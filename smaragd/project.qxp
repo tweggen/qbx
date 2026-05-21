@@ -1,0 +1,16 @@
+<SProject fileName='' rootId='140676285106240' bpmTempo='120'>
+<SStdMixer id='140676285106240' nRefs='1' hasDuration='1' duration='9.48091e+06' muted='false' solo='false' volume='0' pan='0' delay='0'>
+<SLink objectId='94423543505600' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+<STrack nBusses='2' id='94423543505600' nRefs='1' hasDuration='1' duration='9.48091e+06' muted='false' solo='false' volume='0' pan='0' delay='0'>
+<SLink objectId='94423539144048' hasStartTime='1' startTime='170520'>
+</SLink>
+</STrack>
+<SPlainWave filename='/home/tweggen/coding/qbx/smaragd/05_trick_me.wav' id='94423547514416' nRefs='1' hasDuration='1' duration='9.31039e+06' muted='false' solo='false' volume='0' pan='0' delay='0'>
+</SPlainWave>
+<SCut startOffset='0' cutDuration='9310392' id='94423539144048' nRefs='1' hasDuration='1' duration='9.31039e+06' muted='false' solo='false' volume='0' pan='0' delay='0'>
+<SLink objectId='94423547514416' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+</SProject>

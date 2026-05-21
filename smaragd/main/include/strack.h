@@ -1,0 +1,104 @@
+
+#ifndef _STRACK_H_
+#define _STRACK_H_
+
+#include <qobject.h>
+#include <qlist.h>
+#include "sobject.h"
+
+class twComponent;
+class STrack;
+class SObjectRenderer;
+class STrackRendererInline;
+class twTrackMix;
+class twRewire;
+class SLink;
+class SProjectLoader;
+
+class SStartTimeList
+    : public QList<SLink*>
+{
+public:
+    SStartTimeList();
+    virtual ~SStartTimeList();    
+protected:
+    //virtual int compareItems( QCollection::Item , QCollection::Item );
+
+private:
+};
+
+class SEndTimeList
+    : public QList<SLink*>
+{
+public:
+    SEndTimeList();
+    virtual ~SEndTimeList();
+protected:
+    //virtual int compareItems( QCollection::Item , QCollection::Item );
+
+private:
+};
+
+/**
+ * A track is a helper class for SStdMixer.
+ * To gain the effect of inserting a track twice, place
+ * Them in two SStdMixers.
+ */
+class STrack
+    : public SObject 
+{
+    Q_OBJECT
+public:
+    STrack( SProject *project );
+    virtual ~STrack();
+
+    static SLink *instantiateFromDomElement( SProjectLoader &projectLoader, 
+					     QDomElement &element, 
+					     SObject *parent );
+
+    virtual twComponent &getRootComponent();
+    
+    virtual int readPreChildrenAttributes( QDomElement &element );
+
+    virtual QWidget *getDetailEditWidget( QWidget *parent );
+    virtual QWidget *getInlineEditWidget( QWidget *parent );
+    virtual SObjectRenderer *getInlineRenderer();
+    
+    virtual SLink *getTopMostSLinkAt( offset_t ) const;
+    int getNBusses() const { return nBusses_; }
+    virtual int seekTo( offset_t ofs );
+
+    virtual bool hasDuration() const;
+    virtual length_t getDuration() const;
+
+public slots:
+    void setNBusses( int n );    
+
+signals:    
+    void nChannelsChanged( int n );
+
+protected:
+    
+private:
+    void checkDurationChanged();
+
+    SStartTimeList startTimeList_;
+    SEndTimeList endTimeList_;
+    STrackRendererInline *inlineRenderer_;
+    int nBusses_;
+    twTrackMix **cpTrackMixers_;
+    twRewire *cpRewire_;
+    
+    mutable length_t lastDuration_;
+    mutable bool lastDurationValid_;
+
+    virtual int serializeSelfAttributes( QTextStream &o );
+    
+private slots:    
+    void trackChildWasAdded( SLink & );
+    void trackChildWasRemoved( SLink & );
+    void trackChildWasMoved( offset_t newTime );
+    void trackChildDurationChanged( length_t newLength );
+};
+
+#endif

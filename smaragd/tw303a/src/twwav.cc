@@ -1,0 +1,147 @@
+
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <memory.h>
+
+#include <iostream>
+
+#include <syslog.h>
+
+#include "twwav.h"
+
+#define WAVE_FORMAT_PCM 1
+
+twWav::twWav( tw303aEnvironment &env0, char const *fileName, length_t length )
+	: twComponent( env0 ), totalLength( length )
+{
+	struct STRU_format {
+		unsigned short wFormatTag;         // Format category
+		unsigned short wChannels;          // Number of channels
+		unsigned dwSamplesPerSec;    // Sampling rate
+		unsigned dwAvgBytesPerSec;   // For buffer estimation
+		unsigned short wBlockAlign;        // Data block size
+// format special fields
+	    unsigned short wBitsPerSample;	// Sample size
+	} wav_format = {
+		WAVE_FORMAT_PCM, 1, 44100, 44100*1*2, 2, 16
+	};
+	struct {     
+		char  id[4];  	// identifier string = "RIFF"
+		int   len;    	// remaining length after this header
+	} riff_hdr;
+	struct {     
+		char  id[4];  	// identifier string = "RIFF"
+		int   len;    	// remaining length after this header
+	} chunk_hdr;
+	char wave_id[4];
+
+	FILE *fp_out = fp=fopen( fileName, "wb");
+	if (!fp){
+		throw excStandard( "Error opening output file." );
+	}
+	// RIFF header schreiben
+	strncpy(riff_hdr.id, "RIFF", 4 );
+	// Länge nach dem RIFF-hdr
+	riff_hdr.len=sizeof(wave_id)+sizeof(chunk_hdr)+16+sizeof(chunk_hdr)+length*sizeof(short);
+	if (fwrite( &riff_hdr, sizeof(riff_hdr), 1, fp_out ) != 1 ){
+		throw excStandard( "Error writing RIFF header." );
+	}
+	// WAVE ID schreiben
+	strncpy(wave_id, "WAVE", 4 );
+	if (fwrite( wave_id, sizeof(wave_id), 1, fp_out ) != 1 ){
+		throw excStandard( "Error writing WAVE header." );
+	}
+
+	// Chunk header fmt schreiben
+	strncpy( chunk_hdr.id, "fmt ", 4 );
+	chunk_hdr.len=16;
+	if (fwrite( &chunk_hdr, sizeof(chunk_hdr), 1, fp_out ) != 1 ){
+		throw excStandard( "Error writing fmt header." );
+	}
+	// Format schreien
+	if (fwrite( &(wav_format), sizeof(wav_format), 1, fp_out ) != 1 ){
+		throw excStandard( "Error writing format chunk." );
+	}
+
+	// chunk header data schreiben
+	strncpy( chunk_hdr.id, "data", 4 );
+	// chunk_hdr.len=stru_wav->data_len*2;
+	// ???
+	chunk_hdr.len=length * sizeof( short ) * getNInputs();
+	if (fwrite( &chunk_hdr, sizeof(chunk_hdr), 1, fp_out ) != 1 ){
+		throw excStandard( "Error writing data header." );
+	} 
+}
+
+twWav::~twWav()
+{
+	if( fp ) {
+		fclose( fp );
+		fp = NULL;
+	}
+}
+
+length_t twWav::calcOutputTo( sample_t *, length_t, idx_t )
+{
+    // nothing to render.
+    return 0;
+}
+
+
+
+void twWav::createOutputLatches()
+{
+}
+
+int twWav::writeLoop()
+{
+	signed short *outBuf = NULL;
+	sample_t *sampleBuffer = NULL;
+	length_t toWrite = totalLength;
+
+	try {
+		outBuf = (signed short *) malloc( 2 * env.getBufferSize() );
+		if( !outBuf ) {
+			throw excStandard( "twWav::writeLoop(): not enough memory" );
+		}
+
+		sampleBuffer = (sample_t *) malloc( env.getBufferSize() * sizeof( sample_t ) );
+		if( !sampleBuffer ) {
+			throw excStandard( "twWav::writeLoop(): not enough memory" );
+		}
+	} catch( excStandard e ) {
+		if( outBuf ) free( outBuf );
+		if( sampleBuffer ) free( sampleBuffer );
+		throw e;
+	}
+
+	toWrite = totalLength;
+	while( toWrite>0 ) {
+		length_t realRead;
+		sample_t *pSrc = sampleBuffer;
+		short *pDest = outBuf;
+		length_t readNow = toWrite<env.getBufferSize()?toWrite:env.getBufferSize();
+
+		realRead = ((twLatchStreamingOutput *)pInputPlugs[0]) -> readStreamingData(
+			sampleBuffer,
+			readNow
+			);
+		
+		for( int i=0; i<realRead; i++ ) {
+			sample_t a = 32767. * *pSrc++;
+			if( a<-32767 ) a=-32767;
+			else if( a>32767 ) a = 32767;
+			
+			*pDest++ = (short) a;
+		}
+			
+		fwrite( outBuf, realRead, sizeof( short ), fp );
+		toWrite -= realRead;
+	}
+
+	free( outBuf );
+	free( sampleBuffer );
+	return 0;
+}
+

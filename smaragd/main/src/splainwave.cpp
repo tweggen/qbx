@@ -1,0 +1,131 @@
+
+#include <stdio.h>
+
+#include <qobject.h>
+#include <qwidget.h>
+#include <qlabel.h>
+#include "qmessagebox.h"
+
+#include "sapplication.h"
+#include "sproject.h"
+#include "twcomponent.h"
+#include "twwavinput.h"
+#include "splainwave.h"
+#include "splainwaverndrinline.h"
+#include "sprojectloader.h"
+
+int SPlainWave::serializeSelfAttributes( QTextStream &o )
+{
+    o << " filename='" << getFileName() << "'";
+    SExternFile::serializeSelfAttributes( o );
+    return 0;
+}
+
+bool SPlainWave::hasPreview() const
+{
+    return true;
+}
+
+int SPlainWave::getPreview( preview_t *dest,
+                             offset_t start, length_t length,
+                             offset_t nProbes )
+{
+    // Only create preview, if have the wave loaded.
+    if( !cpWave_ ) return -1;
+    return getStraightPreview( dest, start, length, nProbes );
+}
+
+QString SPlainWave::getFileName() const
+{
+    return fileName_;
+}
+
+twComponent &SPlainWave::getRootComponent()
+{
+    return *cpWave_;
+}
+
+QWidget *SPlainWave::getDetailEditWidget( QWidget *parent )
+{
+    // FIXME: Reset pointer on destroy.
+    return new QLabel( "plainWave: Nothing to edit now.", parent );
+}
+
+QWidget *SPlainWave::getInlineEditWidget( QWidget * )
+{
+    return NULL;
+}
+
+SObjectRenderer *SPlainWave::getInlineRenderer()
+{
+    if( !inlineRenderer_ ) {
+        inlineRenderer_ = new SPlainWaveRendererInline( *this );
+    }
+    return inlineRenderer_;
+}
+
+bool SPlainWave::hasDuration() const
+{
+    return cpWave_ != NULL;
+}
+
+length_t SPlainWave::getDuration() const
+{
+//    printf( "SPlainWave::getDuration(): cpWave_ = $%08x.\n", (unsigned)cpWave_ );
+//    fflush( stdout ); fflush( stderr );
+    fprintf( stderr, "SPlainWave::getDuration(): %d:%d.\n",
+	     (int)(cpWave_->getLength()>>32),(int)(cpWave_->getLength()) );
+    if( cpWave_ ) {
+        return cpWave_->getLength();
+    } else {
+        return 0;
+    }
+}
+
+int SPlainWave::setWave( const QString fileName )
+{
+    // Fail, if we already have a wave set.
+    if( cpWave_ ) return -2;
+    fileName_ = fileName;
+    cpWave_ = new twWavInput( *(SApplication::app().get303aEnvironment()), fileName );
+    cpWave_->init();
+    if( !cpWave_->wasLoaded() ) {
+        QMessageBox::information( NULL, "QBX error", "Unable to load file.", "OK" );
+        delete cpWave_;
+        cpWave_ = NULL;
+        return -1;
+    }
+    // Add myselves tob the list of extern objects.
+    qWarning( "%s", (const char*) (QString("Filename here is \"")+fileName_+QString("\".\n")).data() );
+    SApplication::app().getCurrentProject()->addExternObject( *this );
+    return 0;
+}
+
+SPlainWave::~SPlainWave()
+{
+    if( cpWave_ ) {
+        SApplication::app().getCurrentProject()->removeExternObject( fileName_ );    
+    }
+}
+
+SPlainWave::SPlainWave( SProject *project ) 
+    : SExternFile( project ),
+      cpWave_( NULL ),
+      fileName_( "" ),
+      inlineRenderer_( NULL )
+{    
+}
+
+SLink *SPlainWave::instantiateFromDomElement( 
+    SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
+{
+    (void) parent;
+    // Ignore other parameters.
+    QString fileName;
+    
+    fileName = (const char *)element.attribute( "filename" ).data();
+    if( fileName.isNull() ) {
+        qWarning( "Cannot open file \"%s\".\n", (const char *)fileName.data() );
+    }
+    return projectLoader.getProject().linkToFile( fileName );
+}

@@ -1,0 +1,38 @@
+
+#ifndef _TW_MIXER_
+#define _TW_MIXER_
+
+#include "twcomponent.h"
+
+class tw303aEnvironment;
+
+class twMixer : public twComponent {
+private:
+    idx_t mixerInputs_;
+    struct InputProperties {
+        double volume_;
+        sample_t volumeFactor_;
+    };
+    InputProperties *inputProperties_;
+
+protected:
+    sample_t *inBuffer;
+    
+public:
+    virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );
+    
+    void createOutputLatches( void );
+    
+    void init( void );
+    int setNInputs( idx_t );
+    int setInputLevel( idx_t, double );
+    virtual idx_t getNInputs() const { return mixerInputs_; }
+    virtual idx_t getNOutputs() const { return 1; }
+    virtual const char *getInputName( idx_t ) const;
+    virtual const char *getOutputName( idx_t ) const;
+    
+    twMixer( tw303aEnvironment &env, idx_t inputs );
+    void setBufferSize( length_t newSize );
+};
+
+#endif
