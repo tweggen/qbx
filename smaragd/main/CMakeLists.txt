@@ -69,3 +69,36 @@ target_link_libraries(smaragd
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Xml
 )
+
+# Auto-deploy Qt runtime DLLs / plugins next to smaragd.exe on Windows
+# (and the .app bundle on macOS) so the binary launches without a manual
+# windeployqt step. Opt out with -DAUTO_DEPLOY_QT=OFF.
+option(AUTO_DEPLOY_QT
+    "Run windeployqt / macdeployqt after building smaragd" ON)
+
+if(AUTO_DEPLOY_QT AND (SMARAGD_WINDOWS OR SMARAGD_MACOS))
+    # windeployqt / macdeployqt live next to qmake in the Qt bin dir.
+    get_target_property(_qt_qmake Qt${QT_VERSION_MAJOR}::qmake IMPORTED_LOCATION)
+    get_filename_component(_qt_bin_dir "${_qt_qmake}" DIRECTORY)
+
+    if(SMARAGD_WINDOWS)
+        find_program(DEPLOYQT_EXECUTABLE windeployqt HINTS "${_qt_bin_dir}")
+        set(DEPLOYQT_ARGS --no-translations --no-system-d3d-compiler --no-opengl-sw)
+    else()
+        find_program(DEPLOYQT_EXECUTABLE macdeployqt HINTS "${_qt_bin_dir}")
+        set(DEPLOYQT_ARGS "")
+    endif()
+
+    if(DEPLOYQT_EXECUTABLE)
+        add_custom_command(TARGET smaragd POST_BUILD
+            COMMAND "${DEPLOYQT_EXECUTABLE}" ${DEPLOYQT_ARGS} "$<TARGET_FILE:smaragd>"
+            COMMENT "Deploying Qt runtime alongside $<TARGET_FILE_NAME:smaragd>"
+            VERBATIM
+        )
+    else()
+        message(WARNING
+            "AUTO_DEPLOY_QT is ON but the deploy tool was not found in "
+            "${_qt_bin_dir}. The binary will need its Qt DLLs supplied "
+            "manually (PATH or copy).")
+    endif()
+endif()
