@@ -265,11 +265,17 @@ int SStdMixer::setNBusses( int n )
         mix->init();
         cpRewire_->setInput( i, mix->linkOutput( 0 ) );
 
-        SLink *st = (SLink *)(const_cast<QObjectList *>(&children)->at( i ));
+        // Bus index is unrelated to track index, but the original code
+        // also primed the mixer's input level using the like-indexed
+        // child track (if one happened to exist). Bound the access so
+        // creating busses ahead of any tracks doesn't assert.
+        SLink *st = ( i < children.count() )
+            ? (SLink *)(const_cast<QObjectList *>(&children)->at( i ))
+            : NULL;
         if( st ) {
             mix->setInputLevel( i, st->getSObject().getVolume() );
-            QObject::connect( 
-                &(st->getSObject()), SIGNAL( volumeChanged( double ) ), 
+            QObject::connect(
+                &(st->getSObject()), SIGNAL( volumeChanged( double ) ),
                 this, SLOT( trackVolumeChanged( double ) ) );
         } else {
             mix->setInputLevel( i, 0 );
@@ -395,11 +401,13 @@ SStdMixer::SStdMixer( SProject *project )
                       this, SLOT( mixerUpdateTrackAdded( int, STrack & ) ) );
     QObject::connect( this, SIGNAL( trackRemoved( int, STrack & ) ),
                       this, SLOT( mixerUpdateTrackRemoved( int, STrack & ) ) );
-    // Note: do NOT call setNBusses(0) here. Shrinking the rewire to zero
-    // outputs would invalidate the speaker's wire (linkOutput(0) returns
-    // NULL for an out-of-range index). We keep the rewire's default of
-    // one output, which produces silence until a real bus / mixer is
-    // wired into it by setNBusses(>=1).
+    // Start with one bus so reconnectTracksToMixer() (called when a track
+    // is added) has somewhere to wire the track into. The original code
+    // called setNBusses(0) here and relied on the .qxp loader to set a
+    // real bus count later, which left File → New projects silent — no
+    // bus mixer existed, so reconnectTracksToMixer's outer loop did
+    // nothing and tracks were never wired.
+    setNBusses( 1 );
 }
 
 SLink *SStdMixer::instantiateFromDomElement( 
