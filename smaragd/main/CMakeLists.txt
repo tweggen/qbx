@@ -48,7 +48,14 @@ set(SMARAGD_SOURCES
     src/strackrndrinline.cpp
 )
 
-if(SMARAGD_WINDOWS)
+# SMARAGD_WIN_CONSOLE: when ON (the default), the Windows build uses the
+# CONSOLE subsystem so stderr/stdout — including the twsyslog.h shim's
+# vfprintf calls and Qt's qDebug() — appear in the launching console.
+# Flip to OFF for a release build that should not pop a console window.
+option(SMARAGD_WIN_CONSOLE
+    "Build the Windows binary against the CONSOLE subsystem (shows stderr)" ON)
+
+if(SMARAGD_WINDOWS AND NOT SMARAGD_WIN_CONSOLE)
     add_executable(smaragd WIN32 ${SMARAGD_SOURCES} ${SMARAGD_HEADERS})
 elseif(SMARAGD_MACOS)
     add_executable(smaragd MACOSX_BUNDLE ${SMARAGD_SOURCES} ${SMARAGD_HEADERS})

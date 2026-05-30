@@ -23,6 +23,7 @@ static inline void syslog(int priority, const char *fmt, ...)
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fputc('\n', stderr);
+    fflush(stderr);
 }
 
 #else
