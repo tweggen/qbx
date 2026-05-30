@@ -5,12 +5,14 @@
 #include "twcomponent.h"
 
 /**
- * An object of this class the same number of inputs and outputs.
- * It presents a collection of input objects as an nChannel output 
- * object. 
+ * Patch-bay component with N paired inputs and outputs (output[i] = input[i]).
  *
- * It does this without buffering, just forwarding output latches
- * from the various sources.
+ * Owns one twStreamingLatch per output index. calcOutputTo() pulls from the
+ * matching input plug, or fills with silence if no input is wired. This
+ * lets downstream consumers (e.g. the speaker) wire to a stable latch once
+ * and have the rewire transparently swap its source over time, instead of
+ * holding a snapshot pointer to whichever component happened to be wired
+ * in at link time.
  */
 class twRewire
     : public twComponent

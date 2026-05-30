@@ -18,22 +18,28 @@ SProject *SApplication::getCurrentProject() const
 }
 
 /**
- * Change modality for a new project. 
+ * Change modality for a new project.
  * Here we currently:
  * - Rewire the main output speaker for a new project.
  */
 void SApplication::setCurrentProject( SProject *cp )
 {
-    // Rewire the speaker.
-    // Remove old one.
-    getSpeaker()->setInput( 0, NULL );
     currentProject_ = cp;
-    if( currentProject_ && currentProject_->getRootComponent() ) {
-        // Set input from new one.
-        getSpeaker()->setInput( 
-            0, 
-            currentProject_->getRootComponent()->getRootComponent().linkOutput(0) );
-    }    
+    rewireSpeaker();
+}
+
+void SApplication::rewireSpeaker()
+{
+    // Drop any prior wiring first.
+    getSpeaker()->setInput( 0, NULL );
+    if( !currentProject_ || !currentProject_->getRootComponent() ) return;
+
+    // twRewire (the rewire root inside SStdMixer) returns NULL from
+    // linkOutput() when nothing has been wired into it yet, so this call
+    // is only meaningful once the graph has at least one track / bus.
+    twLatchOutput *src =
+        currentProject_->getRootComponent()->getRootComponent().linkOutput(0);
+    getSpeaker()->setInput( 0, src );
 }
 
 bool SApplication::isPlaying() const 

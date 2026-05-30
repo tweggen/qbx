@@ -1,10 +1,12 @@
 
 #include <stdlib.h>
+#include <string.h>
+
 #include "twrewire.h"
 
 const char *twRewire::getInputName( idx_t ) const
 {
-    return "Rewire input";   
+    return "Rewire input";
 }
 
 const char *twRewire::getOutputName( idx_t ) const
@@ -19,44 +21,62 @@ void twRewire::init()
 
 length_t twRewire::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
 {
-    length_t realRead;
-    realRead = ((twLatchStreamingOutput *)pInputPlugs[idx]) -> readStreamingData(
-            pDest, length );
-    return realRead;
+    if( idx < 0 || idx >= nInputs_ || !pInputPlugs[idx] ) {
+        // No input wired into this output → produce silence.
+        memset( pDest, 0, length * sizeof( sample_t ) );
+        return length;
+    }
+    return ((twLatchStreamingOutput *)pInputPlugs[idx])->readStreamingData(
+        pDest, length );
 }
 
 int twRewire::setNPlugs( idx_t n )
 {
-    twLatchOutput **newPlugs, **oldPlugs = pInputPlugs;
+    if( n < 0 ) return -1;
+    if( pInputPlugs && pOutputLatches && n == nInputs_ ) return 0;
 
-    // no change?
-    if( pInputPlugs && n==nInputs_ ) return 0;
-
-    if( n<0 ) {
-        return -1;
-    }
-    if( n<nInputs_ ) {
-        // Look, if the remaining inputs are empty.
-        for( int i=n; n<nInputs_; n++ ) {
+    // Refuse to shrink when an outgoing slot is still wired up.
+    if( pInputPlugs ) {
+        for( int i = n; i < nInputs_; ++i ) {
             if( pInputPlugs[i] ) return -2;
         }
     }
-    newPlugs = (twLatchOutput **) ::calloc( sizeof( twLatchOutput * ), n );
+
+    const idx_t allocN = (n > 0 ? n : 1);
+    const int toCopy = (n < nInputs_) ? n : nInputs_;
+
+    twLatchOutput **newPlugs =
+        (twLatchOutput **) ::calloc( sizeof( twLatchOutput * ), allocN );
     if( pInputPlugs ) {
-        if( n<nInputs_ ) {
-            ::memcpy( newPlugs, pInputPlugs, n*sizeof( twLatchOutput *) );
-        } else {
-            ::memcpy( newPlugs, pInputPlugs, nInputs_*sizeof( twLatchOutput *) );
+        if( toCopy > 0 ) {
+            ::memcpy( newPlugs, pInputPlugs, toCopy * sizeof( twLatchOutput * ) );
         }
+        ::free( pInputPlugs );
     }
     pInputPlugs = newPlugs;
-    if( pInputPlugs ) {
-        ::free( oldPlugs );
+
+    twLatch **newLatches =
+        (twLatch **) ::calloc( sizeof( twLatch * ), allocN );
+    if( pOutputLatches ) {
+        if( toCopy > 0 ) {
+            ::memcpy( newLatches, pOutputLatches, toCopy * sizeof( twLatch * ) );
+        }
+        // Latches in slots that are going away need to be deleted.
+        for( int i = n; i < nInputs_; ++i ) {
+            if( pOutputLatches[i] ) delete pOutputLatches[i];
+        }
+        ::free( pOutputLatches );
     }
+    pOutputLatches = newLatches;
+
+    // Fill any freshly-created slots with their own streaming latch.
+    for( int i = 0; i < n; ++i ) {
+        if( !pOutputLatches[i] ) {
+            pOutputLatches[i] = new twStreamingLatch( *this, i, 0 );
+        }
+    }
+
     nInputs_ = n;
-    // I do not have to reallocate the input/output plugs, as I do not
-    // have own output latches.
-    // FIXME: Emit something?
     return 0;
 }
 
@@ -71,32 +91,41 @@ idx_t twRewire::getNOutputs() const
 }
 
 /**
- * Overridden, because I do not posses own plugs.
- * twComponent ctor will call it, I will set the current number of 
- * plugs to my default one.
+ * Overridden: pInputPlugs and pOutputLatches are sized/managed by
+ * setNPlugs(), which also creates the per-output latches.
  */
 void twRewire::allocPlugs()
 {
-    setNPlugs( getNInputs() );
+    setNPlugs( nInputs_ );
 }
 
 /**
- * Overridden, because we do not need to create output latches.
+ * Overridden: setNPlugs() already created the streaming latches; nothing
+ * to do here.
  */
 void twRewire::createOutputLatches()
 {
-    return;
 }
 
 twLatchOutput *twRewire::linkOutput( idx_t idx )
 {
-    if( idx<0 || idx>=nInputs_ ) return NULL;
-    if( !pInputPlugs[idx] ) return NULL;    
-    return pInputPlugs[idx]->getParentLatch().getComponent().linkOutput( 0 );
+    if( idx < 0 || idx >= nInputs_ ) return NULL;
+    if( !pOutputLatches[idx] ) return NULL;
+    return pOutputLatches[idx]->addOutput();
 }
 
 twRewire::~twRewire()
-{    
+{
+    // Base class frees the pOutputLatches array itself; we have to
+    // delete the latch objects it points at first.
+    if( pOutputLatches ) {
+        for( int i = 0; i < nInputs_; ++i ) {
+            if( pOutputLatches[i] ) {
+                delete pOutputLatches[i];
+                pOutputLatches[i] = NULL;
+            }
+        }
+    }
 }
 
 twRewire::twRewire( tw303aEnvironment &env0 )

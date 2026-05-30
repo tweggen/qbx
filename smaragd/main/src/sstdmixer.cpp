@@ -391,11 +391,15 @@ SStdMixer::SStdMixer( SProject *project )
 {
     cpRewire_ = new twRewire( *(SApplication::app().get303aEnvironment()) );
     cpRewire_->init();
-    QObject::connect( this, SIGNAL( trackInserted( int, STrack & ) ), 
+    QObject::connect( this, SIGNAL( trackInserted( int, STrack & ) ),
                       this, SLOT( mixerUpdateTrackAdded( int, STrack & ) ) );
-    QObject::connect( this, SIGNAL( trackRemoved( int, STrack & ) ), 
+    QObject::connect( this, SIGNAL( trackRemoved( int, STrack & ) ),
                       this, SLOT( mixerUpdateTrackRemoved( int, STrack & ) ) );
-    setNBusses( 0 );
+    // Note: do NOT call setNBusses(0) here. Shrinking the rewire to zero
+    // outputs would invalidate the speaker's wire (linkOutput(0) returns
+    // NULL for an out-of-range index). We keep the rewire's default of
+    // one output, which produces silence until a real bus / mixer is
+    // wired into it by setNBusses(>=1).
 }
 
 SLink *SStdMixer::instantiateFromDomElement( 

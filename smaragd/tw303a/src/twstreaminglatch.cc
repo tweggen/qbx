@@ -130,7 +130,9 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 #endif
 
 			// not enough data in buffer, fill it up.
-			filled = getComponent().calcOutputTo( pBuffer + bufPos, maxFill, 0 );
+			// Pass our own latch index so multi-output components
+			// (e.g. twRewire) know which output is being asked for.
+			filled = getComponent().calcOutputTo( pBuffer + bufPos, maxFill, getIndex() );
 			if( !filled ) {
 				throw excStandard( "twLatchStreamingOutput::readStreamingData(): "
 									   "Internal: Component did not provide data." );

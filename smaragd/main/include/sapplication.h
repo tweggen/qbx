@@ -43,6 +43,11 @@ public:
 
     SProject *getCurrentProject() const;
     void setCurrentProject( SProject * );
+    // Re-fetch the project root component's first output and connect it to
+    // the speaker. Call this when the synth graph has changed (tracks
+    // added, busses inserted, etc.) so that playback uses the current
+    // wiring rather than the snapshot taken at project-creation time.
+    void rewireSpeaker();
     offset_t getGlobalLocatorPos() const;
     bool isPlaying() const;
     
