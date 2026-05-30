@@ -1,6 +1,6 @@
 #if 0
 #include <stdlib.h>
-#include <syslog.h>
+#include "twsyslog.h"
 
 #include "twsaw.h"
 

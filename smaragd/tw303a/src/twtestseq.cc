@@ -1,6 +1,6 @@
 #if 0
 #include <iostream>
-#include <syslog.h>
+#include "twsyslog.h"
 
 #include "twtestseq.h"
 

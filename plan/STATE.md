@@ -121,3 +121,93 @@ runs on the more restrictive Windows path, but should be confirmed.
   unused. Confirm during first Linux build.
 - **Qt 5 EOL.** Qt 5.15 LTS reaches end of free support in 2026. A follow-up
   proposal for Qt 6 migration may be worthwhile.
+
+---
+
+## 01_BUILD_SYSTEM_MODERNIZATION.md — Phase 2 (audio abstraction)
+
+- **Date:** 2026-05-30
+- **Status:** Phase 2 of the build-system proposal complete — the synthesizer
+  engine (`tw303a`) now compiles on Windows. The deeper audio work in
+  `plan/proposed/02_AUDIO_DRIVER_STRATEGY.md` (concrete WASAPI/CoreAudio
+  backends, PipeWire/JACK, device enumeration UI, sample-rate negotiation)
+  remains future work.
+- **Verified on platform:** Windows 11 — `cmake --build build --target tw303a`
+  produces `build/lib/libtw303a.a` (~8.8 MB) with Qt 6.11.1 + MinGW 13.1.
+  `smaragd` executable does NOT yet link on Windows; the remaining failures
+  are Qt6 source-porting issues in `main/` (`qxml.h` no longer in Qt6,
+  `(unsigned long)ptr` truncation on LLP64), not audio.
+
+### What landed
+
+| File                                                 | Purpose                                                                              |
+|------------------------------------------------------|--------------------------------------------------------------------------------------|
+| `smaragd/include/twsyslog.h`                         | Portable `syslog()` / `LOG_*` shim — POSIX passes through, Windows routes to stderr. |
+| `smaragd/tw303a/include/audio/audio_backend.h`       | `audio::AudioBackend` interface + `AudioConfig` + `createAudioBackend()` factory.    |
+| `smaragd/tw303a/include/audio/null_backend.h` + `.cc`| No-op backend used when no concrete backend is enabled. Lets the app link.           |
+| `smaragd/tw303a/include/audio/alsa_backend.h` + `.cc`| ALSA backend extracted from `twspeaker.cc`. Behaviour-preserving (44.1k/S16_LE/stereo, 1024-frame buffer, 64-frame period, async callback). Adds xrun recovery the original lacked. |
+| `smaragd/tw303a/src/audio/audio_backend.cc`          | Factory: returns `ALSABackend` when `QBX_LINUX_ALSA` is defined, else `NullBackend`. |
+| `smaragd/tw303a/src/twspeaker.{h,cc}` (rewritten)    | Holds `std::unique_ptr<AudioBackend>`. `startOutput()` installs a render callback that pulls from `pInputPlugs[0]` and fans mono → N channels in place. All platform `#ifdef`s removed. Deleted: the broken pre-2005 `QBX_MAC_OSX_10_2` block, the unused `QBX_LINUX_OSS` socket-notifier path, the `unistd.h`/`fcntl.h`/`sys/ioctl.h`/`linux/soundcard.h` includes. |
+| 12 `tw303a/src/*.cc` files                            | `#include <syslog.h>` → `#include "twsyslog.h"`. No other changes.                   |
+| `smaragd/CMakeLists.txt`                             | `ENABLE_WASAPI`/`ENABLE_COREAUDIO` default flipped to `OFF` since their backends do not exist yet — `NullBackend` is what links on Windows/macOS until they're written. |
+| `smaragd/tw303a/CMakeLists.txt`                      | Wires `audio_backend.cc`/`null_backend.cc` into the always-on source list. ALSA's `alsa_backend.{h,cc}` added under the existing `if(SMARAGD_LINUX AND ENABLE_ALSA)` block. |
+
+### What was deliberately deferred
+
+- **WASAPI backend** — needs ~400 lines of COM-heavy code (IMMDeviceEnumerator,
+  IAudioClient, IAudioRenderClient, event-driven render thread). The link
+  flags and `#define QBX_WIN_WASAPI` are already wired in the CMake; flipping
+  the option ON and dropping `wasapi_backend.{h,cc}` next to the ALSA backend
+  is all that's needed.
+- **Modern CoreAudio backend** — same shape; replaces the deleted pre-2005
+  `OpenAComponent` / `FindNextComponent` code with `AudioComponentInstanceNew`
+  / `AudioComponentFindNext` against an `AUGraph` or raw `AudioUnit`.
+- **PipeWire / JACK / PulseAudio** — `pkg_check_modules` already wired; backend
+  files (`pipewire_backend.cc` etc.) and the factory's `#if defined(QBX_…)`
+  branch are the only missing pieces.
+- **ALSA modernization** — device enumeration via `snd_card_next` /
+  `snd_ctl_*`, dynamic sample-rate/format negotiation, configurable latency.
+  Current backend keeps the original hard-coded settings.
+- **Device-selection UI** — outside the audio-engine layer entirely.
+
+### Verification status
+
+- **Windows / Qt6 / MinGW — tw303a:** ✅ Library builds cleanly.
+  `cmake --build build --target tw303a` → `build/lib/libtw303a.a` (8.8 MB).
+- **Windows / Qt6 / MinGW — smaragd executable:** ❌ Still fails, but for
+  reasons unrelated to Phase 2:
+    1. `main/include/sprojectloader.h` includes `<qxml.h>`. Qt6 dropped
+       `QtXml`'s lowercase compat header; the include needs to become
+       `<QXmlStreamReader>` (and the SAX-style XML reader needs porting to
+       streaming).
+    2. `main/src/{slink,sobject,sproject}.cpp` cast pointers to `unsigned
+       long` for serialization. On 64-bit Windows (LLP64) `unsigned long` is
+       32 bits, so the cast loses precision. Should be `uintptr_t`.
+  These are LLP64 + Qt6-source-port concerns that belong in a separate
+  proposal. They are pre-existing issues, not introduced by this work.
+- **Linux:** Not exercised. ALSA backend is behaviour-preserving relative to
+  the original `twspeaker.cc` ALSA path; a Linux developer should still
+  smoke-test before trusting it.
+
+### Behaviour-relevant changes (heads up for a Linux smoke test)
+
+- xrun recovery added in `ALSABackend::asyncCallback_` and `writeChunk_`
+  (the original code logged but never called `snd_pcm_prepare` on `-EPIPE`).
+  This should reduce silent audio dropouts under load.
+- Mono → stereo fan-out now happens in `twSpeaker`'s render callback, not
+  inside the ALSA write loop. Behaviour matches the original (same int16
+  sample value duplicated to both channels) but the conversion runs against
+  floats first and only the ALSA backend converts to S16.
+- `setGlobalLocatorPos` is now called from inside the audio callback. In the
+  original this was also true (it ran inside `fillBuffer()` from the async
+  handler), so threading semantics are unchanged.
+
+### Next actions
+
+1. Linux smoke test of the refactored ALSA path.
+2. Separate proposal: Qt6 source porting + LLP64 pointer fixes for `main/`
+   (`qxml.h`, `(unsigned long)ptr` casts, `qsocketnotifier.h` lowercase
+   compat headers in surviving files). Needed before any Windows build of the
+   full executable.
+3. Resume `02_AUDIO_DRIVER_STRATEGY.md` proper, starting with the WASAPI
+   backend now that the abstraction layer exists.

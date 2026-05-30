@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <iostream>
 
-#include <syslog.h>
+#include "twsyslog.h"
 
 #include "tw303aenv.h"
 

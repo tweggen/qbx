@@ -1,6 +1,6 @@
 
 #include <iostream>
-#include <syslog.h>
+#include "twsyslog.h"
 
 #include "twconstant.h"
 

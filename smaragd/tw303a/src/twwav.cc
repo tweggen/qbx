@@ -6,7 +6,7 @@
 
 #include <iostream>
 
-#include <syslog.h>
+#include "twsyslog.h"
 
 #include "twwav.h"
 
@@ -42,7 +42,7 @@ twWav::twWav( tw303aEnvironment &env0, char const *fileName, length_t length )
 	}
 	// RIFF header schreiben
 	strncpy(riff_hdr.id, "RIFF", 4 );
-	// Länge nach dem RIFF-hdr
+	// Lï¿½nge nach dem RIFF-hdr
 	riff_hdr.len=sizeof(wave_id)+sizeof(chunk_hdr)+16+sizeof(chunk_hdr)+length*sizeof(short);
 	if (fwrite( &riff_hdr, sizeof(riff_hdr), 1, fp_out ) != 1 ){
 		throw excStandard( "Error writing RIFF header." );

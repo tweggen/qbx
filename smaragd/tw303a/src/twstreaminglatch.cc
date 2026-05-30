@@ -3,7 +3,7 @@
 #include <memory.h>
 #include <string.h>
 
-#include <syslog.h>
+#include "twsyslog.h"
 
 #include "twcomponent.h"
 

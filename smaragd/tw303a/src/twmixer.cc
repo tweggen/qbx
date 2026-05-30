@@ -1,7 +1,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <syslog.h>
+#include "twsyslog.h"
 #include <string.h>
 #include <math.h>
 

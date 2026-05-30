@@ -17,6 +17,8 @@ set(TW303A_HEADERS
     include/twwav.h
     include/twwavinput.h
     include/twwhitenoise.h
+    include/audio/audio_backend.h
+    include/audio/null_backend.h
 )
 
 set(TW303A_SOURCES
@@ -41,6 +43,8 @@ set(TW303A_SOURCES
     src/twwav.cc
     src/twwavinput.cc
     src/twwhitenoise.cc
+    src/audio/audio_backend.cc
+    src/audio/null_backend.cc
 )
 
 add_library(tw303a STATIC ${TW303A_SOURCES} ${TW303A_HEADERS})
@@ -62,6 +66,11 @@ if(SMARAGD_LINUX AND ENABLE_ALSA)
     find_package(ALSA REQUIRED)
     target_compile_definitions(tw303a PRIVATE QBX_LINUX_ALSA=1)
     target_link_libraries(tw303a PRIVATE ALSA::ALSA)
+    target_sources(tw303a
+        PRIVATE
+            src/audio/alsa_backend.cc
+            include/audio/alsa_backend.h
+    )
     message(STATUS "tw303a: ALSA backend enabled")
 endif()
 

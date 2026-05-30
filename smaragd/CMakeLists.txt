@@ -41,8 +41,11 @@ option(ENABLE_ALSA       "Enable ALSA audio backend (Linux)"          ${SMARAGD_
 option(ENABLE_PIPEWIRE   "Enable PipeWire audio backend (Linux)"      OFF)
 option(ENABLE_PULSEAUDIO "Enable PulseAudio audio backend (Linux)"    OFF)
 option(ENABLE_JACK       "Enable JACK audio backend (cross-platform)" OFF)
-option(ENABLE_WASAPI     "Enable WASAPI audio backend (Windows)"      ${SMARAGD_WINDOWS})
-option(ENABLE_COREAUDIO  "Enable CoreAudio audio backend (macOS)"     ${SMARAGD_MACOS})
+# WASAPI / CoreAudio are off by default until the concrete backend
+# implementations land (currently only the link flags exist). When OFF,
+# the NullBackend is used so the app links and runs without sound.
+option(ENABLE_WASAPI     "Enable WASAPI audio backend (Windows)"      OFF)
+option(ENABLE_COREAUDIO  "Enable CoreAudio audio backend (macOS)"     OFF)
 
 if(MSVC)
     add_compile_options(/W3 /permissive-)
