@@ -461,3 +461,74 @@ In the app: `File → New`, then add a track, import a sample, hit Play.
 Discuss an architecture for representing user actions in two related
 forms: an undo/redo stack and a scripting interface. Both want a
 uniform "what just happened, replayably" representation.
+
+---
+
+## 03_ACTION_MODEL.md (proposed)
+
+- **Date:** 2026-05-30
+- **Status:** Design only — proposal authored, no code landed yet.
+
+Captures the SAction design discussed in-session: an immutable command
+object that serves as the GUI→engine handoff primitive, the undo/redo
+unit, and (later) the scripting verb. Engine-thread `apply()` produces
+the inverse from observed pre-state; GUI-side `tryCancel` on the queue
+gives near-zero-latency undo for actions still in flight. Pending
+actions are persisted inline in the project XML so save never blocks
+on queue drain — addresses the busy-DAW save/undo pathology that
+motivated the work. Selection is treated as first-class project state
+(Photoshop pattern) and participates in undo/serialization/scripting.
+
+See `plan/proposed/03_ACTION_MODEL.md` for the full interface sketches,
+threading model, save-format shape, and phased rollout plan.
+
+---
+
+## qmake build system removal
+
+- **Date:** 2026-05-30
+- **Status:** ✅ Legacy qmake artifacts deleted. CMake is now the sole
+  supported build system, completing step 3 of the migration path laid
+  out in `plan/proposed/01_BUILD_SYSTEM_MODERNIZATION.md`.
+
+### What was removed
+
+| Path                         | Role                                                                    |
+|------------------------------|-------------------------------------------------------------------------|
+| `smaragd/smaragd.pro`        | Auto-generated qmake project (by `mkpro`).                              |
+| `smaragd/Makefile`           | qmake-generated GNU Makefile (Qt 5.9.5, Linux toolchain).               |
+| `smaragd/build.sh`           | Wrapper that ran `mkpro`, `qmake -o Makefile`, `make`.                  |
+| `smaragd/mkpro`              | Shell script that regenerated `smaragd.pro` from `find`-discovered sources. |
+| `smaragd/.qmake.stash`       | qmake's per-configuration cache (was tracked, shouldn't have been).     |
+
+### Doc / config touch-ups
+
+- `.gitignore` — dropped the four-line "qmake build output" section
+  (`smaragd/bin/`, `smaragd/obj/`, `smaragd/generated/`,
+  `smaragd/Makefile`, `smaragd/.qmake.stash`). The CMake `build/`
+  ignore already covers all current build output.
+- `docs/BUILD.md` — removed the transitional preamble ("legacy qmake
+  `.pro` file is still in the tree…") and the entire "Switching back
+  to qmake (transitional)" section.
+- `docs/PROJECT_OVERVIEW.md` — removed the `smaragd.pro` and `Makefile`
+  entries from the directory tree, replaced with `CMakeLists.txt`.
+
+### What was deliberately left alone
+
+- `plan/proposed/01_BUILD_SYSTEM_MODERNIZATION.md` — historical proposal
+  document. Step 3 of its "Migration Path" ("Remove qmake once all
+  platforms verified") is now what this section records.
+- `smaragd/main/CMakeLists.txt`'s reference to the `Qt6::qmake` IMPORTED
+  target — this is the standard Qt CMake idiom for locating the Qt bin
+  directory (to find `windeployqt`/`macdeployqt`). The `qmake` binary
+  itself ships with Qt6 as a build-system-detection helper; the name
+  predates CMake's adoption but the import is current.
+
+### Verification
+
+- `git ls-files | Select-String -Pattern 'qmake|\.pro$|mkpro|smaragd/Makefile|build\.sh'`
+  returns no matches.
+- No code in the repo references the removed files.
+- Linux build via qmake is no longer possible from this repo — only
+  CMake. (CMake on Linux was the original baseline anyway; the
+  in-flight ALSA smoke test still applies.)

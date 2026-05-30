@@ -21,8 +21,7 @@ smaragd/
 │   └── src/                   # Application implementation
 ├── include/                   # Shared utilities
 ├── doc/                       # Documentation (images, notes)
-├── smaragd.pro               # Qt project file
-├── Makefile                  # Generated build file
+├── CMakeLists.txt            # Top-level CMake project
 └── .gitignore
 
 main/

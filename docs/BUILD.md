@@ -1,8 +1,6 @@
 # Building smaragd
 
-The build system is **CMake** (>= 3.16). The legacy qmake `.pro` file is still in
-the tree during transition; both build systems coexist until the modernization
-plan is complete (see `plan/proposed/01_BUILD_SYSTEM_MODERNIZATION.md`).
+The build system is **CMake** (>= 3.16).
 
 All CMake commands below should be run from the `smaragd/` subdirectory of the
 repository (the directory that contains `CMakeLists.txt`).
@@ -92,15 +90,3 @@ cmake -B build -G "Visual Studio 17 2022" -DCMAKE_PREFIX_PATH="C:/Qt/5.15.2/msvc
 | `ENABLE_JACK`       | OFF                    | Build the JACK backend (planned).                 |
 | `ENABLE_WASAPI`     | ON on Windows          | Build the WASAPI backend (planned).               |
 | `ENABLE_COREAUDIO`  | ON on macOS            | Build the modern CoreAudio backend (planned).     |
-
-## Switching back to qmake (transitional)
-
-The legacy qmake build still works on Linux until CMake is fully validated:
-
-```bash
-cd smaragd
-./build.sh
-```
-
-This wrapper (and the underlying `smaragd.pro`) will be removed once all
-platforms have been verified on CMake.

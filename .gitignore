@@ -42,13 +42,6 @@ Testing/
 _deps/
 compile_commands.json
 
-# qmake build output
-smaragd/bin/
-smaragd/obj/
-smaragd/generated/
-smaragd/Makefile
-smaragd/.qmake.stash
-
 # IDE
 .vscode/
 .idea/
