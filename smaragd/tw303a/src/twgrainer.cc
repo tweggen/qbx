@@ -43,7 +43,6 @@ length_t twGrainer::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
     length_t firstToGo = 0, secondToGo = 0;
     offset_t firstDone, secondDone;
     int firstIdx, secondIdx;
-    int firstStart, secondStart;
     length_t thisToGo;
     int startIdx = -1;
     offset_t currPos;
@@ -51,10 +50,8 @@ length_t twGrainer::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
     sample_t *currPtr = pDest;
     sample_t *firstBuffer = (sample_t *) 
         alloca( env.getBufferSize()*sizeof( sample_t ) );
-    sample_t *secondBuffer = (sample_t *) 
+    sample_t *secondBuffer = (sample_t *)
         alloca( env.getBufferSize()*sizeof( sample_t ) );
-    int realRead;
-    bool isSecondValid;
 
     // No matter what we do, we need to clear output memory first.
     ::memset( pDest, 0, length*sizeof( sample_t ) );
@@ -76,20 +73,17 @@ length_t twGrainer::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
                 startIdx = firstIdx+1;
                 firstDone = 0;
                 sourceComponent_->seekTo( sgFirst->startOffset_ );
-                realRead = sourceComponent_->calcOutputTo( firstBuffer, firstToGo, idx );
-                firstStart = currPos;
-            }            
+                sourceComponent_->calcOutputTo( firstBuffer, firstToGo, idx );
+            }
         }
         if( !(secondToGo <= 0) ) {
             secondIdx = findValidGrain( /* grainSpec_, */ currPos, startIdx, &secondDone );
             if( secondIdx>=0 ) {
                 sgSecond = grainSpec_->getGrain( secondIdx );
                 secondToGo = sgSecond->length_ - secondDone;
-                isSecondValid = true;
                 startIdx = secondIdx+1;
                 sourceComponent_->seekTo( sgSecond->startOffset_ );
-                realRead = sourceComponent_->calcOutputTo( secondBuffer, secondToGo, idx );
-                secondStart = currPos;
+                sourceComponent_->calcOutputTo( secondBuffer, secondToGo, idx );
             }
         }
         if( firstToGo<=0 && secondToGo<=0 ) break;

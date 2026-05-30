@@ -135,13 +135,13 @@ int twWavInput::findWaveProperties()
 # define EX_LONG(x) ((x)[0]|((x)[1]<<8)|((x)[2]<<16)|((x)[3]<<24))
 #endif
 
-    int chunkLength = 0;
     if( !file_.seek( 0 ) ) return -1;
     memset( s, 0, SLEN );
     file_.read( (char *)s, SLEN );
     if( ::strncmp( (char *)s, "RIFF", 4 ) ) return -2;
     if( ::strncmp( (char *)s+8, "WAVEfmt ", 8 ) ) return -3;
-    chunkLength = EX_LONG(((unsigned char *)(s+16)));
+    // fmt chunk length lives at s+16 — currently unused but kept here
+    // as a reference for any future format-validation work.
     fmtHdr = (STRU_format *) ((int *)(s+20));
     orgChannels_ = EX_SHORT(fmtHdr->wChannels);
     if( orgChannels_ <= 0 ) return -5;

@@ -50,13 +50,13 @@ length_t twSimpleSaw::calcOutputTo( sample_t *pDest,
 	b = a+realRead;
 
 	for( i=a; i<b; i++ ) {
-		register unsigned currFreq;
+		unsigned currFreq;
 		currFreq = *pCurrFreq++;
 		if( currFreq==0 ) {
 			// shut up on pCurrFreq = 0;
 			*pCurr++ = 0;
 		} else {
-			register offset_t periodLength = (4410000 / currFreq);
+			offset_t periodLength = (4410000 / currFreq);
 
 //			this was the cool line
 			*pCurr++ = (((i % periodLength) << 16) / periodLength)-periodLength/2;

@@ -2,8 +2,8 @@
 
 #include "twsyslog.h"
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+// WIN32_LEAN_AND_MEAN / NOMINMAX are provided globally by the top-level
+// CMakeLists.txt — do not redefine here.
 #include <windows.h>
 #include <mmreg.h>
 #include <mmdeviceapi.h>

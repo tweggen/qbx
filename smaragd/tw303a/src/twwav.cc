@@ -40,21 +40,22 @@ twWav::twWav( tw303aEnvironment &env0, char const *fileName, length_t length )
 	if (!fp){
 		throw excStandard( "Error opening output file." );
 	}
-	// RIFF header schreiben
-	strncpy(riff_hdr.id, "RIFF", 4 );
+	// RIFF header schreiben. memcpy (not strncpy) — WAV chunk IDs are
+	// fixed-width 4-byte ASCII tags with no NUL terminator.
+	memcpy( riff_hdr.id, "RIFF", 4 );
 	// L�nge nach dem RIFF-hdr
 	riff_hdr.len=sizeof(wave_id)+sizeof(chunk_hdr)+16+sizeof(chunk_hdr)+length*sizeof(short);
 	if (fwrite( &riff_hdr, sizeof(riff_hdr), 1, fp_out ) != 1 ){
 		throw excStandard( "Error writing RIFF header." );
 	}
 	// WAVE ID schreiben
-	strncpy(wave_id, "WAVE", 4 );
+	memcpy( wave_id, "WAVE", 4 );
 	if (fwrite( wave_id, sizeof(wave_id), 1, fp_out ) != 1 ){
 		throw excStandard( "Error writing WAVE header." );
 	}
 
 	// Chunk header fmt schreiben
-	strncpy( chunk_hdr.id, "fmt ", 4 );
+	memcpy( chunk_hdr.id, "fmt ", 4 );
 	chunk_hdr.len=16;
 	if (fwrite( &chunk_hdr, sizeof(chunk_hdr), 1, fp_out ) != 1 ){
 		throw excStandard( "Error writing fmt header." );
@@ -65,7 +66,7 @@ twWav::twWav( tw303aEnvironment &env0, char const *fileName, length_t length )
 	}
 
 	// chunk header data schreiben
-	strncpy( chunk_hdr.id, "data", 4 );
+	memcpy( chunk_hdr.id, "data", 4 );
 	// chunk_hdr.len=stru_wav->data_len*2;
 	// ???
 	chunk_hdr.len=length * sizeof( short ) * getNInputs();
@@ -110,10 +111,10 @@ int twWav::writeLoop()
 		if( !sampleBuffer ) {
 			throw excStandard( "twWav::writeLoop(): not enough memory" );
 		}
-	} catch( excStandard e ) {
+	} catch( excStandard &e ) {
 		if( outBuf ) free( outBuf );
 		if( sampleBuffer ) free( sampleBuffer );
-		throw e;
+		throw;
 	}
 
 	toWrite = totalLength;
