@@ -16,7 +16,6 @@ set(SMARAGD_HEADERS
     include/sproject.h
     include/sprojectloader.h
     include/ssmvmixercontrol.h
-    include/ssortedobjlist.h
     include/sstdmixer.h
     include/sstdmixerview.h
     include/strack.h
@@ -60,6 +59,7 @@ endif()
 target_include_directories(smaragd
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}
 )
 
 target_link_libraries(smaragd

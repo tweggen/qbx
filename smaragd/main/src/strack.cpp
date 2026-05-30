@@ -325,7 +325,7 @@ SLink *STrack::instantiateFromDomElement(
     track->readPreChildrenAttributes( element );
     while( !childNode.isNull() ) {
         if( childNode.isElement() ) {
-            qWarning() << "found STrack child " << childNode.nodeName() << endl;
+            qWarning() << "found STrack child " << childNode.nodeName() << Qt::endl;
             if( childNode.nodeName() == "SLink" ) {
                 QDomElement childElement = childNode.toElement();
                 QString objectId = childElement.attribute( "objectId" );

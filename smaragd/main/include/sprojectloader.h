@@ -1,9 +1,8 @@
 #ifndef _SPROJECTLOADER_H_
 #define _SPROJECTLOADER_H_
 
-#include <qxml.h>
-#include <qdom.h>
-#include <qhash.h>
+#include <QDomDocument>
+#include <QHash>
 #include "slink.h"
 
 class SProject;

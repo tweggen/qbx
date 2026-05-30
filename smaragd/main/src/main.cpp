@@ -3,9 +3,9 @@
 #include "sapplication.h"
 #include "smainwindow.h"
 
-int main( int argc, char *const argv[] )
+int main( int argc, char *argv[] )
 {
-    SApplication app( argc, (char **)argv );
+    SApplication app( argc, argv );
     SMainWindow *win = new SMainWindow();
     win->move( 100,100 );
     win->resize( 800, 600 );

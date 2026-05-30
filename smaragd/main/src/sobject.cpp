@@ -1,6 +1,7 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <cstdint>
 
 #include <qobject.h>
 #include <qtextstream.h>
@@ -58,7 +59,7 @@ void SObject::setSName( const QString &n )
 
 int SObject::serializeSelfAttributes( QTextStream &o )
 {
-    o << " id='" << ((unsigned long)this) << "'"
+    o << " id='" << reinterpret_cast<std::uintptr_t>(this) << "'"
       << " nRefs='" << nRefs_ << "'"
       << " hasDuration='" << hasDuration() << "'";
     if( hasDuration() ) {

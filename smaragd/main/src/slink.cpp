@@ -2,9 +2,11 @@
 #include "sobject.h"
 #include "slink.h"
 
+#include <cstdint>
+
 int SLink::serializeSelfAttributes( QTextStream &o )
 {
-    o << " objectId='" << (unsigned long)(&object_) << "'"
+    o << " objectId='" << reinterpret_cast<std::uintptr_t>(&object_) << "'"
       << " hasStartTime='" << hasStartTime() << "'";
     if( hasStartTime() ) {
         o << " startTime='" << (double)getStartTime() << "'";

@@ -139,7 +139,7 @@ SLink *SCut::instantiateFromDomElement(
     QDomNode childNode = element.firstChild();
     while( !childNode.isNull() ) {
         if( childNode.isElement() ) {
-            qWarning() << "found SCut child " << childNode.nodeName() << endl;
+            qWarning() << "found SCut child " << childNode.nodeName() << Qt::endl;
             if( childNode.nodeName() == "SLink" ) {
                 QDomElement childElement = childNode.toElement();
                 QString objectId = childElement.attribute( "objectId" );

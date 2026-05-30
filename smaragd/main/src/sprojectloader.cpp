@@ -65,8 +65,8 @@ int SProjectLoader::createObjects( SProject &project )
             project.readPreChildrenAttributes( docElem );
             // TODO: Move the stuff below to postchildrenattr
              rootId = docElem.attribute( "rootId" );
-             qWarning() << QString("docElem.nodeName() == ") << docElem.nodeName() << endl;
-             qWarning() << "docElem.attribute rootId == " << docElem.attribute( "rootId" ) << endl;
+             qWarning() << QString("docElem.nodeName() == ") << docElem.nodeName() << Qt::endl;
+             qWarning() << "docElem.attribute rootId == " << docElem.attribute( "rootId" ) << Qt::endl;
              // TODO: Check for rootId's existence here.
         }
         // Now iterate, until all elements have been resolved.    
@@ -91,7 +91,7 @@ int SProjectLoader::createObjects( SProject &project )
             QDomNode childNode = e.firstChild();
             while( !childNode.isNull() ) {
                 if( childNode.isElement() ) {
-                    qWarning() << "childNode.nodeName() == " << childNode.nodeName() << endl;
+                    qWarning() << "childNode.nodeName() == " << childNode.nodeName() << Qt::endl;
                     if( childNode.nodeName() == "SLink" ) {
                         QDomElement childElement = childNode.toElement();
                         QString objectId = childElement.attribute( "objectId" );
@@ -112,7 +112,7 @@ int SProjectLoader::createObjects( SProject &project )
                 // Then we can instantiate it and add it to the table.
                 // Read the id.
                 QString id = e.attribute( "id" );
-                if( id==QString::null ) {
+                if( id.isNull() ) {
                     qWarning( "File is corrupt, sproject child has no \"id\"." );
                     // FIXME: Delete all SObjects.
                     return -1;

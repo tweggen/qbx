@@ -407,7 +407,7 @@ SLink *SStdMixer::instantiateFromDomElement(
     SStdMixer *mixer = new SStdMixer( &projectLoader.getProject() );
     while( !childNode.isNull() ) {
         if( childNode.isElement() ) {
-            qWarning() << "found SStdMixer child " << childNode.nodeName() << endl;
+            qWarning() << "found SStdMixer child " << childNode.nodeName() << Qt::endl;
             if( childNode.nodeName() == "SLink" ) {
                 QDomElement childElement = childNode.toElement();
                 QString objectId = childElement.attribute( "objectId" );

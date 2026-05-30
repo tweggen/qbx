@@ -166,19 +166,19 @@ void SMainWindow::closeProject()
 
 void SMainWindow::startPlaying()
 {
-    qWarning() << "startPlaying(): Called." << endl;
+    qWarning() << "startPlaying(): Called." << Qt::endl;
     if( !currentProject_ ) return;
     if( SApplication::app().isPlaying() ) {
-        qWarning() << "startPlaying(): Ought to stop." << endl;
+        qWarning() << "startPlaying(): Ought to stop." << Qt::endl;
         SApplication::app().getSpeaker()->stopOutput();        
         actPlay_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
         SApplication::app().setPlaying( false );
     } else {
-        qWarning() << "startPlaying(): Ought to start." << endl;
+        qWarning() << "startPlaying(): Ought to start." << Qt::endl;
         // FIXME: Add myselves as listener of the root component.
         SObject *root = currentProject_->getRootComponent();
         if( !root ) return;
-        qWarning() << "startPlaying(): Preparing start." << endl;
+        qWarning() << "startPlaying(): Preparing start." << Qt::endl;
         root->seekTo( SApplication::app().getGlobalLocatorPos() );
         SApplication::app().getSpeaker()->startOutput();
         actPlay_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );

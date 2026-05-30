@@ -211,3 +211,62 @@ runs on the more restrictive Windows path, but should be confirmed.
    full executable.
 3. Resume `02_AUDIO_DRIVER_STRATEGY.md` proper, starting with the WASAPI
    backend now that the abstraction layer exists.
+
+---
+
+## Qt6 source porting for `main/`
+
+- **Date:** 2026-05-30
+- **Status:** ✅ Complete. `smaragd.exe` (20.32 MB) builds and launches on
+  Windows 11 with Qt 6.11.1 + MinGW 13.1. End-to-end Phase 1 + Phase 2 +
+  Qt6-port verification on Windows.
+- **Verified:** `cmake --build build` produces `build/bin/smaragd.exe`;
+  `Start-Process smaragd.exe` shows the process stays alive (window-up
+  smoke test only — no audio/UI interaction tested, NullBackend is active
+  on Windows so there is no sound anyway).
+- **Not yet covered:** No proposal file exists for this work — it was
+  inline cleanup needed to unblock the Windows executable build. If a
+  formal Qt6 migration proposal is later wanted (e.g., for a full Qt5→Qt6
+  pass across the engine too), this section is the prior art.
+
+### Build-breaking changes
+
+| File                                              | Change                                                                                  |
+|---------------------------------------------------|-----------------------------------------------------------------------------------------|
+| `main/include/sprojectloader.h`                   | Replaced `#include <qxml.h> / <qdom.h> / <qhash.h>` with `<QDomDocument> / <QHash>`. The SAX API (`<qxml.h>`) is removed in Qt6; the project never used any SAX classes — only `QDom*` — so deletion was safe. |
+| `main/src/slink.cpp`                              | `(unsigned long)(&object_)` → `reinterpret_cast<std::uintptr_t>(&object_)`. Fixes LLP64 pointer truncation on 64-bit Windows. |
+| `main/src/sobject.cpp`                            | Same fix at line 61.                                                                    |
+| `main/src/sproject.cpp`                           | Same fix at line 32.                                                                    |
+| `main/src/sprojectloader.cpp`                     | `QString::null` (removed in Qt6) → `id.isNull()`.                                       |
+| `main/src/smainwindow.cpp`, `scut.cpp`, `sprojectloader.cpp`, `sstdmixer.cpp`, `strack.cpp` | `qWarning() << ... << endl` → `... << Qt::endl`. In Qt6 the std::endl manipulator is no longer accepted by QDebug — must use `Qt::endl`. (Remaining `<< endl` occurrences in `tw303a/` are inside `#ifdef`-disabled or commented-out blocks; harmless.) |
+| `main/src/main.cpp`                               | `int main(int argc, char *const argv[])` → `int main(int argc, char *argv[])`. Qt6 on Windows uses an entrypoint shim (`Qt6::EntryPoint`) that `#define`s `main` → `qMain` and expects the exact `int(int, char**)` signature — the `char *const` variant produced an `undefined reference to qMain(int, char**)` link error. |
+
+### CMake changes
+
+- `main/CMakeLists.txt` adds `${CMAKE_SOURCE_DIR}` to the smaragd target's
+  include directories so `#include "pix/playoff.xpm"` resolves (the XPM
+  icons live under `smaragd/pix/`, not `smaragd/main/pix/`).
+- `main/CMakeLists.txt` drops `include/ssortedobjlist.h` from the headers
+  list — the file is empty (1 line, no content), and AUTOMOC was warning
+  about it on every build. Pre-existing issue inherited from the .pro.
+
+### Deferred (deprecation warnings, not errors)
+
+The build is green but produces ~15 deprecation warnings:
+
+- `QMessageBox::information(... int, int)` — use the `StandardButtons` overload.
+- `QMenu::addAction(text, receiver, member, shortcut)` — argument order
+  changed; use the modern signature.
+- `Qt::operator+` on `Qt::Modifier | Qt::Key` — replace `+` with `|`.
+- `XPM string-to-char*` warnings — vendor of XPM-format includes.
+
+None are blockers. They belong in a "polish" pass alongside the broader
+Qt5→Qt6 idiom cleanup (e.g. lowercase `<qfoo.h>` includes throughout).
+
+### Next actions
+
+1. Linux smoke test of the refactored ALSA path remains the most valuable
+   thing to do next (still untouched since Phase 2 was authored).
+2. macOS configure — should now work too, but compile will fail until a
+   modern CoreAudio backend exists (the NullBackend takes over silently).
+3. Resume `02_AUDIO_DRIVER_STRATEGY.md` Phase 4 (WASAPI implementation).

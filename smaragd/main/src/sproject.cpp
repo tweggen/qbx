@@ -2,6 +2,8 @@
 #include <qobject.h>
 #include <QDebug>
 
+#include <cstdint>
+
 using namespace std;
 
 #include "sobject.h"
@@ -29,7 +31,7 @@ int SProject::serialize( QTextStream &o )
     // As the link to he current root component is not my child, I
     // have to serialize it explicitely.
     if( soRoot_ ) {
-        o << (unsigned long)(&(soRoot_->getSObject()));
+        o << reinterpret_cast<std::uintptr_t>(&(soRoot_->getSObject()));
     } else {
         o << "0";
     }
