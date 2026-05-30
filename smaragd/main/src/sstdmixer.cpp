@@ -168,13 +168,11 @@ void SStdMixer::reconnectTracksToMixer()
                 mix->setInputLevel( channel, 0 );
             } else {
                 twComponent &root = lk->getRootComponent();
-                qWarning( "Link Track $%x root component = $%x.\n", 
-                          (unsigned)(ptrdiff_t)lk,
-                          (unsigned)(ptrdiff_t) &root );                
-                qWarning( "Calling $%08x->setInput( %d, "
-                          "$%08x->getRootComponent().linkOutput( %d ) );\n",
-                          (unsigned)(ptrdiff_t) mix,
-                          channel, (unsigned)(ptrdiff_t) lk, bus );
+                qWarning( "Link Track %p root component = %p.\n",
+                          (void *)lk, (void *)&root );
+                qWarning( "Calling %p->setInput( %d, "
+                          "%p->getRootComponent().linkOutput( %d ) );\n",
+                          (void *)mix, channel, (void *)lk, bus );
                 mix->setInput( channel, root.linkOutput( bus ) );
                 mix->setInputLevel( channel, lk->getSObject().getVolume() );
             }
@@ -256,35 +254,27 @@ int SStdMixer::setNBusses( int n )
 
     // If we have to alloc new ones, do it.
     for( int i=nTakeOver; i<n; i++ ) {
-        twMixer *mix;
-        // FIXME: proper n channels.
         qWarning( "SStdMixer::setNBusses( %d ): Creating new mixer #%d.\n", n, i );
         int nc = nTracks;
         if( nc<1 ) nc = 1;
-        mix = new twMixer( *(SApplication::app().get303aEnvironment()), nc );
+        twMixer *mix = new twMixer( *(SApplication::app().get303aEnvironment()), nc );
         mix->init();
         cpRewire_->setInput( i, mix->linkOutput( 0 ) );
-
-        // Bus index is unrelated to track index, but the original code
-        // also primed the mixer's input level using the like-indexed
-        // child track (if one happened to exist). Bound the access so
-        // creating busses ahead of any tracks doesn't assert.
-        SLink *st = ( i < children.count() )
-            ? (SLink *)(const_cast<QObjectList *>(&children)->at( i ))
-            : NULL;
-        if( st ) {
-            mix->setInputLevel( i, st->getSObject().getVolume() );
-            QObject::connect(
-                &(st->getSObject()), SIGNAL( volumeChanged( double ) ),
-                this, SLOT( trackVolumeChanged( double ) ) );
-        } else {
-            mix->setInputLevel( i, 0 );
-        }
         newMixers[i] = mix;
     }
     nBusses_ = n;
     cpMixers_ = newMixers;
     if( oldMixers ) ::free( oldMixers );
+
+    // Wire every existing track into every freshly-created bus mixer.
+    // reconnectTracksToMixer iterates over all (bus, track) pairs and
+    // calls setInput / setInputLevel correctly — replaces the previous
+    // misindexed priming which used the bus index to look up a child
+    // track and set the bus mixer's like-indexed input level. The
+    // per-track volumeChanged signal connection is handled in
+    // insertTrack(), not here.
+    reconnectTracksToMixer();
+
     return 0;
 }
 

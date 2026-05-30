@@ -259,8 +259,8 @@ void SObject::removeRef()
         return;
     }
     if( (--nRefs_)==0 ) {
-        qWarning( "Object $%08x, class '%s' got unreferenced.\n", 
-                  (unsigned)(ptrdiff_t)this, metaObject()->className() );
+        qWarning( "Object %p, class '%s' got unreferenced.\n",
+                  (void *)this, metaObject()->className() );
         emit gotUnreferenced();
     }
     qWarning( "Object of class \"%s\" now has %d references.\n", 
