@@ -31,9 +31,9 @@ using namespace std;
 
 void SMainWindow::nyi()
 {
-    QMessageBox::information( NULL, "Smaragd warning", 
+    QMessageBox::information( nullptr, "Smaragd warning",
                               "This feature is not yet implemented.",
-                              "OK" );
+                              QMessageBox::Ok );
 }
 
 void SMainWindow::destroyDocksToolbars()
@@ -110,9 +110,9 @@ void SMainWindow::fileOpen()
     // OK, try to load the document.
     SProjectLoader loader( *currentProject_, fileName );
     if( !loader.wasLoaded() ) {
-        QMessageBox::information( NULL, "Smaragd warning", 
+        QMessageBox::information( nullptr, "Smaragd warning",
                                   "Unable to open specified project file.",
-                                  "OK" );
+                                  QMessageBox::Ok );
         return;
     }
 
@@ -238,14 +238,14 @@ SMainWindow::SMainWindow()
 
     qFileMenu_ = new QMenu( "&File", this );
     qFileMenu_->setTearOffEnabled(true);
-    qFileMenu_->addAction( "&New...", this, SLOT( fileNew() ), Qt::CTRL | Qt::Key_N );
+    qFileMenu_->addAction( "&New...", Qt::CTRL | Qt::Key_N, this, SLOT( fileNew() ) );
     qFileMenu_->addAction( "&Open...", this, SLOT( fileOpen() ) );
-    qFileMenu_->addAction( "&Save", this, SLOT( fileSave() ), Qt::CTRL | Qt::Key_S );
+    qFileMenu_->addAction( "&Save", Qt::CTRL | Qt::Key_S, this, SLOT( fileSave() ) );
     qFileMenu_->addAction( "Save &as", this, SLOT( nyi() ) );
     qFileMenu_->addSeparator();
-    qFileMenu_->addAction( "&Close",  this, SLOT( nyi() ), Qt::CTRL | Qt::Key_W );  
+    qFileMenu_->addAction( "&Close", Qt::CTRL | Qt::Key_W, this, SLOT( nyi() ) );
     qFileMenu_->addSeparator();
-    qFileMenu_->addAction( "E&xit", this, SLOT( fileExit() ), Qt::CTRL | Qt::Key_Q );    
+    qFileMenu_->addAction( "E&xit", Qt::CTRL | Qt::Key_Q, this, SLOT( fileExit() ) );
     menuBar()->addMenu( qFileMenu_ );
     qDockExternFileList_ = NULL;
 }

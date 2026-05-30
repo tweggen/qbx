@@ -118,39 +118,19 @@ int SMVActualView::getXPosOfOffset( offset_t off ) const
 
 void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
 {
+    // Qt6 forbids constructing a QPainter on a widget outside paintEvent.
+    // Instead, invalidate the 1-pixel-wide columns around the old and new
+    // playhead positions; paintEvent already knows how to redraw the
+    // playhead (see the cursor block at the end of paintEvent).
     QRect myRect = rect();
     int w = myRect.width();
-    //    int h = myRect.height();
-    bool painted = false;
-    // Expose both oldpos and newpos.
+    int h = myRect.height();
     int oldX = getXPosOfOffset( oldPos );
     int newX = getXPosOfOffset( newPos );
-    if( oldX==newX ) return;
+    if( oldX == newX ) return;
 
-    QPainter p( this );   
-
-    QPainter::CompositionMode oldCompositionMode = p.compositionMode();
-
-    if( oldX >= 0 && oldX<w ) {
-//        update( oldX, 0, 1, h );
-        p.setCompositionMode( QPainter::CompositionMode_Xor );        
-        p.setPen( QColor( 30, 200, 30 ) );
-        p.drawLine( oldX, 0, oldX, myRect.height()-1 );
-        painted = true;
-    }
-    if( newX >= 0 && newX<w ) {
-//        update( newX, 0, 1, h );
-        if( !painted ) {
-            p.setCompositionMode( QPainter::CompositionMode_Xor );
-            p.setPen( QColor( 30, 200, 30 ) );
-            painted = true;
-        }
-        p.drawLine( newX, 0, newX, myRect.height()-1 );
-    }
-    if( painted ) {
-        p.setCompositionMode( oldCompositionMode );
-    }
-
+    if( oldX >= 0 && oldX < w ) update( oldX, 0, 1, h );
+    if( newX >= 0 && newX < w ) update( newX, 0, 1, h );
 }
 
 void SMVActualView::resizeEvent( QResizeEvent * )
@@ -359,7 +339,7 @@ void SStdMixerView::ctSplitSample()
 
     oldLink = ensureSCut( oldLink );
     if( !oldLink ) {
-        QMessageBox::information( NULL, "Smaragd warning", "Unable to split sample.", "OK" );
+        QMessageBox::information( nullptr, "Smaragd warning", "Unable to split sample.", QMessageBox::Ok );
         return;
     }
     SCut *sc1 = (SCut *)&(oldLink->getSObject());
@@ -389,8 +369,8 @@ void SMVActualView::ctGlobalShow()
         qGlobalPopup_->addSeparator();
     }
     if( lastClickTrack_ ) {
-        qGlobalPopup_->addAction( "&Insert sample", &smv_, SLOT( ctInsertSample() ), 
-                                   Qt::CTRL+Qt::Key_Return );
+        qGlobalPopup_->addAction( "&Insert sample", Qt::CTRL | Qt::Key_Return,
+                                   &smv_, SLOT( ctInsertSample() ) );
         qGlobalPopup_->addAction( "&Remove sample", &smv_, SLOT( ctRemoveSample() ) );
         qGlobalPopup_->addAction( "Delete sample", &smv_, SLOT( ctDeleteSample() ) );
         qGlobalPopup_->addSeparator();
@@ -803,8 +783,8 @@ void SStdMixerView::addMixerControl( int trackIdx, STrack &tk )
         // Then mc might be zero here.
         if( !mc ) continue;
         mc->move( 0, getTrackHeight()*t );        
-        printf( "$%x parent is $%x qTrackControlBox_ is $%x control pos/size = %d/%d-%d/%d\n",
-                (unsigned)(ptrdiff_t) mc, (unsigned)(ptrdiff_t) mc->parent(), (unsigned)(ptrdiff_t) qTrackControlBox_,
+        printf( "%p parent is %p qTrackControlBox_ is %p control pos/size = %d/%d-%d/%d\n",
+                (void *)mc, (void *)mc->parent(), (void *)qTrackControlBox_,
                 mc->x(), mc->y(), mc->width(), mc->height() );
     }
     // Resize the container.
