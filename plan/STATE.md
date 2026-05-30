@@ -356,3 +356,108 @@ Qt5→Qt6 idiom cleanup (e.g. lowercase `<qfoo.h>` includes throughout).
 3. Linux ALSA smoke test still outstanding.
 4. CoreAudio backend mirrors this shape: device → AudioUnit → render
    callback → IAudioRenderClient analogue.
+
+---
+
+## End-to-end Windows audio + Qt6 polish (post-WASAPI)
+
+- **Date:** 2026-05-30
+- **Status:** ✅ `smaragd.exe` produces audible sound on Windows via WASAPI
+  from a project created via `File → New`. Build emits no warnings
+  beyond vendor XPM noise and a benign DirectX deploy notice.
+
+### Build & launch ergonomics
+
+| Change                                                              | Why                                                                                                  |
+|---------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
+| `AUTO_DEPLOY_QT` CMake option (default ON) — runs `windeployqt` / `macdeployqt` as a POST_BUILD step | After `cmake --build`, the exe sits next to all Qt6 DLLs and plugins; double-clickable, no PATH dance. Opt-out with `-DAUTO_DEPLOY_QT=OFF`. |
+| `SMARAGD_WIN_CONSOLE` CMake option (default ON) — omits the `WIN32` linker flag                       | Default Windows build uses the CONSOLE subsystem so stdout/stderr from the launching shell receive logs. Was previously `WIN32` (GUI subsystem) and stderr went into the void. |
+| `twsyslog.h` shim: add `fflush(stderr)` after each call                                                | Without it, redirected stderr is fully buffered and logs were lost on abnormal exit.                 |
+
+### Wiring chain (the actual reason audio worked)
+
+The audio-output chain had a stack of latent bugs that all had to be
+fixed together to produce sound on a freshly created project:
+
+1. **twRewire was a snapshot patch-bay.** `linkOutput(i)` reached back
+   through the rewire and returned a pointer to whatever component was
+   currently wired into input `i`, so downstream consumers (the speaker)
+   held a pointer to the *upstream* component. Later input swaps left
+   the speaker dangling. Rewrote twRewire to own one `twStreamingLatch`
+   per output index. `calcOutputTo` now pulls from the matching input
+   or `memset(0)`s when nothing's wired. The speaker is connected once
+   at project creation and stays valid across graph mutations.
+2. **`twStreamingLatch::copyData` hardcoded `0`** as the output index
+   when calling its owner component's `calcOutputTo`. Latent bug for any
+   multi-output component, harmless for the existing single-output ones
+   — but needed for twRewire's per-output latches to each fill from the
+   correct input. Now passes `getIndex()`.
+3. **SStdMixer's constructor called `setNBusses(0)`**, which shrank the
+   rewire to zero outputs, so `linkOutput(0)` was out of bounds and
+   returned NULL the instant `SApplication::setCurrentProject` tried to
+   wire the speaker. Replaced with `setNBusses(1)` — every project
+   starts with one bus that the speaker can permanently attach to.
+4. **`setNBusses`'s bus-creation loop indexed `children.at(i)`** without
+   a bounds check — dormant when called with `n=0`, asserted as soon
+   as the new `setNBusses(1)` default tried to create a bus before any
+   tracks existed. Bounded.
+5. **`setNBusses` then primed mixer input levels using the bus index**
+   (`mix->setInputLevel(i, lk->getVolume())` where `i` is the bus index)
+   and duplicated a `volumeChanged` signal connection already done
+   per-track in `insertTrack`. Both removed; `reconnectTracksToMixer()`
+   is now called at the end of `setNBusses` to do the wiring correctly.
+
+### Cleanup pass — quirks + Qt6 polish
+
+- Pointer-truncating debug logs in `sstdmixer.cpp`, `sobject.cpp`,
+  `sstdmixerview.cpp`: `(unsigned)(ptrdiff_t)ptr` → `%p` + `(void *)ptr`.
+- `SMVActualView::globalLocatorMoved` was constructing a QPainter
+  outside `paintEvent` — Qt6 floods stderr with `QWidget::paintEngine:
+  Should no longer be called` on every audio render tick. Replaced
+  with `update(x, 0, 1, h)` calls; `paintEvent` already redraws the
+  playhead.
+- Qt6 deprecations all fixed: `QMessageBox::information(..., "OK")` →
+  `..., QMessageBox::Ok`; `QMenu::addAction(text, recv, member, shortcut)`
+  → `addAction(text, shortcut, recv, member)`; `Qt::CTRL + Qt::Key_X`
+  → `Qt::CTRL | Qt::Key_X`.
+- General compiler warnings: `register` keyword, `catch(excStandard e)`
+  → `catch(excStandard &e)` + bare `throw`, `strncpy` of fixed-width
+  WAV chunk IDs → `memcpy`, four set-but-unused locals removed,
+  redundant `NOMINMAX` define in `wasapi_backend.cc` dropped.
+
+### How to build & run today
+
+```powershell
+$env:PATH = "C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;" + $env:PATH
+cd smaragd
+cmake -B build -G Ninja -DCMAKE_PREFIX_PATH="C:/Qt/6.11.1/mingw_64"
+cmake --build build
+& .\build\bin\smaragd.exe
+```
+
+In the app: `File → New`, then add a track, import a sample, hit Play.
+
+### Open issues still on the table
+
+- **Sample-rate mismatch.** Synth produces 44.1 kHz, WASAPI shared mode
+  forces the device rate (almost always 48 kHz). Playback is ~8.8 %
+  pitched up. Three options: rate-aware synth (engine work), resampler
+  at backend boundary (medium), exclusive-mode at 44.1 (intrusive).
+- **WASAPI: default endpoint only**, no device picker, no
+  format-change handling, no exclusive-mode path, only float32/int16/int32.
+- **Linux ALSA refactor untested** — behaviour-preserving rewrite +
+  added xrun recovery, but needs a Linux smoke build.
+- **CoreAudio / PipeWire / JACK / PulseAudio backends** — abstraction
+  is ready, no implementations.
+- **CI workflow** — `.github/workflows/build.yml` not yet authored.
+- **`paintEvent` cursor still uses `CompositionMode_Xor`** — harmless
+  but vestigial from the old XOR-draw scheme.
+- **`reconnectTracksToMixer`** has a `printf` debug spam ("Calling
+  $X->setInput(...)") that's now correctly formatted with `%p` but
+  still noisy. Could be downgraded to `qDebug` or removed.
+
+### Next session (planned)
+
+Discuss an architecture for representing user actions in two related
+forms: an undo/redo stack and a scripting interface. Both want a
+uniform "what just happened, replayably" representation.
