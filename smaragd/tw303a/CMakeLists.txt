@@ -1,0 +1,117 @@
+set(TW303A_HEADERS
+    include/tw303aenv.h
+    include/twcomponent.h
+    include/twconstant.h
+    include/twgrainer.h
+    include/twgrainspec.h
+    include/twmixer.h
+    include/twmoog.h
+    include/twosc.h
+    include/twpipe.h
+    include/twrewire.h
+    include/twsaw.h
+    include/twsimplesaw.h
+    include/twspeaker.h
+    include/twtestseq.h
+    include/twtrackmix.h
+    include/twwav.h
+    include/twwavinput.h
+    include/twwhitenoise.h
+)
+
+set(TW303A_SOURCES
+    src/tw303a.cc
+    src/tw303aenv.cc
+    src/twcomponent.cc
+    src/twconstant.cc
+    src/twgrainer.cc
+    src/twgrainspec.cc
+    src/twlatch.cc
+    src/twmixer.cc
+    src/twmoog.cc
+    src/twosc.cc
+    src/twpipe.cc
+    src/twrewire.cc
+    src/twsaw.cc
+    src/twsimplesaw.cc
+    src/twspeaker.cc
+    src/twstreaminglatch.cc
+    src/twtestseq.cc
+    src/twtrackmix.cc
+    src/twwav.cc
+    src/twwavinput.cc
+    src/twwhitenoise.cc
+)
+
+add_library(tw303a STATIC ${TW303A_SOURCES} ${TW303A_HEADERS})
+
+target_include_directories(tw303a
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/main/include
+)
+
+target_link_libraries(tw303a PUBLIC
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Xml
+)
+
+if(SMARAGD_LINUX AND ENABLE_ALSA)
+    find_package(ALSA REQUIRED)
+    target_compile_definitions(tw303a PRIVATE QBX_LINUX_ALSA=1)
+    target_link_libraries(tw303a PRIVATE ALSA::ALSA)
+    message(STATUS "tw303a: ALSA backend enabled")
+endif()
+
+if(SMARAGD_LINUX AND ENABLE_PIPEWIRE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+    target_compile_definitions(tw303a PRIVATE QBX_LINUX_PIPEWIRE=1)
+    target_link_libraries(tw303a PRIVATE PkgConfig::PIPEWIRE)
+    message(STATUS "tw303a: PipeWire backend enabled (placeholder; implementation pending)")
+endif()
+
+if(SMARAGD_LINUX AND ENABLE_PULSEAUDIO)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(PULSEAUDIO REQUIRED IMPORTED_TARGET libpulse libpulse-simple)
+    target_compile_definitions(tw303a PRIVATE QBX_LINUX_PULSEAUDIO=1)
+    target_link_libraries(tw303a PRIVATE PkgConfig::PULSEAUDIO)
+    message(STATUS "tw303a: PulseAudio backend enabled (placeholder; implementation pending)")
+endif()
+
+if(ENABLE_JACK)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(JACK REQUIRED IMPORTED_TARGET jack)
+    target_compile_definitions(tw303a PRIVATE QBX_JACK=1)
+    target_link_libraries(tw303a PRIVATE PkgConfig::JACK)
+    message(STATUS "tw303a: JACK backend enabled (placeholder; implementation pending)")
+endif()
+
+if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
+    target_compile_definitions(tw303a PRIVATE QBX_WIN_WASAPI=1)
+    target_link_libraries(tw303a PRIVATE ole32 oleaut32 mmdevapi avrt ksuser uuid winmm)
+    message(STATUS "tw303a: WASAPI backend enabled (placeholder; implementation pending)")
+endif()
+
+if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
+    find_library(COREAUDIO_LIBRARY  CoreAudio)
+    find_library(AUDIOUNIT_LIBRARY  AudioUnit)
+    find_library(AUDIOTOOLBOX       AudioToolbox)
+    find_library(COREFOUNDATION     CoreFoundation)
+    find_library(AVFOUNDATION       AVFoundation)
+    target_compile_definitions(tw303a PRIVATE QBX_MAC_COREAUDIO=1)
+    target_link_libraries(tw303a PRIVATE
+        ${COREAUDIO_LIBRARY}
+        ${AUDIOUNIT_LIBRARY}
+        ${AUDIOTOOLBOX}
+        ${COREFOUNDATION}
+        ${AVFOUNDATION}
+    )
+    message(STATUS "tw303a: CoreAudio backend enabled (placeholder; implementation pending)")
+endif()
+
+if(NOT (ENABLE_ALSA OR ENABLE_PIPEWIRE OR ENABLE_PULSEAUDIO OR ENABLE_JACK OR ENABLE_WASAPI OR ENABLE_COREAUDIO))
+    message(WARNING "tw303a: no audio backend enabled; the synthesizer will build but cannot output sound.")
+endif()
