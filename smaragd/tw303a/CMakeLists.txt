@@ -101,7 +101,12 @@ endif()
 if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
     target_compile_definitions(tw303a PRIVATE QBX_WIN_WASAPI=1)
     target_link_libraries(tw303a PRIVATE ole32 oleaut32 mmdevapi avrt ksuser uuid winmm)
-    message(STATUS "tw303a: WASAPI backend enabled (placeholder; implementation pending)")
+    target_sources(tw303a
+        PRIVATE
+            src/audio/wasapi_backend.cc
+            include/audio/wasapi_backend.h
+    )
+    message(STATUS "tw303a: WASAPI backend enabled")
 endif()
 
 if(SMARAGD_MACOS AND ENABLE_COREAUDIO)

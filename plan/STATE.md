@@ -270,3 +270,89 @@ Qt5→Qt6 idiom cleanup (e.g. lowercase `<qfoo.h>` includes throughout).
 2. macOS configure — should now work too, but compile will fail until a
    modern CoreAudio backend exists (the NullBackend takes over silently).
 3. Resume `02_AUDIO_DRIVER_STRATEGY.md` Phase 4 (WASAPI implementation).
+
+---
+
+## 02_AUDIO_DRIVER_STRATEGY.md — WASAPI backend (Windows)
+
+- **Date:** 2026-05-30
+- **Status:** First real backend behind the abstraction. Builds clean on
+  Windows / Qt6 / MinGW; manual playback verification (clicking Play in
+  the UI and listening) is the user's job and has NOT been done from
+  this session.
+
+### What landed
+
+| File                                                     | Purpose                                                                                              |
+|----------------------------------------------------------|------------------------------------------------------------------------------------------------------|
+| `smaragd/tw303a/include/audio/wasapi_backend.h`          | `WASAPIBackend` class; forward-declares COM interfaces so `<windows.h>` does not leak into Qt MOC.   |
+| `smaragd/tw303a/src/audio/wasapi_backend.cc`             | Implementation: shared-mode IAudioClient, event-driven render thread, MMCSS "Pro Audio" priority, format conversion for float32 / int16 / int32 device mix formats. |
+| `smaragd/tw303a/src/audio/audio_backend.cc`              | Factory: `QBX_WIN_WASAPI` branch picks `WASAPIBackend` over `NullBackend`.                           |
+| `smaragd/tw303a/CMakeLists.txt`                          | Wires `wasapi_backend.{h,cc}` under the existing `if(SMARAGD_WINDOWS AND ENABLE_WASAPI)` block.       |
+| `smaragd/CMakeLists.txt`                                 | `ENABLE_WASAPI` default flipped back to `ON` on Windows.                                              |
+
+### How it works
+
+- `openDevice()`: `CoInitializeEx` → `IMMDeviceEnumerator` → default render
+  endpoint → `IAudioClient::Activate` → `GetMixFormat` → `Initialize` in
+  `AUDCLNT_SHAREMODE_SHARED | AUDCLNT_STREAMFLAGS_EVENTCALLBACK` →
+  `SetEventHandle` → `GetService(IAudioRenderClient)`.
+- `startOutput()`: pre-fills one silent buffer, calls `IAudioClient::Start`,
+  spawns a dedicated thread.
+- Audio thread: boosts itself to MMCSS "Pro Audio" priority, then waits on
+  the buffer-ready event. Each wake-up pulls floats from the render
+  callback into a scratch buffer and converts in place into the device's
+  native format (float32 / int16 / int32) before releasing back to WASAPI.
+- `stopOutput()`: sets a stop flag, signals the event to unblock the
+  thread, joins, then calls `IAudioClient::Stop`.
+
+### MinGW quirks worked around
+
+- `KSDATAFORMAT_SUBTYPE_IEEE_FLOAT` / `KSDATAFORMAT_SUBTYPE_PCM` are not
+  always provided as linker symbols by MinGW's `<ksmedia.h>`; defined as
+  file-local GUIDs.
+- Same story for `CLSID_MMDeviceEnumerator` /
+  `IID_IMMDeviceEnumerator` / `IID_IAudioClient` /
+  `IID_IAudioRenderClient` — defined locally rather than relying on the
+  symbols being exported by `mmdevapi`.
+
+### Known limitations (deferred)
+
+- **Sample-rate mismatch.** WASAPI shared mode forces the device's mix
+  format, which is almost always 48 kHz on modern Windows. The synth
+  produces 44.1 kHz samples; playback at 48 kHz will be ~8.8 % too fast
+  (and pitched up by the same ratio). The backend logs a `LOG_WARNING`
+  to flag this. Fixes:
+    - Make the synth rate-aware (engine work, broad scope), OR
+    - Add a resampler at the backend boundary (smaller scope), OR
+    - Use `AUDCLNT_SHAREMODE_EXCLUSIVE` at 44.1 kHz (intrusive — kicks
+      other apps off the device).
+- **Default-endpoint only.** No device enumeration / selection UI yet.
+- **No endpoint-change handling.** If the user switches default device
+  while playing, behaviour is undefined.
+- **No format other than float32 / int16 / int32.** 24-bit-packed PCM
+  devices would fail openDevice with a logged error.
+- **No exclusive-mode path.**
+
+### Verification
+
+- **Build:** ✅ clean on Windows / Qt6 / MinGW;
+  `cmake --build build` → `build/bin/smaragd.exe` (20.57 MB), auto-deploy
+  copies Qt DLLs.
+- **Launch:** ✅ process stays up; no crash on startup. WASAPI init only
+  runs when the user clicks Play, so the launch test does not exercise
+  the backend itself.
+- **Audible playback:** ❓ not tested from this session — needs a human
+  with a speaker.
+
+### Next actions
+
+1. **You: launch the exe, click Play, listen.** If nothing happens,
+   `stderr` should show `WASAPIBackend: opened default endpoint, …` lines
+   from `syslog()`. If you see those but hear nothing, the synth's
+   `pInputPlugs[0]` chain is the next suspect, not the backend.
+2. Sample-rate handling — pick one of the three options above when
+   pitched-up playback gets annoying.
+3. Linux ALSA smoke test still outstanding.
+4. CoreAudio backend mirrors this shape: device → AudioUnit → render
+   callback → IAudioRenderClient analogue.
