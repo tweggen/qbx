@@ -23,6 +23,14 @@ struct AudioConfig {
     twSampleType sampleType   = twSampleType::Float32;
 };
 
+// One selectable output device. `id` is the backend-specific handle passed back
+// to openDevice() (e.g. a WASAPI endpoint id); `name` is the human-readable
+// label for the UI. The empty id / "default" means the system default endpoint.
+struct AudioDeviceInfo {
+    std::string id;
+    std::string name;
+};
+
 // Pull callback: fill `out` with up to `frames` interleaved float samples
 // across `channels` channels. Return the number of frames actually written
 // (may be less than requested when the source is dry; backends should treat
@@ -55,6 +63,11 @@ public:
     // probe the device but must not disturb an active stream. Feeds the
     // negotiator's candidate domain D.
     virtual std::vector<std::uint32_t> supportedRates() const           = 0;
+
+    // Enumerate the selectable output devices for a device-picker UI. The empty
+    // list means "only the system default is available". May be called before
+    // openDevice().
+    virtual std::vector<AudioDeviceInfo> enumerateDevices() const        = 0;
 
     virtual const char *name() const                                    = 0;
 };

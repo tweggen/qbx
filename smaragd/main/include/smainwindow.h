@@ -8,6 +8,7 @@
 
 class SProject;
 class QAction;
+class QActionGroup;
 
 class QString;
 
@@ -29,9 +30,12 @@ protected slots:
     void startPlaying();
     void stopPlaying();
 
+    void audioDeviceSelected( QAction * );
+
 private:
     void newProject();
     void closeProject();
+    void buildAudioMenu();
 
     void createDocksToolbars();
     void destroyDocksToolbars();
@@ -40,6 +44,8 @@ private:
     QWidget *projectRootWidget_;
 
     QMenu *qFileMenu_;
+    QMenu *qAudioMenu_;
+    QActionGroup *deviceGroup_;
 
     QAction *actStop_, *actPlay_;
     QToolBar *qTBTransport_;

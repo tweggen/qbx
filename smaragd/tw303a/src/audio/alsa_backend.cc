@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 
 namespace audio {
 
@@ -103,6 +105,26 @@ std::vector<std::uint32_t> ALSABackend::supportedRates() const
     }
     snd_pcm_close(probe);
     return out;
+}
+
+std::vector<AudioDeviceInfo> ALSABackend::enumerateDevices() const
+{
+    std::vector<AudioDeviceInfo> devices;
+    // Always offer the system default first.
+    devices.push_back({ "default", "System default" });
+
+    int card = -1;
+    while (snd_card_next(&card) == 0 && card >= 0) {
+        char *cardName = nullptr;
+        if (snd_card_get_name(card, &cardName) == 0 && cardName) {
+            AudioDeviceInfo d;
+            d.id   = "hw:" + std::to_string(card);
+            d.name = cardName;
+            devices.push_back(d);
+            free(cardName);
+        }
+    }
+    return devices;
 }
 
 int ALSABackend::startOutput()

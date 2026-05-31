@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 // MinGW omits KSDATAFORMAT_SUBTYPE_IEEE_FLOAT / _PCM from its ksmedia.h in
 // some builds — define them locally if not already provided.
@@ -47,10 +48,35 @@ static const IID IID_IAudioClient_local = {
 static const IID IID_IAudioRenderClient_local = {
     0xF294ACFC, 0x3146, 0x4483,
     {0xA7, 0xBF, 0xAD, 0xDC, 0xA7, 0xC2, 0x60, 0xE2}};
+// PKEY_Device_FriendlyName: also not always provided as a linker symbol by
+// MinGW. {fmtid, pid} from functiondiscoverykeys_devpkey.h.
+static const PROPERTYKEY PKEY_Device_FriendlyName_local = {
+    {0xA45C254E, 0xDF1C, 0x4EFD,
+     {0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0}}, 14};
 
 namespace {
 
 const REFERENCE_TIME kRequestedDurationHns = 100 * 10000;  // 100 ms
+
+std::string wideToUtf8(const wchar_t *w)
+{
+    if (!w) return {};
+    int len = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return {};
+    std::string s(static_cast<std::size_t>(len - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), len, nullptr, nullptr);
+    return s;
+}
+
+std::wstring utf8ToWide(const std::string &s)
+{
+    if (s.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring w(static_cast<std::size_t>(len - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), len);
+    return w;
+}
 
 audio::WasapiSampleFormat detectSampleFormat(const WAVEFORMATEX *wf)
 {
@@ -93,7 +119,7 @@ WASAPIBackend::~WASAPIBackend()
     }
 }
 
-int WASAPIBackend::openDevice(const std::string & /*deviceName*/,
+int WASAPIBackend::openDevice(const std::string &deviceName,
                               std::uint32_t preferredRate)
 {
     if (audioClient_) {
@@ -117,11 +143,28 @@ int WASAPIBackend::openDevice(const std::string & /*deviceName*/,
         return -1;
     }
 
-    hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
-    if (FAILED(hr)) {
-        syslog(LOG_ERR, "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx",
-               (unsigned long)hr);
-        return -1;
+    if (deviceName.empty() || deviceName == "default") {
+        hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
+        if (FAILED(hr)) {
+            syslog(LOG_ERR, "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx",
+                   (unsigned long)hr);
+            return -1;
+        }
+    } else {
+        std::wstring wid = utf8ToWide(deviceName);
+        hr = enumerator_->GetDevice(wid.c_str(), &device_);
+        if (FAILED(hr)) {
+            syslog(LOG_WARNING,
+                   "WASAPIBackend: GetDevice for selected endpoint failed "
+                   "(0x%08lx); falling back to system default.",
+                   (unsigned long)hr);
+            hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
+            if (FAILED(hr)) {
+                syslog(LOG_ERR, "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx",
+                       (unsigned long)hr);
+                return -1;
+            }
+        }
     }
 
     hr = device_->Activate(IID_IAudioClient_local, CLSCTX_INPROC_SERVER, nullptr,
@@ -221,6 +264,63 @@ int WASAPIBackend::openDevice(const std::string & /*deviceName*/,
            "synth output to match.",
            config_.sampleRate);
     return 0;
+}
+
+std::vector<AudioDeviceInfo> WASAPIBackend::enumerateDevices() const
+{
+    std::vector<AudioDeviceInfo> devices;
+    devices.push_back({ "default", "System default" });
+
+    // Ensure COM is available on this (GUI) thread; balance only what we init.
+    HRESULT ci = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool didInit = (ci == S_OK || ci == S_FALSE);
+
+    // Use a transient enumerator so this works before openDevice().
+    IMMDeviceEnumerator *enumr = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator_local, nullptr,
+                                  CLSCTX_INPROC_SERVER, IID_IMMDeviceEnumerator_local,
+                                  reinterpret_cast<void **>(&enumr));
+    if (FAILED(hr) || !enumr) {
+        if (didInit) CoUninitialize();
+        return devices;
+    }
+
+    IMMDeviceCollection *coll = nullptr;
+    hr = enumr->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &coll);
+    if (SUCCEEDED(hr) && coll) {
+        UINT count = 0;
+        coll->GetCount(&count);
+        for (UINT i = 0; i < count; ++i) {
+            IMMDevice *dev = nullptr;
+            if (FAILED(coll->Item(i, &dev)) || !dev) continue;
+
+            LPWSTR wid = nullptr;
+            std::string id, label;
+            if (SUCCEEDED(dev->GetId(&wid)) && wid) {
+                id = wideToUtf8(wid);
+                CoTaskMemFree(wid);
+            }
+
+            IPropertyStore *props = nullptr;
+            if (SUCCEEDED(dev->OpenPropertyStore(STGM_READ, &props)) && props) {
+                PROPVARIANT name;
+                PropVariantInit(&name);
+                if (SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName_local, &name))
+                    && name.vt == VT_LPWSTR) {
+                    label = wideToUtf8(name.pwszVal);
+                }
+                PropVariantClear(&name);
+                props->Release();
+            }
+            if (!id.empty())
+                devices.push_back({ id, label.empty() ? id : label });
+            dev->Release();
+        }
+        coll->Release();
+    }
+    enumr->Release();
+    if (didInit) CoUninitialize();
+    return devices;
 }
 
 std::vector<std::uint32_t> WASAPIBackend::supportedRates() const

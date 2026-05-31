@@ -27,6 +27,7 @@ public:
     // The null backend imposes no hardware constraint: it can "open" at any
     // rate, so it honours whatever was requested (reported via getConfig()).
     std::vector<std::uint32_t> supportedRates() const override { return {}; }
+    std::vector<AudioDeviceInfo> enumerateDevices() const override { return {}; }
 
     const char *name() const override { return "null"; }
 

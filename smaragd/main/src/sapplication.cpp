@@ -9,6 +9,7 @@
 #include "slink.h"
 #include "sapplication.h"
 #include "sproject.h"
+#include "ssettings.h"
 
 SApplication *SApplication::singleton_ = NULL;
 
@@ -191,12 +192,19 @@ SApplication::SApplication( int &argc, char **argv )
       isPlaying_( false ),
       currentProject_( NULL )
 {
+    setOrganizationName( "Smaragd" );
+    setApplicationName( "smaragd" );
+
     singleton_ = this;
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
     t3Speaker_ = new twSpeaker( *t3Env_ );
-    t3Speaker_->init();    
+    t3Speaker_->init();
+
+    // Restore the audio output device chosen in a previous session.
+    QString devId = SSettings::instance().audioDeviceId();
+    if( !devId.isEmpty() ) t3Speaker_->setOutputDevice( devId.toStdString() );
 }
 
 SApplication::~SApplication()

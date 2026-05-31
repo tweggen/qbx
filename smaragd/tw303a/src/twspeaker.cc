@@ -33,7 +33,7 @@ void twSpeaker::startOutput()
         graphRate = pInputPlugs[0]->getFormat().sampleRate;
     }
 
-    if (backend_->openDevice("default", graphRate) != 0) {
+    if (backend_->openDevice(outputDeviceId_, graphRate) != 0) {
         syslog(LOG_ERR, "twSpeaker::startOutput: openDevice failed");
         return;
     }
@@ -112,6 +112,16 @@ void twSpeaker::stopOutput()
 bool twSpeaker::isPlaying()
 {
     return isPlaying_;
+}
+
+void twSpeaker::setOutputDevice(const std::string &id)
+{
+    outputDeviceId_ = id.empty() ? "default" : id;
+}
+
+std::vector<audio::AudioDeviceInfo> twSpeaker::outputDevices() const
+{
+    return backend_->enumerateDevices();
 }
 
 length_t twSpeaker::calcOutputTo(sample_t *, length_t, idx_t)

@@ -8,6 +8,7 @@
 #include <qpainter.h>
 #include <qmenu.h>
 #include <qfiledialog.h>
+#include <QFileInfo>
 #include <qscrollbar.h>
 #include <qlayout.h>
 #include <qmessagebox.h>
@@ -24,6 +25,7 @@
 #include "slink.h"
 #include "scut.h"
 #include "sproject.h"
+#include "ssettings.h"
 #include "ssmvmixercontrol.h"
 
 // Icons needed here
@@ -253,12 +255,13 @@ void SStdMixerView::ctInsertSample()
     QString s( QFileDialog::getOpenFileName(
         this, // parent
         "Insert sample",
-        QDir::currentPath(),
-        "Wave files (*.WAV *.wav)" ) ); 
+        SSettings::instance().lastDir( "sample", QDir::currentPath() ),
+        "Wave files (*.WAV *.wav)" ) );
     if( s.isNull() ) {
         qWarning( "Nothing selected in file requester.\n" );
         return;
     }
+    SSettings::instance().setLastDir( "sample", QFileInfo( s ).absolutePath() );
 //    qWarning( "User selected \"%s\" in file requester.\n", (const char *) s );
     SLink *lk = SApplication::app().getCurrentProject()->linkToFile( s );
     if( !lk ) {

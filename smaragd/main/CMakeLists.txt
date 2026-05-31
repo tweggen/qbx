@@ -15,6 +15,7 @@ set(SMARAGD_HEADERS
     include/splainwaverndrinline.h
     include/sproject.h
     include/sprojectloader.h
+    include/ssettings.h
     include/ssmvmixercontrol.h
     include/sstdmixer.h
     include/sstdmixerview.h
@@ -41,6 +42,7 @@ set(SMARAGD_SOURCES
     src/splainwaverndrinline.cpp
     src/sproject.cpp
     src/sprojectloader.cpp
+    src/ssettings.cpp
     src/ssmvmixercontrol.cpp
     src/sstdmixer.cpp
     src/sstdmixerview.cpp

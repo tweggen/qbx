@@ -781,3 +781,48 @@ set + format. On a device that can open at the project rate, the speaker
 resampler is a passthrough. Shared-mode WASAPI can't change its mix rate, so the
 request is advisory there (resampler bridges); exclusive-mode honoring is the
 documented future step. Committed in this session.
+
+---
+
+## Audio output device picker + per-user settings store
+
+- **Date:** 2026-05-31
+- **Status:** ✅ Implemented and building green on Windows/Qt6/MinGW; window-up
+  smoke test passes (the Audio menu, and thus WASAPI device enumeration, is
+  built at startup without crashing). Picking a device / observing the saved
+  INI still wants a human click.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `main/include/ssettings.h` + `src/ssettings.cpp` (new) | `SSettings` singleton over `QSettings(IniFormat, UserScope, "Smaragd", "smaragd")` — a real per-user INI (`%APPDATA%/Smaragd/smaragd.ini`, `~/.config/Smaragd/smaragd.ini`). Keys: `audio/deviceId`, `paths/<context>`. This is the requested "(device,user)-specific config file". |
+| `tw303a/include/audio/audio_backend.h` | `AudioDeviceInfo{id,name}`; `enumerateDevices()` pure virtual. |
+| `audio/wasapi_backend.{h,cc}` | `enumerateDevices()` via `IMMDeviceEnumerator::EnumAudioEndpoints` (id + `PKEY_Device_FriendlyName`, defined locally for MinGW); `openDevice` honors a non-default endpoint id via `GetDevice`, falling back to default. UTF-8↔wide helpers. COM init is balanced defensively in the enumerator. |
+| `audio/null_backend.h`, `audio/alsa_backend.{h,cc}` | `enumerateDevices()`: Null returns `{}`; ALSA enumerates cards via `snd_card_next` (Linux, uncompiled). |
+| `tw303a/include/twspeaker.h` + `src/twspeaker.cc` | `setOutputDevice`/`outputDevice`/`outputDevices`; `startOutput` opens the selected id. Engine stays GUI-agnostic (id is a plain string; no SSettings dependency). |
+| `main/src/sapplication.cpp` | Sets org/app name; restores the saved device id into the speaker at startup. |
+| `main/include/smainwindow.h` + `src/smainwindow.cpp` | New **Audio → Output Device** submenu: a `QActionGroup` of checkable entries from `speaker->outputDevices()`, current selection checked. Choosing one calls `setOutputDevice` + persists to `SSettings` (takes effect next Play; a status-bar note if currently playing). |
+| `main/src/smainwindow.cpp`, `sstdmixerview.cpp` | The project-open and sample-import file dialogs now start at the remembered `SSettings::lastDir("project"/"sample", …)` and store the chosen directory back. |
+
+### Notes / decisions
+
+- **Layering:** device enumeration and the device id live in the engine
+  (`twSpeaker`/`AudioBackend`), but the *settings* and *menu* live in `main/`.
+  The engine never depends on `SSettings`; the GUI orchestrates (load id →
+  `setOutputDevice`; user picks → persist).
+- **Effective timing:** a device change applies at the next `startOutput()`
+  (the speaker reads the id when opening). No mid-play device switch — kept
+  simple; a stop/restart could be added later.
+- **Shared-mode caveat carries over:** selecting a device still goes through
+  shared-mode WASAPI, so its mix rate governs and the speaker resampler bridges
+  as needed.
+
+### Next actions
+
+1. **You:** run it, open the **Audio → Output Device** menu, pick a device,
+   confirm `%APPDATA%/Smaragd/smaragd.ini` appears with `audio/deviceId`; reopen
+   a file dialog to confirm it returns to the last directory.
+2. ALSA device enumeration is uncompiled here — needs a Linux build.
+3. Per-device *rate* selection in the picker UI (exclusive-mode) is a natural
+   follow-on now that `supportedRates()` exists.

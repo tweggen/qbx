@@ -4,10 +4,14 @@
 #include <QDebug>
 #include <qmessagebox.h>
 #include <qaction.h>
+#include <QActionGroup>
+#include <QMenu>
 #include <qtoolbar.h>
 #include <QDockWidget>
 #include <qfile.h>
 #include <qfiledialog.h>
+#include <QFileInfo>
+#include <QStatusBar>
 
 #include <iostream>
 
@@ -18,6 +22,7 @@
 #include "sexternfilelist.h"
 #include "slink.h"
 #include "sprojectloader.h"
+#include "ssettings.h"
 
 #include "sstdmixer.h"
 
@@ -92,16 +97,18 @@ void SMainWindow::fileOpen()
     // FIXME: Delete the old component
     closeProject();
 //    newProject();
-    QString fileName( 
-        QFileDialog::getOpenFileName( 
+    QString fileName(
+        QFileDialog::getOpenFileName(
             this,
             "Open Project",
-            QDir::currentPath(),
-            "qbx Projects (*.qxp *.QXP)" ) ); 
+            SSettings::instance().lastDir( "project", QDir::currentPath() ),
+            "qbx Projects (*.qxp *.QXP)" ) );
     if( fileName.isNull() ) {
         qWarning( "Nothing selected in file requester.\n" );
         return;
     }
+    SSettings::instance().setLastDir( "project",
+                                      QFileInfo( fileName ).absolutePath() );
 
     // Now, as the reading proceeded, create an empty project to fill in the data.
     currentProject_ = new SProject();    
@@ -247,7 +254,60 @@ SMainWindow::SMainWindow()
     qFileMenu_->addSeparator();
     qFileMenu_->addAction( "E&xit", Qt::CTRL | Qt::Key_Q, this, SLOT( fileExit() ) );
     menuBar()->addMenu( qFileMenu_ );
+
+    buildAudioMenu();
+
     qDockExternFileList_ = NULL;
+}
+
+void SMainWindow::buildAudioMenu()
+{
+    qAudioMenu_ = new QMenu( "&Audio", this );
+    QMenu *devMenu = qAudioMenu_->addMenu( "Output &Device" );
+
+    deviceGroup_ = new QActionGroup( this );
+    deviceGroup_->setExclusive( true );
+
+    twSpeaker *spk = SApplication::app().getSpeaker();
+    const std::string current = spk->outputDevice();
+    std::vector<audio::AudioDeviceInfo> devs = spk->outputDevices();
+
+    auto addDevice = [&]( const QString &label, const QString &id ) {
+        QAction *a = devMenu->addAction( label );
+        a->setCheckable( true );
+        a->setData( id );
+        a->setChecked( id.toStdString() == current );
+        deviceGroup_->addAction( a );
+    };
+
+    if( devs.empty() ) {
+        // Backend offers no enumeration (e.g. NullBackend): just the default.
+        addDevice( "System default", "default" );
+    } else {
+        for( const audio::AudioDeviceInfo &d : devs )
+            addDevice( QString::fromStdString( d.name ),
+                       QString::fromStdString( d.id ) );
+    }
+
+    // If the saved device is gone, fall back to checking the first entry.
+    if( !deviceGroup_->checkedAction() && !deviceGroup_->actions().isEmpty() )
+        deviceGroup_->actions().first()->setChecked( true );
+
+    connect( deviceGroup_, &QActionGroup::triggered,
+             this, &SMainWindow::audioDeviceSelected );
+
+    menuBar()->addMenu( qAudioMenu_ );
+}
+
+void SMainWindow::audioDeviceSelected( QAction *a )
+{
+    if( !a ) return;
+    const QString id = a->data().toString();
+    SApplication::app().getSpeaker()->setOutputDevice( id.toStdString() );
+    SSettings::instance().setAudioDeviceId( id );
+    if( SApplication::app().isPlaying() )
+        statusBar()->showMessage(
+            "Audio device change takes effect on the next Play.", 4000 );
 }
 
 SMainWindow::~SMainWindow()

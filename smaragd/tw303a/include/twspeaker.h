@@ -3,10 +3,11 @@
 
 #include "twcomponent.h"
 #include "twresampler.h"
+#include "audio/audio_backend.h"
 
 #include <memory>
-
-namespace audio { class AudioBackend; }
+#include <string>
+#include <vector>
 
 class twSpeaker
     : public twComponent
@@ -16,6 +17,7 @@ private:
     std::unique_ptr<audio::AudioBackend> backend_;
     bool isPlaying_;
     twResampler resampler_;
+    std::string outputDeviceId_ = "default";
 
 protected:
     virtual length_t calcOutputTo(sample_t *pDest, length_t length, idx_t idx);
@@ -34,6 +36,13 @@ public:
     void setBufferSize(length_t) {}
 
     bool isPlaying();
+
+    // Output device selection (for a device-picker UI). The id is a backend
+    // device id from outputDevices(); "default" / empty means the system
+    // default endpoint. Takes effect on the next startOutput().
+    void setOutputDevice( const std::string &id );
+    const std::string &outputDevice() const { return outputDeviceId_; }
+    std::vector<audio::AudioDeviceInfo> outputDevices() const;
 
 public slots:
     void startOutput();

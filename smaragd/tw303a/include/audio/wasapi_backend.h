@@ -44,6 +44,7 @@ public:
     // rate (known after openDevice; empty before). Exclusive-mode enumeration
     // is future work — see proposal 02.
     std::vector<std::uint32_t> supportedRates() const override;
+    std::vector<AudioDeviceInfo> enumerateDevices() const override;
 
     const char *name() const override { return "wasapi"; }
 

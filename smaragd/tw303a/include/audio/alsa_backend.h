@@ -27,6 +27,8 @@ public:
 
     // Rates the PCM device accepts, probed from the candidate set.
     std::vector<std::uint32_t> supportedRates() const override;
+    // Enumerate ALSA cards (snd_card_next) as selectable devices.
+    std::vector<AudioDeviceInfo> enumerateDevices() const override;
 
     const char *name() const override { return "alsa"; }
 
