@@ -1,5 +1,6 @@
 #include "audio/alsa_backend.h"
 
+#include "twconvert.h"
 #include "twsyslog.h"
 
 #include <algorithm>
@@ -167,12 +168,15 @@ void ALSABackend::writeChunk_(snd_pcm_uframes_t chunkSize)
             remaining, config_.bufferFrames);
 
         pullSamples_();
-        for (std::size_t i = 0; i < framesNow * config_.channels; ++i) {
-            float s = floatBuffer_[i] * 32767.0f;
-            if (s < -32768.0f) s = -32768.0f;
-            else if (s >  32767.0f) s =  32767.0f;
-            shortBuffer_[i] = static_cast<int16_t>(s);
-        }
+        // Interleaved N-channel float → S16_LE, via the shared converter
+        // (replaces the former hand-rolled clip loop).
+        twFormat srcFmt;
+        srcFmt.sampleType = twSampleType::Float32;
+        srcFmt.channels   = static_cast<std::uint16_t>(config_.channels);
+        twFormat dstFmt = srcFmt;
+        dstFmt.sampleType = twSampleType::Int16;
+        twConvertFrames(srcFmt, floatBuffer_.data(), dstFmt, shortBuffer_.data(),
+                        static_cast<length_t>(framesNow));
 
         snd_pcm_sframes_t written =
             snd_pcm_writei(pcm_, shortBuffer_.data(), framesNow);

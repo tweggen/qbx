@@ -1,5 +1,6 @@
 #include "audio/wasapi_backend.h"
 
+#include "twconvert.h"
 #include "twsyslog.h"
 
 // WIN32_LEAN_AND_MEAN / NOMINMAX are provided globally by the top-level
@@ -74,22 +75,6 @@ audio::WasapiSampleFormat detectSampleFormat(const WAVEFORMATEX *wf)
         }
     }
     return audio::WasapiSampleFormat::Unknown;
-}
-
-inline int16_t clipToInt16(float s)
-{
-    s *= 32767.0f;
-    if (s < -32768.0f) s = -32768.0f;
-    else if (s > 32767.0f) s = 32767.0f;
-    return static_cast<int16_t>(s);
-}
-
-inline int32_t clipToInt32(float s)
-{
-    double v = static_cast<double>(s) * 2147483647.0;
-    if (v < -2147483648.0) v = -2147483648.0;
-    else if (v > 2147483647.0) v = 2147483647.0;
-    return static_cast<int32_t>(v);
 }
 
 }  // namespace
@@ -212,12 +197,10 @@ int WASAPIBackend::openDevice(const std::string & /*deviceName*/)
            "WASAPIBackend: opened default endpoint, %u Hz, %u ch, %s, buffer=%u frames",
            config_.sampleRate, config_.channels, fmtName, config_.bufferFrames);
 
-    if (config_.sampleRate != 44100) {
-        syslog(LOG_WARNING,
-               "WASAPIBackend: device runs at %u Hz but the synth produces 44100 Hz "
-               "samples; pitch will be off until a resampler / rate-aware synth lands.",
-               config_.sampleRate);
-    }
+    syslog(LOG_INFO,
+           "WASAPIBackend: device mix rate is %u Hz; twSpeaker resamples the "
+           "synth output to match.",
+           config_.sampleRate);
     return 0;
 }
 
@@ -306,25 +289,26 @@ int WASAPIBackend::renderOnce_()
                   0.0f);
     }
 
-    const std::size_t totalSamples = static_cast<std::size_t>(framesAvail) * config_.channels;
+    twSampleType dstType;
     switch (sampleFormat_) {
-        case WasapiSampleFormat::Float32:
-            std::memcpy(dst, floatScratch_.data(), totalSamples * sizeof(float));
-            break;
-        case WasapiSampleFormat::Int16: {
-            auto *out = reinterpret_cast<int16_t *>(dst);
-            for (std::size_t i = 0; i < totalSamples; ++i) out[i] = clipToInt16(floatScratch_[i]);
-            break;
-        }
-        case WasapiSampleFormat::Int32: {
-            auto *out = reinterpret_cast<int32_t *>(dst);
-            for (std::size_t i = 0; i < totalSamples; ++i) out[i] = clipToInt32(floatScratch_[i]);
-            break;
-        }
+        case WasapiSampleFormat::Float32: dstType = twSampleType::Float32; break;
+        case WasapiSampleFormat::Int16:   dstType = twSampleType::Int16;   break;
+        case WasapiSampleFormat::Int32:   dstType = twSampleType::Int32;   break;
         default:
             renderClient_->ReleaseBuffer(framesAvail, AUDCLNT_BUFFERFLAGS_SILENT);
             return -1;
     }
+
+    // Interleaved N-channel float scratch → device's native binary format.
+    // Same channel count and layout, so this is purely a sample-type conversion
+    // (and a plain memcpy in the float32 case).
+    twFormat srcFmt;
+    srcFmt.sampleType = twSampleType::Float32;
+    srcFmt.channels   = static_cast<std::uint16_t>(config_.channels);
+    twFormat dstFmt = srcFmt;
+    dstFmt.sampleType = dstType;
+    twConvertFrames(srcFmt, floatScratch_.data(), dstFmt, dst,
+                    static_cast<length_t>(framesAvail));
 
     renderClient_->ReleaseBuffer(framesAvail, 0);
     return 0;

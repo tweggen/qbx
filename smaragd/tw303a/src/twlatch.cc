@@ -34,6 +34,14 @@ length_t twLatchStreamingOutput::readStreamingData( sample_t * pDest, length_t m
 	return len;
 }
 
+length_t twLatchStreamingOutput::readRaw( void * dest, length_t maxFrames )
+{
+	// twStreamingLatch stores canonical mono Float32, so native bytes are the
+	// float samples readStreamingData yields. A latch holding another binary
+	// representation would override its output's readRaw alongside getFormat().
+	return readStreamingData( (sample_t *) dest, maxFrames );
+}
+
 /**
  *	@method twLatch.twLatch
  *		Constructor for twLatch object.

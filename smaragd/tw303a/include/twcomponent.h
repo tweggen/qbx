@@ -116,6 +116,14 @@ public:
     length_t readStreamingData( sample_t * pDest, length_t maxLength );
     inline length_t readData( sample_t * pDest, length_t maxLength )
         { return readStreamingData( pDest, maxLength ); }
+
+    // Read up to maxFrames frames of the latch's NATIVE format (getFormat())
+    // into dest, with no conversion; dest must hold
+    // maxFrames * getFormat().bytesPerFrame() bytes. Returns frames read. The
+    // sink decides whether to convert (see twConvertFrames). Current latches
+    // store canonical mono Float32, so this presently yields the same bytes as
+    // readStreamingData — a producer storing another representation overrides it.
+    length_t readRaw( void * dest, length_t maxFrames );
     
     inline twStreamingLatch & getParentStreamingLatch()
         { return (twStreamingLatch &) getParentLatch(); }

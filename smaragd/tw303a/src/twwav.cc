@@ -8,6 +8,7 @@
 
 #include "twsyslog.h"
 
+#include "twconvert.h"
 #include "twwav.h"
 
 #define WAVE_FORMAT_PCM 1
@@ -117,26 +118,26 @@ int twWav::writeLoop()
 		throw;
 	}
 
+	// Mono Float32 from the synth → mono Int16 on disk, via the shared
+	// converter (replaces the former hand-rolled clip loop).
+	twFormat srcFmt;
+	srcFmt.sampleType = twSampleType::Float32;
+	srcFmt.channels   = 1;
+	twFormat dstFmt = srcFmt;
+	dstFmt.sampleType = twSampleType::Int16;
+
 	toWrite = totalLength;
 	while( toWrite>0 ) {
 		length_t realRead;
-		sample_t *pSrc = sampleBuffer;
-		short *pDest = outBuf;
 		length_t readNow = toWrite<env.getBufferSize()?toWrite:env.getBufferSize();
 
 		realRead = ((twLatchStreamingOutput *)pInputPlugs[0]) -> readStreamingData(
 			sampleBuffer,
 			readNow
 			);
-		
-		for( int i=0; i<realRead; i++ ) {
-			sample_t a = 32767. * *pSrc++;
-			if( a<-32767 ) a=-32767;
-			else if( a>32767 ) a = 32767;
-			
-			*pDest++ = (short) a;
-		}
-			
+
+		twConvertFrames( srcFmt, sampleBuffer, dstFmt, outBuf, realRead );
+
 		fwrite( outBuf, realRead, sizeof( short ), fp );
 		toWrite -= realRead;
 	}
