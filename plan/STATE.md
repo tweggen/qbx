@@ -596,3 +596,71 @@ read-path API, conversion strategy, worked examples, and 6-phase rollout.
 - Linux build via qmake is no longer possible from this repo — only
   CMake. (CMake on Linux was the original baseline anyway; the
   in-flight ALSA smoke test still applies.)
+
+---
+
+## 04_WIRE_FORMAT_AND_SAMPLE_RATE.md — phases 1-3 (format mechanism + bug fix)
+
+- **Date:** 2026-05-31
+- **Status:** Phases 1-3 of the proposal complete and committed. **The ~8.8 %
+  pitch/speed bug is fixed** (phase 2). Phases 4-7 (project rate, rate-aware
+  engine core, capabilities, negotiation pass) remain — the user opted for the
+  full 7-phase rollout, so they are next.
+- **Verified on platform:** Windows 11 — `cmake --build smaragd/build` produces
+  `build/bin/smaragd.exe` (~21.7 MB) clean on Qt 6.11.1 + MinGW 13.1 (only the
+  pre-existing vendor XPM `-Wwrite-strings` noise). **Audible** verification
+  (launch, click Play, listen) is still a human step and has NOT been done from
+  this session.
+
+### What landed
+
+| File | Purpose |
+|------|---------|
+| `tw303a/include/twformat.h` (new) | `twFormat` value type: `sampleRate`, `twSampleType` (Float32/Float64/Int16/Int32), `channels`, `twLayout` (Interleaved/Planar). `bytesPerSample`/`bytesPerFrame`/`sameMemoryShape`/`==`. `twCanonicalFormat(rate)`. Default-constructed == today's mono Float32. |
+| `tw303a/include/twcomponent.h` | `twLatch::getFormat()` (virtual, default canonical at env rate); `twLatchOutput::getFormat()` delegates to producing latch; `twLatchStreamingOutput::readRaw(void*, frames)`. |
+| `tw303a/src/twlatch.cc` | `twLatch::getFormat()` impl (reads `component.env` via existing friendship); `readRaw` impl (mirrors `readStreamingData` while latches store float). |
+| `tw303a/include/twresampler.h` + `src/twresampler.cc` (new) | Linear, block-pull mono SRC. Passthrough when rates equal. `process()` reports INPUT frames consumed separately from output frames produced. |
+| `tw303a/include/twspeaker.h` + `src/twspeaker.cc` | Holds a `twResampler`; render callback reconciles input-wire rate → device mix rate (`backend_->getConfig().sampleRate`) before the mono→N fan-out. Locator advances by input frames consumed. |
+| `tw303a/include/twconvert.h` + `src/twconvert.cc` (new) | `twConvertFrames`: pure interleaved type/channel conversion, no rate change; memcpy fast-path on matching memory shape. |
+| `tw303a/src/audio/wasapi_backend.cc`, `audio/alsa_backend.cc`, `src/twwav.cc` | Hand-rolled float→int clip loops replaced by `twConvertFrames`. Int16 clamp standardized to `[-32768, 32767]` (twWav previously clamped to `-32767`). Stale WASAPI "pitch will be off" warning dropped. |
+| `tw303a/CMakeLists.txt` | Registers `twformat.h`, `twconvert.{h,cc}`, `twresampler.{h,cc}`. |
+
+### How the bug fix works
+
+`twSpeaker::startOutput` configures the resampler from the input wire's
+`getFormat().sampleRate` (currently the env rate, 44100) to the negotiated
+device rate (`AudioConfig.sampleRate`, commonly 48000). The render callback
+calls `resampler_.process(...)`, which interpolates 44100→48000 (consuming
+~940 input frames per 1024 output frames) and reports the input-frame count so
+the global locator advances in synth time, not device time. When the rates
+already match it is a passthrough — byte-identical to the prior read path.
+
+### Commits
+
+- `997c442` — phases 1-2 (twFormat + speaker resampler).
+- `cf98d7c` — phase 3 (native read path + shared converter).
+- (this STATE.md entry lands in a follow-up commit.)
+
+### Behaviour-relevant notes / heads-up
+
+- **Resampler quality is linear** for now (proposal earmarks a polyphase/sinc
+  upgrade behind the same interface). It removes the pitch/speed error; it is
+  not mastering-grade.
+- **Int16 clamp range** changed for the WAV writer (`-32767` → `-32768`); a
+  1-LSB difference at full negative scale, inaudible, more correct.
+- **ALSA port is uncompiled here** (Linux-only); it mirrors the WASAPI change
+  and still needs a Linux smoke build.
+- First audio callback may grow the resampler's input history buffer once;
+  `reserveHint(bufferFrames)` pre-sizes it to avoid steady-state allocation.
+
+### Next actions
+
+1. **You: launch the exe, click Play, listen** — confirm correct pitch/speed
+   on a 48 kHz default device. `stderr` will show
+   `twSpeaker: resampling 44100 Hz -> 48000 Hz`.
+2. Phase 4 — settable + persisted project sample rate
+   (`setSRate`/`sampleRateChanged`, candidate-rate set, project-XML attribute,
+   `File → New` default 48000).
+3. Phase 5 — replace literal `44100`s in the engine DSP with `env.getSRate()`.
+4. Phases 6-7 — capabilities (`getInputCaps`/`getOutputCaps`/`narrowCaps`) and
+   the `twNegotiator` fixpoint with renegotiation signalling.
