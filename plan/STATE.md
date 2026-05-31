@@ -664,3 +664,71 @@ already match it is a passthrough — byte-identical to the prior read path.
 3. Phase 5 — replace literal `44100`s in the engine DSP with `env.getSRate()`.
 4. Phases 6-7 — capabilities (`getInputCaps`/`getOutputCaps`/`narrowCaps`) and
    the `twNegotiator` fixpoint with renegotiation signalling.
+
+---
+
+## 04_WIRE_FORMAT_AND_SAMPLE_RATE.md — phases 4-7 (rate-aware core + negotiation)
+
+- **Date:** 2026-05-31
+- **Status:** ✅ All 7 phases of the proposal implemented and committed. The
+  full per-wire-format + sample-rate-negotiation design is in the tree, with one
+  deliberately deferred sub-step (live resampler-node insertion — see below).
+- **Verified on platform:** Windows 11 — `cmake --build smaragd/build` →
+  `build/bin/smaragd.exe` (~23.8 MB) clean on Qt 6.11.1 + MinGW 13.1; window-up
+  smoke test passes (process stays alive, no startup crash). **Audible**
+  verification (launch, click Play, listen) is still a human step.
+
+### What landed (phases 4-7)
+
+| Phase | File(s) | Change |
+|-------|---------|--------|
+| 4 | `tw303a/include/tw303aenv.h` + `src/tw303aenv.cc` | `setSRate` (emits `sampleRateChanged`); configurable candidate-rate set `candidateRates()`/`setCandidateRates()` default `{44100,48000,88200,96000}` (emits `candidateRatesChanged`); inheritance from `QObject` made **public** so the signals can be connected. |
+| 4 | `main/include/sproject.h` + `src/sproject.cpp` | `SProject` holds `sampleRate_` + `candidateRates_`; serializes them on the project root (QTextStream write, QDom read). Fresh project defaults to **48000**; a file without the attribute loads as **44100** and round-trips. |
+| 4 | `main/src/sapplication.cpp` | `setCurrentProject` pushes the project's rate / candidate set into the engine (runs again post-load in `fileOpen`, so the engine lands on the saved rate). |
+| 5 | `twsaw.cc`, `twsimplesaw.cc`, `twmoog.cc`, `twtestseq.cc`, `twpipe.cc`, `twwav.cc`, `tw303a.cc` | Hardcoded `44100`/`4410000` replaced with `env.getSRate()` (`4410000` == rate·100 fixed-point period). A matched-rate project now plays with the speaker resampler collapsed to a passthrough. |
+| 6 | `tw303a/include/twformat.h`, `twcomponent.{h,cc}` | `twFormatCaps` (per-port candidate domain) + `twPortDomains`; `getInputCaps`/`getOutputCaps` (seed mono Float32, any rate) and the monotone `narrowCaps` coupling relation (default: couple all ports to one common rate via set intersection). |
+| 7 | `tw303a/include/twnegotiator.h` + `src/twnegotiator.cc` (new) | `twNegotiator`: subgraph discovery from a sink, build candidate domain `D`, AC-3 monotone fixpoint (node `narrowCaps` + wire equality, bounded-iteration backstop), infeasibility detection+logging, preference resolve (project rate first), `commitFormats` per node. |
+| 7 | `twcomponent.{h,cc}` | `commitFormats` (default: record formats, emit `formatChanged` on change) + `renegotiationRequired`/`formatChanged` signals. |
+| 7 | `twspeaker.cc` | Runs the negotiator before opening the device — **advisory**: logged, playback proceeds regardless, so negotiation can never regress the working audio path. |
+
+### Design notes / decisions
+
+- **Negotiation is advisory, not gating.** Because the speaker's own resampler
+  (phase 2) bridges graph-rate → device-rate unconditionally, the negotiator's
+  job today is to resolve+commit the graph to the project rate and validate it.
+  Making it non-blocking guarantees the shipped pitch fix can't regress if the
+  negotiator has a bug.
+- **Graph is always uniform today.** Every source produces at the env rate, so
+  the candidate-rate intersection is never empty and no wire is infeasible. The
+  negotiator's healing path is therefore dormant.
+- **Deferred (documented open fork): live resampler-node insertion.** Healing an
+  infeasible wire by splicing a rate-converting node into the live graph is
+  *detected and logged* but not performed. Rationale: (a) no current graph
+  triggers it (needs a fixed-rate source at a non-project rate), (b) it is the
+  exact "automatic vs. manual converter insertion" UX fork the proposal flagged
+  for later, and (c) live graph mutation can't be runtime-verified in this
+  session. To finish it later: add a `twRateConvert` node (1-in/1-out wrapping
+  `twResampler`, `narrowCaps` returns false to decouple, builds its kernel in
+  `commitFormats`) and rewire via `setInput`/`linkOutput` at the infeasible wire.
+- **Signalling is interface-complete but the trigger is implicit.** `twSpeaker`
+  re-negotiates on every `startOutput`, so a device-rate or project-rate change
+  is picked up at the next play without a cached-negotiation invalidation path.
+  `renegotiationRequired` is reserved for that future caching.
+
+### Commits
+
+- `4ec5fe3` — phases 4-5 (project rate + rate-aware core).
+- `68d7814` — phase 6 (capabilities).
+- `9d653c5` — phase 7 (negotiator + signalling).
+
+### Next actions
+
+1. **You: audible test.** Launch, `File → New` (project defaults to 48 kHz),
+   add a track, import a sample, Play — confirm correct pitch on a 48 kHz
+   device. A matched 48/48 project should log the resampler as passthrough; a
+   loaded legacy 44.1 kHz project should log `resampling 44100 Hz -> 48000 Hz`.
+2. **Linux ALSA smoke build** — still outstanding from earlier phases; the
+   converter port to ALSA was not compiled here.
+3. **Optional UI** — no widget exposes the project sample rate yet; add a
+   project-settings control if user-facing rate changes are wanted.
+4. **Finish healing** when a fixed-rate source lands (see deferred fork above).
