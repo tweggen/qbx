@@ -61,6 +61,21 @@ twLatch::~twLatch()
 }
 
 /**
+ *	@method twLatch.getFormat
+ *		Native format of the data this latch produces.
+ *	@desc
+ *		Default: the canonical mono-Float32 exchange format at the environment
+ *		sample rate. This is byte-identical to what every component has always
+ *		produced, so unmodified latches keep behaving exactly as before.
+ *		Producers emitting a different format override this. twLatch is a friend
+ *		of twComponent, so it may read the component's environment directly.
+ */
+twFormat twLatch::getFormat() const
+{
+    return twCanonicalFormat( (std::uint32_t) component.env.getSRate() );
+}
+
+/**
  *	@method twLatch.addOutput
  *		Returns a latch output object from a latch.
  *	@synopsis twLatchOutput * twLatch::addOutput()

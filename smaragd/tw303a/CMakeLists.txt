@@ -1,6 +1,8 @@
 set(TW303A_HEADERS
     include/tw303aenv.h
     include/twcomponent.h
+    include/twformat.h
+    include/twresampler.h
     include/twconstant.h
     include/twgrainer.h
     include/twgrainspec.h
@@ -33,6 +35,7 @@ set(TW303A_SOURCES
     src/twmoog.cc
     src/twosc.cc
     src/twpipe.cc
+    src/twresampler.cc
     src/twrewire.cc
     src/twsaw.cc
     src/twsimplesaw.cc

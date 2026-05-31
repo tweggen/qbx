@@ -2,6 +2,7 @@
 #define _TWSPEAKER_H_
 
 #include "twcomponent.h"
+#include "twresampler.h"
 
 #include <memory>
 
@@ -14,6 +15,7 @@ class twSpeaker
 private:
     std::unique_ptr<audio::AudioBackend> backend_;
     bool isPlaying_;
+    twResampler resampler_;
 
 protected:
     virtual length_t calcOutputTo(sample_t *pDest, length_t length, idx_t idx);

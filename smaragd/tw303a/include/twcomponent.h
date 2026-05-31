@@ -5,6 +5,7 @@
 #include <qobject.h>
 
 #include "exc.h"
+#include "twformat.h"
 
 #define DTOR_DEL(x) {if((x)) {delete (x); (x) = NULL; }}
 
@@ -49,7 +50,13 @@ public:
 
     inline twComponent & getComponent() { return component; }
     inline idx_t getIndex() { return idx; }
-    
+
+    // Native format of the data this latch produces. The default reports the
+    // canonical mono-Float32 format at the environment sample rate, so every
+    // existing latch tells the truth without any change. Producers that emit a
+    // different format (foreign rate, Int16 PCM, …) override this.
+    virtual twFormat getFormat() const;
+
     virtual twLatchOutput * addOutput();
     virtual int deleteOutput( twLatchOutput * latchOutput );
 
@@ -67,7 +74,11 @@ public:
     twLatchOutput (twLatch & latch)
         : parentLatch(latch) { offset = latch.getOffset(); }
     inline twLatch & getParentLatch () { return parentLatch; }
-    
+
+    // The consumer's single entry point for "what am I about to read?".
+    // Delegates to the producing latch.
+    twFormat getFormat() const { return parentLatch.getFormat(); }
+
     virtual length_t readData( sample_t *, length_t  ) {
         throw excStandard( "twLatchOutput(): Tried to read data from the Latch itselves." );
     };

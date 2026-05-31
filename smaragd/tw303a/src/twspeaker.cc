@@ -29,6 +29,23 @@ void twSpeaker::startOutput()
         return;
     }
 
+    // Reconcile the synth's sample rate with the device's. The device mix rate
+    // is whatever the backend negotiated (commonly 48 kHz); the synth produces
+    // at its input wire's rate (commonly 44.1 kHz). The resampler bridges them;
+    // it is a passthrough when they already match.
+    const audio::AudioConfig cfg = backend_->getConfig();
+    std::uint32_t inRate = (std::uint32_t) env.getSRate();
+    if (pInputPlugs != nullptr && pInputPlugs[0] != nullptr) {
+        inRate = pInputPlugs[0]->getFormat().sampleRate;
+    }
+    resampler_.configure(inRate, cfg.sampleRate);
+    resampler_.reserveHint((length_t) cfg.bufferFrames);
+    resampler_.reset();
+    if (!resampler_.isPassthrough()) {
+        syslog(LOG_INFO, "twSpeaker: resampling %u Hz -> %u Hz",
+               (unsigned) inRate, (unsigned) cfg.sampleRate);
+    }
+
     backend_->setRenderCallback(
         [this](float *out, std::size_t frames, std::uint32_t channels) -> std::size_t {
             if (pInputPlugs == nullptr || pInputPlugs[0] == nullptr) {
@@ -37,19 +54,20 @@ void twSpeaker::startOutput()
             }
 
             offset_t formerPos = SApplication::app().getGlobalLocatorPos();
-            length_t framesRead =
-                static_cast<twLatchStreamingOutput *>(pInputPlugs[0])
-                    ->readStreamingData(out, static_cast<length_t>(frames));
+            length_t inConsumed = 0;
+            length_t framesOut = resampler_.process(
+                static_cast<twLatchStreamingOutput *>(pInputPlugs[0]),
+                out, static_cast<length_t>(frames), &inConsumed);
 
-            if (framesRead <= 0) {
+            if (framesOut <= 0) {
                 std::fill_n(out, frames * channels, 0.0f);
                 return frames;
             }
 
-            // Mono synthesizer → fan out to N channels. We read mono into the
-            // start of the buffer and expand in place from the tail.
+            // Mono synthesizer → fan out to N channels. The resampler wrote mono
+            // into the start of the buffer; expand in place from the tail.
             if (channels > 1) {
-                for (length_t i = framesRead - 1; i >= 0; --i) {
+                for (length_t i = framesOut - 1; i >= 0; --i) {
                     float s = out[i];
                     for (std::uint32_t c = 0; c < channels; ++c) {
                         out[i * channels + c] = s;
@@ -57,8 +75,10 @@ void twSpeaker::startOutput()
                 }
             }
 
-            SApplication::app().setGlobalLocatorPos(formerPos + framesRead);
-            return static_cast<std::size_t>(framesRead);
+            // Advance the playback locator by INPUT frames consumed (synth-time),
+            // not output frames — the two differ once resampling is active.
+            SApplication::app().setGlobalLocatorPos(formerPos + inConsumed);
+            return static_cast<std::size_t>(framesOut);
         });
 
     if (backend_->startOutput() != 0) {
