@@ -2,6 +2,7 @@
 
 #include "audio/audio_backend.h"
 #include "sapplication.h"
+#include "twnegotiator.h"
 #include "twsyslog.h"
 
 #include <algorithm>
@@ -23,6 +24,15 @@ twSpeaker::~twSpeaker()
 void twSpeaker::startOutput()
 {
     if (isPlaying_) return;
+
+    // Negotiate one format per wire across the graph feeding this speaker,
+    // before opening the device. Advisory: the result is logged and the engine
+    // proceeds regardless, because the speaker's own resampler bridges the
+    // graph rate to the device rate in all cases.
+    {
+        twNegotiator negotiator(env);
+        negotiator.negotiate(this);
+    }
 
     if (backend_->openDevice("default") != 0) {
         syslog(LOG_ERR, "twSpeaker::startOutput: openDevice failed");

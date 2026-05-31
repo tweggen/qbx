@@ -3,6 +3,7 @@ set(TW303A_HEADERS
     include/twcomponent.h
     include/twformat.h
     include/twconvert.h
+    include/twnegotiator.h
     include/twresampler.h
     include/twconstant.h
     include/twgrainer.h
@@ -30,6 +31,7 @@ set(TW303A_SOURCES
     src/twcomponent.cc
     src/twconstant.cc
     src/twconvert.cc
+    src/twnegotiator.cc
     src/twgrainer.cc
     src/twgrainspec.cc
     src/twlatch.cc

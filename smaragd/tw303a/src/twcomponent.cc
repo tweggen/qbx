@@ -59,6 +59,19 @@ std::vector<std::uint32_t> intersectRates( const std::vector<std::uint32_t> &a,
 
 }  // namespace
 
+bool twComponent::commitFormats( const twFormat *in,  idx_t nIn,
+                                 const twFormat *out, idx_t nOut )
+{
+    committedIn_.assign( in, in + ( nIn > 0 ? nIn : 0 ) );
+    for( idx_t j = 0; j < nOut; ++j ) {
+        twFormat prev = ( (std::size_t) j < committedOut_.size() )
+                      ? committedOut_[j] : twFormat{};
+        if( prev != out[j] ) emit formatChanged( j, prev, out[j] );
+    }
+    committedOut_.assign( out, out + ( nOut > 0 ? nOut : 0 ) );
+    return true;
+}
+
 bool twComponent::narrowCaps( twPortDomains &ports ) const
 {
     // Default coupling: this node runs every port at one common rate (it
