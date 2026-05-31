@@ -2,121 +2,169 @@
 
 ## Executive Summary
 
-**Smaragd** is a Qt-based audio synthesis application featuring a software TB-303 synthesizer clone with granular synthesis capabilities. The codebase (~7,200 lines of C++) currently supports Linux with ALSA, legacy macOS CoreAudio, and legacy Linux OSS, but lacks modern audio driver support for current macOS, Windows, and modern Linux alternatives (PipeWire, PulseAudio, JACK).
+**Smaragd** is a Qt-based audio synthesis application featuring a software
+TB-303 synthesizer clone with granular synthesis capabilities (~11,200 lines of
+C++). It builds with **CMake** against **Qt 6** and runs on Windows (WASAPI) and
+Linux (ALSA); macOS configures but falls back to a silent backend until a modern
+CoreAudio implementation lands.
+
+Audio output goes through a platform-abstracted `AudioBackend` interface, and
+sample format/rate are first-class properties of the signal path: every project
+has its own sample rate, the engine is rate-aware, and a resampler at the device
+boundary reconciles the project rate with whatever the audio device runs at.
+
+> **History / current status:** this document is a high-level snapshot. The
+> authoritative, chronological record of what has been implemented (and what is
+> deferred) lives in [`plan/STATE.md`](../plan/STATE.md); design proposals live
+> in [`plan/proposed/`](../plan/proposed/).
 
 ## Project Structure
 
 ```
 smaragd/
-├── tw303a/                    # TB-303 synthesizer synthesizer components
-│   ├── include/               # Header files for synthesizer modules
-│   │   ├── twosc.h           # Oscillators
-│   │   ├── twmoog.h          # Moog filter
-│   │   ├── twgrainer.h       # Granular synthesis engine
-│   │   ├── twspeaker.h       # Audio output handler (KEY FILE)
+├── CMakeLists.txt              # Top-level project: C++17, Qt6, platform + backend options
+├── tw303a/                     # TB-303 synthesizer engine (static library)
+│   ├── CMakeLists.txt
+│   ├── include/
+│   │   ├── twcomponent.h       # Base component + the plug/latch "wire" model
+│   │   ├── twformat.h          # twFormat (rate/type/channels) + capability types
+│   │   ├── twconvert.h         # Shared sample-format converter
+│   │   ├── twresampler.h       # Linear sample-rate converter
+│   │   ├── twnegotiator.h      # Graph-wide format negotiation
+│   │   ├── twosc.h / twsaw.h / twmoog.h / twgrainer.h  # Oscillators, filter, granular
+│   │   ├── twspeaker.h         # Audio sink: resampler + AudioBackend (KEY FILE)
+│   │   └── audio/
+│   │       ├── audio_backend.h # AudioBackend interface, AudioConfig, AudioDeviceInfo
+│   │       ├── wasapi_backend.h
+│   │       ├── alsa_backend.h
+│   │       └── null_backend.h
+│   └── src/                    # Implementations (incl. src/audio/*.cc)
+├── main/                       # Qt application (UI, project management)
+│   ├── CMakeLists.txt
+│   ├── include/
+│   │   ├── sapplication.h      # App singleton; owns the environment + speaker
+│   │   ├── sproject.h          # Project/session state (incl. sample rate)
+│   │   ├── ssettings.h         # Per-user config store (QSettings INI)
+│   │   ├── smainwindow.h       # Main UI window (menus, device picker)
+│   │   ├── sstdmixer.h / strack.h / sstdmixerview.h
 │   │   └── ...
-│   └── src/                   # Synthesizer implementation
-├── main/                      # Main application (Qt UI, project management)
-│   ├── include/               # Application headers
-│   └── src/                   # Application implementation
-├── include/                   # Shared utilities
-├── doc/                       # Documentation (images, notes)
-├── CMakeLists.txt            # Top-level CMake project
-└── .gitignore
-
-main/
-├── include/
-│   ├── sproject.h            # Project/session management
-│   ├── sstdmixer.h          # Standard mixer
-│   ├── strack.h             # Audio tracks
-│   ├── smainwindow.h        # Main UI window
-│   └── ...
-└── src/
+│   └── src/
+├── include/                    # Shared utilities (exceptions, logging shim)
+├── doc/ , images/ , pix/       # Notes, screenshots, XPM icons
+└── docs/                       # This overview, BUILD.md
 ```
 
-## Current Audio Driver Architecture
+## Audio Architecture
 
-### Supported Platforms
+### Abstraction layer
 
-| Platform | Driver | Status | Notes |
-|----------|--------|--------|-------|
-| Linux | ALSA | ✅ Active | Primary implementation, asynchronous PCM handler |
-| Linux | OSS | ⚠️ Legacy | Deprecated code path, socket notifier-based |
-| macOS | CoreAudio | ❌ Broken | OS X 10.2 API (deprecated 2005+), uses removed APIs |
-| Windows | — | ❌ None | Not implemented |
+Platform `#ifdef` sprawl was replaced by a single interface
+(`tw303a/include/audio/audio_backend.h`):
 
-### Current Implementation Details
+- **Callback-pull model:** the backend owns the timing and calls a
+  `RenderCallback` to pull interleaved float frames from the synth.
+- **`AudioConfig`** reports the rate, channel count, buffer/period sizes, and the
+  device's native binary `sampleType` (float32 / int16 / int32).
+- **Rate negotiation:** `supportedRates()` advertises the rates the device can
+  open without host resampling; `openDevice(device, preferredRate)` requests a
+  rate; `getConfig()` reports what was actually opened.
+- **Device enumeration:** `enumerateDevices()` returns selectable
+  `{id, name}` endpoints for the device-picker UI.
+- `createAudioBackend()` selects the backend compiled in for the platform; an
+  always-available `NullBackend` lets the app run silently when no real backend
+  is enabled.
 
-**Audio Output Flow:**
-1. Application generates floating-point audio samples (tw303a synthesizer)
-2. `twSpeaker::calcOutputTo()` or streaming callbacks provide samples
-3. Samples converted from float to 16-bit signed PCM (S16_LE)
-4. Output to ALSA default device or OSS `/dev/dsp`
-5. Hard-coded: 44.1 kHz, mono synthesizer → stereo output
+### Supported platforms
 
-**ALSA Implementation (twspeaker.cc:244-303):**
-- Opens "default" device in playback mode
-- Hardcoded: 44100 Hz, 2 channels, S16_LE format
-- Buffer size: 1024 frames, period size: 64 frames
-- Async callback handler (`alsaPcmHandlerStatic_`) fills buffer on demand
-- No device enumeration, no format negotiation
+| Platform | Backend | Status | Notes |
+|----------|---------|--------|-------|
+| Windows  | WASAPI  | ✅ Implemented, **verified audible** | Shared mode, event-driven render thread, MMCSS "Pro Audio"; device enumeration + selection; float32/int16/int32. |
+| Linux    | ALSA    | ✅ Behind the abstraction | Extracted from the old code, **plus xrun recovery**; S16_LE. Not re-tested on Linux since the refactor. |
+| macOS    | (Null)  | ⚠️ Builds, silent | Pre-2005 CoreAudio code removed; modern CoreAudio backend not yet written, so `NullBackend` is active. |
+| Linux    | PipeWire / JACK / PulseAudio | ❌ Not implemented | CMake wiring + `pkg_check_modules` present; backends are placeholders. |
+| (legacy) | OSS, old CoreAudio | 🗑️ Removed | The `/dev/dsp` socket-notifier path and the OS X 10.2 `OpenAComponent` path were deleted. |
 
-**macOS CoreAudio (deprecated):**
-- Uses pre-10.5 APIs: `OpenAComponent()`, `FindNextComponent()`
-- AudioUnit callback model (still valid pattern, but APIs removed)
-- 44.1 kHz, float format, single callback for rendering
+### Sample format & rate handling
 
-**OSS Legacy Code (unused):**
-- `/dev/dsp` socket notifier approach
-- Pre-ALSA era Linux support
+Data format is a property of every "wire" (the `twLatch` → `twLatchStreamingOutput`
+connection), not an engine-wide constant:
 
-### Known Issues & Limitations
+1. **`twFormat`** (rate, binary sample type, channels, layout) is attached to
+   each producing latch and queried by its consumer. The default is mono float32,
+   byte-identical to the engine's historic assumption.
+2. **Per-project sample rate.** `SProject` stores a sample rate (a fresh project
+   defaults to **48 kHz**; legacy files without the attribute load as 44.1 kHz)
+   and a configurable candidate-rate set, both persisted in the project XML and
+   pushed into the engine (`tw303aEnvironment::setSRate`).
+3. **Rate-aware engine.** Oscillators, the delay line, the Moog filter, tempo
+   math and the WAV writer all derive their constants from `env.getSRate()`
+   rather than a hardcoded 44.1 kHz.
+4. **Resampling at the device boundary.** `twSpeaker` holds a `twResampler` that
+   converts the graph rate to the rate the device actually opened at — a
+   passthrough when they match. This removed the long-standing ~8.8 % pitch error
+   on 48 kHz devices.
+5. **Format conversion.** A shared `twConvertFrames` handles type/channel
+   conversion (e.g. float → int16) at the device boundary and in the WAV writer.
+6. **Negotiation.** `twNegotiator` resolves a single rate per wire across the
+   graph (an arc-consistency fixpoint over a finite candidate-rate domain),
+   folding in the device's advertised rates, and runs before playback. It is
+   currently advisory — the speaker's resampler guarantees correct output
+   regardless — and live insertion of in-graph resampler nodes is deferred.
 
-1. **Platform-specific compilation**: Requires compiler flags like `-DQBX_LINUX_ALSA=1`
-2. **No sample rate flexibility**: Hardcoded 44.1 kHz only
-3. **No audio device selection**: Always uses "default" device
-4. **macOS support broken**: CoreAudio API deprecated, app won't compile/run on modern macOS
-5. **Windows completely missing**: Critical gap for cross-platform audio application
-6. **No PulseAudio/PipeWire**: Linux developers using modern sound stacks are blocked
-7. **No JACK support**: Professional audio users cannot use this synthesizer
-8. **Buffer management primitive**: Fixed sizes, no dynamic adaptation
-9. **No latency optimization**: ~1024-sample buffer introduces ~23ms latency at 44.1 kHz
+### Configuration & UI
+
+- **`SSettings`** (`main/`) is a `QSettings`-based per-user INI
+  (`%APPDATA%/Smaragd/smaragd.ini`, `~/.config/Smaragd/smaragd.ini`) holding
+  machine-local settings that don't belong in a project file: the selected audio
+  device and the last-used directories for file dialogs.
+- **Device picker:** an **Audio → Output Device** menu lists enumerated
+  endpoints; the choice is persisted and restored at startup.
+
+## Known Issues & Limitations
+
+1. **macOS has no real audio** — `NullBackend` is active until a modern CoreAudio
+   backend is written.
+2. **PipeWire / JACK / PulseAudio** — not implemented (placeholders only).
+3. **ALSA untested since the refactor** — behaviour-preserving rewrite + xrun
+   recovery, but needs a Linux smoke build.
+4. **WASAPI shared mode only** — no exclusive (bit-perfect) mode; a device whose
+   mix rate differs from the project is bridged by the resampler rather than
+   opened natively.
+5. **Resampler is linear** — adequate to fix pitch/speed; not mastering-grade.
+6. **No CI** — no GitHub Actions workflow yet; only the Windows/Qt6/MinGW build
+   is regularly exercised.
+7. **Latency** — buffer sizing is largely fixed; no user-facing latency control.
 
 ## Codebase Statistics
 
-- **Total Lines**: ~7,200 (C++, C)
-- **Synthesizer (tw303a/)**: ~3,500 LOC (oscillators, filters, effects, granular synthesis)
-- **Main App (main/)**: ~3,000 LOC (UI, project management, rendering)
-- **Audio Output (twspeaker)**: ~470 LOC (ALSA/OSS/CoreAudio logic)
+- **Total**: ~11,200 lines (C++/C), up from ~7,200 pre-modernization.
+- **Synthesizer (`tw303a/`)**: oscillators, Moog filter, granular synthesis,
+  effects, the wire/format/resampler/negotiator machinery, and audio backends.
+- **Main app (`main/`)**: Qt UI, project management/serialization, settings.
 
 ## Key Dependencies
 
-- **Qt5**: UI framework (widgets, XML, core)
-- **ALSA**: Linux sound driver (libasound)
-- **pthreads**: Threading
-- **X11/OpenGL**: Linux display (desktop)
-- **CoreAudio/AudioUnit**: macOS (broken, needs update)
-- **Windows APIs**: Not integrated
+- **Qt 6** (6.11.x): Widgets, Xml, Core.
+- **CMake** (≥ 3.16) — the sole build system.
+- **Windows**: WASAPI (built-in SDK: `ole32`, `mmdevapi`, `avrt`, …); MinGW 13.1.
+- **Linux**: ALSA (`libasound`); optional PipeWire/JACK/PulseAudio via pkg-config.
+- **pthreads / std::thread**: backend render threads.
 
-## Modernization Goals
+## Build
 
-### Build System
-- Support CMake for cross-platform builds
-- Conditional compilation for macOS (Xcode), Windows (MSVC/MinGW), Linux (GCC/Clang)
-- Modern Qt5 integration
+See [`docs/BUILD.md`](BUILD.md). On Windows the typical flow is:
 
-### Audio Drivers
-- **macOS**: AVAudioEngine or modern CoreAudio APIs
-- **Windows**: WASAPI (modern standard)
-- **Linux**: ALSA (keep), add PipeWire and JACK support
-- **Cross-platform**: Dynamic format/sample-rate negotiation
-
-### Quality-of-Life Improvements
-- Device enumeration and selection UI
-- Configurable buffer sizes/latency
-- Error recovery and fallback mechanisms
-- Cross-compilation support
+```powershell
+$env:PATH = "C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;" + $env:PATH
+cd smaragd
+cmake -B build -G Ninja -DCMAKE_PREFIX_PATH="C:/Qt/6.11.1/mingw_64"
+cmake --build build
+& .\build\bin\smaragd.exe
+```
 
 ## Next Steps
 
-See `plan/proposed/` for detailed modernization strategies.
+See `plan/proposed/` for detailed strategies and `plan/STATE.md` for current
+status. Open threads include: a modern CoreAudio backend, a Linux ALSA smoke
+build, CI, exclusive-mode / per-device rate selection, and the SAction
+command/undo/scripting model (`03_ACTION_MODEL.md`, design only).
