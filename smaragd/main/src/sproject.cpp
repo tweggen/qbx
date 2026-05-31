@@ -51,6 +51,13 @@ int SProject::serialize( QTextStream &o )
 int SProject::serializeSelfAttributes( QTextStream &o )
 {
     o << " bpmTempo='" << (double) getBPMTempo() << "'";
+    o << " sampleRate='" << sampleRate_ << "'";
+    o << " candidateRates='";
+    for( size_t i = 0; i < candidateRates_.size(); ++i ) {
+        if( i ) o << ",";
+        o << candidateRates_[i];
+    }
+    o << "'";
     return 0;
 }
 
@@ -59,6 +66,19 @@ int SProject::readPreChildrenAttributes( QDomElement &element )
     QString data;
     data = element.attribute( "bpmTempo", "120.0" );
     setBPMTempo( data.toDouble() );
+
+    // Absent on pre-sample-rate files → default 44100 so they load unchanged.
+    setSRate( element.attribute( "sampleRate", "44100" ).toInt() );
+
+    QString cr = element.attribute( "candidateRates", "44100,48000,88200,96000" );
+    std::vector<std::uint32_t> rates;
+    const QStringList parts = cr.split( ',', Qt::SkipEmptyParts );
+    for( const QString &p : parts ) {
+        bool ok = false;
+        unsigned int v = p.trimmed().toUInt( &ok );
+        if( ok && v > 0 ) rates.push_back( v );
+    }
+    if( !rates.empty() ) setCandidateRates( std::move( rates ) );
     return 0;
 }
 
@@ -91,6 +111,19 @@ void SProject::setBPMTempo( double newTempo )
 {
     bpmTempo_ = newTempo;
     emit bpmTempoChanged( newTempo );
+}
+
+void SProject::setSRate( int rate )
+{
+    if( rate <= 0 ) return;
+    sampleRate_ = rate;
+    emit sampleRateChanged( rate );
+}
+
+void SProject::setCandidateRates( std::vector<std::uint32_t> rates )
+{
+    if( rates.empty() ) return;
+    candidateRates_ = std::move( rates );
 }
 
 void SProject::setFileName( const QString &fileName )
@@ -135,9 +168,11 @@ SProject::~SProject()
 
 SProject::SProject()
     : soRoot_( NULL ),
-      bpmTempo_( 120. )
+      bpmTempo_( 120. ),
+      sampleRate_( 48000 ),
+      candidateRates_{ 44100, 48000, 88200, 96000 }
 {
-#if 0    
+#if 0
     soRoot_ = new SStdMixer( this );
 #endif
 }

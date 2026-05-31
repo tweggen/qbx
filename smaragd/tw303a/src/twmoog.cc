@@ -55,7 +55,7 @@ length_t twMoog::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */
 		throw new excStandard( "twMoog::calcOutputTo(): Sources did not provide sufficient data." );
 	}
 
-    double freqCorrect = 1.16 / (double)(44100/2);
+    double freqCorrect = 1.16 / (double)(env.getSRate()/2);
 	
 	for( offset_t i=0; i<(offset_t)realRead; i++ ) {
 		double input = (double) *pCurr;

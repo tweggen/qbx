@@ -25,6 +25,13 @@ SProject *SApplication::getCurrentProject() const
 void SApplication::setCurrentProject( SProject *cp )
 {
     currentProject_ = cp;
+    // Push the project's sample rate / candidate set into the engine. For a
+    // loaded project this runs again after the loader has populated these from
+    // XML (see SMainWindow::fileOpen), so the engine ends up on the saved rate.
+    if( cp && t3Env_ ) {
+        t3Env_->setSRate( cp->getSRate() );
+        t3Env_->setCandidateRates( cp->candidateRates() );
+    }
     rewireSpeaker();
 }
 

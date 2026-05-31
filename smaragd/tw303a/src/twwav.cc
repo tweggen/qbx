@@ -25,7 +25,10 @@ twWav::twWav( tw303aEnvironment &env0, char const *fileName, length_t length )
 // format special fields
 	    unsigned short wBitsPerSample;	// Sample size
 	} wav_format = {
-		WAVE_FORMAT_PCM, 1, 44100, 44100*1*2, 2, 16
+		WAVE_FORMAT_PCM, 1,
+		(unsigned) env.getSRate(),          // dwSamplesPerSec
+		(unsigned) env.getSRate() * 1 * 2,  // dwAvgBytesPerSec = rate * ch * bytes
+		2, 16
 	};
 	struct {     
 		char  id[4];  	// identifier string = "RIFF"

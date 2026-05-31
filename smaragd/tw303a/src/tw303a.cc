@@ -59,7 +59,7 @@ void testRun( length_t bufSize )
     // test comment
     twComponent *pMoog = (twComponent *) new twMoog( *pEnv, 1.0 );
     twComponent *pMoogEnv = (twComponent *) new twMoog( *pEnv, 1.0 );
-    twComponent *pWave = (twComponent *) new twWav( *pEnv, "out.wav", (44100*32)*120/120 );
+    twComponent *pWave = (twComponent *) new twWav( *pEnv, "out.wav", (pEnv->getSRate()*32)*120/120 );
     twComponent *pFreqMix = (twComponent *) new twMixer( *pEnv, 2 );
     twComponent *pReverb = (twComponent *) new twPipe( *pEnv );
     
@@ -122,7 +122,7 @@ void testRun( length_t bufSize )
     twComponent *pEnvel = (twComponent *) new twSaw( *pEnv, 5000, 10 );
     //twComponent *pEnvel = (twComponent *) new twConstant( *pEnv, 100 );
     twComponent *pMoog = (twComponent *) new twMoog( *pEnv, 3.6 );
-    twComponent *pWave = (twComponent *) new twWav( *pEnv, "noisesweep.wav", 44100*4 );
+    twComponent *pWave = (twComponent *) new twWav( *pEnv, "noisesweep.wav", pEnv->getSRate()*4 );
     
     pEnvelFreq->init();
     pOscFreq->init();

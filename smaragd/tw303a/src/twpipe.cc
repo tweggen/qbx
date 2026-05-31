@@ -19,9 +19,9 @@ length_t twPipe::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */
 {
 	length_t realRead;
 
-	memcpy( inBuffer, inBuffer+44100, sizeof( sample_t ) * length );
+	memcpy( inBuffer, inBuffer+env.getSRate(), sizeof( sample_t ) * length );
 	realRead = ((twLatchStreamingOutput *)pInputPlugs[0]) -> readStreamingData(
-		inBuffer+44100,
+		inBuffer+env.getSRate(),
 		length
 		);
 	if( realRead==0 ) {
@@ -30,7 +30,7 @@ length_t twPipe::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */
 
 	// processData( pDest, realRead ); 
 	offset_t i;
-	sample_t *pSrc = inBuffer+44100;
+	sample_t *pSrc = inBuffer+env.getSRate();
 	for( i=0; i<(offset_t)length; i++ ) {
 		*pSrc = *pDest++ =
 			 (*pSrc*12 + (pSrc[-1310])*4 + (pSrc[-4561])*5 + (pSrc[-3364])*5
@@ -44,7 +44,7 @@ length_t twPipe::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */
 void twPipe::setBufferSize( length_t length )
 {
 	if( inBuffer ) free( inBuffer );
-	inBuffer = (sample_t *) calloc( sizeof(sample_t), length+44100 );
+	inBuffer = (sample_t *) calloc( sizeof(sample_t), length+env.getSRate() );
 	if( !inBuffer ) {
 		throw excStandard( "twPipe::setBufferSize(): Not enough memory for mixer input channels." );
 	}

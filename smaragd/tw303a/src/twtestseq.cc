@@ -80,7 +80,7 @@ length_t twTestSeq::calcOutputTo( sample_t *pDest, length_t length, idx_t /*idx*
 //		 9+36,  0,  9+36,  0,  0   ,  0,  9+36,  0,
 //		 9+36,  0,  0   ,  0,  0   ,  0,     0,  0
     };
-    int freqLength = (44100*60)/(120*4);
+    int freqLength = (env.getSRate()*60)/(120*4);
     
     for( i=0; i<length; i++ ) {
         constant = freq( noteTable[ ((currPos/freqLength)%nFreqs) ] );

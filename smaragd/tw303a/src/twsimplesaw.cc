@@ -56,7 +56,7 @@ length_t twSimpleSaw::calcOutputTo( sample_t *pDest,
 			// shut up on pCurrFreq = 0;
 			*pCurr++ = 0;
 		} else {
-			offset_t periodLength = (4410000 / currFreq);
+			offset_t periodLength = ((env.getSRate()*100) / currFreq);
 
 //			this was the cool line
 			*pCurr++ = (((i % periodLength) << 16) / periodLength)-periodLength/2;

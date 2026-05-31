@@ -59,7 +59,7 @@ length_t twSaw::calcOutputTo( sample_t *pDest, length_t /* length */, idx_t /* i
 			smpl = 0;
 			smplErr = 0;
 		} else {
-			register offset_t sdiff = ampl*4096/(4410000 / currFreq) + smplErr;
+			register offset_t sdiff = ampl*4096/((env.getSRate()*100) / currFreq) + smplErr;
 	
 			if( rampDown ) {
 				*pCurr++ = maxVal-smpl;
