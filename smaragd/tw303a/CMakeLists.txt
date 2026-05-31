@@ -130,7 +130,12 @@ if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
         ${COREFOUNDATION}
         ${AVFOUNDATION}
     )
-    message(STATUS "tw303a: CoreAudio backend enabled (placeholder; implementation pending)")
+    target_sources(tw303a
+        PRIVATE
+            src/audio/coreaudio_backend.cc
+            include/audio/coreaudio_backend.h
+    )
+    message(STATUS "tw303a: CoreAudio backend enabled")
 endif()
 
 if(NOT (ENABLE_ALSA OR ENABLE_PIPEWIRE OR ENABLE_PULSEAUDIO OR ENABLE_JACK OR ENABLE_WASAPI OR ENABLE_COREAUDIO))

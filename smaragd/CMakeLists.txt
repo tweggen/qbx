@@ -42,9 +42,7 @@ option(ENABLE_PIPEWIRE   "Enable PipeWire audio backend (Linux)"      OFF)
 option(ENABLE_PULSEAUDIO "Enable PulseAudio audio backend (Linux)"    OFF)
 option(ENABLE_JACK       "Enable JACK audio backend (cross-platform)" OFF)
 option(ENABLE_WASAPI     "Enable WASAPI audio backend (Windows)"      ${SMARAGD_WINDOWS})
-# CoreAudio is off by default until its concrete backend implementation
-# lands (currently only the link flags exist). NullBackend wins when off.
-option(ENABLE_COREAUDIO  "Enable CoreAudio audio backend (macOS)"     OFF)
+option(ENABLE_COREAUDIO  "Enable CoreAudio audio backend (macOS)"     ${SMARAGD_MACOS})
 
 if(MSVC)
     add_compile_options(/W3 /permissive-)
