@@ -15,7 +15,8 @@ public:
     ALSABackend();
     ~ALSABackend() override;
 
-    int  openDevice(const std::string &deviceName = "default") override;
+    int  openDevice(const std::string &deviceName = "default",
+                    std::uint32_t preferredRate = 0) override;
     int  closeDevice() override;
     int  startOutput() override;
     int  stopOutput() override;
@@ -23,6 +24,9 @@ public:
 
     void setRenderCallback(RenderCallback cb) override { callback_ = std::move(cb); }
     AudioConfig getConfig() const override { return config_; }
+
+    // Rates the PCM device accepts, probed from the candidate set.
+    std::vector<std::uint32_t> supportedRates() const override;
 
     const char *name() const override { return "alsa"; }
 

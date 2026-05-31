@@ -14,7 +14,8 @@ public:
     NullBackend();
     ~NullBackend() override;
 
-    int  openDevice(const std::string &deviceName = "default") override;
+    int  openDevice(const std::string &deviceName = "default",
+                    std::uint32_t preferredRate = 0) override;
     int  closeDevice() override;
     int  startOutput() override;
     int  stopOutput() override;
@@ -22,6 +23,10 @@ public:
 
     void setRenderCallback(RenderCallback cb) override { callback_ = std::move(cb); }
     AudioConfig getConfig() const override { return config_; }
+
+    // The null backend imposes no hardware constraint: it can "open" at any
+    // rate, so it honours whatever was requested (reported via getConfig()).
+    std::vector<std::uint32_t> supportedRates() const override { return {}; }
 
     const char *name() const override { return "null"; }
 

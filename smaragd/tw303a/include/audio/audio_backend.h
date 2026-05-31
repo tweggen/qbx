@@ -6,14 +6,21 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
+
+#include "twformat.h"   // twSampleType
 
 namespace audio {
 
 struct AudioConfig {
-    uint32_t sampleRate   = 44100;
-    uint32_t channels     = 2;
-    uint32_t bufferFrames = 1024;
-    uint32_t periodFrames = 64;
+    uint32_t     sampleRate   = 44100;
+    uint32_t     channels     = 2;
+    uint32_t     bufferFrames = 1024;
+    uint32_t     periodFrames = 64;
+    // The device's native binary sample format (mirrors twFormat.sampleType),
+    // so the device boundary is just another wire and the converter targets it
+    // directly. Reported via getConfig() after the device is opened.
+    twSampleType sampleType   = twSampleType::Float32;
 };
 
 // Pull callback: fill `out` with up to `frames` interleaved float samples
@@ -27,7 +34,12 @@ class AudioBackend {
 public:
     virtual ~AudioBackend() = default;
 
-    virtual int  openDevice(const std::string &deviceName = "default") = 0;
+    // Open a device, optionally requesting a preferred sample rate. The backend
+    // opens at preferredRate iff it can support it natively, otherwise at its
+    // default / mix rate; the rate (and sampleType) actually in force is
+    // reported by getConfig(). preferredRate == 0 means "no preference".
+    virtual int  openDevice(const std::string &deviceName = "default",
+                            std::uint32_t preferredRate = 0)            = 0;
     virtual int  closeDevice()                                          = 0;
 
     virtual int  startOutput()                                          = 0;
@@ -36,6 +48,13 @@ public:
 
     virtual void setRenderCallback(RenderCallback cb)                   = 0;
     virtual AudioConfig getConfig() const                               = 0;
+
+    // Rates this device can be opened at WITHOUT the host resampling. A
+    // shared-mode backend reports its single mix rate; an exclusive-capable one
+    // may report several. Empty == unknown until opened. Pure query: it may
+    // probe the device but must not disturb an active stream. Feeds the
+    // negotiator's candidate domain D.
+    virtual std::vector<std::uint32_t> supportedRates() const           = 0;
 
     virtual const char *name() const                                    = 0;
 };

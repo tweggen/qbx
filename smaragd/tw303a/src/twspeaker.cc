@@ -25,35 +25,37 @@ void twSpeaker::startOutput()
 {
     if (isPlaying_) return;
 
-    // Negotiate one format per wire across the graph feeding this speaker,
-    // before opening the device. Advisory: the result is logged and the engine
-    // proceeds regardless, because the speaker's own resampler bridges the
-    // graph rate to the device rate in all cases.
-    {
-        twNegotiator negotiator(env);
-        negotiator.negotiate(this);
+    // The graph (synth) runs at its input wire's rate — the project/env rate.
+    // Request that rate from the device so that, when the device can open there,
+    // no resampling is needed at all.
+    std::uint32_t graphRate = (std::uint32_t) env.getSRate();
+    if (pInputPlugs != nullptr && pInputPlugs[0] != nullptr) {
+        graphRate = pInputPlugs[0]->getFormat().sampleRate;
     }
 
-    if (backend_->openDevice("default") != 0) {
+    if (backend_->openDevice("default", graphRate) != 0) {
         syslog(LOG_ERR, "twSpeaker::startOutput: openDevice failed");
         return;
     }
 
-    // Reconcile the synth's sample rate with the device's. The device mix rate
-    // is whatever the backend negotiated (commonly 48 kHz); the synth produces
-    // at its input wire's rate (commonly 44.1 kHz). The resampler bridges them;
-    // it is a passthrough when they already match.
-    const audio::AudioConfig cfg = backend_->getConfig();
-    std::uint32_t inRate = (std::uint32_t) env.getSRate();
-    if (pInputPlugs != nullptr && pInputPlugs[0] != nullptr) {
-        inRate = pInputPlugs[0]->getFormat().sampleRate;
+    // Negotiate one rate per wire across the graph feeding this speaker, folding
+    // in the rates the device advertises so a device-native rate can win.
+    // Advisory: logged, playback proceeds regardless — the resampler below
+    // bridges any residual mismatch.
+    {
+        twNegotiator negotiator(env);
+        negotiator.negotiate(this, backend_->supportedRates());
     }
-    resampler_.configure(inRate, cfg.sampleRate);
+
+    // Reconcile the graph rate with the rate the device actually opened at. The
+    // resampler is a passthrough when the device honoured the request.
+    const audio::AudioConfig cfg = backend_->getConfig();
+    resampler_.configure(graphRate, cfg.sampleRate);
     resampler_.reserveHint((length_t) cfg.bufferFrames);
     resampler_.reset();
     if (!resampler_.isPassthrough()) {
         syslog(LOG_INFO, "twSpeaker: resampling %u Hz -> %u Hz",
-               (unsigned) inRate, (unsigned) cfg.sampleRate);
+               (unsigned) graphRate, (unsigned) cfg.sampleRate);
     }
 
     backend_->setRenderCallback(

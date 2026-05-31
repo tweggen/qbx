@@ -30,7 +30,8 @@ public:
     WASAPIBackend();
     ~WASAPIBackend() override;
 
-    int  openDevice(const std::string &deviceName = "default") override;
+    int  openDevice(const std::string &deviceName = "default",
+                    std::uint32_t preferredRate = 0) override;
     int  closeDevice() override;
     int  startOutput() override;
     int  stopOutput() override;
@@ -38,6 +39,11 @@ public:
 
     void setRenderCallback(RenderCallback cb) override { callback_ = std::move(cb); }
     AudioConfig getConfig() const override { return config_; }
+
+    // Shared mode: the OS mixer owns the rate, so this is just the current mix
+    // rate (known after openDevice; empty before). Exclusive-mode enumeration
+    // is future work — see proposal 02.
+    std::vector<std::uint32_t> supportedRates() const override;
 
     const char *name() const override { return "wasapi"; }
 

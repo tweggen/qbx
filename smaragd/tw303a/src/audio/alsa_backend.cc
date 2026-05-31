@@ -16,8 +16,11 @@ ALSABackend::~ALSABackend()
     if (pcm_)    closeDevice();
 }
 
-int ALSABackend::openDevice(const std::string &deviceName)
+int ALSABackend::openDevice(const std::string &deviceName,
+                            std::uint32_t preferredRate)
 {
+    if (preferredRate != 0) config_.sampleRate = preferredRate;
+
     int rc = snd_pcm_open(&pcm_, deviceName.c_str(),
                           SND_PCM_STREAM_PLAYBACK, 0);
     if (rc < 0) {
@@ -39,6 +42,7 @@ int ALSABackend::openDevice(const std::string &deviceName)
     int          dir  = 0;
     snd_pcm_hw_params_set_rate_near(pcm_, params, &rate, &dir);
     config_.sampleRate = rate;
+    config_.sampleType = twSampleType::Int16;  // device-native format (S16_LE)
 
     snd_pcm_uframes_t bufferFrames = config_.bufferFrames;
     snd_pcm_uframes_t periodFrames = config_.periodFrames;
@@ -74,6 +78,31 @@ int ALSABackend::closeDevice()
         pcm_ = nullptr;
     }
     return 0;
+}
+
+std::vector<std::uint32_t> ALSABackend::supportedRates() const
+{
+    // Probe the standard candidate set against the device's hw params. Done on
+    // a short-lived handle so it works whether or not a stream is open.
+    static const unsigned int kCandidates[] = { 44100, 48000, 88200, 96000,
+                                                 176400, 192000 };
+    std::vector<std::uint32_t> out;
+
+    snd_pcm_t *probe = nullptr;
+    if (snd_pcm_open(&probe, "default", SND_PCM_STREAM_PLAYBACK,
+                     SND_PCM_NONBLOCK) < 0 || !probe)
+        return out;
+
+    snd_pcm_hw_params_t *params;
+    snd_pcm_hw_params_alloca(&params);
+    if (snd_pcm_hw_params_any(probe, params) >= 0) {
+        for (unsigned int r : kCandidates) {
+            if (snd_pcm_hw_params_test_rate(probe, params, r, 0) == 0)
+                out.push_back(r);
+        }
+    }
+    snd_pcm_close(probe);
+    return out;
 }
 
 int ALSABackend::startOutput()

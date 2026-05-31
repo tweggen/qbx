@@ -761,4 +761,23 @@ Key points captured in the revision:
   `set_rate_near`/`test_rate`, CoreAudio nominal-sample-rate properties), plus a
   new timeline item **1b** and two success criteria.
 
-Next: implement timeline item **1b** in code (interface + WASAPI/Null/ALSA).
+### Implementation — timeline item 1b (done)
+
+- **Date:** 2026-05-31
+- **Status:** ✅ Backend native-rate negotiation implemented and building green on
+  Windows/Qt6/MinGW; window-up smoke test passes. Audible verification pending.
+
+| File | Change |
+|------|--------|
+| `tw303a/include/audio/audio_backend.h` | `AudioConfig.sampleType` (twSampleType); `supportedRates()` pure virtual; `openDevice` gains `preferredRate` (default 0). |
+| `audio/null_backend.{h,cc}` | Honors `preferredRate` (no hardware constraint); `supportedRates()` returns `{}`. |
+| `audio/wasapi_backend.{h,cc}` | Sets `config_.sampleType` from the detected mix format; logs when a requested rate can't be honored in shared mode; `supportedRates()` returns `{mixRate}` once open. |
+| `audio/alsa_backend.{h,cc}` | Requests `preferredRate` via `set_rate_near`; `sampleType = Int16`; `supportedRates()` probes the candidate set with `snd_pcm_hw_params_test_rate` (Linux — not compiled here). |
+| `twnegotiator.{h,cc}` | `negotiate(target, extraRates)` overload folds device-advertised rates into `D`. |
+| `twspeaker.cc` | Reordered: open device requesting the graph rate → negotiate with `backend_->supportedRates()` → configure resampler `graphRate → getConfig().sampleRate` (passthrough when the request is honored). |
+
+Net: the backend now **requests** the graph rate and **returns** its native rate
+set + format. On a device that can open at the project rate, the speaker
+resampler is a passthrough. Shared-mode WASAPI can't change its mix rate, so the
+request is advisory there (resampler bridges); exclusive-mode honoring is the
+documented future step. Committed in this session.

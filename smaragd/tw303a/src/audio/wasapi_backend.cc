@@ -93,7 +93,8 @@ WASAPIBackend::~WASAPIBackend()
     }
 }
 
-int WASAPIBackend::openDevice(const std::string & /*deviceName*/)
+int WASAPIBackend::openDevice(const std::string & /*deviceName*/,
+                              std::uint32_t preferredRate)
 {
     if (audioClient_) {
         syslog(LOG_WARNING, "WASAPIBackend::openDevice: already open");
@@ -151,6 +152,24 @@ int WASAPIBackend::openDevice(const std::string & /*deviceName*/)
         return -1;
     }
 
+    // Report the device-native binary format on the config (wire format).
+    switch (sampleFormat_) {
+        case WasapiSampleFormat::Float32: config_.sampleType = twSampleType::Float32; break;
+        case WasapiSampleFormat::Int16:   config_.sampleType = twSampleType::Int16;   break;
+        case WasapiSampleFormat::Int32:   config_.sampleType = twSampleType::Int32;   break;
+        default: break;
+    }
+
+    // Shared mode is locked to the OS mix rate, so a preferred rate that differs
+    // can't be honoured here — the speaker resampler bridges it. (Exclusive-mode
+    // support for honouring preferredRate natively is future work; see prop 02.)
+    if (preferredRate != 0 && preferredRate != config_.sampleRate) {
+        syslog(LOG_INFO,
+               "WASAPIBackend: requested %u Hz but shared-mode mix rate is %u Hz; "
+               "the speaker will resample.",
+               (unsigned) preferredRate, config_.sampleRate);
+    }
+
     hr = audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED,
                                   AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
                                   kRequestedDurationHns, 0, mixFormat, nullptr);
@@ -202,6 +221,17 @@ int WASAPIBackend::openDevice(const std::string & /*deviceName*/)
            "synth output to match.",
            config_.sampleRate);
     return 0;
+}
+
+std::vector<std::uint32_t> WASAPIBackend::supportedRates() const
+{
+    // Shared mode: the only rate we can run without the OS mixer resampling is
+    // the current mix rate, known once the device is open. Before open, return
+    // empty ("unknown"). Exclusive-mode enumeration via IsFormatSupported is
+    // future work.
+    if (audioClient_ && config_.sampleRate != 0)
+        return { config_.sampleRate };
+    return {};
 }
 
 int WASAPIBackend::closeDevice()

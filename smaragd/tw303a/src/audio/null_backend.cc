@@ -7,9 +7,15 @@ namespace audio {
 NullBackend::NullBackend()  = default;
 NullBackend::~NullBackend() = default;
 
-int NullBackend::openDevice(const std::string & /*deviceName*/)
+int NullBackend::openDevice(const std::string & /*deviceName*/,
+                            std::uint32_t preferredRate)
 {
-    syslog(LOG_INFO, "audio: NullBackend active — no sound will be produced.");
+    // No hardware to constrain us: adopt the requested rate so the speaker
+    // resampler stays a passthrough. 0 keeps the default.
+    if (preferredRate != 0) config_.sampleRate = preferredRate;
+    syslog(LOG_INFO,
+           "audio: NullBackend active (%u Hz) — no sound will be produced.",
+           (unsigned) config_.sampleRate);
     return 0;
 }
 

@@ -47,6 +47,12 @@ twNegotiator::twNegotiator( tw303aEnvironment &env )
 
 bool twNegotiator::negotiate( twComponent *target )
 {
+    return negotiate( target, {} );
+}
+
+bool twNegotiator::negotiate( twComponent *target,
+                              const std::vector<std::uint32_t> &extraRates )
+{
     if( !target ) return true;
 
     // 1. Discover the upstream subgraph (BFS over input plugs).
@@ -73,9 +79,12 @@ bool twNegotiator::negotiate( twComponent *target )
         }
     }
 
-    // 2. Candidate domain D = configured standard rates ∪ the project rate.
+    // 2. Candidate domain D = configured standard rates ∪ the project rate ∪
+    //    rates the device advertises (so a device-native rate can win and avoid
+    //    resampling).
     Rates D = env_.candidateRates();
     D.push_back( (std::uint32_t) env_.getSRate() );
+    D.insert( D.end(), extraRates.begin(), extraRates.end() );
     D = sortedUnique( D );
 
     // 3. Seed per-component port domains; expand "any" (empty) to D, otherwise
