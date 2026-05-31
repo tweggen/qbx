@@ -170,6 +170,22 @@ public:
     virtual idx_t getNOutputs() const = 0;
     virtual const char *getInputName( idx_t idx ) const = 0;
     virtual const char *getOutputName( idx_t idx ) const = 0;
+
+    // --- Format negotiation (proposal 04 §3) -----------------------------
+    // Seed capability domains for one port. Default: mono Float32 at any rate.
+    virtual twFormatCaps getOutputCaps( idx_t idx ) const;
+    virtual twFormatCaps getInputCaps ( idx_t idx ) const;
+
+    // The node's in<->out coupling relation, iterated to a fixpoint by the
+    // negotiator. It narrows the given port domains to mutual consistency and
+    // MUST be monotone (remove candidates only) — that is what guarantees
+    // termination. Returns true iff it narrowed anything. The default couples
+    // every port to one common rate (a node that neither resamples nor
+    // rate-mixes); a rate-decoupling node (resampler) overrides this to return
+    // false. Contract: domains are concrete (the negotiator has expanded "any"
+    // to the candidate set D before calling), so an empty domain means
+    // infeasible, not "any".
+    virtual bool narrowCaps( twPortDomains &ports ) const;
     
     virtual void setBufferSize( length_t ) {};
 

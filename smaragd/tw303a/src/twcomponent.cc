@@ -3,7 +3,10 @@
 #include <memory.h>
 #include <string.h>
 
+#include <algorithm>
 #include <iostream>
+#include <iterator>
+#include <vector>
 
 #include "twsyslog.h"
 
@@ -14,6 +17,71 @@
 offset_t twComponent::tellPos() const
 {
     return 0;
+}
+
+// --- Format negotiation defaults -----------------------------------------
+
+twFormatCaps twComponent::getOutputCaps( idx_t /*idx*/ ) const
+{
+    // The engine exchanges mono Float32; `rates` left empty == any rate (the
+    // negotiator intersects it with the candidate set D).
+    twFormatCaps c;
+    c.types        = { twSampleType::Float32 };
+    c.channelCounts = { 1 };
+    return c;
+}
+
+twFormatCaps twComponent::getInputCaps( idx_t /*idx*/ ) const
+{
+    twFormatCaps c;
+    c.types        = { twSampleType::Float32 };
+    c.channelCounts = { 1 };
+    return c;
+}
+
+namespace {
+
+std::vector<std::uint32_t> sortedUnique( std::vector<std::uint32_t> v )
+{
+    std::sort( v.begin(), v.end() );
+    v.erase( std::unique( v.begin(), v.end() ), v.end() );
+    return v;
+}
+
+std::vector<std::uint32_t> intersectRates( const std::vector<std::uint32_t> &a,
+                                           const std::vector<std::uint32_t> &b )
+{
+    std::vector<std::uint32_t> out;
+    std::set_intersection( a.begin(), a.end(), b.begin(), b.end(),
+                           std::back_inserter( out ) );
+    return out;
+}
+
+}  // namespace
+
+bool twComponent::narrowCaps( twPortDomains &ports ) const
+{
+    // Default coupling: this node runs every port at one common rate (it
+    // neither resamples nor rate-mixes). Intersect all port rate-domains and
+    // write the result back to each. Monotone: the intersection is a subset of
+    // every input domain, so it only ever removes candidates.
+    std::vector<std::vector<std::uint32_t> *> r;
+    for( auto &c : ports.in )  r.push_back( &c.rates );
+    for( auto &c : ports.out ) r.push_back( &c.rates );
+    if( r.empty() ) return false;
+
+    std::vector<std::uint32_t> common = sortedUnique( *r[0] );
+    for( std::size_t i = 1; i < r.size(); ++i )
+        common = intersectRates( common, sortedUnique( *r[i] ) );
+
+    bool changed = false;
+    for( auto *pr : r ) {
+        if( sortedUnique( *pr ) != common ) {
+            *pr = common;
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 bool twComponent::isSeekable() const

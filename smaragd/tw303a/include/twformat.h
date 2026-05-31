@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 // The binary representation of one sample. The engine's native exchange type is
 // Float32 (== sample_t); the other encodings exist so a wire can advertise data
@@ -73,5 +74,24 @@ inline twFormat twCanonicalFormat( std::uint32_t rate )
 {
     return twFormat{ rate, twSampleType::Float32, 1, twLayout::Interleaved };
 }
+
+// What a wire *can* carry — the candidate domain for one port, the input to
+// format negotiation (proposal 04 §3a), as opposed to twFormat which is the one
+// format finally chosen. An empty vector for a dimension means "no constraint"
+// (any); the negotiator intersects an empty `rates` with its candidate set D at
+// the start of a pass, after which an empty `rates` means *infeasible*.
+struct twFormatCaps {
+    std::vector<std::uint32_t> rates;          // empty = any
+    std::vector<twSampleType>  types;          // empty = any
+    std::vector<std::uint16_t> channelCounts;  // empty = any
+    std::uint32_t preferredRate = 0;           // 0 = defer to project rate
+};
+
+// The candidate domains of all of a node's ports, passed to narrowCaps() so a
+// node's coupling relation can narrow inputs and outputs together in one shot.
+struct twPortDomains {
+    std::vector<twFormatCaps> in;    // indexed by input plug
+    std::vector<twFormatCaps> out;   // indexed by output latch
+};
 
 #endif
