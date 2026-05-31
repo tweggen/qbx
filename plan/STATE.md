@@ -732,3 +732,33 @@ already match it is a passthrough — byte-identical to the prior read path.
 3. **Optional UI** — no widget exposes the project sample rate yet; add a
    project-settings control if user-facing rate changes are wanted.
 4. **Finish healing** when a fixed-rate source lands (see deferred fork above).
+
+---
+
+## 02_AUDIO_DRIVER_STRATEGY.md — revised to support the wire format (design)
+
+- **Date:** 2026-05-31
+- **Status:** Proposal 02 revised (design only). Brings the audio-driver
+  strategy in line with the as-built callback-pull `AudioBackend` and proposal
+  04's wire format, by making the backend a participant in rate negotiation:
+  it **returns** the rates it can open natively (`supportedRates()`) and
+  **accepts** a requested rate (`openDevice(device, preferredRate)`), with
+  `AudioConfig.sampleType` carrying the device-native binary format.
+
+Key points captured in the revision:
+- New normative "Wire-format rate negotiation" section supersedes the original
+  speculative push/`writeAudio` interface sketch for the rate/format aspect.
+- Negotiation flow: seed `D = candidateRates ∪ {projectRate} ∪
+  backend.supportedRates()`, resolve with a no-resample preference, request that
+  rate at open, then configure the speaker resampler `graphRate →
+  getConfig().sampleRate` (passthrough when the request is honored). This is the
+  resolution of proposal 04's open item *"auto-extend D with device-advertised
+  rates"* → yes.
+- Shared vs. exclusive mode documented: `preferredRate` is advisory in shared
+  mode (mixer owns the rate) and bit-perfect in exclusive mode; exclusive mode
+  is the lever behind 04's deferred *"device vs. fixed-rate source anchor"* fork.
+- Per-backend realization notes (WASAPI `IsFormatSupported`/`GetMixFormat`, ALSA
+  `set_rate_near`/`test_rate`, CoreAudio nominal-sample-rate properties), plus a
+  new timeline item **1b** and two success criteria.
+
+Next: implement timeline item **1b** in code (interface + WASAPI/Null/ALSA).
