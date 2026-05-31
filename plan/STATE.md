@@ -484,6 +484,70 @@ threading model, save-format shape, and phased rollout plan.
 
 ---
 
+## 04_WIRE_FORMAT_AND_SAMPLE_RATE.md (proposed)
+
+- **Date:** 2026-05-31
+- **Status:** Design only — proposal authored, no code landed yet.
+
+Tackles the sample-rate mismatch (synth 44.1 kHz vs WASAPI 48 kHz device,
+~8.8 % pitch error) by making data format a first-class property of each
+wire rather than an implicit engine-wide assumption. Two layers:
+
+- **(a) Technical** — a `twFormat` descriptor (sample rate, binary sample
+  type, channels, layout) attached to the producing `twLatch` and queried by
+  the consumer via `twLatchOutput::getFormat()`. The sink decides how/if to
+  convert: consume natively (zero-copy when matched), convert explicitly via
+  shared `twConvert`/`twResampler` utilities, or refuse + log. Default
+  `twFormat` is mono float32 — byte-identical to today's universal
+  assumption — so no existing component needs edits to keep working.
+- **(b) Usability** — a settable, persisted project sample rate seeds
+  `tw303aEnvironment` (`setSRate`/`sampleRateChanged`) and every wire's
+  default format. A common rate by default (proposal recommends 48000 for
+  `File → New`), but per-wire override means foreign-rate signals (imported
+  96 kHz samples, rendered stems) are reconciled by the downstream sink, not
+  forced.
+
+On top of the per-wire format mechanism sits an explicit **(re)negotiation
+protocol**. Because a node's output caps depend on its input caps and vice
+versa (passthrough: out==in; mixer: common rate; only a resampler decouples),
+resolution is a **fixpoint**, not a single pass. It is made to terminate by
+construction: capabilities are narrowed over a *finite discrete candidate set*
+`D` = {standard rates 44.1/48/88.2/96/…} ∪ {rates hard-anchored in the graph},
+and each node's `narrowCaps` coupling relation is **monotone (remove-only)**, so
+AC-3-style propagation settles in ≤ Σ|domains| steps (an iteration cap is only a
+bug-backstop). The standard rates do triple duty — finite domain (the real
+termination guarantee), convergence magnet/tiebreak, and default. The standard
+set defaults to **{44100, 48000, 88200, 96000}** and is **configurable** (lives
+on `tw303aEnvironment`, persisted with the project). A graph-level
+`twNegotiator` builds `D`, propagates to fixpoint, heals empty wires by inserting
+`twResampler` nodes (each wire healed at most once → outer loop also terminates),
+resolves residual freedom by preference (project rate → device rate → standard
+ranking), then calls each node's `commitFormats()` to do its own (potentially
+expensive) setup — resampler kernels, buffer allocation — entirely off the
+realtime path. Triggered before play, and re-triggered via signalling
+(`renegotiationRequired`/`formatChanged`) when any node's constraints change —
+e.g. the audio driver switching the device from 48 kHz to 44.1 kHz, which can
+ripple upstream so the synth produces the new rate directly and the speaker
+resampler collapses to a passthrough. Any node can originate a renegotiation,
+not just the sink. This was the key refinement over the initial "sink decides
+at read time" sketch (GStreamer caps-negotiation / CoreAudio AUGraph pre-roll
+precedent).
+
+The reported bug is closed by phase 2 alone (a `twResampler` inside
+`twSpeaker`'s render callback targeting `backend_->getConfig().sampleRate`),
+before the engine core is made rate-aware (phase 5: replacing literal
+`44100`s in `twsaw`/`twsimplesaw`/`twpipe`/`twmoog`/`twtestseq`/`twwav` with
+`env.getSRate()`) and before full graph negotiation (phases 6–7). Open design
+forks: negotiation anchor priority (device vs. fixed-rate source), mid-play
+local absorption vs. stop/renegotiate/restart, and failure UX. Cross-references
+`03_ACTION_MODEL.md` — changing the project rate should eventually be a
+`set-project-rate` SAction.
+
+See `plan/proposed/04_WIRE_FORMAT_AND_SAMPLE_RATE.md` for the full descriptor,
+read-path API, conversion strategy, worked examples, and 6-phase rollout.
+
+---
+
 ## qmake build system removal
 
 - **Date:** 2026-05-30
