@@ -10,6 +10,8 @@
 #include "sapplication.h"
 #include "sproject.h"
 #include "ssettings.h"
+#include "sactionhistory.h"
+#include "saction.h"
 
 SApplication *SApplication::singleton_ = NULL;
 
@@ -190,7 +192,8 @@ SApplication::SApplication( int &argc, char **argv )
       currentSelectedSLink_( NULL ),
       globalLocatorPos_( 0 ),
       isPlaying_( false ),
-      currentProject_( NULL )
+      currentProject_( NULL ),
+      actionHistory_( NULL )
 {
     setOrganizationName( "Smaragd" );
     setApplicationName( "smaragd" );
@@ -201,6 +204,7 @@ SApplication::SApplication( int &argc, char **argv )
     t3Env_->setBufferSize( 4096 );
     t3Speaker_ = new twSpeaker( *t3Env_ );
     t3Speaker_->init();
+    actionHistory_ = new SActionHistory( this );
 
     // Restore the audio output device chosen in a previous session.
     QString devId = SSettings::instance().audioDeviceId();
@@ -209,7 +213,20 @@ SApplication::SApplication( int &argc, char **argv )
 
 SApplication::~SApplication()
 {
+    DTOR_DEL( actionHistory_ );
     DTOR_DEL( t3Speaker_ );
     DTOR_DEL( t3Env_ );
     DTOR_DEL( selectionList_ );
+}
+
+SActionHistory *SApplication::actionHistory() const
+{
+    return actionHistory_;
+}
+
+void SApplication::submitAction(SAction *action)
+{
+    if (actionHistory_) {
+        actionHistory_->submit(action);
+    }
 }

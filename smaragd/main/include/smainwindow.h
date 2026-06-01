@@ -31,6 +31,7 @@ protected slots:
     void stopPlaying();
 
     void audioDeviceSelected( QAction * );
+    void runTestSequence();
 
 private:
     void newProject();
@@ -45,6 +46,7 @@ private:
 
     QMenu *qFileMenu_;
     QMenu *qAudioMenu_;
+    QMenu *qTestMenu_;
     QActionGroup *deviceGroup_;
 
     QAction *actStop_, *actPlay_;

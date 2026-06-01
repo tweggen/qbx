@@ -13,6 +13,8 @@ class twWhiteNoise;
 class SObject;
 class SLink;
 class SProject;
+class SActionHistory;
+class SAction;
 
 typedef QList<SLink*> SSelectionList;
 
@@ -50,7 +52,8 @@ public:
     void rewireSpeaker();
     offset_t getGlobalLocatorPos() const;
     bool isPlaying() const;
-    
+    SActionHistory *actionHistory() const;
+    void submitAction(SAction *action);
 
 signals:
     void globalLocatorMoved( offset_t newPos, offset_t oldPos );
@@ -73,9 +76,10 @@ private:
     tw303aEnvironment *t3Env_;
     twSpeaker *t3Speaker_;
     twWhiteNoise *t3WhiteNoise_;
+    SActionHistory *actionHistory_;
 
     SLink *currentSelectedSLink_;
-    
+
     offset_t globalLocatorPos_;
     bool isPlaying_;
     SProject *currentProject_;

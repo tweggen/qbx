@@ -22,6 +22,15 @@ set(SMARAGD_HEADERS
     include/strack.h
     include/strackrenderer.h
     include/strackrndrinline.h
+    include/saction.h
+    include/sactionregistry.h
+    include/sactionqueue.h
+    include/sactionhistory.h
+    include/sactionundocommand.h
+    include/actions/saddtrackaction.h
+    include/actions/sremovetrackaction.h
+    include/actions/saddsampleaction.h
+    include/actions/stoggleplaybackaction.h
 )
 
 set(SMARAGD_SOURCES
@@ -48,6 +57,14 @@ set(SMARAGD_SOURCES
     src/sstdmixerview.cpp
     src/strack.cpp
     src/strackrndrinline.cpp
+    src/sactionregistry.cpp
+    src/sactionqueue.cpp
+    src/sactionhistory.cpp
+    src/sactionundocommand.cpp
+    src/actions/saddtrackaction.cpp
+    src/actions/sremovetrackaction.cpp
+    src/actions/saddsampleaction.cpp
+    src/actions/stoggleplaybackaction.cpp
 )
 
 # SMARAGD_WIN_CONSOLE: when ON (the default), the Windows build uses the

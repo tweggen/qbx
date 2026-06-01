@@ -29,6 +29,10 @@
 
 #include "twspeaker.h"
 
+#include "actions/saddtrackaction.h"
+#include "actions/saddsampleaction.h"
+#include "actions/stoggleplaybackaction.h"
+
 #include "pix/playoff.xpm"
 #include "pix/playon.xpm"
 #include "pix/stopoff.xpm"
@@ -262,6 +266,11 @@ SMainWindow::SMainWindow()
 
     buildAudioMenu();
 
+    qTestMenu_ = new QMenu( "&Test", this );
+    qTestMenu_->setTearOffEnabled(true);
+    qTestMenu_->addAction( "&Run Test Sequence...", this, SLOT( runTestSequence() ) );
+    menuBar()->addMenu( qTestMenu_ );
+
     qDockExternFileList_ = NULL;
 }
 
@@ -313,6 +322,46 @@ void SMainWindow::audioDeviceSelected( QAction *a )
     if( SApplication::app().isPlaying() )
         statusBar()->showMessage(
             "Audio device change takes effect on the next Play.", 4000 );
+}
+
+void SMainWindow::runTestSequence()
+{
+    // Open file dialog to pick a WAV file.
+    QString lastDir = SSettings::instance().lastDir("sample", "");
+    QString filePath = QFileDialog::getOpenFileName(
+        this,
+        "Select a WAV file for the test sequence",
+        lastDir,
+        "WAV Files (*.wav);;All Files (*)"
+    );
+
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    // Save the directory.
+    QFileInfo fileInfo(filePath);
+    SSettings::instance().setLastDir("sample", fileInfo.absolutePath());
+
+    // Create a new project.
+    fileNew();
+
+    if (!currentProject_) {
+        QMessageBox::critical(this, "Error", "Failed to create new project");
+        return;
+    }
+
+    // Submit the test sequence actions.
+    // 1. Add a track at index 0.
+    SApplication::app().submitAction(new SAddTrackAction(0));
+
+    // 2. Add the sample to track 0 at time 0.
+    SApplication::app().submitAction(new SAddSampleAction(0, filePath, 0));
+
+    // 3. Start playback.
+    SApplication::app().submitAction(new STogglePlaybackAction(true));
+
+    statusBar()->showMessage("Test sequence started", 2000);
 }
 
 SMainWindow::~SMainWindow()
