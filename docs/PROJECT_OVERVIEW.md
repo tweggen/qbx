@@ -162,6 +162,6 @@ cmake --build build
 ## Next Steps
 
 See `plan/proposed/` for detailed strategies and `plan/STATE.md` for current
-status. Open threads include: a modern CoreAudio backend, a Linux ALSA smoke
-build, CI, exclusive-mode / per-device rate selection, and the SAction
-command/undo/scripting model (`03_ACTION_MODEL.md`, design only).
+status. Open threads include: a Linux ALSA smoke build, CI, exclusive-mode /
+per-device rate selection, and the SAction command/undo/scripting model
+(`03_ACTION_MODEL.md`, design only).
