@@ -3,7 +3,7 @@
 #include "twconvert.h"
 #include "twsyslog.h"
 
-// Include CoreAudio headers first to get proper type definitions
+// Include CoreAudio headers
 #include <AudioUnit/AudioUnit.h>
 #include <CoreAudio/CoreAudio.h>
 #include <AudioToolbox/AudioToolbox.h>
@@ -80,7 +80,6 @@ CoreAudioBackend::CoreAudioBackend()
     config_.bufferFrames = 1024;
     config_.periodFrames = 256;
     config_.sampleType = twSampleType::Float32;
-    fprintf(stderr, "CoreAudioBackend: constructor - backend created\n");
 }
 
 CoreAudioBackend::~CoreAudioBackend()
@@ -131,31 +130,27 @@ int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t pref
 
     deviceId_ = device;
 
-    // Try HALOutputUnit instead of DefaultOutput for better control
-    fprintf(stderr, "CoreAudioBackend: looking for AudioUnit HALOutput component\n");
+    // Find the DefaultOutput audio unit (standard macOS speaker output).
     AudioComponentDescription desc = {
         kAudioUnitType_Output,
-        kAudioUnitSubType_HALOutput,
+        kAudioUnitSubType_DefaultOutput,
         kAudioUnitManufacturer_Apple,
         0, 0
     };
 
     AudioComponent comp = AudioComponentFindNext(nullptr, &desc);
     if (!comp) {
-        fprintf(stderr, "CoreAudioBackend: AudioComponentFindNext(DefaultOutput) FAILED\n");
+        syslog(LOG_ERR, "CoreAudioBackend: AudioComponentFindNext(DefaultOutput) failed");
         return -1;
     }
-    fprintf(stderr, "CoreAudioBackend: found AudioUnit component\n");
 
-    // Create the audio unit.
+    // Create the audio unit instance.
     ::AudioUnit tempUnit = nullptr;
-    fprintf(stderr, "CoreAudioBackend: calling AudioComponentInstanceNew\n");
     err = AudioComponentInstanceNew(comp, reinterpret_cast<AudioComponentInstance *>(&tempUnit));
     if (err != noErr) {
-        fprintf(stderr, "CoreAudioBackend: AudioComponentInstanceNew FAILED: %d\n", (int)err);
+        syslog(LOG_ERR, "CoreAudioBackend: AudioComponentInstanceNew failed: %d", (int)err);
         return -1;
     }
-    fprintf(stderr, "CoreAudioBackend: AudioComponentInstanceNew succeeded\n");
     outputUnit_ = tempUnit;
 
     // Query the device's format and capabilities via AudioHardware APIs.
@@ -178,91 +173,63 @@ int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t pref
                (unsigned)config_.sampleRate, (unsigned)preferredRate);
     }
 
-    // Set the output unit's format to what the app produces (mono float32, will be
-    // converted by the speaker resampler as needed).
+    // Set the output unit's format to what the app produces (stereo float32 at device rate).
+    // Use the most basic format flags for compatibility.
     AudioStreamBasicDescription appFormat = {0};
     appFormat.mSampleRate = config_.sampleRate;
     appFormat.mFormatID = kAudioFormatLinearPCM;
-    appFormat.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
-    appFormat.mBytesPerPacket = 4;  // float32
+    appFormat.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;  // Interleaved float
+    appFormat.mBytesPerPacket = 4 * config_.channels;  // float32 * num channels
     appFormat.mFramesPerPacket = 1;
-    appFormat.mBytesPerFrame = 4;
+    appFormat.mBytesPerFrame = 4 * config_.channels;
     appFormat.mChannelsPerFrame = config_.channels;
     appFormat.mBitsPerChannel = 32;
 
     ::AudioUnit au = reinterpret_cast<::AudioUnit>(outputUnit_);
 
-    fprintf(stderr, "CoreAudioBackend: calling AudioUnitSetProperty(StreamFormat)\n");
+    // Set format on INPUT scope (where we provide data to the unit).
     err = AudioUnitSetProperty(au, kAudioUnitProperty_StreamFormat,
                                kAudioUnitScope_Input, 0, &appFormat, sizeof(appFormat));
     if (err != noErr) {
-        fprintf(stderr, "CoreAudioBackend: AudioUnitSetProperty(format) FAILED: %d\n", (int)err);
+        syslog(LOG_ERR, "CoreAudioBackend: AudioUnitSetProperty(format) failed: %d", (int)err);
         AudioComponentInstanceDispose(reinterpret_cast<::AudioComponentInstance>(au));
         outputUnit_ = nullptr;
         return -1;
     }
-    fprintf(stderr, "CoreAudioBackend: AudioUnitSetProperty(StreamFormat) succeeded\n");
 
-    // Install the render callback. The inRefCon pointer is passed back to us
-    // in the static callback, allowing us to dispatch to the instance.
-    // Cast our void* callback signature to AURenderCallback.
+    // Set format on OUTPUT scope (often read-only, but try anyway).
+    err = AudioUnitSetProperty(au, kAudioUnitProperty_StreamFormat,
+                               kAudioUnitScope_Output, 0, &appFormat, sizeof(appFormat));
+    if (err != noErr) {
+        syslog(LOG_DEBUG, "CoreAudioBackend: OUTPUT scope format not settable (expected on some units): %d", (int)err);
+    }
+
+    // Install the render callback (invoked when the unit needs audio data).
     AURenderCallbackStruct callbackStruct;
     callbackStruct.inputProc = reinterpret_cast<AURenderCallback>(CoreAudioBackend::renderCallback_);
     callbackStruct.inputProcRefCon = this;
 
-    fprintf(stderr, "CoreAudioBackend: calling AudioUnitSetProperty(SetRenderCallback)\n");
     err = AudioUnitSetProperty(au, kAudioUnitProperty_SetRenderCallback,
                                kAudioUnitScope_Input, 0, &callbackStruct, sizeof(callbackStruct));
     if (err != noErr) {
-        fprintf(stderr, "CoreAudioBackend: AudioUnitSetProperty(callback) FAILED: %d\n", (int)err);
+        syslog(LOG_ERR, "CoreAudioBackend: AudioUnitSetProperty(SetRenderCallback) failed: %d", (int)err);
         AudioComponentInstanceDispose(reinterpret_cast<::AudioComponentInstance>(au));
         outputUnit_ = nullptr;
         return -1;
-    }
-    fprintf(stderr, "CoreAudioBackend: AudioUnitSetProperty(SetRenderCallback) succeeded\n");
-
-    // For HALOutput, disable input and enable output
-    fprintf(stderr, "CoreAudioBackend: configuring HALOutput I/O\n");
-    UInt32 enableIO = 0;
-    err = AudioUnitSetProperty(au, kAudioOutputUnitProperty_EnableIO,
-                               kAudioUnitScope_Input, 0, &enableIO, sizeof(enableIO));
-    if (err != noErr) {
-        fprintf(stderr, "CoreAudioBackend: DisableIO on INPUT WARNING: %d\n", (int)err);
-    }
-
-    enableIO = 1;
-    err = AudioUnitSetProperty(au, kAudioOutputUnitProperty_EnableIO,
-                               kAudioUnitScope_Output, 0, &enableIO, sizeof(enableIO));
-    if (err != noErr) {
-        fprintf(stderr, "CoreAudioBackend: EnableIO on OUTPUT WARNING: %d\n", (int)err);
-    } else {
-        fprintf(stderr, "CoreAudioBackend: EnableIO OUTPUT succeeded\n");
-    }
-
-    // Set the device on the HALOutput unit
-    fprintf(stderr, "CoreAudioBackend: setting device on HALOutput (device=%u)\n", (unsigned)device);
-    err = AudioUnitSetProperty(au, kAudioOutputUnitProperty_CurrentDevice,
-                               kAudioUnitScope_Global, 0, &device, sizeof(device));
-    if (err != noErr) {
-        fprintf(stderr, "CoreAudioBackend: SetDevice WARNING: %d\n", (int)err);
-    } else {
-        fprintf(stderr, "CoreAudioBackend: SetDevice succeeded\n");
     }
 
     // Initialize the audio unit.
-    fprintf(stderr, "CoreAudioBackend: calling AudioUnitInitialize\n");
     err = AudioUnitInitialize(au);
     if (err != noErr) {
-        fprintf(stderr, "CoreAudioBackend: AudioUnitInitialize FAILED: %d\n", (int)err);
+        syslog(LOG_ERR, "CoreAudioBackend: AudioUnitInitialize failed: %d", (int)err);
         AudioComponentInstanceDispose(reinterpret_cast<::AudioComponentInstance>(au));
         outputUnit_ = nullptr;
         return -1;
     }
-    fprintf(stderr, "CoreAudioBackend: AudioUnitInitialize succeeded\n");
 
     floatScratch_.resize(config_.bufferFrames * config_.channels);
 
-    fprintf(stderr, "CoreAudioBackend: opened device %u at %u Hz, %u channels\n",
+    syslog(LOG_INFO, "CoreAudioBackend: opened device %u at %u Hz, %u channels",
            (unsigned)device, (unsigned)config_.sampleRate, (unsigned)config_.channels);
 
     return 0;
@@ -287,20 +254,13 @@ int CoreAudioBackend::startOutput()
         return -1;
     }
 
-    fprintf(stderr, "CoreAudioBackend::startOutput: callback_set=%s, device=%u\n",
-           callback_ ? "yes" : "NO", (unsigned)deviceId_);
-
-    // Cast opaque pointer to AudioUnit for the CoreAudio call
-    fprintf(stderr, "CoreAudioBackend::startOutput: calling AudioOutputUnitStart\n");
     OSStatus err = AudioOutputUnitStart(reinterpret_cast<::AudioUnit>(outputUnit_));
     if (err != noErr) {
-        fprintf(stderr, "CoreAudioBackend: AudioOutputUnitStart FAILED: %d\n", (int)err);
+        syslog(LOG_ERR, "CoreAudioBackend: AudioOutputUnitStart failed: %d", (int)err);
         return -1;
     }
-    fprintf(stderr, "CoreAudioBackend: AudioOutputUnitStart succeeded\n");
 
     running_.store(true);
-    fprintf(stderr, "CoreAudioBackend: audio output started successfully\n");
     return 0;
 }
 
@@ -385,14 +345,12 @@ int CoreAudioBackend::renderCallback_(void *refCon,
                                       unsigned int frames,
                                       void *buffers_)
 {
-    // The callback must return an OSStatus (0 = noErr). We dispatch to the
-    // instance; if the instance doesn't exist, fill the buffer with silence
-    // and return success.
+    // Invoked by CoreAudio when it needs audio data.
     CoreAudioBackend *self = reinterpret_cast<CoreAudioBackend *>(refCon);
     if (self) {
         self->renderOnce_(frames, buffers_);
     } else {
-        // Silence the output.
+        // Silence the output if no instance.
         if (buffers_) {
             auto *buffers = reinterpret_cast<AudioBufferList *>(buffers_);
             for (unsigned i = 0; i < buffers->mNumberBuffers; ++i) {
@@ -407,22 +365,10 @@ int CoreAudioBackend::renderCallback_(void *refCon,
 
 void CoreAudioBackend::renderOnce_(unsigned int frames, void *buffers_)
 {
-    static int renderCount = 0;
-    if (renderCount == 0) {
-        fprintf(stderr, "CoreAudioBackend::renderOnce_ FIRST CALL! frames=%u\n", frames);
-    }
-    if (renderCount++ % 100 == 0) {
-        fprintf(stderr, "CoreAudioBackend::renderOnce_ called (count=%d, frames=%u, callback_set=%s)\n",
-               renderCount, frames, callback_ ? "yes" : "NO");
-    }
-
     if (!buffers_) return;
     auto *buffers = reinterpret_cast<AudioBufferList *>(buffers_);
 
     if (!callback_) {
-        if (renderCount == 1) {
-            fprintf(stderr, "CoreAudioBackend::renderOnce_: NO CALLBACK REGISTERED!\n");
-        }
         // No callback: silence the buffers.
         for (unsigned i = 0; i < buffers->mNumberBuffers; ++i) {
             if (buffers->mBuffers[i].mData && buffers->mBuffers[i].mDataByteSize) {
@@ -435,8 +381,7 @@ void CoreAudioBackend::renderOnce_(unsigned int frames, void *buffers_)
     // Pull floats from the synthesizer.
     size_t filled = callback_(floatScratch_.data(), frames, config_.channels);
 
-    // Copy the float data to the audio buffers. We set up the format as float32,
-    // so the data in floatScratch_ matches what CoreAudio expects.
+    // Copy the float data to the audio buffers.
     const size_t frameBytes = config_.channels * sizeof(float);
     for (unsigned i = 0; i < buffers->mNumberBuffers; ++i) {
         if (buffers->mBuffers[i].mData) {
@@ -447,7 +392,7 @@ void CoreAudioBackend::renderOnce_(unsigned int frames, void *buffers_)
             }
             // Silence the rest.
             if (filled < frames) {
-                std::memset(reinterpret_cast<float *>(buffers->mBuffers[i].mData) + filled * config_.channels,
+                std::memset(reinterpret_cast<uint8_t *>(buffers->mBuffers[i].mData) + filled * frameBytes,
                             0, (frames - filled) * frameBytes);
             }
         }

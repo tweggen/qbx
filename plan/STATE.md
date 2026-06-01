@@ -829,59 +829,57 @@ documented future step. Committed in this session.
 
 ---
 
-## CoreAudio backend diagnostic work (macOS)
+## CoreAudio backend diagnostic work + fix (macOS)
 
 - **Date:** 2026-06-01
-- **Status:** ⚠️ CoreAudio backend compiles and initializes but render callback
-  is never invoked. Diagnosis in progress; requires architectural review.
+- **Status:** ✅ **FIXED** — CoreAudio backend now produces audible audio on macOS.
 
-### Symptoms
+### Initial Symptoms
 
-- macOS build with `-DENABLE_COREAUDIO=ON` compiles successfully
-- All CoreAudio setup calls succeed (AudioComponentInstanceNew, AudioUnitSetProperty, AudioUnitInitialize, AudioOutputUnitStart)
-- Callback is registered (`callback_set=yes`)
-- But the render callback (`renderOnce_()`) is **never called** by CoreAudio
+- macOS build with `-DENABLE_COREAUDIO=ON` compiled successfully
+- All setup calls succeeded, but render callback (`renderOnce_()`) was never invoked
+- No audio produced; cursor did not advance during playback
 
-### Diagnostic work performed
+### Root Cause
 
-1. **Fixed file dialog blocking issue** on macOS: switched from `QFileDialog::getOpenFileName()` to explicit `QFileDialog` with `exec()` and `DontUseNativeDialog` flag (sstdmixerview.cpp:255–263). File insertion now works.
+The audio format descriptor had two issues:
 
-2. **Added comprehensive stderr logging** throughout the audio initialization chain to trace the issue:
-   - twSpeaker::startOutput() logs entry, openDevice call, callback setup
-   - CoreAudioBackend::openDevice() logs component lookup, AudioUnit creation, property setup, initialization
-   - CoreAudioBackend::startOutput() logs callback status, AudioOutputUnitStart result
-   - CoreAudioBackend::renderOnce_() logs first invocation (never seen)
+1. **Incorrect byte sizes:** `mBytesPerPacket` and `mBytesPerFrame` were hardcoded to 4 (single-channel float32) instead of `4 * channels` (stereo float32 = 8 bytes)
+2. **Audio unit type:** HALOutput and GenericOutput didn't trigger callbacks; switching back to `DefaultOutput` was required
 
-3. **Tested two audio unit types:**
-   - **DefaultOutput** (kAudioUnitSubType_DefaultOutput): all setup succeeds, callback never invoked
-   - **HALOutput** (kAudioUnitSubType_HALOutput): EnableIO on OUTPUT scope succeeds, device set, callback still never invoked
+### Fix Applied
 
-### Root cause (hypothesis)
+| File | Change |
+|------|--------|
+| `coreaudio_backend.cc` | **Audio unit:** Switched from HALOutput → DefaultOutput (standard speaker output). **Format:** Fixed `mBytesPerPacket` and `mBytesPerFrame` to `4 * channels` for stereo float32. Set format on both INPUT scope (where we provide data) and OUTPUT scope (device expectation, often read-only). **Logging:** Simplified diagnostic output; kept syslog calls, removed excessive fprintf. |
+| `sstdmixerview.cpp` | (from prior session) Fixed file dialog blocking via `DontUseNativeDialog` flag. |
 
-The callback-pull architecture (`setRenderCallback()` with CoreAudio invoking it when data is needed) may not work with the audio unit types tried. Possibilities:
+### Verification
 
-1. **Wrong audio unit type:** DefaultOutput and HALOutput may require a different callback model or may not use callbacks at all on modern macOS
-2. **Missing AUGraph wiring:** The audio units may need to be connected via an AUGraph for the callback to be invoked
-3. **Threading model:** The render callback may need to be pulled explicitly via `AudioUnitRender` in a dedicated thread, not invoked by the framework
-4. **Format/device configuration:** The audio unit may need additional configuration (buffer sizes, stream formats on different scopes) before it activates
+- **Build:** ✅ Compiles cleanly on macOS / Qt6.11.1 / arm64
+- **Audible playback:** ✅ **Confirmed** — user tested with `File → New`, added track, imported sample, pressed Play. Heard audio and saw playback cursor advance.
+- **Diagnostic output shows:**
+  ```
+  CoreAudioBackend::renderCallback_ INVOKED! (call #1, frames=512, ...)
+  CoreAudioBackend::renderCallback_ INVOKED! (call #100, frames=512, ...)
+  CoreAudioBackend::renderCallback_ INVOKED! (call #200, frames=512, ...)
+  ```
 
-### Next steps (deferred — requires deeper investigation)
+### Architecture Summary
 
-1. **Research modern macOS audio patterns:** Determine if DefaultOutput/HALOutput support render callbacks, or if AVAudioEngine / AudioQueueServices are the recommended approach
-2. **Consider alternative patterns:**
-   - Switch to `AudioQueueServices` (simpler, pull-based, known to work)
-   - Manually pull audio via `AudioUnitRender()` in a worker thread
-   - Use `AVAudioEngine` (modern, high-level)
-3. **Reference implementation review:** Check Apple's examples or JUCE/RtAudio implementations for macOS CoreAudio usage
-4. **Test case:** Add a minimal CoreAudio example that successfully produces sound to verify the setup pattern
+The final working pattern:
+1. **Audio unit:** `DefaultOutput` (kAudioUnitSubType_DefaultOutput)
+2. **Format:** Stereo float32, interleaved, at device sample rate (typically 48 kHz)
+3. **Callback:** Render callback on INPUT scope, invoked by CoreAudio when data is needed
+4. **Data flow:** Synth (mono) → speaker resampler (mono → device rate) → CoreAudio callback → output buffers → speakers
 
 ### Files touched
 
-- `twspeaker.cc` — added diagnostic logging (fprintf to stderr)
-- `coreaudio_backend.cc` — switched DefaultOutput→HALOutput, added detailed setup logging, tested multiple initialization orders
-- `smainwindow.cpp` — added diagnostic logging and fixed file dialog
-- `sstdmixerview.cpp` — fixed file dialog blocking issue (DontUseNativeDialog)
+- `coreaudio_backend.cc` — fixed format descriptor, switched to DefaultOutput, streamlined logging
+- `smainwindow.cpp` — (from prior session) added diagnostic qWarning messages
+- `twspeaker.cc` — (from prior session) added diagnostic fprintf output
+- `sstdmixerview.cpp` — (from prior session) fixed file dialog blocking issue
 
-### Current state
+### Current State
 
-The macOS app **builds** and **initializes** all audio infrastructure, but produces **no sound** because the synthesis engine is never called to render audio. The audio system is "ready" but "idle". This is a blocker for audible testing on macOS; Windows/Linux audio remains functional (WASAPI verified audible, ALSA uncompiled).
+macOS audio **fully operational**. The synth produces audible output at device native rate (48 kHz on modern Macs); the speaker resampler bridges any project-rate mismatch. Playback cursor advances correctly, reflecting synth time (not device time).
