@@ -252,11 +252,15 @@ void SStdMixerView::ctInsertSample()
         return;
     }
     // OK, we have the track. Insert the sample here.
-    QString s( QFileDialog::getOpenFileName(
-        this, // parent
-        "Insert sample",
-        SSettings::instance().lastDir( "sample", QDir::currentPath() ),
-        "Wave files (*.WAV *.wav)" ) );
+    QFileDialog dialog(this, "Insert sample",
+                       SSettings::instance().lastDir( "sample", QDir::currentPath() ),
+                       "Wave files (*.WAV *.wav)");
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setOptions(QFileDialog::DontUseNativeDialog);
+    QString s;
+    if (dialog.exec() == QDialog::Accepted) {
+        s = dialog.selectedFiles().isEmpty() ? QString() : dialog.selectedFiles().at(0);
+    }
     if( s.isNull() ) {
         qWarning( "Nothing selected in file requester.\n" );
         return;

@@ -4,9 +4,8 @@
 
 **Smaragd** is a Qt-based audio synthesis application featuring a software
 TB-303 synthesizer clone with granular synthesis capabilities (~11,200 lines of
-C++). It builds with **CMake** against **Qt 6** and runs on Windows (WASAPI) and
-Linux (ALSA); macOS configures but falls back to a silent backend until a modern
-CoreAudio implementation lands.
+C++). It builds with **CMake** against **Qt 6** and runs on Windows (WASAPI),
+Linux (ALSA), and macOS (CoreAudio).
 
 Audio output goes through a platform-abstracted `AudioBackend` interface, and
 sample format/rate are first-class properties of the signal path: every project
@@ -80,7 +79,7 @@ Platform `#ifdef` sprawl was replaced by a single interface
 |----------|---------|--------|-------|
 | Windows  | WASAPI  | ✅ Implemented, **verified audible** | Shared mode, event-driven render thread, MMCSS "Pro Audio"; device enumeration + selection; float32/int16/int32. |
 | Linux    | ALSA    | ✅ Behind the abstraction | Extracted from the old code, **plus xrun recovery**; S16_LE. Not re-tested on Linux since the refactor. |
-| macOS    | (Null)  | ⚠️ Builds, silent | Pre-2005 CoreAudio code removed; modern CoreAudio backend not yet written, so `NullBackend` is active. |
+| macOS    | CoreAudio | ✅ Implemented, **audible** | Modern CoreAudio backend; device enumeration + selection. Build with `-DENABLE_COREAUDIO=ON`. |
 | Linux    | PipeWire / JACK / PulseAudio | ❌ Not implemented | CMake wiring + `pkg_check_modules` present; backends are placeholders. |
 | (legacy) | OSS, old CoreAudio | 🗑️ Removed | The `/dev/dsp` socket-notifier path and the OS X 10.2 `OpenAComponent` path were deleted. |
 
@@ -122,18 +121,16 @@ connection), not an engine-wide constant:
 
 ## Known Issues & Limitations
 
-1. **macOS has no real audio** — `NullBackend` is active until a modern CoreAudio
-   backend is written.
-2. **PipeWire / JACK / PulseAudio** — not implemented (placeholders only).
-3. **ALSA untested since the refactor** — behaviour-preserving rewrite + xrun
+1. **PipeWire / JACK / PulseAudio** — not implemented (placeholders only).
+2. **ALSA untested since the refactor** — behaviour-preserving rewrite + xrun
    recovery, but needs a Linux smoke build.
-4. **WASAPI shared mode only** — no exclusive (bit-perfect) mode; a device whose
+3. **WASAPI shared mode only** — no exclusive (bit-perfect) mode; a device whose
    mix rate differs from the project is bridged by the resampler rather than
    opened natively.
-5. **Resampler is linear** — adequate to fix pitch/speed; not mastering-grade.
-6. **No CI** — no GitHub Actions workflow yet; only the Windows/Qt6/MinGW build
+4. **Resampler is linear** — adequate to fix pitch/speed; not mastering-grade.
+5. **No CI** — no GitHub Actions workflow yet; only the Windows/Qt6/MinGW build
    is regularly exercised.
-7. **Latency** — buffer sizing is largely fixed; no user-facing latency control.
+6. **Latency** — buffer sizing is largely fixed; no user-facing latency control.
 
 ## Codebase Statistics
 

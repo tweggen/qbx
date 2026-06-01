@@ -6,6 +6,8 @@
 #include "twsyslog.h"
 
 #include <algorithm>
+#include <cassert>
+#include <cstdio>
 
 twSpeaker::twSpeaker(tw303aEnvironment &env0)
     : twComponent(env0),
@@ -25,6 +27,10 @@ void twSpeaker::startOutput()
 {
     if (isPlaying_) return;
 
+    fprintf(stderr, "twSpeaker::startOutput: ENTER - backend=%p, outputDeviceId=%s\n",
+           backend_.get(), outputDeviceId_.c_str());
+    fflush(stderr);
+
     // The graph (synth) runs at its input wire's rate — the project/env rate.
     // Request that rate from the device so that, when the device can open there,
     // no resampling is needed at all.
@@ -33,10 +39,12 @@ void twSpeaker::startOutput()
         graphRate = pInputPlugs[0]->getFormat().sampleRate;
     }
 
+    fprintf(stderr, "twSpeaker::startOutput: calling openDevice with rate=%u\n", graphRate);
     if (backend_->openDevice(outputDeviceId_, graphRate) != 0) {
-        syslog(LOG_ERR, "twSpeaker::startOutput: openDevice failed");
+        fprintf(stderr, "twSpeaker::startOutput: openDevice FAILED\n");
         return;
     }
+    fprintf(stderr, "twSpeaker::startOutput: openDevice succeeded\n");
 
     // Negotiate one rate per wire across the graph feeding this speaker, folding
     // in the rates the device advertises so a device-native rate can win.
@@ -93,11 +101,13 @@ void twSpeaker::startOutput()
             return static_cast<std::size_t>(framesOut);
         });
 
+    fprintf(stderr, "twSpeaker::startOutput: calling backend->startOutput()\n");
     if (backend_->startOutput() != 0) {
-        syslog(LOG_ERR, "twSpeaker::startOutput: backend startOutput failed");
+        fprintf(stderr, "twSpeaker::startOutput: backend startOutput FAILED\n");
         backend_->closeDevice();
         return;
     }
+    fprintf(stderr, "twSpeaker::startOutput: backend->startOutput() succeeded\n");
     isPlaying_ = true;
 }
 

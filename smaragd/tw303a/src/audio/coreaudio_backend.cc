@@ -8,6 +8,7 @@
 #include <CoreAudio/CoreAudio.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -79,6 +80,7 @@ CoreAudioBackend::CoreAudioBackend()
     config_.bufferFrames = 1024;
     config_.periodFrames = 256;
     config_.sampleType = twSampleType::Float32;
+    fprintf(stderr, "CoreAudioBackend: constructor - backend created\n");
 }
 
 CoreAudioBackend::~CoreAudioBackend()
@@ -129,27 +131,31 @@ int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t pref
 
     deviceId_ = device;
 
-    // Create the default output AudioUnit (RemoteIO on iOS, I/O on macOS).
+    // Try HALOutputUnit instead of DefaultOutput for better control
+    fprintf(stderr, "CoreAudioBackend: looking for AudioUnit HALOutput component\n");
     AudioComponentDescription desc = {
         kAudioUnitType_Output,
-        kAudioUnitSubType_DefaultOutput,
+        kAudioUnitSubType_HALOutput,
         kAudioUnitManufacturer_Apple,
         0, 0
     };
 
     AudioComponent comp = AudioComponentFindNext(nullptr, &desc);
     if (!comp) {
-        syslog(LOG_ERR, "CoreAudioBackend: AudioComponentFindNext(DefaultOutput) failed");
+        fprintf(stderr, "CoreAudioBackend: AudioComponentFindNext(DefaultOutput) FAILED\n");
         return -1;
     }
+    fprintf(stderr, "CoreAudioBackend: found AudioUnit component\n");
 
     // Create the audio unit.
     ::AudioUnit tempUnit = nullptr;
+    fprintf(stderr, "CoreAudioBackend: calling AudioComponentInstanceNew\n");
     err = AudioComponentInstanceNew(comp, reinterpret_cast<AudioComponentInstance *>(&tempUnit));
     if (err != noErr) {
-        syslog(LOG_ERR, "CoreAudioBackend: AudioComponentInstanceNew failed: %d", (int)err);
+        fprintf(stderr, "CoreAudioBackend: AudioComponentInstanceNew FAILED: %d\n", (int)err);
         return -1;
     }
+    fprintf(stderr, "CoreAudioBackend: AudioComponentInstanceNew succeeded\n");
     outputUnit_ = tempUnit;
 
     // Query the device's format and capabilities via AudioHardware APIs.
@@ -186,14 +192,16 @@ int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t pref
 
     ::AudioUnit au = reinterpret_cast<::AudioUnit>(outputUnit_);
 
+    fprintf(stderr, "CoreAudioBackend: calling AudioUnitSetProperty(StreamFormat)\n");
     err = AudioUnitSetProperty(au, kAudioUnitProperty_StreamFormat,
                                kAudioUnitScope_Input, 0, &appFormat, sizeof(appFormat));
     if (err != noErr) {
-        syslog(LOG_ERR, "CoreAudioBackend: AudioUnitSetProperty(format) failed: %d", (int)err);
+        fprintf(stderr, "CoreAudioBackend: AudioUnitSetProperty(format) FAILED: %d\n", (int)err);
         AudioComponentInstanceDispose(reinterpret_cast<::AudioComponentInstance>(au));
         outputUnit_ = nullptr;
         return -1;
     }
+    fprintf(stderr, "CoreAudioBackend: AudioUnitSetProperty(StreamFormat) succeeded\n");
 
     // Install the render callback. The inRefCon pointer is passed back to us
     // in the static callback, allowing us to dispatch to the instance.
@@ -202,27 +210,59 @@ int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t pref
     callbackStruct.inputProc = reinterpret_cast<AURenderCallback>(CoreAudioBackend::renderCallback_);
     callbackStruct.inputProcRefCon = this;
 
+    fprintf(stderr, "CoreAudioBackend: calling AudioUnitSetProperty(SetRenderCallback)\n");
     err = AudioUnitSetProperty(au, kAudioUnitProperty_SetRenderCallback,
                                kAudioUnitScope_Input, 0, &callbackStruct, sizeof(callbackStruct));
     if (err != noErr) {
-        syslog(LOG_ERR, "CoreAudioBackend: AudioUnitSetProperty(callback) failed: %d", (int)err);
+        fprintf(stderr, "CoreAudioBackend: AudioUnitSetProperty(callback) FAILED: %d\n", (int)err);
         AudioComponentInstanceDispose(reinterpret_cast<::AudioComponentInstance>(au));
         outputUnit_ = nullptr;
         return -1;
+    }
+    fprintf(stderr, "CoreAudioBackend: AudioUnitSetProperty(SetRenderCallback) succeeded\n");
+
+    // For HALOutput, disable input and enable output
+    fprintf(stderr, "CoreAudioBackend: configuring HALOutput I/O\n");
+    UInt32 enableIO = 0;
+    err = AudioUnitSetProperty(au, kAudioOutputUnitProperty_EnableIO,
+                               kAudioUnitScope_Input, 0, &enableIO, sizeof(enableIO));
+    if (err != noErr) {
+        fprintf(stderr, "CoreAudioBackend: DisableIO on INPUT WARNING: %d\n", (int)err);
+    }
+
+    enableIO = 1;
+    err = AudioUnitSetProperty(au, kAudioOutputUnitProperty_EnableIO,
+                               kAudioUnitScope_Output, 0, &enableIO, sizeof(enableIO));
+    if (err != noErr) {
+        fprintf(stderr, "CoreAudioBackend: EnableIO on OUTPUT WARNING: %d\n", (int)err);
+    } else {
+        fprintf(stderr, "CoreAudioBackend: EnableIO OUTPUT succeeded\n");
+    }
+
+    // Set the device on the HALOutput unit
+    fprintf(stderr, "CoreAudioBackend: setting device on HALOutput (device=%u)\n", (unsigned)device);
+    err = AudioUnitSetProperty(au, kAudioOutputUnitProperty_CurrentDevice,
+                               kAudioUnitScope_Global, 0, &device, sizeof(device));
+    if (err != noErr) {
+        fprintf(stderr, "CoreAudioBackend: SetDevice WARNING: %d\n", (int)err);
+    } else {
+        fprintf(stderr, "CoreAudioBackend: SetDevice succeeded\n");
     }
 
     // Initialize the audio unit.
+    fprintf(stderr, "CoreAudioBackend: calling AudioUnitInitialize\n");
     err = AudioUnitInitialize(au);
     if (err != noErr) {
-        syslog(LOG_ERR, "CoreAudioBackend: AudioUnitInitialize failed: %d", (int)err);
+        fprintf(stderr, "CoreAudioBackend: AudioUnitInitialize FAILED: %d\n", (int)err);
         AudioComponentInstanceDispose(reinterpret_cast<::AudioComponentInstance>(au));
         outputUnit_ = nullptr;
         return -1;
     }
+    fprintf(stderr, "CoreAudioBackend: AudioUnitInitialize succeeded\n");
 
     floatScratch_.resize(config_.bufferFrames * config_.channels);
 
-    syslog(LOG_INFO, "CoreAudioBackend: opened device %u at %u Hz, %u channels",
+    fprintf(stderr, "CoreAudioBackend: opened device %u at %u Hz, %u channels\n",
            (unsigned)device, (unsigned)config_.sampleRate, (unsigned)config_.channels);
 
     return 0;
@@ -247,14 +287,20 @@ int CoreAudioBackend::startOutput()
         return -1;
     }
 
+    fprintf(stderr, "CoreAudioBackend::startOutput: callback_set=%s, device=%u\n",
+           callback_ ? "yes" : "NO", (unsigned)deviceId_);
+
     // Cast opaque pointer to AudioUnit for the CoreAudio call
+    fprintf(stderr, "CoreAudioBackend::startOutput: calling AudioOutputUnitStart\n");
     OSStatus err = AudioOutputUnitStart(reinterpret_cast<::AudioUnit>(outputUnit_));
     if (err != noErr) {
-        syslog(LOG_ERR, "CoreAudioBackend: AudioOutputUnitStart failed: %d", (int)err);
+        fprintf(stderr, "CoreAudioBackend: AudioOutputUnitStart FAILED: %d\n", (int)err);
         return -1;
     }
+    fprintf(stderr, "CoreAudioBackend: AudioOutputUnitStart succeeded\n");
 
     running_.store(true);
+    fprintf(stderr, "CoreAudioBackend: audio output started successfully\n");
     return 0;
 }
 
@@ -361,10 +407,22 @@ int CoreAudioBackend::renderCallback_(void *refCon,
 
 void CoreAudioBackend::renderOnce_(unsigned int frames, void *buffers_)
 {
+    static int renderCount = 0;
+    if (renderCount == 0) {
+        fprintf(stderr, "CoreAudioBackend::renderOnce_ FIRST CALL! frames=%u\n", frames);
+    }
+    if (renderCount++ % 100 == 0) {
+        fprintf(stderr, "CoreAudioBackend::renderOnce_ called (count=%d, frames=%u, callback_set=%s)\n",
+               renderCount, frames, callback_ ? "yes" : "NO");
+    }
+
     if (!buffers_) return;
     auto *buffers = reinterpret_cast<AudioBufferList *>(buffers_);
 
     if (!callback_) {
+        if (renderCount == 1) {
+            fprintf(stderr, "CoreAudioBackend::renderOnce_: NO CALLBACK REGISTERED!\n");
+        }
         // No callback: silence the buffers.
         for (unsigned i = 0; i < buffers->mNumberBuffers; ++i) {
             if (buffers->mBuffers[i].mData && buffers->mBuffers[i].mDataByteSize) {

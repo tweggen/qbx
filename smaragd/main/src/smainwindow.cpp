@@ -1,6 +1,7 @@
 
 #include <stdlib.h>
 
+#include <cassert>
 #include <QDebug>
 #include <qmessagebox.h>
 #include <qaction.h>
@@ -186,8 +187,12 @@ void SMainWindow::startPlaying()
         SObject *root = currentProject_->getRootComponent();
         if( !root ) return;
         qWarning() << "startPlaying(): Preparing start." << Qt::endl;
+        qWarning() << "startPlaying(): About to call root->seekTo()" << Qt::endl;
         root->seekTo( SApplication::app().getGlobalLocatorPos() );
+        qWarning() << "startPlaying(): After root->seekTo()" << Qt::endl;
+        qWarning() << "startPlaying(): About to call getSpeaker()->startOutput()" << Qt::endl;
         SApplication::app().getSpeaker()->startOutput();
+        qWarning() << "startPlaying(): After getSpeaker()->startOutput()" << Qt::endl;
         actPlay_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
         SApplication::app().setPlaying( true );
     }
