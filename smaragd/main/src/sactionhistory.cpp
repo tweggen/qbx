@@ -19,13 +19,30 @@ SActionHistory::~SActionHistory()
     delete queue_;
 }
 
-void SActionHistory::submit(SAction *forward)
+void SActionHistory::submit(SAction *forward, bool skipHistory)
 {
     // Phase 1: synchronous drain on GUI thread.
     // Phase 2 would defer this to engine thread + async signal.
 
-    quint64 id = queue_->enqueue(forward);
-    drain_();
+    SProject *project = SApplication::app().getCurrentProject();
+    if (!project || !forward) {
+        delete forward;
+        return;
+    }
+
+    if (skipHistory) {
+        // Apply directly without adding to history (for undo/redo operations).
+        SApplyResult result = forward->apply(project);
+        delete forward;
+        if (result.inverse) {
+            delete result.inverse;
+        }
+    } else {
+        // Normal path: add to queue and undo history.
+        quint64 id = queue_->enqueue(forward);
+        inFlight_.append({id, forward});
+        drain_();
+    }
 }
 
 void SActionHistory::drain_()
@@ -43,11 +60,12 @@ void SActionHistory::drain_()
 
         if (result.applied) {
             onApplied_(id, result.inverse);
+            // ownership of action transferred to undo command, don't delete
         } else {
             onRejected_(id, "Apply failed");
+            // action ownership stays here, delete it
+            delete action;
         }
-
-        delete action;
     }
 }
 

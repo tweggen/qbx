@@ -4,7 +4,8 @@
 #include "../saction.h"
 
 // Action: toggle playback (play/pause).
-// Not undoable (transport control).
+// Not undoable: playback state is transient (not persisted in project).
+// Undo/redo only tracks persistent changes to project content.
 class STogglePlaybackAction : public SAction {
 public:
     explicit STogglePlaybackAction(bool play);

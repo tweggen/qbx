@@ -21,7 +21,8 @@ public:
     ~SActionHistory();
 
     // Submit a forward action from the GUI. Enqueues and drains synchronously (Phase 1).
-    void submit(SAction *forward);
+    // If skipHistory is true, applies without adding to undo stack (for undo/redo operations).
+    void submit(SAction *forward, bool skipHistory = false);
 
     // Undo the most recent action: try cancel if in-flight, else pop QUndoStack.
     void undo();

@@ -398,15 +398,11 @@ void SMainWindow::runTestSequence()
 
 void SMainWindow::undo()
 {
-    fprintf(stderr, "SMainWindow::undo() called\n");
-    fflush(stderr);
     SApplication::app().actionHistory()->undo();
 }
 
 void SMainWindow::redo()
 {
-    fprintf(stderr, "SMainWindow::redo() called\n");
-    fflush(stderr);
     SApplication::app().actionHistory()->redo();
 }
 

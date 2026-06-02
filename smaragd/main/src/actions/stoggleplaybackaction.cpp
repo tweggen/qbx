@@ -29,7 +29,7 @@ SApplyResult STogglePlaybackAction::apply(SProject *project)
         app.setPlaying(false);
     }
 
-    // Not undoable (transport control).
+    // Not undoable: playback state is transient and not persisted in the project.
     return {true, nullptr};
 }
 

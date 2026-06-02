@@ -18,22 +18,20 @@ SActionUndoCommand::~SActionUndoCommand()
 
 void SActionUndoCommand::undo()
 {
-    // Undo means: submit the inverse action.
-    // The inverse is the action that reverses the forward.
+    // Undo means: apply the inverse action without adding to history (to avoid recursion).
     if (history_ && inverse_) {
-        history_->submit(inverse_);
-        // After submit, inverse_ is owned by the newly created undo command.
-        // We shouldn't delete it here.
+        history_->submit(inverse_, true);  // skipHistory = true
+        // submit deletes the action, so clear our pointer.
         inverse_ = nullptr;
     }
 }
 
 void SActionUndoCommand::redo()
 {
-    // Redo means: submit the forward action again.
+    // Redo means: apply the forward action without adding to history (to avoid recursion).
     if (history_ && forward_) {
-        history_->submit(forward_);
-        // After submit, forward_ is owned by the newly created undo command.
+        history_->submit(forward_, true);  // skipHistory = true
+        // submit deletes the action, so clear our pointer.
         forward_ = nullptr;
     }
 }
