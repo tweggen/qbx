@@ -30,6 +30,7 @@ set(SMARAGD_HEADERS
     include/actions/saddtrackaction.h
     include/actions/sremovetrackaction.h
     include/actions/saddsampleaction.h
+    include/actions/sremovesampleaction.h
     include/actions/stoggleplaybackaction.h
 )
 
@@ -64,6 +65,7 @@ set(SMARAGD_SOURCES
     src/actions/saddtrackaction.cpp
     src/actions/sremovetrackaction.cpp
     src/actions/saddsampleaction.cpp
+    src/actions/sremovesampleaction.cpp
     src/actions/stoggleplaybackaction.cpp
 )
 

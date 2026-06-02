@@ -11,9 +11,14 @@ class twComponent;
 class QTextStream;
 
 /**
- * An instance of this object is the actual reference to an object node.
- * In place, at the appropriate points within the hierarchy, only the 
- * slinks exist.
+ * SLink wraps an SObject and adds timing information (startTime) to place content
+ * into a timeline. SLink instances represent references to resources (whether
+ * loaded from files via SCut, or other SObjects) positioned at specific times
+ * within a parent container (typically an STrack).
+ *
+ * IMPORTANT: Always construct with parent=NULL, then call setParent() after
+ * construction is complete. This avoids triggering childEvent() during construction,
+ * which could call virtual methods on an incompletely-initialized object.
  */
 class SLink
     : public QObject 

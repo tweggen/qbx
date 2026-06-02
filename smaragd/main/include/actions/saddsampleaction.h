@@ -7,9 +7,10 @@
 class QString;
 
 // Action: add a sample to a track at a given time position.
-// Phase 1: Undo not implemented.
+// Inverse: removes the sample (SRemoveSampleAction).
 class SAddSampleAction : public SAction {
 public:
+    SAddSampleAction() = default;
     SAddSampleAction(int trackIdx, const QString &filePath, offset_t timePos);
 
     QString name() const override { return QStringLiteral("add-sample"); }

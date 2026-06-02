@@ -11,16 +11,26 @@ PROJECT_DIR="$SCRIPT_DIR/smaragd"
 
 # Detect Qt path if not provided
 if [ -z "$1" ]; then
-    # Try common Qt installation locations
+    QT_PATH=""
+
+    # Try macOS Qt installation (most recent version)
     if [ -d "$HOME/Qt" ]; then
-        # Find the most recent Qt 6 installation
-        QT_PATH=$(find "$HOME/Qt" -maxdepth 3 -name "*.framework" -o -name "QtCore.framework" 2>/dev/null | \
-                  head -1 | xargs dirname | xargs dirname)
-    elif command -v qmake &> /dev/null; then
+        # Look for Qt6 macOS installation: ~/Qt/6.x.x/macos
+        QT_PATH=$(ls -d "$HOME/Qt"/6.*/macos 2>/dev/null | sort -V | tail -1)
+    fi
+
+    # Fallback: try qmake if available
+    if [ -z "$QT_PATH" ] && command -v qmake &> /dev/null; then
         QT_PATH=$(qmake -query QT_INSTALL_PREFIX)
-    else
-        echo "Error: Could not detect Qt installation. Please provide QT_PATH as argument."
+    fi
+
+    # If still not found, error
+    if [ -z "$QT_PATH" ]; then
+        echo "Error: Could not detect Qt installation."
+        echo "Looked in: $HOME/Qt/6.*/macos"
+        echo ""
         echo "Usage: $0 /path/to/qt"
+        echo "Example: $0 $HOME/Qt/6.11.1/macos"
         exit 1
     fi
 else

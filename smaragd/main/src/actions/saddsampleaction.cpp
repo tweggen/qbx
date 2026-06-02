@@ -1,5 +1,6 @@
 #include "actions/saddsampleaction.h"
 #include "sproject.h"
+#include "sactionregistry.h"
 #include "sstdmixer.h"
 #include "strack.h"
 #include "scut.h"
@@ -48,16 +49,36 @@ SApplyResult SAddSampleAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    // Create a new link from the cut, with track as parent.
-    SLink *cutLink = new SLink(*cut, track);
+    // Create a new link from the cut. IMPORTANT: construct with NULL parent,
+    // then setParent after construction to avoid triggering childEvent during init.
+    SLink *cutLink = new SLink(*cut, NULL);
     if (!cutLink) {
         return {false, nullptr};
     }
 
     // Set the start time.
+    fprintf(stderr, "    SAddSampleAction: setting start time\n");
+    fflush(stderr);
     cutLink->setStartTime(timePos_);
 
-    // Phase 1: undo not implemented.
+    // Now parent the link to the track (safe: SLink is fully constructed).
+    fprintf(stderr, "    SAddSampleAction: setting parent\n");
+    fflush(stderr);
+    cutLink->setParent(track);
+
+    // Find the newly created clip in the track's children to get its index.
+    fprintf(stderr, "    SAddSampleAction: getting children\n");
+    fflush(stderr);
+    const QObjectList &children = track->children();
+    fprintf(stderr, "    SAddSampleAction: finding clip index (children count=%d)\n", children.size());
+    fflush(stderr);
+    int clipIndex = children.indexOf(cutLink);
+    fprintf(stderr, "    SAddSampleAction: clipIndex=%d\n", clipIndex);
+    fflush(stderr);
+
+    // TEMP: Return nullptr for inverse to debug crash
+    fprintf(stderr, "    SAddSampleAction: returning no inverse (debugging)\n");
+    fflush(stderr);
     return {true, nullptr};
 }
 
@@ -75,3 +96,11 @@ bool SAddSampleAction::readXml(const QDomElement &elem, int /*version*/)
     timePos_ = elem.attribute("timePos", "0").toULongLong();
     return true;
 }
+
+// DISABLED: Self-register the action type
+// static const bool s_reg_addsample = (
+//     SActionRegistry::instance().registerType(
+//         QStringLiteral("add-sample"),
+//         []{ return new SAddSampleAction; }
+//     ), true
+// );

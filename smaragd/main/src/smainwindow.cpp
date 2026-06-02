@@ -24,6 +24,7 @@
 #include "slink.h"
 #include "sprojectloader.h"
 #include "ssettings.h"
+#include "sactionhistory.h"
 
 #include "sstdmixer.h"
 
@@ -223,6 +224,9 @@ SMainWindow::SMainWindow()
       currentProject_( 0 ),
       projectRootWidget_( NULL )
 {
+    fprintf(stderr, "*** SMainWindow built on %s at %s ***\n", __DATE__, __TIME__);
+    fflush(stderr);
+
     actPlay_ = new QAction( 
         QIcon( QPixmap( (const char **)playoff_xpm )),
         "Start playing",
@@ -263,6 +267,11 @@ SMainWindow::SMainWindow()
     qFileMenu_->addSeparator();
     qFileMenu_->addAction( "E&xit", Qt::CTRL | Qt::Key_Q, this, SLOT( fileExit() ) );
     menuBar()->addMenu( qFileMenu_ );
+
+    QMenu *editMenu = new QMenu( "&Edit", this );
+    editMenu->addAction( "&Undo", Qt::CTRL | Qt::Key_Z, this, SLOT( undo() ) );
+    editMenu->addAction( "&Redo", Qt::CTRL | Qt::SHIFT | Qt::Key_Z, this, SLOT( redo() ) );
+    menuBar()->addMenu( editMenu );
 
     buildAudioMenu();
 
@@ -326,16 +335,25 @@ void SMainWindow::audioDeviceSelected( QAction *a )
 
 void SMainWindow::runTestSequence()
 {
+    fprintf(stderr, "runTestSequence() CALLED\n");
+    fflush(stderr);
+
     // Open file dialog to pick a WAV file.
+    fprintf(stderr, "  Opening file dialog...\n");
+    fflush(stderr);
     QString lastDir = SSettings::instance().lastDir("sample", "");
-    QString filePath = QFileDialog::getOpenFileName(
-        this,
-        "Select a WAV file for the test sequence",
-        lastDir,
-        "WAV Files (*.wav);;All Files (*)"
-    );
+    QFileDialog dialog(this, "Select a WAV file for the test sequence", lastDir, "WAV Files (*.wav);;All Files (*)");
+    dialog.setOptions(QFileDialog::DontUseNativeDialog);
+    QString filePath;
+    if (dialog.exec() == QDialog::Accepted) {
+        filePath = dialog.selectedFiles().first();
+    }
+    fprintf(stderr, "  File dialog closed. filePath=%s\n", filePath.toStdString().c_str());
+    fflush(stderr);
 
     if (filePath.isEmpty()) {
+        fprintf(stderr, "  User cancelled. Returning.\n");
+        fflush(stderr);
         return;
     }
 
@@ -344,24 +362,52 @@ void SMainWindow::runTestSequence()
     SSettings::instance().setLastDir("sample", fileInfo.absolutePath());
 
     // Create a new project.
+    fprintf(stderr, "  Creating new project...\n");
+    fflush(stderr);
     fileNew();
 
     if (!currentProject_) {
+        fprintf(stderr, "  ERROR: Failed to create new project!\n");
+        fflush(stderr);
         QMessageBox::critical(this, "Error", "Failed to create new project");
         return;
     }
 
+    fprintf(stderr, "  Submitting actions...\n");
+    fflush(stderr);
     // Submit the test sequence actions.
     // 1. Add a track at index 0.
     SApplication::app().submitAction(new SAddTrackAction(0));
+    fprintf(stderr, "    Add track action submitted\n");
+    fflush(stderr);
 
     // 2. Add the sample to track 0 at time 0.
     SApplication::app().submitAction(new SAddSampleAction(0, filePath, 0));
+    fprintf(stderr, "    Add sample action submitted\n");
+    fflush(stderr);
 
     // 3. Start playback.
     SApplication::app().submitAction(new STogglePlaybackAction(true));
+    fprintf(stderr, "    Toggle playback action submitted\n");
+    fflush(stderr);
 
     statusBar()->showMessage("Test sequence started", 2000);
+    fprintf(stderr, "  Test sequence complete!\n");
+    fflush(stderr);
+}
+
+void SMainWindow::undo()
+{
+    fprintf(stderr, "SMainWindow::undo() called\n");
+    fflush(stderr);
+    SApplication::app().actionHistory()->undo();
+}
+
+void SMainWindow::redo()
+{
+    fprintf(stderr, "SMainWindow::redo() called\n");
+    fflush(stderr);
+    SApplication::app().actionHistory()->redo();
 }
 
 SMainWindow::~SMainWindow()

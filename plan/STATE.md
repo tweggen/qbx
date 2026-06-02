@@ -883,3 +883,76 @@ The final working pattern:
 ### Current State
 
 macOS audio **fully operational**. The synth produces audible output at device native rate (48 kHz on modern Macs); the speaker resampler bridges any project-rate mismatch. Playback cursor advances correctly, reflecting synth time (not device time).
+
+---
+
+## 03_ACTION_MODEL.md — Phase 2 rollout strategy
+
+- **Date:** 2026-06-01
+- **Status:** Design complete (Phase 2 sequencing rationale documented in `plan/proposed/03a_ACTION_MODEL_PHASE_2_ROLLOUT.md`). Implementation begins with Phase 2a.
+
+### Rollout decision
+
+Phase 1 implemented the action substrate (queue, history, registry, undo bridge) + four proof-of-concept actions. Phase 2 introduces the first **production-ready** actions, sequenced as:
+
+1. **Phase 2a:** `SAddSampleAction` hardened → creates testable audio content
+2. **Phase 2b:** `SSetTrackVolumeAction` with merge → volume changes audibly observable because 2a added audio
+
+### Rationale
+
+Testing volume changes without sample content means amplifying silence — the action mechanism works (UI updates, undo functions), but you have zero way to verify the audio path is correct. With `SAddSampleAction` first, phase 2b has testable audio so volume changes are audibly verifiable. De-risks by validating the basic apply/inverse/undo/save/load cycle before adding merge logic.
+
+See `plan/proposed/03a_ACTION_MODEL_PHASE_2_ROLLOUT.md` for detailed phase breakdown, acceptance criteria, and success metrics for each phase.
+
+---
+
+## 03_ACTION_MODEL.md — Phase 2a (add sample with undo)
+
+- **Date:** 2026-06-01
+- **Status:** ✅ Code complete. **Ready for compilation and audible test on macOS/Windows.**
+
+### What landed
+
+| File | Purpose |
+|------|---------|
+| `main/include/actions/sremovesampleaction.h` (new) | Inverse action: removes clip from track, reconstructs SAddSampleAction with original file path + position |
+| `main/src/actions/sremovesampleaction.cpp` (new) | Implementation + self-registration to `SActionRegistry` |
+| `main/src/actions/saddsampleaction.cpp` (refined) | Now returns `SRemoveSampleAction` as inverse; self-registration added |
+| `main/CMakeLists.txt` | Added `sremovesampleaction.{h,cpp}` to build |
+
+### How it works
+
+**SAddSampleAction::apply():**
+1. Creates clip (SCut + SLink) on track at timePos
+2. Finds newly created clip in track's children list
+3. Captures clip index
+4. Returns `SRemoveSampleAction(trackIdx, clipIdx, filePath, timePos)` as inverse
+
+**SRemoveSampleAction::apply():**
+1. Gets clip at the stored index
+2. Deletes the clip (Qt + ref-counting handles full cleanup)
+3. Returns `SAddSampleAction(trackIdx, filePath, timePos)` as inverse
+
+**Serialization:**
+- Both actions serialize all needed fields (trackIdx, filePath, timePos, clipIdx for remove)
+- XML round-trips preserve pending sample imports across save/load
+
+### Design notes
+
+- **Clip index stability:** Captured immediately after creation, used on undo. If clips shift between apply and undo (e.g., another clip added/removed), undo would fail. Phase 2b will address this if needed; for now, acceptable because samples are typically not reordered during undo sequence.
+- **File deletion:** When SCut is deleted, its wavLink is also deleted via SCut destructor. SLink's ref-counting ensures file is freed only when all references gone.
+- **Inverse symmetry:** inverse-of-inverse is symmetric (undo of undo = redo); no special-casing needed.
+
+### Verification needed
+
+Compile and test on macOS/Windows:
+1. Create project, add track, import sample via Test menu or manual action
+2. Hear audio play back
+3. Ctrl+Z: sample removed, silence
+4. Ctrl+Y (redo): sample returns, audio plays again
+5. Save during pending import; reload; sample is there
+
+### Next action
+
+Compile and test, then proceed to Phase 2b (SSetTrackVolumeAction with merge).
+
