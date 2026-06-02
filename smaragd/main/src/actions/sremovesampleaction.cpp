@@ -76,10 +76,9 @@ bool SRemoveSampleAction::readXml(const QDomElement &elem, int /*version*/)
     return true;
 }
 
-// DISABLED: Self-register the action type
-// static const bool s_reg_removesample = (
-//     SActionRegistry::instance().registerType(
-//         QStringLiteral("remove-sample"),
-//         []{ return new SRemoveSampleAction; }
-//     ), true
-// );
+static const bool s_reg_removesample = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("remove-sample"),
+        []{ return new SRemoveSampleAction; }
+    ), true
+);

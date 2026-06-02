@@ -1,4 +1,5 @@
 #include "actions/saddsampleaction.h"
+#include "actions/sremovesampleaction.h"
 #include "sproject.h"
 #include "sactionregistry.h"
 #include "sstdmixer.h"
@@ -57,29 +58,21 @@ SApplyResult SAddSampleAction::apply(SProject *project)
     }
 
     // Set the start time.
-    fprintf(stderr, "    SAddSampleAction: setting start time\n");
-    fflush(stderr);
     cutLink->setStartTime(timePos_);
 
     // Now parent the link to the track (safe: SLink is fully constructed).
-    fprintf(stderr, "    SAddSampleAction: setting parent\n");
-    fflush(stderr);
     cutLink->setParent(track);
 
     // Find the newly created clip in the track's children to get its index.
-    fprintf(stderr, "    SAddSampleAction: getting children\n");
-    fflush(stderr);
     const QObjectList &children = track->children();
-    fprintf(stderr, "    SAddSampleAction: finding clip index (children count=%d)\n", children.size());
-    fflush(stderr);
     int clipIndex = children.indexOf(cutLink);
-    fprintf(stderr, "    SAddSampleAction: clipIndex=%d\n", clipIndex);
-    fflush(stderr);
+    if (clipIndex < 0) {
+        return {false, nullptr};
+    }
 
-    // TEMP: Return nullptr for inverse to debug crash
-    fprintf(stderr, "    SAddSampleAction: returning no inverse (debugging)\n");
-    fflush(stderr);
-    return {true, nullptr};
+    // Return inverse: remove the sample at the same position
+    SRemoveSampleAction *inverse = new SRemoveSampleAction(trackIndex_, clipIndex, filePath_, timePos_);
+    return {true, inverse};
 }
 
 void SAddSampleAction::writeXml(QDomElement &elem) const
@@ -97,10 +90,9 @@ bool SAddSampleAction::readXml(const QDomElement &elem, int /*version*/)
     return true;
 }
 
-// DISABLED: Self-register the action type
-// static const bool s_reg_addsample = (
-//     SActionRegistry::instance().registerType(
-//         QStringLiteral("add-sample"),
-//         []{ return new SAddSampleAction; }
-//     ), true
-// );
+static const bool s_reg_addsample = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("add-sample"),
+        []{ return new SAddSampleAction; }
+    ), true
+);
