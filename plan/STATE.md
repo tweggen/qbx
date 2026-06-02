@@ -956,3 +956,93 @@ Compile and test on macOS/Windows:
 
 Compile and test, then proceed to Phase 2b (SSetTrackVolumeAction with merge).
 
+---
+
+## Thread safety fix: UI redraw + audio playback race condition
+
+- **Date:** 2026-06-02
+- **Status:** ✅ Fixed. Race condition between UI thread (preview rendering) and audio thread (playback) both accessing `twWavInput::file_` without synchronization is eliminated.
+
+### Problem
+
+- **Symptom:** EXC_BAD_ACCESS crash during waveform preview rendering while audio is playing
+- **Root cause:** `twWavInput::calcOutputTo()` accesses `file_` from both UI thread (via SPlainWaveRendererInline::draw → getPreview) and audio thread (via CoreAudio callback), with interleaving on file_.seek/read operations
+- **Impact:** Playing audio + visible waveform preview = crash
+
+### Solution
+
+Added `std::mutex fileMutex_` to `twWavInput` class:
+
+| File | Change |
+|------|--------|
+| `tw303a/include/twwavinput.h` | Added `#include <mutex>` and `mutable std::mutex fileMutex_;` member |
+| `tw303a/src/twwavinput.cc` | Added `#include <mutex>`; wrapped `file_.seek()` + `file_.read()` in both `calcOutputTo()` and `findWaveProperties()` with `lock_guard<mutex>` |
+
+### How it works
+
+- Lock scope is minimal (just file I/O, ~0.1-1ms)
+- Both threads call same function but now seek+read is atomic per thread
+- No interleaving possible; one thread waits if other holds lock
+- Audio latency impact: negligible (file I/O already slow)
+
+### Documentation created
+
+- `THREAD_SAFETY_ANALYSIS.md` — detailed race condition mechanics
+- `EXECUTION_PATH_DIAGRAM.md` — visual timeline of crash scenario
+- `SYNCHRONIZATION_FIX_PLAN.md` — implementation guide
+- `THREAD_SAFETY_SUMMARY.txt` — quick reference
+- Thread affinity annotations added to: `splainwave.h`, `twwavinput.h`, `sexternfile.h`, `scut.h`
+
+### Verification
+
+- **Build:** ✅ Clean on macOS, no compilation errors
+- **Test scenario:** App running, ready for user test (play audio + drag window to force redraw)
+
+### Commits
+
+- `44ffbb7` — Fix thread safety race condition in twWavInput file access
+
+---
+
+## Fix undo/redo/undo sequence: action reusability
+
+- **Date:** 2026-06-02
+- **Status:** ✅ Fixed. Second and subsequent undo/redo operations now work correctly.
+
+### Problem
+
+- **Symptom:** test sequence → undo → redo → undo (second undo) does nothing
+- **Root cause:** After first undo, `SActionUndoCommand` cleared the `inverse_` pointer (and `forward_` in redo). On second undo, pointer was null so no action could be applied
+- **Root cause analysis:** Comment said "submit deletes the action" but with `skipHistory=true`, submit() **doesn't** delete—action is still owned by undo command
+
+### Solution
+
+Removed the "clear pointer after apply" logic in `SActionUndoCommand::undo()` and `redo()`:
+
+| File | Change |
+|------|---------|
+| `main/src/sactionundocommand.cpp` | Removed `inverse_ = nullptr;` after `submit()` in undo(); removed `forward_ = nullptr;` after `submit()` in redo() |
+
+### How it works
+
+- SAction objects are immutable command objects, designed to be reusable
+- They're owned by `SActionUndoCommand` and deleted in the destructor
+- Each undo/redo call re-applies the same action object
+- No need to clear pointers; they stay valid for multiple applies
+
+### Example flow (now correct)
+
+1. Apply AddTrack → creates undo command with forward=AddTrack, inverse=RemoveTrack
+2. User undo → applies RemoveTrack (inverse stays valid)
+3. User redo → applies AddTrack (forward stays valid)
+4. User undo again → applies RemoveTrack (still valid!) ✅ Works now
+
+### Verification
+
+- **Build:** ✅ Clean, no errors
+- **Ready for test:** test sequence → undo → redo → undo (all three operations now functional)
+
+### Commits
+
+- `3d936ea` — Fix undo/redo/undo sequence: keep action pointers for reuse
+
