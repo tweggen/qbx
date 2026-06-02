@@ -28,6 +28,14 @@ void SActionUndoCommand::undo()
 
 void SActionUndoCommand::redo()
 {
+    // The first redo() is called by Qt's QUndoStack::push() after the action
+    // has already been applied in drain_(). Skip it to avoid double-applying.
+    // Subsequent redo() calls (from user clicking redo) should re-apply.
+    if (firstRedo_) {
+        firstRedo_ = false;
+        return;
+    }
+
     // Redo means: apply the forward action without adding to history (to avoid recursion).
     if (history_ && forward_) {
         history_->submit(forward_, true);  // skipHistory = true

@@ -24,6 +24,7 @@ private:
     SAction         *forward_;   // ownership: kept for redo
     SAction         *inverse_;   // ownership: kept for undo
     SActionHistory  *history_;   // back-pointer for submit
+    bool            firstRedo_ = true;  // track if redo() is being called for initial state
 };
 
 #endif // SACTIONUNDOCOMMAND_H

@@ -399,11 +399,19 @@ void SMainWindow::runTestSequence()
 void SMainWindow::undo()
 {
     SApplication::app().actionHistory()->undo();
+    // Refresh the view after undo
+    if (projectRootWidget_) {
+        projectRootWidget_->update();
+    }
 }
 
 void SMainWindow::redo()
 {
     SApplication::app().actionHistory()->redo();
+    // Refresh the view after redo
+    if (projectRootWidget_) {
+        projectRootWidget_->update();
+    }
 }
 
 SMainWindow::~SMainWindow()
