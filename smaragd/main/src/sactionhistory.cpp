@@ -32,8 +32,9 @@ void SActionHistory::submit(SAction *forward, bool skipHistory)
 
     if (skipHistory) {
         // Apply directly without adding to history (for undo/redo operations).
+        // Don't delete the action: it's owned by the undo command and will be deleted
+        // when the undo command is destroyed. Just apply it and discard the inverse.
         SApplyResult result = forward->apply(project);
-        delete forward;
         if (result.inverse) {
             delete result.inverse;
         }

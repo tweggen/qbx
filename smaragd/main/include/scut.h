@@ -13,7 +13,21 @@ class SObjectRenderer;
 class SCutRendererInline;
 class SProjectLoader;
 
-class SCut 
+/**
+ * A cut (slice) of content with timing information.
+ *
+ * Thread affinity: MIXED (not thread-safe)
+ * - content_: accessed from UI thread (getDetailEditWidget, rendering) AND audio thread (getRootComponent→calcOutputTo)
+ * - startOffset_, loopStart_, cutDuration_: read from both UI and audio threads
+ *
+ * RACE CONDITION: When content_ points to a SPlainWave, the underlying file handle
+ * (twWavInput::file_) is accessed from both threads without synchronization.
+ *
+ * Execution paths:
+ *   UI:    SMVActualView::paintEvent() → draw(SLink) → SPlainWaveRendererInline::draw()
+ *   Audio: CoreAudio callback → rendering → getRootComponent()->calcOutputTo()
+ */
+class SCut
     : public SObject
 {
     Q_OBJECT

@@ -15,6 +15,17 @@ class SProjectLoader;
 /**
  * A Plainwave object is an audio source.
  * Being one of the extern file objects, it is kept inside the project.
+ *
+ * Thread affinity: MIXED (not thread-safe)
+ * - cpWave_: accessed from UI thread (getPreview) AND audio thread (getRootComponent→calcOutputTo)
+ * - fileName_: read from UI thread only
+ * - inlineRenderer_: UI thread only
+ * - previewData_: accessed from UI thread only
+ *
+ * RACE CONDITION: cpWave_->file_ (QFile) is accessed from both threads without synchronization.
+ * Execution paths:
+ *   UI:    paintEvent → draw() → getPreview() → getStraightPreview() → straightCalcPreviewData()
+ *   Audio: callback → calcOutputTo() → cpWave_->calcOutputTo() → file_.seek/read()
  */
 class SPlainWave
     : public SExternFile

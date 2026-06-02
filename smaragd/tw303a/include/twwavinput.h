@@ -3,11 +3,25 @@
 #define _TWWAVINPUT_H
 
 #include <qfile.h>
+#include <mutex>
 #include "twcomponent.h"
 
 class tw303aEnvironment;
 
-class twWavInput 
+/**
+ * Audio input component that reads WAV file samples.
+ *
+ * Thread affinity: AUDIO THREAD ONLY
+ * - calcOutputTo() is called from audio thread callback
+ * - file_ (QFile) is accessed without synchronization
+ * - seekTo() is called from audio thread
+ *
+ * CRITICAL: This class is NOT thread-safe. The QFile handle is accessed directly
+ * from the audio render callback without any mutex or thread-local protection.
+ * If UI thread accesses the same SPlainWave object via getPreview(), it will race
+ * against calcOutputTo() accessing the same file_.
+ */
+class twWavInput
     : public twComponent
 {
 public:
@@ -54,6 +68,7 @@ private:
     offset_t cacheStart_;
     QString fileName_;
     QFile file_;
+    mutable std::mutex fileMutex_;  // Protects file_ access from concurrent threads (UI redraw + audio)
 
     offset_t playOffset_;
 };

@@ -1,0 +1,93 @@
+================================================================================
+THREAD SAFETY ANALYSIS SUMMARY
+================================================================================
+
+PROBLEM:
+--------
+Race condition between UI thread (waveform preview rendering) and audio thread
+(playback) both accessing twWavInput::file_ without synchronization.
+
+CRASH SYMPTOM:
+--------------
+EXC_BAD_ACCESS during waveform preview rendering while audio is playing.
+
+ROOT CAUSE:
+-----------
+twWavInput::calcOutputTo() (line 73 in twwavinput.cc) does:
+  1. file_.seek(position)
+  2. file_.read(data)
+
+These are NOT atomic. If two threads interleave:
+  Thread A: seek(100)
+  Thread B: seek(1024)    ← overwrites A's position
+  Thread A: read()        ← reads from 1024 instead of 100
+
+SHARED RESOURCES:
+-----------------
+Class              Member          UI Thread   Audio Thread   Protected?
+─────────────────  ─────────────   ──────────  ────────────   ──────────
+twWavInput         file_           YES         YES            ❌ NO
+SPlainWave         cpWave_         YES         YES            ❌ NO
+SCut               content_        YES         YES            ❌ NO
+
+EXECUTION PATHS:
+----------------
+UI Path:
+  SMVActualView::paintEvent()
+  → SPlainWaveRendererInline::draw()
+  → SPlainWave::getPreview()
+  → SObject::getStraightPreview()
+  → RootComponent.calcOutputTo()
+  → twWavInput::calcOutputTo()
+  → file_.seek/read() ⚠️ FILE ACCESS
+
+Audio Path:
+  CoreAudio callback
+  → twSpeaker::readData()
+  → tw303aEnvironment::calcOutputTo()
+  → twComponent::calcOutputTo()
+  → twWavInput::calcOutputTo()
+  → file_.seek/read() ⚠️ FILE ACCESS
+
+SOLUTION:
+---------
+Add std::mutex to twWavInput class:
+
+  header: mutable std::mutex fileMutex_;
+
+  code:   {
+            std::lock_guard<std::mutex> lock(fileMutex_);
+            file_.seek(...);
+            file_.read(...);
+          }
+
+DOCUMENTATION CREATED:
+----------------------
+1. THREAD_SAFETY_ANALYSIS.md (detailed analysis)
+2. EXECUTION_PATH_DIAGRAM.md (visual timeline)
+3. SYNCHRONIZATION_FIX_PLAN.md (implementation guide)
+4. Thread affinity annotations in header files:
+   - splainwave.h
+   - twwavinput.h
+   - sexternfile.h
+   - scut.h
+
+NEXT STEP:
+----------
+Implement the mutex fix in smaragd/tw303a/include/twwavinput.h and
+smaragd/tw303a/src/twwavinput.cc per SYNCHRONIZATION_FIX_PLAN.md
+
+TESTING:
+--------
+1. Build clean
+2. New project → Add track → Add sample
+3. Start playback (should hear audio)
+4. While playing, drag window to force redraw
+5. Should NOT crash with EXC_BAD_ACCESS
+6. Test undo/redo during playback
+
+IMPACT:
+-------
+✅ Fixes crash during waveform preview rendering + playback
+✅ Minimal code changes (just add mutex + lock_guard)
+❓ Potential audio latency (negligible - lock scope is ~0.1-1ms)

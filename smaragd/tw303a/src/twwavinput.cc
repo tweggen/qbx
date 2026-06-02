@@ -1,6 +1,7 @@
 
 #include <stdlib.h>
 #include <stddef.h>
+#include <mutex>
 #include <qfile.h>
 #include <qstring.h>
 
@@ -75,14 +76,21 @@ length_t twWavInput::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
     // FIXME: Fill cache here! Reading the data every time is inefficient
     // (although linux does a good job caching).
 
-//      qWarning( "twWavInput::calcOutputTo(): Called for offset = %d.\n", 
+//      qWarning( "twWavInput::calcOutputTo(): Called for offset = %d.\n",
 //                playOffset_ );
     int orgChannels = orgChannels_;
     int neededReadLength = orgChannels*2 /* for the bits */ * length;
-    short *psrc, *readData = (short *) alloca( neededReadLength );   
+    short *psrc, *readData = (short *) alloca( neededReadLength );
     psrc = readData+idx;
-    file_.seek( dataStart_ + playOffset_*orgChannels*2 );
-    int didRead = file_.read( (char *)readData, neededReadLength );
+
+    // Protect file I/O from concurrent access (UI thread preview rendering)
+    int didRead;
+    {
+        std::lock_guard<std::mutex> lock(fileMutex_);
+        file_.seek( dataStart_ + playOffset_*orgChannels*2 );
+        didRead = file_.read( (char *)readData, neededReadLength );
+    }
+
     sample_t *pd2 = pDest;
     psrc = readData;
     if( didRead<0 ) didRead = 0;
@@ -135,9 +143,12 @@ int twWavInput::findWaveProperties()
 # define EX_LONG(x) ((x)[0]|((x)[1]<<8)|((x)[2]<<16)|((x)[3]<<24))
 #endif
 
-    if( !file_.seek( 0 ) ) return -1;
-    memset( s, 0, SLEN );
-    file_.read( (char *)s, SLEN );
+    {
+        std::lock_guard<std::mutex> lock(fileMutex_);
+        if( !file_.seek( 0 ) ) return -1;
+        memset( s, 0, SLEN );
+        file_.read( (char *)s, SLEN );
+    }
     if( ::strncmp( (char *)s, "RIFF", 4 ) ) return -2;
     if( ::strncmp( (char *)s+8, "WAVEfmt ", 8 ) ) return -3;
     // fmt chunk length lives at s+16 — currently unused but kept here
