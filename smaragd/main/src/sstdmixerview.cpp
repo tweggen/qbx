@@ -121,9 +121,10 @@ int SMVActualView::getXPosOfOffset( offset_t off ) const
 void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
 {
     // Qt6 forbids constructing a QPainter on a widget outside paintEvent.
-    // Instead, invalidate the 1-pixel-wide columns around the old and new
-    // playhead positions; paintEvent already knows how to redraw the
-    // playhead (see the cursor block at the end of paintEvent).
+    // Instead, invalidate the columns around the old and new playhead positions
+    // with a width of 3 pixels to ensure complete redraw (covers XOR artifacts).
+    // paintEvent already knows how to redraw the playhead (see the cursor block
+    // at the end of paintEvent).
     QRect myRect = rect();
     int w = myRect.width();
     int h = myRect.height();
@@ -131,8 +132,9 @@ void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
     int newX = getXPosOfOffset( newPos );
     if( oldX == newX ) return;
 
-    if( oldX >= 0 && oldX < w ) update( oldX, 0, 1, h );
-    if( newX >= 0 && newX < w ) update( newX, 0, 1, h );
+    const int cursorWidth = 3;
+    if( oldX >= 0 && oldX < w ) update( oldX - 1, 0, cursorWidth, h );
+    if( newX >= 0 && newX < w ) update( newX - 1, 0, cursorWidth, h );
 }
 
 void SMVActualView::resizeEvent( QResizeEvent * )
