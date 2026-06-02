@@ -19,10 +19,10 @@ SActionUndoCommand::~SActionUndoCommand()
 void SActionUndoCommand::undo()
 {
     // Undo means: apply the inverse action without adding to history (to avoid recursion).
+    // The inverse action is reusable; it's owned by this undo command and will be
+    // deleted in the destructor. Don't null out the pointer.
     if (history_ && inverse_) {
         history_->submit(inverse_, true);  // skipHistory = true
-        // submit deletes the action, so clear our pointer.
-        inverse_ = nullptr;
     }
 }
 
@@ -37,10 +37,10 @@ void SActionUndoCommand::redo()
     }
 
     // Redo means: apply the forward action without adding to history (to avoid recursion).
+    // The forward action is reusable; it's owned by this undo command and will be
+    // deleted in the destructor. Don't null out the pointer.
     if (history_ && forward_) {
         history_->submit(forward_, true);  // skipHistory = true
-        // submit deletes the action, so clear our pointer.
-        forward_ = nullptr;
     }
 }
 
