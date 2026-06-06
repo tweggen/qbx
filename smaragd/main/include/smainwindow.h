@@ -5,6 +5,7 @@
 #include <qmainwindow.h>
 #include <qmenubar.h>
 #include <QString>
+#include <QVariant>
 // #include <qpopupmenu.h>
 
 class SProject;
@@ -38,13 +39,26 @@ protected slots:
     void undo();
     void redo();
 
+    // Toolbar palette toggles (each submits the matching toggle action).
+    void toggleSnapToGrid();
+    void toggleGrid();
+    void toggleMetronome();
+    void toggleCycle();
+
+    // Reflect a project property change on the matching palette button.
+    void onProjectPropertyChanged( const QString &key, const QVariant &value );
+
 private:
     void newProject();
     void closeProject();
     void buildAudioMenu();
+    void buildPaletteToolbar();
 
     void createDocksToolbars();
     void destroyDocksToolbars();
+    // Enable + sync the palette buttons to a project's properties (or disable
+    // them when project == NULL), and connect to its propertyChanged signal.
+    void syncPaletteToProject( SProject *project );
 
     // Serialize the current project to path; reports errors via a dialog.
     bool saveToPath( const QString &path );
@@ -62,7 +76,9 @@ private:
 
     QAction *actStop_, *actPlay_;
     QToolBar *qTBTransport_;
+    QToolBar *qTBPalette_;
+    QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
-}; 
+};
 
 #endif

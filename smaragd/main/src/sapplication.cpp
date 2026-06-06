@@ -189,11 +189,11 @@ offset_t SApplication::getGlobalLocatorPos() const
 
 SApplication::SApplication( int &argc, char **argv )
     : QApplication( argc, argv ),
+      actionHistory_( NULL ),
       currentSelectedSLink_( NULL ),
       globalLocatorPos_( 0 ),
       isPlaying_( false ),
-      currentProject_( NULL ),
-      actionHistory_( NULL )
+      currentProject_( NULL )
 {
     setOrganizationName( "Smaragd" );
     setApplicationName( "smaragd" );

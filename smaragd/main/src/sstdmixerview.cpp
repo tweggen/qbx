@@ -25,6 +25,7 @@
 #include "slink.h"
 #include "scut.h"
 #include "sproject.h"
+#include "sprojectprops.h"
 #include "ssettings.h"
 #include "ssmvmixercontrol.h"
 
@@ -189,9 +190,10 @@ void SMVActualView::paintEvent( QPaintEvent * )
         trk->getInlineRenderer()->draw( *tlk, ctx );
     }
     // Before painting the timegrid, decide, wether the grid elements are not too close
-    // together.
+    // together. Grid visibility is a per-project property (toolbar palette / grid action).
     STimeGridSpec tgs = smv_.getTimeGridSpec();
-    if( (tgs.getTimeGridWidth()*secondWidth_) > 6.0 ) {
+    bool gridOn = smv_.model_->getProject().prop( SProjectProps::GridVisible, true ).toBool();
+    if( gridOn && (tgs.getTimeGridWidth()*secondWidth_) > 6.0 ) {
         double a = (double)upperLeftX_;
         int maxX = myRect.width();
         a /= secondWidth_;
@@ -915,7 +917,6 @@ void SStdMixerView::recalcPageStep()
     }
     // FIXME: Remove the 44100
     dw = HSliderRange*(double)w/qContent_->getSecondWidth()*44100. / (double)dur;
-    qWarning( "Setting pagestep to %d.\n", (int)(dw+0.5) );
     qScrollHoriz_->setPageStep( (int)(dw+0.5) );
     qScrollHoriz_->setSingleStep( ((int)(dw+0.5)/10)+1 );
     h /= qContent_->getTrackHeight();
@@ -934,7 +935,6 @@ void SStdMixerView::viewResized()
     dw = dw * 44100. / qContent_->getSecondWidth();
     offset_t lw = (offset_t) (dw);
     if( lw>0x7fffffff ) lw = 0x7fffffff;
-    qWarning( "Setting pagestep to %d.\n", (int)lw );
     qScrollHoriz_->setPageStep( lw );
     qScrollHoriz_->setMaxValue( model_->getDuration()-lw );
     h /= qContent_->getTrackHeight();
@@ -1001,6 +1001,10 @@ void SStdMixerView::setBPMTempo( double bpmTempo )
  */
 offset_t SStdMixerView::alignTime( offset_t o )
 {
+    // Snap is a per-project property (toolbar palette / snap-to-grid action).
+    if( model_ && !model_->getProject().prop( SProjectProps::SnapToGrid, true ).toBool() ) {
+        return o;
+    }
     if( currentSnapSpec_ ) {
         return currentSnapSpec_->alignTime( o );
     } else {
@@ -1116,8 +1120,14 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
 
     QObject::connect( smv_.model_, SIGNAL( trackInserted( int, STrack & ) ),
                       SLOT( update() ) );
-    QObject::connect( smv_.model_, SIGNAL( trackRemoved( int, STrack & ) ), 
+    QObject::connect( smv_.model_, SIGNAL( trackRemoved( int, STrack & ) ),
                       SLOT( update() ) );
+
+    // Repaint when a project property (e.g. grid visibility) changes. Extra
+    // signal args are dropped by the connection; repainting is cheap.
+    QObject::connect( &smv_.model_->getProject(),
+                      SIGNAL( propertyChanged( QString, QVariant ) ),
+                      this, SLOT( update() ) );
 }
 
     

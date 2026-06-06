@@ -92,7 +92,7 @@ int SPlainWave::setWave( const QString fileName )
         return -1;
     }
     // Add myselves tob the list of extern objects.
-    qWarning( "%s", (const char*) (QString("Filename here is \"")+fileName_+QString("\".\n")).data() );
+    qWarning() << "Filename here is" << fileName_;
     SApplication::app().getCurrentProject()->addExternObject( *this );
     return 0;
 }
@@ -100,7 +100,14 @@ int SPlainWave::setWave( const QString fileName )
 SPlainWave::~SPlainWave()
 {
     if( cpWave_ ) {
-        SApplication::app().getCurrentProject()->removeExternObject( fileName_ );    
+        // Deregister from our OWN project (our QObject parent). Using the app's
+        // "current" project was wrong: it is NULL during File -> Close and points
+        // at the wrong project when loading into a non-current project. SProject's
+        // destructor deletes its children before tearing down externFileDict_, so
+        // the dict is still alive here.
+        if( QObject *p = parent() ) {
+            static_cast<SProject*>( p )->removeExternObject( fileName_ );
+        }
     }
 }
 
@@ -117,11 +124,13 @@ SLink *SPlainWave::instantiateFromDomElement(
 {
     (void) parent;
     // Ignore other parameters.
-    QString fileName;
-    
-    fileName = (const char *)element.attribute( "filename" ).data();
-    if( fileName.isNull() ) {
-        qWarning( "Cannot open file \"%s\".\n", (const char *)fileName.data() );
+    //
+    // NB: use the QString directly. Casting QString::data() (QChar*, UTF-16) to
+    // const char* truncates the path at the first byte (e.g. "C:/..." -> "C").
+    QString fileName = element.attribute( "filename" );
+    if( fileName.isEmpty() ) {
+        qWarning() << "SPlainWave: missing/empty filename attribute.";
+        return NULL;
     }
     return projectLoader.getProject().linkToFile( fileName );
 }

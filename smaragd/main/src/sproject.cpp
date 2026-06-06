@@ -1,6 +1,8 @@
 
 #include <qobject.h>
 #include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include <cstdint>
 
@@ -8,8 +10,21 @@ using namespace std;
 
 #include "sobject.h"
 #include "sproject.h"
+#include "sprojectprops.h"
 #include "sstdmixer.h"
 #include "sexternfile.h"
+
+// Minimal XML escaping for embedding a JSON string inside a single-quoted
+// attribute. JSON's own double quotes are fine inside single quotes; we only
+// need to guard the characters that would break the attribute or the markup.
+static QString xmlAttrEscape( const QString &s )
+{
+    QString out = s;
+    out.replace( '&', "&amp;" );
+    out.replace( '<', "&lt;" );
+    out.replace( '\'', "&apos;" );
+    return out;
+}
 
 #include "slink.h"
 
@@ -58,6 +73,11 @@ int SProject::serializeSelfAttributes( QTextStream &o )
         o << candidateRates_[i];
     }
     o << "'";
+
+    // The generic property dict, serialized as JSON in a single attribute.
+    QJsonObject obj = QJsonObject::fromVariantMap( properties_ );
+    QByteArray json = QJsonDocument( obj ).toJson( QJsonDocument::Compact );
+    o << " properties='" << xmlAttrEscape( QString::fromUtf8( json ) ) << "'";
     return 0;
 }
 
@@ -79,7 +99,40 @@ int SProject::readPreChildrenAttributes( QDomElement &element )
         if( ok && v > 0 ) rates.push_back( v );
     }
     if( !rates.empty() ) setCandidateRates( std::move( rates ) );
+
+    // Generic property dict (JSON). Merge over the seeded defaults so missing
+    // keys keep their default and unknown (future) keys are preserved.
+    const QString pj = element.attribute( "properties" );
+    if( !pj.isEmpty() ) {
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson( pj.toUtf8(), &err );
+        if( err.error == QJsonParseError::NoError && doc.isObject() ) {
+            const QVariantMap loaded = doc.object().toVariantMap();
+            for( auto it = loaded.cbegin(); it != loaded.cend(); ++it ) {
+                properties_.insert( it.key(), it.value() );
+            }
+        } else {
+            qWarning() << "SProject: ignoring malformed properties JSON:" << err.errorString();
+        }
+    }
     return 0;
+}
+
+QVariant SProject::prop( const QString &key, const QVariant &defaultValue ) const
+{
+    return properties_.value( key, defaultValue );
+}
+
+void SProject::setProp( const QString &key, const QVariant &value )
+{
+    if( properties_.value( key ) == value ) return;   // no-op if unchanged
+    properties_.insert( key, value );
+    emit propertyChanged( key, value );
+}
+
+bool SProject::hasProp( const QString &key ) const
+{
+    return properties_.contains( key );
 }
 
 SObject *SProject::getRootComponent() const
@@ -163,14 +216,45 @@ SLink *SProject::linkToFile( QString &fileName )
 
 SProject::~SProject()
 {
-    DTOR_DEL( soRoot_ );
+    DTOR_DEL( soRoot_ );   // drop the root reference (parent==NULL, not a child)
+
+    // Tear down the object graph here, in the destructor body, while our members
+    // (externFileDict_, ...) are still alive — child destructors call back into
+    // the project (e.g. SPlainWave deregisters itself from externFileDict_).
+    //
+    // Every SObject is both a QObject child of the project AND reference-counted
+    // via SLinks. Delete only objects whose reference count has reached zero,
+    // repeatedly: deleting an object frees its child SLinks, which drop the
+    // references they held, bringing the next layer to zero. Starting from the
+    // root (whose reference we just dropped) this cascades root -> leaf, so no
+    // SLink ever dereferences an already-freed object.
+    bool progress = true;
+    while( progress ) {
+        progress = false;
+        const QObjectList kids = children();   // copy: mutates as we delete
+        for( QObject *kid : kids ) {
+            SObject *so = static_cast<SObject*>( kid );
+            if( so->getNReferences() == 0 ) {
+                delete so;
+                progress = true;
+            }
+        }
+    }
+
+    // Safety net for any survivors (reference cycles / links leaked elsewhere):
+    // delete them outright so we don't leak. Normally this list is empty.
+    const QObjectList survivors = children();
+    for( QObject *kid : survivors ) {
+        delete kid;
+    }
 }
 
 SProject::SProject()
     : soRoot_( NULL ),
       bpmTempo_( 120. ),
       sampleRate_( 48000 ),
-      candidateRates_{ 44100, 48000, 88200, 96000 }
+      candidateRates_{ 44100, 48000, 88200, 96000 },
+      properties_( SProjectProps::defaults() )
 {
 #if 0
     soRoot_ = new SStdMixer( this );

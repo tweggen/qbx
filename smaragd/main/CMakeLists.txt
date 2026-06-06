@@ -34,7 +34,14 @@ set(SMARAGD_HEADERS
     include/actions/ssettrackvolumeaction.h
     include/actions/ssaveprojectaction.h
     include/actions/sloadprojectaction.h
+    include/actions/stogglesettingaction.h
+    include/actions/ssnaptogridaction.h
+    include/actions/sgridaction.h
+    include/actions/smetronomeaction.h
+    include/actions/scycleaction.h
+    include/actions/ssetpropertyaction.h
     include/actions/stoggleplaybackaction.h
+    include/sprojectprops.h
 )
 
 set(SMARAGD_SOURCES
@@ -72,6 +79,11 @@ set(SMARAGD_SOURCES
     src/actions/ssettrackvolumeaction.cpp
     src/actions/ssaveprojectaction.cpp
     src/actions/sloadprojectaction.cpp
+    src/actions/ssnaptogridaction.cpp
+    src/actions/sgridaction.cpp
+    src/actions/smetronomeaction.cpp
+    src/actions/scycleaction.cpp
+    src/actions/ssetpropertyaction.cpp
     src/actions/stoggleplaybackaction.cpp
 )
 

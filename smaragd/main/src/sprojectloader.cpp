@@ -126,9 +126,16 @@ int SProjectLoader::createObjects( SProject &project )
                         .arg( tagName ).arg( id );
                     object = instantiateSObjectFromDomElement(
                         tagName, e, NULL );
+                    if( !object ) {
+                        qWarning() << QString( "Failed to instantiate object of type "
+                                               "\"%1\" (id \"%2\"); aborting load." )
+                                          .arg( tagName ).arg( id );
+                        // FIXME: leaks objects already built this pass.
+                        return -1;
+                    }
                     // Now apply the attributes
                     object->readAttributes( e );
-                    objectDict_.insert( id, object );                    
+                    objectDict_.insert( id, object );
                 } 
                 QDomNode nodeToDelete = n;
                 n = n.nextSibling();
@@ -175,8 +182,20 @@ SProjectLoader::SProjectLoader( SProject &project, const QString &name )
 
 SProjectLoader::~SProjectLoader()
 {
-    for( auto it = sObjectRegistry_.begin(); it != sObjectRegistry_.end(); ++it ) {
-        sObjectRegistry_.erase(it); 
+    // The dictionary holds the temporary "handle" SLinks returned by each
+    // instantiate function (parent==NULL, not owned by anyone). The real
+    // parent/child links (insertTrack, SCut ctor, setRootComponent) keep the
+    // objects alive; these handles are loading scaffolding. Delete them so they
+    // stop holding extra references — otherwise every loaded object keeps a
+    // phantom reference forever and can never be torn down cleanly.
+    for( SLink *lk : objectDict_ ) {
+        delete lk;
     }
+    objectDict_.clear();
+
+    for( SObjectRegistryEntry *entry : sObjectRegistry_ ) {
+        delete entry;
+    }
+    sObjectRegistry_.clear();
 }
 

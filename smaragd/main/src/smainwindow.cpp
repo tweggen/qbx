@@ -20,6 +20,7 @@
 #include "smainwindow.h"
 #include "sobject.h"
 #include "sproject.h"
+#include "sprojectprops.h"
 #include "sexternfilelist.h"
 #include "slink.h"
 #include "sprojectloader.h"
@@ -36,7 +37,17 @@
 #include "actions/ssettrackvolumeaction.h"
 #include "actions/ssaveprojectaction.h"
 #include "actions/sloadprojectaction.h"
+#include "actions/ssnaptogridaction.h"
+#include "actions/sgridaction.h"
+#include "actions/smetronomeaction.h"
+#include "actions/scycleaction.h"
 #include "actions/stoggleplaybackaction.h"
+
+#include <QPixmap>
+#include <QPainter>
+#include <QIcon>
+#include <QFont>
+#include <QKeySequence>
 
 #include "pix/playoff.xpm"
 #include "pix/playon.xpm"
@@ -131,11 +142,12 @@ void SMainWindow::fileSaveAs()
 
 void SMainWindow::fileClose()
 {
-    closeProject();
+    closeProject();             // deletes the project (auto-removes its connections)
     currentFilePath_.clear();
     setCentralWidget( NULL );   // drop the (now-deleted) project widget
     projectRootWidget_ = NULL;
     updateWindowTitle();
+    syncPaletteToProject( NULL );
 }
 
 void SMainWindow::updateWindowTitle()
@@ -173,6 +185,7 @@ void SMainWindow::fileNew()
 
     currentFilePath_.clear();   // fresh project is untitled until saved
     updateWindowTitle();
+    syncPaletteToProject( currentProject_ );
 }
 
 void SMainWindow::fileOpen()
@@ -221,6 +234,7 @@ void SMainWindow::fileOpen()
 
     currentFilePath_ = fileName;   // remember where we loaded from
     updateWindowTitle();
+    syncPaletteToProject( currentProject_ );
 }
 
 void SMainWindow::fileExit()
@@ -349,6 +363,8 @@ SMainWindow::SMainWindow()
     menuBar()->addMenu( editMenu );
 
     buildAudioMenu();
+
+    buildPaletteToolbar();
 
     qTestMenu_ = new QMenu( "&Test", this );
     qTestMenu_->setTearOffEnabled(true);
@@ -547,6 +563,107 @@ void SMainWindow::runSaveLoadTest()
     fprintf(stderr, "%s  [%s]\n", msg.toUtf8().constData(), tmpPath.toUtf8().constData());
     fflush(stderr);
     statusBar()->showMessage(msg, 5000);
+}
+
+// Draw a small square "lamp" icon with a single glyph, for the palette buttons.
+static QIcon makePaletteIcon( const QString &glyph )
+{
+    const int sz = 22;
+    QPixmap pm( sz, sz );
+    pm.fill( Qt::transparent );
+    QPainter pr( &pm );
+    pr.setRenderHint( QPainter::Antialiasing, false );
+    pr.setPen( QColor( 80, 80, 80 ) );
+    pr.setBrush( QColor( 235, 235, 225 ) );
+    pr.drawRect( 2, 2, sz - 5, sz - 5 );
+    pr.setPen( QColor( 40, 40, 40 ) );
+    pr.setFont( QFont( "sansserif", 9, QFont::Bold ) );
+    pr.drawText( QRect( 2, 2, sz - 5, sz - 5 ), Qt::AlignCenter, glyph );
+    pr.end();
+    return QIcon( pm );
+}
+
+void SMainWindow::buildPaletteToolbar()
+{
+    qTBPalette_ = new QToolBar( "Palette" );
+    qTBPalette_->setIconSize( QSize( 22, 22 ) );
+
+    // Each toggle is a small, square, checkable button with a shortcut. Clicking
+    // it (or pressing the shortcut) submits a *-toggle action against the current
+    // project; the button's checked state is kept in sync from the project's
+    // propertyChanged signal (see syncPaletteToProject / onProjectPropertyChanged),
+    // so it tracks the setting however it changes (button, shortcut, or script).
+    auto addToggle = [&]( const QString &glyph, const QString &name,
+                          const QKeySequence &sc, const char *slot ) -> QAction* {
+        QAction *a = new QAction( makePaletteIcon( glyph ), name, this );
+        a->setCheckable( true );
+        a->setShortcut( sc );
+        a->setToolTip( QString( "%1 (%2)" ).arg( name, sc.toString() ) );
+        a->setEnabled( false );   // no project yet; enabled by syncPaletteToProject
+        QObject::connect( a, SIGNAL( triggered() ), this, slot );
+        qTBPalette_->addAction( a );
+        return a;
+    };
+
+    actSnapToGrid_ = addToggle( "S", "Snap to grid", Qt::Key_S, SLOT( toggleSnapToGrid() ) );
+    actGrid_       = addToggle( "G", "Grid",         Qt::Key_G, SLOT( toggleGrid() ) );
+    actMetronome_  = addToggle( "M", "Metronome",    Qt::Key_M, SLOT( toggleMetronome() ) );
+    actCycle_      = addToggle( "C", "Cycle",        Qt::Key_C, SLOT( toggleCycle() ) );
+
+    addToolBar( Qt::TopToolBarArea, qTBPalette_ );
+
+    // Reflect whatever project is current at startup (usually none).
+    syncPaletteToProject( currentProject_ );
+}
+
+void SMainWindow::syncPaletteToProject( SProject *project )
+{
+    const bool en = ( project != NULL );
+    actSnapToGrid_->setEnabled( en );
+    actGrid_->setEnabled( en );
+    actMetronome_->setEnabled( en );
+    actCycle_->setEnabled( en );
+
+    if( !project ) return;
+
+    // setChecked does not emit triggered(), so this won't re-submit actions.
+    actSnapToGrid_->setChecked( project->prop( SProjectProps::SnapToGrid, true ).toBool() );
+    actGrid_->setChecked( project->prop( SProjectProps::GridVisible, true ).toBool() );
+    actMetronome_->setChecked( project->prop( SProjectProps::Metronome, false ).toBool() );
+    actCycle_->setChecked( project->prop( SProjectProps::Cycle, false ).toBool() );
+
+    // The previous project (if any) was deleted by closeProject(), which
+    // auto-removed its connections, so we only need to connect the new one.
+    QObject::connect( project, SIGNAL( propertyChanged( QString, QVariant ) ),
+                      this, SLOT( onProjectPropertyChanged( QString, QVariant ) ) );
+}
+
+void SMainWindow::onProjectPropertyChanged( const QString &key, const QVariant &value )
+{
+    if( key == SProjectProps::SnapToGrid )       actSnapToGrid_->setChecked( value.toBool() );
+    else if( key == SProjectProps::GridVisible ) actGrid_->setChecked( value.toBool() );
+    else if( key == SProjectProps::Metronome )   actMetronome_->setChecked( value.toBool() );
+    else if( key == SProjectProps::Cycle )       actCycle_->setChecked( value.toBool() );
+}
+
+void SMainWindow::toggleSnapToGrid()
+{
+    SApplication::app().submitAction( new SSnapToGridAction( SToggleSettingAction::Toggle ) );
+}
+
+void SMainWindow::toggleGrid()
+{
+    SApplication::app().submitAction( new SGridAction( SToggleSettingAction::Toggle ) );
+}
+
+void SMainWindow::toggleMetronome()
+{
+    SApplication::app().submitAction( new SMetronomeAction( SToggleSettingAction::Toggle ) );
+}
+
+void SMainWindow::toggleCycle()
+{
+    SApplication::app().submitAction( new SCycleAction( SToggleSettingAction::Toggle ) );
 }
 
 void SMainWindow::undo()

@@ -1162,3 +1162,155 @@ code path.
 4. **Test → Save/Load Round-trip** → stderr/status shows `Round-trip OK: N tracks`.
 5. **File → Close** → central view clears, title back to `Smaragd`, no crash.
 
+---
+
+## Crash fixes: load truncates path, and populated-project teardown
+
+- **Date:** 2026-06-06
+- **Status:** ✅ Fixed and verified with a headless gdb reproduction (build a
+  project with a sample → save → load into a probe → delete probe → delete live
+  project → process exits normally, no SIGSEGV). Builds clean on Windows/Qt6/MinGW.
+
+### Symptom
+
+User created a project, ran the test sequence (loads a WAV + plays), stopped
+playback, then ran **Test → Save/Load Round-trip** → segfault.
+
+### Diagnosis (gdb, via a temporary `--repro` harness in `main`, since removed)
+
+Two independent bugs, both pre-existing and newly *reached* by the save/load work:
+
+1. **Wave path truncated to one character on load** → `SPlainWave` failed to open
+   the file → its instantiate returned NULL → `SProjectLoader::createObjects`
+   dereferenced that NULL at `object->readAttributes(e)`.
+2. **Destroying a populated project crashed** — the first time a project with
+   content was ever destroyed (`delete probe`; also reachable now via File →
+   Close / File → Open-replace). An `SLink` destructor called `removeRef()` on a
+   sibling object that had already been freed.
+
+### Fixes
+
+| File | Fix |
+|------|-----|
+| `main/src/splainwave.cpp` | `instantiateFromDomElement` read the filename as `(const char*)element.attribute("filename").data()` — casting `QString::data()` (QChar*, UTF-16) to `const char*` truncates `"C:/..."` to `"C"` at the first NUL byte. Use the `QString` directly. (Same buggy cast in a nearby log line also fixed.) The file is saved correctly; only the *read* was broken — a Qt5→Qt6 wide-char porting bug. |
+| `main/src/sprojectloader.cpp` (`createObjects`) | Null-check the instantiate result before `readAttributes`; abort the load with `-1` instead of dereferencing NULL (graceful failure when, e.g., a referenced WAV is missing). |
+| `main/src/sprojectloader.cpp` (`~SProjectLoader`) | Delete the temporary "handle" `SLink`s held in `objectDict_` (and properly free the registry entries). These handles are loading scaffolding, distinct from the real parent/child links; leaking them kept every loaded object's refcount permanently above zero so it could never be torn down cleanly. |
+| `main/src/sproject.cpp` (`~SProject`) | Tear down the object graph by repeatedly deleting only objects whose reference count has reached zero. Deleting an object frees its child `SLink`s, which drop references and bring the next layer to zero — so deletion cascades root→leaf and no `SLink` ever dereferences a freed object. Done in the destructor body so child destructors still see a live `externFileDict_`. |
+| `main/src/splainwave.cpp` (`~SPlainWave`) | Deregister from the object's *own* project (its QObject parent), not `SApplication`'s current project (which is NULL during Close and wrong when loading into a non-current project). |
+
+### Note
+
+These teardown bugs were latent because a populated project had never actually
+been destroyed before (the old `closeProject` only ran on empty/in-flight
+projects). Save/Load + File → Close are the first paths to exercise it.
+
+---
+
+## Toolbar palette: snap-to-grid / grid / metronome / cycle toggles
+
+- **Date:** 2026-06-06
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW (no new
+  warnings). Window-up smoke test passes; visual/interactive check is a human
+  step (couldn't reliably screenshot the app window from this environment).
+
+### What landed
+
+A small palette of four checkable square buttons in a new toolbar, each with a
+shortcut, that toggle on click or keypress:
+
+| Button | Shortcut | Real? |
+|--------|----------|-------|
+| Snap to grid (S) | `S` | yes — gates `SStdMixerView::alignTime` |
+| Grid (G) | `G` | yes — gates the time-grid drawing in `SMVActualView::paintEvent`, repaints on toggle |
+| Metronome (M) | `M` | **stub** — toggles state only, no click track |
+| Cycle (C) | `C` | **stub** — toggles state only, no looped playback |
+
+### Design
+
+- **State** lives in `SApplication` (`snapToGrid_`/`gridVisible_`/`metronomeOn_`/
+  `cycleOn_`, defaults `true/true/false/false`) with setters that emit
+  `*Changed(bool)` signals — same home as transport (`isPlaying`).
+- **Actions**: a header-only base `SToggleSettingAction` (carries an
+  `Op{Toggle,Enable,Disable}`, non-undoable) + four thin subclasses
+  (`SSnapToGridAction`, `SGridAction`, `SMetronomeAction`, `SCycleAction`). Each
+  registers **three verbs** — e.g. `snap-to-grid-toggle/-enable/-disable` — so
+  every feature has toggle/enable/disable actions, scriptable via the registry.
+- **UI** (`SMainWindow::buildPaletteToolbar`): checkable `QAction`s with
+  generated 22×22 square letter icons. `triggered()` submits the `*-toggle`
+  action; the `SApplication *Changed` signal drives `setChecked`, so the button
+  stays in sync however the setting changes (button, shortcut, or script) — no
+  feedback loop because `setChecked` doesn't emit `triggered`.
+- Snap/grid were already implemented in the view (always-on); this just gates
+  them on the new toggle state. Metronome/cycle setters carry `// TODO stub`.
+
+### Files
+
+New: `actions/stogglesettingaction.h`, `actions/s{snaptogrid,grid,metronome,cycle}action.{h,cpp}`.
+Edited: `sapplication.{h,cpp}` (state+signals), `smainwindow.{h,cpp}` (palette
+toolbar + slots + icon helper), `sstdmixerview.cpp` (gate alignTime + grid draw,
+repaint on grid toggle), `main/CMakeLists.txt`.
+
+### Verification needed (human)
+
+1. Four square buttons appear in a toolbar; Snap + Grid start pressed.
+2. `G` / clicking Grid hides/shows the time grid; `S` toggles clip snapping.
+3. `M` / `C` toggle their buttons (no audible/transport effect yet — stubs).
+
+
+---
+
+## Per-project property dictionary (generic key/value store)
+
+- **Date:** 2026-06-06
+- **Status:** ✅ Code complete, builds clean (no new warnings). Round-trip
+  **verified headlessly**: defaults seed correctly, snap/cycle/an arbitrary int
+  key all persist through save→load. Window-up smoke passes. Visual/interactive
+  check (toggle, save, reopen, confirm restored) is a human step.
+
+### Decision
+
+Discussed and challenged the "generic property bag" idea. Outcome (user choices):
+**per-project** storage (saved in the `.qxp`), and **both** a generic action and
+named convenience wrappers. Non-undoable (view/transport toggles). Qt mechanism:
+a `QVariantMap` (Qt's JSON-object analog) serialized as JSON — chosen over QObject
+dynamic properties (poor change-notification/serialization ergonomics) and over
+hand-rolled XML-typed elements.
+
+### What landed
+
+- **`SProject` property store**: `QVariantMap properties_` + `prop(key,default)` /
+  `setProp(key,value)` / `hasProp(key)` / `properties()` and a
+  `propertyChanged(QString,QVariant)` signal. Named `prop*` (not
+  `property/setProperty`) to avoid shadowing QObject's meta-property API. Seeded
+  from `SProjectProps::defaults()` at construction.
+- **`sprojectprops.h`** (new): well-known key constants (`SnapToGrid`,
+  `GridVisible`, `Metronome`, `Cycle`) + `defaults()`. Keeps the stringly-typed
+  bag discoverable/typo-proof.
+- **Serialization**: the dict is written as JSON in a single `properties='...'`
+  attribute on `<SProject>` (compact `QJsonDocument`, minimal XML-attr escaping),
+  read back in `readPreChildrenAttributes` and merged over the seeded defaults —
+  so old files (no attribute) load with defaults and unknown future keys survive.
+- **Actions** (the four toggles now read/write the project, not SApplication):
+  - base `SToggleSettingAction::get/setState` now take `SProject*`.
+  - `SSnapToGridAction` / `SGridAction` / `SMetronomeAction` / `SCycleAction`
+    operate on `project->prop/setProp` with the `SProjectProps` keys.
+  - new generic `SSetPropertyAction(key, value)` registered as `set-property`
+    (value JSON-encoded for type-preserving serialization).
+- **`SApplication`**: the snap/grid/metronome/cycle members, getters, setters and
+  signals added in the previous step were **removed** — state moved to the dict.
+- **Toolbar palette** (`SMainWindow`): buttons now reflect the *current project's*
+  properties. `syncPaletteToProject()` enables+seeds the buttons and connects to
+  the project's `propertyChanged` (called from fileNew/fileOpen/fileClose);
+  `onProjectPropertyChanged()` keeps each button in sync. Buttons are disabled
+  when no project is open.
+- **`SStdMixerView`**: `alignTime` (snap) and the grid drawing now read the
+  project's properties; repaints on the project's `propertyChanged`.
+
+### Notes / open points
+
+- Snap/grid/metronome/cycle are now saved *in the project file*. As flagged in the
+  design discussion, on-off prefs like snap/metronome are arguably per-user; if
+  that becomes annoying, a per-user override layer (SSettings) can seed new
+  projects without changing this store.
+- `SSetPropertyAction` is non-undoable for now; the property bag makes undo trivial
+  later (capture old value as inverse) if wanted.
