@@ -150,35 +150,56 @@ void SStdMixer::reconnectTracksToMixer()
         qWarning( "Should reconnect tracks although no mixer was created yet.\n" );
         return;
     }
-    qWarning( "Reconnecting tracks; %d busses.\n", nBusses_ );
     int nTracks = children.count();
+    const bool solo = anyTrackSoloed();
     // For all busses.
     for( int bus=0; bus<nBusses_; bus++ ) {
         twMixer *mix = cpMixers_[bus];
         if( !mix ) continue;
         // Ensure the given number of inputs.
         mix->setNInputs( nTracks );
-        // FIXME: Remove this ugly iterating.
-        int channel;
-        for( channel=0; channel<nTracks; channel++ ) {
-            SLink *lk = NULL;
-            lk = (SLink *)(const_cast<QObjectList&>(children)).at( channel );
-            if( !lk ) {
+        for( int channel=0; channel<nTracks; channel++ ) {
+            SLink *lk = (SLink *)(const_cast<QObjectList&>(children)).at( channel );
+            // A track is audible iff it is not muted and, when any track is
+            // soloed, it is itself soloed. Inaudible tracks get a NULL input so
+            // their DSP is not pulled at all (processing AND output disabled).
+            bool audible = false;
+            if( lk ) {
+                SObject &so = lk->getSObject();
+                audible = !so.isMuted() && ( !solo || so.isSolo() );
+            }
+            if( !lk || !audible ) {
                 mix->setInput( channel, NULL );
                 mix->setInputLevel( channel, 0 );
             } else {
                 twComponent &root = lk->getRootComponent();
-                qWarning( "Link Track %p root component = %p.\n",
-                          (void *)lk, (void *)&root );
-                qWarning( "Calling %p->setInput( %d, "
-                          "%p->getRootComponent().linkOutput( %d ) );\n",
-                          (void *)mix, channel, (void *)lk, bus );
                 mix->setInput( channel, root.linkOutput( bus ) );
                 mix->setInputLevel( channel, lk->getSObject().getVolume() );
             }
         }
-        // FIXME: Clear the remaining channels.
     }
+}
+
+/**
+ * True if at least one track has its solo flag set.
+ */
+bool SStdMixer::anyTrackSoloed() const
+{
+    const QObjectList& children = this->children();
+    for( QObject *o : children ) {
+        SLink *lk = (SLink *) o;
+        if( lk && lk->getSObject().isSolo() ) return true;
+    }
+    return false;
+}
+
+/**
+ * A track's mute/solo changed. Solo is global (it silences every non-soloed
+ * track), so just re-evaluate the whole routing.
+ */
+void SStdMixer::trackMuteSoloChanged()
+{
+    reconnectTracksToMixer();
 }
 
 // Slots.
@@ -289,14 +310,16 @@ void SStdMixer::trackVolumeChanged( double  )
         qWarning( "No per track object found.\n" );
         return;
     }
-    // FIXME: ALso consider pan.
-    double cvol = so->getVolume();
     int i = getChildIndex( (SObject &)(*so) );
     if( i<0  /* || i>=(int)trackList_.count() */ ) {
         qWarning( "Invalid track index returned.\n" );
         return;
     }
-    for( int bus=0; bus<nBusses_; bus++ ) {    
+    // Don't un-silence a muted/non-soloed track by raising its level.
+    // FIXME: Also consider pan.
+    bool audible = !so->isMuted() && ( !anyTrackSoloed() || so->isSolo() );
+    double cvol = audible ? so->getVolume() : 0;
+    for( int bus=0; bus<nBusses_; bus++ ) {
         twMixer *m = cpMixers_[bus];
         if( !m ) continue;
         m->setInputLevel( i, cvol );
@@ -311,9 +334,15 @@ void SStdMixer::insertTrack( int newIndex, STrack &trk )
     qWarning( "Inserting new track @%d.\n", newIndex );
     QObject::connect( (QObject*)&trk, SIGNAL( durationChanged( length_t ) ), 
                       this, SLOT( mixerChildDurationChanged( length_t ) ) );    
-    QObject::connect( 
-        (QObject*)&trk, SIGNAL( volumeChanged( double ) ), 
+    QObject::connect(
+        (QObject*)&trk, SIGNAL( volumeChanged( double ) ),
         this, SLOT( trackVolumeChanged( double ) ) );
+    QObject::connect(
+        (QObject*)&trk, SIGNAL( mutedChanged( bool ) ),
+        this, SLOT( trackMuteSoloChanged() ) );
+    QObject::connect(
+        (QObject*)&trk, SIGNAL( soloChanged( bool ) ),
+        this, SLOT( trackMuteSoloChanged() ) );
     SLink *lk = new SLink( (SObject&)trk, this );
     (void) lk;
     emit trackInserted( newIndex, trk );

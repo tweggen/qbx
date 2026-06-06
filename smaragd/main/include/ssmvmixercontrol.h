@@ -30,6 +30,13 @@ protected slots:
     void sliderValueChanged( int value );
     void sliderValueChanged( double value );
 
+    // Button -> model.
+    void muteToggled( bool );
+    void soloToggled( bool );
+    // Model -> button (keeps the buttons in sync if the flag changes elsewhere).
+    void onMutedChanged( bool );
+    void onSoloChanged( bool );
+
 private:
     // Resolve this control's track index within the mixer model (-1 if gone).
     int trackIndex_() const;
@@ -44,6 +51,8 @@ private:
     QSlider *qVolume_;
     QLabel *qVolLabel_;
     QLineEdit *qTrkLabel_;
+    QPushButton *qMute_;
+    QPushButton *qSolo_;
 };
 
 #endif

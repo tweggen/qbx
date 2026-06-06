@@ -11,6 +11,7 @@
 #include <qslider.h>
 #include <qlabel.h>
 #include <qlineedit.h>
+#include <qpushbutton.h>
 #include <QSignalBlocker>
 
 #include "sapplication.h"
@@ -97,6 +98,28 @@ void SSMVMixerControl::setSliderSilently( double value )
     }
 }
 
+void SSMVMixerControl::muteToggled( bool on )
+{
+    tk_.setMuted( on );
+}
+
+void SSMVMixerControl::soloToggled( bool on )
+{
+    tk_.setSolo( on );
+}
+
+void SSMVMixerControl::onMutedChanged( bool on )
+{
+    QSignalBlocker block( qMute_ );   // don't bounce back into muteToggled
+    qMute_->setChecked( on );
+}
+
+void SSMVMixerControl::onSoloChanged( bool on )
+{
+    QSignalBlocker block( qSolo_ );
+    qSolo_->setChecked( on );
+}
+
 SSMVMixerControl::~SSMVMixerControl()
 {
     // Deletes all widgets by default
@@ -129,18 +152,49 @@ SSMVMixerControl::SSMVMixerControl(
     qVolLabel_->setAlignment( Qt::AlignHCenter );
     qVolLabel_->setFont( QFont( "sansserif", 7 ) );
 
+    // Small square Mute / Solo toggle buttons. Mute (red when on) silences this
+    // track; Solo (yellow when on) silences every track that is not soloed.
+    qMute_ = new QPushButton( "M", this );
+    qMute_->setCheckable( true );
+    qMute_->setFixedSize( 20, 20 );
+    qMute_->setToolTip( "Mute" );
+    qMute_->setStyleSheet( "QPushButton:checked { background:#d04040; color:white; }" );
+    qSolo_ = new QPushButton( "S", this );
+    qSolo_->setCheckable( true );
+    qSolo_->setFixedSize( 20, 20 );
+    qSolo_->setToolTip( "Solo" );
+    qSolo_->setStyleSheet( "QPushButton:checked { background:#e0c020; color:black; }" );
+
+    QHBoxLayout *btnRow = new QHBoxLayout();
+    btnRow->setContentsMargins( 0, 0, 0, 0 );
+    btnRow->setSpacing( 2 );
+    btnRow->addWidget( qMute_ );
+    btnRow->addWidget( qSolo_ );
+    btnRow->addStretch( 1 );
+
     setFixedSize( 150, smv_.getTrackHeight() );
 
     qLayout_->addWidget( qTrkLabel_, 0, 0, Qt::AlignTop );
-    qLayout_->addWidget( qVolume_,   1, 0, Qt::AlignHCenter );
-    qLayout_->addWidget( qVolLabel_, 2, 0, Qt::AlignHCenter );
-    qLayout_->setRowStretch( 1, 1 );
+    qLayout_->addLayout( btnRow,     1, 0 );
+    qLayout_->addWidget( qVolume_,   2, 0, Qt::AlignHCenter );
+    qLayout_->addWidget( qVolLabel_, 3, 0, Qt::AlignHCenter );
+    qLayout_->setRowStretch( 2, 1 );
 
-    // Seed the fader position + dB readout from the current track volume.
+    // Seed widgets from the current track state.
     setSliderSilently( tk_.getVolume() );
+    qMute_->setChecked( tk_.isMuted() );
+    qSolo_->setChecked( tk_.isSolo() );
 
     QObject::connect( qVolume_, SIGNAL( valueChanged( int ) ),
                       this, SLOT( sliderValueChanged( int ) ) );
     QObject::connect( &tk_, SIGNAL( volumeChanged( double ) ),
                       this, SLOT( sliderValueChanged( double ) ) );
+    QObject::connect( qMute_, SIGNAL( toggled( bool ) ),
+                      this, SLOT( muteToggled( bool ) ) );
+    QObject::connect( qSolo_, SIGNAL( toggled( bool ) ),
+                      this, SLOT( soloToggled( bool ) ) );
+    QObject::connect( &tk_, SIGNAL( mutedChanged( bool ) ),
+                      this, SLOT( onMutedChanged( bool ) ) );
+    QObject::connect( &tk_, SIGNAL( soloChanged( bool ) ),
+                      this, SLOT( onSoloChanged( bool ) ) );
 }

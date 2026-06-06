@@ -1362,3 +1362,110 @@ Fixes:
 
 1. Ctrl+T adds a track; Ctrl+Return inserts a sample at the last-clicked track.
 2. Right-click → Remove track no longer crashes (single track and multi-track).
+
+---
+
+## Per-track Mute / Solo buttons
+
+- **Date:** 2026-06-06
+- **Status:** ✅ Builds clean, window-up smoke passes. Audible behaviour is a
+  human step (no headless hook into the live mixer state).
+
+### What landed
+
+Small square **M**/**S** toggle buttons in each track's channel strip
+(`SSMVMixerControl`): Mute turns red when on, Solo turns yellow. They drive the
+existing per-`SObject` `muted`/`solo` flags (already serialized), so state
+persists with the project.
+
+Routing (`SStdMixer`): `reconnectTracksToMixer` now computes, per track,
+`audible = !muted && (!anySoloed || soloed)`. Inaudible tracks get a **NULL mixer
+input** (their DSP isn't pulled — processing *and* output disabled) plus level 0;
+audible tracks get their root output at their volume.
+
+- `mutedChanged`/`soloChanged` from each track are connected (in `insertTrack`)
+  to a new `trackMuteSoloChanged()` slot → full `reconnectTracksToMixer()` (solo
+  is global, so all tracks are re-evaluated).
+- `trackVolumeChanged` now also respects audibility, so dragging a muted/
+  non-soloed track's fader can't un-silence it.
+- `anyTrackSoloed()` helper added.
+
+### Behaviour
+
+- **Mute**: silences that track (input detached → no processing/output).
+- **Solo**: as soon as any track is soloed, every non-soloed track is silenced;
+  a soloed track still obeys its own mute.
+
+### Verification needed (human)
+
+Two tracks with audio: mute one → it goes silent; solo the other → only it plays;
+clear solo → both play; muted+soloed track stays silent.
+
+---
+
+## 05_TRACK_GROUPING_AND_LIVE_ASSETS.md (proposed)
+
+- **Date:** 2026-06-06
+- **Status:** Design only — concept authored, no code.
+
+Concept for two requested features, unified under "composition of
+sub-arrangements":
+
+- **(a) Track groups** — tracks as children of tracks (Reaper-style folders);
+  parent sums child-track outputs with its own clips, through its own processing.
+- **(b) Live region assets** — a marked time region becomes a shareable
+  sub-arrangement in the resource list, placed via SLink/SCut (whole or part),
+  not rendered to file; editing the master changes all instances; recursive.
+
+Key findings that make this tractable: `twTrackMix` already sums *any* child
+`SObject`'s root component (nesting is how the DSP already works); `SObject`
+sharing + the live-pull render already give "edit once, hear everywhere"; `SCut`
+already is a windowed view. The one real prerequisite is making track processing
+(gain/mute/solo) **intrinsic** to the track strip so tracks compose uniformly —
+which also touches the mute/solo just landed. (b) is largely (a) + register as a
+resource + range-selection + extract-and-replace + an acyclicity guard.
+
+See `plan/proposed/05_TRACK_GROUPING_AND_LIVE_ASSETS.md` for the model/DSP/UI/
+serialization breakdown, a 6-phase rollout, and open questions.
+
+---
+
+## Range selection in the ruler (proposal 05, first increment)
+
+- **Date:** 2026-06-06
+- **Status:** ✅ Builds clean, window-up smoke passes. Interactive behaviour is a
+  human step. First slice of `05_TRACK_GROUPING_AND_LIVE_ASSETS.md` §2.6.
+
+### What landed (all in `SMVActualView`)
+
+- **State**: `rangeValid_` + two ends `rangeStart_/rangeEnd_` (stored unordered,
+  normalized on release) + a `rangeDrag_` mode (none / create / move-start /
+  move-end). Public `hasRange()/getRangeStart()/getRangeEnd()` for later use
+  (asset creation).
+- **Interaction** (top ruler band, `y < SMV_TIME_RULER_HEIGHT`):
+  - Left-press *not* on an end → start a new range (this press fixes one end);
+    drag moves the other end; release fixes it. A zero-length click clears.
+  - Left-press within `SMV_RANGE_GRAB_PIXEL` of an existing end → drag that end.
+  - Both ends snap via `smv_.alignTime()` (so they honor the snap-to-grid
+    project property).
+  - Range drag takes precedence over clip editing in mouseMove/Release.
+- **Rendering** (`drawRange`, last in paintEvent): grey band in the ruler
+  between the ends; both ends as vertical lines over the full track height.
+- **Context menu** (`qRangePopup_`, shown on right-click in the ruler): "Set
+  BPM..." (moved here from the old ruler right-click hack), "Clear range"
+  (enabled only when a range exists), and "Create asset from range" — a **stub**
+  wired for feature (b).
+
+### Notes
+
+- The old ruler right-click → BPM-input hack is gone; BPM now lives in the range
+  menu. Ruler left-click no longer seeks (it selects a range); track-area
+  left-click still seeks.
+- Range state is view-local for now; per proposal 05 it should migrate to
+  `SProject` (with a track set) when asset creation lands.
+
+### Verification needed (human)
+
+Drag a range in the ruler → grey band + full-height edges appear; with snap on,
+ends land on grid lines; grab an end and move it; right-click → menu with
+Clear/Set BPM/Create asset (stub).

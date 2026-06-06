@@ -23,6 +23,7 @@ class SSMVMixerControl;
 #define SMV_CUT_MIN_TIME 1024
 #define SMV_LEFT_DRAG_PIXEL 7
 #define SMV_RIGHT_DRAG_PIXEL 7
+#define SMV_RANGE_GRAB_PIXEL 5
 
 #define SMV_TIME_RULER_HEIGHT 16
 
@@ -50,6 +51,12 @@ public:
     int getXPosOfOffset( offset_t ) const;
     QRect getSLinkVisibRect( int trackIdx, const SLink & );
 
+    // Time-range selection (shown in the ruler band). Bounds are normalized
+    // (start <= end). hasRange() is false when there is no selection.
+    bool hasRange() const { return rangeValid_; }
+    offset_t getRangeStart() const;
+    offset_t getRangeEnd() const;
+
 public slots:
     void setTrackHeight( int x );
     void setSecondWidth( double x );
@@ -65,6 +72,10 @@ signals:
     
 protected slots:
     void ctGlobalShow();
+    // Range-bar context menu.
+    void ctRangeSetBPM();
+    void ctRangeClear();
+    void ctRangeCreateAsset();
 
 protected:
     virtual void paintEvent( QPaintEvent * );
@@ -78,6 +89,16 @@ private slots:
 
 private:
     void updateLastClickVars( const QPoint & );
+
+    // --- time-range selection -------------------------------------------
+    enum RangeDrag { RangeNone, RangeCreate, RangeMoveStart, RangeMoveEnd };
+    void beginRangeDrag( int x );    // mouse press in the ruler band
+    void updateRangeDrag( int x );   // mouse move while dragging
+    void endRangeDrag( int x );      // mouse release
+    void rangeBounds( offset_t &lo, offset_t &hi ) const;  // normalized
+    void drawRange( QPainter &, const QRect &myRect );
+    // --------------------------------------------------------------------
+
     SStdMixerView &smv_;
 
     class InlineRenderContext
@@ -100,6 +121,11 @@ private:
     int trackHeight_;
     double secondWidth_;
     QMenu *qGlobalPopup_;
+    QMenu *qRangePopup_;
+    QAction *qRangeActClear_;
+    bool rangeValid_;
+    offset_t rangeStart_, rangeEnd_;   // the two ends (not necessarily ordered)
+    int rangeDrag_;                    // RangeDrag
     int lastClickTrackIdx_;
     STrack *lastClickTrack_;
     SLink *lastClickSLink_;

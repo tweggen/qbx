@@ -246,6 +246,10 @@ void SMVActualView::paintEvent( QPaintEvent * )
             p.setCompositionMode( oldCompositionMode );
         }
     }
+
+    // Time-range selection on top of everything (grey band in the ruler +
+    // vertical edges over all tracks).
+    drawRange( p, myRect );
 }
 
 /**
@@ -465,8 +469,11 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
     }    
 }
 
-void SMVActualView::mouseReleaseEvent( QMouseEvent * )
+void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 {
+    if( rangeDrag_ != RangeNone ) {
+        endRangeDrag( ev->pos().x() );
+    }
 }
 
 /**
@@ -499,16 +506,126 @@ QRect SMVActualView::getSLinkVisibRect( int trackIdx, const SLink &lk )
     return r;
 }
 
+// ---------------------------------------------------------------------------
+// Time-range selection (shown in the top ruler band)
+// ---------------------------------------------------------------------------
+
+void SMVActualView::rangeBounds( offset_t &lo, offset_t &hi ) const
+{
+    if( rangeStart_ <= rangeEnd_ ) { lo = rangeStart_; hi = rangeEnd_; }
+    else                           { lo = rangeEnd_;   hi = rangeStart_; }
+}
+
+offset_t SMVActualView::getRangeStart() const
+{
+    offset_t lo, hi; rangeBounds( lo, hi ); return lo;
+}
+
+offset_t SMVActualView::getRangeEnd() const
+{
+    offset_t lo, hi; rangeBounds( lo, hi ); return hi;
+}
+
+void SMVActualView::beginRangeDrag( int x )
+{
+    if( x < 0 ) x = 0;
+    offset_t t = smv_.alignTime( getTimeOf( x ) );
+
+    // If the press lands on an existing end, grab it for moving; otherwise
+    // start a brand-new range (this press fixes one end).
+    if( rangeValid_ ) {
+        int xs = getXPosOfOffset( rangeStart_ );
+        int xe = getXPosOfOffset( rangeEnd_ );
+        if( qAbs( x - xs ) <= SMV_RANGE_GRAB_PIXEL ) { rangeDrag_ = RangeMoveStart; return; }
+        if( qAbs( x - xe ) <= SMV_RANGE_GRAB_PIXEL ) { rangeDrag_ = RangeMoveEnd;   return; }
+    }
+    rangeStart_ = rangeEnd_ = t;
+    rangeValid_ = true;
+    rangeDrag_ = RangeCreate;
+    update();
+}
+
+void SMVActualView::updateRangeDrag( int x )
+{
+    if( x < 0 ) x = 0;
+    offset_t t = smv_.alignTime( getTimeOf( x ) );
+    if( rangeDrag_ == RangeMoveStart ) rangeStart_ = t;
+    else                               rangeEnd_   = t;   // RangeCreate or RangeMoveEnd
+    update();
+}
+
+void SMVActualView::endRangeDrag( int x )
+{
+    updateRangeDrag( x );
+    if( rangeStart_ > rangeEnd_ ) {                   // normalize
+        offset_t tmp = rangeStart_; rangeStart_ = rangeEnd_; rangeEnd_ = tmp;
+    }
+    // A click with no drag (zero-length create) clears the selection.
+    if( rangeDrag_ == RangeCreate && rangeStart_ == rangeEnd_ ) {
+        rangeValid_ = false;
+    }
+    rangeDrag_ = RangeNone;
+    update();
+}
+
+void SMVActualView::drawRange( QPainter &p, const QRect &myRect )
+{
+    if( !rangeValid_ ) return;
+    offset_t lo, hi; rangeBounds( lo, hi );
+    int xlo = getXPosOfOffset( lo );
+    int xhi = getXPosOfOffset( hi );
+
+    // Grey band inside the ruler.
+    if( xhi > xlo ) {
+        p.fillRect( QRect( xlo, 0, xhi - xlo, SMV_TIME_RULER_HEIGHT ),
+                    QColor( 150, 150, 150 ) );
+    }
+    // Edges as vertical lines over all tracks.
+    p.setPen( QColor( 80, 80, 80 ) );
+    if( xlo >= 0 && xlo < myRect.width() ) p.drawLine( xlo, 0, xlo, myRect.height()-1 );
+    if( xhi >= 0 && xhi < myRect.width() ) p.drawLine( xhi, 0, xhi, myRect.height()-1 );
+}
+
+void SMVActualView::ctRangeSetBPM()
+{
+    bool ok = false;
+    STimeGridSpec tgs( smv_.getTimeGridSpec() );
+    double oldTempo = tgs.getBPM();
+    double newTempo = QInputDialog::getDouble(
+        &smv_, "Smaragd request", tr( "Please enter new BPM" ),
+        oldTempo, 10., 4000., 1, &ok );
+    if( ok && newTempo != oldTempo ) {
+        smv_.model_->getProject().setBPMTempo( newTempo );
+    }
+}
+
+void SMVActualView::ctRangeClear()
+{
+    rangeValid_ = false;
+    rangeDrag_ = RangeNone;
+    update();
+}
+
+void SMVActualView::ctRangeCreateAsset()
+{
+    // TODO: feature (b) — turn the selected region into a reusable live asset
+    // (see plan/proposed/05_TRACK_GROUPING_AND_LIVE_ASSETS.md). Stub for now.
+    if( !rangeValid_ ) return;
+    qWarning( "Create asset from range [%lld..%lld]: not yet implemented.",
+              (long long) getRangeStart(), (long long) getRangeEnd() );
+}
+
 /**
  * Mouse was moved. Look, if the left button currently is pressed, and if 
  * an object was selected initially. If it was, move it.
  */
 void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
 {
-//      qWarning( "ev->button() & LeftButton = %d.\n"
-//                "lastClickSLink_ = $%08x.\n",
-//                ev->state() & LeftButton,
-//                (unsigned) lastClickSLink_ );
+    // Range selection drag takes precedence over clip editing.
+    if( rangeDrag_ != RangeNone ) {
+        updateRangeDrag( ev->pos().x() );
+        return;
+    }
 
     // Check scrolling, if the event position is invisible.
     QRect myRect = rect();
@@ -641,7 +758,12 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
 
 void SMVActualView::contextMenuEvent( QContextMenuEvent *ev )
 {
-    qWarning( "contextMenuEvent() called.\n" );
+    // Range bar (ruler) gets its own menu.
+    if( ev->pos().y() < SMV_TIME_RULER_HEIGHT ) {
+        qRangeActClear_->setEnabled( rangeValid_ );
+        qRangePopup_->popup( mapToGlobal( ev->pos() ) );
+        return;
+    }
     updateLastClickVars( ev->pos() );
     qGlobalPopup_->popup( mapToGlobal( ev->pos() ) );
 }
@@ -651,34 +773,24 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
     qWarning( "mousePressEvent() called button=%d.\n",
 	      ev->button() );
     updateLastClickVars( ev->pos() );
-    if( ev->buttons() & Qt::RightButton ) {
-        if( ev->pos().y() < SMV_TIME_RULER_HEIGHT ) {
-            // Popup menu for application.
-            // FIXME: This is a hack.
-            bool ok = false;
-            STimeGridSpec tgs( smv_.getTimeGridSpec() );
-            double oldTempo = tgs.getBPM();
-            double newTempo = QInputDialog::getDouble(
-                &smv_,
-                "Smaragd request", 
-                tr( "Please enter new BPM" ),
-                oldTempo, 10., 4000., 1, &ok );
-            if ( ok && newTempo != oldTempo ) {
-                // FIXME: This should happen as view on SProject's bpmTempoChanged() signal.
-                smv_.model_->getProject().setBPMTempo( newTempo );
-                // tgs.setBPM( newTempo );
-                // smv_.setTimeGridSpec( tgs );
-                // FIXME: This should be superfluous, as the timeGridSpec_
-                // changed signal should do it.
-                // update();
-            } else {
-                // Do nothing.
-            }
-        } else {
-	    // Also emulate legacy right mouse button events for the events
-	    // we do not receive via QContextHelpEvent
-            qGlobalPopup_->popup( mapToGlobal( ev->pos() ) );
+
+    // The top ruler band hosts the time-range selector.
+    if( ev->pos().y() < SMV_TIME_RULER_HEIGHT ) {
+        if( ev->button() == Qt::LeftButton ) {
+            beginRangeDrag( ev->pos().x() );
+            return;
         }
+        if( ev->button() == Qt::RightButton ) {
+            qRangeActClear_->setEnabled( rangeValid_ );
+            qRangePopup_->popup( mapToGlobal( ev->pos() ) );
+            return;
+        }
+    }
+
+    if( ev->buttons() & Qt::RightButton ) {
+	// Also emulate legacy right mouse button events for the events
+	// we do not receive via QContextHelpEvent
+        qGlobalPopup_->popup( mapToGlobal( ev->pos() ) );
     } else if( ev->buttons() & Qt::LeftButton ) {
         // Detect, on which object we clicked.
         // We know the track,  so now calculate the time. 
@@ -1116,8 +1228,20 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
 {    
     // setBackgroundMode( NoBackground );
     qGlobalPopup_ = new QMenu( this );
-    QObject::connect( qGlobalPopup_, SIGNAL( aboutToShow() ), 
+    QObject::connect( qGlobalPopup_, SIGNAL( aboutToShow() ),
                       this, SLOT( ctGlobalShow() ) );
+
+    // Context menu for the time-range bar (top ruler).
+    qRangePopup_ = new QMenu( this );
+    qRangePopup_->addAction( "Set &BPM...", this, SLOT( ctRangeSetBPM() ) );
+    qRangePopup_->addSeparator();
+    qRangeActClear_ = qRangePopup_->addAction( "&Clear range", this, SLOT( ctRangeClear() ) );
+    qRangePopup_->addAction( "Create &asset from range", this, SLOT( ctRangeCreateAsset() ) );
+
+    rangeValid_ = false;
+    rangeStart_ = rangeEnd_ = 0;
+    rangeDrag_ = RangeNone;
+
 //    setBackgroundColor( QColor( 0, 0, 0 ) );
     trackHeight_ = 100;
     secondWidth_ = 30.;

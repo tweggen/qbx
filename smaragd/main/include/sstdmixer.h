@@ -97,10 +97,14 @@ private slots:
     void mixerUpdateTrackAdded( int, STrack & );
     void mixerChildDurationChanged( length_t );
     void trackVolumeChanged( double );
-    
+    // A track's mute or solo flag changed: re-evaluate routing for all tracks
+    // (solo on any track silences the others).
+    void trackMuteSoloChanged();
+
 private:
     void checkDurationChanged();
     void reconnectTracksToMixer();
+    bool anyTrackSoloed() const;
     twMixer **cpMixers_;
     twRewire *cpRewire_;
     int nBusses_;
