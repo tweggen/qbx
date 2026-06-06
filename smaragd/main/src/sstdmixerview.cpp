@@ -205,7 +205,6 @@ void SMVActualView::paintEvent( QPaintEvent * )
         a -= (double)(c * tgs.getTimeGridWidth() );
         a = tgs.getTimeGridWidth() - a;
         // And that's the time of the first grid relative to the start.
-        p.setPen( QColor( 96, 96, 96 ) );
         while(true) {
             ++c;
             bool emph = false;
@@ -219,15 +218,13 @@ void SMVActualView::paintEvent( QPaintEvent * )
             }
             int x = (int) (a * secondWidth_);
             if( x>=maxX ) break;
-            if( emph ) {
-                p.setPen( QColor( 96, 96, 96 ) );
-            }
+            // Pick the pen per line: emphasized (bar) lines dark, the rest light.
+            // (The old code only set the light pen *after* the first bar line, so
+            // the first few lines were wrongly drawn in the bar colour.)
+            p.setPen( emph ? QColor( 96, 96, 96 ) : QColor( 160, 160, 160 ) );
             p.drawLine( x, SMV_TIME_RULER_HEIGHT, x, SMV_TIME_RULER_HEIGHT+nTracks*trackHeight_-upperLeftY_ );
-            if( emph ) {
-                p.setPen( QColor( 160, 160, 160 ) );
-            }
             a += tgs.getTimeGridWidth();
-        }        
+        }
     }
     int tmp = (SMV_TIME_RULER_HEIGHT+nTracks*trackHeight_-upperLeftY_);
     if( myRect.height()>tmp ) {        

@@ -165,20 +165,21 @@ SSMVMixerControl::SSMVMixerControl(
     qSolo_->setToolTip( "Solo" );
     qSolo_->setStyleSheet( "QPushButton:checked { background:#e0c020; color:black; }" );
 
-    QHBoxLayout *btnRow = new QHBoxLayout();
-    btnRow->setContentsMargins( 0, 0, 0, 0 );
-    btnRow->setSpacing( 2 );
-    btnRow->addWidget( qMute_ );
-    btnRow->addWidget( qSolo_ );
-    btnRow->addStretch( 1 );
+    // One row: Mute, Solo, then the volume fader to their right.
+    QHBoxLayout *stripRow = new QHBoxLayout();
+    stripRow->setContentsMargins( 0, 0, 0, 0 );
+    stripRow->setSpacing( 2 );
+    stripRow->addWidget( qMute_, 0, Qt::AlignTop );
+    stripRow->addWidget( qSolo_, 0, Qt::AlignTop );
+    stripRow->addWidget( qVolume_ );
+    stripRow->addStretch( 1 );
 
     setFixedSize( 150, smv_.getTrackHeight() );
 
     qLayout_->addWidget( qTrkLabel_, 0, 0, Qt::AlignTop );
-    qLayout_->addLayout( btnRow,     1, 0 );
-    qLayout_->addWidget( qVolume_,   2, 0, Qt::AlignHCenter );
-    qLayout_->addWidget( qVolLabel_, 3, 0, Qt::AlignHCenter );
-    qLayout_->setRowStretch( 2, 1 );
+    qLayout_->addLayout( stripRow,   1, 0 );
+    qLayout_->addWidget( qVolLabel_, 2, 0, Qt::AlignHCenter );
+    qLayout_->setRowStretch( 1, 1 );
 
     // Seed widgets from the current track state.
     setSliderSilently( tk_.getVolume() );
