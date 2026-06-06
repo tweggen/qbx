@@ -1104,3 +1104,61 @@ keeps the pre-burst level). One Ctrl+Z restores the original.
 Verify interactively, then phase 2c (async engine-thread drain) to realize the
 deferred items above.
 
+---
+
+## Project Save / Save As / Close + save & load actions
+
+- **Date:** 2026-06-06
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW (only the
+  pre-existing vendor XPM `-Wwrite-strings` noise). Window-up smoke test passes.
+  Interactive verification (save a file, reopen it, run the round-trip) is a
+  human step.
+
+### Background
+
+Serialization already worked end to end (`SProject::serialize` + `SProjectLoader`;
+**File → Open** was functional). The gaps were UI/wiring only: **Save As** and
+**Close** were wired to `nyi()` ("not yet implemented"), and **Save** hardcoded
+`project.qxp` in the CWD with no dialog and silent failure.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `main/include/actions/ssaveprojectaction.{h}` + `src/.../ssaveprojectaction.cpp` (new) | `SSaveProjectAction(path)`: `apply()` serializes the project to `path`; non-undoable (`{applied, nullptr}`). Self-registers as `save-project`. |
+| `main/include/actions/sloadprojectaction.{h}` + `src/.../sloadprojectaction.cpp` (new) | `SLoadProjectAction(path)`: `apply()` runs `SProjectLoader` + `createObjects` into the supplied (empty) project; non-undoable. Self-registers as `load-project`. |
+| `main/CMakeLists.txt` | Both files added. |
+| `main/src/smainwindow.cpp` + `.h` | `fileSaveAs()` (QFileDialog, ensures `.qxp`), `fileClose()`, `saveToPath()` helper, `updateWindowTitle()` (shows `Smaragd - <file>` / `untitled`), `currentFilePath_` member. **Save** now saves to the remembered path or falls back to Save As; **Save As** and **Close** menu items un-wired from `nyi()`. `fileOpen`/`fileSave` now go **through the actions** (single code path shared with tests). Ctrl+Shift+S bound to Save As. |
+| `main/src/smainwindow.cpp` (`closeProject`) | Now nulls `projectRootWidget_` after delete — it previously left a dangling pointer; calling close twice (now reachable via the load-failure path and File → Close) would have double-freed. |
+| `main/src/smainwindow.cpp` (`fileOpen`) | Load-failure paths now `closeProject()` + return instead of dereferencing a half-built / deleted project (a latent crash). |
+
+### Actions for testability (the second ask)
+
+Save/load are now real `SAction`s, so they are scriptable and testable via the
+same registry as every other action. **Test → Save/Load Round-trip** drives them
+as a self-contained assertion: saves the live project to `QDir::tempPath()/
+smaragd_roundtrip.qxp` via `SSaveProjectAction`, reloads into a throwaway
+`SProject` via `SLoadProjectAction` (the live project is never disturbed),
+compares track counts, and reports OK/FAILED to stderr + status bar. The GUI
+Save/Open paths call the very same actions, so the test exercises the production
+code path.
+
+### Notes / decisions
+
+- Save/load `apply()` is called **directly** (not via `submitAction`) in both the
+  GUI and the test, because they are non-undoable and the caller needs the
+  success result synchronously. Consistent with how a headless test would invoke
+  them.
+- There is no formal unit-test harness in the repo yet; the **Test menu** is the
+  de-facto test runner, so the round-trip lives there. The actions themselves are
+  harness-agnostic (no Qt-GUI dependency in `apply`), so they can move into a real
+  test target later unchanged.
+
+### Verification needed (human)
+
+1. **File → Save As…** on a project → choose a path → file written, title shows it.
+2. **File → Open…** that file → loads, title updates.
+3. **File → Save** on a loaded/saved project → overwrites silently (status note).
+4. **Test → Save/Load Round-trip** → stderr/status shows `Round-trip OK: N tracks`.
+5. **File → Close** → central view clears, title back to `Smaragd`, no crash.
+

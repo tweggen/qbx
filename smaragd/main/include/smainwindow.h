@@ -4,13 +4,12 @@
 
 #include <qmainwindow.h>
 #include <qmenubar.h>
+#include <QString>
 // #include <qpopupmenu.h>
 
 class SProject;
 class QAction;
 class QActionGroup;
-
-class QString;
 
 class SMainWindow
     : public QMainWindow
@@ -25,7 +24,9 @@ protected slots:
     void fileExit();
     void fileNew();
     void fileSave();
+    void fileSaveAs();
     void fileOpen();
+    void fileClose();
 
     void startPlaying();
     void stopPlaying();
@@ -33,6 +34,7 @@ protected slots:
     void audioDeviceSelected( QAction * );
     void runTestSequence();
     void runVolumeBurst();
+    void runSaveLoadTest();
     void undo();
     void redo();
 
@@ -44,8 +46,14 @@ private:
     void createDocksToolbars();
     void destroyDocksToolbars();
 
+    // Serialize the current project to path; reports errors via a dialog.
+    bool saveToPath( const QString &path );
+    // Reflect the current project file (or "untitled") in the window title.
+    void updateWindowTitle();
+
     SProject *currentProject_;
     QWidget *projectRootWidget_;
+    QString currentFilePath_;   // empty = never saved/loaded (untitled)
 
     QMenu *qFileMenu_;
     QMenu *qAudioMenu_;

@@ -34,6 +34,8 @@
 #include "actions/saddtrackaction.h"
 #include "actions/saddsampleaction.h"
 #include "actions/ssettrackvolumeaction.h"
+#include "actions/ssaveprojectaction.h"
+#include "actions/sloadprojectaction.h"
 #include "actions/stoggleplaybackaction.h"
 
 #include "pix/playoff.xpm"
@@ -65,16 +67,87 @@ void SMainWindow::createDocksToolbars()
     addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
 }
 
+bool SMainWindow::saveToPath( const QString &path )
+{
+    if( !currentProject_ ) return false;
+
+    // Same action the round-trip test and any future script would use.
+    SSaveProjectAction action( path );
+    SApplyResult r = action.apply( currentProject_ );
+    if( !r.applied ) {
+        QMessageBox::warning( this, "Smaragd",
+                              QString( "Could not write project file:\n%1" )
+                                  .arg( path ),
+                              QMessageBox::Ok );
+        return false;
+    }
+
+    currentFilePath_ = path;
+    SSettings::instance().setLastDir( "project",
+                                      QFileInfo( path ).absolutePath() );
+    updateWindowTitle();
+    statusBar()->showMessage( QString( "Saved %1" )
+                                  .arg( QFileInfo( path ).fileName() ), 2000 );
+    return true;
+}
+
 void SMainWindow::fileSave()
 {
-    QFile f("project.qxp");
-    if ( f.open(QIODevice::WriteOnly) ) {    // file opened successfully
-        {
-            QTextStream t( &f );        // use a text stream
-            currentProject_->serialize( t );
-        }
-        f.close();
-    }    
+    if( !currentProject_ ) return;
+
+    // No path yet (untitled project) -> behave like Save As.
+    if( currentFilePath_.isEmpty() ) {
+        fileSaveAs();
+        return;
+    }
+    saveToPath( currentFilePath_ );
+}
+
+void SMainWindow::fileSaveAs()
+{
+    if( !currentProject_ ) return;
+
+    QString startDir = currentFilePath_.isEmpty()
+        ? SSettings::instance().lastDir( "project", QDir::currentPath() )
+        : currentFilePath_;
+
+    QString fileName(
+        QFileDialog::getSaveFileName(
+            this,
+            "Save Project As",
+            startDir,
+            "qbx Projects (*.qxp)" ) );
+    if( fileName.isNull() ) {
+        return;  // user cancelled
+    }
+
+    // Ensure the .qxp extension so Open's filter finds it later.
+    if( !fileName.endsWith( ".qxp", Qt::CaseInsensitive ) ) {
+        fileName += ".qxp";
+    }
+
+    saveToPath( fileName );
+}
+
+void SMainWindow::fileClose()
+{
+    closeProject();
+    currentFilePath_.clear();
+    setCentralWidget( NULL );   // drop the (now-deleted) project widget
+    projectRootWidget_ = NULL;
+    updateWindowTitle();
+}
+
+void SMainWindow::updateWindowTitle()
+{
+    QString name = currentProject_
+        ? ( currentFilePath_.isEmpty()
+                ? QString( "untitled" )
+                : QFileInfo( currentFilePath_ ).fileName() )
+        : QString();
+
+    setWindowTitle( name.isEmpty() ? QString( "Smaragd" )
+                                   : QString( "Smaragd - %1" ).arg( name ) );
 }
 
 void SMainWindow::fileNew()
@@ -98,6 +171,8 @@ void SMainWindow::fileNew()
     projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
 
+    currentFilePath_.clear();   // fresh project is untitled until saved
+    updateWindowTitle();
 }
 
 void SMainWindow::fileOpen()
@@ -119,27 +194,23 @@ void SMainWindow::fileOpen()
                                       QFileInfo( fileName ).absolutePath() );
 
     // Now, as the reading proceeded, create an empty project to fill in the data.
-    currentProject_ = new SProject();    
+    currentProject_ = new SProject();
     SApplication::app().setCurrentProject( currentProject_ );
-
-    // OK, try to load the document.
-    SProjectLoader loader( *currentProject_, fileName );
-    if( !loader.wasLoaded() ) {
-        QMessageBox::information( nullptr, "Smaragd warning",
-                                  "Unable to open specified project file.",
-                                  QMessageBox::Ok );
-        return;
-    }
-
-    // Now, that we got all data, build up the objects.
 
     createDocksToolbars();
 
-    int err = loader.createObjects( *currentProject_ );
-    if( err ) {
-        closeProject();
-    }    
-    
+    // Load via the same action a script or round-trip test would use.
+    SLoadProjectAction action( fileName );
+    SApplyResult r = action.apply( currentProject_ );
+    if( !r.applied ) {
+        QMessageBox::information( nullptr, "Smaragd warning",
+                                  "Unable to open specified project file.",
+                                  QMessageBox::Ok );
+        closeProject();   // discard the half-built placeholder project
+        updateWindowTitle();
+        return;   // currentProject_ is gone; do not touch it below
+    }
+
     // Find out the main widget.
     // We do have a root component here as we assigned it before.
     projectRootWidget_ = currentProject_->getRootComponent()->getDetailEditWidget( this );
@@ -147,8 +218,9 @@ void SMainWindow::fileOpen()
     setCentralWidget( projectRootWidget_ );
     projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
-    
 
+    currentFilePath_ = fileName;   // remember where we loaded from
+    updateWindowTitle();
 }
 
 void SMainWindow::fileExit()
@@ -174,7 +246,8 @@ void SMainWindow::closeProject()
     if( !currentProject_ ) return;
     SApplication::app().setCurrentProject( NULL );
     delete projectRootWidget_;
-    delete currentProject_;    
+    projectRootWidget_ = NULL;   // avoid a dangling pointer / double-free
+    delete currentProject_;
     destroyDocksToolbars();
     currentProject_ = NULL;
 }
@@ -263,9 +336,9 @@ SMainWindow::SMainWindow()
     qFileMenu_->addAction( "&New...", Qt::CTRL | Qt::Key_N, this, SLOT( fileNew() ) );
     qFileMenu_->addAction( "&Open...", this, SLOT( fileOpen() ) );
     qFileMenu_->addAction( "&Save", Qt::CTRL | Qt::Key_S, this, SLOT( fileSave() ) );
-    qFileMenu_->addAction( "Save &as", this, SLOT( nyi() ) );
+    qFileMenu_->addAction( "Save &as...", Qt::CTRL | Qt::SHIFT | Qt::Key_S, this, SLOT( fileSaveAs() ) );
     qFileMenu_->addSeparator();
-    qFileMenu_->addAction( "&Close", Qt::CTRL | Qt::Key_W, this, SLOT( nyi() ) );
+    qFileMenu_->addAction( "&Close", Qt::CTRL | Qt::Key_W, this, SLOT( fileClose() ) );
     qFileMenu_->addSeparator();
     qFileMenu_->addAction( "E&xit", Qt::CTRL | Qt::Key_Q, this, SLOT( fileExit() ) );
     menuBar()->addMenu( qFileMenu_ );
@@ -281,6 +354,7 @@ SMainWindow::SMainWindow()
     qTestMenu_->setTearOffEnabled(true);
     qTestMenu_->addAction( "&Run Test Sequence...", this, SLOT( runTestSequence() ) );
     qTestMenu_->addAction( "&Volume Burst (track 0)", this, SLOT( runVolumeBurst() ) );
+    qTestMenu_->addAction( "Save/&Load Round-trip", this, SLOT( runSaveLoadTest() ) );
     menuBar()->addMenu( qTestMenu_ );
 
     qDockExternFileList_ = NULL;
@@ -429,6 +503,50 @@ void SMainWindow::runVolumeBurst()
     statusBar()->showMessage(
         QString("Volume burst: %1 actions -> undo stack +%2 (expect +1)")
             .arg(steps).arg(after - before), 4000);
+}
+
+// Save/load validation: drive SSaveProjectAction + SLoadProjectAction (the same
+// actions the File menu uses) as a self-contained assertion. Saves the live
+// project to a temp file, reloads it into a throwaway project, and compares
+// track counts. The live project is never disturbed.
+void SMainWindow::runSaveLoadTest()
+{
+    if (!currentProject_) {
+        statusBar()->showMessage("Open or create a project first", 3000);
+        return;
+    }
+
+    SStdMixer *liveMixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    int liveTracks = liveMixer ? liveMixer->getNTracks() : -1;
+
+    QString tmpPath = QDir::tempPath() + "/smaragd_roundtrip.qxp";
+
+    // 1. Save the live project via the action.
+    SSaveProjectAction saveAction(tmpPath);
+    if (!saveAction.apply(currentProject_).applied) {
+        statusBar()->showMessage("Round-trip FAILED: save error", 5000);
+        return;
+    }
+
+    // 2. Reload into a throwaway project via the action (live project untouched).
+    SProject *probe = new SProject();
+    bool loaded = SLoadProjectAction(tmpPath).apply(probe).applied;
+
+    int probeTracks = -1;
+    if (loaded) {
+        SStdMixer *probeMixer = dynamic_cast<SStdMixer*>(probe->getRootComponent());
+        probeTracks = probeMixer ? probeMixer->getNTracks() : -1;
+    }
+    delete probe;
+
+    bool ok = loaded && (probeTracks == liveTracks);
+    QString msg = ok
+        ? QString("Round-trip OK: %1 tracks saved and reloaded").arg(liveTracks)
+        : QString("Round-trip FAILED: live=%1 reloaded=%2 (loaded=%3)")
+              .arg(liveTracks).arg(probeTracks).arg(loaded ? "yes" : "no");
+    fprintf(stderr, "%s  [%s]\n", msg.toUtf8().constData(), tmpPath.toUtf8().constData());
+    fflush(stderr);
+    statusBar()->showMessage(msg, 5000);
 }
 
 void SMainWindow::undo()
