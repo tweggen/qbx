@@ -1314,3 +1314,51 @@ hand-rolled XML-typed elements.
   projects without changing this store.
 - `SSetPropertyAction` is non-undoable for now; the property bag makes undo trivial
   later (capture old value as inverse) if wanted.
+
+---
+
+## Track shortcuts (Ctrl+T / Ctrl+Return) + remove-track crash fix
+
+- **Date:** 2026-06-06
+- **Status:** ✅ Builds clean. Remove-track crash **reproduced and fixed**
+  (verified headlessly under gdb with the mixer view present). Shortcut behaviour
+  is human-verifiable.
+
+### Remove-track crash (root cause)
+
+`SStdMixerView::removeMixerControl` crashed at `controlArray_->at(1)` on an
+emptied vector. Two bugs combined:
+1. It read `model_->getNTracks()` for the count, but `SStdMixer::removeTrack`
+   emits `trackRemoved` (which drives `removeMixerControl`) **before** deleting
+   the track link — so the count still included the track being removed.
+2. The reposition loop was `for(t=trackIdx; t<newNTracks; --t)` — wrong
+   decrement, and `controlArray_->at(t+1)` indexed past the vector that
+   `takeAt()` had already shrunk.
+
+Fixes:
+- `removeMixerControl` rewritten to use the actual `controlArray_->size()` (not
+  the stale model count); `takeAt()` already removes+compacts, so the bogus
+  manual shift loop is gone — just reposition the remaining controls.
+- `SStdMixer::removeTrack` now deletes the link **before** emitting
+  `trackRemoved`, so listeners (mixer rewiring, the view) see the post-removal
+  state. This also fixes a latent audio bug where `reconnectTracksToMixer` left a
+  dangling mixer input to the just-removed track. The track object survives the
+  delete (refcount→0 → deleteLater) so passing it to the signal stays valid.
+
+### Shortcuts
+
+- **Ctrl+T → New track** and **Ctrl+Return (and Ctrl+Enter) → Insert sample** are
+  now persistent `QAction`s owned by `SStdMixerView` (added to the widget), so
+  their shortcuts actually fire whenever the arranger window is up. Previously
+  they were created fresh inside the context menu on every popup, so the
+  shortcuts never registered (the insert-sample one was "listed but did nothing").
+  The same action objects are placed into the right-click menu by `ctGlobalShow`,
+  so the menu shows the shortcut and there's no duplicate-shortcut ambiguity.
+- `ctAddTrack` now routes through `SAddTrackAction` (undoable + rewires the
+  speaker) instead of a direct `insertTrack`, so the context menu and Ctrl+T do
+  the same correct thing.
+
+### Verification needed (human)
+
+1. Ctrl+T adds a track; Ctrl+Return inserts a sample at the last-clicked track.
+2. Right-click → Remove track no longer crashes (single track and multi-track).

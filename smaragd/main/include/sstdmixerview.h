@@ -17,6 +17,7 @@ class STrack;
 class SStdMixerView;
 class SLink;
 class QPushButton;
+class QAction;
 class SSMVMixerControl;
 
 #define SMV_CUT_MIN_TIME 1024
@@ -264,6 +265,12 @@ private:
     QToolButton *qZoomTotal_;
 
     SStdMixer *model_;
+
+    // Persistent actions so their keyboard shortcuts work whenever the arranger
+    // is up (a context-menu-only action's shortcut never fires). Also shown in
+    // the right-click menu.
+    QAction *actNewTrack_;       // Ctrl+T
+    QAction *actInsertSample_;   // Ctrl+Return
 
     bool snapToTimeGrid_;
     STimeGridSpec timeGridSpec_;

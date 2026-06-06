@@ -348,8 +348,13 @@ int SStdMixer::removeTrack( int trackIndex )
         return -1;
     }
     SObject &so = stl->getSObject();
-    emit trackRemoved( trackIndex, (STrack &)so );
+    // Delete the link FIRST so that getNTracks()/children reflect the removal
+    // before listeners react. The track object itself survives (its refcount
+    // drops to 0 and it is deleteLater'd), so passing it to the signal is safe;
+    // reconnectTracksToMixer() then rewires only the remaining tracks instead of
+    // leaving a dangling input to the removed one.
     delete stl;
+    emit trackRemoved( trackIndex, (STrack &)so );
     return 0;
 }
 

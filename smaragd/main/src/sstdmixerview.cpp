@@ -28,6 +28,9 @@
 #include "sprojectprops.h"
 #include "ssettings.h"
 #include "ssmvmixercontrol.h"
+#include "actions/saddtrackaction.h"
+#include <qaction.h>
+#include <QKeySequence>
 
 // Icons needed here
 
@@ -380,13 +383,12 @@ void SMVActualView::ctGlobalShow()
         qGlobalPopup_->addSeparator();
     }
     if( lastClickTrack_ ) {
-        qGlobalPopup_->addAction( "&Insert sample", Qt::CTRL | Qt::Key_Return,
-                                   &smv_, SLOT( ctInsertSample() ) );
+        qGlobalPopup_->addAction( smv_.actInsertSample_ );
         qGlobalPopup_->addAction( "&Remove sample", &smv_, SLOT( ctRemoveSample() ) );
         qGlobalPopup_->addAction( "Delete sample", &smv_, SLOT( ctDeleteSample() ) );
         qGlobalPopup_->addSeparator();
     }
-    qGlobalPopup_->addAction( "&New track", &smv_, SLOT( ctAddTrack() ) );
+    qGlobalPopup_->addAction( smv_.actNewTrack_ );
     if( lastClickTrack_ ) {
         qGlobalPopup_->addAction( "Remove track", &smv_, SLOT( ctRemoveTrack() ) );
     }
@@ -397,8 +399,9 @@ void SMVActualView::ctGlobalShow()
  */
 void SStdMixerView::ctAddTrack()
 {
-    STrack *track = new STrack( SApplication::app().getCurrentProject() );
-    model_->insertTrack( -1, *track );
+    // Route through the action: undoable, and it rewires the speaker so the new
+    // track is audible (the old direct insertTrack did neither).
+    SApplication::app().submitAction( new SAddTrackAction( -1 ) );
 }
 
 /**
@@ -804,23 +807,25 @@ void SStdMixerView::addMixerControl( int trackIdx, STrack &tk )
  */
 void SStdMixerView::removeMixerControl( int trackIdx, STrack &/*track*/ )
 {
-    printf( "remove mixer control called trackIdx = %d.\n", trackIdx );
-    // Delete the superfluous unit.
-    delete controlArray_->takeAt( trackIdx );
-    // Now move the other elements one back.
-    int newNTracks = model_->getNTracks();
-    for( int t=trackIdx; t<newNTracks; --t ) {
-        controlArray_->insert( t, controlArray_->at( t+1 ) );
+    if( trackIdx < 0 || trackIdx >= (int)controlArray_->size() ) {
+        return;
     }
-    // Now reposition each of the controls, that needs.
-    // Obviously, only controls after the one inserted (including that) 
-    // gotta be positioned.
-    for( int t=trackIdx; t>newNTracks; ++t ) {
-        controlArray_->at( t )->move( 0, getTrackHeight()*t );        
-    }    
-    // Resize the container.
-    // FIXME: The control box's width is hard-coded.
-    qTrackControlBox_->resize( 150, getTrackHeight()*newNTracks );
+    // takeAt() removes the entry AND shifts the rest down, so the vector is
+    // already compacted; just delete the widget. (The previous code added a
+    // manual shift loop that ran off the end of the now-shorter vector — and
+    // used model_->getNTracks(), which is stale here because trackRemoved is
+    // emitted before the track link is deleted.)
+    delete controlArray_->takeAt( trackIdx );
+
+    // Reposition the controls that shifted up into the gap.
+    const int n = (int)controlArray_->size();
+    for( int t = trackIdx; t < n; ++t ) {
+        if( controlArray_->at( t ) ) {
+            controlArray_->at( t )->move( 0, getTrackHeight()*t );
+        }
+    }
+    // Resize the container. FIXME: The control box's width is hard-coded.
+    qTrackControlBox_->resize( 150, getTrackHeight()*n );
 }
 
 void SStdMixerView::nTracksChanged()
@@ -1249,6 +1254,20 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
 
     QObject::connect( &(model_->getProject()), SIGNAL( bpmTempoChanged( double ) ),
                       this, SLOT( setBPMTempo( double ) ) );
+
+    // Persistent actions with keyboard shortcuts (active whenever the arranger
+    // window is up). They are also placed in the right-click menu by ctGlobalShow.
+    actNewTrack_ = new QAction( "&New track", this );
+    actNewTrack_->setShortcut( Qt::CTRL | Qt::Key_T );
+    QObject::connect( actNewTrack_, SIGNAL( triggered() ), this, SLOT( ctAddTrack() ) );
+    addAction( actNewTrack_ );
+
+    actInsertSample_ = new QAction( "&Insert sample", this );
+    actInsertSample_->setShortcuts(
+        { QKeySequence( Qt::CTRL | Qt::Key_Return ),
+          QKeySequence( Qt::CTRL | Qt::Key_Enter ) } );
+    QObject::connect( actInsertSample_, SIGNAL( triggered() ), this, SLOT( ctInsertSample() ) );
+    addAction( actInsertSample_ );
 
     // Now, create controls and stuff for the data that currently already
     // resides inside the mixer. Consult the signal/slot connections above for
