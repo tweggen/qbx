@@ -174,7 +174,9 @@ void SStdMixer::reconnectTracksToMixer()
             } else {
                 twComponent &root = lk->getRootComponent();
                 mix->setInput( channel, root.linkOutput( bus ) );
-                mix->setInputLevel( channel, lk->getSObject().getVolume() );
+                // Unity (0 dB): the track applies its own gain intrinsically
+                // (see twTrackMix::calcOutputTo), so the mixer just sums.
+                mix->setInputLevel( channel, 0.0 );
             }
         }
     }
@@ -299,33 +301,6 @@ int SStdMixer::setNBusses( int n )
     return 0;
 }
 
-/**
- * This function is meant for internal use only.
- */
-void SStdMixer::trackVolumeChanged( double  )
-{
-    qWarning( "SStdMixer::trackVolumeChanged(): called." );
-    SObject *so = (SObject *) (const SObject *) sender();
-    if( !so ) {
-        qWarning( "No per track object found.\n" );
-        return;
-    }
-    int i = getChildIndex( (SObject &)(*so) );
-    if( i<0  /* || i>=(int)trackList_.count() */ ) {
-        qWarning( "Invalid track index returned.\n" );
-        return;
-    }
-    // Don't un-silence a muted/non-soloed track by raising its level.
-    // FIXME: Also consider pan.
-    bool audible = !so->isMuted() && ( !anyTrackSoloed() || so->isSolo() );
-    double cvol = audible ? so->getVolume() : 0;
-    for( int bus=0; bus<nBusses_; bus++ ) {
-        twMixer *m = cpMixers_[bus];
-        if( !m ) continue;
-        m->setInputLevel( i, cvol );
-    }
-}
-
 void SStdMixer::insertTrack( int newIndex, STrack &trk )
 {
     const QObjectList& children = this->children();
@@ -334,9 +309,7 @@ void SStdMixer::insertTrack( int newIndex, STrack &trk )
     qWarning( "Inserting new track @%d.\n", newIndex );
     QObject::connect( (QObject*)&trk, SIGNAL( durationChanged( length_t ) ), 
                       this, SLOT( mixerChildDurationChanged( length_t ) ) );    
-    QObject::connect(
-        (QObject*)&trk, SIGNAL( volumeChanged( double ) ),
-        this, SLOT( trackVolumeChanged( double ) ) );
+    // Volume needs no connection: twTrackMix reads getVolume() live each buffer.
     QObject::connect(
         (QObject*)&trk, SIGNAL( mutedChanged( bool ) ),
         this, SLOT( trackMuteSoloChanged() ) );

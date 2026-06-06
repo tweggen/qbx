@@ -270,6 +270,36 @@ assembly of existing parts.
 6. **Length-follow + edit-through-instance polish** (§2.8), and async-safe edits
    (§2.10).
 
+## 4b. Refinement (2026-06-06): an asset is just a cut on a group
+
+Decision from review: **don't extract-and-replace**. Once track grouping exists,
+a region asset is simply an **`SCut` windowing a group** (a sub-arrangement
+`SObject`), placed at the region bounds:
+
+- The group stays in place as the single source of truth (it already *is* the
+  "drum bus"). No moving clips out, no replacing the original.
+- An asset/instance = `SCut(group, startOffset=t0, duration=t1−t0)`. "In parts"
+  is the cut window; "everywhere at once / edit once" is the shared `SObject`
+  pulled live; recursion is just cuts-of-groups-containing-cuts.
+- The resource-list "asset" entry is therefore a lightweight handle to
+  `(group, window)` — no new heavy object, no bake.
+
+This makes (b) fall out of (a): build grouping, and asset creation is mostly
+"make an `SCut` over the selected group for the current range, register it".
+
+Implication: **build grouping first** (chosen), assets second.
+
+## 4c. Progress
+
+- **§0 intrinsic track processing — DONE (2026-06-06).** `twTrackMix` now applies
+  the track's own gain (`pow(10, vol/20)`) and mute, read live each buffer; the
+  master mixer sums tracks at unity (`setInputLevel 0 dB`) and the obsolete
+  `SStdMixer::trackVolumeChanged` slot was removed. Behaviour-equivalent for the
+  current flat arrangement (gain just moved one DSP stage earlier), and it makes
+  a track's output self-contained so it sums correctly when nested. Solo stays
+  resolved at the mixer (top-level only) for now — nested-track solo is a
+  follow-up. Next: the track-tree model + reparent, then the indented arranger UI.
+
 ## 5. Open questions
 
 - May a folder track also carry its own clips (Reaper-style), or is it

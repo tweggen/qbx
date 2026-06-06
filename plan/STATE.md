@@ -1469,3 +1469,41 @@ serialization breakdown, a 6-phase rollout, and open questions.
 Drag a range in the ruler → grey band + full-height edges appear; with snap on,
 ends land on grid lines; grab an end and move it; right-click → menu with
 Clear/Set BPM/Create asset (stub).
+
+---
+
+## Grouping/assets: §0 intrinsic track processing (foundation)
+
+- **Date:** 2026-06-06
+- **Status:** ✅ Builds clean, window-up smoke passes. Audio behaviour is a human
+  step (volume/mute/solo should be unchanged for the current flat arrangement).
+
+### Design refinement (from review)
+
+Returning to proposal 05 with range selection in hand, the user reframed the
+asset model: **an asset is just an `SCut` windowing a track group** — the group
+stays put as the single source of truth, the cut is a live window, edit-once-
+everywhere is automatic, recursion is free, and nothing is extracted or baked.
+So **grouping is built first**; asset creation then becomes "make an SCut over
+the selected group for the current range". (Recorded in
+`plan/proposed/05_…md` §4b.)
+
+### What landed (§0)
+
+Made track output **self-contained** so a track sums correctly wherever it is
+placed (master mixer today, a parent track/group tomorrow):
+
+- `twTrackMix::calcOutputTo` now applies the track's own gain
+  (`pow(10, getVolume()/20)`) and mute, read live each buffer.
+- `SStdMixer::reconnectTracksToMixer` sums tracks at **unity** (0 dB) instead of
+  applying per-track volume at the mixer input.
+- Removed the now-obsolete `SStdMixer::trackVolumeChanged` slot + its
+  `volumeChanged` connection (volume is picked up live by twTrackMix).
+
+Behaviour-equivalent for the current flat arrangement (gain moved one stage
+earlier). Mute/solo still work; solo is still resolved at the mixer (top-level
+only) — nested-track solo is a documented follow-up.
+
+### Next
+
+Track-tree model + reparent action → indented arranger UI → assets as SCut-on-group.

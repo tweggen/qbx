@@ -1,6 +1,8 @@
 
 //#include <qobjectlist.h>
 
+#include <math.h>
+
 #include "tw303aenv.h"
 #include "twtrackmix.h"
 
@@ -115,6 +117,17 @@ length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t out
         cp.calcOutputTo( readBuffer+startTime-startInterval, doRead, outChannel );
         for( int i=startTime-startInterval; (offset_t)i<endTime-startInterval; i++ ) {
             buffer[i] += readBuffer[i];
+        }
+    }
+
+    // Intrinsic track processing: apply the track's own gain (and mute) here so
+    // the output is self-contained — correct wherever it is summed, both by the
+    // master mixer and, for groups, by a parent track. Volume is in dB (same
+    // convention as twMixer::setInputLevel); read live so changes apply at once.
+    double factor = track_.isMuted() ? 0.0 : pow( 10., track_.getVolume()/20. );
+    if( factor != 1.0 ) {
+        for( offset_t i=0; i<(offset_t)playLen; i++ ) {
+            buffer[i] *= (sample_t) factor;
         }
     }
     return playLen;
