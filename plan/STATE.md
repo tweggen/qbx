@@ -1046,3 +1046,61 @@ Removed the "clear pointer after apply" logic in `SActionUndoCommand::undo()` an
 
 - `3d936ea` — Fix undo/redo/undo sequence: keep action pointers for reuse
 
+---
+
+## 03_ACTION_MODEL.md — Phase 2b (set track volume + merge)
+
+- **Date:** 2026-06-06
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW
+  (`build/bin/smaragd.exe`, ~29.2 MB). Audible + interactive verification is a
+  human step (see below).
+
+### What landed
+
+| File | Purpose |
+|------|---------|
+| `main/include/actions/ssettrackvolumeaction.h` + `src/.../ssettrackvolumeaction.cpp` (new) | `SSetTrackVolumeAction(trackIdx, newVolume)`. `apply()` resolves the track (same `getTrackAt`→`getSObject`→`dynamic_cast<STrack*>` pattern as the sample actions), captures `getVolume()` for the inverse, calls `setVolume()`. `mergeKey()` = `set-track-volume:<idx>`; `mergeWith()` absorbs the newer volume. Self-registers as `"set-track-volume"`. |
+| `main/CMakeLists.txt` | Header + source added to the build lists. |
+| `main/src/ssmvmixercontrol.cpp` + `include/ssmvmixercontrol.h` | The track volume control now routes through `submitAction(new SSetTrackVolumeAction(...))` instead of calling `tk_.setVolume()` directly. New `trackIndex_()` helper resolves the control's track index from `smv_.getModel()`; falls back to a direct `setVolume()` if the index can't be resolved (track gone) so the UI never wedges. **UI follow-up (2026-06-06):** replaced the up/down dB spinbox (`qxDBSpinBox`, now deleted) with a **vertical fader** (`QSlider`, loud at top, ticks every 12 dB) plus a centred dB readout label. Model→view updates go through `setSliderSilently()`, which wraps `setValue()` in a `QSignalBlocker` so a programmatic fader move (e.g. during undo) can't re-emit `valueChanged` and submit a spurious action. Same tenths-of-a-dB range (−96.0..+24.0 dB). |
+| `main/src/smainwindow.cpp` + `include/smainwindow.h` | New **Test → Volume Burst (track 0)** entry submits 50 volume actions ramping −24..+6 db and logs the undo-stack delta (expect +1 if merge worked). |
+
+### How merge actually works today (important)
+
+`setVolume()` already emits `volumeChanged()`, which is wired to **both** the
+audio mixer (`SStdMixer::trackVolumeChanged` → `setInputLevel`) and the UI
+spinbox, so the action only needs to call `setVolume()` — propagation is free.
+No feedback loop: `setVolume`'s `fabs(...)<0.0001` guard plus the spinbox's
+"only set if different" guard break the cycle.
+
+Coalescing is realized at the **`QUndoStack` layer**, not the queue. Because
+`SActionHistory::submit()` enqueues then drains **synchronously** on the GUI
+thread, the queue never holds two entries, so the enqueue-time `mergeWith` is
+dormant. Instead `SActionUndoCommand::id()`/`mergeWith()` collapse the 50 pushed
+commands into one undo entry (forward absorbs the latest volume; the inverse
+keeps the pre-burst level). One Ctrl+Z restores the original.
+
+### Honestly deferred to phase 2c (async drain)
+
+- **True enqueue-time 50→1 *apply* coalescing.** Today it's 50 cheap applies →
+  1 undo step. Collapsing to a single engine apply needs the async drain.
+- **Near-zero-latency in-flight `tryCancel` undo.** Structurally unreachable
+  under synchronous drain.
+- **Pending-action persistence** (`snapshotPending()` is still a stub). In the
+  synchronous model the volume is already applied and serialized via normal
+  `SObject` XML (`volume='...'`), so "reload at the dragged level" works anyway —
+  just not via the `<pending-actions>` block.
+
+### Verification needed (human)
+
+1. Run **Test → Run Test Sequence...** (creates project, track 0, sample, plays).
+2. Drag the track-0 volume spinbox during playback → level changes audibly,
+   pitch/speed unchanged.
+3. **Test → Volume Burst (track 0)** → stderr/status shows undo stack `+1`.
+4. One Ctrl+Z after the burst restores the pre-burst level.
+5. Delete the track, drag its (former) volume → apply fails cleanly, UI consistent.
+
+### Next action
+
+Verify interactively, then phase 2c (async engine-thread drain) to realize the
+deferred items above.
+

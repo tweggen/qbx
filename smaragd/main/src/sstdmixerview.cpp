@@ -414,13 +414,9 @@ void SStdMixerView::ctRemoveTrack()
 offset_t SMVActualView::getTimeOf( int x ) const
 {
     // FIXME: Remove the 44100.
-    qWarning( "SMVActualView::getTimeOf(): x=%d, getUpperLeftX = %d:%d.",
-	      x, (int)(getUpperLeftX()>>32), (int)(getUpperLeftX()) );
     offset_t totalX = x + getUpperLeftX();
     double a = ((double)totalX)/getSecondWidth()*44100.;
-    qWarning( "SMVActualView::getTimeOf(): totalX=%d:%d.",
-	      (int)(totalX>>32),(int)totalX );
-    return (offset_t)a;    
+    return (offset_t)a;
 }
 
 void SMVActualView::updateLastClickVars( const QPoint &pos )

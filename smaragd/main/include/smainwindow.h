@@ -32,6 +32,7 @@ protected slots:
 
     void audioDeviceSelected( QAction * );
     void runTestSequence();
+    void runVolumeBurst();
     void undo();
     void redo();
 

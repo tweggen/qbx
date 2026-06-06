@@ -71,10 +71,6 @@ bool SPlainWave::hasDuration() const
 
 length_t SPlainWave::getDuration() const
 {
-//    printf( "SPlainWave::getDuration(): cpWave_ = $%08x.\n", (unsigned)cpWave_ );
-//    fflush( stdout ); fflush( stderr );
-    fprintf( stderr, "SPlainWave::getDuration(): %d:%d.\n",
-	     (int)(cpWave_->getLength()>>32),(int)(cpWave_->getLength()) );
     if( cpWave_ ) {
         return cpWave_->getLength();
     } else {

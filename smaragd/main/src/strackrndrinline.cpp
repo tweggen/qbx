@@ -82,7 +82,6 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
                         QString::number( lk->getSObject().getNReferences() ) );
         }
     }
-    qWarning( "Track is not empty.\n" );
 }
 
 /**

@@ -4,7 +4,6 @@
 
 #include <qwidget.h>
 #include <sobjectrenderer.h>
-#include <qspinbox.h>
 
 class SStdMixer;
 class QGridLayout;
@@ -12,22 +11,11 @@ class STrack;
 class SStdMixerView;
 class SLink;
 class QPushButton;
-class QSpinBox;
+class QSlider;
+class QLabel;
 class QLineEdit;
 
-class qxDBSpinBox
-    : public QSpinBox
-{
-    Q_OBJECT
-public:
-    qxDBSpinBox( int min, int max, int step, QWidget *parent );
-
-protected:
-    QString mapValueToText( int value );
-    int mapTextToValue( bool *ok );
-};
-
-class SSMVMixerControl 
+class SSMVMixerControl
     : public QWidget
 {
     Q_OBJECT
@@ -43,10 +31,18 @@ protected slots:
     void sliderValueChanged( double value );
 
 private:
+    // Resolve this control's track index within the mixer model (-1 if gone).
+    int trackIndex_() const;
+
+    // Push the slider position to the value v (in dB) without re-submitting
+    // an action (model -> view update).
+    void setSliderSilently( double v );
+
     SStdMixerView &smv_;
     STrack &tk_;
     QGridLayout *qLayout_;
-    qxDBSpinBox *qVolume_;
+    QSlider *qVolume_;
+    QLabel *qVolLabel_;
     QLineEdit *qTrkLabel_;
 };
 

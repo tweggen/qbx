@@ -25,6 +25,7 @@
 #include "sprojectloader.h"
 #include "ssettings.h"
 #include "sactionhistory.h"
+#include <QUndoStack>
 
 #include "sstdmixer.h"
 
@@ -32,6 +33,7 @@
 
 #include "actions/saddtrackaction.h"
 #include "actions/saddsampleaction.h"
+#include "actions/ssettrackvolumeaction.h"
 #include "actions/stoggleplaybackaction.h"
 
 #include "pix/playoff.xpm"
@@ -278,6 +280,7 @@ SMainWindow::SMainWindow()
     qTestMenu_ = new QMenu( "&Test", this );
     qTestMenu_->setTearOffEnabled(true);
     qTestMenu_->addAction( "&Run Test Sequence...", this, SLOT( runTestSequence() ) );
+    qTestMenu_->addAction( "&Volume Burst (track 0)", this, SLOT( runVolumeBurst() ) );
     menuBar()->addMenu( qTestMenu_ );
 
     qDockExternFileList_ = NULL;
@@ -394,6 +397,38 @@ void SMainWindow::runTestSequence()
     statusBar()->showMessage("Test sequence started", 2000);
     fprintf(stderr, "  Test sequence complete!\n");
     fflush(stderr);
+}
+
+// Phase 2b validation: fire a rapid burst of volume changes at track 0 and
+// confirm (a) they are audible while playing, (b) the undo stack collapses the
+// burst to a single entry via mergeKey()/mergeWith(), and (c) one undo restores
+// the pre-burst level. Run "Run Test Sequence..." first so track 0 has audio.
+void SMainWindow::runVolumeBurst()
+{
+    if (!currentProject_) {
+        statusBar()->showMessage("Run the Test Sequence first (need a track to drive)", 3000);
+        return;
+    }
+
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    int before = stack ? stack->count() : -1;
+
+    // Ramp -24 db .. +6 db over 50 steps, all on track 0. In the current
+    // synchronous drain model each one applies immediately, but the QUndoStack
+    // merges them (same mergeKey) into a single undo entry.
+    const int steps = 50;
+    for (int i = 0; i < steps; ++i) {
+        double db = -24.0 + (30.0 * i) / (steps - 1);
+        SApplication::app().submitAction(new SSetTrackVolumeAction(0, db));
+    }
+
+    int after = stack ? stack->count() : -1;
+    fprintf(stderr, "Volume burst: %d actions submitted; undo stack %d -> %d "
+                    "(expect +1 if merge worked)\n", steps, before, after);
+    fflush(stderr);
+    statusBar()->showMessage(
+        QString("Volume burst: %1 actions -> undo stack +%2 (expect +1)")
+            .arg(steps).arg(after - before), 4000);
 }
 
 void SMainWindow::undo()
