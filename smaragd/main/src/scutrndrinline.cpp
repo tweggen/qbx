@@ -53,7 +53,7 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     SCut &cut = getCut();
     if( !cut.isLooping() ) {
         // Note, that this is my link but his object!!!
-        InlineRenderContext myctx( cut, ctx, p );
+        InlineRenderContext myctx( cut, ctx, p, lk.getStartTime() );
         myctx.setVisibRect( visibRect );
         rndr->draw( lk, myctx );
         return;
@@ -102,18 +102,29 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
  */
 offset_t SCutRendererInline::InlineRenderContext::getTimeOf( int x ) const
 {
-    return parentRC_.getTimeOf( x )+cut_.getStartOffset();
+    // The content (raw source) is indexed in the SOURCE domain, but startOffset
+    // and the cut window live in the grain OUTPUT (stretched) domain. Map the
+    // clip-relative output position back to the source by dividing by the stretch
+    // factor, so the drawn waveform lines up with what plays. (The wave renderer
+    // subtracts the link start time again, so we add it back here.)
+    double stretch = cut_.getStretch();
+    if( stretch <= 0.0 ) stretch = 1.0;
+    double rel = (double) parentRC_.getTimeOf( x )
+               - (double) clipStart_ + (double) cut_.getStartOffset();
+    if( rel < 0 ) rel = 0;
+    return clipStart_ + (offset_t)( rel / stretch );
 }
 
 SCutRendererInline::InlineRenderContext::~InlineRenderContext()
 {
 }
 
-SCutRendererInline::InlineRenderContext::InlineRenderContext( 
-    SCut &cut, SRenderContext &par, QPainter &painter )
+SCutRendererInline::InlineRenderContext::InlineRenderContext(
+    SCut &cut, SRenderContext &par, QPainter &painter, offset_t clipStart )
     : SRenderContext( painter ),
       parentRC_( par ),
-      cut_( cut )
+      cut_( cut ),
+      clipStart_( clipStart )
 {
 }
 

@@ -640,10 +640,16 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
             length_t newLoop    = cut->getLoopLength();
             double   newStretch = clipStretch0_;
             if( clipDragIsStretch_ ) {
-                double srcSpan = (double) lastClickDuration_
-                               / ( clipStretch0_ > 0 ? clipStretch0_ : 1.0 );
+                // The grain view is addressed in the OUTPUT (stretched) domain, so
+                // startOffset scales with the stretch factor. Keep the SAME source
+                // window: srcSpan and the source start stay fixed, the offset and
+                // duration are rescaled to the new stretch. (Without rescaling the
+                // offset, the clip would start at a different point in the source.)
+                double s0 = clipStretch0_ > 0 ? clipStretch0_ : 1.0;
+                double srcSpan = (double) lastClickDuration_ / s0;
                 if( srcSpan < 1 ) srcSpan = 1;
                 newStretch = (double) newDur / srcSpan;
+                newOffset = (offset_t)( (double) clipResizeOffset0_ * newStretch / s0 + 0.5 );
             }
             bool changed = newStart != clipDragStart0_ || newOffset != clipResizeOffset0_
                         || newDur != lastClickDuration_ || newLoop != clipLoopLen0_
