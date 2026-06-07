@@ -27,6 +27,8 @@
 #include "sproject.h"
 #include "sprojectprops.h"
 #include "ssettings.h"
+#include "soptions.h"
+#include <QWheelEvent>
 #include "ssmvmixercontrol.h"
 #include "actions/saddtrackaction.h"
 #include "actions/smovetrackaction.h"
@@ -50,7 +52,9 @@ void SMVActualView::setSecondWidth( double w )
 {
     if( w<0.000001 ) w=0.000001;
     secondWidth_ = w;
-//    update();
+    // Keep the pixel origin consistent with the (unchanged) left time offset, so
+    // the left edge stays put on zoom rather than drifting.
+    upperLeftX_ = (int)( ((double)upperLeftOffset_)/44100.*secondWidth_ );
     smv_.viewResized();
     update();
     // FIXME: Emit signal?
@@ -1477,6 +1481,97 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     QObject::connect( &smv_.model_->getProject(),
                       SIGNAL( propertyChanged( QString, QVariant ) ),
                       this, SLOT( update() ) );
+
+    // Mouse-wheel navigation config: cache now and refresh whenever the user
+    // changes it in the options dialog.
+    loadWheelConfig();
+    QObject::connect( &SSettings::instance(), &SSettings::changed,
+                      this, [this]( const QString & ){ loadWheelConfig(); } );
+}
+
+void SMVActualView::loadWheelConfig()
+{
+    SSettings &s = SSettings::instance();
+    wheelPlain_        = s.value( SOpt::WheelPlain,     SOpt::def( SOpt::WheelPlain ) ).toInt();
+    wheelShift_        = s.value( SOpt::WheelShift,     SOpt::def( SOpt::WheelShift ) ).toInt();
+    wheelCtrl_         = s.value( SOpt::WheelCtrl,      SOpt::def( SOpt::WheelCtrl ) ).toInt();
+    wheelCtrlShift_    = s.value( SOpt::WheelCtrlShift, SOpt::def( SOpt::WheelCtrlShift ) ).toInt();
+    wheelZoomToCursor_ = s.value( SOpt::ZoomToCursor,  SOpt::def( SOpt::ZoomToCursor ) ).toBool();
+    wheelInvertZoom_   = s.value( SOpt::InvertZoom,    SOpt::def( SOpt::InvertZoom ) ).toBool();
+}
+
+int SMVActualView::wheelActionFor( Qt::KeyboardModifiers mods ) const
+{
+    bool ctrl  = mods & Qt::ControlModifier;
+    bool shift = mods & Qt::ShiftModifier;
+    if( ctrl && shift ) return wheelCtrlShift_;
+    if( ctrl )          return wheelCtrl_;
+    if( shift )         return wheelShift_;
+    return wheelPlain_;
+}
+
+void SMVActualView::wheelEvent( QWheelEvent *ev )
+{
+    int dy = ev->angleDelta().y();
+    if( dy == 0 ) { QWidget::wheelEvent( ev ); return; }
+    int dir = (dy > 0) ? +1 : -1;   // +1 = wheel away from the user ("up")
+
+    switch( wheelActionFor( ev->modifiers() ) ) {
+
+    case SOpt::ScrollVertical: {
+        // One track lane per notch via the scrollbar (keeps it in sync).
+        if( smv_.qScrollVert_ ) {
+            smv_.qScrollVert_->setValue( smv_.qScrollVert_->value() - dir );
+        }
+        break;
+    }
+
+    case SOpt::ScrollHorizontal: {
+        // Pan the timeline by ~1/8 of the visible span per notch.
+        offset_t span = getTimeOf( width() ) - getTimeOf( 0 );
+        offset_t step = span / 8;
+        if( step < 1 ) step = 1;
+        offset_t cur = upperLeftOffset_;
+        offset_t next = (dir > 0) ? ( cur > step ? cur - step : 0 )   // up = earlier
+                                  : cur + step;
+        setLeftOffset( next );
+        break;
+    }
+
+    case SOpt::ZoomHorizontal: {
+        bool in = (dir > 0);
+        if( wheelInvertZoom_ ) in = !in;
+        double newW = secondWidth_ * ( in ? 1.2 : 1.0 / 1.2 );
+        if( wheelZoomToCursor_ ) {
+            int mouseX = (int) ev->position().x();
+            offset_t t = getTimeOf( mouseX );          // time under cursor (pre-zoom)
+            setSecondWidth( newW );
+            double ahead = ((double) mouseX) / newW * 44100.;
+            offset_t left = ( (double) t > ahead ) ? (offset_t)( (double) t - ahead ) : 0;
+            setLeftOffset( left );
+        } else {
+            setSecondWidth( newW );
+        }
+        break;
+    }
+
+    case SOpt::ZoomVertical: {
+        bool in = (dir > 0);
+        if( wheelInvertZoom_ ) in = !in;
+        int h = in ? (trackHeight_ * 3) / 2 : (trackHeight_ * 2) / 3;
+        if( h < 6 ) h = 6;
+        setTrackHeight( h );
+        smv_.qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH,
+                                        getTrackHeight() * smv_.rowCount() );
+        break;
+    }
+
+    case SOpt::None:
+    default:
+        QWidget::wheelEvent( ev );
+        return;
+    }
+    ev->accept();
 }
 
     

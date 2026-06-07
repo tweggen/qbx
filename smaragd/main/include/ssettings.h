@@ -1,18 +1,30 @@
 #ifndef _SSETTINGS_H_
 #define _SSETTINGS_H_
 
+#include <QObject>
 #include <QSettings>
 #include <QString>
+#include <QVariant>
 
 // Per-user, per-machine configuration, persisted as an INI file under the
 // user's app-config location (e.g. %APPDATA%/Smaragd/smaragd.ini on Windows,
-// ~/.config/Smaragd/smaragd.ini on Linux). This is the home for machine-local
-// settings that must NOT live in a portable project file: the selected audio
-// output device, and the last-used directories for file dialogs.
-class SSettings
+// ~/.config/Smaragd/smaragd.ini on Linux). Home for machine-local settings that
+// must NOT live in a portable project file: the selected audio output device,
+// last-used file-dialog directories, and (since the options dialog) UI
+// preferences such as mouse-wheel navigation.
+//
+// A QObject singleton so it can emit changed() when a value is written, letting
+// live UI (the arranger's wheel handler, etc.) react without polling.
+class SSettings : public QObject
 {
+    Q_OBJECT
 public:
     static SSettings &instance();
+
+    // Generic typed access (persisted). setValue() emits changed() on a real
+    // change. Prefer SOpt keys + SOpt::def() for the default.
+    QVariant value( const QString &key, const QVariant &def = QVariant() ) const;
+    void     setValue( const QString &key, const QVariant &val );
 
     // Selected audio output device id (backend-specific; empty == system
     // default). Matches AudioDeviceInfo::id from the audio backend.
@@ -24,6 +36,9 @@ public:
     QString lastDir( const QString &context,
                      const QString &fallback = QString() ) const;
     void    setLastDir( const QString &context, const QString &dir );
+
+signals:
+    void changed( const QString &key );
 
 private:
     SSettings();

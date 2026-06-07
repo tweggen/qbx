@@ -44,6 +44,7 @@ protected slots:
     void runSetClipPitch();
     void undo();
     void redo();
+    void showOptionsDialog();
 
     // Toolbar palette toggles (each submits the matching toggle action).
     void toggleSnapToGrid();

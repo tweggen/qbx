@@ -33,6 +33,7 @@
 #include "sstdmixer.h"
 #include "sstdmixerview.h"
 #include "strack.h"
+#include "soptionsdialog.h"
 
 #include "twspeaker.h"
 
@@ -367,6 +368,9 @@ SMainWindow::SMainWindow()
     QMenu *editMenu = new QMenu( "&Edit", this );
     editMenu->addAction( "&Undo", Qt::CTRL | Qt::Key_Z, this, SLOT( undo() ) );
     editMenu->addAction( "&Redo", Qt::CTRL | Qt::SHIFT | Qt::Key_Z, this, SLOT( redo() ) );
+    editMenu->addSeparator();
+    editMenu->addAction( "&Options...", QKeySequence( Qt::CTRL | Qt::Key_Comma ),
+                         this, SLOT( showOptionsDialog() ) );
     menuBar()->addMenu( editMenu );
 
     buildAudioMenu();
@@ -985,6 +989,12 @@ void SMainWindow::redo()
     if (projectRootWidget_) {
         projectRootWidget_->update();
     }
+}
+
+void SMainWindow::showOptionsDialog()
+{
+    SOptionsDialog dlg( this );
+    dlg.exec();   // pages write to SSettings on OK/Apply; live UI reacts to changed()
 }
 
 SMainWindow::~SMainWindow()

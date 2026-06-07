@@ -12,22 +12,34 @@ SSettings::SSettings()
 {
 }
 
+QVariant SSettings::value( const QString &key, const QVariant &def ) const
+{
+    return settings_.value( key, def );
+}
+
+void SSettings::setValue( const QString &key, const QVariant &val )
+{
+    if( settings_.value( key ) == val ) return;   // no-op: don't churn/emit
+    settings_.setValue( key, val );
+    emit changed( key );
+}
+
 QString SSettings::audioDeviceId() const
 {
-    return settings_.value( "audio/deviceId" ).toString();
+    return value( "audio/deviceId" ).toString();
 }
 
 void SSettings::setAudioDeviceId( const QString &id )
 {
-    settings_.setValue( "audio/deviceId", id );
+    setValue( "audio/deviceId", id );
 }
 
 QString SSettings::lastDir( const QString &context, const QString &fallback ) const
 {
-    return settings_.value( "paths/" + context, fallback ).toString();
+    return value( "paths/" + context, fallback ).toString();
 }
 
 void SSettings::setLastDir( const QString &context, const QString &dir )
 {
-    settings_.setValue( "paths/" + context, dir );
+    setValue( "paths/" + context, dir );
 }

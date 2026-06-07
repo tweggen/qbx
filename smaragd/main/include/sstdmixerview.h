@@ -105,11 +105,20 @@ protected:
     virtual void mouseReleaseEvent( QMouseEvent * );
     virtual void contextMenuEvent( QContextMenuEvent * );
     virtual void resizeEvent( QResizeEvent * );
+    virtual void wheelEvent( QWheelEvent * );
 private slots:
     void globalLocatorMoved( offset_t, offset_t );
 
 private:
     void updateLastClickVars( const QPoint & );
+
+    // Mouse-wheel navigation config, cached from SSettings (SOpt keys) and
+    // refreshed when settings change. wheelActionFor() maps a modifier combo to
+    // an SOpt::WheelAction. See wheelEvent().
+    void loadWheelConfig();
+    int  wheelActionFor( Qt::KeyboardModifiers mods ) const;
+    int  wheelPlain_, wheelShift_, wheelCtrl_, wheelCtrlShift_;
+    bool wheelZoomToCursor_, wheelInvertZoom_;
 
     // --- time-range selection -------------------------------------------
     enum RangeDrag { RangeNone, RangeCreate, RangeMoveStart, RangeMoveEnd };

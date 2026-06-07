@@ -2012,3 +2012,45 @@ Clip Pitch…", e.g. 1200 → up an octave, same length. Set while **stopped**.
 - `twGrainer`/`twGrainSpec`/`SGrainFile`/`SGrainFileRendererInline` (old stub
   scaffold, never wired into the loader) have been **deleted** — superseded by
   `twGrainSource`. CMake entries and the stray loader include removed too.
+
+---
+
+## Per-user options + Options dialog + mouse-wheel zoom/pan
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW; window-up smoke
+  passes. Interactive verification (open the dialog, use the wheel) is a human step.
+- **Plan:** `~/.claude/plans/lucky-nibbling-nygaard.md` (approved).
+
+### Why
+
+The arranger had zoom/pan primitives but the **mouse wheel did nothing**. Rather
+than hard-code gestures, we wanted them user-configurable — which required a real
+**per-user options** layer and a **preferences dialog**. Default wheel mapping is
+**scroll-first**; the Audio page does output-device selection only.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `main/include/soptions.{h}` + `src/soptions.cpp` (new) | `SOpt` namespace: `WheelAction` enum (None/ScrollVertical/ScrollHorizontal/ZoomHorizontal/ZoomVertical), option keys, central `def(key)` defaults (scroll-first), and `wheelActionLabel()`. Single source of truth for keys+defaults. |
+| `main/include/ssettings.h` + `src/ssettings.cpp` | `SSettings` is now a `QObject` singleton with generic `value(key,def)` / `setValue(key,val)` (emits `changed(key)` on a real change) over its QSettings INI. Existing `audioDeviceId`/`lastDir` reimplemented over it. |
+| `main/include/soptionsdialog.{h}` + `src/soptionsdialog.cpp` (new) | `SOptionsDialog : QDialog` — left `QTreeWidget` (Mouse navigation, Audio) + right `QStackedWidget` page per leaf + OK/Cancel/Apply. Mouse page: 4 wheel-action combos (Plain/Shift/Ctrl/Ctrl+Shift) + *Zoom to cursor* / *Invert zoom* checkboxes. Audio page: output-device combo (same apply path as the Audio menu). |
+| `main/src/smainwindow.cpp` + `.h` | **Edit → Options…** (Ctrl+,) → `showOptionsDialog()` (`exec()`s the dialog). |
+| `main/src/sstdmixerview.cpp` + `.h` | `SMVActualView::wheelEvent`: maps the active modifier combo to a `WheelAction` from cached config (reloaded on `SSettings::changed`). Vertical scroll drives the v-scrollbar; horizontal scroll pans `setLeftOffset`; horizontal zoom changes `secondWidth` with **zoom-to-cursor** (keeps the time under the pointer fixed) honouring *Invert zoom*; vertical zoom changes `trackHeight`. Also fixed `setSecondWidth` to recompute `upperLeftX_` so the left edge no longer drifts on zoom (helps the corner zoom buttons too). |
+| `main/CMakeLists.txt` | Added the four new files. |
+
+### Verification needed (human)
+
+1. **Edit → Options…**: tree shows Mouse navigation + Audio; pages switch.
+2. Defaults: wheel scrolls tracks; Shift+wheel scrolls timeline; Ctrl+wheel zooms
+   horizontally toward the cursor; Ctrl+Shift+wheel zooms track height.
+3. Remap (e.g. plain wheel → Zoom horizontal) + Apply → behaviour changes live;
+   toggle Invert zoom and confirm direction flips.
+4. Audio page lists devices; pick + Apply → persists; relaunch → wheel + device
+   settings remembered (INI under the user scope).
+
+### Next
+
+Possible follow-ups: a scroll-speed/zoom-step option; wheel handling on the ruler;
+buffer/latency on the Audio page (currently fixed).

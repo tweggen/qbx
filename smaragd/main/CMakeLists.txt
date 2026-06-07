@@ -14,6 +14,8 @@ set(SMARAGD_HEADERS
     include/sproject.h
     include/sprojectloader.h
     include/ssettings.h
+    include/soptions.h
+    include/soptionsdialog.h
     include/ssmvmixercontrol.h
     include/sstdmixer.h
     include/sstdmixerview.h
@@ -66,6 +68,8 @@ set(SMARAGD_SOURCES
     src/sproject.cpp
     src/sprojectloader.cpp
     src/ssettings.cpp
+    src/soptions.cpp
+    src/soptionsdialog.cpp
     src/ssmvmixercontrol.cpp
     src/sstdmixer.cpp
     src/sstdmixerview.cpp
