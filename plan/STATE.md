@@ -2140,3 +2140,34 @@ Dragging a clip's left/right edge now (1) snaps the dragged edge to the grid and
 2. Drag the left edge → the start snaps and the front trims (content offset
    follows); undo/redo round-trips.
 3. With snap off (Alt+S), edges drag freely again.
+
+---
+
+## Ctrl-drag duplicate now copies the whole selection
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Builds clean; window-up smoke passes. Drag behaviour is a human check.
+
+### What landed
+
+Ctrl-dragging a clip already duplicated that one clip. Now, if the clicked clip
+is part of a multi-selection (Shift-click to extend), the **entire selection** is
+duplicated and dragged together: the clicked clip is the anchor and follows the
+mouse (snapped); every other copy shifts by the same time delta and the same
+lane-row delta, preserving the group's relative layout. Releasing submits one
+`SDuplicateClipAction` per copy, wrapped in a single "Duplicate clips" undo macro
+so the whole group reverts in one Ctrl+Z.
+
+| File | Change |
+|------|--------|
+| `sstdmixerview.h` | Replaced the single `clipDupSourcePath_` with a `ClipDupItem` list (copy + sourcePath + origStart + origRow), anchor snapshot (`clipDupAnchorStart_`/`clipDupAnchorRow_`), and `syncDuplicateGroup()`. |
+| `sstdmixerview.cpp` | Press: build the duplicate group from the current selection (or just the clicked clip), make a live copy of each, pick the anchor. Move: after the anchor moves, `syncDuplicateGroup()` drags the rest by the shared time/row delta. Release: capture each copy's final track+start, drop the previews, submit one action per copy inside a macro. |
+
+### Verify (human)
+
+1. Shift-click several clips (across tracks too), then Ctrl-drag one of them →
+   all copies move together, the dragged one snapping to the grid, the rest
+   keeping their relative spacing and track offsets.
+2. Release → originals stay; copies land at the dragged positions.
+3. Ctrl+Z removes all copies at once; Ctrl+Y restores them.
+4. Ctrl-drag a single (unselected or lone) clip → still duplicates just that one.

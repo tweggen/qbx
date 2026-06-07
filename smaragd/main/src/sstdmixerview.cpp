@@ -544,6 +544,36 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
     }    
 }
 
+// Move the non-anchor duplicate copies to follow the anchor: each shifts by the
+// same time delta (clamped >= 0) and the same lane-row delta (clamped to the
+// track list), preserving the group's relative layout. The anchor itself is
+// driven by the normal move logic.
+void SMVActualView::syncDuplicateGroup()
+{
+    if( !clipDragIsDuplicate_ || clipDupItems_.size() <= 1 || !lastClickSLink_ )
+        return;
+    length_t timeDelta =
+        (length_t) lastClickSLink_->getStartTime() - (length_t) clipDupAnchorStart_;
+    int anchorRow = smv_.rowIndexOfTrack( lastClickTrack_ );
+    int rowDelta = ( anchorRow >= 0 && clipDupAnchorRow_ >= 0 )
+                   ? anchorRow - clipDupAnchorRow_ : 0;
+    int n = smv_.rowCount();
+    for( const ClipDupItem &it : clipDupItems_ ) {
+        if( !it.copy || it.copy == lastClickSLink_ ) continue;
+        length_t ns = (length_t) it.origStart + timeDelta;
+        if( ns < 0 ) ns = 0;
+        int tr = it.origRow + rowDelta;
+        if( tr < 0 ) tr = 0;
+        if( tr >= n ) tr = n - 1;
+        const STrackRow *row = ( tr >= 0 ) ? smv_.rowAt( tr ) : NULL;
+        STrack *dt = row ? row->track : NULL;
+        if( dt && dt != dynamic_cast<STrack*>( it.copy->parent() ) )
+            it.copy->setParent( dt );
+        it.copy->setStartTime( (offset_t) ns );
+    }
+    update();
+}
+
 void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 {
     if( rangeDrag_ != RangeNone ) {
@@ -551,21 +581,36 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         return;
     }
 
-    // Finalize a clip DUPLICATE (Ctrl-drag): the dragged clip is a live copy.
-    // Drop the preview and submit an undoable SDuplicateClipAction that re-creates
-    // it at the final (snapped) position.
-    if( clipDragArmed_ && clipDragIsDuplicate_ && lastClickSLink_ ) {
-        SLink *copy = lastClickSLink_;
-        STrack *destTrack = lastClickTrack_;
-        offset_t newStart = copy->getStartTime();   // already snapped by the drag
-        QList<int> destTrackPath = destTrack ? strackpath::pathOf( smv_.getModel(), destTrack )
-                                             : QList<int>();
-        delete copy;                  // remove the live preview
-        lastClickSLink_ = NULL;
-        if( destTrack && !clipDupSourcePath_.isEmpty() ) {
-            SApplication::app().submitAction(
-                new SDuplicateClipAction( clipDupSourcePath_, destTrackPath, newStart ) );
+    // Finalize a clip DUPLICATE (Ctrl-drag): the dragged clips are live copies.
+    // Drop the previews and submit an undoable SDuplicateClipAction per copy that
+    // re-creates it at its final (snapped) position. Several copies land as one
+    // undo macro so the whole group reverts together.
+    if( clipDragArmed_ && clipDragIsDuplicate_ ) {
+        struct Fin { QList<int> src; QList<int> dest; offset_t start; };
+        QVector<Fin> fins;
+        for( const ClipDupItem &it : clipDupItems_ ) {
+            if( !it.copy ) continue;
+            STrack *dt = dynamic_cast<STrack*>( it.copy->parent() );
+            Fin f;
+            f.src   = it.sourcePath;
+            f.dest  = dt ? strackpath::pathOf( smv_.getModel(), dt ) : QList<int>();
+            f.start = it.copy->getStartTime();   // already snapped by the drag
+            fins.append( f );
         }
+        for( const ClipDupItem &it : clipDupItems_ )
+            if( it.copy ) delete it.copy;         // remove the live previews
+        clipDupItems_.clear();
+        lastClickSLink_ = NULL;
+
+        QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+        bool macro = fins.size() > 1 && stack;
+        if( macro ) stack->beginMacro( QStringLiteral("Duplicate clips") );
+        for( const Fin &f : fins ) {
+            if( !f.src.isEmpty() && !f.dest.isEmpty() )
+                SApplication::app().submitAction(
+                    new SDuplicateClipAction( f.src, f.dest, f.start ) );
+        }
+        if( macro ) stack->endMacro();
         update();
         clipDragArmed_ = false;
         clipDragIsDuplicate_ = false;
@@ -873,11 +918,14 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                             lastClickTrackIdx_, *lastClickSLink_ );
                         update( newVisibRect );
                     } else {
-                        QRect newVisibRect = getSLinkVisibRect( 
+                        QRect newVisibRect = getSLinkVisibRect(
                             lastClickTrackIdx_, *lastClickSLink_ );
                         update( newVisibRect );
                     }
                 }
+                // For a group duplicate, drag the other copies with the anchor.
+                if( clipDragIsDuplicate_ )
+                    syncDuplicateGroup();
             }
         } else {
             // OK, seek to the position.
@@ -934,23 +982,51 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
             if( lastClickSLink_ ) {
                 Qt::KeyboardModifiers modifiers = QGuiApplication::keyboardModifiers();
                 if( modifiers & Qt::ControlModifier ) {
-                    // Ctrl-click on a clip: duplicate it and drag the live copy;
-                    // the release submits an undoable SDuplicateClipAction.
-                    STrack *track = lastClickTrack_;
-                    clipDupSourcePath_ = strackpath::pathOf( smv_.getModel(), track );
-                    clipDupSourcePath_.append( track->indexOfChild( lastClickSLink_ ) );
-                    SLink *copy = makeDuplicateClip(
-                        &smv_.getModel()->getProject(),
-                        lastClickSLink_->getSObject(), track,
-                        lastClickSLink_->getStartTime() );
-                    if( copy ) {
-                        SApplication::app().setSelectedSLink( copy );
-                        lastClickSLink_ = copy;
-                        lastClickSelStartOffset_ = copy->getStartTime();
+                    // Ctrl-click on a clip: duplicate it and drag the live copy.
+                    // If the clicked clip is part of a multi-selection, the whole
+                    // selection is duplicated and dragged as a group (the clicked
+                    // clip is the anchor; the rest follow by the same time/row
+                    // delta). The release submits one undoable step per copy.
+                    SLink *clicked = lastClickSLink_;
+                    STrack *clickedTrack = lastClickTrack_;
+                    SSelectionList group;
+                    const SSelectionList &sel = SApplication::app().getSelectionList();
+                    if( SApplication::app().isSLinkSelected( clicked ) && sel.size() > 1 )
+                        group = sel;
+                    else
+                        group.append( clicked );
+
+                    clipDupItems_.clear();
+                    SProject *proj = &smv_.getModel()->getProject();
+                    SLink *anchorCopy = NULL;
+                    for( SLink *src : group ) {
+                        STrack *st = dynamic_cast<STrack*>( src->parent() );
+                        if( !st ) continue;
+                        ClipDupItem it;
+                        it.sourcePath = strackpath::pathOf( smv_.getModel(), st );
+                        it.sourcePath.append( st->indexOfChild( src ) );
+                        it.origStart = src->getStartTime();
+                        it.origRow   = smv_.rowIndexOfTrack( st );
+                        it.copy = makeDuplicateClip( proj, src->getSObject(), st,
+                                                     src->getStartTime() );
+                        if( !it.copy ) continue;
+                        clipDupItems_.append( it );
+                        if( src == clicked ) anchorCopy = it.copy;
+                    }
+                    if( !anchorCopy && !clipDupItems_.isEmpty() )
+                        anchorCopy = clipDupItems_.first().copy;
+
+                    if( anchorCopy ) {
+                        SApplication::app().setSelectedSLink( anchorCopy );
+                        lastClickSLink_ = anchorCopy;
+                        lastClickTrack_ = clickedTrack;
+                        lastClickSelStartOffset_ = anchorCopy->getStartTime();
                         clipDragArmed_ = true;
                         clipDragIsDuplicate_ = true;
-                        clipDragTrack0_ = track;
-                        clipDragStart0_ = copy->getStartTime();
+                        clipDragTrack0_ = clickedTrack;
+                        clipDragStart0_ = anchorCopy->getStartTime();
+                        clipDupAnchorStart_ = anchorCopy->getStartTime();
+                        clipDupAnchorRow_ = smv_.rowIndexOfTrack( clickedTrack );
                         lastClickedStart_ = lastClickedEnd_ = false;   // move, not resize
                         update();
                     }

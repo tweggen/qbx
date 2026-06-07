@@ -174,10 +174,21 @@ private:
     // SCut start-offset at press, for the resize (edge-drag) undo snapshot.
     offset_t clipResizeOffset0_ = 0;
 
-    // Ctrl-drag DUPLICATE: when armed, the dragged clip is a live copy and the
-    // release submits an SDuplicateClipAction instead of a move.
-    bool       clipDragIsDuplicate_ = false;
-    QList<int> clipDupSourcePath_;
+    // Ctrl-drag DUPLICATE: when armed, the dragged clips are live copies and the
+    // release submits SDuplicateClipAction(s) instead of a move. Duplicates every
+    // selected clip; the clicked clip is the anchor and the rest follow by the
+    // same time/row delta. syncDuplicateGroup() moves the non-anchor copies.
+    bool clipDragIsDuplicate_ = false;
+    struct ClipDupItem {
+        SLink     *copy = nullptr;   // live preview copy being dragged
+        QList<int> sourcePath;       // path of the original clip
+        offset_t   origStart = 0;    // original start time of this clip
+        int        origRow = -1;     // original lane row of this clip's track
+    };
+    QVector<ClipDupItem> clipDupItems_;
+    offset_t   clipDupAnchorStart_ = 0;   // anchor copy's start at press
+    int        clipDupAnchorRow_   = -1;  // anchor's lane row at press
+    void syncDuplicateGroup();            // move non-anchor copies with the anchor
 };
 
 class STimeGridSpec {
