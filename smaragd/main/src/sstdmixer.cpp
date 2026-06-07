@@ -303,6 +303,11 @@ void SStdMixer::insertTrack( STrack &trk )
     emit trackInserted( newIndex, trk );
 }
 
+void SStdMixer::notifyTreeChanged()
+{
+    emit tracksReordered();
+}
+
 void SStdMixer::reorderTrack( int fromIndex, int toIndex )
 {
     const int n = childCount();

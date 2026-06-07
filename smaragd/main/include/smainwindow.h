@@ -38,6 +38,7 @@ protected slots:
     void runSaveLoadTest();
     void runGroupTrackTest();
     void runReorderTrackTest();
+    void runGroupPersist();
     void undo();
     void redo();
 

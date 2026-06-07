@@ -29,6 +29,12 @@ public:
     // a reorder).
     STrack &getTrack() const { return tk_; }
 
+    // Tree presentation: indent depth, whether this is a foldable parent, and
+    // its fold state. The control indents its content, draws a fold triangle for
+    // parents, and offsets its grip handle accordingly.
+    void setTreeInfo( int depth, bool foldable, bool collapsed );
+    int depth() const { return depth_; }
+
 protected:
     // A grip strip across the top of the control is the drag handle for
     // reordering this track; the rest of the control is its normal channel strip.
@@ -55,6 +61,11 @@ private:
     // Push the slider position to the value v (in dB) without re-submitting
     // an action (model -> view update).
     void setSliderSilently( double v );
+
+    // Tree presentation state (see setTreeInfo).
+    int depth_ = 0;
+    bool foldable_ = false;
+    bool collapsed_ = false;
 
     // Track-reorder drag: armed on press in the grip strip, active once the
     // pointer moves past a small threshold.

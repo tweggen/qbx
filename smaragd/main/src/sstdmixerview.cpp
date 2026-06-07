@@ -53,8 +53,10 @@ void SMVActualView::setTrackHeight( int h )
 {
     if( h<6 ) h = 6;
     trackHeight_ = h;
-    for( int t=0; t<smv_.model_->getNTracks(); t++ ) {        
-        SSMVMixerControl *mc = smv_.controlArray_->at( t );
+    QVector<SSMVMixerControl*> &controls = *smv_.controlArray_;
+    for( int t=0; t<controls.size(); t++ ) {
+        SSMVMixerControl *mc = controls.at( t );
+        if( !mc ) continue;
         mc->move( 0, getTrackHeight()*t );
         mc->setFixedSize( 150, getTrackHeight() );
         mc->resize( 150, getTrackHeight() );
@@ -67,7 +69,7 @@ void SMVActualView::setTrackHeight( int h )
 
 void SMVActualView::setUpperLeft( offset_t leftOffset, idx_t topOffset )
 {
-    int nTracks = smv_.model_->getNTracks();
+    int nTracks = smv_.rowCount();
     if( !nTracks ) {
         topOffset = 0;
     } else {
@@ -101,7 +103,7 @@ void SMVActualView::setLeftOffset( offset_t leftOffset )
 
 void SMVActualView::setTopOffset( idx_t topOffset )
 {
-    int nTracks = smv_.model_->getNTracks();
+    int nTracks = smv_.rowCount();
     if( !nTracks ) {
         topOffset = 0;
     } else {
@@ -164,7 +166,7 @@ void SMVActualView::paintEvent( QPaintEvent * )
         return;
     }
 //    qWarning( "SStdMixerLength is %d.\n", (int) smv_.model_->getDuration() );
-    if( !smv_.model_->getNTracks() ) {
+    if( !smv_.rowCount() ) {
         p.setPen( QColor( 160, 32, 32 ) );
         p.drawText( myRect, Qt::AlignCenter, "Mixer contains no tracks." );
         p.fillRect( QRect( 0, 0, myRect.width(), myRect.height() ), QColor( 220, 220, 190 ) );
@@ -175,24 +177,28 @@ void SMVActualView::paintEvent( QPaintEvent * )
 
     InlineRenderContext ctx( *this, p );    
     p.fillRect( QRect( 0, 0, myRect.width(), SMV_TIME_RULER_HEIGHT ), QColor( 220, 220, 190 ) );
-    // OK, we have tracks.
-    int nTracks = smv_.model_->getNTracks();
+    // OK, we have tracks (lanes of the flattened tree).
+    int nTracks = smv_.rowCount();
     int firstTrack = (upperLeftY_ + trackHeight_-1) / trackHeight_;
     for( int i=firstTrack; i<nTracks; i++ ) {
+        const STrackRow *row = smv_.rowAt( i );
+        if( !row ) continue;
+        int laneTop = SMV_TIME_RULER_HEIGHT+i*trackHeight_-upperLeftY_;
+        // Nested lanes get a left indent band so the hierarchy reads in the
+        // timeline too; clips still render across the full lane width.
+        int indent = row->depth*SMV_TRACK_INDENT;
+        if( indent>0 ) {
+            p.fillRect( QRect( 0, laneTop+1, indent, trackHeight_-2 ),
+                        QColor( 205, 205, 180 ) );
+        }
         p.setPen( QColor( 96, 96, 96 ) );
-        ctx.setVisibRect( 
-            QRect( 0, SMV_TIME_RULER_HEIGHT+1+i*trackHeight_-upperLeftY_, 
-                   myRect.width(), trackHeight_-2 ) );
-        p.drawLine( 0, SMV_TIME_RULER_HEIGHT+i*trackHeight_-upperLeftY_,
-                    myRect.bottomRight().x(), SMV_TIME_RULER_HEIGHT+i*trackHeight_-upperLeftY_ );
-        p.drawLine( 0, SMV_TIME_RULER_HEIGHT+(i+1)*trackHeight_-upperLeftY_-1,
-                    myRect.bottomRight().x(), SMV_TIME_RULER_HEIGHT+(i+1)*trackHeight_-upperLeftY_-1);
-        // OK, draw the tracks.    
-        SLink *tlk = smv_.model_->getTrackAt( i );
-//(        printf( "tlk[%d] = $%08x.\n", i, (unsigned) tlk );
-        if( !tlk ) continue;
-        STrack *trk = (STrack* ) &(tlk->getSObject());
-        trk->getInlineRenderer()->draw( *tlk, ctx );
+        ctx.setVisibRect(
+            QRect( indent, laneTop+1, myRect.width()-indent, trackHeight_-2 ) );
+        p.drawLine( 0, laneTop, myRect.bottomRight().x(), laneTop );
+        p.drawLine( 0, laneTop+trackHeight_-1,
+                    myRect.bottomRight().x(), laneTop+trackHeight_-1 );
+        // Draw the track's clips.
+        row->track->getInlineRenderer()->draw( *row->link, ctx );
     }
     // Before painting the timegrid, decide, wether the grid elements are not too close
     // together. Grid visibility is a per-project property (toolbar palette / grid action).
@@ -435,11 +441,10 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
     if( y<0 ) y = 0;
     lastClickTrackIdx_ = (y+upperLeftY_)/trackHeight_;
     lastClickOffset_ = getTimeOf( pos.x() );
-    SLink *tlk;
-    if( lastClickTrackIdx_>=smv_.model_->getNTracks() ) tlk=NULL;
-    else tlk = smv_.model_->getTrackAt( lastClickTrackIdx_ );
+    const STrackRow *row = smv_.rowAt( lastClickTrackIdx_ );
+    SLink *tlk = row ? row->link : NULL;
     if( tlk ) {
-        lastClickTrack_ = (STrack *)&(tlk->getSObject());
+        lastClickTrack_ = row->track;
         lastClickSLink_ = lastClickTrack_->getTopMostSLinkAt( lastClickOffset_ );
         if( lastClickSLink_ ) {
             //qWarning( "Clicked on a %s.\n", lastClickSLink_->getSObject().className() );
@@ -646,15 +651,10 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
     }
 
     // Ge the current track.
-    int newTrackIdx = (ev->pos().y()+upperLeftY_-SMV_TIME_RULER_HEIGHT)/trackHeight_;    
-    SLink *newTLK;
-    if( newTrackIdx>=smv_.model_->getNTracks() ) newTLK = NULL;
-    else newTLK = smv_.model_->getTrackAt( newTrackIdx );
-    STrack *newTrack = NULL;
-    if( newTLK ) {
-        newTrack = (STrack *)&(newTLK->getSObject());
-        if( newTrack == lastClickTrack_ ) newTrack = NULL;
-    } 
+    int newTrackIdx = (ev->pos().y()+upperLeftY_-SMV_TIME_RULER_HEIGHT)/trackHeight_;
+    const STrackRow *newRow = smv_.rowAt( newTrackIdx );
+    STrack *newTrack = newRow ? newRow->track : NULL;
+    if( newTrack && newTrack == lastClickTrack_ ) newTrack = NULL;
 
     // Determine which action to take.
     if( ev->buttons() & Qt::LeftButton ) {        
@@ -874,78 +874,97 @@ void SStdMixerView::contentDurationChanged( length_t newDur )
 #endif
 }
 
-/**
- * A track was added to the mixer, create a control for it.
- */
-void SStdMixerView::addMixerControl( int trackIdx, STrack &tk )
+// True if a container has at least one child that is itself a track (so it is a
+// foldable parent in the arranger).
+static bool hasChildTracks( SObject *container )
 {
-    int newNTracks = model_->getNTracks();
-//    printf( "add mixer control called idx is %d newNTracks is %d.\n", 
-//            trackIdx, newNTracks );
-    // First, ensure sufficient size.
-    if( (int)controlArray_->size() < newNTracks ) {
-        controlArray_->resize( newNTracks );
+    for( SLink *lk : container->childLinks() ) {
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) return true;
     }
-    // Then move all controls in the array one behind.
-    for( int t=newNTracks-1; t>trackIdx; --t ) {
-        controlArray_->insert( t, controlArray_->at( t-1 ) );
-    }
-    // And create a new one.
-    controlArray_->insert( 
-        trackIdx,         
-        new SSMVMixerControl( qTrackControlBox_, *this, tk ) );
-    controlArray_->at( trackIdx )->show();
-    // Now reposition each of the controls, that needs.
-    // Obviously, only controls after the one inserted (including that) 
-    // gotta be positioned.
-    for( int t=trackIdx; t<newNTracks; t++ ) {        
-        SSMVMixerControl *mc = controlArray_->at( t );
-        // If we are called at instantiation time, not all mixer controls have been created.
-        // Then mc might be zero here.
-        if( !mc ) continue;
-        mc->move( 0, getTrackHeight()*t );        
-        printf( "%p parent is %p qTrackControlBox_ is %p control pos/size = %d/%d-%d/%d\n",
-                (void *)mc, (void *)mc->parent(), (void *)qTrackControlBox_,
-                mc->x(), mc->y(), mc->width(), mc->height() );
-    }
-    // Resize the container.
-    // FIXME: The control box's width is hard-coded.
-    qTrackControlBox_->resize( 150, getTrackHeight()*newNTracks );
+    return false;
 }
 
-/**
- * A track was removed to the mixer, remove its control.
- */
-void SStdMixerView::removeMixerControl( int trackIdx, STrack &/*track*/ )
+void SStdMixerView::appendRowsFor( SObject *container, int depth )
 {
-    if( trackIdx < 0 || trackIdx >= (int)controlArray_->size() ) {
-        return;
+    for( SLink *lk : container->childLinks() ) {
+        STrack *tk = dynamic_cast<STrack*>( &lk->getSObject() );
+        if( !tk ) continue;          // clips render inside their track's own lane
+        bool kids = hasChildTracks( tk );
+        bool col = collapsed_.contains( tk );
+        rows_.append( STrackRow{ tk, lk, container, depth, kids, col } );
+        if( kids && !col ) appendRowsFor( tk, depth+1 );   // recurse if expanded
     }
-    // takeAt() removes the entry AND shifts the rest down, so the vector is
-    // already compacted; just delete the widget. (The previous code added a
-    // manual shift loop that ran off the end of the now-shorter vector — and
-    // used model_->getNTracks(), which is stale here because trackRemoved is
-    // emitted before the track link is deleted.)
-    delete controlArray_->takeAt( trackIdx );
-
-    // Reposition the controls that shifted up into the gap.
-    const int n = (int)controlArray_->size();
-    for( int t = trackIdx; t < n; ++t ) {
-        if( controlArray_->at( t ) ) {
-            controlArray_->at( t )->move( 0, getTrackHeight()*t );
-        }
-    }
-    // Resize the container. FIXME: The control box's width is hard-coded.
-    qTrackControlBox_->resize( 150, getTrackHeight()*n );
 }
 
-// Map a Y in the control-column to an insertion gap 0..n (n = above all, n =
-// below all), rounding to the nearest track boundary.
+void SStdMixerView::rebuildRows()
+{
+    rows_.clear();
+    if( model_ ) appendRowsFor( model_, 0 );
+}
+
+const STrackRow *SStdMixerView::rowAt( int i ) const
+{
+    if( i<0 || i>=rows_.size() ) return NULL;
+    return &rows_.at( i );
+}
+
+int SStdMixerView::rowIndexOfTrack( const STrack *t ) const
+{
+    for( int i=0; i<rows_.size(); ++i ) {
+        if( rows_.at( i ).track == t ) return i;
+    }
+    return -1;
+}
+
+void SStdMixerView::toggleTrackCollapsed( STrack *t )
+{
+    if( !t ) return;
+    if( collapsed_.contains( t ) ) collapsed_.remove( t );
+    else                           collapsed_.insert( t );
+    refreshTrackTree();
+}
+
+// Recreate the control strips so there is exactly one per visible lane, indented
+// to its depth. (Cheap — there are only a handful of tracks — and it keeps the
+// control column in lockstep with rows_ for every structural change.)
+void SStdMixerView::rebuildControlColumn()
+{
+    for( SSMVMixerControl *mc : *controlArray_ ) delete mc;
+    controlArray_->clear();
+    int h = getTrackHeight();
+    for( int i=0; i<rows_.size(); ++i ) {
+        const STrackRow &row = rows_.at( i );
+        SSMVMixerControl *mc = new SSMVMixerControl( qTrackControlBox_, *this, *row.track );
+        mc->setTreeInfo( row.depth, row.hasChildren, row.collapsed );
+        mc->move( 0, h*i );
+        mc->show();
+        controlArray_->append( mc );
+    }
+    qTrackControlBox_->resize( 150, h*rows_.size() );
+}
+
+// Single entry point for any structural change (add/remove/reorder/group/fold):
+// rebuild the flattened tree, the control column, the scroll range, and repaint.
+void SStdMixerView::refreshTrackTree()
+{
+    rebuildRows();
+    rebuildControlColumn();
+    nTracksChanged();
+    qContent_->update();
+}
+
+// The model signals still arrive incrementally; a full refresh is simplest and
+// correct (nesting changes do not map cleanly onto add/remove-at-index).
+void SStdMixerView::addMixerControl( int, STrack & )    { refreshTrackTree(); }
+void SStdMixerView::removeMixerControl( int, STrack & ) { refreshTrackTree(); }
+void SStdMixerView::tracksReordered()                   { refreshTrackTree(); }
+
+// Map a Y in the control-column to an insertion gap 0..n among the visible lanes.
 int SStdMixerView::insertSlotAt( int y ) const
 {
     int h = getTrackHeight();
     if( h<=0 ) return 0;
-    int n = model_ ? model_->getNTracks() : 0;
+    int n = rowCount();
     int slot = (y + h/2) / h;
     if( slot<0 ) slot = 0;
     if( slot>n ) slot = n;
@@ -976,59 +995,40 @@ void SStdMixerView::endTrackDrag( int yInControlBox )
     dragControl_ = NULL;
     if( !control || !model_ ) return;
 
-    int fromIdx = controlArray_->indexOf( control );
-    if( fromIdx<0 ) return;
-    int n = model_->getNTracks();
+    // The grip reorders top-level tracks. (Dragging a nested track, and
+    // drag-to-nest, come with the grouping gestures.)
+    STrack *track = &control->getTrack();
+    int fromIdx = model_->indexOfChildObject( *track );
+    if( fromIdx<0 ) return;                    // not a mixer child -> nested
 
-    // An insertion gap of `slot` lands the track at index slot, or slot-1 when
-    // it was pulled from an earlier position (its removal shifts the gap down).
-    int slot = insertSlotAt( yInControlBox );
+    int h = getTrackHeight();
+    int nTop = model_->getNTracks();
+    // Insertion gap among top-level lanes = how many of them sit above the drop.
+    int slot = 0;
+    for( int i=0; i<rows_.size(); ++i ) {
+        if( rows_.at( i ).depth != 0 ) continue;
+        if( yInControlBox > i*h + h/2 ) ++slot;
+    }
     int target = (slot>fromIdx) ? slot-1 : slot;
     if( target<0 ) target = 0;
-    if( target>=n ) target = n-1;
-    if( target==fromIdx ) return;             // dropped on its own slot
+    if( target>=nTop ) target = nTop-1;
+    if( target==fromIdx ) return;
 
     SApplication::app().submitAction(
         new SMoveTrackAction( QList<int>{ fromIdx }, target ) );
 }
 
-/**
- * The model reordered its top-level tracks in place. Re-sequence the existing
- * controls to match (no control is created or destroyed) and reposition them.
- */
-void SStdMixerView::tracksReordered()
-{
-    const int n = model_->getNTracks();
-    QVector<SSMVMixerControl*> reordered;
-    reordered.reserve( n );
-    for( int i=0; i<n; ++i ) {
-        SLink *lk = model_->getTrackAt( i );
-        STrack *tk = lk ? dynamic_cast<STrack*>( &lk->getSObject() ) : NULL;
-        SSMVMixerControl *mc = NULL;
-        // Match the existing control that drives this track.
-        for( SSMVMixerControl *cand : *controlArray_ ) {
-            if( cand && &cand->getTrack() == tk ) { mc = cand; break; }
-        }
-        reordered.append( mc );
-    }
-    *controlArray_ = reordered;
-    for( int i=0; i<n; ++i ) {
-        if( controlArray_->at( i ) ) controlArray_->at( i )->move( 0, getTrackHeight()*i );
-    }
-    qContent_->update();
-}
-
 void SStdMixerView::nTracksChanged()
 {
-    int newNTracks = model_->getNTracks();
+    int newNTracks = rowCount();    // visible lanes, not just top-level tracks
     int currValue = qScrollVert_->value();
     int pageStep = qScrollVert_->pageStep();
     if( currValue+pageStep > newNTracks ) {
         currValue = newNTracks-pageStep;
         if( currValue<0 ) currValue = 0;
         trackSliderMoved( currValue );
-    }    
-    qScrollVert_->setMaximum( (int) newNTracks-pageStep );    
+    }
+    qScrollVert_->setMaximum( (int) newNTracks-pageStep );
 }
 
 void SStdMixerView::avLeftOffsetChanged( offset_t newValue )
@@ -1116,7 +1116,7 @@ void SStdMixerView::recalcPageStep()
     qScrollHoriz_->setSingleStep( ((int)(dw+0.5)/10)+1 );
     h /= qContent_->getTrackHeight();
     qScrollVert_->setPageStep( h );
-    qScrollVert_->setMaximum( model_->getNTracks()-h );    
+    qScrollVert_->setMaximum( rowCount()-h );
 }
 
 void SStdMixerView::viewResized()
@@ -1165,7 +1165,7 @@ void SStdMixerView::zoomInVert()
     // FIXME: Configure this
     h = (h*3)/2;
     qContent_->setTrackHeight( h );
-    qTrackControlBox_->resize( 150, getTrackHeight()*model_->getNTracks() );
+    qTrackControlBox_->resize( 150, getTrackHeight()*rowCount() );
 }
 
 void SStdMixerView::zoomOutVert()
@@ -1175,7 +1175,7 @@ void SStdMixerView::zoomOutVert()
     // FIXME: Configure this
     h = (h*2)/3;
     qContent_->setTrackHeight( h );
-    qTrackControlBox_->resize( 150, getTrackHeight()*model_->getNTracks() );
+    qTrackControlBox_->resize( 150, getTrackHeight()*rowCount() );
 }
 
 void SStdMixerView::setBPMTempo( double bpmTempo )
@@ -1481,15 +1481,10 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     QObject::connect( actInsertSample_, SIGNAL( triggered() ), this, SLOT( ctInsertSample() ) );
     addAction( actInsertSample_ );
 
-    // Now, create controls and stuff for the data that currently already
-    // resides inside the mixer. Consult the signal/slot connections above for
-    // same meaning.
+    // Build the flattened tree + control column for whatever already resides in
+    // the mixer (refreshTrackTree handles rows, controls and scroll range).
     {
-        int nTracks = model_->getNTracks();
-        for( int trackIdx=0; trackIdx<nTracks; trackIdx++ ) {
-            addMixerControl( trackIdx, (STrack &)(model_->getTrackAt( trackIdx )->getSObject()) );
-        }
-        nTracksChanged();
+        refreshTrackTree();
         contentDurationChanged( model_->getDuration() );
         update();
     }

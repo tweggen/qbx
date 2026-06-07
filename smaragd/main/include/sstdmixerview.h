@@ -6,6 +6,8 @@
 #include <sobjectrenderer.h>
 //#include <qptrvector.h>
 #include <qtoolbutton.h>
+#include <QVector>
+#include <QSet>
 
 class SStdMixer;
 class QGridLayout;
@@ -14,6 +16,7 @@ class QMouseEvent;
 class QPopupMenu;
 class QScrollBar;
 class STrack;
+class SObject;
 class SStdMixerView;
 class SLink;
 class QPushButton;
@@ -26,6 +29,21 @@ class SSMVMixerControl;
 #define SMV_RANGE_GRAB_PIXEL 5
 
 #define SMV_TIME_RULER_HEIGHT 16
+
+// Per-depth horizontal indent (px) for nested track lanes/controls, and the
+// width of the fold-triangle hit area drawn just left of a parent's content.
+#define SMV_TRACK_INDENT 14
+#define SMV_FOLD_W 12
+
+// One visible lane in the flattened depth-first walk of the track tree.
+struct STrackRow {
+    STrack  *track;        // the track shown on this lane
+    SLink   *link;         // the SLink wrapping it in its parent (timeline pos)
+    SObject *parent;       // the container that holds `link` (mixer or a track)
+    int      depth;        // 0 = top-level (mixer child)
+    bool     hasChildren;  // has at least one child *track* (is foldable)
+    bool     collapsed;    // children hidden
+};
 
 class SMVActualView 
     : public QWidget
@@ -201,6 +219,19 @@ public:
 
     int getTrackHeight() const;
 
+    // --- flattened track-tree (depth-first) the arranger draws -----------
+    // The view shows one lane per STrackRow. rows_ is rebuilt by refreshTrackTree
+    // whenever the tree or a fold state changes; everything that used to index
+    // the flat mixer (paint, hit-testing, drag, scrolling, the control column)
+    // now indexes these rows.
+    int rowCount() const { return rows_.size(); }
+    const STrackRow *rowAt( int i ) const;
+    int rowIndexOfTrack( const STrack * ) const;
+    bool isTrackCollapsed( STrack *t ) const { return collapsed_.contains( t ); }
+    void toggleTrackCollapsed( STrack * );
+    void refreshTrackTree();   // rebuild rows + control column + relayout + repaint
+    // --------------------------------------------------------------------
+
     // Track-reorder drag, driven by a control's grip handle. beginTrackDrag()
     // arms the drag for the given control; updateTrackDrag()/endTrackDrag() take
     // a Y in qTrackControlBox_ coordinates. On release a move past the original
@@ -316,6 +347,13 @@ private:
     QWidget *qTrackControlBoxHolder_;
     QWidget *qTrackControlBox_;
     QVector<SSMVMixerControl*> *controlArray_;
+
+    // Flattened track tree + per-track fold state (UI-only).
+    QVector<STrackRow> rows_;
+    QSet<STrack*> collapsed_;
+    void rebuildRows();
+    void rebuildControlColumn();
+    void appendRowsFor( SObject *container, int depth );
 
     // Track-reorder drag state. dragControl_ is the control being dragged (NULL
     // when not dragging); dropIndicator_ is a thin line marking the insertion

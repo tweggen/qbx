@@ -115,6 +115,11 @@ SApplyResult SReparentTrackAction::apply(SProject *project)
     // Refresh the engine graph root (mirrors SAddTrackAction).
     SApplication::app().rewireSpeaker();
 
+    // Detach fired a mid-operation view refresh (track briefly parentless) and
+    // the folder-side attach emits no mixer signal; announce the final tree so
+    // views rebuild against the completed state.
+    rootMixer->notifyTreeChanged();
+
     // Synthesize the inverse from the *post-move* tree so it is immune to the
     // index shifts the move caused — and restore the exact original slot.
     QList<int> newSourcePath     = pathOf(root, track);

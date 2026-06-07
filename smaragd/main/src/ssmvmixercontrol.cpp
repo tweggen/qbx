@@ -12,6 +12,7 @@
 #include <qlabel.h>
 #include <qlineedit.h>
 #include <qpushbutton.h>
+#include <QPolygon>
 #include <QSignalBlocker>
 
 #include "sapplication.h"
@@ -104,26 +105,66 @@ void SSMVMixerControl::setSliderSilently( double value )
     }
 }
 
-// Draw the grip strip down the left so the user can see the drag handle.
+void SSMVMixerControl::setTreeInfo( int depth, bool foldable, bool collapsed )
+{
+    depth_ = depth;
+    foldable_ = foldable;
+    collapsed_ = collapsed;
+    // Indent the content: [depth indent][fold gutter][grip][content].
+    int left = depth_*SMV_TRACK_INDENT + SMV_FOLD_W + HANDLE_W;
+    qLayout_->setContentsMargins( left, 2, 4, 2 );
+    update();
+}
+
+// The grip's left edge, accounting for indent + fold gutter.
+static inline int gripLeft( int depth ) { return depth*SMV_TRACK_INDENT + SMV_FOLD_W; }
+
+// Draw the indented grip strip and, for parents, a fold triangle to its left.
 void SSMVMixerControl::paintEvent( QPaintEvent *ev )
 {
     QWidget::paintEvent( ev );
     QPainter p( this );
-    QRect handle( 0, 0, HANDLE_W, height() );
+
+    int gx = gripLeft( depth_ );
+    QRect handle( gx, 0, HANDLE_W, height() );
     p.fillRect( handle, dragging_ ? QColor( 40, 90, 160 ) : QColor( 70, 70, 80 ) );
     p.setPen( QColor( 165, 165, 175 ) );
-    int cx = HANDLE_W/2;
+    int cx = gx + HANDLE_W/2;
     int cy = height()/2;
     for( int i=-3; i<=3; ++i ) {
         p.drawPoint( cx-2, cy + i*6 );
         p.drawPoint( cx+1, cy + i*6 );
     }
+
+    if( foldable_ ) {
+        int fx = depth_*SMV_TRACK_INDENT;
+        int midY = SMV_FOLD_W/2 + 2;
+        p.setPen( QColor( 60, 60, 60 ) );
+        p.setBrush( QColor( 60, 60, 60 ) );
+        QPolygon tri;
+        if( collapsed_ ) {                      // ▸ collapsed
+            tri << QPoint( fx+3, midY-4 ) << QPoint( fx+3, midY+4 ) << QPoint( fx+9, midY );
+        } else {                                // ▾ expanded
+            tri << QPoint( fx+2, midY-3 ) << QPoint( fx+10, midY-3 ) << QPoint( fx+6, midY+3 );
+        }
+        p.drawPolygon( tri );
+    }
 }
 
 void SSMVMixerControl::mousePressEvent( QMouseEvent *ev )
 {
+    int x = ev->pos().x();
+    int fx = depth_*SMV_TRACK_INDENT;
+    int gx = gripLeft( depth_ );
+
+    // A left click on the fold triangle toggles this parent's children.
+    if( ev->button()==Qt::LeftButton && foldable_ && x>=fx && x<fx+SMV_FOLD_W ) {
+        smv_.toggleTrackCollapsed( &tk_ );
+        ev->accept();
+        return;
+    }
     // A left press on the grip strip arms a track-reorder drag.
-    if( ev->button()==Qt::LeftButton && ev->pos().x() < HANDLE_W ) {
+    if( ev->button()==Qt::LeftButton && x>=gx && x<gx+HANDLE_W ) {
         dragArmed_ = true;
         dragging_ = false;
         dragPressPos_ = ev->pos();
@@ -202,8 +243,9 @@ SSMVMixerControl::SSMVMixerControl(
       tk_( tk )
 {
     qLayout_ = new QGridLayout( this );
-    // Leave the left HANDLE_W pixels free for the drag-handle grip.
-    qLayout_->setContentsMargins( HANDLE_W, 2, 4, 2 );
+    // Reserve the left edge for [fold triangle][grip]; setTreeInfo() widens this
+    // by the indent for nested tracks.
+    qLayout_->setContentsMargins( SMV_FOLD_W + HANDLE_W, 2, 4, 2 );
     qLayout_->setSpacing( 2 );
 
     qTrkLabel_ = new QLineEdit( tk_.getSName(), this );

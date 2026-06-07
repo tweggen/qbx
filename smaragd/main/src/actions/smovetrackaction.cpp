@@ -58,9 +58,10 @@ SApplyResult SMoveTrackAction::apply(SProject *project)
     // track needs nothing further — twTrackMix sums its children live.
     SStdMixer *mixer = dynamic_cast<SStdMixer *>(parent);
     if (mixer) {
-        mixer->reorderTrack(fromIndex, toIndex);
+        mixer->reorderTrack(fromIndex, toIndex);   // emits tracksReordered itself
     } else {
         parent->moveChildToIndex(fromIndex, toIndex);
+        rootMixer->notifyTreeChanged();            // folder reorder: notify views
     }
 
     // Inverse: the track now sits at `toIndex`; move it back to `fromIndex`.

@@ -1669,5 +1669,55 @@ fader.)
 
 ### Verification needed (human)
 
-1. Drag a track's top grip up/down → a blue insertion line tracks the pointer;
+1. Drag a track's grip up/down → a blue insertion line tracks the pointer;
    on release the track (fader + lane) moves to that slot. Ctrl+Z restores it.
+
+---
+
+## Grouping/assets: §1.2 indented arranger — display foundation (Stage 1)
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW; window-up smoke
+  passes. Visual check is a human step (see below).
+
+### Why
+
+The arranger assumed a flat `getTrackAt(i)` / `i*trackHeight` mapping everywhere
+(paint, hit-testing, clip-drag, scroll, the control column). To show nested
+tracks it had to be restructured around the tree. This is the **display
+foundation**; the three grouping *gestures* (drag-to-nest, context indent/outdent,
+toolbar Group/Ungroup — all requested) come next on top of it.
+
+### What landed
+
+A **flattened depth-first row model** owned by `SStdMixerView`: `rows_` (a
+`QVector<STrackRow>` of `{track, link, parent, depth, hasChildren, collapsed}`),
+rebuilt by `refreshTrackTree()` (→ `rebuildRows` walks the tree, skipping
+collapsed subtrees → `rebuildControlColumn` → scroll range → repaint). Per-track
+fold state lives in a `QSet<STrack*> collapsed_`.
+
+| Area | Change |
+|------|--------|
+| `sstdmixerview.h/.cpp` | `STrackRow` + `rows_`/`collapsed_`; `rowCount/rowAt/rowIndexOfTrack/toggleTrackCollapsed/refreshTrackTree`. Paint walks rows (indent band per depth, full-width clips); `updateLastClickVars`, clip-drag, scroll range, zoom and the ctor all index rows instead of the flat mixer. The incremental `add/removeMixerControl`/`tracksReordered` slots now just call `refreshTrackTree()` (a full, always-correct rebuild). Grip drag still reorders **top-level** tracks for now. |
+| `ssmvmixercontrol.h/.cpp` | `setTreeInfo(depth,foldable,collapsed)`: indents the strip content, draws a ▾/▸ **fold triangle** for parents (click toggles via `toggleTrackCollapsed`), and offsets the grip by the indent + fold gutter. |
+| `sstdmixer.h/.cpp` | `notifyTreeChanged()` (emits `tracksReordered()`) so tree-editing actions can force a post-operation view rebuild. |
+| `sreparenttrackaction.cpp`, `smovetrackaction.cpp` | Call `notifyTreeChanged()` after mutating — the detach fires a mid-operation refresh and the folder-side attach emits no mixer signal, so the final state needs an explicit nudge. |
+| `smainwindow.cpp/.h` | **Test → Nest Track 1 Under 0 (persist)** so the indented display is visible (the Group Track Test self-undoes). Ctrl+Z ungroups. |
+
+### Notes / scope
+
+- Grip drag reorders **top-level** tracks only; dragging nested tracks + the
+  three grouping gestures are Stage 2.
+- Control column is rebuilt wholesale on any structural change (cheap; keeps it
+  in lockstep with `rows_`). Volume changes do **not** trigger it.
+
+### Verification needed (human)
+
+1. **Test → Nest Track 1 Under 0 (persist)** → track 1 appears as an indented
+   lane under track 0, which shows a ▾ fold triangle. Clicking the triangle
+   collapses/expands; the nested fader indents to match. Ctrl+Z ungroups.
+
+### Next
+
+§1.2 Stage 2 — the three grouping gestures (drag-to-nest, context-menu
+indent/outdent, toolbar Group/Ungroup), plus nested-track grip reorder.

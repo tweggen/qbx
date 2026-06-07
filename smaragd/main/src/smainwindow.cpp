@@ -376,6 +376,7 @@ SMainWindow::SMainWindow()
     qTestMenu_->addAction( "Save/&Load Round-trip", this, SLOT( runSaveLoadTest() ) );
     qTestMenu_->addAction( "&Group Track Test (tree + undo)", this, SLOT( runGroupTrackTest() ) );
     qTestMenu_->addAction( "Re&order Track Test (exact slot)", this, SLOT( runReorderTrackTest() ) );
+    qTestMenu_->addAction( "&Nest Track 1 Under 0 (persist)", this, SLOT( runGroupPersist() ) );
     menuBar()->addMenu( qTestMenu_ );
 
     qDockExternFileList_ = NULL;
@@ -645,6 +646,24 @@ void SMainWindow::runGroupTrackTest()
             mixer->getNTracks(), probeTop);
     fflush(stderr);
     statusBar()->showMessage(msg, 6000);
+}
+
+// Create a persistent nesting so the indented arranger is visible (the Group
+// Track Test self-undoes). Nests track 1 under track 0; Ctrl+Z ungroups.
+void SMainWindow::runGroupPersist()
+{
+    if (!currentProject_) {
+        statusBar()->showMessage("Open or create a project first", 3000);
+        return;
+    }
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    if (!mixer) return;
+    while (mixer->getNTracks() < 2) {
+        SApplication::app().submitAction(new SAddTrackAction(-1));
+    }
+    SApplication::app().submitAction(
+        new SReparentTrackAction(QList<int>{1}, QList<int>{0}));
+    statusBar()->showMessage("Nested track 1 under track 0 (Ctrl+Z to ungroup)", 4000);
 }
 
 // Validation for exact-slot reorder: tag the first three tracks with distinct

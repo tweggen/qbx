@@ -93,6 +93,14 @@ public slots:
     void reorderTrack( int fromIndex, int toIndex );
 
     /**
+     * Announce that the track tree changed somewhere (e.g. a reparent into a
+     * folder, or a reorder inside one) so views rebuild. Emitted as
+     * tracksReordered() since the effect on a view is the same: re-walk the tree.
+     * Used by the tree-editing actions after they finish mutating.
+     */
+    void notifyTreeChanged();
+
+    /**
      * Remove the specified track.
      */
     int removeTrack( int trackIndex );
