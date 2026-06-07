@@ -1760,10 +1760,8 @@ reached from the main window by casting the central `projectRootWidget_`).
 
 ### Honestly deferred
 
-- **Group/Ungroup operate on top-level tracks** (and leave the emptied folder in
-  place on Ungroup): an *undoable* track-remove doesn't exist yet
-  (`SRemoveTrackAction` is non-undoable), so dissolving the folder fully would
-  break the undo macro. Removing the leftover empty folder is a manual step.
+- **Group/Ungroup operate on top-level tracks.** (Ungroup now fully dissolves the
+  folder — see the undoable-remove entry below.)
 - Toolbar Group/Ungroup target the **last-clicked track** in the timeline lanes
   (clicking a fader strip doesn't set that selection yet).
 - Between-drag reorder inside a folder isn't a distinct gesture — drop-onto nests,
@@ -1776,3 +1774,55 @@ reached from the main window by casting the central `projectRootWidget_`).
    outlined); drop on a boundary → reorder / pop-out. Ctrl+Z reverts.
 2. Right-click a track → Indent/Outdent/Group/Ungroup behave; each is one undo.
 3. Toolbar **Group**/**Ungroup** act on the clicked track.
+
+---
+
+## Grouping/assets: undoable track-remove (restore subtree)
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW; window-up smoke
+  passes. Validated via **Test → Undoable Remove Test** (human step).
+
+### Why / how
+
+`SRemoveTrackAction` was a Phase-1 stub returning `{true, nullptr}` (no undo), so
+Ungroup couldn't delete the folder it emptied. Now it is **undoable by pinning**:
+`apply()` takes an extra reference on the removed track and stores it *on the
+action object itself* (`heldTrack_`/`holdsRef_`). Because a track owns its child
+SLinks as QObject-children, pinning the track keeps its **entire subtree alive
+and intact** — no serialization. The inverse, `SRestoreTrackAction`, reads that
+pinned track back via the owning remove action and re-inserts it at its original
+index, **preserving object identity** across undo/redo.
+
+The pin lives on the *persistent* forward action (the undo command reuses
+forward/inverse across undo↔redo; `skipHistory` submit deletes the *returned*
+inverse each time — see `SActionHistory::submit`). `dropStalePin()` releases a
+pin left by a previous apply whose track was orphaned (e.g. AddTrack's redo makes
+a fresh track); the destructor releases the pin if the command is discarded while
+in the removed state, finally tearing the subtree down.
+
+| File | Change |
+|------|--------|
+| `actions/sremovetrackaction.{h,cpp}` | Undoable: pin on apply, `heldTrack()/releaseHeld()`, stale-pin + destructor handling; returns `SRestoreTrackAction`. |
+| `actions/srestoretrackaction.{h,cpp}` (new) | Re-inserts the pinned track at its index, releases the pin, `notifyTreeChanged()`. Created live only (not registered/serialized). |
+| `sstdmixerview.cpp` | `ctRemoveTrack` now routes through `SRemoveTrackAction` (undoable); **Ungroup deletes the emptied folder** inside its macro (undo restores folder, then children reparent back in — the reverse replay reconstructs each intermediate tree, so the exact-slot reparent inverses resolve). |
+| `smainwindow.cpp/.h` | **Test → Undoable Remove Test**: groups, removes the folder+subtree, undoes, asserts the folder and its nested child return as the same objects. |
+
+### Verification needed (human)
+
+1. **Test → Undoable Remove Test** → `Undoable remove OK: folder+subtree restored
+   (… same identity)`.
+2. Right-click a folder → **Ungroup** now removes the folder entirely; Ctrl+Z
+   restores it with its children.
+
+### Crash fix (same session)
+
+**SEGV on a second drag-to-group** (group track 2, then group track 3 onto the
+same folder). Cause: `rebuildControlColumn()` did `delete mc` on every control,
+and it is reached *synchronously from inside a control's own mouse handler* (a
+grip-drag release that reparents, or a fold-triangle click) — so the control
+freed itself while Qt was still dispatching its event (use-after-free, both in
+the handler's trailing code and in Qt's dispatch). Fix: `rebuildControlColumn()`
+now `hide()`s and `deleteLater()`s the old controls, so the handler unwinds
+before they are destroyed. Covers the drag-release, fold-click, and any other
+in-event structural change.

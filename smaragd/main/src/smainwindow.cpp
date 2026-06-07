@@ -37,6 +37,7 @@
 #include "actions/saddtrackaction.h"
 #include "actions/sreparenttrackaction.h"
 #include "actions/smovetrackaction.h"
+#include "actions/sremovetrackaction.h"
 #include "actions/saddsampleaction.h"
 #include "actions/ssettrackvolumeaction.h"
 #include "actions/ssaveprojectaction.h"
@@ -378,6 +379,7 @@ SMainWindow::SMainWindow()
     qTestMenu_->addAction( "&Group Track Test (tree + undo)", this, SLOT( runGroupTrackTest() ) );
     qTestMenu_->addAction( "Re&order Track Test (exact slot)", this, SLOT( runReorderTrackTest() ) );
     qTestMenu_->addAction( "&Nest Track 1 Under 0 (persist)", this, SLOT( runGroupPersist() ) );
+    qTestMenu_->addAction( "Undoable Remo&ve Test (subtree)", this, SLOT( runUndoRemoveTest() ) );
     menuBar()->addMenu( qTestMenu_ );
 
     qDockExternFileList_ = NULL;
@@ -645,6 +647,59 @@ void SMainWindow::runGroupTrackTest()
     fprintf(stderr, "%s (top %d->%d->undo %d; probeTop=%d)\n",
             msg.toUtf8().constData(), topBefore, topAfter,
             mixer->getNTracks(), probeTop);
+    fflush(stderr);
+    statusBar()->showMessage(msg, 6000);
+}
+
+// Validate undoable track-remove: group track 1 under track 0 so the folder has
+// a subtree, remove the folder, then undo and confirm the folder AND its nested
+// child come back as the *same* objects (the pin preserves identity + subtree).
+void SMainWindow::runUndoRemoveTest()
+{
+    if (!currentProject_) {
+        statusBar()->showMessage("Open or create a project first", 3000);
+        return;
+    }
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    if (!mixer) {
+        statusBar()->showMessage("Remove test FAILED: no mixer", 4000);
+        return;
+    }
+    auto childTrackCount = [](SObject *c) {
+        int n = 0;
+        for (SLink *lk : c->childLinks())
+            if (dynamic_cast<STrack*>(&lk->getSObject())) ++n;
+        return n;
+    };
+
+    while (mixer->getNTracks() < 2) {
+        SApplication::app().submitAction(new SAddTrackAction(-1));
+    }
+    SApplication::app().submitAction(new SReparentTrackAction(QList<int>{1}, QList<int>{0}));
+    int topAfterGroup = mixer->getNTracks();
+    STrack *folderTrack = dynamic_cast<STrack*>(&mixer->childAt(0)->getSObject());
+    int childCount = folderTrack ? childTrackCount(folderTrack) : -1;
+
+    SApplication::app().submitAction(new SRemoveTrackAction(0));
+    int topAfterRemove = mixer->getNTracks();
+
+    SApplication::app().actionHistory()->undo();
+    int topAfterUndo = mixer->getNTracks();
+    STrack *restored = mixer->getNTracks() > 0
+        ? dynamic_cast<STrack*>(&mixer->childAt(0)->getSObject()) : nullptr;
+    int restoredChildCount = restored ? childTrackCount(restored) : -1;
+    bool identitySame = (restored == folderTrack);
+
+    bool ok = (topAfterRemove == topAfterGroup-1)
+              && (topAfterUndo == topAfterGroup)
+              && (restoredChildCount == childCount)
+              && identitySame;
+    QString msg = ok
+        ? QString("Undoable remove OK: folder+subtree restored (%1 child, same identity)").arg(childCount)
+        : QString("Undoable remove FAILED: top %1->%2->undo %3; child %4->%5; identity=%6")
+              .arg(topAfterGroup).arg(topAfterRemove).arg(topAfterUndo)
+              .arg(childCount).arg(restoredChildCount).arg(identitySame);
+    fprintf(stderr, "%s\n", msg.toUtf8().constData());
     fflush(stderr);
     statusBar()->showMessage(msg, 6000);
 }

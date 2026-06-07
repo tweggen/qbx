@@ -31,6 +31,7 @@
 #include "actions/saddtrackaction.h"
 #include "actions/smovetrackaction.h"
 #include "actions/sreparenttrackaction.h"
+#include "actions/sremovetrackaction.h"
 #include "actions/strackpath.h"
 #include "sactionhistory.h"
 #include <QFrame>
@@ -436,7 +437,8 @@ void SStdMixerView::ctRemoveTrack()
     if( !t || !model_ ) return;
     int idx = model_->indexOfChildObject( *t );
     if( idx<0 ) return;                 // nested track: not handled here
-    model_->removeTrack( idx );
+    // Through the action so it is undoable (the track + subtree is restorable).
+    SApplication::app().submitAction( new SRemoveTrackAction( idx ) );
 }
 
 // --- grouping (proposal 05 §1.2) ----------------------------------------
@@ -516,6 +518,12 @@ void SStdMixerView::ctUngroupTrack()
         SApplication::app().submitAction( new SReparentTrackAction(
             strackpath::pathOf( model_, k ), QList<int>{}, insertAt ) );
         ++insertAt;
+    }
+    // Delete the now-empty folder (undoable: its restore brings it back, then the
+    // child reparents undo back into it).
+    int fIdx = model_->indexOfChildObject( *t );
+    if( fIdx>=0 ) {
+        SApplication::app().submitAction( new SRemoveTrackAction( fIdx ) );
     }
     if( stack ) stack->endMacro();
 }
@@ -1024,7 +1032,14 @@ void SStdMixerView::toggleTrackCollapsed( STrack *t )
 // control column in lockstep with rows_ for every structural change.)
 void SStdMixerView::rebuildControlColumn()
 {
-    for( SSMVMixerControl *mc : *controlArray_ ) delete mc;
+    // Defer destruction: a rebuild can be triggered from *inside* a control's
+    // own mouse handler (a grip-drag release that reparents, or a fold-triangle
+    // click), so deleting the control synchronously would free it while Qt is
+    // still dispatching its event -> use-after-free. hide() + deleteLater() lets
+    // the handler unwind first.
+    for( SSMVMixerControl *mc : *controlArray_ ) {
+        if( mc ) { mc->hide(); mc->deleteLater(); }
+    }
     controlArray_->clear();
     int h = getTrackHeight();
     for( int i=0; i<rows_.size(); ++i ) {

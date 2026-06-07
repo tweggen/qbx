@@ -39,6 +39,7 @@ protected slots:
     void runGroupTrackTest();
     void runReorderTrackTest();
     void runGroupPersist();
+    void runUndoRemoveTest();
     void undo();
     void redo();
 
