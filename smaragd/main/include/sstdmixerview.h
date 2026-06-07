@@ -353,6 +353,7 @@ private:
     // the right-click menu.
     QAction *actNewTrack_;       // Ctrl+T
     QAction *actInsertSample_;   // Ctrl+Return
+    QAction *actSplit_;          // S
 
     bool snapToTimeGrid_;
     STimeGridSpec timeGridSpec_;

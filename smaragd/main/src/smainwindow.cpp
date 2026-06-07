@@ -839,7 +839,7 @@ void SMainWindow::buildPaletteToolbar()
         return a;
     };
 
-    actSnapToGrid_ = addToggle( "S", "Snap to grid", Qt::Key_S, SLOT( toggleSnapToGrid() ) );
+    actSnapToGrid_ = addToggle( "S", "Snap to grid", Qt::ALT | Qt::Key_S, SLOT( toggleSnapToGrid() ) );
     actGrid_       = addToggle( "G", "Grid",         Qt::Key_G, SLOT( toggleGrid() ) );
     actMetronome_  = addToggle( "M", "Metronome",    Qt::Key_M, SLOT( toggleMetronome() ) );
     actCycle_      = addToggle( "C", "Cycle",        Qt::Key_C, SLOT( toggleCycle() ) );

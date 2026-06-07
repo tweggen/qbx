@@ -354,7 +354,7 @@ void SMVActualView::ctGlobalShow()
 {
     qGlobalPopup_->clear();
     if( lastClickSLink_ ) {
-        qGlobalPopup_->addAction( "&Split object", &smv_, SLOT( ctSplitSample() ) );
+        qGlobalPopup_->addAction( smv_.actSplit_ );
         qGlobalPopup_->addAction( "Add &link", &smv_, SLOT( ctAddLink() ) );
         qGlobalPopup_->addSeparator();
     }
@@ -882,9 +882,8 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         qGlobalPopup_->popup( mapToGlobal( ev->pos() ) );
     } else if( ev->buttons() & Qt::LeftButton ) {
         // Detect, on which object we clicked.
-        // We know the track,  so now calculate the time. 
-        bool gotObject = false;
-        if( lastClickTrack_ ) {            
+        // We know the track,  so now calculate the time.
+        if( lastClickTrack_ ) {
             if( lastClickSLink_ ) {
                 lastClickSelStartOffset_ = lastClickSLink_->getStartTime();
                 // Snapshot for a possible MOVE drag (finalized in release).
@@ -908,20 +907,15 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                 }
                 // FIXME: Only update the object itselves.
                 update();
-                gotObject = true;
             }
         }
-        if( !gotObject ) {
-            // OK, seek to the position.
-            offset_t ofs = getTimeOf( ev->pos().x() );
-            ofs = smv_.alignTime( ofs );
-            SApplication::app().setGlobalLocatorPos( ofs );
-            if( SApplication::app().isPlaying() ) {
-                // FIXME: Why here? It should work anyways.
-                //SApplication::app().getSpeaker()->stopOutput();
-                smv_.model_->seekTo( SApplication::app().getGlobalLocatorPos() );
-                //SApplication::app().getSpeaker()->startOutput();
-            }
+        // A left click always moves the playhead to the clicked time — whether on
+        // a sample or empty lane — until richer in-sample mouse actions exist.
+        // (This also lets 's' Split at the click point.)
+        offset_t ofs = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+        SApplication::app().setGlobalLocatorPos( ofs );
+        if( SApplication::app().isPlaying() ) {
+            smv_.model_->seekTo( SApplication::app().getGlobalLocatorPos() );
         }
     }
 }
@@ -1627,6 +1621,11 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
           QKeySequence( Qt::CTRL | Qt::Key_Enter ) } );
     QObject::connect( actInsertSample_, SIGNAL( triggered() ), this, SLOT( ctInsertSample() ) );
     addAction( actInsertSample_ );
+
+    actSplit_ = new QAction( "&Split object", this );
+    actSplit_->setShortcut( Qt::Key_S );
+    QObject::connect( actSplit_, SIGNAL( triggered() ), this, SLOT( ctSplitSample() ) );
+    addAction( actSplit_ );
 
     // Build the flattened tree + control column for whatever already resides in
     // the mixer (refreshTrackTree handles rows, controls and scroll range).
