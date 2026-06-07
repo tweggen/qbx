@@ -5,6 +5,7 @@
 #include <qfile.h>
 
 #include "twsamplesource.h"
+#include "twresampledsource.h"
 
 twSampleSource::twSampleSource( tw303aEnvironment &env, const QString &fileName )
     : env_( env ),
@@ -13,7 +14,8 @@ twSampleSource::twSampleSource( tw303aEnvironment &env, const QString &fileName 
       channels_( 0 ),
       rate_( 0 ),
       bits_( 0 ),
-      nFrames_( 0 )
+      nFrames_( 0 ),
+      resampledRate_( 0 )
 {
     if( loadWav() < 0 ) {
         loaded_ = false;
@@ -22,6 +24,21 @@ twSampleSource::twSampleSource( tw303aEnvironment &env, const QString &fileName 
 
 twSampleSource::~twSampleSource()
 {
+    // resampled_ (unique_ptr<twResampledSource>) destroyed here, where the type
+    // is complete.
+}
+
+twRandomSource *twSampleSource::viewAtRate( int targetRate ) const
+{
+    twSampleSource *self = const_cast<twSampleSource *>( this );
+    if( !loaded_ || targetRate <= 0 || targetRate == rate_ ) {
+        return self;   // native rate already matches (the common case)
+    }
+    if( !resampled_ || resampledRate_ != targetRate ) {
+        resampled_.reset( new twResampledSource( *this, targetRate ) );
+        resampledRate_ = targetRate;
+    }
+    return resampled_.get();
 }
 
 /**

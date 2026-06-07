@@ -15,6 +15,7 @@ set(TW303A_HEADERS
     include/twrandomsource.h
     include/twsamplesource.h
     include/twsamplereader.h
+    include/twresampledsource.h
     include/twrewire.h
     include/twsaw.h
     include/twsimplesaw.h
@@ -44,6 +45,7 @@ set(TW303A_SOURCES
     src/twpipe.cc
     src/twsamplesource.cc
     src/twsamplereader.cc
+    src/twresampledsource.cc
     src/twresampler.cc
     src/twrewire.cc
     src/twsaw.cc

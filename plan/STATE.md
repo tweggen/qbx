@@ -1920,3 +1920,49 @@ under a lock. Proposal 07 splits the immutable data from the per-consumer cursor
   `getRandomSource()` API is the hook it will plug into.
 - Windowed/streaming fallback for files too large to keep resident: not added
   (residency is the default; huge files are the only gap).
+
+---
+
+## Cached resampling: off-rate samples now play at correct pitch & length
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW. Human listen on
+  an off-rate sample (e.g. a 44.1 kHz file in a 48 kHz project) is the real check.
+
+### Why
+
+After the source/reader split a sample still played back at its native rate, so a
+44.1 kHz file in a 48 kHz project ran fast and sharp (the twSpeaker rate
+diagnostic was added for exactly this). Resampling on every block would be
+wasteful; the data is reproducible, so resample once and cache.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `tw303a/include/twresampledsource.h` + `src/twresampledsource.cc` (new) | `twResampledSource`: a twRandomSource that materialises the whole material, resampled (linear) to a target rate, into a resident planar buffer ONCE in its ctor; read() is then a lock-free memcpy. Reproducible/shareable. |
+| `tw303a/include/twsamplesource.h` + `src/twsamplesource.cc` | `viewAtRate(targetRate)`: returns `this` when the native rate matches (common case, zero cost), else a lazily-built, cached `twResampledSource` (rebuilt only if the requested rate changes). |
+| `tw303a/src/twwavinput.cc` | `calcOutputTo`, `getLength`, and `getSource` all go through `source_->viewAtRate(env.getSRate())`, so playback, **duration**, preview, and cut readers are all project-rate coherent. The view is pre-built at load time (UI thread) so the one-time resample never lands in a realtime block. |
+| `tw303a/CMakeLists.txt` | Added the new files. |
+
+### Design note: why the cache is on the source, not literally in the reader
+
+A per-reader resampler would (a) duplicate the resampled buffer for every cut of
+one sample (the waste we explicitly want to avoid) and (b) leave preview and
+`getDuration()` at the native rate while playback ran at the project rate —
+off-rate samples would then play at correct pitch but wrong length (truncated
+when upsampling, silence-padded when downsampling). A single cached view on the
+source, read by preview + every reader + duration, is the only coherent place.
+The reader still reads exclusively resampled, cached data — just not a private
+copy.
+
+### Honestly deferred / limitations
+
+- **Mid-session project-rate change:** a cut's reader is acquired once over
+  whatever `getSource()` returned then; it will not switch to a freshly-built
+  view if the project rate later changes (the shared twWavInput path does
+  self-correct). Rare; tied to the broader renegotiation debt.
+- **Legacy off-rate projects:** a cut serialised with a native-frame
+  `cutDuration_` (from before this change) stays that length on reload; new cuts
+  get the correct project-rate duration.
+- Linear interpolation only (matches twResampler); a polyphase upgrade is future.

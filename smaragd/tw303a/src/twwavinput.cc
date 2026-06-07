@@ -19,7 +19,9 @@ int twWavInput::setNOutputs( idx_t )
 
 length_t twWavInput::getLength() const
 {
-    return source_ ? source_->length() : -1;
+    // Report duration in PROJECT-rate frames, so the timeline reserves the right
+    // span for an off-rate sample (otherwise it would be truncated/padded).
+    return source_ ? source_->viewAtRate( env.getSRate() )->length() : -1;
 }
 
 // Cache sizing is obsolete now that the whole file is resident; kept as no-op
@@ -67,7 +69,9 @@ idx_t twWavInput::getNOutputs() const
 
 twRandomSource *twWavInput::getSource() const
 {
-    return source_;
+    // Hand out the project-rate view, so cut readers and preview play at the
+    // correct pitch from a single cached resampled buffer.
+    return source_ ? source_->viewAtRate( env.getSRate() ) : NULL;
 }
 
 /**
@@ -81,7 +85,9 @@ length_t twWavInput::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
         memset( pDest, 0, sizeof( sample_t ) * length );
         return length;
     }
-    source_->read( playOffset_, pDest, length, idx );
+    // Read through the project-rate view (cached); a no-op passthrough when the
+    // sample's native rate already equals the project rate.
+    source_->viewAtRate( env.getSRate() )->read( playOffset_, pDest, length, idx );
     return length;
 }
 
@@ -113,6 +119,10 @@ twWavInput::twWavInput( tw303aEnvironment &env, QString fileName )
         return;
     }
     loaded_ = true;
+    // Build the resampled view now, on the (UI) load thread, so the one-time
+    // resample cost does not land in the first realtime audio block. No-op when
+    // the sample is already at the project rate.
+    source_->viewAtRate( env.getSRate() );
 }
 
 twWavInput::~twWavInput()
