@@ -1130,13 +1130,18 @@ void SStdMixerView::endTrackDrag( int yInControlBox )
     dragControl_ = NULL;
     if( !control || !model_ ) return;
     STrack *t = &control->getTrack();
+    int ri = rowIndexOfTrack( t );
+    SObject *curParent = (ri>=0) ? rowAt( ri )->parent : NULL;
 
     STrack *onto = NULL; int slot = 0;
     resolveDrop( yInControlBox, &onto, &slot );
 
-    // Dropped onto another lane -> nest under it (the action guards cycles and
-    // a same-parent no-op).
-    if( onto && onto != t ) {
+    // Dropped onto a lane:
+    if( onto ) {
+        // Onto itself or the parent it already sits in -> no-op (don't submit a
+        // doomed reparent).
+        if( onto == t || (SObject*)onto == curParent ) return;
+        // Otherwise nest under it (the action also guards cycles).
         SApplication::app().submitAction( new SReparentTrackAction(
             strackpath::pathOf( model_, t ),
             strackpath::pathOf( model_, onto ), -1 ) );

@@ -159,8 +159,13 @@ void SSMVMixerControl::mousePressEvent( QMouseEvent *ev )
 
     // A left click on the fold triangle toggles this parent's children.
     if( ev->button()==Qt::LeftButton && foldable_ && x>=fx && x<fx+SMV_FOLD_W ) {
-        smv_.toggleTrackCollapsed( &tk_ );
         ev->accept();
+        // Toggling rebuilds the control column (deletes controls, incl. this
+        // one) — do it after this event returns, never inside the handler.
+        SStdMixerView *view = &smv_;
+        STrack *tk = &tk_;
+        QMetaObject::invokeMethod( view, [view, tk]() { view->toggleTrackCollapsed( tk ); },
+                                   Qt::QueuedConnection );
         return;
     }
     // A left press on the grip strip arms a track-reorder drag.
@@ -195,12 +200,18 @@ void SSMVMixerControl::mouseMoveEvent( QMouseEvent *ev )
 void SSMVMixerControl::mouseReleaseEvent( QMouseEvent *ev )
 {
     if( dragging_ ) {
-        smv_.endTrackDrag( mapToParent( ev->pos() ).y() );
         dragging_ = false;
         dragArmed_ = false;
         unsetCursor();
         update();
+        int y = mapToParent( ev->pos() ).y();
         ev->accept();
+        // endTrackDrag can rebuild the control column (deleting controls,
+        // including this one). Run it after this event returns so we never
+        // mutate/destroy widgets from inside their own event dispatch.
+        SStdMixerView *view = &smv_;
+        QMetaObject::invokeMethod( view, [view, y]() { view->endTrackDrag( y ); },
+                                   Qt::QueuedConnection );
         return;
     }
     dragArmed_ = false;
