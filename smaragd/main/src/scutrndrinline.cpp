@@ -8,25 +8,91 @@
 #include "scut.h"
 #include "scutrndrinline.h"
 
+namespace {
+// A render context that maps one loop-repetition's pixel span linearly onto the
+// content segment [startOffset, startOffset+loopLength]. The wave renderer
+// subtracts lk.getStartTime() from getTimeOf(), so baseTime carries
+// (clipStart + startOffset) and the per-pixel ramp covers exactly one segment.
+class LoopSegmentContext : public SRenderContext {
+public:
+    LoopSegmentContext( QPainter &p, offset_t baseTime,
+                        double segLeftX, double segWpx, length_t segLen )
+        : SRenderContext( p ), baseTime_( baseTime ),
+          segLeftX_( segLeftX ), segWpx_( segWpx ), segLen_( segLen ) {}
+    virtual offset_t getTimeOf( int x ) const {
+        double rel = ( (double) x - segLeftX_ ) * (double) segLen_ / segWpx_;
+        if( rel < 0 ) rel = 0;
+        return baseTime_ + (offset_t) rel;
+    }
+private:
+    offset_t baseTime_;
+    double   segLeftX_;
+    double   segWpx_;
+    length_t segLen_;
+};
+}
+
 /**
  * The actual cut renderer function.
- * It simply creates a context and calls the content renderer function.
+ * Non-looping cuts draw their content once. A looping cut tiles its loop segment
+ * across the clip width (the wave renderer fetches one linear range per call, so
+ * tiling needs repeated draws rather than a wrapped getTimeOf), with a faint
+ * divider at each loop boundary.
  */
 void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
-{        
+{
     QPainter &p = ctx.getPainter();
     QRect visibRect = ctx.getVisibRect();
 
-    // Now draw the inner of the object.
-    InlineRenderContext myctx( getCut(), ctx, p );
-    myctx.setVisibRect( visibRect );
     SObjectRenderer *rndr = getCut().getContent().getInlineRenderer();
     if( !rndr ) {
         p.drawText( visibRect, Qt::AlignCenter, "SCut: No renderer." );
         return;
     }
-    // Note, that this is my link but his object!!!
-    rndr->draw( lk, myctx );
+
+    SCut &cut = getCut();
+    if( !cut.isLooping() ) {
+        // Note, that this is my link but his object!!!
+        InlineRenderContext myctx( cut, ctx, p );
+        myctx.setVisibRect( visibRect );
+        rndr->draw( lk, myctx );
+        return;
+    }
+
+    length_t segLen   = cut.getLoopLength();
+    offset_t baseTime = lk.getStartTime() + cut.getStartOffset();
+
+    // Pixels-per-sample from two probe points of the parent (timeline) mapping.
+    int xa = visibRect.x();
+    int xb = visibRect.x() + visibRect.width();
+    if( xb <= xa ) xb = xa + 1;
+    double ta = (double) ctx.getTimeOf( xa );
+    double tb = (double) ctx.getTimeOf( xb );
+    double spp = ( tb - ta ) / (double)( xb - xa );     // timeline samples / pixel
+    if( spp <= 0.0 ) spp = 1.0;
+    double clipLeftX = (double) xa + ( (double) lk.getStartTime() - ta ) / spp;
+    double segWpx = (double) segLen / spp;
+    if( segWpx < 1.0 ) segWpx = 1.0;
+
+    int right = visibRect.x() + visibRect.width();
+    int k = 0;
+    if( clipLeftX < visibRect.x() )
+        k = (int)( ( visibRect.x() - clipLeftX ) / segWpx );
+    for( ; ; k++ ) {
+        double sx = clipLeftX + (double) k * segWpx;
+        if( sx >= right ) break;
+        double ex = sx + segWpx;
+        int isx = (int)( sx > visibRect.x() ? sx : visibRect.x() );
+        int iex = (int)( ex < right ? ex : right );
+        if( iex <= isx ) continue;
+        LoopSegmentContext lctx( p, baseTime, sx, segWpx, segLen );
+        lctx.setVisibRect( QRect( isx, visibRect.y(), iex - isx, visibRect.height() ) );
+        rndr->draw( lk, lctx );
+        if( ex < right ) {                              // loop boundary divider
+            p.setPen( QColor( 70, 70, 70 ) );
+            p.drawLine( (int) ex, visibRect.y(), (int) ex, visibRect.y() + visibRect.height() );
+        }
+    }
 }
 
 /**

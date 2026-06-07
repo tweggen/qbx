@@ -29,6 +29,10 @@
 #include "ssettings.h"
 #include "soptions.h"
 #include <QWheelEvent>
+#include <QCursor>
+#include <QPixmap>
+#include <QPolygon>
+#include <QPen>
 #include "ssmvmixercontrol.h"
 #include "actions/saddtrackaction.h"
 #include "actions/smovetrackaction.h"
@@ -507,6 +511,7 @@ offset_t SMVActualView::getTimeOf( int x ) const
 void SMVActualView::updateLastClickVars( const QPoint &pos )
 {
     lastClickedStart_ = lastClickedEnd_ = false;
+    lastClickedEndUpper_ = false;
     lastClickPos_ = pos;
     int y = pos.y()-SMV_TIME_RULER_HEIGHT;
     if( y<0 ) y = 0;
@@ -531,10 +536,13 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
                     length_t len = lastClickSLink_->getSObject().getDuration();
                     lastClickDuration_ = len;
                     int endX = getXPosOfOffset( pos+len );
-                    if( lastClickPos_.x() < endX 
+                    if( lastClickPos_.x() < endX
                         && lastClickPos_.x() >= (endX-SMV_RIGHT_DRAG_PIXEL) ) {
                         lastClickedEnd_ = true;
-                    }                    
+                        // Upper half of the lane → loop; lower half → extend.
+                        int laneY = ( y + upperLeftY_ ) % trackHeight_;
+                        lastClickedEndUpper_ = ( laneY < trackHeight_/2 );
+                    }
                 }
             }
         }
@@ -617,28 +625,44 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         return;
     }
 
-    // Finalize a clip RESIZE (edge drag) as a single undoable action. The drag
-    // resized live (snapped); revert to the pre-drag window and re-apply via
-    // SResizeClipAction so it is one undo step.
-    if( clipDragArmed_ && lastClickSLink_ && ( lastClickedStart_ || lastClickedEnd_ ) ) {
+    // Finalize a clip EDGE EDIT (resize / slip / stretch / loop) as a single
+    // undoable action. The drag mutated the cut live for feedback; revert to the
+    // pre-drag window and re-apply the whole window via SResizeClipAction so it
+    // is one undo step (and the audio chain rebuilds exactly once, here).
+    if( clipDragArmed_ && lastClickSLink_
+        && ( lastClickedStart_ || lastClickedEnd_ || clipDragIsSlip_
+             || clipDragIsStretch_ || clipDragIsLoop_ ) ) {
         SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
         if( cut ) {
-            offset_t newStart  = lastClickSLink_->getStartTime();
-            offset_t newOffset = cut->getStartOffset();
-            length_t newDur    = cut->getDuration();
-            if( newStart != clipDragStart0_ || newOffset != clipResizeOffset0_
-                || newDur != lastClickDuration_ ) {
+            offset_t newStart   = lastClickSLink_->getStartTime();
+            offset_t newOffset  = cut->getStartOffset();
+            length_t newDur     = cut->getDuration();
+            length_t newLoop    = cut->getLoopLength();
+            double   newStretch = clipStretch0_;
+            if( clipDragIsStretch_ ) {
+                double srcSpan = (double) lastClickDuration_
+                               / ( clipStretch0_ > 0 ? clipStretch0_ : 1.0 );
+                if( srcSpan < 1 ) srcSpan = 1;
+                newStretch = (double) newDur / srcSpan;
+            }
+            bool changed = newStart != clipDragStart0_ || newOffset != clipResizeOffset0_
+                        || newDur != lastClickDuration_ || newLoop != clipLoopLen0_
+                        || newStretch != clipStretch0_;
+            if( changed ) {
+                // Revert to the pre-drag window, then re-apply via the action.
                 lastClickSLink_->setStartTime( clipDragStart0_ );
-                cut->setStartOffset( clipResizeOffset0_ );
-                cut->setDuration( lastClickDuration_ );
+                cut->setWindow( clipResizeOffset0_, lastClickDuration_,
+                                clipLoopLen0_, clipStretch0_ );
                 QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
                 clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
                 SApplication::app().submitAction(
-                    new SResizeClipAction( clipPath, newStart, newOffset, newDur ) );
+                    new SResizeClipAction( clipPath, newStart, newOffset, newDur,
+                                           newLoop, newStretch ) );
                 update();
             }
         }
         clipDragArmed_ = false;
+        clipDragIsSlip_ = clipDragIsStretch_ = clipDragIsLoop_ = false;
         return;
     }
 
@@ -805,8 +829,68 @@ void SMVActualView::ctRangeCreateAsset()
               (long long) getRangeStart(), (long long) getRangeEnd() );
 }
 
+// Set the mouse cursor to telegraph the clip-edit gesture under the pointer,
+// given the current keyboard modifiers: resize/extend (SizeHor), time-stretch
+// (SplitH, Ctrl+border), loop (custom ↻, right-edge upper half), slip (SizeAll,
+// Alt+body), duplicate (DragCopy, Ctrl+body), move (OpenHand). Off any clip it
+// is the plain arrow. Read-only — does not touch the lastClick* drag state.
+void SMVActualView::updateHoverCursor( const QPoint &pos )
+{
+    static QCursor *s_loopCursor = NULL;
+    if( !s_loopCursor ) {
+        QPixmap pm( 24, 24 );
+        pm.fill( Qt::transparent );
+        QPainter pp( &pm );
+        pp.setRenderHint( QPainter::Antialiasing, true );
+        pp.setPen( QPen( QColor( 0, 0, 0 ), 2 ) );
+        pp.drawArc( 5, 5, 14, 14, 50*16, 280*16 );   // open circle
+        pp.setBrush( QColor( 0, 0, 0 ) );
+        QPolygon tri;
+        tri << QPoint( 18, 3 ) << QPoint( 23, 9 ) << QPoint( 14, 8 );
+        pp.drawPolygon( tri );                        // arrow head
+        pp.end();
+        s_loopCursor = new QCursor( pm, 12, 12 );
+    }
+
+    Qt::CursorShape shape = Qt::ArrowCursor;
+    const QCursor *custom = NULL;
+
+    if( pos.y() >= SMV_TIME_RULER_HEIGHT ) {
+        int y = pos.y() - SMV_TIME_RULER_HEIGHT;
+        int rowIdx = ( y + upperLeftY_ ) / trackHeight_;
+        const STrackRow *row = smv_.rowAt( rowIdx );
+        STrack *track = row ? row->track : NULL;
+        SLink *clip = track ? track->getTopMostSLinkAt( getTimeOf( pos.x() ) ) : NULL;
+        if( clip && clip->hasStartTime()
+            && !dynamic_cast<STrack*>( &clip->getSObject() ) ) {
+            offset_t st = clip->getStartTime();
+            int startX = getXPosOfOffset( st );
+            bool onLeft = ( pos.x() >= startX && pos.x() < startX + SMV_LEFT_DRAG_PIXEL );
+            bool onRight = false, upper = false;
+            if( clip->getSObject().hasDuration() ) {
+                length_t len = clip->getSObject().getDuration();
+                int endX = getXPosOfOffset( st + (offset_t) len );
+                onRight = ( pos.x() < endX && pos.x() >= endX - SMV_RIGHT_DRAG_PIXEL );
+                upper = ( ( ( y + upperLeftY_ ) % trackHeight_ ) < trackHeight_/2 );
+            }
+            bool onBorder = onLeft || onRight;
+            Qt::KeyboardModifiers mods = QGuiApplication::keyboardModifiers();
+            bool ctrl = mods & Qt::ControlModifier;
+            bool alt  = mods & Qt::AltModifier;
+            if( onBorder && ctrl )       shape = Qt::SplitHCursor;     // time-stretch
+            else if( onRight && upper )  custom = s_loopCursor;        // loop
+            else if( onBorder )          shape = Qt::SizeHorCursor;    // resize / extend
+            else if( alt )               shape = Qt::SizeAllCursor;    // slip
+            else if( ctrl )              shape = Qt::DragCopyCursor;   // duplicate
+            else                         shape = Qt::OpenHandCursor;   // move
+        }
+    }
+    if( custom ) setCursor( *custom );
+    else setCursor( QCursor( shape ) );
+}
+
 /**
- * Mouse was moved. Look, if the left button currently is pressed, and if 
+ * Mouse was moved. Look, if the left button currently is pressed, and if
  * an object was selected initially. If it was, move it.
  */
 void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
@@ -814,6 +898,12 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
     // Range selection drag takes precedence over clip editing.
     if( rangeDrag_ != RangeNone ) {
         updateRangeDrag( ev->pos().x() );
+        return;
+    }
+
+    // No button held: this is a hover — just update the gesture cursor.
+    if( !( ev->buttons() & Qt::LeftButton ) ) {
+        updateHoverCursor( ev->pos() );
         return;
     }
 
@@ -851,7 +941,83 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
             length_t newStart = getLastClickStartOffset() + delta;
             if( newStart<0 ) newStart = 0;
 
-            if( lastClickedStart_ ) {
+            // Live drags below mutate only the fields needed for visual feedback
+            // (cheap, no audio rebuild); the release reverts to the snapshot and
+            // re-applies the whole window through SResizeClipAction.
+            if( clipDragIsSlip_ ) {
+                // Alt-drag the BODY: slide the content under the clip (change the
+                // cut's start offset). Position and length stay put; dragging
+                // right reveals earlier content.
+                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
+                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                length_t contentLen = cut->getContent().hasDuration()
+                                      ? (length_t) cut->getContent().getDuration() : -1;
+                double st = cut->getStretch(); if( st <= 0 ) st = 1.0;
+                length_t windowLen = (length_t)( (double) cut->getDuration() / st );
+                length_t d = (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
+                           - (length_t) smv_.alignTime( (offset_t) getLastClickOffset() );
+                length_t newOff = (length_t) clipResizeOffset0_ - d;
+                if( newOff < 0 ) newOff = 0;
+                if( contentLen >= 0 && newOff > contentLen - windowLen )
+                    newOff = contentLen - windowLen;
+                if( newOff < 0 ) newOff = 0;
+                QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+                cut->setStartOffset( (offset_t) newOff );
+                update( oldRect );
+                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+            } else if( clipDragIsStretch_ ) {
+                // Ctrl-drag a BORDER: change the timeline length; the stretch is
+                // computed and applied on release (grain rebuild is costly). Here
+                // we only move the geometry, NOT clamped to content (it stretches).
+                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
+                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                offset_t m = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+                QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+                if( lastClickedEnd_ ) {
+                    length_t newDur = (length_t) m - (length_t) clipDragStart0_;
+                    if( newDur < SMV_CUT_MIN_TIME ) newDur = SMV_CUT_MIN_TIME;
+                    cut->setDuration( newDur );
+                } else {
+                    offset_t end0 = clipDragStart0_ + (offset_t) lastClickDuration_;
+                    offset_t rStart = m;
+                    if( (length_t) end0 - (length_t) rStart < SMV_CUT_MIN_TIME )
+                        rStart = end0 - (offset_t) SMV_CUT_MIN_TIME;
+                    cut->setDuration( (length_t) end0 - (length_t) rStart );
+                    lastClickSLink_->setStartTime( rStart );
+                }
+                update( oldRect );
+                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+            } else if( clipDragIsLoop_ ) {
+                // Drag the RIGHT edge's UPPER half: extend the clip past its
+                // content by repeating the previously visible cut. Capture the
+                // loop segment once, then grow the total duration.
+                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
+                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                if( clipLoopSeg_ <= 0 ) {
+                    // Capture the segment to repeat once: the previously visible
+                    // cut (original loop length if already looping, else the
+                    // content the clip showed, capped at the content end).
+                    length_t seg = clipLoopLen0_;
+                    if( seg <= 0 ) {
+                        length_t contentLen = cut->getContent().hasDuration()
+                                              ? (length_t) cut->getContent().getDuration() : -1;
+                        seg = lastClickDuration_;
+                        if( contentLen >= 0
+                            && seg > contentLen - (length_t) clipResizeOffset0_ )
+                            seg = contentLen - (length_t) clipResizeOffset0_;
+                    }
+                    if( seg < SMV_CUT_MIN_TIME ) seg = SMV_CUT_MIN_TIME;
+                    clipLoopSeg_ = seg;
+                }
+                offset_t rEnd = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+                length_t newDur = (length_t) rEnd - (length_t) clipDragStart0_;
+                if( newDur < SMV_CUT_MIN_TIME ) newDur = SMV_CUT_MIN_TIME;
+                QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+                cut->setLoopLengthRaw( clipLoopSeg_ );
+                cut->setDuration( newDur );
+                update( oldRect );
+                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+            } else if( lastClickedStart_ ) {
                 // Drag the LEFT edge: move the clip start to the snapped mouse
                 // time, trimming the front (cut start offset shifts with it).
                 lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
@@ -981,8 +1147,10 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         if( lastClickTrack_ ) {
             if( lastClickSLink_ ) {
                 Qt::KeyboardModifiers modifiers = QGuiApplication::keyboardModifiers();
-                if( modifiers & Qt::ControlModifier ) {
-                    // Ctrl-click on a clip: duplicate it and drag the live copy.
+                bool onBorder = lastClickedStart_ || lastClickedEnd_;
+                if( (modifiers & Qt::ControlModifier) && !onBorder ) {
+                    // Ctrl-click on a clip BODY: duplicate it and drag the live copy.
+                    // (Ctrl on a border means time-stretch — handled below.)
                     // If the clicked clip is part of a multi-selection, the whole
                     // selection is duplicated and dragged as a group (the clicked
                     // clip is the anchor; the rest follow by the same time/row
@@ -1032,17 +1200,33 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     }
                 } else {
                     lastClickSelStartOffset_ = lastClickSLink_->getStartTime();
-                    // Snapshot for a possible MOVE or RESIZE drag (finalized in
-                    // release). clipResizeOffset0_ is the cut's start offset.
+                    // Arm a clip-edit drag (finalized as one undoable action on
+                    // release). Which gesture: Alt on the body = slip; Ctrl on a
+                    // border = time-stretch; right-edge upper half = loop; plain
+                    // border = resize; plain body = move. Snapshot the full cut
+                    // window so the release can revert-then-action.
+                    bool alt = modifiers & Qt::AltModifier;
                     clipDragArmed_ = true;
                     clipDragIsDuplicate_ = false;
+                    clipDragIsSlip_    = ( alt && !onBorder );
+                    clipDragIsStretch_ = ( (modifiers & Qt::ControlModifier) && onBorder );
+                    clipDragIsLoop_    = ( !(modifiers & Qt::ControlModifier)
+                                           && lastClickedEnd_ && lastClickedEndUpper_ );
+                    clipLoopSeg_ = 0;   // captured lazily on the first loop move
                     clipDragTrack0_ = lastClickTrack_;
                     clipDragStart0_ = lastClickSLink_->getStartTime();
                     {
                         SObject &o = lastClickSLink_->getSObject();
-                        clipResizeOffset0_ =
-                            ( qstrcmp( o.metaObject()->className(), "SCut" ) == 0 )
-                                ? ((SCut*)&o)->getStartOffset() : 0;
+                        if( qstrcmp( o.metaObject()->className(), "SCut" ) == 0 ) {
+                            SCut *c = (SCut*)&o;
+                            clipResizeOffset0_ = c->getStartOffset();
+                            clipLoopLen0_      = c->getLoopLength();
+                            clipStretch0_      = c->getStretch();
+                        } else {
+                            clipResizeOffset0_ = 0;
+                            clipLoopLen0_      = 0;
+                            clipStretch0_      = 1.0;
+                        }
                     }
                     switch( modifiers & (Qt::ShiftModifier) ) {
                     case Qt::ShiftModifier: // Shift: toggle this object in the selection.
@@ -1613,6 +1797,10 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     rangeValid_ = false;
     rangeStart_ = rangeEnd_ = 0;
     rangeDrag_ = RangeNone;
+
+    // Track the mouse with no button held so the cursor can telegraph the
+    // clip-edit gesture under the pointer (resize / slip / stretch / loop).
+    setMouseTracking( true );
 
 //    setBackgroundColor( QColor( 0, 0, 0 ) );
     trackHeight_ = 100;

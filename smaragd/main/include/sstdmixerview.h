@@ -164,6 +164,7 @@ private:
     QPoint lastClickPos_;
     offset_t lastClickSelStartOffset_;
     bool lastClickedStart_, lastClickedEnd_;
+    bool lastClickedEndUpper_ = false;   // right edge band AND cursor in upper lane half
     length_t lastClickDuration_;
 
     // Clip MOVE drag snapshot: captured at press so the move lands as one
@@ -173,6 +174,16 @@ private:
     offset_t clipDragStart0_ = 0;
     // SCut start-offset at press, for the resize (edge-drag) undo snapshot.
     offset_t clipResizeOffset0_ = 0;
+    // Loop length / grain stretch at press, for the loop & time-stretch gestures.
+    length_t clipLoopLen0_ = 0;   // original loop length (revert snapshot)
+    length_t clipLoopSeg_  = 0;   // loop segment captured during a loop drag
+    double   clipStretch0_ = 1.0;
+    // Which clip-edit gesture this drag is: Alt-body = slip, Ctrl-border = stretch,
+    // right-upper edge = loop. (Resize/extend/trim use lastClickedStart_/End_.)
+    bool clipDragIsSlip_ = false;
+    bool clipDragIsStretch_ = false;
+    bool clipDragIsLoop_ = false;
+    void updateHoverCursor( const QPoint &pos );   // telegraph the gesture on hover
 
     // Ctrl-drag DUPLICATE: when armed, the dragged clips are live copies and the
     // release submits SDuplicateClipAction(s) instead of a move. Duplicates every

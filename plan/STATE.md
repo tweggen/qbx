@@ -2171,3 +2171,56 @@ so the whole group reverts in one Ctrl+Z.
 2. Release → originals stay; copies land at the dragged positions.
 3. Ctrl+Z removes all copies at once; Ctrl+Y restores them.
 4. Ctrl-drag a single (unselected or lone) clip → still duplicates just that one.
+
+---
+
+## Clip-edge editing gestures: slip, time-stretch, loop, extend (+ cursors)
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Builds clean; window-up smoke passes. Drag/audio behaviour is a human check.
+
+### What landed
+
+The full clip-edit vocabulary on top of `SCut`, all snap-aware and undoable
+through one generalized action:
+
+| Gesture | Input | Effect |
+|---------|-------|--------|
+| **Slip** | Alt-drag body | Slide the content under the clip (`startOffset`); position & length fixed. |
+| **Time-stretch** | Ctrl-drag either border | Change timeline length, grain-stretch the same content to fit (pitch preserved); opposite edge anchored. |
+| **Loop** | Right edge, **upper** half | Extend past the content end by repeating the previously-visible cut (real looped audio). |
+| **Extend** | Right edge, **lower** half | Reveal more content, clamped at content end (prior behaviour). |
+| **Trim/Move/Duplicate** | left edge / body / Ctrl-body | Unchanged. |
+
+Hover cursors telegraph each gesture (SizeHor resize, SplitH stretch, SizeAll
+slip, DragCopy duplicate, OpenHand move, custom ↻ for loop).
+
+### Key pieces
+
+- **`tw303a/twloopreader.{h,cc}` (new):** `twLoopReader : twSampleReader` wraps
+  reads over `[loopBase, loopBase+loopLen)`, looping. The engine gap — `loopStart_`
+  was vestigial (unread, unsaved) and `twTrackMix` does one linear read per clip.
+- **`SCut`:** new `loopLength_` (loop active iff `0 < loopLength_ < cutDuration_`),
+  `setWindow(startOffset,duration,loopLength,stretch)` (sets all four directly, no
+  preserve-span rescale, one `rebuildReader`), `rebuildReader` builds a
+  `twLoopReader` when looping, `seekTo` is loop-base aware, `loopLength` is now
+  serialized. `setLoopLengthRaw` for cheap live-drag feedback.
+- **`SCutRendererInline`:** tiles the loop segment with repeated clipped draws +
+  boundary dividers (the wave renderer fetches one linear range per call, so
+  tiling needs repeated calls).
+- **`SResizeClipAction`:** generalized to the whole window
+  `{startTime, startOffset, duration, loopLength, stretch}` — every edge gesture
+  finalizes through it (revert-to-snapshot then submit), so all undo uniformly.
+- **`SMVActualView`:** zone×modifier dispatch at press; cheap live field-only
+  drags (audio rebuild deferred to the release action); `setMouseTracking` +
+  `updateHoverCursor`.
+
+### Verify (human, GUI)
+
+1. **Slip**: Alt-drag a clip body → waveform slides, clip stays put; Ctrl+Z restores.
+2. **Stretch**: Ctrl-drag a border → length changes, **pitch unchanged** on play,
+   opposite edge fixed; undo/redo round-trips.
+3. **Loop**: drag the right edge's **upper half** past the content end → cut repeats
+   and **plays looped**; dividers drawn; save+reload keeps it; undo removes it.
+   Lower-half drag still just reveals content to its end.
+4. All honor snap (Alt+S); hover cursors change per zone/modifier.

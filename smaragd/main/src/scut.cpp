@@ -7,6 +7,7 @@
 #include "twcomponent.h"
 #include "twrandomsource.h"
 #include "twsamplereader.h"
+#include "twloopreader.h"
 #include "twgrainsource.h"
 #include "sapplication.h"
 #include "scut.h"
@@ -41,7 +42,20 @@ void SCut::rebuildReader()
         grain_ = new twGrainSource( *rs, grainParams_ );
         view = grain_;
     }
-    reader_ = view->acquireReader( *(SApplication::app().get303aEnvironment()) );
+    tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
+    if( loopLength_ > 0 && loopLength_ < cutDuration_ ) {
+        // Loop active: wrap the view in a looping reader over the segment
+        // [startOffset_, startOffset_+loopLength_). It is a twSampleReader, so it
+        // lives in reader_ like any other; looping_ tells seekTo() not to add
+        // startOffset_ again (the loop reader adds its loop base itself).
+        twLoopReader *lr = new twLoopReader( env, *view, startOffset_, loopLength_ );
+        lr->init();
+        reader_ = lr;
+        looping_ = true;
+    } else {
+        reader_ = view->acquireReader( env );
+        looping_ = false;
+    }
 }
 
 twComponent &SCut::getRootComponent()
@@ -74,7 +88,9 @@ int SCut::seekTo( offset_t off )
 {
     // FIXME: bounds check!!!
     ensureReader();
-    if( reader_ ) return reader_->seekTo( off + startOffset_ );
+    // A loop reader is cut-relative (it adds its own loop base = startOffset_);
+    // a plain reader needs startOffset_ folded in here.
+    if( reader_ ) return reader_->seekTo( looping_ ? off : off + startOffset_ );
     return content_->getSObject().seekTo( off+startOffset_ );
 }
 
@@ -93,6 +109,24 @@ void SCut::setDuration( length_t dur )
 void SCut::setLoopStart( offset_t s )
 {
     loopStart_ = s;
+}
+
+void SCut::setLoopLength( length_t l )
+{
+    loopLength_ = l;
+    rebuildReader();   // loop on/off changes the playback chain
+    emit durationChanged( cutDuration_ );
+}
+
+void SCut::setWindow( offset_t startOffset, length_t duration,
+                      length_t loopLength, double stretch )
+{
+    startOffset_ = startOffset;
+    cutDuration_ = duration;
+    loopLength_  = loopLength;
+    grainParams_.stretch = stretch;
+    rebuildReader();   // one rebuild for the whole window change (UI thread)
+    emit durationChanged( cutDuration_ );
 }
 
 offset_t SCut::getLoopStart() const
@@ -149,9 +183,11 @@ SCut::~SCut()
 SCut::SCut( SProject *parentProject, SLink &content )
     : SObject( parentProject ),
       startOffset_( 0 ),
+      loopLength_( 0 ),
       inlineRenderer_( NULL ),
       reader_( NULL ),
       grain_( NULL ),
+      looping_( false ),
       readerTried_( false )
 {
     content_ = &content;
@@ -173,9 +209,11 @@ SCut::SCut( SProject *parentProject, SLink &content )
 SCut::SCut( SProject *parentProject, SObject &content )
     : SObject( parentProject ),
       startOffset_( 0 ),
+      loopLength_( 0 ),
       inlineRenderer_( NULL ),
       reader_( NULL ),
       grain_( NULL ),
+      looping_( false ),
       readerTried_( false )
 {
     content_ = new SLink( content, this );
@@ -193,6 +231,7 @@ int SCut::serializeSelfAttributes( QTextStream &o )
 {
     o << " startOffset='" << (unsigned long ) getStartOffset() << "'"
       << " cutDuration='" << (unsigned long ) cutDuration_ << "'"
+      << " loopLength='" << (unsigned long ) loopLength_ << "'"
       << " stretch='" << grainParams_.stretch << "'"
       << " pitchCents='" << grainParams_.pitchCents << "'"
       << " grainSize='" << (unsigned long ) grainParams_.grainSize << "'"
@@ -210,6 +249,7 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     setStartOffset( data.toULongLong() );
     data = element.attribute( "cutDuration", "44100" );
     cutDuration_ = data.toULongLong();
+    loopLength_ = element.attribute( "loopLength", "0" ).toULongLong();
 
     // Grain params are stored already-final, so set them directly (no rescale).
     grainParams_.stretch    = element.attribute( "stretch", "1.0" ).toDouble();
@@ -217,9 +257,10 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     grainParams_.grainSize  = element.attribute( "grainSize", "2048" ).toLongLong();
     grainParams_.crossfade  = element.attribute( "crossfade", "512" ).toLongLong();
 
-    // Pre-build the grain buffer now (load thread) so a stretched clip restored
-    // from disk does not materialise on the first realtime audio block.
-    if( !grainParams_.isIdentity() ) rebuildReader();
+    // Pre-build the playback chain now (load thread) so a stretched or looping
+    // clip restored from disk does not materialise on the first realtime block.
+    if( !grainParams_.isIdentity() || ( loopLength_ > 0 && loopLength_ < cutDuration_ ) )
+        rebuildReader();
 
     return 0;
 }

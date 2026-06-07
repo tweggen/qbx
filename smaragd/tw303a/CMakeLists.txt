@@ -13,6 +13,7 @@ set(TW303A_HEADERS
     include/twrandomsource.h
     include/twsamplesource.h
     include/twsamplereader.h
+    include/twloopreader.h
     include/twresampledsource.h
     include/twgrainparams.h
     include/twgrainsource.h
@@ -43,6 +44,7 @@ set(TW303A_SOURCES
     src/twpipe.cc
     src/twsamplesource.cc
     src/twsamplereader.cc
+    src/twloopreader.cc
     src/twresampledsource.cc
     src/twgrainsource.cc
     src/twresampler.cc

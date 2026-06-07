@@ -56,8 +56,24 @@ public:
     SObject &getContent() const { return content_->getSObject(); }
     offset_t getLoopStart() const;
     offset_t getStartOffset() const { return startOffset_; }
+    // Length of the segment that repeats when this cut is longer than it (the
+    // "previously visible cut" captured by the right-upper edge loop gesture).
+    // 0 means no loop; the loop is active iff 0 < loopLength_ < cutDuration_.
+    length_t getLoopLength() const { return loopLength_; }
+    bool isLooping() const { return loopLength_ > 0 && loopLength_ < cutDuration_; }
+    // Set the loop length for drawing only, without rebuilding the audio chain
+    // (used for live drag feedback; the chain is rebuilt once on release).
+    void setLoopLengthRaw( length_t l ) { loopLength_ = l; }
     virtual bool hasDuration() const { return true; }
     virtual length_t getDuration() const;
+
+    // Set the whole clip window at once (slip offset, timeline duration, loop
+    // segment length, grain stretch) and rebuild the playback chain exactly
+    // once. Unlike setGrainParams() this does NOT preserve-span-rescale — the
+    // caller supplies already-final values. The undoable form of the clip-edge
+    // gestures (see SResizeClipAction).
+    void setWindow( offset_t startOffset, length_t duration,
+                    length_t loopLength, double stretch );
 
     // Grain time-stretch / pitch-shift parameters for this clip (proposal 06).
     double getStretch() const { return grainParams_.stretch; }
@@ -67,6 +83,7 @@ public:
 
 public slots:
     virtual void setLoopStart( offset_t );
+    virtual void setLoopLength( length_t );
     virtual void setStartOffset( offset_t );
     virtual void setDuration( length_t );
     void setStretch( double );
@@ -87,7 +104,9 @@ private:
     SLink *content_;
     offset_t startOffset_;
     offset_t loopStart_;
+    length_t loopLength_;
     length_t cutDuration_;
+    bool     looping_;   // true while reader_ is a twLoopReader (cursor base-aware)
     SCutRendererInline *inlineRenderer_;
     twSampleReader *reader_;
     twGrainSource *grain_;
