@@ -20,7 +20,6 @@ using namespace std;
 #include "strack.h"
 #include "scut.h"
 #include "sstdmixer.h"
-//#include "sgrainfile.h"
 
 
 void SProjectLoader::registerSObjectClass( 

@@ -4,8 +4,6 @@ set(SMARAGD_HEADERS
     include/scutrndrinline.h
     include/sexternfile.h
     include/sexternfilelist.h
-    include/sgrainfile.h
-    include/sgrainfilerndrinline.h
     include/slink.h
     include/smainwindow.h
     include/sobject.h
@@ -58,8 +56,6 @@ set(SMARAGD_SOURCES
     src/scutrndrinline.cpp
     src/sexternfile.cpp
     src/sexternfilelist.cpp
-    src/sgrainfile.cpp
-    src/sgrainfilerndrinline.cpp
     src/slink.cpp
     src/smainwindow.cpp
     src/sobject.cpp

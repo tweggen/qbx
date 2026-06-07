@@ -1966,3 +1966,49 @@ copy.
   `cutDuration_` (from before this change) stays that length on reload; new cuts
   get the correct project-rate duration.
 - Linear interpolation only (matches twResampler); a polyphase upgrade is future.
+
+---
+
+## Grain playback MVP: per-clip time-stretch & pitch (proposal 06, phases 0–2)
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW. Audible
+  verification via the Test menu is a human step.
+
+### Why
+
+With the source/reader split + cached resampling in place, the grain engine has a
+clean random-access foundation. Built the first useful slice: constant-rate
+time-stretch and pitch-shift per clip, modelled as a cached `twRandomSource`
+decorator (the "warped source" of proposal 06 §7.2) rather than the streaming
+node — that route is reserved for variable/automated rate.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `tw303a/include/twgrainparams.h` (new) | `twGrainParams`: grainSize, crossfade, stretch, pitchCents, `isIdentity()`. |
+| `tw303a/include/twgrainsource.h` + `src/twgrainsource.cc` (new) | `twGrainSource : twRandomSource`. Materialises the whole time-slice **overlap-add** result once into a resident planar buffer (normalised by a window-weight accumulator → unity gain incl. edges). Time-stretch = output-hop `G-C` vs input-hop `(G-C)/stretch`; pitch = per-grain linear resample by `2^(cents/1200)`. read() is then a lock-free memcpy. |
+| `main/include/scut.h` + `src/scut.cpp` | `SCut` gains `Stretch`/`PitchCents` Q_PROPERTYs + `setGrainParams`. When non-identity it interposes an owned `twGrainSource` between the content view and its reader (passthrough otherwise). Params serialize; the clip's timeline length (and source window) rescale with stretch. Grain buffer is pre-built off the audio thread (on UI edit and on load). |
+| `main/src/smainwindow.cpp` + `include/smainwindow.h` | Test menu: **Set Clip Stretch…** and **Set Clip Pitch…** (QInputDialog) act on the selected clip — the MVP verification trigger. |
+| `tw303a/CMakeLists.txt` | Added the new files. |
+
+### How to verify (human)
+
+1. Load/record a clip, select it. 2. Test → "Set Clip Stretch…", e.g. 2.0 →
+the clip doubles in length and plays at the same pitch, slower. 3. Test → "Set
+Clip Pitch…", e.g. 1200 → up an octave, same length. Set while **stopped**.
+
+### Honestly deferred / limitations
+
+- **Realtime-unsafe param change:** rebuilding the grain buffer while the clip is
+  actively playing races the audio thread (same class of hazard already in the
+  codebase). Set params while stopped.
+- **No UI beyond the Test menu**, no automation, no undo for these yet.
+- **Non-source content** (synth, sub-mix) can't be stretched yet — needs
+  `twCapturingSource` (proposal 07 step 5). Falls back to passthrough.
+- **Slicer is fixed** (time-slice only); transient/hybrid slicers + a variable
+  time map (streaming node) are the next phases.
+- `twGrainer`/`twGrainSpec`/`SGrainFile`/`SGrainFileRendererInline` (old stub
+  scaffold, never wired into the loader) have been **deleted** — superseded by
+  `twGrainSource`. CMake entries and the stray loader include removed too.

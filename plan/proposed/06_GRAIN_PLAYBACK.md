@@ -31,6 +31,37 @@ because *placement depends on it*.
 
 ---
 
+## Update (post-07): decorator-first MVP — IMPLEMENTED
+
+Proposal 07 (source/reader split + cached resampling) changed the cleanest first
+cut. The grain engine no longer needs its own component-pointer pull or a bespoke
+source cache (original §1/§3): it consumes a `twRandomSource` — the same
+project-rate view a normal cut reader reads — and the "warped source" of §7.2 is
+now a literal type.
+
+**Shipped (MVP, constant stretch + pitch):**
+
+- `twGrainParams` (`tw303a/include/twgrainparams.h`) — grainSize, crossfade,
+  stretch, pitchCents; `isIdentity()`.
+- `twGrainSource : twRandomSource` (`tw303a/{include,src}/twgrainsource.*`) — a
+  *decorator* that materialises the whole time-slice overlap-add result ONCE into
+  a resident planar buffer (normalised OLA), exactly like `twResampledSource`.
+  Time-stretch = output-hop vs input-hop; pitch = per-grain resample. Reads are
+  then lock-free memcpy; reproducible/cacheable.
+- `SCut` owns grain params + an interposed `twGrainSource` when non-identity
+  (passthrough otherwise). `Stretch`/`PitchCents` are Q_PROPERTYs; params
+  serialize; the clip's timeline length rescales with stretch. Pre-built off the
+  audio thread (UI edits + on load).
+- Trigger for verification: **Test menu → Set Clip Stretch… / Set Clip Pitch…**
+  acts on the selected clip (set while stopped — rebuild is not yet realtime-safe).
+
+This realises 06's phases 0–2 (skeleton → cache + slicer + overlap-add) via the
+decorator route. The streaming `twComponent` node (§1) is now reserved for
+**variable/automated** rate, which eager materialisation can't serve. Remaining
+work below is unchanged in intent.
+
+---
+
 ## 0. What the engine already gives us
 
 The pull model (`twComponent::calcOutputTo(dest, length, idx)` + `seekTo` +

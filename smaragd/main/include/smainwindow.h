@@ -40,6 +40,8 @@ protected slots:
     void runReorderTrackTest();
     void runGroupPersist();
     void runUndoRemoveTest();
+    void runSetClipStretch();
+    void runSetClipPitch();
     void undo();
     void redo();
 

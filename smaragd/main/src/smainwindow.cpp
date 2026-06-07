@@ -13,6 +13,7 @@
 #include <qfiledialog.h>
 #include <QFileInfo>
 #include <QStatusBar>
+#include <QInputDialog>
 
 #include <iostream>
 
@@ -23,6 +24,7 @@
 #include "sprojectprops.h"
 #include "sexternfilelist.h"
 #include "slink.h"
+#include "scut.h"
 #include "sprojectloader.h"
 #include "ssettings.h"
 #include "sactionhistory.h"
@@ -380,6 +382,9 @@ SMainWindow::SMainWindow()
     qTestMenu_->addAction( "Re&order Track Test (exact slot)", this, SLOT( runReorderTrackTest() ) );
     qTestMenu_->addAction( "&Nest Track 1 Under 0 (persist)", this, SLOT( runGroupPersist() ) );
     qTestMenu_->addAction( "Undoable Remo&ve Test (subtree)", this, SLOT( runUndoRemoveTest() ) );
+    qTestMenu_->addSeparator();
+    qTestMenu_->addAction( "Set Clip &Stretch... (selected)", this, SLOT( runSetClipStretch() ) );
+    qTestMenu_->addAction( "Set Clip &Pitch... (selected)", this, SLOT( runSetClipPitch() ) );
     menuBar()->addMenu( qTestMenu_ );
 
     qDockExternFileList_ = NULL;
@@ -702,6 +707,44 @@ void SMainWindow::runUndoRemoveTest()
     fprintf(stderr, "%s\n", msg.toUtf8().constData());
     fflush(stderr);
     statusBar()->showMessage(msg, 6000);
+}
+
+// MVP grain-playback trigger (proposal 06): set a time-stretch factor on the
+// currently selected clip. Set it while playback is stopped (rebuild is not yet
+// realtime-safe), then play.
+void SMainWindow::runSetClipStretch()
+{
+    SLink *sel = SApplication::app().getCurrentSelectedSLink();
+    SCut *cut = sel ? dynamic_cast<SCut*>( &sel->getSObject() ) : nullptr;
+    if( !cut ) {
+        statusBar()->showMessage( "Select a clip (SCut) first", 3000 );
+        return;
+    }
+    bool ok = false;
+    double s = QInputDialog::getDouble( this, "Clip Time-Stretch",
+                                        "Stretch factor (>1 = longer/slower):",
+                                        cut->getStretch(), 0.1, 10.0, 3, &ok );
+    if( !ok ) return;
+    cut->setStretch( s );
+    statusBar()->showMessage( QString( "Clip stretch set to %1x" ).arg( s ), 4000 );
+}
+
+// MVP grain-playback trigger: set a pitch offset (cents) on the selected clip.
+void SMainWindow::runSetClipPitch()
+{
+    SLink *sel = SApplication::app().getCurrentSelectedSLink();
+    SCut *cut = sel ? dynamic_cast<SCut*>( &sel->getSObject() ) : nullptr;
+    if( !cut ) {
+        statusBar()->showMessage( "Select a clip (SCut) first", 3000 );
+        return;
+    }
+    bool ok = false;
+    double cents = QInputDialog::getDouble( this, "Clip Pitch Offset",
+                                            "Pitch offset (cents, 1200 = +1 octave):",
+                                            cut->getPitchCents(), -2400.0, 2400.0, 1, &ok );
+    if( !ok ) return;
+    cut->setPitchCents( cents );
+    statusBar()->showMessage( QString( "Clip pitch set to %1 cents" ).arg( cents ), 4000 );
 }
 
 // Create a persistent nesting so the indented arranger is visible (the Group

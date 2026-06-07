@@ -38,7 +38,7 @@ The synth engine is in `tw303a/` (static library); the Qt UI and project managem
 - `include/smainwindow.h` — menu system, device picker
 
 **Synthesis:**
-- `include/twosc.h`, `twsaw.h`, `twmoog.h`, `twgrainer.h` — oscillators, Moog filter, granular
+- `include/twosc.h`, `twsaw.h`, `twmoog.h`, `twgrainsource.h` — oscillators, Moog filter, grain time-stretch/pitch
 
 ## Project Structure
 

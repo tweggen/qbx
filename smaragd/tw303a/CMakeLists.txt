@@ -6,8 +6,6 @@ set(TW303A_HEADERS
     include/twnegotiator.h
     include/twresampler.h
     include/twconstant.h
-    include/twgrainer.h
-    include/twgrainspec.h
     include/twmixer.h
     include/twmoog.h
     include/twosc.h
@@ -16,6 +14,8 @@ set(TW303A_HEADERS
     include/twsamplesource.h
     include/twsamplereader.h
     include/twresampledsource.h
+    include/twgrainparams.h
+    include/twgrainsource.h
     include/twrewire.h
     include/twsaw.h
     include/twsimplesaw.h
@@ -36,8 +36,6 @@ set(TW303A_SOURCES
     src/twconstant.cc
     src/twconvert.cc
     src/twnegotiator.cc
-    src/twgrainer.cc
-    src/twgrainspec.cc
     src/twlatch.cc
     src/twmixer.cc
     src/twmoog.cc
@@ -46,6 +44,7 @@ set(TW303A_SOURCES
     src/twsamplesource.cc
     src/twsamplereader.cc
     src/twresampledsource.cc
+    src/twgrainsource.cc
     src/twresampler.cc
     src/twrewire.cc
     src/twsaw.cc

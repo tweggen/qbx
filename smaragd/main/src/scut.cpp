@@ -1,11 +1,13 @@
 
 #include <iostream>
+#include <math.h>
 
 #include <QDebug>
 
 #include "twcomponent.h"
 #include "twrandomsource.h"
 #include "twsamplereader.h"
+#include "twgrainsource.h"
 #include "sapplication.h"
 #include "scut.h"
 #include "slink.h"
@@ -17,11 +19,29 @@ using namespace std;
 void SCut::ensureReader()
 {
     if( readerTried_ ) return;
+    rebuildReader();
+}
+
+// (Re)build the playback chain: content source -> optional grain stretch ->
+// our own cursor. Called lazily on first pull, and eagerly from setGrainParams
+// (on the UI thread) so the one-time grain materialisation never lands in a
+// realtime audio block. NB: rebuilding while this clip is actively playing is
+// not yet thread-safe — set parameters while stopped (proposal 06 MVP).
+void SCut::rebuildReader()
+{
     readerTried_ = true;
+    if( reader_ ) { delete reader_; reader_ = NULL; }
+    if( grain_ )  { delete grain_;  grain_  = NULL; }
+
     twRandomSource *rs = content_->getSObject().getRandomSource();
-    if( rs ) {
-        reader_ = rs->acquireReader( *(SApplication::app().get303aEnvironment()) );
+    if( !rs ) return;   // non-source content: getRootComponent() falls back
+
+    twRandomSource *view = rs;
+    if( !grainParams_.isIdentity() ) {
+        grain_ = new twGrainSource( *rs, grainParams_ );
+        view = grain_;
     }
+    reader_ = view->acquireReader( *(SApplication::app().get303aEnvironment()) );
 }
 
 twComponent &SCut::getRootComponent()
@@ -85,14 +105,43 @@ length_t SCut::getDuration() const
     return cutDuration_;
 }
 
+void SCut::setGrainParams( const twGrainParams &p )
+{
+    double oldStretch = grainParams_.stretch;
+    grainParams_ = p;
+
+    // Keep the clip covering the same musical span: stretching 2x makes the clip
+    // twice as long on the timeline (and shifts its source window accordingly).
+    if( oldStretch > 0.0 && p.stretch > 0.0 && p.stretch != oldStretch ) {
+        double k = p.stretch / oldStretch;
+        cutDuration_ = (length_t) llround( (double) cutDuration_ * k );
+        startOffset_ = (offset_t) llround( (double) startOffset_ * k );
+    }
+
+    rebuildReader();   // pre-build off the audio thread (caller is the UI thread)
+    emit durationChanged( cutDuration_ );
+}
+
+void SCut::setStretch( double s )
+{
+    twGrainParams p = grainParams_;
+    p.stretch = s;
+    setGrainParams( p );
+}
+
+void SCut::setPitchCents( double cents )
+{
+    twGrainParams p = grainParams_;
+    p.pitchCents = cents;
+    setGrainParams( p );
+}
+
 SCut::~SCut()
 {
-    // Our reader only references the (longer-lived) source data; drop it before
-    // releasing the content link.
-    if( reader_ ) {
-        delete reader_;
-        reader_ = NULL;
-    }
+    // reader_ / grain_ only reference the (longer-lived) source data; drop them
+    // before releasing the content link.
+    if( reader_ ) { delete reader_; reader_ = NULL; }
+    if( grain_ )  { delete grain_;  grain_  = NULL; }
     delete content_;
     content_ = NULL;
 }
@@ -102,6 +151,7 @@ SCut::SCut( SProject *parentProject, SLink &content )
       startOffset_( 0 ),
       inlineRenderer_( NULL ),
       reader_( NULL ),
+      grain_( NULL ),
       readerTried_( false )
 {
     content_ = &content;
@@ -125,6 +175,7 @@ SCut::SCut( SProject *parentProject, SObject &content )
       startOffset_( 0 ),
       inlineRenderer_( NULL ),
       reader_( NULL ),
+      grain_( NULL ),
       readerTried_( false )
 {
     content_ = new SLink( content, this );
@@ -141,7 +192,11 @@ SCut::SCut( SProject *parentProject, SObject &content )
 int SCut::serializeSelfAttributes( QTextStream &o )
 {
     o << " startOffset='" << (unsigned long ) getStartOffset() << "'"
-      << " cutDuration='" << (unsigned long ) cutDuration_ << "'";
+      << " cutDuration='" << (unsigned long ) cutDuration_ << "'"
+      << " stretch='" << grainParams_.stretch << "'"
+      << " pitchCents='" << grainParams_.pitchCents << "'"
+      << " grainSize='" << (unsigned long ) grainParams_.grainSize << "'"
+      << " crossfade='" << (unsigned long ) grainParams_.crossfade << "'";
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -149,13 +204,23 @@ int SCut::serializeSelfAttributes( QTextStream &o )
 int SCut::readPostChildrenAttributes( QDomElement &element )
 {
     SObject::readPostChildrenAttributes( element );
-    
+
     QString data;
     data = element.attribute( "startOffset", "0" );
     setStartOffset( data.toULongLong() );
     data = element.attribute( "cutDuration", "44100" );
     cutDuration_ = data.toULongLong();
-    
+
+    // Grain params are stored already-final, so set them directly (no rescale).
+    grainParams_.stretch    = element.attribute( "stretch", "1.0" ).toDouble();
+    grainParams_.pitchCents = element.attribute( "pitchCents", "0.0" ).toDouble();
+    grainParams_.grainSize  = element.attribute( "grainSize", "2048" ).toLongLong();
+    grainParams_.crossfade  = element.attribute( "crossfade", "512" ).toLongLong();
+
+    // Pre-build the grain buffer now (load thread) so a stretched clip restored
+    // from disk does not materialise on the first realtime audio block.
+    if( !grainParams_.isIdentity() ) rebuildReader();
+
     return 0;
 }
 

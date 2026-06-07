@@ -5,11 +5,13 @@
 #include <qobject.h>
 #include "sobject.h"
 #include "slink.h"
+#include "twgrainparams.h"
 
 class SProject;
 class QWidget;
 class twComponent;
 class twSampleReader;
+class twGrainSource;
 class SObjectRenderer;
 class SCutRendererInline;
 class SProjectLoader;
@@ -32,6 +34,8 @@ class SCut
     : public SObject
 {
     Q_OBJECT
+    Q_PROPERTY( double Stretch READ getStretch WRITE setStretch )
+    Q_PROPERTY( double PitchCents READ getPitchCents WRITE setPitchCents )
 public:
     SCut( SProject *parentProject, SObject &content );
     SCut( SProject *parentProject, SLink &content );
@@ -54,12 +58,19 @@ public:
     offset_t getStartOffset() const { return startOffset_; }
     virtual bool hasDuration() const { return true; }
     virtual length_t getDuration() const;
-    
+
+    // Grain time-stretch / pitch-shift parameters for this clip (proposal 06).
+    double getStretch() const { return grainParams_.stretch; }
+    double getPitchCents() const { return grainParams_.pitchCents; }
+    const twGrainParams &getGrainParams() const { return grainParams_; }
+    void setGrainParams( const twGrainParams & );
 
 public slots:
     virtual void setLoopStart( offset_t );
     virtual void setStartOffset( offset_t );
     virtual void setDuration( length_t );
+    void setStretch( double );
+    void setPitchCents( double );
 
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );
@@ -67,9 +78,11 @@ protected:
 private:
     // Lazily acquire our own independent read cursor over the content's sample
     // data, so two cuts of one source never share a play position (proposal 07).
-    // Stays NULL when the content is not a random-access source, in which case we
-    // fall back to the content's shared root component.
+    // When grain params are non-identity, an owned twGrainSource is interposed
+    // (proposal 06). Stays a passthrough/fallback when the content is not a
+    // random-access source.
     void ensureReader();
+    void rebuildReader();
 
     SLink *content_;
     offset_t startOffset_;
@@ -77,6 +90,8 @@ private:
     length_t cutDuration_;
     SCutRendererInline *inlineRenderer_;
     twSampleReader *reader_;
+    twGrainSource *grain_;
+    twGrainParams grainParams_;
     bool readerTried_;
 };
 
