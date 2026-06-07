@@ -12,6 +12,7 @@
 #include <qlabel.h>
 #include <qlineedit.h>
 #include <qpushbutton.h>
+#include <QApplication>
 #include <QPolygon>
 #include <QSignalBlocker>
 
@@ -259,9 +260,14 @@ SSMVMixerControl::SSMVMixerControl(
     qLayout_->setContentsMargins( SMV_FOLD_W + HANDLE_W, 2, 4, 2 );
     qLayout_->setSpacing( 2 );
 
+    // Small label font derived from the application default (the bundled
+    // FreeSans, antialiased) so the channel strip matches the rest of the UI.
+    QFont smallFont = QApplication::font();
+    smallFont.setPointSize( 7 );
+
     qTrkLabel_ = new QLineEdit( tk_.getSName(), this );
     qTrkLabel_->setFrame( false );
-    qTrkLabel_->setFont( QFont( "sansserif", 7 ) );
+    qTrkLabel_->setFont( smallFont );
 
     // Vertical fader, like a channel strip on a console. Works in tenths of a
     // dB; loud at the top (Qt vertical sliders put the maximum at the top).
@@ -274,7 +280,7 @@ SSMVMixerControl::SSMVMixerControl(
 
     qVolLabel_ = new QLabel( this );
     qVolLabel_->setAlignment( Qt::AlignHCenter );
-    qVolLabel_->setFont( QFont( "sansserif", 7 ) );
+    qVolLabel_->setFont( smallFont );
 
     // Small square Mute / Solo toggle buttons. Mute (red when on) silences this
     // track; Solo (yellow when on) silences every track that is not soloed.
