@@ -32,6 +32,8 @@
 #include "actions/smovetrackaction.h"
 #include "actions/sreparenttrackaction.h"
 #include "actions/sremovetrackaction.h"
+#include "actions/smoveclipaction.h"
+#include "actions/ssplitclipaction.h"
 #include "actions/strackpath.h"
 #include "sactionhistory.h"
 #include <QFrame>
@@ -339,53 +341,18 @@ void SStdMixerView::ctDeleteSample()
 void SStdMixerView::ctSplitSample()
 {
     STrack *oldTrack = qContent_->getLastClickTrack();
-    if( !oldTrack ) {
-        return;
-    }
     SLink *oldLink = qContent_->getLastClickSLink();
-    if( !oldLink ) {
+    if( !oldTrack || !oldLink ) {
         qWarning( "ctSplitSample called without object.\n" );
         return;
     }
-    QRect r = qContent_->getSLinkVisibRect( 
-        qContent_->getLastClickTrackIdx(), *oldLink );
-    // First create an own link two the object inside the track.
-    SObject &obj = oldLink->getSObject();
-    offset_t oldStartTime = oldLink->getStartTime();
-    offset_t inObjOffset = SApplication::app().getGlobalLocatorPos()-oldStartTime;
-    length_t oldDuration = obj.getDuration();
-    if( inObjOffset<=1 || inObjOffset>=((offset_t)oldDuration-1) ) {
-        qWarning( "Omitting split, sample is too short.\n" );
-        return;
-    }
-    // If this is true, we afterwards select the second part, if false, the first.
-    // It also shows, which one should be reused, i.e. if we select the second part,
-    // we modify the sample to become the second part FIXME: (NYI)
-    bool selectSecondPart = qContent_->getLastClickOffset() > SApplication::app().getGlobalLocatorPos();
-    // Then delete the actual one.
-    qContent_->resetLastClickSLink();
-
-    oldLink = ensureSCut( oldLink );
-    if( !oldLink ) {
-        QMessageBox::information( nullptr, "Smaragd warning", "Unable to split sample.", QMessageBox::Ok );
-        return;
-    }
-    SCut *sc1 = (SCut *)&(oldLink->getSObject());
-    // FIXME: Hardcoded this scut becomes the first one.
-    offset_t oldStartOffset = sc1->getStartOffset();
-    
-    // SCut *sc1 = new SCut( &(model_->getProject()), oldLink->getSObject() );
-    SCut *sc2 = new SCut( &(model_->getProject()), sc1->getContent() ); 
-    sc2->setStartOffset( oldStartOffset + inObjOffset );
-    sc2->setDuration( oldDuration-inObjOffset );
-    sc1->setDuration( inObjOffset );
-
-    // Create two cuts for the stuff.
-    SLink *sl2 = new SLink( *sc2, NULL );
-    sl2->setStartTime( oldStartTime+inObjOffset );
-    sl2->setParent(oldTrack); // was: oldTrack->insertChild( sl2 );
-    SApplication::app().setSelectedSLink( selectSecondPart?sl2:oldLink );
-    qContent_->update( r );
+    // Through the action so the split (and the implicit ensure-SCut) is undoable.
+    QList<int> clipPath = strackpath::pathOf( model_, oldTrack );
+    clipPath.append( oldTrack->indexOfChild( oldLink ) );
+    offset_t splitTime = SApplication::app().getGlobalLocatorPos();
+    qContent_->resetLastClickSLink();   // the link may be replaced by the split
+    SApplication::app().submitAction( new SSplitClipAction( clipPath, splitTime ) );
+    qContent_->update();
 }
 
 void SMVActualView::ctGlobalShow()
@@ -580,7 +547,32 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 {
     if( rangeDrag_ != RangeNone ) {
         endRangeDrag( ev->pos().x() );
+        return;
     }
+
+    // Finalize a clip MOVE as a single undoable action. The drag mutated the
+    // model live for feedback; here we revert to the pre-drag placement and
+    // re-apply it through SMoveClipAction so it lands as one undo step. (Resize
+    // — lastClickedStart_/End_ — is not yet actioned.)
+    if( clipDragArmed_ && lastClickSLink_ && clipDragTrack0_
+        && !lastClickedStart_ && !lastClickedEnd_ ) {
+        SLink *link = lastClickSLink_;
+        STrack *destTrack = lastClickTrack_;
+        offset_t newStart = link->getStartTime();
+        if( destTrack && ( destTrack != clipDragTrack0_ || newStart != clipDragStart0_ ) ) {
+            // Revert to the snapshot, then redo via the action.
+            if( destTrack != clipDragTrack0_ ) link->setParent( clipDragTrack0_ );
+            link->setStartTime( clipDragStart0_ );
+
+            QList<int> clipPath = strackpath::pathOf( smv_.getModel(), clipDragTrack0_ );
+            clipPath.append( clipDragTrack0_->indexOfChild( link ) );
+            QList<int> destTrackPath = strackpath::pathOf( smv_.getModel(), destTrack );
+            SApplication::app().submitAction(
+                new SMoveClipAction( clipPath, destTrackPath, newStart ) );
+            update();
+        }
+    }
+    clipDragArmed_ = false;
 }
 
 /**
@@ -900,6 +892,10 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         if( lastClickTrack_ ) {            
             if( lastClickSLink_ ) {
                 lastClickSelStartOffset_ = lastClickSLink_->getStartTime();
+                // Snapshot for a possible MOVE drag (finalized in release).
+                clipDragArmed_ = true;
+                clipDragTrack0_ = lastClickTrack_;
+                clipDragStart0_ = lastClickSLink_->getStartTime();
                 // OK, we clicked on an slink, process the selection stuff.
                 // Qt::MouseButtons buttons = ev->buttons();
                 Qt::KeyboardModifiers modifiers = QGuiApplication::keyboardModifiers();

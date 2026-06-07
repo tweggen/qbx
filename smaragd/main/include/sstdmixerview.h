@@ -152,6 +152,12 @@ private:
     offset_t lastClickSelStartOffset_;
     bool lastClickedStart_, lastClickedEnd_;
     length_t lastClickDuration_;
+
+    // Clip MOVE drag snapshot: captured at press so the move lands as one
+    // undoable SMoveClipAction on release (the drag itself mutates live).
+    bool     clipDragArmed_ = false;
+    STrack  *clipDragTrack0_ = nullptr;
+    offset_t clipDragStart0_ = 0;
 };
 
 class STimeGridSpec {

@@ -1837,3 +1837,41 @@ an independent clip lane. Fix: `STrackRendererInline::draw` and
 `STrack::getTopMostSLinkAt` now skip links whose object is an `STrack`, so a
 folder lane draws/edits only its own clips while children render on their own
 lanes.
+
+---
+
+## Clip move and split are now undoable actions
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW; window-up smoke
+  passes. Interactive verification (drag a clip, split a clip, Ctrl+Z) is a human
+  step.
+
+### Why
+
+Dragging a clip and "Split object" mutated the model directly (setParent/
+setStartTime/new SCut/...), bypassing the action system — so neither was
+undoable. Made both real `SAction`s.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `actions/smoveclipaction.{h,cpp}` (new) | `SMoveClipAction(clipPath, destTrackPath, newStartTime)`. Clip addressed by track index-path + the link's index (`indexOfChild`, keyed on the link, so it is correct even for shared clips). `apply()` setParent (if the track changed) + setStartTime; the link object persists so there is no refcount dance. Inverse moves it back, synthesized from the post-move index. Clip order within a track is positional, so append-on-restore is fine. Registers as `move-clip`. |
+| `actions/ssplitclipaction.{h,cpp}` + `sunsplitclipaction.{h,cpp}` (new) | `SSplitClipAction(clipPath, splitTime)` wraps the clip in an SCut if needed, sets the first part's length, and adds a second SCut/SLink for the remainder. Inverse `SUnsplitClipAction` deletes the second part and restores the first's length; its own inverse re-splits. Registers `split-clip` (unsplit is live-only). |
+| `sstdmixerview.cpp` | Clip MOVE drag is now finalized in `mouseReleaseEvent`: the drag still mutates live for feedback, then on release it reverts to the pre-drag placement (snapshot captured on press) and re-applies via `SMoveClipAction` — one undo step. `ctSplitSample` routes through `SSplitClipAction`. |
+
+### Honestly deferred
+
+- **Clip resize** (drag the clip's left/right edge — `lastClickedStart_`/`End_`)
+  still mutates live and is **not** actioned yet; it shares the press-snapshot
+  machinery, so it is a natural follow-up (capture cut startOffset+duration too).
+- Move/split keep object **identity** for the clip being moved / the first part;
+  the split's second part is re-created on redo (content-equivalent).
+
+### Verification needed (human)
+
+1. Drag a clip to a new time / another lane → release → Ctrl+Z returns it; Ctrl+Y
+   re-applies.
+2. Position the playhead inside a clip → right-click → Split object → two clips;
+   Ctrl+Z merges them back.
