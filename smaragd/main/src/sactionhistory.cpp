@@ -61,11 +61,13 @@ void SActionHistory::drain_()
 
         if (result.applied) {
             onApplied_(id, result.inverse);
-            // ownership of action transferred to undo command, don't delete
+            // ownership of action transferred to undo command (or deleted there
+            // when there is no inverse) — don't delete here.
         } else {
+            // onRejected_ already deletes the action (it owns the in-flight
+            // entry, mirroring onApplied_). Deleting it here too was a
+            // double-free that corrupted the heap on every rejected action.
             onRejected_(id, "Apply failed");
-            // action ownership stays here, delete it
-            delete action;
         }
     }
 }
