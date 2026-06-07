@@ -2054,3 +2054,38 @@ than hard-code gestures, we wanted them user-configurable — which required a r
 
 Possible follow-ups: a scroll-speed/zoom-step option; wheel handling on the ruler;
 buffer/latency on the Audio page (currently fixed).
+
+---
+
+## Fix: large WAV truncated by a single QFile::read (preview + audio cut off)
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Builds clean; needs human audio/visual verification.
+
+### Symptom
+
+On a long sample, the waveform preview and the audio both went flat/silent at
+the same offset (~1/3 of a ~211 s file) — visible once horizontal zoom-out was
+possible.
+
+### Cause
+
+`twSampleSource::loadWav()` read the whole PCM data chunk with a **single**
+`file.read(raw.data(), rawBytes)` (~37 MB). `QFile::read()` does not guarantee
+filling a large buffer in one call; a short return left the tail of the resident
+buffer zero-filled while `nFrames_` (hence clip length, preview length, and the
+resampled view) kept the header's full count — so everything past the bytes that
+actually arrived was silence. The "loaded N frames resident" log printed the
+header count, masking it.
+
+### Fix (twsamplesource.cc)
+
+Loop the read until all bytes arrive or a real EOF; if the file genuinely ends
+short, clamp `nFrames_` to what was read (no phantom trailing silence) and warn.
+EOF/short reads now load completely.
+
+### Verify (human)
+
+Load a long WAV, zoom out: the waveform should fill the whole clip and playback
+should run to the end. If the console shows a "short read … clamping" warning,
+that file was genuinely truncated on disk.

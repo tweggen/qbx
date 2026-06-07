@@ -147,13 +147,29 @@ int twSampleSource::loadWav()
     if( !file.seek( dataStart ) ) return -10;
     length_t rawBytes = (length_t) nFrames_ * channels_ * 2;
     std::vector<unsigned char> raw( (size_t) rawBytes );
-    qint64 got = file.read( (char *) raw.data(), rawBytes );
-    if( got < 0 ) got = 0;
-    length_t gotFrames = ( (length_t) got / 2 ) / channels_;
+    // QFile::read() is NOT guaranteed to fill a large buffer in a single call,
+    // so loop until we have every byte (or hit a real EOF). The previous
+    // single-shot read could come up short on big files, silently zero-filling
+    // the rest while the header-derived length stayed full — which made preview
+    // and audio go flat partway through the clip.
+    qint64 total = 0;
+    while( total < (qint64) rawBytes ) {
+        qint64 got = file.read( (char *) raw.data() + total, (qint64) rawBytes - total );
+        if( got <= 0 ) break;   // EOF or error
+        total += got;
+    }
+    length_t gotFrames = ( total / 2 ) / channels_;
     if( gotFrames > nFrames_ ) gotFrames = nFrames_;
+    if( gotFrames < nFrames_ ) {
+        qWarning( "twSampleSource: short read on \"%s\": %lld of %lld frames; "
+                  "clamping to the data actually present.\n",
+                  (const char *) fileName_.toUtf8().constData(),
+                  (long long) gotFrames, (long long) nFrames_ );
+        nFrames_ = gotFrames;   // size buffer + clip to real data, no phantom tail
+    }
 
     data_.assign( (size_t) channels_ * nFrames_, 0.0f );
-    for( length_t f = 0; f < gotFrames; ++f ) {
+    for( length_t f = 0; f < nFrames_; ++f ) {
         for( idx_t c = 0; c < channels_; ++c ) {
             const unsigned char *p = raw.data() + ( (size_t) f * channels_ + c ) * 2;
             short v = (short) ( p[0] | ( p[1] << 8 ) );
