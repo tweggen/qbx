@@ -171,6 +171,8 @@ private:
     bool     clipDragArmed_ = false;
     STrack  *clipDragTrack0_ = nullptr;
     offset_t clipDragStart0_ = 0;
+    // SCut start-offset at press, for the resize (edge-drag) undo snapshot.
+    offset_t clipResizeOffset0_ = 0;
 
     // Ctrl-drag DUPLICATE: when armed, the dragged clip is a live copy and the
     // release submits an SDuplicateClipAction instead of a move.

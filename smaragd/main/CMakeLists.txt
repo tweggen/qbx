@@ -37,6 +37,7 @@ set(SMARAGD_HEADERS
     include/actions/sunsplitclipaction.h
     include/actions/sduplicateclipaction.h
     include/actions/sremoveclipaction.h
+    include/actions/sresizeclipaction.h
     include/actions/strackpath.h
     include/actions/saddsampleaction.h
     include/actions/sremovesampleaction.h
@@ -91,6 +92,7 @@ set(SMARAGD_SOURCES
     src/actions/sunsplitclipaction.cpp
     src/actions/sduplicateclipaction.cpp
     src/actions/sremoveclipaction.cpp
+    src/actions/sresizeclipaction.cpp
     src/actions/saddsampleaction.cpp
     src/actions/sremovesampleaction.cpp
     src/actions/ssettrackvolumeaction.cpp

@@ -2114,3 +2114,29 @@ at the (snapped) position. Undoable.
 1. Ctrl-drag a clip → a copy follows the cursor (snapped to grid) and lands on
    release (same or another track). Ctrl+Z removes the copy; Ctrl+Y re-adds it.
 2. The original clip is untouched; the copy shares the same audio content.
+
+---
+
+## Clip resize (edge drag) now snaps and is undoable
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Builds clean; window-up smoke passes. Drag behaviour is a human check.
+
+### What landed
+
+Dragging a clip's left/right edge now (1) snaps the dragged edge to the grid and
+(2) lands as a single undoable step.
+
+| File | Change |
+|------|--------|
+| `actions/sresizeclipaction.{h,cpp}` (new) | `SResizeClipAction(clipPath, startTime, startOffset, duration)` sets an SCut's link start time + cut start-offset + duration; inverse restores the previous values. Registers `resize-clip`. |
+| `sstdmixerview.cpp/.h` | The left/right edge drags were rewritten to compute from the **snapped absolute mouse time** (`alignTime(getTimeOf(x))`) against a press-time snapshot (`clipDragStart0_`, `clipResizeOffset0_`, `lastClickDuration_`) instead of accumulating raw deltas — so the edge follows the grid, with min-length and content-bounds clamping. `mouseReleaseEvent` reverts to the snapshot and submits `SResizeClipAction` (one undo step). New member `clipResizeOffset0_`. |
+| `main/CMakeLists.txt` | Added the action. |
+
+### Verify (human)
+
+1. Drag a clip's right edge → its length snaps to the grid; Ctrl+Z restores the
+   previous length, Ctrl+Y re-applies.
+2. Drag the left edge → the start snaps and the front trims (content offset
+   follows); undo/redo round-trips.
+3. With snap off (Alt+S), edges drag freely again.

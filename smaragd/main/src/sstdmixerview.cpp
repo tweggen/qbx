@@ -37,6 +37,7 @@
 #include "actions/smoveclipaction.h"
 #include "actions/ssplitclipaction.h"
 #include "actions/sduplicateclipaction.h"
+#include "actions/sresizeclipaction.h"
 #include "actions/strackpath.h"
 #include "sactionhistory.h"
 #include <QFrame>
@@ -571,10 +572,34 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         return;
     }
 
+    // Finalize a clip RESIZE (edge drag) as a single undoable action. The drag
+    // resized live (snapped); revert to the pre-drag window and re-apply via
+    // SResizeClipAction so it is one undo step.
+    if( clipDragArmed_ && lastClickSLink_ && ( lastClickedStart_ || lastClickedEnd_ ) ) {
+        SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
+        if( cut ) {
+            offset_t newStart  = lastClickSLink_->getStartTime();
+            offset_t newOffset = cut->getStartOffset();
+            length_t newDur    = cut->getDuration();
+            if( newStart != clipDragStart0_ || newOffset != clipResizeOffset0_
+                || newDur != lastClickDuration_ ) {
+                lastClickSLink_->setStartTime( clipDragStart0_ );
+                cut->setStartOffset( clipResizeOffset0_ );
+                cut->setDuration( lastClickDuration_ );
+                QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+                clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+                SApplication::app().submitAction(
+                    new SResizeClipAction( clipPath, newStart, newOffset, newDur ) );
+                update();
+            }
+        }
+        clipDragArmed_ = false;
+        return;
+    }
+
     // Finalize a clip MOVE as a single undoable action. The drag mutated the
     // model live for feedback; here we revert to the pre-drag placement and
-    // re-apply it through SMoveClipAction so it lands as one undo step. (Resize
-    // — lastClickedStart_/End_ — is not yet actioned.)
+    // re-apply it through SMoveClipAction so it lands as one undo step.
     if( clipDragArmed_ && lastClickSLink_ && clipDragTrack0_
         && !lastClickedStart_ && !lastClickedEnd_ ) {
         SLink *link = lastClickSLink_;
@@ -781,57 +806,53 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
             length_t newStart = getLastClickStartOffset() + delta;
             if( newStart<0 ) newStart = 0;
 
-            if( lastClickedStart_ && delta != 0 ) {
-                // Drag the start?
-                // First ensure, this is an scut link.
-                // (After the first move, it will remain being an scut)
+            if( lastClickedStart_ ) {
+                // Drag the LEFT edge: move the clip start to the snapped mouse
+                // time, trimming the front (cut start offset shifts with it).
                 lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
                 SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
-                length_t maxLength = -1;
-                if( cut->getContent().hasDuration() ) {
-                    maxLength = cut->getContent().getDuration();
-                }
-                length_t newDuration = lastClickDuration_-delta;
-                if( maxLength>=0 && newDuration > maxLength ) newDuration = maxLength;
-                offset_t oldCutStart = cut->getStartOffset();
-                // Calculate, how much we already dragged.
-                offset_t prevStart = lastClickSLink_->getStartTime();
-                length_t prevDelta = prevStart-getLastClickStartOffset();
-                // Now, calculate, how much we changed this time
-                length_t thisDelta = delta-prevDelta;
-                length_t oldStart = getLastClickStartOffset();
-                if( ((delta<0 && ((offset_t)(-delta))<(offset_t)oldStart) || delta>0)
-                    && ((thisDelta<0 && ((offset_t)(-thisDelta))<oldCutStart) || thisDelta>0)
-                    && newDuration>SMV_CUT_MIN_TIME ) {
+                length_t maxLength = cut->getContent().hasDuration()
+                                     ? (length_t) cut->getContent().getDuration() : -1;
+                offset_t end0 = clipDragStart0_ + (offset_t) lastClickDuration_;  // fixed right edge
+                offset_t rStart = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+                // Keep at least the minimum length.
+                if( (length_t) end0 - (length_t) rStart < SMV_CUT_MIN_TIME )
+                    rStart = end0 - (offset_t) SMV_CUT_MIN_TIME;
+                // The cut's start offset can't go below 0.
+                length_t shift = (length_t) rStart - (length_t) clipDragStart0_;
+                if( (length_t) clipResizeOffset0_ + shift < 0 )
+                    rStart = clipDragStart0_ - (offset_t) clipResizeOffset0_;
+                if( (offset_t) rStart > end0 ) rStart = clipDragStart0_;   // safety
+                shift = (length_t) rStart - (length_t) clipDragStart0_;
+                offset_t rCutStart = (offset_t)( (length_t) clipResizeOffset0_ + shift );
+                length_t rDur = (length_t) end0 - (length_t) rStart;
+                if( maxLength >= 0 && rDur > maxLength - (length_t) rCutStart )
+                    rDur = maxLength - (length_t) rCutStart;
+                if( rDur >= SMV_CUT_MIN_TIME ) {
                     QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
-                    offset_t newStart = oldStart + delta;
-                    offset_t newCutStart = oldCutStart + thisDelta;
-                    // This only makes sense, if the cut does not vanish.
-                    cut->setDuration( newDuration );
-                    cut->setStartOffset( newCutStart );
-                    lastClickSLink_->setStartTime( newStart );
+                    cut->setStartOffset( rCutStart );
+                    cut->setDuration( rDur );
+                    lastClickSLink_->setStartTime( rStart );
                     update( oldRect );
                     update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
                 }
-            } else if( lastClickedEnd_ && delta != 0) {
-                // Drag the end?
-                // First ensure, this is an scut link.
-                // (After the first move, it will remain being an scut)
+            } else if( lastClickedEnd_ ) {
+                // Drag the RIGHT edge: set the duration to the snapped mouse time.
                 lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
                 SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
-                length_t maxLength = -1;
-                if( cut->getContent().hasDuration() ) {
-                    maxLength = cut->getContent().getDuration();
+                length_t maxLength = cut->getContent().hasDuration()
+                                     ? (length_t) cut->getContent().getDuration() : -1;
+                offset_t rEnd = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+                length_t rDur = (length_t) rEnd - (length_t) clipDragStart0_;
+                if( rDur < SMV_CUT_MIN_TIME ) rDur = SMV_CUT_MIN_TIME;
+                if( maxLength >= 0 ) {
+                    length_t maxDur = maxLength - (length_t) clipResizeOffset0_;
+                    if( rDur > maxDur ) rDur = maxDur;
                 }
-                length_t newDuration = lastClickDuration_+delta;
-                if( maxLength>=0 && newDuration > maxLength ) newDuration = maxLength;
-                if( newDuration>SMV_CUT_MIN_TIME ) {
-                    QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
-                    // This only makes sense, if the cut does not vanish.
-                    cut->setDuration( newDuration );
-                    update( oldRect );
-                    update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
-                }
+                QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+                cut->setDuration( rDur );
+                update( oldRect );
+                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( delta != 0 ) {
                 // Move it.
                 QRect oldVisibRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
@@ -935,11 +956,18 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     }
                 } else {
                     lastClickSelStartOffset_ = lastClickSLink_->getStartTime();
-                    // Snapshot for a possible MOVE drag (finalized in release).
+                    // Snapshot for a possible MOVE or RESIZE drag (finalized in
+                    // release). clipResizeOffset0_ is the cut's start offset.
                     clipDragArmed_ = true;
                     clipDragIsDuplicate_ = false;
                     clipDragTrack0_ = lastClickTrack_;
                     clipDragStart0_ = lastClickSLink_->getStartTime();
+                    {
+                        SObject &o = lastClickSLink_->getSObject();
+                        clipResizeOffset0_ =
+                            ( qstrcmp( o.metaObject()->className(), "SCut" ) == 0 )
+                                ? ((SCut*)&o)->getStartOffset() : 0;
+                    }
                     switch( modifiers & (Qt::ShiftModifier) ) {
                     case Qt::ShiftModifier: // Shift: toggle this object in the selection.
                         if( SApplication::app().isSLinkSelected( lastClickSLink_ ) ) {
