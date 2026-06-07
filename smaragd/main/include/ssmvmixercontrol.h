@@ -20,12 +20,23 @@ class SSMVMixerControl
 {
     Q_OBJECT
 public:
-    SSMVMixerControl( 
+    SSMVMixerControl(
         QWidget *parent, SStdMixerView &, STrack & );
     virtual ~SSMVMixerControl();
     virtual QSize sizeHint() const;
 
+    // The track this control drives (used to re-match controls to tracks after
+    // a reorder).
+    STrack &getTrack() const { return tk_; }
+
 protected:
+    // A grip strip across the top of the control is the drag handle for
+    // reordering this track; the rest of the control is its normal channel strip.
+    void paintEvent( QPaintEvent * ) override;
+    void mousePressEvent( QMouseEvent * ) override;
+    void mouseMoveEvent( QMouseEvent * ) override;
+    void mouseReleaseEvent( QMouseEvent * ) override;
+
 protected slots:
     void sliderValueChanged( int value );
     void sliderValueChanged( double value );
@@ -44,6 +55,12 @@ private:
     // Push the slider position to the value v (in dB) without re-submitting
     // an action (model -> view update).
     void setSliderSilently( double v );
+
+    // Track-reorder drag: armed on press in the grip strip, active once the
+    // pointer moves past a small threshold.
+    bool dragArmed_;
+    bool dragging_;
+    QPoint dragPressPos_;
 
     SStdMixerView &smv_;
     STrack &tk_;

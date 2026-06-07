@@ -24,14 +24,17 @@ SApplyResult SAddTrackAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    // Calculate actual index (handle -1 = append).
-    int actualIndex = (index_ == -1) ? mixer->getNTracks() : index_;
-
-    // Create a new track.
+    // Create a new track and append it (insertTrack is append-only).
     STrack *track = new STrack(project);
+    mixer->insertTrack(*track);
+    int landing = mixer->getNTracks() - 1;
 
-    // Insert into mixer.
-    mixer->insertTrack(actualIndex, *track);
+    // Honour a requested index by moving the appended track into place
+    // (-1 or out-of-range = leave at the end).
+    int actualIndex = (index_ < 0 || index_ > landing) ? landing : index_;
+    if (actualIndex != landing) {
+        mixer->reorderTrack(landing, actualIndex);
+    }
 
     // Rewire speaker so new track is audible.
     SApplication::app().rewireSpeaker();

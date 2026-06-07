@@ -298,7 +298,39 @@ Implication: **build grouping first** (chosen), assets second.
   current flat arrangement (gain just moved one DSP stage earlier), and it makes
   a track's output self-contained so it sums correctly when nested. Solo stays
   resolved at the mixer (top-level only) for now — nested-track solo is a
-  follow-up. Next: the track-tree model + reparent, then the indented arranger UI.
+  follow-up. **§0 audio verified working by the user (2026-06-07).**
+
+- **§1.1 + §1.4 track-tree model + reparent action — DONE (2026-06-07).** Tracks
+  can now nest: a container's (mixer *or* track) SLink children may point at
+  child `STrack`s, summed for free by `twTrackMix` (it already pulls every child
+  live and `SLink::hasStartTime()` is always true, so a child track at startTime
+  0 contributes immediately). New undoable `SReparentTrackAction` moves a track
+  to a new parent, identified by an **index-path from the root mixer** (`{}` =
+  mixer, `{2,1}` = 2nd child of the 3rd top track). It is refcount-safe
+  (`addRef` pins the track across the detach→attach gap so the transient
+  zero-ref window can't trigger `deleteLater`), guards against same-container
+  reorder and cycles, and synthesizes its inverse from the *post-move* tree so it
+  survives the index shifts the move causes. Nesting round-trips through
+  save/load with **no format change** (the loader already rebuilds arbitrary
+  `SObject`/`SLink` trees by id). Driven by **Test → Group Track Test**.
+  *Limitation (since removed, see below):* attach was append-only.
+
+- **Explicit child order + exact-slot move/reorder — DONE (2026-06-07).** Removed
+  the append-only limitation by adopting the idiomatic Qt model: an **explicit
+  ordered list** owns sequence (`SObject::childOrder_`), QObject parentage means
+  ownership only, and all iteration is hidden behind an **iterator**
+  (`childLinks()` / `childAt` / `childCount`) so call sites are decoupled from the
+  storage. `moveChildToIndex` is now a plain list move (no `setParent` dance).
+  `SReparentTrackAction` honours an exact `destIndex` and its inverse restores the
+  exact original (parent, index); new **`SMoveTrackAction`** does in-place
+  reorder within a container with an exact-slot inverse. `SStdMixer::insertTrack`
+  lost its cosmetic index param (append-only + emits the real landing index) and
+  gained `reorderTrack` + a `tracksReordered()` signal. **The arranger now reacts
+  live:** `SStdMixerView::tracksReordered()` re-sequences the existing
+  control-column faders to match the reordered model (no widgets created/destroyed)
+  and repaints — so reorder/group/undo keep faders aligned with lanes. Next: the
+  indented arranger UI (§1.2) to walk the tree depth-first (nested-track lanes +
+  fold), building on this.
 
 ## 5. Open questions
 

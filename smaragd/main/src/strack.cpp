@@ -91,9 +91,7 @@ int STrack::seekTo( offset_t ofs )
 
 SLink *STrack::getTopMostSLinkAt( offset_t queryTime ) const
 {
-    const QObjectList& children = this->children();
-    for( QObjectList::const_iterator it = children.begin(); it != children.end(); ++it ) {
-        SLink *lk = (SLink*) *it;
+    for( SLink *lk : childLinks() ) {
         if( !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();
         if( queryTime<startTime ) continue;

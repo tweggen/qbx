@@ -39,12 +39,7 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
     }
 
     // Get the clip at the specified index.
-    const QObjectList &children = track->children();
-    if (clipIndex_ < 0 || clipIndex_ >= children.size()) {
-        return {false, nullptr};
-    }
-
-    SLink *clipLink = dynamic_cast<SLink*>(children.at(clipIndex_));
+    SLink *clipLink = track->childAt(clipIndex_);
     if (!clipLink) {
         return {false, nullptr};
     }

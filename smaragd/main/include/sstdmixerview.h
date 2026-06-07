@@ -201,6 +201,14 @@ public:
 
     int getTrackHeight() const;
 
+    // Track-reorder drag, driven by a control's grip handle. beginTrackDrag()
+    // arms the drag for the given control; updateTrackDrag()/endTrackDrag() take
+    // a Y in qTrackControlBox_ coordinates. On release a move past the original
+    // slot submits an SMoveTrackAction.
+    void beginTrackDrag( SSMVMixerControl *control );
+    void updateTrackDrag( int yInControlBox );
+    void endTrackDrag( int yInControlBox );
+
 public slots:
     void ctAddTrack();
     void ctRemoveTrack();
@@ -237,6 +245,9 @@ private slots:
     void avLeftOffsetChanged( offset_t );
     void addMixerControl( int, STrack & );
     void removeMixerControl( int, STrack & );
+    // Re-sequence the control column to match the model's (reordered) track
+    // order without adding/removing controls.
+    void tracksReordered();
 
 private:
     // Symbolic constants for the screen layout.
@@ -305,6 +316,13 @@ private:
     QWidget *qTrackControlBoxHolder_;
     QWidget *qTrackControlBox_;
     QVector<SSMVMixerControl*> *controlArray_;
+
+    // Track-reorder drag state. dragControl_ is the control being dragged (NULL
+    // when not dragging); dropIndicator_ is a thin line marking the insertion
+    // slot. Helper insertSlotAt() maps a Y to a 0..n insertion gap.
+    SSMVMixerControl *dragControl_;
+    QWidget *dropIndicator_;
+    int insertSlotAt( int yInControlBox ) const;
 };
 
 

@@ -1507,3 +1507,167 @@ only) — nested-track solo is a documented follow-up.
 ### Next
 
 Track-tree model + reparent action → indented arranger UI → assets as SCut-on-group.
+
+---
+
+## Grouping/assets: §1 track-tree model + reparent action (Phase 2)
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW
+  (`build/bin/smaragd.exe`, ~34.6 MB). §0 audio behaviour was verified working by
+  the user first. Interactive verification of the new tree/undo is the **Test →
+  Group Track Test** entry (a self-contained assert).
+
+### What landed
+
+Tracks can now form a **tree**. Structurally the model already allowed it (a
+container's children are `SLink`s to any `SObject`) and the DSP already summed it
+(`twTrackMix::calcOutputTo` pulls every child's `getRootComponent()` live each
+buffer, and `SLink::hasStartTime()` is always true, so a child track at
+startTime 0 contributes immediately). What was missing was a safe *operation* to
+rewire the tree, plus a test that it round-trips.
+
+| File | Purpose |
+|------|---------|
+| `main/include/actions/sreparenttrackaction.h` + `src/.../sreparenttrackaction.cpp` (new) | `SReparentTrackAction(sourcePath, destParentPath, destIndex)`. Tracks/containers are addressed by an **index-path from the root mixer** (`{}` = mixer, `{2}` = its 3rd child, `{2,1}` = 2nd child of that). `apply()` resolves source + dest **before** any mutation, validates (must be a track; dest must be a container; reject same-container reorder; cycle guard via `isSelfOrDescendant`), then moves: `addRef()` pins the track across the detach→attach gap (so the transient zero-ref window can't fire the irreversible `removeRef→deleteLater`), detaches (mixer: `removeTrack(SLink&)` + clear stale `track→mixer` signal connections; track parent: `delete link` + clear `track→parent`), attaches (mixer: `insertTrack`; track parent: `new SLink(track,NULL); setParent`), `removeRef()`, `rewireSpeaker()`. The **inverse is synthesized from the post-move tree** (`pathOf`) so it is immune to the index shifts the move causes in both containers. Self-registers as `reparent-track`. |
+| `main/CMakeLists.txt` | Header + source added. |
+| `main/src/smainwindow.cpp` + `.h` | New **Test → Group Track Test (tree + undo)**: ensures ≥2 top tracks, groups track `{1}` under `{0}`, asserts the mixer shrank by one and track 0 gained a track-typed child, round-trips the nested arrangement through `SSaveProjectAction`/`SLoadProjectAction` into a throwaway project, then undoes and asserts the flat arrangement returns. Reports OK/FAILED to stderr + status bar. |
+
+### Serialization
+
+**No format change.** Nesting is just `SLink` children of a track; the loader's
+two-pass `createObjects` already rebuilds arbitrary `SObject`/`SLink` trees by
+id, and `STrack::instantiateFromDomElement` already loops its `SLink` children
+and resolves each `objectId` — a track-child-of-track resolves because the nested
+track is instantiated first (dependency ordering).
+
+### Honestly deferred
+
+- **Append-only attach.** The model appends tracks (`insertTrack`'s index is
+  cosmetic; QObject child order = creation order, with no reorder API), so undo
+  restores **membership, not the exact original slot**. Consistent with the fact
+  that no track-reorder exists anywhere yet; a future move/reorder action covers
+  it.
+- **Same-container reorder** is rejected by the action (out of scope — it is a
+  reorder, not a reparent).
+- **Nested-track solo** still resolved at the top-level mixer only (carried over
+  from §0).
+
+### Verification needed (human)
+
+1. **Test → Group Track Test** → stderr/status shows `Group test OK`.
+2. (Once §1.2 UI lands) visually confirm the indented lanes.
+
+### Next
+
+Indented arranger UI (§1.2): walk the track tree depth-first in `SMVActualView`
+instead of the flat `getTrackAt(i)` list; indent + fold triangle per parent.
+
+---
+
+## Grouping/assets: explicit child order + exact-slot move/reorder
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW; window-up smoke
+  passes. Verify interactively via **Test → Reorder Track Test** and re-run
+  **Test → Group Track Test** (the undo path is now exact-slot).
+
+### Why
+
+The Phase 2 reparent was append-only, so undo restored *membership, not the
+original slot*. Root cause: the model conflated **order** with **QObject child
+order**, and Qt has no public reorder API (`setParent` always appends). On the
+user's call we switched to the idiomatic Qt approach — an **explicit ordered
+list as the source of truth**, with QObject parentage left to mean *ownership
+only* — and hid all iteration behind an **iterator** so call sites don't depend
+on the storage.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `main/include/sobject.h` + `src/sobject.cpp` | `SObject` now owns `QList<SLink*> childOrder_` (the order source of truth). `childEvent()` keeps its **membership** in sync with QObject parentage (append on add, drop on remove); **order** is then set by `moveChildToIndex(from,to)` — a plain `QList::move`, no `setParent` dance, no signal churn, refcounts untouched. New storage-agnostic accessors: `childLinks()` (a range, `for (SLink* lk : obj->childLinks())`), `childCount()`, `childAt(i)`, `indexOfChild()`, `indexOfChildObject()`. A small `SChildLinks` range type wraps the list so the iterator type is the abstraction, not `QObject::children()`. |
+| `main/src/sstdmixer.cpp` + `.h`, `strack.cpp`, `strackrndrinline.cpp`, `sobject.cpp`, `tw303a/.../twtrackmix.cc`, sample actions | Every **order-relevant** `QObject::children()` reader switched to the iterator/accessors (getNTracks, getTrackAt, reconnectTracksToMixer, anyTrackSoloed, seekTo, getTopMostSLinkAt, getChildrenExtent, serialize, the inline renderer, twTrackMix's sum loop, add/remove-sample). `SProject`'s `children()` (flat *SObject* ownership list, not SLink order) deliberately untouched. |
+| `main/src/sstdmixer.cpp` + `.h` | **`insertTrack`'s cosmetic index param removed** → `insertTrack(STrack&)`; it always appended (the index only fed the signal) and now emits the real landing index. New **`reorderTrack(from,to)`** = `moveChildToIndex` + `reconnectTracksToMixer` (bus inputs are index-assigned) + new **`tracksReordered()`** signal (a hook for the §1.2 view). |
+| `main/src/actions/saddtrackaction.cpp` | Now **honours its index for real** (append then `reorderTrack` into place) — previously it silently appended regardless, so its inverse could remove the wrong track. |
+| `main/include/actions/strackpath.h` (new) | Shared inline path helpers (`childLinkAt`/`resolveByPath`/`pathOf`/`isSelfOrDescendant`/`pathToString`/`stringToPath`) built on the iterator API, used by both tree actions. |
+| `main/src/actions/sreparenttrackaction.cpp` | Refactored onto `strackpath.h`; now **honours an exact `destIndex`** (append then place) and its **inverse restores the exact original (parent, index)**. The append-only limitation is gone. |
+| `main/include/actions/smovetrackaction.{h}` + `src/.../smovetrackaction.cpp` (new) | `SMoveTrackAction(sourcePath, toIndex)` — in-place reorder within the current parent (mixer or folder track). Undoable; inverse moves back to the exact original index. Registers as `move-track`. |
+| `main/CMakeLists.txt`, `main/src/smainwindow.cpp` + `.h` | Build wiring + **Test → Reorder Track Test**: tags 3 tracks by volume, moves track 0 → slot 2, asserts the new order, round-trips it, and asserts undo restores the exact original order. |
+
+### How ordering works now (the model)
+
+`childOrder_` is the single source of truth for sequence; `QObject::children()`
+is only ownership/lifetime and may differ in order after a reorder (same
+membership, always). Save/load preserves logical order because `serialize`
+writes `childLinks()` order and the loader rebuilds via `setParent`, which
+appends to `childOrder_` in document order.
+
+### Live arranger refresh on reorder — DONE (2026-06-07)
+
+The earlier deferral is implemented. `SStdMixerView` now has a `tracksReordered()`
+slot, connected to the mixer's `tracksReordered()` signal, that **re-sequences the
+existing control-column widgets** to match the model order (matching each control
+to its track via the new `SSMVMixerControl::getTrack()`, then repositioning) and
+repaints the lanes — no control is created or destroyed. The invariant
+"`controlArray_` order == model order" is now maintained by all three view slots
+(`addMixerControl`/`removeMixerControl`/`tracksReordered`), so live reorder, group,
+and undo all keep the faders aligned with the lanes.
+
+| File | Change |
+|------|--------|
+| `main/include/ssmvmixercontrol.h` | Public `STrack &getTrack() const`. |
+| `main/include/sstdmixerview.h` + `src/sstdmixerview.cpp` | `tracksReordered()` slot (reorders `controlArray_` to model order + repositions + `qContent_->update()`); connected to `model_`'s `tracksReordered()` in the ctor. |
+
+### Verification needed (human)
+
+1. **Test → Reorder Track Test** → `Reorder test OK: 012 -> 120 -> undo 012`,
+   and the faders visibly follow the lanes.
+2. **Test → Group Track Test** → `Group test OK` (its undo is now exact-slot).
+
+### Next
+
+Indented arranger UI (§1.2), now on a clean ordered-tree foundation: walk the
+tree depth-first, indent + fold per parent, and re-sequence the control column
+on `tracksReordered()`.
+
+---
+
+## Grouping/assets: mouse drag-to-reorder tracks (interactive)
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW; window-up smoke
+  passes. The drag itself is a human check (drag a track's grip up/down).
+
+### Why
+
+The reorder/move engine + actions existed but were only reachable from the Test
+menu. The user asked for a **manual mouse** way to reorder top-level tracks
+(keyboard/context-menu not chosen; **manual grouping deliberately deferred to
+§1.2**, since a grouped track leaves the flat view and would be invisible until
+the indented tree UI exists).
+
+### What landed
+
+A **grip handle** — a 12 px strip down the **left** side of each channel-strip
+control (`SSMVMixerControl`), drawn by the control so mouse events on it reach
+the control directly (its child widgets cover the rest). Dragging the grip
+reorders the track. (Mute/Solo are stacked vertically, mute over solo, beside the
+fader.)
+
+| File | Change |
+|------|--------|
+| `main/include/ssmvmixercontrol.h` + `src/ssmvmixercontrol.cpp` | Reserve the left `HANDLE_W` px (grid left-margin) and `paintEvent` a vertical grip there. `mousePressEvent` on the grip arms a drag; `mouseMoveEvent` past a 4 px threshold starts it (cursor → closed hand, grip turns blue) and forwards the pointer (mapped to the control-column) to the view; `mouseReleaseEvent` ends it. New `dragArmed_`/`dragging_`/`dragPressPos_` state. Mute/Solo laid out in a vertical column. |
+| `main/include/sstdmixerview.h` + `src/sstdmixerview.cpp` | `beginTrackDrag/updateTrackDrag/endTrackDrag` + `insertSlotAt()`. A thin `QFrame` `dropIndicator_` (child of the control box) shows the insertion line while dragging; on release the gap is mapped to a target index and an **`SMoveTrackAction`** is submitted (undoable; the existing `tracksReordered()` path then re-sequences the faders). Dropping on the track's own slot is a no-op. |
+
+### Notes / scope
+
+- Reorder applies to **top-level** tracks (the control column only shows those).
+- Manual **grouping** (reparent into a folder) is **deferred to §1.2** by choice —
+  the engine (`SReparentTrackAction`) is ready; it just needs the tree UI to be
+  visible/usable. No keyboard or context-menu reorder was added (mouse only).
+
+### Verification needed (human)
+
+1. Drag a track's top grip up/down → a blue insertion line tracks the pointer;
+   on release the track (fader + lane) moves to that slot. Ctrl+Z restores it.

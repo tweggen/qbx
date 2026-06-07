@@ -60,7 +60,7 @@ SObjectRenderer *SStdMixer::getInlineRenderer()
 
 int SStdMixer::getNTracks() const
 {
-    return this->children().count();
+    return childCount();
 }
 
 #if 0
@@ -74,15 +74,7 @@ SSMPerTrack *SStdMixer::getPerTrackAt( int idx )
 
 SLink *SStdMixer::getTrackAt( int idx )
 {
-#if 1
-    const QObjectList& children = this->children();
-    return (SLink*) (const_cast<QObjectList*>(&children)->at( idx ));
-#else
-    SSMPerTrack *spt = getPerTrackAt( idx );
-    if( !spt ) return NULL;    
-    SLink *lk = &(spt->getTrack());
-    return lk;
-#endif
+    return childAt( idx );
 }
 
 #if 0
@@ -127,14 +119,8 @@ twComponent &SStdMixer::getRootComponent()
 
 int SStdMixer::seekTo( offset_t off )
 {
-    const QObjectList& children = this->children();
-    for( auto it=children.cbegin(); it != children.cend(); ++it ) {
-        SLink *lk = const_cast<SLink*>((const SLink*) *it);
-        if( lk ) {
-            lk->getSObject().seekTo( off );
-        } else {
-            qWarning( "SStdMixer::seekTo(): Link was NULL.\n" );
-        }
+    for( SLink *lk : childLinks() ) {
+        lk->getSObject().seekTo( off );
     }
     return 0;
 }
@@ -145,12 +131,11 @@ int SStdMixer::seekTo( offset_t off )
  */
 void SStdMixer::reconnectTracksToMixer()
 {
-    const QObjectList& children = this->children();
     if( !cpMixers_ ) {
         qWarning( "Should reconnect tracks although no mixer was created yet.\n" );
         return;
     }
-    int nTracks = children.count();
+    int nTracks = childCount();
     const bool solo = anyTrackSoloed();
     // For all busses.
     for( int bus=0; bus<nBusses_; bus++ ) {
@@ -159,7 +144,7 @@ void SStdMixer::reconnectTracksToMixer()
         // Ensure the given number of inputs.
         mix->setNInputs( nTracks );
         for( int channel=0; channel<nTracks; channel++ ) {
-            SLink *lk = (SLink *)(const_cast<QObjectList&>(children)).at( channel );
+            SLink *lk = childAt( channel );
             // A track is audible iff it is not muted and, when any track is
             // soloed, it is itself soloed. Inaudible tracks get a NULL input so
             // their DSP is not pulled at all (processing AND output disabled).
@@ -187,10 +172,8 @@ void SStdMixer::reconnectTracksToMixer()
  */
 bool SStdMixer::anyTrackSoloed() const
 {
-    const QObjectList& children = this->children();
-    for( QObject *o : children ) {
-        SLink *lk = (SLink *) o;
-        if( lk && lk->getSObject().isSolo() ) return true;
+    for( SLink *lk : childLinks() ) {
+        if( lk->getSObject().isSolo() ) return true;
     }
     return false;
 }
@@ -237,9 +220,8 @@ int SStdMixer::setNBusses( int n )
     // no change?
     if( n<0 ) return -2;
     if( n==nBusses_ && cpMixers_ ) return 0;
-    const QObjectList& children = this->children();
-    int nTracks = children.count();
-    
+    int nTracks = childCount();
+
     qWarning( "SStdMixer::setNBusses( %d ): called.\n", n );
 
     // First check, if still input tracks are connected to the
@@ -301,14 +283,10 @@ int SStdMixer::setNBusses( int n )
     return 0;
 }
 
-void SStdMixer::insertTrack( int newIndex, STrack &trk )
+void SStdMixer::insertTrack( STrack &trk )
 {
-    const QObjectList& children = this->children();
-    int nKids = children.count();
-    if( newIndex<0 ) newIndex = nKids;
-    qWarning( "Inserting new track @%d.\n", newIndex );
-    QObject::connect( (QObject*)&trk, SIGNAL( durationChanged( length_t ) ), 
-                      this, SLOT( mixerChildDurationChanged( length_t ) ) );    
+    QObject::connect( (QObject*)&trk, SIGNAL( durationChanged( length_t ) ),
+                      this, SLOT( mixerChildDurationChanged( length_t ) ) );
     // Volume needs no connection: twTrackMix reads getVolume() live each buffer.
     QObject::connect(
         (QObject*)&trk, SIGNAL( mutedChanged( bool ) ),
@@ -316,18 +294,32 @@ void SStdMixer::insertTrack( int newIndex, STrack &trk )
     QObject::connect(
         (QObject*)&trk, SIGNAL( soloChanged( bool ) ),
         this, SLOT( trackMuteSoloChanged() ) );
+    // Construction parents the link to us, which appends it (childEvent keeps
+    // childOrder_ in sync). Position it afterwards with reorderTrack().
     SLink *lk = new SLink( (SObject&)trk, this );
     (void) lk;
+    int newIndex = childCount() - 1;   // actual landing index (append)
+    qWarning( "Inserted new track @%d.\n", newIndex );
     emit trackInserted( newIndex, trk );
+}
+
+void SStdMixer::reorderTrack( int fromIndex, int toIndex )
+{
+    const int n = childCount();
+    if( fromIndex<0 || fromIndex>=n ) return;
+    if( toIndex<0 ) toIndex = 0;
+    if( toIndex>=n ) toIndex = n-1;
+    if( fromIndex==toIndex ) return;
+    moveChildToIndex( fromIndex, toIndex );
+    // Bus mixer inputs are assigned by track index, so re-wire after a reorder.
+    reconnectTracksToMixer();
+    emit tracksReordered();
 }
 
 int SStdMixer::removeTrack( SLink &track )
 {
-    const QObjectList& children = this->children();
-    int nKids = children.count();
     int idx = getChildIndex( track.getSObject() );
-    if( idx<0 || idx>=nKids ) return -1;
-    SLink *sl = (SLink *) (const_cast<QObjectList*>(&children)->at( idx ));
+    SLink *sl = childAt( idx );
     if( !sl ) return -1;
     QObject::disconnect( &(sl->getSObject()), SIGNAL( durationChanged( length_t ) ), 
                          this, SLOT( mixerChildDurationChanged( length_t ) ) );    
@@ -337,14 +329,8 @@ int SStdMixer::removeTrack( SLink &track )
 }
 
 int SStdMixer::removeTrack( int trackIndex )
-{    
-    const QObjectList& children = this->children();
-    int nKids = children.count();
-    // FIXME: This is inefficient.
-    SLink *stl;
-    if( trackIndex<0 || trackIndex>=nKids ) return -1;
-    // stl = (SLink *)((QObjectList *)children)->at( trackIndex );
-    stl = (SLink *)(const_cast<QObjectList *>(&children)->at( trackIndex ));
+{
+    SLink *stl = childAt( trackIndex );
     if( !stl ) {
         qWarning( "SStdMixer::removeTrack(): Child requested was not found.\n" );
         return -1;
@@ -424,7 +410,7 @@ SLink *SStdMixer::instantiateFromDomElement(
                 contentLink = projectLoader.getObjectDictionary().value( objectId );
                 if( contentLink ) {
                     // FIXME: Check, wether this is a track, or create a generic insertion function.
-                    mixer->insertTrack( -1, *(STrack *)&contentLink->getSObject() );
+                    mixer->insertTrack( *(STrack *)&contentLink->getSObject() );
                 }
             }
         }

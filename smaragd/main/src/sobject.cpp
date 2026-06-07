@@ -107,9 +107,7 @@ int SObject::serialize( QTextStream &o )
     if( res<0 ) return res;
     o  << ">\n";
 
-    const QObjectList& children = this->children();
-    for( auto it=children.cbegin(); it != children.cend(); ++it ) {
-        SLink *lk = const_cast<SLink*>((const SLink*)(*it));
+    for( SLink *lk : childLinks() ) {
         int res = lk->serialize( o );
         if( res<0 ) break;
     }
@@ -242,6 +240,36 @@ int SObject::getNReferences() const
     return nRefs_;
 }
 
+SLink *SObject::childAt( int index ) const
+{
+    if( index<0 || index>=childOrder_.size() ) return nullptr;
+    return childOrder_.at( index );
+}
+
+int SObject::indexOfChild( const SLink *child ) const
+{
+    return childOrder_.indexOf( const_cast<SLink*>( child ) );
+}
+
+int SObject::indexOfChildObject( const SObject &child ) const
+{
+    for( int i=0; i<childOrder_.size(); ++i ) {
+        if( &childOrder_.at( i )->getSObject() == &child ) return i;
+    }
+    return -1;
+}
+
+void SObject::moveChildToIndex( int fromIndex, int toIndex )
+{
+    const int n = childOrder_.size();
+    if( fromIndex<0 || fromIndex>=n ) return;
+    if( toIndex<0 ) toIndex = 0;
+    if( toIndex>=n ) toIndex = n-1;
+    if( fromIndex==toIndex ) return;
+    // Order is just the explicit list; QObject parentage is unaffected.
+    childOrder_.move( fromIndex, toIndex );
+}
+
 void SObject::addRef()
 {
     if( ++nRefs_ == 1 ) {
@@ -284,9 +312,7 @@ offset_t SObject::getChildrenExtent( offset_t &firstStart, offset_t &lastEnd,
     nUndefDuration = 0;
     firstStart = (offset_t) (0-1); // Largest number possible
     lastEnd = (offset_t) 0;
-    const QObjectList& myChildren = children();
-    for( auto it = myChildren.cbegin(); it != myChildren.cend(); ++it ) {
-        SLink *sli = const_cast<SLink*>((const SLink *) *it);;
+    for( SLink *sli : childLinks() ) {
         SObject &sobj = sli->getSObject();
         bool hd = sobj.hasDuration();
 
@@ -343,16 +369,24 @@ length_t SObject::getAllChildsDuration() const
 
 bool SObject::isEmpty() const
 {
-    return children().empty();
+    return childOrder_.isEmpty();
 }
 
 void SObject::childEvent( QChildEvent *ce )
 {
     QObject::childEvent( ce );
+    // Keep childOrder_ membership in sync with QObject parentage. New children
+    // append (order is then adjusted via moveChildToIndex); removed children
+    // drop out. Mirror QObject's own list state: at ChildAdded the child is
+    // already in children(); at ChildRemoved it is already gone.
     if( ce->added() ) {
-        gotChild( *((SLink *) ce->child() ) );
+        SLink *lk = (SLink *) ce->child();
+        if( !childOrder_.contains( lk ) ) childOrder_.append( lk );
+        gotChild( *lk );
     } else if( ce->removed() ) {
-        lostChild( *((SLink *) ce->child() ) );
+        SLink *lk = (SLink *) ce->child();
+        childOrder_.removeOne( lk );
+        lostChild( *lk );
     }
 }
 
@@ -368,14 +402,7 @@ void SObject::lostChild( SLink &newChild )
 
 int SObject::getChildIndex( SObject &child ) const
 {
-    const QObjectList& children = this->children();
-    int i=0;
-    for( auto it=children.cbegin(); it != children.cend(); ++it ) {
-        SLink *lk = const_cast<SLink*>( (const SLink *) *it );
-        if( &(lk->getSObject()) == &child ) return i;
-        ++i;
-    }
-    return -1;
+    return indexOfChildObject( child );
 
 }
 

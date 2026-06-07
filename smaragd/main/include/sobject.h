@@ -6,6 +6,7 @@
 #include "tw303aenv.h"
 #include <qtextstream.h>
 #include <QDomElement>
+#include <QList>
 
 class QWidget;
 
@@ -13,6 +14,28 @@ class twComponent;
 class SProject;
 class SLink;
 class SObjectRenderer;
+
+
+/**
+ * A lightweight, storage-agnostic view over a container's ordered SLink
+ * children. Consumers iterate with a range-for
+ * (`for( SLink *lk : obj->childLinks() )`) or index with at()/size(), and stay
+ * decoupled from how the order is actually stored (an explicit list today, the
+ * QObject child list historically). Order is owned by the container; QObject
+ * parentage is only about lifetime.
+ */
+class SChildLinks {
+public:
+    using const_iterator = QList<SLink*>::const_iterator;
+    explicit SChildLinks( const QList<SLink*> &list ) : list_( list ) {}
+    const_iterator begin() const { return list_.cbegin(); }
+    const_iterator end() const { return list_.cend(); }
+    int size() const { return list_.size(); }
+    bool isEmpty() const { return list_.isEmpty(); }
+    SLink *at( int i ) const { return list_.at( i ); }
+private:
+    const QList<SLink*> &list_;
+};
 
 
 /**
@@ -71,6 +94,26 @@ public:
      * interfaces.
      */
     virtual int seekTo( offset_t );
+
+    /**
+     * Ordered view of this container's SLink children. Prefer this and the
+     * childAt()/childCount() accessors over QObject::children() everywhere order
+     * matters, so call sites stay decoupled from the storage.
+     */
+    SChildLinks childLinks() const { return SChildLinks( childOrder_ ); }
+    int childCount() const { return childOrder_.size(); }
+    SLink *childAt( int index ) const;
+    int indexOfChild( const SLink *child ) const;
+    int indexOfChildObject( const SObject &child ) const;
+
+    /**
+     * Reorder this container's SLink children so the child currently at
+     * fromIndex ends up at toIndex (the others shift to fill). No-op if either
+     * index is out of range or they are equal. Order is just the explicit list,
+     * so this is a plain list move — QObject parentage and refcounts are
+     * untouched and no childObject signals fire.
+     */
+    void moveChildToIndex( int fromIndex, int toIndex );
 
     /**
      * Return the number of references to this object (from SLinks)
@@ -191,6 +234,10 @@ private:
     void gotChild( SLink & );
     void lostChild( SLink & );
     int straightCalcPreviewData();
+    // Source of truth for child order (membership mirrors QObject::children(),
+    // maintained in childEvent(); order is independent and set by
+    // moveChildToIndex()).
+    QList<SLink*> childOrder_;
     int nRefs_;
     offset_t previewForLength_;
     offset_t nPreviewProbes_;

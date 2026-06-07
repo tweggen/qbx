@@ -29,6 +29,12 @@
 static const int FADER_MIN = -960;
 static const int FADER_MAX =  240;
 
+// Width of the grip strip down the left side of the control that acts as the
+// track-reorder drag handle, and the pixels the pointer must travel before a
+// press there turns into a drag.
+static const int HANDLE_W = 12;
+static const int DRAG_THRESHOLD = 4;
+
 QSize SSMVMixerControl::sizeHint() const
 {
 //    printf( "Returning a size of 150/%d.\n",smv_.getTrackHeight() );
@@ -98,6 +104,68 @@ void SSMVMixerControl::setSliderSilently( double value )
     }
 }
 
+// Draw the grip strip down the left so the user can see the drag handle.
+void SSMVMixerControl::paintEvent( QPaintEvent *ev )
+{
+    QWidget::paintEvent( ev );
+    QPainter p( this );
+    QRect handle( 0, 0, HANDLE_W, height() );
+    p.fillRect( handle, dragging_ ? QColor( 40, 90, 160 ) : QColor( 70, 70, 80 ) );
+    p.setPen( QColor( 165, 165, 175 ) );
+    int cx = HANDLE_W/2;
+    int cy = height()/2;
+    for( int i=-3; i<=3; ++i ) {
+        p.drawPoint( cx-2, cy + i*6 );
+        p.drawPoint( cx+1, cy + i*6 );
+    }
+}
+
+void SSMVMixerControl::mousePressEvent( QMouseEvent *ev )
+{
+    // A left press on the grip strip arms a track-reorder drag.
+    if( ev->button()==Qt::LeftButton && ev->pos().x() < HANDLE_W ) {
+        dragArmed_ = true;
+        dragging_ = false;
+        dragPressPos_ = ev->pos();
+        ev->accept();
+        return;
+    }
+    QWidget::mousePressEvent( ev );
+}
+
+void SSMVMixerControl::mouseMoveEvent( QMouseEvent *ev )
+{
+    if( dragArmed_ && (ev->buttons() & Qt::LeftButton) ) {
+        if( !dragging_ ) {
+            if( abs( ev->pos().y()-dragPressPos_.y() ) < DRAG_THRESHOLD ) return;
+            dragging_ = true;
+            setCursor( Qt::ClosedHandCursor );
+            smv_.beginTrackDrag( this );
+            update();   // repaint the grip in its "active" colour
+        }
+        // Report the pointer in the control-column's coordinate space.
+        smv_.updateTrackDrag( mapToParent( ev->pos() ).y() );
+        ev->accept();
+        return;
+    }
+    QWidget::mouseMoveEvent( ev );
+}
+
+void SSMVMixerControl::mouseReleaseEvent( QMouseEvent *ev )
+{
+    if( dragging_ ) {
+        smv_.endTrackDrag( mapToParent( ev->pos() ).y() );
+        dragging_ = false;
+        dragArmed_ = false;
+        unsetCursor();
+        update();
+        ev->accept();
+        return;
+    }
+    dragArmed_ = false;
+    QWidget::mouseReleaseEvent( ev );
+}
+
 void SSMVMixerControl::muteToggled( bool on )
 {
     tk_.setMuted( on );
@@ -125,14 +193,17 @@ SSMVMixerControl::~SSMVMixerControl()
     // Deletes all widgets by default
 }
 
-SSMVMixerControl::SSMVMixerControl( 
+SSMVMixerControl::SSMVMixerControl(
     QWidget *parent, SStdMixerView &smv, STrack &tk )
     : QWidget( parent ),
+      dragArmed_( false ),
+      dragging_( false ),
       smv_( smv ),
       tk_( tk )
 {
     qLayout_ = new QGridLayout( this );
-    qLayout_->setContentsMargins( 4, 2, 4, 2 );
+    // Leave the left HANDLE_W pixels free for the drag-handle grip.
+    qLayout_->setContentsMargins( HANDLE_W, 2, 4, 2 );
     qLayout_->setSpacing( 2 );
 
     qTrkLabel_ = new QLineEdit( tk_.getSName(), this );
@@ -165,12 +236,18 @@ SSMVMixerControl::SSMVMixerControl(
     qSolo_->setToolTip( "Solo" );
     qSolo_->setStyleSheet( "QPushButton:checked { background:#e0c020; color:black; }" );
 
-    // One row: Mute, Solo, then the volume fader to their right.
+    // Mute over Solo in a column, with the volume fader to their right.
+    QVBoxLayout *muteSoloCol = new QVBoxLayout();
+    muteSoloCol->setContentsMargins( 0, 0, 0, 0 );
+    muteSoloCol->setSpacing( 2 );
+    muteSoloCol->addWidget( qMute_, 0, Qt::AlignTop );
+    muteSoloCol->addWidget( qSolo_, 0, Qt::AlignTop );
+    muteSoloCol->addStretch( 1 );
+
     QHBoxLayout *stripRow = new QHBoxLayout();
     stripRow->setContentsMargins( 0, 0, 0, 0 );
     stripRow->setSpacing( 2 );
-    stripRow->addWidget( qMute_, 0, Qt::AlignTop );
-    stripRow->addWidget( qSolo_, 0, Qt::AlignTop );
+    stripRow->addLayout( muteSoloCol );
     stripRow->addWidget( qVolume_ );
     stripRow->addStretch( 1 );
 

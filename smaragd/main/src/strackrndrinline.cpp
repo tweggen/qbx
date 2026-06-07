@@ -21,15 +21,13 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
     offset_t rightTime = ctx.getTimeOf( visibRect.x()+visibRect.width() );
 
     p.fillRect( visibRect, QColor( 128, 128, 192 ) );    
-    const QObjectList& children = getTrack().children();
-    if( children.empty() || getTrack().isEmpty() ) {
+    if( getTrack().isEmpty() ) {
 //        p.setPen( QColor( 160, 64, 64 ) );
 //        p.drawText( visibRect, AlignCenter, "Track is empty." );
         return;
-    } 
+    }
     // qWarning( "visibRect.x() = %d, leftTime = %d; rightTime=%d.\n", visibRect.x(), (int)leftTime, (int)rightTime );
-    for( QObjectList::const_iterator it = children.begin(); it != children.end(); ++it ) {
-        SLink *lk = (SLink*) *it;
+    for( SLink *lk : getTrack().childLinks() ) {
         bool isSelected = SApplication::app().isSLinkSelected( lk );
         //printf( "Link found: $%08x.\n", lk );
         //fflush( stdout ); fflush( stderr );

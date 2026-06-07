@@ -29,6 +29,9 @@ set(SMARAGD_HEADERS
     include/sactionundocommand.h
     include/actions/saddtrackaction.h
     include/actions/sremovetrackaction.h
+    include/actions/sreparenttrackaction.h
+    include/actions/smovetrackaction.h
+    include/actions/strackpath.h
     include/actions/saddsampleaction.h
     include/actions/sremovesampleaction.h
     include/actions/ssettrackvolumeaction.h
@@ -74,6 +77,8 @@ set(SMARAGD_SOURCES
     src/sactionundocommand.cpp
     src/actions/saddtrackaction.cpp
     src/actions/sremovetrackaction.cpp
+    src/actions/sreparenttrackaction.cpp
+    src/actions/smovetrackaction.cpp
     src/actions/saddsampleaction.cpp
     src/actions/sremovesampleaction.cpp
     src/actions/ssettrackvolumeaction.cpp

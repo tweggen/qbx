@@ -29,10 +29,13 @@
 #include <QUndoStack>
 
 #include "sstdmixer.h"
+#include "strack.h"
 
 #include "twspeaker.h"
 
 #include "actions/saddtrackaction.h"
+#include "actions/sreparenttrackaction.h"
+#include "actions/smovetrackaction.h"
 #include "actions/saddsampleaction.h"
 #include "actions/ssettrackvolumeaction.h"
 #include "actions/ssaveprojectaction.h"
@@ -371,6 +374,8 @@ SMainWindow::SMainWindow()
     qTestMenu_->addAction( "&Run Test Sequence...", this, SLOT( runTestSequence() ) );
     qTestMenu_->addAction( "&Volume Burst (track 0)", this, SLOT( runVolumeBurst() ) );
     qTestMenu_->addAction( "Save/&Load Round-trip", this, SLOT( runSaveLoadTest() ) );
+    qTestMenu_->addAction( "&Group Track Test (tree + undo)", this, SLOT( runGroupTrackTest() ) );
+    qTestMenu_->addAction( "Re&order Track Test (exact slot)", this, SLOT( runReorderTrackTest() ) );
     menuBar()->addMenu( qTestMenu_ );
 
     qDockExternFileList_ = NULL;
@@ -563,6 +568,160 @@ void SMainWindow::runSaveLoadTest()
     fprintf(stderr, "%s  [%s]\n", msg.toUtf8().constData(), tmpPath.toUtf8().constData());
     fflush(stderr);
     statusBar()->showMessage(msg, 5000);
+}
+
+// Phase 2 (proposal 05 §1) validation: build a track tree with
+// SReparentTrackAction, confirm the nested structure, round-trip it through
+// save/load, and confirm undo restores the flat arrangement. Self-contained.
+void SMainWindow::runGroupTrackTest()
+{
+    if (!currentProject_) {
+        statusBar()->showMessage("Open or create a project first", 3000);
+        return;
+    }
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    if (!mixer) {
+        statusBar()->showMessage("Group test FAILED: no mixer", 4000);
+        return;
+    }
+
+    // Need at least two top-level tracks; add until we have two.
+    while (mixer->getNTracks() < 2) {
+        SApplication::app().submitAction(new SAddTrackAction(-1));
+    }
+    const int topBefore = mixer->getNTracks();
+
+    // Count the track-typed children of a container (clips don't count).
+    auto childTrackCount = [](SObject *container) {
+        int n = 0;
+        for (SLink *lk : container->childLinks()) {
+            if (dynamic_cast<STrack*>(&lk->getSObject())) ++n;
+        }
+        return n;
+    };
+
+    SObject *topTrack0 = &mixer->childAt(0)->getSObject();
+    const int nestedBefore = childTrackCount(topTrack0);
+
+    // Move the second top-level track (path {1}) under the first (path {0}).
+    SApplication::app().submitAction(
+        new SReparentTrackAction(QList<int>{1}, QList<int>{0}));
+
+    const int topAfter = mixer->getNTracks();
+    const int nestedAfter = childTrackCount(topTrack0);
+    bool grouped = (topAfter == topBefore - 1) && (nestedAfter == nestedBefore + 1);
+
+    // Round-trip the nested arrangement through save/load (live untouched).
+    QString tmpPath = QDir::tempPath() + "/smaragd_group.qxp";
+    bool saved = SSaveProjectAction(tmpPath).apply(currentProject_).applied;
+    bool nestedRoundTrips = false;
+    int probeTop = -1;
+    if (saved) {
+        SProject *probe = new SProject();
+        if (SLoadProjectAction(tmpPath).apply(probe).applied) {
+            SStdMixer *pm = dynamic_cast<SStdMixer*>(probe->getRootComponent());
+            if (pm && pm->getNTracks() >= 1) {
+                probeTop = pm->getNTracks();
+                SObject *pTop0 = &pm->childAt(0)->getSObject();
+                nestedRoundTrips = (probeTop == topAfter)
+                                   && (childTrackCount(pTop0) == nestedAfter);
+            }
+        }
+        delete probe;
+    }
+
+    // Undo the grouping; the flat arrangement should return.
+    SApplication::app().actionHistory()->undo();
+    bool undone = (mixer->getNTracks() == topBefore)
+                  && (childTrackCount(topTrack0) == nestedBefore);
+
+    bool ok = grouped && nestedRoundTrips && undone;
+    QString msg = ok
+        ? QString("Group test OK: tree built, round-tripped, undone")
+        : QString("Group test FAILED: grouped=%1 roundtrip=%2 undone=%3")
+              .arg(grouped).arg(nestedRoundTrips).arg(undone);
+    fprintf(stderr, "%s (top %d->%d->undo %d; probeTop=%d)\n",
+            msg.toUtf8().constData(), topBefore, topAfter,
+            mixer->getNTracks(), probeTop);
+    fflush(stderr);
+    statusBar()->showMessage(msg, 6000);
+}
+
+// Validation for exact-slot reorder: tag the first three tracks with distinct
+// volumes (0,1,2 dB) as identity, move track 0 to slot 2 via SMoveTrackAction,
+// confirm the new order, round-trip it, and confirm undo restores the exact
+// original order. Self-contained.
+void SMainWindow::runReorderTrackTest()
+{
+    if (!currentProject_) {
+        statusBar()->showMessage("Open or create a project first", 3000);
+        return;
+    }
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    if (!mixer) {
+        statusBar()->showMessage("Reorder test FAILED: no mixer", 4000);
+        return;
+    }
+
+    while (mixer->getNTracks() < 3) {
+        SApplication::app().submitAction(new SAddTrackAction(-1));
+    }
+
+    auto trackAt = [mixer](int i) {
+        return dynamic_cast<STrack*>(&mixer->getTrackAt(i)->getSObject());
+    };
+    for (int i = 0; i < 3; ++i) trackAt(i)->setVolume((double)i);
+
+    // Order signature: the integer volume tag of each top-level track.
+    auto orderString = [mixer, trackAt]() {
+        QString s;
+        for (int i = 0; i < mixer->getNTracks(); ++i)
+            s += QString::number((int)trackAt(i)->getVolume());
+        return s;
+    };
+
+    const QString before = orderString();          // "012..."
+    const int n = mixer->getNTracks();
+
+    // Move the first track to slot 2.
+    SApplication::app().submitAction(new SMoveTrackAction(QList<int>{0}, 2));
+    const QString moved = orderString();           // expect "120..."
+    bool reordered = (moved.left(3) == "120");
+
+    // Round-trip the reordered arrangement.
+    QString tmpPath = QDir::tempPath() + "/smaragd_reorder.qxp";
+    bool saved = SSaveProjectAction(tmpPath).apply(currentProject_).applied;
+    bool orderRoundTrips = false;
+    if (saved) {
+        SProject *probe = new SProject();
+        if (SLoadProjectAction(tmpPath).apply(probe).applied) {
+            SStdMixer *pm = dynamic_cast<SStdMixer*>(probe->getRootComponent());
+            if (pm && pm->getNTracks() >= 3) {
+                QString ps;
+                for (int i = 0; i < 3; ++i)
+                    ps += QString::number(
+                        (int)dynamic_cast<STrack*>(&pm->getTrackAt(i)->getSObject())->getVolume());
+                orderRoundTrips = (ps == "120");
+            }
+        }
+        delete probe;
+    }
+
+    // Undo restores the exact original order.
+    SApplication::app().actionHistory()->undo();
+    const QString undone = orderString();
+    bool restored = (undone == before) && (mixer->getNTracks() == n);
+
+    bool ok = reordered && orderRoundTrips && restored;
+    QString msg = ok
+        ? QString("Reorder test OK: %1 -> %2 -> undo %3")
+              .arg(before.left(3)).arg(moved.left(3)).arg(undone.left(3))
+        : QString("Reorder test FAILED: reordered=%1 roundtrip=%2 restored=%3 (%4->%5->%6)")
+              .arg(reordered).arg(orderRoundTrips).arg(restored)
+              .arg(before.left(3)).arg(moved.left(3)).arg(undone.left(3));
+    fprintf(stderr, "%s\n", msg.toUtf8().constData());
+    fflush(stderr);
+    statusBar()->showMessage(msg, 6000);
 }
 
 // Draw a small square "lamp" icon with a single glyph, for the palette buttons.

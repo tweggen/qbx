@@ -77,14 +77,7 @@ length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t out
     memset( buffer, 0, sizeof( sample_t )*playLen );
 
     // FIXME: Take advantage of sorted objects.
-    const QObjectList *children = &(track_.children());
-    if( !children ) return playLen;
-    QList<QObject*>::const_iterator it = children->begin();
-    SLink *lk;
-    for( ; it != children->end(); ++it ) {
-        lk = (SLink *) *it;
-        //while ( (lk=(SLink *)it.current()) != 0 ) { 
-        //++it;
+    for( SLink *lk : track_.childLinks() ) {
         if( !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();        
         if( startTime>=endInterval ) continue;

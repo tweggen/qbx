@@ -36,6 +36,8 @@ protected slots:
     void runTestSequence();
     void runVolumeBurst();
     void runSaveLoadTest();
+    void runGroupTrackTest();
+    void runReorderTrackTest();
     void undo();
     void redo();
 

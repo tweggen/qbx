@@ -29,6 +29,8 @@
 #include "ssettings.h"
 #include "ssmvmixercontrol.h"
 #include "actions/saddtrackaction.h"
+#include "actions/smovetrackaction.h"
+#include <QFrame>
 #include <qaction.h>
 #include <QKeySequence>
 
@@ -937,6 +939,85 @@ void SStdMixerView::removeMixerControl( int trackIdx, STrack &/*track*/ )
     qTrackControlBox_->resize( 150, getTrackHeight()*n );
 }
 
+// Map a Y in the control-column to an insertion gap 0..n (n = above all, n =
+// below all), rounding to the nearest track boundary.
+int SStdMixerView::insertSlotAt( int y ) const
+{
+    int h = getTrackHeight();
+    if( h<=0 ) return 0;
+    int n = model_ ? model_->getNTracks() : 0;
+    int slot = (y + h/2) / h;
+    if( slot<0 ) slot = 0;
+    if( slot>n ) slot = n;
+    return slot;
+}
+
+void SStdMixerView::beginTrackDrag( SSMVMixerControl *control )
+{
+    dragControl_ = control;
+    if( dropIndicator_ ) dropIndicator_->raise();
+}
+
+void SStdMixerView::updateTrackDrag( int yInControlBox )
+{
+    if( !dragControl_ || !dropIndicator_ ) return;
+    int slot = insertSlotAt( yInControlBox );
+    int yLine = slot*getTrackHeight();
+    if( yLine>0 ) yLine -= 1;                 // straddle the boundary
+    dropIndicator_->setGeometry( 0, yLine, 150, 3 );
+    dropIndicator_->show();
+    dropIndicator_->raise();
+}
+
+void SStdMixerView::endTrackDrag( int yInControlBox )
+{
+    if( dropIndicator_ ) dropIndicator_->hide();
+    SSMVMixerControl *control = dragControl_;
+    dragControl_ = NULL;
+    if( !control || !model_ ) return;
+
+    int fromIdx = controlArray_->indexOf( control );
+    if( fromIdx<0 ) return;
+    int n = model_->getNTracks();
+
+    // An insertion gap of `slot` lands the track at index slot, or slot-1 when
+    // it was pulled from an earlier position (its removal shifts the gap down).
+    int slot = insertSlotAt( yInControlBox );
+    int target = (slot>fromIdx) ? slot-1 : slot;
+    if( target<0 ) target = 0;
+    if( target>=n ) target = n-1;
+    if( target==fromIdx ) return;             // dropped on its own slot
+
+    SApplication::app().submitAction(
+        new SMoveTrackAction( QList<int>{ fromIdx }, target ) );
+}
+
+/**
+ * The model reordered its top-level tracks in place. Re-sequence the existing
+ * controls to match (no control is created or destroyed) and reposition them.
+ */
+void SStdMixerView::tracksReordered()
+{
+    const int n = model_->getNTracks();
+    QVector<SSMVMixerControl*> reordered;
+    reordered.reserve( n );
+    for( int i=0; i<n; ++i ) {
+        SLink *lk = model_->getTrackAt( i );
+        STrack *tk = lk ? dynamic_cast<STrack*>( &lk->getSObject() ) : NULL;
+        SSMVMixerControl *mc = NULL;
+        // Match the existing control that drives this track.
+        for( SSMVMixerControl *cand : *controlArray_ ) {
+            if( cand && &cand->getTrack() == tk ) { mc = cand; break; }
+        }
+        reordered.append( mc );
+    }
+    *controlArray_ = reordered;
+    for( int i=0; i<n; ++i ) {
+        if( controlArray_->at( i ) ) controlArray_->at( i )->move( 0, getTrackHeight()*i );
+    }
+    qContent_->update();
+}
+
 void SStdMixerView::nTracksChanged()
 {
     int newNTracks = model_->getNTracks();
@@ -1318,6 +1399,14 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     
 
     qTrackControlBox_ = new QWidget( qTrackControlBoxHolder_ );
+
+    // Track-reorder drag state + the insertion-line indicator (hidden until a
+    // drag is in progress).
+    dragControl_ = NULL;
+    dropIndicator_ = new QFrame( qTrackControlBox_ );
+    dropIndicator_->setStyleSheet( "background:#2080ff; border:none;" );
+    dropIndicator_->setFixedHeight( 3 );
+    dropIndicator_->hide();
 //    qTrackControlBox_->setBackgroundMode( NoBackground );
 
     if( GLCOLSTRETCH_0>=0 ) qGridLayout_->setColumnStretch( 0, GLCOLSTRETCH_0 );
@@ -1363,10 +1452,12 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
                       SLOT( nTracksChanged() ) );
     QObject::connect( model_, SIGNAL( trackRemoved( int, STrack & ) ), 
                       SLOT( nTracksChanged() ) );
-    QObject::connect( model_, SIGNAL( trackInserted( int, STrack & ) ), 
+    QObject::connect( model_, SIGNAL( trackInserted( int, STrack & ) ),
                       SLOT( addMixerControl( int, STrack & ) ) );
-    QObject::connect( model_, SIGNAL( trackRemoved( int, STrack & ) ), 
+    QObject::connect( model_, SIGNAL( trackRemoved( int, STrack & ) ),
                       SLOT( removeMixerControl( int, STrack & ) ) );
+    QObject::connect( model_, SIGNAL( tracksReordered() ),
+                      SLOT( tracksReordered() ) );
     QObject::connect( this, SIGNAL( timeGridSpecChanged( const STimeGridSpec & ) ), 
                       SLOT( update() ) );
 

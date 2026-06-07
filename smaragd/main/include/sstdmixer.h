@@ -63,7 +63,14 @@ signals:
      * the track.
      */
     void trackRemoved( int oldIndex, STrack &pt );
-    
+
+    /**
+     * Emitted when the track order changed in place (no track added or removed).
+     * A hook for views to re-sequence their lanes; the model order is already
+     * updated when this fires.
+     */
+    void tracksReordered();
+
 public slots:
     /**
      * Set the number of output busses.
@@ -73,12 +80,17 @@ public slots:
     int setNBusses( int n );
 
     /**
-     * Insert another track at the given position. 
-     * Tracks with numerically greater indices appear after the new track.
-     * A special index of -1 is identically to specifying the highest available
-     * track number.
+     * Append a track to the mixer (QObject children are append-only; use
+     * reorderTrack() to position it). Emits trackInserted() with the track's
+     * actual landing index.
      */
-    void insertTrack( int newIndex, STrack &track );
+    void insertTrack( STrack &track );
+
+    /**
+     * Move the track at fromIndex to toIndex, re-sequencing the others, then
+     * rewire the bus inputs (assigned by index) and emit tracksReordered().
+     */
+    void reorderTrack( int fromIndex, int toIndex );
 
     /**
      * Remove the specified track.

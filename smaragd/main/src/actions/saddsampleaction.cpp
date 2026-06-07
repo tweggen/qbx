@@ -64,8 +64,7 @@ SApplyResult SAddSampleAction::apply(SProject *project)
     cutLink->setParent(track);
 
     // Find the newly created clip in the track's children to get its index.
-    const QObjectList &children = track->children();
-    int clipIndex = children.indexOf(cutLink);
+    int clipIndex = track->indexOfChild(cutLink);
     if (clipIndex < 0) {
         return {false, nullptr};
     }
