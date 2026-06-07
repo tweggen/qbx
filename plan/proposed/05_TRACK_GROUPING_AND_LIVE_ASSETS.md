@@ -328,9 +328,18 @@ Implication: **build grouping first** (chosen), assets second.
   gained `reorderTrack` + a `tracksReordered()` signal. **The arranger now reacts
   live:** `SStdMixerView::tracksReordered()` re-sequences the existing
   control-column faders to match the reordered model (no widgets created/destroyed)
-  and repaints — so reorder/group/undo keep faders aligned with lanes. Next: the
-  indented arranger UI (§1.2) to walk the tree depth-first (nested-track lanes +
-  fold), building on this.
+  and repaints — so reorder/group/undo keep faders aligned with lanes.
+
+- **§1.2 indented arranger — DONE (2026-06-07).** *Stage 1 (display):* the
+  arranger walks a flattened depth-first row model (`SStdMixerView::rows_`),
+  drawing nested tracks as indented lanes with ▾/▸ fold triangles; hit-testing,
+  clip-drag, scroll and the control column all index rows. *Stage 2 (gestures,
+  all three):* drag-to-nest (drop onto a lane nests; drop on a boundary
+  reorders/pops out), context-menu Indent/Outdent + Group/Ungroup, and a toolbar
+  Group/Ungroup. Group/Ungroup are undoable macros over `SAddTrackAction` +
+  `SReparentTrackAction`. Deferred: they operate on top-level tracks and Ungroup
+  leaves the emptied folder (an undoable track-remove is still missing). Next:
+  feature (b) live region assets = an `SCut` over a track group (§2, §4b).
 
 ## 5. Open questions
 

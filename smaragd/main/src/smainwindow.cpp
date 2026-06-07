@@ -29,6 +29,7 @@
 #include <QUndoStack>
 
 #include "sstdmixer.h"
+#include "sstdmixerview.h"
 #include "strack.h"
 
 #include "twspeaker.h"
@@ -790,6 +791,20 @@ void SMainWindow::buildPaletteToolbar()
 
     addToolBar( Qt::TopToolBarArea, qTBPalette_ );
 
+    // Track grouping toolbar. These act on the arranger's last-clicked track
+    // (click a track lane, then Group/Ungroup).
+    qTBTracks_ = new QToolBar( "Tracks" );
+    qTBTracks_->setIconSize( QSize( 22, 22 ) );
+    QAction *aGroup = new QAction( makePaletteIcon( "[" ), "Group track", this );
+    aGroup->setToolTip( "Group: wrap the clicked track in a new folder" );
+    QObject::connect( aGroup, SIGNAL( triggered() ), this, SLOT( groupTrack() ) );
+    qTBTracks_->addAction( aGroup );
+    QAction *aUngroup = new QAction( makePaletteIcon( "]" ), "Ungroup track", this );
+    aUngroup->setToolTip( "Ungroup: dissolve the clicked folder track" );
+    QObject::connect( aUngroup, SIGNAL( triggered() ), this, SLOT( ungroupTrack() ) );
+    qTBTracks_->addAction( aUngroup );
+    addToolBar( Qt::TopToolBarArea, qTBTracks_ );
+
     // Reflect whatever project is current at startup (usually none).
     syncPaletteToProject( currentProject_ );
 }
@@ -842,6 +857,18 @@ void SMainWindow::toggleMetronome()
 void SMainWindow::toggleCycle()
 {
     SApplication::app().submitAction( new SCycleAction( SToggleSettingAction::Toggle ) );
+}
+
+void SMainWindow::groupTrack()
+{
+    SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
+    if( v ) v->ctGroupTrack();
+}
+
+void SMainWindow::ungroupTrack()
+{
+    SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
+    if( v ) v->ctUngroupTrack();
 }
 
 void SMainWindow::undo()

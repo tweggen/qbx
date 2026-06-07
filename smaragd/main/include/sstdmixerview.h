@@ -243,6 +243,11 @@ public:
 public slots:
     void ctAddTrack();
     void ctRemoveTrack();
+    // Grouping via the right-click menu / toolbar.
+    void ctIndentTrack();    // nest the clicked track under its preceding sibling
+    void ctOutdentTrack();   // move it out to its grandparent, after its parent
+    void ctGroupTrack();     // wrap the clicked track in a new folder track
+    void ctUngroupTrack();   // dissolve the clicked folder, promoting its children
     void ctInsertSample();
     void ctRemoveSample();
     void ctDeleteSample();
@@ -354,6 +359,10 @@ private:
     void rebuildRows();
     void rebuildControlColumn();
     void appendRowsFor( SObject *container, int depth );
+    // Resolve a drag drop at control-column y: *onto = the lane's track if the
+    // pointer is over a lane's middle (nest), else NULL; *topSlot = insertion
+    // index among top-level tracks (reorder / pop-to-top).
+    void resolveDrop( int y, STrack **onto, int *topSlot ) const;
 
     // Track-reorder drag state. dragControl_ is the control being dragged (NULL
     // when not dragging); dropIndicator_ is a thin line marking the insertion

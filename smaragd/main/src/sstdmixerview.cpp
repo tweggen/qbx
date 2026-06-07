@@ -30,7 +30,11 @@
 #include "ssmvmixercontrol.h"
 #include "actions/saddtrackaction.h"
 #include "actions/smovetrackaction.h"
+#include "actions/sreparenttrackaction.h"
+#include "actions/strackpath.h"
+#include "sactionhistory.h"
 #include <QFrame>
+#include <QUndoStack>
 #include <qaction.h>
 #include <QKeySequence>
 
@@ -400,6 +404,14 @@ void SMVActualView::ctGlobalShow()
     qGlobalPopup_->addAction( smv_.actNewTrack_ );
     if( lastClickTrack_ ) {
         qGlobalPopup_->addAction( "Remove track", &smv_, SLOT( ctRemoveTrack() ) );
+        qGlobalPopup_->addSeparator();
+        qGlobalPopup_->addAction( "Indent track (nest under above)", &smv_, SLOT( ctIndentTrack() ) );
+        qGlobalPopup_->addAction( "Outdent track", &smv_, SLOT( ctOutdentTrack() ) );
+        qGlobalPopup_->addAction( "Group track", &smv_, SLOT( ctGroupTrack() ) );
+        if( smv_.rowIndexOfTrack( lastClickTrack_ )>=0
+            && smv_.rowAt( smv_.rowIndexOfTrack( lastClickTrack_ ) )->hasChildren ) {
+            qGlobalPopup_->addAction( "Ungroup track", &smv_, SLOT( ctUngroupTrack() ) );
+        }
     }
 }
 
@@ -418,11 +430,94 @@ void SStdMixerView::ctAddTrack()
  */
 void SStdMixerView::ctRemoveTrack()
 {
-    int idx = qContent_->getLastClickTrackIdx();
-    if( idx<0 ) {
-        return;
+    // getLastClickTrackIdx() is a row index now; resolve the track and its real
+    // mixer index. (Removing a nested track is not wired here yet.)
+    STrack *t = qContent_->getLastClickTrack();
+    if( !t || !model_ ) return;
+    int idx = model_->indexOfChildObject( *t );
+    if( idx<0 ) return;                 // nested track: not handled here
+    model_->removeTrack( idx );
+}
+
+// --- grouping (proposal 05 §1.2) ----------------------------------------
+
+void SStdMixerView::ctIndentTrack()
+{
+    STrack *t = qContent_->getLastClickTrack();
+    if( !t || !model_ ) return;
+    int ri = rowIndexOfTrack( t );
+    if( ri<0 ) return;
+    const STrackRow *row = rowAt( ri );
+    SObject *parent = row->parent;
+    int depth = row->depth;
+    // Preceding sibling = the nearest earlier row sharing this parent.
+    STrack *prevSibling = NULL;
+    for( int i=ri-1; i>=0; --i ) {
+        const STrackRow *r = rowAt( i );
+        if( r->depth < depth ) break;          // left this sibling group
+        if( r->parent == parent ) { prevSibling = r->track; break; }
     }
-    model_->removeTrack( idx );    
+    if( !prevSibling ) return;                  // nothing to nest under
+    SApplication::app().submitAction( new SReparentTrackAction(
+        strackpath::pathOf( model_, t ),
+        strackpath::pathOf( model_, prevSibling ), -1 ) );
+}
+
+void SStdMixerView::ctOutdentTrack()
+{
+    STrack *t = qContent_->getLastClickTrack();
+    if( !t || !model_ ) return;
+    int ri = rowIndexOfTrack( t );
+    if( ri<0 ) return;
+    SObject *parent = rowAt( ri )->parent;
+    STrack *parentTrack = dynamic_cast<STrack*>( parent );
+    if( !parentTrack ) return;                  // already top-level
+    int pri = rowIndexOfTrack( parentTrack );
+    SObject *grand = (pri>=0) ? rowAt( pri )->parent : (SObject*)model_;
+    int dstIndex = grand->indexOfChildObject( *parentTrack ) + 1;  // just after parent
+    SApplication::app().submitAction( new SReparentTrackAction(
+        strackpath::pathOf( model_, t ),
+        strackpath::pathOf( model_, grand ), dstIndex ) );
+}
+
+void SStdMixerView::ctGroupTrack()
+{
+    STrack *t = qContent_->getLastClickTrack();
+    if( !t || !model_ ) return;
+    int c = model_->indexOfChildObject( *t );   // top-level tracks only for now
+    if( c<0 ) return;
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    if( stack ) stack->beginMacro( "Group track" );
+    // New empty folder at T's slot; T then sits at c+1 and is moved into it.
+    SApplication::app().submitAction( new SAddTrackAction( c ) );
+    SApplication::app().submitAction( new SReparentTrackAction(
+        QList<int>{ c+1 }, QList<int>{ c }, -1 ) );
+    if( stack ) stack->endMacro();
+}
+
+void SStdMixerView::ctUngroupTrack()
+{
+    STrack *t = qContent_->getLastClickTrack();
+    if( !t || !model_ ) return;
+    int c = model_->indexOfChildObject( *t );   // top-level folders only for now
+    if( c<0 ) return;
+    QList<STrack*> kids;
+    for( SLink *lk : t->childLinks() ) {
+        if( STrack *k = dynamic_cast<STrack*>( &lk->getSObject() ) ) kids.append( k );
+    }
+    if( kids.isEmpty() ) return;
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    if( stack ) stack->beginMacro( "Ungroup track" );
+    // Move each child out to the mixer, filling the slots just before the folder
+    // so they end up where the folder was, in order. The empty folder is left in
+    // place (an undoable track-remove is a separate task).
+    int insertAt = c;
+    for( STrack *k : kids ) {
+        SApplication::app().submitAction( new SReparentTrackAction(
+            strackpath::pathOf( model_, k ), QList<int>{}, insertAt ) );
+        ++insertAt;
+    }
+    if( stack ) stack->endMacro();
 }
 
 offset_t SMVActualView::getTimeOf( int x ) const
@@ -977,13 +1072,47 @@ void SStdMixerView::beginTrackDrag( SSMVMixerControl *control )
     if( dropIndicator_ ) dropIndicator_->raise();
 }
 
+void SStdMixerView::resolveDrop( int y, STrack **onto, int *topSlot ) const
+{
+    *onto = NULL;
+    int h = getTrackHeight();
+    int n = rowCount();
+    if( h>0 ) {
+        int r = y / h;
+        if( r>=0 && r<n ) {
+            int within = y - r*h;
+            const STrackRow *row = rowAt( r );
+            // Over the middle half of a lane -> nest onto that track.
+            if( row && within > h/4 && within < (3*h)/4 ) *onto = row->track;
+        }
+    }
+    // Insertion gap among top-level lanes = how many sit above the drop.
+    int slot = 0;
+    for( int i=0; i<n; ++i ) {
+        if( rowAt( i )->depth != 0 ) continue;
+        if( y > i*h + h/2 ) ++slot;
+    }
+    *topSlot = slot;
+}
+
 void SStdMixerView::updateTrackDrag( int yInControlBox )
 {
     if( !dragControl_ || !dropIndicator_ ) return;
-    int slot = insertSlotAt( yInControlBox );
-    int yLine = slot*getTrackHeight();
-    if( yLine>0 ) yLine -= 1;                 // straddle the boundary
-    dropIndicator_->setGeometry( 0, yLine, 150, 3 );
+    STrack *onto = NULL; int slot = 0;
+    resolveDrop( yInControlBox, &onto, &slot );
+    int h = getTrackHeight();
+    if( onto && onto != &dragControl_->getTrack() ) {
+        // Nest: outline the whole target lane.
+        int r = rowIndexOfTrack( onto );
+        dropIndicator_->setStyleSheet( "border:2px solid #2080ff; background:transparent;" );
+        dropIndicator_->setGeometry( 0, r*h, 150, h );
+    } else {
+        // Between: a thin insertion line at the nearest lane boundary.
+        dropIndicator_->setStyleSheet( "background:#2080ff; border:none;" );
+        int yLine = insertSlotAt( yInControlBox )*h;
+        if( yLine>0 ) yLine -= 1;
+        dropIndicator_->setGeometry( 0, yLine, 150, 3 );
+    }
     dropIndicator_->show();
     dropIndicator_->raise();
 }
@@ -994,28 +1123,36 @@ void SStdMixerView::endTrackDrag( int yInControlBox )
     SSMVMixerControl *control = dragControl_;
     dragControl_ = NULL;
     if( !control || !model_ ) return;
+    STrack *t = &control->getTrack();
 
-    // The grip reorders top-level tracks. (Dragging a nested track, and
-    // drag-to-nest, come with the grouping gestures.)
-    STrack *track = &control->getTrack();
-    int fromIdx = model_->indexOfChildObject( *track );
-    if( fromIdx<0 ) return;                    // not a mixer child -> nested
+    STrack *onto = NULL; int slot = 0;
+    resolveDrop( yInControlBox, &onto, &slot );
 
-    int h = getTrackHeight();
-    int nTop = model_->getNTracks();
-    // Insertion gap among top-level lanes = how many of them sit above the drop.
-    int slot = 0;
-    for( int i=0; i<rows_.size(); ++i ) {
-        if( rows_.at( i ).depth != 0 ) continue;
-        if( yInControlBox > i*h + h/2 ) ++slot;
+    // Dropped onto another lane -> nest under it (the action guards cycles and
+    // a same-parent no-op).
+    if( onto && onto != t ) {
+        SApplication::app().submitAction( new SReparentTrackAction(
+            strackpath::pathOf( model_, t ),
+            strackpath::pathOf( model_, onto ), -1 ) );
+        return;
     }
-    int target = (slot>fromIdx) ? slot-1 : slot;
-    if( target<0 ) target = 0;
-    if( target>=nTop ) target = nTop-1;
-    if( target==fromIdx ) return;
 
-    SApplication::app().submitAction(
-        new SMoveTrackAction( QList<int>{ fromIdx }, target ) );
+    // Dropped on a boundary -> reorder at top level, or pop a nested track out.
+    int nTop = model_->getNTracks();
+    int fromTop = model_->indexOfChildObject( *t );
+    if( fromTop>=0 ) {
+        int target = (slot>fromTop) ? slot-1 : slot;
+        if( target<0 ) target = 0;
+        if( target>=nTop ) target = nTop-1;
+        if( target==fromTop ) return;
+        SApplication::app().submitAction( new SMoveTrackAction( QList<int>{ fromTop }, target ) );
+    } else {
+        int target = slot;
+        if( target<0 ) target = 0;
+        if( target>nTop ) target = nTop;
+        SApplication::app().submitAction( new SReparentTrackAction(
+            strackpath::pathOf( model_, t ), QList<int>{}, target ) );
+    }
 }
 
 void SStdMixerView::nTracksChanged()
@@ -1405,7 +1542,6 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     dragControl_ = NULL;
     dropIndicator_ = new QFrame( qTrackControlBox_ );
     dropIndicator_->setStyleSheet( "background:#2080ff; border:none;" );
-    dropIndicator_->setFixedHeight( 3 );
     dropIndicator_->hide();
 //    qTrackControlBox_->setBackgroundMode( NoBackground );
 

@@ -47,6 +47,9 @@ protected slots:
     void toggleGrid();
     void toggleMetronome();
     void toggleCycle();
+    // Track grouping toolbar -> act on the arranger's last-clicked track.
+    void groupTrack();
+    void ungroupTrack();
 
     // Reflect a project property change on the matching palette button.
     void onProjectPropertyChanged( const QString &key, const QVariant &value );
@@ -80,6 +83,7 @@ private:
     QAction *actStop_, *actPlay_;
     QToolBar *qTBTransport_;
     QToolBar *qTBPalette_;
+    QToolBar *qTBTracks_;
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
 };

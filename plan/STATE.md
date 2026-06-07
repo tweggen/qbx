@@ -1721,3 +1721,58 @@ fold state lives in a `QSet<STrack*> collapsed_`.
 
 §1.2 Stage 2 — the three grouping gestures (drag-to-nest, context-menu
 indent/outdent, toolbar Group/Ungroup), plus nested-track grip reorder.
+
+---
+
+## Grouping/assets: §1.2 indented arranger — grouping gestures (Stage 2)
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW; window-up smoke
+  passes. Interactive verification is a human step.
+
+### What landed — all three gestures (as requested)
+
+**1. Drag-to-nest** (extends the grip drag). `resolveDrop(y)` classifies a drop:
+over a lane's middle half → **nest** under that track (the drop indicator
+outlines the whole target lane); on a lane boundary → **between**. On release:
+nest = `SReparentTrackAction(pathOf(t), pathOf(onto), -1)`; between = reorder at
+top level (`SMoveTrackAction`) if the dragged track is top-level, else **pop it
+out** to top level at that slot (`SReparentTrackAction` to the mixer). Cycle/no-op
+guards live in the action.
+
+**2. Context-menu Indent/Outdent** (right-click a track lane). *Indent* nests the
+track under its preceding sibling; *Outdent* moves it to its grandparent, just
+after its old parent. Both compute paths via `strackpath` and submit
+`SReparentTrackAction`. The menu also carries **Group/Ungroup**.
+
+**3. Toolbar Group/Ungroup** (new "Tracks" toolbar in the main window; also in the
+context menu). *Group* wraps the clicked top-level track in a new folder
+(`SAddTrackAction` at the slot + `SReparentTrackAction` into it, wrapped in a
+`QUndoStack` macro so it is one undo step). *Ungroup* moves a folder's child
+tracks back out to the mixer at the folder's slot (macro'd, undoable). They act
+on the arranger's last-clicked track (`SStdMixerView::ctGroupTrack/ctUngroupTrack`,
+reached from the main window by casting the central `projectRootWidget_`).
+
+| File | Change |
+|------|--------|
+| `sstdmixerview.h/.cpp` | `resolveDrop`; reworked `updateTrackDrag/endTrackDrag` for nest-vs-between; `ctIndentTrack/ctOutdentTrack/ctGroupTrack/ctUngroupTrack`; context-menu entries; `ctRemoveTrack` fixed to resolve the track's real mixer index (row index ≠ mixer index now). |
+| `smainwindow.h/.cpp` | "Tracks" toolbar with Group/Ungroup → `groupTrack/ungroupTrack` forward to the arranger. |
+
+### Honestly deferred
+
+- **Group/Ungroup operate on top-level tracks** (and leave the emptied folder in
+  place on Ungroup): an *undoable* track-remove doesn't exist yet
+  (`SRemoveTrackAction` is non-undoable), so dissolving the folder fully would
+  break the undo macro. Removing the leftover empty folder is a manual step.
+- Toolbar Group/Ungroup target the **last-clicked track** in the timeline lanes
+  (clicking a fader strip doesn't set that selection yet).
+- Between-drag reorder inside a folder isn't a distinct gesture — drop-onto nests,
+  drop-on-boundary reorders/pops to top level; use Indent/Outdent for precise
+  in-group moves.
+
+### Verification needed (human)
+
+1. Drag a track's grip onto another lane's middle → it nests (target lane
+   outlined); drop on a boundary → reorder / pop-out. Ctrl+Z reverts.
+2. Right-click a track → Indent/Outdent/Group/Ungroup behave; each is one undo.
+3. Toolbar **Group**/**Ungroup** act on the clicked track.
