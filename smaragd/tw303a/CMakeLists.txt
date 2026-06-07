@@ -12,6 +12,9 @@ set(TW303A_HEADERS
     include/twmoog.h
     include/twosc.h
     include/twpipe.h
+    include/twrandomsource.h
+    include/twsamplesource.h
+    include/twsamplereader.h
     include/twrewire.h
     include/twsaw.h
     include/twsimplesaw.h
@@ -39,6 +42,8 @@ set(TW303A_SOURCES
     src/twmoog.cc
     src/twosc.cc
     src/twpipe.cc
+    src/twsamplesource.cc
+    src/twsamplereader.cc
     src/twresampler.cc
     src/twrewire.cc
     src/twsaw.cc

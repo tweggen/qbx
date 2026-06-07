@@ -6,6 +6,7 @@
 #include "sexternfile.h"
 
 class twComponent;
+class twRandomSource;
 class twWavInput;
 
 class SObjectRenderer;
@@ -40,6 +41,7 @@ public:
 					     SObject *parent );
 
     virtual twComponent &getRootComponent();
+    virtual twRandomSource *getRandomSource();
     virtual int setWave( const QString url );
     virtual QString getFileName() const;
 

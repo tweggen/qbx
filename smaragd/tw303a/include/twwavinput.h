@@ -2,24 +2,24 @@
 #ifndef _TWWAVINPUT_H
 #define _TWWAVINPUT_H
 
-#include <qfile.h>
-#include <mutex>
 #include "twcomponent.h"
 
 class tw303aEnvironment;
+class twSampleSource;
+class twRandomSource;
 
 /**
- * Audio input component that reads WAV file samples.
+ * Audio input component that plays a WAV file.
  *
- * Thread affinity: AUDIO THREAD ONLY
- * - calcOutputTo() is called from audio thread callback
- * - file_ (QFile) is accessed without synchronization
- * - seekTo() is called from audio thread
+ * Since proposal 07 this is a thin cursor: it owns a fully-resident
+ * twSampleSource (the immutable, shared sample data) and serves calcOutputTo()
+ * by random-reading that source at its current play position. The file is read
+ * once, at load time, into RAM — there is no QFile handle, no mutex, and no
+ * file I/O in the realtime path, so the old UI/audio race is gone.
  *
- * CRITICAL: This class is NOT thread-safe. The QFile handle is accessed directly
- * from the audio render callback without any mutex or thread-local protection.
- * If UI thread accesses the same SPlainWave object via getPreview(), it will race
- * against calcOutputTo() accessing the same file_.
+ * Consumers that want INDEPENDENT play positions (e.g. several SCuts of one
+ * sample) should acquire their own twSampleReader from getSource() rather than
+ * share this single cursor; getSource() exposes the underlying data for that.
  */
 class twWavInput
     : public twComponent
@@ -44,33 +44,20 @@ public:
     virtual idx_t getNOutputs() const;
     virtual void setBufferSize( length_t );
     virtual void init();
-    
+
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );
 
-    bool wasLoaded() const { return dataStart_ != -1; }
+    bool wasLoaded() const { return loaded_; }
 
-protected:
+    // The immutable, shared sample data behind this input. Consumers use this to
+    // mint independent readers (twRandomSource::acquireReader).
+    twRandomSource *getSource() const;
 
 private:
-    int findWaveProperties();
-
-    idx_t orgChannels_;
-    int orgRate_;
-    int orgBits_;
-    idx_t outputChannels_;
-
-    sample_t *cache_;
-    int maxCacheSize_;
-    int cacheSize_;
-    // Where does the data chunk start inside the file?
-    long dataStart_;
-    length_t nSamples_;
-    offset_t cacheStart_;
-    QString fileName_;
-    QFile file_;
-    mutable std::mutex fileMutex_;  // Protects file_ access from concurrent threads (UI redraw + audio)
-
-    offset_t playOffset_;
+    twSampleSource *source_;
+    bool            loaded_;
+    offset_t        playOffset_;
+    QString         fileName_;
 };
 
 #endif

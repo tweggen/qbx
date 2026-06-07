@@ -45,6 +45,11 @@ twComponent &SPlainWave::getRootComponent()
     return *cpWave_;
 }
 
+twRandomSource *SPlainWave::getRandomSource()
+{
+    return cpWave_ ? cpWave_->getSource() : NULL;
+}
+
 QWidget *SPlainWave::getDetailEditWidget( QWidget *parent )
 {
     // FIXME: Reset pointer on destroy.

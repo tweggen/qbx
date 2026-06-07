@@ -61,6 +61,24 @@ void twSpeaker::startOutput()
     resampler_.configure(graphRate, cfg.sampleRate);
     resampler_.reserveHint((length_t) cfg.bufferFrames);
     resampler_.reset();
+
+    // Sample-rate diagnostic (pitch/too-fast bug). Three numbers pin down where a
+    // mismatch hides: the project rate, what the input wire claims to produce, and
+    // what the device actually opened at. If wire == device but a 44.1 kHz sample
+    // still plays fast, the source/reader isn't resampling file-rate -> project-rate
+    // (the resampler here is correctly a passthrough). If wire != device but
+    // passthrough is true, the boundary resampler failed to engage.
+    {
+        std::uint32_t wireRate = (pInputPlugs != nullptr && pInputPlugs[0] != nullptr)
+                                     ? pInputPlugs[0]->getFormat().sampleRate
+                                     : 0;
+        syslog(LOG_INFO,
+               "twSpeaker: rate diag — project(env)=%d Hz, wire=%u Hz, "
+               "device=%u Hz, resampler=%s",
+               env.getSRate(), (unsigned) wireRate, (unsigned) cfg.sampleRate,
+               resampler_.isPassthrough() ? "passthrough" : "active");
+    }
+
     if (!resampler_.isPassthrough()) {
         syslog(LOG_INFO, "twSpeaker: resampling %u Hz -> %u Hz",
                (unsigned) graphRate, (unsigned) cfg.sampleRate);

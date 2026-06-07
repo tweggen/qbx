@@ -10,6 +10,7 @@
 #include "sobject.h"
 #include "slink.h"
 #include "sproject.h"
+#include "twrandomsource.h"
 
 void SObject::setSolo( bool f )
 {
@@ -157,13 +158,21 @@ int SObject::straightCalcPreviewData()
               (int)sizeof( preview_t ), (int)nPreviewProbes_,
               (int)nPreviewProbes_, (int)previewSkip_ );
     sample_t *buffer = (sample_t *) alloca( previewSkip_ * sizeof( sample_t ) );
+    // If this object exposes random-access sample data, read it statelessly:
+    // that touches no play cursor and needs no lock, so preview rendering on the
+    // UI thread can no longer race playback on the audio thread (proposal 07).
+    twRandomSource *rs = getRandomSource();
     // Fill it up.
     for( offset_t i=0; i<(offset_t) previewForLength_; i+=previewSkip_ ) {
-	// Yes, this values are other way round. These are the defaults, 
+	// Yes, this values are other way round. These are the defaults,
 	// we want to calc the overall range.
         sample_t min=SAMPLE_NORM_MAX, max = SAMPLE_NORM_MIN;
-        getRootComponent().seekTo( i );
-        getRootComponent().calcOutputTo( buffer, previewSkip_, 0 );
+        if( rs ) {
+            rs->read( i, buffer, previewSkip_, 0 );
+        } else {
+            getRootComponent().seekTo( i );
+            getRootComponent().calcOutputTo( buffer, previewSkip_, 0 );
+        }
         sample_t *p = buffer;
         for( offset_t j=0; j<previewSkip_; ++j ) {
             sample_t a = *p++;

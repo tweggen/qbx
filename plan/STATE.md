@@ -1875,3 +1875,48 @@ undoable. Made both real `SAction`s.
    re-applies.
 2. Position the playhead inside a clip → right-click → Split object → two clips;
    Ctrl+Z merges them back.
+
+---
+
+## Sample source / reader split (proposal 07, steps 1–4)
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW. Interactive
+  audio/preview verification is a human step.
+
+### Why
+
+`twWavInput` conflated immutable file data, the RAM cache, and a play **cursor**
+in one object that `SPlainWave` **shared** among all its cuts. Sharing the cursor
+made two cuts of one sample fight over a single `playOffset_` and thrash the
+cache; the QFile was read from both the audio thread and the UI preview thread
+under a lock. Proposal 07 splits the immutable data from the per-consumer cursor.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `tw303a/include/twrandomsource.h` (new) | `twRandomSource` interface: stateless `read(offset,dest,len,channel)`, `length/channels/sampleRate/isReproducible`, and `acquireReader(env)` — the reader factory. |
+| `tw303a/include/twsamplesource.h` + `src/twsamplesource.cc` (new) | `twSampleSource`: decodes the whole WAV into **resident planar Float32** at construction, then `read()` is a lock-free memcpy (no QFile, no mutex). WAV header parse ported from the old `findWaveProperties`; 16-bit PCM only. |
+| `tw303a/include/twsamplereader.h` + `src/twsamplereader.cc` (new) | `twSampleReader`: a thin per-consumer cursor `twComponent` over a `twRandomSource`; `calcOutputTo` reads at `pos_` and advances. `acquireReader()` defined here. |
+| `tw303a/include/twwavinput.h` + `src/twwavinput.cc` | Rewritten as a thin cursor that **owns** a `twSampleSource`; dropped the QFile handle, mutex, and dead cache from the realtime path. Adds `getSource()`. Public API otherwise unchanged. |
+| `main/include/sobject.h` + `src/sobject.cpp` | New `virtual twRandomSource *getRandomSource()` hook (default NULL). Preview (`straightCalcPreviewData`) reads statelessly via it when available → no lock, no cursor race with playback. |
+| `main/include/splainwave.h` + `src/splainwave.cpp` | `getRandomSource()` returns the wave's source. |
+| `main/include/scut.h` + `src/scut.cpp` | Each `SCut` lazily acquires its **own** reader from the content's source (cut-vs-cut cursor fix); `getRootComponent`/`seekTo` route through it. Falls back to the shared component when content is not a random-access source. |
+| `tw303a/CMakeLists.txt` | Added the three new headers/sources. |
+
+### Intentional behaviour change
+
+- `read()` honours the requested **channel** (clamped to `[0, channels-1]`),
+  fixing the old `twWavInput::calcOutputTo` bug that always returned channel 0 —
+  so stereo material now feeds the right channel where the pipeline asks for it.
+  Mono still plays on every channel. Mono-pipeline output is unchanged.
+
+### Honestly deferred (proposal 07 §2 step 5, §6)
+
+- **`twCapturingSource`** (random-access adapter over *any* linear `twComponent`,
+  i.e. "time-stretch anything before an SCut") is **not** built yet: its only
+  consumer is the grain node (proposal 06), which does not exist. The
+  `getRandomSource()` API is the hook it will plug into.
+- Windowed/streaming fallback for files too large to keep resident: not added
+  (residency is the default; huge files are the only gap).

@@ -9,6 +9,7 @@
 class SProject;
 class QWidget;
 class twComponent;
+class twSampleReader;
 class SObjectRenderer;
 class SCutRendererInline;
 class SProjectLoader;
@@ -62,13 +63,21 @@ public slots:
 
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );
-    
+
 private:
+    // Lazily acquire our own independent read cursor over the content's sample
+    // data, so two cuts of one source never share a play position (proposal 07).
+    // Stays NULL when the content is not a random-access source, in which case we
+    // fall back to the content's shared root component.
+    void ensureReader();
+
     SLink *content_;
     offset_t startOffset_;
     offset_t loopStart_;
     length_t cutDuration_;
     SCutRendererInline *inlineRenderer_;
+    twSampleReader *reader_;
+    bool readerTried_;
 };
 
 #endif

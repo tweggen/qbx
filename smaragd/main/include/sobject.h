@@ -11,6 +11,7 @@
 class QWidget;
 
 class twComponent;
+class twRandomSource;
 class SProject;
 class SLink;
 class SObjectRenderer;
@@ -76,6 +77,15 @@ public:
      * may be included at different parts of the entire arrangement.
      */
     virtual twComponent &getRootComponent() = 0;
+
+    /**
+     * If this object is backed by random-access sample data, return that source
+     * (proposal 07). Consumers use it to mint independent readers and to read
+     * statelessly (e.g. preview rendering) without disturbing any play cursor.
+     * The default returns NULL: most objects are not random-access sources.
+     */
+    virtual twRandomSource *getRandomSource() { return NULL; }
+
     /**
      * Return a widget suitable for full-screen editing this SObject.
      */

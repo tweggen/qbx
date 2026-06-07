@@ -4,6 +4,9 @@
 #include <QDebug>
 
 #include "twcomponent.h"
+#include "twrandomsource.h"
+#include "twsamplereader.h"
+#include "sapplication.h"
 #include "scut.h"
 #include "slink.h"
 #include "scutrndrinline.h"
@@ -11,8 +14,21 @@
 
 using namespace std;
 
-twComponent &SCut::getRootComponent() 
+void SCut::ensureReader()
 {
+    if( readerTried_ ) return;
+    readerTried_ = true;
+    twRandomSource *rs = content_->getSObject().getRandomSource();
+    if( rs ) {
+        reader_ = rs->acquireReader( *(SApplication::app().get303aEnvironment()) );
+    }
+}
+
+twComponent &SCut::getRootComponent()
+{
+    ensureReader();
+    if( reader_ ) return *reader_;
+    // Content is not a random-access source: fall back to its shared component.
     return content_->getRootComponent();
 }
 
@@ -37,7 +53,9 @@ SObjectRenderer *SCut::getInlineRenderer( void )
 int SCut::seekTo( offset_t off )
 {
     // FIXME: bounds check!!!
-    return content_->getSObject().seekTo( off+startOffset_ );    
+    ensureReader();
+    if( reader_ ) return reader_->seekTo( off + startOffset_ );
+    return content_->getSObject().seekTo( off+startOffset_ );
 }
 
 void SCut::setStartOffset( offset_t off )
@@ -69,6 +87,12 @@ length_t SCut::getDuration() const
 
 SCut::~SCut()
 {
+    // Our reader only references the (longer-lived) source data; drop it before
+    // releasing the content link.
+    if( reader_ ) {
+        delete reader_;
+        reader_ = NULL;
+    }
     delete content_;
     content_ = NULL;
 }
@@ -76,7 +100,9 @@ SCut::~SCut()
 SCut::SCut( SProject *parentProject, SLink &content )
     : SObject( parentProject ),
       startOffset_( 0 ),
-      inlineRenderer_( NULL )
+      inlineRenderer_( NULL ),
+      reader_( NULL ),
+      readerTried_( false )
 {
     content_ = &content;
     content_->setParent(this);
@@ -97,7 +123,9 @@ SCut::SCut( SProject *parentProject, SLink &content )
 SCut::SCut( SProject *parentProject, SObject &content )
     : SObject( parentProject ),
       startOffset_( 0 ),
-      inlineRenderer_( NULL )
+      inlineRenderer_( NULL ),
+      reader_( NULL ),
+      readerTried_( false )
 {
     content_ = new SLink( content, this );
     if( content_->getSObject().hasDuration() ) {
