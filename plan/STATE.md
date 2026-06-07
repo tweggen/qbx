@@ -2089,3 +2089,28 @@ EOF/short reads now load completely.
 Load a long WAV, zoom out: the waveform should fill the whole clip and playback
 should run to the end. If the console shows a "short read … clamping" warning,
 that file was genuinely truncated on disk.
+
+---
+
+## Clip duplicate: Ctrl-drag a sample to a snapped copy
+
+- **Date:** 2026-06-07
+- **Status:** ✅ Builds clean; window-up smoke passes. Drag behaviour is a human check.
+
+### What landed
+
+**Ctrl + left-press on a clip** duplicates it and drags the copy; release drops it
+at the (snapped) position. Undoable.
+
+| File | Change |
+|------|--------|
+| `actions/sduplicateclipaction.{h,cpp}` (new) | `makeDuplicateClip(project, srcObj, destTrack, startTime)` — shared copy helper (SCut→copy content+window; raw clip→wrap whole). `SDuplicateClipAction(sourceClipPath, destTrackPath, startTime)`: creates the copy on the dest track; inverse `SRemoveClipAction`. Registers `duplicate-clip`. |
+| `actions/sremoveclipaction.{h,cpp}` (new) | Inverse of duplicate: deletes the copied clip; its own inverse re-duplicates from the original (mirrors Split/Unsplit). |
+| `sstdmixerview.cpp/.h` | mousePress: Ctrl+left on a clip builds a **live copy** via `makeDuplicateClip` and arms a duplicate move-drag (`clipDragIsDuplicate_`, `clipDupSourcePath_`); the existing move-drag (which snaps) drags it. mouseRelease: drops the live preview and submits `SDuplicateClipAction` at the final snapped position. Plain Shift/no-modifier selection unchanged. |
+| `main/CMakeLists.txt` | Added the two action files. |
+
+### Verify (human)
+
+1. Ctrl-drag a clip → a copy follows the cursor (snapped to grid) and lands on
+   release (same or another track). Ctrl+Z removes the copy; Ctrl+Y re-adds it.
+2. The original clip is untouched; the copy shares the same audio content.

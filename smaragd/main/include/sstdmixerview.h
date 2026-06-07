@@ -8,6 +8,7 @@
 #include <qtoolbutton.h>
 #include <QVector>
 #include <QSet>
+#include <QList>
 
 class SStdMixer;
 class QGridLayout;
@@ -170,6 +171,11 @@ private:
     bool     clipDragArmed_ = false;
     STrack  *clipDragTrack0_ = nullptr;
     offset_t clipDragStart0_ = 0;
+
+    // Ctrl-drag DUPLICATE: when armed, the dragged clip is a live copy and the
+    // release submits an SDuplicateClipAction instead of a move.
+    bool       clipDragIsDuplicate_ = false;
+    QList<int> clipDupSourcePath_;
 };
 
 class STimeGridSpec {
@@ -363,6 +369,7 @@ private:
     QAction *actNewTrack_;       // Ctrl+T
     QAction *actInsertSample_;   // Ctrl+Return
     QAction *actSplit_;          // S
+    QAction *actRemoveSample_;   // Delete
 
     bool snapToTimeGrid_;
     STimeGridSpec timeGridSpec_;

@@ -36,6 +36,7 @@
 #include "actions/sremovetrackaction.h"
 #include "actions/smoveclipaction.h"
 #include "actions/ssplitclipaction.h"
+#include "actions/sduplicateclipaction.h"
 #include "actions/strackpath.h"
 #include "sactionhistory.h"
 #include <QFrame>
@@ -364,7 +365,7 @@ void SMVActualView::ctGlobalShow()
     }
     if( lastClickTrack_ ) {
         qGlobalPopup_->addAction( smv_.actInsertSample_ );
-        qGlobalPopup_->addAction( "&Remove sample", &smv_, SLOT( ctRemoveSample() ) );
+        qGlobalPopup_->addAction( smv_.actRemoveSample_ );
         qGlobalPopup_->addAction( "Delete sample", &smv_, SLOT( ctDeleteSample() ) );
         qGlobalPopup_->addSeparator();
     }
@@ -546,6 +547,27 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 {
     if( rangeDrag_ != RangeNone ) {
         endRangeDrag( ev->pos().x() );
+        return;
+    }
+
+    // Finalize a clip DUPLICATE (Ctrl-drag): the dragged clip is a live copy.
+    // Drop the preview and submit an undoable SDuplicateClipAction that re-creates
+    // it at the final (snapped) position.
+    if( clipDragArmed_ && clipDragIsDuplicate_ && lastClickSLink_ ) {
+        SLink *copy = lastClickSLink_;
+        STrack *destTrack = lastClickTrack_;
+        offset_t newStart = copy->getStartTime();   // already snapped by the drag
+        QList<int> destTrackPath = destTrack ? strackpath::pathOf( smv_.getModel(), destTrack )
+                                             : QList<int>();
+        delete copy;                  // remove the live preview
+        lastClickSLink_ = NULL;
+        if( destTrack && !clipDupSourcePath_.isEmpty() ) {
+            SApplication::app().submitAction(
+                new SDuplicateClipAction( clipDupSourcePath_, destTrackPath, newStart ) );
+        }
+        update();
+        clipDragArmed_ = false;
+        clipDragIsDuplicate_ = false;
         return;
     }
 
@@ -889,28 +911,50 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         // We know the track,  so now calculate the time.
         if( lastClickTrack_ ) {
             if( lastClickSLink_ ) {
-                lastClickSelStartOffset_ = lastClickSLink_->getStartTime();
-                // Snapshot for a possible MOVE drag (finalized in release).
-                clipDragArmed_ = true;
-                clipDragTrack0_ = lastClickTrack_;
-                clipDragStart0_ = lastClickSLink_->getStartTime();
-                // OK, we clicked on an slink, process the selection stuff.
-                // Qt::MouseButtons buttons = ev->buttons();
                 Qt::KeyboardModifiers modifiers = QGuiApplication::keyboardModifiers();
-                switch( modifiers & (Qt::ShiftModifier|Qt::ControlModifier) ) {
-                case 0: // No modifier, new one becomes selected.
-                    SApplication::app().setSelectedSLink( lastClickSLink_ );
-                    break;
-                case Qt::ShiftModifier: // Shuft Button: Add this object to the selection.
-                    if( SApplication::app().isSLinkSelected( lastClickSLink_ ) ) {
-                        SApplication::app().unselectSLink( lastClickSLink_ );
-                    } else {
-                        SApplication::app().addSelectedSLink( lastClickSLink_ );
+                if( modifiers & Qt::ControlModifier ) {
+                    // Ctrl-click on a clip: duplicate it and drag the live copy;
+                    // the release submits an undoable SDuplicateClipAction.
+                    STrack *track = lastClickTrack_;
+                    clipDupSourcePath_ = strackpath::pathOf( smv_.getModel(), track );
+                    clipDupSourcePath_.append( track->indexOfChild( lastClickSLink_ ) );
+                    SLink *copy = makeDuplicateClip(
+                        &smv_.getModel()->getProject(),
+                        lastClickSLink_->getSObject(), track,
+                        lastClickSLink_->getStartTime() );
+                    if( copy ) {
+                        SApplication::app().setSelectedSLink( copy );
+                        lastClickSLink_ = copy;
+                        lastClickSelStartOffset_ = copy->getStartTime();
+                        clipDragArmed_ = true;
+                        clipDragIsDuplicate_ = true;
+                        clipDragTrack0_ = track;
+                        clipDragStart0_ = copy->getStartTime();
+                        lastClickedStart_ = lastClickedEnd_ = false;   // move, not resize
+                        update();
                     }
-                    break;
+                } else {
+                    lastClickSelStartOffset_ = lastClickSLink_->getStartTime();
+                    // Snapshot for a possible MOVE drag (finalized in release).
+                    clipDragArmed_ = true;
+                    clipDragIsDuplicate_ = false;
+                    clipDragTrack0_ = lastClickTrack_;
+                    clipDragStart0_ = lastClickSLink_->getStartTime();
+                    switch( modifiers & (Qt::ShiftModifier) ) {
+                    case Qt::ShiftModifier: // Shift: toggle this object in the selection.
+                        if( SApplication::app().isSLinkSelected( lastClickSLink_ ) ) {
+                            SApplication::app().unselectSLink( lastClickSLink_ );
+                        } else {
+                            SApplication::app().addSelectedSLink( lastClickSLink_ );
+                        }
+                        break;
+                    default: // No modifier, new one becomes selected.
+                        SApplication::app().setSelectedSLink( lastClickSLink_ );
+                        break;
+                    }
+                    // FIXME: Only update the object itselves.
+                    update();
                 }
-                // FIXME: Only update the object itselves.
-                update();
             }
         }
         // A left click always moves the playhead to the clicked time — whether on
@@ -1721,6 +1765,11 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     actSplit_->setShortcut( Qt::Key_S );
     QObject::connect( actSplit_, SIGNAL( triggered() ), this, SLOT( ctSplitSample() ) );
     addAction( actSplit_ );
+
+    actRemoveSample_ = new QAction( "&Remove sample", this );
+    actRemoveSample_->setShortcut( Qt::Key_Delete );
+    QObject::connect( actRemoveSample_, SIGNAL( triggered() ), this, SLOT( ctRemoveSample() ) );
+    addAction( actRemoveSample_ );
 
     // Build the flattened tree + control column for whatever already resides in
     // the mixer (refreshTrackTree handles rows, controls and scroll range).
