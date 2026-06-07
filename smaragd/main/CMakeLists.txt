@@ -100,6 +100,18 @@ set(SMARAGD_SOURCES
     src/actions/stoggleplaybackaction.cpp
 )
 
+# Optionally embed a bundled UI font. Drop a TTF at main/resources/FreeSans.ttf
+# and re-run CMake: it is compiled into the binary (AUTORCC) and used as the
+# default, antialiased UI font (see main.cpp). If absent, the platform default
+# font is used and the build is unaffected. (GNU FreeFont / FreeSans is GPL with
+# a font exception, so bundling it in the application is fine.)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/resources/FreeSans.ttf)
+    list(APPEND SMARAGD_SOURCES resources/fonts.qrc)
+    message(STATUS "Smaragd: embedding bundled font resources/FreeSans.ttf")
+else()
+    message(STATUS "Smaragd: resources/FreeSans.ttf not found; using the platform default font")
+endif()
+
 # SMARAGD_WIN_CONSOLE: when ON (the default), the Windows build uses the
 # CONSOLE subsystem so stderr/stdout — including the twsyslog.h shim's
 # vfprintf calls and Qt's qDebug() — appear in the launching console.
