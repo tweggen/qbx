@@ -92,6 +92,9 @@ int STrack::seekTo( offset_t ofs )
 SLink *STrack::getTopMostSLinkAt( offset_t queryTime ) const
 {
     for( SLink *lk : childLinks() ) {
+        // Skip child tracks — they have their own lanes; this query is for the
+        // track's own clips.
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
         if( !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();
         if( queryTime<startTime ) continue;

@@ -28,11 +28,15 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
     }
     // qWarning( "visibRect.x() = %d, leftTime = %d; rightTime=%d.\n", visibRect.x(), (int)leftTime, (int)rightTime );
     for( SLink *lk : getTrack().childLinks() ) {
+        // Child tracks are summed into this (folder) track's audio but they are
+        // their own lanes — don't draw them as clips here. The lane shows only
+        // this track's own clips.
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
         bool isSelected = SApplication::app().isSLinkSelected( lk );
         //printf( "Link found: $%08x.\n", lk );
         //fflush( stdout ); fflush( stderr );
         if( !lk->hasStartTime() ) continue;
-        if( !lk->getSObject().hasDuration() ) continue;                
+        if( !lk->getSObject().hasDuration() ) continue;
         offset_t startTime = lk->getStartTime();
 //        qWarning( "With start time of %d.\n", (int) startTime );
         length_t length = lk->getSObject().getDuration();

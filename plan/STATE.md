@@ -1826,3 +1826,14 @@ the handler's trailing code and in Qt's dispatch). Fix: `rebuildControlColumn()`
 now `hide()`s and `deleteLater()`s the old controls, so the handler unwinds
 before they are destroyed. Covers the drag-release, fold-click, and any other
 in-event structural change.
+
+### Folder lane shows only its own clips (same session)
+
+A child track's clips appeared on its parent folder's lane too: the folder's
+inline renderer drew *every* child link with a duration — including its child
+**tracks** (whose duration grows when you add a clip to them). A folder track
+**sums** its children's audio (twTrackMix, unchanged) but its **lane** should be
+an independent clip lane. Fix: `STrackRendererInline::draw` and
+`STrack::getTopMostSLinkAt` now skip links whose object is an `STrack`, so a
+folder lane draws/edits only its own clips while children render on their own
+lanes.
