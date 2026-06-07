@@ -191,16 +191,11 @@ void SMVActualView::paintEvent( QPaintEvent * )
         const STrackRow *row = smv_.rowAt( i );
         if( !row ) continue;
         int laneTop = SMV_TIME_RULER_HEIGHT+i*trackHeight_-upperLeftY_;
-        // Nested lanes get a left indent band so the hierarchy reads in the
-        // timeline too; clips still render across the full lane width.
-        int indent = row->depth*SMV_TRACK_INDENT;
-        if( indent>0 ) {
-            p.fillRect( QRect( 0, laneTop+1, indent, trackHeight_-2 ),
-                        QColor( 205, 205, 180 ) );
-        }
+        // All lanes start at x=0 (full width) — the hierarchy is shown by the
+        // indented control strips, not the timeline, so editing keeps full width.
         p.setPen( QColor( 96, 96, 96 ) );
         ctx.setVisibRect(
-            QRect( indent, laneTop+1, myRect.width()-indent, trackHeight_-2 ) );
+            QRect( 0, laneTop+1, myRect.width(), trackHeight_-2 ) );
         p.drawLine( 0, laneTop, myRect.bottomRight().x(), laneTop );
         p.drawLine( 0, laneTop+trackHeight_-1,
                     myRect.bottomRight().x(), laneTop+trackHeight_-1 );
