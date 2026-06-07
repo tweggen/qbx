@@ -959,38 +959,54 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 length_t contentLen = cut->getContent().hasDuration()
                                       ? (length_t) cut->getContent().getDuration() : -1;
                 double st = cut->getStretch(); if( st <= 0 ) st = 1.0;
-                length_t windowLen = (length_t)( (double) cut->getDuration() / st );
                 length_t d = (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
                            - (length_t) smv_.alignTime( (offset_t) getLastClickOffset() );
                 length_t newOff = (length_t) clipResizeOffset0_ - d;
                 if( newOff < 0 ) newOff = 0;
-                if( contentLen >= 0 && newOff > contentLen - windowLen )
-                    newOff = contentLen - windowLen;
-                if( newOff < 0 ) newOff = 0;
+                // Bound the window START (output domain) to near the content end,
+                // not content_end - window_len: a full-length clip (window ==
+                // content) would otherwise have zero slip room. Sliding further
+                // simply lets the tail run into silence, which is a valid slip.
+                if( contentLen >= 0 ) {
+                    length_t maxOff = (length_t)( (double) contentLen * st )
+                                    - (length_t) SMV_CUT_MIN_TIME;
+                    if( maxOff < 0 ) maxOff = 0;
+                    if( newOff > maxOff ) newOff = maxOff;
+                }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setStartOffset( (offset_t) newOff );
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsStretch_ ) {
-                // Ctrl-drag a BORDER: change the timeline length; the stretch is
-                // computed and applied on release (grain rebuild is costly). Here
-                // we only move the geometry, NOT clamped to content (it stretches).
+                // Ctrl-drag a BORDER: change the timeline length, keeping the same
+                // SOURCE window (grain-stretched, pitch preserved). We set stretch
+                // and the rescaled offset live (raw, no audio rebuild) so the
+                // waveform redraws stretched during the drag; the audio chain
+                // rebuilds once on release. Not clamped to content (it stretches).
                 lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
                 SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
                 offset_t m = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+                double s0 = clipStretch0_ > 0 ? clipStretch0_ : 1.0;
+                double srcSpan = (double) lastClickDuration_ / s0;
+                if( srcSpan < 1 ) srcSpan = 1;
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+                length_t newDur;
                 if( lastClickedEnd_ ) {
-                    length_t newDur = (length_t) m - (length_t) clipDragStart0_;
+                    newDur = (length_t) m - (length_t) clipDragStart0_;
                     if( newDur < SMV_CUT_MIN_TIME ) newDur = SMV_CUT_MIN_TIME;
-                    cut->setDuration( newDur );
                 } else {
                     offset_t end0 = clipDragStart0_ + (offset_t) lastClickDuration_;
                     offset_t rStart = m;
                     if( (length_t) end0 - (length_t) rStart < SMV_CUT_MIN_TIME )
                         rStart = end0 - (offset_t) SMV_CUT_MIN_TIME;
-                    cut->setDuration( (length_t) end0 - (length_t) rStart );
+                    newDur = (length_t) end0 - (length_t) rStart;
                     lastClickSLink_->setStartTime( rStart );
                 }
+                double newStretch = (double) newDur / srcSpan;
+                cut->setStretchRaw( newStretch );
+                cut->setStartOffset( (offset_t)( (double) clipResizeOffset0_
+                                                 * newStretch / s0 + 0.5 ) );
+                cut->setDuration( newDur );
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsLoop_ ) {

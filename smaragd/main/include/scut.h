@@ -61,9 +61,13 @@ public:
     // 0 means no loop; the loop is active iff 0 < loopLength_ < cutDuration_.
     length_t getLoopLength() const { return loopLength_; }
     bool isLooping() const { return loopLength_ > 0 && loopLength_ < cutDuration_; }
-    // Set the loop length for drawing only, without rebuilding the audio chain
-    // (used for live drag feedback; the chain is rebuilt once on release).
+    // Set the loop length / stretch / full grain params for drawing only, without
+    // rebuilding the audio chain or the preserve-span rescale (used for live drag
+    // feedback and for cloning; the chain is rebuilt once afterwards, e.g. by
+    // setWindow on release).
     void setLoopLengthRaw( length_t l ) { loopLength_ = l; }
+    void setStretchRaw( double s ) { grainParams_.stretch = s; }
+    void setGrainParamsRaw( const twGrainParams &p ) { grainParams_ = p; }
     virtual bool hasDuration() const { return true; }
     virtual length_t getDuration() const;
 

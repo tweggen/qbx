@@ -20,8 +20,13 @@ SLink *makeDuplicateClip( SProject *project, SObject &srcObj,
     if( strcmp( srcObj.metaObject()->className(), "SCut" ) == 0 ) {
         SCut *s = static_cast<SCut*>( &srcObj );
         copy = new SCut( project, s->getContent() );   // share the same content
-        copy->setStartOffset( s->getStartOffset() );
-        copy->setDuration( s->getDuration() );
+        // Copy the WHOLE window faithfully: grain params (pitch/grain/crossfade)
+        // first without rescale, then the window (offset/duration/loop/stretch).
+        // startOffset lives in the stretched output domain, so copying it without
+        // the stretch would land the copy elsewhere in the source (and unstretched).
+        copy->setGrainParamsRaw( s->getGrainParams() );
+        copy->setWindow( s->getStartOffset(), s->getDuration(),
+                         s->getLoopLength(), s->getStretch() );
     } else {
         copy = new SCut( project, srcObj );             // wrap a raw clip whole
     }
