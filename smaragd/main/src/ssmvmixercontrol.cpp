@@ -39,8 +39,7 @@ static const int DRAG_THRESHOLD = 4;
 
 QSize SSMVMixerControl::sizeHint() const
 {
-//    printf( "Returning a size of 150/%d.\n",smv_.getTrackHeight() );
-    return QSize( 150, smv_.getTrackHeight() );
+    return QSize( SMV_TRACK_CTRL_WIDTH, smv_.getTrackHeight() );
 }
 
 /**
@@ -284,18 +283,26 @@ SSMVMixerControl::SSMVMixerControl(
 
     // Small square Mute / Solo toggle buttons. Mute (red when on) silences this
     // track; Solo (yellow when on) silences every track that is not soloed.
+    // Small square Mute / Solo toggle buttons. A compact bold font keeps the
+    // single glyph from being clipped inside the 20x20 button (the default
+    // FreeSans size was too tall) while preserving the native button look.
+    QFont btnFont = QApplication::font();
+    btnFont.setPointSize( 8 );
+    btnFont.setBold( true );
     qMute_ = new QPushButton( "M", this );
     qMute_->setCheckable( true );
     qMute_->setFixedSize( 20, 20 );
+    qMute_->setFont( btnFont );
     qMute_->setToolTip( "Mute" );
     qMute_->setStyleSheet( "QPushButton:checked { background:#d04040; color:white; }" );
     qSolo_ = new QPushButton( "S", this );
     qSolo_->setCheckable( true );
     qSolo_->setFixedSize( 20, 20 );
+    qSolo_->setFont( btnFont );
     qSolo_->setToolTip( "Solo" );
     qSolo_->setStyleSheet( "QPushButton:checked { background:#e0c020; color:black; }" );
 
-    // Mute over Solo in a column, with the volume fader to their right.
+    // Mute over Solo in a column.
     QVBoxLayout *muteSoloCol = new QVBoxLayout();
     muteSoloCol->setContentsMargins( 0, 0, 0, 0 );
     muteSoloCol->setSpacing( 2 );
@@ -303,18 +310,27 @@ SSMVMixerControl::SSMVMixerControl(
     muteSoloCol->addWidget( qSolo_, 0, Qt::AlignTop );
     muteSoloCol->addStretch( 1 );
 
+    // Fader with its dB readout directly beneath it, both centred so they line
+    // up as one column.
+    QVBoxLayout *faderCol = new QVBoxLayout();
+    faderCol->setContentsMargins( 0, 0, 0, 0 );
+    faderCol->setSpacing( 1 );
+    faderCol->addWidget( qVolume_, 1, Qt::AlignHCenter );
+    faderCol->addWidget( qVolLabel_, 0, Qt::AlignHCenter );
+
+    // Mute/Solo column, then the fader column; a trailing stretch keeps the
+    // group left-aligned.
     QHBoxLayout *stripRow = new QHBoxLayout();
     stripRow->setContentsMargins( 0, 0, 0, 0 );
-    stripRow->setSpacing( 2 );
+    stripRow->setSpacing( 4 );
     stripRow->addLayout( muteSoloCol );
-    stripRow->addWidget( qVolume_ );
+    stripRow->addLayout( faderCol );
     stripRow->addStretch( 1 );
 
-    setFixedSize( 150, smv_.getTrackHeight() );
+    setFixedSize( SMV_TRACK_CTRL_WIDTH, smv_.getTrackHeight() );
 
     qLayout_->addWidget( qTrkLabel_, 0, 0, Qt::AlignTop );
     qLayout_->addLayout( stripRow,   1, 0 );
-    qLayout_->addWidget( qVolLabel_, 2, 0, Qt::AlignHCenter );
     qLayout_->setRowStretch( 1, 1 );
 
     // Seed widgets from the current track state.

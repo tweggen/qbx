@@ -35,6 +35,9 @@ class SSMVMixerControl;
 #define SMV_TRACK_INDENT 14
 #define SMV_FOLD_W 12
 
+// Width (px) of the track control strip / control column.
+#define SMV_TRACK_CTRL_WIDTH 120
+
 // One visible lane in the flattened depth-first walk of the track tree.
 struct STrackRow {
     STrack  *track;        // the track shown on this lane

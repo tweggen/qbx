@@ -65,8 +65,8 @@ void SMVActualView::setTrackHeight( int h )
         SSMVMixerControl *mc = controls.at( t );
         if( !mc ) continue;
         mc->move( 0, getTrackHeight()*t );
-        mc->setFixedSize( 150, getTrackHeight() );
-        mc->resize( 150, getTrackHeight() );
+        mc->setFixedSize( SMV_TRACK_CTRL_WIDTH, getTrackHeight() );
+        mc->resize( SMV_TRACK_CTRL_WIDTH, getTrackHeight() );
     }
 //    update();
     smv_.viewResized();
@@ -1041,7 +1041,7 @@ void SStdMixerView::rebuildControlColumn()
         mc->show();
         controlArray_->append( mc );
     }
-    qTrackControlBox_->resize( 150, h*rows_.size() );
+    qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH, h*rows_.size() );
 }
 
 // Single entry point for any structural change (add/remove/reorder/group/fold):
@@ -1111,13 +1111,13 @@ void SStdMixerView::updateTrackDrag( int yInControlBox )
         // Nest: outline the whole target lane.
         int r = rowIndexOfTrack( onto );
         dropIndicator_->setStyleSheet( "border:2px solid #2080ff; background:transparent;" );
-        dropIndicator_->setGeometry( 0, r*h, 150, h );
+        dropIndicator_->setGeometry( 0, r*h, SMV_TRACK_CTRL_WIDTH, h );
     } else {
         // Between: a thin insertion line at the nearest lane boundary.
         dropIndicator_->setStyleSheet( "background:#2080ff; border:none;" );
         int yLine = insertSlotAt( yInControlBox )*h;
         if( yLine>0 ) yLine -= 1;
-        dropIndicator_->setGeometry( 0, yLine, 150, 3 );
+        dropIndicator_->setGeometry( 0, yLine, SMV_TRACK_CTRL_WIDTH, 3 );
     }
     dropIndicator_->show();
     dropIndicator_->raise();
@@ -1313,7 +1313,7 @@ void SStdMixerView::zoomInVert()
     // FIXME: Configure this
     h = (h*3)/2;
     qContent_->setTrackHeight( h );
-    qTrackControlBox_->resize( 150, getTrackHeight()*rowCount() );
+    qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH, getTrackHeight()*rowCount() );
 }
 
 void SStdMixerView::zoomOutVert()
@@ -1323,7 +1323,7 @@ void SStdMixerView::zoomOutVert()
     // FIXME: Configure this
     h = (h*2)/3;
     qContent_->setTrackHeight( h );
-    qTrackControlBox_->resize( 150, getTrackHeight()*rowCount() );
+    qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH, getTrackHeight()*rowCount() );
 }
 
 void SStdMixerView::setBPMTempo( double bpmTempo )
@@ -1534,7 +1534,7 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
                       this, SLOT( trackSliderMoved( int ) ) );
 
     qTrackControlBoxHolder_ = new QWidget( this );
-    qTrackControlBoxHolder_->setFixedWidth( 150 );
+    qTrackControlBoxHolder_->setFixedWidth( SMV_TRACK_CTRL_WIDTH );
     // qTrackControlBoxHolder_->setBackgroundColor( QColor( 100, 100, 0 ) );
     qGridLayout_->addWidget(
         qTrackControlBoxHolder_,
