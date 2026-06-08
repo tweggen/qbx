@@ -131,6 +131,7 @@ private:
     void endRangeDrag( int x );      // mouse release
     void rangeBounds( offset_t &lo, offset_t &hi ) const;  // normalized
     void drawRange( QPainter &, const QRect &myRect );
+    void drawRulerTicks( QPainter &, const QRect &myRect );
     // --------------------------------------------------------------------
 
     SStdMixerView &smv_;

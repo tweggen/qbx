@@ -15,6 +15,7 @@ inline constexpr char SnapToGrid[]  = "snapToGrid";   // bool: clip times snap t
 inline constexpr char GridVisible[] = "gridVisible";  // bool: draw the time grid
 inline constexpr char Metronome[]   = "metronome";    // bool: metronome on (stub)
 inline constexpr char Cycle[]       = "cycle";        // bool: cycle/loop on (stub)
+inline constexpr char RulerMode[]   = "rulerMode";    // string: "bars" or "time" display format
 
 // Values a brand-new project starts with.
 inline QVariantMap defaults()
@@ -24,6 +25,7 @@ inline QVariantMap defaults()
     m[GridVisible] = true;
     m[Metronome]   = false;
     m[Cycle]       = false;
+    m[RulerMode]   = QString("bars");
     return m;
 }
 

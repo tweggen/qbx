@@ -196,10 +196,11 @@ void SMVActualView::paintEvent( QPaintEvent * )
         return;
     }
 
-    // Above the tracks, render the timescale.    
+    // Above the tracks, render the timescale.
 
-    InlineRenderContext ctx( *this, p );    
+    InlineRenderContext ctx( *this, p );
     p.fillRect( QRect( 0, 0, myRect.width(), SMV_TIME_RULER_HEIGHT ), QColor( 220, 220, 190 ) );
+    drawRulerTicks( p, myRect );
     // OK, we have tracks (lanes of the flattened tree).
     int nTracks = smv_.rowCount();
     int firstTrack = (upperLeftY_ + trackHeight_-1) / trackHeight_;
@@ -810,6 +811,109 @@ void SMVActualView::drawRange( QPainter &p, const QRect &myRect )
     p.setPen( QColor( 80, 80, 80 ) );
     if( xlo >= 0 && xlo < myRect.width() ) p.drawLine( xlo, 0, xlo, myRect.height()-1 );
     if( xhi >= 0 && xhi < myRect.width() ) p.drawLine( xhi, 0, xhi, myRect.height()-1 );
+}
+
+void SMVActualView::drawRulerTicks( QPainter &p, const QRect &myRect )
+{
+    // Render time markers (beats, bars, or minutes/hours) in the ruler band,
+    // choosing granularity to avoid overlaps based on current zoom.
+    STimeGridSpec tgs = smv_.getTimeGridSpec();
+    double beatSec  = tgs.getTimeGridWidth();      // seconds per beat
+    int    bpb      = tgs.getEmphasizeGrids(0);    // beats per bar (e.g. 4)
+    bool   barsMode = (smv_.getModel() &&
+        smv_.getModel()->getProject().prop(SProjectProps::RulerMode, "bars").toString() == "bars");
+
+    // --- 1. Use a small font so it fits in 16 px ---
+    QFont f = font();
+    f.setPointSize(7);
+    p.setFont(f);
+    QFontMetrics fm(f);
+
+    // --- 2. Estimate worst-case label width ---
+    int labelW = fm.horizontalAdvance(barsMode ? "9999.4.479" : "99:59:999") + 3;
+
+    // --- 3. Determine which granularity to render ---
+    // pixelsPerBeat / pixelsPerBar / pixelsPerMinute / pixelsPerHour
+    double beatPx   = beatSec   * secondWidth_;
+    double barPx    = beatPx    * bpb;
+    double minutePx = 60.0      * secondWidth_;
+    double hourPx   = 3600.0    * secondWidth_;
+
+    enum Level { Beat=0, Bar=1, Minute=2, Hour=3 };
+    Level level = Hour;
+    if      (beatPx   >= labelW) level = Beat;
+    else if (barPx    >= labelW) level = Bar;
+    else if (minutePx >= labelW) level = Minute;
+    // else Hour
+
+    // --- 4. Choose step size in seconds ---
+    double stepSec;
+    switch (level) {
+        case Beat:   stepSec = beatSec;        break;
+        case Bar:    stepSec = beatSec * bpb;  break;
+        case Minute: stepSec = 60.0;           break;
+        case Hour:   stepSec = 3600.0;         break;
+    }
+
+    // --- 5. Iterate using integer step count to avoid float drift ---
+    //   leftSec = time in seconds of the left pixel edge
+    double leftSec = (double)upperLeftX_ / secondWidth_;
+    long   firstStep = (long)floor(leftSec / stepSec);  // may be 0 or negative
+
+    // Draw tick colour
+    p.setPen(QColor(80, 80, 80));
+
+    for (long n = firstStep; ; ++n) {
+        double t    = n * stepSec;               // time in seconds
+        int    x    = (int)(t * secondWidth_) - upperLeftX_;
+        if (x > myRect.width()) break;
+        if (x < -labelW)       continue;
+
+        // --- Format label ---
+        QString label;
+        if (barsMode) {
+            // beat index from project start (0-based)
+            double beatIdxExact = t / beatSec;
+            long beatIdx  = (long)floor(beatIdxExact);
+            long bar      = beatIdx / bpb + 1;     // 1-based bar
+            int  beat     = (int)(beatIdx % bpb) + 1; // 1-based beat within bar
+            if (level == Beat) {
+                double fracBeat = beatIdxExact - beatIdx;  // [0, 1) within the beat
+                int tick = (int)round(fracBeat * 480.0);
+                if (tick > 0)
+                    label = QString("%1.%2.%3").arg(bar).arg(beat).arg(tick, 3, 10, QChar('0'));
+                else
+                    label = QString("%1.%2").arg(bar).arg(beat);
+            } else {
+                label = QString::number(bar);
+            }
+        } else {
+            // time mode
+            long totalMs = (long)round(t * 1000.0);
+            long ms      = totalMs % 1000;  totalMs /= 1000;
+            long secs    = totalMs % 60;    totalMs /= 60;
+            long mins    = totalMs % 60;    totalMs /= 60;
+            long hrs     = totalMs;
+            if (hrs > 0)
+                label = QString("%1:%2:%3").arg(hrs)
+                            .arg(mins, 2, 10, QChar('0'))
+                            .arg(secs, 2, 10, QChar('0'));
+            else
+                label = QString("%1:%2:%3").arg(mins)
+                            .arg(secs, 2, 10, QChar('0'))
+                            .arg(ms,   3, 10, QChar('0'));
+        }
+
+        // --- Tick mark height: coarser boundary = taller ---
+        int tickH = 3;
+        if (level <= Bar  && (long)round(t / (beatSec * bpb)) * (beatSec * bpb) == t) tickH = 6;
+        if (minutePx > 20 && fmod(t, 60.0)   < stepSec * 0.01) tickH = 9;
+        if (hourPx   > 20 && fmod(t, 3600.0) < stepSec * 0.01) tickH = 12;
+
+        p.drawLine(x, 0, x, tickH);
+        if (x + 1 + labelW <= myRect.width())
+            p.drawText(x + 2, SMV_TIME_RULER_HEIGHT - 2, label);
+    }
 }
 
 void SMVActualView::ctRangeSetBPM()
@@ -1831,6 +1935,23 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     qRangePopup_->addSeparator();
     qRangeActClear_ = qRangePopup_->addAction( "&Clear range", this, SLOT( ctRangeClear() ) );
     qRangePopup_->addAction( "Create &asset from range", this, SLOT( ctRangeCreateAsset() ) );
+    qRangePopup_->addSeparator();
+    QAction *actMode = qRangePopup_->addAction( "Time display: &Bars" );
+    actMode->setCheckable(true);
+    QObject::connect( qRangePopup_, &QMenu::aboutToShow, this,
+                      [this, actMode]() {
+                          if (smv_.getModel()) {
+                              bool isBars = smv_.getModel()->getProject().prop(
+                                  SProjectProps::RulerMode, "bars").toString() == "bars";
+                              actMode->setChecked(isBars);
+                          }
+                      } );
+    QObject::connect( actMode, &QAction::toggled, this,
+                      [this](bool checked) {
+                          if (smv_.getModel())
+                              smv_.getModel()->getProject().setProp(
+                                  SProjectProps::RulerMode, checked ? "bars" : "time");
+                      } );
 
     rangeValid_ = false;
     rangeStart_ = rangeEnd_ = 0;
