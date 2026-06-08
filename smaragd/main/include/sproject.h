@@ -69,10 +69,18 @@ public:
     bool hasAsset( const QString &name ) const;
     QList<QString> assetNames() const;
 
+    // Fire arrangementChanged(). Called from the action chokepoint after every
+    // applied action so cached renders (asset captures) invalidate transparently
+    // on any edit. Coarse by design (every action, not just arrangement edits);
+    // over-invalidation only costs a re-render, never correctness.
+    void notifyArrangementChanged() { emit arrangementChanged(); }
+
 signals:
     void fileNameChanged( const QString & );
     void assetAdded( const QString &name, SObject &body );
     void assetRemoved( const QString &name );
+    // Any applied action; consumers that cache rendered audio drop their cache.
+    void arrangementChanged();
     void externFileAdded( const SExternFile & );
     void externFileRemoved( const QString );
     void bpmTempoChanged( double );

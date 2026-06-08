@@ -9,7 +9,9 @@
 #include "twsamplereader.h"
 #include "twloopreader.h"
 #include "twgrainsource.h"
+#include "twcapturingsource.h"
 #include "sapplication.h"
+#include "sproject.h"
 #include "scut.h"
 #include "slink.h"
 #include "scutrndrinline.h"
@@ -35,7 +37,8 @@ void SCut::rebuildReader()
     if( grain_ )  { delete grain_;  grain_  = NULL; }
 
     twRandomSource *rs = content_->getSObject().getRandomSource();
-    if( !rs ) return;   // non-source content: getRootComponent() falls back
+    if( !rs ) rs = ensureCapture();
+    if( !rs ) return;   // non-source, non-capturable: getRootComponent() falls back
 
     twRandomSource *view = rs;
     if( !grainParams_.isIdentity() ) {
@@ -56,6 +59,50 @@ void SCut::rebuildReader()
         reader_ = view->acquireReader( env );
         looping_ = false;
     }
+}
+
+// Render a container content (a track/mixer sub-arrangement) once into an owned
+// twCapturingSource, so each placement reads a cheap, independent snapshot rather
+// than re-pulling — and fighting the single cursor of — the live graph (proposal
+// 07 step 5). The whole content [0, dur) is captured (the cut's startOffset_
+// indexes into it exactly like a sample source), so two cuts windowing the same
+// container still each get a correct view. Returns NULL for real sources (the
+// sample path) or content we cannot capture.
+twRandomSource *SCut::ensureCapture()
+{
+    if( capture_ ) return capture_;
+    SObject &c = content_->getSObject();
+    if( c.getRandomSource() ) return NULL;          // real source -> sample path
+    if( !c.hasDuration() ) return NULL;
+    twComponent &comp = c.getRootComponent();
+    if( !comp.isSeekable() ) return NULL;           // can't capture reliably
+    length_t need = (length_t) startOffset_ + cutDuration_;
+    length_t dur  = (length_t) c.getDuration();
+    length_t n = dur > need ? dur : need;
+    if( n <= 0 ) return NULL;
+
+    tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
+    capture_ = new twCapturingSource( env, comp, 0, n, 1, env.getSRate() );
+
+    if( !captureConnected_ ) {
+        // Transparent invalidation: any applied action drops the snapshot so the
+        // next pull re-captures the edited arrangement.
+        QObject::connect( &getProject(), SIGNAL( arrangementChanged() ),
+                          this, SLOT( invalidateCapture() ) );
+        captureConnected_ = true;
+    }
+    return capture_;
+}
+
+void SCut::invalidateCapture()
+{
+    // Drop the cached render and anything built over it; the next pull
+    // re-captures. NB: like rebuildReader(), this is not realtime-safe — in the
+    // MVP edits/auditions happen while stopped.
+    if( reader_ )  { delete reader_;  reader_  = NULL; }
+    if( grain_ )   { delete grain_;   grain_   = NULL; }
+    if( capture_ ) { delete capture_; capture_ = NULL; }
+    readerTried_ = false;
 }
 
 twComponent &SCut::getRootComponent()
@@ -176,6 +223,7 @@ SCut::~SCut()
     // before releasing the content link.
     if( reader_ ) { delete reader_; reader_ = NULL; }
     if( grain_ )  { delete grain_;  grain_  = NULL; }
+    if( capture_ ) { delete capture_; capture_ = NULL; }
     delete content_;
     content_ = NULL;
 }

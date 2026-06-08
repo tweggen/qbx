@@ -2322,15 +2322,45 @@ The capture is a **snapshot at construction** (it advances the source's cursor),
 so it must run off the audio thread while the source isn't playing — the same
 constraint as the grain materialisation.
 
-### Honestly deferred (the consumer wiring — next slice)
+### Consumer wiring — see the next entry (now landed)
 
-- **Asset integration:** an asset `SCut` (cut over a container) returns a
-  `twCapturingSource` from `getRandomSource()` instead of NULL, so placements read
-  the rendered snapshot via independent `twSampleReader`s. Today the asset path
-  still falls back to live-pull (fine for a single audition, wasteful + unsafe for
-  many placements).
-- **Invalidation:** rebuild the capture when the underlying arrangement edits
-  (hook the container's `childObjectAdded/Removed` / `durationChanged`), so the
-  "edit once → changes everywhere" liveness survives caching.
 - **Content-addressed shared cache** so identical assets/cuts render once
-  (proposal 06 §7 tier 3).
+  (proposal 06 §7 tier 3) — still deferred.
+
+---
+
+## Asset cache wiring: transparent invalidate-on-edit
+
+- **Date:** 2026-06-08
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW; window-up smoke
+  passes. **Dormant until placement** (nothing pulls an asset cut yet), so no
+  behaviour change today — the cache is ready for when slice 2 lands.
+
+### What landed
+
+`SCut` now caches a container content's render through `twCapturingSource`, and
+drops the cache transparently on any edit:
+
+| File | Change |
+|------|--------|
+| `main/include/scut.h` + `src/scut.cpp` | New `ensureCapture()`: when the content is **not** a random source but **is** a seekable container (a track/mixer sub-arrangement) with a duration, render its whole output `[0, dur)` ONCE into an owned `twCapturingSource` and read from that. `rebuildReader()` now does `rs = getRandomSource(); if(!rs) rs = ensureCapture();` — so a cut over a group gets a cheap snapshot + its own reader (independent cursor) instead of re-pulling the live graph. `startOffset_` indexes into the capture exactly like a sample source, so cuts windowing the same container each get a correct view. New `invalidateCapture()` slot drops the capture (+ reader/grain) so the next pull re-captures; dtor frees the capture. Mono MVP (1 channel; served on every channel like a mono sample). |
+| `main/include/sproject.h` | New `arrangementChanged()` signal + `notifyArrangementChanged()`. |
+| `main/src/sactionhistory.cpp` | Fires `notifyArrangementChanged()` at **both** apply chokepoints (forward `drain_` + undo/redo `submit(skipHistory)`), so every applied action invalidates cached renders. |
+
+### Design notes
+
+- **Transparent, coarse invalidation.** Every applied action drops the cache (not
+  just arrangement edits). Over-invalidation only costs a re-render, never
+  correctness; it's also complete (deep edits don't have to bubble a signal up the
+  tree). A finer "did the arrangement actually change" gate is a later optimisation.
+- **Snapshot ⇒ stopped-only edits (MVP).** Re-capture/teardown is not realtime-safe
+  (same documented stance as `rebuildReader`); edit/audition while stopped.
+- **Only container-backed cuts connect** to `arrangementChanged`, so sample cuts
+  are unaffected.
+
+### Still deferred
+
+- Content-addressed **shared** cache across identical cuts (06 §7 tier 3) — today
+  each cut owns its own capture.
+- A finer invalidation gate (only re-capture when the captured subtree changed).
+- Multi-channel capture (mono for now).

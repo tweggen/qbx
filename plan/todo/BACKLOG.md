@@ -13,15 +13,16 @@ Each item: one line of *what*, one of *why deferred* / what unblocks it.
 
 ## From proposal 07 — sample source/reader split (now in `plan/done/`)
 
-- **`twCapturingSource` — class DONE (2026-06-08), consumer wiring pending.** The
+- **`twCapturingSource` — class + asset wiring DONE (2026-06-08).** The
   `twRandomSource` that materialises any linear `twComponent` (e.g. a group's
-  `twTrackMix`) once into a resident planar buffer now exists
-  (`tw303a/twcapturingsource.*`); read() is a lock-free memcpy. *Remaining:* wire
-  it into the **live-asset cache** — an asset (a cut over a container) exposes a
-  `twCapturingSource` via `getRandomSource()` so placements mint independent
-  readers over the rendered snapshot (cheap + correct), with **invalidation** when
-  the underlying arrangement edits, and a **content-addressed shared cache** so
-  identical assets/cuts render once (proposal 06 §7). See STATE.md.
+  `twTrackMix`) once into a resident planar buffer, and the `SCut` wiring that
+  caches a container content through it with transparent invalidate-on-edit, are
+  both in (see STATE.md). *Remaining (optimisations, not blockers):* a
+  **content-addressed shared cache** so identical cuts render once instead of each
+  owning its own capture (proposal 06 §7 tier 3); a **finer invalidation gate**
+  (re-capture only when the captured subtree actually changed, vs every action);
+  and **multi-channel** capture (mono for now). The cache is **dormant until asset
+  placement** (slice 2) gives it a consumer.
 
 - **Windowed / streaming sample source** — a fallback for files too large to keep
   fully resident in RAM (`twSampleSource` decodes the whole WAV to planar Float32

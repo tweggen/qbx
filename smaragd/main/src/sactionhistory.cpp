@@ -35,6 +35,9 @@ void SActionHistory::submit(SAction *forward, bool skipHistory)
         // Don't delete the action: it's owned by the undo command and will be deleted
         // when the undo command is destroyed. Just apply it and discard the inverse.
         SApplyResult result = forward->apply(project);
+        if (result.applied) {
+            project->notifyArrangementChanged();   // invalidate cached renders
+        }
         if (result.inverse) {
             delete result.inverse;
         }
@@ -60,6 +63,7 @@ void SActionHistory::drain_()
         SApplyResult result = action->apply(project);
 
         if (result.applied) {
+            project->notifyArrangementChanged();   // invalidate cached renders
             onApplied_(id, result.inverse);
             // ownership of action transferred to undo command (or deleted there
             // when there is no inverse) — don't delete here.

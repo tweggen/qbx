@@ -10,8 +10,10 @@
 class SProject;
 class QWidget;
 class twComponent;
+class twRandomSource;
 class twSampleReader;
 class twGrainSource;
+class twCapturingSource;
 class SObjectRenderer;
 class SCutRendererInline;
 class SProjectLoader;
@@ -93,6 +95,13 @@ public slots:
     void setStretch( double );
     void setPitchCents( double );
 
+private slots:
+    // Drop the cached render of a container content (and any reader built over
+    // it); the next pull re-captures. Connected to SProject::arrangementChanged
+    // so a cut over a group/mixer transparently reflects edits (proposal 05
+    // feature (b) / 07 step 5). Only container-backed cuts ever connect this.
+    void invalidateCapture();
+
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );
 
@@ -104,6 +113,12 @@ private:
     // random-access source.
     void ensureReader();
     void rebuildReader();
+    // When the content is not a random-access source but is a seekable container
+    // (a track/mixer sub-arrangement), render its output ONCE into an owned
+    // twCapturingSource so placements read a cheap, independent snapshot instead
+    // of re-pulling the live graph (proposal 07 step 5). Returns NULL when the
+    // content is a real source (sample path) or cannot be captured.
+    twRandomSource *ensureCapture();
 
     SLink *content_;
     offset_t startOffset_;
@@ -116,6 +131,10 @@ private:
     twGrainSource *grain_;
     twGrainParams grainParams_;
     bool readerTried_;
+    // Cached render of a container content (proposal 07 step 5). Built lazily by
+    // ensureCapture(); invalidated on any edit via invalidateCapture().
+    twCapturingSource *capture_ = nullptr;
+    bool captureConnected_ = false;   // connected to arrangementChanged once
 };
 
 #endif
