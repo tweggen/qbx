@@ -27,6 +27,24 @@ Each item: one line of *what*, one of *why deferred* / what unblocks it.
 
 ---
 
+## From proposal 05 — track grouping (feature (a), shipped; still in `proposed/`)
+
+Feature (a) is complete; these are the two small leftovers. (Feature (b), live
+region assets, is the live remaining design in proposal 05 — not a backlog item.)
+
+- **Group/Ungroup operate on top-level tracks only** — you cannot group or ungroup
+  a track that is already nested inside a folder.
+  *Deferred:* the gesture/menu plumbing resolves the clicked top-level track;
+  generalising to arbitrary depth is UI work, no model change.
+
+- **Nested-track solo resolved at the top mixer only** — solo's "silence the
+  others" is computed over the mixer's direct children, so soloing inside a folder
+  doesn't honour the group hierarchy (proposal 05 §1.3).
+  *Deferred:* needs `anyTrackSoloed()` + audibility to walk the whole tree; the
+  intrinsic-processing refactor (§0) already landed, so this is the remaining bit.
+
+---
+
 ## Conventions
 
 - Promote an item to a `plan/proposed/NN_*.md` proposal once it needs real design

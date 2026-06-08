@@ -161,6 +161,16 @@ into it, reference-counted as usual. The **resource list holds one reference** s
 the asset survives with zero arrangement instances (otherwise refcount→0 →
 `deleteLater`).
 
+The resource list (`SExternFileList`, left-hand panel) generalises from "samples"
+to "**shared, placeable `SObject`s**": today `SExternFile`/`SPlainWave`, tomorrow
+also asset bodies (groups). It stores `SObject`s, **not** reader factories — the
+`twRandomSource`/`acquireReader` factory (proposal 07) is what a *sample* exposes
+via `getRandomSource()` for independent random-access reads; an asset has no such
+source (it is pulled live as a component) until explicitly captured. The list's
+common abstraction is placement-by-`SLink`/`SCut`, not the reader factory. See the
+resolved §5 "where does the asset open" note. The asset's **launch surface is this
+list**, and its **editor is a proposal-09 tab**.
+
 ### 2.4 Extraction algorithm (mark region → asset)
 
 Given a region `[t0, t1)` and a set of tracks `T`:
@@ -337,9 +347,23 @@ Implication: **build grouping first** (chosen), assets second.
   all three):* drag-to-nest (drop onto a lane nests; drop on a boundary
   reorders/pops out), context-menu Indent/Outdent + Group/Ungroup, and a toolbar
   Group/Ungroup. Group/Ungroup are undoable macros over `SAddTrackAction` +
-  `SReparentTrackAction`. Deferred: they operate on top-level tracks and Ungroup
-  leaves the emptied folder (an undoable track-remove is still missing). Next:
+  `SReparentTrackAction`. Deferred: they operate on **top-level tracks** (now
+  parked in `plan/todo/BACKLOG.md`). *(The "Ungroup leaves the emptied folder /
+  undoable track-remove is still missing" caveat that was here is now closed —
+  see the next bullet.)* Next:
   feature (b) live region assets = an `SCut` over a track group (§2, §4b).
+
+- **Undoable track-remove → Ungroup fully dissolves — DONE (2026-06-07).**
+  `SRemoveTrackAction` (was a Phase-1 stub with no undo) is now undoable by
+  **pinning** the removed subtree; its inverse is `SRestoreTrackAction`. Ungroup
+  now **deletes the emptied folder** inside its macro — undo restores the folder,
+  then reparents the children back (the reverse replay reconstructs each
+  intermediate tree so the exact-slot reparent inverses resolve). This closes the
+  last §1.2 caveat: **feature (a) track groups is complete** apart from two small
+  follow-ups parked in `plan/todo/BACKLOG.md` (top-level-only Group/Ungroup;
+  nested-track solo still resolved at the top mixer). The live remaining design in
+  this proposal is **feature (b)** (§2), whose editor-surface and cycle-guard
+  questions are now settled by proposal 09 (see §5).
 
 ## 5. Open questions
 
@@ -348,7 +372,27 @@ Implication: **build grouping first** (chosen), assets second.
 - Does soloing a folder solo its descendants implicitly? (Recommended: yes.)
 - Asset instances: default to "follow master length" or "fixed window"?
 - Where does the asset open for editing — in place (the instance expands) or a
-  dedicated editor view? (Affects "edit the original" UX.)
+  dedicated editor view? (Affects "edit the original" UX.) **Resolved (2026-06-08):
+  it lives in the left-hand resource list and opens from there into a dedicated
+  tab.** The asset first appears in the **resource list on the left** — the same
+  list that shows samples today (`SExternFileList`) — so it reads as "just another
+  reusable source". Double-click / "Open" launches it as a **tab** (proposal 09:
+  an `SStdMixerView` rooted at the group/asset); drag places an instance via
+  `SLink`/`SCut`. So the resource list is the *home & launch point*; the tab is the
+  *editor*; they compose. Proposal 09 also makes the §2.7 acyclic requirement a
+  defined model invariant (09 §6) and builds its "asset tabs" on §4b's
+  cut-over-a-group model.
+  - *On "is it the reader factories we store there?"* — no, and the distinction
+    matters. The resource list stores **shared `SObject`s** (today `SExternFile`/
+    `SPlainWave`), not reader factories. The reader factory (`twRandomSource` +
+    `acquireReader`, proposal 07) is something a **sample** `SObject` *exposes* via
+    `getRandomSource()` — it is specific to random-access PCM data. An **asset is a
+    different kind of `SObject`**: a live sub-arrangement pulled as a component
+    (`getRootComponent().calcOutputTo()`), with **no** random-access source until
+    it is explicitly *captured* (`twCapturingSource`, the deferred 07 step 5). So
+    the unifying abstraction of the resource list is "**a shared, placeable
+    `SObject`**", and the reader factory is an implementation detail of the *sample*
+    kind — see §2.3.
 - Resource lifetime/GC: explicit "delete unused asset", or keep until project
   close?
 - Should `SStdMixer` be retired in favour of "the master is just the root group",
