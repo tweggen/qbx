@@ -1,6 +1,7 @@
 
 #include <iostream>
 #include <math.h>
+#include <cstdlib>
 
 #include <QDebug>
 
@@ -14,6 +15,7 @@
 #include "sproject.h"
 #include "scut.h"
 #include "slink.h"
+#include "strack.h"
 #include "scutrndrinline.h"
 #include "sprojectloader.h"
 
@@ -74,15 +76,22 @@ twRandomSource *SCut::ensureCapture()
     SObject &c = content_->getSObject();
     if( c.getRandomSource() ) return NULL;          // real source -> sample path
     if( !c.hasDuration() ) return NULL;
-    twComponent &comp = c.getRootComponent();
-    if( !comp.isSeekable() ) return NULL;           // can't capture reliably
+
+    // Prefer a seekable capture component (a track's twTrackMix, which seeks
+    // cleanly and re-seeks its children each buffer) over the output rewire,
+    // whose forward-streaming latches carry playback state and can't seek to 0.
+    twComponent *comp = NULL;
+    if( STrack *trk = dynamic_cast<STrack *>( &c ) ) comp = trk->getCaptureComponent();
+    if( !comp ) comp = &c.getRootComponent();
+    if( !comp->isSeekable() ) return NULL;
+
     length_t need = (length_t) startOffset_ + cutDuration_;
     length_t dur  = (length_t) c.getDuration();
     length_t n = dur > need ? dur : need;
     if( n <= 0 ) return NULL;
 
     tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
-    capture_ = new twCapturingSource( env, comp, 0, n, 1, env.getSRate() );
+    capture_ = new twCapturingSource( env, *comp, 0, n, 1, env.getSRate() );
 
     if( !captureConnected_ ) {
         // Transparent invalidation: any applied action drops the snapshot so the
@@ -102,7 +111,99 @@ void SCut::invalidateCapture()
     if( reader_ )  { delete reader_;  reader_  = NULL; }
     if( grain_ )   { delete grain_;   grain_   = NULL; }
     if( capture_ ) { delete capture_; capture_ = NULL; }
+    if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }
     readerTried_ = false;
+}
+
+// Build a peak cache of the capture (the rendered snapshot) for waveform
+// preview, in the container frame domain. min/max are stored as positive
+// magnitudes in [0,127], matching SObject::straightCalcPreviewData()'s
+// convention so the same draw loop (swaveformdraw) applies.
+bool SCut::ensureCapturePeaks()
+{
+    if( capPeaks_ ) return true;
+    if( !capture_ ) return false;
+    length_t len = (length_t) capture_->length();
+    if( len <= 0 ) return false;
+
+    offset_t skip = 256;
+    while( len < skip * 128 && skip > 1 ) skip >>= 1;
+    if( skip < 1 ) skip = 1;
+    while( (offset_t)( len / skip ) >= 0x200000 ) skip *= 2;
+    offset_t n = (offset_t)( len / skip ) + 1;
+
+    capPeaks_ = (preview_t *) ::calloc( sizeof( preview_t ), n );
+    if( !capPeaks_ ) return false;
+    capPeakSkip_ = skip;
+    capPeakN_ = n;
+
+    sample_t *buf = (sample_t *) ::malloc( skip * sizeof( sample_t ) );
+    if( !buf ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; return false; }
+
+    for( offset_t i = 0; i < (offset_t) len; i += skip ) {
+        offset_t chunk = ( i + skip <= (offset_t) len ) ? skip : ( (offset_t) len - i );
+        capture_->read( i, buf, chunk, 0 );
+        sample_t mn = SAMPLE_NORM_MAX, mx = SAMPLE_NORM_MIN;
+        for( offset_t j = 0; j < chunk; ++j ) {
+            sample_t a = buf[j];
+            if( a < mn ) mn = a;
+            if( a > mx ) mx = a;
+        }
+        // Signed envelope, matching SObject::straightCalcPreviewData()'s
+        // convention: .max is the upper (positive) edge, .min the lower
+        // (negative) edge, each in [-128,127]. (Clamping to [0,127] here was the
+        // bug that turned the waveform into a comb.)
+        double mxs = ( mx * 127. ) / SAMPLE_NORM_MAX;
+        if( mxs > 127. ) mxs = 127.; if( mxs < -128. ) mxs = -128.;
+        double mns = ( mn * -127. ) / SAMPLE_NORM_MIN;
+        if( mns > 127. ) mns = 127.; if( mns < -128. ) mns = -128.;
+        offset_t idx = i / skip;
+        if( idx < n ) {
+            capPeaks_[idx].min = (char) mns;
+            capPeaks_[idx].max = (char) mxs;
+        }
+    }
+    ::free( buf );
+    return true;
+}
+
+// Waveform peaks for the asset preview, read from the capture (shared with the
+// audio render). `start`/`length` are in the container frame domain; the cut
+// renderer's InlineRenderContext maps the clip window there. Sample cuts have no
+// capture and defer to the base preview.
+int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
+                      offset_t nProbes )
+{
+    // No capture (sample cut, or a container we can't snapshot): preview the
+    // content live, in the same (container) frame domain we are addressed in.
+    if( !ensureCapture() || !ensureCapturePeaks() )
+        return getContent().getPreview( dest, start, length, nProbes );
+
+    if( nProbes <= 0 ) return -1;
+    if( length < 1 ) length = 1;
+
+    for( offset_t k = 0; k < nProbes; ++k ) {
+        // Aggregate the true signed envelope over each output column: the lower
+        // edge is the smallest .min, the upper edge the largest .max (this is
+        // what avoids aliasing combs when zoomed out).
+        offset_t s = start + ( k * length ) / nProbes;
+        offset_t e = start + ( ( k + 1 ) * length ) / nProbes;
+        offset_t i0 = s / capPeakSkip_;
+        offset_t i1 = ( e > s ? e - 1 : s ) / capPeakSkip_;
+        char aggMin = 0, aggMax = 0;   // default: silence -> flat midline
+        bool any = false;
+        for( offset_t i = i0; i <= i1 && i < capPeakN_; ++i ) {
+            char pmn = capPeaks_[i].min, pmx = capPeaks_[i].max;
+            if( !any ) { aggMin = pmn; aggMax = pmx; any = true; }
+            else {
+                if( pmn < aggMin ) aggMin = pmn;
+                if( pmx > aggMax ) aggMax = pmx;
+            }
+        }
+        dest[k].min = aggMin;
+        dest[k].max = aggMax;
+    }
+    return 0;
 }
 
 twComponent &SCut::getRootComponent()
@@ -224,6 +325,7 @@ SCut::~SCut()
     if( reader_ ) { delete reader_; reader_ = NULL; }
     if( grain_ )  { delete grain_;  grain_  = NULL; }
     if( capture_ ) { delete capture_; capture_ = NULL; }
+    if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; }
     delete content_;
     content_ = NULL;
 }

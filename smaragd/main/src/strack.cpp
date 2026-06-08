@@ -79,6 +79,13 @@ twComponent &STrack::getRootComponent()
     return *(twComponent *)cpRewire_;
 }
 
+twComponent *STrack::getCaptureComponent() const
+{
+    if( cpTrackMixers_ && nBusses_ > 0 && cpTrackMixers_[0] )
+        return (twComponent *) cpTrackMixers_[0];
+    return NULL;
+}
+
 int STrack::seekTo( offset_t ofs )
 {
     if( !cpTrackMixers_ ) return 0;

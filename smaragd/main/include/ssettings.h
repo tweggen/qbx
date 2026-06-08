@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QSettings>
 #include <QString>
+#include <QStringList>
 #include <QVariant>
 
 // Per-user, per-machine configuration, persisted as an INI file under the
@@ -36,6 +37,13 @@ public:
     QString lastDir( const QString &context,
                      const QString &fallback = QString() ) const;
     void    setLastDir( const QString &context, const QString &dir );
+
+    // Most-recently-opened project files, newest first (capped, absolute paths).
+    // addRecentProject() de-duplicates and moves the entry to the front;
+    // removeRecentProject() drops one (e.g. a file that no longer exists).
+    QStringList recentProjects() const;
+    void        addRecentProject( const QString &path );
+    void        removeRecentProject( const QString &path );
 
 signals:
     void changed( const QString &key );

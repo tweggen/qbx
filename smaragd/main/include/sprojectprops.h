@@ -16,6 +16,13 @@ inline constexpr char GridVisible[] = "gridVisible";  // bool: draw the time gri
 inline constexpr char Metronome[]   = "metronome";    // bool: metronome on (stub)
 inline constexpr char Cycle[]       = "cycle";        // bool: cycle/loop on (stub)
 
+// Time-range marker in the ruler (the asset-from-range selection). Persisted so
+// a selection survives save/load. Start/End are offset_t (sample frames), stored
+// as qulonglong; only meaningful when RangeValid is true.
+inline constexpr char RangeValid[]  = "rangeValid";   // bool
+inline constexpr char RangeStart[]  = "rangeStart";   // qulonglong (offset_t)
+inline constexpr char RangeEnd[]    = "rangeEnd";     // qulonglong (offset_t)
+
 // Values a brand-new project starts with.
 inline QVariantMap defaults()
 {
@@ -24,6 +31,9 @@ inline QVariantMap defaults()
     m[GridVisible] = true;
     m[Metronome]   = false;
     m[Cycle]       = false;
+    m[RangeValid]  = false;
+    m[RangeStart]  = (qulonglong) 0;
+    m[RangeEnd]    = (qulonglong) 0;
     return m;
 }
 

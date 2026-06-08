@@ -29,6 +29,8 @@ int main( int argc, char *argv[] )
     win->move( 100,100 );
     win->resize( 800, 600 );
     win->showMaximized();
+    // Re-open the most recently used project (if any still exist on disk).
+    win->openMostRecent();
     app.exec();
     return 0;
 }

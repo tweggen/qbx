@@ -5,6 +5,7 @@
 #include "sactionregistry.h"
 #include "sstdmixer.h"
 #include "strack.h"
+#include "scut.h"
 #include "slink.h"
 #include <QDomElement>
 
@@ -44,6 +45,22 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
     SObject *assetBody = project->asset(assetName_);
     if (!assetBody) {
         return {false, nullptr};
+    }
+
+    // Cycle guard (proposal 05 §2.7): an asset is a live window over a container.
+    // Placing it inside that same container — or a descendant of it — would make
+    // the container's render pull itself (the capture build recurses before the
+    // snapshot exists). Refuse such placements.
+    if (SCut *assetCut = dynamic_cast<SCut*>(assetBody)) {
+        SObject *container = &assetCut->getContent();
+        if (container == root) {
+            return {false, nullptr};   // whole-mixer asset: every placement cycles
+        }
+        if (STrack *containerTrack = dynamic_cast<STrack*>(container)) {
+            if (isSelfOrDescendant(track, containerTrack)) {
+                return {false, nullptr};   // dropping into the asset's own subtree
+            }
+        }
     }
 
     // Pin the asset to keep it alive during undo/redo cycles.

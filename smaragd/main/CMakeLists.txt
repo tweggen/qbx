@@ -77,6 +77,7 @@ set(SMARAGD_SOURCES
     src/ssettings.cpp
     src/soptions.cpp
     src/soptionsdialog.cpp
+    src/swaveformdraw.cpp
     src/ssmvmixercontrol.cpp
     src/sstdmixer.cpp
     src/sstdmixerview.cpp

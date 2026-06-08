@@ -124,11 +124,17 @@ void SObject::invalidatePreview()
     previewData_ = NULL;    
 }
 
-int SObject::getPreview( preview_t */*dest*/,
-                         offset_t /*start*/, length_t /*length*/, 
-                         offset_t /*nProbes*/ )
+int SObject::getPreview( preview_t *dest,
+                         offset_t start, length_t length,
+                         offset_t nProbes )
 {
-    return -1;
+    // Default preview: if this object renders to a duration, produce peaks from
+    // its rendered output. straightCalcPreviewData() reads a random source when
+    // there is one (samples) and otherwise pulls getRootComponent() live — so a
+    // container (a track/mixer sub-arrangement, i.e. a live asset) is previewable
+    // too. No duration -> no preview.
+    if( !hasDuration() ) return -1;
+    return getStraightPreview( dest, start, length, nProbes );
 }
 
 int SObject::straightCalcPreviewData()

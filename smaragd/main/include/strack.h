@@ -57,7 +57,15 @@ public:
 					     SObject *parent );
 
     virtual twComponent &getRootComponent();
-    
+
+    // A *seekable* component rendering this track's summed output, for snapshot
+    // capture (asset previews / proposal 07). Unlike getRootComponent() (the
+    // output rewire, whose streaming latches carry playback state and can't seek
+    // to zero), the per-bus twTrackMix seeks cleanly and re-seeks its children
+    // each buffer. Bus 0 is the output for the common single-bus track. NULL if
+    // unbuilt.
+    twComponent *getCaptureComponent() const;
+
     virtual int readPreChildrenAttributes( QDomElement &element );
 
     virtual QWidget *getDetailEditWidget( QWidget *parent );

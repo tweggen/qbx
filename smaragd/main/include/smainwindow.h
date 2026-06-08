@@ -21,6 +21,10 @@ public:
     SMainWindow();
     virtual ~SMainWindow();
 
+    // Startup: open the newest still-existing entry from the recent list, if
+    // any. Leaves an empty workspace when there is nothing to restore.
+    void openMostRecent();
+
 protected slots:
     void nyi();
     void fileExit();
@@ -78,6 +82,12 @@ private:
 
     // Serialize the current project to path; reports errors via a dialog.
     bool saveToPath( const QString &path );
+    // Load a project file (shared by File→Open, the recent list, and startup).
+    // Closes the current project, loads `fileName`, updates the recent list and
+    // window title. Returns false (with a dialog) on a load failure.
+    bool openProjectFile( const QString &fileName );
+    // Rebuild the File→Open Recent submenu from SSettings::recentProjects().
+    void updateRecentMenu();
     // Reflect the current project file (or "untitled") in the window title.
     void updateWindowTitle();
 
@@ -86,6 +96,7 @@ private:
     QString currentFilePath_;   // empty = never saved/loaded (untitled)
 
     QMenu *qFileMenu_;
+    QMenu *qRecentMenu_;        // File -> Open Recent submenu
     QMenu *qAudioMenu_;
     QMenu *qTestMenu_;
     QActionGroup *deviceGroup_;
