@@ -2413,3 +2413,149 @@ Drag-and-drop from the resource list to the arranger:
 - Per-folder-track vertical scope (create assets scoped to a folder track, not just the mixer root).
 - Asset serialization (session-only today; save/load assets from the project XML).
 - Content-addressed shared cache (a single cached render for multiple identical cuts).
+
+---
+
+## Asset/file drag-drop: first Windows verification + three fixes
+
+- **Date:** 2026-06-08
+- **Status:** ✅ Fixed and **visually confirmed on Windows** (asset clip lands on the
+  target lane; ghost label follows the cursor). Builds clean on Windows/Qt6/MinGW.
+
+### Background
+
+Slice 2's drag-drop placement was only ever built/verified on macOS. Its first
+real exercise on Windows surfaced three issues — two functional, one cosmetic.
+Diagnosed by temporarily instrumenting the whole DnD chain (since removed); the
+trace confirmed `mousePress → startDrag → dragEnter → drop` all fired and the
+drop mapped to a valid track, isolating the problems to drag-init and repaint.
+
+### Fixes
+
+| File | Fix |
+|------|-----|
+| `main/src/sexternfilelist.cpp` (ctor) | **Drag never started on Windows.** `setDragEnabled(true)` alone did not initiate the `QDrag` from the `QTreeWidget` on this Qt6/MinGW build. Added `setDragDropMode(QAbstractItemView::DragOnly)` — the idiomatic enable — which makes `startDrag()` fire. |
+| `main/src/sstdmixerview.cpp` (`dropEvent`) | **Placed clip was invisible.** The drop submitted `SPlaceAssetAction`/`SAddSampleAction` (model updated correctly) but never repainted — the view's `update()` is wired only to track insert/remove and property changes, not clip additions. Added an `update()` at the end of `dropEvent`, mirroring the explicit `qContent_->update()` the normal `ctInsertSample` path already does. |
+| `main/src/sexternfilelist.cpp` (`startDrag`) | **No drag ghost.** Our custom `QDrag` had no pixmap, so nothing followed the cursor (Qt's *default* item-view drag renders the row, but we build our own `QDrag`). Added a small rendered label pixmap + hotspot. |
+
+### Diagnostic note (for next time)
+
+On Windows/MinGW, `qWarning()`/`qDebug()` output does **not** reach the
+bash-redirected `stderr` logfile (it routes to the Windows debug channel), so
+DnD probes via `qWarning` were invisible. Engine logs show up because
+`twsyslog.h` uses `fprintf(stderr,…)+fflush`. Use that same idiom (not
+`qWarning`) when adding console diagnostics that must land in a redirected log.
+
+### Known follow-ups (unchanged scope)
+
+- The placed asset clip renders a **"No render" placeholder** — there is no
+  waveform/preview renderer for a container-backed asset cut yet.
+- **Cycle hazard:** an asset whose vertical scope is the whole mixer, placed back
+  onto a track *inside* that mixer, is a self-reference. The deferred cycle guard
+  (proposal 05 §2.7) still applies — be cautious hitting Play on such a placement.
+
+---
+
+## Recent-projects menu + open-most-recent + range-marker persistence
+
+- **Date:** 2026-06-08
+- **Status:** ✅ Implemented and **user-verified** ("Looks great!"). Builds clean on
+  Windows/Qt6/MinGW.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `main/include/ssettings.h` + `src/ssettings.cpp` | `recentProjects()` / `addRecentProject()` / `removeRecentProject()` over a `recent/projects` INI key (newest-first, de-duplicated case-insensitively, capped at 5, absolute paths). |
+| `main/src/smainwindow.cpp` + `.h` | New **File → Open Recent** submenu (`qRecentMenu_`, `updateRecentMenu()`); shows "(none)" when empty. `fileOpen` refactored to a thin dialog wrapper + shared `openProjectFile()` (closes current, loads, adds to recents, repaints) — so dialog-open, recent-open, and startup all share one path (cancelling Open no longer closes the current project). `saveToPath()` also adds to recents. New **`openMostRecent()`** opens the newest still-existing entry (prunes missing ones); called from `main.cpp` after `showMaximized()`. |
+| `main/src/main.cpp` | Calls `win->openMostRecent()` at startup (app previously booted with no project). |
+| `main/include/sprojectprops.h` | New property keys `RangeValid`/`RangeStart`/`RangeEnd` (+ defaults). The ruler **time-range marker** now lives in the project property bag (already JSON-round-tripped through save/load). |
+| `main/src/sstdmixerview.cpp` | `SMVActualView::saveRangeToProject()` / `loadRangeFromProject()`; the view writes the range on `endRangeDrag`/`ctRangeClear` and reads it back in its constructor (the project is fully loaded before the view is built). |
+
+---
+
+## Track-scoped asset creation + acyclicity guard
+
+- **Date:** 2026-06-08
+- **Status:** ✅ Implemented and **user-verified** ("Looks good!"). Builds clean.
+
+Reframed asset creation to dodge the self-reference trap (a whole-mixer asset
+placed back into the mixer cycles at capture-build time).
+
+| File | Change |
+|------|--------|
+| `main/src/sstdmixerview.cpp` | **Moved** "Create asset from range" off the ruler menu onto the **track context menu** (`ctCreateAssetFromTrack`), scoped vertically to the right-clicked track via `SCreateAssetAction(pathOf(root, lastClickTrack_), …)` instead of `{}` (whole mixer). Disabled (with a hint) when no range is selected. |
+| `main/src/actions/splaceassetaction.cpp` | **Cycle guard (proposal 05 §2.7):** refuse to place an asset onto its source container or a descendant (`SCut::getContent()` → `isSelfOrDescendant(track, container)`). Authoritative backstop for any caller. |
+| `main/src/sstdmixerview.cpp` (`dropEvent`) | Friendly pre-check: a self-placement drop shows a status-bar hint instead of silently no-op'ing. |
+
+Cycle precondition (precise): an asset is a cut over container **C**; placing it
+under track **T** cycles **iff T is C or a descendant of C**. Track-scoping shrinks
+that surface to "don't drop it inside its own track" — detectable and guarded.
+
+---
+
+## Asset preview: rendered waveform (Tier 1 + Tier 2) — PARTIAL
+
+- **Date:** 2026-06-08
+- **Status:** ✅ **Works for leaf-track and uniform-content group assets**
+  (user-verified). ❌ **Mixed-content nested groups render only one sub-track** —
+  root-caused (see below); fix is the recursive capture in **proposal 10**.
+  Builds clean; debug logging removed.
+
+### What landed
+
+- **Tier 1** — base `SObject::getPreview()` now *computes* (was a `-1` stub): if the
+  object has a duration it returns `getStraightPreview()`, whose fallback pulls
+  `getRootComponent()` live — so a **container** (track/mixer) is previewable.
+  Extracted the waveform draw into reusable `swaveformdraw.{h,cpp}`
+  (`drawObjectWaveform`); `SPlainWaveRendererInline` uses it too.
+  `SCutRendererInline` detects a container-backed cut and draws its rendered
+  waveform (windowed by the cut, asset name in the corner) instead of "No renderer".
+- **Tier 2** — `SCut::getPreview()` reads peaks from the cut's `twCapturingSource`
+  (the snapshot shared with audio), cached in `capPeaks_` (signed `[-128,127]`
+  envelope — *matching* `straightCalcPreviewData`'s convention; an early
+  `[0,127]` clamp + wrong aggregation was the "comb" bug, since fixed). Peak cache
+  dropped with the capture in `invalidateCapture()`.
+- **Refresh-on-edit** — mute/solo toggles (which call `setMuted/setSolo` directly,
+  not via actions) now fire `SProject::notifyArrangementChanged()`
+  (`ssmvmixercontrol.cpp`); `SMVActualView` repaints on `arrangementChanged`. So
+  edits invalidate the capture **and** repaint the asset lane.
+- **Capture now actually runs.** It used to silently fail: `STrack::getRootComponent()`
+  returns the output **rewire**, whose `twStreamingLatch` chain reports
+  `isSeekable()==false`, so `ensureCapture()` always bailed and the preview fell
+  back to a cursor-sharing live pull (the source of the "only one clip / corrupts
+  on move" symptoms). Fix: new **`STrack::getCaptureComponent()`** returns the
+  bus-0 **`twTrackMix`** (cleanly seekable — `seekTo` just sets `playOffset_`, and
+  it re-seeks its children each buffer); `SCut::ensureCapture()` captures that.
+
+### The remaining nested bug (root cause, for proposal 10)
+
+A capture of a **group track** sums its child **tracks** via
+`child.getRootComponent()` — each child's **rewire**, whose `twStreamingLatch`
+*buffers ahead ~16384 frames*. But `twTrackMix` **re-seeks each child every
+buffer**. The latch read-ahead and the per-buffer re-seek are irreconcilable for a
+track-of-tracks, so one sub-track's stream "wins" and the other reads stale/silence
+(it looked fine only when both sub-tracks held the *same* sample). Confirmed by a
+diagnostic that showed both sub-tracks present as `STrack` children with real
+durations, yet only one rendered. **Leaf tracks work** (their clip children are
+independent random-access readers); nested tracks don't. Playback is unaffected
+(sequential, no random re-seek conflict).
+
+### Files touched this slice
+
+New: `main/include/swaveformdraw.h`, `main/src/swaveformdraw.cpp` (+ CMake).
+Edited: `sobject.cpp` (getPreview), `splainwaverndrinline.cpp`, `scutrndrinline.cpp`,
+`scut.{h,cpp}` (getPreview/ensureCapturePeaks/capPeaks_/ensureCapture-via-capture-
+component), `strack.{h,cpp}` (getCaptureComponent), `ssmvmixercontrol.cpp`
+(mute/solo → arrangementChanged), `sstdmixerview.cpp` (repaint on arrangementChanged).
+
+### NEXT STEP (agreed direction)
+
+Implement **proposal 10 — render cache / recursive capture**. The nested fix is to
+make container rendering **block-addressed / random-access** (recursively summing
+child *snapshots* instead of pulling live streaming rewires), which composes
+cleanly under nesting. The user framed the larger arc as a Unix-VM-style page
+cache (demand paging, mmap-like `twRandomSource` views, COW/content-addressed
+sharing, page invalidation) — `twRandomSource` is already that "mapped view"
+interface; the recursive capture is its first eagerly-filled instance. See
+`plan/proposed/10_RENDER_CACHE.md`.

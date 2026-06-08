@@ -7,6 +7,7 @@
 #include "slink.h"
 #include "scut.h"
 #include "scutrndrinline.h"
+#include "swaveformdraw.h"
 
 namespace {
 // A render context that maps one loop-repetition's pixel span linearly onto the
@@ -44,13 +45,38 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     QPainter &p = ctx.getPainter();
     QRect visibRect = ctx.getVisibRect();
 
-    SObjectRenderer *rndr = getCut().getContent().getInlineRenderer();
+    SCut &cut = getCut();
+    SObject &content = cut.getContent();
+
+    // Container-backed cut (a live asset over a track/mixer sub-arrangement): the
+    // content has no sample waveform renderer of its own, so draw a waveform of
+    // its RENDERED output, windowed by this cut. The InlineRenderContext folds
+    // the cut's startOffset into the time mapping, so the drawn region matches
+    // what plays. (Tier 1 pulls the render via getPreview; Tier 2 reads the
+    // capture — see SCut::getPreview.)
+    if( !content.getRandomSource() ) {
+        InlineRenderContext myctx( cut, ctx, p, lk.getStartTime() );
+        myctx.setVisibRect( visibRect );
+        // Preview the cut: SCut::getPreview reads the capture (shared with the
+        // audio render) in the container frame domain, which myctx supplies
+        // (it folds the cut's startOffset into the time mapping).
+        if( !drawObjectWaveform( cut, lk, myctx, QColor( 120, 200, 255 ) ) ) {
+            p.drawText( visibRect, Qt::AlignCenter, "Asset: (no preview)" );
+        }
+        if( !cut.getSName().isEmpty() ) {
+            p.setPen( QColor( 10, 10, 40 ) );
+            p.drawText( visibRect, Qt::AlignBottom | Qt::AlignRight, cut.getSName() );
+        }
+        return;
+    }
+
+    // Sample-backed cut: delegate to the content's own waveform renderer.
+    SObjectRenderer *rndr = content.getInlineRenderer();
     if( !rndr ) {
         p.drawText( visibRect, Qt::AlignCenter, "SCut: No renderer." );
         return;
     }
 
-    SCut &cut = getCut();
     if( !cut.isLooping() ) {
         // Note, that this is my link but his object!!!
         InlineRenderContext myctx( cut, ctx, p, lk.getStartTime() );

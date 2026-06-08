@@ -105,6 +105,8 @@ bool SMainWindow::saveToPath( const QString &path )
     currentFilePath_ = path;
     SSettings::instance().setLastDir( "project",
                                       QFileInfo( path ).absolutePath() );
+    SSettings::instance().addRecentProject( path );
+    updateRecentMenu();
     updateWindowTitle();
     statusBar()->showMessage( QString( "Saved %1" )
                                   .arg( QFileInfo( path ).fileName() ), 2000 );
@@ -199,9 +201,6 @@ void SMainWindow::fileNew()
 
 void SMainWindow::fileOpen()
 {
-    // FIXME: Delete the old component
-    closeProject();
-//    newProject();
     QString fileName(
         QFileDialog::getOpenFileName(
             this,
@@ -210,12 +209,22 @@ void SMainWindow::fileOpen()
             "qbx Projects (*.qxp *.QXP)" ) );
     if( fileName.isNull() ) {
         qWarning( "Nothing selected in file requester.\n" );
-        return;
+        return;   // user cancelled: keep the current project untouched
     }
+    openProjectFile( fileName );
+}
+
+bool SMainWindow::openProjectFile( const QString &fileName )
+{
+    if( fileName.isEmpty() ) return false;
+
+    // FIXME: Delete the old component
+    closeProject();
+
     SSettings::instance().setLastDir( "project",
                                       QFileInfo( fileName ).absolutePath() );
 
-    // Now, as the reading proceeded, create an empty project to fill in the data.
+    // Create an empty project to fill in the data as the reading proceeds.
     currentProject_ = new SProject();
     SApplication::app().setCurrentProject( currentProject_ );
 
@@ -230,7 +239,7 @@ void SMainWindow::fileOpen()
                                   QMessageBox::Ok );
         closeProject();   // discard the half-built placeholder project
         updateWindowTitle();
-        return;   // currentProject_ is gone; do not touch it below
+        return false;     // currentProject_ is gone; do not touch it below
     }
 
     // Find out the main widget.
@@ -244,6 +253,53 @@ void SMainWindow::fileOpen()
     currentFilePath_ = fileName;   // remember where we loaded from
     updateWindowTitle();
     syncPaletteToProject( currentProject_ );
+
+    SSettings::instance().addRecentProject( fileName );
+    updateRecentMenu();
+    return true;
+}
+
+void SMainWindow::updateRecentMenu()
+{
+    if( !qRecentMenu_ ) return;
+    qRecentMenu_->clear();
+
+    const QStringList recents = SSettings::instance().recentProjects();
+    if( recents.isEmpty() ) {
+        QAction *a = qRecentMenu_->addAction( "(none)" );
+        a->setEnabled( false );
+        return;
+    }
+
+    int n = 1;
+    for( const QString &path : recents ) {
+        const QString label =
+            QString( "&%1  %2" ).arg( n++ ).arg( QFileInfo( path ).fileName() );
+        QAction *a = qRecentMenu_->addAction( label );
+        a->setData( path );
+        a->setToolTip( path );
+        connect( a, &QAction::triggered, this, [this, path] {
+            if( !openProjectFile( path ) ) {
+                // File gone / unreadable — drop it so the list stays useful.
+                SSettings::instance().removeRecentProject( path );
+                updateRecentMenu();
+            }
+        } );
+    }
+}
+
+void SMainWindow::openMostRecent()
+{
+    const QStringList recents = SSettings::instance().recentProjects();
+    for( const QString &path : recents ) {
+        if( QFileInfo::exists( path ) && openProjectFile( path ) )
+            return;
+        // Missing on disk: forget it and try the next-newest.
+        if( !QFileInfo::exists( path ) )
+            SSettings::instance().removeRecentProject( path );
+    }
+    // Nothing to restore — start empty (File → New to begin a session).
+    updateRecentMenu();
 }
 
 void SMainWindow::fileExit()
@@ -358,6 +414,8 @@ SMainWindow::SMainWindow()
     qFileMenu_->setTearOffEnabled(true);
     qFileMenu_->addAction( "&New...", Qt::CTRL | Qt::Key_N, this, SLOT( fileNew() ) );
     qFileMenu_->addAction( "&Open...", this, SLOT( fileOpen() ) );
+    qRecentMenu_ = qFileMenu_->addMenu( "Open &Recent" );
+    updateRecentMenu();
     qFileMenu_->addAction( "&Save", Qt::CTRL | Qt::Key_S, this, SLOT( fileSave() ) );
     qFileMenu_->addAction( "Save &as...", Qt::CTRL | Qt::SHIFT | Qt::Key_S, this, SLOT( fileSaveAs() ) );
     qFileMenu_->addSeparator();

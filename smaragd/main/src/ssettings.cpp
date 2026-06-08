@@ -1,5 +1,7 @@
 #include "ssettings.h"
 
+#include <QFileInfo>
+
 SSettings &SSettings::instance()
 {
     static SSettings s;
@@ -42,4 +44,46 @@ QString SSettings::lastDir( const QString &context, const QString &fallback ) co
 void SSettings::setLastDir( const QString &context, const QString &dir )
 {
     setValue( "paths/" + context, dir );
+}
+
+static const char *kRecentKey = "recent/projects";
+static const int   kRecentMax = 5;
+
+QStringList SSettings::recentProjects() const
+{
+    return value( kRecentKey ).toStringList();
+}
+
+void SSettings::addRecentProject( const QString &path )
+{
+    if( path.isEmpty() ) return;
+    const QString abs = QFileInfo( path ).absoluteFilePath();
+
+    QStringList list = recentProjects();
+    // Drop any existing entry for the same file (case-insensitive: Windows paths).
+    for( int i = list.size() - 1; i >= 0; --i ) {
+        if( QString::compare( QFileInfo( list.at( i ) ).absoluteFilePath(),
+                              abs, Qt::CaseInsensitive ) == 0 ) {
+            list.removeAt( i );
+        }
+    }
+    list.prepend( abs );
+    while( list.size() > kRecentMax ) list.removeLast();
+
+    setValue( kRecentKey, list );
+}
+
+void SSettings::removeRecentProject( const QString &path )
+{
+    const QString abs = QFileInfo( path ).absoluteFilePath();
+    QStringList list = recentProjects();
+    bool changed = false;
+    for( int i = list.size() - 1; i >= 0; --i ) {
+        if( QString::compare( QFileInfo( list.at( i ) ).absoluteFilePath(),
+                              abs, Qt::CaseInsensitive ) == 0 ) {
+            list.removeAt( i );
+            changed = true;
+        }
+    }
+    if( changed ) setValue( kRecentKey, list );
 }

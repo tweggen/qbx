@@ -16,6 +16,8 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QMainWindow>
+#include <QStatusBar>
 
 #include "twwavinput.h"
 #include "twspeaker.h"
@@ -392,6 +394,14 @@ void SMVActualView::ctGlobalShow()
             && smv_.rowAt( smv_.rowIndexOfTrack( lastClickTrack_ ) )->hasChildren ) {
             qGlobalPopup_->addAction( "Ungroup track", &smv_, SLOT( ctUngroupTrack() ) );
         }
+        qGlobalPopup_->addSeparator();
+        // Make a live asset from this track over the current ruler range. Needs
+        // a range; disabled (with a hint) when none is selected.
+        QAction *aAsset = qGlobalPopup_->addAction(
+            "Create &asset from range", this, SLOT( ctCreateAssetFromTrack() ) );
+        aAsset->setEnabled( hasRange() );
+        if( !hasRange() )
+            aAsset->setText( "Create &asset from range  (select a range first)" );
     }
 }
 
@@ -792,7 +802,24 @@ void SMVActualView::endRangeDrag( int x )
         rangeValid_ = false;
     }
     rangeDrag_ = RangeNone;
+    saveRangeToProject();
     update();
+}
+
+void SMVActualView::saveRangeToProject()
+{
+    SProject &p = smv_.model_->getProject();
+    p.setProp( SProjectProps::RangeValid, rangeValid_ );
+    p.setProp( SProjectProps::RangeStart, (qulonglong) rangeStart_ );
+    p.setProp( SProjectProps::RangeEnd,   (qulonglong) rangeEnd_ );
+}
+
+void SMVActualView::loadRangeFromProject()
+{
+    SProject &p = smv_.model_->getProject();
+    rangeValid_ = p.prop( SProjectProps::RangeValid, false ).toBool();
+    rangeStart_ = (offset_t) p.prop( SProjectProps::RangeStart, (qulonglong) 0 ).toULongLong();
+    rangeEnd_   = (offset_t) p.prop( SProjectProps::RangeEnd,   (qulonglong) 0 ).toULongLong();
 }
 
 void SMVActualView::drawRange( QPainter &p, const QRect &myRect )
@@ -933,22 +960,27 @@ void SMVActualView::ctRangeClear()
 {
     rangeValid_ = false;
     rangeDrag_ = RangeNone;
+    saveRangeToProject();
     update();
 }
 
-void SMVActualView::ctRangeCreateAsset()
+void SMVActualView::ctCreateAssetFromTrack()
 {
-    // Feature (b): turn the selected time range into a reusable live asset — an
-    // SCut windowing the whole mixer (vertical scope = root container, path {}),
-    // horizontal scope = the range. It appears in the resource list and can be
-    // placed/edited like a sample. See
-    // plan/proposed/05_TRACK_GROUPING_AND_LIVE_ASSETS.md feature (b).
-    if( !rangeValid_ ) return;
+    // Feature (b): turn the right-clicked track + the ruler range into a reusable
+    // live asset — an SCut windowing THAT track (vertical scope = the track and
+    // its children), horizontal scope = the range. Scoping to a track (rather
+    // than the whole mixer) is what lets a placement land on a sibling lane
+    // without a self-reference cycle; placing it back inside the source track is
+    // refused by the guard in SPlaceAssetAction. See
+    // plan/proposed/05_TRACK_GROUPING_AND_LIVE_ASSETS.md feature (b) / §2.7.
+    if( !rangeValid_ || !lastClickTrack_ ) return;
     offset_t t0 = getRangeStart();
     offset_t t1 = getRangeEnd();
     if( t1 <= t0 ) return;
+    const QList<int> containerPath =
+        strackpath::pathOf( smv_.model_, lastClickTrack_ );
     SApplication::app().submitAction(
-        new SCreateAssetAction( QList<int>{}, t0, (length_t)( t1 - t0 ) ) );
+        new SCreateAssetAction( containerPath, t0, (length_t)( t1 - t0 ) ) );
 }
 
 // Set the mouse cursor to telegraph the clip-edit gesture under the pointer,
@@ -1956,6 +1988,9 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     rangeValid_ = false;
     rangeStart_ = rangeEnd_ = 0;
     rangeDrag_ = RangeNone;
+    // Restore a saved range marker for this project (the view is rebuilt per
+    // project, and the project is fully loaded before this widget is created).
+    loadRangeFromProject();
 
     // Track the mouse with no button held so the cursor can telegraph the
     // clip-edit gesture under the pointer (resize / slip / stretch / loop).
@@ -1978,6 +2013,13 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // signal args are dropped by the connection; repainting is cheap.
     QObject::connect( &smv_.model_->getProject(),
                       SIGNAL( propertyChanged( QString, QVariant ) ),
+                      this, SLOT( update() ) );
+
+    // Repaint on any arrangement change (an applied action, or a mute/solo
+    // toggle). Cached renders (asset captures) have already been invalidated by
+    // the same signal, so the repaint re-pulls a fresh waveform preview.
+    QObject::connect( &smv_.model_->getProject(),
+                      SIGNAL( arrangementChanged() ),
                       this, SLOT( update() ) );
 
     // Mouse-wheel navigation config: cache now and refresh whenever the user
@@ -2129,6 +2171,29 @@ void SMVActualView::dropEvent(QDropEvent *e)
     // Parse the MIME payload and submit the appropriate action.
     if (payload.startsWith(QStringLiteral("asset:"))) {
         QString assetName = payload.mid(6);
+        // Friendly cycle guard: placing an asset inside its own source container
+        // (or a descendant) would self-reference. Refuse with a hint rather than
+        // letting SPlaceAssetAction::apply() silently no-op. (apply() is the
+        // authoritative backstop for scripted placements.)
+        SObject *assetBody = SApplication::app().getCurrentProject()
+                                 ? SApplication::app().getCurrentProject()->asset(assetName)
+                                 : nullptr;
+        bool cycle = false;
+        if (SCut *assetCut = dynamic_cast<SCut*>(assetBody)) {
+            SObject *container = &assetCut->getContent();
+            cycle = (container == root);
+            if (!cycle) {
+                if (STrack *ct = dynamic_cast<STrack*>(container))
+                    cycle = isSelfOrDescendant(track, ct);
+            }
+        }
+        if (cycle) {
+            if (QMainWindow *mw = qobject_cast<QMainWindow*>(window()))
+                mw->statusBar()->showMessage(
+                    "Can't place an asset inside its own track.", 4000);
+            update();
+            return;
+        }
         SApplication::app().submitAction(new SPlaceAssetAction(assetName, trackPath, timePos));
     } else if (payload.startsWith(QStringLiteral("file:"))) {
         QString filePath = payload.mid(5);
@@ -2139,6 +2204,11 @@ void SMVActualView::dropEvent(QDropEvent *e)
             SApplication::app().submitAction(new SAddSampleAction(trackIdx, filePath, timePos));
         }
     }
+
+    // Repaint the lanes so the newly placed clip becomes visible — the view's
+    // update() is wired to track insert/remove, not clip additions (mirrors the
+    // explicit qContent_->update() in ctInsertSample).
+    update();
 }
 
 

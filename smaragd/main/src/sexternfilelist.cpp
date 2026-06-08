@@ -2,6 +2,9 @@
 #include <QDebug>
 #include <QDrag>
 #include <QMimeData>
+#include <QPixmap>
+#include <QPainter>
+#include <QFontMetrics>
 
 #include "sobject.h"
 #include "sexternfile.h"
@@ -125,6 +128,25 @@ void SExternFileList::startDrag(Qt::DropActions /*supportedActions*/)
 
     QDrag *drag = new QDrag(this);
     drag->setMimeData(mimeData);
+
+    // Give the drag a visible ghost so something follows the cursor. (Qt's
+    // default item-view drag renders the row, but we build our own QDrag.)
+    {
+        QString label = item->text(0);
+        QFontMetrics fm(font());
+        int w = fm.horizontalAdvance(label) + 16;
+        int h = fm.height() + 8;
+        QPixmap pm(w, h);
+        pm.fill(QColor(60, 60, 90, 220));
+        QPainter pp(&pm);
+        pp.setPen(Qt::white);
+        pp.drawRect(0, 0, w - 1, h - 1);
+        pp.drawText(pm.rect(), Qt::AlignCenter, label);
+        pp.end();
+        drag->setPixmap(pm);
+        drag->setHotSpot(QPoint(w / 2, h / 2));
+    }
+
     drag->exec(Qt::CopyAction);
 }
 
@@ -156,6 +178,7 @@ SExternFileList::SExternFileList( QWidget *parent, SProject &pro )
     QStringList headers = { "File name", "Type", "Refs" };
     setHeaderLabels(headers);
     setDragEnabled(true);
+    setDragDropMode(QAbstractItemView::DragOnly);
     setSelectionMode(QAbstractItemView::SingleSelection);
     // FIXME: Add a destroyed slot for the destroyed signal of the project.
     // FIXME: Add initially used extern files.

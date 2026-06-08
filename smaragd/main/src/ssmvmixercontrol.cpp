@@ -221,11 +221,17 @@ void SSMVMixerControl::mouseReleaseEvent( QMouseEvent *ev )
 void SSMVMixerControl::muteToggled( bool on )
 {
     tk_.setMuted( on );
+    // Mute/solo changes the rendered output, so drop cached renders (asset
+    // captures) — they are not actions and so don't hit the action chokepoint.
+    if( SProject *p = SApplication::app().getCurrentProject() )
+        p->notifyArrangementChanged();
 }
 
 void SSMVMixerControl::soloToggled( bool on )
 {
     tk_.setSolo( on );
+    if( SProject *p = SApplication::app().getCurrentProject() )
+        p->notifyArrangementChanged();
 }
 
 void SSMVMixerControl::onMutedChanged( bool on )

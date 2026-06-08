@@ -73,6 +73,14 @@ public:
     virtual bool hasDuration() const { return true; }
     virtual length_t getDuration() const;
 
+    // Waveform preview for a container-backed asset cut: peaks come from the
+    // capture (the rendered snapshot shared with audio), in the container's frame
+    // domain, so `start` is the container offset the cut window maps to. Sample
+    // cuts have no capture here and fall back to the base preview. Tier 2 of the
+    // asset-preview work.
+    virtual int getPreview( preview_t *dest, offset_t start, length_t length,
+                            offset_t nProbes );
+
     // Set the whole clip window at once (slip offset, timeline duration, loop
     // segment length, grain stretch) and rebuild the playback chain exactly
     // once. Unlike setGrainParams() this does NOT preserve-span-rescale — the
@@ -119,6 +127,9 @@ private:
     // of re-pulling the live graph (proposal 07 step 5). Returns NULL when the
     // content is a real source (sample path) or cannot be captured.
     twRandomSource *ensureCapture();
+    // Build (once) a peak-cache of the capture for waveform preview, in the
+    // container frame domain. Dropped together with the capture on edit.
+    bool ensureCapturePeaks();
 
     SLink *content_;
     offset_t startOffset_;
@@ -135,6 +146,11 @@ private:
     // ensureCapture(); invalidated on any edit via invalidateCapture().
     twCapturingSource *capture_ = nullptr;
     bool captureConnected_ = false;   // connected to arrangementChanged once
+    // Peak cache over the capture, for the waveform preview. Built lazily from
+    // capture_; freed with it in invalidateCapture()/dtor.
+    preview_t *capPeaks_ = nullptr;
+    offset_t   capPeakSkip_ = 0;   // capture frames per peak
+    offset_t   capPeakN_ = 0;      // number of peaks
 };
 
 #endif

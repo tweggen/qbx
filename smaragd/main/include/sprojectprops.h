@@ -17,6 +17,13 @@ inline constexpr char Metronome[]   = "metronome";    // bool: metronome on (stu
 inline constexpr char Cycle[]       = "cycle";        // bool: cycle/loop on (stub)
 inline constexpr char RulerMode[]   = "rulerMode";    // string: "bars" or "time" display format
 
+// Time-range marker in the ruler (the asset-from-range selection). Persisted so
+// a selection survives save/load. Start/End are offset_t (sample frames), stored
+// as qulonglong; only meaningful when RangeValid is true.
+inline constexpr char RangeValid[]  = "rangeValid";   // bool
+inline constexpr char RangeStart[]  = "rangeStart";   // qulonglong (offset_t)
+inline constexpr char RangeEnd[]    = "rangeEnd";     // qulonglong (offset_t)
+
 // Values a brand-new project starts with.
 inline QVariantMap defaults()
 {
@@ -26,6 +33,9 @@ inline QVariantMap defaults()
     m[Metronome]   = false;
     m[Cycle]       = false;
     m[RulerMode]   = QString("bars");
+    m[RangeValid]  = false;
+    m[RangeStart]  = (qulonglong) 0;
+    m[RangeEnd]    = (qulonglong) 0;
     return m;
 }
 

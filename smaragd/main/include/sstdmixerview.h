@@ -97,7 +97,9 @@ protected slots:
     // Range-bar context menu.
     void ctRangeSetBPM();
     void ctRangeClear();
-    void ctRangeCreateAsset();
+    // Track context menu: make a live asset from the right-clicked track over
+    // the current ruler range (vertical scope = that track).
+    void ctCreateAssetFromTrack();
 
 protected:
     virtual void paintEvent( QPaintEvent * );
@@ -132,6 +134,8 @@ private:
     void rangeBounds( offset_t &lo, offset_t &hi ) const;  // normalized
     void drawRange( QPainter &, const QRect &myRect );
     void drawRulerTicks( QPainter &, const QRect &myRect );
+    void saveRangeToProject();
+    void loadRangeFromProject();
     // --------------------------------------------------------------------
 
     SStdMixerView &smv_;
