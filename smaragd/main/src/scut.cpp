@@ -292,6 +292,7 @@ void SCut::setStartOffset( offset_t off )
         std::lock_guard<std::mutex> lock( windowMutex_ );
         startOffset_ = off;
     }
+    invalidateCapture();  // Window change requires new capture (formal guidelines)
 }
 
 void SCut::setDuration( length_t dur )
@@ -301,6 +302,7 @@ void SCut::setDuration( length_t dur )
         std::lock_guard<std::mutex> lock( windowMutex_ );
         cutDuration_ = dur;
     }
+    invalidateCapture();  // Window change requires new capture (formal guidelines)
     emit durationChanged( dur );
 }
 
@@ -321,6 +323,7 @@ void SCut::setLoopLength( length_t l )
         // Capture snapshot while holding lock for consistent rebuild
         snap = getSnapshot();
     }
+    invalidateCapture();  // Window change requires new capture (formal guidelines)
     rebuildReader( snap );   // loop on/off changes the playback chain
     emit durationChanged( snap.cutDuration );
 }
@@ -338,6 +341,7 @@ void SCut::setWindow( offset_t startOffset, length_t duration,
         // Capture snapshot while holding lock for consistent rebuild
         snap = getSnapshot();
     }
+    invalidateCapture();  // Window change requires new capture (formal guidelines)
     rebuildReader( snap );   // one rebuild for the whole window change (UI thread)
     emit durationChanged( duration );
 }
