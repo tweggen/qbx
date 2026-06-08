@@ -15,6 +15,7 @@ set(TW303A_HEADERS
     include/twsamplereader.h
     include/twloopreader.h
     include/twresampledsource.h
+    include/twcapturingsource.h
     include/twgrainparams.h
     include/twgrainsource.h
     include/twrewire.h
@@ -46,6 +47,7 @@ set(TW303A_SOURCES
     src/twsamplereader.cc
     src/twloopreader.cc
     src/twresampledsource.cc
+    src/twcapturingsource.cc
     src/twgrainsource.cc
     src/twresampler.cc
     src/twrewire.cc

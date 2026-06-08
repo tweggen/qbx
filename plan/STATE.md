@@ -2292,3 +2292,45 @@ container reads its live `twTrackMix` for free.
 1. Drag a time range in the ruler, right-click → **Create asset from range** →
    an "Asset 1" row appears in the left resource list with ref-count 1.
 2. Ctrl+Z removes the asset row; Ctrl+Y restores it.
+
+---
+
+## twCapturingSource — the asset cache primitive (proposal 07 step 5)
+
+- **Date:** 2026-06-08
+- **Status:** ✅ Engine class code-complete, builds clean on Windows/Qt6/MinGW.
+  Not yet wired to a consumer (so no behaviour change yet).
+
+### Why
+
+A re-used live asset is a **cut over a group**, and a group's output is a single
+twTrackMix node with **one** `playOffset_` cursor that advances on every
+`calcOutputTo` call. Pulling it once per placement would (1) re-render the whole
+sub-graph every buffer and (2) fight over that one cursor — the same shared-cursor
+hazard proposal 07 removed for samples. The fix is to render the windowed output
+**once** into immutable random-access data, then let each placement mint its own
+independent reader over the snapshot. This is proposal 07's deferred **step 5**.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `tw303a/include/twcapturingsource.h` + `src/twcapturingsource.cc` (new) | `twCapturingSource : twRandomSource`. Constructor pulls a linear `twComponent` once — block by block, **re-seeking to the window start per channel** (twTrackMix advances its shared cursor per call regardless of channel) — into a planar Float32 buffer; `read()` is then a lock-free, zero-filling memcpy (mirrors `twResampledSource`). `isReproducible()==true`. Falls back to a single channel-0 pass when the source is not seekable. |
+| `tw303a/CMakeLists.txt` | Added the new header/source. |
+
+The capture is a **snapshot at construction** (it advances the source's cursor),
+so it must run off the audio thread while the source isn't playing — the same
+constraint as the grain materialisation.
+
+### Honestly deferred (the consumer wiring — next slice)
+
+- **Asset integration:** an asset `SCut` (cut over a container) returns a
+  `twCapturingSource` from `getRandomSource()` instead of NULL, so placements read
+  the rendered snapshot via independent `twSampleReader`s. Today the asset path
+  still falls back to live-pull (fine for a single audition, wasteful + unsafe for
+  many placements).
+- **Invalidation:** rebuild the capture when the underlying arrangement edits
+  (hook the container's `childObjectAdded/Removed` / `durationChanged`), so the
+  "edit once → changes everywhere" liveness survives caching.
+- **Content-addressed shared cache** so identical assets/cuts render once
+  (proposal 06 §7 tier 3).

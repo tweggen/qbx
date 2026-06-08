@@ -13,11 +13,15 @@ Each item: one line of *what*, one of *why deferred* / what unblocks it.
 
 ## From proposal 07 — sample source/reader split (now in `plan/done/`)
 
-- **`twCapturingSource`** — a `twRandomSource` adapter over *any* linear
-  `twComponent`, i.e. "time-stretch / random-access anything placed before an
-  `SCut`", not just decoded files.
-  *Deferred:* its only consumer was the grain node; `getRandomSource()` is the
-  hook it plugs into. Revisit when a non-file source needs grain/warp treatment.
+- **`twCapturingSource` — class DONE (2026-06-08), consumer wiring pending.** The
+  `twRandomSource` that materialises any linear `twComponent` (e.g. a group's
+  `twTrackMix`) once into a resident planar buffer now exists
+  (`tw303a/twcapturingsource.*`); read() is a lock-free memcpy. *Remaining:* wire
+  it into the **live-asset cache** — an asset (a cut over a container) exposes a
+  `twCapturingSource` via `getRandomSource()` so placements mint independent
+  readers over the rendered snapshot (cheap + correct), with **invalidation** when
+  the underlying arrangement edits, and a **content-addressed shared cache** so
+  identical assets/cuts render once (proposal 06 §7). See STATE.md.
 
 - **Windowed / streaming sample source** — a fallback for files too large to keep
   fully resident in RAM (`twSampleSource` decodes the whole WAV to planar Float32
