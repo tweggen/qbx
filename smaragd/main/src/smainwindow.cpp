@@ -12,6 +12,7 @@
 #include <qfile.h>
 #include <qfiledialog.h>
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QLabel>
 #include <QInputDialog>
@@ -129,16 +130,26 @@ void SMainWindow::fileSaveAs()
 {
     if( !currentProject_ ) return;
 
-    QString startDir = currentFilePath_.isEmpty()
-        ? SSettings::instance().lastDir( "project", QDir::currentPath() )
-        : currentFilePath_;
+    QString startDir;
+    if( !currentFilePath_.isEmpty() ) {
+        startDir = currentFilePath_;
+    } else {
+        startDir = SSettings::instance().lastDir( "project", QString() );
+        if( startDir.isEmpty() ) {
+            startDir = QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation )
+                     + QDir::separator() + "smaragd";
+            QDir().mkpath( startDir );
+        }
+    }
 
-    QString fileName(
-        QFileDialog::getSaveFileName(
-            this,
-            "Save Project As",
-            startDir,
-            "qbx Projects (*.qxp)" ) );
+    QFileDialog dialog( this, "Save Project As", startDir, "qbx Projects (*.qxp)" );
+    dialog.setFileMode( QFileDialog::AnyFile );
+    dialog.setAcceptMode( QFileDialog::AcceptSave );
+    dialog.setOptions( QFileDialog::DontUseNativeDialog );
+    QString fileName;
+    if( dialog.exec() == QDialog::Accepted ) {
+        fileName = dialog.selectedFiles().isEmpty() ? QString() : dialog.selectedFiles().at( 0 );
+    }
     if( fileName.isNull() ) {
         return;  // user cancelled
     }
@@ -201,12 +212,19 @@ void SMainWindow::fileNew()
 
 void SMainWindow::fileOpen()
 {
-    QString fileName(
-        QFileDialog::getOpenFileName(
-            this,
-            "Open Project",
-            SSettings::instance().lastDir( "project", QDir::currentPath() ),
-            "qbx Projects (*.qxp *.QXP)" ) );
+    QString defaultDir = SSettings::instance().lastDir( "project", QString() );
+    if( defaultDir.isEmpty() ) {
+        defaultDir = QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation )
+                   + QDir::separator() + "smaragd";
+        QDir().mkpath( defaultDir );
+    }
+    QFileDialog dialog( this, "Open Project", defaultDir, "qbx Projects (*.qxp *.QXP)" );
+    dialog.setFileMode( QFileDialog::ExistingFile );
+    dialog.setOptions( QFileDialog::DontUseNativeDialog );
+    QString fileName;
+    if( dialog.exec() == QDialog::Accepted ) {
+        fileName = dialog.selectedFiles().isEmpty() ? QString() : dialog.selectedFiles().at( 0 );
+    }
     if( fileName.isNull() ) {
         qWarning( "Nothing selected in file requester.\n" );
         return;   // user cancelled: keep the current project untouched

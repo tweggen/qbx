@@ -1,5 +1,6 @@
 
 #include <stdlib.h>
+#include <cmath>
 
 #include <qwidget.h>
 #include <qevent.h>
@@ -30,6 +31,33 @@
 // slider value v  <->  v/10 dB. Range -96.0 .. +24.0 dB.
 static const int FADER_MIN = -960;
 static const int FADER_MAX =  240;
+static const double FADER_MIN_DB = -96.0;
+static const double FADER_MAX_DB =  24.0;
+
+// Volume fader curve exponent: y = x^n where x is normalized [0,1].
+// n=1.0 is linear, n=2.0 is quadratic (recommended), n>1 makes small moves
+// near center more sensitive. Configurable via SOpt if desired.
+static const double VOLUME_CURVE_EXPONENT = 2.0;
+
+// Helper: convert slider value to dB using the configured curve.
+static double sliderToDB( int sliderValue )
+{
+    double normalized = (double)(sliderValue - FADER_MIN) / (FADER_MAX - FADER_MIN);
+    normalized = qBound( 0.0, normalized, 1.0 );
+    // Apply power-law curve: y = x^n
+    double curved = pow( normalized, VOLUME_CURVE_EXPONENT );
+    return FADER_MIN_DB + curved * (FADER_MAX_DB - FADER_MIN_DB);
+}
+
+// Helper: convert dB to slider value using the inverse curve.
+static int dbToSlider( double dB )
+{
+    double normalized = (dB - FADER_MIN_DB) / (FADER_MAX_DB - FADER_MIN_DB);
+    normalized = qBound( 0.0, normalized, 1.0 );
+    // Apply inverse curve: x = y^(1/n)
+    double curved = pow( normalized, 1.0 / VOLUME_CURVE_EXPONENT );
+    return (int)( FADER_MIN + curved * (FADER_MAX - FADER_MIN) + 0.5 );
+}
 
 // Width of the grip strip down the left side of the control that acts as the
 // track-reorder drag handle, and the pixels the pointer must travel before a
@@ -47,7 +75,7 @@ QSize SSMVMixerControl::sizeHint() const
  */
 void SSMVMixerControl::sliderValueChanged( int value )
 {
-    double newVolume = ((double)value)/10.;
+    double newVolume = sliderToDB( value );
 
     // Route the change through the action system so it is undoable and (once the
     // engine drain goes async) coalescable. Resolve our track's index in the
@@ -58,6 +86,10 @@ void SSMVMixerControl::sliderValueChanged( int value )
             new SSetTrackVolumeAction( trackIdx, newVolume ) );
     } else {
         tk_.setVolume( newVolume );
+        // Direct mutation doesn't go through actions, so invalidate caches manually
+        // (asset captures need to reflect volume changes).
+        if( SProject *p = SApplication::app().getCurrentProject() )
+            p->notifyArrangementChanged();
     }
 }
 
@@ -95,7 +127,7 @@ void SSMVMixerControl::sliderValueChanged( double value )
  */
 void SSMVMixerControl::setSliderSilently( double value )
 {
-    int newValue = (int)(value*10.);
+    int newValue = dbToSlider( value );
     if( qVolume_->value() != newValue ) {
         QSignalBlocker block( qVolume_ );
         qVolume_->setValue( newValue );

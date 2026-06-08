@@ -3,6 +3,8 @@
 #define _SCUT_H_
 
 #include <qobject.h>
+#include <mutex>
+#include <atomic>
 #include "sobject.h"
 #include "slink.h"
 #include "twgrainparams.h"
@@ -21,17 +23,33 @@ class SProjectLoader;
 /**
  * A cut (slice) of content with timing information.
  *
- * Thread affinity: MIXED (not thread-safe)
- * - content_: accessed from UI thread (getDetailEditWidget, rendering) AND audio thread (getRootComponent→calcOutputTo)
- * - startOffset_, loopStart_, cutDuration_: read from both UI and audio threads
+ * Thread affinity: MIXED (synchronized via snapshot)
  *
- * RACE CONDITION: When content_ points to a SPlainWave, the underlying file handle
- * (twWavInput::file_) is accessed from both threads without synchronization.
+ * Synchronization strategy (multithreading policy: Phase 1):
+ * - Window parameters (startOffset_, loopStart_, loopLength_, cutDuration_, grainParams_):
+ *   Protected by windowMutex_. UI thread modifies freely (with lock). Audio thread calls
+ *   getSnapshot() to get immutable copy, avoiding lock contention during rendering.
+ * - reader_, grain_, looping_: Part of snapshot; rebuilt by UI thread only, read via snapshot.
+ * - content_: Accessed from UI thread (getDetailEditWidget, rendering) AND audio thread
+ *   (getRootComponent→calcOutputTo). See SPlainWave thread affinity (file handle race).
  *
  * Execution paths:
  *   UI:    SMVActualView::paintEvent() → draw(SLink) → SPlainWaveRendererInline::draw()
  *   Audio: CoreAudio callback → rendering → getRootComponent()->calcOutputTo()
  */
+// Immutable snapshot of SCut's playback window parameters for lock-free audio-thread reads.
+// Audio thread takes a snapshot at buffer boundaries; UI thread modifies the original.
+// Generation counter allows audio to detect if reader was rebuilt (see MULTITHREADING_CONTRACT.md).
+struct SCutSnapshot {
+    offset_t startOffset;        // Source sample position where clip window begins
+    length_t loopLength;         // Loop segment length; 0 = no loop
+    length_t cutDuration;        // Timeline duration of clip (includes stretching)
+    twGrainParams grainParams;   // Time-stretch/pitch-shift parameters
+    bool looping;                // True iff reader is a twLoopReader
+    twSampleReader *reader;      // Always valid: non-null or fallback to content's root
+    int readerGeneration;        // Generation counter; increments when reader is rebuilt
+};
+
 class SCut
     : public SObject
 {
@@ -46,6 +64,15 @@ public:
     static SLink *instantiateFromDomElement( SProjectLoader &projectLoader, 
 					     QDomElement &element, 
 					     SObject *parent );
+
+    // Immutable snapshot of playback parameters for lock-free audio-thread reads
+    // (multithreading contract: Rule 2). Safe to call from audio thread.
+    SCutSnapshot getSnapshot() const;
+
+    // Reader generation counter (multithreading contract: Rule 2). Audio thread
+    // calls this to detect if reader was rebuilt; if generation changed, re-snapshots.
+    // Safe to call from audio thread (atomic read, no blocking).
+    int getReaderGeneration() const { return readerGeneration_.load(); }
 
     virtual twComponent &getRootComponent();
     virtual QWidget *getDetailEditWidget( QWidget *parent );
@@ -120,7 +147,10 @@ private:
     // (proposal 06). Stays a passthrough/fallback when the content is not a
     // random-access source.
     void ensureReader();
-    void rebuildReader();
+    // Rebuild the playback chain with given snapshot parameters. Called from UI
+    // thread setters; accepts snapshot to avoid reading unlocked members
+    // (multithreading policy: Phase 1 Option B).
+    void rebuildReader( const SCutSnapshot &snap );
     // When the content is not a random-access source but is a seekable container
     // (a track/mixer sub-arrangement), render its output ONCE into an owned
     // twCapturingSource so placements read a cheap, independent snapshot instead
@@ -132,6 +162,9 @@ private:
     bool ensureCapturePeaks();
 
     SLink *content_;
+    // Window parameters: accessed by both UI thread (modifications) and audio thread (reading).
+    // Use windowMutex_ to synchronize access when modifying window/grain params.
+    mutable std::mutex windowMutex_;
     offset_t startOffset_;
     offset_t loopStart_;
     length_t loopLength_;
@@ -142,6 +175,13 @@ private:
     twGrainSource *grain_;
     twGrainParams grainParams_;
     bool readerTried_;
+    // Generation counter: incremented when reader is rebuilt (multithreading contract: Rule 2).
+    // Allows audio thread to detect stale reader pointers without blocking.
+    std::atomic<int> readerGeneration_{0};
+    // Deferred-deletion list: old reader/grain that was replaced but might still be
+    // used by audio thread (multithreading contract: Rule 2, deferred deletion pattern).
+    twSampleReader *readerPending_ = nullptr;
+    twGrainSource *grainPending_ = nullptr;
     // Cached render of a container content (proposal 07 step 5). Built lazily by
     // ensureCapture(); invalidated on any edit via invalidateCapture().
     twCapturingSource *capture_ = nullptr;

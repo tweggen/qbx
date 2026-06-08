@@ -28,8 +28,14 @@ void SObject::setMuted( bool f )
 
 void SObject::setVolume( double d )
 {
-    if( fabs( volume_-d ) < 0.0001 ) return;
-    volume_ = d;
+    {
+        std::lock_guard<std::mutex> lock( volumeMutex_ );
+        if( fabs( volume_-d ) < 0.0001 ) return;
+        volume_ = d;
+    }
+    // Volume change affects preview rendering, so invalidate the cached preview
+    // so it gets regenerated at the new volume level (not just scaled on-the-fly).
+    invalidatePreview();
     emit volumeChanged( d );
 }
 

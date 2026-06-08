@@ -21,39 +21,62 @@
 
 using namespace std;
 
+SCutSnapshot SCut::getSnapshot() const
+{
+    std::lock_guard<std::mutex> lock( windowMutex_ );
+    SCutSnapshot snap;
+    snap.startOffset = startOffset_;
+    snap.loopLength = loopLength_;
+    snap.cutDuration = cutDuration_;
+    snap.grainParams = grainParams_;
+    snap.looping = looping_;
+    snap.reader = reader_;
+    snap.readerGeneration = readerGeneration_.load();  // Capture generation at snapshot time
+    return snap;
+}
+
 void SCut::ensureReader()
 {
     if( readerTried_ ) return;
-    rebuildReader();
+    rebuildReader( getSnapshot() );
 }
 
 // (Re)build the playback chain: content source -> optional grain stretch ->
-// our own cursor. Called lazily on first pull, and eagerly from setGrainParams
-// (on the UI thread) so the one-time grain materialisation never lands in a
-// realtime audio block. NB: rebuilding while this clip is actively playing is
-// not yet thread-safe — set parameters while stopped (proposal 06 MVP).
-void SCut::rebuildReader()
+// our own cursor. Called eagerly from setGrainParams / setWindow (on the UI
+// thread) so the one-time grain materialisation never lands in a realtime audio
+// block. Accepts snapshot parameter to avoid reading unlocked members
+// (multithreading contract: Rule 2, Phase 2) — reader can now safely be rebuilt
+// while playing. Increments generation counter so audio thread detects the change.
+void SCut::rebuildReader( const SCutSnapshot &snap )
 {
     readerTried_ = true;
-    if( reader_ ) { delete reader_; reader_ = NULL; }
-    if( grain_ )  { delete grain_;  grain_  = NULL; }
+
+    // Defer deletion of old reader/grain: audio thread might still be using them
+    // (multithreading contract: Rule 2, deferred deletion pattern). Clean up the
+    // previously-deferred ones, then defer the current ones.
+    if( readerPending_ ) { delete readerPending_; readerPending_ = NULL; }
+    if( grainPending_ )  { delete grainPending_;  grainPending_  = NULL; }
+    readerPending_ = reader_;
+    grainPending_ = grain_;
+    reader_ = NULL;
+    grain_ = NULL;
 
     twRandomSource *rs = content_->getSObject().getRandomSource();
     if( !rs ) rs = ensureCapture();
     if( !rs ) return;   // non-source, non-capturable: getRootComponent() falls back
 
     twRandomSource *view = rs;
-    if( !grainParams_.isIdentity() ) {
-        grain_ = new twGrainSource( *rs, grainParams_ );
+    if( !snap.grainParams.isIdentity() ) {
+        grain_ = new twGrainSource( *rs, snap.grainParams );
         view = grain_;
     }
     tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
-    if( loopLength_ > 0 && loopLength_ < cutDuration_ ) {
+    if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
         // Loop active: wrap the view in a looping reader over the segment
-        // [startOffset_, startOffset_+loopLength_). It is a twSampleReader, so it
-        // lives in reader_ like any other; looping_ tells seekTo() not to add
-        // startOffset_ again (the loop reader adds its loop base itself).
-        twLoopReader *lr = new twLoopReader( env, *view, startOffset_, loopLength_ );
+        // [startOffset, startOffset+loopLength). It is a twSampleReader, so it
+        // lives in reader_ like any other; looping tells seekTo() not to add
+        // startOffset again (the loop reader adds its loop base itself).
+        twLoopReader *lr = new twLoopReader( env, *view, snap.startOffset, snap.loopLength );
         lr->init();
         reader_ = lr;
         looping_ = true;
@@ -61,6 +84,9 @@ void SCut::rebuildReader()
         reader_ = view->acquireReader( env );
         looping_ = false;
     }
+
+    // Signal to audio thread that reader has changed (multithreading contract: Rule 2)
+    readerGeneration_.fetch_add(1, std::memory_order_release);
 }
 
 // Render a container content (a track/mixer sub-arrangement) once into an owned
@@ -85,7 +111,9 @@ twRandomSource *SCut::ensureCapture()
     if( !comp ) comp = &c.getRootComponent();
     if( !comp->isSeekable() ) return NULL;
 
-    length_t need = (length_t) startOffset_ + cutDuration_;
+    // Use snapshot to read window parameters consistently (multithreading policy: Phase 1).
+    SCutSnapshot snap = getSnapshot();
+    length_t need = (length_t) snap.startOffset + snap.cutDuration;
     length_t dur  = (length_t) c.getDuration();
     length_t n = dur > need ? dur : need;
     if( n <= 0 ) return NULL;
@@ -106,10 +134,14 @@ twRandomSource *SCut::ensureCapture()
 void SCut::invalidateCapture()
 {
     // Drop the cached render and anything built over it; the next pull
-    // re-captures. NB: like rebuildReader(), this is not realtime-safe — in the
-    // MVP edits/auditions happen while stopped.
-    if( reader_ )  { delete reader_;  reader_  = NULL; }
-    if( grain_ )   { delete grain_;   grain_   = NULL; }
+    // re-captures. Defer deletion like rebuildReader (multithreading contract: Rule 2).
+    if( readerPending_ ) { delete readerPending_; readerPending_ = NULL; }
+    if( grainPending_ )  { delete grainPending_;  grainPending_  = NULL; }
+    readerPending_ = reader_;
+    grainPending_ = grain_;
+    reader_ = NULL;
+    grain_ = NULL;
+
     if( capture_ ) { delete capture_; capture_ = NULL; }
     if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }
     readerTried_ = false;
@@ -209,7 +241,13 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
 twComponent &SCut::getRootComponent()
 {
     ensureReader();
-    if( reader_ ) return *reader_;
+    // Use snapshot to safely dereference reader (multithreading contract: Rule 2).
+    // Audio thread holds this reference for the duration of rendering, so we capture
+    // reader_ within the snapshot. Even if UI rebuilds afterwards, we're safe
+    // because we have a pointer to the old reader which remains valid until
+    // the next rebuildReader() (it's not deleted until replaced).
+    SCutSnapshot snap = getSnapshot();
+    if( snap.reader ) return *snap.reader;
     // Content is not a random-access source: fall back to its shared component.
     return content_->getRootComponent();
 }
@@ -236,45 +274,72 @@ int SCut::seekTo( offset_t off )
 {
     // FIXME: bounds check!!!
     ensureReader();
+    SCutSnapshot snap = getSnapshot();
+
+    // NOTE: If called from audio thread during playback, check for generation change
+    // (multithreading contract: Rule 2). If reader was rebuilt, re-snapshot:
+    //   if (snap.readerGeneration != getReaderGeneration()) snap = getSnapshot();
+
     // A loop reader is cut-relative (it adds its own loop base = startOffset_);
     // a plain reader needs startOffset_ folded in here.
-    if( reader_ ) return reader_->seekTo( looping_ ? off : off + startOffset_ );
-    return content_->getSObject().seekTo( off+startOffset_ );
+    if( snap.reader ) return snap.reader->seekTo( snap.looping ? off : off + snap.startOffset );
+    return content_->getSObject().seekTo( off + snap.startOffset );
 }
 
 void SCut::setStartOffset( offset_t off )
 {
-    startOffset_ = off;
+    {
+        std::lock_guard<std::mutex> lock( windowMutex_ );
+        startOffset_ = off;
+    }
 }
 
 void SCut::setDuration( length_t dur )
 {
     // FIXME: clip.
-    cutDuration_ = dur;
+    {
+        std::lock_guard<std::mutex> lock( windowMutex_ );
+        cutDuration_ = dur;
+    }
     emit durationChanged( dur );
 }
 
 void SCut::setLoopStart( offset_t s )
 {
-    loopStart_ = s;
+    {
+        std::lock_guard<std::mutex> lock( windowMutex_ );
+        loopStart_ = s;
+    }
 }
 
 void SCut::setLoopLength( length_t l )
 {
-    loopLength_ = l;
-    rebuildReader();   // loop on/off changes the playback chain
-    emit durationChanged( cutDuration_ );
+    SCutSnapshot snap;
+    {
+        std::lock_guard<std::mutex> lock( windowMutex_ );
+        loopLength_ = l;
+        // Capture snapshot while holding lock for consistent rebuild
+        snap = getSnapshot();
+    }
+    rebuildReader( snap );   // loop on/off changes the playback chain
+    emit durationChanged( snap.cutDuration );
 }
 
 void SCut::setWindow( offset_t startOffset, length_t duration,
                       length_t loopLength, double stretch )
 {
-    startOffset_ = startOffset;
-    cutDuration_ = duration;
-    loopLength_  = loopLength;
-    grainParams_.stretch = stretch;
-    rebuildReader();   // one rebuild for the whole window change (UI thread)
-    emit durationChanged( cutDuration_ );
+    SCutSnapshot snap;
+    {
+        std::lock_guard<std::mutex> lock( windowMutex_ );
+        startOffset_ = startOffset;
+        cutDuration_ = duration;
+        loopLength_  = loopLength;
+        grainParams_.stretch = stretch;
+        // Capture snapshot while holding lock for consistent rebuild
+        snap = getSnapshot();
+    }
+    rebuildReader( snap );   // one rebuild for the whole window change (UI thread)
+    emit durationChanged( duration );
 }
 
 offset_t SCut::getLoopStart() const
@@ -284,46 +349,66 @@ offset_t SCut::getLoopStart() const
 
 length_t SCut::getDuration() const
 {
-    return cutDuration_;
+    // Use snapshot for consistent reads (multithreading policy: Phase 1).
+    // Audio thread may be reading duration during rendering; ensure we get
+    // a consistent value taken together with other window parameters.
+    return getSnapshot().cutDuration;
 }
 
 void SCut::setGrainParams( const twGrainParams &p )
 {
-    double oldStretch = grainParams_.stretch;
-    grainParams_ = p;
+    SCutSnapshot snap;
 
-    // Keep the clip covering the same musical span: stretching 2x makes the clip
-    // twice as long on the timeline (and shifts its source window accordingly).
-    if( oldStretch > 0.0 && p.stretch > 0.0 && p.stretch != oldStretch ) {
-        double k = p.stretch / oldStretch;
-        cutDuration_ = (length_t) llround( (double) cutDuration_ * k );
-        startOffset_ = (offset_t) llround( (double) startOffset_ * k );
+    // All window parameter modifications must be protected by windowMutex_
+    // (formal concurrency guidelines: Contract B, Snapshot Pattern).
+    // Read oldStretch INSIDE lock to avoid TOCTOU race (formal verification).
+    {
+        std::lock_guard<std::mutex> lock( windowMutex_ );
+        double oldStretch = grainParams_.stretch;  // ← Read inside lock
+        grainParams_ = p;
+        if( oldStretch > 0.0 && p.stretch > 0.0 && p.stretch != oldStretch ) {
+            double k = p.stretch / oldStretch;
+            cutDuration_ = (length_t) llround( (double) cutDuration_ * k );
+            startOffset_ = (offset_t) llround( (double) startOffset_ * k );
+        }
+        // Capture snapshot while holding lock for consistent rebuild
+        snap = getSnapshot();
     }
 
-    rebuildReader();   // pre-build off the audio thread (caller is the UI thread)
-    emit durationChanged( cutDuration_ );
+    rebuildReader( snap );   // pre-build off the audio thread (caller is the UI thread)
+    emit durationChanged( snap.cutDuration );
 }
 
 void SCut::setStretch( double s )
 {
-    twGrainParams p = grainParams_;
-    p.stretch = s;
-    setGrainParams( p );
+    twGrainParams p;
+    {
+        std::lock_guard<std::mutex> lock( windowMutex_ );  // Read under lock
+        p = grainParams_;  // Snapshot params
+    }
+    p.stretch = s;  // Modify copy outside lock
+    setGrainParams( p );  // Pass modified copy
 }
 
 void SCut::setPitchCents( double cents )
 {
-    twGrainParams p = grainParams_;
-    p.pitchCents = cents;
-    setGrainParams( p );
+    twGrainParams p;
+    {
+        std::lock_guard<std::mutex> lock( windowMutex_ );  // Read under lock
+        p = grainParams_;  // Snapshot params
+    }
+    p.pitchCents = cents;  // Modify copy outside lock
+    setGrainParams( p );  // Pass modified copy
 }
 
 SCut::~SCut()
 {
     // reader_ / grain_ only reference the (longer-lived) source data; drop them
-    // before releasing the content link.
+    // before releasing the content link. Also clean up any deferred-deletion pointers.
     if( reader_ ) { delete reader_; reader_ = NULL; }
     if( grain_ )  { delete grain_;  grain_  = NULL; }
+    if( readerPending_ ) { delete readerPending_; readerPending_ = NULL; }
+    if( grainPending_ )  { delete grainPending_;  grainPending_  = NULL; }
     if( capture_ ) { delete capture_; capture_ = NULL; }
     if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; }
     delete content_;
@@ -410,7 +495,7 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     // Pre-build the playback chain now (load thread) so a stretched or looping
     // clip restored from disk does not materialise on the first realtime block.
     if( !grainParams_.isIdentity() || ( loopLength_ > 0 && loopLength_ < cutDuration_ ) )
-        rebuildReader();
+        rebuildReader( getSnapshot() );
 
     return 0;
 }

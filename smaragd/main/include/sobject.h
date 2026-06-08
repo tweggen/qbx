@@ -7,6 +7,7 @@
 #include <qtextstream.h>
 #include <QDomElement>
 #include <QList>
+#include <mutex>
 
 class QWidget;
 
@@ -257,6 +258,12 @@ private:
     bool solo_;
     bool muted_;
     double volume_;
+
+    // Thread-safe state: audio thread may read volume while UI thread modifies it.
+    // Made public so preview rendering can snapshot the volume safely.
+public:
+    mutable std::mutex volumeMutex_;
+private:
     double pan_;
     double delay_;
     QString sName_;
