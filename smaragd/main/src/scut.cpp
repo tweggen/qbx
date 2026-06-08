@@ -29,9 +29,7 @@ SCutSnapshot SCut::getSnapshot() const
     snap.loopLength = loopLength_;
     snap.cutDuration = cutDuration_;
     snap.grainParams = grainParams_;
-    snap.looping = looping_;
-    snap.reader = reader_;
-    snap.readerGeneration = readerGeneration_.load();  // Capture generation at snapshot time
+    snap.reader = currentReader_;  // Always valid, complete, atomic (Unix page cache)
     return snap;
 }
 
@@ -44,49 +42,59 @@ void SCut::ensureReader()
 // (Re)build the playback chain: content source -> optional grain stretch ->
 // our own cursor. Called eagerly from setGrainParams / setWindow (on the UI
 // thread) so the one-time grain materialisation never lands in a realtime audio
-// block. Accepts snapshot parameter to avoid reading unlocked members
-// (multithreading contract: Rule 2, Phase 2) — reader can now safely be rebuilt
-// while playing. Increments generation counter so audio thread detects the change.
+// block. Builds into nextReader_ completely, then swaps atomically
+// (Unix page cache model: audio thread always sees a complete, valid state).
 void SCut::rebuildReader( const SCutSnapshot &snap )
 {
     readerTried_ = true;
 
-    // Defer deletion of old reader/grain: audio thread might still be using them
-    // (multithreading contract: Rule 2, deferred deletion pattern). Clean up the
-    // previously-deferred ones, then defer the current ones.
-    if( readerPending_ ) { delete readerPending_; readerPending_ = NULL; }
-    if( grainPending_ )  { delete grainPending_;  grainPending_  = NULL; }
-    readerPending_ = reader_;
-    grainPending_ = grain_;
-    reader_ = NULL;
-    grain_ = NULL;
+    // STEP 1: Build new reader state completely out-of-band
+    // (audio thread continues using currentReader_ during this entire process)
+    twSampleReader *newReader = NULL;
+    twGrainSource *newGrain = NULL;
+    bool newLooping = false;
 
     twRandomSource *rs = content_->getSObject().getRandomSource();
     if( !rs ) rs = ensureCapture();
-    if( !rs ) return;   // non-source, non-capturable: getRootComponent() falls back
+    if( !rs ) goto swap_complete;   // no-op, keep current
 
-    twRandomSource *view = rs;
-    if( !snap.grainParams.isIdentity() ) {
-        grain_ = new twGrainSource( *rs, snap.grainParams );
-        view = grain_;
-    }
-    tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
-    if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
-        // Loop active: wrap the view in a looping reader over the segment
-        // [startOffset, startOffset+loopLength). It is a twSampleReader, so it
-        // lives in reader_ like any other; looping tells seekTo() not to add
-        // startOffset again (the loop reader adds its loop base itself).
-        twLoopReader *lr = new twLoopReader( env, *view, snap.startOffset, snap.loopLength );
-        lr->init();
-        reader_ = lr;
-        looping_ = true;
-    } else {
-        reader_ = view->acquireReader( env );
-        looping_ = false;
+    {
+        twRandomSource *view = rs;
+        if( !snap.grainParams.isIdentity() ) {
+            newGrain = new twGrainSource( *rs, snap.grainParams );
+            view = newGrain;
+        }
+        tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
+        if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
+            twLoopReader *lr = new twLoopReader( env, *view, snap.startOffset, snap.loopLength );
+            lr->init();
+            newReader = lr;
+            newLooping = true;
+        } else {
+            newReader = view->acquireReader( env );
+            newLooping = false;
+        }
     }
 
-    // Signal to audio thread that reader has changed (multithreading contract: Rule 2)
-    readerGeneration_.fetch_add(1, std::memory_order_release);
+swap_complete:
+    // STEP 2: Atomic swap (Unix page cache model)
+    // Audio thread sees oldReader_ become available for deletion, currentReader_ updated
+    {
+        std::lock_guard<std::mutex> lock( readerSwapLock_ );
+
+        // Clean up previous old reader
+        if( oldReader_.reader ) { delete oldReader_.reader; oldReader_.reader = NULL; }
+        if( oldReader_.grain )  { delete oldReader_.grain;  oldReader_.grain = NULL; }
+
+        // Move current to old (for deferred deletion)
+        oldReader_ = currentReader_;
+
+        // Move next to current (becomes visible to audio thread immediately)
+        currentReader_.reader = newReader;
+        currentReader_.grain = newGrain;
+        currentReader_.looping = newLooping;
+        currentReader_.generation++;  // Increment on successful swap
+    }
 }
 
 // Render a container content (a track/mixer sub-arrangement) once into an owned
@@ -133,18 +141,14 @@ twRandomSource *SCut::ensureCapture()
 
 void SCut::invalidateCapture()
 {
-    // Drop the cached render and anything built over it; the next pull
-    // re-captures. Defer deletion like rebuildReader (multithreading contract: Rule 2).
-    if( readerPending_ ) { delete readerPending_; readerPending_ = NULL; }
-    if( grainPending_ )  { delete grainPending_;  grainPending_  = NULL; }
-    readerPending_ = reader_;
-    grainPending_ = grain_;
-    reader_ = NULL;
-    grain_ = NULL;
-
+    // Drop the cached render of a container; next access re-captures.
+    // Rebuild reader with current snapshot (double-buffer model ensures safety).
     if( capture_ ) { delete capture_; capture_ = NULL; }
     if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }
     readerTried_ = false;
+
+    // Rebuild reader to work with new capture
+    rebuildReader( getSnapshot() );
 }
 
 // Build a peak cache of the capture (the rendered snapshot) for waveform
@@ -241,13 +245,10 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
 twComponent &SCut::getRootComponent()
 {
     ensureReader();
-    // Use snapshot to safely dereference reader (multithreading contract: Rule 2).
-    // Audio thread holds this reference for the duration of rendering, so we capture
-    // reader_ within the snapshot. Even if UI rebuilds afterwards, we're safe
-    // because we have a pointer to the old reader which remains valid until
-    // the next rebuildReader() (it's not deleted until replaced).
+    // Use snapshot to get double-buffered reader state (Unix page cache model).
+    // currentReader_ is always complete & valid; never becomes NULL while in use.
     SCutSnapshot snap = getSnapshot();
-    if( snap.reader ) return *snap.reader;
+    if( snap.reader.reader ) return *snap.reader.reader;
     // Content is not a random-access source: fall back to its shared component.
     return content_->getRootComponent();
 }
@@ -276,13 +277,10 @@ int SCut::seekTo( offset_t off )
     ensureReader();
     SCutSnapshot snap = getSnapshot();
 
-    // NOTE: If called from audio thread during playback, check for generation change
-    // (multithreading contract: Rule 2). If reader was rebuilt, re-snapshot:
-    //   if (snap.readerGeneration != getReaderGeneration()) snap = getSnapshot();
-
     // A loop reader is cut-relative (it adds its own loop base = startOffset_);
     // a plain reader needs startOffset_ folded in here.
-    if( snap.reader ) return snap.reader->seekTo( snap.looping ? off : off + snap.startOffset );
+    // snap.reader.reader is always valid (double-buffer model: Unix page cache).
+    if( snap.reader.reader ) return snap.reader.reader->seekTo( snap.reader.looping ? off : off + snap.startOffset );
     return content_->getSObject().seekTo( off + snap.startOffset );
 }
 
@@ -407,12 +405,14 @@ void SCut::setPitchCents( double cents )
 
 SCut::~SCut()
 {
-    // reader_ / grain_ only reference the (longer-lived) source data; drop them
-    // before releasing the content link. Also clean up any deferred-deletion pointers.
-    if( reader_ ) { delete reader_; reader_ = NULL; }
-    if( grain_ )  { delete grain_;  grain_  = NULL; }
-    if( readerPending_ ) { delete readerPending_; readerPending_ = NULL; }
-    if( grainPending_ )  { delete grainPending_;  grainPending_  = NULL; }
+    // Clean up all reader states (double-buffer model)
+    if( currentReader_.reader ) { delete currentReader_.reader; currentReader_.reader = NULL; }
+    if( currentReader_.grain )  { delete currentReader_.grain;  currentReader_.grain = NULL; }
+    if( oldReader_.reader ) { delete oldReader_.reader; oldReader_.reader = NULL; }
+    if( oldReader_.grain )  { delete oldReader_.grain;  oldReader_.grain = NULL; }
+    if( nextReader_.reader ) { delete nextReader_.reader; nextReader_.reader = NULL; }
+    if( nextReader_.grain )  { delete nextReader_.grain;  nextReader_.grain = NULL; }
+
     if( capture_ ) { delete capture_; capture_ = NULL; }
     if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; }
     delete content_;
@@ -424,9 +424,6 @@ SCut::SCut( SProject *parentProject, SLink &content )
       startOffset_( 0 ),
       loopLength_( 0 ),
       inlineRenderer_( NULL ),
-      reader_( NULL ),
-      grain_( NULL ),
-      looping_( false ),
       readerTried_( false )
 {
     content_ = &content;
@@ -450,9 +447,6 @@ SCut::SCut( SProject *parentProject, SObject &content )
       startOffset_( 0 ),
       loopLength_( 0 ),
       inlineRenderer_( NULL ),
-      reader_( NULL ),
-      grain_( NULL ),
-      looping_( false ),
       readerTried_( false )
 {
     content_ = new SLink( content, this );

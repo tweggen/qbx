@@ -37,17 +37,24 @@ class SProjectLoader;
  *   UI:    SMVActualView::paintEvent() → draw(SLink) → SPlainWaveRendererInline::draw()
  *   Audio: CoreAudio callback → rendering → getRootComponent()->calcOutputTo()
  */
+// Double-buffer reader state: always has a complete, committed version (Unix page cache model).
+// Audio thread always reads "current"; UI thread builds "next", then swaps atomically.
+struct SCutReaderState {
+    twSampleReader *reader;      // Always valid: non-null or fallback to content's root
+    twGrainSource *grain;        // Optional grain processor
+    bool looping;                // True iff reader is a twLoopReader
+    int generation;              // Incremented on each swap
+};
+
 // Immutable snapshot of SCut's playback window parameters for lock-free audio-thread reads.
 // Audio thread takes a snapshot at buffer boundaries; UI thread modifies the original.
-// Generation counter allows audio to detect if reader was rebuilt (see MULTITHREADING_CONTRACT.md).
+// ReaderState is swapped atomically (Unix page cache model).
 struct SCutSnapshot {
     offset_t startOffset;        // Source sample position where clip window begins
     length_t loopLength;         // Loop segment length; 0 = no loop
     length_t cutDuration;        // Timeline duration of clip (includes stretching)
     twGrainParams grainParams;   // Time-stretch/pitch-shift parameters
-    bool looping;                // True iff reader is a twLoopReader
-    twSampleReader *reader;      // Always valid: non-null or fallback to content's root
-    int readerGeneration;        // Generation counter; increments when reader is rebuilt
+    SCutReaderState reader;      // Double-buffered reader state (always complete & valid)
 };
 
 class SCut
@@ -65,14 +72,10 @@ public:
 					     QDomElement &element, 
 					     SObject *parent );
 
-    // Immutable snapshot of playback parameters for lock-free audio-thread reads
-    // (multithreading contract: Rule 2). Safe to call from audio thread.
+    // Immutable snapshot of playback parameters for lock-free audio-thread reads.
+    // Reader state is double-buffered (Unix page cache model): currentReader_ is
+    // always complete & valid. Safe to call from audio thread.
     SCutSnapshot getSnapshot() const;
-
-    // Reader generation counter (multithreading contract: Rule 2). Audio thread
-    // calls this to detect if reader was rebuilt; if generation changed, re-snapshots.
-    // Safe to call from audio thread (atomic read, no blocking).
-    int getReaderGeneration() const { return readerGeneration_.load(); }
 
     virtual twComponent &getRootComponent();
     virtual QWidget *getDetailEditWidget( QWidget *parent );
@@ -162,6 +165,7 @@ private:
     bool ensureCapturePeaks();
 
     SLink *content_;
+
     // Window parameters: accessed by both UI thread (modifications) and audio thread (reading).
     // Use windowMutex_ to synchronize access when modifying window/grain params.
     mutable std::mutex windowMutex_;
@@ -169,19 +173,19 @@ private:
     offset_t loopStart_;
     length_t loopLength_;
     length_t cutDuration_;
-    bool     looping_;   // true while reader_ is a twLoopReader (cursor base-aware)
-    SCutRendererInline *inlineRenderer_;
-    twSampleReader *reader_;
-    twGrainSource *grain_;
     twGrainParams grainParams_;
+
+    SCutRendererInline *inlineRenderer_;
     bool readerTried_;
-    // Generation counter: incremented when reader is rebuilt (multithreading contract: Rule 2).
-    // Allows audio thread to detect stale reader pointers without blocking.
-    std::atomic<int> readerGeneration_{0};
-    // Deferred-deletion list: old reader/grain that was replaced but might still be
-    // used by audio thread (multithreading contract: Rule 2, deferred deletion pattern).
-    twSampleReader *readerPending_ = nullptr;
-    twGrainSource *grainPending_ = nullptr;
+
+    // DOUBLE-BUFFER READER STATE (Unix page cache model)
+    // currentReader_: always valid & complete, read by audio thread
+    // nextReader_: being built by UI thread, swapped in atomically when ready
+    // oldReader_: previous currentReader_, freed after swap
+    mutable std::mutex readerSwapLock_;  // Protects swap operation
+    SCutReaderState currentReader_{nullptr, nullptr, false, 0};
+    SCutReaderState nextReader_{nullptr, nullptr, false, 0};
+    SCutReaderState oldReader_{nullptr, nullptr, false, 0};  // For deferred deletion
     // Cached render of a container content (proposal 07 step 5). Built lazily by
     // ensureCapture(); invalidated on any edit via invalidateCapture().
     twCapturingSource *capture_ = nullptr;
