@@ -30,6 +30,9 @@ public:
     SExternFileList( QWidget *parent, SProject &project );
     virtual ~SExternFileList();
 
+protected:
+    void startDrag(Qt::DropActions supportedActions) override;
+
 private slots:
     void externFileRemoved( const QString );
     void externFileAdded( const SExternFile & );

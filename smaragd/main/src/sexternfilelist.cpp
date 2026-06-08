@@ -1,5 +1,7 @@
 
 #include <QDebug>
+#include <QDrag>
+#include <QMimeData>
 
 #include "sobject.h"
 #include "sexternfile.h"
@@ -92,7 +94,41 @@ void SExternFileList::externFileRefChanged()
     }
 }
 
-SExternFileItem::SExternFileItem( SExternFileList *parent, const SExternFile &ef ) 
+void SExternFileList::startDrag(Qt::DropActions /*supportedActions*/)
+{
+    QTreeWidgetItem *item = currentItem();
+    if (!item) return;
+
+    QString mimePayload;
+
+    // Check if this is an asset item.
+    if (assetItemDict_.values().contains(item)) {
+        // Find the asset name by searching assetItemDict_.
+        for (auto it = assetItemDict_.begin(); it != assetItemDict_.end(); ++it) {
+            if (it.value() == item) {
+                mimePayload = QStringLiteral("asset:") + it.key();
+                break;
+            }
+        }
+    } else if (itemDict_.values().contains(dynamic_cast<SExternFileItem*>(item))) {
+        // It's a file item.
+        SExternFileItem *fileItem = dynamic_cast<SExternFileItem*>(item);
+        if (fileItem) {
+            mimePayload = QStringLiteral("file:") + fileItem->getExternFile().getFileName();
+        }
+    }
+
+    if (mimePayload.isEmpty()) return;
+
+    QMimeData *mimeData = new QMimeData;
+    mimeData->setData(QStringLiteral("application/x-smaragd-resource"), mimePayload.toUtf8());
+
+    QDrag *drag = new QDrag(this);
+    drag->setMimeData(mimeData);
+    drag->exec(Qt::CopyAction);
+}
+
+SExternFileItem::SExternFileItem( SExternFileList *parent, const SExternFile &ef )
     : QTreeWidgetItem( parent ),
       externFile_( ef )
 {
@@ -119,6 +155,8 @@ SExternFileList::SExternFileList( QWidget *parent, SProject &pro )
     setMinimumHeight(100);
     QStringList headers = { "File name", "Type", "Refs" };
     setHeaderLabels(headers);
+    setDragEnabled(true);
+    setSelectionMode(QAbstractItemView::SingleSelection);
     // FIXME: Add a destroyed slot for the destroyed signal of the project.
     // FIXME: Add initially used extern files.
     QObject::connect( &project_, SIGNAL( externFileAdded( const SExternFile & ) ),

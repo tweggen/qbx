@@ -107,6 +107,9 @@ protected:
     virtual void contextMenuEvent( QContextMenuEvent * );
     virtual void resizeEvent( QResizeEvent * );
     virtual void wheelEvent( QWheelEvent * );
+    virtual void dragEnterEvent( QDragEnterEvent * );
+    virtual void dragMoveEvent( QDragMoveEvent * );
+    virtual void dropEvent( QDropEvent * );
 private slots:
     void globalLocatorMoved( offset_t, offset_t );
 

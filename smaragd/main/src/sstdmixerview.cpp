@@ -13,6 +13,9 @@
 #include <qlayout.h>
 #include <qmessagebox.h>
 #include <qinputdialog.h>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 
 #include "twwavinput.h"
 #include "twspeaker.h"
@@ -43,6 +46,8 @@
 #include "actions/sduplicateclipaction.h"
 #include "actions/sresizeclipaction.h"
 #include "actions/screateassetaction.h"
+#include "actions/splaceassetaction.h"
+#include "actions/saddsampleaction.h"
 #include "actions/strackpath.h"
 #include "sactionhistory.h"
 #include <QFrame>
@@ -1835,6 +1840,9 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // clip-edit gesture under the pointer (resize / slip / stretch / loop).
     setMouseTracking( true );
 
+    // Accept drag-drop from the resource list (assets and external files).
+    setAcceptDrops(true);
+
 //    setBackgroundColor( QColor( 0, 0, 0 ) );
     trackHeight_ = 100;
     secondWidth_ = 30.;
@@ -1943,7 +1951,76 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
     ev->accept();
 }
 
-    
+void SMVActualView::dragEnterEvent(QDragEnterEvent *e)
+{
+    if (e->mimeData()->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {
+        e->acceptProposedAction();
+    }
+}
+
+void SMVActualView::dragMoveEvent(QDragMoveEvent *e)
+{
+    if (e->mimeData()->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {
+        e->acceptProposedAction();
+    }
+}
+
+void SMVActualView::dropEvent(QDropEvent *e)
+{
+    const QMimeData *mimeData = e->mimeData();
+    if (!mimeData->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {
+        return;
+    }
+
+    QString payload = QString::fromUtf8(mimeData->data(QStringLiteral("application/x-smaragd-resource")));
+    if (payload.isEmpty()) {
+        return;
+    }
+
+    e->acceptProposedAction();
+
+    // Compute drop position (time + track).
+    offset_t timePos = smv_.alignTime(getTimeOf((int)e->position().x()));
+    int rowIdx = (int)((e->position().y() + upperLeftY_ - SMV_TIME_RULER_HEIGHT) / trackHeight_);
+
+    // Get the target track from the row.
+    const STrackRow *row = smv_.rowAt(rowIdx);
+    if (!row || !row->track) {
+        return;
+    }
+
+    STrack *track = row->track;
+    SProject *project = SApplication::app().getCurrentProject();
+    if (!project) {
+        return;
+    }
+
+    // Resolve the track's path from the root mixer.
+    SObject *root = project->getRootComponent();
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
+    if (!mixer) {
+        return;
+    }
+
+    using namespace strackpath;
+    QList<int> trackPath = pathOf(root, track);
+
+    // Parse the MIME payload and submit the appropriate action.
+    if (payload.startsWith(QStringLiteral("asset:"))) {
+        QString assetName = payload.mid(6);
+        SApplication::app().submitAction(new SPlaceAssetAction(assetName, trackPath, timePos));
+    } else if (payload.startsWith(QStringLiteral("file:"))) {
+        QString filePath = payload.mid(5);
+        // For file drops, use SAddSampleAction (same as Insert Sample dialog).
+        // The file's track index is its position in the mixer's top-level children.
+        int trackIdx = mixer->indexOfChildObject(*track);
+        if (trackIdx >= 0) {
+            SApplication::app().submitAction(new SAddSampleAction(trackIdx, filePath, timePos));
+        }
+    }
+}
+
+
 SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     : QWidget( parent ),
       model_( model ),

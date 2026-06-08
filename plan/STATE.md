@@ -2364,3 +2364,52 @@ drops the cache transparently on any edit:
   each cut owns its own capture.
 - A finer invalidation gate (only re-capture when the captured subtree changed).
 - Multi-channel capture (mono for now).
+
+---
+
+## Live region assets — slice 2: placement (proposal 05, first audible test case)
+
+- **Date:** 2026-06-08
+- **Status:** ✅ Code complete, builds clean on macOS / Qt6. Window-up smoke test passes. Interactive drag-drop verification is a human step.
+
+### What landed
+
+Drag-and-drop from the resource list to the arranger:
+
+| File | Change |
+|------|--------|
+| `actions/splaceassetaction.{h,cpp}` (new) | `SPlaceAssetAction(assetName, trackPath, timePos)`: resolves asset by name, pins refcount, creates an SLink, records clip index for the inverse. Registers as `place-asset`. |
+| `actions/sremoveassetplacementaction.{h,cpp}` (new) | Inverse: removes the placement, returns `SPlaceAssetAction` for redo. Live-only (no XML serialization). |
+| `sexternfilelist.{h,cpp}` | `setDragEnabled(true)` / `setSelectionMode(SingleSelection)` in ctor; override `startDrag()` to emit a `QDrag` with custom MIME `application/x-smaragd-resource` carrying either `asset:<name>` or `file:<path>`. |
+| `sstdmixerview.{h,cpp}` | Add `setAcceptDrops(true)` in ctor; implement `dragEnterEvent`, `dragMoveEvent`, `dropEvent` to accept and decode the MIME payload, map drop position to (time, track), and submit either `SPlaceAssetAction` (asset drop) or `SAddSampleAction` (file drop). |
+| `main/CMakeLists.txt` | Add the two new action files. |
+
+### Bonuses
+
+- **File drag-drop:** Dragging external files from the resource list now works (same as Insert Sample dialog, via the existing `SAddSampleAction`).
+- **Undo/redo:** Asset placements (and file drops) are undoable — removal restores the asset body via the registry's extra reference pin.
+- **Refcount tracking:** Resource list ref-count column auto-updates as placements are added/removed.
+
+### How it works
+
+1. User drags an asset from the resource list → `SExternFileList::startDrag` encodes it as `asset:AssetName`.
+2. User releases over a track lane in the arranger → `SMVActualView::dropEvent` decodes it.
+3. Drop position maps to (time, track); track path is computed via `strackpath::pathOf`.
+4. `SPlaceAssetAction(assetName, trackPath, timePos)` is submitted → the asset is placed.
+5. Undo invokes `SRemoveAssetPlacementAction` → the placement is deleted; registry pin keeps the asset alive.
+6. Redo re-places it via the captured index.
+
+### Verification needed (human)
+
+1. Create an asset (drag time range in ruler → right-click → "Create asset from range").
+2. Drag the asset from the resource list onto a track lane.
+3. Hear it play back through the live `twCapturingSource` cache.
+4. Ref-count in the resource panel increments; Ctrl+Z removes it (count decrements).
+5. Drag an external file from the resource list as a bonus test (same mechanics via SAddSampleAction).
+
+### Next (deferred in slice 2)
+
+- Drop preview / ghost clip while dragging.
+- Per-folder-track vertical scope (create assets scoped to a folder track, not just the mixer root).
+- Asset serialization (session-only today; save/load assets from the project XML).
+- Content-addressed shared cache (a single cached render for multiple identical cuts).
