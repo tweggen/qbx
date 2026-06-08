@@ -13,6 +13,7 @@
 #include <qfiledialog.h>
 #include <QFileInfo>
 #include <QStatusBar>
+#include <QLabel>
 #include <QInputDialog>
 
 #include <iostream>
@@ -391,7 +392,29 @@ SMainWindow::SMainWindow()
     qTestMenu_->addAction( "Set Clip &Pitch... (selected)", this, SLOT( runSetClipPitch() ) );
     menuBar()->addMenu( qTestMenu_ );
 
+    buildStatusBar();
+
     qDockExternFileList_ = NULL;
+}
+
+// Build the status bar. The left area is used for transient showMessage()
+// notices (saves, test results, …); the permanent right area carries a mode
+// indicator that reflects the active editing gesture (slip, time-stretch, …).
+void SMainWindow::buildStatusBar()
+{
+    modeLabel_ = new QLabel( this );
+    modeLabel_->setMinimumWidth( 100 );
+    statusBar()->addPermanentWidget( modeLabel_ );
+
+    QObject::connect( &SApplication::app(), SIGNAL( statusModeChanged( const QString & ) ),
+                      this, SLOT( onStatusModeChanged( const QString & ) ) );
+    onStatusModeChanged( SApplication::app().getStatusMode() );
+}
+
+void SMainWindow::onStatusModeChanged( const QString &mode )
+{
+    if( !modeLabel_ ) return;
+    modeLabel_->setText( mode );
 }
 
 void SMainWindow::buildAudioMenu()

@@ -5,6 +5,7 @@
 #include <tw303aenv.h>
 #include <twcomponent.h>
 #include <QApplication>
+#include <QString>
 //#include <qptrlist.h>
 
 class tw303aEnvironment;
@@ -55,10 +56,18 @@ public:
     SActionHistory *actionHistory() const;
     void submitAction(SAction *action);
 
+    // App-wide status/mode line shown in the main window's status bar. Views
+    // push the active (or hover-telegraphed) gesture here; the main window
+    // reflects it. Empty string means "no special mode" (idle).
+    const QString &getStatusMode() const { return statusMode_; }
+
 signals:
     void globalLocatorMoved( offset_t newPos, offset_t oldPos );
+    void statusModeChanged( const QString &mode );
 
 public slots:
+    // Set the status/mode line. Emits statusModeChanged only when it changes.
+    void setStatusMode( const QString &mode );
     void setSelectedSLink( SLink * );        
     void addSelectedSLink( SLink * );
     void clearSelection();
@@ -83,6 +92,7 @@ private:
     offset_t globalLocatorPos_;
     bool isPlaying_;
     SProject *currentProject_;
+    QString statusMode_;
 };
 
 #endif

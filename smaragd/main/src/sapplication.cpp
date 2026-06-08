@@ -52,9 +52,16 @@ void SApplication::rewireSpeaker()
     getSpeaker()->setInput( 0, src );
 }
 
-bool SApplication::isPlaying() const 
+bool SApplication::isPlaying() const
 {
     return isPlaying_;
+}
+
+void SApplication::setStatusMode( const QString &mode )
+{
+    if( mode == statusMode_ ) return;
+    statusMode_ = mode;
+    emit statusModeChanged( statusMode_ );
 }
 
 void SApplication::setPlaying( bool f ) 

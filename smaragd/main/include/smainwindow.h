@@ -11,6 +11,7 @@
 class SProject;
 class QAction;
 class QActionGroup;
+class QLabel;
 
 class SMainWindow
     : public QMainWindow
@@ -58,7 +59,12 @@ protected slots:
     // Reflect a project property change on the matching palette button.
     void onProjectPropertyChanged( const QString &key, const QVariant &value );
 
+    // Reflect the app-wide status/mode (slip, time-stretch, …) in the status bar.
+    void onStatusModeChanged( const QString &mode );
+
 private:
+    // Build the status bar and its permanent widgets (mode indicator, …).
+    void buildStatusBar();
     void newProject();
     void closeProject();
     void buildAudioMenu();
@@ -90,6 +96,9 @@ private:
     QToolBar *qTBTracks_;
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
+
+    // Permanent mode indicator on the right of the status bar.
+    QLabel *modeLabel_;
 };
 
 #endif

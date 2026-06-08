@@ -860,6 +860,7 @@ void SMVActualView::updateHoverCursor( const QPoint &pos )
 
     Qt::CursorShape shape = Qt::ArrowCursor;
     const QCursor *custom = NULL;
+    QString mode;   // status-bar label; empty = idle
 
     if( pos.y() >= SMV_TIME_RULER_HEIGHT ) {
         int y = pos.y() - SMV_TIME_RULER_HEIGHT;
@@ -883,16 +884,19 @@ void SMVActualView::updateHoverCursor( const QPoint &pos )
             Qt::KeyboardModifiers mods = QGuiApplication::keyboardModifiers();
             bool ctrl = mods & Qt::ControlModifier;
             bool alt  = mods & Qt::AltModifier;
-            if( onBorder && ctrl )       shape = Qt::SplitHCursor;     // time-stretch
-            else if( onRight && upper )  custom = s_loopCursor;        // loop
-            else if( onBorder )          shape = Qt::SizeHorCursor;    // resize / extend
-            else if( alt )               shape = Qt::SizeAllCursor;    // slip
-            else if( ctrl )              shape = Qt::DragCopyCursor;   // duplicate
-            else                         shape = Qt::OpenHandCursor;   // move
+            if( onBorder && ctrl )     { shape = Qt::SplitHCursor;     mode = "Time-stretch"; }
+            else if( onRight && upper ){ custom = s_loopCursor;        mode = "Loop"; }
+            else if( onLeft )          { shape = Qt::SizeHorCursor;    mode = "Trim start"; }
+            else if( onRight )         { shape = Qt::SizeHorCursor;    mode = "Extend"; }
+            else if( alt )             { shape = Qt::SizeAllCursor;    mode = "Slip"; }
+            else if( ctrl )            { shape = Qt::DragCopyCursor;   mode = "Duplicate"; }
+            else                       { shape = Qt::OpenHandCursor;   mode = "Move"; }
         }
     }
     if( custom ) setCursor( *custom );
     else setCursor( QCursor( shape ) );
+
+    SApplication::app().setStatusMode( mode );
 }
 
 /**
