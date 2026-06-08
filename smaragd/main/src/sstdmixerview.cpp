@@ -42,6 +42,7 @@
 #include "actions/ssplitclipaction.h"
 #include "actions/sduplicateclipaction.h"
 #include "actions/sresizeclipaction.h"
+#include "actions/screateassetaction.h"
 #include "actions/strackpath.h"
 #include "sactionhistory.h"
 #include <QFrame>
@@ -828,11 +829,17 @@ void SMVActualView::ctRangeClear()
 
 void SMVActualView::ctRangeCreateAsset()
 {
-    // TODO: feature (b) — turn the selected region into a reusable live asset
-    // (see plan/proposed/05_TRACK_GROUPING_AND_LIVE_ASSETS.md). Stub for now.
+    // Feature (b): turn the selected time range into a reusable live asset — an
+    // SCut windowing the whole mixer (vertical scope = root container, path {}),
+    // horizontal scope = the range. It appears in the resource list and can be
+    // placed/edited like a sample. See
+    // plan/proposed/05_TRACK_GROUPING_AND_LIVE_ASSETS.md feature (b).
     if( !rangeValid_ ) return;
-    qWarning( "Create asset from range [%lld..%lld]: not yet implemented.",
-              (long long) getRangeStart(), (long long) getRangeEnd() );
+    offset_t t0 = getRangeStart();
+    offset_t t1 = getRangeEnd();
+    if( t1 <= t0 ) return;
+    SApplication::app().submitAction(
+        new SCreateAssetAction( QList<int>{}, t0, (length_t)( t1 - t0 ) ) );
 }
 
 // Set the mouse cursor to telegraph the clip-edit gesture under the pointer,

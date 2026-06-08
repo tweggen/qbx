@@ -33,6 +33,48 @@ void SExternFileList::externFileRemoved( const QString fileName )
     delete oldEFI;
 }
 
+void SExternFileList::assetAdded( const QString &name, SObject &body )
+{
+    if( assetItemDict_.contains( name ) ) {
+        qWarning() << QString( "SExternFileList::assetAdded(): asset already "
+                               "present: \"%1\"." ).arg( name );
+        return;
+    }
+    QTreeWidgetItem *item = new QTreeWidgetItem( this );
+    item->setText( 0, name );
+    item->setText( 1, "Asset" );
+    item->setText( 2, QString::number( body.getNReferences() ) );
+    assetItemDict_.insert( name, item );
+    assetNameByBody_.insert( &body, name );
+    QObject::connect( &body, SIGNAL( nRefsChanged() ),
+                      this, SLOT( assetRefChanged() ) );
+}
+
+void SExternFileList::assetRemoved( const QString &name )
+{
+    QTreeWidgetItem *item = assetItemDict_.take( name );
+    if( !item ) return;
+    // Drop the body->name reverse entry and its ref-count signal connection.
+    for( auto it = assetNameByBody_.begin(); it != assetNameByBody_.end(); ++it ) {
+        if( it.value() == name ) {
+            QObject::disconnect( it.key(), SIGNAL( nRefsChanged() ),
+                                 this, SLOT( assetRefChanged() ) );
+            assetNameByBody_.erase( it );
+            break;
+        }
+    }
+    delete item;
+}
+
+void SExternFileList::assetRefChanged()
+{
+    SObject *body = (SObject *) sender();
+    QString name = assetNameByBody_.value( body );
+    if( name.isEmpty() ) return;
+    QTreeWidgetItem *item = assetItemDict_.value( name );
+    if( item ) item->setText( 2, QString::number( body->getNReferences() ) );
+}
+
 void SExternFileList::externFileRefChanged()
 {
     SExternFile *snd = (SExternFile *) sender();
@@ -83,4 +125,8 @@ SExternFileList::SExternFileList( QWidget *parent, SProject &pro )
                       this, SLOT( externFileAdded( const SExternFile & ) ) );
     QObject::connect( &project_, SIGNAL( externFileRemoved( const QString ) ),
                       this, SLOT( externFileRemoved( const QString ) ) );
+    QObject::connect( &project_, SIGNAL( assetAdded( const QString &, SObject & ) ),
+                      this, SLOT( assetAdded( const QString &, SObject & ) ) );
+    QObject::connect( &project_, SIGNAL( assetRemoved( const QString & ) ),
+                      this, SLOT( assetRemoved( const QString & ) ) );
 }

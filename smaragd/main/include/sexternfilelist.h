@@ -35,11 +35,20 @@ private slots:
     void externFileAdded( const SExternFile & );
     void externFileRefChanged();
 
+    // Live assets (proposal 05 feature (b)) are listed alongside sample files.
+    // An asset body is a plain SObject (not an SExternFile), so it gets its own
+    // rows keyed by asset name.
+    void assetAdded( const QString &name, SObject &body );
+    void assetRemoved( const QString &name );
+    void assetRefChanged();
+
 private:
     SProject &project_;
     // This is ugly, but I don't know a better solution. We keep a second dict here
     // for the items, though they must also be kept inside the list...
     QHash<QString,SExternFileItem*> itemDict_;
+    QHash<QString,QTreeWidgetItem*> assetItemDict_;   // asset name -> row
+    QHash<SObject*,QString> assetNameByBody_;          // body -> asset name (refs)
 };
 
 #endif

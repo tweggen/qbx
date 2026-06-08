@@ -2224,3 +2224,71 @@ slip, DragCopy duplicate, OpenHand move, custom ↻ for loop).
    and **plays looped**; dividers drawn; save+reload keeps it; undo removes it.
    Lower-half drag still just reveals content to its end.
 4. All honor snap (Alt+S); hover cursors change per zone/modifier.
+
+---
+
+## Status-bar mode indicator (clip-edit gestures)
+
+- **Date:** 2026-06-08
+- **Status:** ✅ Builds clean; window-up smoke passes. Hover-mapping is a human check.
+
+A permanent mode indicator on the right of the main window's status bar reflects
+the active arranger gesture as the cursor hovers a clip: Move, Slip, Duplicate,
+Trim start, Extend, Loop, Time-stretch (blank off any clip). Routed through the
+`SApplication` singleton (the app-wide QObject bus) so views stay decoupled:
+`setStatusMode()`/`getStatusMode()` + `statusModeChanged()` (emits only on
+change); `SMVActualView::updateHoverCursor` computes the label beside the cursor
+shape it already picks; `SMainWindow::buildStatusBar` adds the `QLabel` and
+connects it. Future status fields (BPM, selection, playhead time) follow the same
+pattern.
+
+---
+
+## Live region assets — slice 1: create + register + display (proposal 05 feature (b))
+
+- **Date:** 2026-06-08
+- **Status:** ✅ Code complete, builds clean on Windows/Qt6/MinGW. Interactive
+  create/undo verification is a human step.
+
+### What it is
+
+First vertical slice of proposal 05 feature (b). An **asset** is a live `SCut`
+windowing an existing container — **vertical scope** = the container (the root
+`SStdMixer`, or later a folder `STrack`), **horizontal scope** = a time range
+`[t0,t1)` via `setWindow(startOffset=t0, duration=t1−t0)`. No copy, no
+clip-splitting: it references the container, so editing the container's
+tracks/clips changes the asset everywhere it is placed (the `SObject` is pulled
+live each buffer). This is the §4b "cut over a group" model, generalised so the
+group is any container. `SCut::getRootComponent()` already falls back to the
+content's component when the content is not a sample source, so a cut over a
+container reads its live `twTrackMix` for free.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `main/include/sproject.h` + `src/sproject.cpp` | **Asset registry**: `registerAsset(name, body)` (pins one ref via `addRef` so the asset survives with zero placements) / `unregisterAsset(name)` (emits `assetRemoved` then `removeRef` → `deleteLater`), `asset()/hasAsset()/assetNames()`, signals `assetAdded(name, body)` / `assetRemoved(name)`. New `assetDict_`. |
+| `main/include/actions/screateassetaction.{h,cpp}` (new) | `SCreateAssetAction(containerPath, startOffset, duration, name="")`: resolve the container by index-path (`strackpath::resolveByPath`, `{}` = mixer), build the windowing `SCut`, register it (auto-names "Asset N" if unnamed). Inverse `SRemoveAssetAction`. Registered `create-asset`. |
+| `main/include/actions/sremoveassetaction.{h,cpp}` (new) | Inverse: captures the asset's container path + window + name (the body is pure derived data), unregisters it; its inverse re-creates an identical `SCreateAssetAction`. Registered `remove-asset`. |
+| `main/include/sexternfilelist.{h}` + `src/sexternfilelist.cpp` | The resource panel now lists **assets** beside sample files (rows keyed by asset name: name / "Asset" / live ref-count). New slots `assetAdded/assetRemoved/assetRefChanged`; `assetItemDict_` + `assetNameByBody_`. |
+| `main/src/sstdmixerview.cpp` | The ruler range context-menu **"Create asset from range"** (was a stub) now submits `SCreateAssetAction({}, t0, t1−t0)` — vertical scope = the whole mixer. |
+| `main/CMakeLists.txt` | Added the two action files. |
+
+### Honestly deferred (next slices)
+
+- **Placement** — dropping an asset from the resource list into the arrangement
+  (an `SLink`/`SCut` instance). The model supports it (windowed playback rides
+  the existing `getRootComponent`/`seekTo` fallback); the UI is not wired yet, so
+  an asset can be created and seen but not yet placed.
+- **Per-folder-track create** (vertical scope = an `STrack`) — the action already
+  takes any container path; only a track-context-menu entry is missing.
+- **Serialization** — assets are session-only; they are not yet written to the
+  project file (§2.9).
+- **Cycle guard** (§2.7), **editing an asset in a tab** (proposal 09), and
+  length-follow (§2.8).
+
+### Verify (human)
+
+1. Drag a time range in the ruler, right-click → **Create asset from range** →
+   an "Asset 1" row appears in the left resource list with ref-count 1.
+2. Ctrl+Z removes the asset row; Ctrl+Y restores it.

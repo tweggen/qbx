@@ -1,0 +1,92 @@
+#include "actions/screateassetaction.h"
+#include "actions/sremoveassetaction.h"
+#include "actions/strackpath.h"
+#include "sproject.h"
+#include "sstdmixer.h"
+#include "strack.h"
+#include "scut.h"
+#include "sactionregistry.h"
+#include <QDomElement>
+
+using namespace strackpath;
+
+// First-unused "Asset N" name, so creating assets in a row doesn't collide and
+// undo/redo can reuse an explicit name.
+static QString generateAssetName( SProject *project )
+{
+    for( int n = 1; ; ++n ) {
+        QString candidate = QString( "Asset %1" ).arg( n );
+        if( !project->hasAsset( candidate ) ) return candidate;
+    }
+}
+
+SCreateAssetAction::SCreateAssetAction( const QList<int> &containerPath,
+                                        offset_t startOffset, length_t duration,
+                                        const QString &assetName )
+    : containerPath_( containerPath ),
+      startOffset_( startOffset ),
+      duration_( duration ),
+      assetName_( assetName )
+{
+}
+
+SApplyResult SCreateAssetAction::apply( SProject *project )
+{
+    if( !project || duration_ <= 0 ) {
+        return { false, nullptr };
+    }
+
+    SObject *root = project->getRootComponent();
+    if( !dynamic_cast<SStdMixer *>( root ) ) {
+        return { false, nullptr };
+    }
+
+    // The vertical scope is an existing container: the root mixer ([]) or a
+    // folder track. Both are valid asset bodies (their getRootComponent() sums
+    // their children live).
+    SObject *container = resolveByPath( root, containerPath_ );
+    if( !container ) {
+        return { false, nullptr };
+    }
+    if( !dynamic_cast<SStdMixer *>( container )
+        && !dynamic_cast<STrack *>( container ) ) {
+        return { false, nullptr };          // only containers can be windowed
+    }
+
+    QString assetName = assetName_.isEmpty() ? generateAssetName( project )
+                                             : assetName_;
+
+    // The asset is a live window over the container: a cut starting at
+    // startOffset_ for duration_. No copy — placements read the container live.
+    SCut *cut = new SCut( project, *container );
+    cut->setWindow( startOffset_, duration_, 0, 1.0 );
+    cut->setSName( assetName );
+
+    project->registerAsset( assetName, cut );
+
+    return { true, new SRemoveAssetAction( assetName ) };
+}
+
+void SCreateAssetAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "container", pathToString( containerPath_ ) );
+    elem.setAttribute( "startOffset", (double) startOffset_ );
+    elem.setAttribute( "duration", (double) duration_ );
+    elem.setAttribute( "assetName", assetName_ );
+}
+
+bool SCreateAssetAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    containerPath_ = stringToPath( elem.attribute( "container" ) );
+    startOffset_   = (offset_t) elem.attribute( "startOffset", "0" ).toDouble();
+    duration_      = (length_t) elem.attribute( "duration", "0" ).toDouble();
+    assetName_     = elem.attribute( "assetName" );
+    return true;
+}
+
+static const bool s_reg_createasset = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("create-asset"),
+        []{ return new SCreateAssetAction; }
+    ), true
+);

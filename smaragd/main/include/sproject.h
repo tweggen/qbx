@@ -9,6 +9,7 @@
 #include <qtextstream.h>
 #include <QVariant>
 #include <QVariantMap>
+#include <QList>
 
 #include <cstdint>
 #include <vector>
@@ -55,9 +56,23 @@ public:
     bool hasProp( const QString &key ) const;
     const QVariantMap &properties() const { return properties_; }
 
+    // --- Live asset registry (proposal 05 feature (b)) -------------------
+    // An asset is a named, shared SObject (today: an SCut windowing a container
+    // — the root mixer or a folder track) kept as a reusable resource,
+    // independent of where it is placed in the arrangement. The registry pins
+    // one reference so the asset survives with zero placements; editing the
+    // underlying container changes every placement live (the SObject is pulled
+    // each buffer). See plan/proposed/05_TRACK_GROUPING_AND_LIVE_ASSETS.md.
+    void registerAsset( const QString &name, SObject *body );
+    void unregisterAsset( const QString &name );
+    SObject *asset( const QString &name ) const;
+    bool hasAsset( const QString &name ) const;
+    QList<QString> assetNames() const;
 
 signals:
     void fileNameChanged( const QString & );
+    void assetAdded( const QString &name, SObject &body );
+    void assetRemoved( const QString &name );
     void externFileAdded( const SExternFile & );
     void externFileRemoved( const QString );
     void bpmTempoChanged( double );
@@ -85,6 +100,7 @@ private:
     QVariantMap properties_;
 
     QHash<QString,SExternFile*> externFileDict_;
+    QHash<QString,SObject*> assetDict_;
 };
 
 #endif

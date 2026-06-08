@@ -199,6 +199,42 @@ void SProject::removeExternObject( QString &fileName )
     emit externFileRemoved( fileName );
 }
 
+void SProject::registerAsset( const QString &name, SObject *body )
+{
+    if( !body || name.isEmpty() ) return;
+    if( assetDict_.contains( name ) ) {
+        qWarning() << QString( "SProject::registerAsset: name already in use: \"%1\"." )
+                          .arg( name );
+        return;
+    }
+    assetDict_.insert( name, body );
+    body->addRef();                  // pin: the asset survives with zero placements
+    emit assetAdded( name, *body );
+}
+
+void SProject::unregisterAsset( const QString &name )
+{
+    SObject *body = assetDict_.take( name );
+    if( !body ) return;
+    emit assetRemoved( name );       // let listeners drop their row before the body dies
+    body->removeRef();               // may bring the refcount to 0 -> deleteLater
+}
+
+SObject *SProject::asset( const QString &name ) const
+{
+    return assetDict_.value( name );
+}
+
+bool SProject::hasAsset( const QString &name ) const
+{
+    return assetDict_.contains( name );
+}
+
+QList<QString> SProject::assetNames() const
+{
+    return assetDict_.keys();
+}
+
 SLink *SProject::linkToFile( QString &fileName )
 {
     SExternFile *ef = externFileDict_.value( fileName );

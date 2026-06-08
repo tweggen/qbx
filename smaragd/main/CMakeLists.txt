@@ -38,6 +38,8 @@ set(SMARAGD_HEADERS
     include/actions/sduplicateclipaction.h
     include/actions/sremoveclipaction.h
     include/actions/sresizeclipaction.h
+    include/actions/screateassetaction.h
+    include/actions/sremoveassetaction.h
     include/actions/strackpath.h
     include/actions/saddsampleaction.h
     include/actions/sremovesampleaction.h
@@ -93,6 +95,8 @@ set(SMARAGD_SOURCES
     src/actions/sduplicateclipaction.cpp
     src/actions/sremoveclipaction.cpp
     src/actions/sresizeclipaction.cpp
+    src/actions/screateassetaction.cpp
+    src/actions/sremoveassetaction.cpp
     src/actions/saddsampleaction.cpp
     src/actions/sremovesampleaction.cpp
     src/actions/ssettrackvolumeaction.cpp
