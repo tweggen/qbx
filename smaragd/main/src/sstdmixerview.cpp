@@ -1149,6 +1149,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setStartOffset( (offset_t) newOff );  // Visual feedback + queues event via invalidateCapture
+                cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
                 smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -1218,6 +1219,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Queue event for processing after drag
                 cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
                 cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
+                cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
                 smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -1273,6 +1275,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 cut->setDuration( rDur );
                 // Queue event for processing after drag
                 cut->queueWindowParamEvent( DURATION_CHANGE, (double) rDur );
+                cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
                 smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
