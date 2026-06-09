@@ -711,6 +711,18 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         }
     }
     clipDragArmed_ = false;
+
+    // Set the cursor only if this was a pure click (no drag of any kind).
+    // This allows click to seek the playhead, but dragging clips or ranges
+    // won't accidentally move the playhead during the drag.
+    if( rangeDrag_ == RangeNone ) {
+        // No range drag occurred either, so this was a pure click.
+        offset_t ofs = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+        SApplication::app().setGlobalLocatorPos( ofs );
+        if( SApplication::app().isPlaying() ) {
+            smv_.model_->seekTo( SApplication::app().getGlobalLocatorPos() );
+        }
+    }
 }
 
 /**
@@ -1272,16 +1284,9 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 if( clipDragIsDuplicate_ )
                     syncDuplicateGroup();
             }
-        } else {
-            // OK, seek to the position.
-            offset_t ofs = getTimeOf( ev->pos().x() );            
-            ofs = smv_.alignTime( ofs );
-            SApplication::app().setGlobalLocatorPos( ofs );
-            // FIXME: Application should do that!
-            if( SApplication::app().isPlaying() ) {
-                smv_.model_->seekTo( SApplication::app().getGlobalLocatorPos() );
-            }
         }
+        // Note: cursor seeking on mouse movement is now deferred to mouseReleaseEvent
+        // so clicks only set the cursor if no drag occurs.
     }
 }
 
@@ -1424,14 +1429,8 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                 }
             }
         }
-        // A left click always moves the playhead to the clicked time — whether on
-        // a sample or empty lane — until richer in-sample mouse actions exist.
-        // (This also lets 's' Split at the click point.)
-        offset_t ofs = smv_.alignTime( getTimeOf( ev->pos().x() ) );
-        SApplication::app().setGlobalLocatorPos( ofs );
-        if( SApplication::app().isPlaying() ) {
-            smv_.model_->seekTo( SApplication::app().getGlobalLocatorPos() );
-        }
+        // Note: cursor seeking is now deferred to mouseReleaseEvent so it only
+        // happens on a click (no drag).
     }
 }
 
