@@ -22,7 +22,7 @@ bool drawObjectWaveform( SObject &obj, SLink &lk, SRenderContext &ctx,
     // context maps pixel -> time, and we subtract the link start so 0 is the
     // object's origin (the cut context folds its window offset in here).
     offset_t o1 = ctx.getTimeOf( r.topLeft().x() );
-    offset_t o2 = ctx.getTimeOf( r.bottomRight().x() );
+    offset_t o2 = ctx.getTimeOf( r.right() + 1 );  // open-ended right boundary, consistent with STrackRendererInline
     if( o2 <= o1 ) o2 = o1 + 1;
     o1 -= lk.getStartTime();
     o2 -= lk.getStartTime();
