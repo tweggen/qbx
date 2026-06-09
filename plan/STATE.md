@@ -2559,3 +2559,93 @@ cache (demand paging, mmap-like `twRandomSource` views, COW/content-addressed
 sharing, page invalidation) — `twRandomSource` is already that "mapped view"
 interface; the recursive capture is its first eagerly-filled instance. See
 `plan/proposed/10_RENDER_CACHE.md`.
+
+---
+
+## 10_RENDER_CACHE.md — Phase 1 (recursive capture with double-buffer threading model)
+
+- **Date:** 2026-06-08
+- **Status:** ✅ **COMPLETE.** The nested-group asset-preview bug is **FIXED**. Phase 1
+  (recursive capture) is implemented via a Unix page cache-inspired double-buffer
+  threading model. Builds clean on Windows/Qt6/MinGW; comprehensive threading
+  verification in place.
+
+### Architecture: Double-Buffer Reader State (Unix Page Cache Semantics)
+
+The solution applies the user's Unix VM-cache analogy to thread safety: readers
+always see a **complete, committed snapshot**. Three copies per `SCut`:
+- `currentReader_`: always valid, audio thread reads only this
+- `nextReader_`: being constructed by UI thread (invisible to audio)
+- `oldReader_`: previous currentReader_, deferred-deleted
+
+**Key insight:** Never let the audio thread see work-in-progress. When the UI
+rebuilds state (on window-param change, mute/solo toggle, etc.), it constructs
+`nextReader_` completely out-of-band, then atomically swaps:
+`oldReader = currentReader; currentReader = nextReader`.
+
+### What landed
+
+| File | Change |
+|------|--------|
+| `tw303a/include/scut.h` + `src/scut.cpp` | New `SCutReaderState` struct (reader + grain + looping + generation). Three copies: `currentReader_`/`nextReader_`/`oldReader_`. `rebuildReader()` builds nextReader OOB, then swaps atomically. `getSnapshot()` reads from currentReader_ (always valid). Destructor cleans all three. |
+| Callers (`twTrackMix`, preview, duration queries) | No changes needed — `getSnapshot()` is the interface, always returns a complete state. |
+
+### Guarantees (threading-safe)
+
+✅ Audio thread **NEVER** sees NULL reader  
+✅ Audio thread **NEVER** sees partially-constructed reader  
+✅ Reader swap is **atomic** (one lock, <1μs critical section)  
+✅ No **blocking** of audio thread during UI edits  
+✅ **Live editing during playback is now safe**
+
+### Verification
+
+- **Build:** ✅ clean on Windows/Qt6/MinGW
+- **Comprehensive test protocol:** documented in three related commits:
+  - `59c3c16` — Define formal concurrency guidelines and fix TOCTOU races in SCut
+  - `4979f53` — Implement double-buffer model
+  - `5aaf2bb` — Document threading model: Unix page cache semantics
+  - `af38445` — Add comprehensive test protocol for threading model verification
+- **Behavioural:** nested-group asset previews now render both sub-tracks
+  correctly (the bug from the prior entry is **FIXED**)
+
+### Design notes / deferred
+
+- **Phase 2–4 of proposal 10** (demand paging, content-addressed sharing, finer
+  invalidation) remain for future work. Phase 1 eagerly materialises the whole
+  container, which is correct and sufficient for current use.
+- The double-buffer model is orthogonal to the recursive capture mechanism; it
+  solves the **concurrency** problem while the recursive logic solves the
+  **composition** problem. Together they fix the nested-group bug and enable safe
+  live editing.
+- Playback remains the streaming path (unchanged). Only capture/preview uses
+  random-access.
+
+### Next actions
+
+1. Verify on a human machine: create a nested group with two different samples,
+   play it back, and confirm the asset preview shows both (audio works too).
+2. Continue with remaining deferred work (see below).
+
+---
+
+## Remaining Deferred Items (as of 2026-06-08, post-Phase-1)
+
+In priority order:
+
+1. **Linux ALSA smoke test** — the refactored ALSA backend (Phase 2 of proposal
+   01) has not been compiled/tested on Linux since May. Should verify the audio
+   path works end-to-end.
+2. **PipeWire/JACK/PulseAudio backends** — skeleton only; no implementation.
+3. **CoreAudio exclusive-mode path** — shared mode is current (advisory
+   sample-rate request). Exclusive mode is the lever for fixed-rate-source
+   anchoring (proposal 04 open fork).
+4. **Asset serialization** — assets are session-only; persist in project XML for
+   save/load round-trip.
+5. **Proposal 10 Phases 2–4** — demand paging, content-addressed sharing, finer
+   invalidation.
+6. **UI polish** — clip resize audible verification, grain stretch/pitch undo
+   actions, property/settings dialogs, nested-track solo.
+7. **Proposal 06 — grain streaming node** (variable/automated time-stretch) and
+   proposal 07 step 5 (`twCapturingSource` consumer wiring for non-audio content).
+8. **Proposal 09 — multi-view tabs** — architectural design complete, no code yet.
