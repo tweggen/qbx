@@ -133,12 +133,14 @@ public slots:
     void setStretch( double );
     void setPitchCents( double );
 
-private slots:
     // Drop the cached render of a container content (and any reader built over
     // it); the next pull re-captures. Connected to SProject::arrangementChanged
     // so a cut over a group/mixer transparently reflects edits (proposal 05
-    // feature (b) / 07 step 5). Only container-backed cuts ever connect this.
+    // feature (b) / 07 step 5). Also called during dragging for live preview
+    // feedback. Only container-backed cuts ever use this.
     void invalidateCapture();
+
+private slots:
 
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );

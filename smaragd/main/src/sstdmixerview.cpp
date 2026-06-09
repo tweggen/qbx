@@ -1127,6 +1127,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setStartOffset( (offset_t) newOff );
+                cut->invalidateCapture();  // Live preview feedback during slip drag
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsStretch_ ) {
@@ -1159,6 +1160,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 cut->setStartOffset( (offset_t)( (double) clipResizeOffset0_
                                                  * newStretch / s0 + 0.5 ) );
                 cut->setDuration( newDur );
+                cut->invalidateCapture();  // Live preview feedback during stretch drag
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsLoop_ ) {
@@ -1189,6 +1191,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setLoopLengthRaw( clipLoopSeg_ );
                 cut->setDuration( newDur );
+                cut->invalidateCapture();  // Live preview feedback during loop drag
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( lastClickedStart_ ) {
@@ -1218,6 +1221,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->setStartOffset( rCutStart );
                     cut->setDuration( rDur );
                     lastClickSLink_->setStartTime( rStart );
+                    cut->invalidateCapture();  // Live preview feedback during trim drag
                     update( oldRect );
                     update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
                 }
@@ -1236,6 +1240,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setDuration( rDur );
+                cut->invalidateCapture();  // Live preview feedback during extend drag
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( delta != 0 ) {
