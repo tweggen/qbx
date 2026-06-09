@@ -31,6 +31,10 @@ twCapturingSource::twCapturingSource( tw303aEnvironment &env, twComponent &sourc
         // source can only be captured in a single forward pass — channel 0.
         if( seekable ) {
             source.seekTo( captureStart );
+            // Reset all latches attached to the source so they start from position 0,
+            // ensuring deterministic capture output (fixes nil-operation bug where
+            // rebuilding without actual changes would produce different audio).
+            source.resetAllLatches();
         } else if( c > 0 ) {
             break;
         }

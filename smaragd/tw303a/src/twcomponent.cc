@@ -107,6 +107,20 @@ int twComponent::seekTo( offset_t )
     return -1;
 }
 
+void twComponent::resetAllLatches()
+{
+    // Reset all output latches to offset 0, ensuring deterministic capture rebuilds.
+    // This fixes the nil-operation bug where rebuilding without actual changes
+    // would produce different audio due to persisted latch offsets.
+    if( pOutputLatches ) {
+        for( idx_t i = 0; i < getNOutputs(); i++ ) {
+            if( pOutputLatches[i] ) {
+                pOutputLatches[i]->resetOffset();
+            }
+        }
+    }
+}
+
 void twComponent::allocPlugs()
 {
     if( getNInputs()>0 ) {

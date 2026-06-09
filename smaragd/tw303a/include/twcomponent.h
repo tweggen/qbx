@@ -46,6 +46,7 @@ public:
     twLatch( twComponent & component0, idx_t idx0 );
 
     virtual offset_t getOffset () { return offset; }
+    virtual void resetOffset() { offset = 0; }  // Reset for capture rebuilds
     virtual ~ twLatch();
 
     inline twComponent & getComponent() { return component; }
@@ -154,6 +155,7 @@ public:
     virtual bool isSeekable() const;
     virtual int seekTo( offset_t );
     virtual offset_t tellPos() const;
+    virtual void resetAllLatches();  // Reset all output latches to offset 0
 
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) = 0;
 
