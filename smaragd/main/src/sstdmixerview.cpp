@@ -1146,8 +1146,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     if( newOff > maxOff ) newOff = maxOff;
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
-                cut->setStartOffset( (offset_t) newOff );
-                // Queue event for processing after drag to safely handle invalidateCapture
+                // Only queue the event; don't call setter (which calls invalidateCapture)
                 cut->queueWindowParamEvent( OFFSET_CHANGE, (double) newOff );
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -1177,11 +1176,9 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     lastClickSLink_->setStartTime( rStart );
                 }
                 double newStretch = (double) newDur / srcSpan;
-                cut->setStretchRaw( newStretch );
-                cut->setStartOffset( (offset_t)( (double) clipResizeOffset0_
-                                                 * newStretch / s0 + 0.5 ) );
-                cut->setDuration( newDur );
-                // Queue events for processing after drag
+                cut->setStretchRaw( newStretch );  // Raw setter only (no invalidateCapture)
+                // Don't call setStartOffset/setDuration - they call invalidateCapture which causes lock contention
+                // Just queue events for safe atomic application after drag
                 cut->queueWindowParamEvent( STRETCH_CHANGE, newStretch );
                 cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
                 cut->queueWindowParamEvent( OFFSET_CHANGE, (double)(clipResizeOffset0_ * newStretch / s0 + 0.5) );
