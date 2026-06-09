@@ -336,8 +336,12 @@ void SCut::setWindow( offset_t startOffset, length_t duration,
         cutDuration_ = duration;
         loopLength_  = loopLength;
         grainParams_.stretch = stretch;
-        // Capture snapshot while holding lock for consistent rebuild
-        snap = getSnapshot();
+        // Manually construct snapshot without re-acquiring lock
+        snap.startOffset = startOffset_;
+        snap.loopLength = loopLength_;
+        snap.cutDuration = cutDuration_;
+        snap.grainParams = grainParams_;
+        snap.reader = currentReader_;
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
     rebuildReader( snap );   // one rebuild for the whole window change (UI thread)
@@ -373,8 +377,12 @@ void SCut::setGrainParams( const twGrainParams &p )
             cutDuration_ = (length_t) llround( (double) cutDuration_ * k );
             startOffset_ = (offset_t) llround( (double) startOffset_ * k );
         }
-        // Capture snapshot while holding lock for consistent rebuild
-        snap = getSnapshot();
+        // Manually construct snapshot without re-acquiring lock
+        snap.startOffset = startOffset_;
+        snap.loopLength = loopLength_;
+        snap.cutDuration = cutDuration_;
+        snap.grainParams = grainParams_;
+        snap.reader = currentReader_;
     }
 
     rebuildReader( snap );   // pre-build off the audio thread (caller is the UI thread)
