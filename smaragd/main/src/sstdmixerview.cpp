@@ -1149,6 +1149,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setStartOffset( (offset_t) newOff );  // Visual feedback + queues event via invalidateCapture
+                smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsStretch_ ) {

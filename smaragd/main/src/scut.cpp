@@ -152,10 +152,6 @@ void SCut::invalidateCapture()
 
     // Notify parent containers that window parameters have changed (for live drag feedback)
     emit windowParamsChanged();
-
-    // Notify the project so live assets (ACuts) that reference ancestor tracks
-    // get invalidated and re-render in real-time (cascading invalidation).
-    getProject().notifyArrangementChanged();
 }
 
 // Build a peak cache of the capture (the rendered snapshot) for waveform
