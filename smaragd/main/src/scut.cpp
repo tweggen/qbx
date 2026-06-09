@@ -149,6 +149,9 @@ void SCut::invalidateCapture()
 
     // Rebuild reader to work with new capture
     rebuildReader( getSnapshot() );
+
+    // Notify parent containers that window parameters have changed (for live drag feedback)
+    emit windowParamsChanged();
 }
 
 // Build a peak cache of the capture (the rendered snapshot) for waveform

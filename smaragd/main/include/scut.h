@@ -137,6 +137,11 @@ public:
     const twGrainParams &getGrainParams() const { return grainParams_; }
     void setGrainParams( const twGrainParams & );
 
+signals:
+    // Emitted when window parameters change (slip, stretch, loop, trim, extend)
+    // during a drag. Parent containers use this to invalidate their renders.
+    void windowParamsChanged();
+
 public slots:
     virtual void setLoopStart( offset_t );
     virtual void setLoopLength( length_t );
