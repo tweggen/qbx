@@ -842,6 +842,18 @@ void SMVActualView::loadRangeFromProject()
     rangeValid_ = p.prop( SProjectProps::RangeValid, false ).toBool();
     rangeStart_ = (offset_t) p.prop( SProjectProps::RangeStart, (qulonglong) 0 ).toULongLong();
     rangeEnd_   = (offset_t) p.prop( SProjectProps::RangeEnd,   (qulonglong) 0 ).toULongLong();
+
+    if (!rangeValid_) {
+        STimeGridSpec tgs = smv_.getTimeGridSpec();
+        double beatSec = tgs.getTimeGridWidth();
+        int bpb = tgs.getEmphasizeGrids(0);
+        int srate = smv_.model_->getProject().getSRate();
+
+        offset_t barDurationSamples = (offset_t)(beatSec * bpb * srate);
+        rangeStart_ = 4 * barDurationSamples;
+        rangeEnd_ = rangeStart_ + 4 * barDurationSamples;
+        rangeValid_ = true;
+    }
 }
 
 void SMVActualView::drawRange( QPainter &p, const QRect &myRect )
@@ -851,9 +863,10 @@ void SMVActualView::drawRange( QPainter &p, const QRect &myRect )
     int xlo = getXPosOfOffset( lo );
     int xhi = getXPosOfOffset( hi );
 
-    // Grey band inside the ruler.
+    // Grey band in the upper half of the ruler.
     if( xhi > xlo ) {
-        p.fillRect( QRect( xlo, 0, xhi - xlo, SMV_TIME_RULER_HEIGHT ),
+        int rulerMid = SMV_TIME_RULER_HEIGHT / 2;
+        p.fillRect( QRect( xlo, 0, xhi - xlo, rulerMid ),
                     QColor( 150, 150, 150 ) );
     }
     // Edges as vertical lines over all tracks.
@@ -1148,9 +1161,12 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     if( newOff > maxOff ) newOff = maxOff;
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
-                cut->setStartOffset( (offset_t) newOff );  // Visual feedback + queues event via invalidateCapture
-                cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
-                smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                // Only rebuild if offset actually changed
+                if( newOff != cut->getStartOffset() ) {
+                    cut->setStartOffset( (offset_t) newOff );  // Visual feedback + queues event via invalidateCapture
+                    cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
+                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                }
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsStretch_ ) {
@@ -1214,13 +1230,15 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 length_t newDur = (length_t) rEnd - (length_t) clipDragStart0_;
                 if( newDur < SMV_CUT_MIN_TIME ) newDur = SMV_CUT_MIN_TIME;
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
-                cut->setLoopLengthRaw( clipLoopSeg_ );
-                cut->setDuration( newDur );
-                // Queue event for processing after drag
-                cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
-                cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
-                cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
-                smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                // Only rebuild if duration actually changed
+                if( newDur != cut->getDuration() || clipLoopSeg_ != cut->getLoopLength() ) {
+                    cut->setLoopLengthRaw( clipLoopSeg_ );
+                    cut->setDuration( newDur );
+                    cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
+                    cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
+                    cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
+                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                }
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( lastClickedStart_ ) {
@@ -1272,11 +1290,13 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     if( rDur > maxDur ) rDur = maxDur;
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
-                cut->setDuration( rDur );
-                // Queue event for processing after drag
-                cut->queueWindowParamEvent( DURATION_CHANGE, (double) rDur );
-                cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
-                smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                // Only rebuild if duration actually changed (not clamped to same value)
+                if( rDur != cut->getDuration() ) {
+                    cut->setDuration( rDur );
+                    cut->queueWindowParamEvent( DURATION_CHANGE, (double) rDur );
+                    cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
+                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                }
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( delta != 0 ) {
