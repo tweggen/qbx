@@ -1513,8 +1513,8 @@ void SStdMixerView::contentDurationChanged( length_t newDur )
         if( currValue<0 ) currValue = 0;
         timeSliderMoved( currValue );
     }
-    qWarning( "Setting maxValue to %d.\n", (int) newDur );
-    qScrollHoriz_->setMaxValue( (int)newDur-pageStep );
+    qWarning( "Setting maxValue to %d.\n", qMax( 0, (int) newDur - pageStep ) );
+    qScrollHoriz_->setMaxValue( qMax( 0, (int)newDur-pageStep ) );
 #else
     recalcPageStep();
 #endif
@@ -1728,7 +1728,7 @@ void SStdMixerView::nTracksChanged()
         if( currValue<0 ) currValue = 0;
         trackSliderMoved( currValue );
     }
-    qScrollVert_->setMaximum( (int) newNTracks-pageStep );
+    qScrollVert_->setMaximum( qMax( 0, (int) newNTracks-pageStep ) );
 }
 
 void SStdMixerView::avLeftOffsetChanged( offset_t newValue )
