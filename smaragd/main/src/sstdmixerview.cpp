@@ -1149,8 +1149,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Force synchronous rebuild for live feedback during drag
                 cut->ensureCapture();
                 cut->ensureCapturePeaks();
-                update( oldRect );
-                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+                repaint( oldRect );
+                repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsStretch_ ) {
                 // Ctrl-drag a BORDER: change the timeline length, keeping the same
                 // SOURCE window (grain-stretched, pitch preserved). We set stretch
@@ -1185,8 +1185,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Force synchronous rebuild for live feedback during drag
                 cut->ensureCapture();
                 cut->ensureCapturePeaks();
-                update( oldRect );
-                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+                repaint( oldRect );
+                repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsLoop_ ) {
                 // Drag the RIGHT edge's UPPER half: extend the clip past its
                 // content by repeating the previously visible cut. Capture the
@@ -1219,8 +1219,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Force synchronous rebuild for live feedback during drag
                 cut->ensureCapture();
                 cut->ensureCapturePeaks();
-                update( oldRect );
-                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+                repaint( oldRect );
+                repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( lastClickedStart_ ) {
                 // Drag the LEFT edge: move the clip start to the snapped mouse
                 // time, trimming the front (cut start offset shifts with it).
@@ -1274,8 +1274,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Force synchronous rebuild for live feedback during drag
                 cut->ensureCapture();
                 cut->ensureCapturePeaks();
-                update( oldRect );
-                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+                repaint( oldRect );
+                repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( delta != 0 ) {
                 // Move it.
                 QRect oldVisibRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
