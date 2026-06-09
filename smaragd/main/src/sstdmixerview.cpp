@@ -716,11 +716,17 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
     // This allows click to seek the playhead, but dragging clips or ranges
     // won't accidentally move the playhead during the drag.
     if( rangeDrag_ == RangeNone ) {
-        // No range drag occurred either, so this was a pure click.
-        offset_t ofs = smv_.alignTime( getTimeOf( ev->pos().x() ) );
-        SApplication::app().setGlobalLocatorPos( ofs );
-        if( SApplication::app().isPlaying() ) {
-            smv_.model_->seekTo( SApplication::app().getGlobalLocatorPos() );
+        // Check that the mouse didn't move significantly (within 4 pixels).
+        // This distinguishes a click from a small drag.
+        const int CLICK_THRESHOLD = 4;
+        QPoint delta = ev->pos() - lastClickPos_;
+        if( delta.manhattanLength() <= CLICK_THRESHOLD ) {
+            // No range drag and minimal mouse movement = pure click.
+            offset_t ofs = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+            SApplication::app().setGlobalLocatorPos( ofs );
+            if( SApplication::app().isPlaying() ) {
+                smv_.model_->seekTo( SApplication::app().getGlobalLocatorPos() );
+            }
         }
     }
 }
