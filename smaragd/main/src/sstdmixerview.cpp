@@ -681,6 +681,8 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
                 SApplication::app().submitAction(
                     new SResizeClipAction( clipPath, newStart, newOffset, newDur,
                                            newLoop, newStretch ) );
+                // Apply any queued window parameter events
+                cut->processWindowParamEvents();
                 update();
             }
         }
@@ -1145,8 +1147,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setStartOffset( (offset_t) newOff );
-                // Note: invalidateCapture() during drag causes deadlock with windowMutex_.
-                // The capture preview will update when the action applies on release.
+                // Queue event for processing after drag to safely handle invalidateCapture
+                cut->queueWindowParamEvent( OFFSET_CHANGE, (double) newOff );
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsStretch_ ) {
@@ -1179,11 +1181,11 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 cut->setStartOffset( (offset_t)( (double) clipResizeOffset0_
                                                  * newStretch / s0 + 0.5 ) );
                 cut->setDuration( newDur );
-                cut->invalidateCapture();  // Drop cached render
-                // Force synchronous rebuild for live feedback during drag
-                cut->ensureCapture();
-                cut->ensureCapturePeaks();
-                repaint( oldRect );
+                // Queue events for processing after drag
+                cut->queueWindowParamEvent( STRETCH_CHANGE, newStretch );
+                cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
+                cut->queueWindowParamEvent( OFFSET_CHANGE, (double)(clipResizeOffset0_ * newStretch / s0 + 0.5) );
+                update( oldRect );
                 repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsLoop_ ) {
                 // Drag the RIGHT edge's UPPER half: extend the clip past its
@@ -1213,12 +1215,11 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setLoopLengthRaw( clipLoopSeg_ );
                 cut->setDuration( newDur );
-                cut->invalidateCapture();  // Drop cached render
-                // Force synchronous rebuild for live feedback during drag
-                cut->ensureCapture();
-                cut->ensureCapturePeaks();
-                repaint( oldRect );
-                repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+                // Queue event for processing after drag
+                cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
+                cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
+                update( oldRect );
+                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( lastClickedStart_ ) {
                 // Drag the LEFT edge: move the clip start to the snapped mouse
                 // time, trimming the front (cut start offset shifts with it).
@@ -1268,12 +1269,10 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setDuration( rDur );
-                cut->invalidateCapture();  // Drop cached render
-                // Force synchronous rebuild for live feedback during drag
-                cut->ensureCapture();
-                cut->ensureCapturePeaks();
-                repaint( oldRect );
-                repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+                // Queue event for processing after drag
+                cut->queueWindowParamEvent( DURATION_CHANGE, (double) rDur );
+                update( oldRect );
+                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( delta != 0 ) {
                 // Move it.
                 QRect oldVisibRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );

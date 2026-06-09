@@ -529,3 +529,67 @@ SLink *SCut::instantiateFromDomElement(
 
     return new SLink( *cut, parent );
 }
+
+void SCut::queueWindowParamEvent( SCutWindowParamEventType type, double value )
+{
+    // Queue a window parameter change event for later processing.
+    // This allows drag operations to queue changes without acquiring
+    // windowMutex_ (which would conflict with invalidateCapture).
+    std::lock_guard<std::mutex> lock( queueMutex_ );
+    SCutWindowParamEvent event{ type, value };
+    windowParamEventQueue_.push_back( event );
+}
+
+void SCut::processWindowParamEvents()
+{
+    // Process all queued window parameter events.
+    // Called after drag completes to apply all changes atomically,
+    // including invalidateCapture() and rebuildReader().
+    std::vector<SCutWindowParamEvent> events;
+    {
+        std::lock_guard<std::mutex> lock( queueMutex_ );
+        if( windowParamEventQueue_.empty() ) return;
+        events = windowParamEventQueue_;
+        windowParamEventQueue_.clear();
+    }
+
+    // Apply all events under windowMutex_, then handle expensive operations
+    SCutSnapshot snap;
+    bool needsCaptureBuild = false;
+    bool needsReaderBuild = false;
+
+    {
+        std::lock_guard<std::mutex> lock( windowMutex_ );
+        for( const SCutWindowParamEvent &event : events ) {
+            switch( event.type ) {
+            case OFFSET_CHANGE:
+                startOffset_ = (offset_t) event.value;
+                needsCaptureBuild = true;
+                break;
+            case DURATION_CHANGE:
+                cutDuration_ = (length_t) event.value;
+                needsCaptureBuild = true;
+                break;
+            case LOOP_LENGTH_CHANGE:
+                loopLength_ = (length_t) event.value;
+                needsCaptureBuild = true;
+                needsReaderBuild = true;
+                break;
+            case STRETCH_CHANGE:
+                grainParams_.stretch = event.value;
+                needsCaptureBuild = true;
+                needsReaderBuild = true;
+                break;
+            }
+        }
+        snap = getSnapshot();
+    }
+
+    // Call invalidateCapture and rebuildReader outside the lock
+    if( needsCaptureBuild ) {
+        invalidateCapture();
+    }
+    if( needsReaderBuild ) {
+        rebuildReader( snap );
+    }
+}

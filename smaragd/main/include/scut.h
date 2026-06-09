@@ -46,6 +46,18 @@ struct SCutReaderState {
     int generation;              // Incremented on each swap
 };
 
+// Window parameter change event queue for async processing after drag operations.
+enum SCutWindowParamEventType {
+    OFFSET_CHANGE,
+    DURATION_CHANGE,
+    LOOP_LENGTH_CHANGE,
+    STRETCH_CHANGE
+};
+struct SCutWindowParamEvent {
+    SCutWindowParamEventType type;
+    double value;
+};
+
 // Immutable snapshot of SCut's playback window parameters for lock-free audio-thread reads.
 // Audio thread takes a snapshot at buffer boundaries; UI thread modifies the original.
 // ReaderState is swapped atomically (Unix page cache model).
@@ -133,6 +145,11 @@ public slots:
     void setStretch( double );
     void setPitchCents( double );
 
+    // Queue a window parameter change event for later processing. Used during
+    // drag operations to avoid calling invalidateCapture() on the critical path.
+    void queueWindowParamEvent( SCutWindowParamEventType type, double value );
+    void processWindowParamEvents();  // Called after drag to apply queued changes
+
     // Drop the cached render of a container content (and any reader built over
     // it); the next pull re-captures. Connected to SProject::arrangementChanged
     // so a cut over a group/mixer transparently reflects edits (proposal 05
@@ -162,6 +179,12 @@ private:
     // thread setters; accepts snapshot to avoid reading unlocked members
     // (multithreading policy: Phase 1 Option B).
     void rebuildReader( const SCutSnapshot &snap );
+
+    // Queue of pending window parameter changes (populated during drag,
+    // processed after drag completes). Allows drag operations to queue changes
+    // without calling expensive invalidateCapture() on the drag event path.
+    std::vector<SCutWindowParamEvent> windowParamEventQueue_;
+    std::mutex queueMutex_;  // Protects the event queue (minimal contention)
 
     SLink *content_;
 
