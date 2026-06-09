@@ -140,6 +140,12 @@ public slots:
     // feedback. Only container-backed cuts ever use this.
     void invalidateCapture();
 
+    // Ensure the capture is built (used for synchronous rebuild during drags).
+    // Returns the capture if one was built, NULL if content is not capturable.
+    twRandomSource *ensureCapture();
+    // Ensure the peak cache of the capture is built (for waveform display).
+    bool ensureCapturePeaks();
+
 private slots:
 
 protected:
@@ -156,15 +162,6 @@ private:
     // thread setters; accepts snapshot to avoid reading unlocked members
     // (multithreading policy: Phase 1 Option B).
     void rebuildReader( const SCutSnapshot &snap );
-    // When the content is not a random-access source but is a seekable container
-    // (a track/mixer sub-arrangement), render its output ONCE into an owned
-    // twCapturingSource so placements read a cheap, independent snapshot instead
-    // of re-pulling the live graph (proposal 07 step 5). Returns NULL when the
-    // content is a real source (sample path) or cannot be captured.
-    twRandomSource *ensureCapture();
-    // Build (once) a peak-cache of the capture for waveform preview, in the
-    // container frame domain. Dropped together with the capture on edit.
-    bool ensureCapturePeaks();
 
     SLink *content_;
 
