@@ -672,7 +672,11 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
                         || newDur != lastClickDuration_ || newLoop != clipLoopLen0_
                         || newStretch != clipStretch0_;
             if( changed ) {
-                // Revert to the pre-drag window, then re-apply via the action.
+                // Apply queued window parameter events first (before reverting)
+                // This safely handles any invalidateCapture calls without lock contention
+                cut->processWindowParamEvents();
+
+                // Then revert to pre-drag state and re-apply via action
                 lastClickSLink_->setStartTime( clipDragStart0_ );
                 cut->setWindow( clipResizeOffset0_, lastClickDuration_,
                                 clipLoopLen0_, clipStretch0_ );
@@ -681,8 +685,6 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
                 SApplication::app().submitAction(
                     new SResizeClipAction( clipPath, newStart, newOffset, newDur,
                                            newLoop, newStretch ) );
-                // Apply any queued window parameter events
-                cut->processWindowParamEvents();
                 update();
             }
         }
