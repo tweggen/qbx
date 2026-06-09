@@ -2014,7 +2014,6 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     qRangePopup_->addAction( "Set &BPM...", this, SLOT( ctRangeSetBPM() ) );
     qRangePopup_->addSeparator();
     qRangeActClear_ = qRangePopup_->addAction( "&Clear range", this, SLOT( ctRangeClear() ) );
-    qRangePopup_->addAction( "Create &asset from range", this, SLOT( ctRangeCreateAsset() ) );
     qRangePopup_->addSeparator();
     QAction *actMode = qRangePopup_->addAction( "Time display: &Bars" );
     actMode->setCheckable(true);
