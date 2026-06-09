@@ -1145,12 +1145,10 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 cut->setStartOffset( (offset_t) newOff );
-                cut->invalidateCapture();  // Drop cached render
-                // Force synchronous rebuild for live feedback during drag
-                cut->ensureCapture();
-                cut->ensureCapturePeaks();
-                repaint( oldRect );
-                repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+                // Note: invalidateCapture() during drag causes deadlock with windowMutex_.
+                // The capture preview will update when the action applies on release.
+                update( oldRect );
+                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsStretch_ ) {
                 // Ctrl-drag a BORDER: change the timeline length, keeping the same
                 // SOURCE window (grain-stretched, pitch preserved). We set stretch
