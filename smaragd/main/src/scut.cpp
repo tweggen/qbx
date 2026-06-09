@@ -582,7 +582,12 @@ void SCut::processWindowParamEvents()
                 break;
             }
         }
-        snap = getSnapshot();
+        // Manually construct snapshot without re-acquiring lock (we already hold it)
+        snap.startOffset = startOffset_;
+        snap.loopLength = loopLength_;
+        snap.cutDuration = cutDuration_;
+        snap.grainParams = grainParams_;
+        snap.reader = currentReader_;
     }
 
     // Call invalidateCapture and rebuildReader outside the lock
