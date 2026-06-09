@@ -1184,6 +1184,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 cut->queueWindowParamEvent( STRETCH_CHANGE, newStretch );
                 cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
                 cut->queueWindowParamEvent( OFFSET_CHANGE, (double)(clipResizeOffset0_ * newStretch / s0 + 0.5) );
+                smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsLoop_ ) {
@@ -1217,6 +1218,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Queue event for processing after drag
                 cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
                 cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
+                smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( lastClickedStart_ ) {
@@ -1250,6 +1252,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     // Force synchronous rebuild for live feedback during drag
                     cut->ensureCapture();
                     cut->ensureCapturePeaks();
+                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                     update( oldRect );
                     update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
                 }
@@ -1270,6 +1273,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 cut->setDuration( rDur );
                 // Queue event for processing after drag
                 cut->queueWindowParamEvent( DURATION_CHANGE, (double) rDur );
+                smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( delta != 0 ) {
