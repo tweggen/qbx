@@ -1148,8 +1148,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     if( newOff > maxOff ) newOff = maxOff;
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
-                // Only queue the event; don't call setter (which calls invalidateCapture)
-                cut->queueWindowParamEvent( OFFSET_CHANGE, (double) newOff );
+                cut->setStartOffset( (offset_t) newOff );  // Visual feedback + queues event via invalidateCapture
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsStretch_ ) {
