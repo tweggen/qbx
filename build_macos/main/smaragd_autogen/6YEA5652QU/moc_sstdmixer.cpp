@@ -48,9 +48,14 @@ template <> constexpr inline auto SStdMixer::qt_create_metaobjectdata<qt_meta_ta
         "pt",
         "trackRemoved",
         "oldIndex",
+        "tracksReordered",
         "setNBusses",
         "insertTrack",
         "track",
+        "reorderTrack",
+        "fromIndex",
+        "toIndex",
+        "notifyTreeChanged",
         "removeTrack",
         "trackIndex",
         "SLink&",
@@ -58,7 +63,7 @@ template <> constexpr inline auto SStdMixer::qt_create_metaobjectdata<qt_meta_ta
         "mixerUpdateTrackAdded",
         "mixerChildDurationChanged",
         "length_t",
-        "trackVolumeChanged"
+        "trackMuteSoloChanged"
     };
 
     QtMocHelpers::UintData qt_methods {
@@ -74,38 +79,44 @@ template <> constexpr inline auto SStdMixer::qt_create_metaobjectdata<qt_meta_ta
         QtMocHelpers::SignalData<void(int, STrack &)>(8, 2, QMC::AccessPublic, QMetaType::Void, {{
             { QMetaType::Int, 9 }, { 0x80000000 | 6, 7 },
         }}),
+        // Signal 'tracksReordered'
+        QtMocHelpers::SignalData<void()>(10, 2, QMC::AccessPublic, QMetaType::Void),
         // Slot 'setNBusses'
-        QtMocHelpers::SlotData<int(int)>(10, 2, QMC::AccessPublic, QMetaType::Int, {{
+        QtMocHelpers::SlotData<int(int)>(11, 2, QMC::AccessPublic, QMetaType::Int, {{
             { QMetaType::Int, 3 },
         }}),
         // Slot 'insertTrack'
-        QtMocHelpers::SlotData<void(int, STrack &)>(11, 2, QMC::AccessPublic, QMetaType::Void, {{
-            { QMetaType::Int, 5 }, { 0x80000000 | 6, 12 },
+        QtMocHelpers::SlotData<void(STrack &)>(12, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { 0x80000000 | 6, 13 },
+        }}),
+        // Slot 'reorderTrack'
+        QtMocHelpers::SlotData<void(int, int)>(14, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::Int, 15 }, { QMetaType::Int, 16 },
+        }}),
+        // Slot 'notifyTreeChanged'
+        QtMocHelpers::SlotData<void()>(17, 2, QMC::AccessPublic, QMetaType::Void),
+        // Slot 'removeTrack'
+        QtMocHelpers::SlotData<int(int)>(18, 2, QMC::AccessPublic, QMetaType::Int, {{
+            { QMetaType::Int, 19 },
         }}),
         // Slot 'removeTrack'
-        QtMocHelpers::SlotData<int(int)>(13, 2, QMC::AccessPublic, QMetaType::Int, {{
-            { QMetaType::Int, 14 },
-        }}),
-        // Slot 'removeTrack'
-        QtMocHelpers::SlotData<int(SLink &)>(13, 2, QMC::AccessPublic, QMetaType::Int, {{
-            { 0x80000000 | 15, 12 },
+        QtMocHelpers::SlotData<int(SLink &)>(18, 2, QMC::AccessPublic, QMetaType::Int, {{
+            { 0x80000000 | 20, 13 },
         }}),
         // Slot 'mixerUpdateTrackRemoved'
-        QtMocHelpers::SlotData<void(int, STrack &)>(16, 2, QMC::AccessPrivate, QMetaType::Void, {{
+        QtMocHelpers::SlotData<void(int, STrack &)>(21, 2, QMC::AccessPrivate, QMetaType::Void, {{
             { QMetaType::Int, 2 }, { 0x80000000 | 6, 2 },
         }}),
         // Slot 'mixerUpdateTrackAdded'
-        QtMocHelpers::SlotData<void(int, STrack &)>(17, 2, QMC::AccessPrivate, QMetaType::Void, {{
+        QtMocHelpers::SlotData<void(int, STrack &)>(22, 2, QMC::AccessPrivate, QMetaType::Void, {{
             { QMetaType::Int, 2 }, { 0x80000000 | 6, 2 },
         }}),
         // Slot 'mixerChildDurationChanged'
-        QtMocHelpers::SlotData<void(length_t)>(18, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { 0x80000000 | 19, 2 },
+        QtMocHelpers::SlotData<void(length_t)>(23, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 24, 2 },
         }}),
-        // Slot 'trackVolumeChanged'
-        QtMocHelpers::SlotData<void(double)>(20, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::Double, 2 },
-        }}),
+        // Slot 'trackMuteSoloChanged'
+        QtMocHelpers::SlotData<void()>(25, 2, QMC::AccessPrivate, QMetaType::Void),
     };
     QtMocHelpers::UintData qt_properties {
     };
@@ -132,17 +143,20 @@ void SStdMixer::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, v
         case 0: _t->nBussesChanged((*reinterpret_cast<std::add_pointer_t<int>>(_a[1]))); break;
         case 1: _t->trackInserted((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
         case 2: _t->trackRemoved((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
-        case 3: { int _r = _t->setNBusses((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])));
+        case 3: _t->tracksReordered(); break;
+        case 4: { int _r = _t->setNBusses((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])));
             if (_a[0]) *reinterpret_cast<int*>(_a[0]) = std::move(_r); }  break;
-        case 4: _t->insertTrack((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
-        case 5: { int _r = _t->removeTrack((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])));
+        case 5: _t->insertTrack((*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[1]))); break;
+        case 6: _t->reorderTrack((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<int>>(_a[2]))); break;
+        case 7: _t->notifyTreeChanged(); break;
+        case 8: { int _r = _t->removeTrack((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])));
             if (_a[0]) *reinterpret_cast<int*>(_a[0]) = std::move(_r); }  break;
-        case 6: { int _r = _t->removeTrack((*reinterpret_cast<std::add_pointer_t<SLink&>>(_a[1])));
+        case 9: { int _r = _t->removeTrack((*reinterpret_cast<std::add_pointer_t<SLink&>>(_a[1])));
             if (_a[0]) *reinterpret_cast<int*>(_a[0]) = std::move(_r); }  break;
-        case 7: _t->mixerUpdateTrackRemoved((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
-        case 8: _t->mixerUpdateTrackAdded((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
-        case 9: _t->mixerChildDurationChanged((*reinterpret_cast<std::add_pointer_t<length_t>>(_a[1]))); break;
-        case 10: _t->trackVolumeChanged((*reinterpret_cast<std::add_pointer_t<double>>(_a[1]))); break;
+        case 10: _t->mixerUpdateTrackRemoved((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
+        case 11: _t->mixerUpdateTrackAdded((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
+        case 12: _t->mixerChildDurationChanged((*reinterpret_cast<std::add_pointer_t<length_t>>(_a[1]))); break;
+        case 13: _t->trackMuteSoloChanged(); break;
         default: ;
         }
     }
@@ -152,6 +166,8 @@ void SStdMixer::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, v
         if (QtMocHelpers::indexOfMethod<void (SStdMixer::*)(int , STrack & )>(_a, &SStdMixer::trackInserted, 1))
             return;
         if (QtMocHelpers::indexOfMethod<void (SStdMixer::*)(int , STrack & )>(_a, &SStdMixer::trackRemoved, 2))
+            return;
+        if (QtMocHelpers::indexOfMethod<void (SStdMixer::*)()>(_a, &SStdMixer::tracksReordered, 3))
             return;
     }
 }
@@ -175,14 +191,14 @@ int SStdMixer::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 11)
+        if (_id < 14)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 11;
+        _id -= 14;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 11)
+        if (_id < 14)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 11;
+        _id -= 14;
     }
     return _id;
 }
@@ -203,5 +219,11 @@ void SStdMixer::trackInserted(int _t1, STrack & _t2)
 void SStdMixer::trackRemoved(int _t1, STrack & _t2)
 {
     QMetaObject::activate<void>(this, &staticMetaObject, 2, nullptr, _t1, _t2);
+}
+
+// SIGNAL 3
+void SStdMixer::tracksReordered()
+{
+    QMetaObject::activate(this, &staticMetaObject, 3, nullptr);
 }
 QT_WARNING_POP

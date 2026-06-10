@@ -55,6 +55,9 @@ template <> constexpr inline auto SMVActualView::qt_create_metaobjectdata<qt_met
         "setLeftOffset",
         "setTopOffset",
         "ctGlobalShow",
+        "ctRangeSetBPM",
+        "ctRangeClear",
+        "ctCreateAssetFromTrack",
         "globalLocatorMoved"
     };
 
@@ -97,8 +100,14 @@ template <> constexpr inline auto SMVActualView::qt_create_metaobjectdata<qt_met
         }}),
         // Slot 'ctGlobalShow'
         QtMocHelpers::SlotData<void()>(16, 2, QMC::AccessProtected, QMetaType::Void),
+        // Slot 'ctRangeSetBPM'
+        QtMocHelpers::SlotData<void()>(17, 2, QMC::AccessProtected, QMetaType::Void),
+        // Slot 'ctRangeClear'
+        QtMocHelpers::SlotData<void()>(18, 2, QMC::AccessProtected, QMetaType::Void),
+        // Slot 'ctCreateAssetFromTrack'
+        QtMocHelpers::SlotData<void()>(19, 2, QMC::AccessProtected, QMetaType::Void),
         // Slot 'globalLocatorMoved'
-        QtMocHelpers::SlotData<void(offset_t, offset_t)>(17, 2, QMC::AccessPrivate, QMetaType::Void, {{
+        QtMocHelpers::SlotData<void(offset_t, offset_t)>(20, 2, QMC::AccessPrivate, QMetaType::Void, {{
             { 0x80000000 | 6, 2 }, { 0x80000000 | 6, 2 },
         }}),
     };
@@ -134,7 +143,10 @@ void SMVActualView::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _i
         case 7: _t->setLeftOffset((*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[1]))); break;
         case 8: _t->setTopOffset((*reinterpret_cast<std::add_pointer_t<idx_t>>(_a[1]))); break;
         case 9: _t->ctGlobalShow(); break;
-        case 10: _t->globalLocatorMoved((*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[2]))); break;
+        case 10: _t->ctRangeSetBPM(); break;
+        case 11: _t->ctRangeClear(); break;
+        case 12: _t->ctCreateAssetFromTrack(); break;
+        case 13: _t->globalLocatorMoved((*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[2]))); break;
         default: ;
         }
     }
@@ -169,14 +181,14 @@ int SMVActualView::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 11)
+        if (_id < 14)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 11;
+        _id -= 14;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 11)
+        if (_id < 14)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 11;
+        _id -= 14;
     }
     return _id;
 }
@@ -332,6 +344,10 @@ template <> constexpr inline auto SStdMixerView::qt_create_metaobjectdata<qt_met
         "STimeGridSpec",
         "ctAddTrack",
         "ctRemoveTrack",
+        "ctIndentTrack",
+        "ctOutdentTrack",
+        "ctGroupTrack",
+        "ctUngroupTrack",
         "ctInsertSample",
         "ctRemoveSample",
         "ctDeleteSample",
@@ -355,7 +371,8 @@ template <> constexpr inline auto SStdMixerView::qt_create_metaobjectdata<qt_met
         "offset_t",
         "addMixerControl",
         "STrack&",
-        "removeMixerControl"
+        "removeMixerControl",
+        "tracksReordered"
     };
 
     QtMocHelpers::UintData qt_methods {
@@ -367,60 +384,70 @@ template <> constexpr inline auto SStdMixerView::qt_create_metaobjectdata<qt_met
         QtMocHelpers::SlotData<void()>(4, 2, QMC::AccessPublic, QMetaType::Void),
         // Slot 'ctRemoveTrack'
         QtMocHelpers::SlotData<void()>(5, 2, QMC::AccessPublic, QMetaType::Void),
-        // Slot 'ctInsertSample'
+        // Slot 'ctIndentTrack'
         QtMocHelpers::SlotData<void()>(6, 2, QMC::AccessPublic, QMetaType::Void),
-        // Slot 'ctRemoveSample'
+        // Slot 'ctOutdentTrack'
         QtMocHelpers::SlotData<void()>(7, 2, QMC::AccessPublic, QMetaType::Void),
-        // Slot 'ctDeleteSample'
+        // Slot 'ctGroupTrack'
         QtMocHelpers::SlotData<void()>(8, 2, QMC::AccessPublic, QMetaType::Void),
-        // Slot 'ctSplitSample'
+        // Slot 'ctUngroupTrack'
         QtMocHelpers::SlotData<void()>(9, 2, QMC::AccessPublic, QMetaType::Void),
-        // Slot 'ctAddLink'
+        // Slot 'ctInsertSample'
         QtMocHelpers::SlotData<void()>(10, 2, QMC::AccessPublic, QMetaType::Void),
+        // Slot 'ctRemoveSample'
+        QtMocHelpers::SlotData<void()>(11, 2, QMC::AccessPublic, QMetaType::Void),
+        // Slot 'ctDeleteSample'
+        QtMocHelpers::SlotData<void()>(12, 2, QMC::AccessPublic, QMetaType::Void),
+        // Slot 'ctSplitSample'
+        QtMocHelpers::SlotData<void()>(13, 2, QMC::AccessPublic, QMetaType::Void),
+        // Slot 'ctAddLink'
+        QtMocHelpers::SlotData<void()>(14, 2, QMC::AccessPublic, QMetaType::Void),
         // Slot 'setTimeGridSpec'
-        QtMocHelpers::SlotData<void(const STimeGridSpec &)>(11, 2, QMC::AccessPublic, QMetaType::Void, {{
+        QtMocHelpers::SlotData<void(const STimeGridSpec &)>(15, 2, QMC::AccessPublic, QMetaType::Void, {{
             { 0x80000000 | 3, 2 },
         }}),
         // Slot 'setBPMTempo'
-        QtMocHelpers::SlotData<void(double)>(12, 2, QMC::AccessPublic, QMetaType::Void, {{
+        QtMocHelpers::SlotData<void(double)>(16, 2, QMC::AccessPublic, QMetaType::Void, {{
             { QMetaType::Double, 2 },
         }}),
         // Slot 'viewResized'
-        QtMocHelpers::SlotData<void()>(13, 2, QMC::AccessProtected, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(17, 2, QMC::AccessProtected, QMetaType::Void),
         // Slot 'contentDurationChanged'
-        QtMocHelpers::SlotData<void(length_t)>(14, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { 0x80000000 | 15, 16 },
+        QtMocHelpers::SlotData<void(length_t)>(18, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 19, 20 },
         }}),
         // Slot 'nTracksChanged'
-        QtMocHelpers::SlotData<void()>(17, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(21, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'timeSliderMoved'
-        QtMocHelpers::SlotData<void(int)>(18, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::Int, 19 },
+        QtMocHelpers::SlotData<void(int)>(22, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Int, 23 },
         }}),
         // Slot 'trackSliderMoved'
-        QtMocHelpers::SlotData<void(int)>(20, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::Int, 19 },
+        QtMocHelpers::SlotData<void(int)>(24, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Int, 23 },
         }}),
         // Slot 'zoomOutHor'
-        QtMocHelpers::SlotData<void()>(21, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(25, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'zoomInHor'
-        QtMocHelpers::SlotData<void()>(22, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(26, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'zoomOutVert'
-        QtMocHelpers::SlotData<void()>(23, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(27, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'zoomInVert'
-        QtMocHelpers::SlotData<void()>(24, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(28, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'avLeftOffsetChanged'
-        QtMocHelpers::SlotData<void(offset_t)>(25, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { 0x80000000 | 26, 2 },
+        QtMocHelpers::SlotData<void(offset_t)>(29, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 30, 2 },
         }}),
         // Slot 'addMixerControl'
-        QtMocHelpers::SlotData<void(int, STrack &)>(27, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::Int, 2 }, { 0x80000000 | 28, 2 },
+        QtMocHelpers::SlotData<void(int, STrack &)>(31, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Int, 2 }, { 0x80000000 | 32, 2 },
         }}),
         // Slot 'removeMixerControl'
-        QtMocHelpers::SlotData<void(int, STrack &)>(29, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::Int, 2 }, { 0x80000000 | 28, 2 },
+        QtMocHelpers::SlotData<void(int, STrack &)>(33, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Int, 2 }, { 0x80000000 | 32, 2 },
         }}),
+        // Slot 'tracksReordered'
+        QtMocHelpers::SlotData<void()>(34, 2, QMC::AccessPrivate, QMetaType::Void),
     };
     QtMocHelpers::UintData qt_properties {
     };
@@ -447,25 +474,30 @@ void SStdMixerView::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _i
         case 0: _t->timeGridSpecChanged((*reinterpret_cast<std::add_pointer_t<STimeGridSpec>>(_a[1]))); break;
         case 1: _t->ctAddTrack(); break;
         case 2: _t->ctRemoveTrack(); break;
-        case 3: _t->ctInsertSample(); break;
-        case 4: _t->ctRemoveSample(); break;
-        case 5: _t->ctDeleteSample(); break;
-        case 6: _t->ctSplitSample(); break;
-        case 7: _t->ctAddLink(); break;
-        case 8: _t->setTimeGridSpec((*reinterpret_cast<std::add_pointer_t<STimeGridSpec>>(_a[1]))); break;
-        case 9: _t->setBPMTempo((*reinterpret_cast<std::add_pointer_t<double>>(_a[1]))); break;
-        case 10: _t->viewResized(); break;
-        case 11: _t->contentDurationChanged((*reinterpret_cast<std::add_pointer_t<length_t>>(_a[1]))); break;
-        case 12: _t->nTracksChanged(); break;
-        case 13: _t->timeSliderMoved((*reinterpret_cast<std::add_pointer_t<int>>(_a[1]))); break;
-        case 14: _t->trackSliderMoved((*reinterpret_cast<std::add_pointer_t<int>>(_a[1]))); break;
-        case 15: _t->zoomOutHor(); break;
-        case 16: _t->zoomInHor(); break;
-        case 17: _t->zoomOutVert(); break;
-        case 18: _t->zoomInVert(); break;
-        case 19: _t->avLeftOffsetChanged((*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[1]))); break;
-        case 20: _t->addMixerControl((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
-        case 21: _t->removeMixerControl((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
+        case 3: _t->ctIndentTrack(); break;
+        case 4: _t->ctOutdentTrack(); break;
+        case 5: _t->ctGroupTrack(); break;
+        case 6: _t->ctUngroupTrack(); break;
+        case 7: _t->ctInsertSample(); break;
+        case 8: _t->ctRemoveSample(); break;
+        case 9: _t->ctDeleteSample(); break;
+        case 10: _t->ctSplitSample(); break;
+        case 11: _t->ctAddLink(); break;
+        case 12: _t->setTimeGridSpec((*reinterpret_cast<std::add_pointer_t<STimeGridSpec>>(_a[1]))); break;
+        case 13: _t->setBPMTempo((*reinterpret_cast<std::add_pointer_t<double>>(_a[1]))); break;
+        case 14: _t->viewResized(); break;
+        case 15: _t->contentDurationChanged((*reinterpret_cast<std::add_pointer_t<length_t>>(_a[1]))); break;
+        case 16: _t->nTracksChanged(); break;
+        case 17: _t->timeSliderMoved((*reinterpret_cast<std::add_pointer_t<int>>(_a[1]))); break;
+        case 18: _t->trackSliderMoved((*reinterpret_cast<std::add_pointer_t<int>>(_a[1]))); break;
+        case 19: _t->zoomOutHor(); break;
+        case 20: _t->zoomInHor(); break;
+        case 21: _t->zoomOutVert(); break;
+        case 22: _t->zoomInVert(); break;
+        case 23: _t->avLeftOffsetChanged((*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[1]))); break;
+        case 24: _t->addMixerControl((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
+        case 25: _t->removeMixerControl((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<STrack&>>(_a[2]))); break;
+        case 26: _t->tracksReordered(); break;
         default: ;
         }
     }
@@ -494,14 +526,14 @@ int SStdMixerView::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 22)
+        if (_id < 27)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 22;
+        _id -= 27;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 22)
+        if (_id < 27)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 22;
+        _id -= 27;
     }
     return _id;
 }

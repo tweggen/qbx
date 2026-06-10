@@ -751,9 +751,17 @@ smaragd_autogen/timestamp: \
 	/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include/stdarg.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QHash \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QList \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QMap \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QMutex \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QObject \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QRect \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QSet \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QSettings \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QString \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QStringList \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QVariant \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QVariantMap \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/QVector \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/q17memory.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/q20bit.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/q20functional.h \
@@ -847,6 +855,7 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qscopedpointer.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qscopeguard.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qset.h \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qsettings.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qshareddata.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qshareddata_impl.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qsharedpointer.h \
@@ -892,7 +901,9 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qtypes.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qutf8stringview.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qvariant.h \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qvariantmap.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qvarlengtharray.h \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qvector.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qversiontagging.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qxptype_traits.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtCore.framework/Versions/A/Headers/qyieldcpu.h \
@@ -930,6 +941,7 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtGui.framework/Versions/A/Headers/qvalidator.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtGui.framework/Versions/A/Headers/qwindowdefs.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/QApplication \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/QDialog \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/QTreeWidget \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qabstractbutton.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qabstractitemdelegate.h \
@@ -938,6 +950,7 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qabstractslider.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qabstractspinbox.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qapplication.h \
+	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qdialog.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qframe.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qmainwindow.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qmenu.h \
@@ -945,7 +958,6 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qrubberband.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qsizepolicy.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qslider.h \
-	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qspinbox.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qstyle.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qstyleoption.h \
 	/Users/tweggen/Qt/6.11.1/macos/lib/QtWidgets.framework/Versions/A/Headers/qtabbar.h \
@@ -968,9 +980,32 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/coding/github/qbx/smaragd/main/CMakeLists.txt \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/saddsampleaction.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/saddtrackaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/screateassetaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/scycleaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sduplicateclipaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sgridaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sloadprojectaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/smetronomeaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/smoveclipaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/smovetrackaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/splaceassetaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sremoveassetaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sremoveassetplacementaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sremoveclipaction.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sremovesampleaction.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sremovetrackaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sreparenttrackaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sresizeclipaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/srestoretrackaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/ssaveprojectaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/ssetpropertyaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/ssettrackvolumeaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/ssnaptogridaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/ssplitclipaction.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/stoggleplaybackaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/stogglesettingaction.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/strackpath.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/actions/sunsplitclipaction.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/saction.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sactionhistory.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sactionqueue.h \
@@ -981,17 +1016,18 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/scutrndrinline.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sexternfile.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sexternfilelist.h \
-	/Users/tweggen/coding/github/qbx/smaragd/main/include/sgrainfile.h \
-	/Users/tweggen/coding/github/qbx/smaragd/main/include/sgrainfilerndrinline.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/slink.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/smainwindow.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sobject.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sobjectrenderer.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sobjecttreeview.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/soptions.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/soptionsdialog.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/splainwave.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/splainwaverndrinline.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sproject.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sprojectloader.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/include/sprojectprops.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/ssettings.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/ssmvmixercontrol.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/sstdmixer.h \
@@ -999,11 +1035,33 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/strack.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/strackrenderer.h \
 	/Users/tweggen/coding/github/qbx/smaragd/main/include/strackrndrinline.h \
+	/Users/tweggen/coding/github/qbx/smaragd/main/resources/fonts.qrc \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/saddsampleaction.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/saddtrackaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/screateassetaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/scycleaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sduplicateclipaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sgridaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sloadprojectaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/smetronomeaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/smoveclipaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/smovetrackaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/splaceassetaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sremoveassetaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sremoveassetplacementaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sremoveclipaction.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sremovesampleaction.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sremovetrackaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sreparenttrackaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sresizeclipaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/srestoretrackaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/ssaveprojectaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/ssetpropertyaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/ssettrackvolumeaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/ssnaptogridaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/ssplitclipaction.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/stoggleplaybackaction.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/actions/sunsplitclipaction.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/main.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/sactionhistory.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/sactionqueue.cpp \
@@ -1014,13 +1072,13 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/scutrndrinline.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/sexternfile.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/sexternfilelist.cpp \
-	/Users/tweggen/coding/github/qbx/smaragd/main/src/sgrainfile.cpp \
-	/Users/tweggen/coding/github/qbx/smaragd/main/src/sgrainfilerndrinline.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/slink.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/smainwindow.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/sobject.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/sobjectrenderer.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/sobjecttreeview.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/soptions.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/soptionsdialog.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/splainwave.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/splainwaverndrinline.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/sproject.cpp \
@@ -1031,7 +1089,9 @@ smaragd_autogen/timestamp: \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/sstdmixerview.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/strack.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/main/src/strackrndrinline.cpp \
+	/Users/tweggen/coding/github/qbx/smaragd/main/src/swaveformdraw.cpp \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/tw303aenv.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twcomponent.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twformat.h \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twgrainparams.h \
 	/opt/homebrew/bin/cmake

@@ -857,19 +857,25 @@ tw303a_autogen/timestamp: \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/audio/coreaudio_backend.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/audio/null_backend.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/tw303aenv.h \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twcapturingsource.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twcomponent.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twconstant.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twconvert.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twformat.h \
-	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twgrainer.h \
-	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twgrainspec.h \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twgrainparams.h \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twgrainsource.h \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twloopreader.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twmixer.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twmoog.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twnegotiator.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twosc.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twpipe.h \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twrandomsource.h \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twresampledsource.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twresampler.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twrewire.h \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twsamplereader.h \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twsamplesource.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twsaw.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twsimplesaw.h \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/include/twspeaker.h \
@@ -883,19 +889,23 @@ tw303a_autogen/timestamp: \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/audio/null_backend.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/tw303a.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/tw303aenv.cc \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twcapturingsource.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twcomponent.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twconstant.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twconvert.cc \
-	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twgrainer.cc \
-	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twgrainspec.cc \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twgrainsource.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twlatch.cc \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twloopreader.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twmixer.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twmoog.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twnegotiator.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twosc.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twpipe.cc \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twresampledsource.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twresampler.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twrewire.cc \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twsamplereader.cc \
+	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twsamplesource.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twsaw.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twsimplesaw.cc \
 	/Users/tweggen/coding/github/qbx/smaragd/tw303a/src/twspeaker.cc \

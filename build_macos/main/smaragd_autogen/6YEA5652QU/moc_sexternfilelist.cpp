@@ -43,7 +43,13 @@ template <> constexpr inline auto SExternFileList::qt_create_metaobjectdata<qt_m
         "",
         "externFileAdded",
         "SExternFile",
-        "externFileRefChanged"
+        "externFileRefChanged",
+        "assetAdded",
+        "name",
+        "SObject&",
+        "body",
+        "assetRemoved",
+        "assetRefChanged"
     };
 
     QtMocHelpers::UintData qt_methods {
@@ -57,6 +63,16 @@ template <> constexpr inline auto SExternFileList::qt_create_metaobjectdata<qt_m
         }}),
         // Slot 'externFileRefChanged'
         QtMocHelpers::SlotData<void()>(5, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'assetAdded'
+        QtMocHelpers::SlotData<void(const QString &, SObject &)>(6, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::QString, 7 }, { 0x80000000 | 8, 9 },
+        }}),
+        // Slot 'assetRemoved'
+        QtMocHelpers::SlotData<void(const QString &)>(10, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::QString, 7 },
+        }}),
+        // Slot 'assetRefChanged'
+        QtMocHelpers::SlotData<void()>(11, 2, QMC::AccessPrivate, QMetaType::Void),
     };
     QtMocHelpers::UintData qt_properties {
     };
@@ -83,6 +99,9 @@ void SExternFileList::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int 
         case 0: _t->externFileRemoved((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1]))); break;
         case 1: _t->externFileAdded((*reinterpret_cast<std::add_pointer_t<SExternFile>>(_a[1]))); break;
         case 2: _t->externFileRefChanged(); break;
+        case 3: _t->assetAdded((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<SObject&>>(_a[2]))); break;
+        case 4: _t->assetRemoved((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1]))); break;
+        case 5: _t->assetRefChanged(); break;
         default: ;
         }
     }
@@ -107,14 +126,14 @@ int SExternFileList::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 3)
+        if (_id < 6)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 3;
+        _id -= 6;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 3)
+        if (_id < 6)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 3;
+        _id -= 6;
     }
     return _id;
 }

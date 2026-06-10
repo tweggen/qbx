@@ -49,6 +49,9 @@ bool RenderSession::start(twComponent *synthOutput, const RenderParams &params,
     double durationSec = params_.endTimeSec - params_.startTimeSec;
     totalSamples_ = static_cast<std::size_t>(durationSec * sampleRate_);
 
+    // Calculate start offset in samples
+    startOffsetSamples_ = static_cast<std::size_t>(params_.startTimeSec * sampleRate_);
+
     // Create writer for the selected format
     writer_ = createAudioFileWriter(params_.format);
     if (!writer_) {
@@ -115,11 +118,16 @@ void RenderSession::renderThreadMain() {
     bool success = true;
     std::string errorMsg;
 
-    fprintf(stderr, "[RenderSession] Starting render. Total samples: %zu, Sample rate: %u\n",
-            totalSamples_, sampleRate_);
+    fprintf(stderr, "[RenderSession] Starting render. Total samples: %zu, Sample rate: %u, Start offset: %zu\n",
+            totalSamples_, sampleRate_, startOffsetSamples_);
     fflush(stderr);
 
     try {
+        // Seek to start position if needed
+        if (startOffsetSamples_ > 0) {
+            synthOutput_->seekTo(startOffsetSamples_);
+        }
+
         std::size_t samplesWrittenVal = 0;
         while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
             // Calculate how many samples to render this iteration
@@ -127,15 +135,25 @@ void RenderSession::renderThreadMain() {
             std::size_t samplesToRender =
                 std::min(RENDER_BUFFER_FRAMES, (remainingSamples + 1) / 2);
 
-            // Pull samples from synth
-            // Note: This is a simplified implementation. The actual call depends on
-            // how twComponent's output is accessed. For now, we zero-fill as a
-            // placeholder.
-            // TODO: Properly integrate with synth graph audio processing
-            std::fill(buffer.begin(), buffer.end(), 0.0f);
+            // Pull mono samples from synth component
+            length_t framesGenerated = synthOutput_->calcOutputTo(
+                buffer.data(), samplesToRender, 0);
 
-            // Write to file
-            if (!writer_->write(buffer.data(), samplesToRender)) {
+            // If no frames were generated, fill with silence
+            if (framesGenerated <= 0) {
+                std::fill(buffer.begin(), buffer.begin() + samplesToRender, 0.0f);
+                framesGenerated = samplesToRender;
+            }
+
+            // Expand mono to stereo (duplicate each sample for left/right channels)
+            for (length_t i = framesGenerated - 1; i >= 0; --i) {
+                float s = buffer[i];
+                buffer[i * 2] = s;      // Left channel
+                buffer[i * 2 + 1] = s;  // Right channel
+            }
+
+            // Write to file (now as stereo)
+            if (!writer_->write(buffer.data(), framesGenerated)) {
                 success = false;
                 errorMsg = std::string("Write failed: ") + writer_->errorMessage();
                 break;

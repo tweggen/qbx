@@ -158,6 +158,30 @@ smaragd_autogen/fast:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd_autogen.dir/build.make main/CMakeFiles/smaragd_autogen.dir/build
 .PHONY : smaragd_autogen/fast
 
+smaragd_autogen/3YJK5W5UP7/qrc_fonts.o: smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.o
+.PHONY : smaragd_autogen/3YJK5W5UP7/qrc_fonts.o
+
+# target to build an object file
+smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.o
+.PHONY : smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.o
+
+smaragd_autogen/3YJK5W5UP7/qrc_fonts.i: smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.i
+.PHONY : smaragd_autogen/3YJK5W5UP7/qrc_fonts.i
+
+# target to preprocess a source file
+smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.i
+.PHONY : smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.i
+
+smaragd_autogen/3YJK5W5UP7/qrc_fonts.s: smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.s
+.PHONY : smaragd_autogen/3YJK5W5UP7/qrc_fonts.s
+
+# target to generate assembly for a file
+smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.s
+.PHONY : smaragd_autogen/3YJK5W5UP7/qrc_fonts.cpp.s
+
 smaragd_autogen/mocs_compilation.o: smaragd_autogen/mocs_compilation.cpp.o
 .PHONY : smaragd_autogen/mocs_compilation.o
 
@@ -230,6 +254,294 @@ src/actions/saddtrackaction.cpp.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/saddtrackaction.cpp.s
 .PHONY : src/actions/saddtrackaction.cpp.s
 
+src/actions/screateassetaction.o: src/actions/screateassetaction.cpp.o
+.PHONY : src/actions/screateassetaction.o
+
+# target to build an object file
+src/actions/screateassetaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/screateassetaction.cpp.o
+.PHONY : src/actions/screateassetaction.cpp.o
+
+src/actions/screateassetaction.i: src/actions/screateassetaction.cpp.i
+.PHONY : src/actions/screateassetaction.i
+
+# target to preprocess a source file
+src/actions/screateassetaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/screateassetaction.cpp.i
+.PHONY : src/actions/screateassetaction.cpp.i
+
+src/actions/screateassetaction.s: src/actions/screateassetaction.cpp.s
+.PHONY : src/actions/screateassetaction.s
+
+# target to generate assembly for a file
+src/actions/screateassetaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/screateassetaction.cpp.s
+.PHONY : src/actions/screateassetaction.cpp.s
+
+src/actions/scycleaction.o: src/actions/scycleaction.cpp.o
+.PHONY : src/actions/scycleaction.o
+
+# target to build an object file
+src/actions/scycleaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/scycleaction.cpp.o
+.PHONY : src/actions/scycleaction.cpp.o
+
+src/actions/scycleaction.i: src/actions/scycleaction.cpp.i
+.PHONY : src/actions/scycleaction.i
+
+# target to preprocess a source file
+src/actions/scycleaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/scycleaction.cpp.i
+.PHONY : src/actions/scycleaction.cpp.i
+
+src/actions/scycleaction.s: src/actions/scycleaction.cpp.s
+.PHONY : src/actions/scycleaction.s
+
+# target to generate assembly for a file
+src/actions/scycleaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/scycleaction.cpp.s
+.PHONY : src/actions/scycleaction.cpp.s
+
+src/actions/sduplicateclipaction.o: src/actions/sduplicateclipaction.cpp.o
+.PHONY : src/actions/sduplicateclipaction.o
+
+# target to build an object file
+src/actions/sduplicateclipaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sduplicateclipaction.cpp.o
+.PHONY : src/actions/sduplicateclipaction.cpp.o
+
+src/actions/sduplicateclipaction.i: src/actions/sduplicateclipaction.cpp.i
+.PHONY : src/actions/sduplicateclipaction.i
+
+# target to preprocess a source file
+src/actions/sduplicateclipaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sduplicateclipaction.cpp.i
+.PHONY : src/actions/sduplicateclipaction.cpp.i
+
+src/actions/sduplicateclipaction.s: src/actions/sduplicateclipaction.cpp.s
+.PHONY : src/actions/sduplicateclipaction.s
+
+# target to generate assembly for a file
+src/actions/sduplicateclipaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sduplicateclipaction.cpp.s
+.PHONY : src/actions/sduplicateclipaction.cpp.s
+
+src/actions/sgridaction.o: src/actions/sgridaction.cpp.o
+.PHONY : src/actions/sgridaction.o
+
+# target to build an object file
+src/actions/sgridaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sgridaction.cpp.o
+.PHONY : src/actions/sgridaction.cpp.o
+
+src/actions/sgridaction.i: src/actions/sgridaction.cpp.i
+.PHONY : src/actions/sgridaction.i
+
+# target to preprocess a source file
+src/actions/sgridaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sgridaction.cpp.i
+.PHONY : src/actions/sgridaction.cpp.i
+
+src/actions/sgridaction.s: src/actions/sgridaction.cpp.s
+.PHONY : src/actions/sgridaction.s
+
+# target to generate assembly for a file
+src/actions/sgridaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sgridaction.cpp.s
+.PHONY : src/actions/sgridaction.cpp.s
+
+src/actions/sloadprojectaction.o: src/actions/sloadprojectaction.cpp.o
+.PHONY : src/actions/sloadprojectaction.o
+
+# target to build an object file
+src/actions/sloadprojectaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sloadprojectaction.cpp.o
+.PHONY : src/actions/sloadprojectaction.cpp.o
+
+src/actions/sloadprojectaction.i: src/actions/sloadprojectaction.cpp.i
+.PHONY : src/actions/sloadprojectaction.i
+
+# target to preprocess a source file
+src/actions/sloadprojectaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sloadprojectaction.cpp.i
+.PHONY : src/actions/sloadprojectaction.cpp.i
+
+src/actions/sloadprojectaction.s: src/actions/sloadprojectaction.cpp.s
+.PHONY : src/actions/sloadprojectaction.s
+
+# target to generate assembly for a file
+src/actions/sloadprojectaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sloadprojectaction.cpp.s
+.PHONY : src/actions/sloadprojectaction.cpp.s
+
+src/actions/smetronomeaction.o: src/actions/smetronomeaction.cpp.o
+.PHONY : src/actions/smetronomeaction.o
+
+# target to build an object file
+src/actions/smetronomeaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/smetronomeaction.cpp.o
+.PHONY : src/actions/smetronomeaction.cpp.o
+
+src/actions/smetronomeaction.i: src/actions/smetronomeaction.cpp.i
+.PHONY : src/actions/smetronomeaction.i
+
+# target to preprocess a source file
+src/actions/smetronomeaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/smetronomeaction.cpp.i
+.PHONY : src/actions/smetronomeaction.cpp.i
+
+src/actions/smetronomeaction.s: src/actions/smetronomeaction.cpp.s
+.PHONY : src/actions/smetronomeaction.s
+
+# target to generate assembly for a file
+src/actions/smetronomeaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/smetronomeaction.cpp.s
+.PHONY : src/actions/smetronomeaction.cpp.s
+
+src/actions/smoveclipaction.o: src/actions/smoveclipaction.cpp.o
+.PHONY : src/actions/smoveclipaction.o
+
+# target to build an object file
+src/actions/smoveclipaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/smoveclipaction.cpp.o
+.PHONY : src/actions/smoveclipaction.cpp.o
+
+src/actions/smoveclipaction.i: src/actions/smoveclipaction.cpp.i
+.PHONY : src/actions/smoveclipaction.i
+
+# target to preprocess a source file
+src/actions/smoveclipaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/smoveclipaction.cpp.i
+.PHONY : src/actions/smoveclipaction.cpp.i
+
+src/actions/smoveclipaction.s: src/actions/smoveclipaction.cpp.s
+.PHONY : src/actions/smoveclipaction.s
+
+# target to generate assembly for a file
+src/actions/smoveclipaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/smoveclipaction.cpp.s
+.PHONY : src/actions/smoveclipaction.cpp.s
+
+src/actions/smovetrackaction.o: src/actions/smovetrackaction.cpp.o
+.PHONY : src/actions/smovetrackaction.o
+
+# target to build an object file
+src/actions/smovetrackaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/smovetrackaction.cpp.o
+.PHONY : src/actions/smovetrackaction.cpp.o
+
+src/actions/smovetrackaction.i: src/actions/smovetrackaction.cpp.i
+.PHONY : src/actions/smovetrackaction.i
+
+# target to preprocess a source file
+src/actions/smovetrackaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/smovetrackaction.cpp.i
+.PHONY : src/actions/smovetrackaction.cpp.i
+
+src/actions/smovetrackaction.s: src/actions/smovetrackaction.cpp.s
+.PHONY : src/actions/smovetrackaction.s
+
+# target to generate assembly for a file
+src/actions/smovetrackaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/smovetrackaction.cpp.s
+.PHONY : src/actions/smovetrackaction.cpp.s
+
+src/actions/splaceassetaction.o: src/actions/splaceassetaction.cpp.o
+.PHONY : src/actions/splaceassetaction.o
+
+# target to build an object file
+src/actions/splaceassetaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/splaceassetaction.cpp.o
+.PHONY : src/actions/splaceassetaction.cpp.o
+
+src/actions/splaceassetaction.i: src/actions/splaceassetaction.cpp.i
+.PHONY : src/actions/splaceassetaction.i
+
+# target to preprocess a source file
+src/actions/splaceassetaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/splaceassetaction.cpp.i
+.PHONY : src/actions/splaceassetaction.cpp.i
+
+src/actions/splaceassetaction.s: src/actions/splaceassetaction.cpp.s
+.PHONY : src/actions/splaceassetaction.s
+
+# target to generate assembly for a file
+src/actions/splaceassetaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/splaceassetaction.cpp.s
+.PHONY : src/actions/splaceassetaction.cpp.s
+
+src/actions/sremoveassetaction.o: src/actions/sremoveassetaction.cpp.o
+.PHONY : src/actions/sremoveassetaction.o
+
+# target to build an object file
+src/actions/sremoveassetaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremoveassetaction.cpp.o
+.PHONY : src/actions/sremoveassetaction.cpp.o
+
+src/actions/sremoveassetaction.i: src/actions/sremoveassetaction.cpp.i
+.PHONY : src/actions/sremoveassetaction.i
+
+# target to preprocess a source file
+src/actions/sremoveassetaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremoveassetaction.cpp.i
+.PHONY : src/actions/sremoveassetaction.cpp.i
+
+src/actions/sremoveassetaction.s: src/actions/sremoveassetaction.cpp.s
+.PHONY : src/actions/sremoveassetaction.s
+
+# target to generate assembly for a file
+src/actions/sremoveassetaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremoveassetaction.cpp.s
+.PHONY : src/actions/sremoveassetaction.cpp.s
+
+src/actions/sremoveassetplacementaction.o: src/actions/sremoveassetplacementaction.cpp.o
+.PHONY : src/actions/sremoveassetplacementaction.o
+
+# target to build an object file
+src/actions/sremoveassetplacementaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremoveassetplacementaction.cpp.o
+.PHONY : src/actions/sremoveassetplacementaction.cpp.o
+
+src/actions/sremoveassetplacementaction.i: src/actions/sremoveassetplacementaction.cpp.i
+.PHONY : src/actions/sremoveassetplacementaction.i
+
+# target to preprocess a source file
+src/actions/sremoveassetplacementaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremoveassetplacementaction.cpp.i
+.PHONY : src/actions/sremoveassetplacementaction.cpp.i
+
+src/actions/sremoveassetplacementaction.s: src/actions/sremoveassetplacementaction.cpp.s
+.PHONY : src/actions/sremoveassetplacementaction.s
+
+# target to generate assembly for a file
+src/actions/sremoveassetplacementaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremoveassetplacementaction.cpp.s
+.PHONY : src/actions/sremoveassetplacementaction.cpp.s
+
+src/actions/sremoveclipaction.o: src/actions/sremoveclipaction.cpp.o
+.PHONY : src/actions/sremoveclipaction.o
+
+# target to build an object file
+src/actions/sremoveclipaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremoveclipaction.cpp.o
+.PHONY : src/actions/sremoveclipaction.cpp.o
+
+src/actions/sremoveclipaction.i: src/actions/sremoveclipaction.cpp.i
+.PHONY : src/actions/sremoveclipaction.i
+
+# target to preprocess a source file
+src/actions/sremoveclipaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremoveclipaction.cpp.i
+.PHONY : src/actions/sremoveclipaction.cpp.i
+
+src/actions/sremoveclipaction.s: src/actions/sremoveclipaction.cpp.s
+.PHONY : src/actions/sremoveclipaction.s
+
+# target to generate assembly for a file
+src/actions/sremoveclipaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremoveclipaction.cpp.s
+.PHONY : src/actions/sremoveclipaction.cpp.s
+
 src/actions/sremovesampleaction.o: src/actions/sremovesampleaction.cpp.o
 .PHONY : src/actions/sremovesampleaction.o
 
@@ -278,6 +590,198 @@ src/actions/sremovetrackaction.cpp.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sremovetrackaction.cpp.s
 .PHONY : src/actions/sremovetrackaction.cpp.s
 
+src/actions/sreparenttrackaction.o: src/actions/sreparenttrackaction.cpp.o
+.PHONY : src/actions/sreparenttrackaction.o
+
+# target to build an object file
+src/actions/sreparenttrackaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sreparenttrackaction.cpp.o
+.PHONY : src/actions/sreparenttrackaction.cpp.o
+
+src/actions/sreparenttrackaction.i: src/actions/sreparenttrackaction.cpp.i
+.PHONY : src/actions/sreparenttrackaction.i
+
+# target to preprocess a source file
+src/actions/sreparenttrackaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sreparenttrackaction.cpp.i
+.PHONY : src/actions/sreparenttrackaction.cpp.i
+
+src/actions/sreparenttrackaction.s: src/actions/sreparenttrackaction.cpp.s
+.PHONY : src/actions/sreparenttrackaction.s
+
+# target to generate assembly for a file
+src/actions/sreparenttrackaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sreparenttrackaction.cpp.s
+.PHONY : src/actions/sreparenttrackaction.cpp.s
+
+src/actions/sresizeclipaction.o: src/actions/sresizeclipaction.cpp.o
+.PHONY : src/actions/sresizeclipaction.o
+
+# target to build an object file
+src/actions/sresizeclipaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sresizeclipaction.cpp.o
+.PHONY : src/actions/sresizeclipaction.cpp.o
+
+src/actions/sresizeclipaction.i: src/actions/sresizeclipaction.cpp.i
+.PHONY : src/actions/sresizeclipaction.i
+
+# target to preprocess a source file
+src/actions/sresizeclipaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sresizeclipaction.cpp.i
+.PHONY : src/actions/sresizeclipaction.cpp.i
+
+src/actions/sresizeclipaction.s: src/actions/sresizeclipaction.cpp.s
+.PHONY : src/actions/sresizeclipaction.s
+
+# target to generate assembly for a file
+src/actions/sresizeclipaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sresizeclipaction.cpp.s
+.PHONY : src/actions/sresizeclipaction.cpp.s
+
+src/actions/srestoretrackaction.o: src/actions/srestoretrackaction.cpp.o
+.PHONY : src/actions/srestoretrackaction.o
+
+# target to build an object file
+src/actions/srestoretrackaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/srestoretrackaction.cpp.o
+.PHONY : src/actions/srestoretrackaction.cpp.o
+
+src/actions/srestoretrackaction.i: src/actions/srestoretrackaction.cpp.i
+.PHONY : src/actions/srestoretrackaction.i
+
+# target to preprocess a source file
+src/actions/srestoretrackaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/srestoretrackaction.cpp.i
+.PHONY : src/actions/srestoretrackaction.cpp.i
+
+src/actions/srestoretrackaction.s: src/actions/srestoretrackaction.cpp.s
+.PHONY : src/actions/srestoretrackaction.s
+
+# target to generate assembly for a file
+src/actions/srestoretrackaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/srestoretrackaction.cpp.s
+.PHONY : src/actions/srestoretrackaction.cpp.s
+
+src/actions/ssaveprojectaction.o: src/actions/ssaveprojectaction.cpp.o
+.PHONY : src/actions/ssaveprojectaction.o
+
+# target to build an object file
+src/actions/ssaveprojectaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssaveprojectaction.cpp.o
+.PHONY : src/actions/ssaveprojectaction.cpp.o
+
+src/actions/ssaveprojectaction.i: src/actions/ssaveprojectaction.cpp.i
+.PHONY : src/actions/ssaveprojectaction.i
+
+# target to preprocess a source file
+src/actions/ssaveprojectaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssaveprojectaction.cpp.i
+.PHONY : src/actions/ssaveprojectaction.cpp.i
+
+src/actions/ssaveprojectaction.s: src/actions/ssaveprojectaction.cpp.s
+.PHONY : src/actions/ssaveprojectaction.s
+
+# target to generate assembly for a file
+src/actions/ssaveprojectaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssaveprojectaction.cpp.s
+.PHONY : src/actions/ssaveprojectaction.cpp.s
+
+src/actions/ssetpropertyaction.o: src/actions/ssetpropertyaction.cpp.o
+.PHONY : src/actions/ssetpropertyaction.o
+
+# target to build an object file
+src/actions/ssetpropertyaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssetpropertyaction.cpp.o
+.PHONY : src/actions/ssetpropertyaction.cpp.o
+
+src/actions/ssetpropertyaction.i: src/actions/ssetpropertyaction.cpp.i
+.PHONY : src/actions/ssetpropertyaction.i
+
+# target to preprocess a source file
+src/actions/ssetpropertyaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssetpropertyaction.cpp.i
+.PHONY : src/actions/ssetpropertyaction.cpp.i
+
+src/actions/ssetpropertyaction.s: src/actions/ssetpropertyaction.cpp.s
+.PHONY : src/actions/ssetpropertyaction.s
+
+# target to generate assembly for a file
+src/actions/ssetpropertyaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssetpropertyaction.cpp.s
+.PHONY : src/actions/ssetpropertyaction.cpp.s
+
+src/actions/ssettrackvolumeaction.o: src/actions/ssettrackvolumeaction.cpp.o
+.PHONY : src/actions/ssettrackvolumeaction.o
+
+# target to build an object file
+src/actions/ssettrackvolumeaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssettrackvolumeaction.cpp.o
+.PHONY : src/actions/ssettrackvolumeaction.cpp.o
+
+src/actions/ssettrackvolumeaction.i: src/actions/ssettrackvolumeaction.cpp.i
+.PHONY : src/actions/ssettrackvolumeaction.i
+
+# target to preprocess a source file
+src/actions/ssettrackvolumeaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssettrackvolumeaction.cpp.i
+.PHONY : src/actions/ssettrackvolumeaction.cpp.i
+
+src/actions/ssettrackvolumeaction.s: src/actions/ssettrackvolumeaction.cpp.s
+.PHONY : src/actions/ssettrackvolumeaction.s
+
+# target to generate assembly for a file
+src/actions/ssettrackvolumeaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssettrackvolumeaction.cpp.s
+.PHONY : src/actions/ssettrackvolumeaction.cpp.s
+
+src/actions/ssnaptogridaction.o: src/actions/ssnaptogridaction.cpp.o
+.PHONY : src/actions/ssnaptogridaction.o
+
+# target to build an object file
+src/actions/ssnaptogridaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssnaptogridaction.cpp.o
+.PHONY : src/actions/ssnaptogridaction.cpp.o
+
+src/actions/ssnaptogridaction.i: src/actions/ssnaptogridaction.cpp.i
+.PHONY : src/actions/ssnaptogridaction.i
+
+# target to preprocess a source file
+src/actions/ssnaptogridaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssnaptogridaction.cpp.i
+.PHONY : src/actions/ssnaptogridaction.cpp.i
+
+src/actions/ssnaptogridaction.s: src/actions/ssnaptogridaction.cpp.s
+.PHONY : src/actions/ssnaptogridaction.s
+
+# target to generate assembly for a file
+src/actions/ssnaptogridaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssnaptogridaction.cpp.s
+.PHONY : src/actions/ssnaptogridaction.cpp.s
+
+src/actions/ssplitclipaction.o: src/actions/ssplitclipaction.cpp.o
+.PHONY : src/actions/ssplitclipaction.o
+
+# target to build an object file
+src/actions/ssplitclipaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssplitclipaction.cpp.o
+.PHONY : src/actions/ssplitclipaction.cpp.o
+
+src/actions/ssplitclipaction.i: src/actions/ssplitclipaction.cpp.i
+.PHONY : src/actions/ssplitclipaction.i
+
+# target to preprocess a source file
+src/actions/ssplitclipaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssplitclipaction.cpp.i
+.PHONY : src/actions/ssplitclipaction.cpp.i
+
+src/actions/ssplitclipaction.s: src/actions/ssplitclipaction.cpp.s
+.PHONY : src/actions/ssplitclipaction.s
+
+# target to generate assembly for a file
+src/actions/ssplitclipaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/ssplitclipaction.cpp.s
+.PHONY : src/actions/ssplitclipaction.cpp.s
+
 src/actions/stoggleplaybackaction.o: src/actions/stoggleplaybackaction.cpp.o
 .PHONY : src/actions/stoggleplaybackaction.o
 
@@ -301,6 +805,30 @@ src/actions/stoggleplaybackaction.s: src/actions/stoggleplaybackaction.cpp.s
 src/actions/stoggleplaybackaction.cpp.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/stoggleplaybackaction.cpp.s
 .PHONY : src/actions/stoggleplaybackaction.cpp.s
+
+src/actions/sunsplitclipaction.o: src/actions/sunsplitclipaction.cpp.o
+.PHONY : src/actions/sunsplitclipaction.o
+
+# target to build an object file
+src/actions/sunsplitclipaction.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sunsplitclipaction.cpp.o
+.PHONY : src/actions/sunsplitclipaction.cpp.o
+
+src/actions/sunsplitclipaction.i: src/actions/sunsplitclipaction.cpp.i
+.PHONY : src/actions/sunsplitclipaction.i
+
+# target to preprocess a source file
+src/actions/sunsplitclipaction.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sunsplitclipaction.cpp.i
+.PHONY : src/actions/sunsplitclipaction.cpp.i
+
+src/actions/sunsplitclipaction.s: src/actions/sunsplitclipaction.cpp.s
+.PHONY : src/actions/sunsplitclipaction.s
+
+# target to generate assembly for a file
+src/actions/sunsplitclipaction.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/actions/sunsplitclipaction.cpp.s
+.PHONY : src/actions/sunsplitclipaction.cpp.s
 
 src/main.o: src/main.cpp.o
 .PHONY : src/main.o
@@ -542,54 +1070,6 @@ src/sexternfilelist.cpp.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/sexternfilelist.cpp.s
 .PHONY : src/sexternfilelist.cpp.s
 
-src/sgrainfile.o: src/sgrainfile.cpp.o
-.PHONY : src/sgrainfile.o
-
-# target to build an object file
-src/sgrainfile.cpp.o:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/sgrainfile.cpp.o
-.PHONY : src/sgrainfile.cpp.o
-
-src/sgrainfile.i: src/sgrainfile.cpp.i
-.PHONY : src/sgrainfile.i
-
-# target to preprocess a source file
-src/sgrainfile.cpp.i:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/sgrainfile.cpp.i
-.PHONY : src/sgrainfile.cpp.i
-
-src/sgrainfile.s: src/sgrainfile.cpp.s
-.PHONY : src/sgrainfile.s
-
-# target to generate assembly for a file
-src/sgrainfile.cpp.s:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/sgrainfile.cpp.s
-.PHONY : src/sgrainfile.cpp.s
-
-src/sgrainfilerndrinline.o: src/sgrainfilerndrinline.cpp.o
-.PHONY : src/sgrainfilerndrinline.o
-
-# target to build an object file
-src/sgrainfilerndrinline.cpp.o:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/sgrainfilerndrinline.cpp.o
-.PHONY : src/sgrainfilerndrinline.cpp.o
-
-src/sgrainfilerndrinline.i: src/sgrainfilerndrinline.cpp.i
-.PHONY : src/sgrainfilerndrinline.i
-
-# target to preprocess a source file
-src/sgrainfilerndrinline.cpp.i:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/sgrainfilerndrinline.cpp.i
-.PHONY : src/sgrainfilerndrinline.cpp.i
-
-src/sgrainfilerndrinline.s: src/sgrainfilerndrinline.cpp.s
-.PHONY : src/sgrainfilerndrinline.s
-
-# target to generate assembly for a file
-src/sgrainfilerndrinline.cpp.s:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/sgrainfilerndrinline.cpp.s
-.PHONY : src/sgrainfilerndrinline.cpp.s
-
 src/slink.o: src/slink.cpp.o
 .PHONY : src/slink.o
 
@@ -709,6 +1189,54 @@ src/sobjecttreeview.s: src/sobjecttreeview.cpp.s
 src/sobjecttreeview.cpp.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/sobjecttreeview.cpp.s
 .PHONY : src/sobjecttreeview.cpp.s
+
+src/soptions.o: src/soptions.cpp.o
+.PHONY : src/soptions.o
+
+# target to build an object file
+src/soptions.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/soptions.cpp.o
+.PHONY : src/soptions.cpp.o
+
+src/soptions.i: src/soptions.cpp.i
+.PHONY : src/soptions.i
+
+# target to preprocess a source file
+src/soptions.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/soptions.cpp.i
+.PHONY : src/soptions.cpp.i
+
+src/soptions.s: src/soptions.cpp.s
+.PHONY : src/soptions.s
+
+# target to generate assembly for a file
+src/soptions.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/soptions.cpp.s
+.PHONY : src/soptions.cpp.s
+
+src/soptionsdialog.o: src/soptionsdialog.cpp.o
+.PHONY : src/soptionsdialog.o
+
+# target to build an object file
+src/soptionsdialog.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/soptionsdialog.cpp.o
+.PHONY : src/soptionsdialog.cpp.o
+
+src/soptionsdialog.i: src/soptionsdialog.cpp.i
+.PHONY : src/soptionsdialog.i
+
+# target to preprocess a source file
+src/soptionsdialog.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/soptionsdialog.cpp.i
+.PHONY : src/soptionsdialog.cpp.i
+
+src/soptionsdialog.s: src/soptionsdialog.cpp.s
+.PHONY : src/soptionsdialog.s
+
+# target to generate assembly for a file
+src/soptionsdialog.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/soptionsdialog.cpp.s
+.PHONY : src/soptionsdialog.cpp.s
 
 src/splainwave.o: src/splainwave.cpp.o
 .PHONY : src/splainwave.o
@@ -950,6 +1478,30 @@ src/strackrndrinline.cpp.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/strackrndrinline.cpp.s
 .PHONY : src/strackrndrinline.cpp.s
 
+src/swaveformdraw.o: src/swaveformdraw.cpp.o
+.PHONY : src/swaveformdraw.o
+
+# target to build an object file
+src/swaveformdraw.cpp.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/swaveformdraw.cpp.o
+.PHONY : src/swaveformdraw.cpp.o
+
+src/swaveformdraw.i: src/swaveformdraw.cpp.i
+.PHONY : src/swaveformdraw.i
+
+# target to preprocess a source file
+src/swaveformdraw.cpp.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/swaveformdraw.cpp.i
+.PHONY : src/swaveformdraw.cpp.i
+
+src/swaveformdraw.s: src/swaveformdraw.cpp.s
+.PHONY : src/swaveformdraw.s
+
+# target to generate assembly for a file
+src/swaveformdraw.cpp.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f main/CMakeFiles/smaragd.dir/build.make main/CMakeFiles/smaragd.dir/src/swaveformdraw.cpp.s
+.PHONY : src/swaveformdraw.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -961,6 +1513,9 @@ help:
 	@echo "... smaragd_autogen"
 	@echo "... smaragd_autogen_timestamp_deps"
 	@echo "... smaragd"
+	@echo "... smaragd_autogen/3YJK5W5UP7/qrc_fonts.o"
+	@echo "... smaragd_autogen/3YJK5W5UP7/qrc_fonts.i"
+	@echo "... smaragd_autogen/3YJK5W5UP7/qrc_fonts.s"
 	@echo "... smaragd_autogen/mocs_compilation.o"
 	@echo "... smaragd_autogen/mocs_compilation.i"
 	@echo "... smaragd_autogen/mocs_compilation.s"
@@ -970,15 +1525,78 @@ help:
 	@echo "... src/actions/saddtrackaction.o"
 	@echo "... src/actions/saddtrackaction.i"
 	@echo "... src/actions/saddtrackaction.s"
+	@echo "... src/actions/screateassetaction.o"
+	@echo "... src/actions/screateassetaction.i"
+	@echo "... src/actions/screateassetaction.s"
+	@echo "... src/actions/scycleaction.o"
+	@echo "... src/actions/scycleaction.i"
+	@echo "... src/actions/scycleaction.s"
+	@echo "... src/actions/sduplicateclipaction.o"
+	@echo "... src/actions/sduplicateclipaction.i"
+	@echo "... src/actions/sduplicateclipaction.s"
+	@echo "... src/actions/sgridaction.o"
+	@echo "... src/actions/sgridaction.i"
+	@echo "... src/actions/sgridaction.s"
+	@echo "... src/actions/sloadprojectaction.o"
+	@echo "... src/actions/sloadprojectaction.i"
+	@echo "... src/actions/sloadprojectaction.s"
+	@echo "... src/actions/smetronomeaction.o"
+	@echo "... src/actions/smetronomeaction.i"
+	@echo "... src/actions/smetronomeaction.s"
+	@echo "... src/actions/smoveclipaction.o"
+	@echo "... src/actions/smoveclipaction.i"
+	@echo "... src/actions/smoveclipaction.s"
+	@echo "... src/actions/smovetrackaction.o"
+	@echo "... src/actions/smovetrackaction.i"
+	@echo "... src/actions/smovetrackaction.s"
+	@echo "... src/actions/splaceassetaction.o"
+	@echo "... src/actions/splaceassetaction.i"
+	@echo "... src/actions/splaceassetaction.s"
+	@echo "... src/actions/sremoveassetaction.o"
+	@echo "... src/actions/sremoveassetaction.i"
+	@echo "... src/actions/sremoveassetaction.s"
+	@echo "... src/actions/sremoveassetplacementaction.o"
+	@echo "... src/actions/sremoveassetplacementaction.i"
+	@echo "... src/actions/sremoveassetplacementaction.s"
+	@echo "... src/actions/sremoveclipaction.o"
+	@echo "... src/actions/sremoveclipaction.i"
+	@echo "... src/actions/sremoveclipaction.s"
 	@echo "... src/actions/sremovesampleaction.o"
 	@echo "... src/actions/sremovesampleaction.i"
 	@echo "... src/actions/sremovesampleaction.s"
 	@echo "... src/actions/sremovetrackaction.o"
 	@echo "... src/actions/sremovetrackaction.i"
 	@echo "... src/actions/sremovetrackaction.s"
+	@echo "... src/actions/sreparenttrackaction.o"
+	@echo "... src/actions/sreparenttrackaction.i"
+	@echo "... src/actions/sreparenttrackaction.s"
+	@echo "... src/actions/sresizeclipaction.o"
+	@echo "... src/actions/sresizeclipaction.i"
+	@echo "... src/actions/sresizeclipaction.s"
+	@echo "... src/actions/srestoretrackaction.o"
+	@echo "... src/actions/srestoretrackaction.i"
+	@echo "... src/actions/srestoretrackaction.s"
+	@echo "... src/actions/ssaveprojectaction.o"
+	@echo "... src/actions/ssaveprojectaction.i"
+	@echo "... src/actions/ssaveprojectaction.s"
+	@echo "... src/actions/ssetpropertyaction.o"
+	@echo "... src/actions/ssetpropertyaction.i"
+	@echo "... src/actions/ssetpropertyaction.s"
+	@echo "... src/actions/ssettrackvolumeaction.o"
+	@echo "... src/actions/ssettrackvolumeaction.i"
+	@echo "... src/actions/ssettrackvolumeaction.s"
+	@echo "... src/actions/ssnaptogridaction.o"
+	@echo "... src/actions/ssnaptogridaction.i"
+	@echo "... src/actions/ssnaptogridaction.s"
+	@echo "... src/actions/ssplitclipaction.o"
+	@echo "... src/actions/ssplitclipaction.i"
+	@echo "... src/actions/ssplitclipaction.s"
 	@echo "... src/actions/stoggleplaybackaction.o"
 	@echo "... src/actions/stoggleplaybackaction.i"
 	@echo "... src/actions/stoggleplaybackaction.s"
+	@echo "... src/actions/sunsplitclipaction.o"
+	@echo "... src/actions/sunsplitclipaction.i"
+	@echo "... src/actions/sunsplitclipaction.s"
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"
@@ -1009,12 +1627,6 @@ help:
 	@echo "... src/sexternfilelist.o"
 	@echo "... src/sexternfilelist.i"
 	@echo "... src/sexternfilelist.s"
-	@echo "... src/sgrainfile.o"
-	@echo "... src/sgrainfile.i"
-	@echo "... src/sgrainfile.s"
-	@echo "... src/sgrainfilerndrinline.o"
-	@echo "... src/sgrainfilerndrinline.i"
-	@echo "... src/sgrainfilerndrinline.s"
 	@echo "... src/slink.o"
 	@echo "... src/slink.i"
 	@echo "... src/slink.s"
@@ -1030,6 +1642,12 @@ help:
 	@echo "... src/sobjecttreeview.o"
 	@echo "... src/sobjecttreeview.i"
 	@echo "... src/sobjecttreeview.s"
+	@echo "... src/soptions.o"
+	@echo "... src/soptions.i"
+	@echo "... src/soptions.s"
+	@echo "... src/soptionsdialog.o"
+	@echo "... src/soptionsdialog.i"
+	@echo "... src/soptionsdialog.s"
 	@echo "... src/splainwave.o"
 	@echo "... src/splainwave.i"
 	@echo "... src/splainwave.s"
@@ -1060,6 +1678,9 @@ help:
 	@echo "... src/strackrndrinline.o"
 	@echo "... src/strackrndrinline.i"
 	@echo "... src/strackrndrinline.s"
+	@echo "... src/swaveformdraw.o"
+	@echo "... src/swaveformdraw.i"
+	@echo "... src/swaveformdraw.s"
 .PHONY : help
 
 

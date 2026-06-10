@@ -53,6 +53,7 @@ private:
     RenderParams params_;
     std::uint32_t sampleRate_ = 48000;
     std::size_t totalSamples_ = 0;
+    std::size_t startOffsetSamples_ = 0;
     std::atomic<std::size_t> samplesWritten_{0};
     std::atomic<bool> running_{false};
     std::atomic<bool> cancelRequested_{false};

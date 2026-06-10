@@ -31,63 +31,6 @@ QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
 QT_WARNING_DISABLE_GCC("-Wuseless-cast")
 namespace {
-struct qt_meta_tag_ZN11qxDBSpinBoxE_t {};
-} // unnamed namespace
-
-template <> constexpr inline auto qxDBSpinBox::qt_create_metaobjectdata<qt_meta_tag_ZN11qxDBSpinBoxE_t>()
-{
-    namespace QMC = QtMocConstants;
-    QtMocHelpers::StringRefStorage qt_stringData {
-        "qxDBSpinBox"
-    };
-
-    QtMocHelpers::UintData qt_methods {
-    };
-    QtMocHelpers::UintData qt_properties {
-    };
-    QtMocHelpers::UintData qt_enums {
-    };
-    return QtMocHelpers::metaObjectData<qxDBSpinBox, qt_meta_tag_ZN11qxDBSpinBoxE_t>(QMC::MetaObjectFlag{}, qt_stringData,
-            qt_methods, qt_properties, qt_enums);
-}
-Q_CONSTINIT const QMetaObject qxDBSpinBox::staticMetaObject = { {
-    QMetaObject::SuperData::link<QSpinBox::staticMetaObject>(),
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN11qxDBSpinBoxE_t>.stringdata,
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN11qxDBSpinBoxE_t>.data,
-    qt_static_metacall,
-    nullptr,
-    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN11qxDBSpinBoxE_t>.metaTypes,
-    nullptr
-} };
-
-void qxDBSpinBox::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
-{
-    auto *_t = static_cast<qxDBSpinBox *>(_o);
-    (void)_t;
-    (void)_c;
-    (void)_id;
-    (void)_a;
-}
-
-const QMetaObject *qxDBSpinBox::metaObject() const
-{
-    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
-}
-
-void *qxDBSpinBox::qt_metacast(const char *_clname)
-{
-    if (!_clname) return nullptr;
-    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN11qxDBSpinBoxE_t>.strings))
-        return static_cast<void*>(this);
-    return QSpinBox::qt_metacast(_clname);
-}
-
-int qxDBSpinBox::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
-{
-    _id = QSpinBox::qt_metacall(_c, _id, _a);
-    return _id;
-}
-namespace {
 struct qt_meta_tag_ZN16SSMVMixerControlE_t {};
 } // unnamed namespace
 
@@ -98,7 +41,11 @@ template <> constexpr inline auto SSMVMixerControl::qt_create_metaobjectdata<qt_
         "SSMVMixerControl",
         "sliderValueChanged",
         "",
-        "value"
+        "value",
+        "muteToggled",
+        "soloToggled",
+        "onMutedChanged",
+        "onSoloChanged"
     };
 
     QtMocHelpers::UintData qt_methods {
@@ -109,6 +56,22 @@ template <> constexpr inline auto SSMVMixerControl::qt_create_metaobjectdata<qt_
         // Slot 'sliderValueChanged'
         QtMocHelpers::SlotData<void(double)>(1, 2, QMC::AccessProtected, QMetaType::Void, {{
             { QMetaType::Double, 3 },
+        }}),
+        // Slot 'muteToggled'
+        QtMocHelpers::SlotData<void(bool)>(4, 2, QMC::AccessProtected, QMetaType::Void, {{
+            { QMetaType::Bool, 2 },
+        }}),
+        // Slot 'soloToggled'
+        QtMocHelpers::SlotData<void(bool)>(5, 2, QMC::AccessProtected, QMetaType::Void, {{
+            { QMetaType::Bool, 2 },
+        }}),
+        // Slot 'onMutedChanged'
+        QtMocHelpers::SlotData<void(bool)>(6, 2, QMC::AccessProtected, QMetaType::Void, {{
+            { QMetaType::Bool, 2 },
+        }}),
+        // Slot 'onSoloChanged'
+        QtMocHelpers::SlotData<void(bool)>(7, 2, QMC::AccessProtected, QMetaType::Void, {{
+            { QMetaType::Bool, 2 },
         }}),
     };
     QtMocHelpers::UintData qt_properties {
@@ -135,6 +98,10 @@ void SSMVMixerControl::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int
         switch (_id) {
         case 0: _t->sliderValueChanged((*reinterpret_cast<std::add_pointer_t<int>>(_a[1]))); break;
         case 1: _t->sliderValueChanged((*reinterpret_cast<std::add_pointer_t<double>>(_a[1]))); break;
+        case 2: _t->muteToggled((*reinterpret_cast<std::add_pointer_t<bool>>(_a[1]))); break;
+        case 3: _t->soloToggled((*reinterpret_cast<std::add_pointer_t<bool>>(_a[1]))); break;
+        case 4: _t->onMutedChanged((*reinterpret_cast<std::add_pointer_t<bool>>(_a[1]))); break;
+        case 5: _t->onSoloChanged((*reinterpret_cast<std::add_pointer_t<bool>>(_a[1]))); break;
         default: ;
         }
     }
@@ -159,14 +126,14 @@ int SSMVMixerControl::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 2)
+        if (_id < 6)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 2;
+        _id -= 6;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 2)
+        if (_id < 6)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 2;
+        _id -= 6;
     }
     return _id;
 }

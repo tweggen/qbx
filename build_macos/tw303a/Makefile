@@ -278,6 +278,30 @@ src/tw303aenv.cc.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/tw303aenv.cc.s
 .PHONY : src/tw303aenv.cc.s
 
+src/twcapturingsource.o: src/twcapturingsource.cc.o
+.PHONY : src/twcapturingsource.o
+
+# target to build an object file
+src/twcapturingsource.cc.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twcapturingsource.cc.o
+.PHONY : src/twcapturingsource.cc.o
+
+src/twcapturingsource.i: src/twcapturingsource.cc.i
+.PHONY : src/twcapturingsource.i
+
+# target to preprocess a source file
+src/twcapturingsource.cc.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twcapturingsource.cc.i
+.PHONY : src/twcapturingsource.cc.i
+
+src/twcapturingsource.s: src/twcapturingsource.cc.s
+.PHONY : src/twcapturingsource.s
+
+# target to generate assembly for a file
+src/twcapturingsource.cc.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twcapturingsource.cc.s
+.PHONY : src/twcapturingsource.cc.s
+
 src/twcomponent.o: src/twcomponent.cc.o
 .PHONY : src/twcomponent.o
 
@@ -350,53 +374,29 @@ src/twconvert.cc.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twconvert.cc.s
 .PHONY : src/twconvert.cc.s
 
-src/twgrainer.o: src/twgrainer.cc.o
-.PHONY : src/twgrainer.o
+src/twgrainsource.o: src/twgrainsource.cc.o
+.PHONY : src/twgrainsource.o
 
 # target to build an object file
-src/twgrainer.cc.o:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twgrainer.cc.o
-.PHONY : src/twgrainer.cc.o
+src/twgrainsource.cc.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twgrainsource.cc.o
+.PHONY : src/twgrainsource.cc.o
 
-src/twgrainer.i: src/twgrainer.cc.i
-.PHONY : src/twgrainer.i
-
-# target to preprocess a source file
-src/twgrainer.cc.i:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twgrainer.cc.i
-.PHONY : src/twgrainer.cc.i
-
-src/twgrainer.s: src/twgrainer.cc.s
-.PHONY : src/twgrainer.s
-
-# target to generate assembly for a file
-src/twgrainer.cc.s:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twgrainer.cc.s
-.PHONY : src/twgrainer.cc.s
-
-src/twgrainspec.o: src/twgrainspec.cc.o
-.PHONY : src/twgrainspec.o
-
-# target to build an object file
-src/twgrainspec.cc.o:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twgrainspec.cc.o
-.PHONY : src/twgrainspec.cc.o
-
-src/twgrainspec.i: src/twgrainspec.cc.i
-.PHONY : src/twgrainspec.i
+src/twgrainsource.i: src/twgrainsource.cc.i
+.PHONY : src/twgrainsource.i
 
 # target to preprocess a source file
-src/twgrainspec.cc.i:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twgrainspec.cc.i
-.PHONY : src/twgrainspec.cc.i
+src/twgrainsource.cc.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twgrainsource.cc.i
+.PHONY : src/twgrainsource.cc.i
 
-src/twgrainspec.s: src/twgrainspec.cc.s
-.PHONY : src/twgrainspec.s
+src/twgrainsource.s: src/twgrainsource.cc.s
+.PHONY : src/twgrainsource.s
 
 # target to generate assembly for a file
-src/twgrainspec.cc.s:
-	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twgrainspec.cc.s
-.PHONY : src/twgrainspec.cc.s
+src/twgrainsource.cc.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twgrainsource.cc.s
+.PHONY : src/twgrainsource.cc.s
 
 src/twlatch.o: src/twlatch.cc.o
 .PHONY : src/twlatch.o
@@ -421,6 +421,30 @@ src/twlatch.s: src/twlatch.cc.s
 src/twlatch.cc.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twlatch.cc.s
 .PHONY : src/twlatch.cc.s
+
+src/twloopreader.o: src/twloopreader.cc.o
+.PHONY : src/twloopreader.o
+
+# target to build an object file
+src/twloopreader.cc.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twloopreader.cc.o
+.PHONY : src/twloopreader.cc.o
+
+src/twloopreader.i: src/twloopreader.cc.i
+.PHONY : src/twloopreader.i
+
+# target to preprocess a source file
+src/twloopreader.cc.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twloopreader.cc.i
+.PHONY : src/twloopreader.cc.i
+
+src/twloopreader.s: src/twloopreader.cc.s
+.PHONY : src/twloopreader.s
+
+# target to generate assembly for a file
+src/twloopreader.cc.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twloopreader.cc.s
+.PHONY : src/twloopreader.cc.s
 
 src/twmixer.o: src/twmixer.cc.o
 .PHONY : src/twmixer.o
@@ -542,6 +566,30 @@ src/twpipe.cc.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twpipe.cc.s
 .PHONY : src/twpipe.cc.s
 
+src/twresampledsource.o: src/twresampledsource.cc.o
+.PHONY : src/twresampledsource.o
+
+# target to build an object file
+src/twresampledsource.cc.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twresampledsource.cc.o
+.PHONY : src/twresampledsource.cc.o
+
+src/twresampledsource.i: src/twresampledsource.cc.i
+.PHONY : src/twresampledsource.i
+
+# target to preprocess a source file
+src/twresampledsource.cc.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twresampledsource.cc.i
+.PHONY : src/twresampledsource.cc.i
+
+src/twresampledsource.s: src/twresampledsource.cc.s
+.PHONY : src/twresampledsource.s
+
+# target to generate assembly for a file
+src/twresampledsource.cc.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twresampledsource.cc.s
+.PHONY : src/twresampledsource.cc.s
+
 src/twresampler.o: src/twresampler.cc.o
 .PHONY : src/twresampler.o
 
@@ -589,6 +637,54 @@ src/twrewire.s: src/twrewire.cc.s
 src/twrewire.cc.s:
 	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twrewire.cc.s
 .PHONY : src/twrewire.cc.s
+
+src/twsamplereader.o: src/twsamplereader.cc.o
+.PHONY : src/twsamplereader.o
+
+# target to build an object file
+src/twsamplereader.cc.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twsamplereader.cc.o
+.PHONY : src/twsamplereader.cc.o
+
+src/twsamplereader.i: src/twsamplereader.cc.i
+.PHONY : src/twsamplereader.i
+
+# target to preprocess a source file
+src/twsamplereader.cc.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twsamplereader.cc.i
+.PHONY : src/twsamplereader.cc.i
+
+src/twsamplereader.s: src/twsamplereader.cc.s
+.PHONY : src/twsamplereader.s
+
+# target to generate assembly for a file
+src/twsamplereader.cc.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twsamplereader.cc.s
+.PHONY : src/twsamplereader.cc.s
+
+src/twsamplesource.o: src/twsamplesource.cc.o
+.PHONY : src/twsamplesource.o
+
+# target to build an object file
+src/twsamplesource.cc.o:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twsamplesource.cc.o
+.PHONY : src/twsamplesource.cc.o
+
+src/twsamplesource.i: src/twsamplesource.cc.i
+.PHONY : src/twsamplesource.i
+
+# target to preprocess a source file
+src/twsamplesource.cc.i:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twsamplesource.cc.i
+.PHONY : src/twsamplesource.cc.i
+
+src/twsamplesource.s: src/twsamplesource.cc.s
+.PHONY : src/twsamplesource.s
+
+# target to generate assembly for a file
+src/twsamplesource.cc.s:
+	cd /Users/tweggen/coding/github/qbx/build_macos && $(MAKE) $(MAKESILENT) -f tw303a/CMakeFiles/tw303a.dir/build.make tw303a/CMakeFiles/tw303a.dir/src/twsamplesource.cc.s
+.PHONY : src/twsamplesource.cc.s
 
 src/twsaw.o: src/twsaw.cc.o
 .PHONY : src/twsaw.o
@@ -856,6 +952,9 @@ help:
 	@echo "... src/tw303aenv.o"
 	@echo "... src/tw303aenv.i"
 	@echo "... src/tw303aenv.s"
+	@echo "... src/twcapturingsource.o"
+	@echo "... src/twcapturingsource.i"
+	@echo "... src/twcapturingsource.s"
 	@echo "... src/twcomponent.o"
 	@echo "... src/twcomponent.i"
 	@echo "... src/twcomponent.s"
@@ -865,15 +964,15 @@ help:
 	@echo "... src/twconvert.o"
 	@echo "... src/twconvert.i"
 	@echo "... src/twconvert.s"
-	@echo "... src/twgrainer.o"
-	@echo "... src/twgrainer.i"
-	@echo "... src/twgrainer.s"
-	@echo "... src/twgrainspec.o"
-	@echo "... src/twgrainspec.i"
-	@echo "... src/twgrainspec.s"
+	@echo "... src/twgrainsource.o"
+	@echo "... src/twgrainsource.i"
+	@echo "... src/twgrainsource.s"
 	@echo "... src/twlatch.o"
 	@echo "... src/twlatch.i"
 	@echo "... src/twlatch.s"
+	@echo "... src/twloopreader.o"
+	@echo "... src/twloopreader.i"
+	@echo "... src/twloopreader.s"
 	@echo "... src/twmixer.o"
 	@echo "... src/twmixer.i"
 	@echo "... src/twmixer.s"
@@ -889,12 +988,21 @@ help:
 	@echo "... src/twpipe.o"
 	@echo "... src/twpipe.i"
 	@echo "... src/twpipe.s"
+	@echo "... src/twresampledsource.o"
+	@echo "... src/twresampledsource.i"
+	@echo "... src/twresampledsource.s"
 	@echo "... src/twresampler.o"
 	@echo "... src/twresampler.i"
 	@echo "... src/twresampler.s"
 	@echo "... src/twrewire.o"
 	@echo "... src/twrewire.i"
 	@echo "... src/twrewire.s"
+	@echo "... src/twsamplereader.o"
+	@echo "... src/twsamplereader.i"
+	@echo "... src/twsamplereader.s"
+	@echo "... src/twsamplesource.o"
+	@echo "... src/twsamplesource.i"
+	@echo "... src/twsamplesource.s"
 	@echo "... src/twsaw.o"
 	@echo "... src/twsaw.i"
 	@echo "... src/twsaw.s"

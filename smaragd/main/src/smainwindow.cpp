@@ -348,15 +348,21 @@ void SMainWindow::onRenderTriggered()
     if (dialog.exec() == QDialog::Accepted) {
         audio::RenderParams params = dialog.getRenderParams();
 
-        // Show progress dialog and start rendering
-        SRenderProgressDialog progressDialog(SApplication::app().renderSession(),
-                                             QString::fromStdString(params.outputPath), this);
-
-        // Start render
+        // Start render first (creates/resets the RenderSession)
         SApplication::app().startRender(params);
 
-        // Run progress dialog (blocks until render completes)
-        progressDialog.exec();
+        // Show progress dialog and start rendering
+        SRenderProgressDialog *progressDialog = new SRenderProgressDialog(
+            SApplication::app().renderSession(),
+            QString::fromStdString(params.outputPath), this);
+
+        // Show non-modally so the event loop can process updates
+        progressDialog->show();
+
+        // Pump event loop while render is active
+        while (SApplication::app().renderSession()->isRunning()) {
+            QApplication::processEvents();
+        }
     }
 }
 

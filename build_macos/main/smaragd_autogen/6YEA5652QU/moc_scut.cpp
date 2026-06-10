@@ -39,29 +39,74 @@ template <> constexpr inline auto SCut::qt_create_metaobjectdata<qt_meta_tag_ZN4
     namespace QMC = QtMocConstants;
     QtMocHelpers::StringRefStorage qt_stringData {
         "SCut",
-        "setLoopStart",
+        "windowParamsChanged",
         "",
+        "setLoopStart",
         "offset_t",
+        "setLoopLength",
+        "length_t",
         "setStartOffset",
         "setDuration",
-        "length_t"
+        "setStretch",
+        "setPitchCents",
+        "queueWindowParamEvent",
+        "SCutWindowParamEventType",
+        "type",
+        "value",
+        "processWindowParamEvents",
+        "invalidateCapture",
+        "ensureCapture",
+        "twRandomSource*",
+        "ensureCapturePeaks",
+        "Stretch",
+        "PitchCents"
     };
 
     QtMocHelpers::UintData qt_methods {
+        // Signal 'windowParamsChanged'
+        QtMocHelpers::SignalData<void()>(1, 2, QMC::AccessPublic, QMetaType::Void),
         // Slot 'setLoopStart'
-        QtMocHelpers::SlotData<void(offset_t)>(1, 2, QMC::AccessPublic, QMetaType::Void, {{
-            { 0x80000000 | 3, 2 },
+        QtMocHelpers::SlotData<void(offset_t)>(3, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { 0x80000000 | 4, 2 },
         }}),
-        // Slot 'setStartOffset'
-        QtMocHelpers::SlotData<void(offset_t)>(4, 2, QMC::AccessPublic, QMetaType::Void, {{
-            { 0x80000000 | 3, 2 },
-        }}),
-        // Slot 'setDuration'
+        // Slot 'setLoopLength'
         QtMocHelpers::SlotData<void(length_t)>(5, 2, QMC::AccessPublic, QMetaType::Void, {{
             { 0x80000000 | 6, 2 },
         }}),
+        // Slot 'setStartOffset'
+        QtMocHelpers::SlotData<void(offset_t)>(7, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { 0x80000000 | 4, 2 },
+        }}),
+        // Slot 'setDuration'
+        QtMocHelpers::SlotData<void(length_t)>(8, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { 0x80000000 | 6, 2 },
+        }}),
+        // Slot 'setStretch'
+        QtMocHelpers::SlotData<void(double)>(9, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::Double, 2 },
+        }}),
+        // Slot 'setPitchCents'
+        QtMocHelpers::SlotData<void(double)>(10, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::Double, 2 },
+        }}),
+        // Slot 'queueWindowParamEvent'
+        QtMocHelpers::SlotData<void(SCutWindowParamEventType, double)>(11, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { 0x80000000 | 12, 13 }, { QMetaType::Double, 14 },
+        }}),
+        // Slot 'processWindowParamEvents'
+        QtMocHelpers::SlotData<void()>(15, 2, QMC::AccessPublic, QMetaType::Void),
+        // Slot 'invalidateCapture'
+        QtMocHelpers::SlotData<void()>(16, 2, QMC::AccessPublic, QMetaType::Void),
+        // Slot 'ensureCapture'
+        QtMocHelpers::SlotData<twRandomSource *()>(17, 2, QMC::AccessPublic, 0x80000000 | 18),
+        // Slot 'ensureCapturePeaks'
+        QtMocHelpers::SlotData<bool()>(19, 2, QMC::AccessPublic, QMetaType::Bool),
     };
     QtMocHelpers::UintData qt_properties {
+        // property 'Stretch'
+        QtMocHelpers::PropertyData<double>(20, QMetaType::Double, QMC::DefaultPropertyFlags | QMC::Writable | QMC::StdCppSet),
+        // property 'PitchCents'
+        QtMocHelpers::PropertyData<double>(21, QMetaType::Double, QMC::DefaultPropertyFlags | QMC::Writable | QMC::StdCppSet),
     };
     QtMocHelpers::UintData qt_enums {
     };
@@ -83,10 +128,41 @@ void SCut::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void *
     auto *_t = static_cast<SCut *>(_o);
     if (_c == QMetaObject::InvokeMetaMethod) {
         switch (_id) {
-        case 0: _t->setLoopStart((*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[1]))); break;
-        case 1: _t->setStartOffset((*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[1]))); break;
-        case 2: _t->setDuration((*reinterpret_cast<std::add_pointer_t<length_t>>(_a[1]))); break;
+        case 0: _t->windowParamsChanged(); break;
+        case 1: _t->setLoopStart((*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[1]))); break;
+        case 2: _t->setLoopLength((*reinterpret_cast<std::add_pointer_t<length_t>>(_a[1]))); break;
+        case 3: _t->setStartOffset((*reinterpret_cast<std::add_pointer_t<offset_t>>(_a[1]))); break;
+        case 4: _t->setDuration((*reinterpret_cast<std::add_pointer_t<length_t>>(_a[1]))); break;
+        case 5: _t->setStretch((*reinterpret_cast<std::add_pointer_t<double>>(_a[1]))); break;
+        case 6: _t->setPitchCents((*reinterpret_cast<std::add_pointer_t<double>>(_a[1]))); break;
+        case 7: _t->queueWindowParamEvent((*reinterpret_cast<std::add_pointer_t<SCutWindowParamEventType>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<double>>(_a[2]))); break;
+        case 8: _t->processWindowParamEvents(); break;
+        case 9: _t->invalidateCapture(); break;
+        case 10: { twRandomSource* _r = _t->ensureCapture();
+            if (_a[0]) *reinterpret_cast<twRandomSource**>(_a[0]) = std::move(_r); }  break;
+        case 11: { bool _r = _t->ensureCapturePeaks();
+            if (_a[0]) *reinterpret_cast<bool*>(_a[0]) = std::move(_r); }  break;
         default: ;
+        }
+    }
+    if (_c == QMetaObject::IndexOfMethod) {
+        if (QtMocHelpers::indexOfMethod<void (SCut::*)()>(_a, &SCut::windowParamsChanged, 0))
+            return;
+    }
+    if (_c == QMetaObject::ReadProperty) {
+        void *_v = _a[0];
+        switch (_id) {
+        case 0: *reinterpret_cast<double*>(_v) = _t->getStretch(); break;
+        case 1: *reinterpret_cast<double*>(_v) = _t->getPitchCents(); break;
+        default: break;
+        }
+    }
+    if (_c == QMetaObject::WriteProperty) {
+        void *_v = _a[0];
+        switch (_id) {
+        case 0: _t->setStretch(*reinterpret_cast<double*>(_v)); break;
+        case 1: _t->setPitchCents(*reinterpret_cast<double*>(_v)); break;
+        default: break;
         }
     }
 }
@@ -110,15 +186,27 @@ int SCut::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 3)
+        if (_id < 12)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 3;
+        _id -= 12;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 3)
+        if (_id < 12)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 3;
+        _id -= 12;
+    }
+    if (_c == QMetaObject::ReadProperty || _c == QMetaObject::WriteProperty
+            || _c == QMetaObject::ResetProperty || _c == QMetaObject::BindableProperty
+            || _c == QMetaObject::RegisterPropertyMetaType) {
+        qt_static_metacall(this, _c, _id, _a);
+        _id -= 2;
     }
     return _id;
+}
+
+// SIGNAL 0
+void SCut::windowParamsChanged()
+{
+    QMetaObject::activate(this, &staticMetaObject, 0, nullptr);
 }
 QT_WARNING_POP
