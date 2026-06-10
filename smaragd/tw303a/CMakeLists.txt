@@ -30,6 +30,7 @@ set(TW303A_HEADERS
     include/audio/audio_backend.h
     include/audio/null_backend.h
     include/audio/audio_file_writer.h
+    include/render_session.h
 )
 
 set(TW303A_SOURCES
@@ -70,6 +71,7 @@ set(TW303A_SOURCES
     src/audio/ogg_writer.h
     src/audio/mp3_writer.cc
     src/audio/mp3_writer.h
+    src/render_session.cc
 )
 
 add_library(tw303a STATIC ${TW303A_SOURCES} ${TW303A_HEADERS})
