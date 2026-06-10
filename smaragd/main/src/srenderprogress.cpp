@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QCloseEvent>
+#include <QMetaObject>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -70,10 +71,18 @@ SRenderProgressDialog::SRenderProgressDialog(audio::RenderSession *session,
     // Setup callbacks from rendering session
     if (session_) {
         session_->onProgress = [this](std::size_t written, std::size_t total) {
-            this->onRenderProgress(written, total);
+            // Use Qt::invokeMethod to call slot safely from render thread
+            QMetaObject::invokeMethod(this, "onRenderProgress",
+                                     Qt::QueuedConnection,
+                                     Q_ARG(std::size_t, written),
+                                     Q_ARG(std::size_t, total));
         };
         session_->onComplete = [this](bool success, const char *error) {
-            this->onRenderComplete(success, error);
+            // Use Qt::invokeMethod to call slot safely from render thread
+            QMetaObject::invokeMethod(this, "onRenderComplete",
+                                     Qt::QueuedConnection,
+                                     Q_ARG(bool, success),
+                                     Q_ARG(const char *, error));
         };
     }
 }
