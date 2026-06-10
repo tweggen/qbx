@@ -18,6 +18,7 @@ set(SMARAGD_HEADERS
     include/soptionsdialog.h
     include/srenderdialog.h
     include/srenderprogress.h
+    include/srecordingprogress.h
     include/ssmvmixercontrol.h
     include/sstdmixer.h
     include/sstdmixerview.h
@@ -81,6 +82,7 @@ set(SMARAGD_SOURCES
     src/soptionsdialog.cpp
     src/srenderdialog.cpp
     src/srenderprogress.cpp
+    src/srecordingprogress.cpp
     src/swaveformdraw.cpp
     src/ssmvmixercontrol.cpp
     src/sstdmixer.cpp

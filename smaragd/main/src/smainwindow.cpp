@@ -24,6 +24,7 @@
 #include "sobject.h"
 #include "sproject.h"
 #include "ssettings.h"
+#include "srecordingprogress.h"
 #include <recording_session.h>
 #include "sprojectprops.h"
 #include "sexternfilelist.h"
@@ -470,6 +471,14 @@ void SMainWindow::onRecordTriggered()
 
         SApplication::app().startRecording( params );
         actRecord_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
+
+        // Show recording progress dialog
+        audio::RecordingSession *recSession = SApplication::app().recordingSession();
+        if( recSession ) {
+            recordingProgressDialog_ = new SRecordingProgressDialog( recSession, this );
+            recordingProgressDialog_->exec();
+            // Dialog ownership: will be deleted when closed
+        }
     }
 }
 

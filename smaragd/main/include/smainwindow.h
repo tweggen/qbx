@@ -12,6 +12,7 @@ class SProject;
 class QAction;
 class QActionGroup;
 class QLabel;
+class SRecordingProgressDialog;
 
 class SMainWindow
     : public QMainWindow
@@ -107,6 +108,7 @@ private:
     QToolBar *qTBTransport_;
     QToolBar *qTBPalette_;
     QToolBar *qTBTracks_;
+    SRecordingProgressDialog *recordingProgressDialog_ = nullptr;
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
 
