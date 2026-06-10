@@ -25,7 +25,12 @@
 #include "sproject.h"
 #include "ssettings.h"
 #include "srecordingprogress.h"
+#include "scut.h"
+#include "splainwave.h"
+#include "slink.h"
+#include "strack.h"
 #include <recording_session.h>
+#include <QFileInfo>
 #include "sprojectprops.h"
 #include "sexternfilelist.h"
 #include "slink.h"
@@ -462,10 +467,14 @@ void SMainWindow::onRecordTriggered()
         params.sampleRate = currentProject_->getSRate();
         params.channels = 2;
 
-        // Collect armed track IDs
+        // Collect armed track IDs and STrack pointers
+        std::vector<STrack*> armedTracks;
         for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
             if( trackLink->getSObject().isArmedForRecording() ) {
                 params.armedTrackIds.push_back( trackLink->getSObject().getSName().toStdString() );
+                if( STrack *track = dynamic_cast<STrack*>( &trackLink->getSObject() ) ) {
+                    armedTracks.push_back( track );
+                }
             }
         }
 
@@ -476,10 +485,63 @@ void SMainWindow::onRecordTriggered()
         audio::RecordingSession *recSession = SApplication::app().recordingSession();
         if( recSession ) {
             recordingProgressDialog_ = new SRecordingProgressDialog( recSession, this );
-            recordingProgressDialog_->exec();
-            // Dialog ownership: will be deleted when closed
+            int result = recordingProgressDialog_->exec();
+
+            // On dialog close, place the cuts on armed tracks
+            if( result == QDialog::Accepted ) {
+                onRecordingCompleted();
+            }
         }
     }
+}
+
+void SMainWindow::onRecordingCompleted()
+{
+    if( !currentProject_ ) return;
+
+    audio::RecordingSession *recSession = SApplication::app().recordingSession();
+    if( !recSession ) return;
+
+    // Get the created files
+    const auto &createdFiles = recSession->createdFiles();
+    if( createdFiles.empty() ) return;
+
+    // The first file (if any) is the recorded audio
+    // For now, we'll place it on all armed tracks
+    QString recordedFile = QString::fromStdString( createdFiles[0] );
+    if( !QFileInfo( recordedFile ).exists() ) return;
+
+    // Get the recording start time (global locator position at start)
+    // For now, use the current locator position
+    offset_t recordingStartTime = SApplication::app().getGlobalLocatorPos();
+
+    // Place cuts on all armed tracks
+    for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
+        if( !trackLink->getSObject().isArmedForRecording() ) continue;
+
+        STrack *track = dynamic_cast<STrack*>( &trackLink->getSObject() );
+        if( !track ) continue;
+
+        // Create a SPlainWave for the recorded file
+        SPlainWave *wave = new SPlainWave( currentProject_ );
+        if( wave->setWave( recordedFile ) < 0 ) {
+            delete wave;
+            continue;
+        }
+
+        // Create a SCut wrapping the wave
+        SCut *cut = new SCut( currentProject_, *wave );
+
+        // Create an SLink to place the cut in the track
+        SLink *link = new SLink( *cut, nullptr );
+        link->setStartTime( recordingStartTime );
+        link->setParent( track );
+
+        // Mark track as no longer armed
+        track->setArmedForRecording( false );
+    }
+
+    actRecord_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
 }
 
 SMainWindow::SMainWindow()

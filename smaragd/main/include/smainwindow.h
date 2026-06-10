@@ -39,6 +39,7 @@ protected slots:
     void startPlaying();
     void stopPlaying();
     void onRecordTriggered();
+    void onRecordingCompleted();
 
     void audioDeviceSelected( QAction * );
     void runTestSequence();
