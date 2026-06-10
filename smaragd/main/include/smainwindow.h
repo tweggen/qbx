@@ -33,6 +33,7 @@ protected slots:
     void fileSaveAs();
     void fileOpen();
     void fileClose();
+    void onRenderTriggered();
 
     void startPlaying();
     void stopPlaying();

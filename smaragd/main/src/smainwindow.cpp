@@ -28,6 +28,8 @@
 #include "slink.h"
 #include "scut.h"
 #include "sprojectloader.h"
+#include "srenderdialog.h"
+#include "srenderprogress.h"
 #include "ssettings.h"
 #include "sactionhistory.h"
 #include <QUndoStack>
@@ -325,6 +327,31 @@ void SMainWindow::fileExit()
     ::exit( 0 );
 }
 
+void SMainWindow::onRenderTriggered()
+{
+    SProject *project = SApplication::app().getCurrentProject();
+    if (!project) {
+        QMessageBox::warning(this, "No Project", "Please open or create a project first.");
+        return;
+    }
+
+    // Show render dialog
+    SRenderDialog dialog(project, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        audio::RenderParams params = dialog.getRenderParams();
+
+        // Show progress dialog and start rendering
+        SRenderProgressDialog progressDialog(SApplication::app().renderSession(),
+                                             QString::fromStdString(params.outputPath), this);
+
+        // Start render
+        SApplication::app().startRender(params);
+
+        // Run progress dialog (blocks until render completes)
+        progressDialog.exec();
+    }
+}
+
 void SMainWindow::newProject()
 {
 #if 0
@@ -436,6 +463,8 @@ SMainWindow::SMainWindow()
     updateRecentMenu();
     qFileMenu_->addAction( "&Save", Qt::CTRL | Qt::Key_S, this, SLOT( fileSave() ) );
     qFileMenu_->addAction( "Save &as...", Qt::CTRL | Qt::SHIFT | Qt::Key_S, this, SLOT( fileSaveAs() ) );
+    qFileMenu_->addSeparator();
+    qFileMenu_->addAction( "&Render...", this, SLOT( onRenderTriggered() ) );
     qFileMenu_->addSeparator();
     qFileMenu_->addAction( "&Close", Qt::CTRL | Qt::Key_W, this, SLOT( fileClose() ) );
     qFileMenu_->addSeparator();
