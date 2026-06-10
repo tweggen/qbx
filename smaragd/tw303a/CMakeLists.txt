@@ -30,6 +30,7 @@ set(TW303A_HEADERS
     include/audio/audio_backend.h
     include/audio/null_backend.h
     include/audio/audio_file_writer.h
+    include/audio/audio_input.h
     include/render_session.h
 )
 
@@ -71,6 +72,15 @@ set(TW303A_SOURCES
     src/audio/ogg_writer.h
     src/audio/mp3_writer.cc
     src/audio/mp3_writer.h
+    src/audio/audio_input.cc
+    src/audio/null_input.h
+    src/audio/null_input.cc
+    src/audio/wasapi_input.h
+    src/audio/wasapi_input.cc
+    src/audio/alsa_input.h
+    src/audio/alsa_input.cc
+    src/audio/coreaudio_input.h
+    src/audio/coreaudio_input.cc
     src/render_session.cc
 )
 
@@ -172,4 +182,21 @@ endif()
 
 if(NOT (ENABLE_ALSA OR ENABLE_PIPEWIRE OR ENABLE_PULSEAUDIO OR ENABLE_JACK OR ENABLE_WASAPI OR ENABLE_COREAUDIO))
     message(WARNING "tw303a: no audio backend enabled; the synthesizer will build but cannot output sound.")
+endif()
+
+# Audio input (recording) implementations
+if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
+    target_compile_definitions(tw303a PRIVATE QBX_WIN_WASAPI_INPUT=1)
+    message(STATUS "tw303a: WASAPI input (recording) enabled")
+endif()
+
+if(SMARAGD_LINUX AND ENABLE_ALSA)
+    target_compile_definitions(tw303a PRIVATE QBX_LINUX_ALSA_INPUT=1)
+    target_link_libraries(tw303a PRIVATE ALSA::ALSA)
+    message(STATUS "tw303a: ALSA input (recording) enabled")
+endif()
+
+if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
+    target_compile_definitions(tw303a PRIVATE QBX_MAC_COREAUDIO_INPUT=1)
+    message(STATUS "tw303a: CoreAudio input (recording) enabled")
 endif()
