@@ -2,8 +2,11 @@
 #ifndef _SAPPLICATION_H
 #define _SAPPLICATION_H
 
+#include <memory>
+
 #include <tw303aenv.h>
 #include <twcomponent.h>
+#include <audio/render_session.h>
 #include <QApplication>
 #include <QString>
 //#include <qptrlist.h>
@@ -53,8 +56,12 @@ public:
     void rewireSpeaker();
     offset_t getGlobalLocatorPos() const;
     bool isPlaying() const;
+    bool isRenderingActive() const;
     SActionHistory *actionHistory() const;
     void submitAction(SAction *action);
+
+    audio::RenderSession *renderSession() const;
+    void startRender(const audio::RenderParams &params);
 
     // App-wide status/mode line shown in the main window's status bar. Views
     // push the active (or hover-telegraphed) gesture here; the main window
@@ -86,6 +93,7 @@ private:
     twSpeaker *t3Speaker_;
     twWhiteNoise *t3WhiteNoise_;
     SActionHistory *actionHistory_;
+    std::unique_ptr<audio::RenderSession> renderSession_;
 
     SLink *currentSelectedSLink_;
 

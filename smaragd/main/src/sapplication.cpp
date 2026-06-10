@@ -200,7 +200,8 @@ SApplication::SApplication( int &argc, char **argv )
       currentSelectedSLink_( NULL ),
       globalLocatorPos_( 0 ),
       isPlaying_( false ),
-      currentProject_( NULL )
+      currentProject_( NULL ),
+      renderSession_( nullptr )
 {
     setOrganizationName( "Smaragd" );
     setApplicationName( "smaragd" );
@@ -236,4 +237,44 @@ void SApplication::submitAction(SAction *action)
     if (actionHistory_) {
         actionHistory_->submit(action);
     }
+}
+
+audio::RenderSession *SApplication::renderSession() const
+{
+    return renderSession_.get();
+}
+
+bool SApplication::isRenderingActive() const
+{
+    return renderSession_ && renderSession_->isRunning();
+}
+
+void SApplication::startRender(const audio::RenderParams &params)
+{
+    if (!renderSession_) {
+        renderSession_ = std::make_unique<audio::RenderSession>();
+    }
+
+    if (isPlaying_) {
+        t3Speaker_->stopOutput();
+        isPlaying_ = false;
+    }
+
+    // Get the synth output component
+    twComponent *synthOutput = nullptr;
+    if (currentProject_) {
+        twComponent *root = currentProject_->getRootComponent();
+        if (root) {
+            synthOutput = &root->getRootComponent();
+        }
+    }
+
+    if (!synthOutput) {
+        // TODO: Emit error signal to UI
+        return;
+    }
+
+    // Start rendering
+    int sampleRate = t3Env_ ? t3Env_->getSRate() : 48000;
+    renderSession_->start(synthOutput, params, static_cast<std::uint32_t>(sampleRate));
 }
