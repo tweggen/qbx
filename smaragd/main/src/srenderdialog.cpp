@@ -100,7 +100,7 @@ SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
 
     // Set defaults
     wavRadio_->setChecked(true);
-    timeSelectionRadio_->setChecked(true);
+    entireProjectRadio_->setChecked(true);
     outputPathLineEdit_->setText("render.wav");
     onFormatChanged(0);
 
