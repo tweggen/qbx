@@ -349,14 +349,22 @@ void SMainWindow::onRenderTriggered()
         audio::RenderParams params = dialog.getRenderParams();
 
         // Show progress dialog and start rendering
+        fprintf(stderr, "[onRenderTriggered] Creating progress dialog\n");
+        fflush(stderr);
         SRenderProgressDialog progressDialog(SApplication::app().renderSession(),
                                              QString::fromStdString(params.outputPath), this);
 
+        fprintf(stderr, "[onRenderTriggered] Starting render\n");
+        fflush(stderr);
         // Start render
         SApplication::app().startRender(params);
 
+        fprintf(stderr, "[onRenderTriggered] Calling progressDialog.exec()\n");
+        fflush(stderr);
         // Run progress dialog (blocks until render completes)
         progressDialog.exec();
+        fprintf(stderr, "[onRenderTriggered] progressDialog.exec() returned\n");
+        fflush(stderr);
     }
 }
 

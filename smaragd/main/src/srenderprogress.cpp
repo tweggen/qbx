@@ -65,8 +65,14 @@ SRenderProgressDialog::SRenderProgressDialog(audio::RenderSession *session,
 
     // Setup timer for time display updates
     updateTimer_ = new QTimer(this);
+    fprintf(stderr, "[SRenderProgressDialog] Created timer: %p\n", updateTimer_);
+    fflush(stderr);
     connect(updateTimer_, &QTimer::timeout, this, &SRenderProgressDialog::updateTimeDisplay);
+    fprintf(stderr, "[SRenderProgressDialog] Connected timer\n");
+    fflush(stderr);
     updateTimer_->start(100);  // Update every 100ms
+    fprintf(stderr, "[SRenderProgressDialog] Started timer, isActive=%d\n", updateTimer_->isActive());
+    fflush(stderr);
 
     // Setup callbacks from rendering session
     if (session_) {
