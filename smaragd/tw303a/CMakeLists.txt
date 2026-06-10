@@ -66,6 +66,8 @@ set(TW303A_SOURCES
     src/audio/audio_file_writer.cc
     src/audio/wav_writer.cc
     src/audio/wav_writer.h
+    src/audio/ogg_writer.cc
+    src/audio/ogg_writer.h
 )
 
 add_library(tw303a STATIC ${TW303A_SOURCES} ${TW303A_HEADERS})
