@@ -53,6 +53,7 @@ class SObject
     Q_OBJECT
     Q_PROPERTY( bool Solo READ isSolo WRITE setSolo )
     Q_PROPERTY( bool Muted READ isMuted WRITE setMuted )
+    Q_PROPERTY( bool ArmedForRecording READ isArmedForRecording WRITE setArmedForRecording )
     Q_PROPERTY( double Volume READ getVolume WRITE setVolume )
     Q_PROPERTY( double Pan READ getPan WRITE setPan )
     Q_PROPERTY( double Delay READ getDelay WRITE setDelay )
@@ -149,6 +150,8 @@ public:
         { return solo_; }
     bool isMuted() const
         { return muted_; }
+    bool isArmedForRecording() const
+        { return armed_; }
     double getVolume() const
         { return volume_; }
     double getPan() const
@@ -158,9 +161,10 @@ public:
     QString getSName() const
         { return sName_; }    
 
-public slots:    
+public slots:
     void setSolo( bool );
     void setMuted( bool );
+    void setArmedForRecording( bool );
     void setVolume( double );
     void setPan( double );
     void setDelay( double );
@@ -173,6 +177,7 @@ signals:
     // For the properties
     void soloChanged( bool );
     void mutedChanged( bool );
+    void armedForRecordingChanged( bool );
     void volumeChanged( double );
     void panChanged( double );
     void delayChanged( double );
@@ -257,6 +262,7 @@ private:
 
     bool solo_;
     bool muted_;
+    bool armed_;
     double volume_;
 
     // Thread-safe state: audio thread may read volume while UI thread modifies it.

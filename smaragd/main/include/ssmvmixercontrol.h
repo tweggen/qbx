@@ -50,9 +50,11 @@ protected slots:
     // Button -> model.
     void muteToggled( bool );
     void soloToggled( bool );
+    void armToggled( bool );
     // Model -> button (keeps the buttons in sync if the flag changes elsewhere).
     void onMutedChanged( bool );
     void onSoloChanged( bool );
+    void onArmedChanged( bool );
 
 private:
     // Resolve this control's track index within the mixer model (-1 if gone).
@@ -81,6 +83,7 @@ private:
     QLineEdit *qTrkLabel_;
     QPushButton *qMute_;
     QPushButton *qSolo_;
+    QPushButton *qArm_;
 };
 
 #endif

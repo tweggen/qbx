@@ -26,6 +26,13 @@ void SObject::setMuted( bool f )
     emit mutedChanged( f );
 }
 
+void SObject::setArmedForRecording( bool f )
+{
+    if( f==armed_ ) return;
+    armed_ = f;
+    emit armedForRecordingChanged( f );
+}
+
 void SObject::setVolume( double d )
 {
     {
@@ -76,6 +83,8 @@ int SObject::serializeSelfAttributes( QTextStream &o )
     o << (isMuted()?"true":"false") << "'";
     o << " solo='";
     o << (isSolo()?"true":"false") << "'";
+    o << " armedForRecording='";
+    o << (isArmedForRecording()?"true":"false") << "'";
     o << " volume='" << getVolume() << "'";
     o << " pan='" << getPan() << "'";
     o << " delay='" << getDelay() << "'";
@@ -91,6 +100,8 @@ int SObject::readPreChildrenAttributes( QDomElement &element )
     setMuted( data.startsWith( "true" ) );
     data = element.attribute( "solo", "false" );
     setSolo( data.startsWith( "true" ) );
+    data = element.attribute( "armedForRecording", "false" );
+    setArmedForRecording( data.startsWith( "true" ) );
     data = element.attribute( "volume", "1.0" );
     setVolume( data.toDouble() );
     data = element.attribute( "pan", "0.0" );
@@ -432,10 +443,11 @@ SObject::SObject( SProject *project )
       nRefs_( 0 ),
       previewForLength_( 0 ),
       nPreviewProbes_( 0 ),
-      previewData_( 0 ),   
+      previewData_( 0 ),
       previewSkip_( 0 ),
       solo_( false ),
       muted_( false ),
+      armed_( false ),
       volume_( 0.0 ),
       pan_( 0.0 ),
       delay_( 0.0 ),

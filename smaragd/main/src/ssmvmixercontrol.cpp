@@ -278,6 +278,17 @@ void SSMVMixerControl::onSoloChanged( bool on )
     qSolo_->setChecked( on );
 }
 
+void SSMVMixerControl::armToggled( bool on )
+{
+    tk_.setArmedForRecording( on );
+}
+
+void SSMVMixerControl::onArmedChanged( bool on )
+{
+    QSignalBlocker block( qArm_ );
+    qArm_->setChecked( on );
+}
+
 SSMVMixerControl::~SSMVMixerControl()
 {
     // Deletes all widgets by default
@@ -340,12 +351,20 @@ SSMVMixerControl::SSMVMixerControl(
     qSolo_->setToolTip( "Solo" );
     qSolo_->setStyleSheet( "QPushButton:checked { background:#e0c020; color:black; }" );
 
-    // Mute over Solo in a column.
+    qArm_ = new QPushButton( "R", this );
+    qArm_->setCheckable( true );
+    qArm_->setFixedSize( 20, 20 );
+    qArm_->setFont( btnFont );
+    qArm_->setToolTip( "Arm for Recording" );
+    qArm_->setStyleSheet( "QPushButton:checked { background:#c04040; color:white; }" );
+
+    // Mute over Solo over Arm in a column.
     QVBoxLayout *muteSoloCol = new QVBoxLayout();
     muteSoloCol->setContentsMargins( 0, 0, 0, 0 );
     muteSoloCol->setSpacing( 2 );
     muteSoloCol->addWidget( qMute_, 0, Qt::AlignTop );
     muteSoloCol->addWidget( qSolo_, 0, Qt::AlignTop );
+    muteSoloCol->addWidget( qArm_, 0, Qt::AlignTop );
     muteSoloCol->addStretch( 1 );
 
     // Fader with its dB readout directly beneath it, both centred so they line
@@ -375,6 +394,7 @@ SSMVMixerControl::SSMVMixerControl(
     setSliderSilently( tk_.getVolume() );
     qMute_->setChecked( tk_.isMuted() );
     qSolo_->setChecked( tk_.isSolo() );
+    qArm_->setChecked( tk_.isArmedForRecording() );
 
     QObject::connect( qVolume_, SIGNAL( valueChanged( int ) ),
                       this, SLOT( sliderValueChanged( int ) ) );
@@ -384,8 +404,12 @@ SSMVMixerControl::SSMVMixerControl(
                       this, SLOT( muteToggled( bool ) ) );
     QObject::connect( qSolo_, SIGNAL( toggled( bool ) ),
                       this, SLOT( soloToggled( bool ) ) );
+    QObject::connect( qArm_, SIGNAL( toggled( bool ) ),
+                      this, SLOT( armToggled( bool ) ) );
     QObject::connect( &tk_, SIGNAL( mutedChanged( bool ) ),
                       this, SLOT( onMutedChanged( bool ) ) );
     QObject::connect( &tk_, SIGNAL( soloChanged( bool ) ),
                       this, SLOT( onSoloChanged( bool ) ) );
+    QObject::connect( &tk_, SIGNAL( armedForRecordingChanged( bool ) ),
+                      this, SLOT( onArmedChanged( bool ) ) );
 }
