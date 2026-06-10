@@ -132,6 +132,12 @@ void SRenderProgressDialog::updateTimeDisplay() {
     std::size_t written = session_->samplesWritten();
     std::size_t total = session_->totalSamples();
 
+    static int callCount = 0;
+    if (callCount++ % 10 == 0) {  // Log every 10th call to avoid spam
+        fprintf(stderr, "[updateTimeDisplay] written=%zu, total=%zu\n", written, total);
+        fflush(stderr);
+    }
+
     // Update progress bar and text
     if (total > 0) {
         int percentage = static_cast<int>((100.0 * written) / total);
