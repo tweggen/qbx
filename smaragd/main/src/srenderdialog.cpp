@@ -103,7 +103,6 @@ SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
     entireProjectRadio_->setChecked(true);
     outputPathLineEdit_->setText("render.wav");
     onFormatChanged(0);
-    onOutputPathChanged();  // Ensure button is enabled with default filename
 
     // Time selection is available if project exists
     // (user can set markers at any time)
@@ -260,6 +259,7 @@ audio::RenderParams SRenderDialog::getRenderParams() const {
 }
 
 int SRenderDialog::exec() {
-    renderButton_->setEnabled(false);
+    // Enable render button if output path is not empty
+    renderButton_->setEnabled(!outputPathLineEdit_->text().isEmpty());
     return QDialog::exec();
 }
