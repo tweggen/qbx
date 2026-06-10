@@ -1,5 +1,6 @@
 #include "audio/audio_file_writer.h"
 
+#include "mp3_writer.h"
 #include "ogg_writer.h"
 #include "wav_writer.h"
 
@@ -12,8 +13,7 @@ std::unique_ptr<AudioFileWriter> createAudioFileWriter(AudioFormat format) {
         case AudioFormat::OGG:
             return std::make_unique<OGGWriter>();
         case AudioFormat::MP3:
-            // Placeholder for MP3 writer (implemented in Phase 2c)
-            return nullptr;
+            return std::make_unique<MP3Writer>();
     }
     return nullptr;
 }
