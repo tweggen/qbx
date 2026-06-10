@@ -115,10 +115,15 @@ void RenderSession::renderThreadMain() {
     bool success = true;
     std::string errorMsg;
 
+    fprintf(stderr, "[RenderSession] Starting render. Total samples: %zu, Sample rate: %u\n",
+            totalSamples_, sampleRate_);
+    fflush(stderr);
+
     try {
-        while (!cancelRequested_ && samplesWritten_ < totalSamples_) {
+        std::size_t samplesWrittenVal = 0;
+        while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
             // Calculate how many samples to render this iteration
-            std::size_t remainingSamples = totalSamples_ - samplesWritten_;
+            std::size_t remainingSamples = totalSamples_ - samplesWrittenVal;
             std::size_t samplesToRender =
                 std::min(RENDER_BUFFER_FRAMES, (remainingSamples + 1) / 2);
 
@@ -136,15 +141,23 @@ void RenderSession::renderThreadMain() {
                 break;
             }
 
-            samplesWritten_ += samplesToRender;
+            samplesWrittenVal += samplesToRender;
+            samplesWritten_.store(samplesWrittenVal);
 
             // Emit progress callback every ~50ms
-            if (samplesWritten_ % (sampleRate_ / 20) == 0) {
+            if (samplesWrittenVal % (sampleRate_ / 20) == 0) {
+                fprintf(stderr, "[RenderSession] Progress: %zu / %zu samples\n",
+                        samplesWrittenVal, totalSamples_);
+                fflush(stderr);
                 if (onProgress) {
-                    onProgress(samplesWritten_, totalSamples_);
+                    onProgress(samplesWrittenVal, totalSamples_);
                 }
             }
         }
+
+        fprintf(stderr, "[RenderSession] Render loop complete. Total samples written: %zu\n",
+                samplesWrittenVal);
+        fflush(stderr);
 
         if (cancelRequested_) {
             success = false;
@@ -154,6 +167,8 @@ void RenderSession::renderThreadMain() {
     } catch (const std::exception &e) {
         success = false;
         errorMsg = std::string("Render error: ") + e.what();
+        fprintf(stderr, "[RenderSession] Exception: %s\n", errorMsg.c_str());
+        fflush(stderr);
     }
 
     // Close file and clean up
@@ -163,8 +178,14 @@ void RenderSession::renderThreadMain() {
 
     running_ = false;
 
+    fprintf(stderr, "[RenderSession] Render complete. Success: %s\n",
+            success ? "true" : "false");
+    fflush(stderr);
+
     // Emit completion callback
     if (onComplete) {
+        fprintf(stderr, "[RenderSession] Calling onComplete callback\n");
+        fflush(stderr);
         onComplete(success, errorMsg.c_str());
     }
 
