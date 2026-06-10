@@ -98,10 +98,12 @@ target_link_libraries(tw303a PUBLIC
 # Required audio file format libraries
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
+pkg_check_modules(OGG REQUIRED IMPORTED_TARGET ogg)
 pkg_check_modules(VORBIS REQUIRED IMPORTED_TARGET vorbis vorbisenc)
 
 target_link_libraries(tw303a PRIVATE
     PkgConfig::SNDFILE
+    PkgConfig::OGG
     PkgConfig::VORBIS
 )
 

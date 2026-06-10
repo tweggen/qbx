@@ -81,8 +81,8 @@ SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
     setLayout(mainLayout);
 
     // Connect signals
-    connect(formatGroup_, QOverload<int>::of(&QButtonGroup::buttonClicked), this,
-            &SRenderDialog::onFormatChanged);
+    connect(formatGroup_, QOverload<QAbstractButton *>::of(&QButtonGroup::buttonClicked), this,
+            [this](QAbstractButton *) { this->onFormatChanged(0); });
     connect(browseButton_, &QPushButton::clicked, this, &SRenderDialog::onBrowseClicked);
     connect(outputPathLineEdit_, &QLineEdit::textChanged, this,
             &SRenderDialog::onOutputPathChanged);

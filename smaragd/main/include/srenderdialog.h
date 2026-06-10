@@ -1,7 +1,7 @@
 #ifndef _SRENDERDIALOG_H
 #define _SRENDERDIALOG_H
 
-#include <audio/audio_file_writer.h>
+#include <render_session.h>
 
 #include <QDialog>
 #include <QString>
@@ -23,6 +23,7 @@ public:
     SRenderDialog(SProject *project, QWidget *parent = nullptr);
     ~SRenderDialog() override;
 
+    int exec() override;
     audio::RenderParams getRenderParams() const;
 
 private slots:
