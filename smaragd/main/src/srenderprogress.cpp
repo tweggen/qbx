@@ -71,18 +71,12 @@ SRenderProgressDialog::SRenderProgressDialog(audio::RenderSession *session,
     // Setup callbacks from rendering session
     if (session_) {
         session_->onProgress = [this](std::size_t written, std::size_t total) {
-            // Use Qt::invokeMethod to call slot safely from render thread
-            QMetaObject::invokeMethod(this, "onRenderProgress",
-                                     Qt::QueuedConnection,
-                                     Q_ARG(std::size_t, written),
-                                     Q_ARG(std::size_t, total));
+            // Call directly - updateTimeDisplay() reads progress each frame anyway
+            this->onRenderProgress(written, total);
         };
         session_->onComplete = [this](bool success, const char *error) {
-            // Use Qt::invokeMethod to call slot safely from render thread
-            QMetaObject::invokeMethod(this, "onRenderComplete",
-                                     Qt::QueuedConnection,
-                                     Q_ARG(bool, success),
-                                     Q_ARG(const char *, error));
+            // Call directly - this just updates text labels
+            this->onRenderComplete(success, error);
         };
     }
 }
