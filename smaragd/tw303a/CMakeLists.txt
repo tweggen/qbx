@@ -79,6 +79,18 @@ target_link_libraries(tw303a PUBLIC
     Qt${QT_VERSION_MAJOR}::Xml
 )
 
+# Required audio file format libraries
+find_package(SndFile REQUIRED)
+find_package(Vorbis REQUIRED)
+
+target_link_libraries(tw303a PRIVATE
+    SndFile::SndFile
+    Vorbis::Vorbis
+    Vorbis::VorbisEnc
+)
+
+message(STATUS "tw303a: audio file I/O libraries found (libsndfile, libvorbis)")
+
 if(SMARAGD_LINUX AND ENABLE_ALSA)
     find_package(ALSA REQUIRED)
     target_compile_definitions(tw303a PRIVATE QBX_LINUX_ALSA=1)
