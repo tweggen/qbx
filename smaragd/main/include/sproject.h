@@ -58,6 +58,8 @@ public:
         double endSeconds;
     };
     TimeRange getTimeSelection() const;
+    void setTimeSelection(double startSeconds, double endSeconds);
+    void clearTimeSelection();
 
     // Generic per-project property store (a QVariantMap; serialized as JSON).
     // Named prop/setProp/hasProp rather than property/setProperty to avoid

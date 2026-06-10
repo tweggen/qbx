@@ -188,16 +188,29 @@ double SProject::getDurationSeconds() const
 
 bool SProject::hasTimeSelection() const
 {
-    // TODO: Check if locator in/out markers are set or time range selected
-    // For now, return false (no selection)
-    return false;
+    return hasProp("render/timeSelection_in") && hasProp("render/timeSelection_out");
 }
 
 SProject::TimeRange SProject::getTimeSelection() const
 {
-    // TODO: Return actual in/out marker positions or selection range
-    // For now, return full duration
+    if (hasTimeSelection()) {
+        double inMarker = prop("render/timeSelection_in", 0.0).toDouble();
+        double outMarker = prop("render/timeSelection_out", getDurationSeconds()).toDouble();
+        return { inMarker, outMarker };
+    }
     return { 0.0, getDurationSeconds() };
+}
+
+void SProject::setTimeSelection(double startSeconds, double endSeconds)
+{
+    setProp("render/timeSelection_in", startSeconds);
+    setProp("render/timeSelection_out", endSeconds);
+}
+
+void SProject::clearTimeSelection()
+{
+    properties_.remove("render/timeSelection_in");
+    properties_.remove("render/timeSelection_out");
 }
 
 void SProject::setFileName( const QString &fileName )

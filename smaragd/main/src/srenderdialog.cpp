@@ -241,9 +241,9 @@ audio::RenderParams SRenderDialog::getRenderParams() const {
     // Extent
     if (timeSelectionRadio_->isChecked() && project_) {
         params.extent = audio::RenderParams::Extent::TimeSelection;
-        // TODO: Get actual time selection from project
-        params.startTimeSec = 0.0;
-        params.endTimeSec = project_->getDurationSeconds();
+        SProject::TimeRange selection = project_->getTimeSelection();
+        params.startTimeSec = selection.startSeconds;
+        params.endTimeSec = selection.endSeconds;
     } else {
         params.extent = audio::RenderParams::Extent::EntireProject;
         params.startTimeSec = 0.0;
