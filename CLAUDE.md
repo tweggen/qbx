@@ -85,10 +85,64 @@ See `docs/BUILD.md` for platform-specific details.
 
 **UI changes:** Add menu items in `SMainWindow`, connect to synth state in `SApplication`.
 
+## Rendering Audio
+
+Smaragd supports exporting audio to file via **File → Render...** menu action. The feature is non-interactive and blocks UI during rendering (maintaining "one player at a time" directive).
+
+### Supported Formats
+
+| Format | Quality Control | Dependency | Notes |
+|--------|-----------------|-----------|-------|
+| **WAV** | Bit depth (16/24/32) | libsndfile | PCM-only, lossless |
+| **OGG Vorbis** | Quality 0-10 | libvorbis | Patent-free, high quality |
+| **MP3** | Bitrate 128-320 kbps | libmp3lame (optional) | User-provided binary |
+
+### Render Extent
+
+Users can render either:
+- **Entire project:** From start to end of project duration
+- **Time selection:** If in/out markers are set (option disabled if unavailable)
+
+### Architecture
+
+**File writers:** `tw303a/src/audio/` implements `AudioFileWriter` interface:
+- `WAVWriter` (libsndfile)
+- `OGGWriter` (libvorbisenc)
+- `MP3Writer` (dynamic dlopen/LoadLibrary for libmp3lame)
+
+**Render session:** `tw303a/src/render_session.cc` manages background thread, pulls synth audio, writes via appropriate writer, emits progress callbacks.
+
+**UI dialogs:**
+- `SRenderDialog` (main/src/srenderdialog.cpp) — format/quality/extent selector
+- `SRenderProgressDialog` (main/src/srenderprogress.cpp) — modal progress display
+
+**Integration:** `SApplication::startRender()` spawns session; `SMainWindow::onRenderTriggered()` wires menu.
+
+### Optional MP3 Support
+
+MP3 encoding requires `libmp3lame` binary in the application directory due to patent licensing concerns. If not found, the UI disables the MP3 option with a helpful tooltip. Users can obtain the library:
+
+```bash
+# macOS: brew install lame → copy /opt/homebrew/lib/libmp3lame.dylib
+# Linux: apt install libmp3lame0 → copy /usr/lib/libmp3lame.so
+# Windows: vcpkg install lame → copy mp3lame.dll
+```
+
 ## Dependencies
 
+### Core
 - **Qt 6** (6.11.x): Widgets, Xml, Core
 - **CMake** ≥ 3.16
-- **Windows:** WASAPI (SDK: ole32, mmdevapi, avrt, …); MinGW 13.1
-- **Linux:** libasound (ALSA)
 - **pthreads / std::thread** for backend render threads
+
+### Audio I/O (Required)
+- **libsndfile** — WAV export (all platforms)
+- **libvorbis / libvorbisenc** — OGG Vorbis export (all platforms)
+
+### Platform-Specific Audio Backends
+- **Windows:** WASAPI (SDK: ole32, mmdevapi, avrt, …); MinGW 13.1
+- **Linux:** ALSA (libasound)
+- **macOS:** CoreAudio
+
+### Optional
+- **libmp3lame** — MP3 export (user-provided binary in app directory)

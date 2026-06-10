@@ -107,6 +107,41 @@ cmake -B build -G "Visual Studio 17 2022" -DCMAKE_PREFIX_PATH="C:/Qt/5.15.2/msvc
 > unconditionally `#include <syslog.h>` / `<sys/ioctl.h>` / `<unistd.h>`,
 > which are not present on MinGW. See `plan/STATE.md`.
 
+## Testing Audio Render
+
+After building successfully, test the render feature:
+
+1. **Launch:** `./build/bin/smaragd` (or `..\build\bin\smaragd.exe` on Windows)
+
+2. **Create/open a project** — File → New (or open an existing project)
+
+3. **Test WAV export:**
+   - File → Render...
+   - Select "WAV" format
+   - Entire project / Time selection as available
+   - Choose output file (e.g., `/tmp/test.wav`)
+   - Click Render; watch progress dialog
+   - Verify output file exists and plays in external player
+
+4. **Test OGG Vorbis export:**
+   - File → Render...
+   - Select "OGG Vorbis" format
+   - Adjust quality slider (0-10)
+   - Render and verify playback
+
+5. **Test MP3 (if binary provided):**
+   - If `libmp3lame.dll/.dylib/.so` is in app directory, File → Render shows MP3 enabled
+   - Otherwise, MP3 option is disabled with helpful tooltip
+   - If enabled, test bitrate selection and rendering
+
+6. **Stress tests:**
+   - Cancel mid-render → verify file cleanup and UI recovery
+   - Render long project → verify progress updates smoothly
+   - Switch projects during render → should not crash
+   - Play synth during render → playback should be blocked (one player at a time)
+
+Expected: Output files are valid, audio is audible, UI remains responsive.
+
 ## Build options
 
 | Option              | Default                | Description                                       |
