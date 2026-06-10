@@ -66,6 +66,16 @@ SRenderProgressDialog::SRenderProgressDialog(audio::RenderSession *session,
     updateTimer_ = new QTimer(this);
     connect(updateTimer_, &QTimer::timeout, this, &SRenderProgressDialog::updateTimeDisplay);
     updateTimer_->start(100);  // Update every 100ms
+
+    // Setup callbacks from rendering session
+    if (session_) {
+        session_->onProgress = [this](std::size_t written, std::size_t total) {
+            this->onRenderProgress(written, total);
+        };
+        session_->onComplete = [this](bool success, const char *error) {
+            this->onRenderComplete(success, error);
+        };
+    }
 }
 
 SRenderProgressDialog::~SRenderProgressDialog() {
