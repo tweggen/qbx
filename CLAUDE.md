@@ -128,6 +128,69 @@ MP3 encoding requires `libmp3lame` binary in the application directory due to pa
 # Windows: vcpkg install lame → copy mp3lame.dll
 ```
 
+## Recording Audio
+
+Smaragd supports recording from input devices (microphone, line-in, etc.) via **Record** button in the transport toolbar or **Ctrl-R** / **Cmd-R** keyboard shortcut. Recorded audio is automatically converted to clips and placed on armed tracks.
+
+### Recording Flow
+
+1. **Arm tracks:** Click ARM button (red "R") on track headers to select which tracks receive recorded audio
+2. **Select input device:** Edit → Options → Audio tab → Input device dropdown
+3. **Start recording:** Click record button or press Ctrl-R/Cmd-R
+4. **Progress dialog:** Shows real-time duration and allows stopping via "Stop Recording" button
+5. **Automatic placement:** On completion, WAV file is converted to `SPlainWave` → `SCut` and placed on all armed tracks at current time position
+6. **Auto-disarm:** Armed tracks are automatically disarmed after recording placement
+
+### Architecture
+
+**Audio input abstraction:** `tw303a/include/audio/audio_input.h` defines `AudioInput` interface (platform-agnostic):
+- `openDevice(deviceId, sampleRate)` — select input device
+- `startCapture()` / `stopCapture()` — control recording stream
+- `read(buffer, frameCount)` — pull audio samples (non-blocking)
+- `listDevices()` — enumerate available input devices
+
+**Platform implementations:**
+- `WASAPIInput` (Windows) — shared-mode capture via WASAPI
+- `ALSAInput` (Linux) — ALSA PCM device capture
+- `CoreAudioInput` (macOS) — HAL audio unit input (needs read callback implementation)
+
+**Recording session:** `tw303a/src/recording_session.cc` manages background recording thread:
+- Creates `AudioInput` for selected device
+- Opens WAV output file via `createAudioFileWriter(AudioFormat::WAV)`
+- Records loop: pulls frames from input → writes to WAV → emits progress every ~100ms
+- Handles stop request gracefully with file cleanup
+
+**UI integration:**
+- Transport toolbar: Record button with play/pause icons
+- Keyboard shortcuts: Ctrl-R (Windows/Linux), Cmd-R (macOS), numpad * (all platforms)
+- Per-track ARM buttons: Red "R" toggle on track control strips (mute/solo area)
+- Options dialog: Input device selection (Audio tab)
+- Progress dialog: `SRecordingProgressDialog` shows duration MM:SS.mmm, stop button
+- Settings: Input device ID persisted in per-machine INI config
+
+**Cut placement:** `SMainWindow::onRecordingCompleted()`:
+- Loads recorded WAV as `SPlainWave` object
+- Wraps in `SCut` for timeline placement
+- Creates `SLink` with timestamp = recording start position
+- Parents link to track (UI automatically syncs)
+- Places cut once per armed track (one input → multiple track recording)
+
+### Recorded File Format
+
+Files written as WAV (PCM, lossless) in project directory:
+- **Filename:** `YYYYMMDD_HHMMSS_mmm_input0.wav` (timestamp with millisecond precision)
+- **Sample rate:** Matches project rate
+- **Channels:** Stereo (or project channel count)
+- **Bit depth:** Float32 (internal engine format)
+
+### Known Limitations & Future Work
+
+1. **CoreAudio input:** Currently placeholder (read returns silence). Full HAL callback integration pending.
+2. **Device enumeration:** Only "System default" shown in UI; full platform-specific enumeration deferred to Phase 7b.
+3. **Hardware monitoring:** Recording pulls from input device only (no synth-to-recording path). Plugin support on input planned for future phase.
+4. **Multi-input:** One WAV per input device; multiple inputs with separate files not yet supported.
+5. **Latency control:** Fixed at device default; no user-facing buffer sizing.
+
 ## Dependencies
 
 ### Core

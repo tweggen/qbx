@@ -142,6 +142,52 @@ After building successfully, test the render feature:
 
 Expected: Output files are valid, audio is audible, UI remains responsive.
 
+## Testing Audio Recording
+
+The recording feature allows you to capture audio from external input devices (microphone,
+line-in, etc.) and place them as clips on armed tracks. To test:
+
+1. **Launch:** `./build/bin/smaragd`
+
+2. **Create/open a project** — File → New (or open an existing project)
+
+3. **Arm a track for recording:**
+   - Right-click a track or use the mixer panel
+   - Click the ARM button (red "R") to arm the track
+   - You can arm multiple tracks; recordings are placed on all armed tracks simultaneously
+
+4. **Select input device:**
+   - Edit → Options → Audio tab
+   - Choose your input device from the dropdown (e.g., built-in microphone, line-in)
+   - Click OK
+
+5. **Start recording:**
+   - Press Ctrl+R or use the red Record button in the transport toolbar
+   - Speak into the microphone / feed audio into the input device
+   - Watch the real-time duration display in the progress dialog
+
+6. **Stop recording:**
+   - Click "Stop Recording" in the progress dialog, or press Ctrl+R again
+   - The dialog shows completion status
+   - A WAV file is written to the project directory with timestamp: `YYYYMMDD_HHMMSS_mmm_input0.wav`
+   - The recorded clip appears on all armed tracks at the current playhead position
+
+7. **Stress tests:**
+   - Arm/disarm different tracks and re-record; verify clips appear on the right tracks
+   - Try different input devices; verify device switching works mid-session
+   - Record with playback muted vs. unmuted; verify one operation at a time (mutual exclusion)
+   - Record then immediately render; verify both features work in sequence
+
+Expected: Recording completes successfully, clips appear on armed tracks, audio is audible.
+
+### Known Limitations
+
+- **Input enumeration:** Input device list updates on startup only; device plug/unplug during session are not detected
+- **Hardware monitoring:** Currently records external input only (no playback + input blend)
+- **Sample rate:** Recording uses the project's sample rate; no per-input resampling yet
+- **Multi-input:** Single-input only; simultaneous multi-device recording not yet supported
+- **Latency control:** No user-facing buffer size control for input device
+
 ## Build options
 
 | Option              | Default                | Description                                       |
