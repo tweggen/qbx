@@ -37,6 +37,7 @@ protected slots:
 
     void startPlaying();
     void stopPlaying();
+    void onRecordTriggered();
 
     void audioDeviceSelected( QAction * );
     void runTestSequence();
@@ -102,7 +103,7 @@ private:
     QMenu *qTestMenu_;
     QActionGroup *deviceGroup_;
 
-    QAction *actStop_, *actPlay_;
+    QAction *actStop_, *actPlay_, *actRecord_;
     QToolBar *qTBTransport_;
     QToolBar *qTBPalette_;
     QToolBar *qTBTracks_;

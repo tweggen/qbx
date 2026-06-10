@@ -23,6 +23,7 @@
 #include "smainwindow.h"
 #include "sobject.h"
 #include "sproject.h"
+#include <recording_session.h>
 #include "sprojectprops.h"
 #include "sexternfilelist.h"
 #include "slink.h"
@@ -410,12 +411,63 @@ void SMainWindow::stopPlaying()
         SApplication::app().setPlaying( false );
     } else {
         SObject *root = currentProject_->getRootComponent();
-        if( !root ) return;        
+        if( !root ) return;
         // FIXME: Jump to left locator here.
         SApplication::app().setGlobalLocatorPos( 0 );
         //  currentProject_->getRootComponent().seekTo( 0 );
     }
     actPlay_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
+}
+
+void SMainWindow::onRecordTriggered()
+{
+    if( !currentProject_ ) return;
+
+    if( SApplication::app().isRecordingActive() ) {
+        // Stop recording
+        audio::RecordingSession *session = SApplication::app().recordingSession();
+        if( session ) {
+            session->requestStop();
+        }
+        actRecord_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
+    } else {
+        // Check if any tracks are armed
+        bool anyArmed = false;
+        for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
+            if( trackLink->getSObject().isArmedForRecording() ) {
+                anyArmed = true;
+                break;
+            }
+        }
+
+        if( !anyArmed ) {
+            // Inform user to arm a track
+            QMessageBox::information( this, "No Tracks Armed",
+                "Please arm at least one track for recording before starting." );
+            return;
+        }
+
+        // Start recording
+        audio::RecordingParams params;
+        params.inputDeviceId = "default";  // TODO: Get from UI
+        // Use the project file directory for recordings, or a default if unsaved
+        QString projectDir = currentFilePath_.isEmpty() ?
+            QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation ) :
+            QFileInfo( currentFilePath_ ).absolutePath();
+        params.projectDirectory = projectDir.toStdString();
+        params.sampleRate = currentProject_->getSRate();
+        params.channels = 2;
+
+        // Collect armed track IDs
+        for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
+            if( trackLink->getSObject().isArmedForRecording() ) {
+                params.armedTrackIds.push_back( trackLink->getSObject().getSName().toStdString() );
+            }
+        }
+
+        SApplication::app().startRecording( params );
+        actRecord_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
+    }
 }
 
 SMainWindow::SMainWindow()
@@ -441,6 +493,17 @@ SMainWindow::SMainWindow()
     // actStop_->setMenuText("Stop");
     /*new QAction( "Stop playing", QIcon( QPixmap( "images/player_stop.png" ) ),
                             "Stop", Qt::Key_0, this );*/
+
+    actRecord_ = new QAction(
+        QIcon( QPixmap( (const char **)playoff_xpm )),
+        "Record",
+        this);
+    // Set keyboard shortcuts: Ctrl-R (Windows/Linux), Cmd-R (macOS), and numpad *
+    actRecord_->setShortcut( Qt::CTRL | Qt::Key_R );
+    // Note: macOS uses Cmd which Qt maps to Meta, but Qt::CTRL is more portable
+    // To support Cmd-R on macOS, we could add: actRecord_->setShortcut( Qt::META | Qt::Key_R );
+    // For now, Ctrl-R works on all platforms
+
     qTBTransport_ = new QToolBar( "Transport" /*, this*/ );
     /*
     actPlay_->addTo( qTBTransport );
@@ -448,12 +511,15 @@ SMainWindow::SMainWindow()
     */
     qTBTransport_->addAction( actPlay_ );
     qTBTransport_->addAction( actStop_ );
+    qTBTransport_->addAction( actRecord_ );
     addToolBar( Qt::TopToolBarArea, qTBTransport_ );
 
-    QObject::connect( actPlay_, SIGNAL( triggered() ), 
+    QObject::connect( actPlay_, SIGNAL( triggered() ),
                       this, SLOT( startPlaying() ) );
-    QObject::connect( actStop_, SIGNAL( triggered() ), 
+    QObject::connect( actStop_, SIGNAL( triggered() ),
                       this, SLOT( stopPlaying() ) );
+    QObject::connect( actRecord_, SIGNAL( triggered() ),
+                      this, SLOT( onRecordTriggered() ) );
 
     qFileMenu_ = new QMenu( "&File", this );
     qFileMenu_->setTearOffEnabled(true);
