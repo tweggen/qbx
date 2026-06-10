@@ -22,12 +22,16 @@ public:
                          QWidget *parent = nullptr);
     ~SRenderProgressDialog() override;
 
+signals:
+    void renderProgressUpdated(std::size_t written, std::size_t total);
+    void renderCompleted(bool success, QString error);
+
 protected:
     void closeEvent(QCloseEvent *event) override;
 
 private slots:
     void onRenderProgress(std::size_t written, std::size_t total);
-    void onRenderComplete(bool success, const char *error);
+    void onRenderComplete(bool success, QString error);
     void onCancelClicked();
     void updateTimeDisplay();
 

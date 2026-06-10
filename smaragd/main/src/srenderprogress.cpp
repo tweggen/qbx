@@ -65,24 +65,24 @@ SRenderProgressDialog::SRenderProgressDialog(audio::RenderSession *session,
 
     // Setup timer for time display updates
     updateTimer_ = new QTimer(this);
-    fprintf(stderr, "[SRenderProgressDialog] Created timer: %p\n", updateTimer_);
-    fflush(stderr);
     connect(updateTimer_, &QTimer::timeout, this, &SRenderProgressDialog::updateTimeDisplay);
-    fprintf(stderr, "[SRenderProgressDialog] Connected timer\n");
-    fflush(stderr);
     updateTimer_->start(100);  // Update every 100ms
-    fprintf(stderr, "[SRenderProgressDialog] Started timer, isActive=%d\n", updateTimer_->isActive());
-    fflush(stderr);
 
-    // Setup callbacks from rendering session
+    // Connect signals from this dialog (will be emitted from render thread)
+    connect(this, &SRenderProgressDialog::renderProgressUpdated,
+            this, &SRenderProgressDialog::onRenderProgress);
+    connect(this, &SRenderProgressDialog::renderCompleted,
+            this, &SRenderProgressDialog::onRenderComplete);
+
+    // Setup callbacks from rendering session - emit signals (thread-safe)
     if (session_) {
         session_->onProgress = [this](std::size_t written, std::size_t total) {
-            // Call directly - updateTimeDisplay() reads progress each frame anyway
-            this->onRenderProgress(written, total);
+            // Emit signal - will be delivered safely to main thread
+            emit renderProgressUpdated(written, total);
         };
         session_->onComplete = [this](bool success, const char *error) {
-            // Call directly - this just updates text labels
-            this->onRenderComplete(success, error);
+            // Emit signal with QString - thread-safe
+            emit renderCompleted(success, QString::fromUtf8(error ? error : ""));
         };
     }
 }
@@ -109,7 +109,7 @@ void SRenderProgressDialog::onRenderProgress(std::size_t written, std::size_t to
     }
 }
 
-void SRenderProgressDialog::onRenderComplete(bool success, const char *error) {
+void SRenderProgressDialog::onRenderComplete(bool success, QString error) {
     updateTimer_->stop();
 
     if (success) {
@@ -120,8 +120,7 @@ void SRenderProgressDialog::onRenderComplete(bool success, const char *error) {
     } else {
         cancelButton_->setText("Close");
         cancelButton_->setEnabled(true);
-        QString errorMsg = error ? QString::fromStdString(std::string(error)) : "Unknown error";
-        estimatedTimeLabel_->setText("Error: " + errorMsg);
+        estimatedTimeLabel_->setText("Error: " + (error.isEmpty() ? "Unknown error" : error));
     }
 }
 
@@ -137,12 +136,6 @@ void SRenderProgressDialog::updateTimeDisplay() {
 
     std::size_t written = session_->samplesWritten();
     std::size_t total = session_->totalSamples();
-
-    static int callCount = 0;
-    if (callCount++ % 10 == 0) {  // Log every 10th call to avoid spam
-        fprintf(stderr, "[updateTimeDisplay] written=%zu, total=%zu\n", written, total);
-        fflush(stderr);
-    }
 
     // Update progress bar and text
     if (total > 0) {
