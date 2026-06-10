@@ -66,11 +66,6 @@ SRenderProgressDialog::SRenderProgressDialog(audio::RenderSession *session,
     updateTimer_ = new QTimer(this);
     connect(updateTimer_, &QTimer::timeout, this, &SRenderProgressDialog::updateTimeDisplay);
     updateTimer_->start(100);  // Update every 100ms
-
-    // Get total samples from session
-    if (session_) {
-        totalSamples_ = session_->totalSamples();
-    }
 }
 
 SRenderProgressDialog::~SRenderProgressDialog() {
@@ -80,8 +75,6 @@ SRenderProgressDialog::~SRenderProgressDialog() {
 }
 
 void SRenderProgressDialog::onRenderProgress(std::size_t written, std::size_t total) {
-    totalSamples_ = total;
-
     if (total > 0) {
         int percentage = static_cast<int>((written * 100) / total);
         progressBar_->setValue(percentage);
@@ -121,31 +114,40 @@ void SRenderProgressDialog::updateTimeDisplay() {
     std::size_t written = session_->samplesWritten();
     std::size_t total = session_->totalSamples();
 
-    if (total == 0 || written == 0) {
-        return;
-    }
+    // Update progress bar and text
+    if (total > 0) {
+        int percentage = static_cast<int>((100.0 * written) / total);
+        progressBar_->setValue(percentage);
+        progressTextLabel_->setText(
+            QString("%1% (%2 / %3 samples)")
+                .arg(percentage)
+                .arg(written)
+                .arg(total));
 
-    // Calculate elapsed time
-    double elapsedSeconds = static_cast<double>(written) / sampleRate_;
+        // Calculate elapsed time and speed
+        double elapsedSeconds = static_cast<double>(written) / sampleRate_;
 
-    // Calculate rendering rate (samples per second)
-    double rate = static_cast<double>(written) / elapsedSeconds;
+        if (elapsedSeconds > 0) {
+            // Calculate rendering rate (samples per second)
+            double rate = static_cast<double>(written) / elapsedSeconds;
 
-    if (rate > 0) {
-        // Calculate remaining time
-        double remainingSeconds = static_cast<double>(total - written) / rate;
+            if (rate > 0) {
+                // Calculate remaining time
+                double remainingSeconds = static_cast<double>(total - written) / rate;
 
-        QString elapsedStr = formatTime(elapsedSeconds);
-        QString remainingStr = formatTime(remainingSeconds);
-        QString timeText =
-            QString("Elapsed: %1 / Remaining: %2").arg(elapsedStr, remainingStr);
-        timeLabel_->setText(timeText);
+                QString elapsedStr = formatTime(elapsedSeconds);
+                QString remainingStr = formatTime(remainingSeconds);
+                QString timeText =
+                    QString("Elapsed: %1 / Remaining: %2").arg(elapsedStr, remainingStr);
+                timeLabel_->setText(timeText);
 
-        // Rendering speed indicator
-        double realtimeRatio = rate / sampleRate_;
-        QString speedText =
-            QString("Speed: %.1fx realtime").arg(realtimeRatio);
-        estimatedTimeLabel_->setText(speedText);
+                // Rendering speed indicator
+                double realtimeRatio = rate / sampleRate_;
+                QString speedText =
+                    QString("Speed: %.1fx realtime").arg(realtimeRatio);
+                estimatedTimeLabel_->setText(speedText);
+            }
+        }
     }
 }
 

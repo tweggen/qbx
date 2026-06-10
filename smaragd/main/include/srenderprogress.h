@@ -44,7 +44,6 @@ private:
     QLabel *estimatedTimeLabel_ = nullptr;
     QPushButton *cancelButton_ = nullptr;
 
-    std::size_t totalSamples_ = 0;
     std::uint32_t sampleRate_ = 48000;
     QTimer *updateTimer_ = nullptr;
 };
