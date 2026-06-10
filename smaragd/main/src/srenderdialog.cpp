@@ -103,8 +103,9 @@ SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
     entireProjectRadio_->setChecked(true);
     onFormatChanged(0);
 
-    // Disable time selection if not available
-    if (!project || !project->hasTimeSelection()) {
+    // Time selection is available if project exists
+    // (user can set markers at any time)
+    if (!project) {
         timeSelectionRadio_->setEnabled(false);
     }
 }
