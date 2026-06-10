@@ -628,6 +628,7 @@ SMainWindow::SMainWindow()
     qTestMenu_->addAction( "&Run Test Sequence...", this, SLOT( runTestSequence() ) );
     qTestMenu_->addAction( "&Volume Burst (track 0)", this, SLOT( runVolumeBurst() ) );
     qTestMenu_->addAction( "Test &Render...", this, SLOT( runTestRender() ) );
+    qTestMenu_->addAction( "Set &Time Selection (first half)", this, SLOT( runSetTimeSelection() ) );
     qTestMenu_->addAction( "Save/&Load Round-trip", this, SLOT( runSaveLoadTest() ) );
     qTestMenu_->addAction( "&Group Track Test (tree + undo)", this, SLOT( runGroupTrackTest() ) );
     qTestMenu_->addAction( "Re&order Track Test (exact slot)", this, SLOT( runReorderTrackTest() ) );
@@ -817,6 +818,20 @@ void SMainWindow::runTestRender()
 
     // Open the render dialog
     onRenderTriggered();
+}
+
+void SMainWindow::runSetTimeSelection()
+{
+    if (!currentProject_) {
+        statusBar()->showMessage("Create or open a project first", 3000);
+        return;
+    }
+
+    // Set time selection to first half of project duration
+    double duration = currentProject_->getDurationSeconds();
+    currentProject_->setTimeSelection(0.0, duration / 2.0);
+    statusBar()->showMessage(
+        QString("Time selection set: 0.0 - %1 seconds").arg(duration / 2.0, 0, 'f', 2), 3000);
 }
 
 // Save/load validation: drive SSaveProjectAction + SLoadProjectAction (the same

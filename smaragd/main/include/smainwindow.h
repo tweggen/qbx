@@ -45,6 +45,7 @@ protected slots:
     void runTestSequence();
     void runVolumeBurst();
     void runTestRender();
+    void runSetTimeSelection();
     void runSaveLoadTest();
     void runGroupTrackTest();
     void runReorderTrackTest();
