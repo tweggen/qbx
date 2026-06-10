@@ -47,6 +47,18 @@ public:
     int getSRate() const { return sampleRate_; }
     const std::vector<std::uint32_t> &candidateRates() const { return candidateRates_; }
 
+    // Render-related queries
+    // Total project duration in seconds (based on arrangement length)
+    double getDurationSeconds() const;
+
+    // Time selection (locator in/out markers or arrangement selection)
+    bool hasTimeSelection() const;
+    struct TimeRange {
+        double startSeconds;
+        double endSeconds;
+    };
+    TimeRange getTimeSelection() const;
+
     // Generic per-project property store (a QVariantMap; serialized as JSON).
     // Named prop/setProp/hasProp rather than property/setProperty to avoid
     // shadowing QObject's meta-property API. Well-known keys + defaults live in

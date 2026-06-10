@@ -179,6 +179,27 @@ void SProject::setCandidateRates( std::vector<std::uint32_t> rates )
     candidateRates_ = std::move( rates );
 }
 
+double SProject::getDurationSeconds() const
+{
+    // TODO: Calculate from arrangement/track structure
+    // For now, return 60 seconds as a default
+    return 60.0;
+}
+
+bool SProject::hasTimeSelection() const
+{
+    // TODO: Check if locator in/out markers are set or time range selected
+    // For now, return false (no selection)
+    return false;
+}
+
+SProject::TimeRange SProject::getTimeSelection() const
+{
+    // TODO: Return actual in/out marker positions or selection range
+    // For now, return full duration
+    return { 0.0, getDurationSeconds() };
+}
+
 void SProject::setFileName( const QString &fileName )
 {
     fileName_ = fileName;
