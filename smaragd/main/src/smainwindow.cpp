@@ -627,6 +627,7 @@ SMainWindow::SMainWindow()
     qTestMenu_->setTearOffEnabled(true);
     qTestMenu_->addAction( "&Run Test Sequence...", this, SLOT( runTestSequence() ) );
     qTestMenu_->addAction( "&Volume Burst (track 0)", this, SLOT( runVolumeBurst() ) );
+    qTestMenu_->addAction( "Test &Render...", this, SLOT( runTestRender() ) );
     qTestMenu_->addAction( "Save/&Load Round-trip", this, SLOT( runSaveLoadTest() ) );
     qTestMenu_->addAction( "&Group Track Test (tree + undo)", this, SLOT( runGroupTrackTest() ) );
     qTestMenu_->addAction( "Re&order Track Test (exact slot)", this, SLOT( runReorderTrackTest() ) );
@@ -805,6 +806,17 @@ void SMainWindow::runVolumeBurst()
     statusBar()->showMessage(
         QString("Volume burst: %1 actions -> undo stack +%2 (expect +1)")
             .arg(steps).arg(after - before), 4000);
+}
+
+void SMainWindow::runTestRender()
+{
+    if (!currentProject_) {
+        statusBar()->showMessage("Create or open a project first", 3000);
+        return;
+    }
+
+    // Open the render dialog
+    onRenderTriggered();
 }
 
 // Save/load validation: drive SSaveProjectAction + SLoadProjectAction (the same

@@ -44,6 +44,7 @@ protected slots:
     void audioDeviceSelected( QAction * );
     void runTestSequence();
     void runVolumeBurst();
+    void runTestRender();
     void runSaveLoadTest();
     void runGroupTrackTest();
     void runReorderTrackTest();
