@@ -29,6 +29,7 @@ set(TW303A_HEADERS
     include/twwhitenoise.h
     include/audio/audio_backend.h
     include/audio/null_backend.h
+    include/audio/audio_file_writer.h
 )
 
 set(TW303A_SOURCES
@@ -62,6 +63,9 @@ set(TW303A_SOURCES
     src/twwhitenoise.cc
     src/audio/audio_backend.cc
     src/audio/null_backend.cc
+    src/audio/audio_file_writer.cc
+    src/audio/wav_writer.cc
+    src/audio/wav_writer.h
 )
 
 add_library(tw303a STATIC ${TW303A_SOURCES} ${TW303A_HEADERS})
