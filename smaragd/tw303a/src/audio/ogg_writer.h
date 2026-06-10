@@ -3,16 +3,13 @@
 
 #include <string>
 #include <vector>
+#include <cstdio>
 
 #include "audio/audio_file_writer.h"
 
-struct ogg_stream_state;
-struct ogg_page;
-struct ogg_packet;
-struct vorbis_info;
-struct vorbis_comment;
-struct vorbis_dsp_state;
-struct vorbis_block;
+#include <ogg/ogg.h>
+#include <vorbis/codec.h>
+#include <vorbis/vorbisenc.h>
 
 namespace audio {
 

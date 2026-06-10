@@ -1,6 +1,12 @@
 #include "srenderdialog.h"
 
-#include <audio/mp3_writer.h>
+// Forward declare MP3Writer for checking availability
+namespace audio {
+class MP3Writer {
+public:
+    static bool isAvailable();
+};
+}
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>

@@ -201,7 +201,8 @@ SApplication::SApplication( int &argc, char **argv )
       globalLocatorPos_( 0 ),
       isPlaying_( false ),
       currentProject_( NULL ),
-      renderSession_( nullptr )
+      renderSession_( nullptr ),
+      recordingSession_( nullptr )
 {
     setOrganizationName( "Smaragd" );
     setApplicationName( "smaragd" );
@@ -263,7 +264,7 @@ void SApplication::startRender(const audio::RenderParams &params)
     // Get the synth output component
     twComponent *synthOutput = nullptr;
     if (currentProject_) {
-        twComponent *root = currentProject_->getRootComponent();
+        SObject *root = currentProject_->getRootComponent();
         if (root) {
             synthOutput = &root->getRootComponent();
         }
@@ -277,4 +278,30 @@ void SApplication::startRender(const audio::RenderParams &params)
     // Start rendering
     int sampleRate = t3Env_ ? t3Env_->getSRate() : 48000;
     renderSession_->start(synthOutput, params, static_cast<std::uint32_t>(sampleRate));
+}
+
+audio::RecordingSession *SApplication::recordingSession() const
+{
+    return recordingSession_.get();
+}
+
+bool SApplication::isRecordingActive() const
+{
+    return recordingSession_ && recordingSession_->isRunning();
+}
+
+void SApplication::startRecording(const audio::RecordingParams &params)
+{
+    if (!recordingSession_) {
+        recordingSession_ = std::make_unique<audio::RecordingSession>();
+    }
+
+    // Stop playback if active (mutual exclusion)
+    if (isPlaying_) {
+        t3Speaker_->stopOutput();
+        isPlaying_ = false;
+    }
+
+    // Start recording
+    recordingSession_->start(params);
 }

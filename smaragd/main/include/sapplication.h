@@ -6,7 +6,8 @@
 
 #include <tw303aenv.h>
 #include <twcomponent.h>
-#include <audio/render_session.h>
+#include <render_session.h>
+#include <recording_session.h>
 #include <QApplication>
 #include <QString>
 //#include <qptrlist.h>
@@ -57,11 +58,15 @@ public:
     offset_t getGlobalLocatorPos() const;
     bool isPlaying() const;
     bool isRenderingActive() const;
+    bool isRecordingActive() const;
     SActionHistory *actionHistory() const;
     void submitAction(SAction *action);
 
     audio::RenderSession *renderSession() const;
     void startRender(const audio::RenderParams &params);
+
+    audio::RecordingSession *recordingSession() const;
+    void startRecording(const audio::RecordingParams &params);
 
     // App-wide status/mode line shown in the main window's status bar. Views
     // push the active (or hover-telegraphed) gesture here; the main window
@@ -94,6 +99,7 @@ private:
     twWhiteNoise *t3WhiteNoise_;
     SActionHistory *actionHistory_;
     std::unique_ptr<audio::RenderSession> renderSession_;
+    std::unique_ptr<audio::RecordingSession> recordingSession_;
 
     SLink *currentSelectedSLink_;
 

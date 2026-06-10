@@ -76,12 +76,6 @@ set(TW303A_SOURCES
     src/audio/audio_input.cc
     src/audio/null_input.h
     src/audio/null_input.cc
-    src/audio/wasapi_input.h
-    src/audio/wasapi_input.cc
-    src/audio/alsa_input.h
-    src/audio/alsa_input.cc
-    src/audio/coreaudio_input.h
-    src/audio/coreaudio_input.cc
     src/render_session.cc
     src/recording_session.cc
 )
@@ -102,27 +96,28 @@ target_link_libraries(tw303a PUBLIC
 )
 
 # Required audio file format libraries
-find_package(SndFile REQUIRED)
-find_package(Vorbis REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
+pkg_check_modules(VORBIS REQUIRED IMPORTED_TARGET vorbis vorbisenc)
 
 target_link_libraries(tw303a PRIVATE
-    SndFile::SndFile
-    Vorbis::Vorbis
-    Vorbis::VorbisEnc
+    PkgConfig::SNDFILE
+    PkgConfig::VORBIS
 )
 
 message(STATUS "tw303a: audio file I/O libraries found (libsndfile, libvorbis)")
 
 if(SMARAGD_LINUX AND ENABLE_ALSA)
     find_package(ALSA REQUIRED)
-    target_compile_definitions(tw303a PRIVATE QBX_LINUX_ALSA=1)
+    target_compile_definitions(tw303a PRIVATE QBX_LINUX_ALSA=1 QBX_LINUX_ALSA_INPUT=1)
     target_link_libraries(tw303a PRIVATE ALSA::ALSA)
     target_sources(tw303a
         PRIVATE
             src/audio/alsa_backend.cc
             include/audio/alsa_backend.h
+            src/audio/alsa_input.cc
     )
-    message(STATUS "tw303a: ALSA backend enabled")
+    message(STATUS "tw303a: ALSA backend and input (recording) enabled")
 endif()
 
 if(SMARAGD_LINUX AND ENABLE_PIPEWIRE)
@@ -150,14 +145,15 @@ if(ENABLE_JACK)
 endif()
 
 if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
-    target_compile_definitions(tw303a PRIVATE QBX_WIN_WASAPI=1)
+    target_compile_definitions(tw303a PRIVATE QBX_WIN_WASAPI=1 QBX_WIN_WASAPI_INPUT=1)
     target_link_libraries(tw303a PRIVATE ole32 oleaut32 mmdevapi avrt ksuser uuid winmm)
     target_sources(tw303a
         PRIVATE
             src/audio/wasapi_backend.cc
             include/audio/wasapi_backend.h
+            src/audio/wasapi_input.cc
     )
-    message(STATUS "tw303a: WASAPI backend enabled")
+    message(STATUS "tw303a: WASAPI backend and input (recording) enabled")
 endif()
 
 if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
@@ -166,7 +162,7 @@ if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
     find_library(AUDIOTOOLBOX       AudioToolbox)
     find_library(COREFOUNDATION     CoreFoundation)
     find_library(AVFOUNDATION       AVFoundation)
-    target_compile_definitions(tw303a PRIVATE QBX_MAC_COREAUDIO=1)
+    target_compile_definitions(tw303a PRIVATE QBX_MAC_COREAUDIO=1 QBX_MAC_COREAUDIO_INPUT=1)
     target_link_libraries(tw303a PRIVATE
         ${COREAUDIO_LIBRARY}
         ${AUDIOUNIT_LIBRARY}
@@ -178,27 +174,11 @@ if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
         PRIVATE
             src/audio/coreaudio_backend.cc
             include/audio/coreaudio_backend.h
+            src/audio/coreaudio_input.cc
     )
-    message(STATUS "tw303a: CoreAudio backend enabled")
+    message(STATUS "tw303a: CoreAudio backend and input (recording) enabled")
 endif()
 
 if(NOT (ENABLE_ALSA OR ENABLE_PIPEWIRE OR ENABLE_PULSEAUDIO OR ENABLE_JACK OR ENABLE_WASAPI OR ENABLE_COREAUDIO))
     message(WARNING "tw303a: no audio backend enabled; the synthesizer will build but cannot output sound.")
-endif()
-
-# Audio input (recording) implementations
-if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
-    target_compile_definitions(tw303a PRIVATE QBX_WIN_WASAPI_INPUT=1)
-    message(STATUS "tw303a: WASAPI input (recording) enabled")
-endif()
-
-if(SMARAGD_LINUX AND ENABLE_ALSA)
-    target_compile_definitions(tw303a PRIVATE QBX_LINUX_ALSA_INPUT=1)
-    target_link_libraries(tw303a PRIVATE ALSA::ALSA)
-    message(STATUS "tw303a: ALSA input (recording) enabled")
-endif()
-
-if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
-    target_compile_definitions(tw303a PRIVATE QBX_MAC_COREAUDIO_INPUT=1)
-    message(STATUS "tw303a: CoreAudio input (recording) enabled")
 endif()

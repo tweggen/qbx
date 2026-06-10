@@ -1,6 +1,6 @@
 #include "srenderprogress.h"
 
-#include <audio/render_session.h>
+#include <render_session.h>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>

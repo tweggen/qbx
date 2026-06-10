@@ -188,7 +188,9 @@ void RecordingSession::recordThreadMain() {
                 }
 
                 // Update duration
-                recordedDuration_ += static_cast<double>(framesRead) / sampleRate;
+                recordedDuration_.store(
+                    recordedDuration_.load() + static_cast<double>(framesRead) / sampleRate
+                );
 
                 // Emit progress every ~0.1s
                 auto now = std::chrono::steady_clock::now();
