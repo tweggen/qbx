@@ -46,7 +46,16 @@ SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
     // Quality group
     createQualityGroup();
     mainLayout->addWidget(new QLabel("Quality:"));
-    mainLayout->addWidget(qualityLabel_);
+
+    QVBoxLayout *qualityLayout = new QVBoxLayout();
+    qualityLayout->addWidget(new QLabel("WAV bit depth:"));
+    qualityLayout->addWidget(wavBitDepthSpinBox_);
+    qualityLayout->addWidget(new QLabel("OGG quality (0=low, 10=high):"));
+    qualityLayout->addWidget(oggQualitySlider_);
+    qualityLayout->addWidget(new QLabel("MP3 bitrate:"));
+    qualityLayout->addWidget(mp3BitrateSpinBox_);
+    qualityLayout->addStretch();
+    mainLayout->addLayout(qualityLayout);
     mainLayout->addSpacing(8);
 
     mainLayout->addSpacing(12);
@@ -122,8 +131,6 @@ void SRenderDialog::createFormatGroup() {
 }
 
 void SRenderDialog::createQualityGroup() {
-    qualityLabel_ = new QLabel();
-
     // WAV: bit depth
     wavBitDepthSpinBox_ = new QSpinBox();
     wavBitDepthSpinBox_->setMinimum(16);
@@ -147,15 +154,6 @@ void SRenderDialog::createQualityGroup() {
     mp3BitrateSpinBox_->setSingleStep(16);
     mp3BitrateSpinBox_->setValue(192);
     mp3BitrateSpinBox_->setSuffix(" kbps");
-
-    QVBoxLayout *qualityLayout = new QVBoxLayout(qualityLabel_);
-    qualityLayout->addWidget(new QLabel("WAV bit depth:"));
-    qualityLayout->addWidget(wavBitDepthSpinBox_);
-    qualityLayout->addWidget(new QLabel("OGG quality (0=low, 10=high):"));
-    qualityLayout->addWidget(oggQualitySlider_);
-    qualityLayout->addWidget(new QLabel("MP3 bitrate:"));
-    qualityLayout->addWidget(mp3BitrateSpinBox_);
-    qualityLayout->addStretch();
 }
 
 void SRenderDialog::createExtentGroup() {
@@ -174,6 +172,9 @@ void SRenderDialog::createOutputGroup() {
 
     browseButton_ = new QPushButton("Browse...");
     browseButton_->setMaximumWidth(100);
+
+    renderButton_ = new QPushButton("Render");
+    cancelButton_ = new QPushButton("Cancel");
 }
 
 void SRenderDialog::onFormatChanged(int id) {

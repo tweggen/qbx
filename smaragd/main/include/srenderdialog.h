@@ -48,7 +48,6 @@ private:
     QRadioButton *mp3Radio_ = nullptr;
 
     // Quality controls (shown/hidden based on format)
-    QLabel *qualityLabel_ = nullptr;
     QSpinBox *wavBitDepthSpinBox_ = nullptr;  // 16, 24, 32
     QSlider *oggQualitySlider_ = nullptr;     // 0-10
     QSpinBox *mp3BitrateSpinBox_ = nullptr;   // 128-320
