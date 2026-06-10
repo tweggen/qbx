@@ -32,6 +32,7 @@ set(TW303A_HEADERS
     include/audio/audio_file_writer.h
     include/audio/audio_input.h
     include/render_session.h
+    include/recording_session.h
 )
 
 set(TW303A_SOURCES
@@ -82,6 +83,7 @@ set(TW303A_SOURCES
     src/audio/coreaudio_input.h
     src/audio/coreaudio_input.cc
     src/render_session.cc
+    src/recording_session.cc
 )
 
 add_library(tw303a STATIC ${TW303A_SOURCES} ${TW303A_HEADERS})
