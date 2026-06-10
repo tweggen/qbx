@@ -32,6 +32,11 @@ public:
     QString audioDeviceId() const;
     void    setAudioDeviceId( const QString &id );
 
+    // Selected audio input device id (backend-specific; empty == system
+    // default). Used for recording input.
+    QString audioInputDeviceId() const;
+    void    setAudioInputDeviceId( const QString &id );
+
     // Last-used directory for a file dialog, keyed by a context string
     // ("project", "sample", ...). Returns `fallback` when nothing is stored.
     QString lastDir( const QString &context,

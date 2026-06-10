@@ -23,6 +23,7 @@
 #include "smainwindow.h"
 #include "sobject.h"
 #include "sproject.h"
+#include "ssettings.h"
 #include <recording_session.h>
 #include "sprojectprops.h"
 #include "sexternfilelist.h"
@@ -449,7 +450,9 @@ void SMainWindow::onRecordTriggered()
 
         // Start recording
         audio::RecordingParams params;
-        params.inputDeviceId = "default";  // TODO: Get from UI
+        // Get input device from settings (defaults to "default" if not set)
+        QString inputDevId = SSettings::instance().audioInputDeviceId();
+        params.inputDeviceId = inputDevId.toStdString();
         // Use the project file directory for recordings, or a default if unsaved
         QString projectDir = currentFilePath_.isEmpty() ?
             QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation ) :

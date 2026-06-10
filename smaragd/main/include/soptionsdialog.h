@@ -41,7 +41,8 @@ private:
     QCheckBox *invertZoom_;
 
     // Audio page.
-    QComboBox *audioDevice_;
+    QComboBox *audioDevice_;      // Output device
+    QComboBox *audioInputDevice_; // Input device (for recording)
 };
 
 #endif // SOPTIONSDIALOG_H

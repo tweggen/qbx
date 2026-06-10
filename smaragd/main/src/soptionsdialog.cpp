@@ -106,6 +106,10 @@ QWidget *SOptionsDialog::buildAudioPage()
     form->addRow( "Output device:", audioDevice_ );
     form->addRow( new QLabel( "Device changes take effect on the next Play." ) );
 
+    audioInputDevice_ = new QComboBox;
+    form->addRow( "Input device:", audioInputDevice_ );
+    form->addRow( new QLabel( "Device selection is used when recording starts." ) );
+
     return page;
 }
 
@@ -133,6 +137,7 @@ void SOptionsDialog::applyMousePage()
 
 void SOptionsDialog::loadAudioPage()
 {
+    // Load output devices
     audioDevice_->clear();
     twSpeaker *spk = SApplication::app().getSpeaker();
     std::vector<audio::AudioDeviceInfo> devs = spk ? spk->outputDevices()
@@ -149,16 +154,33 @@ void SOptionsDialog::loadAudioPage()
                       : SSettings::instance().audioDeviceId();
     int i = audioDevice_->findData( cur );
     if( i >= 0 ) audioDevice_->setCurrentIndex( i );
+
+    // Load input devices
+    audioInputDevice_->clear();
+    audioInputDevice_->addItem( "System default", "default" );
+    // TODO: Phase 7: enumerate input devices via AudioInput factory for this platform
+    QString curIn = SSettings::instance().audioInputDeviceId();
+    if( curIn.isEmpty() ) curIn = "default";
+    int j = audioInputDevice_->findData( curIn );
+    if( j >= 0 ) audioInputDevice_->setCurrentIndex( j );
 }
 
 void SOptionsDialog::applyAudioPage()
 {
+    // Save output device
     QString id = audioDevice_->currentData().toString();
-    if( id.isEmpty() ) return;
-    if( twSpeaker *spk = SApplication::app().getSpeaker() ) {
-        spk->setOutputDevice( id.toStdString() );
+    if( !id.isEmpty() ) {
+        if( twSpeaker *spk = SApplication::app().getSpeaker() ) {
+            spk->setOutputDevice( id.toStdString() );
+        }
+        SSettings::instance().setAudioDeviceId( id );
     }
-    SSettings::instance().setAudioDeviceId( id );
+
+    // Save input device
+    QString inId = audioInputDevice_->currentData().toString();
+    if( !inId.isEmpty() ) {
+        SSettings::instance().setAudioInputDeviceId( inId );
+    }
 }
 
 void SOptionsDialog::apply()

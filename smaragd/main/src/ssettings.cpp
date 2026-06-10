@@ -36,6 +36,16 @@ void SSettings::setAudioDeviceId( const QString &id )
     setValue( "audio/deviceId", id );
 }
 
+QString SSettings::audioInputDeviceId() const
+{
+    return value( "audio/inputDeviceId" ).toString();
+}
+
+void SSettings::setAudioInputDeviceId( const QString &id )
+{
+    setValue( "audio/inputDeviceId", id );
+}
+
 QString SSettings::lastDir( const QString &context, const QString &fallback ) const
 {
     return value( "paths/" + context, fallback ).toString();
