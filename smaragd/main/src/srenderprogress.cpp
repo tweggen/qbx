@@ -94,8 +94,13 @@ SRenderProgressDialog::~SRenderProgressDialog() {
 }
 
 void SRenderProgressDialog::onRenderProgress(std::size_t written, std::size_t total) {
+    fprintf(stderr, "[SRenderProgressDialog::onRenderProgress] written=%zu, total=%zu\n", written, total);
+    fflush(stderr);
+
     if (total > 0) {
         int percentage = static_cast<int>((written * 100) / total);
+        fprintf(stderr, "[SRenderProgressDialog] Setting progress to %d%%\n", percentage);
+        fflush(stderr);
         progressBar_->setValue(percentage);
 
         QString progressText =
