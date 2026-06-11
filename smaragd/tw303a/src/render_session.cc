@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "twcomponent.h"
+#include "sapplication.h"
 
 namespace audio {
 
@@ -24,6 +25,12 @@ bool RenderSession::start(twComponent *synthOutput, const RenderParams &params,
     if (running_) {
         lastError_ = "Render already in progress";
         return false;
+    }
+
+    // Ensure previous render thread is fully cleaned up before starting a new one
+    if (renderThread_ && renderThread_->joinable()) {
+        renderThread_->join();
+        renderThread_.reset();
     }
 
     if (!synthOutput) {
@@ -123,21 +130,64 @@ void RenderSession::renderThreadMain() {
     fflush(stderr);
 
     try {
-        // Seek to start position if needed
-        if (startOffsetSamples_ > 0) {
-            synthOutput_->seekTo(startOffsetSamples_);
-        }
+        fprintf(stderr, "\n[RenderSession::DEBUG] ===== RENDER START =====\n");
+        fprintf(stderr, "[RenderSession::DEBUG] startOffsetSamples_: %zu\n", startOffsetSamples_);
+        fprintf(stderr, "[RenderSession::DEBUG] totalSamples_: %zu\n", totalSamples_);
+        fprintf(stderr, "[RenderSession::DEBUG] sampleRate_: %u\n", sampleRate_);
+        fprintf(stderr, "[RenderSession::DEBUG] synthOutput_: %p\n", (void*)synthOutput_);
+        fprintf(stderr, "[RenderSession::DEBUG] synthOutput_->getNOutputs(): %d\n", synthOutput_->getNOutputs());
+        fprintf(stderr, "[RenderSession::DEBUG] synthOutput_->getNInputs(): %d\n", synthOutput_->getNInputs());
+        fflush(stderr);
 
+        // Seek to start position (exactly like playback does)
+        fprintf(stderr, "[RenderSession::DEBUG] Calling seekTo(%zu)\n", startOffsetSamples_);
+        fflush(stderr);
+        synthOutput_->seekTo(startOffsetSamples_);
+        fprintf(stderr, "[RenderSession::DEBUG] seekTo() returned\n");
+        fflush(stderr);
+
+        // Set global locator to start position (exactly like playback does)
+        fprintf(stderr, "[RenderSession::DEBUG] Setting global locator to %zu\n", startOffsetSamples_);
+        fflush(stderr);
+        SApplication::app().setGlobalLocatorPos(startOffsetSamples_);
+        fprintf(stderr, "[RenderSession::DEBUG] Global locator set\n");
+        fflush(stderr);
+
+        std::size_t samplesGeneratedVal = 0;
         std::size_t samplesWrittenVal = 0;
-        while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
-            // Calculate how many samples to render this iteration
-            std::size_t remainingSamples = totalSamples_ - samplesWrittenVal;
-            std::size_t samplesToRender =
-                std::min(RENDER_BUFFER_FRAMES, (remainingSamples + 1) / 2);
 
-            // Pull mono samples from synth component
+        fprintf(stderr, "[RenderSession::DEBUG] Will render %zu samples starting from position %zu\n",
+                totalSamples_, startOffsetSamples_);
+        fflush(stderr);
+
+        while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
+            if (samplesWrittenVal == 0) {
+                fprintf(stderr, "[RenderSession::DEBUG] === FIRST ITERATION ===\n");
+                fflush(stderr);
+            }
+
+            // Calculate how many samples to render this iteration
+            std::size_t remainingToRender = totalSamples_ - samplesWrittenVal;
+            std::size_t samplesToRender =
+                std::min(RENDER_BUFFER_FRAMES, (remainingToRender + 1) / 2);
+
+            fprintf(stderr, "[RenderSession::DEBUG::LOOP] Iteration %zu: samplesWrittenVal=%zu, remainingToRender=%zu, samplesToRender=%zu\n",
+                    samplesGeneratedVal / RENDER_BUFFER_FRAMES, samplesWrittenVal, remainingToRender, samplesToRender);
+            fflush(stderr);
+
+            // Pull mono samples from synth component (starting from seeked position)
+            fprintf(stderr, "[RenderSession::DEBUG::LOOP] Calling calcOutputTo(buffer, %zu, 0)\n", samplesToRender);
+            fflush(stderr);
             length_t framesGenerated = synthOutput_->calcOutputTo(
                 buffer.data(), samplesToRender, 0);
+            fprintf(stderr, "[RenderSession::DEBUG::LOOP] calcOutputTo returned: %lld frames\n", framesGenerated);
+            fflush(stderr);
+
+            if (samplesWrittenVal < 100) {  // Debug first iteration
+                fprintf(stderr, "[RenderSession::DEBUG::SAMPLES] First few samples: %.6f, %.6f, %.6f, %.6f\n",
+                        buffer[0], buffer[1], buffer[2], buffer[3]);
+                fflush(stderr);
+            }
 
             // If no frames were generated, fill with silence
             if (framesGenerated <= 0) {
@@ -152,15 +202,19 @@ void RenderSession::renderThreadMain() {
                 buffer[i * 2 + 1] = s;  // Right channel
             }
 
-            // Write to file (now as stereo)
+            // Write all generated frames to file
             if (!writer_->write(buffer.data(), framesGenerated)) {
                 success = false;
                 errorMsg = std::string("Write failed: ") + writer_->errorMessage();
                 break;
             }
 
-            samplesWrittenVal += samplesToRender;
+            samplesWrittenVal += framesGenerated;
+            samplesGeneratedVal += framesGenerated;
             samplesWritten_.store(samplesWrittenVal);
+
+            // Update global locator position (same as playback callback does)
+            SApplication::app().setGlobalLocatorPos(startOffsetSamples_ + samplesWrittenVal);
 
             // Emit progress callback every ~50ms
             if (samplesWrittenVal % (sampleRate_ / 20) == 0) {

@@ -223,8 +223,8 @@ private:
     short emphasizeGrids_[4];
 };
 
-class SSnapSpec 
-    : QObject 
+class SSnapSpec
+    : QObject
 {
     Q_OBJECT
 public:
@@ -241,6 +241,7 @@ public:
 
     idx_t getBeatSubDiv() const;
     int getSnapMethod() const;
+    void setSampleRate( int srate ) { sampleRate_ = srate; }
 
 signals:
     void snapMethodChanged( int );
@@ -253,6 +254,7 @@ protected:
 private:
     idx_t beatSubDiv_;
     int snapMethod_;
+    int sampleRate_;
     STimeGridSpec &tgs_;
 };
 

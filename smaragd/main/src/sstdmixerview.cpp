@@ -68,7 +68,8 @@ void SMVActualView::setSecondWidth( double w )
     secondWidth_ = w;
     // Keep the pixel origin consistent with the (unchanged) left time offset, so
     // the left edge stays put on zoom rather than drifting.
-    upperLeftX_ = (int)( ((double)upperLeftOffset_)/44100.*secondWidth_ );
+    int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
+    upperLeftX_ = (int)( ((double)upperLeftOffset_)/srate*secondWidth_ );
     smv_.viewResized();
     update();
     // FIXME: Emit signal?
@@ -116,7 +117,8 @@ void SMVActualView::setLeftOffset( offset_t leftOffset )
 {   
     if( upperLeftOffset_ == leftOffset ) return;
     upperLeftOffset_ = leftOffset;
-    int newUpperLeftX = ((int)((((double)leftOffset)/44100.)*secondWidth_));
+    int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
+    int newUpperLeftX = ((int)((((double)leftOffset)/srate)*secondWidth_));
     if( upperLeftX_ == newUpperLeftX ) return;
     upperLeftX_ = newUpperLeftX;
 //    qWarning( "SMVActualView::setLeftOffset(): leftOffset = %d:%d, upperLeftX_ = %d",
@@ -145,10 +147,10 @@ void SMVActualView::setTopOffset( idx_t topOffset )
     update();
 }
 
-int SMVActualView::getXPosOfOffset( offset_t off ) const 
+int SMVActualView::getXPosOfOffset( offset_t off ) const
 {
-    // FIXME: 44100.
-    return ((int)((((double)off)/44100.)*secondWidth_))-upperLeftX_;
+    int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
+    return ((int)((((double)off)/srate)*secondWidth_))-upperLeftX_;
 }
 
 void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
@@ -519,9 +521,10 @@ void SStdMixerView::ctUngroupTrack()
 
 offset_t SMVActualView::getTimeOf( int x ) const
 {
-    // FIXME: Remove the 44100.
     offset_t totalX = x + getUpperLeftX();
-    double a = ((double)totalX)/getSecondWidth()*44100.;
+    // Use actual project sample rate, not hardcoded 44100
+    int sampleRate = smv_.model_->getProject().getSRate();
+    double a = ((double)totalX)/getSecondWidth() * sampleRate;
     return (offset_t)a;
 }
 
@@ -751,13 +754,14 @@ QRect SMVActualView::getSLinkVisibRect( int trackIdx, const SLink &lk )
         return r;
     }
     offset_t startTimeOfs = lk.getStartTime();
-    double startTime = ((double)startTimeOfs)/44100.;
+    int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
+    double startTime = ((double)startTimeOfs)/srate;
     int startPos = (int)(startTime*secondWidth_);
     startPos -= upperLeftX_;
     if( startPos>=0 && startPos<width() ) r.setLeft( startPos );
     if( lk.getSObject().hasDuration() ) {
         startTimeOfs += lk.getSObject().getDuration();
-        startTime = ((double)startTimeOfs)/44100.;
+        startTime = ((double)startTimeOfs)/srate;
         startPos = (int)(startTime*secondWidth_);
         startPos -= upperLeftX_;
         if( startPos>0 && startPos<width() ) r.setRight( startPos );
@@ -1102,20 +1106,21 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
 
     // Check scrolling, if the event position is invisible.
     QRect myRect = rect();
+    int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
     if( ev->pos().x()<0 ) {
         int currentOffset = upperLeftX_;
         int d = -ev->pos().x();
         currentOffset -= d;
-        if( currentOffset<0 ) currentOffset = 0;        
+        if( currentOffset<0 ) currentOffset = 0;
         if( currentOffset != upperLeftX_ ) {
-            setLeftOffset( (offset_t)( ((double)currentOffset)/secondWidth_*44100.) );
+            setLeftOffset( (offset_t)( ((double)currentOffset)/secondWidth_*srate) );
         }
     } else if( ev->pos().x()>=myRect.width() ) {
         int currentOffset = upperLeftX_;
         int d = ev->pos().x()-myRect.width();
         currentOffset += d;
         if( currentOffset != upperLeftX_ ) {
-            setLeftOffset( (offset_t)( ((double)currentOffset)/secondWidth_*44100.) );
+            setLeftOffset( (offset_t)( ((double)currentOffset)/secondWidth_*srate) );
         }
     }
 
@@ -1802,16 +1807,16 @@ void SStdMixerView::recalcPageStep()
     int w = qContent_->width();
     int h = qContent_->height();
     // Calc new pageStep.
+    int srate = model_ ? model_->getProject().getSRate() : 48000;
     double dw = w;
-    dw = dw * 44100. / qContent_->getSecondWidth();
+    dw = dw * srate / qContent_->getSecondWidth();
     offset_t lw = (offset_t) (dw);
     if( lw>0x7fffffff ) lw = 0x7fffffff;
     offset_t dur = 1;
     if( model_->hasDuration() ) {
 	dur = model_->getDuration();
     }
-    // FIXME: Remove the 44100
-    dw = HSliderRange*(double)w/qContent_->getSecondWidth()*44100. / (double)dur;
+    dw = HSliderRange*(double)w/qContent_->getSecondWidth()*srate / (double)dur;
     qScrollHoriz_->setPageStep( (int)(dw+0.5) );
     qScrollHoriz_->setSingleStep( ((int)(dw+0.5)/10)+1 );
     h /= qContent_->getTrackHeight();
@@ -1826,8 +1831,9 @@ void SStdMixerView::viewResized()
     int w = qContent_->width();
     int h = qContent_->height();
     // Calc new pageStep.
+    int srate = model_ ? model_->getProject().getSRate() : 48000;
     double dw = w;
-    dw = dw * 44100. / qContent_->getSecondWidth();
+    dw = dw * srate / qContent_->getSecondWidth();
     offset_t lw = (offset_t) (dw);
     if( lw>0x7fffffff ) lw = 0x7fffffff;
     qScrollHoriz_->setPageStep( lw );
@@ -1943,8 +1949,7 @@ offset_t SSnapSpec::alignTime( offset_t o )
         //if( beatsPerBar<=0 ) beatsPerBar = 1;
         double w = tgs_.getTimeGridWidth();
         //w *= beatsPerBar;
-        // FIXME: 44100
-        w *= 44100.;
+        w *= sampleRate_;
         offset_t wo = (offset_t) (w);
         if( wo<=0 ) wo = 1;
         offset_t onew;
@@ -1982,6 +1987,7 @@ SSnapSpec::SSnapSpec( STimeGridSpec &tgs )
     : QObject(),
       beatSubDiv_( 1 ),
       snapMethod_( SnapToBeats ),
+      sampleRate_( 48000 ),
       tgs_( tgs )
 {
 }
@@ -2133,7 +2139,8 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
             int mouseX = (int) ev->position().x();
             offset_t t = getTimeOf( mouseX );          // time under cursor (pre-zoom)
             setSecondWidth( newW );
-            double ahead = ((double) mouseX) / newW * 44100.;
+            int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
+            double ahead = ((double) mouseX) / newW * srate;
             offset_t left = ( (double) t > ahead ) ? (offset_t)( (double) t - ahead ) : 0;
             setLeftOffset( left );
         } else {
@@ -2363,6 +2370,9 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     timeGridSpec_.setEmphasizeGrids( 3, 0 );
 
     currentSnapSpec_ = new SSnapSpec( timeGridSpec_ );
+    if( model_ ) {
+        currentSnapSpec_->setSampleRate( model_->getProject().getSRate() );
+    }
 
     QObject::connect( model_, SIGNAL( durationChanged( length_t ) ), 
                       this, SLOT( contentDurationChanged( length_t ) ) );

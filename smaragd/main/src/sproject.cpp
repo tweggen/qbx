@@ -188,23 +188,30 @@ double SProject::getDurationSeconds() const
 
 bool SProject::hasTimeSelection() const
 {
-    return hasProp("render/timeSelection_in") && hasProp("render/timeSelection_out");
+    return prop(SProjectProps::RangeValid, false).toBool();
 }
 
 SProject::TimeRange SProject::getTimeSelection() const
 {
-    if (hasTimeSelection()) {
-        double inMarker = prop("render/timeSelection_in", 0.0).toDouble();
-        double outMarker = prop("render/timeSelection_out", getDurationSeconds()).toDouble();
-        return { inMarker, outMarker };
+    // Read from the UI's time-range marker (stored in samples)
+    bool rangeValid = prop(SProjectProps::RangeValid, false).toBool();
+    if (rangeValid) {
+        // Convert from samples to seconds using project sample rate
+        double sampleRate = getSRate();
+        double startSec = prop(SProjectProps::RangeStart, 0).toULongLong() / sampleRate;
+        double endSec = prop(SProjectProps::RangeEnd, 0).toULongLong() / sampleRate;
+        return { startSec, endSec };
     }
     return { 0.0, getDurationSeconds() };
 }
 
 void SProject::setTimeSelection(double startSeconds, double endSeconds)
 {
-    setProp("render/timeSelection_in", startSeconds);
-    setProp("render/timeSelection_out", endSeconds);
+    // Store in the UI's time-range marker (convert from seconds to samples)
+    double sampleRate = getSRate();
+    setProp(SProjectProps::RangeValid, true);
+    setProp(SProjectProps::RangeStart, (qulonglong)(startSeconds * sampleRate));
+    setProp(SProjectProps::RangeEnd, (qulonglong)(endSeconds * sampleRate));
 }
 
 void SProject::clearTimeSelection()
