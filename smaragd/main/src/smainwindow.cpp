@@ -432,6 +432,22 @@ void SMainWindow::stopPlaying()
     actPlay_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
 }
 
+// Jump the global position to the start of the time range, if one is set,
+// otherwise to the very beginning (zero).
+void SMainWindow::gotoRangeStart()
+{
+    if( !currentProject_ ) return;
+
+    offset_t pos = 0;
+    if( currentProject_->hasTimeSelection() ) {
+        SProject::TimeRange sel = currentProject_->getTimeSelection();
+        double sampleRate = currentProject_->getSRate();
+        pos = (offset_t)( sel.startSeconds * sampleRate );
+    }
+
+    SApplication::app().setGlobalLocatorPos( pos );
+}
+
 void SMainWindow::onRecordTriggered()
 {
     if( !currentProject_ ) return;
@@ -569,10 +585,14 @@ SMainWindow::SMainWindow()
         QIcon( QPixmap( (const char **)stopoff_xpm )),
         "Stop playing",
         this);
-    actStop_->setShortcut(Qt::Key_0);
     // actStop_->setMenuText("Stop");
     /*new QAction( "Stop playing", QIcon( QPixmap( "images/player_stop.png" ) ),
                             "Stop", Qt::Key_0, this );*/
+
+    // "0" jumps the global position to the start of the time range
+    // (if one is set), otherwise to zero.
+    actGotoStart_ = new QAction( "Go to range start", this );
+    actGotoStart_->setShortcut( Qt::Key_0 );
 
     actRecord_ = new QAction(
         QIcon( QPixmap( (const char **)playoff_xpm )),
@@ -600,6 +620,12 @@ SMainWindow::SMainWindow()
                       this, SLOT( stopPlaying() ) );
     QObject::connect( actRecord_, SIGNAL( triggered() ),
                       this, SLOT( onRecordTriggered() ) );
+
+    // Register the goto-start action on the window so its "0" shortcut is
+    // active even though it has no toolbar/menu entry.
+    addAction( actGotoStart_ );
+    QObject::connect( actGotoStart_, SIGNAL( triggered() ),
+                      this, SLOT( gotoRangeStart() ) );
 
     qFileMenu_ = new QMenu( "&File", this );
     qFileMenu_->setTearOffEnabled(true);

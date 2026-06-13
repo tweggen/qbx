@@ -38,6 +38,7 @@ protected slots:
 
     void startPlaying();
     void stopPlaying();
+    void gotoRangeStart();
     void onRecordTriggered();
     void onRecordingCompleted();
 
@@ -107,7 +108,7 @@ private:
     QMenu *qTestMenu_;
     QActionGroup *deviceGroup_;
 
-    QAction *actStop_, *actPlay_, *actRecord_;
+    QAction *actStop_, *actPlay_, *actRecord_, *actGotoStart_;
     QToolBar *qTBTransport_;
     QToolBar *qTBPalette_;
     QToolBar *qTBTracks_;
