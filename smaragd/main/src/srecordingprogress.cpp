@@ -48,41 +48,18 @@ SRecordingProgressDialog::SRecordingProgressDialog(audio::RecordingSession *sess
     // Connect button
     connect(stopButton_, &QPushButton::clicked, this, &SRecordingProgressDialog::onStopClicked);
 
-    // Setup callbacks from recording session. These fire on the recording WORKER
-    // thread, so they must NOT touch widgets/timers directly — doing so corrupts
-    // Qt's per-thread state (e.g. "Timers cannot be stopped from another thread"
-    // and a SIGSEGV while rewiring the button). Marshal them onto the GUI thread
-    // with a queued invocation instead.
-    if (session_) {
-        session_->onProgress = [this](double durationSeconds) {
-            QMetaObject::invokeMethod(this, [this, durationSeconds] {
-                this->onRecordingProgress(durationSeconds);
-            }, Qt::QueuedConnection);
-        };
-        session_->onComplete = [this](bool success, const char *error) {
-            // `error` points into a std::string owned by the worker thread; copy
-            // it now, since the queued slot runs after that string may be gone.
-            QString err = error ? QString::fromUtf8(error) : QString();
-            QMetaObject::invokeMethod(this, [this, success, err] {
-                this->onRecordingComplete(success, err);
-            }, Qt::QueuedConnection);
-        };
-    }
-
-    // Setup timer for time display updates
+    // We deliberately do NOT install session callbacks: those fire on the
+    // recording WORKER thread, and a worker std::thread touching Qt (timers,
+    // widgets, even posting events) crashed in Qt's per-thread teardown. Instead
+    // the timer below polls the session's thread-safe state on the GUI thread.
+    //
+    // Setup timer for time display + completion polling.
     updateTimer_ = new QTimer(this);
     connect(updateTimer_, &QTimer::timeout, this, &SRecordingProgressDialog::updateTimeDisplay);
-    updateTimer_->start(100);  // Update every 100ms
+    updateTimer_->start(100);  // Poll every 100ms
 }
 
 SRecordingProgressDialog::~SRecordingProgressDialog() {
-    // Detach from the session so a late worker-thread callback can't invoke into
-    // a half-destroyed dialog. (By normal flow the worker has already finished by
-    // the time the dialog closes; this is defensive.)
-    if (session_) {
-        session_->onProgress = nullptr;
-        session_->onComplete = nullptr;
-    }
     if (updateTimer_) {
         updateTimer_->stop();
     }
@@ -100,11 +77,7 @@ QString SRecordingProgressDialog::formatTime(double seconds) const {
     return QString::fromStdString(oss.str());
 }
 
-void SRecordingProgressDialog::onRecordingProgress(double durationSeconds) {
-    recordedDuration_ = durationSeconds;
-}
-
-void SRecordingProgressDialog::onRecordingComplete(bool success, const QString &error) {
+void SRecordingProgressDialog::handleCompletion(bool success, const QString &error) {
     updateTimer_->stop();
     isComplete_ = true;
 
@@ -128,7 +101,17 @@ void SRecordingProgressDialog::onStopClicked() {
 }
 
 void SRecordingProgressDialog::updateTimeDisplay() {
+    if (!session_) return;
+
+    // Poll progress (thread-safe atomic) on the GUI thread.
+    recordedDuration_ = session_->recordedDurationSeconds();
     durationLabel_->setText("Duration: " + formatTime(recordedDuration_));
+
+    // Poll for completion instead of receiving a worker-thread callback.
+    if (!isComplete_ && session_->isFinished()) {
+        handleCompletion(session_->succeeded(),
+                         QString::fromUtf8(session_->errorMessage()));
+    }
 }
 
 void SRecordingProgressDialog::closeEvent(QCloseEvent *event) {

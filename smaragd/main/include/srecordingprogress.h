@@ -25,13 +25,12 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private slots:
-    void onRecordingProgress(double durationSeconds);
-    void onRecordingComplete(bool success, const QString &error);
     void onStopClicked();
-    void updateTimeDisplay();
+    void updateTimeDisplay();   // GUI-thread timer: polls progress + completion
 
 private:
     QString formatTime(double seconds) const;
+    void handleCompletion(bool success, const QString &error);  // on the GUI thread
 
     audio::RecordingSession *session_;
 

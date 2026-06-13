@@ -76,11 +76,13 @@ private:
 RecordingSession::RecordingSession() {}
 
 RecordingSession::~RecordingSession() {
-    if (running_) {
-        requestStop();
-        if (recordThread_ && recordThread_->joinable()) {
-            recordThread_->join();
-        }
+    requestStop();
+    // Always join a joinable thread, even after normal completion: recordThreadMain
+    // clears running_ before it returns, so gating the join on running_ left the
+    // finished thread un-joined (it would lurk, and a later destroy/restart hit
+    // std::thread's terminate-on-joinable).
+    if (recordThread_ && recordThread_->joinable()) {
+        recordThread_->join();
     }
 }
 
@@ -100,11 +102,19 @@ bool RecordingSession::start(const RecordingParams &params) {
         return false;
     }
 
+    // Join a previous (already finished) thread before reusing the handle —
+    // assigning over a joinable std::thread would call std::terminate.
+    if (recordThread_ && recordThread_->joinable()) {
+        recordThread_->join();
+    }
+
     params_ = params;
     recordedDuration_ = 0.0;
     createdFiles_.clear();
 
     stopRequested_ = false;
+    finished_ = false;
+    succeeded_ = false;
     running_ = true;
 
     try {
@@ -126,6 +136,14 @@ bool RecordingSession::isRunning() const {
     return running_;
 }
 
+bool RecordingSession::isFinished() const {
+    return finished_.load(std::memory_order_acquire);
+}
+
+bool RecordingSession::succeeded() const {
+    return succeeded_.load();
+}
+
 double RecordingSession::recordedDurationSeconds() const {
     return recordedDuration_;
 }
@@ -139,11 +157,20 @@ const std::vector<std::string> &RecordingSession::createdFiles() const {
 }
 
 void RecordingSession::recordThreadMain() {
+    // Publish the terminal state for the polling UI. lastError_ must already be
+    // set; finished_ is stored last with release ordering so a GUI thread that
+    // sees isFinished()==true also sees succeeded_/lastError_.
+    auto markFinished = [this](bool ok) {
+        succeeded_.store(ok);
+        running_.store(false);
+        finished_.store(true, std::memory_order_release);
+    };
+
     // Create audio input
     std::unique_ptr<AudioInput> input = createAudioInput();
     if (!input) {
         lastError_ = "Failed to create audio input";
-        running_ = false;
+        markFinished(false);
         if (onComplete) {
             onComplete(false, lastError_.c_str());
         }
@@ -153,7 +180,7 @@ void RecordingSession::recordThreadMain() {
     // Open input device
     if (input->openDevice(params_.inputDeviceId, params_.sampleRate) < 0) {
         lastError_ = std::string("Failed to open input device: ") + input->errorMessage();
-        running_ = false;
+        markFinished(false);
         if (onComplete) {
             onComplete(false, lastError_.c_str());
         }
@@ -189,7 +216,7 @@ void RecordingSession::recordThreadMain() {
     if (!writer) {
         lastError_ = "Failed to create WAV writer";
         input->closeDevice();
-        running_ = false;
+        markFinished(false);
         if (onComplete) {
             onComplete(false, lastError_.c_str());
         }
@@ -205,7 +232,7 @@ void RecordingSession::recordThreadMain() {
     if (!writer->open(filename, fileConfig)) {
         lastError_ = std::string("Failed to open WAV file: ") + writer->errorMessage();
         input->closeDevice();
-        running_ = false;
+        markFinished(false);
         if (onComplete) {
             onComplete(false, lastError_.c_str());
         }
@@ -217,7 +244,7 @@ void RecordingSession::recordThreadMain() {
         lastError_ = std::string("Failed to start capture: ") + input->errorMessage();
         writer->close();
         input->closeDevice();
-        running_ = false;
+        markFinished(false);
         if (onComplete) {
             onComplete(false, lastError_.c_str());
         }
@@ -307,14 +334,15 @@ void RecordingSession::recordThreadMain() {
         // User requested stop - treat as success
     }
 
-    running_ = false;
+    // Publish error/result before marking finished (release), so the polling UI
+    // sees a consistent terminal state.
+    lastError_ = errorMsg;
+    markFinished(success);
 
-    // Emit completion callback
+    // Legacy callback (not used by the progress dialog, which polls instead).
     if (onComplete) {
         onComplete(success, errorMsg.c_str());
     }
-
-    lastError_ = errorMsg;
 }
 
 }  // namespace audio
