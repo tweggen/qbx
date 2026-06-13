@@ -2,12 +2,19 @@
 
 #include <wrl.h>
 #include <comdef.h>
+#include <functiondiscoverykeys_devpkey.h>
 #include <cstring>
 #include <sstream>
 
 using namespace Microsoft::WRL;
 
 namespace audio {
+
+// PKEY_Device_FriendlyName is not always provided as a linker symbol by MinGW.
+// {fmtid, pid} from functiondiscoverykeys_devpkey.h (matches wasapi_backend.cc).
+static const PROPERTYKEY PKEY_Device_FriendlyName_local = {
+    {0xA45C254E, 0xDF1C, 0x4EFD,
+     {0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0}}, 14};
 
 WASAPIInput::WASAPIInput() {
     config_.sampleRate = 48000;
@@ -29,13 +36,17 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
         lastError_ = "Failed to initialize COM";
         return -1;
     }
+    comInitialized_ = true;
 
-    // Create device enumerator
+    // Create device enumerator. From here on, every failure routes through
+    // closeDevice(), which releases whatever was created, nulls the pointers
+    // (so ~WASAPIInput can't double-release a dangling COM pointer — the crash
+    // this replaces) and uninitializes COM exactly once.
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
                           __uuidof(IMMDeviceEnumerator), (void **)&enumerator_);
     if (FAILED(hr)) {
         lastError_ = "Failed to create device enumerator";
-        CoUninitialize();
+        closeDevice();
         return -1;
     }
 
@@ -54,8 +65,7 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
 
     if (FAILED(hr)) {
         lastError_ = "Failed to get input device";
-        if (enumerator_) enumerator_->Release();
-        CoUninitialize();
+        closeDevice();
         return -1;
     }
 
@@ -64,9 +74,7 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
                                  (void **)&audioClient_);
     if (FAILED(hr)) {
         lastError_ = "Failed to activate audio client";
-        inputDevice_->Release();
-        enumerator_->Release();
-        CoUninitialize();
+        closeDevice();
         return -1;
     }
 
@@ -75,21 +83,18 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
     hr = audioClient_->GetMixFormat(&deviceFormat);
     if (FAILED(hr)) {
         lastError_ = "Failed to get device format";
-        audioClient_->Release();
-        inputDevice_->Release();
-        enumerator_->Release();
-        CoUninitialize();
+        closeDevice();
         return -1;
     }
 
-    // Apply preferred sample rate if specified
-    if (preferredRate > 0) {
-        config_.sampleRate = preferredRate;
-        deviceFormat->nSamplesPerSec = preferredRate;
-    } else {
-        config_.sampleRate = deviceFormat->nSamplesPerSec;
-    }
-
+    // Shared-mode capture is LOCKED to the device's mix format — we must pass it
+    // to Initialize() unmodified. (Overwriting nSamplesPerSec here left the rest
+    // of the WAVEFORMATEX inconsistent and made Initialize() fail with
+    // AUDCLNT_E_UNSUPPORTED_FORMAT.) We therefore capture at the device rate and
+    // report it via getConfig(); the caller resamples to the desired rate.
+    // preferredRate is intentionally not applied to the device here.
+    (void)preferredRate;
+    config_.sampleRate = deviceFormat->nSamplesPerSec;
     config_.channels = deviceFormat->nChannels;
 
     // Initialize audio client for capture
@@ -98,10 +103,7 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
     if (FAILED(hr)) {
         lastError_ = "Failed to initialize audio client";
         CoTaskMemFree(deviceFormat);
-        audioClient_->Release();
-        inputDevice_->Release();
-        enumerator_->Release();
-        CoUninitialize();
+        closeDevice();
         return -1;
     }
 
@@ -111,10 +113,7 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
     hr = audioClient_->GetService(__uuidof(IAudioCaptureClient), (void **)&captureClient_);
     if (FAILED(hr)) {
         lastError_ = "Failed to get capture client";
-        audioClient_->Release();
-        inputDevice_->Release();
-        enumerator_->Release();
-        CoUninitialize();
+        closeDevice();
         return -1;
     }
 
@@ -144,7 +143,14 @@ int WASAPIInput::closeDevice() {
         enumerator_ = nullptr;
     }
 
-    CoUninitialize();
+    // Only uninitialize COM if *we* initialized it, and only once. closeDevice()
+    // is called explicitly, again from ~WASAPIInput, and as openDevice()'s
+    // failure-cleanup path; an unconditional CoUninitialize() would unbalance
+    // COM's per-thread ref count (and a prior call already nulled the pointers).
+    if (comInitialized_) {
+        CoUninitialize();
+        comInitialized_ = false;
+    }
     return 0;
 }
 
@@ -257,7 +263,7 @@ std::vector<AudioInputDeviceInfo> WASAPIInput::listDevices() const {
 
         PROPVARIANT varName;
         PropVariantInit(&varName);
-        props->GetValue(PKEY_Device_FriendlyName, &varName);
+        props->GetValue(PKEY_Device_FriendlyName_local, &varName);
 
         // Convert wide string to UTF-8
         int len = WideCharToMultiByte(CP_UTF8, 0, varName.pwszVal, -1, nullptr, 0, nullptr, nullptr);

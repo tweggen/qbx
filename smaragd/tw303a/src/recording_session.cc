@@ -12,6 +12,67 @@
 
 namespace audio {
 
+namespace {
+
+// Stateful streaming linear resampler for interleaved float frames. Shared-mode
+// WASAPI capture is locked to the device's mix rate, so we capture at that rate
+// and convert here to the project rate before writing the WAV (so recorded files
+// match the project rate). Linear quality matches the engine's twResampler bar;
+// that converter pulls from a streaming-latch component and doesn't fit this
+// push-buffer path, so this is a small standalone version. Passthrough when the
+// rates already match.
+class LinearResampler {
+public:
+    LinearResampler(std::uint32_t inRate, std::uint32_t outRate, std::uint32_t channels)
+        : ratio_(static_cast<double>(inRate) / static_cast<double>(outRate)),
+          channels_(channels),
+          passthrough_(inRate == outRate),
+          havePrev_(false),
+          frac_(0.0),
+          prev_(channels, 0.0f) {}
+
+    bool passthrough() const { return passthrough_; }
+
+    // Resample `inFrames` interleaved input frames from `in` into `out` (cleared
+    // and filled with interleaved output frames). Returns the output frame count.
+    std::size_t process(const float *in, std::size_t inFrames,
+                        std::vector<float> &out) {
+        out.clear();
+        if (inFrames == 0) return 0;
+        // Upper bound on outputs this chunk; reserve to avoid reallocation churn.
+        out.reserve(static_cast<std::size_t>(inFrames / ratio_ + 2.0) * channels_);
+        for (std::size_t f = 0; f < inFrames; ++f) {
+            const float *cur = in + f * channels_;
+            if (!havePrev_) {
+                for (std::uint32_t c = 0; c < channels_; ++c) prev_[c] = cur[c];
+                havePrev_ = true;
+                continue;  // need a previous frame before interpolating an interval
+            }
+            // Emit every output sample that falls in the interval [prev_, cur).
+            while (frac_ < 1.0) {
+                for (std::uint32_t c = 0; c < channels_; ++c) {
+                    out.push_back(static_cast<float>(
+                        prev_[c] * (1.0 - frac_) + cur[c] * frac_));
+                }
+                frac_ += ratio_;
+            }
+            frac_ -= 1.0;
+            for (std::uint32_t c = 0; c < channels_; ++c) prev_[c] = cur[c];
+        }
+        return out.size() / channels_;
+    }
+
+private:
+    double ratio_;            // input frames advanced per output frame
+    std::uint32_t channels_;
+    bool passthrough_;
+    bool havePrev_;
+    double frac_;             // position of next output within [prev_, cur), in [0,1)
+    std::vector<float> prev_; // last input frame consumed
+};
+
+}  // namespace
+
 RecordingSession::RecordingSession() {}
 
 RecordingSession::~RecordingSession() {
@@ -99,9 +160,12 @@ void RecordingSession::recordThreadMain() {
         return;
     }
 
-    // Get actual config from input
+    // Get actual config from input. Shared-mode capture runs at the DEVICE rate;
+    // we resample to the project (target) rate so the recorded WAV matches the
+    // project, per the recording design (files match project rate).
     const AudioInputConfig &inputConfig = input->getConfig();
-    std::uint32_t sampleRate = inputConfig.sampleRate;
+    std::uint32_t deviceRate = inputConfig.sampleRate;
+    std::uint32_t targetRate = params_.sampleRate > 0 ? params_.sampleRate : deviceRate;
     std::uint32_t channels = inputConfig.channels;
 
     // Create output filename with timestamp
@@ -134,7 +198,7 @@ void RecordingSession::recordThreadMain() {
 
     // Open WAV file
     AudioFileConfig fileConfig;
-    fileConfig.sampleRate = sampleRate;
+    fileConfig.sampleRate = targetRate;
     fileConfig.channels = channels;
     fileConfig.sampleType = inputConfig.sampleType;
 
@@ -163,6 +227,8 @@ void RecordingSession::recordThreadMain() {
     // Recording loop
     const std::size_t BUFFER_SIZE = 2048;
     std::vector<float> buffer(BUFFER_SIZE * channels);
+    std::vector<float> resampled;  // scratch for device->project rate conversion
+    LinearResampler resampler(deviceRate, targetRate, channels);
     auto lastProgressTime = std::chrono::steady_clock::now();
 
     bool success = true;
@@ -180,16 +246,28 @@ void RecordingSession::recordThreadMain() {
             }
 
             if (framesRead > 0) {
-                // Write to WAV
-                if (!writer->write(buffer.data(), framesRead)) {
+                // Resample device-rate capture to the project rate, then write.
+                const float *outData = buffer.data();
+                std::int32_t outFrames = framesRead;
+                if (!resampler.passthrough()) {
+                    std::size_t n = resampler.process(buffer.data(),
+                                                      static_cast<std::size_t>(framesRead),
+                                                      resampled);
+                    outData = resampled.data();
+                    outFrames = static_cast<std::int32_t>(n);
+                }
+
+                // Write to WAV (a chunk can resample to 0 output frames — skip it)
+                if (outFrames > 0 && !writer->write(outData, outFrames)) {
                     success = false;
                     errorMsg = std::string("Write error: ") + writer->errorMessage();
                     break;
                 }
 
-                // Update duration
+                // Update duration from the input frames at the device rate (real
+                // elapsed time, independent of the resampling ratio).
                 recordedDuration_.store(
-                    recordedDuration_.load() + static_cast<double>(framesRead) / sampleRate
+                    recordedDuration_.load() + static_cast<double>(framesRead) / deviceRate
                 );
 
                 // Emit progress every ~0.1s

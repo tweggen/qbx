@@ -34,6 +34,7 @@ private:
     IAudioClient *audioClient_ = nullptr;
     IAudioCaptureClient *captureClient_ = nullptr;
 
+    bool comInitialized_ = false;
     bool isCapturing_ = false;
 };
 

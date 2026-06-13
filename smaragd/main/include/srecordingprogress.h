@@ -26,7 +26,7 @@ protected:
 
 private slots:
     void onRecordingProgress(double durationSeconds);
-    void onRecordingComplete(bool success, const char *error);
+    void onRecordingComplete(bool success, const QString &error);
     void onStopClicked();
     void updateTimeDisplay();
 

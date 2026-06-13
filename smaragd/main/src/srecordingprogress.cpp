@@ -48,13 +48,24 @@ SRecordingProgressDialog::SRecordingProgressDialog(audio::RecordingSession *sess
     // Connect button
     connect(stopButton_, &QPushButton::clicked, this, &SRecordingProgressDialog::onStopClicked);
 
-    // Setup callbacks from recording session
+    // Setup callbacks from recording session. These fire on the recording WORKER
+    // thread, so they must NOT touch widgets/timers directly — doing so corrupts
+    // Qt's per-thread state (e.g. "Timers cannot be stopped from another thread"
+    // and a SIGSEGV while rewiring the button). Marshal them onto the GUI thread
+    // with a queued invocation instead.
     if (session_) {
         session_->onProgress = [this](double durationSeconds) {
-            this->onRecordingProgress(durationSeconds);
+            QMetaObject::invokeMethod(this, [this, durationSeconds] {
+                this->onRecordingProgress(durationSeconds);
+            }, Qt::QueuedConnection);
         };
         session_->onComplete = [this](bool success, const char *error) {
-            this->onRecordingComplete(success, error);
+            // `error` points into a std::string owned by the worker thread; copy
+            // it now, since the queued slot runs after that string may be gone.
+            QString err = error ? QString::fromUtf8(error) : QString();
+            QMetaObject::invokeMethod(this, [this, success, err] {
+                this->onRecordingComplete(success, err);
+            }, Qt::QueuedConnection);
         };
     }
 
@@ -65,6 +76,13 @@ SRecordingProgressDialog::SRecordingProgressDialog(audio::RecordingSession *sess
 }
 
 SRecordingProgressDialog::~SRecordingProgressDialog() {
+    // Detach from the session so a late worker-thread callback can't invoke into
+    // a half-destroyed dialog. (By normal flow the worker has already finished by
+    // the time the dialog closes; this is defensive.)
+    if (session_) {
+        session_->onProgress = nullptr;
+        session_->onComplete = nullptr;
+    }
     if (updateTimer_) {
         updateTimer_->stop();
     }
@@ -86,7 +104,7 @@ void SRecordingProgressDialog::onRecordingProgress(double durationSeconds) {
     recordedDuration_ = durationSeconds;
 }
 
-void SRecordingProgressDialog::onRecordingComplete(bool success, const char *error) {
+void SRecordingProgressDialog::onRecordingComplete(bool success, const QString &error) {
     updateTimer_->stop();
     isComplete_ = true;
 
