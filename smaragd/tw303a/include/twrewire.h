@@ -34,6 +34,8 @@ public:
     virtual const char *getInputName( idx_t ) const;
     virtual const char *getOutputName( idx_t ) const;
 
+    virtual int seekTo( offset_t offset );
+
     virtual void setBufferSize( length_t ) {};
 
 protected:

@@ -20,12 +20,13 @@ protected:
     
 public:
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );
-    
+
     void createOutputLatches( void );
-    
+
     void init( void );
     int setNInputs( idx_t );
     int setInputLevel( idx_t, double );
+    virtual int seekTo( offset_t offset );
     virtual idx_t getNInputs() const { return mixerInputs_; }
     virtual idx_t getNOutputs() const { return 1; }
     virtual const char *getInputName( idx_t ) const;

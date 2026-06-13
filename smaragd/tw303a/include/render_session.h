@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "audio/audio_file_writer.h"
+#include "twresampler.h"
 
 class twComponent;
 
@@ -60,6 +61,7 @@ private:
     std::unique_ptr<std::thread> renderThread_;
     std::string lastError_;
     std::unique_ptr<AudioFileWriter> writer_;
+    twResampler resampler_;
 };
 
 }  // namespace audio

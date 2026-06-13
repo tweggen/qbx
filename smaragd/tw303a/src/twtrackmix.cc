@@ -13,7 +13,12 @@
 
 int twTrackMix::seekTo( offset_t newOffset )
 {
+    fprintf(stderr, "[twTrackMix::seekTo] Setting playOffset_ from %llu to %llu\n",
+            (unsigned long long)playOffset_, (unsigned long long)newOffset);
+    fflush(stderr);
     playOffset_ = newOffset;
+    fprintf(stderr, "[twTrackMix::seekTo] playOffset_ now = %llu\n", (unsigned long long)playOffset_);
+    fflush(stderr);
     return 0;
 }
 

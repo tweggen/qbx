@@ -102,8 +102,11 @@ bool twComponent::isSeekable() const
     return false;
 }
 
-int twComponent::seekTo( offset_t )
+int twComponent::seekTo( offset_t offset )
 {
+    fprintf(stderr, "[twComponent::seekTo] Base implementation called on %s with offset=%llu (seekTo not implemented for this component)\n",
+            typeid(*this).name(), (unsigned long long)offset);
+    fflush(stderr);
     return -1;
 }
 

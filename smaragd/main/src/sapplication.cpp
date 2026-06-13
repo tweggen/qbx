@@ -252,9 +252,8 @@ bool SApplication::isRenderingActive() const
 
 void SApplication::startRender(const audio::RenderParams &params)
 {
-    if (!renderSession_) {
-        renderSession_ = std::make_unique<audio::RenderSession>();
-    }
+    // Always recreate for reproducibility
+    renderSession_ = std::make_unique<audio::RenderSession>();
 
     if (isPlaying_) {
         t3Speaker_->stopOutput();

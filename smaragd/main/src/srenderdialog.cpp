@@ -22,6 +22,8 @@ public:
 #include <QMessageBox>
 
 #include "sproject.h"
+#include "sprojectprops.h"
+#include <cstdio>
 
 SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
     : QDialog(parent), project_(project) {
@@ -246,10 +248,21 @@ audio::RenderParams SRenderDialog::getRenderParams() const {
         SProject::TimeRange selection = project_->getTimeSelection();
         params.startTimeSec = selection.startSeconds;
         params.endTimeSec = selection.endSeconds;
+
+        // Debug: Log what range is being used
+        bool rangeValid = project_->prop(SProjectProps::RangeValid, false).toBool();
+        qulonglong rangeStart = project_->prop(SProjectProps::RangeStart, 0).toULongLong();
+        qulonglong rangeEnd = project_->prop(SProjectProps::RangeEnd, 0).toULongLong();
+        fprintf(stderr, "[SRenderDialog] TimeSelection: RangeValid=%d, RangeStart=%llu samples, RangeEnd=%llu samples\n",
+                rangeValid, rangeStart, rangeEnd);
+        fprintf(stderr, "[SRenderDialog] Converted: startTimeSec=%.6f, endTimeSec=%.6f\n",
+                params.startTimeSec, params.endTimeSec);
     } else {
         params.extent = audio::RenderParams::Extent::EntireProject;
         params.startTimeSec = 0.0;
         params.endTimeSec = project_ ? project_->getDurationSeconds() : 60.0;
+        fprintf(stderr, "[SRenderDialog] EntireProject: startTimeSec=%.6f, endTimeSec=%.6f\n",
+                params.startTimeSec, params.endTimeSec);
     }
 
     // Output path
