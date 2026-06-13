@@ -111,6 +111,8 @@ public:
     // setWindow on release).
     void setLoopLengthRaw( length_t l ) { loopLength_ = l; }
     void setStretchRaw( double s ) { grainParams_.stretch = s; }
+    void setStartOffsetRaw( offset_t o ) { startOffset_ = o; }
+    void setDurationRaw( length_t d ) { cutDuration_ = d; }
     void setGrainParamsRaw( const twGrainParams &p ) { grainParams_ = p; }
     virtual bool hasDuration() const { return true; }
     virtual length_t getDuration() const;

@@ -1230,10 +1230,13 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsStretch_ ) {
                 // Ctrl-drag a BORDER: change the timeline length, keeping the same
-                // SOURCE window (grain-stretched, pitch preserved). We set stretch
-                // and the rescaled offset live (raw, no audio rebuild) so the
-                // waveform redraws stretched during the drag; the audio chain
-                // rebuilds once on release. Not clamped to content (it stretches).
+                // SOURCE window (grain-stretched, pitch preserved). The sample-backed
+                // preview maps each pixel to a source sample via (rel + startOffset)/
+                // stretch, so all THREE of stretch, startOffset and duration must move
+                // together live or the visible/audible source window drifts. We apply
+                // them with the raw setters (no invalidateCapture, so no lock
+                // contention); the audio chain rebuilds once on release via the
+                // SResizeClipAction. Not clamped to content (it stretches).
                 lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
                 SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
                 offset_t m = smv_.alignTime( getTimeOf( ev->pos().x() ) );
@@ -1254,12 +1257,15 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     lastClickSLink_->setStartTime( rStart );
                 }
                 double newStretch = (double) newDur / srcSpan;
-                cut->setStretchRaw( newStretch );  // Raw setter only (no invalidateCapture)
-                // Don't call setStartOffset/setDuration - they call invalidateCapture which causes lock contention
-                // Just queue events for safe atomic application after drag
-                cut->queueWindowParamEvent( STRETCH_CHANGE, newStretch );
-                cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
-                cut->queueWindowParamEvent( OFFSET_CHANGE, (double)(clipResizeOffset0_ * newStretch / s0 + 0.5) );
+                // Rescale the output-domain start offset by the SAME factor as the
+                // stretch so the source start (startOffset/stretch) is invariant; the
+                // source span is fixed by srcSpan, so the source end stays put too.
+                offset_t newOffset =
+                    (offset_t)( (double) clipResizeOffset0_ * newStretch / s0 + 0.5 );
+                cut->setStretchRaw( newStretch );
+                cut->setStartOffsetRaw( newOffset );
+                cut->setDurationRaw( newDur );
+                cut->ensureCapturePeaks();  // refresh container-backed previews
                 smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
