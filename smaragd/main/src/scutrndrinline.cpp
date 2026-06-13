@@ -10,23 +10,35 @@
 #include "swaveformdraw.h"
 
 namespace {
-// A render context that maps one loop-repetition's pixel span linearly onto the
-// content segment [startOffset, startOffset+loopLength]. The wave renderer
-// subtracts lk.getStartTime() from getTimeOf(), so baseTime carries
-// (clipStart + startOffset) and the per-pixel ramp covers exactly one segment.
+// A render context that maps one loop-repetition's pixel span onto the content's
+// raw SOURCE samples. The loop segment is loopLength samples of grain OUTPUT
+// starting at startOffset (both in the stretched OUTPUT domain, like the rest of
+// the cut window), but the content waveform is indexed in the SOURCE domain — so
+// the output position (startOffset + per-pixel ramp) is divided by the stretch
+// factor, exactly as the non-loop InlineRenderContext::getTimeOf() does. Without
+// this a stretched, looped clip reads the wrong source range (and on a clip
+// slipped far into the sample, past the content end -> a flat zero waveform). The
+// wave renderer subtracts lk.getStartTime() from getTimeOf(), so clipStart is
+// added back here.
 class LoopSegmentContext : public SRenderContext {
 public:
-    LoopSegmentContext( QPainter &p, offset_t baseTime,
-                        double segLeftX, double segWpx, length_t segLen )
-        : SRenderContext( p ), baseTime_( baseTime ),
+    LoopSegmentContext( QPainter &p, offset_t clipStart, offset_t startOffset,
+                        double stretch, double segLeftX, double segWpx,
+                        length_t segLen )
+        : SRenderContext( p ), clipStart_( clipStart ), startOffset_( startOffset ),
+          stretch_( stretch > 0.0 ? stretch : 1.0 ),
           segLeftX_( segLeftX ), segWpx_( segWpx ), segLen_( segLen ) {}
     virtual offset_t getTimeOf( int x ) const {
         double rel = ( (double) x - segLeftX_ ) * (double) segLen_ / segWpx_;
         if( rel < 0 ) rel = 0;
-        return baseTime_ + (offset_t) rel;
+        // (startOffset + rel) is the OUTPUT position inside this repetition;
+        // /stretch maps it to the source sample the waveform is read from.
+        return clipStart_ + (offset_t)( ( (double) startOffset_ + rel ) / stretch_ );
     }
 private:
-    offset_t baseTime_;
+    offset_t clipStart_;
+    offset_t startOffset_;
+    double   stretch_;
     double   segLeftX_;
     double   segWpx_;
     length_t segLen_;
@@ -86,7 +98,6 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     }
 
     length_t segLen   = cut.getLoopLength();
-    offset_t baseTime = lk.getStartTime() + cut.getStartOffset();
 
     // Pixels-per-sample from two probe points of the parent (timeline) mapping.
     int xa = visibRect.x();
@@ -111,7 +122,8 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         int isx = (int)( sx > visibRect.x() ? sx : visibRect.x() );
         int iex = (int)( ex < right ? ex : right );
         if( iex <= isx ) continue;
-        LoopSegmentContext lctx( p, baseTime, sx, segWpx, segLen );
+        LoopSegmentContext lctx( p, lk.getStartTime(), cut.getStartOffset(),
+                                 cut.getStretch(), sx, segWpx, segLen );
         lctx.setVisibRect( QRect( isx, visibRect.y(), iex - isx, visibRect.height() ) );
         rndr->draw( lk, lctx );
         if( ex < right ) {                              // loop boundary divider
