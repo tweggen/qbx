@@ -42,6 +42,8 @@ protected:
     void mousePressEvent( QMouseEvent * ) override;
     void mouseMoveEvent( QMouseEvent * ) override;
     void mouseReleaseEvent( QMouseEvent * ) override;
+    // Watches the fader for a double-click, which resets it to 0.0 dB.
+    bool eventFilter( QObject *, QEvent * ) override;
 
 protected slots:
     void sliderValueChanged( int value );
@@ -63,6 +65,10 @@ private:
     // Push the slider position to the value v (in dB) without re-submitting
     // an action (model -> view update).
     void setSliderSilently( double v );
+
+    // Apply a new track volume (in dB) through the action system. Shared by the
+    // fader drag and the double-click-to-reset path.
+    void applyVolume_( double dB );
 
     // Tree presentation state (see setTreeInfo).
     int depth_ = 0;

@@ -75,11 +75,17 @@ QSize SSMVMixerControl::sizeHint() const
  */
 void SSMVMixerControl::sliderValueChanged( int value )
 {
-    double newVolume = sliderToDB( value );
+    applyVolume_( sliderToDB( value ) );
+}
 
-    // Route the change through the action system so it is undoable and (once the
-    // engine drain goes async) coalescable. Resolve our track's index in the
-    // mixer; if we can't, fall back to a direct mutation so the UI never wedges.
+/**
+ * Apply a new track volume (in dB), routing through the action system so it is
+ * undoable and (once the engine drain goes async) coalescable. Resolve our
+ * track's index in the mixer; if we can't, fall back to a direct mutation so the
+ * UI never wedges.
+ */
+void SSMVMixerControl::applyVolume_( double newVolume )
+{
     int trackIdx = trackIndex_();
     if( trackIdx >= 0 ) {
         SApplication::app().submitAction(
@@ -91,6 +97,23 @@ void SSMVMixerControl::sliderValueChanged( int value )
         if( SProject *p = SApplication::app().getCurrentProject() )
             p->notifyArrangementChanged();
     }
+}
+
+/**
+ * Double-clicking the fader resets it to unity gain (0.0 dB). We intercept the
+ * event here rather than subclass QSlider; the slider would otherwise treat the
+ * second press as the start of another drag.
+ */
+bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
+{
+    if( watched == qVolume_ && ev->type() == QEvent::MouseButtonDblClick ) {
+        QMouseEvent *me = static_cast<QMouseEvent *>( ev );
+        if( me->button() == Qt::LeftButton ) {
+            applyVolume_( 0.0 );
+            return true;   // swallow it so the slider doesn't also jump-to-position
+        }
+    }
+    return QWidget::eventFilter( watched, ev );
 }
 
 /**
@@ -325,6 +348,8 @@ SSMVMixerControl::SSMVMixerControl(
     qVolume_->setPageStep( 60 );      // 6.0 dB per page
     qVolume_->setTickPosition( QSlider::TicksRight );
     qVolume_->setTickInterval( 120 ); // a tick every 12 dB
+    // Watch for a double-click on the fader to reset it to 0.0 dB.
+    qVolume_->installEventFilter( this );
 
     qVolLabel_ = new QLabel( this );
     qVolLabel_->setAlignment( Qt::AlignHCenter );
