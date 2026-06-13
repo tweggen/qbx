@@ -3,7 +3,9 @@
 #include "sprojectprops.h"
 #include "sactionregistry.h"
 
-// STUB: cycle/loop playback is not implemented yet; this only tracks on/off.
+// Tracks the cycle on/off flag. The actual loop playback lives in twSpeaker's
+// render callback; SMainWindow pushes this flag (and the range bounds) to the
+// speaker via syncCyclePlayback() whenever it changes.
 bool SCycleAction::getState( SProject *project ) const
 {
     return project->prop( SProjectProps::Cycle, false ).toBool();

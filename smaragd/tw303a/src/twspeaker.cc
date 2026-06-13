@@ -2,11 +2,14 @@
 
 #include "audio/audio_backend.h"
 #include "sapplication.h"
+#include "sproject.h"
+#include "sobject.h"
 #include "twnegotiator.h"
 #include "twsyslog.h"
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 
 twSpeaker::twSpeaker(tw303aEnvironment &env0)
@@ -62,6 +65,10 @@ void twSpeaker::startOutput()
     resampler_.reserveHint((length_t) cfg.bufferFrames);
     resampler_.reset();
 
+    // Output-to-input frame ratio, used to bound a pull at the loop end during
+    // cycle playback. 1.0 when the resampler is a passthrough.
+    rateRatio_ = (graphRate > 0) ? ((double) cfg.sampleRate / (double) graphRate) : 1.0;
+
     // Sample-rate diagnostic (pitch/too-fast bug). Three numbers pin down where a
     // mismatch hides: the project rate, what the input wire claims to produce, and
     // what the device actually opened at. If wire == device but a 44.1 kHz sample
@@ -91,21 +98,70 @@ void twSpeaker::startOutput()
                 return frames;
             }
 
-            offset_t formerPos = SApplication::app().getGlobalLocatorPos();
-            length_t inConsumed = 0;
-            length_t framesOut = resampler_.process(
-                static_cast<twLatchStreamingOutput *>(pInputPlugs[0]),
-                out, static_cast<length_t>(frames), &inConsumed);
+            auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs[0]);
+            offset_t pos = SApplication::app().getGlobalLocatorPos();
 
-            if (framesOut <= 0) {
+            const bool     cycle     = cycleEnabled_.load(std::memory_order_relaxed);
+            const offset_t loopStart = loopStart_.load(std::memory_order_relaxed);
+            const offset_t loopEnd   = loopEnd_.load(std::memory_order_relaxed);
+            const bool     loopValid = cycle && loopEnd > loopStart;
+
+            // Fill the buffer, wrapping back to loopStart whenever the cursor
+            // reaches loopEnd. Without cycling this runs exactly one pull, which
+            // is the original straight-through behaviour. Mono is written
+            // contiguously into out[0..]; the fan-out to N channels happens once
+            // the whole buffer is filled.
+            std::size_t filled = 0;
+            while (filled < frames) {
+                if (loopValid && pos >= loopEnd) {
+                    // Seamless wrap: re-seek the graph to the loop start. (seekTo
+                    // only resets cursor positions — cheap and lock-free, and we
+                    // are the only thread pulling.)
+                    if (SProject *proj = SApplication::app().getCurrentProject()) {
+                        if (SObject *root = proj->getRootComponent())
+                            root->seekTo(loopStart);
+                    }
+                    pos = loopStart;
+                }
+
+                length_t want = static_cast<length_t>(frames - filled);
+                if (loopValid) {
+                    // Don't pull past the loop end in this chunk: bound the
+                    // request by the output frames that fit in the remaining
+                    // input (synth-time) frames before loopEnd.
+                    double outLeft = (double)(loopEnd - pos) * rateRatio_;
+                    length_t cap = (length_t) std::llround(outLeft);
+                    if (cap < 1) cap = 1;            // always make progress
+                    if (want > cap) want = cap;
+                }
+
+                length_t inConsumed = 0;
+                length_t got = resampler_.process(input, out + filled, want, &inConsumed);
+                if (got <= 0) break;                 // source dry — stop filling
+
+                pos += (offset_t) inConsumed;
+                filled += (std::size_t) got;
+
+                if (!loopValid) break;               // single pull when not cycling
+            }
+
+            if (filled == 0) {
                 std::fill_n(out, frames * channels, 0.0f);
+                SApplication::app().setGlobalLocatorPos(pos);
                 return frames;
             }
 
-            // Mono synthesizer → fan out to N channels. The resampler wrote mono
-            // into the start of the buffer; expand in place from the tail.
+            // Pad any unfilled tail with silence so the whole buffer is defined
+            // (only happens when the source ran dry mid-buffer).
+            if (filled < frames)
+                std::fill(out + filled, out + frames, 0.0f);
+
+            std::size_t outFrames = loopValid ? frames : filled;
+
+            // Mono synthesizer → fan out to N channels. The mono samples sit at
+            // the start of the buffer; expand in place from the tail.
             if (channels > 1) {
-                for (length_t i = framesOut - 1; i >= 0; --i) {
+                for (length_t i = (length_t) outFrames - 1; i >= 0; --i) {
                     float s = out[i];
                     for (std::uint32_t c = 0; c < channels; ++c) {
                         out[i * channels + c] = s;
@@ -113,10 +169,10 @@ void twSpeaker::startOutput()
                 }
             }
 
-            // Advance the playback locator by INPUT frames consumed (synth-time),
-            // not output frames — the two differ once resampling is active.
-            SApplication::app().setGlobalLocatorPos(formerPos + inConsumed);
-            return static_cast<std::size_t>(framesOut);
+            // Advance (or wrap) the playback locator. pos already reflects any
+            // loop wraps that happened above.
+            SApplication::app().setGlobalLocatorPos(pos);
+            return static_cast<std::size_t>(outFrames);
         });
 
     fprintf(stderr, "twSpeaker::startOutput: calling backend->startOutput()\n");
@@ -140,6 +196,15 @@ void twSpeaker::stopOutput()
 bool twSpeaker::isPlaying()
 {
     return isPlaying_;
+}
+
+void twSpeaker::setCycle(bool enabled, offset_t startFrame, offset_t endFrame)
+{
+    // An empty or inverted range can't loop; treat it as cycle-off.
+    if (endFrame <= startFrame) enabled = false;
+    loopStart_.store(startFrame, std::memory_order_relaxed);
+    loopEnd_.store(endFrame, std::memory_order_relaxed);
+    cycleEnabled_.store(enabled, std::memory_order_relaxed);
 }
 
 void twSpeaker::setOutputDevice(const std::string &id)

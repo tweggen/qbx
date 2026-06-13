@@ -86,6 +86,10 @@ private:
     // Enable + sync the palette buttons to a project's properties (or disable
     // them when project == NULL), and connect to its propertyChanged signal.
     void syncPaletteToProject( SProject *project );
+    // Push the current cycle on/off state and time-range bounds to the speaker
+    // so loop playback follows the project. Called when playback starts and
+    // whenever the Cycle flag or the range markers change.
+    void syncCyclePlayback();
 
     // Serialize the current project to path; reports errors via a dialog.
     bool saveToPath( const QString &path );

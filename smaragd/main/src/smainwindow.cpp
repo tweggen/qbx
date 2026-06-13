@@ -408,6 +408,9 @@ void SMainWindow::startPlaying()
         qWarning() << "startPlaying(): About to call root->seekTo()" << Qt::endl;
         root->seekTo( SApplication::app().getGlobalLocatorPos() );
         qWarning() << "startPlaying(): After root->seekTo()" << Qt::endl;
+        // Arm cycle (loop) playback from the current project state before output
+        // starts, so the loop region is honoured from the first buffer.
+        syncCyclePlayback();
         qWarning() << "startPlaying(): About to call getSpeaker()->startOutput()" << Qt::endl;
         SApplication::app().getSpeaker()->startOutput();
         qWarning() << "startPlaying(): After getSpeaker()->startOutput()" << Qt::endl;
@@ -1266,6 +1269,35 @@ void SMainWindow::onProjectPropertyChanged( const QString &key, const QVariant &
     else if( key == SProjectProps::GridVisible ) actGrid_->setChecked( value.toBool() );
     else if( key == SProjectProps::Metronome )   actMetronome_->setChecked( value.toBool() );
     else if( key == SProjectProps::Cycle )       actCycle_->setChecked( value.toBool() );
+
+    // Cycle toggle or a change to the range markers updates the live loop region.
+    if( key == SProjectProps::Cycle || key == SProjectProps::RangeValid
+        || key == SProjectProps::RangeStart || key == SProjectProps::RangeEnd ) {
+        syncCyclePlayback();
+    }
+}
+
+// Push the project's cycle flag and time-range bounds to the speaker, which
+// performs the seamless loop in its render callback. Cycling needs a valid
+// range, so it is off whenever no range is set.
+void SMainWindow::syncCyclePlayback()
+{
+    twSpeaker *speaker = SApplication::app().getSpeaker();
+    if( !speaker ) return;
+
+    if( !currentProject_ ) {
+        speaker->setCycle( false, 0, 0 );
+        return;
+    }
+
+    bool cycle = currentProject_->prop( SProjectProps::Cycle, false ).toBool();
+    offset_t start = (offset_t) currentProject_->prop(
+                         SProjectProps::RangeStart, (qulonglong) 0 ).toULongLong();
+    offset_t end   = (offset_t) currentProject_->prop(
+                         SProjectProps::RangeEnd,   (qulonglong) 0 ).toULongLong();
+    bool haveRange = currentProject_->prop( SProjectProps::RangeValid, false ).toBool();
+
+    speaker->setCycle( cycle && haveRange, start, end );
 }
 
 void SMainWindow::toggleSnapToGrid()
