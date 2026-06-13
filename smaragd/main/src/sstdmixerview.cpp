@@ -418,6 +418,60 @@ void SStdMixerView::ctAddTrack()
 }
 
 /**
+ * Add a new track whose parent is the same container as the last visible lane's
+ * track (the "track above" the blank space the user double-clicked). Always goes
+ * through the undoable SAction system.
+ *
+ * When that parent is the root mixer the whole gesture is a single
+ * SAddTrackAction. When it is a folder track we follow the ctGroupTrack()
+ * pattern: append a top-level track, then reparent it under the folder — two
+ * SActions wrapped in one undo macro so a single undo reverses the gesture.
+ */
+void SStdMixerView::ctAddTrackBelowLast()
+{
+    if( !model_ ) return;
+
+    // "Track above" = the last lane in the flattened tree; its container is the
+    // parent the new track should share. No lanes yet -> append to the mixer.
+    const STrackRow *last = rowAt( rowCount() - 1 );
+    SObject *parent = last ? last->parent : (SObject*)model_;
+    STrack *parentTrack = dynamic_cast<STrack*>( parent );
+
+    if( !parentTrack ) {
+        // Parent is the root mixer: a plain append is undoable on its own.
+        SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+        return;
+    }
+
+    // Nested parent: create at the top level, then move under the folder.
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    if( stack ) stack->beginMacro( "Add track" );
+    SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+    // submitAction drains synchronously (Phase 1), so the new track is now the
+    // last top-level track; reparent it under the target folder.
+    int newIdx = model_->getNTracks() - 1;
+    SApplication::app().submitAction( new SReparentTrackAction(
+        QList<int>{ newIdx },
+        strackpath::pathOf( model_, parentTrack ), -1 ) );
+    if( stack ) stack->endMacro();
+}
+
+// Catch double-clicks in the blank area of the track-control column (below the
+// last track head) and turn them into a new-track gesture.
+bool SStdMixerView::eventFilter( QObject *watched, QEvent *event )
+{
+    if( watched == qTrackControlBoxHolder_
+        && event->type() == QEvent::MouseButtonDblClick ) {
+        QMouseEvent *me = static_cast<QMouseEvent*>( event );
+        if( me->button() == Qt::LeftButton ) {
+            ctAddTrackBelowLast();
+            return true;   // consumed
+        }
+    }
+    return QWidget::eventFilter( watched, event );
+}
+
+/**
  * Remove the currently selected track. This also will remove its children.
  */
 void SStdMixerView::ctRemoveTrack()
@@ -2315,6 +2369,8 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
 
     qTrackControlBoxHolder_ = new QWidget( this );
     qTrackControlBoxHolder_->setFixedWidth( SMV_TRACK_CTRL_WIDTH );
+    // Double-clicking the blank area below the track heads adds a new track.
+    qTrackControlBoxHolder_->installEventFilter( this );
     // qTrackControlBoxHolder_->setBackgroundColor( QColor( 100, 100, 0 ) );
     qGridLayout_->addWidget(
         qTrackControlBoxHolder_,
