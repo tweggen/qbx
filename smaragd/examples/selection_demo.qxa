@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Example Smaragd Action Script: Multi-Selection Operations
+
+     This script demonstrates the action-backed selection system with
+     full undo/redo support. Each action is reversible; when executed,
+     the inverse action is recorded for undo.
+
+     Index paths use strackpath format: pipe-separated comma-separated indices.
+     Example: "0,1|1,2" refers to two clips:
+       - Clip at track 0, position 1
+       - Clip at track 1, position 2
+-->
+<script version="1">
+  <actions>
+    <!-- Clear any existing selection -->
+    <action type="clear-selection" />
+
+    <!-- Select first two clips in track 0 -->
+    <action type="set-selection" paths="0,0|0,1" />
+
+    <!-- Add two more clips from tracks 1 and 2 to the selection -->
+    <action type="add-to-selection" paths="1,0|2,1" />
+
+    <!-- Toggle a clip (if selected, deselect; if not, select) -->
+    <action type="toggle-selection" paths="0,2" />
+
+    <!-- Remove one clip from the selection -->
+    <action type="remove-from-selection" paths="1,0" />
+
+    <!-- Final selection state: clips at 0,0 | 0,1 | 2,1 | 0,2 (if not already selected) -->
+
+    <!-- Demonstrate undo scenario: clear everything and start fresh -->
+    <action type="clear-selection" />
+    <action type="set-selection" paths="0,0|0,1|0,2" />
+  </actions>
+</script>
