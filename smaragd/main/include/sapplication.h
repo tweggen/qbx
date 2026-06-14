@@ -59,6 +59,9 @@ public:
 
     // SLink-based selection action submission (convenience for UI)
     void submitSetSelectionAction(SLink *link);
+    // Replace the selection with an explicit list of links as one undoable step
+    // (used by the rubberband marquee, which selects many clips at once).
+    void submitSetSelectionAction(const SSelectionList &links);
     void submitAddSelectionAction(SLink *link);
     void submitToggleSelectionAction(SLink *link);
     void submitClearSelectionAction();

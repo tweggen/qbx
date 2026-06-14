@@ -382,6 +382,14 @@ void SMainWindow::newProject()
 void SMainWindow::closeProject()
 {
     if( !currentProject_ ) return;
+    // Undo history is per-project. Drop it BEFORE tearing the project down: an
+    // SDeleteClipAction's inverse pins the removed clip's content (addRef), so
+    // clearing the stack here releases those pins while the content is still
+    // alive — otherwise the pins would dangle into the freed project. (This also
+    // fixes undo history wrongly surviving across project loads.)
+    if( SActionHistory *h = SApplication::app().actionHistory() )
+        if( QUndoStack *st = h->undoStack() )
+            st->clear();
     SApplication::app().setCurrentProject( NULL );
     delete projectRootWidget_;
     projectRootWidget_ = NULL;   // avoid a dangling pointer / double-free

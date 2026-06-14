@@ -46,6 +46,7 @@
 #include "actions/smoveclipaction.h"
 #include "actions/ssplitclipaction.h"
 #include "actions/sduplicateclipaction.h"
+#include "actions/sdeleteclipaction.h"
 #include "actions/sresizeclipaction.h"
 #include "actions/screateassetaction.h"
 #include "actions/splaceassetaction.h"
@@ -278,6 +279,14 @@ void SMVActualView::paintEvent( QPaintEvent * )
     // Time-range selection on top of everything (grey band in the ruler +
     // vertical edges over all tracks).
     drawRange( p, myRect );
+
+    // Rubberband (marquee) selection rectangle, on top of everything.
+    if( rubberActive_ && !rubberRect_.isNull() ) {
+        p.setPen( QColor( 60, 120, 220 ) );
+        p.setBrush( QColor( 60, 120, 220, 48 ) );
+        p.drawRect( rubberRect_ );
+        p.setBrush( Qt::NoBrush );
+    }
 }
 
 /**
@@ -338,20 +347,54 @@ void SStdMixerView::ctAddLink()
 
 void SStdMixerView::ctRemoveSample()
 {
-    SLink *oldLink = qContent_->getLastClickSLink();
-    if( !oldLink ) {
+    // Delete EVERY selected clip (not just the last-clicked one), as one undoable
+    // step. Fall back to the last-clicked clip when nothing is selected (e.g. a
+    // right-click "Remove sample" with no prior selection). Work from a COPY of
+    // the selection: each delete applies synchronously and clears the deleted
+    // link from the live selection list, so iterating the live list would skip
+    // entries / dangle.
+    SSelectionList victims = SApplication::app().getSelectionList();
+    if( victims.isEmpty() ) {
+        SLink *lk = qContent_->getLastClickSLink();
+        if( lk ) victims.append( lk );
+    }
+    // Drop NULLs and nested-track lanes (those are not clips).
+    QList<SLink*> links;
+    for( SLink *lk : victims ) {
+        if( !lk ) continue;
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
+        links.append( lk );
+    }
+    if( links.isEmpty() ) {
         qWarning( "ctRemoveSample called without object.\n" );
         return;
     }
-    QRect r = qContent_->getSLinkVisibRect( qContent_->getLastClickTrackIdx(), *oldLink );
     qContent_->resetLastClickSLink();
-    delete oldLink;
-    // FIXME: Only the track.
-    qContent_->update( r );
+
+    // One undoable SDeleteClipAction per clip; group several into a single macro
+    // so the whole multi-delete reverts together. Resolve each clip's path right
+    // before deleting it: deletes apply synchronously, so an earlier deletion has
+    // already reindexed the track by the time we resolve the next clip.
+    QUndoStack *stack = SApplication::app().actionHistory()
+                        ? SApplication::app().actionHistory()->undoStack() : nullptr;
+    bool macro = links.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral("Delete clips") );
+    for( SLink *lk : links ) {
+        STrack *tr = dynamic_cast<STrack*>( lk->parent() );
+        if( !tr ) continue;
+        QList<int> clipPath = strackpath::pathOf( model_, tr );
+        clipPath.append( tr->indexOfChild( lk ) );
+        SApplication::app().submitAction( new SDeleteClipAction( clipPath ) );
+    }
+    if( macro ) stack->endMacro();
+    // FIXME: Only the affected tracks.
+    qContent_->update();
 }
 
 void SStdMixerView::ctDeleteSample()
 {
+    // "Delete sample" and "Remove sample" both act on the current selection.
+    ctRemoveSample();
 }
 
 void SStdMixerView::ctSplitSample()
@@ -366,8 +409,16 @@ void SStdMixerView::ctSplitSample()
     QList<int> clipPath = strackpath::pathOf( model_, oldTrack );
     clipPath.append( oldTrack->indexOfChild( oldLink ) );
     offset_t splitTime = SApplication::app().getGlobalLocatorPos();
+    offset_t leftStart = oldLink->getStartTime();   // start of the left-hand piece
     qContent_->resetLastClickSLink();   // the link may be replaced by the split
     SApplication::app().submitAction( new SSplitClipAction( clipPath, splitTime ) );
+    // Make the left-hand piece the active selection so it visibly stays selected
+    // AND a following Delete removes it. The split may have replaced the original
+    // link (raw link -> SCut), so re-resolve the piece by its start time instead
+    // of reusing the (possibly stale) old pointer.
+    SLink *leftPiece = oldTrack->getTopMostSLinkAt( leftStart );
+    if( leftPiece )
+        SApplication::app().submitSetSelectionAction( leftPiece );
     qContent_->update();
 }
 
@@ -656,11 +707,64 @@ void SMVActualView::syncDuplicateGroup()
     update();
 }
 
+// Recompute the live selection from the current marquee rectangle: start from
+// the additive base (the pre-drag selection when Shift is held, else empty),
+// then add every clip whose on-screen rectangle intersects the marquee. The
+// mutation is direct (non-undoable) for live feedback; mouseReleaseEvent records
+// the final set as a single undoable action.
+void SMVActualView::updateRubberSelection()
+{
+    SApplication::app().clearSelection();
+    for( SLink *lk : rubberBaseSel_ )
+        SApplication::app().addSelectedSLink( lk );
+
+    int n = smv_.rowCount();
+    for( int i = 0; i < n; ++i ) {
+        const STrackRow *row = smv_.rowAt( i );
+        if( !row || !row->track ) continue;
+        int laneTop = SMV_TIME_RULER_HEIGHT + i * trackHeight_ - upperLeftY_;
+        QRect laneRect( 0, laneTop, width(), trackHeight_ );
+        if( !laneRect.intersects( rubberRect_ ) ) continue;
+        for( SLink *lk : row->track->childLinks() ) {
+            // Skip nested-track lanes — they are drawn on their own rows.
+            if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
+            if( !lk->hasStartTime() || !lk->getSObject().hasDuration() ) continue;
+            offset_t st  = lk->getStartTime();
+            length_t len = lk->getSObject().getDuration();
+            int x0 = getXPosOfOffset( st );
+            int x1 = getXPosOfOffset( st + (offset_t) len );
+            QRect clipRect( x0, laneTop, x1 - x0, trackHeight_ );
+            if( clipRect.intersects( rubberRect_ )
+                && !SApplication::app().isSLinkSelected( lk ) )
+                SApplication::app().addSelectedSLink( lk );
+        }
+    }
+}
+
 void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 {
     if( rangeDrag_ != RangeNone ) {
         endRangeDrag( ev->pos().x() );
         return;
+    }
+
+    // Finalize / cancel a rubberband (marquee) selection.
+    if( rubberArmed_ ) {
+        bool wasActive = rubberActive_;
+        rubberArmed_  = false;
+        rubberActive_ = false;
+        rubberBaseSel_.clear();
+        rubberRect_ = QRect();
+        if( wasActive ) {
+            // The live selection was already mutated during the drag (for
+            // feedback); record the final set as ONE undoable step and stop —
+            // do not also seek the playhead.
+            SApplication::app().submitSetSelectionAction(
+                SApplication::app().getSelectionList() );
+            update();
+            return;
+        }
+        // Otherwise it was a pure empty click: fall through to playhead seeking.
     }
 
     // Finalize a clip DUPLICATE (Ctrl-drag): the dragged clips are live copies.
@@ -1158,6 +1262,20 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
         return;
     }
 
+    // Rubberband (marquee) selection drag in empty timeline space.
+    if( rubberArmed_ ) {
+        if( !rubberActive_ ) {
+            const int START = 4;   // px the pointer must move to begin a marquee
+            if( ( ev->pos() - rubberOrigin_ ).manhattanLength() <= START )
+                return;            // still a candidate click — change nothing yet
+            rubberActive_ = true;
+        }
+        rubberRect_ = QRect( rubberOrigin_, ev->pos() ).normalized();
+        updateRubberSelection();
+        update();
+        return;
+    }
+
     // Check scrolling, if the event position is invisible.
     QRect myRect = rect();
     int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
@@ -1437,8 +1555,8 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
     } else if( ev->buttons() & Qt::LeftButton ) {
         // Detect, on which object we clicked.
         // We know the track,  so now calculate the time.
-        if( lastClickTrack_ ) {
-            if( lastClickSLink_ ) {
+        if( lastClickTrack_ && lastClickSLink_ ) {
+            {
                 Qt::KeyboardModifiers modifiers = QGuiApplication::keyboardModifiers();
                 bool onBorder = lastClickedStart_ || lastClickedEnd_;
                 if( (modifiers & Qt::ControlModifier) && !onBorder ) {
@@ -1533,6 +1651,19 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     update();
                 }
             }
+        } else {
+            // Empty timeline space (no clip under the press): arm a possible
+            // rubberband (marquee) selection. It is promoted to active on the
+            // first move past the threshold (see mouseMoveEvent), so a pure
+            // click still falls through to playhead seeking on release.
+            rubberArmed_    = true;
+            rubberActive_   = false;
+            rubberAdditive_ =
+                ( QGuiApplication::keyboardModifiers() & Qt::ShiftModifier );
+            rubberOrigin_ = ev->pos();
+            rubberRect_   = QRect( ev->pos(), ev->pos() );
+            rubberBaseSel_ = rubberAdditive_
+                ? SApplication::app().getSelectionList() : SSelectionList();
         }
         // Note: cursor seeking is now deferred to mouseReleaseEvent so it only
         // happens on a click (no drag).

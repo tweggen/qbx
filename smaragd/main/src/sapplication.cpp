@@ -419,6 +419,16 @@ void SApplication::submitSetSelectionAction(SLink *link)
     submitAction(action);
 }
 
+void SApplication::submitSetSelectionAction(const SSelectionList &links)
+{
+    // Resolve to paths BEFORE submitting: applying the action clears and rebuilds
+    // selectionList_, so if `links` aliases the live list (the common caller),
+    // the paths must already be materialized by then.
+    SSelectionManager mgr;
+    QList<QList<int>> paths = mgr.linksToPaths(links, currentProject_);
+    submitAction(new SSetSelectionAction(paths));
+}
+
 void SApplication::submitAddSelectionAction(SLink *link)
 {
     if (!link) return;

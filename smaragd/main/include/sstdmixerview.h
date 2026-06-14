@@ -208,6 +208,23 @@ private:
     offset_t   clipDupAnchorStart_ = 0;   // anchor copy's start at press
     int        clipDupAnchorRow_   = -1;  // anchor's lane row at press
     void syncDuplicateGroup();            // move non-anchor copies with the anchor
+
+    // --- rubberband (marquee) selection ---------------------------------
+    // A left-drag that starts in empty timeline space (not on a clip, not in
+    // the ruler) draws a selection rectangle; every clip whose on-screen rect
+    // intersects it becomes selected. A plain drag REPLACES the selection; a
+    // Shift-drag ADDS the intersected clips to the existing selection (Shift is
+    // the same additive modifier used by click-selection). Armed on the empty
+    // press and only promoted to active once the pointer moves past a small
+    // threshold, so a pure click still falls through to playhead seeking.
+    bool   rubberArmed_    = false;  // empty press: a marquee may start
+    bool   rubberActive_   = false;  // moved past threshold: marquee is live
+    bool   rubberAdditive_ = false;  // Shift held at press: add to selection
+    QPoint rubberOrigin_;            // press position (widget coords)
+    QRect  rubberRect_;              // current normalized marquee rect
+    QList<SLink*> rubberBaseSel_;    // pre-drag selection snapshot (additive)
+    void updateRubberSelection();    // recompute live selection from rubberRect_
+    // --------------------------------------------------------------------
 };
 
 class STimeGridSpec {

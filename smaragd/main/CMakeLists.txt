@@ -42,6 +42,7 @@ set(SMARAGD_HEADERS
     include/actions/sunsplitclipaction.h
     include/actions/sduplicateclipaction.h
     include/actions/sremoveclipaction.h
+    include/actions/sdeleteclipaction.h
     include/actions/sresizeclipaction.h
     include/actions/screateassetaction.h
     include/actions/sremoveassetaction.h
@@ -113,6 +114,7 @@ set(SMARAGD_SOURCES
     src/actions/sunsplitclipaction.cpp
     src/actions/sduplicateclipaction.cpp
     src/actions/sremoveclipaction.cpp
+    src/actions/sdeleteclipaction.cpp
     src/actions/sresizeclipaction.cpp
     src/actions/screateassetaction.cpp
     src/actions/sremoveassetaction.cpp
