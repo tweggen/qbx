@@ -1,7 +1,8 @@
-#include "sclearselectionaction.h"
-#include "ssetselectionaction.h"
+#include "actions/sclearselectionaction.h"
 #include "sapplication.h"
 #include "sproject.h"
+#include "sactionregistry.h"
+#include "actions/strackpath.h"
 #include <QDomElement>
 
 SApplyResult SClearSelectionAction::apply(SProject *project)
@@ -16,8 +17,19 @@ SApplyResult SClearSelectionAction::apply(SProject *project)
     // Apply: clear selection
     app.setSelectionFromPaths(QList<QList<int>>());
 
-    // Inverse: restore prior selection
-    SAction *inverse = new SSetSelectionAction(priorPaths);
+    // Inverse: create a set-selection action via registry with prior paths
+    SAction *inverse = SActionRegistry::instance().create(QStringLiteral("set-selection"));
+    if (inverse) {
+        QDomDocument doc;
+        QDomElement elem = doc.createElement("temp");
+        // Manually encode the prior paths for the inverse
+        QStringList pathStrs;
+        for (const QList<int> &path : priorPaths) {
+            pathStrs << strackpath::pathToString(path);
+        }
+        elem.setAttribute("paths", pathStrs.join("|"));
+        inverse->readXml(elem, 1);
+    }
     return {true, inverse};
 }
 

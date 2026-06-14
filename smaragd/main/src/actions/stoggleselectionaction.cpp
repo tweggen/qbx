@@ -1,8 +1,9 @@
-#include "stoggleselectionaction.h"
+#include "actions/stoggleselectionaction.h"
 #include "sapplication.h"
 #include "sproject.h"
 #include "sselectionmanager.h"
-#include "strackpath.h"
+#include "sactionregistry.h"
+#include "actions/strackpath.h"
 #include <QDomElement>
 
 SToggleSelectionAction::SToggleSelectionAction(const QList<QList<int>> &paths)

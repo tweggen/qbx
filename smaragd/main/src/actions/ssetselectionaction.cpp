@@ -1,8 +1,9 @@
-#include "ssetselectionaction.h"
+#include "actions/ssetselectionaction.h"
 #include "sapplication.h"
 #include "sproject.h"
 #include "sselectionmanager.h"
-#include "strackpath.h"
+#include "sactionregistry.h"
+#include "actions/strackpath.h"
 #include <QDomElement>
 
 SSetSelectionAction::SSetSelectionAction(const QList<QList<int>> &paths)

@@ -1,9 +1,10 @@
-#include "saddtoselectionaction.h"
-#include "sremovefromselectionaction.h"
+#include "actions/saddtoselectionaction.h"
+#include "actions/sremovefromselectionaction.h"
 #include "sapplication.h"
 #include "sproject.h"
 #include "sselectionmanager.h"
-#include "strackpath.h"
+#include "sactionregistry.h"
+#include "actions/strackpath.h"
 #include <QDomElement>
 
 SAddToSelectionAction::SAddToSelectionAction(const QList<QList<int>> &paths)

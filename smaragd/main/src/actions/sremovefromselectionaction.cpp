@@ -1,9 +1,9 @@
-#include "sremovefromselectionaction.h"
-#include "saddtoselectionaction.h"
+#include "actions/sremovefromselectionaction.h"
 #include "sapplication.h"
 #include "sproject.h"
 #include "sselectionmanager.h"
-#include "strackpath.h"
+#include "sactionregistry.h"
+#include "actions/strackpath.h"
 #include <QDomElement>
 
 SRemoveFromSelectionAction::SRemoveFromSelectionAction(const QList<QList<int>> &paths)
@@ -28,8 +28,14 @@ SApplyResult SRemoveFromSelectionAction::apply(SProject *project)
     // Apply: remove paths from selection
     app.removeSelectionFromPaths(paths_);
 
-    // Inverse: add these paths back
-    SAction *inverse = new SAddToSelectionAction(paths_);
+    // Inverse: add these paths back via registry (avoid circular include)
+    SAction *inverse = SActionRegistry::instance().create(QStringLiteral("add-to-selection"));
+    if (inverse) {
+        QDomDocument doc;
+        QDomElement elem = doc.createElement("temp");
+        writeXml(elem);
+        inverse->readXml(elem, 1);
+    }
     return {true, inverse};
 }
 

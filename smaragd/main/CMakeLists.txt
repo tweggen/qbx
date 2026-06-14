@@ -30,6 +30,7 @@ set(SMARAGD_HEADERS
     include/sactionqueue.h
     include/sactionhistory.h
     include/sactionundocommand.h
+    include/sactionscript.h
     include/actions/saddtrackaction.h
     include/actions/sremovetrackaction.h
     include/actions/srestoretrackaction.h
@@ -99,6 +100,7 @@ set(SMARAGD_SOURCES
     src/sactionqueue.cpp
     src/sactionhistory.cpp
     src/sactionundocommand.cpp
+    src/sactionscript.cpp
     src/actions/saddtrackaction.cpp
     src/actions/sremovetrackaction.cpp
     src/actions/srestoretrackaction.cpp
@@ -206,3 +208,27 @@ if(AUTO_DEPLOY_QT AND (SMARAGD_WINDOWS OR SMARAGD_MACOS))
             "manually (PATH or copy).")
     endif()
 endif()
+
+# Action round-trip test (Phase 0 of action scripts): verify all actions
+# can serialize and deserialize without loss.
+# Exclude src/main.cpp since the test has its own main()
+list(REMOVE_ITEM SMARAGD_SOURCES src/main.cpp)
+add_executable(action_roundtrip_test
+    src/action_roundtrip_test.cpp
+    ${SMARAGD_SOURCES}
+    ${SMARAGD_HEADERS}
+)
+
+target_include_directories(action_roundtrip_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}
+)
+
+target_link_libraries(action_roundtrip_test
+    PRIVATE
+        tw303a
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Xml
+)
