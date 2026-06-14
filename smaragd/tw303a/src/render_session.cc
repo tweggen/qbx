@@ -148,10 +148,13 @@ void RenderSession::renderThreadMain() {
         fprintf(stderr, "[RenderSession::DEBUG] seekTo() completed\n");
         fflush(stderr);
 
-        // Set global locator to start position (exactly like playback does)
+        // Set global locator to start position (exactly like playback does).
+        // Realtime store only: this runs on the render worker thread, so it must
+        // not emit Qt signals (that would adopt the thread and deadlock the
+        // render-thread join at teardown — same hazard as the audio callback).
         fprintf(stderr, "[RenderSession::DEBUG] Setting global locator to %zu\n", startOffsetSamples_);
         fflush(stderr);
-        SApplication::app().setGlobalLocatorPos(startOffsetSamples_);
+        SApplication::app().setGlobalLocatorPosRealtime(startOffsetSamples_);
         fprintf(stderr, "[RenderSession::DEBUG] Global locator set\n");
         fflush(stderr);
 
@@ -236,9 +239,10 @@ void RenderSession::renderThreadMain() {
                 samplesWrittenVal += framesToRender;
                 samplesWritten_.store(samplesWrittenVal);
 
-                // Update global locator position (same as playback callback does)
+                // Update global locator position (same as playback callback does).
+                // Realtime store only — no Qt signals from the render thread.
                 offset_t formerPos = SApplication::app().getGlobalLocatorPos();
-                SApplication::app().setGlobalLocatorPos(formerPos + framesToRender);
+                SApplication::app().setGlobalLocatorPosRealtime(formerPos + framesToRender);
 
                 // Emit progress callback every ~50ms
                 if (samplesWrittenVal % (sampleRate_ / 20) == 0) {

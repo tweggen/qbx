@@ -3,6 +3,7 @@
 #define _SAPPLICATION_H
 
 #include <memory>
+#include <atomic>
 
 #include <tw303aenv.h>
 #include <twcomponent.h>
@@ -20,6 +21,7 @@ class SLink;
 class SProject;
 class SActionHistory;
 class SAction;
+class QTimer;
 
 typedef QList<SLink*> SSelectionList;
 
@@ -69,6 +71,13 @@ public:
     // wiring rather than the snapshot taken at project-creation time.
     void rewireSpeaker();
     offset_t getGlobalLocatorPos() const;
+    // Store the playback position from the REALTIME AUDIO THREAD. This only does
+    // an atomic store — it must NOT emit any Qt signal or otherwise touch QObject
+    // machinery, because doing so from the raw render std::thread makes Qt adopt
+    // that thread; the adopted thread's Qt-TLS cleanup then runs during DLL
+    // THREAD_DETACH at thread exit and deadlocks the join() in stopOutput(). The
+    // UI playhead is instead driven by a main-thread QTimer (see pumpLocator()).
+    void setGlobalLocatorPosRealtime( offset_t );
     bool isPlaying() const;
     bool isRenderingActive() const;
     bool isRecordingActive() const;
@@ -103,6 +112,10 @@ public slots:
 
 private slots:
     void unselectSLink();
+    // Main-thread poll: pick up the position the audio thread stored and emit
+    // globalLocatorMoved so the playhead repaints. Driven by locatorTimer_ while
+    // playing.
+    void pumpLocator();
 
 private:
     static SApplication *singleton_;
@@ -116,7 +129,11 @@ private:
 
     SLink *currentSelectedSLink_;
 
-    offset_t globalLocatorPos_;
+    // Written by the audio thread (atomic store, no signal) and by the UI thread
+    // (setGlobalLocatorPos, which also emits). Read by both.
+    std::atomic<offset_t> globalLocatorPos_;
+    offset_t lastShownLocator_ = 0;   // last position the UI emitted (main thread only)
+    QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     bool isPlaying_;
     SProject *currentProject_;
     QString statusMode_;

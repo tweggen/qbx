@@ -1,5 +1,7 @@
 
 
+#include <QTimer>
+
 #include <tw303aenv.h>
 #include <twspeaker.h>
 #include <twwhitenoise.h>
@@ -70,9 +72,15 @@ void SApplication::setStatusMode( const QString &mode )
     emit statusModeChanged( statusMode_ );
 }
 
-void SApplication::setPlaying( bool f ) 
+void SApplication::setPlaying( bool f )
 {
     isPlaying_ = f;
+    // Run the playhead poll only while playing; emit one final update on stop so
+    // the cursor lands on the exact end position.
+    if( locatorTimer_ ) {
+        if( f ) locatorTimer_->start();
+        else { locatorTimer_->stop(); pumpLocator(); }
+    }
 }
 
 const SSelectionList &SApplication::getSelectionList() const
@@ -185,9 +193,27 @@ tw303aEnvironment *SApplication::get303aEnvironment() const
 
 void SApplication::setGlobalLocatorPos( offset_t o )
 {
-    offset_t old = globalLocatorPos_;
-    globalLocatorPos_ = o;    
+    // UI-thread setter: store and repaint immediately. Safe to emit here.
+    offset_t old = globalLocatorPos_.exchange( o );
+    lastShownLocator_ = o;
     emit globalLocatorMoved( o, old );
+}
+
+void SApplication::setGlobalLocatorPosRealtime( offset_t o )
+{
+    // Audio-thread setter: atomic store ONLY. No emit (see header rationale).
+    globalLocatorPos_.store( o, std::memory_order_relaxed );
+}
+
+void SApplication::pumpLocator()
+{
+    // Main thread: reflect the audio thread's advance into the playhead. Skip
+    // when unchanged so we don't repaint needlessly.
+    offset_t now = globalLocatorPos_.load( std::memory_order_relaxed );
+    if( now == lastShownLocator_ ) return;
+    offset_t old = lastShownLocator_;
+    lastShownLocator_ = now;
+    emit globalLocatorMoved( now, old );
 }
 
 void SApplication::setSpeakerMaxVal( sample_t /*maxVal*/ )
@@ -197,7 +223,7 @@ void SApplication::setSpeakerMaxVal( sample_t /*maxVal*/ )
 
 offset_t SApplication::getGlobalLocatorPos() const
 {
-    return globalLocatorPos_;
+    return globalLocatorPos_.load( std::memory_order_relaxed );
 }
 
 SApplication::SApplication( int &argc, char **argv )
@@ -214,6 +240,12 @@ SApplication::SApplication( int &argc, char **argv )
     setApplicationName( "smaragd" );
 
     singleton_ = this;
+    // ~30 Hz playhead poll: the audio thread stores its position lock-free; this
+    // main-thread timer turns that into globalLocatorMoved repaints while playing
+    // so the realtime thread never touches Qt. Started/stopped by setPlaying().
+    locatorTimer_ = new QTimer( this );
+    locatorTimer_->setInterval( 33 );
+    connect( locatorTimer_, SIGNAL( timeout() ), this, SLOT( pumpLocator() ) );
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
