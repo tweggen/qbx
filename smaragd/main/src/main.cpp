@@ -9,14 +9,16 @@
 #include "sactionrunner.h"
 #include "sactionregistry.h"
 #include <iostream>
+#include <cstdlib>
 
 int main( int argc, char *argv[] )
 {
     SApplication app( argc, argv );
 
-    // Command-line parsing (Phase 1: --run-actions, Phase 2+: --test-case, Phase 0+: --list-actions)
+    // Command-line parsing (Phase 1+: --run-actions, Phase 2+: --test-case, --list-actions)
     QCommandLineParser parser;
     parser.addOption({"run-actions", "Execute an action script and keep the window open.", "file"});
+    parser.addOption({"test-case", "Run an action script as a headless test (exit 0 on pass, 1 on fail).", "file"});
     parser.addOption({"list-actions", "List known action verbs and exit."});
     parser.process(app);
 
@@ -45,33 +47,68 @@ int main( int argc, char *argv[] )
         QApplication::setFont( uiFont );
     }
 
-    SMainWindow *win = new SMainWindow();
-    // Restored (un-maximized) geometry, then start maximized to fill the screen.
-    win->move( 100,100 );
-    win->resize( 800, 600 );
-    win->showMaximized();
+    // Determine test mode vs interactive mode
+    bool testMode = parser.isSet("test-case");
+    bool runMode = parser.isSet("run-actions");
+    QString scriptPath = testMode ? parser.value("test-case") : parser.value("run-actions");
 
-    // Execute action script if --run-actions was provided
-    if (parser.isSet("run-actions")) {
-        QString scriptPath = parser.value("run-actions");
+    // Create main window (only shown in interactive mode)
+    SMainWindow *win = new SMainWindow();
+    if (!testMode) {
+        // Restored (un-maximized) geometry, then start maximized to fill the screen.
+        win->move( 100, 100 );
+        win->resize( 800, 600 );
+        win->showMaximized();
+    }
+
+    // Execute action script if --run-actions or --test-case was provided
+    if (runMode || testMode) {
         SActionScript script;
         if (script.readFile(scriptPath)) {
             SActionRunner runner;
             SActionRunner::Result result = runner.run(script, app);
-            std::cout << "Script executed: " << (result.passed ? "PASS" : "FAIL") << "\n";
-            std::cout << "  Actions applied: " << result.actionsApplied << "\n";
-            std::cout << "  Actions rejected: " << result.actionsRejected << "\n";
-            if (!result.failures.isEmpty()) {
-                std::cout << "  Failures:\n";
-                for (const QString &failure : result.failures) {
-                    std::cout << "    - " << failure.toStdString() << "\n";
+
+            // Output results
+            if (testMode) {
+                // TAP-style output for test mode
+                std::cout << (result.passed ? "PASS" : "FAIL") << " - " << scriptPath.toStdString() << "\n";
+                if (!result.passed) {
+                    std::cout << "# Actions applied: " << result.actionsApplied << "\n";
+                    std::cout << "# Actions rejected: " << result.actionsRejected << "\n";
+                    std::cout << "# Assertions failed: " << result.assertionsFailed << "\n";
+                    if (!result.failures.isEmpty()) {
+                        std::cout << "# Failures:\n";
+                        for (const QString &failure : result.failures) {
+                            std::cout << "#   - " << failure.toStdString() << "\n";
+                        }
+                    }
+                }
+            } else {
+                // Verbose output for run mode
+                std::cout << "Script executed: " << (result.passed ? "PASS" : "FAIL") << "\n";
+                std::cout << "  Actions applied: " << result.actionsApplied << "\n";
+                std::cout << "  Actions rejected: " << result.actionsRejected << "\n";
+                std::cout << "  Assertions failed: " << result.assertionsFailed << "\n";
+                if (!result.failures.isEmpty()) {
+                    std::cout << "  Failures:\n";
+                    for (const QString &failure : result.failures) {
+                        std::cout << "    - " << failure.toStdString() << "\n";
+                    }
                 }
             }
             std::cout.flush();
             std::cerr.flush();
+
+            // Exit immediately in test mode
+            if (testMode) {
+                std::exit(result.passed ? 0 : 1);
+            }
         } else {
             std::cerr << "Failed to load script: " << script.error().toStdString() << "\n";
             std::cerr.flush();
+            if (testMode) {
+                std::exit(1);
+            }
         }
     } else {
         // Re-open the most recently used project (if any still exist on disk).

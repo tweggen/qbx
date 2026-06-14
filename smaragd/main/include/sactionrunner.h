@@ -3,26 +3,39 @@
 
 #include <QString>
 #include <QStringList>
+#include "sactionscript.h"
 
-class SActionScript;
 class SApplication;
 class SProject;
 
 // Executes an action script against a project and returns results.
-// Phase 1: script load + execute (no assertions yet; those come in Phase 2).
+// Phase 1: script load + execute.
+// Phase 2: assertions (track-count, project-matches, verify-undo).
 class SActionRunner {
 public:
     struct Result {
         bool       passed = false;
         int        actionsApplied = 0;
         int        actionsRejected = 0;
-        QStringList failures;  // human-readable rejection reasons
+        int        assertionsFailed = 0;
+        QStringList failures;  // human-readable rejection/assertion reasons
     };
 
     // Execute a parsed script against a project.
     // Creates the project per script setup, submits actions via SActionHistory,
-    // synchronizes via engine queue drain after each action.
+    // evaluates assertions, handles undo verification.
     Result run(const SActionScript &script, SApplication &app);
+
+private:
+    // Evaluate assertions against the project. Returns true if all pass.
+    bool evaluateAssertions_(const SActionScript &script, SProject *project,
+                             QStringList &failures) const;
+
+    // Assertion evaluators: each returns true if assertion passes.
+    bool assertTrackCount_(const SActionScript::Assertion &a, SProject *project,
+                           QStringList &failures) const;
+    bool assertProjectMatches_(const SActionScript::Assertion &a, SProject *project,
+                               QStringList &failures) const;
 };
 
 #endif // SACTIONRUNNER_H
