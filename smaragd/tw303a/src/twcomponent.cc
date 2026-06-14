@@ -228,7 +228,6 @@ int twComponent::initOperation( int initId )
 
 twComponent::~twComponent ()
 {
-    printf( "twComponent dtor.\n" );
     if( pInputPlugs ) free( pInputPlugs );
     if( pOutputLatches ) free( pOutputLatches );
 }

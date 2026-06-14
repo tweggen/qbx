@@ -60,7 +60,6 @@ twLatch::twLatch( twComponent & component0, idx_t idx0 )
 	  idx( idx0 ),
 	  offset( 0 )
 {
-        qWarning( "Creating latch for component %p.\n", &component );
 }
 
 twLatch::~twLatch()

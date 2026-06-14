@@ -48,6 +48,31 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
 {
     readerTried_ = true;
 
+    // FAST PATH: skip the rebuild when the reader chain would be byte-for-byte
+    // the same one we already hold. The chain depends only on the content source
+    // (constant), whether a grain stage is interposed (and its params), and
+    // whether a loop reader is used (and its loop window) — NOT on cutDuration or
+    // (for a non-looping clip) the slip offset. Trimming/extending or slipping a
+    // plain sample clip therefore reuses the existing reader instead of minting a
+    // new component + latch on every drag tick. Only sample-backed cuts qualify:
+    // a container cut reads through a capture sized to the window, so a duration
+    // change there genuinely requires a fresh capture/reader.
+    if( content_->getSObject().getRandomSource() && currentReader_.reader ) {
+        bool needGrain = !snap.grainParams.isIdentity();
+        bool needLoop  = ( snap.loopLength > 0 && snap.loopLength < snap.cutDuration );
+        bool sameGrain = !needGrain
+            || ( builtGrain_.stretch    == snap.grainParams.stretch
+              && builtGrain_.pitchCents == snap.grainParams.pitchCents
+              && builtGrain_.grainSize  == snap.grainParams.grainSize
+              && builtGrain_.crossfade  == snap.grainParams.crossfade );
+        bool sameLoop = !needLoop
+            || ( builtLoopStart_ == snap.startOffset
+              && builtLoopLength_ == snap.loopLength );
+        if( builtNeedGrain_ == needGrain && builtNeedLoop_ == needLoop
+            && sameGrain && sameLoop )
+            return;   // chain unchanged — keep the current reader
+    }
+
     // STEP 1: Build new reader state completely out-of-band
     // (audio thread continues using currentReader_ during this entire process)
     twSampleReader *newReader = NULL;
@@ -94,6 +119,15 @@ swap_complete:
         currentReader_.grain = newGrain;
         currentReader_.looping = newLooping;
         currentReader_.generation++;  // Increment on successful swap
+    }
+
+    // Record the chain we just built so the next call can take the fast path.
+    if( rs ) {
+        builtNeedGrain_  = ( newGrain != NULL );
+        builtNeedLoop_   = newLooping;
+        builtGrain_      = snap.grainParams;
+        builtLoopStart_  = snap.startOffset;
+        builtLoopLength_ = snap.loopLength;
     }
 }
 

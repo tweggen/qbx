@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  split_extend_repro.qxa
+
+  Goal: reproduce a likely bug surfacing from exhaustive, repetitive window
+  recalculation. We place a sample, slice it on the bar lines, drop the third
+  bar, then grow the surviving middle clip one quarter-bar at a time.
+
+  Timing (new project defaults: 120 BPM, 4/4, 48000 Hz):
+    1 beat     = 24000 frames
+    1 bar      = 96000 frames   (4 beats)
+    1/4 bar    = 24000 frames
+
+  Bar boundaries on the timeline (clip placed at t=0):
+    bar 1 -> 0, bar 2 -> 96000, bar 3 -> 192000
+
+  NOTE: add-sample resolves filePath relative to the current working directory,
+  so an absolute path is used here for reliable reproduction. Adjust if the repo
+  lives elsewhere.
+-->
+<SActionScript version="1" name="split_extend_repro">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- One track to hold the clip. -->
+    <add-track index="-1"/>
+
+    <!-- Insert the sawtooth sample at the very start (t=0). Clip becomes 0,0. -->
+    <add-sample trackIndex="0"
+                filePath="C:/Users/timow/coding/github/qbx/test_sawtooth.wav"
+                timePos="0"/>
+
+    <!-- Split on the start of bar 2 (t=96000): 0,0 -> [0..96000) + new 0,1. -->
+    <split-clip clip="0,0" splitTime="96000"/>
+
+    <!-- Split on the start of bar 3 (t=192000): 0,1 -> [96000..192000) + new 0,2. -->
+    <split-clip clip="0,1" splitTime="192000"/>
+
+    <!-- Remove the third stem (the piece starting at bar 3, index 0,2). -->
+    <remove-sample trackIndex="0" clipIndex="2"
+                   filePath="C:/Users/timow/coding/github/qbx/test_sawtooth.wav"
+                   timePos="192000"/>
+
+    <!-- Extend the remaining second part (0,1) by 1/4 bar (24000) per step.
+         startTime and startOffset stay fixed; only duration grows. -->
+    <resize-clip clip="0,1" startTime="96000" startOffset="96000" duration="120000" loopLength="0" stretch="1.0"/>
+    <resize-clip clip="0,1" startTime="96000" startOffset="96000" duration="144000" loopLength="0" stretch="1.0"/>
+    <resize-clip clip="0,1" startTime="96000" startOffset="96000" duration="168000" loopLength="0" stretch="1.0"/>
+    <resize-clip clip="0,1" startTime="96000" startOffset="96000" duration="192000" loopLength="0" stretch="1.0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <!-- Exhaustive repetitive path: replay the whole inverse stack and redo it. -->
+  <verify-undo restoresInitialState="true"/>
+
+</SActionScript>

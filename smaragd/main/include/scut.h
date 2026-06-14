@@ -215,6 +215,15 @@ private:
     SCutReaderState currentReader_{nullptr, nullptr, false, 0};
     SCutReaderState nextReader_{nullptr, nullptr, false, 0};
     SCutReaderState oldReader_{nullptr, nullptr, false, 0};  // For deferred deletion
+    // Descriptor of the reader chain currently built, so rebuildReader() can skip
+    // re-acquiring an identical chain. A non-looping sample cut's reader does not
+    // depend on duration or slip offset, so a plain trim/extend (which retriggers
+    // rebuildReader on every drag tick) need not mint a fresh reader each time.
+    bool          builtNeedGrain_ = false;
+    bool          builtNeedLoop_  = false;
+    twGrainParams builtGrain_;
+    offset_t      builtLoopStart_  = 0;
+    length_t      builtLoopLength_ = 0;
     // Cached render of a container content (proposal 07 step 5). Built lazily by
     // ensureCapture(); invalidated on any edit via invalidateCapture().
     twCapturingSource *capture_ = nullptr;
