@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -130,19 +131,19 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     // startOutput() would dereference the null renderClient_ and crash. Detect
     // any such half-open state and tear it down so we reopen cleanly.
     if (audioClient_ && renderClient_) {
-        syslog(LOG_WARNING, "WASAPIBackend::openDevice: already open");
+        fprintf(stderr, "WASAPIBackend::openDevice: already open\n");
         return 0;
     }
     if (audioClient_ || renderClient_ || device_ || enumerator_ || bufferReady_) {
-        syslog(LOG_WARNING,
-               "WASAPIBackend::openDevice: resetting half-open device state before reopen");
+        fprintf(stderr,
+                "WASAPIBackend::openDevice: resetting half-open device state before reopen\n");
         releaseDevice_();   // already holding stateMutex_
     }
 
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (SUCCEEDED(hr)) comInitialized_ = true;
     else if (hr != RPC_E_CHANGED_MODE && hr != S_FALSE) {
-        syslog(LOG_ERR, "WASAPIBackend: CoInitializeEx failed: 0x%08lx", (unsigned long)hr);
+        fprintf(stderr, "WASAPIBackend: CoInitializeEx failed: 0x%08lx\n", (unsigned long)hr);
         return -1;
     }
 
@@ -150,30 +151,30 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
                           CLSCTX_INPROC_SERVER, IID_IMMDeviceEnumerator_local,
                           reinterpret_cast<void **>(&enumerator_));
     if (FAILED(hr)) {
-        syslog(LOG_ERR, "WASAPIBackend: CoCreateInstance(MMDeviceEnumerator) failed: 0x%08lx",
-               (unsigned long)hr);
+        fprintf(stderr, "WASAPIBackend: CoCreateInstance(MMDeviceEnumerator) failed: 0x%08lx\n",
+                (unsigned long)hr);
         return -1;
     }
 
     if (deviceName.empty() || deviceName == "default") {
         hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
         if (FAILED(hr)) {
-            syslog(LOG_ERR, "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx",
-                   (unsigned long)hr);
+            fprintf(stderr, "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx\n",
+                    (unsigned long)hr);
             return -1;
         }
     } else {
         std::wstring wid = utf8ToWide(deviceName);
         hr = enumerator_->GetDevice(wid.c_str(), &device_);
         if (FAILED(hr)) {
-            syslog(LOG_WARNING,
-                   "WASAPIBackend: GetDevice for selected endpoint failed "
-                   "(0x%08lx); falling back to system default.",
-                   (unsigned long)hr);
+            fprintf(stderr,
+                    "WASAPIBackend: GetDevice for selected endpoint failed "
+                    "(0x%08lx); falling back to system default.\n",
+                    (unsigned long)hr);
             hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
             if (FAILED(hr)) {
-                syslog(LOG_ERR, "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx",
-                       (unsigned long)hr);
+                fprintf(stderr, "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx\n",
+                        (unsigned long)hr);
                 return -1;
             }
         }
@@ -182,15 +183,15 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     hr = device_->Activate(IID_IAudioClient_local, CLSCTX_INPROC_SERVER, nullptr,
                            reinterpret_cast<void **>(&audioClient_));
     if (FAILED(hr)) {
-        syslog(LOG_ERR, "WASAPIBackend: IMMDevice::Activate(IAudioClient) failed: 0x%08lx",
-               (unsigned long)hr);
+        fprintf(stderr, "WASAPIBackend: IMMDevice::Activate(IAudioClient) failed: 0x%08lx\n",
+                (unsigned long)hr);
         return -1;
     }
 
     WAVEFORMATEX *mixFormat = nullptr;
     hr = audioClient_->GetMixFormat(&mixFormat);
     if (FAILED(hr) || !mixFormat) {
-        syslog(LOG_ERR, "WASAPIBackend: GetMixFormat failed: 0x%08lx", (unsigned long)hr);
+        fprintf(stderr, "WASAPIBackend: GetMixFormat failed: 0x%08lx\n", (unsigned long)hr);
         return -1;
     }
 
@@ -199,10 +200,10 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     config_.channels   = mixFormat->nChannels;
 
     if (sampleFormat_ == WasapiSampleFormat::Unknown) {
-        syslog(LOG_ERR,
-               "WASAPIBackend: unsupported mix format (tag=0x%04x bits=%u) — "
-               "device wants something other than float32/int16/int32; bailing",
-               mixFormat->wFormatTag, mixFormat->wBitsPerSample);
+        fprintf(stderr,
+                "WASAPIBackend: unsupported mix format (tag=0x%04x bits=%u) — "
+                "device wants something other than float32/int16/int32; bailing\n",
+                mixFormat->wFormatTag, mixFormat->wBitsPerSample);
         CoTaskMemFree(mixFormat);
         return -1;
     }
@@ -219,10 +220,10 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     // can't be honoured here — the speaker resampler bridges it. (Exclusive-mode
     // support for honouring preferredRate natively is future work; see prop 02.)
     if (preferredRate != 0 && preferredRate != config_.sampleRate) {
-        syslog(LOG_INFO,
-               "WASAPIBackend: requested %u Hz but shared-mode mix rate is %u Hz; "
-               "the speaker will resample.",
-               (unsigned) preferredRate, config_.sampleRate);
+        fprintf(stderr,
+                "WASAPIBackend: requested %u Hz but shared-mode mix rate is %u Hz; "
+                "the speaker will resample.\n",
+                (unsigned) preferredRate, config_.sampleRate);
     }
 
     hr = audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED,
@@ -230,19 +231,19 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
                                   kRequestedDurationHns, 0, mixFormat, nullptr);
     CoTaskMemFree(mixFormat);
     if (FAILED(hr)) {
-        syslog(LOG_ERR, "WASAPIBackend: IAudioClient::Initialize failed: 0x%08lx",
-               (unsigned long)hr);
+        fprintf(stderr, "WASAPIBackend: IAudioClient::Initialize failed: 0x%08lx\n",
+                (unsigned long)hr);
         return -1;
     }
 
     bufferReady_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!bufferReady_) {
-        syslog(LOG_ERR, "WASAPIBackend: CreateEvent failed");
+        fprintf(stderr, "WASAPIBackend: CreateEvent failed\n");
         return -1;
     }
     hr = audioClient_->SetEventHandle(bufferReady_);
     if (FAILED(hr)) {
-        syslog(LOG_ERR, "WASAPIBackend: SetEventHandle failed: 0x%08lx", (unsigned long)hr);
+        fprintf(stderr, "WASAPIBackend: SetEventHandle failed: 0x%08lx\n", (unsigned long)hr);
         return -1;
     }
 
@@ -255,8 +256,8 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     hr = audioClient_->GetService(IID_IAudioRenderClient_local,
                                   reinterpret_cast<void **>(&renderClient_));
     if (FAILED(hr)) {
-        syslog(LOG_ERR, "WASAPIBackend: GetService(IAudioRenderClient) failed: 0x%08lx",
-               (unsigned long)hr);
+        fprintf(stderr, "WASAPIBackend: GetService(IAudioRenderClient) failed: 0x%08lx\n",
+                (unsigned long)hr);
         return -1;
     }
 
@@ -267,14 +268,14 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
         case WasapiSampleFormat::Int32:   fmtName = "int32";   break;
         default: break;
     }
-    syslog(LOG_INFO,
-           "WASAPIBackend: opened default endpoint, %u Hz, %u ch, %s, buffer=%u frames",
-           config_.sampleRate, config_.channels, fmtName, config_.bufferFrames);
+    fprintf(stderr,
+            "WASAPIBackend: opened default endpoint, %u Hz, %u ch, %s, buffer=%u frames\n",
+            config_.sampleRate, config_.channels, fmtName, config_.bufferFrames);
 
-    syslog(LOG_INFO,
-           "WASAPIBackend: device mix rate is %u Hz; twSpeaker resamples the "
-           "synth output to match.",
-           config_.sampleRate);
+    fprintf(stderr,
+            "WASAPIBackend: device mix rate is %u Hz; twSpeaker resamples the "
+            "synth output to match.\n",
+            config_.sampleRate);
     return 0;
 }
 
@@ -376,10 +377,10 @@ int WASAPIBackend::startOutput()
     // audioClient_ set with a null renderClient_. Bail instead of crashing in
     // GetBuffer below (the next openDevice will reset and reopen cleanly).
     if (!audioClient_ || !renderClient_) {
-        syslog(LOG_ERR,
-               "WASAPIBackend::startOutput: device not fully open "
-               "(audioClient=%p renderClient=%p)",
-               (void *) audioClient_, (void *) renderClient_);
+        fprintf(stderr,
+                "WASAPIBackend::startOutput: device not fully open "
+                "(audioClient=%p renderClient=%p)\n",
+                (void *) audioClient_, (void *) renderClient_);
         return -1;
     }
 
@@ -391,8 +392,8 @@ int WASAPIBackend::startOutput()
 
     HRESULT hr = audioClient_->Start();
     if (FAILED(hr)) {
-        syslog(LOG_ERR, "WASAPIBackend: IAudioClient::Start failed: 0x%08lx",
-               (unsigned long)hr);
+        fprintf(stderr, "WASAPIBackend: IAudioClient::Start failed: 0x%08lx\n",
+                (unsigned long)hr);
         return -1;
     }
 
