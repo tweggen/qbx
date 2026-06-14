@@ -10,9 +10,43 @@
 #include "sactionregistry.h"
 #include <iostream>
 #include <cstdlib>
+#include <cstring>
 
 int main( int argc, char *argv[] )
 {
+    // Phase 4: Detect headless test mode before QApplication init to set platform
+    bool headlessMode = false;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--test-case") == 0) {
+            headlessMode = true;
+            break;
+        }
+    }
+
+    // If in headless test mode and -platform not explicitly set, use offscreen
+    if (headlessMode) {
+        bool platformSet = false;
+        for (int i = 1; i < argc; ++i) {
+            if (strcmp(argv[i], "-platform") == 0) {
+                platformSet = true;
+                break;
+            }
+        }
+        if (!platformSet) {
+            // Insert -platform offscreen before creating QApplication
+            int newArgc = argc + 2;
+            char **newArgv = new char*[newArgc];
+            newArgv[0] = argv[0];  // program name
+            newArgv[1] = (char*)"-platform";
+            newArgv[2] = (char*)"offscreen";
+            for (int i = 1; i < argc; ++i) {
+                newArgv[i + 2] = argv[i];
+            }
+            argc = newArgc;
+            argv = newArgv;
+        }
+    }
+
     SApplication app( argc, argv );
 
     // Command-line parsing (Phase 1+: --run-actions, Phase 2+: --test-case, --list-actions)

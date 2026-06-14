@@ -11,6 +11,7 @@
 #include <QDomDocument>
 #include <QFile>
 #include <QUndoStack>
+#include <QTextStream>
 
 SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplication &app)
 {
@@ -33,7 +34,13 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
     app.rewireSpeaker();
 
     // Step 2: Execute each action in sequence.
-    for (SAction *action : script.actions()) {
+    const auto &actionsMeta = script.actionsMeta();
+    const auto &actions = script.actions();
+
+    for (int i = 0; i < actions.size(); ++i) {
+        SAction *action = actions[i];
+        bool expectReject = (i < actionsMeta.size()) ? actionsMeta[i].expectReject : false;
+
         // Submit via the normal action history path.
         // This ensures coalescing, undo stack, and Phase 2 draining are all exercised.
         // Note: submitAction takes ownership; actions in the script are consumed.
@@ -48,6 +55,11 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
         // app.actionHistory()->waitForEngineQueue();  // TODO: implement in Phase 2
 
         result.actionsApplied++;
+
+        // Phase 4: Handle expectReject for negative tests
+        // (Note: In a full implementation, we would check SApplyResult.applied here
+        // and validate against expectReject. For now, we assume all submitted actions
+        // were applied; tracking rejections would require modifying the submission path.)
     }
 
     // Step 3: Evaluate assertions (Phase 2).
@@ -123,15 +135,42 @@ bool SActionRunner::assertTrackCount_(const SActionScript::Assertion &a, SProjec
 bool SActionRunner::assertProjectMatches_(const SActionScript::Assertion &a, SProject *project,
                                           QStringList &failures) const
 {
-    // Phase 2b: Full project XML comparison. For Phase 2, defer this assertion.
-    // The golden file path is provided but not yet compared.
-    // This is a placeholder for future implementation.
-    (void)project;
-    (void)a;
-    (void)failures;
+    if (!project) {
+        failures.append("assert-project-matches: no project");
+        return false;
+    }
 
-    failures.append("assert-project-matches: not yet implemented in Phase 2");
-    return false;
+    QString goldenFile = a.args.value("file", "");
+    if (goldenFile.isEmpty()) {
+        failures.append("assert-project-matches: no 'file' attribute");
+        return false;
+    }
+
+    // Serialize the current project to a string.
+    QString actualState;
+    {
+        QTextStream stream(&actualState);
+        project->serialize(stream);
+    }
+
+    // Load the golden file.
+    QFile file(goldenFile);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        failures.append(QString("assert-project-matches: cannot open %1").arg(goldenFile));
+        return false;
+    }
+
+    QString expectedState = QString::fromUtf8(file.readAll());
+    file.close();
+
+    // Compare as text (both should be serialized project state).
+    if (actualState.trimmed() != expectedState.trimmed()) {
+        failures.append(QString("assert-project-matches: current state does not match %1")
+            .arg(goldenFile));
+        return false;
+    }
+
+    return true;
 }
 
 bool SActionRunner::verifyUndo_(SProject *project, SApplication &app, QStringList &failures) const
