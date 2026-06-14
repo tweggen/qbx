@@ -12,6 +12,12 @@
 #include "ssettings.h"
 #include "sactionhistory.h"
 #include "saction.h"
+#include "sselectionmanager.h"
+#include "actions/ssetselectionaction.h"
+#include "actions/saddtoselectionaction.h"
+#include "actions/sremovefromselectionaction.h"
+#include "actions/sclearselectionaction.h"
+#include "actions/stoggleselectionaction.h"
 
 SApplication *SApplication::singleton_ = NULL;
 
@@ -303,4 +309,86 @@ void SApplication::startRecording(const audio::RecordingParams &params)
 
     // Start recording
     recordingSession_->start(params);
+}
+
+void SApplication::setSelectionFromPaths(const QList<QList<int>> &paths)
+{
+    clearSelection();
+    addSelectionFromPaths(paths);
+}
+
+void SApplication::addSelectionFromPaths(const QList<QList<int>> &paths)
+{
+    SSelectionManager mgr;
+    SSelectionList addedLinks = mgr.pathsToLinks(paths, currentProject_);
+    for (SLink *link : addedLinks) {
+        if (link && !isSLinkSelected(link)) {
+            addSelectedSLink(link);
+        }
+    }
+}
+
+void SApplication::removeSelectionFromPaths(const QList<QList<int>> &paths)
+{
+    SSelectionManager mgr;
+    SSelectionList removedLinks = mgr.pathsToLinks(paths, currentProject_);
+    for (SLink *link : removedLinks) {
+        if (link && isSLinkSelected(link)) {
+            unselectSLink(link);
+        }
+    }
+}
+
+void SApplication::toggleSelectionFromPaths(const QList<QList<int>> &paths)
+{
+    SSelectionManager mgr;
+    SSelectionList toggleLinks = mgr.pathsToLinks(paths, currentProject_);
+    for (SLink *link : toggleLinks) {
+        if (link) {
+            if (isSLinkSelected(link)) {
+                unselectSLink(link);
+            } else {
+                addSelectedSLink(link);
+            }
+        }
+    }
+}
+
+QList<QList<int>> SApplication::getCurrentSelectionPaths() const
+{
+    SSelectionManager mgr;
+    return mgr.linksToPaths(*selectionList_, currentProject_);
+}
+
+void SApplication::submitSetSelectionAction(SLink *link)
+{
+    if (!link) return;
+    SSelectionManager mgr;
+    QList<QList<int>> paths = mgr.linksToPaths({link}, currentProject_);
+    SAction *action = new SSetSelectionAction(paths);
+    submitAction(action);
+}
+
+void SApplication::submitAddSelectionAction(SLink *link)
+{
+    if (!link) return;
+    SSelectionManager mgr;
+    QList<QList<int>> paths = mgr.linksToPaths({link}, currentProject_);
+    SAction *action = new SAddToSelectionAction(paths);
+    submitAction(action);
+}
+
+void SApplication::submitToggleSelectionAction(SLink *link)
+{
+    if (!link) return;
+    SSelectionManager mgr;
+    QList<QList<int>> paths = mgr.linksToPaths({link}, currentProject_);
+    SAction *action = new SToggleSelectionAction(paths);
+    submitAction(action);
+}
+
+void SApplication::submitClearSelectionAction()
+{
+    SAction *action = new SClearSelectionAction();
+    submitAction(action);
 }

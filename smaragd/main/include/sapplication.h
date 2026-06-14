@@ -48,6 +48,19 @@ public:
     bool isSLinkSelected( SLink * ) const;
     const SSelectionList &getSelectionList() const;
 
+    // Path-based selection methods (for action-backed operations)
+    void setSelectionFromPaths(const QList<QList<int>> &paths);
+    void addSelectionFromPaths(const QList<QList<int>> &paths);
+    void removeSelectionFromPaths(const QList<QList<int>> &paths);
+    void toggleSelectionFromPaths(const QList<QList<int>> &paths);
+    QList<QList<int>> getCurrentSelectionPaths() const;
+
+    // SLink-based selection action submission (convenience for UI)
+    void submitSetSelectionAction(SLink *link);
+    void submitAddSelectionAction(SLink *link);
+    void submitToggleSelectionAction(SLink *link);
+    void submitClearSelectionAction();
+
     SProject *getCurrentProject() const;
     void setCurrentProject( SProject * );
     // Re-fetch the project root component's first output and connect it to

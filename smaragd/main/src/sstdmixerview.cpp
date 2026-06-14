@@ -1478,7 +1478,7 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                         anchorCopy = clipDupItems_.first().copy;
 
                     if( anchorCopy ) {
-                        SApplication::app().setSelectedSLink( anchorCopy );
+                        SApplication::app().submitSetSelectionAction( anchorCopy );
                         lastClickSLink_ = anchorCopy;
                         lastClickTrack_ = clickedTrack;
                         lastClickSelStartOffset_ = anchorCopy->getStartTime();
@@ -1523,14 +1523,10 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     }
                     switch( modifiers & (Qt::ShiftModifier) ) {
                     case Qt::ShiftModifier: // Shift: toggle this object in the selection.
-                        if( SApplication::app().isSLinkSelected( lastClickSLink_ ) ) {
-                            SApplication::app().unselectSLink( lastClickSLink_ );
-                        } else {
-                            SApplication::app().addSelectedSLink( lastClickSLink_ );
-                        }
+                        SApplication::app().submitToggleSelectionAction( lastClickSLink_ );
                         break;
                     default: // No modifier, new one becomes selected.
-                        SApplication::app().setSelectedSLink( lastClickSLink_ );
+                        SApplication::app().submitSetSelectionAction( lastClickSLink_ );
                         break;
                     }
                     // FIXME: Only update the object itselves.

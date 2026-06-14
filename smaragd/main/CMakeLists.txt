@@ -58,6 +58,12 @@ set(SMARAGD_HEADERS
     include/actions/scycleaction.h
     include/actions/ssetpropertyaction.h
     include/actions/stoggleplaybackaction.h
+    include/sselectionmanager.h
+    include/actions/ssetselectionaction.h
+    include/actions/saddtoselectionaction.h
+    include/actions/sremovefromselectionaction.h
+    include/actions/sclearselectionaction.h
+    include/actions/stoggleselectionaction.h
     include/sprojectprops.h
 )
 
@@ -119,6 +125,12 @@ set(SMARAGD_SOURCES
     src/actions/scycleaction.cpp
     src/actions/ssetpropertyaction.cpp
     src/actions/stoggleplaybackaction.cpp
+    src/sselectionmanager.cpp
+    src/actions/ssetselectionaction.cpp
+    src/actions/saddtoselectionaction.cpp
+    src/actions/sremovefromselectionaction.cpp
+    src/actions/sclearselectionaction.cpp
+    src/actions/stoggleselectionaction.cpp
 )
 
 # Optionally embed a bundled UI font. Drop a TTF at main/resources/FreeSans.ttf
