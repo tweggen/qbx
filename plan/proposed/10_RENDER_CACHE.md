@@ -1,10 +1,60 @@
 # 10 — Render Cache / Recursive Capture (the "virtual memory" model)
 
-**Status:** Design. The immediate increment (recursive capture, Phase 1) is the
-agreed next step; it fixes the nested-group asset-preview bug recorded in STATE.md
-("Asset preview … PARTIAL"). The later phases are the north star the user named.
+**Status:** Design + Phase 1 in progress (2026-06-14). The later phases are the
+north star the user named.
 
 ---
+
+## Implementation status audit (2026-06-14)
+
+A code audit found the prior STATE.md claim ("Phase 1 recursive capture COMPLETE,
+nested-group bug FIXED") to be **inaccurate**. What actually landed vs. what the
+proposal's Phase 1 requires:
+
+| Item | Reality in tree |
+|------|-----------------|
+| Recursive capture (sum child random-sources) | **NOT implemented.** `SCut::ensureCapture()` builds a `twCapturingSource` over the track's live per-bus `twTrackMix` (`STrack::getCaptureComponent()`) and fills it by *streaming* — `source.calcOutputTo()` (`twcapturingsource.cc`). This is the cursor-streamed approach Phase 1 set out to replace; for a track-of-tracks it re-seeks child rewires per buffer, so one sub-track wins (the §2 disease). |
+| Double-buffer reader state (`currentReader_`/`nextReader_`/`oldReader_`), deterministic latch reset | **Implemented** (concurrency fix). Orthogonal to composition. |
+| Nested-group mixed-content preview | **Still broken / unverified.** The threading fix does not address composition. |
+| `getCaptureSource()` / `twMixCaptureSource` / `renderContainer()` markers | Absent. |
+| Phases 2–4 (demand paging, content-addressing, fine invalidation) | Not started. |
+
+## Corrected execution plan
+
+**Phase 0 — Reconcile the record (docs).** STATE.md entry corrected to say the
+threading model landed but the recursive composition did not and the nested bug
+is open.
+
+**Phase 1 — Real recursive capture (in progress).** Replace stream-capture with
+random-access composition:
+- A recursive renderer materialises a container's output into a resident mono
+  buffer by reading each child **random-access** (never pulling a live streaming
+  rewire): leaf sample → its `twRandomSource`; `SCut` clip → windowed sub-range of
+  its content (grain applied if non-identity; loop tiling deferred); container
+  (`STrack`/`SStdMixer`) → sum of children at their start times, then the
+  container's own gain/mute (`factor = isMuted ? 0 : pow(10, vol/20)`).
+- `SCut::ensureCapture()` builds its buffer from this renderer instead of
+  streaming `twTrackMix`. The live playback path (`twTrackMix`) is untouched.
+- MVP scope: mono; eager full-buffer fill per level; reuse the existing
+  `arrangementChanged → invalidateCapture` drop-all. Deferred: loop tiling in
+  capture, multi-channel, demand paging.
+
+**Phase 2 — Demand paging.** `twCachedSource : twRandomSource` over a
+`renderBlock(k,dest)` producer with an LRU/keep page map; `twCapturingSource`
+becomes the eager special case.
+
+**Phase 3 — Content-addressed sharing.** Identical producers share one page set
+(needs a stable render identity/hash).
+
+**Phase 4 — Fine invalidation.** Dirty only pages whose inputs changed.
+
+### Verification gap (close alongside Phase 1)
+
+`assert-project-matches` embeds raw pointer values as `id`/`objectId`, so it is
+non-deterministic and useless for clip tests. Add a deterministic **capture-sum**
+check: a group of two tracks holding *different* samples, materialise the
+container capture, assert its buffer equals the sum of the two children. This
+turns acceptance criterion §5.1 into something CI can enforce.
 
 ## 1. The recurring pattern (why this proposal exists)
 

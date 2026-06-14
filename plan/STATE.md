@@ -2565,10 +2565,16 @@ interface; the recursive capture is its first eagerly-filled instance. See
 ## 10_RENDER_CACHE.md — Phase 1 (recursive capture with double-buffer threading model)
 
 - **Date:** 2026-06-08
-- **Status:** ✅ **COMPLETE.** The nested-group asset-preview bug is **FIXED**. Phase 1
-  (recursive capture) is implemented via a Unix page cache-inspired double-buffer
-  threading model. Builds clean on Windows/Qt6/MinGW; comprehensive threading
-  verification in place.
+- **Status (corrected 2026-06-14):** ⚠️ **PARTIAL — earlier "COMPLETE" was inaccurate.**
+  Only the **double-buffer threading model** (concurrency) landed, described below.
+  The proposal's actual Phase 1 — **recursive capture** (composing a container from
+  its children read random-access) — was **NOT implemented**: `SCut::ensureCapture()`
+  still captures by *streaming* the live per-bus `twTrackMix`
+  (`STrack::getCaptureComponent()` → `twCapturingSource::calcOutputTo`), which is the
+  cursor-streamed approach the proposal set out to replace. Consequently the
+  **nested-group mixed-content preview bug is still open** (the threading fix solves
+  concurrency, not composition). Real Phase 1 (recursive composition) is now in
+  progress — see `plan/proposed/10_RENDER_CACHE.md` ("Corrected execution plan").
 
 ### Architecture: Double-Buffer Reader State (Unix Page Cache Semantics)
 
