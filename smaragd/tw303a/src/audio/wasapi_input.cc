@@ -87,25 +87,56 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
         return -1;
     }
 
-    // Shared-mode capture is LOCKED to the device's mix format — we must pass it
-    // to Initialize() unmodified. (Overwriting nSamplesPerSec here left the rest
-    // of the WAVEFORMATEX inconsistent and made Initialize() fail with
-    // AUDCLNT_E_UNSUPPORTED_FORMAT.) We therefore capture at the device rate and
-    // report it via getConfig(); the caller resamples to the desired rate.
-    // preferredRate is intentionally not applied to the device here.
-    (void)preferredRate;
-    config_.sampleRate = deviceFormat->nSamplesPerSec;
-    config_.channels = deviceFormat->nChannels;
+    const std::uint32_t nativeRate = deviceFormat->nSamplesPerSec;
+    const std::uint32_t wantRate   = preferredRate > 0 ? preferredRate : nativeRate;
 
-    // Initialize audio client for capture
-    hr = audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000,  // 1 second buffer
+    // Ask Windows to hand us frames at the rate WE want (the project rate) using
+    // shared-mode automatic format conversion, instead of capturing at the device
+    // mix rate and resampling ourselves. This removes the "what rate is the device
+    // actually delivering?" guesswork that produced takes pitched off by the
+    // 44.1/48k ratio: GetMixFormat's reported rate could disagree with the rate the
+    // shared engine streamed, and our software resampler then double-converted.
+    // With AUTOCONVERTPCM the engine guarantees the requested rate, so no resample
+    // is needed downstream. Only nSamplesPerSec / nAvgBytesPerSec change; block
+    // align (channels x bytes/sample) and the sub-format are untouched, keeping a
+    // WAVEFORMATEXTENSIBLE (likely on this 16-ch endpoint) internally consistent.
+    deviceFormat->nSamplesPerSec  = wantRate;
+    deviceFormat->nAvgBytesPerSec = wantRate * deviceFormat->nBlockAlign;
+
+    const DWORD autoConvertFlags =
+        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    hr = audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED, autoConvertFlags,
+                                   10000000,  // 1 second buffer
                                    0, deviceFormat, nullptr);
-    if (FAILED(hr)) {
-        lastError_ = "Failed to initialize audio client";
-        CoTaskMemFree(deviceFormat);
-        closeDevice();
-        return -1;
+    if (SUCCEEDED(hr)) {
+        config_.sampleRate = wantRate;
+    } else {
+        // Driver/endpoint refused auto-conversion. Fall back to capturing at the
+        // native mix rate and reporting it, so the caller's resampler converts to
+        // the project rate (the historical path). Restore the native rate on the
+        // format before retrying, then re-activate a clean client (a failed
+        // Initialize leaves the client unusable for a second Initialize).
+        deviceFormat->nSamplesPerSec  = nativeRate;
+        deviceFormat->nAvgBytesPerSec = nativeRate * deviceFormat->nBlockAlign;
+
+        audioClient_->Release();
+        audioClient_ = nullptr;
+        hr = inputDevice_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                                    (void **)&audioClient_);
+        if (SUCCEEDED(hr)) {
+            hr = audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000,
+                                           0, deviceFormat, nullptr);
+        }
+        if (FAILED(hr)) {
+            lastError_ = "Failed to initialize audio client";
+            CoTaskMemFree(deviceFormat);
+            closeDevice();
+            return -1;
+        }
+        config_.sampleRate = nativeRate;
     }
+
+    config_.channels = deviceFormat->nChannels;
 
     CoTaskMemFree(deviceFormat);
 

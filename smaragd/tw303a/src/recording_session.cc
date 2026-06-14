@@ -6,22 +6,36 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
 #include <vector>
 
+// Diagnostic output to stderr, tagged with file + function, flushed immediately so
+// the last line before a crash/hang is never lost in a buffer. Mirrors the
+// rate-diagnostic style in twspeaker.cc startOutput() — used here to pin down the
+// "recorded take plays back too fast" bug (capture rate vs project rate).
+#define RECSESS_LOG( fmt, ... )                                                  \
+    do {                                                                         \
+        fprintf( stderr, "recording_session.cc:%s: " fmt "\n", __func__,         \
+                 ##__VA_ARGS__ );                                                \
+        fflush( stderr );                                                        \
+    } while( 0 )
+
 namespace audio {
 
 namespace {
 
-// Stateful streaming linear resampler for interleaved float frames. Shared-mode
-// WASAPI capture is locked to the device's mix rate, so we capture at that rate
-// and convert here to the project rate before writing the WAV (so recorded files
-// match the project rate). Linear quality matches the engine's twResampler bar;
-// that converter pulls from a streaming-latch component and doesn't fit this
-// push-buffer path, so this is a small standalone version. Passthrough when the
-// rates already match.
+// Stateful streaming linear resampler for interleaved float frames. The input
+// backend normally delivers frames already at the project rate (WASAPI shared-mode
+// AUTOCONVERTPCM — see WASAPIInput::openDevice), so this is a passthrough in the
+// common case. It only does real work on the fallback path, where a driver refused
+// auto-conversion and we capture at the device's native mix rate and convert here
+// before writing the WAV (so recorded files always match the project rate). Linear
+// quality matches the engine's twResampler bar; that converter pulls from a
+// streaming-latch component and doesn't fit this push-buffer path, so this is a
+// small standalone version. Passthrough when the rates already match.
 class LinearResampler {
 public:
     LinearResampler(std::uint32_t inRate, std::uint32_t outRate, std::uint32_t channels)
@@ -196,6 +210,15 @@ void RecordingSession::recordThreadMain() {
     std::uint32_t targetRate = params_.sampleRate > 0 ? params_.sampleRate : deviceRate;
     std::uint32_t channels = inputConfig.channels;
 
+    // Rate diagnostic for the "take plays back too fast" bug. If device != target
+    // but the resampler reports passthrough below, the device->project conversion
+    // failed to engage and the WAV will carry device-rate content under a
+    // project-rate header — exactly the 44.1k-played-as-48k symptom.
+    RECSESS_LOG( "rate diag — capture device=%u Hz, project(target)=%u Hz, "
+                 "channels=%u, requested=%u Hz",
+                 (unsigned) deviceRate, (unsigned) targetRate,
+                 (unsigned) channels, (unsigned) params_.sampleRate );
+
     // Create output filename with timestamp
     auto now = std::chrono::system_clock::now();
     auto time = std::chrono::system_clock::to_time_t(now);
@@ -257,6 +280,9 @@ void RecordingSession::recordThreadMain() {
     std::vector<float> buffer(BUFFER_SIZE * channels);
     std::vector<float> resampled;  // scratch for device->project rate conversion
     LinearResampler resampler(deviceRate, targetRate, channels);
+    RECSESS_LOG( "resampler %u Hz -> %u Hz: %s",
+                 (unsigned) deviceRate, (unsigned) targetRate,
+                 resampler.passthrough() ? "passthrough (no conversion)" : "active" );
     auto lastProgressTime = std::chrono::steady_clock::now();
 
     bool success = true;
@@ -270,6 +296,15 @@ void RecordingSession::recordThreadMain() {
     const offset_t startLocator = SApplication::app().getGlobalLocatorPos();
     offset_t recordedProjectFrames = 0;
 
+    // Empirical capture-rate check (for the "take plays back too low" bug). We
+    // count the input frames the device actually hands us and divide by real
+    // wall-clock elapsed. If that effective rate differs from the deviceRate we
+    // queried (e.g. we asked GetMixFormat which said 44100, but the shared engine
+    // actually streams 48000), our resampler is converting from the wrong source
+    // rate — the file then carries the wrong number of frames under a 48000 header.
+    const auto captureStart = std::chrono::steady_clock::now();
+    long long totalInputFrames = 0;
+
     try {
         while (!stopRequested_) {
             // Read from input
@@ -282,6 +317,7 @@ void RecordingSession::recordThreadMain() {
             }
 
             if (framesRead > 0) {
+                totalInputFrames += framesRead;
                 // Resample device-rate capture to the project rate, then write.
                 const float *outData = buffer.data();
                 std::int32_t outFrames = framesRead;
@@ -332,6 +368,21 @@ void RecordingSession::recordThreadMain() {
     } catch (const std::exception &e) {
         success = false;
         errorMsg = std::string("Recording exception: ") + e.what();
+    }
+
+    // Effective capture rate: frames the device actually delivered per real second.
+    // If this is ~48000 while we assumed (and resampled from) deviceRate=44100, the
+    // shared engine was streaming 48k and we double-converted — the smoking gun for
+    // the "take plays back ~8.8% too low" bug.
+    {
+        double wall = std::chrono::duration_cast<std::chrono::duration<double>>(
+                          std::chrono::steady_clock::now() - captureStart ).count();
+        double effRate = wall > 0.0 ? (double) totalInputFrames / wall : 0.0;
+        RECSESS_LOG( "capture-rate check — assumed deviceRate=%u Hz, "
+                     "MEASURED effective=%.1f Hz over %.3fs (%lld input frames). "
+                     "ratio meas/assumed=%.4f",
+                     (unsigned) deviceRate, effRate, wall, totalInputFrames,
+                     deviceRate > 0 ? effRate / deviceRate : 0.0 );
     }
 
     // Stop and cleanup
