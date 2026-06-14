@@ -338,17 +338,25 @@ void SApplication::startRecording(const audio::RecordingParams &params)
         recordingSession_ = std::make_unique<audio::RecordingSession>();
     }
 
-    // Stop playback if active (mutual exclusion)
-    if (isPlaying_) {
-        t3Speaker_->stopOutput();
-        isPlaying_ = false;
-    }
-
-    // Start recording
+    // Start capture first, so isRecordingActive() is already true before the
+    // monitoring playback below produces its first buffer. That keeps the record
+    // worker the sole locator authority (the playback callback won't advance the
+    // locator while recording — see twSpeaker).
     recordingSession_->start(params);
 
-    // Drive the playhead while recording (the worker stores positions lock-free;
-    // pumpLocator turns them into repaints and self-stops when recording ends).
+    // Monitoring: play the existing arrangement so the user hears it while
+    // recording. Output is best-effort — capture and the playhead still work if
+    // it fails (the worker drives the locator regardless).
+    if (!isPlaying_ && currentProject_) {
+        if (SObject *root = currentProject_->getRootComponent()) {
+            root->seekTo(getGlobalLocatorPos());
+            t3Speaker_->startOutput();
+            isPlaying_ = true;
+        }
+    }
+
+    // Drive the playhead repaints while recording (the worker stores positions
+    // lock-free; pumpLocator turns them into repaints and self-stops at the end).
     if( locatorTimer_ && !locatorTimer_->isActive() )
         locatorTimer_->start();
 }

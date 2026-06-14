@@ -148,7 +148,10 @@ void twSpeaker::startOutput()
             if (filled == 0) {
                 std::fill_n(out, frames * channels, 0.0f);
                 // Realtime store only — never emit Qt signals from this thread.
-                SApplication::app().setGlobalLocatorPosRealtime(pos);
+                // While recording, the record worker owns the locator (it tracks
+                // captured frames), so monitoring playback must not move it.
+                if (!SApplication::app().isRecordingActive())
+                    SApplication::app().setGlobalLocatorPosRealtime(pos);
                 return frames;
             }
 
@@ -173,8 +176,11 @@ void twSpeaker::startOutput()
             // Advance (or wrap) the playback locator. pos already reflects any
             // loop wraps that happened above. Realtime store only — never emit Qt
             // signals from this thread (that would adopt it and deadlock the
-            // join() in stopOutput at thread teardown).
-            SApplication::app().setGlobalLocatorPosRealtime(pos);
+            // join() in stopOutput at thread teardown). While recording, the
+            // record worker owns the locator, so monitoring playback must not
+            // move it (it would fight the capture position).
+            if (!SApplication::app().isRecordingActive())
+                SApplication::app().setGlobalLocatorPosRealtime(pos);
             return static_cast<std::size_t>(outFrames);
         });
 

@@ -516,6 +516,13 @@ void SMainWindow::onRecordTriggered()
             recordingProgressDialog_ = new SRecordingProgressDialog( recSession, this );
             int result = recordingProgressDialog_->exec();
 
+            // Recording has ended: stop the monitoring playback we started in
+            // startRecording (safe now that the audio thread never touches Qt).
+            if( SApplication::app().isPlaying() ) {
+                SApplication::app().getSpeaker()->stopOutput();
+                SApplication::app().setPlaying( false );
+            }
+
             // On dialog close, place the cuts on armed tracks
             if( result == QDialog::Accepted ) {
                 onRecordingCompleted();
