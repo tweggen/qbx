@@ -64,7 +64,16 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     length_t origDur = sc1->getDuration();
 
     // Second part: a new cut over the same content, starting at the split point.
+    // startOffset_ and cutDuration_ both live in the grain source's *output*
+    // (stretched) frame domain — the same domain inObjOffset is measured in — so
+    // the offset arithmetic below is correct only if sc2 carries the same stretch
+    // as sc1. Inherit the full grain params (stretch + pitch) via the Raw setter:
+    // setGrainParams() would rescale offset/duration by the stretch ratio (it
+    // assumes you are *changing* stretch on an existing clip), which would
+    // double-apply the factor here. setStartOffset/setDuration below rebuild the
+    // reader with these params in place.
     SCut *sc2 = new SCut(project, sc1->getContent());
+    sc2->setGrainParamsRaw(sc1->getGrainParams());
     sc2->setStartOffset(sc1StartOffset + inObjOffset);
     sc2->setDuration(origDur - inObjOffset);
     sc1->setDuration(inObjOffset);
