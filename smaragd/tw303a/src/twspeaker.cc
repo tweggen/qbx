@@ -12,16 +12,26 @@
 #include <cmath>
 #include <cstdio>
 
+// All diagnostic output in this file goes to stderr, tagged with the source file
+// and function so each line is self-locating and greppable. Flushed immediately
+// so the last message before a crash/hang is never lost in a buffer.
+#define TWSPK_LOG( fmt, ... )                                                   \
+    do {                                                                        \
+        fprintf( stderr, "twspeaker.cc:%s: " fmt "\n", __func__, ##__VA_ARGS__ ); \
+        fflush( stderr );                                                       \
+    } while( 0 )
+
 twSpeaker::twSpeaker(tw303aEnvironment &env0)
     : twComponent(env0),
       backend_(audio::createAudioBackend()),
       isPlaying_(false)
 {
-    syslog(LOG_INFO, "twSpeaker: using audio backend '%s'", backend_->name());
+    TWSPK_LOG( "using audio backend '%s'", backend_->name() );
 }
 
 twSpeaker::~twSpeaker()
 {
+    TWSPK_LOG( "destroying (isPlaying=%d)", (int) isPlaying_.load() );
     if (isPlaying_) backend_->stopOutput();
     backend_->closeDevice();
 }
@@ -31,9 +41,8 @@ void twSpeaker::startOutput()
     std::lock_guard<std::mutex> lock(outputMutex_);
     if (isPlaying_) return;
 
-    fprintf(stderr, "twSpeaker::startOutput: ENTER - backend=%p, outputDeviceId=%s\n",
-           backend_.get(), outputDeviceId_.c_str());
-    fflush(stderr);
+    TWSPK_LOG( "ENTER - backend=%p, outputDeviceId=%s",
+               backend_.get(), outputDeviceId_.c_str() );
 
     // The graph (synth) runs at its input wire's rate — the project/env rate.
     // Request that rate from the device so that, when the device can open there,
@@ -43,12 +52,12 @@ void twSpeaker::startOutput()
         graphRate = pInputPlugs[0]->getFormat().sampleRate;
     }
 
-    fprintf(stderr, "twSpeaker::startOutput: calling openDevice with rate=%u\n", graphRate);
+    TWSPK_LOG( "calling openDevice with rate=%u", graphRate );
     if (backend_->openDevice(outputDeviceId_, graphRate) != 0) {
-        fprintf(stderr, "twSpeaker::startOutput: openDevice FAILED\n");
+        TWSPK_LOG( "openDevice FAILED" );
         return;
     }
-    fprintf(stderr, "twSpeaker::startOutput: openDevice succeeded\n");
+    TWSPK_LOG( "openDevice succeeded" );
 
     // Negotiate one rate per wire across the graph feeding this speaker, folding
     // in the rates the device advertises so a device-native rate can win.
@@ -80,16 +89,15 @@ void twSpeaker::startOutput()
         std::uint32_t wireRate = (pInputPlugs != nullptr && pInputPlugs[0] != nullptr)
                                      ? pInputPlugs[0]->getFormat().sampleRate
                                      : 0;
-        syslog(LOG_INFO,
-               "twSpeaker: rate diag — project(env)=%d Hz, wire=%u Hz, "
-               "device=%u Hz, resampler=%s",
-               env.getSRate(), (unsigned) wireRate, (unsigned) cfg.sampleRate,
-               resampler_.isPassthrough() ? "passthrough" : "active");
+        TWSPK_LOG( "rate diag — project(env)=%d Hz, wire=%u Hz, "
+                   "device=%u Hz, resampler=%s",
+                   env.getSRate(), (unsigned) wireRate, (unsigned) cfg.sampleRate,
+                   resampler_.isPassthrough() ? "passthrough" : "active" );
     }
 
     if (!resampler_.isPassthrough()) {
-        syslog(LOG_INFO, "twSpeaker: resampling %u Hz -> %u Hz",
-               (unsigned) graphRate, (unsigned) cfg.sampleRate);
+        TWSPK_LOG( "resampling %u Hz -> %u Hz",
+                   (unsigned) graphRate, (unsigned) cfg.sampleRate );
     }
 
     backend_->setRenderCallback(
@@ -185,23 +193,25 @@ void twSpeaker::startOutput()
             return static_cast<std::size_t>(outFrames);
         });
 
-    fprintf(stderr, "twSpeaker::startOutput: calling backend->startOutput()\n");
+    TWSPK_LOG( "calling backend->startOutput()" );
     if (backend_->startOutput() != 0) {
-        fprintf(stderr, "twSpeaker::startOutput: backend startOutput FAILED\n");
+        TWSPK_LOG( "backend startOutput FAILED" );
         backend_->closeDevice();
         return;
     }
-    fprintf(stderr, "twSpeaker::startOutput: backend->startOutput() succeeded\n");
+    TWSPK_LOG( "backend->startOutput() succeeded" );
     isPlaying_ = true;
 }
 
 void twSpeaker::stopOutput()
 {
     std::lock_guard<std::mutex> lock(outputMutex_);
-    if (!isPlaying_) return;
+    if (!isPlaying_) { TWSPK_LOG( "already stopped" ); return; }
+    TWSPK_LOG( "ENTER - stopping backend" );
     isPlaying_ = false;               // flip first: a re-entrant/observer sees "stopping"
     backend_->stopOutput();
     backend_->closeDevice();
+    TWSPK_LOG( "stopped" );
 }
 
 bool twSpeaker::isPlaying()
@@ -221,6 +231,8 @@ void twSpeaker::setCycle(bool enabled, offset_t startFrame, offset_t endFrame)
 void twSpeaker::setOutputDevice(const std::string &id)
 {
     outputDeviceId_ = id.empty() ? "default" : id;
+    TWSPK_LOG( "output device set to '%s' (takes effect on next startOutput)",
+               outputDeviceId_.c_str() );
 }
 
 std::vector<audio::AudioDeviceInfo> twSpeaker::outputDevices() const
@@ -236,6 +248,6 @@ length_t twSpeaker::calcOutputTo(sample_t *, length_t, idx_t)
 void twSpeaker::createOutputLatches()
 {
 #ifdef DEBUG_COMPONENT
-    syslog(LOG_DEBUG, "twSpeaker::createOutputLatches(): entered.");
+    TWSPK_LOG( "entered." );
 #endif
 }
