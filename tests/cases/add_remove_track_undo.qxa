@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="add_remove_track_undo">
+
+  <!-- Setup: start with a new project -->
+  <setup project="new"/>
+
+  <!-- Add and remove tracks -->
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <remove-track index="1"/>
+  </actions>
+
+  <!-- Assertions: verify final state -->
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <!-- Verify undo/redo: undo all, verify 0 tracks, redo all, verify 1 track -->
+  <verify-undo/>
+
+</SActionScript>

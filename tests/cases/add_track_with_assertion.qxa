@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="add_track_with_assertion">
+
+  <!-- Setup: start with a new project -->
+  <setup project="new"/>
+
+  <!-- Add a track -->
+  <actions>
+    <add-track index="-1"/>
+  </actions>
+
+  <!-- Assertions: verify the track was added -->
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

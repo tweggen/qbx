@@ -1,0 +1,6 @@
+*Project Test Project 0 (dummy value)
+*SampleRate 48000
+*NominalRate 44100
+SStdMixer 1
+	STrack Grumpy Narwhal
+		link0 SLink -1 -1 1

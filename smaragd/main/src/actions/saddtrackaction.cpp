@@ -4,6 +4,7 @@
 #include "sstdmixer.h"
 #include "strack.h"
 #include "sapplication.h"
+#include "sactionregistry.h"
 #include <QDomElement>
 #include <QString>
 
@@ -88,3 +89,10 @@ bool SAddTrackAction::readXml(const QDomElement &elem, int /*version*/)
     index_ = elem.attribute("index", "-1").toInt();
     return true;
 }
+
+static const bool s_reg_addtrack = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("add-track"),
+        []{ return new SAddTrackAction; }
+    ), true
+);

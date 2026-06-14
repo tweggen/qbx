@@ -70,7 +70,14 @@ bool SActionScript::readXml(const QDomDocument &doc)
                 error_ = QString("Unknown or malformed action: %1").arg(child.tagName());
                 return false;
             }
+
+            // Phase 4: Track expectReject metadata for negative tests
+            ActionMeta meta;
+            meta.action = action;
+            meta.expectReject = child.attribute("expectReject", "false") == "true";
+
             actions_.append(action);
+            actionsMeta_.append(meta);
         }
     }
 

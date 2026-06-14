@@ -16,6 +16,7 @@ class STrack;
 // deletes after each undo/redo.
 class SRemoveTrackAction : public SAction {
 public:
+    SRemoveTrackAction() = default;
     explicit SRemoveTrackAction(int index);
     ~SRemoveTrackAction() override;
 

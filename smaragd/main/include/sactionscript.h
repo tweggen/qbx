@@ -21,6 +21,11 @@ public:
         QMap<QString, QString> args;
     };
 
+    struct ActionMeta {
+        SAction *action = nullptr;
+        bool expectReject = false;  // phase 4: negative tests
+    };
+
     SActionScript();
     ~SActionScript();
 
@@ -34,6 +39,7 @@ public:
     bool writeFile(const QString &path) const;
 
     const Setup &setup() const { return setup_; }
+    const QList<ActionMeta> &actionsMeta() const { return actionsMeta_; }
     const QList<SAction*> &actions() const { return actions_; }
     const QList<Assertion> &assertions() const { return assertions_; }
     bool verifyUndo() const { return verifyUndo_; }
@@ -43,6 +49,7 @@ public:
 private:
     Setup setup_;
     QList<SAction*> actions_;
+    QList<ActionMeta> actionsMeta_;
     QList<Assertion> assertions_;
     bool verifyUndo_ = false;
     mutable QString error_;

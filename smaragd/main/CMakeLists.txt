@@ -31,6 +31,7 @@ set(SMARAGD_HEADERS
     include/sactionhistory.h
     include/sactionundocommand.h
     include/sactionscript.h
+    include/sactionrunner.h
     include/actions/saddtrackaction.h
     include/actions/sremovetrackaction.h
     include/actions/srestoretrackaction.h
@@ -101,6 +102,7 @@ set(SMARAGD_SOURCES
     src/sactionhistory.cpp
     src/sactionundocommand.cpp
     src/sactionscript.cpp
+    src/sactionrunner.cpp
     src/actions/saddtrackaction.cpp
     src/actions/sremovetrackaction.cpp
     src/actions/srestoretrackaction.cpp
