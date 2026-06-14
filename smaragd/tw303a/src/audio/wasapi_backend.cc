@@ -122,9 +122,20 @@ WASAPIBackend::~WASAPIBackend()
 int WASAPIBackend::openDevice(const std::string &deviceName,
                               std::uint32_t preferredRate)
 {
-    if (audioClient_) {
+    // Only report "already open" when the device is FULLY open (both the client
+    // and its render service). A previous openDevice can fail after Activate()
+    // (a transient device/format error) and return without cleanup, leaving
+    // audioClient_ set but renderClient_ null. If we returned success here,
+    // startOutput() would dereference the null renderClient_ and crash. Detect
+    // any such half-open state and tear it down so we reopen cleanly.
+    if (audioClient_ && renderClient_) {
         syslog(LOG_WARNING, "WASAPIBackend::openDevice: already open");
         return 0;
+    }
+    if (audioClient_ || renderClient_ || device_ || enumerator_ || bufferReady_) {
+        syslog(LOG_WARNING,
+               "WASAPIBackend::openDevice: resetting half-open device state before reopen");
+        closeDevice();
     }
 
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -347,7 +358,17 @@ int WASAPIBackend::closeDevice()
 
 int WASAPIBackend::startOutput()
 {
-    if (!audioClient_ || running_.load()) return 0;
+    if (running_.load()) return 0;
+    // Never dereference a half-open device: a failed openDevice can leave
+    // audioClient_ set with a null renderClient_. Bail instead of crashing in
+    // GetBuffer below (the next openDevice will reset and reopen cleanly).
+    if (!audioClient_ || !renderClient_) {
+        syslog(LOG_ERR,
+               "WASAPIBackend::startOutput: device not fully open "
+               "(audioClient=%p renderClient=%p)",
+               (void *) audioClient_, (void *) renderClient_);
+        return -1;
+    }
 
     // Pre-fill one buffer with silence so the device has data when it starts.
     BYTE *silence = nullptr;
