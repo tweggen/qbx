@@ -503,6 +503,10 @@ void SMainWindow::onRecordTriggered()
             }
         }
 
+        // Remember where the playhead is now: the cut goes here, and the playhead
+        // advances from here during the capture.
+        recordingStartPos_ = SApplication::app().getGlobalLocatorPos();
+
         SApplication::app().startRecording( params );
         actRecord_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
 
@@ -536,9 +540,9 @@ void SMainWindow::onRecordingCompleted()
     QString recordedFile = QString::fromStdString( createdFiles[0] );
     if( !QFileInfo( recordedFile ).exists() ) return;
 
-    // Get the recording start time (global locator position at start)
-    // For now, use the current locator position
-    offset_t recordingStartTime = SApplication::app().getGlobalLocatorPos();
+    // The recording start time, captured when recording began (the live locator
+    // has since advanced with the capture).
+    offset_t recordingStartTime = recordingStartPos_;
 
     // Place cuts on all armed tracks
     for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
@@ -565,6 +569,10 @@ void SMainWindow::onRecordingCompleted()
         // Mark track as no longer armed
         track->setArmedForRecording( false );
     }
+
+    // Return the playhead to where recording began, lining it up with the cut we
+    // just placed (it had advanced to the end during capture).
+    SApplication::app().setGlobalLocatorPos( recordingStartTime );
 
     actRecord_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
 }

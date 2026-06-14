@@ -2,6 +2,7 @@
 
 #include "audio/audio_input.h"
 #include "audio/audio_file_writer.h"
+#include "sapplication.h"
 
 #include <chrono>
 #include <cmath>
@@ -261,6 +262,14 @@ void RecordingSession::recordThreadMain() {
     bool success = true;
     std::string errorMsg;
 
+    // Advance the global playback locator in lock-step with what we capture, so
+    // the playhead tracks the recording. Start from the locator position the user
+    // armed at; advance by output (project-rate) frames written. Realtime store
+    // only — never emit Qt signals from this worker thread (a main-thread QTimer
+    // turns these stores into playhead repaints; see SApplication::pumpLocator).
+    const offset_t startLocator = SApplication::app().getGlobalLocatorPos();
+    offset_t recordedProjectFrames = 0;
+
     try {
         while (!stopRequested_) {
             // Read from input
@@ -296,6 +305,13 @@ void RecordingSession::recordThreadMain() {
                 recordedDuration_.store(
                     recordedDuration_.load() + static_cast<double>(framesRead) / deviceRate
                 );
+
+                // Advance the playhead by the project-rate frames just captured.
+                if (outFrames > 0) {
+                    recordedProjectFrames += static_cast<offset_t>(outFrames);
+                    SApplication::app().setGlobalLocatorPosRealtime(
+                        startLocator + recordedProjectFrames);
+                }
 
                 // Emit progress every ~0.1s
                 auto now = std::chrono::steady_clock::now();

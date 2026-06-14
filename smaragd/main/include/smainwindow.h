@@ -117,6 +117,10 @@ private:
     QToolBar *qTBPalette_;
     QToolBar *qTBTracks_;
     SRecordingProgressDialog *recordingProgressDialog_ = nullptr;
+    // Locator position when recording began. The playhead advances during the
+    // capture, so the live locator can't be used to place the recorded cut;
+    // we remember the start here and place the cut there.
+    offset_t recordingStartPos_ = 0;
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
 

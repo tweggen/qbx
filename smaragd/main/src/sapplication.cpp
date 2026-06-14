@@ -75,11 +75,11 @@ void SApplication::setStatusMode( const QString &mode )
 void SApplication::setPlaying( bool f )
 {
     isPlaying_ = f;
-    // Run the playhead poll only while playing; emit one final update on stop so
-    // the cursor lands on the exact end position.
+    // Run the playhead poll while playing; on stop, pumpLocator() emits one final
+    // update and self-stops the timer (unless recording is still driving it).
     if( locatorTimer_ ) {
-        if( f ) locatorTimer_->start();
-        else { locatorTimer_->stop(); pumpLocator(); }
+        if( f ) { if( !locatorTimer_->isActive() ) locatorTimer_->start(); }
+        else pumpLocator();
     }
 }
 
@@ -207,13 +207,18 @@ void SApplication::setGlobalLocatorPosRealtime( offset_t o )
 
 void SApplication::pumpLocator()
 {
-    // Main thread: reflect the audio thread's advance into the playhead. Skip
-    // when unchanged so we don't repaint needlessly.
+    // Main thread: reflect the audio/record thread's advance into the playhead.
     offset_t now = globalLocatorPos_.load( std::memory_order_relaxed );
-    if( now == lastShownLocator_ ) return;
-    offset_t old = lastShownLocator_;
-    lastShownLocator_ = now;
-    emit globalLocatorMoved( now, old );
+    if( now != lastShownLocator_ ) {
+        offset_t old = lastShownLocator_;
+        lastShownLocator_ = now;
+        emit globalLocatorMoved( now, old );
+    }
+    // Self-stop once nothing is driving the locator anymore (playback stopped and
+    // recording finished). Recording ends asynchronously on the worker thread, so
+    // this poll is where we notice it.
+    if( locatorTimer_ && !isPlaying_ && !isRecordingActive() )
+        locatorTimer_->stop();
 }
 
 void SApplication::setSpeakerMaxVal( sample_t /*maxVal*/ )
@@ -341,6 +346,11 @@ void SApplication::startRecording(const audio::RecordingParams &params)
 
     // Start recording
     recordingSession_->start(params);
+
+    // Drive the playhead while recording (the worker stores positions lock-free;
+    // pumpLocator turns them into repaints and self-stops when recording ends).
+    if( locatorTimer_ && !locatorTimer_->isActive() )
+        locatorTimer_->start();
 }
 
 void SApplication::setSelectionFromPaths(const QList<QList<int>> &paths)
