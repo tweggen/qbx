@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="add_track_simple">
+
+  <!-- Setup: start with a new project -->
+  <setup project="new"/>
+
+  <!-- Add a single track -->
+  <actions>
+    <add-track index="-1"/>
+  </actions>
+
+  <!-- Assertions and undo verification deferred to Phase 2 -->
+
+</SActionScript>
