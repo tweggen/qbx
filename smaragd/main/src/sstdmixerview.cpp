@@ -170,6 +170,16 @@ void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
     const int cursorWidth = 3;
     if( oldX >= 0 && oldX < w ) update( oldX - 1, 0, cursorWidth, h );
     if( newX >= 0 && newX < w ) update( newX - 1, 0, cursorWidth, h );
+
+    // While recording, repaint the whole span the playhead swept so the growing
+    // capture region fills in continuously (the 3px cursor columns alone would
+    // leave gaps when zoomed in / moving fast).
+    if( SApplication::app().isRecordingActive() ) {
+        int lo = ( oldX < newX ? oldX : newX ) - 1;
+        int hi = ( oldX < newX ? newX : oldX ) + 1;
+        if( lo < 0 ) lo = 0;
+        update( lo, 0, ( hi - lo ) + cursorWidth, h );
+    }
 }
 
 void SMVActualView::resizeEvent( QResizeEvent * )
@@ -222,6 +232,24 @@ void SMVActualView::paintEvent( QPaintEvent * )
                     myRect.bottomRight().x(), laneTop+trackHeight_-1 );
         // Draw the track's clips.
         row->track->getInlineRenderer()->draw( *row->link, ctx );
+    }
+
+    // While recording, show the in-progress capture as a translucent region that
+    // grows with the playhead, on each armed lane (from the record start to the
+    // live locator). The real clip — with its waveform — is placed when recording
+    // finishes; this is live feedback that something is being captured.
+    if( SApplication::app().isRecordingActive() ) {
+        int xs = getXPosOfOffset( SApplication::app().recordingStartFrame() );
+        int xe = getXPosOfOffset( SApplication::app().getGlobalLocatorPos() );
+        if( xe > xs ) {
+            for( int i=firstTrack; i<nTracks; i++ ) {
+                const STrackRow *row = smv_.rowAt( i );
+                if( !row || !row->track || !row->track->isArmedForRecording() ) continue;
+                int laneTop = SMV_TIME_RULER_HEIGHT+i*trackHeight_-upperLeftY_;
+                p.fillRect( QRect( xs, laneTop+1, xe-xs, trackHeight_-2 ),
+                            QColor( 220, 40, 40, 70 ) );
+            }
+        }
     }
     // Before painting the timegrid, decide, wether the grid elements are not too close
     // together. Grid visibility is a per-project property (toolbar palette / grid action).

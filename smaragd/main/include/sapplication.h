@@ -81,6 +81,9 @@ public:
     bool isPlaying() const;
     bool isRenderingActive() const;
     bool isRecordingActive() const;
+    // Locator position captured when the current recording began. The view uses
+    // it (with the live locator) to draw the growing in-progress capture region.
+    offset_t recordingStartFrame() const { return recordingStartFrame_; }
     SActionHistory *actionHistory() const;
     void submitAction(SAction *action);
 
@@ -133,6 +136,7 @@ private:
     // (setGlobalLocatorPos, which also emits). Read by both.
     std::atomic<offset_t> globalLocatorPos_;
     offset_t lastShownLocator_ = 0;   // last position the UI emitted (main thread only)
+    offset_t recordingStartFrame_ = 0; // locator at record start (for the live region)
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     bool isPlaying_;
     SProject *currentProject_;

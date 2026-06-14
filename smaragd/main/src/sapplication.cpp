@@ -338,6 +338,10 @@ void SApplication::startRecording(const audio::RecordingParams &params)
         recordingSession_ = std::make_unique<audio::RecordingSession>();
     }
 
+    // Remember where capture begins so the view can draw the growing in-progress
+    // region (the worker advances the locator from here as it captures).
+    recordingStartFrame_ = getGlobalLocatorPos();
+
     // Start capture first, so isRecordingActive() is already true before the
     // monitoring playback below produces its first buffer. That keeps the record
     // worker the sole locator authority (the playback callback won't advance the
