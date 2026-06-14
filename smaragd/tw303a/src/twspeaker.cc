@@ -28,6 +28,7 @@ twSpeaker::~twSpeaker()
 
 void twSpeaker::startOutput()
 {
+    std::lock_guard<std::mutex> lock(outputMutex_);
     if (isPlaying_) return;
 
     fprintf(stderr, "twSpeaker::startOutput: ENTER - backend=%p, outputDeviceId=%s\n",
@@ -196,10 +197,11 @@ void twSpeaker::startOutput()
 
 void twSpeaker::stopOutput()
 {
+    std::lock_guard<std::mutex> lock(outputMutex_);
     if (!isPlaying_) return;
+    isPlaying_ = false;               // flip first: a re-entrant/observer sees "stopping"
     backend_->stopOutput();
     backend_->closeDevice();
-    isPlaying_ = false;
 }
 
 bool twSpeaker::isPlaying()

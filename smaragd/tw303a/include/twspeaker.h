@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -16,7 +17,16 @@ class twSpeaker
     Q_OBJECT
 private:
     std::unique_ptr<audio::AudioBackend> backend_;
-    bool isPlaying_;
+    // Atomic so isPlaying() is a lock-free read. The check-and-act transitions
+    // (start/stop) are serialised by outputMutex_ below — atomicity of the flag
+    // alone doesn't make "if (!isPlaying_) return; …flip + drive the backend"
+    // safe against a concurrent/re-entrant caller.
+    std::atomic<bool> isPlaying_;
+    // Serialises startOutput()/stopOutput() so a play can't interleave with a
+    // stop (and a double stop is idempotent). The backend render thread never
+    // takes this lock, so holding it across backend_->stopOutput()'s join is
+    // deadlock-free.
+    std::mutex outputMutex_;
     twResampler resampler_;
     std::string outputDeviceId_ = "default";
 
