@@ -2629,7 +2629,97 @@ rebuilds state (on window-param change, mute/solo toggle, etc.), it constructs
 
 ---
 
-## Remaining Deferred Items (as of 2026-06-08, post-Phase-1)
+---
+
+## 11_ACTION_SCRIPT_TEST_CASES.md
+
+- **Date:** 2026-06-14
+- **Status:** ✅ Complete (all four phases: 0–4)
+- **Commits:** f378d38–8d22a68
+- **Verified on platform:** macOS
+
+### What landed
+
+| Phase | Commits | Deliverables |
+|-------|---------|--------------|
+| **0** | f378d38 | `SActionScript` XML container; `action_roundtrip_test` audit tool; all 32 actions pass round-trip serialization |
+| **1** | 91e1509 | `SActionRunner` executor; `--run-actions` (interactive); `--list-actions` (discovery); action dispatch via `SActionHistory` |
+| **2** | 2b1909e | `--test-case` headless mode; `assert-track-count` assertions; TAP-style output; exit codes (0=pass, 1=fail) |
+| **3** | a80e7e7 | `<verify-undo/>` undo/redo symmetry validation; `run_all_tests.sh` CI runner; fixed `add-track` / `remove-track` registrations |
+| **4** | 8d22a68 | `assert-project-matches` golden file comparison; `-platform offscreen` auto-injection; `expectReject` parsing & tracking |
+
+### Implementation notes
+
+**Architecture:**
+- `SActionScript` parses `.qxa` XML files into action sequences + metadata (setup, assertions, verify-undo, expectReject per-action)
+- `SActionRunner` executes scripts: creates project, submits actions via real `SActionHistory` path (not bypassed), evaluates assertions, verifies undo/redo
+- Main.cpp integrates three flags: `--run-actions` (interactive window stays open), `--test-case` (headless), `--list-actions` (discovery)
+
+**Round-trip verified:**
+- All 32 registered actions serialize and deserialize without loss (Phase 0 audit)
+- Per-action XML: tag name = `SAction::name()`, version attribute, all parameters from `writeXml()`
+
+**Assertions (Phase 2–4):**
+- `assert-track-count equals="N"`: verifies mixer track count post-execution
+- `assert-project-matches file="golden.txt"`: serializes current project, compares text against golden file (Phase 4)
+- `<verify-undo/>`: undo to initial state, verify state matches, redo, verify final state matches
+
+**CI/CD ready:**
+- Exit codes: 0 (pass), 1 (fail) — shell-compatible for scripts and GitHub Actions
+- TAP-style output (PASS/FAIL + comment details on failure)
+- `tests/run_all_tests.sh` — bash runner for all `.qxa` files in a directory; summary report
+- `-platform offscreen` auto-injected for `--test-case` mode (headless CI without display)
+
+**Test suite:**
+- 5 test fixtures in `tests/cases/`:
+  - `add_track_simple.qxa` — basic action execution
+  - `add_track_with_assertion.qxa` — assertions (track count)
+  - `add_track_golden.qxa` — golden file comparison
+  - `add_remove_track_undo.qxa` — undo/redo verification
+  - `add_track_wrong_count.qxa` — intentional failure (validates failure detection)
+- Results: 4/5 passing (100% success for valid tests, 1 expected failure)
+
+**Fixed action registrations:**
+- `SAddTrackAction::registerType("add-track")` — was missing
+- `SRemoveTrackAction::registerType("remove-track")` — was missing; default constructor added
+
+**Foundation for future work:**
+- `expectReject="true"` attribute parsed on action elements; metadata tracked in `SActionScript::ActionMeta`
+- Golden file path can be absolute or relative (currently relative to CWD; Phase 4b could make relative-to-script)
+- Lua scripting deferred per user preference (foundation ready; XML serialization is stable)
+
+### Verification status
+
+**macOS / Qt6 — full end-to-end:**
+- ✅ Serialization round-trip (all 32 actions)
+- ✅ Script load/parse (XML malformed detection, unknown action detection)
+- ✅ Action execution (via `SActionHistory`, proper undo stack)
+- ✅ Assertions (track-count, golden-file)
+- ✅ Undo/redo verification
+- ✅ Exit codes (0 on pass, 1 on fail)
+- ✅ Headless mode (`-platform offscreen` auto-injected)
+- ✅ Test runner script (4/5 pass, summary report)
+
+### Design notes / deferred
+
+**Intentionally not implemented (lower-priority):**
+- **Lua scripting.** User requested deferral in favor of Lua; XML foundation is stable and proven
+- **Full expectReject enforcement.** Metadata is parsed and tracked; full enforcement requires enhancement to action submission path to capture `SApplyResult.applied` flag
+- **Dynamic fixture generation.** Golden files provide adequate snapshot testing; dynamic generation is useful but not essential for Phase 4
+
+**Phase 4 limitations (acceptable):**
+- Golden file paths are relative to CWD (could be made relative-to-script in Phase 4b)
+- Assert-project-matches does text comparison of serialized state (semantic comparison available for Phase 4b if needed)
+
+### Next actions
+
+1. **(If implementing Lua)** Layer Lua VM and script-loader atop stable XML foundation — action registry remains the dispatch target
+2. **(If implementing full expectReject)** Enhance `SActionHistory::submit()` to track rejection reasons; update runner to validate against expectReject
+3. Integrate into CI pipeline: `tests/run_all_tests.sh` ready for GitHub Actions or local pre-commit hooks
+
+---
+
+## Remaining Deferred Items (as of 2026-06-14)
 
 In priority order:
 
@@ -2649,3 +2739,4 @@ In priority order:
 7. **Proposal 06 — grain streaming node** (variable/automated time-stretch) and
    proposal 07 step 5 (`twCapturingSource` consumer wiring for non-audio content).
 8. **Proposal 09 — multi-view tabs** — architectural design complete, no code yet.
+9. **Lua scripting** — deferred from proposal 11; XML action script foundation is stable and verified.

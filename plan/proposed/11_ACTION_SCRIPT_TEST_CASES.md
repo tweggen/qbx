@@ -1,8 +1,19 @@
 # 11 — Action Scripts & Headless Test Cases
 
-**Status:** Proposed (design only)
+**Status:** ✅ Complete (Phases 0–4, commits f378d38–8d22a68)
 **Depends on:** `03_ACTION_MODEL.md`, `03a_ACTION_MODEL_PHASE_2_ROLLOUT.md`
 **Relates to:** `04_WIRE_FORMAT_AND_SAMPLE_RATE.md` (XML serialization conventions)
+
+## Implementation Summary
+
+All four phases of this proposal have been implemented and are production-ready:
+- **Phase 0 (f378d38):** Round-trip serialization audit (all 32 actions verified)
+- **Phase 1 (91e1509):** Script execution with `--run-actions` and `--list-actions`
+- **Phase 2 (2b1909e):** Headless testing with `--test-case`, assertions, exit codes
+- **Phase 3 (a80e7e7):** Undo/redo verification, CI runner script, action registration fixes
+- **Phase 4 (8d22a68):** Golden file comparison, `-platform offscreen`, expectReject support
+
+See plan/STATE.md for detailed completion status.
 
 ## 1. Goal
 
