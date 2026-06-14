@@ -122,6 +122,7 @@ WASAPIBackend::~WASAPIBackend()
 int WASAPIBackend::openDevice(const std::string &deviceName,
                               std::uint32_t preferredRate)
 {
+    std::lock_guard<std::mutex> lock(stateMutex_);
     // Only report "already open" when the device is FULLY open (both the client
     // and its render service). A previous openDevice can fail after Activate()
     // (a transient device/format error) and return without cleanup, leaving
@@ -135,7 +136,7 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     if (audioClient_ || renderClient_ || device_ || enumerator_ || bufferReady_) {
         syslog(LOG_WARNING,
                "WASAPIBackend::openDevice: resetting half-open device state before reopen");
-        closeDevice();
+        releaseDevice_();   // already holding stateMutex_
     }
 
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -345,20 +346,32 @@ std::vector<std::uint32_t> WASAPIBackend::supportedRates() const
     return {};
 }
 
-int WASAPIBackend::closeDevice()
+void WASAPIBackend::releaseDevice_()
 {
+    // Caller holds stateMutex_.
     if (renderClient_) { renderClient_->Release(); renderClient_ = nullptr; }
     if (audioClient_)  { audioClient_->Release();  audioClient_  = nullptr; }
     if (device_)       { device_->Release();       device_       = nullptr; }
     if (enumerator_)   { enumerator_->Release();   enumerator_   = nullptr; }
     if (bufferReady_)  { CloseHandle(bufferReady_); bufferReady_ = nullptr; }
     sampleFormat_ = WasapiSampleFormat::Unknown;
+}
+
+int WASAPIBackend::closeDevice()
+{
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    releaseDevice_();
     return 0;
 }
 
 int WASAPIBackend::startOutput()
 {
+    std::lock_guard<std::mutex> lock(stateMutex_);
     if (running_.load()) return 0;
+    // Reap a previous thread that already exited but was never joined: assigning
+    // over a joinable std::thread calls std::terminate. (Done before touching the
+    // flags below so we never join a thread we just told to keep running.)
+    if (thread_.joinable()) thread_.join();
     // Never dereference a half-open device: a failed openDevice can leave
     // audioClient_ set with a null renderClient_. Bail instead of crashing in
     // GetBuffer below (the next openDevice will reset and reopen cleanly).
@@ -391,9 +404,15 @@ int WASAPIBackend::startOutput()
 
 int WASAPIBackend::stopOutput()
 {
+    std::lock_guard<std::mutex> lock(stateMutex_);
     if (!running_.load()) return 0;
     stopFlag_.store(true);
     if (bufferReady_) SetEvent(bufferReady_);  // wake the thread so it sees stopFlag_
+    // Only join a thread that hasn't been joined already: joinable() is false
+    // after a prior join, so this is safe against a double stopOutput(). The
+    // stateMutex_ + running_ check above also serialise concurrent callers, and
+    // the audio thread never takes stateMutex_, so joining under the lock can't
+    // deadlock.
     if (thread_.joinable()) thread_.join();
     running_.store(false);
     if (audioClient_) audioClient_->Stop();
