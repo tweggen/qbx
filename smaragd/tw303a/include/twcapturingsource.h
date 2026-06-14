@@ -43,6 +43,14 @@ public:
     twCapturingSource( tw303aEnvironment &env, twComponent &source,
                        offset_t captureStart, length_t nFrames,
                        idx_t channels, int sampleRate );
+
+    // Adopt an already-rendered planar buffer (size channels*nFrames). Used by
+    // the recursive container capture (proposal 10 Phase 1), which composes a
+    // buffer by reading children RANDOM-ACCESS rather than streaming a live
+    // component. Short buffers are zero-padded to channels*nFrames.
+    twCapturingSource( std::vector<sample_t> &&data, length_t nFrames,
+                       idx_t channels, int sampleRate );
+
     virtual ~twCapturingSource();
 
     virtual length_t read( offset_t srcOffset, sample_t *dest,

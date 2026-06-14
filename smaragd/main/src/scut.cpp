@@ -2,6 +2,7 @@
 #include <iostream>
 #include <math.h>
 #include <cstdlib>
+#include <vector>
 
 #include <QDebug>
 
@@ -138,20 +139,94 @@ swap_complete:
 // indexes into it exactly like a sample source), so two cuts windowing the same
 // container still each get a correct view. Returns NULL for real sources (the
 // sample path) or content we cannot capture.
+// Recursively render `obj`'s mono output into dest[0,len) (pre-zeroed), reading
+// every child RANDOM-ACCESS — never pulling a live, cursor-bearing streaming
+// component. This is proposal 10 Phase 1: "random access composes; streams
+// don't." A track-of-tracks is the sum of its children's block k, each faulted
+// recursively, so there is no single shared cursor to fight (the nested-group
+// mixed-content bug).
+//
+// Dispatch:
+//   - leaf random source (e.g. SPlainWave): read it directly.
+//   - SCut clip: a windowed view of its content (slip offset + grain stretch;
+//     loop tiling is deferred — a looping clip captures its linear window).
+//   - container (STrack / SStdMixer, or any other child-bearing SObject): sum
+//     children at their start times, then apply the container's own gain/mute
+//     (mirroring twTrackMix::calcOutputTo) so a captured container is
+//     self-contained exactly like the live path.
+static void renderObjectInto( SObject &obj, sample_t *dest, length_t len,
+                              tw303aEnvironment &env, int rate, int depth )
+{
+    if( len <= 0 ) return;
+    if( depth > 64 ) return;            // defensive: a container must not contain itself
+
+    // Leaf: a real random source. Read [0, min(len, srcLen)).
+    if( twRandomSource *rs = obj.getRandomSource() ) {
+        length_t n = rs->length();
+        if( n > len ) n = len;
+        if( n > 0 ) rs->read( 0, dest, n, 0 );
+        return;
+    }
+
+    // SCut: the windowed (and optionally grain-stretched) view of its content.
+    if( SCut *cut = dynamic_cast<SCut *>( &obj ) ) {
+        SObject &content = cut->getContent();
+        offset_t off = cut->getStartOffset();
+        twGrainParams gp = cut->getGrainParams();
+
+        twRandomSource *contentRs = content.getRandomSource();   // borrowed if non-null
+        twCapturingSource *ownedContent = NULL;                  // temp if we rendered
+        if( !contentRs ) {
+            length_t clen = content.hasDuration() ? (length_t) content.getDuration() : 0;
+            if( clen <= 0 ) return;
+            std::vector<sample_t> buf( (size_t) clen, 0.0f );
+            renderObjectInto( content, buf.data(), clen, env, rate, depth + 1 );
+            ownedContent = new twCapturingSource( std::move( buf ), clen, 1, rate );
+            contentRs = ownedContent;
+        }
+
+        twRandomSource *view = contentRs;
+        twGrainSource *grain = NULL;
+        if( !gp.isIdentity() ) {
+            grain = new twGrainSource( *contentRs, gp );         // output (stretched) domain
+            view = grain;
+        }
+        // startOffset and len are in the (post-grain) output domain — the same
+        // domain `view` is addressed in. read() zero-fills past end.
+        view->read( off, dest, len, 0 );
+
+        delete grain;
+        delete ownedContent;
+        return;
+    }
+
+    // Container: sum children at their start times.
+    for( SLink *lk : obj.childLinks() ) {
+        if( !lk ) continue;
+        SObject &child = lk->getSObject();
+        offset_t start = lk->getStartTime();
+        if( start >= len ) continue;
+        length_t childLen = child.hasDuration() ? (length_t) child.getDuration() : 0;
+        length_t avail = len - (length_t) start;
+        length_t n = childLen < avail ? childLen : avail;
+        if( n <= 0 ) continue;
+        std::vector<sample_t> tmp( (size_t) n, 0.0f );
+        renderObjectInto( child, tmp.data(), n, env, rate, depth + 1 );
+        for( length_t i = 0; i < n; ++i ) dest[(size_t)start + i] += tmp[(size_t) i];
+    }
+
+    // Apply this container's own gain/mute, matching the live mixer.
+    double factor = obj.isMuted() ? 0.0 : pow( 10.0, obj.getVolume() / 20.0 );
+    if( factor != 1.0 )
+        for( length_t i = 0; i < len; ++i ) dest[(size_t) i] *= (sample_t) factor;
+}
+
 twRandomSource *SCut::ensureCapture()
 {
     if( capture_ ) return capture_;
     SObject &c = content_->getSObject();
     if( c.getRandomSource() ) return NULL;          // real source -> sample path
     if( !c.hasDuration() ) return NULL;
-
-    // Prefer a seekable capture component (a track's twTrackMix, which seeks
-    // cleanly and re-seeks its children each buffer) over the output rewire,
-    // whose forward-streaming latches carry playback state and can't seek to 0.
-    twComponent *comp = NULL;
-    if( STrack *trk = dynamic_cast<STrack *>( &c ) ) comp = trk->getCaptureComponent();
-    if( !comp ) comp = &c.getRootComponent();
-    if( !comp->isSeekable() ) return NULL;
 
     // Use snapshot to read window parameters consistently (multithreading policy: Phase 1).
     SCutSnapshot snap = getSnapshot();
@@ -161,7 +236,14 @@ twRandomSource *SCut::ensureCapture()
     if( n <= 0 ) return NULL;
 
     tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
-    capture_ = new twCapturingSource( env, *comp, 0, n, 1, env.getSRate() );
+
+    // Proposal 10 Phase 1: build the capture by RECURSIVELY summing the
+    // container's children read random-access, instead of streaming the live
+    // twTrackMix (whose per-buffer child re-seeks lose a sub-track for a
+    // track-of-tracks). Materialise once into a resident buffer.
+    std::vector<sample_t> buf( (size_t) n, 0.0f );
+    renderObjectInto( c, buf.data(), n, env, env.getSRate(), 0 );
+    capture_ = new twCapturingSource( std::move( buf ), n, 1, env.getSRate() );
 
     if( !captureConnected_ ) {
         // Transparent invalidation: any applied action drops the snapshot so the

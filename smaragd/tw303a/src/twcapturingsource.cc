@@ -53,6 +53,18 @@ twCapturingSource::twCapturingSource( tw303aEnvironment &env, twComponent &sourc
     }
 }
 
+twCapturingSource::twCapturingSource( std::vector<sample_t> &&data, length_t nFrames,
+                                      idx_t channels, int sampleRate )
+    : sampleRate_( sampleRate ),
+      channels_( channels < 0 ? 0 : channels ),
+      nFrames_( nFrames < 0 ? 0 : nFrames ),
+      data_( std::move( data ) )
+{
+    // Zero-pad (or size) the buffer to exactly channels_*nFrames_ so read()'s
+    // bounds arithmetic holds regardless of what the caller handed us.
+    data_.resize( (size_t) channels_ * (size_t) nFrames_, 0.0f );
+}
+
 twCapturingSource::~twCapturingSource()
 {
 }
