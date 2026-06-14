@@ -4,6 +4,7 @@
 #include "sstdmixer.h"
 #include "strack.h"
 #include "slink.h"
+#include "sactionregistry.h"
 #include <QDomElement>
 
 SRemoveTrackAction::SRemoveTrackAction(int index)
@@ -77,3 +78,10 @@ bool SRemoveTrackAction::readXml(const QDomElement &elem, int /*version*/)
     index_ = elem.attribute("index", "0").toInt();
     return true;
 }
+
+static const bool s_reg_removetrack = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("remove-track"),
+        []{ return new SRemoveTrackAction; }
+    ), true
+);

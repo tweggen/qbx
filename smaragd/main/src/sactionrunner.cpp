@@ -10,6 +10,7 @@
 #include <QCoreApplication>
 #include <QDomDocument>
 #include <QFile>
+#include <QUndoStack>
 
 SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplication &app)
 {
@@ -54,6 +55,13 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
         if (!evaluateAssertions_(script, project, result.failures)) {
             result.passed = false;
             result.assertionsFailed = result.failures.size();
+        }
+    }
+
+    // Step 4: Verify undo/redo (Phase 3).
+    if (script.verifyUndo()) {
+        if (!verifyUndo_(project, app, result.failures)) {
+            result.passed = false;
         }
     }
 
@@ -124,4 +132,70 @@ bool SActionRunner::assertProjectMatches_(const SActionScript::Assertion &a, SPr
 
     failures.append("assert-project-matches: not yet implemented in Phase 2");
     return false;
+}
+
+bool SActionRunner::verifyUndo_(SProject *project, SApplication &app, QStringList &failures) const
+{
+    if (!project) {
+        failures.append("verify-undo: no project");
+        return false;
+    }
+
+    // Capture the final state: track count at the end.
+    SObject *root = project->getRootComponent();
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
+    if (!mixer) {
+        failures.append("verify-undo: root is not a mixer");
+        return false;
+    }
+
+    int finalTrackCount = mixer->getNTracks();
+
+    // Undo all actions: repeatedly call undo() until the undo stack is empty.
+    // Each undo() removes one action from the undo stack and redoes its inverse.
+    SActionHistory *history = app.actionHistory();
+    if (!history) {
+        failures.append("verify-undo: no action history");
+        return false;
+    }
+
+    int undoCount = 0;
+    while (history->undoStack()->canUndo()) {
+        history->undo();
+        QCoreApplication::processEvents();
+        undoCount++;
+    }
+
+    // Verify we're back to initial state (0 tracks).
+    int initialTrackCount = mixer->getNTracks();
+    if (initialTrackCount != 0) {
+        failures.append(QString("verify-undo: after undo, track count is %1, expected 0")
+            .arg(initialTrackCount));
+        return false;
+    }
+
+    // Redo all actions: repeatedly call redo() to get back to the final state.
+    int redoCount = 0;
+    while (history->undoStack()->canRedo()) {
+        history->redo();
+        QCoreApplication::processEvents();
+        redoCount++;
+    }
+
+    // Verify we're back to final state.
+    int redoTrackCount = mixer->getNTracks();
+    if (redoTrackCount != finalTrackCount) {
+        failures.append(QString("verify-undo: after redo, track count is %1, expected %2")
+            .arg(redoTrackCount).arg(finalTrackCount));
+        return false;
+    }
+
+    // Verify undo/redo counts match.
+    if (undoCount != redoCount) {
+        failures.append(QString("verify-undo: undo count %1 != redo count %2")
+            .arg(undoCount).arg(redoCount));
+        return false;
+    }
+
+    return true;
 }

@@ -36,6 +36,9 @@ private:
                            QStringList &failures) const;
     bool assertProjectMatches_(const SActionScript::Assertion &a, SProject *project,
                                QStringList &failures) const;
+
+    // Undo/redo verification: replay inverses and re-forward, assert state matches.
+    bool verifyUndo_(SProject *project, SApplication &app, QStringList &failures) const;
 };
 
 #endif // SACTIONRUNNER_H
