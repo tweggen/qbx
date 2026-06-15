@@ -103,8 +103,28 @@ brew install qt@5 cmake libsndfile libvorbis
 **Verified working:** Qt 6.11.1 + MinGW 13.1 + Ninja, both bundled by the Qt
 online installer.
 
-The render deps (libsndfile/libvorbis) are not part of Qt's MinGW kit, so
-install them via **vcpkg** for the MinGW-ABI triplet (built with Qt's g++):
+The render deps (libsndfile/libvorbis) are not part of Qt's MinGW kit; they come
+from **vcpkg** built for the MinGW-ABI triplet (`x64-mingw-dynamic`).
+
+**Easiest path — use the script** (from Git Bash, repo root). It puts the MinGW
+toolchain on PATH, wires up vcpkg, and — if the render deps are missing — runs
+`vcpkg install` for you (bootstrapping `vcpkg.exe` first if needed):
+
+```bash
+./rebuild.sh /c/Qt/6.11.1/mingw_64
+```
+
+The auto-install only triggers when the libs are absent (a one-time cost on a
+fresh machine; it can take several minutes as vcpkg builds them with Qt's g++).
+It requires a **vcpkg clone** to already exist — the script looks in
+`$VCPKG_ROOT`, `~/vcpkg`, `/c/vcpkg`, and `/c/Users/*/vcpkg`. If you don't have
+one yet:
+
+```bash
+git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
+```
+
+To install the deps manually instead (equivalent to what the script runs):
 
 ```powershell
 .\vcpkg install libsndfile:x64-mingw-dynamic libvorbis:x64-mingw-dynamic pkgconf:x64-mingw-dynamic
@@ -113,13 +133,6 @@ install them via **vcpkg** for the MinGW-ABI triplet (built with Qt's g++):
 > Use `x64-mingw-dynamic`, **not** `x64-windows` — the latter is MSVC-ABI and
 > won't link against a MinGW build. vcpkg's `pkgconf` also satisfies
 > `find_package(PkgConfig)`, which Qt's MinGW kit lacks.
-
-**Easiest path — use the script** (from Git Bash, repo root). It puts the MinGW
-toolchain on PATH and wires up vcpkg automatically:
-
-```bash
-./rebuild.sh /c/Qt/6.11.1/mingw_64
-```
 
 **Manual equivalent** (PowerShell, from `smaragd/`):
 

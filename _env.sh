@@ -136,29 +136,76 @@ setup_toolchain() {
     command -v ninja &>/dev/null || echo "Warning: 'ninja' not found on PATH."
 }
 
+# Locate a vcpkg install (Windows). On success sets globals VCPKG_DIR (the root)
+# and VCPKG_TRIPLET, and returns 0. Returns 1 if none found. Quiet — callers report.
+detect_vcpkg() {
+    VCPKG_DIR=""
+    VCPKG_TRIPLET="${VCPKG_TARGET_TRIPLET:-x64-mingw-dynamic}"
+    local root
+    for root in "$VCPKG_ROOT" "$HOME/vcpkg" /c/vcpkg /c/Users/*/vcpkg; do
+        [ -n "$root" ] || continue
+        [ -f "$root/scripts/buildsystems/vcpkg.cmake" ] || continue
+        VCPKG_DIR="$root"
+        return 0
+    done
+    return 1
+}
+
+# Ensure the render deps (libsndfile/libvorbis + pkgconf) exist in the vcpkg
+# install, installing them via vcpkg if missing. Windows only. Requires the
+# MinGW toolchain already on PATH (call setup_toolchain first) so the mingw
+# triplet builds against Qt's g++. The install only runs when the libs are
+# absent, so it's a one-time bootstrap cost, not a per-build hit.
+ensure_render_deps() {
+    [ "$PLATFORM" = "windows" ] || return 0
+    detect_vcpkg || { echo "Note: vcpkg not found; skipping render-dep install."; return 0; }
+
+    local pcdir="$VCPKG_DIR/installed/$VCPKG_TRIPLET/lib/pkgconfig"
+    if [ -f "$pcdir/sndfile.pc" ] && [ -f "$pcdir/vorbis.pc" ]; then
+        return 0   # already installed
+    fi
+
+    echo "Render deps (libsndfile/libvorbis) missing for $VCPKG_TRIPLET."
+    echo "Installing via vcpkg from $VCPKG_DIR (this can take several minutes)..."
+
+    # Bootstrap vcpkg.exe if it isn't built yet.
+    local vcpkg_exe="$VCPKG_DIR/vcpkg.exe"
+    if [ ! -f "$vcpkg_exe" ]; then
+        if [ -f "$VCPKG_DIR/bootstrap-vcpkg.bat" ]; then
+            echo "Bootstrapping vcpkg..."
+            ( cd "$VCPKG_DIR" && ./bootstrap-vcpkg.bat ) || {
+                echo "Warning: vcpkg bootstrap failed; configure will likely fail."; return 0; }
+        else
+            echo "Warning: $VCPKG_DIR/bootstrap-vcpkg.bat not found; cannot auto-install."
+            return 0
+        fi
+    fi
+
+    "$vcpkg_exe" install --triplet "$VCPKG_TRIPLET" libsndfile libvorbis pkgconf || {
+        echo "Warning: vcpkg install failed; configure may fail to find render deps."
+        return 0
+    }
+    echo "Render deps installed."
+}
+
 # Populate CMAKE_EXTRA_ARGS (a bash array) with platform-specific configure
-# flags. On Windows the render deps (libsndfile/libvorbis/ogg) come from
-# vcpkg's x64-mingw-dynamic triplet, so wire up the vcpkg toolchain file if a
-# vcpkg install is found. No-op on macOS/Linux (system pkg-config + brew/apt).
+# flags. On Windows the render deps come from vcpkg's mingw triplet, so wire up
+# the vcpkg toolchain file. No-op on macOS/Linux (system pkg-config + brew/apt).
 setup_extra_cmake_args() {
     CMAKE_EXTRA_ARGS=()
     [ "$PLATFORM" = "windows" ] || return
 
-    local root tc
-    for root in "$VCPKG_ROOT" "$HOME/vcpkg" /c/vcpkg /c/Users/*/vcpkg; do
-        [ -n "$root" ] || continue
-        tc="$root/scripts/buildsystems/vcpkg.cmake"
-        [ -f "$tc" ] || continue
+    if detect_vcpkg; then
+        local tc="$VCPKG_DIR/scripts/buildsystems/vcpkg.cmake"
         # CMake wants a Windows-style path (C:/...), not MSYS (/c/...).
         command -v cygpath &>/dev/null && tc="$(cygpath -m "$tc")"
         CMAKE_EXTRA_ARGS+=( "-DCMAKE_TOOLCHAIN_FILE=$tc"
-                            "-DVCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET:-x64-mingw-dynamic}" )
-        echo "vcpkg: $root (triplet ${VCPKG_TARGET_TRIPLET:-x64-mingw-dynamic})"
-        return
-    done
-
-    echo "Warning: vcpkg not found; render deps (libsndfile/libvorbis) will be missing."
-    echo "         Install vcpkg + libs for x64-mingw-dynamic, or set VCPKG_ROOT."
+                            "-DVCPKG_TARGET_TRIPLET=$VCPKG_TRIPLET" )
+        echo "vcpkg: $VCPKG_DIR (triplet $VCPKG_TRIPLET)"
+    else
+        echo "Warning: vcpkg not found; render deps (libsndfile/libvorbis) will be missing."
+        echo "         Install vcpkg + libs for x64-mingw-dynamic, or set VCPKG_ROOT."
+    fi
 }
 
 set_bin_path() {

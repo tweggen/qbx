@@ -15,6 +15,7 @@ source "$SCRIPT_DIR/_env.sh"
 detect_platform
 resolve_qt_path "$1"
 setup_toolchain
+ensure_render_deps
 setup_extra_cmake_args
 set_bin_path
 
