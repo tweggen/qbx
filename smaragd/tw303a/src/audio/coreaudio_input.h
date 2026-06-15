@@ -27,15 +27,14 @@ public:
     std::vector<AudioInputDeviceInfo> listDevices() const override;
     const char *errorMessage() const override;
 
-    // Called from AudioQueue callback to buffer audio
+    // Called from the input render callback to buffer audio
     void bufferAudioData(const float *audioData, std::size_t frameCount);
 
 private:
     AudioInputConfig config_;
     std::string lastError_;
 
-    AudioQueueRef inputQueue_ = nullptr;
-    AudioQueueBufferRef queueBuffers_[2];
+    AudioComponentInstance audioUnit_ = nullptr;
     bool isCapturing_ = false;
 
     // Circular buffer for captured audio
@@ -44,9 +43,6 @@ private:
     std::atomic<std::size_t> readPos_{0};
     std::mutex bufferMutex_;
     std::condition_variable bufferCV_;
-
-    friend void audioQueueInputCallback(void *, AudioQueueRef, AudioQueueBufferRef,
-                                        const AudioTimeStamp *, UInt32, const AudioStreamPacketDescription *);
 };
 
 }  // namespace audio

@@ -1,28 +1,32 @@
 #include "coreaudio_input.h"
 
+#include <AudioToolbox/AudioToolbox.h>
 #include <cstdint>
 #include <cstring>
 
 namespace audio {
 
-// AudioQueue input callback — invoked when a buffer is filled with audio data
-void audioQueueInputCallback(void *inUserData,
-                             AudioQueueRef inAQ,
-                             AudioQueueBufferRef inBuffer,
-                             const AudioTimeStamp *inStartTime,
-                             UInt32 inNumberPacketDescriptions,
-                             const AudioStreamPacketDescription *inPacketDescs) {
-    CoreAudioInput *pThis = static_cast<CoreAudioInput *>(inUserData);
-    if (!pThis || !inBuffer || !inBuffer->mAudioData || inBuffer->mAudioDataByteSize == 0) {
-        if (inBuffer) {
-            AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, nullptr);
-        }
-        return;
+// Static callback for input render — receives audio from the device
+static OSStatus inputRenderCallback(void *inRefCon,
+                                    AudioUnitRenderActionFlags *ioActionFlags,
+                                    const AudioTimeStamp *inTimeStamp,
+                                    UInt32 inBusNumber,
+                                    UInt32 inNumberFrames,
+                                    AudioBufferList *ioData) {
+    CoreAudioInput *pThis = static_cast<CoreAudioInput *>(inRefCon);
+    if (!pThis || !ioData || ioData->mNumberBuffers == 0) {
+        return noErr;
     }
 
-    // Device provides int16 PCM. Convert to float for internal use.
-    const int16_t *int16Data = static_cast<const int16_t *>(inBuffer->mAudioData);
-    std::size_t sampleCount = inBuffer->mAudioDataByteSize / sizeof(int16_t);
+    // ioData contains the captured audio from the device
+    const AudioBuffer &buffer = ioData->mBuffers[0];
+    if (!buffer.mData || buffer.mDataByteSize == 0) {
+        return noErr;
+    }
+
+    // Audio is in the device's native format (int16). Convert to float.
+    const int16_t *int16Data = static_cast<const int16_t *>(buffer.mData);
+    std::size_t sampleCount = buffer.mDataByteSize / sizeof(int16_t);
 
     // Debug: check raw int16 values
     static int debugCount = 0;
@@ -33,11 +37,11 @@ void audioQueueInputCallback(void *inUserData,
             if (absVal > maxInt) maxInt = absVal;
         }
         fprintf(stderr, "coreaudio_input callback #%d: sampleCount=%zu, mAudioDataByteSize=%u, maxInt16=%d\n",
-                debugCount, sampleCount, (unsigned)inBuffer->mAudioDataByteSize, (int)maxInt);
+                debugCount, sampleCount, (unsigned)buffer.mDataByteSize, (int)maxInt);
         fflush(stderr);
     }
 
-    // Convert int16 to float and buffer (int16 range: -32768 to 32767)
+    // Convert int16 to float and buffer
     static std::vector<float> floatBuffer;
     floatBuffer.clear();
     floatBuffer.reserve(sampleCount);
@@ -53,17 +57,16 @@ void audioQueueInputCallback(void *inUserData,
         pThis->bufferAudioData(floatBuffer.data(), frameCount);
     }
 
-    // Re-enqueue the buffer so CoreAudio can fill it again
-    AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, nullptr);
+    return noErr;
 }
 
 CoreAudioInput::CoreAudioInput() {
     config_.sampleRate = 48000;
-    config_.channels = 2;
+    config_.channels = 1;  // Start with mono input
     config_.bufferFrames = 1024;
     config_.sampleType = twSampleType::Float32;
-    // Allocate circular buffer: 2 seconds at max sample rate (48kHz) * 2 channels * float
-    circularBuffer_.resize(2 * 48000 * 2);
+    // Allocate circular buffer: 2 seconds at max sample rate (48kHz) * 1 channel * float
+    circularBuffer_.resize(2 * 48000 * 1);
 }
 
 CoreAudioInput::~CoreAudioInput() {
@@ -71,103 +74,140 @@ CoreAudioInput::~CoreAudioInput() {
 }
 
 int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t preferredRate) {
-    if (inputQueue_) {
+    if (audioUnit_) {
         lastError_ = "Device already open";
         return -1;
     }
 
-    // Simple approach: request 16-bit PCM at the preferred rate (or 48kHz default)
-    // and let AudioQueue use the system's default input device and handle format conversion
+    // Create HAL input audio unit (same approach as playback)
+    AudioComponentDescription desc;
+    std::memset(&desc, 0, sizeof(desc));
+    desc.componentType = kAudioUnitType_Output;
+    desc.componentSubType = kAudioUnitSubType_HALOutput;
+    desc.componentManufacturer = kAudioUnitManufacturer_Apple;
+
+    AudioComponent comp = AudioComponentFindNext(nullptr, &desc);
+    if (!comp) {
+        lastError_ = "Failed to find HAL output component";
+        return -1;
+    }
+
+    OSStatus status = AudioComponentInstanceNew(comp, &audioUnit_);
+    if (status != noErr) {
+        lastError_ = "Failed to create audio unit instance";
+        return -1;
+    }
+
+    // Enable input on the audio unit
+    UInt32 enableIO = 1;
+    status = AudioUnitSetProperty(audioUnit_, kAudioOutputUnitProperty_EnableIO,
+                                  kAudioUnitScope_Input, 1, &enableIO, sizeof(enableIO));
+    if (status != noErr) {
+        lastError_ = "Failed to enable input on audio unit";
+        AudioComponentInstanceDispose(audioUnit_);
+        audioUnit_ = nullptr;
+        return -1;
+    }
+
+    // Disable output scope (we only want input)
+    enableIO = 0;
+    AudioUnitSetProperty(audioUnit_, kAudioOutputUnitProperty_EnableIO,
+                        kAudioUnitScope_Output, 0, &enableIO, sizeof(enableIO));
+
+    // Set input render callback
+    AURenderCallbackStruct callback;
+    callback.inputProc = inputRenderCallback;
+    callback.inputProcRefCon = this;
+
+    status = AudioUnitSetProperty(audioUnit_, kAudioUnitProperty_SetRenderCallback,
+                                 kAudioUnitScope_Output, 1, &callback, sizeof(callback));
+    if (status != noErr) {
+        lastError_ = "Failed to set input render callback";
+        AudioComponentInstanceDispose(audioUnit_);
+        audioUnit_ = nullptr;
+        return -1;
+    }
+
+    // Set up audio format: 16-bit PCM at requested rate
     AudioStreamBasicDescription format;
     std::memset(&format, 0, sizeof(format));
     format.mSampleRate = preferredRate > 0 ? preferredRate : 48000.0;
     format.mFormatID = kAudioFormatLinearPCM;
     format.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
-    format.mBytesPerPacket = 2; // 16-bit = 2 bytes
+    format.mBytesPerPacket = 2 * 1;  // 16-bit mono
     format.mFramesPerPacket = 1;
-    format.mBytesPerFrame = 2;
+    format.mBytesPerFrame = 2 * 1;
     format.mChannelsPerFrame = 1;
     format.mBitsPerChannel = 16;
 
-    fprintf(stderr, "coreaudio_input: requesting %u Hz, 1 channel, 16-bit PCM\n", (unsigned)format.mSampleRate);
-    fflush(stderr);
+    status = AudioUnitSetProperty(audioUnit_, kAudioUnitProperty_StreamFormat,
+                                 kAudioUnitScope_Output, 1, &format, sizeof(format));
+    if (status != noErr) {
+        lastError_ = "Failed to set audio format";
+        AudioComponentInstanceDispose(audioUnit_);
+        audioUnit_ = nullptr;
+        return -1;
+    }
 
     config_.sampleRate = static_cast<std::uint32_t>(format.mSampleRate);
     config_.channels = format.mChannelsPerFrame;
 
-    // Create audio queue with default system input device
-    OSStatus status = AudioQueueNewInput(&format, audioQueueInputCallback, this,
-                                         nullptr, nullptr, 0, &inputQueue_);
+    // Initialize the audio unit
+    status = AudioUnitInitialize(audioUnit_);
     if (status != noErr) {
-        lastError_ = "Failed to create audio queue";
-        fprintf(stderr, "coreaudio_input: AudioQueueNewInput failed with status %d\n", (int)status);
+        lastError_ = "Failed to initialize audio unit";
+        AudioComponentInstanceDispose(audioUnit_);
+        audioUnit_ = nullptr;
         return -1;
     }
 
-    // Don't try to set a specific device - use system default (the microphone user selected)
-
-    // Create and enqueue buffers
-    const UInt32 bufferByteSize = config_.bufferFrames * config_.channels * sizeof(int16_t);
-    for (int i = 0; i < 2; ++i) {
-        status = AudioQueueAllocateBuffer(inputQueue_, bufferByteSize, &queueBuffers_[i]);
-        if (status != noErr) {
-            lastError_ = "Failed to allocate audio queue buffer";
-            AudioQueueDispose(inputQueue_, true);
-            inputQueue_ = nullptr;
-            return -1;
-        }
-
-        status = AudioQueueEnqueueBuffer(inputQueue_, queueBuffers_[i], 0, nullptr);
-        if (status != noErr) {
-            lastError_ = "Failed to enqueue audio queue buffer";
-            AudioQueueDispose(inputQueue_, true);
-            inputQueue_ = nullptr;
-            return -1;
-        }
-    }
-
-    fprintf(stderr, "coreaudio_input: device opened, queue created\n");
+    fprintf(stderr, "coreaudio_input: HAL input unit opened at %u Hz\n",
+            (unsigned)config_.sampleRate);
     fflush(stderr);
+
     return 0;
 }
 
 int CoreAudioInput::closeDevice() {
     stopCapture();
 
-    if (inputQueue_) {
-        AudioQueueDispose(inputQueue_, true);
-        inputQueue_ = nullptr;
+    if (audioUnit_) {
+        AudioUnitUninitialize(audioUnit_);
+        AudioComponentInstanceDispose(audioUnit_);
+        audioUnit_ = nullptr;
     }
 
     return 0;
 }
 
 int CoreAudioInput::startCapture() {
-    if (!inputQueue_) {
-        lastError_ = "Audio queue not initialized";
+    if (!audioUnit_) {
+        lastError_ = "Audio unit not initialized";
         return -1;
     }
 
-    // Reset buffer
     writePos_.store(0);
     readPos_.store(0);
 
-    OSStatus status = AudioQueueStart(inputQueue_, nullptr);
+    OSStatus status = AudioOutputUnitStart(audioUnit_);
     if (status != noErr) {
-        lastError_ = "Failed to start audio queue";
+        lastError_ = "Failed to start audio unit";
         return -1;
     }
+
+    fprintf(stderr, "coreaudio_input: capture started\n");
+    fflush(stderr);
 
     isCapturing_ = true;
     return 0;
 }
 
 int CoreAudioInput::stopCapture() {
-    if (!inputQueue_ || !isCapturing_) {
+    if (!audioUnit_ || !isCapturing_) {
         return 0;
     }
 
-    AudioQueueStop(inputQueue_, true);
+    AudioOutputUnitStop(audioUnit_);
     isCapturing_ = false;
     return 0;
 }
@@ -177,7 +217,7 @@ void CoreAudioInput::bufferAudioData(const float *audioData, std::size_t frameCo
         return;
     }
 
-    // Diagnostic: check if buffer contains actual audio or silence
+    // Diagnostic: check if buffer contains actual audio
     static int checkCount = 0;
     if (++checkCount <= 3) {
         float maxSample = 0.0f;
@@ -215,7 +255,6 @@ std::int32_t CoreAudioInput::read(float *interleaved, std::size_t frameCount) {
 
     std::unique_lock<std::mutex> lock(bufferMutex_);
 
-    // Wait for data with timeout
     std::size_t rp = readPos_.load();
     std::size_t wp = writePos_.load();
     std::size_t framesAvailable = (wp >= rp) ? (wp - rp) : (circularBuffer_.size() - rp + wp);
@@ -248,11 +287,7 @@ const AudioInputConfig &CoreAudioInput::getConfig() const {
 
 std::vector<AudioInputDeviceInfo> CoreAudioInput::listDevices() const {
     std::vector<AudioInputDeviceInfo> devices;
-
-    // TODO: Enumerate CoreAudio input devices using AudioObjectFind and property queries
-    // For now, just return the default device
     devices.push_back({"default", "Default Input", config_.channels});
-
     return devices;
 }
 
