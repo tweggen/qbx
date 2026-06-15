@@ -69,7 +69,9 @@ logic lives in `_env.sh`, sourced by both):
 omit it to auto-detect. On Windows the scripts add Qt's bundled MinGW/Ninja to
 PATH (the compiler lives in `<QtRoot>/Tools`, *outside* the Qt prefix) and wire
 up vcpkg (`-DCMAKE_TOOLCHAIN_FILE` + `x64-mingw-dynamic` triplet) for the render
-deps automatically.
+deps automatically. `AUTO_DEPLOY_QT` defaults ON, so `windeployqt` copies the Qt
+runtime + plugins + MinGW runtime next to the exe — the binary is self-contained
+and runnable without any PATH setup (`AUTO_DEPLOY_QT=OFF` in the env to skip it).
 
 **Manual (Windows, equivalent):**
 ```powershell

@@ -35,10 +35,14 @@ if [ -d "build" ]; then
 fi
 
 # Configure
+# AUTO_DEPLOY_QT defaults ON: a windeployqt/macdeployqt POST_BUILD step copies
+# the Qt runtime, plugins, and (MinGW) compiler runtime next to the binary so it
+# launches without Qt on PATH. Override with AUTO_DEPLOY_QT=OFF in the env for
+# faster iteration when you run with Qt already on PATH.
 echo "Configuring CMake..."
 cmake -B build -G Ninja \
     -DCMAKE_PREFIX_PATH="$QT_PATH" \
-    -DAUTO_DEPLOY_QT=OFF \
+    -DAUTO_DEPLOY_QT="${AUTO_DEPLOY_QT:-ON}" \
     "${CMAKE_EXTRA_ARGS[@]}"
 
 # Build

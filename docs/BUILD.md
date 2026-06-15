@@ -154,8 +154,13 @@ cmake -B build -G Ninja `
 cmake --build build
 ```
 
-To **run** the resulting `build\bin\smaragd.exe`, Qt's `bin` and the MinGW `bin`
-must be on PATH (the vcpkg runtime DLLs are auto-deployed next to the exe).
+The resulting `build\bin\smaragd.exe` is **self-contained and runnable in
+place** — `AUTO_DEPLOY_QT` (ON by default) runs `windeployqt` as a post-build
+step, copying the Qt runtime, the `platforms\qwindows.dll` plugin, and the
+MinGW compiler runtime (`libstdc++-6`, `libgcc_s_seh-1`, `libwinpthread-1`) next
+to the exe; vcpkg deploys the audio DLLs alongside. No PATH setup is needed to
+launch it. (If you build with `AUTO_DEPLOY_QT=OFF` for faster iteration, you
+must instead put Qt's `bin` and the MinGW `bin` on PATH to run.)
 
 Alternative generators (untested but should work once `CMAKE_PREFIX_PATH`
 points at a matching Qt build):
