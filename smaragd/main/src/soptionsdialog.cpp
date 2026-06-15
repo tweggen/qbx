@@ -4,6 +4,7 @@
 #include "sapplication.h"
 #include "twspeaker.h"
 #include "audio/audio_backend.h"
+#include "audio/audio_input.h"
 
 #include <QTreeWidget>
 #include <QStackedWidget>
@@ -113,6 +114,9 @@ QWidget *SOptionsDialog::buildAudioPage()
     form->addRow( "Input device:", audioInputDevice_ );
     form->addRow( new QLabel( "Device selection is used when recording starts." ) );
 
+    inputLatencyLabel_ = new QLabel;
+    form->addRow( "Input latency:", inputLatencyLabel_ );
+
     bufferSizeCombo_ = new QComboBox;
     form->addRow( "Buffer size:", bufferSizeCombo_ );
     form->addRow( new QLabel( "Smaller buffer = lower latency but higher CPU load. "
@@ -211,8 +215,30 @@ void SOptionsDialog::loadAudioPage()
             }
         }
 
+        // Display input latency (symmetric with output latency)
+        std::unique_ptr<audio::AudioInput> input = audio::createAudioInput();
+        if( input ) {
+            QString inputDeviceId = audioInputDevice_->currentData().toString();
+            if( input->openDevice( inputDeviceId.toStdString(), backend ? backend->getConfig().sampleRate : 0 ) == 0 ) {
+                uint32_t inLatency = input->getLatencyFrames();
+                if( inLatency > 0 ) {
+                    uint32_t sampleRate = input->getConfig().sampleRate;
+                    double ms = static_cast<double>(inLatency) / sampleRate * 1000.0;
+                    inputLatencyLabel_->setText( QString::asprintf( "~%.1f ms (%u frames)", ms, inLatency ) );
+                } else {
+                    inputLatencyLabel_->setText( "(not yet measured)" );
+                }
+                input->closeDevice();
+            } else {
+                inputLatencyLabel_->setText( "(device unavailable)" );
+            }
+        } else {
+            inputLatencyLabel_->setText( "(not available)" );
+        }
+
     } else {
         outputLatencyLabel_->setText( "(not available)" );
+        inputLatencyLabel_->setText( "(not available)" );
         bufferSizeCombo_->setEnabled( false );
     }
 }
