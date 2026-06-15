@@ -3,8 +3,12 @@
 
 #include "audio/audio_input.h"
 
-#include <CoreAudio/CoreAudio.h>
 #include <AudioToolbox/AudioToolbox.h>
+#include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <vector>
 
 namespace audio {
 
@@ -24,13 +28,26 @@ public:
     std::vector<AudioInputDeviceInfo> listDevices() const override;
     const char *errorMessage() const override;
 
+    // Called from AudioQueue callback to buffer audio
+    void bufferAudioData(const float *audioData, std::size_t frameCount);
+
 private:
     AudioInputConfig config_;
     std::string lastError_;
 
-    AudioDeviceID inputDeviceID_ = 0;
-    AudioComponentInstance audioUnit_ = nullptr;
+    AudioQueueRef inputQueue_ = nullptr;
+    AudioQueueBufferRef queueBuffers_[2];
     bool isCapturing_ = false;
+
+    // Circular buffer for captured audio
+    std::vector<float> circularBuffer_;
+    std::atomic<std::size_t> writePos_{0};
+    std::atomic<std::size_t> readPos_{0};
+    std::mutex bufferMutex_;
+    std::condition_variable bufferCV_;
+
+    friend void audioQueueInputCallback(void *, AudioQueueRef, AudioQueueBufferRef,
+                                        const AudioTimeStamp *, UInt32, const AudioStreamPacketDescription *);
 };
 
 }  // namespace audio

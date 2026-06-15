@@ -1,15 +1,38 @@
 #include "coreaudio_input.h"
 
 #include <cstring>
-#include <sstream>
 
 namespace audio {
+
+// AudioQueue input callback — invoked when a buffer is filled with audio data
+void audioQueueInputCallback(void *inUserData,
+                             AudioQueueRef inAQ,
+                             AudioQueueBufferRef inBuffer,
+                             const AudioTimeStamp *inStartTime,
+                             UInt32 inNumberPacketDescriptions,
+                             const AudioStreamPacketDescription *inPacketDescs) {
+    CoreAudioInput *pThis = static_cast<CoreAudioInput *>(inUserData);
+    if (!pThis || !inBuffer->mAudioData) {
+        return;
+    }
+
+    // Extract audio from the buffer and buffer it
+    const float *audioData = static_cast<const float *>(inBuffer->mAudioData);
+    std::size_t frameCount = inBuffer->mAudioDataByteSize / (pThis->getConfig().channels * sizeof(float));
+
+    pThis->bufferAudioData(audioData, frameCount);
+
+    // Re-enqueue the buffer so CoreAudio can fill it again
+    AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, nullptr);
+}
 
 CoreAudioInput::CoreAudioInput() {
     config_.sampleRate = 48000;
     config_.channels = 2;
     config_.bufferFrames = 1024;
     config_.sampleType = twSampleType::Float32;
+    // Allocate circular buffer: 2 seconds at max sample rate (48kHz) * 2 channels * float
+    circularBuffer_.resize(2 * 48000 * 2);
 }
 
 CoreAudioInput::~CoreAudioInput() {
@@ -17,123 +40,52 @@ CoreAudioInput::~CoreAudioInput() {
 }
 
 int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t preferredRate) {
-    OSStatus status = noErr;
+    if (inputQueue_) {
+        lastError_ = "Device already open";
+        return -1;
+    }
 
-    // Get default input device if "default" requested
-    if (deviceId == "default") {
-        UInt32 dataSize = sizeof(AudioDeviceID);
-        AudioObjectPropertyAddress addr = {kAudioHardwarePropertyDefaultInputDevice,
-                                            kAudioObjectPropertyScopeGlobal,
-                                            kAudioObjectPropertyElementMain};
+    // Set up audio format
+    AudioStreamBasicDescription format;
+    std::memset(&format, 0, sizeof(format));
+    format.mSampleRate = preferredRate > 0 ? preferredRate : 48000.0;
+    format.mFormatID = kAudioFormatLinearPCM;
+    format.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+    format.mBytesPerPacket = sizeof(float) * 2;
+    format.mFramesPerPacket = 1;
+    format.mBytesPerFrame = sizeof(float) * 2;
+    format.mChannelsPerFrame = 2;
+    format.mBitsPerChannel = 32;
 
-        status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr,
-                                             &dataSize, &inputDeviceID_);
+    config_.sampleRate = static_cast<std::uint32_t>(format.mSampleRate);
+    config_.channels = format.mChannelsPerFrame;
+
+    // Create the audio queue
+    OSStatus status = AudioQueueNewInput(&format, audioQueueInputCallback, this,
+                                         nullptr, nullptr, 0, &inputQueue_);
+    if (status != noErr) {
+        lastError_ = "Failed to create audio queue";
+        return -1;
+    }
+
+    // Create and enqueue buffers
+    const UInt32 bufferByteSize = config_.bufferFrames * config_.channels * sizeof(float);
+    for (int i = 0; i < 2; ++i) {
+        status = AudioQueueAllocateBuffer(inputQueue_, bufferByteSize, &queueBuffers_[i]);
         if (status != noErr) {
-            lastError_ = "Failed to get default input device";
+            lastError_ = "Failed to allocate audio queue buffer";
+            AudioQueueDispose(inputQueue_, true);
+            inputQueue_ = nullptr;
             return -1;
         }
-    } else {
-        // TODO: Parse device ID string and get device
-        // For now, use default
-        UInt32 dataSize = sizeof(AudioDeviceID);
-        AudioObjectPropertyAddress addr = {kAudioHardwarePropertyDefaultInputDevice,
-                                            kAudioObjectPropertyScopeGlobal,
-                                            kAudioObjectPropertyElementMain};
 
-        status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr,
-                                             &dataSize, &inputDeviceID_);
+        status = AudioQueueEnqueueBuffer(inputQueue_, queueBuffers_[i], 0, nullptr);
         if (status != noErr) {
-            lastError_ = "Failed to get input device";
+            lastError_ = "Failed to enqueue audio queue buffer";
+            AudioQueueDispose(inputQueue_, true);
+            inputQueue_ = nullptr;
             return -1;
         }
-    }
-
-    // Create audio unit for HAL input
-    AudioComponentDescription desc;
-    std::memset(&desc, 0, sizeof(desc));
-    desc.componentType = kAudioUnitType_Output;
-    desc.componentSubType = kAudioUnitSubType_HALOutput;
-    desc.componentManufacturer = kAudioUnitManufacturer_Apple;
-
-    AudioComponent comp = AudioComponentFindNext(nullptr, &desc);
-    if (!comp) {
-        lastError_ = "Failed to find audio component";
-        return -1;
-    }
-
-    status = AudioComponentInstanceNew(comp, &audioUnit_);
-    if (status != noErr) {
-        lastError_ = "Failed to create audio unit instance";
-        return -1;
-    }
-
-    // Enable input on the audio unit
-    UInt32 enableIO = 1;
-    status = AudioUnitSetProperty(audioUnit_, kAudioOutputUnitProperty_EnableIO,
-                                   kAudioUnitScope_Input, 1, &enableIO, sizeof(enableIO));
-    if (status != noErr) {
-        lastError_ = "Failed to enable input on audio unit";
-        AudioComponentInstanceDispose(audioUnit_);
-        audioUnit_ = nullptr;
-        return -1;
-    }
-
-    // Disable output
-    enableIO = 0;
-    AudioUnitSetProperty(audioUnit_, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output,
-                         0, &enableIO, sizeof(enableIO));
-
-    // Set input device
-    status = AudioUnitSetProperty(audioUnit_, kAudioOutputUnitProperty_CurrentDevice,
-                                   kAudioUnitScope_Input, 1, &inputDeviceID_,
-                                   sizeof(inputDeviceID_));
-    if (status != noErr) {
-        lastError_ = "Failed to set input device";
-        AudioComponentInstanceDispose(audioUnit_);
-        audioUnit_ = nullptr;
-        return -1;
-    }
-
-    // Get device format and set it on the audio unit
-    AudioStreamBasicDescription streamFormat;
-    UInt32 dataSize = sizeof(streamFormat);
-
-    AudioObjectPropertyAddress addr = {kAudioDevicePropertyStreamFormat, kAudioObjectPropertyScopeInput,
-                                        kAudioObjectPropertyElementMain};
-    status = AudioObjectGetPropertyData(inputDeviceID_, &addr, 0, nullptr, &dataSize,
-                                         &streamFormat);
-    if (status != noErr) {
-        lastError_ = "Failed to get device stream format";
-        AudioComponentInstanceDispose(audioUnit_);
-        audioUnit_ = nullptr;
-        return -1;
-    }
-
-    // Override sample rate if preferred
-    if (preferredRate > 0) {
-        streamFormat.mSampleRate = preferredRate;
-    }
-
-    config_.sampleRate = static_cast<std::uint32_t>(streamFormat.mSampleRate);
-    config_.channels = streamFormat.mChannelsPerFrame;
-
-    // Set the format on the audio unit
-    status = AudioUnitSetProperty(audioUnit_, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output,
-                                   1, &streamFormat, sizeof(streamFormat));
-    if (status != noErr) {
-        lastError_ = "Failed to set stream format on audio unit";
-        AudioComponentInstanceDispose(audioUnit_);
-        audioUnit_ = nullptr;
-        return -1;
-    }
-
-    // Initialize audio unit
-    status = AudioUnitInitialize(audioUnit_);
-    if (status != noErr) {
-        lastError_ = "Failed to initialize audio unit";
-        AudioComponentInstanceDispose(audioUnit_);
-        audioUnit_ = nullptr;
-        return -1;
     }
 
     return 0;
@@ -142,25 +94,27 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
 int CoreAudioInput::closeDevice() {
     stopCapture();
 
-    if (audioUnit_) {
-        AudioUnitUninitialize(audioUnit_);
-        AudioComponentInstanceDispose(audioUnit_);
-        audioUnit_ = nullptr;
+    if (inputQueue_) {
+        AudioQueueDispose(inputQueue_, true);
+        inputQueue_ = nullptr;
     }
 
-    inputDeviceID_ = 0;
     return 0;
 }
 
 int CoreAudioInput::startCapture() {
-    if (!audioUnit_) {
-        lastError_ = "Audio unit not initialized";
+    if (!inputQueue_) {
+        lastError_ = "Audio queue not initialized";
         return -1;
     }
 
-    OSStatus status = AudioOutputUnitStart(audioUnit_);
+    // Reset buffer
+    writePos_.store(0);
+    readPos_.store(0);
+
+    OSStatus status = AudioQueueStart(inputQueue_, nullptr);
     if (status != noErr) {
-        lastError_ = "Failed to start audio unit";
+        lastError_ = "Failed to start audio queue";
         return -1;
     }
 
@@ -169,23 +123,69 @@ int CoreAudioInput::startCapture() {
 }
 
 int CoreAudioInput::stopCapture() {
-    if (!audioUnit_ || !isCapturing_) {
+    if (!inputQueue_ || !isCapturing_) {
         return 0;
     }
 
-    AudioOutputUnitStop(audioUnit_);
+    AudioQueueStop(inputQueue_, true);
     isCapturing_ = false;
     return 0;
 }
 
-std::int32_t CoreAudioInput::read(float *interleaved, std::size_t frameCount) {
-    // TODO: Implement actual audio reading from CoreAudio
-    // This would require setting up an input callback on the audio unit
-    // For now, return silence
-    if (interleaved) {
-        std::memset(interleaved, 0, frameCount * config_.channels * sizeof(float));
+void CoreAudioInput::bufferAudioData(const float *audioData, std::size_t frameCount) {
+    if (!audioData || frameCount == 0) {
+        return;
     }
-    return static_cast<std::int32_t>(frameCount);
+
+    std::unique_lock<std::mutex> lock(bufferMutex_);
+    std::size_t wp = writePos_.load();
+    std::size_t rp = readPos_.load();
+    std::size_t inSamples = frameCount * config_.channels;
+
+    for (std::size_t i = 0; i < inSamples; ++i) {
+        std::size_t nextWp = (wp + 1) % circularBuffer_.size();
+        if (nextWp != rp) {
+            circularBuffer_[wp] = audioData[i];
+            wp = nextWp;
+        }
+    }
+
+    writePos_.store(wp);
+    bufferCV_.notify_one();
+}
+
+std::int32_t CoreAudioInput::read(float *interleaved, std::size_t frameCount) {
+    if (!interleaved || frameCount == 0) {
+        return 0;
+    }
+
+    std::unique_lock<std::mutex> lock(bufferMutex_);
+
+    // Wait for data with timeout
+    std::size_t rp = readPos_.load();
+    std::size_t wp = writePos_.load();
+    std::size_t framesAvailable = (wp >= rp) ? (wp - rp) : (circularBuffer_.size() - rp + wp);
+
+    if (framesAvailable < frameCount && isCapturing_) {
+        bufferCV_.wait_for(lock, std::chrono::milliseconds(100));
+        rp = readPos_.load();
+        wp = writePos_.load();
+        framesAvailable = (wp >= rp) ? (wp - rp) : (circularBuffer_.size() - rp + wp);
+    }
+
+    std::size_t framesCopied = std::min(frameCount, framesAvailable);
+    std::size_t samplesCopied = 0;
+
+    for (std::size_t i = 0; i < framesCopied; ++i) {
+        for (std::uint32_t c = 0; c < config_.channels; ++c) {
+            std::size_t idx = (rp + i) % circularBuffer_.size();
+            interleaved[samplesCopied++] = circularBuffer_[idx];
+        }
+    }
+
+    readPos_.store((rp + framesCopied) % circularBuffer_.size());
+
+    return static_cast<std::int32_t>(framesCopied);
 }
 
 const AudioInputConfig &CoreAudioInput::getConfig() const {
