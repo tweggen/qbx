@@ -5,6 +5,38 @@ The build system is **CMake** (>= 3.16).
 All CMake commands below should be run from the `smaragd/` subdirectory of the
 repository (the directory that contains `CMakeLists.txt`).
 
+## Quick start (recommended): the build scripts
+
+Two scripts at the repo root wrap the CMake invocation and work on macOS,
+Linux, and Windows (Git Bash / MSYS). They detect the platform and locate the
+toolchain for you:
+
+```bash
+./rebuild.sh [QT_PATH]   # clean rebuild (wipes build/, configures, builds)
+./build.sh   [QT_PATH]   # incremental build (configures first if build/ is missing)
+```
+
+`QT_PATH` is the Qt prefix (e.g. `/c/Qt/6.11.1/mingw_64`,
+`$HOME/Qt/6.11.1/macos`, `$HOME/Qt/6.11.1/gcc_64`). If omitted, it is guessed
+per platform; you can also point at any kit explicitly.
+
+What the scripts handle automatically (logic lives in `_env.sh`, sourced by
+both):
+
+- **Platform detection** via `uname`.
+- **Windows toolchain on PATH:** Qt's MinGW compiler and Ninja live in a
+  *separate* `<QtRoot>/Tools` install, **not** inside the Qt prefix. The script
+  derives `<QtRoot>` from `QT_PATH` and prepends `Tools/mingw*/bin`,
+  `Tools/Ninja`, and `Tools/CMake*/bin` to `PATH`, so CMake/Ninja find
+  `gcc`/`g++`/`ninja` without you naming the compiler.
+- **vcpkg wiring (Windows):** auto-detects a vcpkg install (`$VCPKG_ROOT`,
+  `~/vcpkg`, `/c/vcpkg`, …) and passes `-DCMAKE_TOOLCHAIN_FILE` +
+  `-DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic` so the render deps
+  (libsndfile/libvorbis) are found.
+
+The manual CMake commands below remain valid if you prefer to drive CMake
+directly or need a generator the scripts don't use (e.g. MSVC, Xcode).
+
 ## Requirements
 
 | Tool          | Version  | Notes                                                                  |
@@ -62,32 +94,47 @@ Alternatively, for Qt5:
 brew install qt@5 cmake libsndfile libvorbis
 ```
 
-> **Status:** The CMake configuration is ready, but `tw303a/src/twspeaker.cc`
-> still contains Linux-only POSIX includes (`unistd.h`, `sys/ioctl.h`,
-> `syslog.h`) and a deprecated pre-10.5 CoreAudio code path. Compilation will
-> fail until the audio abstraction layer (Phase 2) lands.
+> **Status:** Builds and runs; the CoreAudio backend is audible with a device
+> picker. The build scripts also work here — `./rebuild.sh $HOME/Qt/6.11.1/macos`
+> (uses Ninja + clang). The Xcode generator above remains a valid alternative.
 
 ## Windows
 
-**Verified working (configure step):** Qt 6.11.1 + MinGW 13.1 + Ninja, both
-bundled by the Qt online installer.
+**Verified working:** Qt 6.11.1 + MinGW 13.1 + Ninja, both bundled by the Qt
+online installer.
 
-Install dependencies via **vcpkg** (from your vcpkg clone):
+The render deps (libsndfile/libvorbis) are not part of Qt's MinGW kit, so
+install them via **vcpkg** for the MinGW-ABI triplet (built with Qt's g++):
 
 ```powershell
-.\vcpkg install libsndfile:x64-windows libvorbis:x64-windows
+.\vcpkg install libsndfile:x64-mingw-dynamic libvorbis:x64-mingw-dynamic pkgconf:x64-mingw-dynamic
 ```
 
-Then build:
+> Use `x64-mingw-dynamic`, **not** `x64-windows` — the latter is MSVC-ABI and
+> won't link against a MinGW build. vcpkg's `pkgconf` also satisfies
+> `find_package(PkgConfig)`, which Qt's MinGW kit lacks.
+
+**Easiest path — use the script** (from Git Bash, repo root). It puts the MinGW
+toolchain on PATH and wires up vcpkg automatically:
+
+```bash
+./rebuild.sh /c/Qt/6.11.1/mingw_64
+```
+
+**Manual equivalent** (PowerShell, from `smaragd/`):
 
 ```powershell
 $env:PATH = "C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;" + $env:PATH
 cd smaragd
 cmake -B build -G Ninja `
   -DCMAKE_PREFIX_PATH="C:/Qt/6.11.1/mingw_64" `
-  -DCMAKE_TOOLCHAIN_FILE="<path-to-vcpkg>/scripts/buildsystems/vcpkg.cmake"
+  -DCMAKE_TOOLCHAIN_FILE="C:/Users/<you>/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+  -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic
 cmake --build build
 ```
+
+To **run** the resulting `build\bin\smaragd.exe`, Qt's `bin` and the MinGW `bin`
+must be on PATH (the vcpkg runtime DLLs are auto-deployed next to the exe).
 
 Alternative generators (untested but should work once `CMAKE_PREFIX_PATH`
 points at a matching Qt build):
@@ -101,11 +148,9 @@ cmake --build build --config Release
 cmake -B build -G "Visual Studio 17 2022" -DCMAKE_PREFIX_PATH="C:/Qt/5.15.2/msvc2019_64"
 ```
 
-> **Status:** CMake configure is green. Compilation fails until Phase 2 lands
-> because `tw303a/src/twspeaker.cc`, `twmixer.cc`, `twlatch.cc`, `twpipe.cc`,
-> `twcomponent.cc`, `twconstant.cc`, `twsimplesaw.cc` and others
-> unconditionally `#include <syslog.h>` / `<sys/ioctl.h>` / `<unistd.h>`,
-> which are not present on MinGW. See `plan/STATE.md`.
+> **Status:** Builds and runs with the Qt 6.11.1 MinGW kit (Ninja). The Phase 2
+> audio abstraction has landed, so the POSIX-only includes that previously broke
+> the MinGW build are gone. See `plan/STATE.md`.
 
 ## Testing Audio Render
 

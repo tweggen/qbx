@@ -57,11 +57,27 @@ docs/
 
 ## Build & Run
 
-Windows (typical):
+**Recommended — the build scripts** (work on macOS, Linux, and Windows/Git Bash;
+logic lives in `_env.sh`, sourced by both):
+
+```bash
+./rebuild.sh [QT_PATH]   # clean rebuild
+./build.sh   [QT_PATH]   # incremental build (auto-configures if build/ is missing)
+```
+
+`QT_PATH` is the Qt prefix (e.g. `/c/Qt/6.11.1/mingw_64`, `$HOME/Qt/6.11.1/macos`);
+omit it to auto-detect. On Windows the scripts add Qt's bundled MinGW/Ninja to
+PATH (the compiler lives in `<QtRoot>/Tools`, *outside* the Qt prefix) and wire
+up vcpkg (`-DCMAKE_TOOLCHAIN_FILE` + `x64-mingw-dynamic` triplet) for the render
+deps automatically.
+
+**Manual (Windows, equivalent):**
 ```powershell
 $env:PATH = "C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;" + $env:PATH
 cd smaragd
-cmake -B build -G Ninja -DCMAKE_PREFIX_PATH="C:/Qt/6.11.1/mingw_64"
+cmake -B build -G Ninja -DCMAKE_PREFIX_PATH="C:/Qt/6.11.1/mingw_64" `
+  -DCMAKE_TOOLCHAIN_FILE="<vcpkg>/scripts/buildsystems/vcpkg.cmake" `
+  -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic
 cmake --build build
 & .\build\bin\smaragd.exe
 ```

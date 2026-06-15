@@ -1,0 +1,134 @@
+#!/bin/bash
+# Shared environment + toolchain detection for build.sh / rebuild.sh.
+# This file is *sourced*, not executed. It defines helper functions and,
+# after they run, these variables:
+#   PLATFORM   macos | linux | windows
+#   QT_PATH    Qt prefix to pass as CMAKE_PREFIX_PATH
+#   BIN_PATH   path to the built binary (for the success message)
+#
+# On Windows (Git Bash / MSYS), the MinGW compiler and Ninja ship under
+# <QtRoot>/Tools, which is NOT inside the Qt prefix. setup_toolchain()
+# locates them and prepends them to PATH so CMake/Ninja find gcc/g++/ninja.
+#
+# Typical use from a caller:
+#   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#   source "$SCRIPT_DIR/_env.sh"
+#   detect_platform
+#   resolve_qt_path "$1"
+#   setup_toolchain
+#   set_bin_path
+
+detect_platform() {
+    case "$(uname -s)" in
+        Darwin*)              PLATFORM="macos" ;;
+        Linux*)               PLATFORM="linux" ;;
+        MINGW*|MSYS*|CYGWIN*) PLATFORM="windows" ;;
+        *)
+            echo "Warning: unknown platform '$(uname -s)', assuming linux."
+            PLATFORM="linux"
+            ;;
+    esac
+}
+
+# $1 = optional user-provided Qt prefix. If empty, guess per platform.
+resolve_qt_path() {
+    if [ -n "$1" ]; then
+        QT_PATH="$1"
+        return
+    fi
+
+    QT_PATH=""
+    case "$PLATFORM" in
+        macos)
+            [ -d "$HOME/Qt" ] && QT_PATH=$(ls -d "$HOME/Qt"/6.*/macos 2>/dev/null | sort -V | tail -1)
+            ;;
+        linux)
+            [ -d "$HOME/Qt" ] && QT_PATH=$(ls -d "$HOME/Qt"/6.*/gcc_64 2>/dev/null | sort -V | tail -1)
+            ;;
+        windows)
+            local root
+            for root in /c/Qt C:/Qt "$HOME/Qt"; do
+                [ -d "$root" ] || continue
+                QT_PATH=$(ls -d "$root"/6.*/mingw_64 2>/dev/null | sort -V | tail -1)
+                [ -n "$QT_PATH" ] && break
+            done
+            ;;
+    esac
+
+    # Fallback: ask qmake if it's on PATH.
+    if [ -z "$QT_PATH" ] && command -v qmake &>/dev/null; then
+        QT_PATH=$(qmake -query QT_INSTALL_PREFIX)
+    fi
+
+    if [ -z "$QT_PATH" ]; then
+        echo "Error: Could not detect Qt installation."
+        echo "Usage: $0 /path/to/qt"
+        case "$PLATFORM" in
+            macos)   echo "Example: $0 \$HOME/Qt/6.11.1/macos" ;;
+            linux)   echo "Example: $0 \$HOME/Qt/6.11.1/gcc_64" ;;
+            windows) echo "Example: $0 /c/Qt/6.11.1/mingw_64" ;;
+        esac
+        exit 1
+    fi
+}
+
+# Prepend the bundled MinGW/Ninja/CMake toolchain to PATH on Windows.
+# No-op on macOS/Linux, where the system compiler is already on PATH.
+setup_toolchain() {
+    if [ "$PLATFORM" = "windows" ]; then
+        # QT_PATH = <QtRoot>/6.x.x/mingw_64  ->  QtRoot is two levels up.
+        local qt_root mingw_bin ninja_dir cmake_bin
+        qt_root=$(dirname "$(dirname "$QT_PATH")")
+
+        mingw_bin=$(ls -d "$qt_root"/Tools/mingw*/bin 2>/dev/null | sort -V | tail -1)
+        ninja_dir=$(ls -d "$qt_root"/Tools/Ninja     2>/dev/null | tail -1)
+        cmake_bin=$(ls -d "$qt_root"/Tools/CMake*/bin 2>/dev/null | sort -V | tail -1)
+
+        [ -n "$cmake_bin" ] && PATH="$cmake_bin:$PATH"
+        [ -n "$ninja_dir" ] && PATH="$ninja_dir:$PATH"
+        [ -n "$mingw_bin" ] && PATH="$mingw_bin:$PATH"
+        export PATH
+
+        if [ -n "$mingw_bin" ]; then
+            echo "Toolchain: $mingw_bin"
+        else
+            echo "Warning: MinGW toolchain not found under $qt_root/Tools."
+            echo "         CMake will likely fail to find a C/C++ compiler."
+        fi
+    fi
+
+    command -v ninja &>/dev/null || echo "Warning: 'ninja' not found on PATH."
+}
+
+# Populate CMAKE_EXTRA_ARGS (a bash array) with platform-specific configure
+# flags. On Windows the render deps (libsndfile/libvorbis/ogg) come from
+# vcpkg's x64-mingw-dynamic triplet, so wire up the vcpkg toolchain file if a
+# vcpkg install is found. No-op on macOS/Linux (system pkg-config + brew/apt).
+setup_extra_cmake_args() {
+    CMAKE_EXTRA_ARGS=()
+    [ "$PLATFORM" = "windows" ] || return
+
+    local root tc
+    for root in "$VCPKG_ROOT" "$HOME/vcpkg" /c/vcpkg /c/Users/*/vcpkg; do
+        [ -n "$root" ] || continue
+        tc="$root/scripts/buildsystems/vcpkg.cmake"
+        [ -f "$tc" ] || continue
+        # CMake wants a Windows-style path (C:/...), not MSYS (/c/...).
+        command -v cygpath &>/dev/null && tc="$(cygpath -m "$tc")"
+        CMAKE_EXTRA_ARGS+=( "-DCMAKE_TOOLCHAIN_FILE=$tc"
+                            "-DVCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET:-x64-mingw-dynamic}" )
+        echo "vcpkg: $root (triplet ${VCPKG_TARGET_TRIPLET:-x64-mingw-dynamic})"
+        return
+    done
+
+    echo "Warning: vcpkg not found; render deps (libsndfile/libvorbis) will be missing."
+    echo "         Install vcpkg + libs for x64-mingw-dynamic, or set VCPKG_ROOT."
+}
+
+set_bin_path() {
+    case "$PLATFORM" in
+        macos)   BIN_PATH="$PROJECT_DIR/build/bin/smaragd.app/Contents/MacOS/smaragd" ;;
+        windows) BIN_PATH="$PROJECT_DIR/build/bin/smaragd.exe" ;;
+        *)       BIN_PATH="$PROJECT_DIR/build/bin/smaragd" ;;
+    esac
+}
