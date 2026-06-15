@@ -117,8 +117,8 @@ toolchain on PATH, wires up vcpkg, and — if the render deps are missing — ru
 The auto-install only triggers when the libs are absent (a one-time cost on a
 fresh machine; it can take several minutes as vcpkg builds them with Qt's g++).
 It requires a **vcpkg clone** to already exist — the script looks in
-`$VCPKG_ROOT`, `~/vcpkg`, `/c/vcpkg`, and `/c/Users/*/vcpkg`. If you don't have
-one yet:
+`$VCPKG_ROOT`, `~/vcpkg`, `/c/vcpkg`, `/c/Users/*/vcpkg`, and on `PATH`. If you
+don't have one yet:
 
 ```bash
 git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
@@ -127,12 +127,14 @@ git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
 To install the deps manually instead (equivalent to what the script runs):
 
 ```powershell
-.\vcpkg install libsndfile:x64-mingw-dynamic libvorbis:x64-mingw-dynamic pkgconf:x64-mingw-dynamic
+.\vcpkg install libsndfile:x64-mingw-dynamic libvorbis:x64-mingw-dynamic
 ```
 
 > Use `x64-mingw-dynamic`, **not** `x64-windows` — the latter is MSVC-ABI and
-> won't link against a MinGW build. vcpkg's `pkgconf` also satisfies
-> `find_package(PkgConfig)`, which Qt's MinGW kit lacks.
+> won't link against a MinGW build. The Windows build uses the **CMake config
+> packages** vcpkg ships (`find_package(SndFile/Ogg/Vorbis CONFIG)`), so it needs
+> **no pkg-config / pkgconf** — only macOS/Linux use pkg-config (their system
+> libraries ship the `.pc` files for it).
 
 **Manual equivalent** (PowerShell, from `smaragd/`):
 

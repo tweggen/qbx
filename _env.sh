@@ -164,8 +164,8 @@ detect_vcpkg() {
     return 1
 }
 
-# Ensure the render deps (libsndfile/libvorbis + pkgconf) exist in the vcpkg
-# install, installing them via vcpkg if missing. Windows only. Requires the
+# Ensure the render deps (libsndfile/libvorbis, which pulls libogg) exist in the
+# vcpkg install, installing them via vcpkg if missing. Windows only. Requires the
 # MinGW toolchain already on PATH (call setup_toolchain first) so the mingw
 # triplet builds against Qt's g++. The install only runs when the libs are
 # absent, so it's a one-time bootstrap cost, not a per-build hit.
@@ -173,11 +173,11 @@ ensure_render_deps() {
     [ "$PLATFORM" = "windows" ] || return 0
     detect_vcpkg || { echo "Note: vcpkg not found; skipping render-dep install."; return 0; }
 
-    local pcdir="$VCPKG_DIR/installed/$VCPKG_TRIPLET/lib/pkgconfig"
-    local pkgconf_exe="$VCPKG_DIR/installed/$VCPKG_TRIPLET/tools/pkgconf/pkgconf.exe"
-    # pkgconf is what satisfies find_package(PkgConfig); check it too, else a
-    # libs-only install would still fail configure with "Could NOT find PkgConfig".
-    if [ -f "$pcdir/sndfile.pc" ] && [ -f "$pcdir/vorbis.pc" ] && [ -f "$pkgconf_exe" ]; then
+    # The Windows build uses vcpkg's CMake config packages (not pkg-config), so
+    # key the "already installed" check off the *Config.cmake files they ship.
+    local sharedir="$VCPKG_DIR/installed/$VCPKG_TRIPLET/share"
+    if [ -f "$sharedir/SndFile/SndFileConfig.cmake" ] && \
+       [ -f "$sharedir/Vorbis/VorbisConfig.cmake" ]; then
         return 0   # already installed
     fi
 
@@ -197,7 +197,7 @@ ensure_render_deps() {
         fi
     fi
 
-    "$vcpkg_exe" install --triplet "$VCPKG_TRIPLET" libsndfile libvorbis pkgconf || {
+    "$vcpkg_exe" install --triplet "$VCPKG_TRIPLET" libsndfile libvorbis || {
         echo "Warning: vcpkg install failed; configure may fail to find render deps."
         return 0
     }

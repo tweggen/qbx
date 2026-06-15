@@ -95,17 +95,34 @@ target_link_libraries(tw303a PUBLIC
     Qt${QT_VERSION_MAJOR}::Xml
 )
 
-# Required audio file format libraries
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
-pkg_check_modules(OGG REQUIRED IMPORTED_TARGET ogg)
-pkg_check_modules(VORBIS REQUIRED IMPORTED_TARGET vorbis vorbisenc)
+# Required audio file format libraries (libsndfile, libogg, libvorbis).
+# On Windows these come from vcpkg, which ships CMake config packages, so we
+# use find_package(... CONFIG) and avoid a pkg-config dependency entirely
+# (Qt's MinGW kit has no pkg-config). On macOS/Linux the system libraries ship
+# .pc files, so pkg-config is the natural discovery path.
+if(SMARAGD_WINDOWS)
+    find_package(SndFile CONFIG REQUIRED)
+    find_package(Ogg CONFIG REQUIRED)
+    find_package(Vorbis CONFIG REQUIRED)
 
-target_link_libraries(tw303a PRIVATE
-    PkgConfig::SNDFILE
-    PkgConfig::OGG
-    PkgConfig::VORBIS
-)
+    target_link_libraries(tw303a PRIVATE
+        SndFile::sndfile
+        Ogg::ogg
+        Vorbis::vorbis
+        Vorbis::vorbisenc
+    )
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
+    pkg_check_modules(OGG REQUIRED IMPORTED_TARGET ogg)
+    pkg_check_modules(VORBIS REQUIRED IMPORTED_TARGET vorbis vorbisenc)
+
+    target_link_libraries(tw303a PRIVATE
+        PkgConfig::SNDFILE
+        PkgConfig::OGG
+        PkgConfig::VORBIS
+    )
+endif()
 
 message(STATUS "tw303a: audio file I/O libraries found (libsndfile, libvorbis)")
 
