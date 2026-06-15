@@ -45,26 +45,63 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
         return -1;
     }
 
-    // Set up audio format
+    // Get the default input device (or specified device)
+    AudioDeviceID inputDeviceID = 0;
+    UInt32 dataSize = sizeof(inputDeviceID);
+    AudioObjectPropertyAddress addr = {kAudioHardwarePropertyDefaultInputDevice,
+                                        kAudioObjectPropertyScopeGlobal,
+                                        kAudioObjectPropertyElementMain};
+
+    OSStatus status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr,
+                                                  &dataSize, &inputDeviceID);
+    if (status != noErr || inputDeviceID == 0) {
+        lastError_ = "Failed to get default input device";
+        return -1;
+    }
+
+    // Get device's native sample rate and channels
+    AudioStreamBasicDescription deviceFormat;
+    dataSize = sizeof(deviceFormat);
+    addr.mSelector = kAudioDevicePropertyStreamFormat;
+    addr.mScope = kAudioObjectPropertyScopeInput;
+    addr.mElement = kAudioObjectPropertyElementMain;
+
+    status = AudioObjectGetPropertyData(inputDeviceID, &addr, 0, nullptr, &dataSize, &deviceFormat);
+    if (status != noErr) {
+        lastError_ = "Failed to get device format";
+        return -1;
+    }
+
+    // Set up audio format for the queue (request specific rate if given, else use device rate)
     AudioStreamBasicDescription format;
     std::memset(&format, 0, sizeof(format));
-    format.mSampleRate = preferredRate > 0 ? preferredRate : 48000.0;
+    format.mSampleRate = preferredRate > 0 ? preferredRate : deviceFormat.mSampleRate;
     format.mFormatID = kAudioFormatLinearPCM;
     format.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
-    format.mBytesPerPacket = sizeof(float) * 2;
+    format.mBytesPerPacket = sizeof(float) * deviceFormat.mChannelsPerFrame;
     format.mFramesPerPacket = 1;
-    format.mBytesPerFrame = sizeof(float) * 2;
-    format.mChannelsPerFrame = 2;
+    format.mBytesPerFrame = sizeof(float) * deviceFormat.mChannelsPerFrame;
+    format.mChannelsPerFrame = deviceFormat.mChannelsPerFrame;
     format.mBitsPerChannel = 32;
 
     config_.sampleRate = static_cast<std::uint32_t>(format.mSampleRate);
     config_.channels = format.mChannelsPerFrame;
 
     // Create the audio queue
-    OSStatus status = AudioQueueNewInput(&format, audioQueueInputCallback, this,
-                                         nullptr, nullptr, 0, &inputQueue_);
+    status = AudioQueueNewInput(&format, audioQueueInputCallback, this,
+                                nullptr, nullptr, 0, &inputQueue_);
     if (status != noErr) {
         lastError_ = "Failed to create audio queue";
+        return -1;
+    }
+
+    // Set the input device on the queue
+    status = AudioQueueSetProperty(inputQueue_, kAudioQueueProperty_CurrentDevice,
+                                   &inputDeviceID, sizeof(inputDeviceID));
+    if (status != noErr) {
+        lastError_ = "Failed to set input device on queue";
+        AudioQueueDispose(inputQueue_, true);
+        inputQueue_ = nullptr;
         return -1;
     }
 
