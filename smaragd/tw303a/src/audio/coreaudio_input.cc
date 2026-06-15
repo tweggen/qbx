@@ -76,66 +76,38 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
         return -1;
     }
 
-    // Get the default input device (or specified device)
-    AudioDeviceID inputDeviceID = 0;
-    UInt32 dataSize = sizeof(inputDeviceID);
-    AudioObjectPropertyAddress addr = {kAudioHardwarePropertyDefaultInputDevice,
-                                        kAudioObjectPropertyScopeGlobal,
-                                        kAudioObjectPropertyElementMain};
+    // Simple approach: request 16-bit PCM at the preferred rate (or 48kHz default)
+    // and let AudioQueue use the system's default input device and handle format conversion
+    AudioStreamBasicDescription format;
+    std::memset(&format, 0, sizeof(format));
+    format.mSampleRate = preferredRate > 0 ? preferredRate : 48000.0;
+    format.mFormatID = kAudioFormatLinearPCM;
+    format.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    format.mBytesPerPacket = 2; // 16-bit = 2 bytes
+    format.mFramesPerPacket = 1;
+    format.mBytesPerFrame = 2;
+    format.mChannelsPerFrame = 1;
+    format.mBitsPerChannel = 16;
 
-    OSStatus status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr,
-                                                  &dataSize, &inputDeviceID);
-    if (status != noErr || inputDeviceID == 0) {
-        lastError_ = "Failed to get default input device";
-        return -1;
-    }
-
-    // Get device's native sample rate and channels
-    AudioStreamBasicDescription deviceFormat;
-    dataSize = sizeof(deviceFormat);
-    addr.mSelector = kAudioDevicePropertyStreamFormat;
-    addr.mScope = kAudioObjectPropertyScopeInput;
-    addr.mElement = kAudioObjectPropertyElementMain;
-
-    status = AudioObjectGetPropertyData(inputDeviceID, &addr, 0, nullptr, &dataSize, &deviceFormat);
-    if (status != noErr) {
-        lastError_ = "Failed to get device format";
-        return -1;
-    }
-
-    // Use device's native format to avoid format+sample-rate conversion failures that cause silence.
-    // The recording_session already handles sample rate conversion via its resampler.
-    AudioStreamBasicDescription format = deviceFormat;
-
-    fprintf(stderr, "coreaudio_input: device format: %u Hz, %u channels, formatID=0x%x, flags=0x%x\n",
-            (unsigned)deviceFormat.mSampleRate, (unsigned)deviceFormat.mChannelsPerFrame,
-            (unsigned)deviceFormat.mFormatID, (unsigned)deviceFormat.mFormatFlags);
+    fprintf(stderr, "coreaudio_input: requesting %u Hz, 1 channel, 16-bit PCM\n", (unsigned)format.mSampleRate);
+    fflush(stderr);
 
     config_.sampleRate = static_cast<std::uint32_t>(format.mSampleRate);
     config_.channels = format.mChannelsPerFrame;
 
-    // Create the audio queue
-    status = AudioQueueNewInput(&format, audioQueueInputCallback, this,
-                                nullptr, nullptr, 0, &inputQueue_);
+    // Create audio queue with default system input device
+    OSStatus status = AudioQueueNewInput(&format, audioQueueInputCallback, this,
+                                         nullptr, nullptr, 0, &inputQueue_);
     if (status != noErr) {
         lastError_ = "Failed to create audio queue";
+        fprintf(stderr, "coreaudio_input: AudioQueueNewInput failed with status %d\n", (int)status);
         return -1;
     }
 
-    // Set the input device on the queue
-    status = AudioQueueSetProperty(inputQueue_, kAudioQueueProperty_CurrentDevice,
-                                   &inputDeviceID, sizeof(inputDeviceID));
-    if (status != noErr) {
-        // Log but don't fail—some devices may not support this property
-        fprintf(stderr, "coreaudio_input: warning: failed to set device property (status %d), using default\n", (int)status);
-    }
+    // Don't try to set a specific device - use system default (the microphone user selected)
 
     // Create and enqueue buffers
-    // Buffer size must match the actual format (int16, not float)
     const UInt32 bufferByteSize = config_.bufferFrames * config_.channels * sizeof(int16_t);
-    fprintf(stderr, "coreaudio_input: allocating %u buffers of %u bytes each\n", 2U, bufferByteSize);
-    fflush(stderr);
-
     for (int i = 0; i < 2; ++i) {
         status = AudioQueueAllocateBuffer(inputQueue_, bufferByteSize, &queueBuffers_[i]);
         if (status != noErr) {
@@ -154,6 +126,8 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
         }
     }
 
+    fprintf(stderr, "coreaudio_input: device opened, queue created\n");
+    fflush(stderr);
     return 0;
 }
 

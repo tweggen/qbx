@@ -3,11 +3,9 @@
 
 #include "audio/audio_input.h"
 
-#include <CoreAudio/CoreAudio.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <atomic>
 #include <condition_variable>
-#include <memory>
 #include <mutex>
 #include <vector>
 
