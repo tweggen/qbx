@@ -176,7 +176,7 @@ if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
         PRIVATE
             src/audio/coreaudio_backend.cc
             include/audio/coreaudio_backend.h
-            src/audio/coreaudio_input.cc
+            src/audio/coreaudio_input.mm
     )
     message(STATUS "tw303a: CoreAudio backend and input (recording) enabled")
 endif()

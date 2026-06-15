@@ -6,7 +6,9 @@
 #include <AudioToolbox/AudioToolbox.h>
 #include <atomic>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 namespace audio {
@@ -30,12 +32,17 @@ public:
     // Called from the input render callback to buffer audio
     void bufferAudioData(const float *audioData, std::size_t frameCount);
 
+    // Called from AVAudioEngine tap (Objective-C++, takes AVAudioPCMBuffer*)
+    void captureAVAudioBuffer(void *avAudioPCMBuffer);
+
 private:
     AudioInputConfig config_;
     std::string lastError_;
 
     AudioComponentInstance audioUnit_ = nullptr;
     bool isCapturing_ = false;
+    std::atomic<bool> stopCaptureThread_{false};
+    std::unique_ptr<std::thread> captureThread_;
 
     // Circular buffer for captured audio
     std::vector<float> circularBuffer_;
