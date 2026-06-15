@@ -161,9 +161,12 @@ if(SMARAGD_WINDOWS AND NOT SMARAGD_WIN_CONSOLE)
 elseif(SMARAGD_MACOS)
     add_executable(smaragd MACOSX_BUNDLE ${SMARAGD_SOURCES} ${SMARAGD_HEADERS})
 
-    # Set entitlements for microphone access on macOS
-    set_target_properties(smaragd PROPERTIES
-        XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/smaragd.entitlements"
+    # Code-sign app with microphone entitlements after building
+    add_custom_command(TARGET smaragd POST_BUILD
+        COMMAND codesign --force --deep --sign -
+                --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/smaragd.entitlements"
+                "$<TARGET_BUNDLE_DIR:smaragd>"
+        COMMENT "Code-signing smaragd with microphone entitlements"
     )
 else()
     add_executable(smaragd ${SMARAGD_SOURCES} ${SMARAGD_HEADERS})
