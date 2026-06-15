@@ -43,6 +43,10 @@ public:
     // List of created WAV files (returned after recording completes)
     const std::vector<std::string> &createdFiles() const;
 
+    // Get the measured input latency (in frames) from the recording session.
+    // Valid after recording completes; 0 if latency could not be determined.
+    uint32_t getInputLatencyFrames() const { return inputLatencyFrames_; }
+
     // Optional callbacks. NOTE: these are invoked ON THE RECORD THREAD, so a
     // handler must be thread-safe and must NOT touch Qt/UI objects. The progress
     // dialog deliberately does not use them — it polls the query methods above
@@ -62,6 +66,7 @@ private:
     std::unique_ptr<std::thread> recordThread_;
     std::string lastError_;
     std::vector<std::string> createdFiles_;
+    uint32_t inputLatencyFrames_ = 0;  // Measured input latency during recording
 };
 
 }  // namespace audio

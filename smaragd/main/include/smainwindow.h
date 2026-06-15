@@ -121,6 +121,10 @@ private:
     // capture, so the live locator can't be used to place the recorded cut;
     // we remember the start here and place the cut there.
     offset_t recordingStartPos_ = 0;
+    // Latency sync offset (in frames) between input and output devices.
+    // Applied to the recorded clip placement to align with simultaneous playback.
+    // Positive value means clip should be placed earlier (input is faster than output).
+    int64_t recordingLatencySyncOffset_ = 0;
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
 

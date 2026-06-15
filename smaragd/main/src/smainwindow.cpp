@@ -507,6 +507,10 @@ void SMainWindow::onRecordTriggered()
         // advances from here during the capture.
         recordingStartPos_ = SApplication::app().getGlobalLocatorPos();
 
+        // Note: latency sync offset will be calculated in onRecordingCompleted()
+        // after the input latency is known from the recording session.
+        recordingLatencySyncOffset_ = 0;
+
         SApplication::app().startRecording( params );
         actRecord_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
 
@@ -550,6 +554,26 @@ void SMainWindow::onRecordingCompleted()
     // The recording start time, captured when recording began (the live locator
     // has since advanced with the capture).
     offset_t recordingStartTime = recordingStartPos_;
+
+    // Calculate latency sync offset if playback was running during recording.
+    // Offset = output_latency - input_latency (in frames).
+    // Positive offset: input is faster, so shift the clip earlier to compensate.
+    int64_t latencySyncFrames = 0;
+    twSpeaker *speaker = SApplication::app().getSpeaker();
+    if( speaker ) {
+        audio::AudioBackend *backend = speaker->getBackend();
+        uint32_t inputLatency = recSession->getInputLatencyFrames();
+        if( backend && inputLatency > 0 ) {
+            uint32_t outputLatency = backend->getLatencyFrames();
+            latencySyncFrames = static_cast<int64_t>(outputLatency) - static_cast<int64_t>(inputLatency);
+        }
+    }
+
+    // Apply the offset to the recording start position
+    if( latencySyncFrames != 0 ) {
+        // latencySyncFrames is in samples; convert to the timeline representation
+        recordingStartTime += latencySyncFrames;
+    }
 
     // Place cuts on all armed tracks
     for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {

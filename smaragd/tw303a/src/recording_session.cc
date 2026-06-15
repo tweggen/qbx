@@ -210,6 +210,10 @@ void RecordingSession::recordThreadMain() {
     std::uint32_t targetRate = params_.sampleRate > 0 ? params_.sampleRate : deviceRate;
     std::uint32_t channels = inputConfig.channels;
 
+    // Capture the input latency for later sync compensation (when playback and
+    // recording are simultaneous).
+    inputLatencyFrames_ = input->getLatencyFrames();
+
     // Rate diagnostic for the "take plays back too fast" bug. If device != target
     // but the resampler reports passthrough below, the device->project conversion
     // failed to engage and the WAV will carry device-rate content under a
