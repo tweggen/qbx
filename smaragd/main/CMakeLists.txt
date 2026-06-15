@@ -160,6 +160,11 @@ if(SMARAGD_WINDOWS AND NOT SMARAGD_WIN_CONSOLE)
     add_executable(smaragd WIN32 ${SMARAGD_SOURCES} ${SMARAGD_HEADERS})
 elseif(SMARAGD_MACOS)
     add_executable(smaragd MACOSX_BUNDLE ${SMARAGD_SOURCES} ${SMARAGD_HEADERS})
+
+    # Set entitlements for microphone access on macOS
+    set_target_properties(smaragd PROPERTIES
+        XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/smaragd.entitlements"
+    )
 else()
     add_executable(smaragd ${SMARAGD_SOURCES} ${SMARAGD_HEADERS})
 endif()
