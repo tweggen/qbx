@@ -127,9 +127,15 @@ git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
 To install the deps manually instead (equivalent to what the script runs):
 
 ```powershell
-.\vcpkg install libsndfile:x64-mingw-dynamic libvorbis:x64-mingw-dynamic
+# Run with Qt's MinGW bin on PATH so gcc is available to vcpkg.
+.\vcpkg install --triplet x64-mingw-dynamic --host-triplet x64-mingw-dynamic libsndfile libvorbis
 ```
 
+> `--host-triplet x64-mingw-dynamic` is required on a machine without Visual
+> Studio: otherwise vcpkg builds its host/build-time tools for the default
+> `x64-windows` (MSVC) triplet and fails with "Unable to find a valid Visual
+> Studio instance".
+>
 > Use `x64-mingw-dynamic`, **not** `x64-windows` — the latter is MSVC-ABI and
 > won't link against a MinGW build. The Windows build uses the **CMake config
 > packages** vcpkg ships (`find_package(SndFile/Ogg/Vorbis CONFIG)`), so it needs

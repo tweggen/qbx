@@ -197,7 +197,13 @@ ensure_render_deps() {
         fi
     fi
 
-    "$vcpkg_exe" install --triplet "$VCPKG_TRIPLET" libsndfile libvorbis || {
+    # --host-triplet is essential: without it vcpkg builds its host/build-time
+    # tools for the default host triplet (x64-windows = MSVC), which fails with
+    # "Unable to find a valid Visual Studio instance" on a MinGW-only machine.
+    # Pinning host == target lets it build everything with Qt's g++ (on PATH).
+    "$vcpkg_exe" install \
+        --triplet "$VCPKG_TRIPLET" --host-triplet "$VCPKG_TRIPLET" \
+        libsndfile libvorbis || {
         echo "Warning: vcpkg install failed; configure may fail to find render deps."
         return 0
     }
