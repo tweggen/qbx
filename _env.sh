@@ -34,41 +34,63 @@ detect_platform() {
 resolve_qt_path() {
     if [ -n "$1" ]; then
         QT_PATH="$1"
-        return
-    fi
-
-    QT_PATH=""
-    case "$PLATFORM" in
-        macos)
-            [ -d "$HOME/Qt" ] && QT_PATH=$(ls -d "$HOME/Qt"/6.*/macos 2>/dev/null | sort -V | tail -1)
-            ;;
-        linux)
-            [ -d "$HOME/Qt" ] && QT_PATH=$(ls -d "$HOME/Qt"/6.*/gcc_64 2>/dev/null | sort -V | tail -1)
-            ;;
-        windows)
-            local root
-            for root in /c/Qt C:/Qt "$HOME/Qt"; do
-                [ -d "$root" ] || continue
-                QT_PATH=$(ls -d "$root"/6.*/mingw_64 2>/dev/null | sort -V | tail -1)
-                [ -n "$QT_PATH" ] && break
-            done
-            ;;
-    esac
-
-    # Fallback: ask qmake if it's on PATH.
-    if [ -z "$QT_PATH" ] && command -v qmake &>/dev/null; then
-        QT_PATH=$(qmake -query QT_INSTALL_PREFIX)
-    fi
-
-    if [ -z "$QT_PATH" ]; then
-        echo "Error: Could not detect Qt installation."
-        echo "Usage: $0 /path/to/qt"
+    else
+        QT_PATH=""
         case "$PLATFORM" in
-            macos)   echo "Example: $0 \$HOME/Qt/6.11.1/macos" ;;
-            linux)   echo "Example: $0 \$HOME/Qt/6.11.1/gcc_64" ;;
-            windows) echo "Example: $0 /c/Qt/6.11.1/mingw_64" ;;
+            macos)
+                [ -d "$HOME/Qt" ] && QT_PATH=$(ls -d "$HOME/Qt"/6.*/macos 2>/dev/null | sort -V | tail -1)
+                ;;
+            linux)
+                [ -d "$HOME/Qt" ] && QT_PATH=$(ls -d "$HOME/Qt"/6.*/gcc_64 2>/dev/null | sort -V | tail -1)
+                ;;
+            windows)
+                local root
+                for root in /c/Qt C:/Qt "$HOME/Qt"; do
+                    [ -d "$root" ] || continue
+                    QT_PATH=$(ls -d "$root"/6.*/mingw_64 2>/dev/null | sort -V | tail -1)
+                    [ -n "$QT_PATH" ] && break
+                done
+                ;;
         esac
-        exit 1
+
+        # Fallback: ask qmake if it's on PATH.
+        if [ -z "$QT_PATH" ] && command -v qmake &>/dev/null; then
+            QT_PATH=$(qmake -query QT_INSTALL_PREFIX)
+        fi
+
+        if [ -z "$QT_PATH" ]; then
+            echo "Error: Could not detect Qt installation."
+            echo "Usage: $0 /path/to/qt"
+            case "$PLATFORM" in
+                macos)   echo "Example: $0 \$HOME/Qt/6.11.1/macos" ;;
+                linux)   echo "Example: $0 \$HOME/Qt/6.11.1/gcc_64" ;;
+                windows) echo "Example: $0 /c/Qt/6.11.1/mingw_64" ;;
+            esac
+            exit 1
+        fi
+    fi
+
+    # --- Normalization below runs for both user-supplied and auto-detected paths ---
+
+    # Strip trailing slash(es) so dirname-based logic below is reliable.
+    QT_PATH="${QT_PATH%/}"
+    while [ "${QT_PATH%/}" != "$QT_PATH" ]; do QT_PATH="${QT_PATH%/}"; done
+
+    # Tolerate being handed the version dir (e.g. .../Qt/6.11.1) instead of the
+    # kit dir: if there's no CMake config here but a platform kit lives beneath,
+    # descend into it.
+    if [ ! -d "$QT_PATH/lib/cmake" ]; then
+        local kit_name kit
+        case "$PLATFORM" in
+            macos)   kit_name="macos" ;;
+            linux)   kit_name="gcc_64" ;;
+            windows) kit_name="mingw_64" ;;
+        esac
+        kit=$(ls -d "$QT_PATH/$kit_name" 2>/dev/null | tail -1)
+        if [ -n "$kit" ]; then
+            echo "Note: '$QT_PATH' looks like a version dir; using kit '$kit'."
+            QT_PATH="$kit"
+        fi
     fi
 }
 
@@ -76,9 +98,23 @@ resolve_qt_path() {
 # No-op on macOS/Linux, where the system compiler is already on PATH.
 setup_toolchain() {
     if [ "$PLATFORM" = "windows" ]; then
-        # QT_PATH = <QtRoot>/6.x.x/mingw_64  ->  QtRoot is two levels up.
-        local qt_root mingw_bin ninja_dir cmake_bin
-        qt_root=$(dirname "$(dirname "$QT_PATH")")
+        # The bundled tools live in <QtRoot>/Tools, but QT_PATH may point at the
+        # kit (.../6.x.x/mingw_64), the version dir, or carry a trailing slash.
+        # Walk up until we find a dir that actually contains a Tools/ subdir.
+        local qt_root mingw_bin ninja_dir cmake_bin d
+        qt_root=""
+        d="${QT_PATH%/}"
+        while [ -n "$d" ] && [ "$d" != "/" ] && [ "$d" != "." ]; do
+            if [ -d "$d/Tools" ]; then qt_root="$d"; break; fi
+            d=$(dirname "$d")
+        done
+
+        if [ -z "$qt_root" ]; then
+            echo "Warning: could not locate a Qt 'Tools' dir above $QT_PATH."
+            echo "         CMake will likely fail to find a C/C++ compiler."
+            command -v ninja &>/dev/null || echo "Warning: 'ninja' not found on PATH."
+            return
+        fi
 
         mingw_bin=$(ls -d "$qt_root"/Tools/mingw*/bin 2>/dev/null | sort -V | tail -1)
         ninja_dir=$(ls -d "$qt_root"/Tools/Ninja     2>/dev/null | tail -1)
