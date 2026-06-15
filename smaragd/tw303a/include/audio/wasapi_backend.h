@@ -26,6 +26,30 @@ enum class WasapiSampleFormat {
     Int32,
 };
 
+// Explicit lifecycle state. Every public lifecycle method is a transition between
+// these and is guarded by stateMutex_, so the legal sequence is unambiguous from
+// the code rather than inferred from which handles happen to be non-null:
+//
+//   Closed --openDevice--> Opening --> Open        (failure: --> Closed)
+//   Open   --startOutput--> Starting --> Running    (failure: --> Open)
+//   Running --stopOutput--> Stopping --> Open
+//   {Open,Running} --closeDevice--> Closing --> Closed
+//
+// The transient states (Opening/Starting/Stopping/Closing) exist only for the
+// duration of a call while stateMutex_ is held; an observer never sees them
+// because the mutex serialises callers. They make the intent of each method
+// self-documenting and turn a half-completed open into a clean Closed rather than
+// a "handles partly set" limbo.
+enum class WasapiState {
+    Closed,
+    Opening,
+    Open,
+    Starting,
+    Running,
+    Stopping,
+    Closing,
+};
+
 class WASAPIBackend : public AudioBackend {
 public:
     WASAPIBackend();
@@ -36,10 +60,10 @@ public:
     int  closeDevice() override;
     int  startOutput() override;
     int  stopOutput() override;
-    bool isRunning() const override { return running_.load(); }
+    bool isRunning() const override;
 
-    void setRenderCallback(RenderCallback cb) override { callback_ = std::move(cb); }
-    AudioConfig getConfig() const override { return config_; }
+    void setRenderCallback(RenderCallback cb) override;
+    AudioConfig getConfig() const override;
 
     // Shared mode: the OS mixer owns the rate, so this is just the current mix
     // rate (known after openDevice; empty before). Exclusive-mode enumeration
@@ -52,9 +76,14 @@ public:
 private:
     void audioThreadProc_();
     int  renderOnce_();
-    // Release all device/COM handles. Caller MUST hold stateMutex_ (so openDevice
-    // can reuse it while resetting a half-open state without re-locking). The
-    // public closeDevice() is the locked wrapper.
+
+    // The following helpers all assume the caller already holds stateMutex_; the
+    // public methods are the locking wrappers. Keeping the logic in *_locked_
+    // helpers lets one transition compose another (e.g. closeDevice stops a
+    // running stream) without recursively re-locking.
+    int  startOutputLocked_();
+    int  stopOutputLocked_();
+    // Release all device/COM handles and return to Closed.
     void releaseDevice_();
 
     IMMDeviceEnumerator *enumerator_   = nullptr;
@@ -69,16 +98,25 @@ private:
 
     std::vector<float>   floatScratch_;  // interleaved float pulled from the synth
 
+    // --- Threading model -----------------------------------------------------
+    // Two threads touch this object:
+    //   1. The CONTROL thread (the caller — twSpeaker on the UI thread): drives
+    //      openDevice / startOutput / stopOutput / closeDevice and the queries.
+    //   2. The AUDIO thread (thread_, owned here): runs audioThreadProc_.
+    //
+    // stateMutex_ serialises every control-thread lifecycle transition and guards
+    // state_ together with all the device handles, config_, sampleFormat_,
+    // callback_ and floatScratch_ above. The audio thread NEVER acquires it — that
+    // would both add unbounded latency to the realtime path and deadlock the
+    // thread_.join() that stopOutput performs while holding the lock. Instead the
+    // audio thread only runs while state_ == Running, and everything it reads is
+    // established before the thread is created (in startOutputLocked_) and not
+    // released or mutated until after it is joined. The handshake that tells it to
+    // exit is the stopFlag_ atomic plus a SetEvent on bufferReady_.
     std::thread          thread_;
-    std::atomic<bool>    running_{false};
     std::atomic<bool>    stopFlag_{false};
-    // Serialises the lifecycle transitions (openDevice / closeDevice /
-    // startOutput / stopOutput). The atomics above only protect individual flag
-    // reads; this guards the compound open/close/start/stop logic so concurrent
-    // callers can't interleave (e.g. play and record-monitoring both touching the
-    // device). The audio thread never takes this lock, so holding it across
-    // thread_.join() in stopOutput() cannot deadlock.
-    std::mutex           stateMutex_;
+    WasapiState          state_ = WasapiState::Closed;  // guarded by stateMutex_
+    mutable std::mutex   stateMutex_;
 
     bool                 comInitialized_ = false;
 };

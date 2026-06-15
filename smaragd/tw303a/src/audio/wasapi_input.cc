@@ -24,10 +24,24 @@ WASAPIInput::WASAPIInput() {
 }
 
 WASAPIInput::~WASAPIInput() {
-    closeDevice();
+    std::lock_guard<std::mutex> lock(mutex_);
+    closeDeviceLocked_();
 }
 
 int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferredRate) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Explicit state replaces the old "is this handle set?" reasoning. Already
+    // open: nothing to do. Otherwise we must be Closed; any failure below routes
+    // through closeDeviceLocked_(), which releases whatever was created, nulls the
+    // pointers (so the destructor can't double-release a dangling COM pointer —
+    // the crash this replaces), uninitializes COM exactly once and returns us to
+    // Closed.
+    if (state_ != WasapiInputState::Closed) {
+        lastError_ = "Input device already open";
+        return 0;
+    }
+
     HRESULT hr;
 
     // Initialize COM
@@ -38,15 +52,12 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
     }
     comInitialized_ = true;
 
-    // Create device enumerator. From here on, every failure routes through
-    // closeDevice(), which releases whatever was created, nulls the pointers
-    // (so ~WASAPIInput can't double-release a dangling COM pointer — the crash
-    // this replaces) and uninitializes COM exactly once.
+    // Create device enumerator.
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
                           __uuidof(IMMDeviceEnumerator), (void **)&enumerator_);
     if (FAILED(hr)) {
         lastError_ = "Failed to create device enumerator";
-        closeDevice();
+        closeDeviceLocked_();
         return -1;
     }
 
@@ -65,7 +76,7 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
 
     if (FAILED(hr)) {
         lastError_ = "Failed to get input device";
-        closeDevice();
+        closeDeviceLocked_();
         return -1;
     }
 
@@ -74,7 +85,7 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
                                  (void **)&audioClient_);
     if (FAILED(hr)) {
         lastError_ = "Failed to activate audio client";
-        closeDevice();
+        closeDeviceLocked_();
         return -1;
     }
 
@@ -83,7 +94,7 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
     hr = audioClient_->GetMixFormat(&deviceFormat);
     if (FAILED(hr)) {
         lastError_ = "Failed to get device format";
-        closeDevice();
+        closeDeviceLocked_();
         return -1;
     }
 
@@ -130,7 +141,7 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
         if (FAILED(hr)) {
             lastError_ = "Failed to initialize audio client";
             CoTaskMemFree(deviceFormat);
-            closeDevice();
+            closeDeviceLocked_();
             return -1;
         }
         config_.sampleRate = nativeRate;
@@ -144,15 +155,24 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
     hr = audioClient_->GetService(__uuidof(IAudioCaptureClient), (void **)&captureClient_);
     if (FAILED(hr)) {
         lastError_ = "Failed to get capture client";
-        closeDevice();
+        closeDeviceLocked_();
         return -1;
     }
 
+    state_ = WasapiInputState::Open;
     return 0;
 }
 
 int WASAPIInput::closeDevice() {
-    stopCapture();
+    std::lock_guard<std::mutex> lock(mutex_);
+    closeDeviceLocked_();
+    return 0;
+}
+
+void WASAPIInput::closeDeviceLocked_() {
+    // Caller holds mutex_. Stop capture first so the device isn't running while we
+    // release its services, then tear everything down and return to Closed.
+    stopCaptureLocked_();
 
     if (captureClient_) {
         captureClient_->Release();
@@ -182,11 +202,14 @@ int WASAPIInput::closeDevice() {
         CoUninitialize();
         comInitialized_ = false;
     }
-    return 0;
+
+    state_ = WasapiInputState::Closed;
 }
 
 int WASAPIInput::startCapture() {
-    if (!audioClient_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ == WasapiInputState::Capturing) return 0;
+    if (state_ != WasapiInputState::Open) {
         lastError_ = "Audio client not initialized";
         return -1;
     }
@@ -197,17 +220,23 @@ int WASAPIInput::startCapture() {
         return -1;
     }
 
-    isCapturing_ = true;
+    state_ = WasapiInputState::Capturing;
     return 0;
 }
 
 int WASAPIInput::stopCapture() {
-    if (!audioClient_ || !isCapturing_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stopCaptureLocked_();
+}
+
+int WASAPIInput::stopCaptureLocked_() {
+    // Caller holds mutex_.
+    if (state_ != WasapiInputState::Capturing) {
         return 0;
     }
 
     HRESULT hr = audioClient_->Stop();
-    isCapturing_ = false;
+    state_ = WasapiInputState::Open;
 
     if (FAILED(hr)) {
         lastError_ = "Failed to stop audio capture";
@@ -218,7 +247,8 @@ int WASAPIInput::stopCapture() {
 }
 
 std::int32_t WASAPIInput::read(float *interleaved, std::size_t frameCount) {
-    if (!captureClient_ || !isCapturing_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ != WasapiInputState::Capturing) {
         return 0;
     }
 
@@ -264,13 +294,15 @@ const AudioInputConfig &WASAPIInput::getConfig() const {
 }
 
 std::vector<AudioInputDeviceInfo> WASAPIInput::listDevices() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
     std::vector<AudioInputDeviceInfo> devices;
 
     HRESULT hr;
     IMMDeviceCollection *collection = nullptr;
 
     if (!enumerator_) {
-        return devices;  // Return empty if not initialized
+        return devices;  // Return empty if not initialized (device not open)
     }
 
     hr = enumerator_->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection);
