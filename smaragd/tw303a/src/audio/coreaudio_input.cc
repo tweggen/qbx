@@ -24,6 +24,19 @@ void audioQueueInputCallback(void *inUserData,
     const int16_t *int16Data = static_cast<const int16_t *>(inBuffer->mAudioData);
     std::size_t sampleCount = inBuffer->mAudioDataByteSize / sizeof(int16_t);
 
+    // Debug: check raw int16 values
+    static int debugCount = 0;
+    if (++debugCount <= 3) {
+        int16_t maxInt = 0;
+        for (std::size_t i = 0; i < std::min(sampleCount, size_t(100)); ++i) {
+            int16_t absVal = int16Data[i] < 0 ? -int16Data[i] : int16Data[i];
+            if (absVal > maxInt) maxInt = absVal;
+        }
+        fprintf(stderr, "coreaudio_input callback #%d: sampleCount=%zu, mAudioDataByteSize=%u, maxInt16=%d\n",
+                debugCount, sampleCount, (unsigned)inBuffer->mAudioDataByteSize, (int)maxInt);
+        fflush(stderr);
+    }
+
     // Convert int16 to float and buffer (int16 range: -32768 to 32767)
     static std::vector<float> floatBuffer;
     floatBuffer.clear();
@@ -118,7 +131,11 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
     }
 
     // Create and enqueue buffers
-    const UInt32 bufferByteSize = config_.bufferFrames * config_.channels * sizeof(float);
+    // Buffer size must match the actual format (int16, not float)
+    const UInt32 bufferByteSize = config_.bufferFrames * config_.channels * sizeof(int16_t);
+    fprintf(stderr, "coreaudio_input: allocating %u buffers of %u bytes each\n", 2U, bufferByteSize);
+    fflush(stderr);
+
     for (int i = 0; i < 2; ++i) {
         status = AudioQueueAllocateBuffer(inputQueue_, bufferByteSize, &queueBuffers_[i]);
         if (status != noErr) {
