@@ -141,13 +141,26 @@ setup_toolchain() {
 detect_vcpkg() {
     VCPKG_DIR=""
     VCPKG_TRIPLET="${VCPKG_TARGET_TRIPLET:-x64-mingw-dynamic}"
-    local root
+
+    local root cand
+    # 1) Known locations.
     for root in "$VCPKG_ROOT" "$HOME/vcpkg" /c/vcpkg /c/Users/*/vcpkg; do
         [ -n "$root" ] || continue
         [ -f "$root/scripts/buildsystems/vcpkg.cmake" ] || continue
         VCPKG_DIR="$root"
         return 0
     done
+
+    # 2) vcpkg on PATH: the executable sits at the vcpkg root.
+    cand=$(command -v vcpkg 2>/dev/null || command -v vcpkg.exe 2>/dev/null)
+    if [ -n "$cand" ]; then
+        root=$(dirname "$cand")
+        if [ -f "$root/scripts/buildsystems/vcpkg.cmake" ]; then
+            VCPKG_DIR="$root"
+            return 0
+        fi
+    fi
+
     return 1
 }
 
@@ -161,7 +174,10 @@ ensure_render_deps() {
     detect_vcpkg || { echo "Note: vcpkg not found; skipping render-dep install."; return 0; }
 
     local pcdir="$VCPKG_DIR/installed/$VCPKG_TRIPLET/lib/pkgconfig"
-    if [ -f "$pcdir/sndfile.pc" ] && [ -f "$pcdir/vorbis.pc" ]; then
+    local pkgconf_exe="$VCPKG_DIR/installed/$VCPKG_TRIPLET/tools/pkgconf/pkgconf.exe"
+    # pkgconf is what satisfies find_package(PkgConfig); check it too, else a
+    # libs-only install would still fail configure with "Could NOT find PkgConfig".
+    if [ -f "$pcdir/sndfile.pc" ] && [ -f "$pcdir/vorbis.pc" ] && [ -f "$pkgconf_exe" ]; then
         return 0   # already installed
     fi
 
