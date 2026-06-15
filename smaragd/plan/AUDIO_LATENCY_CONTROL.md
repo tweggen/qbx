@@ -143,26 +143,75 @@ The linear resampler in `tw303a/include/twresampler.h` has inherent latency:
 
 ---
 
-## Phase 2: Platform-Specific Buffer Control (Deferred)
+## Phase 2: Platform-Specific Buffer Control (✅ COMPLETE)
 
-Not implemented in Phase 1. Design outline:
+### Completed Implementation
 
-### 2.1 Interface Extensions
+#### 2.1 Interface Extensions
 
+Added to `AudioBackend` and `AudioInput`:
 ```cpp
-class AudioBackend {
-    virtual std::vector<uint32_t> getAvailableBufferSizes() const = 0;
-    virtual int setBufferSize(uint32_t frameCount) = 0;
-};
+virtual std::vector<uint32_t> getAvailableBufferSizes() const { return {}; }
+virtual int setBufferSize(uint32_t frameCount) { return -1; }
 ```
 
-### 2.2 Per-Platform Strategy
+Both have default no-op implementations for platforms without control.
 
-| Platform | Approach |
-|----------|----------|
-| **WASAPI** | (a) Offer presets in shared mode (256/512/1024/2048), or (b) implement exclusive mode for full control |
-| **CoreAudio** | Report device buffer; no user control (OS-managed) |
-| **ALSA** | Full control via `snd_pcm_hw_params_set_buffer_size_near()` |
+#### 2.2 Per-Platform Implementation
+
+| Platform | Approach | Status |
+|----------|----------|--------|
+| **WASAPI** | Empty list + return -1 (no control in shared mode, honest reporting) | ✅ |
+| **CoreAudio** | Empty list + return -1 (device-managed, no user control) | ✅ |
+| **ALSA** | Full control via `snd_pcm_hw_params_set_buffer_size_near()` | ✅ |
+
+**ALSA implementation:**
+- `getAvailableBufferSizes()`: Returns presets [256, 512, 1024, 2048, 4096, 8192]
+- `setBufferSize()`: Reconfigures hw params; resizes scratch buffers; updates config
+- Applies to both backend (output) and input
+
+#### 2.3 twSpeaker API
+
+Added public getter:
+```cpp
+audio::AudioBackend *getBackend() const { return backend_.get(); }
+```
+
+Allows UI to query configuration and set buffer size.
+
+#### 2.4 Options Dialog UI
+
+**Audio tab now displays:**
+- **Output latency**: Read-only label showing ~ms and frames (e.g., "~23.5 ms (1024 frames)")
+- **Buffer size combo box**:
+  - Auto-populated from `getAvailableBufferSizes()`
+  - Disabled (grayed) if device doesn't support user control (WASAPI, CoreAudio)
+  - Shows "device-managed" message when empty list returned
+  - Can only apply changes when playback is stopped
+  - Warns user if they try to change while playing
+
+**Implementation details:**
+- `loadAudioPage()`: Queries backend for latency, available sizes; populates UI
+- `applyAudioPage()`: Applies buffer size change via `backend->setBufferSize()`; checks if playing first
+- Query happens on each dialog open (always fresh data)
+
+**Files modified:**
+- `main/include/soptionsdialog.h`: Added `bufferSizeCombo_`, `outputLatencyLabel_`
+- `main/src/soptionsdialog.cpp`: UI population and application logic
+- `tw303a/include/audio/audio_backend.h`: Added methods + default implementations
+- `tw303a/include/audio/audio_input.h`: Added methods + default implementations
+- `tw303a/include/audio/alsa_backend.h`: Declared ALSA-specific methods
+- `tw303a/src/audio/alsa_backend.cc`: Implemented ALSA buffer control
+- `tw303a/include/audio/alsa_input.h`: Declared ALSA-specific methods
+- `tw303a/src/audio/alsa_input.cc`: Implemented ALSA buffer control
+- `tw303a/include/twspeaker.h`: Added `getBackend()` getter
+
+#### 2.5 Build Status
+
+✅ Compiles cleanly on macOS (arm64)
+✅ ALSA has full control via hardware parameters
+✅ Windows/macOS gracefully report "device-managed" (no control available)
+✅ UI handles all platforms correctly (enabled/disabled as appropriate)
 
 ---
 
