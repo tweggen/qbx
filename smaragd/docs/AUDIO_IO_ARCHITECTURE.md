@@ -128,7 +128,7 @@ ordering is readable directly from the code, and a half-completed open collapses
 cleanly back to the closed state instead of leaving a partially-initialized
 device behind.
 
-### Writer — `WasapiState` (`wasapi_backend.h`)
+### Writer — `WasapiState` (Windows, `wasapi_backend.h`)
 
 ```
 Closed ──openDevice──► Opening ──► Open          (failure ──► Closed)
@@ -147,7 +147,26 @@ Running ──stopOutput─► Stopping ──► Open
 - `closeDevice` stops a running stream itself (it does not rely on the caller's
   ordering); the destructor does the same.
 
-### Reader — `WasapiInputState` (`wasapi_input.h`)
+### Writer — CoreAudioBackend (macOS, `coreaudio_backend.h/cc`)
+
+CoreAudio does not use an explicit state machine. Instead it tracks lifecycle with
+just the `outputUnit_` pointer and an atomic `running_` flag:
+
+- `outputUnit_ == nullptr` → device is closed.
+- `outputUnit_ != nullptr && !running_` → device is open but not playing.
+- `outputUnit_ != nullptr && running_` → device is open and playback is active.
+
+**Key differences from WASAPI:**
+- No mutex-guarded state enum; lifecycle transitions are implicit.
+- Uses AudioUnit (via `AudioComponentInstanceNew`) and `AURenderCallback` (the
+  standard CoreAudio way) instead of WASAPI's COM interfaces.
+- Device enumeration via `AudioObjectPropertyAddress` queries (same API as WASAPI
+  uses for direct device properties).
+- No support for rate negotiation; accepts the device's nominal sample rate and
+  relies on `twSpeaker`'s resampler to bridge any project-rate mismatch (see §5).
+- Simple cleanup: `AudioUnitUninitialize` → `AudioComponentInstanceDispose`.
+
+### Reader — `WasapiInputState` (Windows, `wasapi_input.h`)
 
 ```
 Closed ──openDevice──► Open          (failure ──► Closed)
@@ -162,9 +181,29 @@ Capturing ──stopCapture──► Open
   `closeDeviceLocked_()`, which stops capture, releases all handles, balances the
   COM init exactly once, and returns to `Closed`.
 
+### Reader — CoreAudioInput (macOS, `coreaudio_input.h/mm`)
+
+CoreAudio input does not use an explicit state machine either. Lifecycle is
+implicit:
+
+- `audioUnit_ == nullptr` → device is closed.
+- `audioUnit_ != nullptr && !isCapturing_` → device is open but not capturing.
+- `audioUnit_ != nullptr && isCapturing_` → device is open and capturing.
+
+**Key differences from WASAPI:**
+- Uses AVAudioEngine (Objective-C++) instead of WASAPI's COM/AUDCLNT interfaces.
+- Creates an `AVAudioInputNode` and installs a tap (`installTapOnBus:`) on it to
+  capture audio via an Objective-C block callback (non-realtime context).
+- Captured samples are written to a circular buffer (atomics for `writePos_` /
+  `readPos_`), guarded by `bufferMutex_` and signalled via `bufferCV_` for
+  blocking reads.
+- No internal capture thread; `RecordingSession` drives the read loop from its
+  worker thread.
+- Simple cleanup: `removeTapOnBus` → `[engine stop]` → `[engine release]`.
+
 ### Composing transitions without re-locking
 
-Both classes split each public method into a **locking wrapper** plus a
+**WASAPI** classes split each public method into a **locking wrapper** plus a
 `*_locked_` helper that assumes the caller already holds the mutex. This lets one
 transition compose another safely:
 
@@ -173,11 +212,19 @@ transition compose another safely:
 - reader: `closeDeviceLocked_()` → `stopCaptureLocked_()`; the failure paths and
   destructor call the locked helpers directly.
 
+**CoreAudio** classes do not use this pattern. Since there is no explicit state
+machine and no mutex, transitions are not composable in the same way:
+
+- writer: `stopOutput()` stops playback by calling `AudioOutputUnitStop` directly;
+  `closeDevice()` does not stop playback itself (caller must order correctly).
+- reader: `stopCapture()` removes the tap; `closeDevice()` calls `stopCapture()`
+  directly (inline, not via a locked helper).
+
 ---
 
 ## 4. Threading & concurrency model
 
-### Writer — two threads
+### Writer — WASAPI (two threads)
 
 1. **Control thread** (the caller — `twSpeaker`, on the UI thread): drives
    `openDevice / startOutput / stopOutput / closeDevice` and the queries.
@@ -201,7 +248,27 @@ Rules that make this sound:
   under the lock. `setRenderCallback` must only be called while not running
   (the audio thread reads `callback_` lock-free).
 
-### Reader — single worker thread
+### Writer — CoreAudio (one implicit thread)
+
+CoreAudio's AudioUnit owns the realtime thread internally. `CoreAudioBackend`
+only coordinates this via the atomic `running_` flag:
+
+- **Control thread** (caller, typically UI): Calls `openDevice` / `startOutput` /
+  `stopOutput` / `closeDevice`.
+- **AudioUnit's internal thread** (not owned by `CoreAudioBackend`): Invokes the
+  `AURenderCallback` synchronously when the device needs samples.
+
+Rules:
+
+- No mutex guards the lifecycle. `outputUnit_` is only checked for null (not
+  modified under lock), and `running_` is atomic.
+- `setRenderCallback` can be called at any time; the callback is read lock-free
+  during render. If called while running, there's no synchronization — the
+  implementation assumes this doesn't happen in practice.
+- No explicit cleanup is needed on stop; the AudioUnit continues to exist and
+  can be restarted later.
+
+### Reader — WASAPI (single worker thread)
 
 `WASAPIInput` has **no thread of its own**. The whole lifecycle is driven by the
 single `RecordingSession` worker thread, and COM is initialized/uninitialized on
@@ -212,6 +279,26 @@ the UI thread, or a stop racing the read loop). `RecordingSession::requestStop()
 only flips an atomic *in the session*; it does not call into `AudioInput`, so the
 read loop and teardown never overlap on the input object.
 
+### Reader — CoreAudio (circular buffer with taps)
+
+`CoreAudioInput` has **no thread of its own**; instead it uses an Objective-C
+block tap on the `AVAudioInputNode`. The architecture differs from WASAPI:
+
+- **Control thread** (caller, typically UI or `RecordingSession`): Drives
+  `openDevice` / `startCapture` / `stopCapture` / `closeDevice` and `read()`.
+- **AVAudioEngine's internal thread** (not owned by `CoreAudioInput`): Invokes
+  the tap block when audio is ready, writing samples to the circular buffer.
+
+Rules:
+
+- `audioUnit_` is only checked for null; no explicit state machine.
+- The tap block writes to `circularBuffer_` via atomics (`writePos_`), guarded
+  by `bufferMutex_` and signalled via `bufferCV_`.
+- `read()` pulls from the circular buffer. If fewer frames are available than
+  requested and `isCapturing_` is true, it waits up to 100 ms on `bufferCV_`
+  before returning what's available.
+- No synchronization of the callback pointer; it's set once at construction.
+
 ---
 
 ## 5. Sample rate & format handling
@@ -219,12 +306,13 @@ read loop and teardown never overlap on the input object.
 The engine is rate-aware; a resampler at the device boundary reconciles the
 project rate with the device rate.
 
-- **Writer:** WASAPI shared mode is locked to the OS mix rate, so a differing
-  `preferredRate` cannot be honoured natively — `twSpeaker`'s resampler bridges
-  it (a passthrough when they already match). `getConfig()` reports the device's
-  native rate and binary sample format (float32 / int16 / int32); `renderOnce_`
-  converts the interleaved float scratch buffer to that format via
-  `twConvertFrames`.
+### WASAPI (Windows)
+
+- **Writer:** Shared mode is locked to the OS mix rate. A differing `preferredRate`
+  cannot be honoured natively — `twSpeaker`'s resampler bridges it (a passthrough
+  when they already match). `getConfig()` reports the device's native rate and
+  binary sample format (float32 / int16 / int32); `renderOnce_` converts the
+  interleaved float scratch buffer to that format via `twConvertFrames`.
 - **Reader:** `WASAPIInput::openDevice` first asks the shared engine to deliver
   frames at the requested project rate using `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`
   (+ `SRC_DEFAULT_QUALITY`). If the driver refuses, it falls back to capturing at
@@ -232,16 +320,46 @@ project rate with the device rate.
   resampler to convert device-rate → project-rate before writing the WAV. Either
   way the recorded file matches the project rate.
 
+### CoreAudio (macOS)
+
+- **Writer:** No rate negotiation. `CoreAudioBackend` queries the device's nominal
+  sample rate via `AudioObjectGetPropertyData(kAudioDevicePropertyNominalSampleRate)`
+  and sets the format to stereo float32 at that rate. The `preferredRate` is
+  ignored (except for a warning log). `twSpeaker`'s resampler bridges any
+  project-rate ↔ device-rate mismatch.
+- **Reader:** No rate negotiation. `CoreAudioInput` queries the `AVAudioInputNode`'s
+  output format to determine the device's sample rate and channel count. If the
+  requested `preferredRate` differs, the format query ignores it and reports the
+  device's actual rate. `RecordingSession`'s linear resampler converts device-rate
+  → project-rate before writing the WAV.
+
 ---
 
 ## 6. Platform status
 
 | Platform | Writer | Reader | Status |
 |----------|--------|--------|--------|
-| Windows  | `WASAPIBackend` | `WASAPIInput` | Reference; shared-mode only |
+| Windows  | `WASAPIBackend` | `WASAPIInput` | Reference; shared-mode only; explicit state machine with mutex protection |
 | Linux    | `ALSABackend` | `ALSAInput` | Implemented, untested since refactor |
-| macOS    | `CoreAudioBackend` | `CoreAudioInput` | Output audible; input via AudioQueue |
+| macOS    | `CoreAudioBackend` | `CoreAudioInput` | Output audible via AudioUnit; input via AVAudioEngine tap; no explicit state machine |
 | —        | `NullBackend` | `NullInput` | Silent fallback |
+
+### macOS Implementation Details
+
+**Writer (`CoreAudioBackend`):**
+- Uses `AudioComponentFindNext` + `AudioComponentInstanceNew` to create a DefaultOutput audio unit.
+- Queries device properties via `AudioObjectPropertyAddress` for nominal sample rate and name.
+- Sets format to stereo float32 interleaved on the unit's input scope.
+- No rate negotiation; the speaker's resampler bridges project-rate ↔ device-rate mismatches.
+- Device enumeration scans `kAudioHardwarePropertyDevices` and filters for output-capable devices.
+
+**Reader (`CoreAudioInput`):**
+- Uses `AVAudioEngine` (Objective-C++ / AVFoundation) instead of low-level CoreAudio HAL.
+- Creates `AVAudioInputNode` and installs a block tap via `installTapOnBus:` to intercept samples.
+- Circular buffer with atomic read/write positions captures samples in the tap block.
+- `RecordingSession` calls `read()` on its worker thread; reads block up to 100 ms if insufficient data available.
+- Device enumeration is minimal: reports only "Default Input" at the queried sample rate and channel count.
+- No rate negotiation; `RecordingSession`'s linear resampler handles device-rate → project-rate conversion.
 
 ---
 
