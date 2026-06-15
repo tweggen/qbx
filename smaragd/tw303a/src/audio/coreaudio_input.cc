@@ -78,7 +78,7 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
         return -1;
     }
 
-    // Set up audio format for the queue (request specific rate if given, else use device rate)
+    // Request float PCM format (AudioQueue will convert from device format if needed)
     AudioStreamBasicDescription format;
     std::memset(&format, 0, sizeof(format));
     format.mSampleRate = preferredRate > 0 ? preferredRate : deviceFormat.mSampleRate;
@@ -89,6 +89,13 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
     format.mBytesPerFrame = sizeof(float) * deviceFormat.mChannelsPerFrame;
     format.mChannelsPerFrame = deviceFormat.mChannelsPerFrame;
     format.mBitsPerChannel = 32;
+
+    fprintf(stderr, "coreaudio_input: device format: %u Hz, %u channels, formatID=0x%x, flags=0x%x\n",
+            (unsigned)deviceFormat.mSampleRate, (unsigned)deviceFormat.mChannelsPerFrame,
+            (unsigned)deviceFormat.mFormatID, (unsigned)deviceFormat.mFormatFlags);
+    fprintf(stderr, "coreaudio_input: requesting: %u Hz, %u channels, flags=0x%x\n",
+            (unsigned)format.mSampleRate, (unsigned)format.mChannelsPerFrame, (unsigned)format.mFormatFlags);
+    fflush(stderr);
 
     config_.sampleRate = static_cast<std::uint32_t>(format.mSampleRate);
     config_.channels = format.mChannelsPerFrame;
@@ -176,6 +183,20 @@ int CoreAudioInput::stopCapture() {
 void CoreAudioInput::bufferAudioData(const float *audioData, std::size_t frameCount) {
     if (!audioData || frameCount == 0) {
         return;
+    }
+
+    // Diagnostic: check if buffer contains actual audio or silence
+    static int checkCount = 0;
+    if (++checkCount <= 3) {
+        float maxSample = 0.0f;
+        std::size_t checkSamples = std::min(frameCount * config_.channels, size_t(4096));
+        for (std::size_t i = 0; i < checkSamples; ++i) {
+            float absVal = audioData[i] < 0 ? -audioData[i] : audioData[i];
+            if (absVal > maxSample) maxSample = absVal;
+        }
+        fprintf(stderr, "coreaudio_input: bufferAudioData #%d: frameCount=%zu, channels=%u, maxSample=%.6f\n",
+                checkCount, frameCount, config_.channels, maxSample);
+        fflush(stderr);
     }
 
     std::unique_lock<std::mutex> lock(bufferMutex_);
