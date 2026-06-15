@@ -16,14 +16,6 @@ void audioQueueInputCallback(void *inUserData,
         return;
     }
 
-    // Debug: log first few callbacks
-    static int callCount = 0;
-    if (++callCount <= 5 || callCount % 200 == 0) {
-        fprintf(stderr, "audioQueueInputCallback: callCount=%d, bufferSize=%u, audioData=%p\n",
-                callCount, (unsigned)inBuffer->mAudioDataByteSize, inBuffer->mAudioData);
-        fflush(stderr);
-    }
-
     if (inBuffer->mAudioData && inBuffer->mAudioDataByteSize > 0) {
         // Extract audio from the buffer and buffer it
         const float *audioData = static_cast<const float *>(inBuffer->mAudioData);
@@ -54,12 +46,8 @@ CoreAudioInput::~CoreAudioInput() {
 }
 
 int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t preferredRate) {
-    fprintf(stderr, "coreaudio_input::openDevice: entered\n");
-    fflush(stderr);
-
     if (inputQueue_) {
         lastError_ = "Device already open";
-        fprintf(stderr, "coreaudio_input::openDevice: queue already open\n");
         return -1;
     }
 
@@ -72,13 +60,8 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
 
     OSStatus status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr,
                                                   &dataSize, &inputDeviceID);
-    fprintf(stderr, "coreaudio_input::openDevice: got device, deviceID=%u, status=%d\n",
-            (unsigned)inputDeviceID, (int)status);
-    fflush(stderr);
-
     if (status != noErr || inputDeviceID == 0) {
         lastError_ = "Failed to get default input device";
-        fprintf(stderr, "coreaudio_input::openDevice: failed to get device\n");
         return -1;
     }
 
@@ -128,13 +111,9 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
 
     // Create and enqueue buffers
     const UInt32 bufferByteSize = config_.bufferFrames * config_.channels * sizeof(float);
-    fprintf(stderr, "coreaudio_input: creating buffers, bufferFrames=%u, channels=%u, bufferByteSize=%u\n",
-            config_.bufferFrames, config_.channels, bufferByteSize);
-
     for (int i = 0; i < 2; ++i) {
         status = AudioQueueAllocateBuffer(inputQueue_, bufferByteSize, &queueBuffers_[i]);
         if (status != noErr) {
-            fprintf(stderr, "coreaudio_input: AudioQueueAllocateBuffer failed with status %d\n", (int)status);
             lastError_ = "Failed to allocate audio queue buffer";
             AudioQueueDispose(inputQueue_, true);
             inputQueue_ = nullptr;
@@ -143,7 +122,6 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
 
         status = AudioQueueEnqueueBuffer(inputQueue_, queueBuffers_[i], 0, nullptr);
         if (status != noErr) {
-            fprintf(stderr, "coreaudio_input: AudioQueueEnqueueBuffer failed with status %d\n", (int)status);
             lastError_ = "Failed to enqueue audio queue buffer";
             AudioQueueDispose(inputQueue_, true);
             inputQueue_ = nullptr;
@@ -151,8 +129,6 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
         }
     }
 
-    fprintf(stderr, "coreaudio_input: device opened successfully\n");
-    fflush(stderr);
     return 0;
 }
 
@@ -179,13 +155,9 @@ int CoreAudioInput::startCapture() {
 
     OSStatus status = AudioQueueStart(inputQueue_, nullptr);
     if (status != noErr) {
-        fprintf(stderr, "coreaudio_input: AudioQueueStart failed with status %d\n", (int)status);
         lastError_ = "Failed to start audio queue";
         return -1;
     }
-
-    fprintf(stderr, "coreaudio_input: AudioQueue started successfully\n");
-    fflush(stderr);
 
     isCapturing_ = true;
     return 0;
