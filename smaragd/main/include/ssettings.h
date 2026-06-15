@@ -37,6 +37,13 @@ public:
     QString audioInputDeviceId() const;
     void    setAudioInputDeviceId( const QString &id );
 
+    // Cached audio device latencies (in frames). Measured at startup and
+    // persisted to avoid repeated device opens. Returns 0 if not yet measured.
+    uint32_t audioOutputLatencyFrames( const QString &deviceId ) const;
+    void     setAudioOutputLatencyFrames( const QString &deviceId, uint32_t frames );
+    uint32_t audioInputLatencyFrames( const QString &deviceId ) const;
+    void     setAudioInputLatencyFrames( const QString &deviceId, uint32_t frames );
+
     // Last-used directory for a file dialog, keyed by a context string
     // ("project", "sample", ...). Returns `fallback` when nothing is stored.
     QString lastDir( const QString &context,

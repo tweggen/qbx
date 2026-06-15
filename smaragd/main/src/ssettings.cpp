@@ -46,6 +46,26 @@ void SSettings::setAudioInputDeviceId( const QString &id )
     setValue( "audio/inputDeviceId", id );
 }
 
+uint32_t SSettings::audioOutputLatencyFrames( const QString &deviceId ) const
+{
+    return value( "audio/outputLatency/" + deviceId, 0u ).toUInt();
+}
+
+void SSettings::setAudioOutputLatencyFrames( const QString &deviceId, uint32_t frames )
+{
+    setValue( "audio/outputLatency/" + deviceId, frames );
+}
+
+uint32_t SSettings::audioInputLatencyFrames( const QString &deviceId ) const
+{
+    return value( "audio/inputLatency/" + deviceId, 0u ).toUInt();
+}
+
+void SSettings::setAudioInputLatencyFrames( const QString &deviceId, uint32_t frames )
+{
+    setValue( "audio/inputLatency/" + deviceId, frames );
+}
+
 QString SSettings::lastDir( const QString &context, const QString &fallback ) const
 {
     return value( "paths/" + context, fallback ).toString();

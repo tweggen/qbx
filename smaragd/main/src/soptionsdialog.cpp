@@ -176,22 +176,36 @@ void SOptionsDialog::loadAudioPage()
     int j = audioInputDevice_->findData( curIn );
     if( j >= 0 ) audioInputDevice_->setCurrentIndex( j );
 
-    // Load latencies and buffer size options from the current backend
+    // Load latencies (cached from startup) and buffer size options
     if( spk ) {
         audio::AudioBackend *backend = spk->getBackend();
 
-        // Display output latency
-        if( backend ) {
-            uint32_t outLatency = backend->getLatencyFrames();
-            if( outLatency > 0 ) {
-                uint32_t sampleRate = backend->getConfig().sampleRate;
-                double ms = static_cast<double>(outLatency) / sampleRate * 1000.0;
-                outputLatencyLabel_->setText( QString::asprintf( "~%.1f ms (%u frames)", ms, outLatency ) );
-            } else {
-                outputLatencyLabel_->setText( "(not yet measured)" );
-            }
+        // Display output latency (from cache)
+        QString outDeviceId = audioDevice_->currentData().toString();
+        uint32_t cachedOutLatency = SSettings::instance().audioOutputLatencyFrames( outDeviceId );
+        if( cachedOutLatency > 0 ) {
+            uint32_t sampleRate = backend ? backend->getConfig().sampleRate : 48000;
+            double ms = static_cast<double>(cachedOutLatency) / sampleRate * 1000.0;
+            outputLatencyLabel_->setText( QString::asprintf( "~%.1f ms (%u frames)", ms, cachedOutLatency ) );
+        } else {
+            outputLatencyLabel_->setText( "(not yet measured)" );
+        }
 
-            // Load available buffer sizes
+        // Display input latency (from cache)
+        QString inDeviceId = audioInputDevice_->currentData().toString();
+        uint32_t cachedInLatency = SSettings::instance().audioInputLatencyFrames( inDeviceId );
+        if( cachedInLatency > 0 ) {
+            // Estimate sample rate for display (use 48kHz if unknown)
+            uint32_t sampleRate = 48000;
+            if( backend ) sampleRate = backend->getConfig().sampleRate;
+            double ms = static_cast<double>(cachedInLatency) / sampleRate * 1000.0;
+            inputLatencyLabel_->setText( QString::asprintf( "~%.1f ms (%u frames)", ms, cachedInLatency ) );
+        } else {
+            inputLatencyLabel_->setText( "(not yet measured)" );
+        }
+
+        // Load available buffer sizes
+        if( backend ) {
             bufferSizeCombo_->clear();
             std::vector<uint32_t> sizes = backend->getAvailableBufferSizes();
             if( sizes.empty() ) {
@@ -213,27 +227,6 @@ void SOptionsDialog::loadAudioPage()
                 if( idx >= 0 ) bufferSizeCombo_->setCurrentIndex( idx );
                 bufferSizeCombo_->setEnabled( true );
             }
-        }
-
-        // Display input latency (symmetric with output latency)
-        std::unique_ptr<audio::AudioInput> input = audio::createAudioInput();
-        if( input ) {
-            QString inputDeviceId = audioInputDevice_->currentData().toString();
-            if( input->openDevice( inputDeviceId.toStdString(), backend ? backend->getConfig().sampleRate : 0 ) == 0 ) {
-                uint32_t inLatency = input->getLatencyFrames();
-                if( inLatency > 0 ) {
-                    uint32_t sampleRate = input->getConfig().sampleRate;
-                    double ms = static_cast<double>(inLatency) / sampleRate * 1000.0;
-                    inputLatencyLabel_->setText( QString::asprintf( "~%.1f ms (%u frames)", ms, inLatency ) );
-                } else {
-                    inputLatencyLabel_->setText( "(not yet measured)" );
-                }
-                input->closeDevice();
-            } else {
-                inputLatencyLabel_->setText( "(device unavailable)" );
-            }
-        } else {
-            inputLatencyLabel_->setText( "(not available)" );
         }
 
     } else {

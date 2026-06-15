@@ -16,6 +16,8 @@
 #include <QStatusBar>
 #include <QLabel>
 #include <QInputDialog>
+#include <QTimer>
+#include <QVBoxLayout>
 
 #include <iostream>
 
@@ -48,6 +50,7 @@
 #include "soptionsdialog.h"
 
 #include "twspeaker.h"
+#include "audio/audio_input.h"
 
 #include "actions/saddtrackaction.h"
 #include "actions/sreparenttrackaction.h"
@@ -716,6 +719,10 @@ SMainWindow::SMainWindow()
     buildStatusBar();
 
     qDockExternFileList_ = NULL;
+
+    // Measure and cache audio device latencies on startup
+    // (done after UI is built, will show modal dialog if needed)
+    QTimer::singleShot( 100, this, &SMainWindow::measureAudioLatenciesIfNeeded );
 }
 
 // Build the status bar. The left area is used for transient showMessage()
@@ -1393,6 +1400,67 @@ void SMainWindow::showOptionsDialog()
 {
     SOptionsDialog dlg( this );
     dlg.exec();   // pages write to SSettings on OK/Apply; live UI reacts to changed()
+}
+
+void SMainWindow::measureAudioLatenciesIfNeeded()
+{
+    SSettings &settings = SSettings::instance();
+    QString outDeviceId = settings.audioDeviceId();
+    QString inDeviceId = settings.audioInputDeviceId();
+
+    // Check if both latencies are already cached
+    bool outKnown = settings.audioOutputLatencyFrames( outDeviceId ) > 0;
+    bool inKnown = settings.audioInputLatencyFrames( inDeviceId ) > 0;
+
+    if( outKnown && inKnown ) {
+        return;  // Both latencies cached, nothing to do
+    }
+
+    // Show modal dialog while measuring
+    QDialog progressDlg( this );
+    progressDlg.setWindowTitle( "Initializing Audio" );
+    progressDlg.setModal( true );
+    progressDlg.setWindowFlags( progressDlg.windowFlags() & ~Qt::WindowContextHelpButtonHint );
+
+    QVBoxLayout *layout = new QVBoxLayout( &progressDlg );
+    QLabel *label = new QLabel( "Checking audio devices..." );
+    layout->addWidget( label );
+
+    progressDlg.setMinimumWidth( 300 );
+    progressDlg.setMinimumHeight( 100 );
+    progressDlg.show();
+    QApplication::processEvents();
+
+    // Measure output latency if not cached
+    if( !outKnown ) {
+        twSpeaker *spk = SApplication::app().getSpeaker();
+        if( spk ) {
+            audio::AudioBackend *backend = spk->getBackend();
+            if( backend ) {
+                uint32_t latency = backend->getLatencyFrames();
+                if( latency > 0 ) {
+                    settings.setAudioOutputLatencyFrames( outDeviceId, latency );
+                }
+            }
+        }
+    }
+
+    // Measure input latency if not cached
+    if( !inKnown ) {
+        std::unique_ptr<audio::AudioInput> input = audio::createAudioInput();
+        if( input ) {
+            // Try to open with a 500ms timeout
+            if( input->openDevice( inDeviceId.toStdString(), 48000 ) == 0 ) {
+                uint32_t latency = input->getLatencyFrames();
+                if( latency > 0 ) {
+                    settings.setAudioInputLatencyFrames( inDeviceId, latency );
+                }
+                input->closeDevice();
+            }
+        }
+    }
+
+    progressDlg.close();
 }
 
 SMainWindow::~SMainWindow()

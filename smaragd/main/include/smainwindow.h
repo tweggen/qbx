@@ -91,6 +91,10 @@ private:
     // whenever the Cycle flag or the range markers change.
     void syncCyclePlayback();
 
+    // Measure and cache audio device latencies on startup if not already known.
+    // Shows a modal "Checking audio devices..." dialog to the user.
+    void measureAudioLatenciesIfNeeded();
+
     // Serialize the current project to path; reports errors via a dialog.
     bool saveToPath( const QString &path );
     // Load a project file (shared by File→Open, the recent list, and startup).
