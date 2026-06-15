@@ -179,6 +179,58 @@ int ALSABackend::stopOutput()
     return 0;
 }
 
+std::vector<uint32_t> ALSABackend::getAvailableBufferSizes() const
+{
+    // Return a set of common buffer sizes for user selection.
+    // These are standard power-of-2 sizes for audio work.
+    return { 256, 512, 1024, 2048, 4096, 8192 };
+}
+
+int ALSABackend::setBufferSize(uint32_t frameCount)
+{
+    // Can only change buffer size when device is not running.
+    if (running_ || !pcm_) return -1;
+
+    snd_pcm_hw_params_t *params;
+    snd_pcm_hw_params_alloca(&params);
+
+    int rc = snd_pcm_hw_params_any(pcm_, params);
+    if (rc < 0) {
+        syslog(LOG_ERR, "ALSABackend::setBufferSize: snd_pcm_hw_params_any: %s",
+               snd_strerror(rc));
+        return -1;
+    }
+
+    snd_pcm_uframes_t bufFrames = frameCount;
+    rc = snd_pcm_hw_params_set_buffer_size_near(pcm_, params, &bufFrames);
+    if (rc < 0) {
+        syslog(LOG_ERR, "ALSABackend::setBufferSize: snd_pcm_hw_params_set_buffer_size_near: %s",
+               snd_strerror(rc));
+        return -1;
+    }
+
+    rc = snd_pcm_hw_params(pcm_, params);
+    if (rc < 0) {
+        syslog(LOG_ERR, "ALSABackend::setBufferSize: snd_pcm_hw_params: %s",
+               snd_strerror(rc));
+        return -1;
+    }
+
+    // Update config with the actual buffer size (may differ from requested)
+    config_.bufferFrames = static_cast<uint32_t>(bufFrames);
+    config_.outputLatencyFrames = static_cast<uint32_t>(bufFrames);
+
+    // Resize scratch buffers to match new buffer size
+    floatBuffer_.assign(config_.bufferFrames * config_.channels, 0.0f);
+    shortBuffer_.assign(config_.bufferFrames * config_.channels, 0);
+
+    syslog(LOG_INFO,
+           "ALSABackend::setBufferSize: changed to %u frames (requested %u)",
+           (unsigned)config_.bufferFrames, (unsigned)frameCount);
+
+    return 0;
+}
+
 void ALSABackend::asyncCallbackStatic_(snd_async_handler_t *handler)
 {
     auto *self = static_cast<ALSABackend *>(

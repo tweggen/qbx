@@ -23,6 +23,11 @@ public:
     std::vector<AudioInputDeviceInfo> listDevices() const override;
     const char *errorMessage() const override;
 
+    // ALSA supports user-selectable buffer sizes. Returns list of common presets.
+    std::vector<uint32_t> getAvailableBufferSizes() const override;
+    // Change buffer size (must be stopped). Reconfigures hw params.
+    int setBufferSize(uint32_t frameCount) override;
+
 private:
     AudioInputConfig config_;
     std::string lastError_;

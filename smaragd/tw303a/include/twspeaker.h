@@ -73,6 +73,9 @@ public:
     const std::string &outputDevice() const { return outputDeviceId_; }
     std::vector<audio::AudioDeviceInfo> outputDevices() const;
 
+    // Get the audio backend for querying configuration, latency, and buffer sizes.
+    audio::AudioBackend *getBackend() const { return backend_.get(); }
+
 public slots:
     void startOutput();
     void stopOutput();

@@ -140,6 +140,50 @@ int ALSAInput::stopCapture() {
     return 0;
 }
 
+std::vector<uint32_t> ALSAInput::getAvailableBufferSizes() const {
+    // Return a set of common buffer sizes for user selection.
+    // These are standard power-of-2 sizes for audio work.
+    return { 256, 512, 1024, 2048, 4096, 8192 };
+}
+
+int ALSAInput::setBufferSize(uint32_t frameCount) {
+    // Can only change buffer size when capture is not running.
+    if (isCapturing_ || !pcmHandle_) return -1;
+
+    snd_pcm_hw_params_t *hwParams = nullptr;
+    int err;
+
+    snd_pcm_hw_params_malloc(&hwParams);
+    err = snd_pcm_hw_params_any(pcmHandle_, hwParams);
+    if (err < 0) {
+        lastError_ = std::string("Failed to get PCM parameters: ") + snd_strerror(err);
+        snd_pcm_hw_params_free(hwParams);
+        return -1;
+    }
+
+    snd_pcm_uframes_t bufFrames = frameCount;
+    err = snd_pcm_hw_params_set_buffer_size_near(pcmHandle_, hwParams, &bufFrames);
+    if (err < 0) {
+        lastError_ = std::string("Failed to set buffer size: ") + snd_strerror(err);
+        snd_pcm_hw_params_free(hwParams);
+        return -1;
+    }
+
+    err = snd_pcm_hw_params(pcmHandle_, hwParams);
+    if (err < 0) {
+        lastError_ = std::string("Failed to apply PCM parameters: ") + snd_strerror(err);
+        snd_pcm_hw_params_free(hwParams);
+        return -1;
+    }
+
+    // Update config with the actual buffer size (may differ from requested)
+    config_.bufferFrames = static_cast<uint32_t>(bufFrames);
+    config_.inputLatencyFrames = static_cast<uint32_t>(bufFrames);
+
+    snd_pcm_hw_params_free(hwParams);
+    return 0;
+}
+
 std::int32_t ALSAInput::read(float *interleaved, std::size_t frameCount) {
     if (!pcmHandle_) {
         return -1;

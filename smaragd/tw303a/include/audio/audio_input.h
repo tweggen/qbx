@@ -55,6 +55,17 @@ public:
     // Returns 0 if not yet determined or if getConfig().inputLatencyFrames is not set.
     virtual uint32_t getLatencyFrames() const { return getConfig().inputLatencyFrames; }
 
+    // Get the list of selectable buffer sizes (in frames) for this backend.
+    // Empty list means buffer size is not user-selectable (fixed by device/OS).
+    // Called after openDevice(); may probe the device but must not disturb capture.
+    virtual std::vector<uint32_t> getAvailableBufferSizes() const { return {}; }
+
+    // Request a specific buffer size (in frames). Returns 0 on success, -1 on error.
+    // Only valid after openDevice(). Requires capture to be stopped.
+    // The backend may return a different size than requested (if the exact size is
+    // not supported); call getConfig().bufferFrames to get the actual size.
+    virtual int setBufferSize(uint32_t frameCount) { return -1; }
+
     // List available input devices
     virtual std::vector<AudioInputDeviceInfo> listDevices() const = 0;
 

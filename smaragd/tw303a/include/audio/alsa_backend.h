@@ -30,6 +30,11 @@ public:
     // Enumerate ALSA cards (snd_card_next) as selectable devices.
     std::vector<AudioDeviceInfo> enumerateDevices() const override;
 
+    // ALSA supports user-selectable buffer sizes. Returns list of common presets.
+    std::vector<uint32_t> getAvailableBufferSizes() const override;
+    // Change buffer size (must be stopped). Reconfigures hw params.
+    int setBufferSize(uint32_t frameCount) override;
+
     const char *name() const override { return "alsa"; }
 
 private:

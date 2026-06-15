@@ -7,6 +7,7 @@ class QTreeWidget;
 class QStackedWidget;
 class QComboBox;
 class QCheckBox;
+class QLabel;
 
 // Per-user preferences dialog: a category tree on the left, one option page per
 // category on the right (QStackedWidget), with OK / Cancel / Apply. Reads from
@@ -41,8 +42,10 @@ private:
     QCheckBox *invertZoom_;
 
     // Audio page.
-    QComboBox *audioDevice_;      // Output device
-    QComboBox *audioInputDevice_; // Input device (for recording)
+    QComboBox *audioDevice_;         // Output device
+    QComboBox *audioInputDevice_;    // Input device (for recording)
+    QComboBox *bufferSizeCombo_;     // Buffer size (ALSA only)
+    QLabel *outputLatencyLabel_;     // Output latency display
 };
 
 #endif // SOPTIONSDIALOG_H

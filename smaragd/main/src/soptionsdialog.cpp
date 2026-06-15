@@ -106,9 +106,17 @@ QWidget *SOptionsDialog::buildAudioPage()
     form->addRow( "Output device:", audioDevice_ );
     form->addRow( new QLabel( "Device changes take effect on the next Play." ) );
 
+    outputLatencyLabel_ = new QLabel;
+    form->addRow( "Output latency:", outputLatencyLabel_ );
+
     audioInputDevice_ = new QComboBox;
     form->addRow( "Input device:", audioInputDevice_ );
     form->addRow( new QLabel( "Device selection is used when recording starts." ) );
+
+    bufferSizeCombo_ = new QComboBox;
+    form->addRow( "Buffer size:", bufferSizeCombo_ );
+    form->addRow( new QLabel( "Smaller buffer = lower latency but higher CPU load. "
+                             "Requires restart of playback to take effect." ) );
 
     return page;
 }
@@ -163,6 +171,50 @@ void SOptionsDialog::loadAudioPage()
     if( curIn.isEmpty() ) curIn = "default";
     int j = audioInputDevice_->findData( curIn );
     if( j >= 0 ) audioInputDevice_->setCurrentIndex( j );
+
+    // Load latencies and buffer size options from the current backend
+    if( spk ) {
+        audio::AudioBackend *backend = spk->getBackend();
+
+        // Display output latency
+        if( backend ) {
+            uint32_t outLatency = backend->getLatencyFrames();
+            if( outLatency > 0 ) {
+                uint32_t sampleRate = backend->getConfig().sampleRate;
+                double ms = static_cast<double>(outLatency) / sampleRate * 1000.0;
+                outputLatencyLabel_->setText( QString::asprintf( "~%.1f ms (%u frames)", ms, outLatency ) );
+            } else {
+                outputLatencyLabel_->setText( "(not yet measured)" );
+            }
+
+            // Load available buffer sizes
+            bufferSizeCombo_->clear();
+            std::vector<uint32_t> sizes = backend->getAvailableBufferSizes();
+            if( sizes.empty() ) {
+                bufferSizeCombo_->addItem( QString::number( backend->getConfig().bufferFrames )
+                                          + " frames (device-managed)" );
+                bufferSizeCombo_->setEnabled( false );
+            } else {
+                for( uint32_t size : sizes ) {
+                    bufferSizeCombo_->addItem( QString::number( size ) + " frames", size );
+                }
+                uint32_t current = backend->getConfig().bufferFrames;
+                int idx = -1;
+                for( int k = 0; k < bufferSizeCombo_->count(); ++k ) {
+                    if( bufferSizeCombo_->itemData( k ).toUInt() == current ) {
+                        idx = k;
+                        break;
+                    }
+                }
+                if( idx >= 0 ) bufferSizeCombo_->setCurrentIndex( idx );
+                bufferSizeCombo_->setEnabled( true );
+            }
+        }
+
+    } else {
+        outputLatencyLabel_->setText( "(not available)" );
+        bufferSizeCombo_->setEnabled( false );
+    }
 }
 
 void SOptionsDialog::applyAudioPage()
@@ -180,6 +232,27 @@ void SOptionsDialog::applyAudioPage()
     QString inId = audioInputDevice_->currentData().toString();
     if( !inId.isEmpty() ) {
         SSettings::instance().setAudioInputDeviceId( inId );
+    }
+
+    // Apply buffer size change (if supported)
+    if( twSpeaker *spk = SApplication::app().getSpeaker() ) {
+        audio::AudioBackend *backend = spk->getBackend();
+        if( backend && bufferSizeCombo_->isEnabled() &&
+            bufferSizeCombo_->currentData().toUInt() > 0 ) {
+            uint32_t newSize = bufferSizeCombo_->currentData().toUInt();
+            uint32_t currentSize = backend->getConfig().bufferFrames;
+            if( newSize != currentSize ) {
+                // Buffer size can only be changed when not playing
+                if( !spk->isPlaying() ) {
+                    int rc = backend->setBufferSize( newSize );
+                    if( rc != 0 ) {
+                        qWarning( "Failed to change buffer size to %u frames", newSize );
+                    }
+                } else {
+                    qWarning( "Cannot change buffer size while playing. Stop playback and try again." );
+                }
+            }
+        }
     }
 }
 
