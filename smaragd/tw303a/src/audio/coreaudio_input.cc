@@ -1,5 +1,6 @@
 #include "coreaudio_input.h"
 
+#include <cstdint>
 #include <cstring>
 
 namespace audio {
@@ -12,20 +13,31 @@ void audioQueueInputCallback(void *inUserData,
                              UInt32 inNumberPacketDescriptions,
                              const AudioStreamPacketDescription *inPacketDescs) {
     CoreAudioInput *pThis = static_cast<CoreAudioInput *>(inUserData);
-    if (!pThis || !inBuffer) {
+    if (!pThis || !inBuffer || !inBuffer->mAudioData || inBuffer->mAudioDataByteSize == 0) {
+        if (inBuffer) {
+            AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, nullptr);
+        }
         return;
     }
 
-    if (inBuffer->mAudioData && inBuffer->mAudioDataByteSize > 0) {
-        // Extract audio from the buffer and buffer it
-        const float *audioData = static_cast<const float *>(inBuffer->mAudioData);
-        // Calculate frames from byte size
-        std::size_t bytesPerFrame = pThis->getConfig().channels * sizeof(float);
-        std::size_t frameCount = inBuffer->mAudioDataByteSize / bytesPerFrame;
+    // Device provides int16 PCM. Convert to float for internal use.
+    const int16_t *int16Data = static_cast<const int16_t *>(inBuffer->mAudioData);
+    std::size_t sampleCount = inBuffer->mAudioDataByteSize / sizeof(int16_t);
 
-        if (frameCount > 0) {
-            pThis->bufferAudioData(audioData, frameCount);
-        }
+    // Convert int16 to float and buffer (int16 range: -32768 to 32767)
+    static std::vector<float> floatBuffer;
+    floatBuffer.clear();
+    floatBuffer.reserve(sampleCount);
+
+    const float scale = 1.0f / 32768.0f;
+    for (std::size_t i = 0; i < sampleCount; ++i) {
+        floatBuffer.push_back(int16Data[i] * scale);
+    }
+
+    // Buffer the converted audio
+    std::size_t frameCount = sampleCount / pThis->getConfig().channels;
+    if (frameCount > 0) {
+        pThis->bufferAudioData(floatBuffer.data(), frameCount);
     }
 
     // Re-enqueue the buffer so CoreAudio can fill it again
@@ -78,24 +90,13 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
         return -1;
     }
 
-    // Request float PCM format (AudioQueue will convert from device format if needed)
-    AudioStreamBasicDescription format;
-    std::memset(&format, 0, sizeof(format));
-    format.mSampleRate = preferredRate > 0 ? preferredRate : deviceFormat.mSampleRate;
-    format.mFormatID = kAudioFormatLinearPCM;
-    format.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
-    format.mBytesPerPacket = sizeof(float) * deviceFormat.mChannelsPerFrame;
-    format.mFramesPerPacket = 1;
-    format.mBytesPerFrame = sizeof(float) * deviceFormat.mChannelsPerFrame;
-    format.mChannelsPerFrame = deviceFormat.mChannelsPerFrame;
-    format.mBitsPerChannel = 32;
+    // Use device's native format to avoid format+sample-rate conversion failures that cause silence.
+    // The recording_session already handles sample rate conversion via its resampler.
+    AudioStreamBasicDescription format = deviceFormat;
 
     fprintf(stderr, "coreaudio_input: device format: %u Hz, %u channels, formatID=0x%x, flags=0x%x\n",
             (unsigned)deviceFormat.mSampleRate, (unsigned)deviceFormat.mChannelsPerFrame,
             (unsigned)deviceFormat.mFormatID, (unsigned)deviceFormat.mFormatFlags);
-    fprintf(stderr, "coreaudio_input: requesting: %u Hz, %u channels, flags=0x%x\n",
-            (unsigned)format.mSampleRate, (unsigned)format.mChannelsPerFrame, (unsigned)format.mFormatFlags);
-    fflush(stderr);
 
     config_.sampleRate = static_cast<std::uint32_t>(format.mSampleRate);
     config_.channels = format.mChannelsPerFrame;
