@@ -60,6 +60,29 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
                 (unsigned)config_.sampleRate, config_.channels);
         fflush(stderr);
 
+        // Query input latency from the AVAudioEngine's input node.
+        // AVAudioEngine doesn't provide a direct latency property, but we can estimate
+        // based on the input node's buffer size and the configured I/O buffer.
+        // For now, estimate as buffer frames (typical device latency is 1 buffer).
+        AVAudioInputNode *inNode = [engine inputNode];
+        if (inNode && inNode.audioUnit) {
+            Float64 latencySecs = 0.0;
+            UInt32 propSize = sizeof(latencySecs);
+            OSStatus err = AudioUnitGetProperty(inNode.audioUnit,
+                                                 kAudioUnitProperty_Latency,
+                                                 kAudioUnitScope_Global, 0,
+                                                 &latencySecs, &propSize);
+            if (err == noErr && latencySecs > 0.0) {
+                config_.inputLatencyFrames = static_cast<uint32_t>(latencySecs * config_.sampleRate);
+                fprintf(stderr, "coreaudio_input: input latency %.2f ms (%u frames @ %u Hz)\n",
+                        latencySecs * 1000.0, config_.inputLatencyFrames, (unsigned)config_.sampleRate);
+            } else {
+                config_.inputLatencyFrames = 0;
+            }
+        } else {
+            config_.inputLatencyFrames = 0;
+        }
+
         return 0;
     } else {
         lastError_ = "AVAudioEngine requires macOS 10.13+";

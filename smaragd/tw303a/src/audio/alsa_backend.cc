@@ -65,10 +65,15 @@ int ALSABackend::openDevice(const std::string &deviceName,
     floatBuffer_.assign(config_.bufferFrames * config_.channels, 0.0f);
     shortBuffer_.assign(config_.bufferFrames * config_.channels, 0);
 
+    // Calculate output latency as the buffer size (device latency ~= buffer time).
+    // In ALSA shared mode, actual latency also includes driver/OS buffering,
+    // but buffer size is the main controllable component.
+    config_.outputLatencyFrames = config_.bufferFrames;
+
     syslog(LOG_INFO,
-           "ALSABackend: opened '%s', %u Hz, %u ch, buffer=%u, period=%u",
+           "ALSABackend: opened '%s', %u Hz, %u ch, buffer=%u, period=%u, latency=%u frames",
            deviceName.c_str(), config_.sampleRate, config_.channels,
-           config_.bufferFrames, config_.periodFrames);
+           config_.bufferFrames, config_.periodFrames, config_.outputLatencyFrames);
     return 0;
 }
 

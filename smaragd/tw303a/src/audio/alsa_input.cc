@@ -91,6 +91,14 @@ int ALSAInput::openDevice(const std::string &deviceId, std::uint32_t preferredRa
         return -1;
     }
 
+    // Get the actual buffer size from hardware parameters for latency calculation.
+    snd_pcm_uframes_t bufferFrames = 0;
+    snd_pcm_hw_params_get_buffer_size(hwParams, &bufferFrames);
+    config_.bufferFrames = static_cast<uint32_t>(bufferFrames);
+
+    // Calculate input latency as the buffer size (device latency ~= buffer time).
+    config_.inputLatencyFrames = static_cast<uint32_t>(bufferFrames);
+
     snd_pcm_hw_params_free(hwParams);
     return 0;
 }

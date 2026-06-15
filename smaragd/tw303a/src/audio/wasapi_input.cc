@@ -159,6 +159,21 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
         return -1;
     }
 
+    // Query input latency (device + driver + OS buffering).
+    REFERENCE_TIME latencyHns = 0;
+    hr = audioClient_->GetStreamLatency(&latencyHns);
+    if (SUCCEEDED(hr) && latencyHns > 0) {
+        // Convert from 100ns units to frames: latency_frames = latency_hns * sampleRate / 10_000_000
+        config_.inputLatencyFrames = static_cast<uint32_t>(
+            (latencyHns * config_.sampleRate) / 10000000LL
+        );
+        fprintf(stderr,
+                "WASAPIInput: input latency %.2f ms (%u frames @ %u Hz)\n",
+                latencyHns / 10000.0, config_.inputLatencyFrames, config_.sampleRate);
+    } else {
+        config_.inputLatencyFrames = 0;
+    }
+
     state_ = WasapiInputState::Open;
     return 0;
 }

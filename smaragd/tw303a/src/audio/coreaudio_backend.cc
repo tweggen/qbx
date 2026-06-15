@@ -227,6 +227,21 @@ int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t pref
         return -1;
     }
 
+    // Query output latency from the audio unit (device + processing latency).
+    Float64 latencySecs = 0.0;
+    uint32_t propSize = sizeof(latencySecs);
+    err = AudioUnitGetProperty(au, kAudioUnitProperty_Latency,
+                               kAudioUnitScope_Global, 0,
+                               &latencySecs, &propSize);
+    if (err == noErr && latencySecs > 0.0) {
+        config_.outputLatencyFrames = static_cast<uint32_t>(latencySecs * config_.sampleRate);
+        syslog(LOG_INFO,
+               "CoreAudioBackend: output latency %.2f ms (%u frames @ %u Hz)",
+               latencySecs * 1000.0, config_.outputLatencyFrames, config_.sampleRate);
+    } else {
+        config_.outputLatencyFrames = 0;
+    }
+
     floatScratch_.resize(config_.bufferFrames * config_.channels);
 
     syslog(LOG_INFO, "CoreAudioBackend: opened device %u at %u Hz, %u channels",

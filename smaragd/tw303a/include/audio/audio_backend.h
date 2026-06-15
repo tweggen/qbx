@@ -21,6 +21,9 @@ struct AudioConfig {
     // so the device boundary is just another wire and the converter targets it
     // directly. Reported via getConfig() after the device is opened.
     twSampleType sampleType   = twSampleType::Float32;
+    // Total output latency (device + driver + resampler) in frames.
+    // Measured/calculated after device is opened; 0 if not yet determined.
+    uint32_t     outputLatencyFrames = 0;
 };
 
 // One selectable output device. `id` is the backend-specific handle passed back
@@ -56,6 +59,10 @@ public:
 
     virtual void setRenderCallback(RenderCallback cb)                   = 0;
     virtual AudioConfig getConfig() const                               = 0;
+
+    // Get the total output latency (device + driver + resampler) in frames.
+    // Returns 0 if not yet determined or if getConfig().outputLatencyFrames is not set.
+    virtual uint32_t getLatencyFrames() const { return getConfig().outputLatencyFrames; }
 
     // Rates this device can be opened at WITHOUT the host resampling. A
     // shared-mode backend reports its single mix rate; an exclusive-capable one

@@ -16,6 +16,9 @@ struct AudioInputConfig {
     std::uint32_t channels = 2;
     std::uint32_t bufferFrames = 1024;
     twSampleType sampleType = twSampleType::Float32;
+    // Total input latency (device + driver + resampler) in frames.
+    // Measured/calculated after device is opened; 0 if not yet determined.
+    std::uint32_t inputLatencyFrames = 0;
 };
 
 struct AudioInputDeviceInfo {
@@ -47,6 +50,10 @@ public:
 
     // Query current configuration
     virtual const AudioInputConfig &getConfig() const = 0;
+
+    // Get the total input latency (device + driver + resampler) in frames.
+    // Returns 0 if not yet determined or if getConfig().inputLatencyFrames is not set.
+    virtual uint32_t getLatencyFrames() const { return getConfig().inputLatencyFrames; }
 
     // List available input devices
     virtual std::vector<AudioInputDeviceInfo> listDevices() const = 0;

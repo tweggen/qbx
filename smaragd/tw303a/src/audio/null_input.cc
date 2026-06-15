@@ -17,6 +17,8 @@ int NullInput::openDevice(const std::string &deviceId, std::uint32_t preferredRa
     if (preferredRate > 0) {
         config_.sampleRate = preferredRate;
     }
+    // Set a reasonable default latency estimate (one buffer frame).
+    config_.inputLatencyFrames = config_.bufferFrames;
     return 0;
 }
 

@@ -13,6 +13,10 @@ int NullBackend::openDevice(const std::string & /*deviceName*/,
     // No hardware to constrain us: adopt the requested rate so the speaker
     // resampler stays a passthrough. 0 keeps the default.
     if (preferredRate != 0) config_.sampleRate = preferredRate;
+
+    // Set a reasonable default latency estimate (one buffer frame).
+    config_.outputLatencyFrames = config_.bufferFrames;
+
     syslog(LOG_INFO,
            "audio: NullBackend active (%u Hz) — no sound will be produced.",
            (unsigned) config_.sampleRate);

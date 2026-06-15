@@ -279,6 +279,21 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     config_.periodFrames = bufferFrames;
     floatScratch_.assign(bufferFrames * config_.channels, 0.0f);
 
+    // Query output latency (device + driver + OS buffering).
+    REFERENCE_TIME latencyHns = 0;
+    hr = audioClient_->GetStreamLatency(&latencyHns);
+    if (SUCCEEDED(hr) && latencyHns > 0) {
+        // Convert from 100ns units to frames: latency_frames = latency_hns * sampleRate / 10_000_000
+        config_.outputLatencyFrames = static_cast<uint32_t>(
+            (latencyHns * config_.sampleRate) / 10000000LL
+        );
+        fprintf(stderr,
+                "WASAPIBackend: output latency %.2f ms (%u frames @ %u Hz)\n",
+                latencyHns / 10000.0, config_.outputLatencyFrames, config_.sampleRate);
+    } else {
+        config_.outputLatencyFrames = 0;
+    }
+
     hr = audioClient_->GetService(IID_IAudioRenderClient_local,
                                   reinterpret_cast<void **>(&renderClient_));
     if (FAILED(hr)) {
