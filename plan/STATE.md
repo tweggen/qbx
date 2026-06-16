@@ -2877,11 +2877,74 @@ rebuilds state (on window-param change, mute/solo toggle, etc.), it constructs
 - ⚠️ DSP graph not yet wired (Phase 2b); `getRootComponent()` throws on chain
 - ⚠️ Serialization stubs only (XML in/out not fully functional yet)
 
-### Next actions (Phase 3)
+### Next actions (Phase 4)
 
-1. **Undo actions** — register insert/remove/reorder/bypass actions with action registry
-2. **Serialization** — implement state chunk save/load, base64 XML round-trip
-3. **Multi-plugin wiring** — extend `twPluginChain::calcOutputTo()` to thread through N plugins in series
+1. **Full serialization** — opaque plugin state chunks with base64 encoding
+2. **Multi-plugin wiring** — extend `twPluginChain::calcOutputTo()` to thread through N plugins in series
+3. **Parameter actions** — `SSetPluginParamAction` for live editing with undo
+4. **UI** — plugin browser, generic parameter editor, FX strip section
+
+---
+
+## 08_PLUGIN_HOSTING.md — Phase 3 (Undo actions)
+
+- **Date:** 2026-06-16
+- **Status:** Phase 3 complete (insert/remove undo actions). Phase 4 (serialization, UI) next.
+
+### What landed
+
+**SInsertPluginAction:**
+- Inserts a plugin at a slot index on a track's effect chain
+- Path-based: uses strackpath index format (e.g., "/mixer/0" → root's child 0)
+- Creates `SPluginSlot`, adds `SLink` to `SPluginChain`
+- Serializes: trackPath, slotIndex, descriptor (format, uid, name, vendor, I/O)
+- Inverse: `SRemovePluginAction` with same index
+
+**SRemovePluginAction:**
+- Removes a plugin from a track's chain
+- Saves full descriptor for inverse re-insertion
+- Deletes `SLink` (which destroys `SPluginSlot`)
+- Inverse: `SInsertPluginAction` with saved descriptor
+
+**Action Registration:**
+- Both registered with `SActionRegistry` (standard pattern)
+- XML serialization: trackPath, slotIndex, descriptor fields
+- Follows naming: "insert-plugin", "remove-plugin" (matching `-` convention)
+
+### Verification status
+
+**macOS / Qt6 / CMake:**
+- ✅ Build succeeds (Ninja, C++17)
+- ✅ Actions instantiate and serialize/deserialize
+- ✅ `apply()` modifies track's plugin chain
+- ✅ Inverse actions created correctly
+- ✅ Registered with action registry
+- ⚠️ No full integration test yet (will run in Phase 4 UI work)
+- ⚠️ Opaque plugin state chunks not yet handled (deferred)
+
+### Design notes
+
+**Why path-based:**
+- Matches existing track actions (all use strackpath)
+- Survives XML round-trip and undo stack persistence
+- Enables scripting / action batching (proposal 11 foundation)
+
+**Why descriptor saving:**
+- `SRemovePluginAction` needs full plugin info for inverse
+- Descriptor is lightweight (just strings + I/O counts)
+- Opaque state chunk handled separately (Phase 4)
+
+**Future extensions:**
+- `SSetPluginBypassAction` — toggle bypass flag
+- `SReorderPluginAction` — move plugin in chain (drag-drop UI)
+- `SSetPluginParamAction` — live parameter editing with undo
+- Opaque state chunks in Phase 4 (nested QDomElement per slot)
+
+### Next actions (Phase 4)
+
+1. **Full serialization** — opaque plugin state chunks, base64 XML encoding in `SPluginSlot`
+2. **Multi-plugin wiring** — fix `twPluginChain::calcOutputTo()` to series-wire all plugins
+3. **Parameter actions** — `SSetPluginParamAction` for live editing
 4. **UI** — plugin browser, generic parameter editor, FX strip section
 
 ---
