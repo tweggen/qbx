@@ -33,6 +33,13 @@ void SObject::setArmedForRecording( bool f )
     emit armedForRecordingChanged( f );
 }
 
+void SObject::setRecordingChannels( uint32_t channels )
+{
+    if( channels == recordingChannels_ ) return;
+    recordingChannels_ = channels;
+    emit recordingChannelsChanged( channels );
+}
+
 void SObject::setVolume( double d )
 {
     {

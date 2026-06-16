@@ -152,6 +152,9 @@ public:
         { return muted_; }
     bool isArmedForRecording() const
         { return armed_; }
+    // Recording channel selection (bitmask: 0 = all channels, 1<<n = channel n)
+    uint32_t getRecordingChannels() const
+        { return recordingChannels_; }
     double getVolume() const
         { return volume_; }
     double getPan() const
@@ -165,19 +168,18 @@ public slots:
     void setSolo( bool );
     void setMuted( bool );
     void setArmedForRecording( bool );
+    void setRecordingChannels( uint32_t channels );
     void setVolume( double );
     void setPan( double );
     void setDelay( double );
     void setSName( const QString & );    
 
 signals:
-
-signals:
-
     // For the properties
     void soloChanged( bool );
     void mutedChanged( bool );
     void armedForRecordingChanged( bool );
+    void recordingChannelsChanged( uint32_t );
     void volumeChanged( double );
     void panChanged( double );
     void delayChanged( double );
@@ -264,6 +266,9 @@ private:
     bool muted_;
     bool armed_;
     double volume_;
+    // Recording channel selection: bitmask of channels (bit 0 = ch 0, etc)
+    // 0 means "all channels" (default). Set via setRecordingChannels().
+    uint32_t recordingChannels_ = 0;
 
     // Thread-safe state: audio thread may read volume while UI thread modifies it.
     // Made public so preview rendering can snapshot the volume safely.
