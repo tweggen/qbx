@@ -5,6 +5,7 @@
 #include <qobject.h>
 #include "tw303aenv.h"
 #include "sobject.h"
+#include "twfraction.h"
 
 class QWidget;
 class twComponent;

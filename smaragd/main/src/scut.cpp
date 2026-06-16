@@ -6,6 +6,7 @@
 
 #include <QDebug>
 
+#include "twfraction.h"
 #include "twcomponent.h"
 #include "twrandomsource.h"
 #include "twsamplereader.h"
@@ -591,9 +592,13 @@ SCut::SCut( SProject *parentProject, SObject &content )
 
 int SCut::serializeSelfAttributes( QTextStream &o )
 {
-    o << " startOffset='" << (unsigned long ) getStartOffset() << "'"
-      << " cutDuration='" << (unsigned long ) cutDuration_ << "'"
-      << " loopLength='" << (unsigned long ) loopLength_ << "'"
+    Fraction startOffsetFrac(getStartOffset(), 1);
+    Fraction cutDurationFrac(cutDuration_, 1);
+    Fraction loopLengthFrac(loopLength_, 1);
+
+    o << " startOffset='" << QString::fromStdString(startOffsetFrac.toString()) << "'"
+      << " cutDuration='" << QString::fromStdString(cutDurationFrac.toString()) << "'"
+      << " loopLength='" << QString::fromStdString(loopLengthFrac.toString()) << "'"
       << " stretch='" << grainParams_.stretch << "'"
       << " pitchCents='" << grainParams_.pitchCents << "'";
 
@@ -616,7 +621,8 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
 
     QString data;
     data = element.attribute( "startOffset", "0" );
-    setStartOffset( data.toULongLong() );
+    Fraction startOffsetFrac = parseFractionOrDouble( data.toStdString() );
+    setStartOffset( (offset_t)startOffsetFrac.toDouble() );
 
     // Load cutDuration. If missing, use a sensible default based on project sample rate
     // (0.5 seconds). This matches the constructor default and ensures consistency
@@ -627,9 +633,12 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
         if( parent() ) srate = getProject().getSRate();
         cutDuration_ = srate / 2;
     } else {
-        cutDuration_ = data.toULongLong();
+        Fraction cutDurationFrac = parseFractionOrDouble( data.toStdString() );
+        cutDuration_ = (length_t)cutDurationFrac.toDouble();
     }
-    loopLength_ = element.attribute( "loopLength", "0" ).toULongLong();
+    data = element.attribute( "loopLength", "0" );
+    Fraction loopLengthFrac = parseFractionOrDouble( data.toStdString() );
+    loopLength_ = (length_t)loopLengthFrac.toDouble();
 
     // Grain params: stretch and pitchCents are dimensionless, grainSize and
     // crossfade are now stored as milliseconds (rate-independent) and converted

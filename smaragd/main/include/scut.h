@@ -8,6 +8,7 @@
 #include "sobject.h"
 #include "slink.h"
 #include "twgrainparams.h"
+#include "twfraction.h"
 
 class SProject;
 class QWidget;

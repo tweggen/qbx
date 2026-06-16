@@ -1,6 +1,7 @@
 
 #include "sobject.h"
 #include "slink.h"
+#include "sproject.h"
 
 #include <cstdint>
 
@@ -9,7 +10,8 @@ int SLink::serializeSelfAttributes( QTextStream &o )
     o << " objectId='" << reinterpret_cast<std::uintptr_t>(&object_) << "'"
       << " hasStartTime='" << hasStartTime() << "'";
     if( hasStartTime() ) {
-        o << " startTime='" << (unsigned long long)getStartTime() << "'";
+        Fraction startTimeFrac(startTime_, 1);
+        o << " startTime='" << QString::fromStdString( startTimeFrac.toString() ) << "'";
     }
     return 0;
 }
@@ -19,7 +21,9 @@ int SLink::readAttributes( QDomElement &element )
     QString data;
 
     data = element.attribute( "startTime", "0" );
-    setStartTime( data.toULongLong() );
+    Fraction startTimeFrac = parseFractionOrDouble( data.toStdString() );
+    offset_t startTimeOffset = (offset_t)startTimeFrac.toDouble();
+    setStartTime( startTimeOffset );
     return 0;
 }
 
