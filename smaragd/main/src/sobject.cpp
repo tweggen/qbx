@@ -369,14 +369,15 @@ void SObject::removeRef()
  * Every link has a start time, every object (maybe) a duration.
  * We assume, that all of my children belong to my events.
  */
-offset_t SObject::getChildrenExtent( offset_t &firstStart, offset_t &lastEnd, 
+offset_t SObject::getChildrenExtent( offset_t &firstStart, offset_t &lastEnd,
                                      int &nUndefStart, int &nUndefDuration ) const
-{    
+{
     nUndefStart = 0;
     nUndefDuration = 0;
     firstStart = (offset_t) (0-1); // Largest number possible
     lastEnd = (offset_t) 0;
     for( SLink *sli : childLinks() ) {
+        if( !sli ) continue;  // Skip null links
         SObject &sobj = sli->getSObject();
         bool hd = sobj.hasDuration();
 

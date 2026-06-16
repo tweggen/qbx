@@ -367,12 +367,12 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     return 0;
 }
 
-SLink *STrack::instantiateFromDomElement( 
+SLink *STrack::instantiateFromDomElement(
     SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
 {
     (void) parent;
     SLink *contentLink = NULL;
-    // Find the first link child 
+    // Find the first link child
     QDomNode childNode = element.firstChild();
     STrack *track = new STrack( &projectLoader.getProject() );
     track->readPreChildrenAttributes( element );
@@ -387,8 +387,14 @@ SLink *STrack::instantiateFromDomElement(
                 if( contentLink ) {
                     // FIXME: Check, wether this is a track, or create a generic insertion function.
                     SLink *sl = new SLink( contentLink->getSObject(), NULL );
-                    sl->readAttributes( childElement );
-                    sl->setParent(track); // was: track->insertChild( sl );
+                    if( sl ) {
+                        sl->readAttributes( childElement );
+                        sl->setParent(track); // was: track->insertChild( sl );
+                    } else {
+                        qWarning() << "Failed to create SLink for object" << objectId;
+                    }
+                } else {
+                    qWarning() << "Object not found in dictionary:" << objectId;
                 }
             }
         }
