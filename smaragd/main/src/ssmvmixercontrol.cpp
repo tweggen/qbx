@@ -16,8 +16,12 @@
 #include <QApplication>
 #include <QPolygon>
 #include <QSignalBlocker>
+#include <QCursor>
 
 #include "sapplication.h"
+#include "audio/audio_input.h"
+#include "ssettings.h"
+#include "sproject.h"
 #include "sstdmixer.h"
 #include "sstdmixerview.h"
 #include "strack.h"
@@ -380,8 +384,9 @@ SSMVMixerControl::SSMVMixerControl(
     qArm_->setCheckable( true );
     qArm_->setFixedSize( 20, 20 );
     qArm_->setFont( btnFont );
-    qArm_->setToolTip( "Arm for Recording" );
+    qArm_->setToolTip( "Arm for Recording\n(Right-click to select input channels)" );
     qArm_->setStyleSheet( "QPushButton:checked { background:#c04040; color:white; }" );
+    qArm_->setContextMenuPolicy( Qt::CustomContextMenu );
 
     // Mute over Solo over Arm in a column.
     QVBoxLayout *muteSoloCol = new QVBoxLayout();
@@ -431,10 +436,106 @@ SSMVMixerControl::SSMVMixerControl(
                       this, SLOT( soloToggled( bool ) ) );
     QObject::connect( qArm_, SIGNAL( toggled( bool ) ),
                       this, SLOT( armToggled( bool ) ) );
+    QObject::connect( qArm_, SIGNAL( customContextMenuRequested( const QPoint& ) ),
+                      this, SLOT( showChannelMenu() ) );
     QObject::connect( &tk_, SIGNAL( mutedChanged( bool ) ),
                       this, SLOT( onMutedChanged( bool ) ) );
     QObject::connect( &tk_, SIGNAL( soloChanged( bool ) ),
                       this, SLOT( onSoloChanged( bool ) ) );
     QObject::connect( &tk_, SIGNAL( armedForRecordingChanged( bool ) ),
                       this, SLOT( onArmedChanged( bool ) ) );
+}
+
+void SSMVMixerControl::showChannelMenu()
+{
+    // Get the selected input device from settings
+    SProject *project = SApplication::app().getCurrentProject();
+    if( !project ) {
+        qWarning( "No project available" );
+        return;
+    }
+
+    QString inDeviceId = SSettings::instance().audioInputDeviceId();
+
+    // Create a temporary audio input to query channel count
+    std::unique_ptr<audio::AudioInput> input = audio::createAudioInput();
+    if( !input || input->openDevice( inDeviceId.toStdString(), 48000 ) != 0 ) {
+        qWarning( "Failed to open input device for channel enumeration" );
+        return;
+    }
+
+    const audio::AudioInputConfig &config = input->getConfig();
+    uint32_t numChannels = config.channels;
+    if( numChannels == 0 ) {
+        qWarning( "Input device has no channels" );
+        return;
+    }
+
+    QMenu menu( "Input Channels" );
+    uint32_t currentSelection = tk_.getRecordingChannels();
+
+    // "All Channels" option
+    QAction *allChannelsAction = menu.addAction( "All Channels" );
+    allChannelsAction->setCheckable( true );
+    allChannelsAction->setChecked( currentSelection == 0 );
+    connect( allChannelsAction, &QAction::triggered, this, [this]() {
+        setRecordingChannels( 0 );
+    });
+
+    menu.addSeparator();
+
+    // Individual channels
+    for( uint32_t ch = 0; ch < numChannels; ++ch ) {
+        QString label = QString( "Channel %1" ).arg( ch + 1 );
+        QAction *chAction = menu.addAction( label );
+        chAction->setCheckable( true );
+        chAction->setChecked( (currentSelection & (1U << ch)) != 0 );
+        connect( chAction, &QAction::triggered, this, [this, ch]() {
+            uint32_t channels = tk_.getRecordingChannels();
+            if( channels == 0 ) {
+                // "All" mode: switch to single channel
+                channels = (1U << ch);
+            } else {
+                // Toggle this channel
+                channels ^= (1U << ch);
+            }
+            setRecordingChannels( channels );
+        });
+    }
+
+    menu.addSeparator();
+
+    // Stereo pairs (1-2, 3-4, 5-6, etc.)
+    for( uint32_t pair = 0; pair + 1 < numChannels; pair += 2 ) {
+        QString label = QString( "Stereo %1-%2" ).arg( pair + 1 ).arg( pair + 2 );
+        QAction *pairAction = menu.addAction( label );
+        pairAction->setCheckable( true );
+        uint32_t pairMask = (1U << pair) | (1U << (pair + 1));
+        pairAction->setChecked( currentSelection == pairMask );
+        connect( pairAction, &QAction::triggered, this, [this, pairMask]() {
+            setRecordingChannels( pairMask );
+        });
+    }
+
+    // Show menu at cursor position
+    menu.exec( QCursor::pos() );
+}
+
+void SSMVMixerControl::setRecordingChannels( uint32_t channels )
+{
+    tk_.setRecordingChannels( channels );
+
+    // Update the ARM button tooltip to show selected channels
+    QString tooltip = "Arm for Recording\n(Right-click to select input channels)";
+    if( channels != 0 ) {
+        QString channelStr;
+        for( uint32_t ch = 0; ch < 32; ++ch ) {
+            if( channels & (1U << ch) ) {
+                if( !channelStr.isEmpty() ) channelStr += ", ";
+                channelStr += QString::number( ch + 1 );
+            }
+        }
+        tooltip += QString( "\nSelected: %1" ).arg( channelStr );
+    }
+    qArm_->setToolTip( tooltip );
 }

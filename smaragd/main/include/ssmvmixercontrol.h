@@ -58,6 +58,10 @@ protected slots:
     void onSoloChanged( bool );
     void onArmedChanged( bool );
 
+    // Recording channel selection context menu
+    void showChannelMenu();
+    void setRecordingChannels( uint32_t channels );
+
 private:
     // Resolve this control's track index within the mixer model (-1 if gone).
     int trackIndex_() const;
