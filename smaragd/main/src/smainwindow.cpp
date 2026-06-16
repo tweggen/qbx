@@ -1299,18 +1299,42 @@ void SMainWindow::runReorderTrackTest()
 static QIcon makePaletteIcon( const QString &glyph )
 {
     const int sz = 22;
-    QPixmap pm( sz, sz );
-    pm.fill( Qt::transparent );
-    QPainter pr( &pm );
-    pr.setRenderHint( QPainter::Antialiasing, false );
-    pr.setPen( QColor( 80, 80, 80 ) );
-    pr.setBrush( QColor( 235, 235, 225 ) );
-    pr.drawRect( 2, 2, sz - 5, sz - 5 );
-    pr.setPen( QColor( 40, 40, 40 ) );
-    pr.setFont( QFont( "sansserif", 9, QFont::Bold ) );
-    pr.drawText( QRect( 2, 2, sz - 5, sz - 5 ), Qt::AlignCenter, glyph );
-    pr.end();
-    return QIcon( pm );
+
+    // Normal state (unchecked)
+    QPixmap pm_normal( sz, sz );
+    pm_normal.fill( Qt::transparent );
+    QPainter pr_normal( &pm_normal );
+    pr_normal.setRenderHint( QPainter::Antialiasing, false );
+    pr_normal.setPen( QColor( 80, 80, 80 ) );
+    pr_normal.setBrush( QColor( 235, 235, 225 ) );
+    pr_normal.drawRect( 2, 2, sz - 5, sz - 5 );
+    pr_normal.setPen( QColor( 40, 40, 40 ) );
+    pr_normal.setFont( QFont( "sansserif", 9, QFont::Bold ) );
+    pr_normal.drawText( QRect( 2, 2, sz - 5, sz - 5 ), Qt::AlignCenter, glyph );
+    pr_normal.end();
+
+    // Checked state: darker background with highlight
+    QPixmap pm_checked( sz, sz );
+    pm_checked.fill( Qt::transparent );
+    QPainter pr_checked( &pm_checked );
+    pr_checked.setRenderHint( QPainter::Antialiasing, false );
+    pr_checked.setPen( QColor( 40, 80, 160 ) );  // Blue border for checked state
+    pr_checked.setBrush( QColor( 180, 200, 240 ) );  // Light blue background
+    pr_checked.drawRect( 2, 2, sz - 5, sz - 5 );
+    pr_checked.setPen( QColor( 20, 40, 100 ) );  // Dark blue text
+    pr_checked.setFont( QFont( "sansserif", 9, QFont::Bold ) );
+    pr_checked.drawText( QRect( 2, 2, sz - 5, sz - 5 ), Qt::AlignCenter, glyph );
+    pr_checked.end();
+
+    // Create icon with both states
+    QIcon icon;
+    icon.addPixmap( pm_normal, QIcon::Normal, QIcon::Off );
+    icon.addPixmap( pm_checked, QIcon::Normal, QIcon::On );
+
+    // Optional: Add active/pressed state for visual feedback
+    icon.addPixmap( pm_checked, QIcon::Active, QIcon::On );
+
+    return icon;
 }
 
 void SMainWindow::buildPaletteToolbar()
