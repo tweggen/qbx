@@ -7,6 +7,7 @@
 #include "strack.h"
 #include "slink.h"
 #include "scut.h"
+#include "twfraction.h"
 #include <QDomElement>
 #include <cstring>
 
@@ -87,14 +88,14 @@ void SDuplicateClipAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "source", pathToString( sourceClipPath_ ) );
     elem.setAttribute( "destTrack", pathToString( destTrackPath_ ) );
-    elem.setAttribute( "startTime", QString::number( (double) startTime_ ) );
+    elem.setAttribute( "startTime", QString::fromStdString( Fraction(startTime_, 1).toString() ) );
 }
 
 bool SDuplicateClipAction::readXml( const QDomElement &elem, int /*version*/ )
 {
     sourceClipPath_ = stringToPath( elem.attribute( "source" ) );
     destTrackPath_  = stringToPath( elem.attribute( "destTrack" ) );
-    startTime_      = (offset_t) elem.attribute( "startTime", "0" ).toDouble();
+    startTime_      = (offset_t) parseFractionOrDouble( elem.attribute( "startTime", "0" ).toStdString() ).toDouble();
     return true;
 }
 

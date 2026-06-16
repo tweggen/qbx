@@ -6,6 +6,7 @@
 #include "strack.h"
 #include "slink.h"
 #include "scut.h"
+#include "twfraction.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -61,8 +62,8 @@ void SUnsplitClipAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("first", pathToString(firstPath_));
     elem.setAttribute("second", pathToString(secondPath_));
-    elem.setAttribute("restoreDuration", QString::number((double)restoreDuration_));
-    elem.setAttribute("inObjOffset", QString::number((double)inObjOffset_));
+    elem.setAttribute("restoreDuration", QString::fromStdString(Fraction(restoreDuration_, 1).toString()));
+    elem.setAttribute("inObjOffset", QString::fromStdString(Fraction(inObjOffset_, 1).toString()));
 }
 
 bool SUnsplitClipAction::readXml(const QDomElement & /*elem*/, int /*version*/)

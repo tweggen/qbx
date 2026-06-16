@@ -7,6 +7,7 @@
 #include "sstdmixer.h"
 #include "strack.h"
 #include "sexternfile.h"
+#include "twfraction.h"
 #include <QDomElement>
 
 SRemoveSampleAction::SRemoveSampleAction(int trackIdx, int clipIdx, const QString &filePath, offset_t timePos)
@@ -59,7 +60,7 @@ void SRemoveSampleAction::writeXml(QDomElement &elem) const
     elem.setAttribute("trackIndex", trackIndex_);
     elem.setAttribute("clipIndex", clipIndex_);
     elem.setAttribute("filePath", filePath_);
-    elem.setAttribute("timePos", QString::number(timePos_));
+    elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
 }
 
 bool SRemoveSampleAction::readXml(const QDomElement &elem, int /*version*/)
@@ -67,7 +68,7 @@ bool SRemoveSampleAction::readXml(const QDomElement &elem, int /*version*/)
     trackIndex_ = elem.attribute("trackIndex", "0").toInt();
     clipIndex_ = elem.attribute("clipIndex", "0").toInt();
     filePath_ = elem.attribute("filePath", "");
-    timePos_ = elem.attribute("timePos", "0").toULongLong();
+    timePos_ = (offset_t)parseFractionOrDouble(elem.attribute("timePos", "0").toStdString()).toDouble();
     return true;
 }
 

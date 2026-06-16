@@ -7,6 +7,7 @@
 #include "strack.h"
 #include "scut.h"
 #include "slink.h"
+#include "twfraction.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -97,14 +98,14 @@ void SPlaceAssetAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("assetName", assetName_);
     elem.setAttribute("trackPath", pathToString(trackPath_));
-    elem.setAttribute("timePos", QString::number(timePos_));
+    elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
 }
 
 bool SPlaceAssetAction::readXml(const QDomElement &elem, int /*version*/)
 {
     assetName_ = elem.attribute("assetName", "");
     trackPath_ = stringToPath(elem.attribute("trackPath", ""));
-    timePos_ = elem.attribute("timePos", "0").toULongLong();
+    timePos_ = (offset_t)parseFractionOrDouble(elem.attribute("timePos", "0").toStdString()).toDouble();
     return true;
 }
 

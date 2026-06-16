@@ -6,6 +6,7 @@
 #include "strack.h"
 #include "scut.h"
 #include "slink.h"
+#include "twfraction.h"
 #include <QDomElement>
 
 SAddSampleAction::SAddSampleAction(int trackIdx, const QString &filePath, offset_t timePos)
@@ -78,14 +79,14 @@ void SAddSampleAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("trackIndex", trackIndex_);
     elem.setAttribute("filePath", filePath_);
-    elem.setAttribute("timePos", QString::number(timePos_));
+    elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
 }
 
 bool SAddSampleAction::readXml(const QDomElement &elem, int /*version*/)
 {
     trackIndex_ = elem.attribute("trackIndex", "0").toInt();
     filePath_ = elem.attribute("filePath", "");
-    timePos_ = elem.attribute("timePos", "0").toULongLong();
+    timePos_ = (offset_t)parseFractionOrDouble(elem.attribute("timePos", "0").toStdString()).toDouble();
     return true;
 }
 

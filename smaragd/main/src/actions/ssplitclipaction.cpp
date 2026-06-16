@@ -7,6 +7,7 @@
 #include "strack.h"
 #include "slink.h"
 #include "scut.h"
+#include "twfraction.h"
 #include <QDomElement>
 #include <cstring>
 
@@ -91,13 +92,13 @@ SApplyResult SSplitClipAction::apply(SProject *project)
 void SSplitClipAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("clip", pathToString(clipPath_));
-    elem.setAttribute("splitTime", QString::number((double)splitTime_));
+    elem.setAttribute("splitTime", QString::fromStdString(Fraction(splitTime_, 1).toString()));
 }
 
 bool SSplitClipAction::readXml(const QDomElement &elem, int /*version*/)
 {
     clipPath_ = stringToPath(elem.attribute("clip"));
-    splitTime_ = (offset_t)elem.attribute("splitTime", "0").toDouble();
+    splitTime_ = (offset_t)parseFractionOrDouble(elem.attribute("splitTime", "0").toStdString()).toDouble();
     return true;
 }
 

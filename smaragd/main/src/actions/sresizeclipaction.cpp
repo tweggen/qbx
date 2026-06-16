@@ -6,6 +6,7 @@
 #include "strack.h"
 #include "slink.h"
 #include "scut.h"
+#include "twfraction.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -62,20 +63,20 @@ SApplyResult SResizeClipAction::apply( SProject *project )
 void SResizeClipAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "clip", pathToString( clipPath_ ) );
-    elem.setAttribute( "startTime", QString::number( (double) startTime_ ) );
-    elem.setAttribute( "startOffset", QString::number( (double) startOffset_ ) );
-    elem.setAttribute( "duration", QString::number( (double) duration_ ) );
-    elem.setAttribute( "loopLength", QString::number( (double) loopLength_ ) );
+    elem.setAttribute( "startTime", QString::fromStdString( Fraction(startTime_, 1).toString() ) );
+    elem.setAttribute( "startOffset", QString::fromStdString( Fraction(startOffset_, 1).toString() ) );
+    elem.setAttribute( "duration", QString::fromStdString( Fraction(duration_, 1).toString() ) );
+    elem.setAttribute( "loopLength", QString::fromStdString( Fraction(loopLength_, 1).toString() ) );
     elem.setAttribute( "stretch", QString::number( stretch_ ) );
 }
 
 bool SResizeClipAction::readXml( const QDomElement &elem, int /*version*/ )
 {
     clipPath_    = stringToPath( elem.attribute( "clip" ) );
-    startTime_   = (offset_t) elem.attribute( "startTime", "0" ).toDouble();
-    startOffset_ = (offset_t) elem.attribute( "startOffset", "0" ).toDouble();
-    duration_    = (length_t) elem.attribute( "duration", "0" ).toDouble();
-    loopLength_  = (length_t) elem.attribute( "loopLength", "0" ).toDouble();
+    startTime_   = (offset_t) parseFractionOrDouble( elem.attribute( "startTime", "0" ).toStdString() ).toDouble();
+    startOffset_ = (offset_t) parseFractionOrDouble( elem.attribute( "startOffset", "0" ).toStdString() ).toDouble();
+    duration_    = (length_t) parseFractionOrDouble( elem.attribute( "duration", "0" ).toStdString() ).toDouble();
+    loopLength_  = (length_t) parseFractionOrDouble( elem.attribute( "loopLength", "0" ).toStdString() ).toDouble();
     stretch_     = elem.attribute( "stretch", "1.0" ).toDouble();
     return true;
 }

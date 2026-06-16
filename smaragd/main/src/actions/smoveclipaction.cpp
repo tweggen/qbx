@@ -5,6 +5,7 @@
 #include "sstdmixer.h"
 #include "strack.h"
 #include "slink.h"
+#include "twfraction.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -64,14 +65,14 @@ void SMoveClipAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("clip", pathToString(clipPath_));
     elem.setAttribute("destTrack", pathToString(destTrackPath_));
-    elem.setAttribute("startTime", QString::number((double)newStartTime_));
+    elem.setAttribute("startTime", QString::fromStdString(Fraction(newStartTime_, 1).toString()));
 }
 
 bool SMoveClipAction::readXml(const QDomElement &elem, int /*version*/)
 {
     clipPath_ = stringToPath(elem.attribute("clip"));
     destTrackPath_ = stringToPath(elem.attribute("destTrack"));
-    newStartTime_ = (offset_t)elem.attribute("startTime", "0").toDouble();
+    newStartTime_ = (offset_t)parseFractionOrDouble(elem.attribute("startTime", "0").toStdString()).toDouble();
     return true;
 }
 

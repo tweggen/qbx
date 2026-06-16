@@ -6,6 +6,7 @@
 #include "strack.h"
 #include "scut.h"
 #include "sactionregistry.h"
+#include "twfraction.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -70,16 +71,16 @@ SApplyResult SCreateAssetAction::apply( SProject *project )
 void SCreateAssetAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "container", pathToString( containerPath_ ) );
-    elem.setAttribute( "startOffset", (double) startOffset_ );
-    elem.setAttribute( "duration", (double) duration_ );
+    elem.setAttribute( "startOffset", QString::fromStdString( Fraction(startOffset_, 1).toString() ) );
+    elem.setAttribute( "duration", QString::fromStdString( Fraction(duration_, 1).toString() ) );
     elem.setAttribute( "assetName", assetName_ );
 }
 
 bool SCreateAssetAction::readXml( const QDomElement &elem, int /*version*/ )
 {
     containerPath_ = stringToPath( elem.attribute( "container" ) );
-    startOffset_   = (offset_t) elem.attribute( "startOffset", "0" ).toDouble();
-    duration_      = (length_t) elem.attribute( "duration", "0" ).toDouble();
+    startOffset_   = (offset_t) parseFractionOrDouble( elem.attribute( "startOffset", "0" ).toStdString() ).toDouble();
+    duration_      = (length_t) parseFractionOrDouble( elem.attribute( "duration", "0" ).toStdString() ).toDouble();
     assetName_     = elem.attribute( "assetName" );
     return true;
 }
