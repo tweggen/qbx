@@ -12,7 +12,9 @@ class SProject;
 class QAction;
 class QActionGroup;
 class QLabel;
+class QToolBar;
 class SRecordingProgressDialog;
+class SGridToolbar;
 
 class SMainWindow
     : public QMainWindow
@@ -127,7 +129,7 @@ private:
 
     QAction *actStop_, *actPlay_, *actRecord_, *actGotoStart_;
     QToolBar *qTBTransport_;
-    QToolBar *qTBPalette_;
+    SGridToolbar *qTBPalette_;
     QToolBar *qTBTracks_;
     SRecordingProgressDialog *recordingProgressDialog_ = nullptr;
     // Locator position when recording began. The playhead advances during the

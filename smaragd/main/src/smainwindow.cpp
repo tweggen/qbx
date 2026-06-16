@@ -23,6 +23,7 @@
 #include <iostream>
 
 #include "sapplication.h"
+#include "sgridtoolbar.h"
 #include "smainwindow.h"
 #include "sobject.h"
 #include "sproject.h"
@@ -1339,8 +1340,10 @@ static QIcon makePaletteIcon( const QString &glyph )
 
 void SMainWindow::buildPaletteToolbar()
 {
-    qTBPalette_ = new QToolBar( "Palette" );
-    qTBPalette_->setIconSize( QSize( 22, 22 ) );
+    // Use new grid toolbar for compact, Reaper-like layout
+    qTBPalette_ = new SGridToolbar( "Palette", this );
+    qTBPalette_->setColumns( 7 );  // 7 columns like Reaper
+    qTBPalette_->setButtonSize( 24 );
 
     // Each toggle is a small, square, checkable button with a shortcut. Clicking
     // it (or pressing the shortcut) submits a *-toggle action against the current
@@ -1355,7 +1358,7 @@ void SMainWindow::buildPaletteToolbar()
         a->setToolTip( QString( "%1 (%2)" ).arg( name, sc.toString() ) );
         a->setEnabled( false );   // no project yet; enabled by syncPaletteToProject
         QObject::connect( a, SIGNAL( triggered() ), this, slot );
-        qTBPalette_->addAction( a );
+        qTBPalette_->addGridAction( a );  // Use grid layout instead of linear
         return a;
     };
 
