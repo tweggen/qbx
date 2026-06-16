@@ -26,6 +26,9 @@ public:
     // any. Leaves an empty workspace when there is nothing to restore.
     void openMostRecent();
 
+protected:
+    void closeEvent( QCloseEvent *event ) override;
+
 protected slots:
     void nyi();
     void fileExit();
@@ -105,6 +108,12 @@ private:
     void updateRecentMenu();
     // Reflect the current project file (or "untitled") in the window title.
     void updateWindowTitle();
+
+    // Check if the current project has unsaved changes.
+    bool hasUnsavedChanges() const;
+    // Prompt user to save unsaved changes. Returns true if the user didn't cancel.
+    // (returns false only if user clicked Cancel; calls closeProject() if not saving)
+    bool promptSaveUnsavedChanges();
 
     SProject *currentProject_;
     QWidget *projectRootWidget_;

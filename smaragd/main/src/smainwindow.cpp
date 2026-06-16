@@ -18,6 +18,7 @@
 #include <QInputDialog>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QCloseEvent>
 
 #include <iostream>
 
@@ -177,6 +178,8 @@ void SMainWindow::fileSaveAs()
 
 void SMainWindow::fileClose()
 {
+    if( !promptSaveUnsavedChanges() ) return;  // User cancelled
+
     closeProject();             // deletes the project (auto-removes its connections)
     currentFilePath_.clear();
     setCentralWidget( NULL );   // drop the (now-deleted) project widget
@@ -200,6 +203,7 @@ void SMainWindow::updateWindowTitle()
 void SMainWindow::fileNew()
 {
     // FIXME: Delete the old component
+    if( !promptSaveUnsavedChanges() ) return;  // User cancelled
     closeProject();
 
     currentProject_ = new SProject();
@@ -250,6 +254,7 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     if( fileName.isEmpty() ) return false;
 
     // FIXME: Delete the old component
+    if( !promptSaveUnsavedChanges() ) return false;  // User cancelled
     closeProject();
 
     SSettings::instance().setLastDir( "project",
@@ -391,6 +396,54 @@ void SMainWindow::closeProject()
     delete currentProject_;
     destroyDocksToolbars();
     currentProject_ = NULL;
+}
+
+bool SMainWindow::hasUnsavedChanges() const
+{
+    if( !currentProject_ ) return false;
+
+    // Check if the undo stack is "clean" (no unsaved changes)
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    return !stack->isClean();
+}
+
+bool SMainWindow::promptSaveUnsavedChanges()
+{
+    if( !hasUnsavedChanges() ) return true;  // No unsaved changes, proceed
+
+    // Determine project name for the dialog
+    QString projectName = currentFilePath_.isEmpty() ? "Untitled" :
+                         QFileInfo( currentFilePath_ ).fileName();
+
+    QMessageBox msgBox( this );
+    msgBox.setWindowTitle( "Unsaved Changes" );
+    msgBox.setText( QString( "Unsaved work in project \"%1\"" ).arg( projectName ) );
+    msgBox.setStandardButtons( QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel );
+    msgBox.setDefaultButton( QMessageBox::Save );
+    msgBox.setIcon( QMessageBox::Warning );
+
+    int result = msgBox.exec();
+
+    switch( result ) {
+        case QMessageBox::Save:
+            fileSave();  // This will save to currentFilePath_ or prompt Save As if untitled
+            return true;
+        case QMessageBox::Discard:
+            return true;
+        case QMessageBox::Cancel:
+        default:
+            return false;
+    }
+}
+
+void SMainWindow::closeEvent( QCloseEvent *event )
+{
+    if( promptSaveUnsavedChanges() ) {
+        closeProject();
+        event->accept();
+    } else {
+        event->ignore();
+    }
 }
 
 void SMainWindow::startPlaying()

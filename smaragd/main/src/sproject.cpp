@@ -87,8 +87,20 @@ int SProject::readPreChildrenAttributes( QDomElement &element )
     data = element.attribute( "bpmTempo", "120.0" );
     setBPMTempo( data.toDouble() );
 
-    // Absent on pre-sample-rate files → default 44100 so they load unchanged.
-    setSRate( element.attribute( "sampleRate", "44100" ).toInt() );
+    // Load sample rate from file; default to 44100 for legacy pre-sample-rate files.
+    // WARNING: If this file was saved with a different sample rate and the attribute
+    // is missing/corrupted, all timeline positions will be incorrect (scaled by the
+    // ratio of saved-rate to loaded-rate).
+    QString srateStr = element.attribute( "sampleRate" );
+    if( srateStr.isEmpty() ) {
+        qWarning() << "WARNING: Project file missing sampleRate attribute. "
+                   << "Defaulting to 44100 Hz. If this file was created with a different "
+                   << "sample rate, timeline positions will be misaligned. Save the project "
+                   << "to correct this.";
+        setSRate( 44100 );
+    } else {
+        setSRate( srateStr.toInt() );
+    }
 
     QString cr = element.attribute( "candidateRates", "44100,48000,88200,96000" );
     std::vector<std::uint32_t> rates;

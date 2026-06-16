@@ -9,7 +9,7 @@ int SLink::serializeSelfAttributes( QTextStream &o )
     o << " objectId='" << reinterpret_cast<std::uintptr_t>(&object_) << "'"
       << " hasStartTime='" << hasStartTime() << "'";
     if( hasStartTime() ) {
-        o << " startTime='" << (double)getStartTime() << "'";
+        o << " startTime='" << (unsigned long long)getStartTime() << "'";
     }
     return 0;
 }

@@ -564,8 +564,9 @@ SCut::SCut( SProject *parentProject, SLink &content )
     if( content_->getSObject().hasDuration() ) {
         cutDuration_ = content_->getSObject().getDuration();
     } else {
-        // FIXME: remove 44100
-        cutDuration_ = 22050;
+        // Default to 0.5 seconds, calculated from project sample rate
+        int srate = (parentProject != nullptr) ? parentProject->getSRate() : 48000;
+        cutDuration_ = srate / 2;
     }
 }
 
@@ -580,8 +581,9 @@ SCut::SCut( SProject *parentProject, SObject &content )
     if( content_->getSObject().hasDuration() ) {
         cutDuration_ = content_->getSObject().getDuration();
     } else {
-        // FIXME: remove 44100
-        cutDuration_ = 22050;
+        // Default to 0.5 seconds, calculated from project sample rate
+        int srate = (parentProject != nullptr) ? parentProject->getSRate() : 48000;
+        cutDuration_ = srate / 2;
     }
     // Loop start defaults to no loop.
     loopStart_ = cutDuration_;
@@ -607,8 +609,18 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     QString data;
     data = element.attribute( "startOffset", "0" );
     setStartOffset( data.toULongLong() );
-    data = element.attribute( "cutDuration", "44100" );
-    cutDuration_ = data.toULongLong();
+
+    // Load cutDuration. If missing, use a sensible default based on project sample rate
+    // (0.5 seconds). This matches the constructor default and ensures consistency
+    // across different project sample rates.
+    data = element.attribute( "cutDuration" );
+    if( data.isEmpty() ) {
+        int srate = 48000;  // default fallback
+        if( parent() ) srate = getProject().getSRate();
+        cutDuration_ = srate / 2;
+    } else {
+        cutDuration_ = data.toULongLong();
+    }
     loopLength_ = element.attribute( "loopLength", "0" ).toULongLong();
 
     // Grain params are stored already-final, so set them directly (no rescale).
