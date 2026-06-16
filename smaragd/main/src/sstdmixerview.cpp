@@ -24,6 +24,7 @@
 #include "sapplication.h"
 #include "sstdmixer.h"
 #include "sstdmixerview.h"
+#include "strackdetailpanel.h"
 #include "strack.h"
 #include "sobjectrenderer.h"
 #include "splainwave.h"
@@ -2546,6 +2547,15 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
         contentDurationChanged( model_->getDuration() );
         update();
     }
+
+    // Create the track detail panel (bottom of mixer view)
+    qTrackDetailPanel_ = new STrackDetailPanel(this);
+    qGridLayout_->addWidget(qTrackDetailPanel_, 4, 0, 1, 5);
+    qGridLayout_->setRowStretch(4, 0);  // Don't stretch detail panel
+
+    // Connect mixer's track selection to detail panel
+    connect(model_, &SStdMixer::selectedTrackChanged,
+            qTrackDetailPanel_, &STrackDetailPanel::setTrack);
 }
 
 SStdMixerView::~SStdMixerView()

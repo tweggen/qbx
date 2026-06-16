@@ -235,6 +235,15 @@ void SSMVMixerControl::mousePressEvent( QMouseEvent *ev )
         ev->accept();
         return;
     }
+
+    // Select this track for the detail panel on click
+    if( ev->button()==Qt::LeftButton ) {
+        SStdMixer *mixer = smv_.getModel();
+        if( mixer ) {
+            mixer->setSelectedTrack( &tk_ );
+        }
+    }
+
     QWidget::mousePressEvent( ev );
 }
 

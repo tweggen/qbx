@@ -426,6 +426,9 @@ private:
     QSet<STrack*> collapsed_;
     void rebuildRows();
     void rebuildControlColumn();
+
+    // Track detail panel (Phase 2 UI)
+    class STrackDetailPanel *qTrackDetailPanel_;
     void appendRowsFor( SObject *container, int depth );
     // Resolve a drag drop at control-column y: *onto = the lane's track if the
     // pointer is over a lane's middle (nest), else NULL; *topSlot = insertion
