@@ -1931,8 +1931,10 @@ void SStdMixerView::recalcPageStep()
 	dur = model_->getDuration();
     }
     dw = HSliderRange*(double)w/qContent_->getSecondWidth()*srate / (double)dur;
-    qScrollHoriz_->setPageStep( (int)(dw+0.5) );
-    qScrollHoriz_->setSingleStep( ((int)(dw+0.5)/10)+1 );
+    int ps = (int)(dw+0.5);
+    qScrollHoriz_->setPageStep( ps );
+    qScrollHoriz_->setSingleStep( (ps/10)+1 );
+    qScrollHoriz_->setMaximum( qMax( 0, (int)HSliderRange - ps ) );
     h /= qContent_->getTrackHeight();
     qScrollVert_->setPageStep( h );
     qScrollVert_->setMaximum( rowCount()-h );
