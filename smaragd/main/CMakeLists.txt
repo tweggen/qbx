@@ -68,6 +68,8 @@ set(SMARAGD_HEADERS
     include/actions/sremovefromselectionaction.h
     include/actions/sclearselectionaction.h
     include/actions/stoggleselectionaction.h
+    include/actions/sinsertpluginaction.h
+    include/actions/sremovepluginaction.h
     include/sprojectprops.h
 )
 
@@ -139,6 +141,8 @@ set(SMARAGD_SOURCES
     src/actions/sremovefromselectionaction.cpp
     src/actions/sclearselectionaction.cpp
     src/actions/stoggleselectionaction.cpp
+    src/actions/sinsertpluginaction.cpp
+    src/actions/sremovepluginaction.cpp
 )
 
 # Optionally embed a bundled UI font. Drop a TTF at main/resources/FreeSans.ttf
@@ -259,6 +263,22 @@ target_include_directories(exact_arithmetic_test
 )
 
 target_link_libraries(exact_arithmetic_test
+    PRIVATE
+        tw303a
+)
+
+# Serialization roundtrip tests
+add_executable(serialization_roundtrip_test
+    ../tw303a/src/test_serialization_roundtrip.cpp
+)
+
+target_include_directories(serialization_roundtrip_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tw303a/include
+        ${CMAKE_SOURCE_DIR}
+)
+
+target_link_libraries(serialization_roundtrip_test
     PRIVATE
         tw303a
 )
