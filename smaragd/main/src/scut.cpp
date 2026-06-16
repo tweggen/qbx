@@ -595,9 +595,17 @@ int SCut::serializeSelfAttributes( QTextStream &o )
       << " cutDuration='" << (unsigned long ) cutDuration_ << "'"
       << " loopLength='" << (unsigned long ) loopLength_ << "'"
       << " stretch='" << grainParams_.stretch << "'"
-      << " pitchCents='" << grainParams_.pitchCents << "'"
-      << " grainSize='" << (unsigned long ) grainParams_.grainSize << "'"
-      << " crossfade='" << (unsigned long ) grainParams_.crossfade << "'";
+      << " pitchCents='" << grainParams_.pitchCents << "'";
+
+    // Grain parameters stored as time (milliseconds) for rate independence.
+    // Default 48kHz: 2048 frames ≈ 42.67 ms, 512 frames ≈ 10.67 ms
+    int srate = 48000;  // default fallback
+    if( parent() ) srate = getProject().getSRate();
+    double grainSizeMs = (grainParams_.grainSize * 1000.0) / srate;
+    double crossfadeMs = (grainParams_.crossfade * 1000.0) / srate;
+    o << " grainSizeMs='" << grainSizeMs << "'"
+      << " crossfadeMs='" << crossfadeMs << "'";
+
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -623,11 +631,52 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     }
     loopLength_ = element.attribute( "loopLength", "0" ).toULongLong();
 
-    // Grain params are stored already-final, so set them directly (no rescale).
+    // Grain params: stretch and pitchCents are dimensionless, grainSize and
+    // crossfade are now stored as milliseconds (rate-independent) and converted
+    // to samples based on project sample rate.
     grainParams_.stretch    = element.attribute( "stretch", "1.0" ).toDouble();
     grainParams_.pitchCents = element.attribute( "pitchCents", "0.0" ).toDouble();
-    grainParams_.grainSize  = element.attribute( "grainSize", "2048" ).toLongLong();
-    grainParams_.crossfade  = element.attribute( "crossfade", "512" ).toLongLong();
+
+    int srate = 48000;  // default fallback
+    if( parent() ) srate = getProject().getSRate();
+
+    // Try to load time-based values (new format)
+    QString grainSizeMsStr = element.attribute( "grainSizeMs" );
+    if( !grainSizeMsStr.isEmpty() ) {
+        // New format: stored as milliseconds, convert to samples
+        double grainSizeMs = grainSizeMsStr.toDouble();
+        grainParams_.grainSize = (length_t)( ( grainSizeMs * srate ) / 1000.0 + 0.5 );
+    } else {
+        // Backwards compatibility: old format was samples at assumed 48kHz
+        // Scale to current project sample rate
+        QString grainSizeStr = element.attribute( "grainSize" );
+        if( grainSizeStr.isEmpty() ) {
+            // Default: 42.67 ms (2048 @ 48kHz)
+            grainParams_.grainSize = (length_t)( ( 42.666667 * srate ) / 1000.0 + 0.5 );
+        } else {
+            // Assume old value was at 48kHz, scale proportionally
+            length_t oldSamples = grainSizeStr.toLongLong();
+            grainParams_.grainSize = (length_t)( ( oldSamples * srate ) / 48000.0 + 0.5 );
+        }
+    }
+
+    QString crossfadeMsStr = element.attribute( "crossfadeMs" );
+    if( !crossfadeMsStr.isEmpty() ) {
+        // New format: stored as milliseconds, convert to samples
+        double crossfadeMs = crossfadeMsStr.toDouble();
+        grainParams_.crossfade = (length_t)( ( crossfadeMs * srate ) / 1000.0 + 0.5 );
+    } else {
+        // Backwards compatibility: old format was samples at assumed 48kHz
+        QString crossfadeStr = element.attribute( "crossfade" );
+        if( crossfadeStr.isEmpty() ) {
+            // Default: 10.666667 ms (512 @ 48kHz)
+            grainParams_.crossfade = (length_t)( ( 10.666667 * srate ) / 1000.0 + 0.5 );
+        } else {
+            // Assume old value was at 48kHz, scale proportionally
+            length_t oldSamples = crossfadeStr.toLongLong();
+            grainParams_.crossfade = (length_t)( ( oldSamples * srate ) / 48000.0 + 0.5 );
+        }
+    }
 
     // Pre-build the playback chain now (load thread) so a stretched or looping
     // clip restored from disk does not materialise on the first realtime block.
