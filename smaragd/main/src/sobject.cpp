@@ -376,22 +376,57 @@ offset_t SObject::getChildrenExtent( offset_t &firstStart, offset_t &lastEnd,
     nUndefDuration = 0;
     firstStart = (offset_t) (0-1); // Largest number possible
     lastEnd = (offset_t) 0;
-    for( SLink *sli : childLinks() ) {
-        if( !sli ) continue;  // Skip null links
-        SObject &sobj = sli->getSObject();
-        bool hd = sobj.hasDuration();
+
+    const auto& links = childLinks();
+    if( links.isEmpty() ) {
+        return 0;
+    }
+
+    for( SLink *sli : links ) {
+        if( !sli ) {
+            ++nUndefStart;
+            ++nUndefDuration;
+            continue;
+        }
+
+        // Safely get the child object; skip if invalid
+        SObject *sobj_ptr = nullptr;
+        try {
+            sobj_ptr = &sli->getSObject();
+        } catch (...) {
+            ++nUndefStart;
+            ++nUndefDuration;
+            continue;
+        }
+
+        if( !sobj_ptr ) {
+            ++nUndefStart;
+            ++nUndefDuration;
+            continue;
+        }
+
+        bool hd = false;
+        try {
+            hd = sobj_ptr->hasDuration();
+        } catch (...) {
+            hd = false;
+        }
 
         if( sli->hasStartTime() ) {
             offset_t st = sli->getStartTime();
             if( st<firstStart ) firstStart = st;
             if( hd ) {
-                offset_t du = (offset_t) sobj.getDuration();
-		// qWarning( "SObject::getChildrenExtent(): Duration = %d:%d.",
-		//	  (int)(du>>32),(int)du );
-                du += st;
-		// qWarning( "SObject::getChildrenExtent(): Duration = %d:%d.",
-		//	  (int)(du>>32),(int)du );
-                if( du>lastEnd ) lastEnd = du;
+                try {
+                    offset_t du = (offset_t) sobj_ptr->getDuration();
+		    // qWarning( "SObject::getChildrenExtent(): Duration = %d:%d.",
+		    //	  (int)(du>>32),(int)du );
+                    du += st;
+		    // qWarning( "SObject::getChildrenExtent(): Duration = %d:%d.",
+		    //	  (int)(du>>32),(int)du );
+                    if( du>lastEnd ) lastEnd = du;
+                } catch (...) {
+                    // Ignore errors in getting duration
+                }
             }
         } else {
             ++nUndefStart;
@@ -399,7 +434,7 @@ offset_t SObject::getChildrenExtent( offset_t &firstStart, offset_t &lastEnd,
         if( !hd ) {
             ++nUndefDuration;
         }
-    } 
+    }
     return lastEnd-firstStart;
 }
 
