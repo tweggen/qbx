@@ -35,6 +35,10 @@ void twPluginRegistry::rescan()
 
 const std::vector<twPluginDescriptor> &twPluginRegistry::plugins() const
 {
+    // Lazy initialization: ensure plugins are loaded on first access
+    if( plugins_.empty() ) {
+        const_cast<twPluginRegistry*>(this)->rescan();
+    }
     return plugins_;
 }
 
