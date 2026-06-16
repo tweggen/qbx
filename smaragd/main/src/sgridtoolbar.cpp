@@ -8,23 +8,32 @@ SGridToolbar::SGridToolbar(const QString &title, QWidget *parent)
       columns_(7),
       buttonSize_(26),
       currentRow_(0),
-      currentCol_(0)
+      currentCol_(0),
+      containerWidget_(nullptr),
+      gridLayout_(nullptr)
 {
     // Create a container widget with grid layout
-    QWidget *container = new QWidget(this);
-    gridLayout_ = new QGridLayout(container);
+    containerWidget_ = new QWidget(this);
+    gridLayout_ = new QGridLayout(containerWidget_);
 
     // Tight spacing for compact grid
     gridLayout_->setSpacing(2);
     gridLayout_->setContentsMargins(2, 2, 2, 2);
     gridLayout_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
 
+    // Calculate and set fixed width to force wrapping
+    // Width = (columns * buttonSize) + (spacing between columns) + margins
+    int gridWidth = (columns_ * (buttonSize_ + 4)) + ((columns_ - 1) * 2) + 4;
+    containerWidget_->setMaximumWidth(gridWidth);
+    containerWidget_->setMinimumWidth(gridWidth);
+
     // Add the container to the toolbar
-    addWidget(container);
+    addWidget(containerWidget_);
 
     // Set fixed height based on button size (room for 2 rows by default)
     setIconSize(QSize(buttonSize_, buttonSize_));
-    setFixedHeight(2 * buttonSize_ + 10);  // 2 rows + spacing
+    setMaximumHeight(2 * (buttonSize_ + 4) + 10);  // 2 rows + spacing
+    setFixedHeight(2 * (buttonSize_ + 4) + 10);
 }
 
 void SGridToolbar::addGridAction(QAction *action)
@@ -76,6 +85,12 @@ void SGridToolbar::setButtonSize(int size)
         }
     }
 
-    // Recalculate height
-    setFixedHeight((currentRow_ + 1) * buttonSize_ + 10);
+    // Recalculate width and height based on button size
+    int gridWidth = (columns_ * (buttonSize_ + 4)) + ((columns_ - 1) * 2) + 4;
+    if (containerWidget_) {
+        containerWidget_->setMaximumWidth(gridWidth);
+        containerWidget_->setMinimumWidth(gridWidth);
+    }
+
+    setFixedHeight((currentRow_ + 1) * (buttonSize_ + 4) + 10);
 }

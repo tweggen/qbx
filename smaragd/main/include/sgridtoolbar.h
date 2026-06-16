@@ -46,6 +46,7 @@ private:
     int buttonSize_;
     int currentRow_;
     int currentCol_;
+    QWidget *containerWidget_;
     QGridLayout *gridLayout_;
     QList<QAction*> actions_;
 };
