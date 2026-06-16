@@ -436,16 +436,20 @@ private:
     // Track detail panel (Phase 2 UI)
     class STrackDetailPanel *qTrackDetailPanel_;
 
+public:
     // Track header resizing (Phase 3 UI)
-    int trackControlWidth_ = 120;  // Current width in pixels
     static constexpr int TRACK_CTRL_WIDTH_MINIMAL = 120;
     static constexpr int TRACK_CTRL_WIDTH_STANDARD = 450;
-    bool trackHeaderDragActive_ = false;
-    int trackHeaderDragStartX_ = 0;
-    int trackHeaderDragStartWidth_ = 0;
+    int getTrackControlWidth() const { return trackControlWidth_; }
     void setTrackControlWidth( int width );
     void saveTrackControlWidth();
     void loadTrackControlWidth();
+
+private:
+    int trackControlWidth_ = 120;  // Current width in pixels
+    bool trackHeaderDragActive_ = false;
+    int trackHeaderDragStartX_ = 0;
+    int trackHeaderDragStartWidth_ = 0;
     void appendRowsFor( SObject *container, int depth );
     // Resolve a drag drop at control-column y: *onto = the lane's track if the
     // pointer is over a lane's middle (nest), else NULL; *topSlot = insertion

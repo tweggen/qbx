@@ -25,6 +25,7 @@
 #include "sstdmixer.h"
 #include "sstdmixerview.h"
 #include "strackdetailpanel.h"
+#include "strackheaderresizer.h"
 #include "strack.h"
 #include "sobjectrenderer.h"
 #include "splainwave.h"
@@ -2550,6 +2551,11 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
 
     // Load saved track control width
     loadTrackControlWidth();
+
+    // Create draggable divider between track header and content
+    STrackHeaderResizer *resizer = new STrackHeaderResizer(this, this);
+    qGridLayout_->addWidget(resizer, 0, 0, 4, 1, Qt::AlignRight);
+    qGridLayout_->setColumnMinimumWidth(0, 8);  // Divider width
 
     // Create the track detail panel (bottom of mixer view)
     qTrackDetailPanel_ = new STrackDetailPanel(this);
