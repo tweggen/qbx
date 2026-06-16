@@ -12,6 +12,8 @@ class QVBoxLayout;
 class QCheckBox;
 class QPushButton;
 class QLabel;
+class QDragMoveEvent;
+class QDropEvent;
 
 // FX strip widget for a track. Shows ordered list of plugins with:
 // - Bypass toggle for each
@@ -31,19 +33,28 @@ protected slots:
     void onPluginSlotInserted(int index, SPluginSlot &slot);
     void onPluginSlotRemoved(int index, SPluginSlot &slot);
 
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dragMoveEvent(QDragMoveEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+
 private:
     struct PluginWidget {
+        int slotIndex;
         QLabel *nameLabel;
         QCheckBox *bypassCheckbox;
         QPushButton *removeBtn;
+        QWidget *container;
     };
 
     void rebuildUI();
+    void startDragFromPlugin(int pluginIndex);
 
     STrack *track_;
     SPluginChain *pluginChain_;
     QVBoxLayout *pluginsLayout_;
     std::vector<PluginWidget> pluginWidgets_;
+    int dragSourceIndex_ = -1;
 };
 
 #endif
