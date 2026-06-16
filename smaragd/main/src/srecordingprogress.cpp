@@ -107,6 +107,14 @@ void SRecordingProgressDialog::updateTimeDisplay() {
     recordedDuration_ = session_->recordedDurationSeconds();
     durationLabel_->setText("Duration: " + formatTime(recordedDuration_));
 
+    // Refresh the main window's UI every ~500ms to show growing recorded clip (every 5 updates @ 100ms)
+    ++updateCount_;
+    if (updateCount_ % 5 == 0) {
+        if (QWidget *mainWindow = parentWidget()) {
+            mainWindow->update();
+        }
+    }
+
     // Poll for completion instead of receiving a worker-thread callback.
     if (!isComplete_ && session_->isFinished()) {
         handleCompletion(session_->succeeded(),

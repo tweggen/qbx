@@ -608,6 +608,11 @@ void SMainWindow::onRecordingCompleted()
     // just placed (it had advanced to the end during capture).
     SApplication::app().setGlobalLocatorPos( recordingStartTime );
 
+    // Refresh the UI to display the newly placed clip
+    if( projectRootWidget_ ) {
+        projectRootWidget_->update();
+    }
+
     actRecord_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
 }
 

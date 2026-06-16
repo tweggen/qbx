@@ -42,6 +42,7 @@ private:
     double recordedDuration_ = 0.0;
     QTimer *updateTimer_ = nullptr;
     bool isComplete_ = false;
+    int updateCount_ = 0;  // Counter to trigger UI refresh every 500ms
 };
 
 #endif
