@@ -50,6 +50,7 @@
 #include "actions/screateassetaction.h"
 #include "actions/splaceassetaction.h"
 #include "actions/saddsampleaction.h"
+#include "actions/sremovesampleaction.h"
 #include "actions/strackpath.h"
 #include "sactionhistory.h"
 #include <QFrame>
@@ -366,16 +367,45 @@ void SStdMixerView::ctAddLink()
 
 void SStdMixerView::ctRemoveSample()
 {
+    STrack *oldTrack = qContent_->getLastClickTrack();
     SLink *oldLink = qContent_->getLastClickSLink();
-    if( !oldLink ) {
+    if( !oldTrack || !oldLink ) {
         qWarning( "ctRemoveSample called without object.\n" );
         return;
     }
-    QRect r = qContent_->getSLinkVisibRect( qContent_->getLastClickTrackIdx(), *oldLink );
+
+    SProject *project = SApplication::app().getCurrentProject();
+    if( !project ) return;
+
+    SObject *root = project->getRootComponent();
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
+    if( !mixer ) return;
+
+    // Get the track index in the mixer (top-level children)
+    int trackIdx = mixer->indexOfChildObject(*oldTrack);
+    if( trackIdx < 0 ) return;
+
+    // Get the clip index within the track
+    int clipIdx = oldTrack->indexOfChild(oldLink);
+    if( clipIdx < 0 ) return;
+
+    // Extract file path from the sample (empty if not available; the inverse action
+    // can reconstruct from position info alone for undo/redo)
+    QString filePath;
+    SObject &obj = oldLink->getSObject();
+    if( dynamic_cast<SCut*>(&obj) ) {
+        // SCut wrapping a file link; file path not easily extractable, so leave empty
+        // The SRemoveSampleAction inverse will restore based on track/clip index and time
+        filePath = "";
+    }
+
+    offset_t timePos = oldLink->getStartTime();
     qContent_->resetLastClickSLink();
-    delete oldLink;
-    // FIXME: Only the track.
-    qContent_->update( r );
+
+    // Submit the removal action (proper undo/redo support)
+    SApplication::app().submitAction(
+        new SRemoveSampleAction(trackIdx, clipIdx, filePath, timePos)
+    );
 }
 
 void SStdMixerView::ctDeleteSample()
