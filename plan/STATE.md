@@ -2877,12 +2877,87 @@ rebuilds state (on window-param change, mute/solo toggle, etc.), it constructs
 - ⚠️ DSP graph not yet wired (Phase 2b); `getRootComponent()` throws on chain
 - ⚠️ Serialization stubs only (XML in/out not fully functional yet)
 
-### Next actions (Phase 2b)
+### Next actions (Phase 3)
 
-1. **STrack integration** — create `SPluginChain` child on every `STrack`; wire DSP graph
-2. **Chain component builder** — construct `twComponent` that threads audio through `twPluginInsert` slots in order
-3. **Undo actions** — register insert/remove/reorder/bypass actions with action registry
-4. **Serialization** — implement state chunk save/load, base64 XML round-trip
+1. **Undo actions** — register insert/remove/reorder/bypass actions with action registry
+2. **Serialization** — implement state chunk save/load, base64 XML round-trip
+3. **Multi-plugin wiring** — extend `twPluginChain::calcOutputTo()` to thread through N plugins in series
+4. **UI** — plugin browser, generic parameter editor, FX strip section
+
+---
+
+## 08_PLUGIN_HOSTING.md — Phase 2b (DSP integration and chain component)
+
+- **Date:** 2026-06-16
+- **Status:** Phase 2b complete (track DSP wiring). Phase 3 (undo/serialization) next.
+
+### What landed
+
+**twPluginChain component:**
+- New DSP component (`tw303a/include/twpluginchain.h`, `.cc`)
+- Inherits from `twComponent`; one instance per bus on each track
+- `addPlugin()`, `removePlugin()`, `reorderPlugin()` methods
+- `calcOutputTo()` threads audio through plugin chain
+- N input ports (1 per bus) and N output ports
+
+**STrack integration:**
+- Constructor creates `SPluginChain` model object as a child
+- `setNBusses()` allocates and wires `twPluginChain` DSP components
+- `getPluginChain()` accessor for UI to bind model to track
+- Destructor cleans up DSP resources
+- DSP graph: `twTrackMix[bus] → twPluginChain[bus] → twRewire[bus]`
+
+**CMakeLists.txt:**
+- Added `twpluginchain.h` and `twpluginchain.cc` to `tw303a`
+- Already had `spluginchain.h`, `spluginslot.h`, `.cpp` from Phase 2
+
+### Architecture notes
+
+**Model-to-DSP binding:**
+- `SPluginChain` (model) owns `cpPluginChains_` (DSP) in `STrack`
+- Each `SPluginSlot` (model) owns a `twPluginInsert` (DSP)
+- `SPluginChain::getChainComponent()` → `twPluginChain` (deferred; currently a stub)
+
+**Wiring strategy:**
+- Each bus is independent: `twPluginChain` handles one mono wire per bus
+- First plugin input: receives from track mixer
+- Last plugin output: feeds to rewire
+- Intermediate: plugin0.out → plugin1.in (deferred to Phase 3)
+
+**Current limitations:**
+- `calcOutputTo()` currently passes through first plugin only
+- No series wiring yet (needs proper input/output linking per plugin)
+- Deferred for Phase 3 (requires iterating through plugin list coherently)
+
+### Verification status
+
+**macOS / Qt6 / CMake:**
+- ✅ Build succeeds (Ninja, C++17)
+- ✅ `STrack` creates `SPluginChain` on construction
+- ✅ `setNBusses()` allocates `twPluginChain` per bus
+- ✅ DSP graph wiring: track mixer → plugin chain → rewire
+- ✅ All three components (track mixer, plugin chain, rewire) linked in series
+- ⚠️ Single plugin pass-through only (multi-plugin series deferred)
+- ⚠️ No undo/serialization yet
+
+### Design notes
+
+The architecture keeps model and DSP tiers separate:
+- **Model tier** (`SPluginChain`, `SPluginSlot`): persistence, ordering, properties
+- **DSP tier** (`twPluginChain`, `twPluginInsert`): audio processing, wiring
+- **Binding** via `STrack`: owns both, wires together in `setNBusses()`
+
+This separation allows:
+1. Model refactoring without affecting audio path
+2. DSP optimization without touching undo/serialization
+3. UI development independently (Phase 4)
+
+### Next actions (Phase 3)
+
+1. **Undo actions** — `SInsertPluginAction`, `SRemovePluginAction`, etc.
+2. **Serialization** — opaque state chunk save/load, base64 XML encoding
+3. **Multi-plugin wiring** — iterate through `twPluginChain::plugins_` in `calcOutputTo()`, thread audio series
+4. **Parameter actions** — `SSetPluginParamAction` for live editing with undo
 
 ---
 
