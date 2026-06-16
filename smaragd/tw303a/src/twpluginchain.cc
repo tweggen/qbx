@@ -29,17 +29,27 @@ length_t twPluginChain::calcOutputTo( sample_t *dst, length_t len, idx_t port )
         return 0;
     }
 
-    // With plugins, we need to thread audio through them sequentially.
-    // For now, thread the first plugin's output (more complex chaining deferred).
-    // TODO: implement proper series wiring of multiple plugins.
-    if( pInputPlugs && pInputPlugs[port] && !plugins_.empty() ) {
-        auto *firstPlugin = plugins_[0];
-        // Wire the input to the first plugin's matching port
-        if( port < firstPlugin->getNInputs() ) {
-            firstPlugin->setInput( port, pInputPlugs[port] );
+    // Series-wire all plugins: input → plugin0 → plugin1 → ... → output
+    // First plugin gets the track input
+    if( pInputPlugs && pInputPlugs[port] ) {
+        if( port < plugins_[0]->getNInputs() ) {
+            plugins_[0]->setInput( port, pInputPlugs[port] );
         }
-        // Pull from the first plugin's output
-        return firstPlugin->calcOutputTo( dst, len, port );
+
+        // Wire each subsequent plugin to the previous one's output
+        for( size_t i = 1; i < plugins_.size(); ++i ) {
+            auto *prevPlugin = plugins_[i-1];
+            auto *nextPlugin = plugins_[i];
+            if( port < prevPlugin->getNOutputs() && port < nextPlugin->getNInputs() ) {
+                nextPlugin->setInput( port, prevPlugin->linkOutput( port ) );
+            }
+        }
+
+        // Pull from the last plugin's output
+        auto *lastPlugin = plugins_.back();
+        if( port < lastPlugin->getNOutputs() ) {
+            return lastPlugin->calcOutputTo( dst, len, port );
+        }
     }
 
     return 0;

@@ -43,6 +43,7 @@ public:
     // State persistence
     void saveState( std::vector<std::uint8_t> &state );
     void restoreState( const std::vector<std::uint8_t> &state );
+    void serializeStateChunk( QDomElement &parentElem, QDomDocument &doc );
 
 signals:
     void bypassChanged( bool );
