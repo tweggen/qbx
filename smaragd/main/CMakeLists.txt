@@ -27,6 +27,9 @@ set(SMARAGD_HEADERS
     include/strackrndrinline.h
     include/spluginchain.h
     include/spluginslot.h
+    include/spluginbrowserdialog.h
+    include/spluginparamereditor.h
+    include/splugineffectstrip.h
     include/saction.h
     include/sactionregistry.h
     include/sactionqueue.h
@@ -103,6 +106,9 @@ set(SMARAGD_SOURCES
     src/strackrndrinline.cpp
     src/spluginchain.cpp
     src/spluginslot.cpp
+    src/spluginbrowserdialog.cpp
+    src/spluginparamereditor.cpp
+    src/splugineffectstrip.cpp
     src/sactionregistry.cpp
     src/sactionqueue.cpp
     src/sactionhistory.cpp
