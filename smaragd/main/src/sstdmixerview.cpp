@@ -2576,8 +2576,16 @@ void SStdMixerView::setTrackControlWidth( int width )
     if( trackControlWidth_ != width ) {
         trackControlWidth_ = width;
         qTrackControlBoxHolder_->setFixedWidth( width );
+        if( qTrackControlBox_ ) {
+            qTrackControlBox_->setFixedWidth( width );
+        }
+        // Force layout recalculation
+        if( qGridLayout_ ) {
+            qGridLayout_->invalidate();
+        }
         saveTrackControlWidth();
         update();
+        repaint();
     }
 }
 
