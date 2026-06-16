@@ -2812,11 +2812,77 @@ rebuilds state (on window-param change, mute/solo toggle, etc.), it constructs
 
 ### Next actions
 
-1. **CLAP backend** — implement `ClapPlugin` wrapping CLAP plugin descriptor/instance; wire into registry scanner (Phase 1b if scheduling, or Phase 2 start)
-2. **Track insert chain** — `SPluginSlot` model object, `SPluginChain` container, track wiring refactor
-3. **Undo + serialization** — actions for insert/remove/reorder/bypass/param, XML round-trip with state chunks
+1. **Track wiring** — modify `STrack` to create and wire `SPluginChain` into DSP graph between track mixer and rewire
+2. **Undo + serialization** — actions for insert/remove/reorder/bypass/param, XML round-trip with state chunks
+3. **CLAP backend** — implement `ClapPlugin` wrapping CLAP descriptor/instance; wire into registry scanner
 4. **UI** — FX section on track strip, plugin browser, generic parameter editor
 5. **Audio test** — wire PassThrough onto a test track, play, verify stereo output is audible (currently PoC only)
+
+---
+
+## 08_PLUGIN_HOSTING.md — Phase 2 (track insert chain model)
+
+- **Date:** 2026-06-16
+- **Status:** Phase 2 model complete (core objects). Track wiring integration pending.
+
+### What landed
+
+**Model objects:**
+- `SPluginSlot` — wraps one `twPluginInsert`, stores descriptor + opaque state chunk + bypass flag
+  - Inherits from `SObject` (integrates into project model)
+  - `getRootComponent()` returns the underlying `twPluginInsert`
+  - Methods: `setBypass()`, `saveState()`, `restoreState()`, XML serialization stub
+- `SPluginChain` — container of ordered `SPluginSlot` children
+  - Inherits from `SObject` (reuses child ordering, refcounting, signals)
+  - `getSlotAt()` / `getSlotCount()` accessors
+  - `reorderSlot()` to move slots (fires `slotsReordered()` signal)
+  - Signals: `slotInserted`, `slotRemoved`, `slotsReordered`
+  - DSP component wiring deferred to Phase 2b
+
+**CMakeLists.txt:**
+- Added `spluginslot.h`, `spluginslot.cpp`, `spluginchain.h`, `spluginchain.cpp`
+
+### Architecture notes
+
+**Model structure:**
+- `SProject` → `SStdMixer` → `STrack`; next step: `STrack` creates and parents `SPluginChain`
+- `SPluginChain` → (ordered SLink) → `SPluginSlot` (one per plugin)
+- Each `SPluginSlot` owns a `twPluginInsert`, which owns a `twPlugin`
+
+**Separation of concerns:**
+- Model tier (`SPluginSlot`, `SPluginChain`): persistence, properties, signals
+- DSP tier (`twPluginInsert`, `twPlugin`): audio processing
+- UI tier (deferred to Phase 4): browser, parameter editor
+
+**State persistence (stubbed):**
+- `SPluginSlot` serializes: descriptor (format/uid), bypass flag, opaque plugin state chunk (as XML base64)
+- `readPreChildrenAttributes()` / `serializeSelfAttributes()` plumbing in place
+
+### What was deliberately deferred
+
+- **Track DSP wiring** — `STrack` doesn't yet create or wire `SPluginChain` into `twTrackMix → chain → twRewire`
+- **Chain component builder** — `getChainComponent()` returns null; needs to build a component that threads audio through ordered slots
+- **Undo actions** — `SInsertPlugin`, `SRemovePlugin`, `SReorderPlugin`, `SSetPluginBypass` not yet implemented
+- **Full XML round-trip** — state chunk serialization deferred (placeholder methods only)
+- **UI** — plugin browser, generic parameter editor, FX strip section
+
+### Verification status
+
+**macOS / Qt6 / CMake:**
+- ✅ Build succeeds (Ninja, C++17)
+- ✅ Model classes compile and link
+- ✅ `SPluginSlot` instantiation (accepts descriptor, creates `twPluginInsert`)
+- ✅ `SPluginChain` container methods (getSlotAt, reorderSlot)
+- ✅ Signals plumbed (slotInserted, slotRemoved, slotsReordered)
+- ⚠️ DSP graph not yet wired (Phase 2b); `getRootComponent()` throws on chain
+- ⚠️ Serialization stubs only (XML in/out not fully functional yet)
+
+### Next actions (Phase 2b)
+
+1. **STrack integration** — create `SPluginChain` child on every `STrack`; wire DSP graph
+2. **Chain component builder** — construct `twComponent` that threads audio through `twPluginInsert` slots in order
+3. **Undo actions** — register insert/remove/reorder/bypass actions with action registry
+4. **Serialization** — implement state chunk save/load, base64 XML round-trip
 
 ---
 

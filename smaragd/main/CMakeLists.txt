@@ -25,6 +25,8 @@ set(SMARAGD_HEADERS
     include/strack.h
     include/strackrenderer.h
     include/strackrndrinline.h
+    include/spluginchain.h
+    include/spluginslot.h
     include/saction.h
     include/sactionregistry.h
     include/sactionqueue.h
@@ -97,6 +99,8 @@ set(SMARAGD_SOURCES
     src/sstdmixerview.cpp
     src/strack.cpp
     src/strackrndrinline.cpp
+    src/spluginchain.cpp
+    src/spluginslot.cpp
     src/sactionregistry.cpp
     src/sactionqueue.cpp
     src/sactionhistory.cpp
