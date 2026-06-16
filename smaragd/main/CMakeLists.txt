@@ -246,3 +246,19 @@ target_link_libraries(action_roundtrip_test
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Xml
 )
+
+# Exact arithmetic integration tests
+add_executable(exact_arithmetic_test
+    ../tw303a/src/test_exact_arithmetic.cpp
+)
+
+target_include_directories(exact_arithmetic_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tw303a/include
+        ${CMAKE_SOURCE_DIR}
+)
+
+target_link_libraries(exact_arithmetic_test
+    PRIVATE
+        tw303a
+)

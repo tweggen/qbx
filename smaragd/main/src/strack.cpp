@@ -10,11 +10,13 @@
 
 #include "twtrackmix.h"
 #include "twrewire.h"
+#include "twpluginchain.h"
 #include "sobject.h"
 #include "slink.h"
 #include "sapplication.h"
 #include "strack.h"
 #include "strackrndrinline.h"
+#include "spluginchain.h"
 #include "sprojectloader.h"
 
 using namespace std;
@@ -228,6 +230,33 @@ void STrack::setNBusses( int nBusses )
         ::free( cpTrackMixers_ );
         cpTrackMixers_ = newMixers;
     }
+    // Reset plugin chain components
+    if( cpPluginChains_ ) {
+        for( int i=0; i<oldNBusses; ++i ) {
+            delete cpPluginChains_[i];
+            cpPluginChains_[i] = nullptr;
+        }
+    } else {
+        oldNBusses = 0;
+    }
+    {
+        twPluginChain **newChains = (twPluginChain **) ::calloc(
+            sizeof( twPluginChain * ), nBusses );
+        if( cpPluginChains_ ) {
+            for( int i=0; i<oldNBusses; ++i ) {
+                newChains[i] = cpPluginChains_[i];
+            }
+        }
+        // Create new plugin chain components
+        for( int i=oldNBusses; i<nBusses; ++i ) {
+            newChains[i] = new twPluginChain(
+                *(SApplication::app().get303aEnvironment()), 1 );
+            newChains[i]->init();
+        }
+        ::free( cpPluginChains_ );
+        cpPluginChains_ = newChains;
+    }
+
     // Reset rewirer.
     if( cpRewire_ ) {
         for( int i=0;i<oldNBusses;++i ) {
@@ -238,8 +267,11 @@ void STrack::setNBusses( int nBusses )
         cpRewire_->init();
     }
     cpRewire_->setNPlugs( nBusses );
-    for( int i=0;i<nBusses;++i ) {
-        cpRewire_->setInput( i, cpTrackMixers_[i]->linkOutput( 0 ) );
+
+    // Wire: track mixer → plugin chain → rewire
+    for( int i=0; i<nBusses; ++i ) {
+        cpPluginChains_[i]->setInput( 0, cpTrackMixers_[i]->linkOutput( 0 ) );
+        cpRewire_->setInput( i, cpPluginChains_[i]->linkOutput( 0 ) );
     }
     nBusses_ = nBusses;
     emit nChannelsChanged( nBusses );
@@ -251,24 +283,37 @@ STrack::STrack( SProject *project )
       nBusses_( 1 ),
       cpTrackMixers_( 0 ),
       cpRewire_( 0 ),
+      cpPluginChain_( 0 ),
+      cpPluginChains_( 0 ),
       lastDuration_( 1 ),
       lastDurationValid_( true )
 {
+    // Create the plugin chain model object (container for effect inserts)
+    cpPluginChain_ = new SPluginChain( project );
+    cpPluginChain_->setParent( this );
+
     // Add a listener for added child objects.
     // We want to become noticed, if it is new.
-    QObject::connect( this, SIGNAL( childObjectAdded( SLink & ) ), 
+    QObject::connect( this, SIGNAL( childObjectAdded( SLink & ) ),
                       this, SLOT( trackChildWasAdded( SLink & ) ) );
-    QObject::connect( this, SIGNAL( childObjectRemoved( SLink & ) ), 
+    QObject::connect( this, SIGNAL( childObjectRemoved( SLink & ) ),
                       this, SLOT( trackChildWasRemoved( SLink & ) ) );
 
     // Set the number of busses. This initial request will allocate
-    // the track mixer objects.    
+    // the track mixer objects and DSP plugin chains.
     setNBusses( 2 );
 }
 
 STrack::~STrack()
 {
     DTOR_DEL( inlineRenderer_ );
+    if( cpPluginChains_ ) {
+        for( int i = 0; i < nBusses_; ++i ) {
+            delete cpPluginChains_[i];
+        }
+        ::free( cpPluginChains_ );
+    }
+    // cpPluginChain_ is managed by SObject parent/child system
 }
 
 #if 0

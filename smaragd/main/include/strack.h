@@ -10,8 +10,10 @@ class twComponent;
 class STrack;
 class SObjectRenderer;
 class STrackRendererInline;
+class SPluginChain;
 class twTrackMix;
 class twRewire;
+class twPluginChain;
 class SLink;
 class SProjectLoader;
 
@@ -74,6 +76,7 @@ public:
     
     virtual SLink *getTopMostSLinkAt( offset_t ) const;
     int getNBusses() const { return nBusses_; }
+    SPluginChain *getPluginChain() const { return cpPluginChain_; }
     virtual int seekTo( offset_t ofs );
 
     virtual bool hasDuration() const;
@@ -96,6 +99,8 @@ private:
     int nBusses_;
     twTrackMix **cpTrackMixers_;
     twRewire *cpRewire_;
+    SPluginChain *cpPluginChain_;  // Model object for effects inserts
+    twPluginChain **cpPluginChains_;  // DSP components (one per bus)
     
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;
