@@ -2575,14 +2575,21 @@ void SStdMixerView::setTrackControlWidth( int width )
 
     if( trackControlWidth_ != width ) {
         trackControlWidth_ = width;
+
+        // Adjust the grid layout column width directly
+        if( qGridLayout_ ) {
+            // Column 0 contains track controls + divider
+            // Set both min and max width to force the column to that size
+            qGridLayout_->setColumnMinimumWidth( 0, width + 8 );  // +8 for divider
+            qGridLayout_->invalidate();
+        }
+
+        // Also update widget widths for consistency
         qTrackControlBoxHolder_->setFixedWidth( width );
         if( qTrackControlBox_ ) {
             qTrackControlBox_->setFixedWidth( width );
         }
-        // Force layout recalculation
-        if( qGridLayout_ ) {
-            qGridLayout_->invalidate();
-        }
+
         saveTrackControlWidth();
         update();
         repaint();
