@@ -14,10 +14,11 @@ namespace audio {
 struct RecordingParams {
     std::string inputDeviceId;                    // e.g., "default"
     std::vector<std::string> armedTrackIds;       // track IDs to record on
+    std::vector<std::uint32_t> trackChannels;     // per-track channel masks (0 = all)
     std::string projectDirectory;                  // where to save WAV files
     double startTimeSeconds = 0.0;                // locator position (not used yet)
     std::uint32_t sampleRate = 48000;
-    std::uint32_t channels = 2;
+    std::uint32_t channels = 2;                   // device input channel count
 };
 
 class RecordingSession {

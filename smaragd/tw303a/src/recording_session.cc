@@ -27,6 +27,46 @@ namespace audio {
 
 namespace {
 
+// Filter selected channels from an interleaved float buffer.
+// If channelMask is 0, all channels are passed through.
+// Otherwise, channelMask is a bitmask where bit n enables channel n.
+std::vector<float> filterChannels(const float *data, std::size_t frameCount,
+                                   std::uint32_t sourceChannels, std::uint32_t channelMask) {
+    std::vector<float> result;
+
+    // If no mask (0), pass through all channels
+    if (channelMask == 0) {
+        result.assign(data, data + frameCount * sourceChannels);
+        return result;
+    }
+
+    // Count how many channels are selected
+    std::uint32_t selectedChannels = 0;
+    std::vector<std::uint32_t> selectedIndices;
+    for (std::uint32_t ch = 0; ch < sourceChannels; ++ch) {
+        if (channelMask & (1U << ch)) {
+            selectedChannels++;
+            selectedIndices.push_back(ch);
+        }
+    }
+
+    if (selectedChannels == 0) {
+        // No channels selected - return silence
+        result.resize(frameCount * 1, 0.0f);  // At least mono
+        return result;
+    }
+
+    // Extract selected channels
+    result.reserve(frameCount * selectedChannels);
+    for (std::size_t f = 0; f < frameCount; ++f) {
+        for (std::uint32_t ch : selectedIndices) {
+            result.push_back(data[f * sourceChannels + ch]);
+        }
+    }
+
+    return result;
+}
+
 // Stateful streaming linear resampler for interleaved float frames. The input
 // backend normally delivers frames already at the project rate (WASAPI shared-mode
 // AUTOCONVERTPCM — see WASAPIInput::openDevice), so this is a passthrough in the
@@ -223,54 +263,84 @@ void RecordingSession::recordThreadMain() {
                  (unsigned) deviceRate, (unsigned) targetRate,
                  (unsigned) channels, (unsigned) params_.sampleRate );
 
-    // Create output filename with timestamp
+    // Create per-track WAV writers and filenames
+    std::vector<std::unique_ptr<AudioFileWriter>> writers;
+    std::vector<std::string> filenames;
+    std::vector<std::uint32_t> outputChannelCounts;  // channels per track after filtering
+
     auto now = std::chrono::system_clock::now();
     auto time = std::chrono::system_clock::to_time_t(now);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                   now.time_since_epoch()) %
               1000;
 
-    std::stringstream filenameSS;
-    filenameSS << params_.projectDirectory << "/";
-    filenameSS << std::put_time(std::localtime(&time), "%Y%m%d_%H%M%S");
-    filenameSS << "_" << std::setfill('0') << std::setw(3) << ms.count();
-    filenameSS << "_input0.wav";
+    // Create a writer for each armed track
+    for (std::size_t trackIdx = 0; trackIdx < params_.armedTrackIds.size(); ++trackIdx) {
+        std::stringstream filenameSS;
+        filenameSS << params_.projectDirectory << "/";
+        filenameSS << std::put_time(std::localtime(&time), "%Y%m%d_%H%M%S");
+        filenameSS << "_" << std::setfill('0') << std::setw(3) << ms.count();
+        filenameSS << "_" << params_.armedTrackIds[trackIdx] << ".wav";
 
-    std::string filename = filenameSS.str();
-    createdFiles_.push_back(filename);
+        std::string filename = filenameSS.str();
+        filenames.push_back(filename);
+        createdFiles_.push_back(filename);
 
-    // Create WAV writer
-    std::unique_ptr<AudioFileWriter> writer = createAudioFileWriter(AudioFormat::WAV);
-    if (!writer) {
-        lastError_ = "Failed to create WAV writer";
-        input->closeDevice();
-        markFinished(false);
-        if (onComplete) {
-            onComplete(false, lastError_.c_str());
+        // Determine output channel count for this track
+        std::uint32_t trackChannelMask = (trackIdx < params_.trackChannels.size()) ?
+                                         params_.trackChannels[trackIdx] : 0;
+        std::uint32_t outChannels = channels;  // default: all channels
+
+        if (trackChannelMask != 0) {
+            // Count selected channels
+            outChannels = 0;
+            for (std::uint32_t ch = 0; ch < channels; ++ch) {
+                if (trackChannelMask & (1U << ch)) {
+                    outChannels++;
+                }
+            }
+            if (outChannels == 0) outChannels = 1;  // At least mono
         }
-        return;
-    }
+        outputChannelCounts.push_back(outChannels);
 
-    // Open WAV file
-    AudioFileConfig fileConfig;
-    fileConfig.sampleRate = targetRate;
-    fileConfig.channels = channels;
-    fileConfig.sampleType = inputConfig.sampleType;
-
-    if (!writer->open(filename, fileConfig)) {
-        lastError_ = std::string("Failed to open WAV file: ") + writer->errorMessage();
-        input->closeDevice();
-        markFinished(false);
-        if (onComplete) {
-            onComplete(false, lastError_.c_str());
+        // Create WAV writer
+        auto writer = createAudioFileWriter(AudioFormat::WAV);
+        if (!writer) {
+            lastError_ = "Failed to create WAV writer";
+            input->closeDevice();
+            markFinished(false);
+            if (onComplete) {
+                onComplete(false, lastError_.c_str());
+            }
+            return;
         }
-        return;
+
+        // Open WAV file
+        AudioFileConfig fileConfig;
+        fileConfig.sampleRate = targetRate;
+        fileConfig.channels = outChannels;
+        fileConfig.sampleType = inputConfig.sampleType;
+
+        if (!writer->open(filename, fileConfig)) {
+            lastError_ = std::string("Failed to open WAV file: ") + writer->errorMessage();
+            input->closeDevice();
+            markFinished(false);
+            if (onComplete) {
+                onComplete(false, lastError_.c_str());
+            }
+            return;
+        }
+
+        writers.push_back(std::move(writer));
     }
 
     // Start input capture
     if (input->startCapture() < 0) {
         lastError_ = std::string("Failed to start capture: ") + input->errorMessage();
-        writer->close();
+        // Close all writers before returning on error
+        for (auto &writer : writers) {
+            writer->close();
+        }
         input->closeDevice();
         markFinished(false);
         if (onComplete) {
@@ -322,7 +392,7 @@ void RecordingSession::recordThreadMain() {
 
             if (framesRead > 0) {
                 totalInputFrames += framesRead;
-                // Resample device-rate capture to the project rate, then write.
+                // Resample device-rate capture to the project rate, then write to per-track files.
                 const float *outData = buffer.data();
                 std::int32_t outFrames = framesRead;
                 if (!resampler.passthrough()) {
@@ -333,11 +403,23 @@ void RecordingSession::recordThreadMain() {
                     outFrames = static_cast<std::int32_t>(n);
                 }
 
-                // Write to WAV (a chunk can resample to 0 output frames — skip it)
-                if (outFrames > 0 && !writer->write(outData, outFrames)) {
-                    success = false;
-                    errorMsg = std::string("Write error: ") + writer->errorMessage();
-                    break;
+                // Write to per-track WAV files with channel filtering (a chunk can resample to 0 output frames — skip it)
+                if (outFrames > 0) {
+                    for (std::size_t trackIdx = 0; trackIdx < writers.size(); ++trackIdx) {
+                        std::uint32_t trackChannelMask = (trackIdx < params_.trackChannels.size()) ?
+                                                         params_.trackChannels[trackIdx] : 0;
+
+                        // Filter channels if needed
+                        std::vector<float> filtered = filterChannels(outData, outFrames, channels, trackChannelMask);
+
+                        if (!writers[trackIdx]->write(filtered.data(), outFrames)) {
+                            success = false;
+                            errorMsg = std::string("Write error on track ") + params_.armedTrackIds[trackIdx] +
+                                     std::string(": ") + writers[trackIdx]->errorMessage();
+                            break;
+                        }
+                    }
+                    if (!success) break;
                 }
 
                 // Update duration from the input frames at the device rate (real
@@ -393,10 +475,14 @@ void RecordingSession::recordThreadMain() {
     input->stopCapture();
     input->closeDevice();
 
-    if (!writer->close()) {
-        if (success) {  // Only override error if we didn't already have one
-            success = false;
-            errorMsg = std::string("Failed to close WAV file: ") + writer->errorMessage();
+    // Close all per-track writers
+    for (std::size_t trackIdx = 0; trackIdx < writers.size(); ++trackIdx) {
+        if (!writers[trackIdx]->close()) {
+            if (success) {  // Only override error if we didn't already have one
+                success = false;
+                errorMsg = std::string("Failed to close WAV file for track ") +
+                          params_.armedTrackIds[trackIdx];
+            }
         }
     }
 

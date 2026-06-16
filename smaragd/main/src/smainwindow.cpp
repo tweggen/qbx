@@ -495,11 +495,12 @@ void SMainWindow::onRecordTriggered()
         params.sampleRate = currentProject_->getSRate();
         params.channels = 2;
 
-        // Collect armed track IDs and STrack pointers
+        // Collect armed track IDs, STrack pointers, and per-track channel selections
         std::vector<STrack*> armedTracks;
         for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
             if( trackLink->getSObject().isArmedForRecording() ) {
                 params.armedTrackIds.push_back( trackLink->getSObject().getSName().toStdString() );
+                params.trackChannels.push_back( trackLink->getSObject().getRecordingChannels() );
                 if( STrack *track = dynamic_cast<STrack*>( &trackLink->getSObject() ) ) {
                     armedTracks.push_back( track );
                 }
@@ -545,14 +546,9 @@ void SMainWindow::onRecordingCompleted()
     audio::RecordingSession *recSession = SApplication::app().recordingSession();
     if( !recSession ) return;
 
-    // Get the created files
+    // Get the created files (one per armed track)
     const auto &createdFiles = recSession->createdFiles();
     if( createdFiles.empty() ) return;
-
-    // The first file (if any) is the recorded audio
-    // For now, we'll place it on all armed tracks
-    QString recordedFile = QString::fromStdString( createdFiles[0] );
-    if( !QFileInfo( recordedFile ).exists() ) return;
 
     // The recording start time, captured when recording began (the live locator
     // has since advanced with the capture).
@@ -578,17 +574,35 @@ void SMainWindow::onRecordingCompleted()
         recordingStartTime += latencySyncFrames;
     }
 
-    // Place cuts on all armed tracks
+    // Place cuts on all armed tracks, using the corresponding per-track WAV file
+    int fileIndex = 0;
     for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
         if( !trackLink->getSObject().isArmedForRecording() ) continue;
 
         STrack *track = dynamic_cast<STrack*>( &trackLink->getSObject() );
         if( !track ) continue;
 
+        // Get the corresponding WAV file for this track
+        if( fileIndex >= (int)createdFiles.size() ) {
+            // No file for this track (shouldn't happen, but safety check)
+            track->setArmedForRecording( false );
+            fileIndex++;
+            continue;
+        }
+
+        QString recordedFile = QString::fromStdString( createdFiles[fileIndex] );
+        if( !QFileInfo( recordedFile ).exists() ) {
+            track->setArmedForRecording( false );
+            fileIndex++;
+            continue;
+        }
+
         // Create a SPlainWave for the recorded file
         SPlainWave *wave = new SPlainWave( currentProject_ );
         if( wave->setWave( recordedFile ) < 0 ) {
             delete wave;
+            track->setArmedForRecording( false );
+            fileIndex++;
             continue;
         }
 
@@ -602,6 +616,7 @@ void SMainWindow::onRecordingCompleted()
 
         // Mark track as no longer armed
         track->setArmedForRecording( false );
+        fileIndex++;
     }
 
     // Return the playhead to where recording began, lining it up with the cut we
