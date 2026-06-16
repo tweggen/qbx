@@ -27,7 +27,7 @@ private:
     // takes this lock, so holding it across backend_->stopOutput()'s join is
     // deadlock-free.
     std::mutex outputMutex_;
-    twResampler resampler_;
+    twResampler resamplerL_, resamplerR_;
     std::string outputDeviceId_ = "default";
 
     // Cycle (loop) playback. When enabled with a valid range, the render

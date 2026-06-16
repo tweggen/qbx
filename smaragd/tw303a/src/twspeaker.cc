@@ -69,11 +69,14 @@ void twSpeaker::startOutput()
     }
 
     // Reconcile the graph rate with the rate the device actually opened at. The
-    // resampler is a passthrough when the device honoured the request.
+    // resamplers are passthroughs when the device honoured the request.
     const audio::AudioConfig cfg = backend_->getConfig();
-    resampler_.configure(graphRate, cfg.sampleRate);
-    resampler_.reserveHint((length_t) cfg.bufferFrames);
-    resampler_.reset();
+    resamplerL_.configure(graphRate, cfg.sampleRate);
+    resamplerR_.configure(graphRate, cfg.sampleRate);
+    resamplerL_.reserveHint((length_t) cfg.bufferFrames);
+    resamplerR_.reserveHint((length_t) cfg.bufferFrames);
+    resamplerL_.reset();
+    resamplerR_.reset();
 
     // Output-to-input frame ratio, used to bound a pull at the loop end during
     // cycle playback. 1.0 when the resampler is a passthrough.
@@ -92,10 +95,10 @@ void twSpeaker::startOutput()
         TWSPK_LOG( "rate diag — project(env)=%d Hz, wire=%u Hz, "
                    "device=%u Hz, resampler=%s",
                    env.getSRate(), (unsigned) wireRate, (unsigned) cfg.sampleRate,
-                   resampler_.isPassthrough() ? "passthrough" : "active" );
+                   resamplerL_.isPassthrough() ? "passthrough" : "active" );
     }
 
-    if (!resampler_.isPassthrough()) {
+    if (!resamplerL_.isPassthrough()) {
         TWSPK_LOG( "resampling %u Hz -> %u Hz",
                    (unsigned) graphRate, (unsigned) cfg.sampleRate );
     }
@@ -107,7 +110,10 @@ void twSpeaker::startOutput()
                 return frames;
             }
 
-            auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs[0]);
+            auto *inputL = static_cast<twLatchStreamingOutput *>(pInputPlugs[0]);
+            auto *inputR = (pInputPlugs[1] != nullptr)
+                             ? static_cast<twLatchStreamingOutput *>(pInputPlugs[1])
+                             : nullptr;
             offset_t pos = SApplication::app().getGlobalLocatorPos();
 
             const bool     cycle     = cycleEnabled_.load(std::memory_order_relaxed);
@@ -115,17 +121,14 @@ void twSpeaker::startOutput()
             const offset_t loopEnd   = loopEnd_.load(std::memory_order_relaxed);
             const bool     loopValid = cycle && loopEnd > loopStart;
 
-            // Fill the buffer, wrapping back to loopStart whenever the cursor
-            // reaches loopEnd. Without cycling this runs exactly one pull, which
-            // is the original straight-through behaviour. Mono is written
-            // contiguously into out[0..]; the fan-out to N channels happens once
-            // the whole buffer is filled.
+            // Allocate temporary buffers for L and R channels (pulled at graph rate).
+            std::vector<float> bufL(frames), bufR(frames);
             std::size_t filled = 0;
+
+            // Fill the buffers, wrapping back to loopStart whenever the cursor
+            // reaches loopEnd. Without cycling this runs exactly one pull.
             while (filled < frames) {
                 if (loopValid && pos >= loopEnd) {
-                    // Seamless wrap: re-seek the graph to the loop start. (seekTo
-                    // only resets cursor positions — cheap and lock-free, and we
-                    // are the only thread pulling.)
                     if (SProject *proj = SApplication::app().getCurrentProject()) {
                         if (SObject *root = proj->getRootComponent())
                             root->seekTo(loopStart);
@@ -135,59 +138,61 @@ void twSpeaker::startOutput()
 
                 length_t want = static_cast<length_t>(frames - filled);
                 if (loopValid) {
-                    // Don't pull past the loop end in this chunk: bound the
-                    // request by the output frames that fit in the remaining
-                    // input (synth-time) frames before loopEnd.
                     double outLeft = (double)(loopEnd - pos) * rateRatio_;
                     length_t cap = (length_t) std::llround(outLeft);
-                    if (cap < 1) cap = 1;            // always make progress
+                    if (cap < 1) cap = 1;
                     if (want > cap) want = cap;
                 }
 
                 length_t inConsumed = 0;
-                length_t got = resampler_.process(input, out + filled, want, &inConsumed);
-                if (got <= 0) break;                 // source dry — stop filling
+                length_t gotL = resamplerL_.process(inputL, bufL.data() + filled, want, &inConsumed);
+                if (gotL <= 0) break;
+
+                // Pull right channel with same consumed count.
+                length_t gotR = 0;
+                if (inputR != nullptr) {
+                    gotR = resamplerR_.process(inputR, bufR.data() + filled, gotL, nullptr);
+                    if (gotR < gotL) gotL = gotR;  // use the minimum
+                } else {
+                    // No right channel; copy left to right.
+                    std::copy(bufL.begin() + filled, bufL.begin() + filled + gotL,
+                              bufR.begin() + filled);
+                }
 
                 pos += (offset_t) inConsumed;
-                filled += (std::size_t) got;
+                filled += (std::size_t) gotL;
 
-                if (!loopValid) break;               // single pull when not cycling
+                if (!loopValid) break;
             }
 
             if (filled == 0) {
                 std::fill_n(out, frames * channels, 0.0f);
-                // Realtime store only — never emit Qt signals from this thread.
-                // While recording, the record worker owns the locator (it tracks
-                // captured frames), so monitoring playback must not move it.
                 if (!SApplication::app().isRecordingActive())
                     SApplication::app().setGlobalLocatorPosRealtime(pos);
                 return frames;
             }
 
-            // Pad any unfilled tail with silence so the whole buffer is defined
-            // (only happens when the source ran dry mid-buffer).
-            if (filled < frames)
-                std::fill(out + filled, out + frames, 0.0f);
-
             std::size_t outFrames = loopValid ? frames : filled;
 
-            // Mono synthesizer → fan out to N channels. The mono samples sit at
-            // the start of the buffer; expand in place from the tail.
-            if (channels > 1) {
-                for (length_t i = (length_t) outFrames - 1; i >= 0; --i) {
-                    float s = out[i];
+            // Interleave L/R into output. If channels > 2, duplicate the stereo
+            // pair to all output channels.
+            for (std::size_t i = 0; i < outFrames; ++i) {
+                float sL = bufL[i];
+                float sR = bufR[i];
+                for (std::uint32_t c = 0; c < channels; ++c) {
+                    out[i * channels + c] = (c % 2 == 0) ? sL : sR;
+                }
+            }
+
+            // Pad any unfilled tail.
+            if (filled < frames) {
+                for (std::size_t i = filled; i < frames; ++i) {
                     for (std::uint32_t c = 0; c < channels; ++c) {
-                        out[i * channels + c] = s;
+                        out[i * channels + c] = 0.0f;
                     }
                 }
             }
 
-            // Advance (or wrap) the playback locator. pos already reflects any
-            // loop wraps that happened above. Realtime store only — never emit Qt
-            // signals from this thread (that would adopt it and deadlock the
-            // join() in stopOutput at thread teardown). While recording, the
-            // record worker owns the locator, so monitoring playback must not
-            // move it (it would fight the capture position).
             if (!SApplication::app().isRecordingActive())
                 SApplication::app().setGlobalLocatorPosRealtime(pos);
             return static_cast<std::size_t>(outFrames);

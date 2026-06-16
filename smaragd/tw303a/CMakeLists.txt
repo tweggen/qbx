@@ -28,6 +28,9 @@ set(TW303A_HEADERS
     include/twwav.h
     include/twwavinput.h
     include/twwhitenoise.h
+    include/twplugininsert.h
+    include/plugins/twplugin.h
+    include/plugins/twplugindescriptor.h
     include/audio/audio_backend.h
     include/audio/null_backend.h
     include/audio/audio_file_writer.h
@@ -66,6 +69,9 @@ set(TW303A_SOURCES
     src/twwav.cc
     src/twwavinput.cc
     src/twwhitenoise.cc
+    src/twplugininsert.cc
+    src/plugins/twpassthrough.cc
+    src/plugins/twpluginregistry.cc
     src/audio/audio_backend.cc
     src/audio/null_backend.cc
     src/audio/audio_file_writer.cc

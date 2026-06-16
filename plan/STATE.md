@@ -2725,24 +2725,120 @@ rebuilds state (on window-param change, mute/solo toggle, etc.), it constructs
 
 ---
 
-## Remaining Deferred Items (as of 2026-06-14)
+## 08_PLUGIN_HOSTING.md — Phase 1 (in-process playback + stereo fix)
+
+- **Date:** 2026-06-16
+- **Status:** Phase 1 complete (proof-of-concept + stereo path fix). Phases 2–8 pending.
+
+### What landed
+
+**Core plugin interfaces:**
+- `tw303a/include/plugins/twplugin.h` — narrow, host-facing plugin interface (no Qt/format deps)
+- `tw303a/include/plugins/twplugindescriptor.h` — descriptor + registry interface
+- `tw303a/include/twplugininsert.h` — `twComponent` wrapper for plugins in DSP graph
+- `tw303a/src/twplugininsert.cc` — host implementation (de-interleaved audio pull + cache)
+
+**Registry + test plugin:**
+- `tw303a/src/plugins/twpluginregistry.cc` — stub registry (hardcoded PassThrough for now)
+- `tw303a/src/plugins/twpassthrough.cc` — in-house test plugin (2-in / 2-out, dry/wet param, state save/load)
+- `tw303a/src/test_plugin_insert.cc` — unit test (instantiation, I/O layout, param access, state roundtrip)
+
+**Stereo path fix (Decision 3):**
+- `tw303a/include/twspeaker.h` — added dual resamplers (one per channel)
+- `tw303a/src/twspeaker.cc` — rewrote render callback to:
+  - Pull input port 0 (L) and port 1 (R) separately through dedicated resamplers
+  - Interleave L/R into device output buffer
+  - Fixes: previously pulled only port 0 and duplicated to all channels (mono device output)
+  - Now true stereo: each input channel resampled independently, interleaved to device
+
+**CMakeLists.txt:**
+- Added plugin headers to `TW303A_HEADERS`
+- Added plugin sources to `TW303A_SOURCES`
+- Directory structure: `tw303a/include/plugins/` and `tw303a/src/plugins/`
+
+### Architecture notes
+
+**Plugin interface design:**
+- Narrow core (`twPlugin`) with 8 virtual methods: `ioLayout()`, `prepare()`, `process()`, `reset()`, parameter access (3), state save/load
+- No format-specific extensions yet; capability flags reserved for future (native editor, note input)
+- De-interleaved audio: plugin receives `float*const*` (one pointer per channel), matches Smaragd's parallel-mono-wire model
+
+**Host component (`twPluginInsert`):**
+- Inherits from `twComponent`, integrates into existing DSP graph via `calcOutputTo()`
+- Produces once per block, serves results from cache (standard Smaragd component pattern)
+- Bypass path: copy input to output, preserving channel count
+
+**Registry (stub):**
+- `pluginRegistry()` returns singleton `twPluginRegistry`
+- `rescan()` currently hardcodes PassThrough descriptor; future phases add filesystem scan + cache
+- `instantiate()` dispatches by format + UID
+
+**Test plugin (PassThrough):**
+- Stereo (2-in / 2-out) to match stereo speaker wiring
+- One parameter: dry/wet mix (0.0–1.0, currently passthrough logic simplifies to copy)
+- State: opaque 8-byte chunk (double), demonstrating serialization contract
+
+### Verification status
+
+**macOS / Qt6 / CMake:**
+- ✅ Build succeeds (Ninja, C++17)
+- ✅ Plugin instantiation (registry returns PassThrough descriptor)
+- ✅ I/O layout queries (2-in / 2-out)
+- ✅ Parameter enumeration
+- ✅ State save/load round-trip
+- ✅ `twSpeaker` stereo path: pulls both ports, resamples independently, interleaves to device
+- ⚠️ Audio path not yet auditioned (Phase 1 proof-of-concept; UI + graph wiring deferred to Phase 2)
+
+**Test coverage:**
+- `test_plugin_insert.cc`: instantiation, layout, parameter, state (unit test, not yet integrated into test suite)
+
+### What was deliberately deferred
+
+- **CLAP backend** — architecture supports it; backend is next after Phase 1 PoC
+- **Track insert chain model** (`SPluginSlot`, `SPluginChain`) — Phase 2
+- **Undo/serialization** — Phase 3
+- **UI (browser, generic editor)** — Phase 4
+- **Native editor windows** — Phase 5
+- **More formats (VST3, AU, LV2)** — Phase 6
+- **Sends/aux tracks** — Phase 7
+- **Instrument plugins** — Phase 8 (blocked on MIDI/note proposal)
+
+### Design decisions confirmed
+
+1. **In-process playback** (performance) + out-of-process scanner (safety) — sandbox is Phase 3
+2. **Composition over inheritance** — one `twPlugin` interface, format wrappers as concrete implementations, not `twComponent` subclasses
+3. **Stereo path in Phase 1** — prerequisite to hear stereo plugins; dual resamplers avoid refactoring resampler's internals
+4. **PassThrough test plugin** — avoids external plugin discovery hassles during PoC; linked into executable
+
+### Next actions
+
+1. **CLAP backend** — implement `ClapPlugin` wrapping CLAP plugin descriptor/instance; wire into registry scanner (Phase 1b if scheduling, or Phase 2 start)
+2. **Track insert chain** — `SPluginSlot` model object, `SPluginChain` container, track wiring refactor
+3. **Undo + serialization** — actions for insert/remove/reorder/bypass/param, XML round-trip with state chunks
+4. **UI** — FX section on track strip, plugin browser, generic parameter editor
+5. **Audio test** — wire PassThrough onto a test track, play, verify stereo output is audible (currently PoC only)
+
+---
+
+## Remaining Deferred Items (as of 2026-06-16)
 
 In priority order:
 
-1. **Linux ALSA smoke test** — the refactored ALSA backend (Phase 2 of proposal
+1. **Proposal 08 Phases 2–8** — plugin hosting (track inserts, undo/serialization, UI, native editors, more formats, sends/aux, instruments)
+2. **Linux ALSA smoke test** — the refactored ALSA backend (Phase 2 of proposal
    01) has not been compiled/tested on Linux since May. Should verify the audio
    path works end-to-end.
-2. **PipeWire/JACK/PulseAudio backends** — skeleton only; no implementation.
-3. **CoreAudio exclusive-mode path** — shared mode is current (advisory
+3. **PipeWire/JACK/PulseAudio backends** — skeleton only; no implementation.
+4. **CoreAudio exclusive-mode path** — shared mode is current (advisory
    sample-rate request). Exclusive mode is the lever for fixed-rate-source
    anchoring (proposal 04 open fork).
-4. **Asset serialization** — assets are session-only; persist in project XML for
+5. **Asset serialization** — assets are session-only; persist in project XML for
    save/load round-trip.
-5. **Proposal 10 Phases 2–4** — demand paging, content-addressed sharing, finer
+6. **Proposal 10 Phases 2–4** — demand paging, content-addressed sharing, finer
    invalidation.
-6. **UI polish** — clip resize audible verification, grain stretch/pitch undo
+7. **UI polish** — clip resize audible verification, grain stretch/pitch undo
    actions, property/settings dialogs, nested-track solo.
-7. **Proposal 06 — grain streaming node** (variable/automated time-stretch) and
+8. **Proposal 06 — grain streaming node** (variable/automated time-stretch) and
    proposal 07 step 5 (`twCapturingSource` consumer wiring for non-audio content).
-8. **Proposal 09 — multi-view tabs** — architectural design complete, no code yet.
-9. **Lua scripting** — deferred from proposal 11; XML action script foundation is stable and verified.
+9. **Proposal 09 — multi-view tabs** — architectural design complete, no code yet.
+10. **Lua scripting** — deferred from proposal 11; XML action script foundation is stable and verified.
