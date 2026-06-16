@@ -9,6 +9,8 @@
 #include <QPushButton>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QGuiApplication>
+#include <QScreen>
 
 STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     : QWidget(parent)
@@ -130,6 +132,27 @@ void STrackDetailPanel::updateCollapsedState()
     if (contentWidget_) {
         contentWidget_->setVisible(expanded_);
     }
+}
+
+QSize STrackDetailPanel::sizeHint() const
+{
+    // 50% of screen height, but max 450px
+    int screenHeight = 600;  // Default fallback
+    if (QGuiApplication::primaryScreen()) {
+        screenHeight = QGuiApplication::primaryScreen()->geometry().height();
+    }
+    int maxHeight = qMin(screenHeight / 2, 450);
+    return QSize(400, maxHeight);
+}
+
+int STrackDetailPanel::heightForWidth(int w) const
+{
+    // Return constrained height
+    int screenHeight = 600;  // Default fallback
+    if (QGuiApplication::primaryScreen()) {
+        screenHeight = QGuiApplication::primaryScreen()->geometry().height();
+    }
+    return qMin(screenHeight / 2, 450);
 }
 
 void STrackDetailPanel::paintEvent(QPaintEvent *event)

@@ -29,6 +29,10 @@ public:
     void saveState();
     void loadState();
 
+    // Size constraint (50% of screen, max 450px)
+    QSize sizeHint() const override;
+    int heightForWidth(int w) const override;
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
