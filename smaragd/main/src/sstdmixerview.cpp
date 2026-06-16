@@ -2533,7 +2533,7 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     addAction( actSplit_ );
 
     actRemoveSample_ = new QAction( "&Remove sample", this );
-    actRemoveSample_->setShortcut( Qt::Key_Delete );
+    actRemoveSample_->setShortcuts( { Qt::Key_Delete, Qt::Key_Backspace } );
     QObject::connect( actRemoveSample_, SIGNAL( triggered() ), this, SLOT( ctRemoveSample() ) );
     addAction( actRemoveSample_ );
 
