@@ -53,6 +53,10 @@ public:
     virtual length_t getDuration() const;
     virtual bool hasDuration() const;
 
+    // Track selection for the detail panel
+    STrack *getSelectedTrack() const { return selectedTrack_; }
+    void setSelectedTrack( STrack *track );
+
 signals:
     void nBussesChanged( int n );
     void trackInserted( int newIndex, STrack &pt );
@@ -70,6 +74,11 @@ signals:
      * updated when this fires.
      */
     void tracksReordered();
+
+    /**
+     * Emitted when a different track is selected (for the detail panel).
+     */
+    void selectedTrackChanged( STrack *track );
 
 public slots:
     /**
@@ -127,9 +136,11 @@ private:
     twMixer **cpMixers_;
     twRewire *cpRewire_;
     int nBusses_;
-    
+
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;
+
+    STrack *selectedTrack_ = nullptr;
 };
 
 #endif

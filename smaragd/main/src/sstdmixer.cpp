@@ -398,7 +398,15 @@ SStdMixer::SStdMixer( SProject *project )
     setNBusses( 1 );
 }
 
-SLink *SStdMixer::instantiateFromDomElement( 
+void SStdMixer::setSelectedTrack( STrack *track )
+{
+    if( selectedTrack_ != track ) {
+        selectedTrack_ = track;
+        emit selectedTrackChanged( track );
+    }
+}
+
+SLink *SStdMixer::instantiateFromDomElement(
     SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
 {
     SLink *contentLink = NULL;

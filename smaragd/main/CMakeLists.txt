@@ -30,6 +30,7 @@ set(SMARAGD_HEADERS
     include/spluginbrowserdialog.h
     include/spluginparamereditor.h
     include/splugineffectstrip.h
+    include/strackdetailpanel.h
     include/saction.h
     include/sactionregistry.h
     include/sactionqueue.h
@@ -109,6 +110,7 @@ set(SMARAGD_SOURCES
     src/spluginbrowserdialog.cpp
     src/spluginparamereditor.cpp
     src/splugineffectstrip.cpp
+    src/strackdetailpanel.cpp
     src/sactionregistry.cpp
     src/sactionqueue.cpp
     src/sactionhistory.cpp

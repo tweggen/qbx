@@ -1,0 +1,143 @@
+#include "strackdetailpanel.h"
+#include "strack.h"
+#include "splugineffectstrip.h"
+#include "ssettings.h"
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QSlider>
+#include <QLabel>
+#include <QPushButton>
+#include <QPainter>
+#include <QMouseEvent>
+
+STrackDetailPanel::STrackDetailPanel(QWidget *parent)
+    : QWidget(parent)
+{
+    setStyleSheet("QWidget { background-color: #2a2a2a; border-top: 1px solid #555; }");
+
+    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+
+    // Header with collapse/expand button
+    QHBoxLayout *headerLayout = new QHBoxLayout();
+    headerLayout->setContentsMargins(8, 4, 8, 4);
+    expandCollapseBtn_ = new QPushButton("▾");
+    expandCollapseBtn_->setMaximumWidth(24);
+    expandCollapseBtn_->setMaximumHeight(20);
+    headerLayout->addWidget(new QLabel("Track Detail"));
+    headerLayout->addStretch();
+    headerLayout->addWidget(expandCollapseBtn_);
+
+    QWidget *headerWidget = new QWidget();
+    headerWidget->setLayout(headerLayout);
+    headerWidget->setStyleSheet("QWidget { background-color: #1a1a1a; border-bottom: 1px solid #444; }");
+    mainLayout->addWidget(headerWidget);
+
+    // Content widget (collapsible)
+    contentWidget_ = new QWidget();
+    contentLayout_ = new QVBoxLayout(contentWidget_);
+    contentLayout_->setContentsMargins(4, 4, 4, 4);
+    contentLayout_->setSpacing(4);
+
+    // Plugin strip (will be created when track is set)
+    pluginStrip_ = nullptr;
+
+    // Volume section
+    QHBoxLayout *volLayout = new QHBoxLayout();
+    volLayout->addWidget(new QLabel("Volume:"));
+    volumeSlider_ = new QSlider(Qt::Horizontal);
+    volumeSlider_->setMinimum(-960);
+    volumeSlider_->setMaximum(240);
+    volumeSlider_->setSliderPosition(0);
+    volLayout->addWidget(volumeSlider_);
+    volumeLabel_ = new QLabel("+0.0 dB");
+    volumeLabel_->setMinimumWidth(60);
+    volLayout->addWidget(volumeLabel_);
+    contentLayout_->addLayout(volLayout);
+
+    contentLayout_->addStretch();
+    mainLayout->addWidget(contentWidget_);
+
+    connect(expandCollapseBtn_, &QPushButton::clicked, this, [this]() {
+        setExpanded(!expanded_);
+    });
+
+    // Load saved state
+    loadState();
+}
+
+STrackDetailPanel::~STrackDetailPanel() = default;
+
+void STrackDetailPanel::setTrack(STrack *track)
+{
+    currentTrack_ = track;
+    rebuildUI();
+}
+
+void STrackDetailPanel::setExpanded(bool expanded)
+{
+    if (expanded_ != expanded) {
+        expanded_ = expanded;
+        updateCollapsedState();
+        saveState();
+    }
+}
+
+void STrackDetailPanel::saveState()
+{
+    SSettings &settings = SSettings::instance();
+    settings.setValue("TrackDetailPanel/Expanded", expanded_);
+}
+
+void STrackDetailPanel::loadState()
+{
+    SSettings &settings = SSettings::instance();
+    expanded_ = settings.value("TrackDetailPanel/Expanded", true).toBool();
+    updateCollapsedState();
+}
+
+void STrackDetailPanel::rebuildUI()
+{
+    // Remove old plugin strip
+    if (pluginStrip_) {
+        contentLayout_->removeWidget(pluginStrip_);
+        delete pluginStrip_;
+        pluginStrip_ = nullptr;
+    }
+
+    if (currentTrack_) {
+        // Create new plugin strip for this track
+        pluginStrip_ = new SPluginEffectStrip(currentTrack_, this);
+        contentLayout_->insertWidget(0, pluginStrip_, 1);
+
+        // Update volume slider
+        double volume = currentTrack_->getVolume();
+        volumeSlider_->blockSignals(true);
+        volumeSlider_->setValue((int)(volume * 10));
+        volumeSlider_->blockSignals(false);
+        volumeLabel_->setText(QString::asprintf("%+.1f dB", volume));
+
+        contentWidget_->setVisible(expanded_);
+    } else {
+        contentWidget_->setVisible(false);
+    }
+}
+
+void STrackDetailPanel::updateCollapsedState()
+{
+    expandCollapseBtn_->setText(expanded_ ? "▾" : "▸");
+    if (contentWidget_) {
+        contentWidget_->setVisible(expanded_);
+    }
+}
+
+void STrackDetailPanel::paintEvent(QPaintEvent *event)
+{
+    QWidget::paintEvent(event);
+}
+
+void STrackDetailPanel::mousePressEvent(QMouseEvent *event)
+{
+    QWidget::mousePressEvent(event);
+}
