@@ -67,6 +67,7 @@ int SProject::serializeSelfAttributes( QTextStream &o )
 {
     o << " bpmTempo='" << (double) getBPMTempo() << "'";
     o << " sampleRate='" << sampleRate_ << "'";
+    o << " posFactor='" << QString::fromStdString( posFactor_.toString() ) << "'";
     o << " candidateRates='";
     for( size_t i = 0; i < candidateRates_.size(); ++i ) {
         if( i ) o << ",";
@@ -101,6 +102,13 @@ int SProject::readPreChildrenAttributes( QDomElement &element )
     } else {
         setSRate( srateStr.toInt() );
     }
+
+    // Load position factor (time coordinate scaling). Default to 1/sampleRate.
+    QString posFactorStr = element.attribute( "posFactor" );
+    if( !posFactorStr.isEmpty() ) {
+        posFactor_ = parseFractionOrDouble( posFactorStr.toStdString() );
+    }
+    // If not present in file, posFactor was already set to 1/sampleRate in setSRate()
 
     QString cr = element.attribute( "candidateRates", "44100,48000,88200,96000" );
     std::vector<std::uint32_t> rates;
@@ -182,6 +190,8 @@ void SProject::setSRate( int rate )
 {
     if( rate <= 0 ) return;
     sampleRate_ = rate;
+    // Initialize posFactor to 1/sampleRate (default: positions in sample units)
+    posFactor_ = Fraction( 1, rate );
     emit sampleRateChanged( rate );
 }
 
@@ -342,6 +352,7 @@ SProject::SProject()
     : soRoot_( NULL ),
       bpmTempo_( 120. ),
       sampleRate_( 48000 ),
+      posFactor_( 1, 48000 ),
       candidateRates_{ 44100, 48000, 88200, 96000 },
       properties_( SProjectProps::defaults() )
 {

@@ -18,6 +18,7 @@ set(TW303A_HEADERS
     include/twcapturingsource.h
     include/twgrainparams.h
     include/twgrainsource.h
+    include/twfraction.h
     include/twrewire.h
     include/twsaw.h
     include/twsimplesaw.h
@@ -53,6 +54,7 @@ set(TW303A_SOURCES
     src/twresampledsource.cc
     src/twcapturingsource.cc
     src/twgrainsource.cc
+    src/twfraction.cpp
     src/twresampler.cc
     src/twrewire.cc
     src/twsaw.cc

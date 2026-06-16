@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "twfraction.h"
+
 class QDomElement;
 
 class SObject;
@@ -46,6 +48,12 @@ public:
     // the project becomes current.
     int getSRate() const { return sampleRate_; }
     const std::vector<std::uint32_t> &candidateRates() const { return candidateRates_; }
+
+    // Position factor for time-based coordinates (exact rational arithmetic).
+    // Default: 1/sampleRate (positions measured in sample units).
+    // Can be overridden at any hierarchy level for stretching/transformation.
+    Fraction getPosFactor() const { return posFactor_; }
+    void setPosFactor( const Fraction &factor ) { posFactor_ = factor; }
 
     // Render-related queries
     // Total project duration in seconds (based on arrangement length)
@@ -118,6 +126,7 @@ private:
     SLink *soRoot_;
     double bpmTempo_;
     int sampleRate_;
+    Fraction posFactor_;  // Time coordinate scaling (default: 1/sampleRate)
     std::vector<std::uint32_t> candidateRates_;
     QVariantMap properties_;
 
