@@ -84,7 +84,11 @@ int SObject::serializeSelfAttributes( QTextStream &o )
       << " nRefs='" << nRefs_ << "'"
       << " hasDuration='" << hasDuration() << "'";
     if( hasDuration() ) {
-        o << " duration='" << (double)getDuration() << "'";
+        // Store duration as time (seconds) for rate independence
+        int srate = parent() && parent()->parent() ?
+            dynamic_cast<SProject*>(parent()->parent())->getSRate() : 48000;
+        double durationSec = getDuration() / (double)srate;
+        o << " durationSec='" << durationSec << "'";
     }
     o << " muted='";
     o << (isMuted()?"true":"false") << "'";
@@ -101,8 +105,29 @@ int SObject::serializeSelfAttributes( QTextStream &o )
 int SObject::readPreChildrenAttributes( QDomElement &element )
 {
     QString data;
-    data = element.attribute( "duration", "10000" );
-    setDuration( data.toULongLong() );
+
+    // Load duration: try new time-based format first (durationSec), then
+    // fall back to old sample-based format for backwards compatibility
+    int srate = parent() && parent()->parent() ?
+        dynamic_cast<SProject*>(parent()->parent())->getSRate() : 48000;
+
+    QString durationSecStr = element.attribute( "durationSec" );
+    if( !durationSecStr.isEmpty() ) {
+        // New format: stored as seconds, convert to samples
+        double durationSec = durationSecStr.toDouble();
+        setDuration( (length_t)( durationSec * srate + 0.5 ) );
+    } else {
+        // Backwards compatibility: old format was samples, default 10000 @ 48kHz
+        data = element.attribute( "duration" );
+        if( data.isEmpty() ) {
+            // Default: ~208 ms (10000 samples @ 48kHz)
+            setDuration( (length_t)( 0.208333 * srate + 0.5 ) );
+        } else {
+            length_t oldSamples = data.toULongLong();
+            // Assume old value was at 48kHz, scale proportionally
+            setDuration( (length_t)( ( oldSamples * srate ) / 48000.0 + 0.5 ) );
+        }
+    }
     data = element.attribute( "muted", "false" );
     setMuted( data.startsWith( "true" ) );
     data = element.attribute( "solo", "false" );
