@@ -332,6 +332,12 @@ protected:
     // (below the track heads) to spawn a new track.
     bool eventFilter( QObject *watched, QEvent *event ) override;
 
+    // Track header resizing via draggable divider
+    void mousePressEvent( QMouseEvent *event ) override;
+    void mouseMoveEvent( QMouseEvent *event ) override;
+    void mouseReleaseEvent( QMouseEvent *event ) override;
+    void updateDividerCursor( const QPoint &pos );
+
 protected slots:
     void viewResized();
 
@@ -429,6 +435,17 @@ private:
 
     // Track detail panel (Phase 2 UI)
     class STrackDetailPanel *qTrackDetailPanel_;
+
+    // Track header resizing (Phase 3 UI)
+    int trackControlWidth_ = 120;  // Current width in pixels
+    static constexpr int TRACK_CTRL_WIDTH_MINIMAL = 120;
+    static constexpr int TRACK_CTRL_WIDTH_STANDARD = 450;
+    bool trackHeaderDragActive_ = false;
+    int trackHeaderDragStartX_ = 0;
+    int trackHeaderDragStartWidth_ = 0;
+    void setTrackControlWidth( int width );
+    void saveTrackControlWidth();
+    void loadTrackControlWidth();
     void appendRowsFor( SObject *container, int depth );
     // Resolve a drag drop at control-column y: *onto = the lane's track if the
     // pointer is over a lane's middle (nest), else NULL; *topSlot = insertion

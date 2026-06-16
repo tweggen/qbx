@@ -2548,6 +2548,9 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
         update();
     }
 
+    // Load saved track control width
+    loadTrackControlWidth();
+
     // Create the track detail panel (bottom of mixer view)
     qTrackDetailPanel_ = new STrackDetailPanel(this);
     qGridLayout_->addWidget(qTrackDetailPanel_, 4, 0, 1, 5);
@@ -2556,6 +2559,83 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     // Connect mixer's track selection to detail panel
     connect(model_, &SStdMixer::selectedTrackChanged,
             qTrackDetailPanel_, &STrackDetailPanel::setTrack);
+}
+
+void SStdMixerView::setTrackControlWidth( int width )
+{
+    // Clamp between minimal and standard
+    if( width < TRACK_CTRL_WIDTH_MINIMAL ) width = TRACK_CTRL_WIDTH_MINIMAL;
+    if( width > TRACK_CTRL_WIDTH_STANDARD ) width = TRACK_CTRL_WIDTH_STANDARD;
+
+    if( trackControlWidth_ != width ) {
+        trackControlWidth_ = width;
+        qTrackControlBoxHolder_->setFixedWidth( width );
+        saveTrackControlWidth();
+        update();
+    }
+}
+
+void SStdMixerView::saveTrackControlWidth()
+{
+    SSettings &settings = SSettings::instance();
+    settings.setValue( "MixerView/TrackControlWidth", trackControlWidth_ );
+}
+
+void SStdMixerView::loadTrackControlWidth()
+{
+    SSettings &settings = SSettings::instance();
+    int saved = settings.value( "MixerView/TrackControlWidth", TRACK_CTRL_WIDTH_MINIMAL ).toInt();
+    setTrackControlWidth( saved );
+}
+
+void SStdMixerView::updateDividerCursor( const QPoint &pos )
+{
+    // Show resize cursor near the divider (within 5 pixels of track header right edge)
+    int dividerX = trackControlWidth_;
+    if( pos.x() >= dividerX - 5 && pos.x() <= dividerX + 5 ) {
+        setCursor( Qt::SizeHorCursor );
+    } else {
+        setCursor( Qt::ArrowCursor );
+    }
+}
+
+void SStdMixerView::mousePressEvent( QMouseEvent *event )
+{
+    // Check if clicking on the divider (resize handle)
+    int dividerX = trackControlWidth_;
+    if( event->button() == Qt::LeftButton &&
+        event->x() >= dividerX - 5 && event->x() <= dividerX + 5 ) {
+        trackHeaderDragActive_ = true;
+        trackHeaderDragStartX_ = event->x();
+        trackHeaderDragStartWidth_ = trackControlWidth_;
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent( event );
+}
+
+void SStdMixerView::mouseMoveEvent( QMouseEvent *event )
+{
+    if( trackHeaderDragActive_ ) {
+        int delta = event->x() - trackHeaderDragStartX_;
+        int newWidth = trackHeaderDragStartWidth_ + delta;
+        setTrackControlWidth( newWidth );
+        event->accept();
+    } else {
+        // Update cursor based on position
+        updateDividerCursor( event->pos() );
+        QWidget::mouseMoveEvent( event );
+    }
+}
+
+void SStdMixerView::mouseReleaseEvent( QMouseEvent *event )
+{
+    if( trackHeaderDragActive_ && event->button() == Qt::LeftButton ) {
+        trackHeaderDragActive_ = false;
+        event->accept();
+    } else {
+        QWidget::mouseReleaseEvent( event );
+    }
 }
 
 SStdMixerView::~SStdMixerView()
