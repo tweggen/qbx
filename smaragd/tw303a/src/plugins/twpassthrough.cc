@@ -1,5 +1,6 @@
 #include "plugins/twplugin.h"
 #include <cstring>
+#include <memory>
 
 namespace audio {
 
