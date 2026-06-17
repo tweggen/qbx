@@ -38,13 +38,19 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
 
     // Content widget (collapsible)
     contentWidget_ = new QWidget();
-    contentWidget_->setMinimumHeight(150);  // Ensure content area has minimum size
+    contentWidget_->setMinimumHeight(100);  // Ensure content area has minimum size
     contentLayout_ = new QVBoxLayout(contentWidget_);
     contentLayout_->setContentsMargins(4, 4, 4, 4);
     contentLayout_->setSpacing(4);
 
     // Plugin strip (will be created when track is set)
     pluginStrip_ = nullptr;
+
+    // Spacer for plugins (will be populated when track is set)
+    QWidget *pluginContainer = new QWidget();
+    pluginContainer->setMinimumHeight(100);
+    pluginContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    contentLayout_->addWidget(pluginContainer, 1);  // Gets extra space
 
     // Volume section
     QHBoxLayout *volLayout = new QHBoxLayout();
@@ -57,9 +63,8 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     volumeLabel_ = new QLabel("+0.0 dB");
     volumeLabel_->setMinimumWidth(60);
     volLayout->addWidget(volumeLabel_);
-    contentLayout_->addLayout(volLayout);
+    contentLayout_->addLayout(volLayout);  // Volume at bottom, no stretch
 
-    contentLayout_->addStretch();
     mainLayout->addWidget(contentWidget_, 1);  // Stretch factor 1 to use available space
 
     connect(expandCollapseBtn_, &QPushButton::clicked, this, [this]() {
@@ -102,16 +107,16 @@ void STrackDetailPanel::loadState()
 
 void STrackDetailPanel::rebuildUI()
 {
-    // Remove old plugin strip
+    // Clear old plugin strip
     if (pluginStrip_) {
-        contentLayout_->removeWidget(pluginStrip_);
         delete pluginStrip_;
         pluginStrip_ = nullptr;
     }
 
     if (currentTrack_) {
-        // Create new plugin strip for this track
+        // Create new plugin strip for this track, add directly to content
         pluginStrip_ = new SPluginEffectStrip(currentTrack_, this);
+        pluginStrip_->setParent(contentWidget_);
         contentLayout_->insertWidget(0, pluginStrip_, 1);
 
         // Update volume slider
