@@ -23,10 +23,7 @@
 SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
     : QWidget(parent), track_(track)
 {
-    pluginChain_ = track->getPluginChain();
-    if (!pluginChain_) {
-        return;
-    }
+    pluginChain_ = track ? track->getPluginChain() : nullptr;
 
     setAcceptDrops(true);
 
@@ -55,9 +52,11 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
 
     connect(addBtn, &QPushButton::clicked, this, &SPluginEffectStrip::onAddPluginClicked);
 
-    // Connect chain signals
-    connect(pluginChain_, &SPluginChain::slotInserted, this, &SPluginEffectStrip::onPluginSlotInserted);
-    connect(pluginChain_, &SPluginChain::slotRemoved, this, &SPluginEffectStrip::onPluginSlotRemoved);
+    // Connect chain signals if it exists
+    if (pluginChain_) {
+        connect(pluginChain_, &SPluginChain::slotInserted, this, &SPluginEffectStrip::onPluginSlotInserted);
+        connect(pluginChain_, &SPluginChain::slotRemoved, this, &SPluginEffectStrip::onPluginSlotRemoved);
+    }
 
     // Initial build
     rebuildUI();
