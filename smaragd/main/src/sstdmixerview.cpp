@@ -2435,18 +2435,25 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     qTrackControlBoxHolder_->setFixedWidth( SMV_TRACK_CTRL_WIDTH );
     // Double-clicking the blank area below the track heads adds a new track.
     qTrackControlBoxHolder_->installEventFilter( this );
-    // qTrackControlBoxHolder_->setBackgroundColor( QColor( 100, 100, 0 ) );
+
+    // Create a vertical layout for the track control holder:
+    // - Top: track controls (scrollable, expandable)
+    // - Bottom: track detail panel (fixed height)
+    QVBoxLayout *trackHolderLayout = new QVBoxLayout( qTrackControlBoxHolder_ );
+    trackHolderLayout->setContentsMargins( 0, 0, 0, 0 );
+    trackHolderLayout->setSpacing( 0 );
+
+    // Add to grid layout spanning all rows
     qGridLayout_->addWidget(
         qTrackControlBoxHolder_,
-        0, /* fromRow */ 
+        0, /* fromRow */
         0, /* fromCol */
-        4, /* rowSpan */
-        1  /* colSpan */ 
+        4, /* rowSpan - all content rows */
+        1  /* colSpan */
         );
-    // was: qGridLayout_->addMultiCellWidget( qTrackControlBoxHolder_, 0 /* from Row */, 3 /* to Row */, 0 /* fromCol */, 0 /* toCol */ );
-    
 
-    qTrackControlBox_ = new QWidget( qTrackControlBoxHolder_ );
+    qTrackControlBox_ = new QWidget();
+    trackHolderLayout->addWidget( qTrackControlBox_, 1 );  // Stretch factor 1 = expandable
 
     // Track-reorder drag state + the insertion-line indicator (hidden until a
     // drag is in progress).
@@ -2557,10 +2564,12 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     qGridLayout_->addWidget(resizer, 0, 0, 4, 1, Qt::AlignRight);
     qGridLayout_->setColumnMinimumWidth(0, 8);  // Divider width
 
-    // Create the track detail panel (bottom of mixer view, spans content area only)
+    // Create the track detail panel and add it to the track holder layout (below track controls)
     qTrackDetailPanel_ = new STrackDetailPanel(this);
-    qGridLayout_->addWidget(qTrackDetailPanel_, 4, 1, 1, 4);  // Column 1-4, same as content
-    qGridLayout_->setRowStretch(4, 0);  // Don't stretch detail panel
+    // Get the track holder layout that was created earlier and add detail panel to it
+    if( QVBoxLayout *layout = qobject_cast<QVBoxLayout*>(qTrackControlBoxHolder_->layout()) ) {
+        layout->addWidget(qTrackDetailPanel_, 0, Qt::AlignBottom);  // Add at bottom, no stretch
+    }
 
     // Connect mixer's track selection to detail panel
     connect(model_, &SStdMixer::selectedTrackChanged,
