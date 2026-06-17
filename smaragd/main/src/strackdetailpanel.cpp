@@ -132,11 +132,17 @@ void STrackDetailPanel::updateCollapsedState()
     if (contentWidget_) {
         contentWidget_->setVisible(expanded_);
     }
+    // Notify layout manager that our size has changed
+    updateGeometry();
 }
 
 QSize STrackDetailPanel::sizeHint() const
 {
-    // 50% of screen height, but max 450px
+    if (!expanded_) {
+        // When collapsed, only report header height
+        return QSize(400, 28);  // Header height + margins/borders
+    }
+    // When expanded: 50% of screen height, but max 450px
     int screenHeight = 600;  // Default fallback
     if (QGuiApplication::primaryScreen()) {
         screenHeight = QGuiApplication::primaryScreen()->geometry().height();
@@ -147,7 +153,10 @@ QSize STrackDetailPanel::sizeHint() const
 
 int STrackDetailPanel::heightForWidth(int w) const
 {
-    // Return constrained height
+    if (!expanded_) {
+        return 28;  // Header height only
+    }
+    // Return constrained height when expanded
     int screenHeight = 600;  // Default fallback
     if (QGuiApplication::primaryScreen()) {
         screenHeight = QGuiApplication::primaryScreen()->geometry().height();
