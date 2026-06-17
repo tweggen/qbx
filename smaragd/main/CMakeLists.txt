@@ -226,8 +226,16 @@ if(AUTO_DEPLOY_QT AND (SMARAGD_WINDOWS OR SMARAGD_MACOS))
     endif()
 
     if(DEPLOYQT_EXECUTABLE)
+        if(SMARAGD_MACOS)
+            # macdeployqt expects the .app bundle directory, not the executable
+            set(_DEPLOY_TARGET "$<TARGET_BUNDLE_DIR:smaragd>")
+        else()
+            # windeployqt expects the executable path
+            set(_DEPLOY_TARGET "$<TARGET_FILE:smaragd>")
+        endif()
+
         add_custom_command(TARGET smaragd POST_BUILD
-            COMMAND "${DEPLOYQT_EXECUTABLE}" ${DEPLOYQT_ARGS} "$<TARGET_FILE:smaragd>"
+            COMMAND "${DEPLOYQT_EXECUTABLE}" ${DEPLOYQT_ARGS} "${_DEPLOY_TARGET}"
             COMMENT "Deploying Qt runtime alongside $<TARGET_FILE_NAME:smaragd>"
             VERBATIM
         )
