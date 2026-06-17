@@ -60,9 +60,15 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     slot->setSName(pluginName_);
 
     // Add to chain
-    SLink *link = new SLink(*slot, chain);
+    // IMPORTANT: SLink must be constructed with parent=NULL, then setParent() called after.
+    // This avoids triggering childEvent() during construction on an incompletely-initialized object.
+    SLink *link = new SLink(*slot, nullptr);
     int landingIndex = chain->childCount();
     int actualIndex = (slotIndex_ < 0 || slotIndex_ > landingIndex) ? landingIndex : slotIndex_;
+
+    // Set the Qt parent (this triggers childEvent and registers in chain's childOrder_)
+    link->setParent(chain);
+
     if (actualIndex != landingIndex) {
         chain->moveChildToIndex(landingIndex, actualIndex);
     }

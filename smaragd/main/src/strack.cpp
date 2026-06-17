@@ -289,8 +289,11 @@ STrack::STrack( SProject *project )
       lastDurationValid_( true )
 {
     // Create the plugin chain model object (container for effect inserts)
+    // NOTE: We do NOT call setParent(this) because the plugin chain is NOT an SLink.
+    // SObject::childEvent() expects all children to be SLink instances; setting the
+    // plugin chain as a Qt child would cause an invalid cast in childEvent().
+    // Instead, we manage the chain's lifetime manually via the destructor.
     cpPluginChain_ = new SPluginChain( project );
-    cpPluginChain_->setParent( this );
 
     // Add a listener for added child objects.
     // We want to become noticed, if it is new.
@@ -307,13 +310,13 @@ STrack::STrack( SProject *project )
 STrack::~STrack()
 {
     DTOR_DEL( inlineRenderer_ );
+    DTOR_DEL( cpPluginChain_ );  // Delete plugin chain (not managed by Qt parent/child)
     if( cpPluginChains_ ) {
         for( int i = 0; i < nBusses_; ++i ) {
             delete cpPluginChains_[i];
         }
         ::free( cpPluginChains_ );
     }
-    // cpPluginChain_ is managed by SObject parent/child system
 }
 
 #if 0
