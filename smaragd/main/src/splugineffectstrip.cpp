@@ -26,6 +26,8 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
     pluginChain_ = track ? track->getPluginChain() : nullptr;
 
     setAcceptDrops(true);
+    setMinimumHeight(100);  // Ensure plugin strip is always visible
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
