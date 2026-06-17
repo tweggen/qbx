@@ -38,6 +38,7 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
 
     // Content widget (collapsible)
     contentWidget_ = new QWidget();
+    contentWidget_->setMinimumHeight(150);  // Ensure content area has minimum size
     contentLayout_ = new QVBoxLayout(contentWidget_);
     contentLayout_->setContentsMargins(4, 4, 4, 4);
     contentLayout_->setSpacing(4);
@@ -59,7 +60,7 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     contentLayout_->addLayout(volLayout);
 
     contentLayout_->addStretch();
-    mainLayout->addWidget(contentWidget_);
+    mainLayout->addWidget(contentWidget_, 1);  // Stretch factor 1 to use available space
 
     connect(expandCollapseBtn_, &QPushButton::clicked, this, [this]() {
         setExpanded(!expanded_);
