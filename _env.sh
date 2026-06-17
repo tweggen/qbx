@@ -215,7 +215,7 @@ ensure_render_deps() {
 # the vcpkg toolchain file. No-op on macOS/Linux (system pkg-config + brew/apt).
 setup_extra_cmake_args() {
     CMAKE_EXTRA_ARGS=()
-    [ "$PLATFORM" = "windows" ] || return
+    [ "$PLATFORM" = "windows" ] || return 0
 
     if detect_vcpkg; then
         local tc="$VCPKG_DIR/scripts/buildsystems/vcpkg.cmake"
@@ -228,6 +228,7 @@ setup_extra_cmake_args() {
         echo "Warning: vcpkg not found; render deps (libsndfile/libvorbis) will be missing."
         echo "         Install vcpkg + libs for x64-mingw-dynamic, or set VCPKG_ROOT."
     fi
+    return 0
 }
 
 set_bin_path() {
