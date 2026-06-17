@@ -40,7 +40,8 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
     QScrollArea *scrollArea = new QScrollArea();
     scrollArea->setWidget(scrollContent);
     scrollArea->setWidgetResizable(true);
-    mainLayout->addWidget(scrollArea);
+    scrollArea->setMinimumHeight(80);  // Ensure scroll area is always visible
+    mainLayout->addWidget(scrollArea, 1);  // Stretch factor 1
 
     // Add button
     QHBoxLayout *addLayout = new QHBoxLayout();
