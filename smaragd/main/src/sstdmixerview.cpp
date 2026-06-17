@@ -2453,7 +2453,7 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
         );
 
     qTrackControlBox_ = new QWidget();
-    trackHolderLayout->addWidget( qTrackControlBox_, 1 );  // Stretch factor 1 = expandable
+    trackHolderLayout->addWidget( qTrackControlBox_, 2 );  // Stretch factor 2 = gets 2/3 of space
 
     // Track-reorder drag state + the insertion-line indicator (hidden until a
     // drag is in progress).
@@ -2568,7 +2568,7 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     qTrackDetailPanel_ = new STrackDetailPanel(this);
     // Get the track holder layout that was created earlier and add detail panel to it
     if( QVBoxLayout *layout = qobject_cast<QVBoxLayout*>(qTrackControlBoxHolder_->layout()) ) {
-        layout->addWidget(qTrackDetailPanel_, 0, Qt::AlignBottom);  // Add at bottom, no stretch
+        layout->addWidget(qTrackDetailPanel_, 1);  // Stretch factor 1 = gets 1/3 of space
     }
 
     // Connect mixer's track selection to detail panel
