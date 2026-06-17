@@ -2557,9 +2557,9 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     qGridLayout_->addWidget(resizer, 0, 0, 4, 1, Qt::AlignRight);
     qGridLayout_->setColumnMinimumWidth(0, 8);  // Divider width
 
-    // Create the track detail panel (bottom of mixer view)
+    // Create the track detail panel (bottom of mixer view, spans content area only)
     qTrackDetailPanel_ = new STrackDetailPanel(this);
-    qGridLayout_->addWidget(qTrackDetailPanel_, 4, 0, 1, 5);
+    qGridLayout_->addWidget(qTrackDetailPanel_, 4, 1, 1, 4);  // Column 1-4, same as content
     qGridLayout_->setRowStretch(4, 0);  // Don't stretch detail panel
 
     // Connect mixer's track selection to detail panel
