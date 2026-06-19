@@ -1706,15 +1706,17 @@ void SStdMixerView::rebuildControlColumn()
     }
     controlArray_->clear();
     int h = getTrackHeight();
+    int w = qTrackControlBoxHolder_->width();  // Use parent width to fill entire column
     for( int i=0; i<rows_.size(); ++i ) {
         const STrackRow &row = rows_.at( i );
         SSMVMixerControl *mc = new SSMVMixerControl( qTrackControlBox_, *this, *row.track );
         mc->setTreeInfo( row.depth, row.hasChildren, row.collapsed );
         mc->move( 0, h*i );
+        mc->resize( w, h );  // Expand to fill parent width
         mc->show();
         controlArray_->append( mc );
     }
-    qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH, h*rows_.size() );
+    qTrackControlBox_->resize( w, h*rows_.size() );
 }
 
 // Single entry point for any structural change (add/remove/reorder/group/fold):
@@ -1989,7 +1991,8 @@ void SStdMixerView::zoomInVert()
     // FIXME: Configure this
     h = (h*3)/2;
     qContent_->setTrackHeight( h );
-    qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH, getTrackHeight()*rowCount() );
+    int w = qTrackControlBoxHolder_->width();
+    qTrackControlBox_->resize( w, getTrackHeight()*rowCount() );
 }
 
 void SStdMixerView::zoomOutVert()
@@ -1999,7 +2002,8 @@ void SStdMixerView::zoomOutVert()
     // FIXME: Configure this
     h = (h*2)/3;
     qContent_->setTrackHeight( h );
-    qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH, getTrackHeight()*rowCount() );
+    int w = qTrackControlBoxHolder_->width();
+    qTrackControlBox_->resize( w, getTrackHeight()*rowCount() );
 }
 
 void SStdMixerView::setBPMTempo( double bpmTempo )
@@ -2273,7 +2277,8 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
         int h = in ? (trackHeight_ * 3) / 2 : (trackHeight_ * 2) / 3;
         if( h < 6 ) h = 6;
         setTrackHeight( h );
-        smv_.qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH,
+        int w = smv_.qTrackControlBoxHolder_->width();
+        smv_.qTrackControlBox_->resize( w,
                                         getTrackHeight() * smv_.rowCount() );
         break;
     }
@@ -2432,12 +2437,10 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
                       this, SLOT( trackSliderMoved( int ) ) );
 
     qTrackControlBoxHolder_ = new QWidget( this );
-    // Allow track control column to expand (a)
+    // Allow track control column to expand and fill entire left width
     qTrackControlBoxHolder_->setMinimumWidth( TRACK_CTRL_WIDTH_MINIMAL );
-    qTrackControlBoxHolder_->setMaximumWidth( TRACK_CTRL_WIDTH_STANDARD );
-    // Set size policy to allow horizontal expansion
+    // No maximum width - column fills all available space
     qTrackControlBoxHolder_->setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Expanding );
-    qTrackControlBoxHolder_->resize( TRACK_CTRL_WIDTH_STANDARD, 0 );
     // Double-clicking the blank area below the track heads adds a new track.
     qTrackControlBoxHolder_->installEventFilter( this );
 
@@ -2602,10 +2605,12 @@ void SStdMixerView::setTrackControlWidth( int width )
             qGridLayout_->setColumnMinimumWidth( 1, 0 );  // Reset other columns
         }
 
-        // Update widget widths
-        qTrackControlBoxHolder_->setFixedWidth( width );
+        // Update widget widths - use minimum width to allow expansion
+        qTrackControlBoxHolder_->setMinimumWidth( width );
+        qTrackControlBoxHolder_->setMaximumWidth( QWIDGETSIZE_MAX );  // No maximum, allow expansion
         if( qTrackControlBox_ ) {
-            qTrackControlBox_->setFixedWidth( width );
+            int h = qTrackControlBox_->height();
+            qTrackControlBox_->resize( qTrackControlBoxHolder_->width(), h );
         }
 
         // Trigger layout recalculation

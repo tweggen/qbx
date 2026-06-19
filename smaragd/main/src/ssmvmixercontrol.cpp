@@ -283,6 +283,12 @@ void SSMVMixerControl::mouseMoveEvent( QMouseEvent *ev )
     QWidget::mouseMoveEvent( ev );
 }
 
+void SSMVMixerControl::resizeEvent( QResizeEvent *ev )
+{
+    QWidget::resizeEvent( ev );
+    updateLayout();
+}
+
 void SSMVMixerControl::mouseReleaseEvent( QMouseEvent *ev )
 {
     if( dragging_ ) {
@@ -584,5 +590,30 @@ void SSMVMixerControl::onSelectedTrackChanged( STrack *track )
     selected_ = (track == &tk_);
     if( wasSelected != selected_ ) {
         update();  // Repaint to update background color
+    }
+}
+
+void SSMVMixerControl::updateLayout()
+{
+    // Check if we should switch to wide mode (width > ~130% of minimal width)
+    bool shouldBeWide = width() > WIDE_MODE_THRESHOLD;
+
+    if( shouldBeWide == wideMode_ ) {
+        return;  // No change needed
+    }
+
+    wideMode_ = shouldBeWide;
+
+    if( wideMode_ ) {
+        // Wide mode: horizontal layout for track name and volume
+        // For now, keep the layout functional - future enhancement can reorganize controls
+        qVolume_->setOrientation( Qt::Horizontal );
+        qVolume_->setMinimumHeight( 20 );
+        qVolume_->setMaximumHeight( 20 );
+    } else {
+        // Narrow mode: vertical layout (current default)
+        qVolume_->setOrientation( Qt::Vertical );
+        qVolume_->setMinimumHeight( 60 );
+        qVolume_->setMaximumHeight( QWIDGETSIZE_MAX );
     }
 }
