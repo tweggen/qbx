@@ -2435,6 +2435,8 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     // Allow track control column to expand (a)
     qTrackControlBoxHolder_->setMinimumWidth( TRACK_CTRL_WIDTH_MINIMAL );
     qTrackControlBoxHolder_->setMaximumWidth( TRACK_CTRL_WIDTH_STANDARD );
+    // Set size policy to allow horizontal expansion
+    qTrackControlBoxHolder_->setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Expanding );
     qTrackControlBoxHolder_->resize( TRACK_CTRL_WIDTH_STANDARD, 0 );
     // Double-clicking the blank area below the track heads adds a new track.
     qTrackControlBoxHolder_->installEventFilter( this );

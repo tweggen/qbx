@@ -392,7 +392,8 @@ private:
         GLROWSTRETCH_2 = -1,
         GLROWSTRETCH_3 = -1,
 
-        GLCOLSTRETCH_0 = 0,
+        // Column 0 (track control): allow expansion up to max width constraint (a)
+        GLCOLSTRETCH_0 = 1,
         GLCOLSTRETCH_1 = -1,
         GLCOLSTRETCH_2 = 100,
         GLCOLSTRETCH_3 = -1,
