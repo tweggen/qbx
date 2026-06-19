@@ -71,7 +71,8 @@ static const int DRAG_THRESHOLD = 4;
 
 QSize SSMVMixerControl::sizeHint() const
 {
-    return QSize( SMV_TRACK_CTRL_WIDTH, smv_.getTrackHeight() );
+    // Return current width to allow expansion, not fixed size
+    return QSize( width(), smv_.getTrackHeight() );
 }
 
 /**
