@@ -598,12 +598,16 @@ void SSMVMixerControl::updateLayout()
 {
     // Check if we should switch to wide mode (width > ~130% of minimal width)
     bool shouldBeWide = width() > WIDE_MODE_THRESHOLD;
+    qWarning( "SSMVMixerControl::updateLayout: width=%d, threshold=%d, shouldBeWide=%s (current mode=%s)",
+              width(), WIDE_MODE_THRESHOLD, shouldBeWide ? "true" : "false",
+              wideMode_ ? "wide" : "narrow" );
 
     if( shouldBeWide == wideMode_ ) {
         return;  // No change needed
     }
 
     wideMode_ = shouldBeWide;
+    qWarning( "  -> switching to %s mode", wideMode_ ? "WIDE" : "NARROW" );
 
     if( wideMode_ ) {
         // Wide mode: horizontal layout for track name and volume

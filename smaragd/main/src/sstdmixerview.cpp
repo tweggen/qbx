@@ -1707,7 +1707,10 @@ void SStdMixerView::rebuildControlColumn()
     controlArray_->clear();
     int h = getTrackHeight();
     // Use parent width, but ensure minimum width
-    int w = qMax( qTrackControlBoxHolder_->width(), TRACK_CTRL_WIDTH_MINIMAL );
+    int holderWidth = qTrackControlBoxHolder_->width();
+    int w = qMax( holderWidth, TRACK_CTRL_WIDTH_MINIMAL );
+    qWarning( "rebuildControlColumn: holder width=%d, control width=%d, rows=%d",
+              holderWidth, w, rows_.size() );
     for( int i=0; i<rows_.size(); ++i ) {
         const STrackRow &row = rows_.at( i );
         SSMVMixerControl *mc = new SSMVMixerControl( qTrackControlBox_, *this, *row.track );
@@ -2591,9 +2594,11 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
 
 void SStdMixerView::setTrackControlWidth( int width )
 {
+    qWarning( "SStdMixerView::setTrackControlWidth( %d )", width );
     // Clamp between minimal and standard
     if( width < TRACK_CTRL_WIDTH_MINIMAL ) width = TRACK_CTRL_WIDTH_MINIMAL;
     if( width > TRACK_CTRL_WIDTH_STANDARD ) width = TRACK_CTRL_WIDTH_STANDARD;
+    qWarning( "  -> clamped to: %d", width );
 
     if( trackControlWidth_ != width ) {
         trackControlWidth_ = width;
