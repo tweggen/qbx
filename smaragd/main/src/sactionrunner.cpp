@@ -10,6 +10,7 @@
 #include <QCoreApplication>
 #include <QDomDocument>
 #include <QFile>
+#include <QDir>
 #include <QUndoStack>
 #include <QTextStream>
 
@@ -74,6 +75,19 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
     if (script.verifyUndo()) {
         if (!verifyUndo_(project, app, result.failures)) {
             result.passed = false;
+        }
+    }
+
+    // Step 5: Collect artifacts from output directory (Phase 2).
+    // Enumerate any files in the test output directory to report artifacts generated
+    // during test execution (screenshots, renders, etc.).
+    QString outputDir = app.testOutputDir();
+    if (!outputDir.isEmpty()) {
+        QDir dir(outputDir);
+        QStringList files = dir.entryList(QDir::Files);
+        for (const QString &filename : files) {
+            // Report relative path for clarity; absolute paths can be reconstructed.
+            result.artifacts.append(filename);
         }
     }
 

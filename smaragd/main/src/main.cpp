@@ -142,6 +142,12 @@ int main( int argc, char *argv[] )
                         }
                     }
                 }
+                if (!result.artifacts.isEmpty()) {
+                    std::cout << "# Artifacts:\n";
+                    for (const QString &artifact : result.artifacts) {
+                        std::cout << "#   - " << artifact.toStdString() << "\n";
+                    }
+                }
             } else {
                 // Verbose output for run mode
                 std::cout << "Script executed: " << (result.passed ? "PASS" : "FAIL") << "\n";
@@ -152,6 +158,12 @@ int main( int argc, char *argv[] )
                     std::cout << "  Failures:\n";
                     for (const QString &failure : result.failures) {
                         std::cout << "    - " << failure.toStdString() << "\n";
+                    }
+                }
+                if (!result.artifacts.isEmpty()) {
+                    std::cout << "  Artifacts:\n";
+                    for (const QString &artifact : result.artifacts) {
+                        std::cout << "    - " << artifact.toStdString() << "\n";
                     }
                 }
             }

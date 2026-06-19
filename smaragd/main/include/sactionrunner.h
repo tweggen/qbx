@@ -18,7 +18,8 @@ public:
         int        actionsApplied = 0;
         int        actionsRejected = 0;
         int        assertionsFailed = 0;
-        QStringList failures;  // human-readable rejection/assertion reasons
+        QStringList failures;   // human-readable rejection/assertion reasons
+        QStringList artifacts;  // paths to generated files (screenshots, renders, etc.)
     };
 
     // Execute a parsed script against a project.
