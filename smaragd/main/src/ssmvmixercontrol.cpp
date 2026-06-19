@@ -286,6 +286,10 @@ void SSMVMixerControl::mouseMoveEvent( QMouseEvent *ev )
 
 void SSMVMixerControl::resizeEvent( QResizeEvent *ev )
 {
+    qWarning( "SSMVMixerControl::resizeEvent: old size=%dx%d, new size=%dx%d, geometry=%dx%d+%d+%d",
+              ev->oldSize().width(), ev->oldSize().height(),
+              ev->size().width(), ev->size().height(),
+              geometry().width(), geometry().height(), geometry().x(), geometry().y() );
     QWidget::resizeEvent( ev );
     updateLayout();
 }
