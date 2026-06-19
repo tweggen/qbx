@@ -1706,7 +1706,8 @@ void SStdMixerView::rebuildControlColumn()
     }
     controlArray_->clear();
     int h = getTrackHeight();
-    int w = qTrackControlBoxHolder_->width();  // Use parent width to fill entire column
+    // Use parent width, but ensure minimum width
+    int w = qMax( qTrackControlBoxHolder_->width(), TRACK_CTRL_WIDTH_MINIMAL );
     for( int i=0; i<rows_.size(); ++i ) {
         const STrackRow &row = rows_.at( i );
         SSMVMixerControl *mc = new SSMVMixerControl( qTrackControlBox_, *this, *row.track );
@@ -1717,6 +1718,8 @@ void SStdMixerView::rebuildControlColumn()
         controlArray_->append( mc );
     }
     qTrackControlBox_->resize( w, h*rows_.size() );
+    // Ensure qTrackControlBox_ also fills parent width
+    qTrackControlBox_->move( 0, 0 );
 }
 
 // Single entry point for any structural change (add/remove/reorder/group/fold):
