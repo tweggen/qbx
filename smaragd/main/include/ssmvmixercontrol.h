@@ -62,6 +62,9 @@ protected slots:
     void showChannelMenu();
     void setRecordingChannels( uint32_t channels );
 
+    // Track selection highlight
+    void onSelectedTrackChanged( STrack *track );
+
 private:
     // Resolve this control's track index within the mixer model (-1 if gone).
     int trackIndex_() const;
@@ -78,6 +81,9 @@ private:
     int depth_ = 0;
     bool foldable_ = false;
     bool collapsed_ = false;
+
+    // Track selection state for styling
+    bool selected_ = false;
 
     // Track-reorder drag: armed on press in the grip strip, active once the
     // pointer moves past a small threshold.

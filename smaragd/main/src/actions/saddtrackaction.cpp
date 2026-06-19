@@ -73,6 +73,9 @@ SApplyResult SAddTrackAction::apply(SProject *project)
     // Rewire speaker so new track is audible.
     SApplication::app().rewireSpeaker();
 
+    // Auto-select the newly added track (c)
+    mixer->setSelectedTrack(track);
+
     // Create inverse action: remove at the same index.
     SAction *inverse = new SRemoveTrackAction(actualIndex);
 

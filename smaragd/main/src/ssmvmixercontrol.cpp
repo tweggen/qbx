@@ -107,6 +107,9 @@ void SSMVMixerControl::applyVolume_( double newVolume )
  * Double-clicking the fader resets it to unity gain (0.0 dB). We intercept the
  * event here rather than subclass QSlider; the slider would otherwise treat the
  * second press as the start of another drag.
+ *
+ * Also intercept mouse presses on the track label to allow selecting the track
+ * from anywhere on the control (d).
  */
 bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
 {
@@ -115,6 +118,17 @@ bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
         if( me->button() == Qt::LeftButton ) {
             applyVolume_( 0.0 );
             return true;   // swallow it so the slider doesn't also jump-to-position
+        }
+    }
+    // Pass mouse press events from the track label through to parent for selection (d)
+    if( watched == qTrkLabel_ && ev->type() == QEvent::MouseButtonPress ) {
+        QMouseEvent *me = static_cast<QMouseEvent *>( ev );
+        if( me->button() == Qt::LeftButton ) {
+            SStdMixer *mixer = smv_.getModel();
+            if( mixer ) {
+                mixer->setSelectedTrack( &tk_ );
+            }
+            return false;  // Let the label still handle it for editing
         }
     }
     return QWidget::eventFilter( watched, ev );
@@ -181,8 +195,12 @@ static inline int gripLeft( int depth ) { return depth*SMV_TRACK_INDENT + SMV_FO
 // Draw the indented grip strip and, for parents, a fold triangle to its left.
 void SSMVMixerControl::paintEvent( QPaintEvent *ev )
 {
-    QWidget::paintEvent( ev );
+    // Draw background: darker blue (50% luminosity) for selected, lighter (25%) for unselected
+    QColor bgColor = selected_ ? QColor( 64, 100, 140 ) : QColor( 48, 70, 100 );
     QPainter p( this );
+    p.fillRect( rect(), bgColor );
+
+    QWidget::paintEvent( ev );
 
     int gx = gripLeft( depth_ );
     QRect handle( gx, 0, HANDLE_W, height() );
@@ -352,6 +370,8 @@ SSMVMixerControl::SSMVMixerControl(
     qTrkLabel_ = new QLineEdit( tk_.getSName(), this );
     qTrkLabel_->setFrame( false );
     qTrkLabel_->setFont( smallFont );
+    // Install event filter to pass mouse clicks through to parent for track selection
+    qTrkLabel_->installEventFilter( this );
 
     // Vertical fader, like a channel strip on a console. Works in tenths of a
     // dB; loud at the top (Qt vertical sliders put the maximum at the top).
@@ -453,6 +473,15 @@ SSMVMixerControl::SSMVMixerControl(
                       this, SLOT( onSoloChanged( bool ) ) );
     QObject::connect( &tk_, SIGNAL( armedForRecordingChanged( bool ) ),
                       this, SLOT( onArmedChanged( bool ) ) );
+
+    // Connect to mixer's track selection changes for highlighting
+    SStdMixer *mixer = smv_.getModel();
+    if( mixer ) {
+        QObject::connect( mixer, SIGNAL( selectedTrackChanged( STrack * ) ),
+                          this, SLOT( onSelectedTrackChanged( STrack * ) ) );
+        // Check if this track is currently selected
+        onSelectedTrackChanged( mixer->getSelectedTrack() );
+    }
 }
 
 void SSMVMixerControl::showChannelMenu()
@@ -547,4 +576,13 @@ void SSMVMixerControl::setRecordingChannels( uint32_t channels )
         tooltip += QString( "\nSelected: %1" ).arg( channelStr );
     }
     qArm_->setToolTip( tooltip );
+}
+
+void SSMVMixerControl::onSelectedTrackChanged( STrack *track )
+{
+    bool wasSelected = selected_;
+    selected_ = (track == &tk_);
+    if( wasSelected != selected_ ) {
+        update();  // Repaint to update background color
+    }
 }
