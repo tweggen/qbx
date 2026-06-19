@@ -76,6 +76,7 @@ set(SMARAGD_HEADERS
     include/actions/stoggleselectionaction.h
     include/actions/sinsertpluginaction.h
     include/actions/sremovepluginaction.h
+    include/actions/srenderaction.h
     include/actions/sscreenshotaction.h
     include/sprojectprops.h
 )
@@ -156,6 +157,7 @@ set(SMARAGD_SOURCES
     src/actions/stoggleselectionaction.cpp
     src/actions/sinsertpluginaction.cpp
     src/actions/sremovepluginaction.cpp
+    src/actions/srenderaction.cpp
     src/actions/sscreenshotaction.cpp
 )
 
