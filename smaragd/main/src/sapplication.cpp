@@ -1,6 +1,7 @@
 
 
 #include <QTimer>
+#include <QDir>
 
 #include <tw303aenv.h>
 #include <twspeaker.h>
@@ -445,4 +446,28 @@ void SApplication::submitClearSelectionAction()
 {
     SAction *action = new SClearSelectionAction();
     submitAction(action);
+}
+
+void SApplication::setTestOutputDir(const QString &path)
+{
+    testOutputDir_ = path;
+}
+
+QString SApplication::testOutputDir() const
+{
+    return testOutputDir_;
+}
+
+bool SApplication::ensureOutputDirExists() const
+{
+    if (testOutputDir_.isEmpty()) {
+        return false;
+    }
+
+    QDir dir(testOutputDir_);
+    if (dir.exists()) {
+        return true;
+    }
+
+    return dir.mkpath(".");
 }

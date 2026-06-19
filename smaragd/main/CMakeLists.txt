@@ -76,6 +76,7 @@ set(SMARAGD_HEADERS
     include/actions/stoggleselectionaction.h
     include/actions/sinsertpluginaction.h
     include/actions/sremovepluginaction.h
+    include/actions/sscreenshotaction.h
     include/sprojectprops.h
 )
 
@@ -155,6 +156,7 @@ set(SMARAGD_SOURCES
     src/actions/stoggleselectionaction.cpp
     src/actions/sinsertpluginaction.cpp
     src/actions/sremovepluginaction.cpp
+    src/actions/sscreenshotaction.cpp
 )
 
 # Optionally embed a bundled UI font. Drop a TTF at main/resources/FreeSans.ttf
