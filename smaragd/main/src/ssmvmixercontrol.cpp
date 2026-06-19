@@ -454,7 +454,10 @@ SSMVMixerControl::SSMVMixerControl(
     stripRow->addLayout( faderCol );
     stripRow->addStretch( 1 );
 
-    setFixedSize( SMV_TRACK_CTRL_WIDTH, smv_.getTrackHeight() );
+    // Allow horizontal expansion instead of fixed width
+    // Set minimum width to default, but allow resizing beyond it
+    setMinimumSize( SMV_TRACK_CTRL_WIDTH, smv_.getTrackHeight() );
+    setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Fixed );
 
     qLayout_->addWidget( qTrkLabel_, 0, 0, Qt::AlignTop );
     qLayout_->addLayout( stripRow,   1, 0 );
