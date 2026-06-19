@@ -2432,7 +2432,10 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
                       this, SLOT( trackSliderMoved( int ) ) );
 
     qTrackControlBoxHolder_ = new QWidget( this );
-    qTrackControlBoxHolder_->setFixedWidth( SMV_TRACK_CTRL_WIDTH );
+    // Allow track control column to expand (a)
+    qTrackControlBoxHolder_->setMinimumWidth( TRACK_CTRL_WIDTH_MINIMAL );
+    qTrackControlBoxHolder_->setMaximumWidth( TRACK_CTRL_WIDTH_STANDARD );
+    qTrackControlBoxHolder_->resize( TRACK_CTRL_WIDTH_STANDARD, 0 );
     // Double-clicking the blank area below the track heads adds a new track.
     qTrackControlBoxHolder_->installEventFilter( this );
 
@@ -2574,6 +2577,8 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     // Connect mixer's track selection to detail panel
     connect(model_, &SStdMixer::selectedTrackChanged,
             qTrackDetailPanel_, &STrackDetailPanel::setTrack);
+    // Initialize detail panel with current selection (nullptr at startup)
+    qTrackDetailPanel_->setTrack(model_->getSelectedTrack());
 }
 
 void SStdMixerView::setTrackControlWidth( int width )

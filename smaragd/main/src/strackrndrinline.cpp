@@ -20,7 +20,8 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
     offset_t leftTime = ctx.getTimeOf( visibRect.x() );
     offset_t rightTime = ctx.getTimeOf( visibRect.x()+visibRect.width() );
 
-    p.fillRect( visibRect, QColor( 128, 128, 192 ) );    
+    // Draw background with 60% luminosity of the track head colors (c)
+    p.fillRect( visibRect, QColor( 77, 77, 115 ) );    
     if( getTrack().isEmpty() ) {
 //        p.setPen( QColor( 160, 64, 64 ) );
 //        p.drawText( visibRect, AlignCenter, "Track is empty." );
