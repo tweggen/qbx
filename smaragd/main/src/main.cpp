@@ -15,6 +15,7 @@
 int main( int argc, char *argv[] )
 {
     // Phase 4: Detect headless test mode before QApplication init to set platform
+    // (Only on Linux; macOS and Windows have native headless support or prefer native backends)
     bool headlessMode = false;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--test-case") == 0) {
@@ -23,7 +24,8 @@ int main( int argc, char *argv[] )
         }
     }
 
-    // If in headless test mode and -platform not explicitly set, use offscreen
+#ifdef Q_OS_LINUX
+    // On Linux, if in headless test mode and -platform not explicitly set, use offscreen
     if (headlessMode) {
         bool platformSet = false;
         for (int i = 1; i < argc; ++i) {
@@ -46,6 +48,7 @@ int main( int argc, char *argv[] )
             argv = newArgv;
         }
     }
+#endif
 
     SApplication app( argc, argv );
 

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="screenshot_test">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Add a single track and capture at different resolutions -->
+    <add-track index="-1"/>
+    <screenshot filename="01_single_track_full.png" resolution="100%"/>
+    <screenshot filename="01_single_track_half.png" resolution="50%"/>
+    <screenshot filename="01_single_track_custom.png" resolution="800x600"/>
+
+    <!-- Add another track -->
+    <add-track index="-1"/>
+    <screenshot filename="02_two_tracks.png" resolution="100%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
