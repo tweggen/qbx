@@ -1,8 +1,13 @@
 # 12 — Test Output Artifacts (Screenshots & Renders)
 
-**Status:** 🔵 Proposed  
+**Status:** ✅ Complete (Phases 0–3, commits 5f0aa81–517af61)  
 **Depends on:** `11_ACTION_SCRIPT_TEST_CASES.md` (completed)  
 **Related to:** Headless testing, visual debugging, CI/CD artifact collection
+
+**Phases completed:**
+- **Phase 1 (5f0aa81):** SScreenshotAction with 100%, 50%, and custom resolutions
+- **Phase 2 (574beb8):** Artifact collection and reporting in test output
+- **Phase 3 (517af61):** SRenderAction for scripted audio export (WAV, OGG, MP3)
 
 ## 1. Goal
 
