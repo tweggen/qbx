@@ -1714,12 +1714,12 @@ void SStdMixerView::rebuildControlColumn()
         const STrackRow &row = rows_.at( i );
         SSMVMixerControl *mc = new SSMVMixerControl( qTrackControlBox_, *this, *row.track );
         mc->setTreeInfo( row.depth, row.hasChildren, row.collapsed );
-        mc->move( 0, h*i );
+        mc->move( 0, SMV_TIME_RULER_HEIGHT + h*i );
         mc->resize( w, h );
         mc->show();
         controlArray_->append( mc );
     }
-    qTrackControlBox_->resize( w, h*rows_.size() );
+    qTrackControlBox_->resize( w, SMV_TIME_RULER_HEIGHT + h*rows_.size() );
     // Ensure qTrackControlBox_ also fills parent width
     qTrackControlBox_->move( 0, 0 );
 }
