@@ -5,6 +5,7 @@
 #include "plugins/twplugin.h"
 #include <memory>
 #include <vector>
+#include <mutex>
 
 namespace audio {
 

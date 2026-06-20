@@ -38,6 +38,9 @@ signals:
     void slotRemoved( int index, SPluginSlot &slot );
     void slotsReordered();
 
+protected:
+    void childEvent( QChildEvent *event ) override;
+
 private:
     twComponent *getChainComponent();
     twComponent *chainComponent_ = nullptr;

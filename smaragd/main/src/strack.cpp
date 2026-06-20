@@ -18,6 +18,7 @@
 #include "strack.h"
 #include "strackrndrinline.h"
 #include "spluginchain.h"
+#include "spluginslot.h"
 #include "sprojectloader.h"
 
 using namespace std;
@@ -296,6 +297,12 @@ STrack::STrack( SProject *project )
     // Instead, we manage the chain's lifetime manually via the destructor.
     cpPluginChain_ = new SPluginChain( project );
 
+    // Connect plugin chain model changes to DSP layer synchronization.
+    QObject::connect( cpPluginChain_, SIGNAL( slotInserted( int, SPluginSlot & ) ),
+                      this, SLOT( onPluginSlotInserted( int, SPluginSlot & ) ) );
+    QObject::connect( cpPluginChain_, SIGNAL( slotRemoved( int, SPluginSlot & ) ),
+                      this, SLOT( onPluginSlotRemoved( int, SPluginSlot & ) ) );
+
     // Add a listener for added child objects.
     // We want to become noticed, if it is new.
     QObject::connect( this, SIGNAL( childObjectAdded( SLink & ) ),
@@ -413,4 +420,44 @@ SLink *STrack::instantiateFromDomElement(
     }
     track->readPostChildrenAttributes( element );
     return new SLink( *track );
+}
+
+void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
+{
+    // Sync the model change to all DSP plugin chains
+    // Pre-allocate inserts for all buses to ensure they're fully initialized
+    // before the audio thread accesses them
+    if( cpPluginChains_ && nBusses_ > 0 ) {
+        // First, ensure all inserts exist and are fully initialized
+        for( int i = 0; i < nBusses_; ++i ) {
+            audio::twPluginInsert *insert = slot.getInsertForBus(i);
+            if( !insert ) {
+                // Insert creation failed - the slot will handle the error
+                return;
+            }
+        }
+
+        // Now that all inserts are safely created, add them to the chains
+        for( int i = 0; i < nBusses_; ++i ) {
+            if( cpPluginChains_[i] ) {
+                audio::twPluginInsert *insert = slot.getInsertForBus(i);
+                if( insert ) {
+                    cpPluginChains_[i]->addPlugin( insert );
+                }
+            }
+        }
+    }
+}
+
+void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
+{
+    // Sync the model change to all DSP plugin chains
+    // Note: we remove by index since the slot is being deleted
+    if( cpPluginChains_ ) {
+        for( int i = 0; i < nBusses_; ++i ) {
+            if( cpPluginChains_[i] ) {
+                cpPluginChains_[i]->removePlugin( index );
+            }
+        }
+    }
 }

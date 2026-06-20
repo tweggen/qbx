@@ -11,6 +11,7 @@ class STrack;
 class SObjectRenderer;
 class STrackRendererInline;
 class SPluginChain;
+class SPluginSlot;
 class twTrackMix;
 class twRewire;
 class twPluginChain;
@@ -83,9 +84,11 @@ public:
     virtual length_t getDuration() const;
 
 public slots:
-    void setNBusses( int n );    
+    void setNBusses( int n );
+    void onPluginSlotInserted( int index, SPluginSlot &slot );
+    void onPluginSlotRemoved( int index, SPluginSlot &slot );
 
-signals:    
+signals:
     void nChannelsChanged( int n );
 
 protected:

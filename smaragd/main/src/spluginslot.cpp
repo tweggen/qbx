@@ -11,26 +11,45 @@ SPluginSlot::SPluginSlot( SProject *project, const audio::twPluginDescriptor &de
     : SObject( project ), descriptor_( desc )
 {
     setSName( QString::fromStdString( desc.name ) );
-
-    // Instantiate the plugin via the registry.
-    auto &registry = audio::pluginRegistry();
-    auto plugin = registry.instantiate( desc );
-    if( !plugin ) {
-        qWarning( "SPluginSlot: failed to instantiate plugin '%s'", desc.name.c_str() );
-        return;
-    }
-
-    // Create the host component (twPluginInsert).
-    insert_ = std::make_unique<audio::twPluginInsert>(
-        *SApplication::app().get303aEnvironment(), std::move( plugin ) );
+    // Inserts are created on-demand via getInsertForBus()
 }
 
 SPluginSlot::~SPluginSlot() = default;
 
+audio::twPluginInsert *SPluginSlot::getInsertForBus( int busIndex ) const
+{
+    // Create inserts on-demand up to the requested bus index
+    if( busIndex < 0 ) return nullptr;
+
+    SPluginSlot *self = const_cast<SPluginSlot *>(this);
+    while( (int)self->inserts_.size() <= busIndex ) {
+        auto &registry = audio::pluginRegistry();
+        auto plugin = registry.instantiate( descriptor_ );
+        if( !plugin ) {
+            qWarning( "SPluginSlot: failed to instantiate plugin '%s'", descriptor_.name.c_str() );
+            return nullptr;
+        }
+
+        auto insert = std::make_unique<audio::twPluginInsert>(
+            *SApplication::app().get303aEnvironment(), std::move( plugin ) );
+
+        // Verify the insert was properly initialized (has input/output plugs)
+        if( insert->getNInputs() == 0 ) {
+            qWarning( "SPluginSlot: plugin has 0 inputs, this will crash during rendering" );
+            return nullptr;
+        }
+
+        self->inserts_.push_back( std::move( insert ) );
+    }
+
+    return self->inserts_[busIndex].get();
+}
+
 twComponent &SPluginSlot::getRootComponent()
 {
-    if( insert_ ) {
-        return *insert_;
+    auto *insert = getInsertForBus(0);
+    if( insert ) {
+        return *insert;
     }
     // Fallback (shouldn't happen - insert should always exist).
     throw std::runtime_error( "SPluginSlot: no plugin insert available" );
@@ -66,8 +85,9 @@ int SPluginSlot::readPreChildrenAttributes( QDomElement &element )
         std::copy( decoded.begin(), decoded.end(), savedState_.begin() );
 
         // Restore state to the plugin
-        if( insert_ && insert_->getPlugin() ) {
-            insert_->getPlugin()->loadState( savedState_ );
+        auto *insert = getInsertForBus(0);
+        if( insert && insert->getPlugin() ) {
+            insert->getPlugin()->loadState( savedState_ );
         }
     }
 
@@ -89,31 +109,43 @@ void SPluginSlot::setBypass( bool bypass )
 {
     if( bypass_ != bypass ) {
         bypass_ = bypass;
-        if( insert_ )
-            insert_->setBypass( bypass );
+        // Apply bypass to all created inserts
+        for( auto &insert : inserts_ ) {
+            if( insert )
+                insert->setBypass( bypass );
+        }
         emit bypassChanged( bypass );
     }
 }
 
 void SPluginSlot::saveState( std::vector<std::uint8_t> &state )
 {
-    if( insert_ && insert_->getPlugin() ) {
-        state = insert_->getPlugin()->saveState();
+    auto *insert = getInsertForBus(0);
+    if( insert && insert->getPlugin() ) {
+        state = insert->getPlugin()->saveState();
     }
 }
 
 void SPluginSlot::restoreState( const std::vector<std::uint8_t> &state )
 {
-    if( insert_ && insert_->getPlugin() ) {
-        insert_->getPlugin()->loadState( state );
+    auto *insert = getInsertForBus(0);
+    if( insert && insert->getPlugin() ) {
+        insert->getPlugin()->loadState( state );
+    }
+    // Apply state to all created inserts
+    for( auto &ins : inserts_ ) {
+        if( ins && ins->getPlugin() ) {
+            ins->getPlugin()->loadState( state );
+        }
     }
 }
 
 void SPluginSlot::serializeStateChunk( QDomElement &parentElem, QDomDocument &doc )
 {
     // Save current state from the plugin
-    if( insert_ && insert_->getPlugin() ) {
-        savedState_ = insert_->getPlugin()->saveState();
+    auto *insert = getInsertForBus(0);
+    if( insert && insert->getPlugin() ) {
+        savedState_ = insert->getPlugin()->saveState();
     }
 
     if( !savedState_.empty() ) {

@@ -7,6 +7,7 @@
 #include "slink.h"
 #include <QDomElement>
 #include <QTextStream>
+#include <QChildEvent>
 
 SPluginChain::SPluginChain( SProject *project )
     : SObject( project )
@@ -15,6 +16,29 @@ SPluginChain::SPluginChain( SProject *project )
     // Create a mixer component to thread audio through the chain.
     // With zero children, it's a simple pass-through.
     // As slots are added, they become inputs to the mixer.
+}
+
+void SPluginChain::childEvent( QChildEvent *event )
+{
+    SObject::childEvent( event );
+
+    if( event->type() == QEvent::ChildAdded ) {
+        // Find the index of the newly added child
+        QObject *child = event->child();
+        int index = children().indexOf( child );
+        if( index >= 0 ) {
+            SLink *link = dynamic_cast<SLink *>( child );
+            if( link ) {
+                SPluginSlot *slot = dynamic_cast<SPluginSlot *>( &link->getSObject() );
+                if( slot ) {
+                    emit slotInserted( index, *slot );
+                }
+            }
+        }
+    } else if( event->type() == QEvent::ChildRemoved ) {
+        // For ChildRemoved, we can't access the child anymore, so we emit with the link
+        // This is handled by the parent's childEvent which already fired before us
+    }
 }
 
 SPluginChain::~SPluginChain() = default;
