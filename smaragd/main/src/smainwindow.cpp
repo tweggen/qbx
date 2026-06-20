@@ -330,11 +330,16 @@ void SMainWindow::openMostRecent()
 {
     const QStringList recents = SSettings::instance().recentProjects();
     for( const QString &path : recents ) {
-        if( QFileInfo::exists( path ) && openProjectFile( path ) )
-            return;
-        // Missing on disk: forget it and try the next-newest.
-        if( !QFileInfo::exists( path ) )
+        if( !QFileInfo::exists( path ) ) {
+            // Missing on disk: forget it and try the next-newest.
             SSettings::instance().removeRecentProject( path );
+            continue;
+        }
+        // File exists; try to open it
+        if( openProjectFile( path ) )
+            return;  // Success, we're done
+        // File exists but failed to open (corrupted, etc.); remove it and try next
+        SSettings::instance().removeRecentProject( path );
     }
     // Nothing to restore — start empty (File → New to begin a session).
     updateRecentMenu();
