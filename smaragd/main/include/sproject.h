@@ -40,6 +40,7 @@ public:
 
     // Mark project as partial/corrupt so destructor skips risky cleanup
     void markAsPartialLoad();
+    bool isPartialLoad() const { return isPartialLoad_; }
 
     virtual int serialize( QTextStream & );
     double getBPMTempo() const { return bpmTempo_; }

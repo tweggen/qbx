@@ -12,6 +12,7 @@
 #include "twrewire.h"
 #include "twpluginchain.h"
 #include "sobject.h"
+#include "sproject.h"
 #include "slink.h"
 #include "sapplication.h"
 #include "strack.h"
@@ -310,7 +311,14 @@ STrack::STrack( SProject *project )
 STrack::~STrack()
 {
     DTOR_DEL( inlineRenderer_ );
-    DTOR_DEL( cpPluginChain_ );  // Delete plugin chain (not managed by Qt parent/child)
+    // For partial loads (project load failed), skip deleting plugin chain
+    // since it might be partially constructed. Accessing a partial-load project
+    // and trying to clean up partial objects can cause crashes.
+    if( !getProject().isPartialLoad() ) {
+        DTOR_DEL( cpPluginChain_ );  // Delete plugin chain (not managed by Qt parent/child)
+    }
+    // cpPluginChain_ will be cleaned up by OS on exit if not manually deleted
+
     if( cpPluginChains_ ) {
         for( int i = 0; i < nBusses_; ++i ) {
             delete cpPluginChains_[i];
