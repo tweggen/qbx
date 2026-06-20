@@ -218,6 +218,10 @@ void SMVActualView::paintEvent( QPaintEvent * )
     InlineRenderContext ctx( *this, p );
     p.fillRect( QRect( 0, 0, myRect.width(), SMV_TIME_RULER_HEIGHT ), QColor( 220, 220, 190 ) );
     drawRulerTicks( p, myRect );
+
+    // Fill timeline background with dark purple (#100820)
+    p.fillRect( QRect( 0, SMV_TIME_RULER_HEIGHT, myRect.width(), myRect.height() - SMV_TIME_RULER_HEIGHT ), QColor( 0x10, 0x08, 0x20 ) );
+
     // OK, we have tracks (lanes of the flattened tree).
     int nTracks = smv_.rowCount();
     int firstTrack = (upperLeftY_ + trackHeight_-1) / trackHeight_;
@@ -2179,7 +2183,6 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // Accept drag-drop from the resource list (assets and external files).
     setAcceptDrops(true);
 
-//    setBackgroundColor( QColor( 0, 0, 0 ) );
     trackHeight_ = 100;
     secondWidth_ = 30.;
     upperLeftX_ = upperLeftY_ = 0;
