@@ -272,11 +272,10 @@ bool SMainWindow::openProjectFile( const QString &fileName )
         QMessageBox::information( nullptr, "Smaragd warning",
                                   "Unable to open specified project file.",
                                   QMessageBox::Ok );
-        // Failed load — clean up any partially-created objects that would crash
-        // the destructor, then safely delete the project using deleteLater() to
-        // ensure the event loop can handle any remaining cleanup.
+        // Failed load — mark as partial so destructor skips unsafe cleanup,
+        // then use deleteLater() to safely let Qt clean up child objects.
         SApplication::app().setCurrentProject( NULL );
-        currentProject_->clearAllChildren();
+        currentProject_->markAsPartialLoad();
         currentProject_->deleteLater();
         currentProject_ = NULL;
         projectRootWidget_ = NULL;

@@ -258,8 +258,12 @@ void SProject::addExternObject( const SExternFile &extObject )
 
 void SProject::removeExternObject( QString &fileName )
 {
-    externFileDict_.remove( fileName );
-    emit externFileRemoved( fileName );
+    // Guard against being called during destruction of a partial load
+    // when this method might be called from a child's destructor
+    if( !fileName.isEmpty() && externFileDict_.contains( fileName ) ) {
+        externFileDict_.remove( fileName );
+        emit externFileRemoved( fileName );
+    }
 }
 
 void SProject::registerAsset( const QString &name, SObject *body )
@@ -315,6 +319,13 @@ SLink *SProject::linkToFile( QString &fileName )
 
 SProject::~SProject()
 {
+    // For partially-loaded projects that failed during object creation, skip
+    // the normal cleanup since accessing the partially-constructed objects
+    // could crash. Qt's parent-child mechanism will still clean them up.
+    if( isPartialLoad_ ) {
+        return;
+    }
+
     DTOR_DEL( soRoot_ );   // drop the root reference (parent==NULL, not a child)
 
     // Tear down the object graph here, in the destructor body, while our members
@@ -348,14 +359,11 @@ SProject::~SProject()
     }
 }
 
-void SProject::clearAllChildren()
+void SProject::markAsPartialLoad()
 {
-    // Force-delete all children without trying to respect reference counts.
-    // Used when a load fails partway through and leaves objects in an inconsistent state.
-    const QObjectList kids = children();
-    for( QObject *kid : kids ) {
-        delete kid;
-    }
+    // Mark project as partially-loaded so destructor skips unsafe cleanup.
+    // Qt's parent-child mechanism will still clean up children safely.
+    isPartialLoad_ = true;
 }
 
 SProject::SProject()

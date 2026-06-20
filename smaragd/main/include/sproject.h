@@ -38,8 +38,8 @@ public:
 
     SLink *linkToFile( QString & );
 
-    // Safe cleanup of all child objects (used when load fails partway through)
-    void clearAllChildren();
+    // Mark project as partial/corrupt so destructor skips risky cleanup
+    void markAsPartialLoad();
 
     virtual int serialize( QTextStream & );
     double getBPMTempo() const { return bpmTempo_; }
@@ -135,6 +135,8 @@ private:
 
     QHash<QString,SExternFile*> externFileDict_;
     QHash<QString,SObject*> assetDict_;
+
+    bool isPartialLoad_ = false;  // True if load failed partway through
 };
 
 #endif
