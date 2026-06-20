@@ -272,9 +272,16 @@ bool SMainWindow::openProjectFile( const QString &fileName )
         QMessageBox::information( nullptr, "Smaragd warning",
                                   "Unable to open specified project file.",
                                   QMessageBox::Ok );
-        closeProject();   // discard the half-built placeholder project
+        // Failed load — clean up any partially-created objects that would crash
+        // the destructor, then safely delete the project using deleteLater() to
+        // ensure the event loop can handle any remaining cleanup.
+        SApplication::app().setCurrentProject( NULL );
+        currentProject_->clearAllChildren();
+        currentProject_->deleteLater();
+        currentProject_ = NULL;
+        projectRootWidget_ = NULL;
         updateWindowTitle();
-        return false;     // currentProject_ is gone; do not touch it below
+        return false;
     }
 
     // Load succeeded; now create UI elements (docks/toolbars) that reference the project

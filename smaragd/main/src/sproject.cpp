@@ -348,6 +348,16 @@ SProject::~SProject()
     }
 }
 
+void SProject::clearAllChildren()
+{
+    // Force-delete all children without trying to respect reference counts.
+    // Used when a load fails partway through and leaves objects in an inconsistent state.
+    const QObjectList kids = children();
+    for( QObject *kid : kids ) {
+        delete kid;
+    }
+}
+
 SProject::SProject()
     : soRoot_( NULL ),
       bpmTempo_( 120. ),

@@ -38,6 +38,9 @@ public:
 
     SLink *linkToFile( QString & );
 
+    // Safe cleanup of all child objects (used when load fails partway through)
+    void clearAllChildren();
+
     virtual int serialize( QTextStream & );
     double getBPMTempo() const { return bpmTempo_; }
     int serializeSelfAttributes( QTextStream & );
