@@ -219,8 +219,10 @@ void SMVActualView::paintEvent( QPaintEvent * )
     p.fillRect( QRect( 0, 0, myRect.width(), SMV_TIME_RULER_HEIGHT ), QColor( 220, 220, 190 ) );
     drawRulerTicks( p, myRect );
 
-    // Fill timeline background with dark purple (#100820)
-    p.fillRect( QRect( 0, SMV_TIME_RULER_HEIGHT, myRect.width(), myRect.height() - SMV_TIME_RULER_HEIGHT ), QColor( 0x10, 0x08, 0x20 ) );
+    // Fill timeline background with black. This appears as a small line between the individual tracks.
+    p.fillRect( QRect( 0, SMV_TIME_RULER_HEIGHT, myRect.width(), myRect.height() - SMV_TIME_RULER_HEIGHT ), 
+        QColor( 0x00, 0x00, 0x00 ) 
+        );
 
     // OK, we have tracks (lanes of the flattened tree).
     int nTracks = smv_.rowCount();
