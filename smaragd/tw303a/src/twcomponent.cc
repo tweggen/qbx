@@ -198,6 +198,11 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
         return;
     }
 
+    // Avoid unnecessary reconnection: if input is already set to the same output, do nothing
+    if( pInputPlugs[idx] == newOutput ) {
+        return;
+    }
+
     if( pInputPlugs[idx] ) {
         auto parentLatch = &(pInputPlugs[idx]->getParentLatch());
         if(parentLatch==nullptr)

@@ -33,6 +33,9 @@ audio::twPluginInsert *SPluginSlot::getInsertForBus( int busIndex ) const
         auto insert = std::make_unique<audio::twPluginInsert>(
             *SApplication::app().get303aEnvironment(), std::move( plugin ) );
 
+        // Initialize the insert component (allocates plugs and latches)
+        insert->init();
+
         // Verify the insert was properly initialized (has input/output plugs)
         if( insert->getNInputs() == 0 ) {
             qWarning( "SPluginSlot: plugin has 0 inputs, this will crash during rendering" );

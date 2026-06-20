@@ -96,6 +96,35 @@ void twPluginChain::reorderPlugin( int fromIndex, int toIndex )
 
 void twPluginChain::rebuildWiring()
 {
-    // TODO: rebuild the plugin chain wiring when the order changes
+    // Set up wiring: input → plugin0 → plugin1 → ... → output
+    // This is called once when plugins are added/removed, not on every sample block.
+
+    if( plugins_.empty() ) {
+        wiringDirty_ = false;
+        return;
+    }
+
+    // For each channel (port), set up the series wiring
+    for( idx_t port = 0; port < nBusses_; ++port ) {
+        // First plugin gets the track input
+        auto *firstPlugin = plugins_[0];
+        if( firstPlugin && port < firstPlugin->getNInputs() && pInputPlugs && pInputPlugs[port] ) {
+            firstPlugin->setInput( port, pInputPlugs[port] );
+        }
+
+        // Wire each subsequent plugin to the previous one's output
+        for( size_t i = 1; i < plugins_.size(); ++i ) {
+            auto *prevPlugin = plugins_[i-1];
+            auto *nextPlugin = plugins_[i];
+            if( prevPlugin && nextPlugin &&
+                port < prevPlugin->getNOutputs() && port < nextPlugin->getNInputs() ) {
+                auto *prevOutput = prevPlugin->linkOutput( port );
+                if( prevOutput ) {
+                    nextPlugin->setInput( port, prevOutput );
+                }
+            }
+        }
+    }
+
     wiringDirty_ = false;
 }
