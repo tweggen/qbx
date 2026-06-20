@@ -1706,17 +1706,16 @@ void SStdMixerView::rebuildControlColumn()
     }
     controlArray_->clear();
     int h = getTrackHeight();
-    // Use parent width, but ensure minimum width
-    int holderWidth = qTrackControlBoxHolder_->width();
-    int w = qMax( holderWidth, TRACK_CTRL_WIDTH_MINIMAL );
+    // Use the requested trackControlWidth_ instead of the holder's actual width
+    int w = trackControlWidth_;
     qWarning( "rebuildControlColumn: holder width=%d, control width=%d, rows=%d",
-              holderWidth, w, rows_.size() );
+              qTrackControlBoxHolder_->width(), w, rows_.size() );
     for( int i=0; i<rows_.size(); ++i ) {
         const STrackRow &row = rows_.at( i );
         SSMVMixerControl *mc = new SSMVMixerControl( qTrackControlBox_, *this, *row.track );
         mc->setTreeInfo( row.depth, row.hasChildren, row.collapsed );
         mc->move( 0, h*i );
-        mc->resize( w, h );  // Expand to fill parent width
+        mc->resize( w, h );
         mc->show();
         controlArray_->append( mc );
     }
@@ -2603,22 +2602,15 @@ void SStdMixerView::setTrackControlWidth( int width )
     if( trackControlWidth_ != width ) {
         trackControlWidth_ = width;
 
-        // Remove stretch on column 0 to allow fixed sizing
+        // Constrain the holder to exactly this width (min = max = width)
+        qTrackControlBoxHolder_->setMinimumWidth( width );
+        qTrackControlBoxHolder_->setMaximumWidth( width );
+
+        // Also constrain the grid column to match
         if( qGridLayout_ ) {
             qGridLayout_->setColumnStretch( 0, 0 );
-            // Set both min and max width to force the column to that exact size
             int totalWidth = width + 8;  // +8 for divider
             qGridLayout_->setColumnMinimumWidth( 0, totalWidth );
-            // Also set maximum to prevent layout from expanding it
-            qGridLayout_->setColumnMinimumWidth( 1, 0 );  // Reset other columns
-        }
-
-        // Update widget widths - use minimum width to allow expansion
-        qTrackControlBoxHolder_->setMinimumWidth( width );
-        qTrackControlBoxHolder_->setMaximumWidth( QWIDGETSIZE_MAX );  // No maximum, allow expansion
-        if( qTrackControlBox_ ) {
-            int h = qTrackControlBox_->height();
-            qTrackControlBox_->resize( qTrackControlBoxHolder_->width(), h );
         }
 
         // Rebuild individual track controls to match new width
