@@ -265,8 +265,6 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     currentProject_ = new SProject();
     SApplication::app().setCurrentProject( currentProject_ );
 
-    createDocksToolbars();
-
     // Load via the same action a script or round-trip test would use.
     SLoadProjectAction action( fileName );
     SApplyResult r = action.apply( currentProject_ );
@@ -278,6 +276,9 @@ bool SMainWindow::openProjectFile( const QString &fileName )
         updateWindowTitle();
         return false;     // currentProject_ is gone; do not touch it below
     }
+
+    // Load succeeded; now create UI elements (docks/toolbars) that reference the project
+    createDocksToolbars();
 
     // Find out the main widget.
     // We do have a root component here as we assigned it before.
@@ -392,10 +393,10 @@ void SMainWindow::closeProject()
 {
     if( !currentProject_ ) return;
     SApplication::app().setCurrentProject( NULL );
+    destroyDocksToolbars();
     delete projectRootWidget_;
     projectRootWidget_ = NULL;   // avoid a dangling pointer / double-free
     delete currentProject_;
-    destroyDocksToolbars();
     currentProject_ = NULL;
 }
 
