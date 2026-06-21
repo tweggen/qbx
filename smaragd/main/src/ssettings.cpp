@@ -23,6 +23,7 @@ void SSettings::setValue( const QString &key, const QVariant &val )
 {
     if( settings_.value( key ) == val ) return;   // no-op: don't churn/emit
     settings_.setValue( key, val );
+    settings_.sync();  // Ensure changes are written to disk immediately
     emit changed( key );
 }
 

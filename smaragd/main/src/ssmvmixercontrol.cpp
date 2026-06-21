@@ -41,7 +41,7 @@ static const double FADER_MAX_DB =  24.0;
 // Volume fader curve exponent: y = x^n where x is normalized [0,1].
 // n=1.0 is linear, n=2.0 is quadratic (recommended), n>1 makes small moves
 // near center more sensitive. Configurable via SOpt if desired.
-static const double VOLUME_CURVE_EXPONENT = 2.0;
+static const double VOLUME_CURVE_EXPONENT = 0.5;
 
 // Helper: convert slider value to dB using the configured curve.
 static double sliderToDB( int sliderValue )
@@ -398,6 +398,10 @@ SSMVMixerControl::SSMVMixerControl(
     qVolLabel_ = new QLabel( this );
     qVolLabel_->setAlignment( Qt::AlignHCenter );
     qVolLabel_->setFont( smallFont );
+    // Set fixed width to prevent layout shifting when digit count changes
+    QFontMetrics fm( smallFont );
+    int maxWidth = fm.horizontalAdvance( "-96.0 dB" ) + 4;
+    qVolLabel_->setFixedWidth( maxWidth );
 
     // Small square Mute / Solo toggle buttons. Mute (red when on) silences this
     // track; Solo (yellow when on) silences every track that is not soloed.

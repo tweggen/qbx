@@ -533,3 +533,8 @@ SObject::SObject( SProject *project )
 SObject::~SObject()
 {
 }
+
+SProject *SObject::getProjectSafe() const
+{
+    return dynamic_cast<SProject*>( parent() );
+}

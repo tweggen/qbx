@@ -315,9 +315,10 @@ STrack::~STrack()
 {
     DTOR_DEL( inlineRenderer_ );
     // For partial loads (project load failed), skip deleting plugin chain
-    // since it might be partially constructed. Accessing a partial-load project
-    // and trying to clean up partial objects can cause crashes.
-    if( !getProject().isPartialLoad() ) {
+    // since it might be partially constructed. Use getProjectSafe() to handle
+    // the case where parent has become invalid during project destruction.
+    SProject *proj = getProjectSafe();
+    if( proj && !proj->isPartialLoad() ) {
         DTOR_DEL( cpPluginChain_ );  // Delete plugin chain (not managed by Qt parent/child)
     }
     // cpPluginChain_ will be cleaned up by OS on exit if not manually deleted

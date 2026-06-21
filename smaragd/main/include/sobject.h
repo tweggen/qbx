@@ -67,7 +67,19 @@ public:
     SObject( SProject* );
     virtual ~SObject();
 
-    SProject &getProject() const { return *(SProject *)parent(); }
+    // WARNING: Returns reference. Will crash if parent is null.
+    // CRITICAL: Destructors MUST use getProjectSafe() instead.
+    // This method asserts if called during destruction (parent becoming invalid).
+    SProject &getProject() const {
+        Q_ASSERT_X(parent() != nullptr, "SObject::getProject",
+                   "Parent project is null - destructor should use getProjectSafe()");
+        return *(SProject *)parent();
+    }
+
+    // Safe accessor: returns pointer (may be null) for use during destruction.
+    // Destructors MUST use this instead of getProject() to handle the case
+    // where the SObject is being destroyed while its parent is invalid.
+    SProject *getProjectSafe() const;
 
     virtual int serialize( QTextStream & );
     virtual int readPreChildrenAttributes( QDomElement &element );

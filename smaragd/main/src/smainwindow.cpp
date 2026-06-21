@@ -403,10 +403,18 @@ void SMainWindow::newProject()
 void SMainWindow::closeProject()
 {
     if( !currentProject_ ) return;
+    // Stop playback before destroying the project to prevent audio thread access
+    if( SApplication::app().isPlaying() ) {
+        stopPlaying();
+    }
     SApplication::app().setCurrentProject( NULL );
     destroyDocksToolbars();
-    delete projectRootWidget_;
-    projectRootWidget_ = NULL;   // avoid a dangling pointer / double-free
+    // Detach (not delete) projectRootWidget_ from the main window so it doesn't
+    // interfere with project destruction. The project may have created children
+    // that are part of its QObject tree; deleting them here would corrupt the
+    // tree before the project destructor runs.
+    setCentralWidget( nullptr );
+    projectRootWidget_ = NULL;
     delete currentProject_;
     currentProject_ = NULL;
 }
@@ -456,6 +464,8 @@ void SMainWindow::closeEvent( QCloseEvent *event )
         // Save window geometry and toolbar/dock state before closing
         SSettings::instance().setWindowGeometry( saveGeometry() );
         SSettings::instance().setWindowState( saveState() );
+        // Ensure all settings are written to disk before exit
+        SSettings::instance().value( "dummy" );  // Triggers internal sync
         event->accept();
     } else {
         event->ignore();

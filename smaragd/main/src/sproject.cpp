@@ -343,8 +343,16 @@ SProject::~SProject()
         progress = false;
         const QObjectList kids = children();   // copy: mutates as we delete
         for( QObject *kid : kids ) {
-            SObject *so = static_cast<SObject*>( kid );
-            if( so->getNReferences() == 0 ) {
+            // Use dynamic_cast to safely check if child is an SObject.
+            // Non-SObject QObjects (like DSP components) are skipped here
+            // and handled by Qt's parent-child cleanup below.
+            SObject *so = dynamic_cast<SObject*>( kid );
+            if( so && so->getNReferences() == 0 ) {
+                // Explicit lifecycle control: remove from parent first, then delete.
+                // This makes the parent-child relationship state transition explicit.
+                // Destructors that call getProjectSafe() will safely get nullptr,
+                // avoiding any implicit behavior during destruction.
+                so->setParent( nullptr );
                 delete so;
                 progress = true;
             }
