@@ -89,18 +89,18 @@ void SMainWindow::nyi()
 
 void SMainWindow::destroyDocksToolbars()
 {
-    // No more extern files here.
-    delete qDockExternFileList_;
-    qDockExternFileList_ = NULL;
+    // Clear the extern file list when closing the project.
+    if( externFileList_ ) {
+        externFileList_->setProject( nullptr );
+    }
 }
 
 void SMainWindow::createDocksToolbars()
 {
-    // Create the extern file list.
-    qDockExternFileList_ = new QDockWidget( "Extern file list" );
-    SExternFileList *efl = new SExternFileList( qDockExternFileList_, *currentProject_ );
-    qDockExternFileList_->setWidget(efl);
-    addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
+    // Populate the extern file list with the current project's files and assets.
+    if( externFileList_ && currentProject_ ) {
+        externFileList_->setProject( currentProject_ );
+    }
 }
 
 bool SMainWindow::saveToPath( const QString &path )
@@ -453,6 +453,9 @@ void SMainWindow::closeEvent( QCloseEvent *event )
 {
     if( promptSaveUnsavedChanges() ) {
         closeProject();
+        // Save window geometry and toolbar/dock state before closing
+        SSettings::instance().setWindowGeometry( saveGeometry() );
+        SSettings::instance().setWindowState( saveState() );
         event->accept();
     } else {
         event->ignore();
@@ -736,6 +739,7 @@ SMainWindow::SMainWindow()
     // For now, Ctrl-R works on all platforms
 
     qTBTransport_ = new QToolBar( "Transport" /*, this*/ );
+    qTBTransport_->setObjectName( "toolbar_transport" );
     /*
     actPlay_->addTo( qTBTransport );
     actStop_->addTo( qTBTransport );
@@ -804,7 +808,19 @@ SMainWindow::SMainWindow()
 
     buildStatusBar();
 
-    qDockExternFileList_ = NULL;
+    // Create the persistent extern file list dock. It outlives any single project;
+    // its content is managed by setProject() called from createDocksToolbars.
+    qDockExternFileList_ = new QDockWidget( tr( "Extern file list" ), this );
+    qDockExternFileList_->setObjectName( "dock_extern_file_list" );
+    externFileList_ = new SExternFileList( qDockExternFileList_, nullptr );
+    qDockExternFileList_->setWidget( externFileList_ );
+    addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
+
+    // Restore window geometry and toolbar/dock state from previous session
+    const QByteArray geo = SSettings::instance().windowGeometry();
+    if( !geo.isEmpty() ) restoreGeometry( geo );
+    const QByteArray state = SSettings::instance().windowState();
+    if( !state.isEmpty() ) restoreState( state );
 
     // Measure and cache audio device latencies on startup
     // (done after UI is built, will show modal dialog if needed)
@@ -1354,6 +1370,7 @@ void SMainWindow::buildPaletteToolbar()
 {
     // Use new grid toolbar for compact, Reaper-like layout
     qTBPalette_ = new SGridToolbar( "Palette", this );
+    qTBPalette_->setObjectName( "toolbar_palette" );
     qTBPalette_->setColumns( 7 );  // 7 columns like Reaper
     qTBPalette_->setButtonSize( 24 );
 
@@ -1384,6 +1401,7 @@ void SMainWindow::buildPaletteToolbar()
     // Track grouping toolbar. These act on the arranger's last-clicked track
     // (click a track lane, then Group/Ungroup).
     qTBTracks_ = new QToolBar( "Tracks" );
+    qTBTracks_->setObjectName( "toolbar_tracks" );
     qTBTracks_->setIconSize( QSize( 22, 22 ) );
     QAction *aGroup = new QAction( makePaletteIcon( "[" ), "Group track", this );
     aGroup->setToolTip( "Group: wrap the clicked track in a new folder" );

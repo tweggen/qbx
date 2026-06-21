@@ -15,6 +15,7 @@ class QLabel;
 class QToolBar;
 class SRecordingProgressDialog;
 class SGridToolbar;
+class SExternFileList;
 
 class SMainWindow
     : public QMainWindow
@@ -142,6 +143,7 @@ private:
     int64_t recordingLatencySyncOffset_ = 0;
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
+    SExternFileList *externFileList_;
 
     // Permanent mode indicator on the right of the status bar.
     QLabel *modeLabel_;

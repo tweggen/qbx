@@ -117,3 +117,23 @@ void SSettings::removeRecentProject( const QString &path )
     }
     if( changed ) setValue( kRecentKey, list );
 }
+
+QByteArray SSettings::windowGeometry() const
+{
+    return value( "ui/windowGeometry" ).toByteArray();
+}
+
+void SSettings::setWindowGeometry( const QByteArray &geometry )
+{
+    setValue( "ui/windowGeometry", geometry );
+}
+
+QByteArray SSettings::windowState() const
+{
+    return value( "ui/windowState" ).toByteArray();
+}
+
+void SSettings::setWindowState( const QByteArray &state )
+{
+    setValue( "ui/windowState", state );
+}

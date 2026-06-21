@@ -166,11 +166,65 @@ SExternFileItem::SExternFileItem( SExternFileList *parent, const SExternFile &ef
 
 SExternFileList::~SExternFileList()
 {
+    disconnectSignals();
 }
 
-SExternFileList::SExternFileList( QWidget *parent, SProject &pro )
+void SExternFileList::disconnectSignals()
+{
+    if( project_ ) {
+        QObject::disconnect( project_, nullptr, this, nullptr );
+    }
+}
+
+void SExternFileList::populate()
+{
+    if( !project_ ) return;
+
+    // Populate existing extern files
+    const auto &externFiles = project_->getExternFiles();
+    for( const auto &ef : externFiles ) {
+        externFileAdded( ef );
+    }
+
+    // Populate existing assets
+    const auto &assets = project_->getAssets();
+    for( auto it = assets.begin(); it != assets.end(); ++it ) {
+        assetAdded( it.key(), *(it.value()) );
+    }
+}
+
+void SExternFileList::connectSignals()
+{
+    if( !project_ ) return;
+
+    QObject::connect( project_, SIGNAL( externFileAdded( const SExternFile & ) ),
+                      this, SLOT( externFileAdded( const SExternFile & ) ) );
+    QObject::connect( project_, SIGNAL( externFileRemoved( const QString ) ),
+                      this, SLOT( externFileRemoved( const QString ) ) );
+    QObject::connect( project_, SIGNAL( assetAdded( const QString &, SObject & ) ),
+                      this, SLOT( assetAdded( const QString &, SObject & ) ) );
+    QObject::connect( project_, SIGNAL( assetRemoved( const QString & ) ),
+                      this, SLOT( assetRemoved( const QString & ) ) );
+}
+
+void SExternFileList::setProject( SProject *project )
+{
+    disconnectSignals();
+    clear();
+    itemDict_.clear();
+    assetItemDict_.clear();
+    assetNameByBody_.clear();
+
+    project_ = project;
+    if( project_ ) {
+        populate();
+        connectSignals();
+    }
+}
+
+SExternFileList::SExternFileList( QWidget *parent, SProject *project )
     : QTreeWidget( parent ),
-      project_( pro )
+      project_( nullptr )
 {
     setColumnCount(3);
     setMinimumWidth(200);
@@ -180,14 +234,8 @@ SExternFileList::SExternFileList( QWidget *parent, SProject &pro )
     setDragEnabled(true);
     setDragDropMode(QAbstractItemView::DragOnly);
     setSelectionMode(QAbstractItemView::SingleSelection);
-    // FIXME: Add a destroyed slot for the destroyed signal of the project.
-    // FIXME: Add initially used extern files.
-    QObject::connect( &project_, SIGNAL( externFileAdded( const SExternFile & ) ),
-                      this, SLOT( externFileAdded( const SExternFile & ) ) );
-    QObject::connect( &project_, SIGNAL( externFileRemoved( const QString ) ),
-                      this, SLOT( externFileRemoved( const QString ) ) );
-    QObject::connect( &project_, SIGNAL( assetAdded( const QString &, SObject & ) ),
-                      this, SLOT( assetAdded( const QString &, SObject & ) ) );
-    QObject::connect( &project_, SIGNAL( assetRemoved( const QString & ) ),
-                      this, SLOT( assetRemoved( const QString & ) ) );
+
+    if( project ) {
+        setProject( project );
+    }
 }

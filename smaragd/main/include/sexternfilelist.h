@@ -27,11 +27,18 @@ class SExternFileList
 {
     Q_OBJECT
 public:
-    SExternFileList( QWidget *parent, SProject &project );
+    SExternFileList( QWidget *parent, SProject *project );
     virtual ~SExternFileList();
+
+    void setProject( SProject *project );
 
 protected:
     void startDrag(Qt::DropActions supportedActions) override;
+
+private:
+    void connectSignals();
+    void populate();
+    void disconnectSignals();
 
 private slots:
     void externFileRemoved( const QString );
@@ -46,7 +53,7 @@ private slots:
     void assetRefChanged();
 
 private:
-    SProject &project_;
+    SProject *project_;
     // This is ugly, but I don't know a better solution. We keep a second dict here
     // for the items, though they must also be kept inside the list...
     QHash<QString,SExternFileItem*> itemDict_;

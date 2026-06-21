@@ -6,6 +6,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariant>
+#include <QByteArray>
 
 // Per-user, per-machine configuration, persisted as an INI file under the
 // user's app-config location (e.g. %APPDATA%/Smaragd/smaragd.ini on Windows,
@@ -56,6 +57,14 @@ public:
     QStringList recentProjects() const;
     void        addRecentProject( const QString &path );
     void        removeRecentProject( const QString &path );
+
+    // Main window geometry (size and position, binary format).
+    QByteArray windowGeometry() const;
+    void       setWindowGeometry( const QByteArray &geometry );
+
+    // Main window state (toolbar/dock layout and positions, binary format).
+    QByteArray windowState() const;
+    void       setWindowState( const QByteArray &state );
 
 signals:
     void changed( const QString &key );
