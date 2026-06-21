@@ -372,7 +372,12 @@ void SStdMixer::mixerChildDurationChanged( length_t )
 
 SStdMixer::~SStdMixer()
 {
-    // FIXME: Free cpMixer.
+    if( cpMixers_ ) {
+        for( int i = 0; i < nBusses_; ++i )
+            delete cpMixers_[i];
+        ::free( cpMixers_ );
+    }
+    delete cpRewire_;
 }
 
 SStdMixer::SStdMixer( SProject *project )

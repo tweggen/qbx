@@ -5,8 +5,7 @@
 twPluginChain::twPluginChain( tw303aEnvironment &env, idx_t nBusses )
     : twComponent( env ), nBusses_( nBusses )
 {
-    allocPlugs();
-    createOutputLatches();
+    // allocPlugs() and createOutputLatches() are called by init()
 }
 
 twPluginChain::~twPluginChain() = default;

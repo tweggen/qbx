@@ -51,14 +51,16 @@ void SApplication::rewireSpeaker()
 {
     // Drop any prior wiring first.
     getSpeaker()->setInput( 0, NULL );
+    getSpeaker()->setInput( 1, NULL );
     if( !currentProject_ || !currentProject_->getRootComponent() ) return;
 
     // twRewire (the rewire root inside SStdMixer) returns NULL from
     // linkOutput() when nothing has been wired into it yet, so this call
     // is only meaningful once the graph has at least one track / bus.
-    twLatchOutput *src =
-        currentProject_->getRootComponent()->getRootComponent().linkOutput(0);
-    getSpeaker()->setInput( 0, src );
+    twComponent &root = currentProject_->getRootComponent()->getRootComponent();
+    getSpeaker()->setInput( 0, root.linkOutput( 0 ) );
+    if( root.getNOutputs() > 1 )
+        getSpeaker()->setInput( 1, root.linkOutput( 1 ) );
 }
 
 bool SApplication::isPlaying() const

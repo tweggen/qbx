@@ -205,11 +205,10 @@ void STrack::setNBusses( int nBusses )
     if( nBusses==nBusses_ ) return;
     int oldNBusses = nBusses_;
     if( nBusses<oldNBusses ) {
-        // The number of busses is about to shrink.
-        // This is only possible, if no object on the track needs
-        // more output channels.
-        // FIXME: Check this here.
-        // FIXME: Write this.
+        // Shrink not yet implemented; refuse rather than leaving stale wiring
+        // that would cause a use-after-free on the next render.
+        Q_ASSERT_X( false, "STrack::setNBusses", "bus count shrink not supported" );
+        return;
     } else {
         // The number of busses is about to grow.
         twTrackMix **newMixers = (twTrackMix **) ::calloc( 
@@ -232,25 +231,17 @@ void STrack::setNBusses( int nBusses )
         ::free( cpTrackMixers_ );
         cpTrackMixers_ = newMixers;
     }
-    // Reset plugin chain components
-    if( cpPluginChains_ ) {
-        for( int i=0; i<oldNBusses; ++i ) {
-            delete cpPluginChains_[i];
-            cpPluginChains_[i] = nullptr;
-        }
-    } else {
-        oldNBusses = 0;
-    }
+    // Grow plugin chain array: keep existing chains, create new ones for added buses.
     {
+        int chainOldN = cpPluginChains_ ? oldNBusses : 0;
         twPluginChain **newChains = (twPluginChain **) ::calloc(
             sizeof( twPluginChain * ), nBusses );
-        if( cpPluginChains_ ) {
-            for( int i=0; i<oldNBusses; ++i ) {
-                newChains[i] = cpPluginChains_[i];
-            }
+        // Preserve existing chains — they are already wired and may hold audio state
+        for( int i=0; i<chainOldN; ++i ) {
+            newChains[i] = cpPluginChains_[i];
         }
-        // Create new plugin chain components
-        for( int i=oldNBusses; i<nBusses; ++i ) {
+        // Create new plugin chain components for added buses only
+        for( int i=chainOldN; i<nBusses; ++i ) {
             newChains[i] = new twPluginChain(
                 *(SApplication::app().get303aEnvironment()), 1 );
             newChains[i]->init();
@@ -273,6 +264,9 @@ void STrack::setNBusses( int nBusses )
     // Wire: track mixer → plugin chain → rewire
     for( int i=0; i<nBusses; ++i ) {
         cpPluginChains_[i]->setInput( 0, cpTrackMixers_[i]->linkOutput( 0 ) );
+        // If this chain already has plugins, rebuildWiring() so it picks up the
+        // (possibly new) input latch after setInput changed pInputPlugs[0].
+        cpPluginChains_[i]->rebuildWiring();
         cpRewire_->setInput( i, cpPluginChains_[i]->linkOutput( 0 ) );
     }
     nBusses_ = nBusses;
@@ -334,6 +328,13 @@ STrack::~STrack()
         }
         ::free( cpPluginChains_ );
     }
+    if( cpTrackMixers_ ) {
+        for( int i = 0; i < nBusses_; ++i ) {
+            delete cpTrackMixers_[i];
+        }
+        ::free( cpTrackMixers_ );
+    }
+    delete cpRewire_;
 }
 
 #if 0
