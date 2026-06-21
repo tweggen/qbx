@@ -2229,7 +2229,8 @@ void SMVActualView::loadWheelConfig()
 
 int SMVActualView::wheelActionFor( Qt::KeyboardModifiers mods ) const
 {
-    bool ctrl  = mods & Qt::ControlModifier;
+    // On macOS, Command key is Qt::MetaModifier. On Windows/Linux, Ctrl is ControlModifier.
+    bool ctrl  = (mods & Qt::ControlModifier) || (mods & Qt::MetaModifier);
     bool shift = mods & Qt::ShiftModifier;
     if( ctrl && shift ) return wheelCtrlShift_;
     if( ctrl )          return wheelCtrl_;
