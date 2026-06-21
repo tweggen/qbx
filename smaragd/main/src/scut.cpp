@@ -847,8 +847,22 @@ void SCut::processWindowParamEvents()
 // without eager, expensive recomputation.
 void SCut::invalidateAspects(uint32_t aspects)
 {
+    // If Playback is invalidated, the audio data in the capture is stale.
+    // Drop both capture and peak cache so they'll be rebuilt with current state.
+    if (aspects & Playback) {
+        capture_.reset();
+        if (capPeaks_) { ::free(capPeaks_); capPeaks_ = NULL; capPeakN_ = 0; }
+    }
+
     // Clear the bits for invalidated aspects
     validAspects_ &= ~aspects;
+
+    // Propagate invalidation to dependents (transitive chain, proposal 06).
+    // If this cut's Playback is stale, cuts that reference this cut are also stale.
+    // Example: Track A muted → Cut C (refs Track A) invalidated → Cut D (refs Cut C) invalidated
+    if (aspects & Playback) {
+        notifyDependentsChanged(Playback | Metadata);
+    }
 }
 
 // Lazy revalidation: ensure specific aspects are computed.
