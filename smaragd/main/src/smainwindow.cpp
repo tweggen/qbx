@@ -1322,7 +1322,7 @@ static QIcon makePaletteIcon( const QString &glyph )
     pr_normal.setBrush( QColor( 235, 235, 225 ) );
     pr_normal.drawRect( 2, 2, sz - 5, sz - 5 );
     pr_normal.setPen( QColor( 40, 40, 40 ) );
-    pr_normal.setFont( QFont( "sansserif", 9, QFont::Bold ) );
+    pr_normal.setFont( QFont( "Helvetica Neue", 9, QFont::Bold ) );
     pr_normal.drawText( QRect( 2, 2, sz - 5, sz - 5 ), Qt::AlignCenter, glyph );
     pr_normal.end();
 
@@ -1335,7 +1335,7 @@ static QIcon makePaletteIcon( const QString &glyph )
     pr_checked.setBrush( QColor( 180, 200, 240 ) );  // Light blue background
     pr_checked.drawRect( 2, 2, sz - 5, sz - 5 );
     pr_checked.setPen( QColor( 20, 40, 100 ) );  // Dark blue text
-    pr_checked.setFont( QFont( "sansserif", 9, QFont::Bold ) );
+    pr_checked.setFont( QFont( "Helvetica Neue", 9, QFont::Bold ) );
     pr_checked.drawText( QRect( 2, 2, sz - 5, sz - 5 ), Qt::AlignCenter, glyph );
     pr_checked.end();
 
