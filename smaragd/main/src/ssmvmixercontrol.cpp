@@ -376,13 +376,16 @@ SSMVMixerControl::SSMVMixerControl(
     // Small label font derived from the application default (the bundled
     // FreeSans, antialiased) so the channel strip matches the rest of the UI.
     QFont smallFont = QApplication::font();
-    smallFont.setPointSize( 7 );
+    smallFont.setPointSize( 9 );
 
     qTrkLabel_ = new QLineEdit( tk_.getSName(), this );
     qTrkLabel_->setFrame( false );
     qTrkLabel_->setFont( smallFont );
     // Install event filter to pass mouse clicks through to parent for track selection
     qTrkLabel_->installEventFilter( this );
+    // Lose focus when Enter/Return is pressed
+    QObject::connect( qTrkLabel_, &QLineEdit::returnPressed,
+                      qTrkLabel_, &QLineEdit::clearFocus );
 
     // Vertical fader, like a channel strip on a console. Works in tenths of a
     // dB; loud at the top (Qt vertical sliders put the maximum at the top).
