@@ -87,6 +87,7 @@ public slots:
     void setNBusses( int n );
     void onPluginSlotInserted( int index, SPluginSlot &slot );
     void onPluginSlotRemoved( int index, SPluginSlot &slot );
+    void onPluginSlotsReordered();
 
 signals:
     void nChannelsChanged( int n );

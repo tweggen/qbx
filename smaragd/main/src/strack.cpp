@@ -302,6 +302,8 @@ STrack::STrack( SProject *project )
                       this, SLOT( onPluginSlotInserted( int, SPluginSlot & ) ) );
     QObject::connect( cpPluginChain_, SIGNAL( slotRemoved( int, SPluginSlot & ) ),
                       this, SLOT( onPluginSlotRemoved( int, SPluginSlot & ) ) );
+    QObject::connect( cpPluginChain_, SIGNAL( slotsReordered() ),
+                      this, SLOT( onPluginSlotsReordered() ) );
 
     // Add a listener for added child objects.
     // We want to become noticed, if it is new.
@@ -457,6 +459,18 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
         for( int i = 0; i < nBusses_; ++i ) {
             if( cpPluginChains_[i] ) {
                 cpPluginChains_[i]->removePlugin( index );
+            }
+        }
+    }
+}
+
+void STrack::onPluginSlotsReordered()
+{
+    // Sync plugin reordering to all DSP plugin chains
+    if( cpPluginChains_ ) {
+        for( int i = 0; i < nBusses_; ++i ) {
+            if( cpPluginChains_[i] ) {
+                cpPluginChains_[i]->rebuildWiring();
             }
         }
     }

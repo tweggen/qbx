@@ -41,7 +41,6 @@ private:
     idx_t nBusses_;
     mutable std::mutex pluginsMutex_;  // protects plugins_ vector from concurrent access
     std::vector<audio::twPluginInsert *> plugins_;  // not owned; managed by SPluginSlot
-    bool wiringDirty_ = false;
 };
 
 #endif

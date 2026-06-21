@@ -20,10 +20,8 @@ SPluginChain::SPluginChain( SProject *project )
 
 void SPluginChain::childEvent( QChildEvent *event )
 {
-    SObject::childEvent( event );
-
     if( event->type() == QEvent::ChildAdded ) {
-        // Find the index of the newly added child
+        // Find the index of the newly added child before parent processes it
         QObject *child = event->child();
         int index = children().indexOf( child );
         if( index >= 0 ) {
@@ -31,14 +29,33 @@ void SPluginChain::childEvent( QChildEvent *event )
             if( link ) {
                 SPluginSlot *slot = dynamic_cast<SPluginSlot *>( &link->getSObject() );
                 if( slot ) {
+                    // Cache the slot before parent's childEvent runs
+                    SObject::childEvent( event );
                     emit slotInserted( index, *slot );
+                    return;
                 }
             }
         }
     } else if( event->type() == QEvent::ChildRemoved ) {
-        // For ChildRemoved, we can't access the child anymore, so we emit with the link
-        // This is handled by the parent's childEvent which already fired before us
+        // Extract child info BEFORE parent's childEvent deletes it
+        QObject *child = event->child();
+        int index = children().indexOf( child );
+        if( index >= 0 ) {
+            SLink *link = dynamic_cast<SLink *>( child );
+            if( link ) {
+                SPluginSlot *slot = dynamic_cast<SPluginSlot *>( &link->getSObject() );
+                if( slot ) {
+                    // Let parent process removal first
+                    SObject::childEvent( event );
+                    emit slotRemoved( index, *slot );
+                    return;
+                }
+            }
+        }
     }
+
+    // Default: call parent for other event types
+    SObject::childEvent( event );
 }
 
 SPluginChain::~SPluginChain() = default;
@@ -77,8 +94,7 @@ SPluginSlot *SPluginChain::getSlotAt( int index ) const
 void SPluginChain::reorderSlot( int fromIndex, int toIndex )
 {
     moveChildToIndex( fromIndex, toIndex );
-    // Rewire the DSP graph (slots are now in a different order).
-    // TODO: trigger chain component rebuild
+    // Emit signal to trigger DSP graph rewiring (STrack::onPluginSlotsReordered listens)
     emit slotsReordered();
 }
 
