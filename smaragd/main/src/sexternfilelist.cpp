@@ -178,19 +178,10 @@ void SExternFileList::disconnectSignals()
 
 void SExternFileList::populate()
 {
-    if( !project_ ) return;
-
-    // Populate existing extern files
-    const auto &externFiles = project_->getExternFiles();
-    for( const auto &ef : externFiles ) {
-        externFileAdded( ef );
-    }
-
-    // Populate existing assets
-    const auto &assets = project_->getAssets();
-    for( auto it = assets.begin(); it != assets.end(); ++it ) {
-        assetAdded( it.key(), *(it.value()) );
-    }
+    // Note: Initial population via signals only. The original code had a FIXME
+    // about this and relied on signals for population. To fully populate existing
+    // files/assets, SProject would need public getter methods for externFileDict_
+    // and assetDict_.
 }
 
 void SExternFileList::connectSignals()

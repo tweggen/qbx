@@ -23,6 +23,7 @@
 #include "twwavinput.h"
 #include "twspeaker.h"
 #include "sapplication.h"
+#include "smainwindow.h"
 #include "sstdmixer.h"
 #include "sstdmixerview.h"
 #include "strackdetailpanel.h"
