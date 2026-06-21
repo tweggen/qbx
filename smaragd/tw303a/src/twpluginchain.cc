@@ -30,6 +30,12 @@ length_t twPluginChain::calcOutputTo( sample_t *dst, length_t len, idx_t port )
         return 0;
     }
 
+    // New block: reset all plugins so each processes fresh audio this callback.
+    // The streaming latch only calls calcOutputTo when it needs new data, so
+    // reaching here always means we are at the start of a new render block.
+    for( auto *plugin : plugins_ )
+        plugin->resetBlock();
+
     // Pull from the last plugin's output (wiring already established in rebuildWiring)
     auto *lastPlugin = plugins_.back();
     if( lastPlugin && port < lastPlugin->getNOutputs() ) {

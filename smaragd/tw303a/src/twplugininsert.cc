@@ -17,8 +17,7 @@ twPluginInsert::twPluginInsert( tw303aEnvironment &env, std::unique_ptr<twPlugin
     for( auto &buf : outScratch_ )
         buf.resize( 4096 );
 
-    allocPlugs();
-    createOutputLatches();
+    // allocPlugs() and createOutputLatches() are called by init()
 }
 
 twPluginInsert::~twPluginInsert() = default;
