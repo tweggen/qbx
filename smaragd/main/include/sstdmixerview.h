@@ -123,6 +123,7 @@ private:
     // an SOpt::WheelAction. See wheelEvent().
     void loadWheelConfig();
     int  wheelActionFor( Qt::KeyboardModifiers mods ) const;
+    QString describeWheelActions() const;  // Human-readable hint for status bar
     int  wheelPlain_, wheelShift_, wheelCtrl_, wheelCtrlShift_;
     bool wheelZoomToCursor_, wheelInvertZoom_;
 

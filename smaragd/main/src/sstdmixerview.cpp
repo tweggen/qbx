@@ -18,6 +18,7 @@
 #include <QMimeData>
 #include <QMainWindow>
 #include <QStatusBar>
+#include <QApplication>
 
 #include "twwavinput.h"
 #include "twspeaker.h"
@@ -2235,6 +2236,34 @@ int SMVActualView::wheelActionFor( Qt::KeyboardModifiers mods ) const
     return wheelPlain_;
 }
 
+QString SMVActualView::describeWheelActions() const
+{
+    auto actionName = [](int action) -> QString {
+        switch( action ) {
+        case SOpt::ScrollVertical:   return "Scroll V";
+        case SOpt::ScrollHorizontal: return "Pan";
+        case SOpt::ZoomHorizontal:   return "Zoom H";
+        case SOpt::ZoomVertical:     return "Zoom V";
+        default:                      return QString();
+        }
+    };
+
+    QStringList parts;
+    QString plain = actionName( wheelPlain_ );
+    if( !plain.isEmpty() ) parts << plain;
+
+    QString shift = actionName( wheelShift_ );
+    if( !shift.isEmpty() ) parts << ("Shift = " + shift);
+
+    QString ctrl = actionName( wheelCtrl_ );
+    if( !ctrl.isEmpty() ) parts << ("Ctrl = " + ctrl);
+
+    QString ctrlShift = actionName( wheelCtrlShift_ );
+    if( !ctrlShift.isEmpty() ) parts << ("Ctrl+Shift = " + ctrlShift);
+
+    return "Wheel: " + parts.join( ", " );
+}
+
 void SMVActualView::wheelEvent( QWheelEvent *ev )
 {
     int dy = ev->angleDelta().y();
@@ -2299,6 +2328,13 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
         return;
     }
     ev->accept();
+
+    // Post a hint showing available wheel actions and modifiers
+    SMainWindow *mw = dynamic_cast<SMainWindow*>(
+        QApplication::activeWindow() );
+    if( mw ) {
+        mw->postHint( describeWheelActions() );
+    }
 }
 
 void SMVActualView::dragEnterEvent(QDragEnterEvent *e)

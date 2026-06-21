@@ -462,6 +462,11 @@ void SMainWindow::closeEvent( QCloseEvent *event )
     }
 }
 
+void SMainWindow::postHint( const QString &text, int durationMs )
+{
+    statusBar()->showMessage( text, durationMs );
+}
+
 void SMainWindow::startPlaying()
 {
     qWarning() << "startPlaying(): Called." << Qt::endl;

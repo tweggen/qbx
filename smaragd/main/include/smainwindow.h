@@ -29,6 +29,9 @@ public:
     // any. Leaves an empty workspace when there is nothing to restore.
     void openMostRecent();
 
+    // Post a transient hint to the status bar (auto-dismisses after durationMs).
+    void postHint( const QString &text, int durationMs = 5000 );
+
 protected:
     void closeEvent( QCloseEvent *event ) override;
 
