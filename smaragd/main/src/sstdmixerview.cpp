@@ -2269,10 +2269,21 @@ QString SMVActualView::describeWheelActions() const
 void SMVActualView::wheelEvent( QWheelEvent *ev )
 {
     int dy = ev->angleDelta().y();
+    int dx = ev->angleDelta().x();
+
+    // On macOS with physical mouse wheel, certain modifier combinations swap X/Y reporting.
+    // When Y delta is zero but X delta is non-zero, treat X as Y (for vertical operations).
+    // This handles Shift+wheel, Cmd+Shift+wheel, etc. on physical mouse wheels.
+    if( dy == 0 && dx != 0 ) {
+        dy = dx;
+    }
+
     if( dy == 0 ) { QWidget::wheelEvent( ev ); return; }
     int dir = (dy > 0) ? +1 : -1;   // +1 = wheel away from the user ("up")
 
-    switch( wheelActionFor( ev->modifiers() ) ) {
+    int action = wheelActionFor( ev->modifiers() );
+
+    switch( action ) {
 
     case SOpt::ScrollVertical: {
         // One track lane per notch via the scrollbar (keeps it in sync).
