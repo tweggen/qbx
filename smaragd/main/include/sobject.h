@@ -7,6 +7,7 @@
 #include <qtextstream.h>
 #include <QDomElement>
 #include <QList>
+#include <QSet>
 #include <mutex>
 
 class QWidget;
@@ -247,6 +248,26 @@ public slots:
      */
     virtual void invalidatePreview();
 
+    /**
+     * Notify dependents (objects that reference this one) that specific aspects
+     * have changed. Only affected dependents are invalidated (lazy invalidation).
+     * Called by audio state changes (mute, solo, volume) that don't affect arrangement.
+     * Example: setMuted() → notifyDependentsChanged(Playback | Metadata)
+     */
+    void notifyDependentsChanged(uint32_t affectedAspects);
+
+    /**
+     * Register a dependent link (object that references this one via SLink).
+     * Called when an asset is placed or a cut references this object.
+     * Uses SLink (the native reference primitive) to track who depends on this object.
+     */
+    void addDependentLink(SLink *dependentLink);
+
+    /**
+     * Unregister a dependent link. Called when a placement or cut is removed.
+     */
+    void removeDependentLink(SLink *dependentLink);
+
 protected:
     offset_t getChildrenExtent( offset_t &firstStart, offset_t &lastEnd, 
                                 int &nUndefStart, int &nUndefDuration ) const;
@@ -268,6 +289,14 @@ private:
     // maintained in childEvent(); order is independent and set by
     // moveChildToIndex()).
     QList<SLink*> childOrder_;
+
+    // Lazy invalidation + dependency tracking (proposal 06).
+    // Set of SLink objects that reference this object (the native way to track references).
+    // When this object's state changes, dependent links are notified.
+    // Example: track output is captured by a cut link; edit track mute → cut's
+    // Playback aspect invalidated, not entire scene.
+    mutable std::mutex dependentsMutex_;
+    QSet<SLink*> dependentLinks_;
     int nRefs_;
     offset_t previewForLength_;
     offset_t nPreviewProbes_;

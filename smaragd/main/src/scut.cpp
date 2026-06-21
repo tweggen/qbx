@@ -223,19 +223,23 @@ static void renderObjectInto( SObject &obj, sample_t *dest, length_t len,
         for( length_t i = 0; i < len; ++i ) dest[(size_t) i] *= (sample_t) factor;
 }
 
-twRandomSource *SCut::ensureCapture()
+// Internal: build the capture (container render) if needed.
+// Initializes capture_ by rendering the container's audio.
+// Should only be called when capture_ is null.
+void SCut::buildCapture_()
 {
-    if( capture_ ) return capture_.get();
+    if( capture_ ) return;  // Already built
+
     SObject &c = content_->getSObject();
-    if( c.getRandomSource() ) return NULL;          // real source -> sample path
-    if( !c.hasDuration() ) return NULL;
+    if( c.getRandomSource() ) return;  // real source -> sample path, no capture needed
+    if( !c.hasDuration() ) return;
 
     // Use snapshot to read window parameters consistently (multithreading policy: Phase 1).
     SCutSnapshot snap = getSnapshot();
     length_t need = (length_t) snap.startOffset + snap.cutDuration;
     length_t dur  = (length_t) c.getDuration();
     length_t n = dur > need ? dur : need;
-    if( n <= 0 ) return NULL;
+    if( n <= 0 ) return;
 
     tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
 
@@ -254,7 +258,18 @@ twRandomSource *SCut::ensureCapture()
                           this, SLOT( invalidateCapture() ) );
         captureConnected_ = true;
     }
-    return capture_.get();
+}
+
+// Old API: ensure the capture (container render) is built.
+// Returns the capture if available, NULL if not capturable (sample cut).
+// Called from UI for preview or explicit build.
+twRandomSource *SCut::ensureCapture()
+{
+    // Use new aspect-based API
+    ensureCapture(Preview | Playback | Metadata);
+
+    if( capture_ ) return capture_.get();
+    return NULL;
 }
 
 void SCut::invalidateCapture()
@@ -266,6 +281,10 @@ void SCut::invalidateCapture()
     capture_.reset();
     if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }
     readerTried_ = false;
+
+    // Invalidate affected aspects: capture rebuild affects Preview, Playback, Metadata
+    // but NOT Export (export is on-demand only and can be recomputed independently).
+    invalidateAspects(Preview | Playback | Metadata);
 
     // Rebuild reader to work with new capture
     rebuildReader( getSnapshot() );
@@ -536,6 +555,13 @@ void SCut::setPitchCents( double cents )
 
 SCut::~SCut()
 {
+    // Unregister from content's dependents (lazy invalidation, proposal 06).
+    // This cut is no longer referencing the content, so remove this link from
+    // the content's dependent set. The content can now change without affecting this cut.
+    if( content_ ) {
+        content_->getSObject().removeDependentLink(content_);
+    }
+
     // Clean up all reader states (double-buffer model)
     if( currentReader_.reader ) { delete currentReader_.reader; currentReader_.reader = NULL; }
     if( currentReader_.grain )  { delete currentReader_.grain;  currentReader_.grain = NULL; }
@@ -573,6 +599,12 @@ SCut::SCut( SProject *parentProject, SLink &content )
         int srate = (parentProject != nullptr) ? parentProject->getSRate() : 48000;
         cutDuration_ = srate / 2;
     }
+
+    // Register as dependent of the content object (lazy invalidation, proposal 06).
+    // When the content's audio state changes (mute, solo, volume), this cut will be
+    // notified to invalidate only affected aspects (Playback, Metadata), not the
+    // entire arrangement.
+    content_->getSObject().addDependentLink(content_);
 }
 
 SCut::SCut( SProject *parentProject, SObject &content )
@@ -592,6 +624,12 @@ SCut::SCut( SProject *parentProject, SObject &content )
     }
     // Loop start defaults to no loop.
     loopStart_ = cutDuration_;
+
+    // Register as dependent of the content object (lazy invalidation, proposal 06).
+    // When the content's audio state changes (mute, solo, volume), this cut will be
+    // notified to invalidate only affected aspects (Playback, Metadata), not the
+    // entire arrangement.
+    content_->getSObject().addDependentLink(content_);
 }
 
 int SCut::serializeSelfAttributes( QTextStream &o )
@@ -798,4 +836,58 @@ void SCut::processWindowParamEvents()
     if( needsReaderBuild ) {
         rebuildReader( snap );
     }
+}
+
+// Lazy invalidation: mark specific aspects as needing recomputation.
+// Aspects only recompute on demand via ensureCapture(). This allows
+// rapid UI changes (mute, solo, etc.) to invalidate only relevant aspects
+// without eager, expensive recomputation.
+void SCut::invalidateAspects(uint32_t aspects)
+{
+    // Clear the bits for invalidated aspects
+    validAspects_ &= ~aspects;
+}
+
+// Lazy revalidation: ensure specific aspects are computed.
+// Only recomputes aspects that are invalid; valid aspects are left alone.
+// Called by UI (requesting Preview), audio thread (requesting Playback), etc.
+void SCut::ensureCapture(uint32_t aspectsMask)
+{
+    // Determine which requested aspects are currently invalid
+    uint32_t toCompute = aspectsMask & ~validAspects_;
+
+    if (toCompute == 0) {
+        // All requested aspects already valid
+        return;
+    }
+
+    // Recompute invalid aspects
+    if (toCompute & Preview) {
+        // Preview (waveform peaks) depends on capture being built.
+        // Build capture if needed, then build peak cache
+        buildCapture_();
+        ensureCapturePeaks();
+    }
+
+    if (toCompute & Playback) {
+        // Playback (reader chain) requires rebuild if reader is stale
+        ensureReader();
+    }
+
+    if (toCompute & Metadata) {
+        // Metadata (duration, peaks) computed with playback + capture
+        ensureReader();
+        // Also ensure capture + peaks for metadata
+        buildCapture_();
+        ensureCapturePeaks();
+    }
+
+    if (toCompute & Export) {
+        // Export buffer: on-demand, expensive. For now, same as playback.
+        // In future, this could be deferred or computed in background.
+        ensureReader();
+    }
+
+    // Mark computed aspects as valid
+    validAspects_ |= toCompute;
 }

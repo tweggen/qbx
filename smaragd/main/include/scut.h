@@ -23,6 +23,28 @@ class SCutRendererInline;
 class SProjectLoader;
 
 /**
+ * Capture aspect bitmask: granular invalidation + lazy recomputation.
+ *
+ * Different capture data has different lifecycles:
+ * - Preview: Waveform for timeline display (batched, low priority)
+ * - Playback: Full-quality audio for real-time playback (eager, high priority)
+ * - Export: Resampled/normalized for export (on-demand only)
+ * - Metadata: Duration, peak levels, RMS (lightweight, computed with playback)
+ *
+ * Invalidation is aspect-specific: muting a track invalidates Playback+Metadata
+ * but NOT Preview (waveform shape unchanged). Revalidation is lazy: aspects
+ * recompute on demand via ensureCapture(aspects).
+ */
+enum SCutCaptureAspect : uint32_t {
+    Preview   = 1u << 0,  // Waveform peaks for timeline
+    Playback  = 1u << 1,  // Reader chain for audio output
+    Metadata  = 1u << 2,  // Duration, peak levels (computed with playback)
+    Export    = 1u << 3,  // Resampled buffer for export (on-demand)
+
+    All       = Preview | Playback | Metadata | Export,
+};
+
+/**
  * A cut (slice) of content with timing information.
  *
  * Thread affinity: MIXED (synchronized via snapshot)
@@ -174,6 +196,20 @@ public slots:
     // Ensure the peak cache of the capture is built (for waveform display).
     bool ensureCapturePeaks();
 
+    // Lazy invalidation + aspect-based caching (proposal 06).
+    // Invalidate specific aspects of the capture (Preview, Playback, Metadata, Export).
+    // Aspects recompute on demand via ensureCapture().
+    void invalidateAspects(uint32_t aspects);
+
+    // Ensure specific capture aspects are valid. Computes on-demand if needed.
+    // Called by UI (paint) requesting Preview, audio thread requesting Playback, etc.
+    void ensureCapture(uint32_t aspectsMask);
+
+    // Query which aspects are currently valid (for diagnostics/optimization).
+    bool isAspectValid(uint32_t aspect) const {
+        return (validAspects_ & aspect) == aspect;
+    }
+
 private slots:
 
 protected:
@@ -190,6 +226,9 @@ private:
     // thread setters; accepts snapshot to avoid reading unlocked members
     // (multithreading policy: Phase 1 Option B).
     void rebuildReader( const SCutSnapshot &snap );
+    // Build the capture (container render) if needed. Internal method called
+    // from ensureCapture(aspectsMask). Only called when capture_ is null.
+    void buildCapture_();
 
     // Queue of pending window parameter changes (populated during drag,
     // processed after drag completes). Allows drag operations to queue changes
@@ -239,6 +278,12 @@ private:
     preview_t *capPeaks_ = nullptr;
     offset_t   capPeakSkip_ = 0;   // capture frames per peak
     offset_t   capPeakN_ = 0;      // number of peaks
+
+    // Lazy invalidation + aspect-based caching (proposal 06).
+    // validAspects_: bitmask of which capture aspects are currently computed and valid.
+    // When an aspect is invalidated, its bit is cleared. ensureCapture() recomputes
+    // only invalid aspects on demand.
+    uint32_t validAspects_ = 0;    // Initially no aspects valid, all computed on first access.
 };
 
 #endif

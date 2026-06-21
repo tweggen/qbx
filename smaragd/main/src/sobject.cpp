@@ -10,6 +10,7 @@
 #include "sobject.h"
 #include "slink.h"
 #include "sproject.h"
+#include "scut.h"
 #include "twrandomsource.h"
 
 void SObject::setSolo( bool f )
@@ -17,6 +18,9 @@ void SObject::setSolo( bool f )
     if( f==solo_ ) return;
     solo_ = f;
     emit soloChanged( f );
+    // Solo changes audio routing but not arrangement structure:
+    // notify dependents to invalidate Playback + Metadata aspects only
+    notifyDependentsChanged(Playback | Metadata);
 }
 
 void SObject::setMuted( bool f )
@@ -24,6 +28,9 @@ void SObject::setMuted( bool f )
     if( f==muted_ ) return;
     muted_ = f;
     emit mutedChanged( f );
+    // Mute changes audio routing but not arrangement structure:
+    // notify dependents to invalidate Playback + Metadata aspects only
+    notifyDependentsChanged(Playback | Metadata);
 }
 
 void SObject::setArmedForRecording( bool f )
@@ -31,6 +38,9 @@ void SObject::setArmedForRecording( bool f )
     if( f==armed_ ) return;
     armed_ = f;
     emit armedForRecordingChanged( f );
+    // Armed state doesn't affect audio capture aspects (only matters during record),
+    // but invalidate for UI consistency
+    notifyDependentsChanged(Metadata);
 }
 
 void SObject::setRecordingChannels( uint32_t channels )
@@ -51,6 +61,9 @@ void SObject::setVolume( double d )
     // so it gets regenerated at the new volume level (not just scaled on-the-fly).
     invalidatePreview();
     emit volumeChanged( d );
+    // Volume changes audio content but not arrangement:
+    // notify dependents to invalidate Playback + Metadata aspects (audio content change)
+    notifyDependentsChanged(Playback | Metadata);
 }
 
 void SObject::setPan( double d )
@@ -537,4 +550,69 @@ SObject::~SObject()
 SProject *SObject::getProjectSafe() const
 {
     return dynamic_cast<SProject*>( parent() );
+}
+
+// Register a dependent link (object that references this one).
+// Called when a cut or asset placement references this object.
+// Uses SLink (the native way to track references) for dependency tracking.
+// Connects to the link's destroyed signal to auto-unregister if the link is deleted.
+void SObject::addDependentLink(SLink *dependentLink)
+{
+    if (!dependentLink) return;
+    {
+        std::lock_guard<std::mutex> lock(dependentsMutex_);
+        dependentLinks_.insert(dependentLink);
+    }
+
+    // Auto-unregister this link when it's destroyed (proposal 06: safe cleanup).
+    // If the cut/link is deleted, remove it from our dependent set to avoid
+    // stale pointers. Use a lambda to capture 'this' and the link safely.
+    QObject::connect(dependentLink, &QObject::destroyed,
+                     this, [this, dependentLink]() {
+        removeDependentLink(dependentLink);
+    });
+}
+
+// Unregister a dependent link. Called when a reference is removed.
+void SObject::removeDependentLink(SLink *dependentLink)
+{
+    if (!dependentLink) return;
+    std::lock_guard<std::mutex> lock(dependentsMutex_);
+    dependentLinks_.remove(dependentLink);
+}
+
+// Notify dependent links that specific aspects have changed.
+// Only affected dependents are invalidated (lazy invalidation).
+// Example: setMuted() → notifyDependentsChanged(Playback | Metadata)
+//
+// This allows fine-grained invalidation: muting a track only invalidates
+// the Playback aspects of cuts that capture that track's output, not the
+// entire arrangement or unrelated clips.
+//
+// NOTE: Links are auto-unregistered on destruction via the destroyed() signal
+// connected in addDependentLink(). This is safe even if a link is destroyed
+// while we're iterating (we collect links under lock first).
+void SObject::notifyDependentsChanged(uint32_t affectedAspects)
+{
+    // Collect dependents under lock, then notify without holding lock.
+    // This snapshot approach is safe: even if a link is destroyed during iteration,
+    // the destroyed() signal will trigger removeDependentLink(), but we're working
+    // on our own snapshot, not the shared set.
+    QSet<SLink*> dependents;
+    {
+        std::lock_guard<std::mutex> lock(dependentsMutex_);
+        dependents = dependentLinks_;
+    }
+
+    // Notify each dependent (typically a cut) to invalidate affected aspects
+    for (SLink *link : dependents) {
+        if (!link) continue;  // Defensive: skip if somehow null (shouldn't happen)
+
+        // Try to cast the linked object to SCut and invalidate its aspects
+        SObject &linkedObj = link->getSObject();
+        SCut *cut = dynamic_cast<SCut*>(&linkedObj);
+        if (cut) {
+            cut->invalidateAspects(affectedAspects);
+        }
+    }
 }
