@@ -274,20 +274,23 @@ twRandomSource *SCut::ensureCapture()
 
 void SCut::invalidateCapture()
 {
-    // Drop the cached render of a container; next access re-captures.
+    // Drop the cached render of a container; next access re-captures (lazy invalidation).
     // Use reset() not delete: the shared_ptr releases SCut's reference, but the
     // audio thread's currentReader_.captureRef keeps it alive if rendering is in progress.
-    // Rebuild reader with current snapshot (double-buffer model ensures safety).
     capture_.reset();
     if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }
     readerTried_ = false;
 
     // Invalidate affected aspects: capture rebuild affects Preview, Playback, Metadata
     // but NOT Export (export is on-demand only and can be recomputed independently).
+    // These aspects will be recomputed lazily on demand via ensureCapture(aspects).
     invalidateAspects(Preview | Playback | Metadata);
 
-    // Rebuild reader to work with new capture
-    rebuildReader( getSnapshot() );
+    // NOTE: Do NOT eagerly rebuild the reader here (lazy invalidation model).
+    // The old code called rebuildReader() immediately, which defeated the purpose
+    // of lazy invalidation by forcing expensive twGrainSource initialization.
+    // Instead, let the lazy system recompute on demand when needed.
+    // rebuildReader( getSnapshot() );  // <-- REMOVED for lazy evaluation
 
     // Notify parent containers that window parameters have changed (for live drag feedback)
     emit windowParamsChanged();

@@ -324,17 +324,17 @@ void SSMVMixerControl::mouseReleaseEvent( QMouseEvent *ev )
 void SSMVMixerControl::muteToggled( bool on )
 {
     tk_.setMuted( on );
-    // Mute/solo changes the rendered output, so drop cached renders (asset
-    // captures) — they are not actions and so don't hit the action chokepoint.
-    if( SProject *p = SApplication::app().getCurrentProject() )
-        p->notifyArrangementChanged();
+    // Lazy invalidation (proposal 06): setMuted() calls notifyDependentsChanged()
+    // to invalidate only affected cuts' Playback+Metadata aspects, not the entire
+    // arrangement. No need to call notifyArrangementChanged() here.
 }
 
 void SSMVMixerControl::soloToggled( bool on )
 {
     tk_.setSolo( on );
-    if( SProject *p = SApplication::app().getCurrentProject() )
-        p->notifyArrangementChanged();
+    // Lazy invalidation (proposal 06): setSolo() calls notifyDependentsChanged()
+    // to invalidate only affected cuts' Playback+Metadata aspects, not the entire
+    // arrangement. No need to call notifyArrangementChanged() here.
 }
 
 void SSMVMixerControl::onMutedChanged( bool on )
