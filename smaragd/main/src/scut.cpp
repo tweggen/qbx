@@ -109,7 +109,7 @@ swap_complete:
     {
         std::lock_guard<std::mutex> lock( readerSwapLock_ );
 
-        // Clean up previous old reader
+        // Clean up previous old reader (oldReader_.captureRef shared_ptr released automatically)
         if( oldReader_.reader ) { delete oldReader_.reader; oldReader_.reader = NULL; }
         if( oldReader_.grain )  { delete oldReader_.grain;  oldReader_.grain = NULL; }
 
@@ -119,6 +119,7 @@ swap_complete:
         // Move next to current (becomes visible to audio thread immediately)
         currentReader_.reader = newReader;
         currentReader_.grain = newGrain;
+        currentReader_.captureRef = capture_;   // Share ownership: keeps capture alive during render
         currentReader_.looping = newLooping;
         currentReader_.generation++;  // Increment on successful swap
     }
@@ -224,7 +225,7 @@ static void renderObjectInto( SObject &obj, sample_t *dest, length_t len,
 
 twRandomSource *SCut::ensureCapture()
 {
-    if( capture_ ) return capture_;
+    if( capture_ ) return capture_.get();
     SObject &c = content_->getSObject();
     if( c.getRandomSource() ) return NULL;          // real source -> sample path
     if( !c.hasDuration() ) return NULL;
@@ -244,7 +245,7 @@ twRandomSource *SCut::ensureCapture()
     // track-of-tracks). Materialise once into a resident buffer.
     std::vector<sample_t> buf( (size_t) n, 0.0f );
     renderObjectInto( c, buf.data(), n, env, env.getSRate(), 0 );
-    capture_ = new twCapturingSource( std::move( buf ), n, 1, env.getSRate() );
+    capture_ = std::make_shared<twCapturingSource>( std::move( buf ), n, 1, env.getSRate() );
 
     if( !captureConnected_ ) {
         // Transparent invalidation: any applied action drops the snapshot so the
@@ -253,14 +254,16 @@ twRandomSource *SCut::ensureCapture()
                           this, SLOT( invalidateCapture() ) );
         captureConnected_ = true;
     }
-    return capture_;
+    return capture_.get();
 }
 
 void SCut::invalidateCapture()
 {
     // Drop the cached render of a container; next access re-captures.
+    // Use reset() not delete: the shared_ptr releases SCut's reference, but the
+    // audio thread's currentReader_.captureRef keeps it alive if rendering is in progress.
     // Rebuild reader with current snapshot (double-buffer model ensures safety).
-    if( capture_ ) { delete capture_; capture_ = NULL; }
+    capture_.reset();
     if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }
     readerTried_ = false;
 
@@ -541,7 +544,8 @@ SCut::~SCut()
     if( nextReader_.reader ) { delete nextReader_.reader; nextReader_.reader = NULL; }
     if( nextReader_.grain )  { delete nextReader_.grain;  nextReader_.grain = NULL; }
 
-    if( capture_ ) { delete capture_; capture_ = NULL; }
+    // capture_ is a shared_ptr — it will be freed when all references are released
+    capture_.reset();
     if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; }
     delete content_;
     content_ = NULL;

@@ -13,12 +13,7 @@
 
 int twTrackMix::seekTo( offset_t newOffset )
 {
-    fprintf(stderr, "[twTrackMix::seekTo] Setting playOffset_ from %llu to %llu\n",
-            (unsigned long long)playOffset_, (unsigned long long)newOffset);
-    fflush(stderr);
-    playOffset_ = newOffset;
-    fprintf(stderr, "[twTrackMix::seekTo] playOffset_ now = %llu\n", (unsigned long long)playOffset_);
-    fflush(stderr);
+    playOffset_.store( newOffset, std::memory_order_relaxed );
     return 0;
 }
 
@@ -73,9 +68,9 @@ length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t out
 {
     // FIXME: Why getBufferSize()? We have some length given!
     sample_t *readBuffer = (sample_t *) alloca( env.getBufferSize()*sizeof( sample_t ) );
-    offset_t startInterval = playOffset_;
-    playOffset_ += playLen;
-    offset_t endInterval = playOffset_;
+    offset_t startInterval = playOffset_.load( std::memory_order_relaxed );
+    offset_t endInterval   = startInterval + playLen;
+    playOffset_.store( endInterval, std::memory_order_relaxed );
 
 //      qWarning( "twTrackMix::calcOutputTo(): Called. track_=$%08x; playOffset_ = %d.\n",
 //                &track_, playOffset_ );

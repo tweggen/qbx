@@ -5,6 +5,7 @@
 #include <qobject.h>
 #include <mutex>
 #include <atomic>
+#include <memory>
 #include "sobject.h"
 #include "slink.h"
 #include "twgrainparams.h"
@@ -40,11 +41,13 @@ class SProjectLoader;
  */
 // Double-buffer reader state: always has a complete, committed version (Unix page cache model).
 // Audio thread always reads "current"; UI thread builds "next", then swaps atomically.
+// captureRef keeps the backing container render alive for as long as any reader references it.
 struct SCutReaderState {
-    twSampleReader *reader;      // Always valid: non-null or fallback to content's root
-    twGrainSource *grain;        // Optional grain processor
-    bool looping;                // True iff reader is a twLoopReader
-    int generation;              // Incremented on each swap
+    twSampleReader *reader = nullptr;      // Always valid: non-null or fallback to content's root
+    twGrainSource *grain = nullptr;        // Optional grain processor
+    std::shared_ptr<twCapturingSource> captureRef;  // Keeps backing source alive during render
+    bool looping = false;                  // True iff reader is a twLoopReader
+    int generation = 0;                    // Incremented on each swap
 };
 
 // Window parameter change event queue for async processing after drag operations.
@@ -213,9 +216,9 @@ private:
     // nextReader_: being built by UI thread, swapped in atomically when ready
     // oldReader_: previous currentReader_, freed after swap
     mutable std::mutex readerSwapLock_;  // Protects swap operation
-    SCutReaderState currentReader_{nullptr, nullptr, false, 0};
-    SCutReaderState nextReader_{nullptr, nullptr, false, 0};
-    SCutReaderState oldReader_{nullptr, nullptr, false, 0};  // For deferred deletion
+    SCutReaderState currentReader_{nullptr, nullptr, nullptr, false, 0};
+    SCutReaderState nextReader_{nullptr, nullptr, nullptr, false, 0};
+    SCutReaderState oldReader_{nullptr, nullptr, nullptr, false, 0};  // For deferred deletion
     // Descriptor of the reader chain currently built, so rebuildReader() can skip
     // re-acquiring an identical chain. A non-looping sample cut's reader does not
     // depend on duration or slip offset, so a plain trim/extend (which retriggers
@@ -227,7 +230,9 @@ private:
     length_t      builtLoopLength_ = 0;
     // Cached render of a container content (proposal 07 step 5). Built lazily by
     // ensureCapture(); invalidated on any edit via invalidateCapture().
-    twCapturingSource *capture_ = nullptr;
+    // Using shared_ptr so audio thread's reader snapshot keeps the capture alive
+    // for the duration of rendering, preventing use-after-free during concurrent invalidation.
+    std::shared_ptr<twCapturingSource> capture_;
     bool captureConnected_ = false;   // connected to arrangementChanged once
     // Peak cache over the capture, for the waveform preview. Built lazily from
     // capture_; freed with it in invalidateCapture()/dtor.
