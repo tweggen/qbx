@@ -196,8 +196,16 @@ static inline int gripLeft( int depth ) { return depth*SMV_TRACK_INDENT + SMV_FO
 // Draw the indented grip strip and, for parents, a fold triangle to its left.
 void SSMVMixerControl::paintEvent( QPaintEvent *ev )
 {
-    // Draw background: darker blue (50% luminosity) for selected, lighter (25%) for unselected
-    QColor bgColor = selected_ ? QColor( 64, 100, 140 ) : QColor( 48, 70, 100 );
+    // Draw background: darker blue for selected, lighter for unselected.
+    // If track is muted, use desaturated gray tones instead.
+    QColor bgColor;
+    if( tk_.isMuted() ) {
+        // Muted: gray out the background
+        bgColor = selected_ ? QColor( 80, 80, 85 ) : QColor( 60, 60, 65 );
+    } else {
+        // Normal: blue tones (darker for selected, lighter for unselected)
+        bgColor = selected_ ? QColor( 64, 100, 140 ) : QColor( 48, 70, 100 );
+    }
     QPainter p( this );
     p.fillRect( rect(), bgColor );
 
@@ -335,6 +343,7 @@ void SSMVMixerControl::onMutedChanged( bool on )
 {
     QSignalBlocker block( qMute_ );   // don't bounce back into muteToggled
     qMute_->setChecked( on );
+    update();  // Repaint to show/hide gray background
 }
 
 void SSMVMixerControl::onSoloChanged( bool on )
