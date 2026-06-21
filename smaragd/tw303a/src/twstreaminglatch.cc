@@ -34,7 +34,7 @@ twStreamingLatch::~twStreamingLatch ()
 void twStreamingLatch::init( length_t bufSize0 )
 {
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twStreamingLatch::init( %d ): called.", bufSize0 );
+	fprintf( sterr, "twStreamingLatch::init( %d ): called.", bufSize0 );
 #endif
 	// allocate buffer
 	bufSize = bufSize0;
@@ -46,7 +46,7 @@ void twStreamingLatch::init( length_t bufSize0 )
 	// reset pointer
 	offset = 0;
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twStreamingLatch::init( %d ): leaving.", bufSize0 );
+	fprintf( sterr, "twStreamingLatch::init( %d ): leaving.", bufSize0 );
 #endif
 }
 
@@ -56,7 +56,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 	offset_t destPos;
 
 #ifdef DEBUG_COPYDATA
-	syslog( LOG_DEBUG, "twStreamingLatch::copyData( %d, pDest, %d): entered, bufSize = %d",
+	fprintf( sterr, "twStreamingLatch::copyData( %d, pDest, %d): entered, bufSize = %d",
 		startOffset, maxLength, bufSize );
 #endif
 
@@ -92,7 +92,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 			memcpyLength = min( dataAvail, toCopy );
 			// copy out the data still stored in the latch
 #ifdef DEBUG_COPYDATA
-			syslog( LOG_DEBUG, "twStreamingLatch::copyData( %d, pDest, %d): "
+			fprintf( sterr, "twStreamingLatch::copyData( %d, pDest, %d): "
 			                   "bufSize = %d; reading %d bytes, "
 			                   "bufStartOffset = %d;",
 				startOffset, maxLength, bufSize, memcpyLength, bufStartOffset );
@@ -125,7 +125,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 			maxFill = min( (bufSize-bufPos), toFill );
 
 #ifdef DEBUG_COPYDATA
-			syslog( LOG_DEBUG, "twStreamingLatch::copyData( %d, pDest, %d): trying to fill up %d bytes.",
+			fprintf( sterr, "twStreamingLatch::copyData( %d, pDest, %d): trying to fill up %d bytes.",
 				startOffset, maxLength, maxFill );
 #endif
 
@@ -143,7 +143,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 	}
 
 #ifdef DEBUG_COPYDATA
-	syslog( LOG_DEBUG, "twStreamingLatch::copyData( %d, pDest, %d): Leaving.",
+	fprintf( sterr, "twStreamingLatch::copyData( %d, pDest, %d): Leaving.",
 		startOffset, maxLength  );
 #endif
 

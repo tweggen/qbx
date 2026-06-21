@@ -47,15 +47,15 @@ void twMixer::init()
 void twMixer::createOutputLatches()
 {
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twMixer::createOutputLatches(): entered." );
+	fprintf( sterr, "twMixer::createOutputLatches(): entered." );
 #endif
 	// use default buffer size
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twMixer::createOutputLatches(): creating streaming latch..." );
+	fprintf( sterr, "twMixer::createOutputLatches(): creating streaming latch..." );
 #endif
 	pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twMixer::createOutputLatches(): leaving." );
+	fprintf( sterr, "twMixer::createOutputLatches(): leaving." );
 #endif
 }
 

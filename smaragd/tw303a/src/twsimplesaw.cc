@@ -14,15 +14,15 @@ void twSimpleSaw::init()
 void twSimpleSaw::createOutputLatches()
 {
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twSimpleSaw::createOutputLatches(): entered." );
+	fprintf( sterr, "twSimpleSaw::createOutputLatches(): entered." );
 #endif
 	// use default buffer size
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twSimpleSaw::createOutputLatches(): creating streaming latch..." );
+	fprintf( sterr, "twSimpleSaw::createOutputLatches(): creating streaming latch..." );
 #endif
 	pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twSimpleSaw::createOutputLatches(): leaving." );
+	fprintf( sterr, "twSimpleSaw::createOutputLatches(): leaving." );
 #endif
 }
 
@@ -44,7 +44,7 @@ length_t twSimpleSaw::calcOutputTo( sample_t *pDest,
 	
 
 #ifdef DEBUG_CALCOUTPUT
-	syslog( LOG_DEBUG, "twSimpleSaw::calOutputTo(): Starting at %d, calcing %d.", currPos, length );
+	fprintf( sterr, "twSimpleSaw::calOutputTo(): Starting at %d, calcing %d.", currPos, length );
 #endif
 	a = currPos;
 	b = a+realRead;

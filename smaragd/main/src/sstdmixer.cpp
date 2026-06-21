@@ -237,7 +237,7 @@ int SStdMixer::setNBusses( int n )
         }
     }
     // OK, we might shrink or enlarge. Take the output latches we have with us.
-    newMixers = (twMixer **) ::calloc( sizeof( twMixer * ), n );
+    newMixers = (twMixer **) ::calloc( n, sizeof( twMixer * ) );
     // Takeover contains the the number of busses we can takeover from the current installation.
     int nTakeOver = n;
     if( nBusses_<nTakeOver ) nTakeOver = nBusses_;
