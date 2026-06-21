@@ -29,6 +29,7 @@
 #include "sobjectrenderer.h"
 #include "sproject.h"
 #include "ssmvmixercontrol.h"
+#include "strackcolormodifier.h"
 #include "actions/ssettrackvolumeaction.h"
 
 // The fader works in tenths of a dB so it can use an integer QSlider:
@@ -196,16 +197,13 @@ static inline int gripLeft( int depth ) { return depth*SMV_TRACK_INDENT + SMV_FO
 // Draw the indented grip strip and, for parents, a fold triangle to its left.
 void SSMVMixerControl::paintEvent( QPaintEvent *ev )
 {
-    // Draw background: darker blue for selected, lighter for unselected.
-    // If track is muted, use desaturated gray tones instead.
-    QColor bgColor;
-    if( tk_.isMuted() ) {
-        // Muted: gray out the background
-        bgColor = selected_ ? QColor( 80, 80, 85 ) : QColor( 60, 60, 65 );
-    } else {
-        // Normal: blue tones (darker for selected, lighter for unselected)
-        bgColor = selected_ ? QColor( 64, 100, 140 ) : QColor( 48, 70, 100 );
-    }
+    // Determine base color (depends on selection state)
+    QColor baseColor = selected_ ? QColor( 64, 100, 140 ) : QColor( 48, 70, 100 );
+
+    // Apply track state modifiers (muted, solo, armed for recording)
+    STrackColorModifier mod = STrackColorModifier::fromTrackState( tk_ );
+    QColor bgColor = mod.apply( baseColor );
+
     QPainter p( this );
     p.fillRect( rect(), bgColor );
 

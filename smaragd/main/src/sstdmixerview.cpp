@@ -2638,9 +2638,11 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
         layout->addWidget(qTrackDetailPanel_, 1);  // Stretch factor 1 = gets 1/3 of space
     }
 
-    // Connect mixer's track selection to detail panel
+    // Connect mixer's track selection to detail panel and timeline repaint
     connect(model_, &SStdMixer::selectedTrackChanged,
             qTrackDetailPanel_, &STrackDetailPanel::setTrack);
+    connect(model_, &SStdMixer::selectedTrackChanged,
+            qContent_, QOverload<>::of(&QWidget::update));
     // Initialize detail panel with current selection (nullptr at startup)
     qTrackDetailPanel_->setTrack(model_->getSelectedTrack());
 }

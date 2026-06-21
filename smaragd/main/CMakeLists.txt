@@ -24,6 +24,7 @@ set(SMARAGD_HEADERS
     include/sstdmixer.h
     include/sstdmixerview.h
     include/strack.h
+    include/strackcolormodifier.h
     include/strackrenderer.h
     include/strackrndrinline.h
     include/spluginchain.h
@@ -79,6 +80,7 @@ set(SMARAGD_HEADERS
     include/actions/srenderaction.h
     include/actions/sscreenshotaction.h
     include/sprojectprops.h
+    include/szoomscrollbar.h
 )
 
 set(SMARAGD_SOURCES
@@ -109,6 +111,7 @@ set(SMARAGD_SOURCES
     src/sstdmixer.cpp
     src/sstdmixerview.cpp
     src/strack.cpp
+    src/strackcolormodifier.cpp
     src/strackrndrinline.cpp
     src/spluginchain.cpp
     src/spluginslot.cpp
@@ -159,6 +162,7 @@ set(SMARAGD_SOURCES
     src/actions/sremovepluginaction.cpp
     src/actions/srenderaction.cpp
     src/actions/sscreenshotaction.cpp
+    src/szoomscrollbar.cpp
 )
 
 # Optionally embed a bundled UI font. Drop a TTF at main/resources/FreeSans.ttf

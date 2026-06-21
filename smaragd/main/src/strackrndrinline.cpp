@@ -5,6 +5,9 @@
 #include "sapplication.h"
 #include "slink.h"
 #include "strack.h"
+#include "sproject.h"
+#include "sstdmixer.h"
+#include "strackcolormodifier.h"
 #include "strackrndrinline.h"
 
 /**
@@ -13,15 +16,35 @@
  * to render themselves into their off-screens, to then transfer them to screen.
  */
 void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
-{    
+{
     QPainter &p = ctx.getPainter();
     QRect visibRect = ctx.getVisibRect();
 
     offset_t leftTime = ctx.getTimeOf( visibRect.x() );
     offset_t rightTime = ctx.getTimeOf( visibRect.x()+visibRect.width() );
 
-    // Draw background with 60% luminosity of the track head colors (c)
-    p.fillRect( visibRect, QColor( 40, 70, 100 ) );    
+    // Check if this track is selected
+    bool isTrackSelected = false;
+    SProject *project = SApplication::app().getCurrentProject();
+    if( project ) {
+        SObject *root = project->getRootComponent();
+        if( root ) {
+            SStdMixer *mixer = dynamic_cast<SStdMixer*>( root );
+            if( mixer && mixer->getSelectedTrack() == &getTrack() ) {
+                isTrackSelected = true;
+            }
+        }
+    }
+
+    // Determine base color (depends on selection state)
+    QColor baseColor = isTrackSelected ? QColor( 60, 90, 130 ) : QColor( 40, 70, 100 );
+
+    // Apply track state modifiers (muted, solo, armed for recording)
+    STrackColorModifier mod = STrackColorModifier::fromTrackState( getTrack() );
+    QColor finalColor = mod.apply( baseColor );
+
+    // Draw background with the final color
+    p.fillRect( visibRect, finalColor );    
     if( getTrack().isEmpty() ) {
 //        p.setPen( QColor( 160, 64, 64 ) );
 //        p.drawText( visibRect, AlignCenter, "Track is empty." );
