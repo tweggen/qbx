@@ -5,6 +5,7 @@
 #include "twmixer.h"
 #include "twcomponent.h"
 #include "slink.h"
+#include "sprojectloader.h"
 #include <QDomElement>
 #include <QTextStream>
 #include <QChildEvent>
@@ -103,4 +104,37 @@ twComponent *SPluginChain::getChainComponent()
     // TODO: Build or rebuild the chain component from current slots.
     // For now, return nullptr (will be implemented with proper wiring).
     return chainComponent_;
+}
+
+SLink *SPluginChain::instantiateFromDomElement(
+    SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
+{
+    (void) parent;
+    // Create the plugin chain object
+    SPluginChain *chain = new SPluginChain( &projectLoader.getProject() );
+    chain->readPreChildrenAttributes( element );
+
+    // Iterate through child SLink elements and instantiate plugin slots
+    QDomNode childNode = element.firstChild();
+    while( !childNode.isNull() ) {
+        if( childNode.isElement() ) {
+            QDomElement childElement = childNode.toElement();
+            if( childElement.nodeName() == "SLink" ) {
+                QString objectId = childElement.attribute( "objectId" );
+                // Look up the object id in the dictionary
+                SLink *contentLink = projectLoader.getObjectDictionary().value( objectId );
+                if( contentLink ) {
+                    // Create a link to the slot
+                    SLink *sl = new SLink( contentLink->getSObject(), nullptr );
+                    if( sl ) {
+                        sl->setParent( chain );
+                    }
+                }
+            }
+        }
+        childNode = childNode.nextSibling();
+    }
+
+    chain->readPostChildrenAttributes( element );
+    return new SLink( *chain, nullptr );
 }

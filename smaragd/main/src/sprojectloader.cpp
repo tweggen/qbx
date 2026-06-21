@@ -20,6 +20,7 @@ using namespace std;
 #include "strack.h"
 #include "scut.h"
 #include "sstdmixer.h"
+#include "spluginchain.h"
 
 
 void SProjectLoader::registerSObjectClass( 
@@ -166,6 +167,7 @@ SProjectLoader::SProjectLoader( SProject &project, const QString &name )
     registerSObjectClass( "SStdMixer", SStdMixer::instantiateFromDomElement );
     registerSObjectClass( "STrack", STrack::instantiateFromDomElement );
     registerSObjectClass( "SCut", SCut::instantiateFromDomElement );
+    registerSObjectClass( "SPluginChain", SPluginChain::instantiateFromDomElement );
 
     QFile f( name_ );
     if ( !f.open( QIODevice::ReadOnly ) )
