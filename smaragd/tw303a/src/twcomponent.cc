@@ -104,10 +104,7 @@ bool twComponent::isSeekable() const
 
 int twComponent::seekTo( offset_t offset )
 {
-    fprintf(stderr, "[twComponent::seekTo] Base implementation called on %s with offset=%llu (seekTo not implemented for this component)\n",
-            typeid(*this).name(), (unsigned long long)offset);
-    fflush(stderr);
-    return -1;
+    return -1;  // Base implementation: component doesn't support seeking
 }
 
 void twComponent::resetAllLatches()

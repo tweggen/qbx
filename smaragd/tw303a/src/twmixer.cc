@@ -19,21 +19,12 @@ const char *twMixer::getOutputName( idx_t ) const
 
 int twMixer::seekTo( offset_t offset )
 {
-    fprintf(stderr, "[twMixer::seekTo] Forwarding seekTo(%llu) to all %d input plugs\n",
-            (unsigned long long)offset, mixerInputs_);
-    fflush(stderr);
-
     // Forward the seek to all input plugs
     for (idx_t i = 0; i < mixerInputs_; ++i) {
         if (pInputPlugs[i]) {
             twLatch &latch = pInputPlugs[i]->getParentLatch();
             twComponent &comp = latch.getComponent();
-            fprintf(stderr, "[twMixer::seekTo]   Seeking input %d (component type: %s)\n",
-                    i, typeid(comp).name());
-            fflush(stderr);
-            int result = comp.seekTo(offset);
-            fprintf(stderr, "[twMixer::seekTo]   Result: %d\n", result);
-            fflush(stderr);
+            comp.seekTo(offset);
         }
     }
     return 0;
