@@ -1291,7 +1291,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Only rebuild if offset actually changed
                 if( newOff != cut->getStartOffset() ) {
                     cut->setStartOffset( (offset_t) newOff );  // Visual feedback + queues event via invalidateCapture
-                    cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
+                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 }
                 update( oldRect );
@@ -1333,7 +1333,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 cut->setStretchRaw( newStretch );
                 cut->setStartOffsetRaw( newOffset );
                 cut->setDurationRaw( newDur );
-                cut->ensureCapturePeaks();  // refresh container-backed previews
+                cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                 smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -1369,7 +1369,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->setDuration( newDur );
                     cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
                     cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
-                    cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
+                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 }
                 update( oldRect );
@@ -1401,10 +1401,9 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->setStartOffset( rCutStart );
                     cut->setDuration( rDur );
                     lastClickSLink_->setStartTime( rStart );
-                    cut->invalidateCapture();  // Drop cached render
-                    // Force synchronous rebuild for live feedback during drag
-                    cut->ensureCapture();
-                    cut->ensureCapturePeaks();
+                    cut->invalidateCapture();  // Drop cached render, schedule async revalidation
+                    // Non-blocking: get preview cache (or stale) for live feedback during drag
+                    cut->getPreviewCapture();
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                     update( oldRect );
                     update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -1427,7 +1426,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 if( rDur != cut->getDuration() ) {
                     cut->setDuration( rDur );
                     cut->queueWindowParamEvent( DURATION_CHANGE, (double) rDur );
-                    cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
+                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 }
                 update( oldRect );
