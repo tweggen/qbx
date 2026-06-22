@@ -106,10 +106,14 @@ length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t out
 //                  &cp, playOffset_ );
 //        cp.seekTo( startOffset );
         offset_t doRead = endTime-startTime;
-        memset( readBuffer, 0, sizeof( sample_t ) * playLen );
-        cp.calcOutputTo( readBuffer+startTime-startInterval, doRead, outChannel );
-        for( int i=startTime-startInterval; (offset_t)i<endTime-startInterval; i++ ) {
-            buffer[i] += readBuffer[i];
+        // Only zero out the range we'll actually use (not entire playLen)
+        offset_t destOffset = startTime-startInterval;
+        memset( readBuffer + destOffset, 0, sizeof( sample_t ) * doRead );
+        // Get actual amount produced (may be less than doRead if component underruns)
+        length_t actuallyGot = cp.calcOutputTo( readBuffer+destOffset, doRead, outChannel );
+        // Only mix the actual samples produced (don't mix zero-padded tail)
+        for( offset_t i = 0; i < actuallyGot; i++ ) {
+            buffer[destOffset + i] += readBuffer[destOffset + i];
         }
     }
 
