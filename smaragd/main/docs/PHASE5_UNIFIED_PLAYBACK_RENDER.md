@@ -243,10 +243,20 @@ if (buffer_.size() >= BUFFER_SIZE) {
 - [ ] Test render with incomplete captures
 - [ ] Stress test with large projects
 
+### Phase 5c1: Futures Integration (within Phase 5c)
+- [ ] Implement GenerationPromise RAII wrapper
+- [ ] Add GenerationRegistry singleton
+- [ ] Tag CapturePageData with generation ID and ready future
+- [ ] Wire revalidation completion → GenerationRegistry::complete()
+- [ ] Implement FileSink with future waiting logic
+- [ ] Add age-based fallback (prevent forever-wait on stale data)
+
 ### Phase 5d: Validation & Polish (weeks 7-8)
 - [ ] Comprehensive testing (playback, render, both together)
 - [ ] Performance profiling
 - [ ] Edge cases (late-stage warmup, format changes, etc.)
+- [ ] Test render with incomplete captures (future timeout behavior)
+- [ ] Verify no deadlocks with generation registry cleanup
 - [ ] Documentation update
 
 ---
@@ -276,13 +286,244 @@ if (buffer_.size() >= BUFFER_SIZE) {
 
 ---
 
+## Revalidation Completion Tracking (Futures-Based Model)
+
+### Problem: Waiting for Captures in Render
+
+The render path needs to ensure complete, valid captures are written to disk:
+
+**Challenge:** Async capture revalidation is non-blocking. How does FileSink know when a buffer is ready to write?
+
+**Options Evaluated:**
+1. Qt signals: Heavy machinery (QMetaObject, event loop, marshaling) for multithreaded use
+2. Condition variables: Low-level, requires manual state management
+3. **std::future/std::promise: Best fit** — designed for cross-thread completion notification
+
+### Design: Generation-Based Futures
+
+Each revalidation cycle gets a **generation ID**. Captures are tagged with their generation. FileSink waits on futures to know when a generation is complete.
+
+```cpp
+// tw303a/include/audio/generation_promise.h (NEW)
+class GenerationPromise {
+    uint32_t generation_;
+    std::promise<void> promise_;
+    std::shared_future<void> future_;
+    
+public:
+    GenerationPromise(uint32_t generation)
+        : generation_(generation) {
+        future_ = promise_.get_future().share();
+    }
+    
+    uint32_t getGeneration() const { return generation_; }
+    
+    // Called when revalidation for this generation completes
+    void markComplete() {
+        try {
+            promise_.set_value();
+        } catch (const std::future_error&) {
+            // Already set, idempotent
+        }
+    }
+    
+    // FileSink waits on this to know generation is stable
+    std::shared_future<void> getFuture() const { return future_; }
+    
+    // Non-blocking check: is this generation ready?
+    bool isReady(std::chrono::milliseconds timeout = std::chrono::milliseconds(0)) const {
+        return future_.wait_for(timeout) == std::future_status::ready;
+    }
+};
+
+// Global registry: generation ID → promise
+class GenerationRegistry {
+    std::unordered_map<uint32_t, std::shared_ptr<GenerationPromise>> promises_;
+    std::mutex registry_mutex_;
+    
+public:
+    std::shared_ptr<GenerationPromise> getOrCreate(uint32_t generation) {
+        std::lock_guard lock(registry_mutex_);
+        auto it = promises_.find(generation);
+        if (it != promises_.end()) {
+            return it->second;
+        }
+        auto promise = std::make_shared<GenerationPromise>(generation);
+        promises_[generation] = promise;
+        return promise;
+    }
+    
+    void complete(uint32_t generation) {
+        std::lock_guard lock(registry_mutex_);
+        auto it = promises_.find(generation);
+        if (it != promises_.end()) {
+            it->second->markComplete();
+        }
+    }
+};
+```
+
+### CapturePageData: Associate Generation with Audio
+
+Each captured buffer gets tagged with its generation:
+
+```cpp
+struct CapturePageData {
+    AudioFrame* frames;
+    size_t frameCount;
+    uint32_t generation;           // Which revalidation cycle produced this
+    std::shared_future<void> readyFuture;  // Future that resolves when generation is stable
+};
+```
+
+### FileSink: Wait for Stability Before Writing
+
+```cpp
+class FileSink : public AudioSink {
+    struct FrameEntry {
+        AudioFrame frame;
+        uint32_t generation;
+        std::shared_future<void> readyFuture;
+        int64_t age_ms;  // Fallback: write if old enough regardless of future
+    };
+    
+    std::deque<FrameEntry> buffer_;
+    static const size_t BUFFER_SIZE = 8192;
+    static const int64_t AGE_TIMEOUT_MS = 500;  // Write stale frames anyway
+    
+    AudioFileWriter* writer_;
+    GenerationRegistry& genReg_;
+    
+public:
+    FileSink(AudioFileWriter* writer, GenerationRegistry& genReg)
+        : writer_(writer), genReg_(genReg) {}
+    
+    void writeFrame(const AudioFrame& frame, uint32_t generation) override {
+        buffer_.push_back({
+            frame,
+            generation,
+            genReg_.getOrCreate(generation)->getFuture(),
+            getCurrentTimeMs()
+        });
+        
+        flushWhenReady();
+    }
+    
+private:
+    void flushWhenReady() {
+        while (!buffer_.empty()) {
+            const auto& entry = buffer_.front();
+            
+            // Two conditions to write:
+            // 1. Generation is stable (future resolved), OR
+            // 2. Data is old enough (Age-based fallback prevents forever-wait)
+            bool ready = entry.readyFuture.wait_for(std::chrono::milliseconds(0)) 
+                        == std::future_status::ready;
+            bool aged = (getCurrentTimeMs() - entry.age_ms) > AGE_TIMEOUT_MS;
+            
+            if (ready || aged) {
+                writer_->write(&entry.frame, 1);
+                buffer_.pop_front();
+            } else {
+                break;  // Stop if front frame isn't ready
+            }
+        }
+    }
+    
+    void flush() override {
+        // Final flush: write everything, with brief grace period
+        while (!buffer_.empty()) {
+            auto& entry = buffer_.front();
+            entry.readyFuture.wait_for(std::chrono::milliseconds(100));
+            writer_->write(&entry.frame, 1);
+            buffer_.pop_front();
+        }
+    }
+};
+```
+
+### Integration: Notify Completions After Revalidation
+
+When revalidation cycle N completes (all dependent workers finish):
+
+```cpp
+// In SProject::finishRevalidation() or worker thread cleanup
+void notifyRevalidationComplete(uint32_t generation) {
+    generationRegistry.complete(generation);  // Unblock FileSink
+}
+```
+
+### Why Futures over Qt Signals?
+
+| Aspect | Qt Signals | std::future |
+|--------|-----------|------------|
+| **Overhead** | Marshal through event loop, QMetaObject | Direct state machine, negligible |
+| **Thread-safety** | Requires Qt::QueuedConnection config | Built-in, always thread-safe |
+| **Multi-waiter** | Connect multiple slots | Share one future to many readers |
+| **Latency** | Event loop round-trip (~milliseconds) | Direct notification (~microseconds) |
+| **Design intent** | UI coordination | Cross-thread async completion |
+| **Frequency** | Few per second (UI updates) | Many per second (render buffers) |
+
+**Decision:** Use std::future. Qt signals add unnecessary overhead in a pure audio context. Futures are designed for exactly this use case: low-latency, lock-free completion notification across threads.
+
+### Integration with Phase 4 Lazy Invalidation
+
+The futures model composes cleanly with Phase 4's async revalidation:
+
+```
+1. User modifies cut (e.g., starts rendering)
+   ↓
+2. invalidateCapture() triggered on cut + dependents
+   ↓
+3. New generation ID allocated: gen = ++currentGeneration_
+   ↓
+4. GenerationPromise created for gen, stored in registry
+   ↓
+5. Revalidator workers pull captures asynchronously
+   (CapturePageData tagged with gen + promise->getFuture())
+   ↓
+6. FileSink starts buffering frames with generation IDs
+   (waits on futures before writing)
+   ↓
+7. Last revalidator finishes → calls notifyRevalidationComplete(gen)
+   ↓
+8. GenerationRegistry::complete(gen) → promise.set_value()
+   ↓
+9. All FileSink waiters wake up → flush buffered frames for gen
+```
+
+**Key insight:** Generations and revalidation cycles are 1:1. One future per cycle, resolves when all workers complete. Multiple frames can carry the same generation; FileSink batches writes by generation stability.
+
+### Memory Management: Registry Cleanup
+
+Generations are transient. After FileSink flushes a generation, the promise can be discarded:
+
+```cpp
+void GenerationRegistry::forget(uint32_t generation) {
+    std::lock_guard lock(registry_mutex_);
+    promises_.erase(generation);
+}
+
+// In FileSink::flushWhenReady(), after writing all frames for a generation:
+// ...write frames...
+// genReg_.forget(generation);  // No longer needed
+```
+
+**Cleanup strategy:**
+- Playback path: Forget generation after readahead buffer passes (no longer used)
+- Render path: Forget generation after FileSink fully writes it to disk
+- Fallback: Forget generations older than ~1 second (prevents unbounded growth)
+
+---
+
 ## Open Questions for Phase 5
 
 1. **Readahead buffer size:** 8192 frames (~170ms @ 48kHz) sufficient? Configurable?
-2. **Buffering strategy:** Fixed-size ring buffer vs. demand-driven buffering?
-3. **Error handling:** How to handle render underruns (vs. playback dropouts)?
-4. **Network sink:** Should be included in Phase 5, or later?
-5. **Legacy compatibility:** Do we maintain RenderSession for a transition period?
+2. **Generation lifecycle:** How long to keep promises in registry? (Cleanup after age-timeout)
+3. **Age-based fallback:** 500ms reasonable? Adaptive based on buffer depth?
+4. **Error handling:** How to handle render underruns (vs. playback dropouts)?
+5. **Network sink:** Should be included in Phase 5, or later?
+6. **Legacy compatibility:** Do we maintain RenderSession for a transition period?
 
 ---
 
@@ -292,6 +533,9 @@ if (buffer_.size() >= BUFFER_SIZE) {
 - ✅ Render uses unified AudioEngine + FileSink
 - ✅ No RenderSession special warmup logic
 - ✅ Render handles stale captures gracefully (via readahead)
+- ✅ Render waits for complete captures via futures (not busy-wait or blocking)
+- ✅ FileSink implements age-based fallback (write stale data if >500ms old)
+- ✅ GenerationPromise is RAII-safe (no promise destruction crashes)
 - ✅ Performance >= Phase 4 (or better)
 - ✅ No regressions in playback quality
 - ✅ Render output identical to Phase 4 (when captures are ready)
