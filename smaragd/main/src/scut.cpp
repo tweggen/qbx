@@ -976,6 +976,15 @@ bool SCut::needsRevalidation(uint32_t aspectsMask) const
 {
     if (aspectsMask == 0) return false;
 
-    std::lock_guard<std::mutex> lock(mutex());
+    // Non-blocking check: try to acquire lock; if busy, assume revalidation might be
+    // happening (safe: worst case we schedule an unnecessary revalidation job).
+    // This prevents UI render from blocking on worker thread mutex contention.
+    std::unique_lock<std::mutex> lock(mutex(), std::try_to_lock);
+    if (!lock.owns_lock()) {
+        // Lock held elsewhere (revalidator or another thread modifying state).
+        // Conservatively assume revalidation might be needed; worst case is redundant job.
+        return true;
+    }
+
     return !currentPage_ || (currentPage_->validAspects & aspectsMask) != aspectsMask;
 }
