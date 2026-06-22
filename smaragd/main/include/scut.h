@@ -238,6 +238,10 @@ protected:
     virtual int serializeSelfAttributes( QTextStream &o );
 
 private:
+    // Check if revalidation is needed for specific aspects. _nolock: caller must hold mutex().
+    // Internal version used by public needsRevalidation() when lock is acquired.
+    bool needsRevalidation_nolock(uint32_t aspectsMask) const;
+
     // Lazily acquire our own independent read cursor over the content's sample
     // data, so two cuts of one source never share a play position (proposal 07).
     // When grain params are non-identity, an owned twGrainSource is interposed

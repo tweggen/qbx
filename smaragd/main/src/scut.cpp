@@ -974,19 +974,24 @@ std::shared_ptr<CapturePageData> SCut::getCapture(uint32_t aspectsMask)
 
 // Check if revalidation is needed for specific aspects.
 // Used by revalidator to decide whether to process a job.
+bool SCut::needsRevalidation_nolock(uint32_t aspectsMask) const
+{
+    if (aspectsMask == 0) return false;
+    return !currentPage_ || (currentPage_->validAspects & aspectsMask) != aspectsMask;
+}
+
 bool SCut::needsRevalidation(uint32_t aspectsMask) const
 {
     if (aspectsMask == 0) return false;
 
-    // Non-blocking check: try to acquire lock; if busy, assume revalidation might be
-    // happening (safe: worst case we schedule an unnecessary revalidation job).
-    // This prevents UI render from blocking on worker thread mutex contention.
+    // Non-blocking check: try to acquire lock. If busy, assume revalidation is needed
+    // (conservative: avoids UI render blocking on worker thread).
     std::unique_lock<std::mutex> lock(mutex(), std::try_to_lock);
     if (!lock.owns_lock()) {
         // Lock held elsewhere (revalidator or another thread modifying state).
-        // Conservatively assume revalidation might be needed; worst case is redundant job.
+        // Assume revalidation might be needed; worst case is a redundant job.
         return true;
     }
 
-    return !currentPage_ || (currentPage_->validAspects & aspectsMask) != aspectsMask;
+    return needsRevalidation_nolock(aspectsMask);
 }
