@@ -370,17 +370,32 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
                       offset_t nProbes )
 {
     // Try async capture first (non-blocking, may be stale or invalid)
-    // If not ready, fall back to live content preview
+    // If not ready, fall back to live content preview (sample-backed cuts only)
     auto page = getPreviewCapture();
     if( !page || !capture_ ) {
-        // No capture available (yet or ever): preview the content live,
-        // in the same (container) frame domain we are addressed in.
-        return getContent().getPreview( dest, start, length, nProbes );
+        // No capture available (yet or ever)
+        // For sample-backed cuts: preview the content live
+        // For container-backed cuts: return error (no fallback)
+        if( getContent().getRandomSource() ) {
+            // Sample-backed: live preview available
+            return getContent().getPreview( dest, start, length, nProbes );
+        } else {
+            // Container-backed: no live preview; page cache only
+            // Return error so UI can show placeholder
+            return -1;
+        }
     }
 
-    // Capture exists but may not have peaks yet - still use live preview as fallback
-    if( !ensureCapturePeaks() )
-        return getContent().getPreview( dest, start, length, nProbes );
+    // Capture exists but may not have peaks yet
+    if( !ensureCapturePeaks() ) {
+        // For sample-backed cuts: try live preview
+        // For container-backed cuts: return error
+        if( getContent().getRandomSource() ) {
+            return getContent().getPreview( dest, start, length, nProbes );
+        } else {
+            return -1;
+        }
+    }
 
     if( nProbes <= 0 ) return -1;
     if( length < 1 ) length = 1;
