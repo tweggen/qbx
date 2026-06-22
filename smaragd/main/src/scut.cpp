@@ -359,10 +359,17 @@ bool SCut::ensureCapturePeaks()
 int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
                       offset_t nProbes )
 {
-    // No capture (sample cut, or a container we can't snapshot): preview the
-    // content live, in the same (container) frame domain we are addressed in.
-    // TODO: Phase 4 - integrate with async capture page model
-    if( !capture_ || !ensureCapturePeaks() )
+    // Try async capture first (non-blocking, may be stale or invalid)
+    // If not ready, fall back to live content preview
+    auto page = getPreviewCapture();
+    if( !page || !capture_ ) {
+        // No capture available (yet or ever): preview the content live,
+        // in the same (container) frame domain we are addressed in.
+        return getContent().getPreview( dest, start, length, nProbes );
+    }
+
+    // Capture exists but may not have peaks yet - still use live preview as fallback
+    if( !ensureCapturePeaks() )
         return getContent().getPreview( dest, start, length, nProbes );
 
     if( nProbes <= 0 ) return -1;
