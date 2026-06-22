@@ -149,6 +149,6 @@ twRewire::twRewire( tw303aEnvironment &env0 )
     : twComponent( env0 )
 {
     setBufferSize( env.getBufferSize() );
-    // Default
-    nInputs_ = 1;
+    // Default: 2 channels (stereo L/R pair)
+    nInputs_ = 2;
 }
