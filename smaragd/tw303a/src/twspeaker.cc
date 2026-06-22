@@ -172,7 +172,8 @@ void twSpeaker::startOutput()
                 return frames;
             }
 
-            std::size_t outFrames = loopValid ? frames : filled;
+            // Always output what we have (never pad with zeros - causes aliasing/artifacts)
+            std::size_t outFrames = filled;
 
             // Interleave L/R into output. If channels > 2, duplicate the stereo
             // pair to all output channels.
@@ -184,9 +185,9 @@ void twSpeaker::startOutput()
                 }
             }
 
-            // Pad any unfilled tail.
-            if (filled < frames) {
-                for (std::size_t i = filled; i < frames; ++i) {
+            // Pad any unfilled tail with silence (smooth, no aliasing).
+            if (outFrames < frames) {
+                for (std::size_t i = outFrames; i < frames; ++i) {
                     for (std::uint32_t c = 0; c < channels; ++c) {
                         out[i * channels + c] = 0.0f;
                     }

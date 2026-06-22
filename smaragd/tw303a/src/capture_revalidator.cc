@@ -83,11 +83,6 @@ void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
     assert(job.cut);
     assert(job.aspects != 0);
 
-    // TODO: Task 3-4 integration - SCut two-page buffer implementation
-    // Once SCut::needsRevalidation(), SCut::getNextPage(), SCut::setNextPage(),
-    // SCut::mutex(), SCut::swapPages() are available, uncomment the following:
-
-    /*
     // Check if cut still needs revalidation
     // (state may have changed while job was queued)
     if (!job.cut->needsRevalidation(job.aspects)) {
@@ -130,11 +125,9 @@ void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
         nextPage->generation++;
     }
 
-    // TODO: Emit signal for UI redraw (connect in SCut when Qt available)
-    // if (job.aspects & Preview) {
-    //     emit captureRevalidated(job.cut, Preview);
-    // }
-    */
+    // TODO: Phase 5 - emit Qt signal for UI redraw
+    // Once SCut becomes a QObject, emit revalidationComplete(cut, aspects)
+    // For now, UI will re-read via getPreviewCapture() on next paint
 }
 
 void CaptureRevalidator::recomputePlayback(SCut* cut, CapturePageData& page) {
