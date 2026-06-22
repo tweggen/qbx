@@ -158,27 +158,39 @@ void CaptureRevalidator::recomputeMetadata(SCut* cut, CapturePageData& page) {
 void CaptureRevalidator::recomputePreview(SCut* cut, CapturePageData& page) {
     // Phase 5d: Build preview waveform from cut's content
     //
-    // For sample-backed cuts: render audio, compute peaks
-    // For container-backed cuts: render container children, compute peaks
-    //
-    // TODO: Implement container rendering via component graph pull
-    // For now: mark as valid to prevent placeholder from showing indefinitely
-    // This allows UI to proceed while waiting for full implementation
+    // Preview is stored as an array of preview_t structs (min/max envelopes).
+    // Maximum number of preview samples: PAGE_SIZE / sizeof(preview_t)
+    // = 256KB / 2 bytes = 131,072 preview points
+
+    const int MAX_PREVIEW_SAMPLES = CapturePageData::PAGE_SIZE / sizeof(preview_t);
+    preview_t* previewData = reinterpret_cast<preview_t*>(page.data);
 
     // Get cut's content
     SObject& content = cut->getContent();
 
     if (content.getRandomSource()) {
-        // Sample-backed cut: read from sample source
-        // TODO: Extract audio window and compute preview peaks
+        // Sample-backed cut: use content's getPreview() to get waveform
+        // This works because SPlainWave implements getPreview()
+        int result = content.getPreview(
+            previewData,
+            cut->getStartOffset(),
+            cut->getDuration(),
+            MAX_PREVIEW_SAMPLES
+        );
+
+        if (result >= 0) {
+            page.validAspects |= Preview;
+        }
     } else {
         // Container-backed cut (track, group, etc.)
-        // TODO: Render container's component graph to get audio,
-        // then apply cut's window parameters and compute preview peaks
+        // TODO: Phase 5d - Implement component graph rendering
+        // For now: render as silence (flat zero line)
+        for (int i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
+            previewData[i].min = 0;
+            previewData[i].max = 0;
+        }
+        page.validAspects |= Preview;
     }
-
-    // Mark preview as valid (placeholder until full implementation)
-    page.validAspects |= Preview;
 }
 
 void CaptureRevalidator::recomputeExport(SCut* cut, CapturePageData& page) {
