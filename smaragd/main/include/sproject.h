@@ -13,14 +13,17 @@
 
 #include <cstdint>
 #include <vector>
+#include <memory>
 
 #include "twfraction.h"
+#include "capture_page_pool.h"
 
 class QDomElement;
 
 class SObject;
 class SExternFile;
 class SLink;
+class CaptureRevalidator;
 
 struct SObjectRegistryEntry;
 
@@ -101,6 +104,11 @@ public:
     // over-invalidation only costs a re-render, never correctness.
     void notifyArrangementChanged() { emit arrangementChanged(); }
 
+    // Async capture revalidation (Phase 4).
+    // Access to pool and revalidator for SCut integration.
+    CaptureRevalidator* getRevalidator() { return revalidator_.get(); }
+    CapturePagePool* getPagePool() { return pagePool_.get(); }
+
 signals:
     void fileNameChanged( const QString & );
     void assetAdded( const QString &name, SObject &body );
@@ -138,6 +146,11 @@ private:
     QHash<QString,SObject*> assetDict_;
 
     bool isPartialLoad_ = false;  // True if load failed partway through
+
+    // Async capture revalidation (Phase 4).
+    // Pre-allocated page pool and worker thread pool for non-blocking capture access.
+    std::unique_ptr<CapturePagePool> pagePool_;       // 512MB pool (2048 pages)
+    std::unique_ptr<CaptureRevalidator> revalidator_;  // 8 worker threads (configurable)
 };
 
 #endif

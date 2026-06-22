@@ -591,6 +591,9 @@ SCut::SCut( SProject *parentProject, SLink &content )
       inlineRenderer_( NULL ),
       readerTried_( false )
 {
+    // Get revalidator from project (Phase 4, async capture model)
+    revalidator_ = (parentProject != nullptr) ? parentProject->getRevalidator() : nullptr;
+
     content_ = &content;
     content_->setParent(this);
     /* was:
@@ -621,6 +624,9 @@ SCut::SCut( SProject *parentProject, SObject &content )
       inlineRenderer_( NULL ),
       readerTried_( false )
 {
+    // Get revalidator from project (Phase 4, async capture model)
+    revalidator_ = (parentProject != nullptr) ? parentProject->getRevalidator() : nullptr;
+
     content_ = new SLink( content, this );
     if( content_->getSObject().hasDuration() ) {
         cutDuration_ = content_->getSObject().getDuration();

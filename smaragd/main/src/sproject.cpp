@@ -13,6 +13,7 @@ using namespace std;
 #include "sprojectprops.h"
 #include "sstdmixer.h"
 #include "sexternfile.h"
+#include "capture_revalidator.h"
 
 // Minimal XML escaping for embedding a JSON string inside a single-quoted
 // attribute. JSON's own double quotes are fine inside single quotes; we only
@@ -382,6 +383,15 @@ SProject::SProject()
       candidateRates_{ 44100, 48000, 88200, 96000 },
       properties_( SProjectProps::defaults() )
 {
+    // Initialize async capture revalidation infrastructure (Phase 4).
+    // Pre-allocate page pool: 2048 pages × 256kB = 512MB per project.
+    // This supports ~100-500 concurrent cut revalidations with headroom.
+    pagePool_ = std::make_unique<CapturePagePool>(2048);
+
+    // Spawn worker thread pool: 8 threads for aggressive race condition testing.
+    // In production, this can be dialed back to 2-4 (diminishing returns above that).
+    revalidator_ = std::make_unique<CaptureRevalidator>(pagePool_.get(), 8);
+
 #if 0
     soRoot_ = new SStdMixer( this );
 #endif
