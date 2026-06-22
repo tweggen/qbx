@@ -36,6 +36,8 @@ set(TW303A_HEADERS
     include/audio/null_backend.h
     include/audio/audio_file_writer.h
     include/audio/audio_input.h
+    include/capture_page_pool.h
+    include/capture_revalidator.h
     include/render_session.h
     include/recording_session.h
 )
@@ -86,6 +88,8 @@ set(TW303A_SOURCES
     src/audio/audio_input.cc
     src/audio/null_input.h
     src/audio/null_input.cc
+    src/capture_page_pool.cc
+    src/capture_revalidator.cc
     src/render_session.cc
     src/recording_session.cc
 )

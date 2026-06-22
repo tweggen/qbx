@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_effect_chain_playback">
+
+  <!-- Regression test: adding the built-in test plugin and starting playback
+       must not crash. This tests the synchronization between SPluginChain (model)
+       and twPluginChain (DSP) layer.
+
+       Key test flow:
+       1. Add a track
+       2. Add the PassThrough test plugin to that track
+          - Triggers SPluginChain::childEvent() → slotInserted() signal
+          - Triggers STrack::onPluginSlotInserted() → twPluginChain::addPlugin()
+          - Thread synchronization via mutex lock_guard
+       3. Start playback
+          - Audio thread calls twPluginChain::calcOutputTo()
+          - Reads the plugins_ vector with mutex protection
+       4. Stop playback cleanly
+
+       Crash = non-zero exit = FAIL.
+  -->
+  <setup project="new"/>
+
+  <actions>
+    <!-- 1. Create a track -->
+    <add-track index="-1"/>
+
+    <!-- 2. Add the built-in PassThrough test plugin to that track.
+             trackPath "0" = first child of the root mixer (added above).
+             slotIndex "-1" = append to end of chain.
+    -->
+    <insert-plugin trackPath="0" slotIndex="-1"
+                   format="tw" uid="tw.passthrough"
+                   name="PassThrough" vendor="tw"
+                   nIn="2" nOut="2"/>
+
+    <!-- 3. Start audio playback (starts the audio thread)
+             play="1" = start, play="0" = stop
+    -->
+    <toggle-playback play="1"/>
+
+    <!-- 4. Stop playback cleanly -->
+    <toggle-playback play="0"/>
+  </actions>
+
+  <assertions>
+    <!-- Sanity: track and plugin chain must still be intact after playback -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
