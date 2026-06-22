@@ -320,6 +320,19 @@ void SApplication::startRender(const audio::RenderParams &params)
         return;
     }
 
+    // TODO: Phase 5 - Async-aware rendering
+    // Currently, render may start before async captures are ready, causing:
+    // 1. First render: partial/distorted audio if captures still building
+    // 2. Second render: zeros if captures invalidated but not yet recomputed
+    //
+    // Proper fix requires:
+    // - Warm-up phase: invalidate all cuts to trigger async revalidation
+    // - Wait mechanism: block briefly for critical captures to be ready
+    // - Or: redesign render to pull incrementally (streaming) instead of upfront
+    //
+    // For now, render relies on playback to pre-warm captures.
+    // User should play audio briefly before rendering for best results.
+
     // Start rendering
     int sampleRate = t3Env_ ? t3Env_->getSRate() : 48000;
     renderSession_->start(synthOutput, params, static_cast<std::uint32_t>(sampleRate));
