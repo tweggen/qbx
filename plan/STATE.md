@@ -3114,3 +3114,133 @@ In priority order:
 3. **Render output assertions** — `assert-renders-to-silence`, `assert-renders-non-zero`, etc. (wave analysis)
 4. **Recording action** — `SRecordAction` to capture from input device within test (complement to render)
 5. **CI wiring** — GitHub Actions workflow to run all tests in `tests/cases/`, archive artifacts per commit
+
+---
+
+## 09_UNIFIED_PAGE_CACHE_ARCHITECTURE.md — Phase 5e (async preview caching, foundation + SPlainWave)
+
+- **Date:** 2026-06-22
+- **Status:** Phase 5e.1 (foundation) and Phase 5e.2 (SPlainWave preview caching) complete. Phases 5e.3–5e.6 pending.
+- **Verified on platform:** macOS arm64 (build only; audible playback not yet tested from this session).
+
+### Background
+
+Prior work (Phase 4) demonstrated that synchronous page caching with `try_lock` workarounds causes deadlock in UI render threads. This phase implements a unified async revalidation model across all SObjects:
+- Two-page buffer per object (currentPage_ / nextPage_) with lock-free atomic reads
+- Fire-and-forget UI scheduling unconditionally requests revalidation
+- Worker threads verify necessity + compute asynchronously under lock
+- Zero-copy PageRef tuples for direct data access
+- Lazy invalidation: only affected dependents revalidated
+
+Observations motivating the unification:
+- SCut's existing preview mechanism (zero-duration crash, invisible clips) was debugging why a container cut (tracking group composition) returned -1 for preview (unimplemented).
+- Recognized that page caching patterns in SCut should apply uniformly to STrack (composite from children), SGroup (hierarchical), SStdMixer (bus mixing), SPlainWave (leaf source).
+- User feedback: "try_lock most always is a symptom of a workaround hiding some design problem" → eliminated try_lock entirely.
+
+### Critical Bugs Fixed
+
+**Bug #1 — Uninitialized preview on zero-duration clips:**
+- Symptom: SCut with duration=0 returned -1 (failure) for getPreview()
+- Root cause: preview render loop never executed; previewData array uninitialized
+- Fix: Initialize all preview data to silence before rendering; handle zero-duration explicitly
+
+**Bug #2 — Lock contention deadlock in getCapture():**
+- Symptom: UI render thread blocked waiting for worker thread; no progress
+- Root cause: getCapture() called needsRevalidation() which used blocking lock_guard, while worker held the same lock
+- Fix: Eliminate try_lock workaround entirely. UI unconditionally schedules revalidation; worker verifies necessity under lock (fire-and-forget model)
+
+**Bug #3 — Uninitialized snapshot fallback in getSnapshot():**
+- Symptom: getSnapshot() returned uninitialized static thread_local when lock failed (duration=0)
+- Root cause: No fallback to last-good state; returned garbage on lock failure
+- Fix: Add lastGoodSnapshot_ member; update it on every successful lock acquisition
+
+**Bug #4 — Data race on atomic shared_ptr access:**
+- Symptom: Undefined C++ behavior (write/reset vs. read not synchronized)
+- Root cause: Reading/writing currentPage_ without atomicity
+- Fix: Use std::atomic_load/store (C++17) for lock-free synchronization
+
+**Bug #5 — Data race on CapturePageData fields:**
+- Symptom: validAspects and data accessed without synchronization
+- Root cause: Multiple threads reading/writing page state unsafely
+- Fix: Add mutable std::mutex pageMutex to CapturePageData; acquire when accessing metadata
+
+### What landed (Phase 5e.1 & 5e.2)
+
+| Phase | File(s) | Change |
+|-------|---------|--------|
+| 5e.1 | `main/include/sobject.h` + `src/sobject.cpp` | Added page cache base API: `getCapture()` (non-blocking), `currentPage()` (atomic_load), `needsRevalidation_nolock()` (checks page validAspects under lock). Added abstract virtual methods for revalidation: `recomputePreview()`, `recomputePlayback()`, `recomputeMetadata()`, `recomputeExport()`. Added private members: currentPage_, nextPage_, revalidator_, validAspects_. Added friend methods: `swapPages_nolock()`, `getNextPage_nolock()`, `setNextPage_nolock()`. |
+| 5e.1 | `tw303a/include/capture_page_pool.h` | Page pool infrastructure: `CapturePageData` struct (256kB per page, pageMutex, validAspects bitmask, generation counter). `CapturePagePool` manages pre-allocated pool with custom deleter for shared_ptr reuse. |
+| 5e.2 | `main/include/splainwave.h` | Added `recomputePreview()` override virtual method. |
+| 5e.2 | `main/src/splainwave.cpp` | Implemented `recomputePreview()`: computes preview via existing `getStraightPreview()` into page buffer; handles zero-duration / missing wave by filling with silence. Updated `getPreview()`: tries `getCapture(Preview)` first, falls back to live `getStraightPreview()` if cache unavailable. Acquires page->pageMutex when reading validAspects. Returns cached data by memcpy. |
+
+### How the page cache works (Phase 5e architecture)
+
+**Non-blocking read path (UI thread):**
+1. UI calls `getCapture(Preview)`
+2. Returns current page via atomic_load (lock-free, no wait)
+3. If page has valid Preview aspect, reads data (with pageMutex)
+4. Schedules revalidation unconditionally (fire-and-forget)
+
+**Async revalidation path (worker thread):**
+1. Worker receives job: revalidate object for aspectsMask
+2. Acquires object's stateMutex_
+3. Checks `needsRevalidation_nolock()`; if not needed, skips
+4. Allocates nextPage_ from pool
+5. Computes `recomputePreview()` (and other aspects) with page->pageMutex held
+6. Atomic_swaps: currentPage_ ← nextPage_
+7. Returns page to pool on completion (shared_ptr deleter)
+
+**Key invariants:**
+- currentPage_ visible to readers at all times (may be stale, never null)
+- nextPage_ exclusive to one worker (never visible during construction)
+- Page swap is atomic; no reader sees partially-built state
+- No locks held during swap (just pointer assignment)
+
+### Commits
+
+- `8cd4d69` — Phase 5e.1 (SObject page cache foundation + CapturePageData/pool)
+- `e0dd0c8` — Phase 5e.2 (SPlainWave preview caching with async revalidation)
+
+### Next phases (5e.3–5e.6, pending)
+
+1. **Phase 5e.3 — STrack composite preview:** Gather previews from all visible children (clips), mix/composite them, render into page
+2. **Phase 5e.4 — SGroup and SStdMixer hierarchical:** Group renders children; mixer renders/buses
+3. **Phase 5e.5 — Unified CaptureRevalidator:** Extend worker to accept SObject* (currently SCut-specific); dispatch jobs uniformly
+4. **Phase 5e.6 — Integration and performance:** Verify zero-copy performance, staleness tracking, pool utilization; disable Phase 4's `try_lock` workarounds
+
+### Design notes / rationale
+
+- **Why fire-and-forget?** Eliminates the need for try_lock and the complex state machines around lock contention. UI always schedules; worker always verifies under lock.
+- **Why two pages?** Unix page-cache model: readers always see a valid currentPage_ (never null, never mid-construction). nextPage_ is exclusively built by one worker.
+- **Why atomic_load/store?** C++17 supports atomic<shared_ptr> operations. Lock-free reads guarantee UI never blocks on worker.
+- **Why separate pageMutex?** Protects page *contents* (data, validAspects). Object's stateMutex_ protects window parameters (position, duration). Allows readers to sample a page's metadata without holding the object-level lock.
+- **Why lazy invalidation?** Only affected dependents revalidated (e.g., if a clip's mute changes, only containers referencing that clip revalidate Playback). Dramatic speedup for large projects where most objects are unaffected.
+
+### Known limitations / deferred
+
+1. **Playback aspect:** recomputePlayback() not yet implemented for any SObject
+2. **Metadata aspect:** recomputeMetadata() not yet implemented
+3. **Export aspect:** recomputeExport() not yet implemented
+4. **live resampler-node insertion:** Detected but not performed (proposal 04 deferred fork)
+5. **Renegotiation signalling:** twNegotiator runs on every play; cached negotiation not yet invalidated on format/rate change
+
+### Verification status
+
+**macOS / Qt6 / CMake:**
+- ✅ Build clean (Ninja, C++17, no warnings)
+- ✅ SPlainWave::recomputePreview() computes and caches preview
+- ✅ getCapture() returns non-blocking (no deadlock symptoms)
+- ✅ Window-up smoke test passes
+- ⚠️ No audible playback test from this session
+- ⚠️ No performance / staleness diagnostics yet
+
+### Pending human verification
+
+1. **Audible playback:** Launch app, load project with sample, hit Play — verify no stalls or deadlock
+2. **UI responsiveness:** Drag preview window (paintEvent) while audio playing — confirm no freezes
+3. **Undo/redo:** Exercise action sequence + invalidation — verify preview updates asynchronously
+4. **Large project performance:** Load a project with many clips/tracks — monitor page pool utilization and staleness
+
+### Next session
+
+Resume with Phase 5e.3 (STrack composite preview) once audible playback + UI responsiveness verified on macOS/Windows.
