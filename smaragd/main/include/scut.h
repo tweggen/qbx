@@ -262,15 +262,16 @@ private:
     friend class CaptureRevalidator;
 
     // Return current capture page without locking.
-    // Safe to call without holding the lock (shared_ptr copy is atomic).
-    // May return stale data if revalidator is modifying the page.
+    // Uses std::atomic_load for thread-safe read (C++17).
+    // May return stale data if revalidator is modifying the page, which is acceptable.
     std::shared_ptr<CapturePageData> currentPage() const {
-        return currentPage_;
+        return std::atomic_load(&currentPage_);
     }
 
     // Atomic swap pages. _nolock: caller must hold mutex()
+    // Uses std::atomic_store for thread-safe write (pairs with atomic_load in currentPage()).
     void swapPages_nolock() {
-        std::swap(currentPage_, nextPage_);
+        std::atomic_store(&currentPage_, nextPage_);
         nextPage_ = nullptr;
     }
 
