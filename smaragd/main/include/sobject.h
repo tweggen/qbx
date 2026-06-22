@@ -269,7 +269,16 @@ public slots:
     void removeDependentLink(SLink *dependentLink);
 
 protected:
-    offset_t getChildrenExtent( offset_t &firstStart, offset_t &lastEnd, 
+    /**
+     * Thread safety: all derived classes use this mutex to protect their state.
+     * Single mutex per object; see async_revalidation_phase4.md for rationale.
+     * Usage: std::lock_guard<std::mutex> lock(mutex());
+     */
+    std::mutex& mutex() const {
+        return stateMutex_;
+    }
+
+    offset_t getChildrenExtent( offset_t &firstStart, offset_t &lastEnd,
                                 int &nUndefStart, int &nUndefDuration ) const;
     offset_t getFirstChildStartTime() const;
     length_t getAllChildsDuration() const;
@@ -282,6 +291,11 @@ protected:
     int getChildIndex( SObject & ) const;
 
 private:
+    // Thread safety: mutex for all derived class state (single mutex per object).
+    // Mutable so const methods can lock. Protected by mutex() accessor.
+    // All derived classes should protect their state with this mutex.
+    mutable std::mutex stateMutex_;
+
     void gotChild( SLink & );
     void lostChild( SLink & );
     int straightCalcPreviewData();
