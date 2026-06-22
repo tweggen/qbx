@@ -20,12 +20,13 @@
 #include "strack.h"
 #include "scutrndrinline.h"
 #include "sprojectloader.h"
+#include "capture_revalidator.h"
 
 using namespace std;
 
 SCutSnapshot SCut::getSnapshot() const
 {
-    std::lock_guard<std::mutex> lock( windowMutex_ );
+    std::lock_guard<std::mutex> lock(mutex());
     SCutSnapshot snap;
     snap.startOffset = startOffset_;
     snap.loopLength = loopLength_;
@@ -82,7 +83,8 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     bool newLooping = false;
 
     twRandomSource *rs = content_->getSObject().getRandomSource();
-    if( !rs ) rs = ensureCapture();
+    // TODO: Phase 4 - integrate async capture model with reader rebuild
+    // if( !rs ) rs = ensureCapture();  // OLD: sync capture fallback
     if( !rs ) goto swap_complete;   // no-op, keep current
 
     {
@@ -261,8 +263,9 @@ void SCut::buildCapture_()
 }
 
 // Old API: ensure the capture (container render) is built.
-// Returns the capture if available, NULL if not capturable (sample cut).
-// Called from UI for preview or explicit build.
+// TODO: Phase 4 - replace with getCapture() / getPreviewCapture() async API.
+// For now, commented out to avoid conflicting with the new getCapture(aspectsMask) method.
+/*
 twRandomSource *SCut::ensureCapture()
 {
     // Use new aspect-based API
@@ -271,26 +274,26 @@ twRandomSource *SCut::ensureCapture()
     if( capture_ ) return capture_.get();
     return NULL;
 }
+*/
 
 void SCut::invalidateCapture()
 {
-    // Drop the cached render of a container; next access re-captures (lazy invalidation).
-    // Use reset() not delete: the shared_ptr releases SCut's reference, but the
-    // audio thread's currentReader_.captureRef keeps it alive if rendering is in progress.
-    capture_.reset();
-    if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }
-    readerTried_ = false;
+    // Drop the cached render (async model).
+    // Use reset() not delete: the shared_ptr releases SCut's reference, but readers
+    // (audio thread) may still hold references via readLockCurrentPage().
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        currentPage_.reset();
+        nextPage_.reset();
+    }
 
     // Invalidate affected aspects: capture rebuild affects Preview, Playback, Metadata
     // but NOT Export (export is on-demand only and can be recomputed independently).
-    // These aspects will be recomputed lazily on demand via ensureCapture(aspects).
+    // These aspects will be recomputed lazily on demand via async revalidator.
     invalidateAspects(Preview | Playback | Metadata);
 
-    // NOTE: Do NOT eagerly rebuild the reader here (lazy invalidation model).
-    // The old code called rebuildReader() immediately, which defeated the purpose
-    // of lazy invalidation by forcing expensive twGrainSource initialization.
-    // Instead, let the lazy system recompute on demand when needed.
-    // rebuildReader( getSnapshot() );  // <-- REMOVED for lazy evaluation
+    // NOTE: Do NOT eagerly rebuild anything here (lazy invalidation model).
+    // The revalidator's background thread will handle recomputation when needed.
 
     // Notify parent containers that window parameters have changed (for live drag feedback)
     emit windowParamsChanged();
@@ -357,7 +360,8 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
 {
     // No capture (sample cut, or a container we can't snapshot): preview the
     // content live, in the same (container) frame domain we are addressed in.
-    if( !ensureCapture() || !ensureCapturePeaks() )
+    // TODO: Phase 4 - integrate with async capture page model
+    if( !capture_ || !ensureCapturePeaks() )
         return getContent().getPreview( dest, start, length, nProbes );
 
     if( nProbes <= 0 ) return -1;
@@ -432,7 +436,7 @@ int SCut::seekTo( offset_t off )
 void SCut::setStartOffset( offset_t off )
 {
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         startOffset_ = off;
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
@@ -442,7 +446,7 @@ void SCut::setDuration( length_t dur )
 {
     // FIXME: clip.
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         cutDuration_ = dur;
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
@@ -452,7 +456,7 @@ void SCut::setDuration( length_t dur )
 void SCut::setLoopStart( offset_t s )
 {
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         loopStart_ = s;
     }
 }
@@ -461,7 +465,7 @@ void SCut::setLoopLength( length_t l )
 {
     SCutSnapshot snap;
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         loopLength_ = l;
         // Capture snapshot while holding lock for consistent rebuild
         snap = getSnapshot();
@@ -476,7 +480,7 @@ void SCut::setWindow( offset_t startOffset, length_t duration,
 {
     SCutSnapshot snap;
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         startOffset_ = startOffset;
         cutDuration_ = duration;
         loopLength_  = loopLength;
@@ -510,11 +514,11 @@ void SCut::setGrainParams( const twGrainParams &p )
 {
     SCutSnapshot snap;
 
-    // All window parameter modifications must be protected by windowMutex_
+    // All window parameter modifications must be protected by mutex()
     // (formal concurrency guidelines: Contract B, Snapshot Pattern).
     // Read oldStretch INSIDE lock to avoid TOCTOU race (formal verification).
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         double oldStretch = grainParams_.stretch;  // ← Read inside lock
         grainParams_ = p;
         if( oldStretch > 0.0 && p.stretch > 0.0 && p.stretch != oldStretch ) {
@@ -538,7 +542,7 @@ void SCut::setStretch( double s )
 {
     twGrainParams p;
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );  // Read under lock
+        std::lock_guard<std::mutex> lock(mutex());  // Read under lock
         p = grainParams_;  // Snapshot params
     }
     p.stretch = s;  // Modify copy outside lock
@@ -549,7 +553,7 @@ void SCut::setPitchCents( double cents )
 {
     twGrainParams p;
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );  // Read under lock
+        std::lock_guard<std::mutex> lock(mutex());  // Read under lock
         p = grainParams_;  // Snapshot params
     }
     p.pitchCents = cents;  // Modify copy outside lock
@@ -776,7 +780,7 @@ void SCut::queueWindowParamEvent( SCutWindowParamEventType type, double value )
 {
     // Queue a window parameter change event for later processing.
     // This allows drag operations to queue changes without acquiring
-    // windowMutex_ (which would conflict with invalidateCapture).
+    // mutex() (which would conflict with invalidateCapture).
     std::lock_guard<std::mutex> lock( queueMutex_ );
     SCutWindowParamEvent event{ type, value };
     windowParamEventQueue_.push_back( event );
@@ -801,7 +805,7 @@ void SCut::processWindowParamEvents()
     bool needsReaderBuild = false;
 
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         for( const SCutWindowParamEvent &event : events ) {
             switch( event.type ) {
             case OFFSET_CHANGE:
@@ -842,22 +846,34 @@ void SCut::processWindowParamEvents()
 }
 
 // Lazy invalidation: mark specific aspects as needing recomputation.
-// Aspects only recompute on demand via ensureCapture(). This allows
-// rapid UI changes (mute, solo, etc.) to invalidate only relevant aspects
-// without eager, expensive recomputation.
+// Async model: schedules revalidation in background, returns immediately.
+// No blocking, no eager rebuild. Stale data available as fallback.
 void SCut::invalidateAspects(uint32_t aspects)
 {
-    // If Playback is invalidated, the audio data in the capture is stale.
-    // Drop both capture and peak cache so they'll be rebuilt with current state.
-    if (aspects & Playback) {
-        capture_.reset();
-        if (capPeaks_) { ::free(capPeaks_); capPeaks_ = NULL; capPeakN_ = 0; }
+    if (aspects == 0 || !revalidator_) return;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+
+        // If Playback is invalidated, drop the stale page
+        // (audio data in currentPage will become stale with mute/solo applied)
+        if (aspects & Playback) {
+            currentPage_.reset();
+        }
+
+        // Clear the bits for invalidated aspects
+        validAspects_ &= ~aspects;
     }
 
-    // Clear the bits for invalidated aspects
-    validAspects_ &= ~aspects;
+    // Determine priority based on aspect type
+    int priority = 5;  // Default: Metadata
+    if (aspects & Playback) priority = 10;  // High: audio thread needs this
+    if (aspects & Preview)  priority = 1;   // Low: UI can tolerate stale
 
-    // Propagate invalidation to dependents (transitive chain, proposal 06).
+    // Schedule async revalidation (returns immediately, no blocking)
+    revalidator_->scheduleRevalidation(this, aspects, priority);
+
+    // Propagate invalidation to dependents (transitive chain).
     // If this cut's Playback is stale, cuts that reference this cut are also stale.
     // Example: Track A muted → Cut C (refs Track A) invalidated → Cut D (refs Cut C) invalidated
     if (aspects & Playback) {
@@ -865,46 +881,39 @@ void SCut::invalidateAspects(uint32_t aspects)
     }
 }
 
-// Lazy revalidation: ensure specific aspects are computed.
-// Only recomputes aspects that are invalid; valid aspects are left alone.
-// Called by UI (requesting Preview), audio thread (requesting Playback), etc.
-void SCut::ensureCapture(uint32_t aspectsMask)
+// Non-blocking capture access: get current/stale page or schedule async revalidation.
+// Returns immediately with current page if all aspects valid, else stale page, else nil.
+// Never waits for revalidation (falls back to stale data for zero audio dropouts).
+std::shared_ptr<CapturePageData> SCut::getCapture(uint32_t aspectsMask)
 {
-    // Determine which requested aspects are currently invalid
-    uint32_t toCompute = aspectsMask & ~validAspects_;
+    if (aspectsMask == 0 || !revalidator_) return nullptr;
 
-    if (toCompute == 0) {
-        // All requested aspects already valid
-        return;
+    // Get current page (may be stale, may be null, never blocks)
+    auto page = readLockCurrentPage();
+
+    // If current page has all needed aspects, return immediately
+    if (page && (page->validAspects & aspectsMask) == aspectsMask) {
+        return page;
     }
 
-    // Recompute invalid aspects
-    if (toCompute & Preview) {
-        // Preview (waveform peaks) depends on capture being built.
-        // Build capture if needed, then build peak cache
-        buildCapture_();
-        ensureCapturePeaks();
+    // Otherwise, schedule async revalidation (returns immediately)
+    if (needsRevalidation(aspectsMask)) {
+        int priority = 5;  // Default: Metadata
+        if (aspectsMask & Playback) priority = 10;
+        if (aspectsMask & Preview)  priority = 1;
+        revalidator_->scheduleRevalidation(this, aspectsMask, priority);
     }
 
-    if (toCompute & Playback) {
-        // Playback (reader chain) requires rebuild if reader is stale
-        ensureReader();
-    }
+    // Return current page anyway (stale is OK; better than null/dropout)
+    return page;
+}
 
-    if (toCompute & Metadata) {
-        // Metadata (duration, peaks) computed with playback + capture
-        ensureReader();
-        // Also ensure capture + peaks for metadata
-        buildCapture_();
-        ensureCapturePeaks();
-    }
+// Check if revalidation is needed for specific aspects.
+// Used by revalidator to decide whether to process a job.
+bool SCut::needsRevalidation(uint32_t aspectsMask) const
+{
+    if (aspectsMask == 0) return false;
 
-    if (toCompute & Export) {
-        // Export buffer: on-demand, expensive. For now, same as playback.
-        // In future, this could be deferred or computed in background.
-        ensureReader();
-    }
-
-    // Mark computed aspects as valid
-    validAspects_ |= toCompute;
+    std::lock_guard<std::mutex> lock(mutex());
+    return !currentPage_ || (currentPage_->validAspects & aspectsMask) != aspectsMask;
 }
