@@ -142,12 +142,40 @@ int SProjectLoader::createObjects( SProject &project )
             } // All Children known
         } while( !n.isNull() );
     }
+
+    // Post-processing pass: call readPostChildrenAttributes on all loaded objects.
+    // This loads object-specific attributes that depend on the DOM element structure.
+    // Critical for SCut (loads startOffset, cutDuration, grain params, etc).
+    // We need to re-scan the saved DOM since we removed elements during the main loop.
+    {
+        QDomDocument tempDom;
+        QFile f(name_);
+        if (f.open(QIODevice::ReadOnly)) {
+            tempDom.setContent(&f);
+            f.close();
+
+            QDomElement docElem = tempDom.documentElement();
+            QDomNode n = docElem.firstChild();
+            while (!n.isNull()) {
+                QDomElement e = n.toElement();
+                if (!e.isNull()) {
+                    QString id = e.attribute("id");
+                    SLink *link = objectDict_.value(id);
+                    if (link) {
+                        link->getSObject().readPostChildrenAttributes(e);
+                    }
+                }
+                n = n.nextSibling();
+            }
+        }
+    }
+
     {
         SLink *rootLink = objectDict_.value( rootId );
-        if( !rootLink ) {            
+        if( !rootLink ) {
             qWarning( "Root component of project was not found.\n" );
             // TODO: Allow user to select display root id.
-        } else {            
+        } else {
             project_.setRootComponent( &rootLink->getSObject() );
         }
     }
