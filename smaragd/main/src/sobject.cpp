@@ -352,8 +352,6 @@ void SObject::addRef()
     if( ++nRefs_ == 1 ) {
         emit gotReferenced();
     }
-    qWarning( "Object of class \"%s\" now has %d references.\n", 
-              metaObject()->className(), nRefs_ );
     emit nRefsChanged();
 }
 
@@ -364,12 +362,8 @@ void SObject::removeRef()
         return;
     }
     if( (--nRefs_)==0 ) {
-        qWarning( "Object %p, class '%s' got unreferenced.\n",
-                  (void *)this, metaObject()->className() );
         emit gotUnreferenced();
     }
-    qWarning( "Object of class \"%s\" now has %d references.\n", 
-              metaObject()->className(), nRefs_ );
     emit nRefsChanged();
     if( 0==nRefs_ ) {
         // This will delete the object if the application reenters the main loop.
