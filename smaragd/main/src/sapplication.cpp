@@ -320,18 +320,25 @@ void SApplication::startRender(const audio::RenderParams &params)
         return;
     }
 
-    // TODO: Phase 5 - Async-aware rendering
+    // TODO: Phase 5 - Scoped per-buffer warm-up for async rendering
     // Currently, render may start before async captures are ready, causing:
     // 1. First render: partial/distorted audio if captures still building
     // 2. Second render: zeros if captures invalidated but not yet recomputed
     //
-    // Proper fix requires:
-    // - Warm-up phase: invalidate all cuts to trigger async revalidation
-    // - Wait mechanism: block briefly for critical captures to be ready
-    // - Or: redesign render to pull incrementally (streaming) instead of upfront
+    // Proposed fix: Incremental per-buffer warm-up (bounded cache)
+    // 1. Before render, scan cuts in render range (not entire project)
+    // 2. Trigger invalidation to start async revalidation
+    // 3. Render loop pulls from already-warming-up captures
+    // 4. As rendering progresses, look ahead 1-2 buffers and warm those
+    // This keeps cache bounded while keeping revalidator ahead of render.
+    //
+    // Implementation needs:
+    // - Cut discovery for time range (project/tree traversal)
+    // - Brief initial warm-up of render range
+    // - Look-ahead in render loop to stay ahead
     //
     // For now, render relies on playback to pre-warm captures.
-    // User should play audio briefly before rendering for best results.
+    // Workaround: User should play audio briefly before rendering.
 
     // Start rendering
     int sampleRate = t3Env_ ? t3Env_->getSRate() : 48000;
