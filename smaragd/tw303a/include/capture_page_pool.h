@@ -39,6 +39,12 @@
 struct CapturePageData {
     static constexpr size_t PAGE_SIZE = 256 * 1024;  // 256kB
 
+    // Synchronization: protects concurrent read/write of data and metadata.
+    // Revalidator holds this lock while writing to data/validAspects.
+    // UI readers acquire this lock when reading validAspects or data pointers.
+    // Kept first (before data) to ensure good cache alignment of lock.
+    mutable std::mutex pageMutex;
+
     // Actual page data (aligned for cache efficiency)
     alignas(4096) uint8_t data[PAGE_SIZE];
 

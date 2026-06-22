@@ -128,10 +128,14 @@ void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
         recomputeExport(job.cut, *nextPage);
     }
 
-    // === CRITICAL SECTION 2: Atomic swap ===
+    // === CRITICAL SECTION 2: Atomic swap and mark valid ===
     {
-        std::lock_guard<std::mutex> lock(job.cut->mutex());
+        std::lock_guard<std::mutex> cutLock(job.cut->mutex());
         job.cut->swapPages_nolock();
+
+        // Now currentPage is nextPage. Update its metadata while holding page lock
+        // to prevent concurrent reads from seeing torn updates.
+        std::lock_guard<std::mutex> pageLock(nextPage->pageMutex);
         nextPage->validAspects |= job.aspects;
         nextPage->generation++;
     }

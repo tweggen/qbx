@@ -951,13 +951,16 @@ std::shared_ptr<CapturePageData> SCut::getCapture(uint32_t aspectsMask)
     if (aspectsMask == 0 || !revalidator_) return nullptr;
 
     // Get current page (may be stale, may be null, never blocks)
-    // Read current page without locking (shared_ptr copy is atomic, stale reads acceptable).
-    // This keeps the UI render path non-blocking.
+    // Read current page without locking (shared_ptr copy is atomic).
     auto page = currentPage();
 
     // If current page has all needed aspects, return immediately
-    if (page && (page->validAspects & aspectsMask) == aspectsMask) {
-        return page;
+    // Acquire page lock to safely read validAspects (prevents torn reads during concurrent writes)
+    if (page) {
+        std::lock_guard<std::mutex> pageLock(page->pageMutex);
+        if ((page->validAspects & aspectsMask) == aspectsMask) {
+            return page;
+        }
     }
 
     // Page missing aspects: unconditionally schedule revalidation.
@@ -978,7 +981,10 @@ std::shared_ptr<CapturePageData> SCut::getCapture(uint32_t aspectsMask)
 bool SCut::needsRevalidation_nolock(uint32_t aspectsMask) const
 {
     if (aspectsMask == 0) return false;
-    return !currentPage_ || (currentPage_->validAspects & aspectsMask) != aspectsMask;
+    // Note: _nolock refers to not holding cut mutex; we still need page lock for valid aspect check
+    if (!currentPage_) return true;
+    std::lock_guard<std::mutex> pageLock(currentPage_->pageMutex);
+    return (currentPage_->validAspects & aspectsMask) != aspectsMask;
 }
 
 bool SCut::needsRevalidation(uint32_t aspectsMask) const
