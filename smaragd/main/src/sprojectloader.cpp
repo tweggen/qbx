@@ -121,8 +121,6 @@ int SProjectLoader::createObjects( SProject &project )
                 if( object ) {
                     qWarning() << QString("Object of type \"%1\", id \"%2\", already had been instantiated.\n").arg(tagName).arg(id);
                 } else {
-                    qWarning() << QString( "Instantiating object of type \"%1\" with id=\"%2\".\n" )
-                        .arg( tagName ).arg( id );
                     object = instantiateSObjectFromDomElement(
                         tagName, e, NULL );
                     if( !object ) {
