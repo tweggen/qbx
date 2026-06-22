@@ -189,13 +189,25 @@ void CaptureRevalidator::recomputePreview(SCut* cut, CapturePageData& page) {
         // Container-backed cut (track, group, etc.)
         // Render the component graph to audio, then downsample to preview peaks
 
+        // Initialize preview data to silence
+        for (int i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
+            previewData[i].min = 0;
+            previewData[i].max = 0;
+        }
+
+        const length_t TOTAL_RENDER_SAMPLES = cut->getDuration();
+        if (TOTAL_RENDER_SAMPLES == 0) {
+            // Zero-duration cut: already filled with silence above
+            page.validAspects |= Preview;
+            return;
+        }
+
         try {
             twComponent& component = content.getRootComponent();
 
             // Render in chunks and downsample to preview
             // Use a reasonable chunk size (4096 samples = ~85ms @ 48kHz)
             const length_t RENDER_CHUNK_SIZE = 4096;
-            const length_t TOTAL_RENDER_SAMPLES = cut->getDuration();
 
             std::vector<sample_t> audioBuffer(RENDER_CHUNK_SIZE);
             int previewIndex = 0;
@@ -244,11 +256,7 @@ void CaptureRevalidator::recomputePreview(SCut* cut, CapturePageData& page) {
 
             page.validAspects |= Preview;
         } catch (...) {
-            // Container rendering failed; fill with silence
-            for (int i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
-                previewData[i].min = 0;
-                previewData[i].max = 0;
-            }
+            // Container rendering failed; preview already filled with silence
             page.validAspects |= Preview;
         }
     }
