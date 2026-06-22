@@ -253,30 +253,30 @@ private:
     void buildCapture_();
 
     // Helper methods for revalidator integration (Phase 4)
-    // IMPORTANT: Caller MUST hold mutex() before calling these.
+    // _nolock suffix indicates caller MUST hold mutex() before calling.
     // These are friends-only methods, non-locking to avoid recursive lock deadlock.
     friend class CaptureRevalidator;
 
-    // Return current capture page without locking (caller must hold mutex())
-    std::shared_ptr<CapturePageData> readLockCurrentPage() const {
-        // Caller has already locked via std::lock_guard<std::mutex> lock(mutex());
+    // Return current capture page without locking.
+    // Safe to call without holding the lock (shared_ptr copy is atomic).
+    // May return stale data if revalidator is modifying the page.
+    std::shared_ptr<CapturePageData> currentPage() const {
         return currentPage_;
     }
 
-    // Atomic swap pages (caller must hold mutex())
-    void swapPages() {
-        // Caller already holds lock to prevent race with readLockCurrentPage()
+    // Atomic swap pages. _nolock: caller must hold mutex()
+    void swapPages_nolock() {
         std::swap(currentPage_, nextPage_);
         nextPage_ = nullptr;
     }
 
-    // Get next capture page (caller must hold mutex())
-    std::shared_ptr<CapturePageData> getNextPage() const {
+    // Get next capture page. _nolock: caller must hold mutex()
+    std::shared_ptr<CapturePageData> getNextPage_nolock() const {
         return nextPage_;
     }
 
-    // Set next capture page (caller must hold mutex())
-    void setNextPage(std::shared_ptr<CapturePageData> page) {
+    // Set next capture page. _nolock: caller must hold mutex()
+    void setNextPage_nolock(std::shared_ptr<CapturePageData> page) {
         nextPage_ = page;
     }
 

@@ -293,7 +293,7 @@ void SCut::invalidateCapture()
 {
     // Drop the cached render (async model).
     // Use reset() not delete: the shared_ptr releases SCut's reference, but readers
-    // (audio thread) may still hold references via readLockCurrentPage().
+    // (audio thread) may still hold references via currentPage().
     {
         std::lock_guard<std::mutex> lock(mutex());
         currentPage_.reset();
@@ -951,7 +951,9 @@ std::shared_ptr<CapturePageData> SCut::getCapture(uint32_t aspectsMask)
     if (aspectsMask == 0 || !revalidator_) return nullptr;
 
     // Get current page (may be stale, may be null, never blocks)
-    auto page = readLockCurrentPage();
+    // Read current page without locking (shared_ptr copy is atomic, stale reads acceptable).
+    // This keeps the UI render path non-blocking.
+    auto page = currentPage();
 
     // If current page has all needed aspects, return immediately
     if (page && (page->validAspects & aspectsMask) == aspectsMask) {

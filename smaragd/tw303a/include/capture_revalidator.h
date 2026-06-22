@@ -50,7 +50,7 @@ struct CaptureRevalidationJob {
  * Job processing:
  * 1. Allocate nextPage from pool (skip if exhausted, re-queue at low priority)
  * 2. Recompute aspects into nextPage (blocking, expected 10-100ms per job)
- * 3. Atomic swap: cut->swapPages() (cut->nextPage ← nextPage, nextPage → currentPage)
+ * 3. Atomic swap: cut->swapPages_nolock() (cut->nextPage ← nextPage, nextPage → currentPage)
  * 4. Mark aspects valid in the swapped page
  * 5. Emit captureRevalidated(cut, aspects) signal (for UI redraw)
  *

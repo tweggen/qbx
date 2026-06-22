@@ -100,7 +100,7 @@ void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
         }
 
         // Get or allocate nextPage (under lock)
-        nextPage = job.cut->getNextPage();
+        nextPage = job.cut->getNextPage_nolock();
         if (!nextPage) {
             nextPage = pagePool_->allocatePage();
             if (!nextPage) {
@@ -108,7 +108,7 @@ void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
                 scheduleRevalidation(job.cut, job.aspects, 0);
                 return;
             }
-            job.cut->setNextPage(nextPage);
+            job.cut->setNextPage_nolock(nextPage);
         }
     }  // Release lock before potentially long-running recomputation
 
@@ -131,7 +131,7 @@ void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
     // === CRITICAL SECTION 2: Atomic swap ===
     {
         std::lock_guard<std::mutex> lock(job.cut->mutex());
-        job.cut->swapPages();
+        job.cut->swapPages_nolock();
         nextPage->validAspects |= job.aspects;
         nextPage->generation++;
     }
