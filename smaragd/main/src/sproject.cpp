@@ -406,8 +406,10 @@ void SProject::enableInvalidation()
     // If we just disabled the last suppression, trigger full revalidation pass.
     // All cuts that were loaded need their captures recomputed.
     if (invalidationSuppressed_ == 0) {
-        // TODO: Phase 5 - implement full project invalidation pass
-        // For now, individual cuts will be invalidated on first access (lazy).
-        // Could add: invalidateAllCuts() here to eagerly start revalidation.
+        // Signal views to refresh: grouped assets, timelines, etc. all need to
+        // repaint as captures transition from empty to revalidated state.
+        // Individual cuts will be invalidated on first access (lazy model),
+        // but views need to know to trigger repaints as data becomes available.
+        emit arrangementChanged();
     }
 }
