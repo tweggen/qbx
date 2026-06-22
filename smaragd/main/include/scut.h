@@ -253,38 +253,38 @@ private:
     void buildCapture_();
 
     // Helper methods for revalidator integration (Phase 4)
+    // IMPORTANT: Caller MUST hold mutex() before calling these.
+    // These are friends-only methods, non-locking to avoid recursive lock deadlock.
     friend class CaptureRevalidator;
 
-    // Read-lock current capture page (borrowed by readers during use)
+    // Return current capture page without locking (caller must hold mutex())
     std::shared_ptr<CapturePageData> readLockCurrentPage() const {
-        std::lock_guard<std::mutex> lock(mutex());
+        // Caller has already locked via std::lock_guard<std::mutex> lock(mutex());
         return currentPage_;
     }
 
-    // Atomic swap pages after revalidation completes
+    // Atomic swap pages (caller must hold mutex())
     void swapPages() {
-        std::lock_guard<std::mutex> lock(mutex());
+        // Caller already holds lock to prevent race with readLockCurrentPage()
         std::swap(currentPage_, nextPage_);
         nextPage_ = nullptr;
     }
 
-    // Get next capture page (for revalidator)
+    // Get next capture page (caller must hold mutex())
     std::shared_ptr<CapturePageData> getNextPage() const {
-        std::lock_guard<std::mutex> lock(mutex());
         return nextPage_;
     }
 
-    // Set next capture page (for revalidator to allocate and fill)
+    // Set next capture page (caller must hold mutex())
     void setNextPage(std::shared_ptr<CapturePageData> page) {
-        std::lock_guard<std::mutex> lock(mutex());
         nextPage_ = page;
     }
 
     // Queue of pending window parameter changes (populated during drag,
     // processed after drag completes). Allows drag operations to queue changes
     // without calling expensive invalidateCapture() on the drag event path.
+    // Protected by the same mutex() as all other SCut state (one mutex per object).
     std::vector<SCutWindowParamEvent> windowParamEventQueue_;
-    std::mutex queueMutex_;  // Protects the event queue (minimal contention)
 
     SLink *content_;
 

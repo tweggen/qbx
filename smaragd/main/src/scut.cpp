@@ -786,9 +786,8 @@ SLink *SCut::instantiateFromDomElement(
 void SCut::queueWindowParamEvent( SCutWindowParamEventType type, double value )
 {
     // Queue a window parameter change event for later processing.
-    // This allows drag operations to queue changes without acquiring
-    // mutex() (which would conflict with invalidateCapture).
-    std::lock_guard<std::mutex> lock( queueMutex_ );
+    // Uses inherited mutex() from SObject (one mutex per object policy).
+    std::lock_guard<std::mutex> lock( mutex() );
     SCutWindowParamEvent event{ type, value };
     windowParamEventQueue_.push_back( event );
 }
@@ -798,9 +797,10 @@ void SCut::processWindowParamEvents()
     // Process all queued window parameter events.
     // Called after drag completes to apply all changes atomically,
     // including invalidateCapture() and rebuildReader().
+    // Uses inherited mutex() from SObject (one mutex per object policy).
     std::vector<SCutWindowParamEvent> events;
     {
-        std::lock_guard<std::mutex> lock( queueMutex_ );
+        std::lock_guard<std::mutex> lock( mutex() );
         if( windowParamEventQueue_.empty() ) return;
         events = windowParamEventQueue_;
         windowParamEventQueue_.clear();

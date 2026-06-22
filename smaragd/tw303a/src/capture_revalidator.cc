@@ -83,26 +83,34 @@ void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
     assert(job.cut);
     assert(job.aspects != 0);
 
-    // Check if cut still needs revalidation
-    // (state may have changed while job was queued)
-    if (!job.cut->needsRevalidation(job.aspects)) {
-        return;
-    }
+    std::shared_ptr<CapturePageData> nextPage;
 
-    // Allocate nextPage from pool if needed
-    auto nextPage = job.cut->getNextPage();
-    if (!nextPage) {
-        nextPage = pagePool_->allocatePage();
-        if (!nextPage) {
-            // Pool exhausted: re-queue at lowest priority and skip for now
-            scheduleRevalidation(job.cut, job.aspects, 0);
+    // === CRITICAL SECTION 1: Check state and allocate page ===
+    {
+        std::lock_guard<std::mutex> lock(job.cut->mutex());
+
+        // Check if cut still needs revalidation
+        // (state may have changed while job was queued)
+        if (!job.cut->needsRevalidation(job.aspects)) {
             return;
         }
-        job.cut->setNextPage(nextPage);
-    }
 
-    // === REVALIDATE (blocking, outside any locks) ===
+        // Get or allocate nextPage (under lock)
+        nextPage = job.cut->getNextPage();
+        if (!nextPage) {
+            nextPage = pagePool_->allocatePage();
+            if (!nextPage) {
+                // Pool exhausted: re-queue at lowest priority and skip for now
+                scheduleRevalidation(job.cut, job.aspects, 0);
+                return;
+            }
+            job.cut->setNextPage(nextPage);
+        }
+    }  // Release lock before potentially long-running recomputation
+
+    // === REVALIDATE (blocking, OUTSIDE locks) ===
     // This may take 10-100ms depending on aspect complexity
+    // No locks held, so UI/audio threads can proceed
     if (job.aspects & Playback) {
         recomputePlayback(job.cut, *nextPage);
     }
@@ -116,8 +124,7 @@ void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
         recomputeExport(job.cut, *nextPage);
     }
 
-    // === ATOMIC SWAP ===
-    // Cut's mutex protects this operation
+    // === CRITICAL SECTION 2: Atomic swap ===
     {
         std::lock_guard<std::mutex> lock(job.cut->mutex());
         job.cut->swapPages();
