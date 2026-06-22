@@ -156,8 +156,28 @@ void CaptureRevalidator::recomputeMetadata(SCut* cut, CapturePageData& page) {
 }
 
 void CaptureRevalidator::recomputePreview(SCut* cut, CapturePageData& page) {
-    // TODO: Downsample to waveform peaks
-    // For now, mark as valid (placeholder)
+    // Phase 5d: Build preview waveform from cut's content
+    //
+    // For sample-backed cuts: render audio, compute peaks
+    // For container-backed cuts: render container children, compute peaks
+    //
+    // TODO: Implement container rendering via component graph pull
+    // For now: mark as valid to prevent placeholder from showing indefinitely
+    // This allows UI to proceed while waiting for full implementation
+
+    // Get cut's content
+    SObject& content = cut->getContent();
+
+    if (content.getRandomSource()) {
+        // Sample-backed cut: read from sample source
+        // TODO: Extract audio window and compute preview peaks
+    } else {
+        // Container-backed cut (track, group, etc.)
+        // TODO: Render container's component graph to get audio,
+        // then apply cut's window parameters and compute preview peaks
+    }
+
+    // Mark preview as valid (placeholder until full implementation)
     page.validAspects |= Preview;
 }
 
