@@ -960,13 +960,14 @@ std::shared_ptr<CapturePageData> SCut::getCapture(uint32_t aspectsMask)
         return page;
     }
 
-    // Otherwise, schedule async revalidation (returns immediately)
-    if (needsRevalidation(aspectsMask)) {
-        int priority = 5;  // Default: Metadata
-        if (aspectsMask & Playback) priority = 10;
-        if (aspectsMask & Preview)  priority = 1;
-        revalidator_->scheduleRevalidation(this, aspectsMask, priority);
-    }
+    // Page missing aspects: unconditionally schedule revalidation.
+    // The revalidator's job processor will check needsRevalidation_nolock() under the lock
+    // to skip if state changed between now and job dequeue. This avoids the try_lock
+    // workaround and keeps the UI render path non-blocking.
+    int priority = 5;  // Default: Metadata
+    if (aspectsMask & Playback) priority = 10;
+    if (aspectsMask & Preview)  priority = 1;
+    revalidator_->scheduleRevalidation(this, aspectsMask, priority);
 
     // Return current page anyway (stale is OK; better than null/dropout)
     return page;
@@ -984,14 +985,6 @@ bool SCut::needsRevalidation(uint32_t aspectsMask) const
 {
     if (aspectsMask == 0) return false;
 
-    // Non-blocking check: try to acquire lock. If busy, assume revalidation is needed
-    // (conservative: avoids UI render blocking on worker thread).
-    std::unique_lock<std::mutex> lock(mutex(), std::try_to_lock);
-    if (!lock.owns_lock()) {
-        // Lock held elsewhere (revalidator or another thread modifying state).
-        // Assume revalidation might be needed; worst case is a redundant job.
-        return true;
-    }
-
+    std::lock_guard<std::mutex> lock(mutex());
     return needsRevalidation_nolock(aspectsMask);
 }

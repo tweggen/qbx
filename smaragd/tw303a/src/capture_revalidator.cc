@@ -93,9 +93,9 @@ void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
     {
         std::lock_guard<std::mutex> lock(job.cut->mutex());
 
-        // Check if cut still needs revalidation
-        // (state may have changed while job was queued)
-        if (!job.cut->needsRevalidation(job.aspects)) {
+        // Check if cut still needs revalidation (state may have changed while queued)
+        // _nolock: we hold the lock (std::lock_guard above)
+        if (!job.cut->needsRevalidation_nolock(job.aspects)) {
             return;
         }
 
