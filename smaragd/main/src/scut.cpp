@@ -27,7 +27,17 @@ using namespace std;
 
 SCutSnapshot SCut::getSnapshot() const
 {
-    std::lock_guard<std::mutex> lock(mutex());
+    // Non-blocking lock to avoid deadlock during UI paint when revalidator
+    // is modifying state. If mutex is held, return a stale snapshot (safe
+    // for rendering; better than blocking/hanging).
+    std::unique_lock<std::mutex> lock(mutex(), std::defer_lock);
+    if (!lock.try_lock()) {
+        // Could not acquire lock: return default/stale snapshot to prevent
+        // deadlock. UI will repaint on next cycle (10-33ms) and try again.
+        static thread_local SCutSnapshot staleFallback;
+        return staleFallback;
+    }
+
     SCutSnapshot snap;
     snap.startOffset = startOffset_;
     snap.loopLength = loopLength_;
