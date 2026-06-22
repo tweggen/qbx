@@ -1,7 +1,11 @@
 #include "capture_revalidator.h"
 #include "capture_page_pool.h"
 #include "scut.h"  // Needs access to SCut::swapPages()
+#include "twcomponent.h"
+#include "tw303aenv.h"
 #include <cassert>
+#include <vector>
+#include <algorithm>
 
 CaptureRevalidator::CaptureRevalidator(CapturePagePool* pagePool, int numWorkers)
     : pagePool_(pagePool) {
@@ -183,13 +187,70 @@ void CaptureRevalidator::recomputePreview(SCut* cut, CapturePageData& page) {
         }
     } else {
         // Container-backed cut (track, group, etc.)
-        // TODO: Phase 5d - Implement component graph rendering
-        // For now: render as silence (flat zero line)
-        for (int i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
-            previewData[i].min = 0;
-            previewData[i].max = 0;
+        // Render the component graph to audio, then downsample to preview peaks
+
+        try {
+            twComponent& component = content.getRootComponent();
+
+            // Render in chunks and downsample to preview
+            // Use a reasonable chunk size (4096 samples = ~85ms @ 48kHz)
+            const length_t RENDER_CHUNK_SIZE = 4096;
+            const length_t TOTAL_RENDER_SAMPLES = cut->getDuration();
+
+            std::vector<sample_t> audioBuffer(RENDER_CHUNK_SIZE);
+            int previewIndex = 0;
+
+            for (length_t renderPos = 0; renderPos < TOTAL_RENDER_SAMPLES && previewIndex < MAX_PREVIEW_SAMPLES;
+                 renderPos += RENDER_CHUNK_SIZE) {
+
+                length_t chunkSize = std::min(RENDER_CHUNK_SIZE, TOTAL_RENDER_SAMPLES - renderPos);
+
+                // Render stereo: average both channels for preview
+                for (int ch = 0; ch < 2; ++ch) {
+                    try {
+                        length_t rendered = component.calcOutputTo(audioBuffer.data(), chunkSize, ch);
+                        if (rendered == 0) break;
+
+                        // Downsample chunk to single preview point per channel
+                        sample_t minVal = audioBuffer[0];
+                        sample_t maxVal = audioBuffer[0];
+
+                        for (length_t i = 0; i < rendered; ++i) {
+                            minVal = std::min(minVal, audioBuffer[i]);
+                            maxVal = std::max(maxVal, audioBuffer[i]);
+                        }
+
+                        // Accumulate across channels
+                        if (ch == 0) {
+                            previewData[previewIndex].min = static_cast<signed char>(minVal * 127.0f);
+                            previewData[previewIndex].max = static_cast<signed char>(maxVal * 127.0f);
+                        } else {
+                            // Average with second channel
+                            signed char minCh = static_cast<signed char>(minVal * 127.0f);
+                            signed char maxCh = static_cast<signed char>(maxVal * 127.0f);
+                            previewData[previewIndex].min = (previewData[previewIndex].min + minCh) / 2;
+                            previewData[previewIndex].max = (previewData[previewIndex].max + maxCh) / 2;
+                        }
+                    } catch (...) {
+                        // Component rendering failed; use silence
+                        previewData[previewIndex].min = 0;
+                        previewData[previewIndex].max = 0;
+                        break;
+                    }
+                }
+
+                previewIndex++;
+            }
+
+            page.validAspects |= Preview;
+        } catch (...) {
+            // Container rendering failed; fill with silence
+            for (int i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
+                previewData[i].min = 0;
+                previewData[i].max = 0;
+            }
+            page.validAspects |= Preview;
         }
-        page.validAspects |= Preview;
     }
 }
 
