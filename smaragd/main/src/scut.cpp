@@ -675,10 +675,14 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
 {
     SObject::readPostChildrenAttributes( element );
 
+    // During project load, directly set state without triggering invalidation chains.
+    // Captures are already invalid (just constructed), and we're still loading.
+    // Calling setters would trigger notifyDependentsChanged recursively → deadlock.
+
     QString data;
     data = element.attribute( "startOffset", "0" );
     Fraction startOffsetFrac = parseFractionOrDouble( data.toStdString() );
-    setStartOffset( (offset_t)startOffsetFrac.toDouble() );
+    startOffset_ = (offset_t)startOffsetFrac.toDouble();
 
     // Load cutDuration. If missing, use a sensible default based on project sample rate
     // (0.5 seconds). This matches the constructor default and ensures consistency
