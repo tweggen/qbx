@@ -91,7 +91,6 @@ int SProjectLoader::createObjects( SProject &project )
             QDomNode childNode = e.firstChild();
             while( !childNode.isNull() ) {
                 if( childNode.isElement() ) {
-                    qWarning() << "childNode.nodeName() == " << childNode.nodeName() << Qt::endl;
                     if( childNode.nodeName() == "SLink" ) {
                         QDomElement childElement = childNode.toElement();
                         QString objectId = childElement.attribute( "objectId" );

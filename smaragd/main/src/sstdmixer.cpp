@@ -299,7 +299,6 @@ void SStdMixer::insertTrack( STrack &trk )
     SLink *lk = new SLink( (SObject&)trk, this );
     (void) lk;
     int newIndex = childCount() - 1;   // actual landing index (append)
-    qWarning( "Inserted new track @%d.\n", newIndex );
     emit trackInserted( newIndex, trk );
 }
 
@@ -355,10 +354,6 @@ void SStdMixer::checkDurationChanged()
 {
     length_t oldDuration = lastDuration_;
     length_t newDuration = getDuration();
-    qWarning( "SStdMixer::checkDurationChanged() called. oldDuration = %d, newDuration = %d.",
-              (int)oldDuration, (int)newDuration );
-    qWarning( "SStdMixer::checkDurationChanged(): newDuration = %d:%d.",
-	      (int)(newDuration>>32), (int)newDuration );
     if( oldDuration!=newDuration ) {
         emit durationChanged( newDuration );
     }
@@ -420,7 +415,6 @@ SLink *SStdMixer::instantiateFromDomElement(
     SStdMixer *mixer = new SStdMixer( &projectLoader.getProject() );
     while( !childNode.isNull() ) {
         if( childNode.isElement() ) {
-            qWarning() << "found SStdMixer child " << childNode.nodeName() << Qt::endl;
             if( childNode.nodeName() == "SLink" ) {
                 QDomElement childElement = childNode.toElement();
                 QString objectId = childElement.attribute( "objectId" );
