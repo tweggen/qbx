@@ -769,14 +769,15 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     if( !grainParams_.isIdentity() || ( loopLength_ > 0 && loopLength_ < cutDuration_ ) )
         rebuildReader( getSnapshot() );
 
+    fprintf(stderr, ">>> SCut::readPostChildrenAttributes END: final cutDuration=%lld\n", (long long)cutDuration_);
     return 0;
 }
 
-SLink *SCut::instantiateFromDomElement( 
+SLink *SCut::instantiateFromDomElement(
     SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
 {
     SLink *contentLink = NULL;
-    // Find the first link child 
+    // Find the first link child
     QDomNode childNode = element.firstChild();
     while( !childNode.isNull() ) {
         if( childNode.isElement() ) {
@@ -791,7 +792,7 @@ SLink *SCut::instantiateFromDomElement(
         }
         childNode = childNode.nextSibling();
     }
-                
+
     if( !contentLink ) {
         qWarning( "SCut did not have a child!!" );
         return NULL;

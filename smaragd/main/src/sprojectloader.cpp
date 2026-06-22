@@ -50,7 +50,7 @@ int SProjectLoader::createObjects( SProject &project )
     }
     // SObject *rootObject = NULL;
     QString rootId;
-    
+
 //    qWarning( "Internal document representation:\n%s",
 //              (const char *) dom_.toString() );
 
