@@ -28,14 +28,12 @@ using namespace std;
 SCutSnapshot SCut::getSnapshot() const
 {
     // Non-blocking lock to avoid deadlock during UI paint when revalidator
-    // is modifying state. If mutex is held, return a stale snapshot (safe
-    // for rendering; better than blocking/hanging).
+    // is modifying state. If mutex is held, return the last good snapshot.
     std::unique_lock<std::mutex> lock(mutex(), std::defer_lock);
     if (!lock.try_lock()) {
-        // Could not acquire lock: return default/stale snapshot to prevent
-        // deadlock. UI will repaint on next cycle (10-33ms) and try again.
-        static thread_local SCutSnapshot staleFallback;
-        return staleFallback;
+        // Could not acquire lock: return last good snapshot (safe for rendering).
+        // This is always initialized and contains valid data from previous successful lock.
+        return lastGoodSnapshot_;
     }
 
     SCutSnapshot snap;
@@ -44,6 +42,10 @@ SCutSnapshot SCut::getSnapshot() const
     snap.cutDuration = cutDuration_;
     snap.grainParams = grainParams_;
     snap.reader = currentReader_;  // Always valid, complete, atomic (Unix page cache)
+
+    // Update the last good snapshot for fallback use when lock fails on next call.
+    lastGoodSnapshot_ = snap;
+
     return snap;
 }
 

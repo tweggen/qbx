@@ -340,6 +340,10 @@ private:
     // Aspect tracking: bitmask of valid aspects in currentPage_.
     // Updated by revalidator when pages are swapped and marked complete.
     uint32_t validAspects_ = 0;
+
+    // Last good snapshot: returned when lock acquisition fails to prevent returning
+    // uninitialized data. Updated whenever getSnapshot() successfully acquires the lock.
+    mutable SCutSnapshot lastGoodSnapshot_{0, 0, 0, {}, {}};
 };
 
 #endif
