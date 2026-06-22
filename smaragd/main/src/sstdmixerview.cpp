@@ -1881,23 +1881,23 @@ void SStdMixerView::avLeftOffsetChanged( offset_t newValue )
 void SStdMixerView::timeSliderMoved( int newValue )
 {
     if( newValue<0 ) {
-	qWarning( "SStdMixerView::timeSliderMoved(): newValue was less than zero." );
-	newValue = 0;
+	   //qWarning( "SStdMixerView::timeSliderMoved(): newValue was less than zero." );
+	   newValue = 0;
     }
-    qWarning( "SStdMixerView::timeSliderMoved(): newValue=%d.",
-	      newValue );
+    //qWarning( "SStdMixerView::timeSliderMoved(): newValue=%d.",
+	//      newValue );
     if( model_->hasDuration() ) {
-	qContent_->setLeftOffset( (offset_t)(newValue*model_->getDuration()/HSliderRange+0.5) );
+	   qContent_->setLeftOffset( (offset_t)(newValue*model_->getDuration()/HSliderRange+0.5) );
     } else {	
-	qContent_->setLeftOffset( 0 );
+	   qContent_->setLeftOffset( 0 );
     }
 }
 
 void SStdMixerView::trackSliderMoved( int newValue )
 {
     if( newValue<0 ) {
-	qWarning( "SStdMixerView::trackSliderMoved(): newValue was less than zero." );
-	newValue = 0;
+	   qWarning( "SStdMixerView::trackSliderMoved(): newValue was less than zero." );
+	   newValue = 0;
     }
     qContent_->setTopOffset( newValue );
 }
