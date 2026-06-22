@@ -4,6 +4,7 @@
 #include "twcomponent.h"
 #include "twresampler.h"
 #include "audio/audio_backend.h"
+#include "audio/audio_engine.h"
 
 #include <atomic>
 #include <memory>
@@ -17,6 +18,7 @@ class twSpeaker
     Q_OBJECT
 private:
     std::unique_ptr<audio::AudioBackend> backend_;
+    std::unique_ptr<audio::AudioEngine> audioEngine_;
     // Atomic so isPlaying() is a lock-free read. The check-and-act transitions
     // (start/stop) are serialised by outputMutex_ below — atomicity of the flag
     // alone doesn't make "if (!isPlaying_) return; …flip + drive the backend"
@@ -27,7 +29,6 @@ private:
     // takes this lock, so holding it across backend_->stopOutput()'s join is
     // deadlock-free.
     std::mutex outputMutex_;
-    twResampler resamplerL_, resamplerR_;
     std::string outputDeviceId_ = "default";
 
     // Cycle (loop) playback. When enabled with a valid range, the render

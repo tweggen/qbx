@@ -39,6 +39,7 @@ set(TW303A_HEADERS
     include/audio/audio_engine.h
     include/audio/audio_sink.h
     include/audio/audio_readahead.h
+    include/audio/playback_sink.h
     include/capture_page_pool.h
     include/capture_revalidator.h
     include/render_session.h
@@ -93,6 +94,7 @@ set(TW303A_SOURCES
     src/audio/null_input.cc
     src/audio/audio_engine.cc
     src/audio/audio_readahead.cc
+    src/audio/playback_sink.cc
     src/capture_page_pool.cc
     src/capture_revalidator.cc
     src/render_session.cc
