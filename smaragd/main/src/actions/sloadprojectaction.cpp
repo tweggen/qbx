@@ -20,9 +20,20 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
         return {false, nullptr};
     }
 
+    // Suppress invalidation during project load to avoid deadlock.
+    // All captures are empty on construction anyway, and worker threads
+    // would race with the UI thread still deserializing objects.
+    // When enableInvalidation() is called, worker threads will begin
+    // recomputing all loaded cuts.
+    project->disableInvalidation();
+
     if (loader.createObjects(*project) != 0) {
+        project->enableInvalidation();  // Re-enable even on error
         return {false, nullptr};
     }
+
+    // Loading complete: re-enable invalidation and trigger revalidation pass.
+    project->enableInvalidation();
 
     // Not undoable: loading replaces the whole project; callers manage the swap.
     return {true, nullptr};

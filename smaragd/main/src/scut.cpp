@@ -675,14 +675,14 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
 {
     SObject::readPostChildrenAttributes( element );
 
-    // During project load, directly set state without triggering invalidation chains.
-    // Captures are already invalid (just constructed), and we're still loading.
-    // Calling setters would trigger notifyDependentsChanged recursively → deadlock.
+    // Note: Invalidation is suppressed during project load via SProject::disableInvalidation(),
+    // so calling setStartOffset() is safe - it won't trigger invalidation chains.
+    // This way setters work normally and code stays consistent.
 
     QString data;
     data = element.attribute( "startOffset", "0" );
     Fraction startOffsetFrac = parseFractionOrDouble( data.toStdString() );
-    startOffset_ = (offset_t)startOffsetFrac.toDouble();
+    setStartOffset( (offset_t)startOffsetFrac.toDouble() );
 
     // Load cutDuration. If missing, use a sensible default based on project sample rate
     // (0.5 seconds). This matches the constructor default and ensures consistency
@@ -862,6 +862,13 @@ void SCut::processWindowParamEvents()
 void SCut::invalidateAspects(uint32_t aspects)
 {
     if (aspects == 0 || !revalidator_) return;
+
+    // During project loading, invalidation is suppressed (all pages invalid anyway).
+    // When enableInvalidation() is called, a full recomputation pass will begin.
+    SProject *proj = getProjectSafe();
+    if (proj && proj->isInvalidationSuppressed()) {
+        return;  // Skip invalidation chain while loading
+    }
 
     auto start = std::chrono::high_resolution_clock::now();
 

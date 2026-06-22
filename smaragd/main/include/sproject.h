@@ -109,6 +109,17 @@ public:
     CaptureRevalidator* getRevalidator() { return revalidator_.get(); }
     CapturePagePool* getPagePool() { return pagePool_.get(); }
 
+    // Suppress capture invalidation during project loading.
+    // During deserialization, all pages are empty anyway, so there's no point
+    // in triggering invalidation chains. Wrap entire load sequence in:
+    //   project->disableInvalidation();
+    //   // ... load from XML ...
+    //   project->enableInvalidation();  // Triggers full revalidation of all cuts
+    // All setters work normally; invalidation is simply deferred until load completes.
+    void disableInvalidation() { invalidationSuppressed_++; }
+    void enableInvalidation();  // Triggers revalidation pass for loaded cuts
+    bool isInvalidationSuppressed() const { return invalidationSuppressed_ > 0; }
+
 signals:
     void fileNameChanged( const QString & );
     void assetAdded( const QString &name, SObject &body );
@@ -146,6 +157,12 @@ private:
     QHash<QString,SObject*> assetDict_;
 
     bool isPartialLoad_ = false;  // True if load failed partway through
+
+    // Invalidation suppression counter (for project loading).
+    // When > 0, invalidateAspects() returns early without scheduling revalidation.
+    // Incremented by disableInvalidation(), decremented by enableInvalidation().
+    // Counter allows nested disable/enable pairs (e.g., subcomponents that also load).
+    int invalidationSuppressed_ = 0;
 
     // Async capture revalidation (Phase 4).
     // Pre-allocated page pool and worker thread pool for non-blocking capture access.

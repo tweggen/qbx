@@ -396,3 +396,18 @@ SProject::SProject()
     soRoot_ = new SStdMixer( this );
 #endif
 }
+
+void SProject::enableInvalidation()
+{
+    if (invalidationSuppressed_ > 0) {
+        invalidationSuppressed_--;
+    }
+
+    // If we just disabled the last suppression, trigger full revalidation pass.
+    // All cuts that were loaded need their captures recomputed.
+    if (invalidationSuppressed_ == 0) {
+        // TODO: Phase 5 - implement full project invalidation pass
+        // For now, individual cuts will be invalidated on first access (lazy).
+        // Could add: invalidateAllCuts() here to eagerly start revalidation.
+    }
+}
