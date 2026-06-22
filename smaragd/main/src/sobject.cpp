@@ -12,6 +12,7 @@
 #include "sproject.h"
 #include "scut.h"
 #include "twrandomsource.h"
+#include "capture_revalidator.h"
 
 void SObject::setSolo( bool f )
 {
@@ -609,4 +610,40 @@ void SObject::notifyDependentsChanged(uint32_t affectedAspects)
             cut->invalidateAspects(affectedAspects);
         }
     }
+}
+
+// Phase 5e: Page cache API
+// Base implementation: just returns current page without scheduling.
+// Derived classes (SCut, STrack, etc.) override to call scheduleRevalidation().
+std::shared_ptr<CapturePageData> SObject::getCapture(uint32_t aspectsMask)
+{
+    if (aspectsMask == 0) return nullptr;
+
+    // Get current page (may be stale, may be null, never blocks).
+    // Read current page without locking (shared_ptr copy is atomic).
+    auto page = currentPage();
+
+    // If current page has all needed aspects, return immediately.
+    // Acquire page lock to safely read validAspects (prevents torn reads during concurrent writes).
+    if (page) {
+        std::lock_guard<std::mutex> pageLock(page->pageMutex);
+        if ((page->validAspects & aspectsMask) == aspectsMask) {
+            return page;
+        }
+    }
+
+    // TODO: Phase 5e.5 - Unify CaptureRevalidator to work with SObject*.
+    // For now, derived classes (SCut) override this to call scheduleRevalidation().
+
+    // Return current page anyway (stale is OK; better than null/dropout)
+    return page;
+}
+
+bool SObject::needsRevalidation_nolock(uint32_t aspectsMask) const
+{
+    if (aspectsMask == 0) return false;
+    // Note: _nolock refers to not holding SObject's state mutex; we still need page lock for valid aspect check
+    if (!currentPage_) return true;
+    std::lock_guard<std::mutex> pageLock(currentPage_->pageMutex);
+    return (currentPage_->validAspects & aspectsMask) != aspectsMask;
 }
