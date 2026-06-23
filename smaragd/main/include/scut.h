@@ -145,6 +145,10 @@ public:
     virtual bool hasDuration() const { return true; }
     virtual length_t getDuration() const;
 
+    // Phase 5e: Page cache implementation
+    // Render preview for both sample-backed and container-backed cuts
+    virtual void recomputePreview(CapturePageData& page) override;
+
     // Waveform preview for a container-backed asset cut: peaks come from the
     // capture (the rendered snapshot shared with audio), in the container's frame
     // domain, so `start` is the container offset the cut window maps to. Sample

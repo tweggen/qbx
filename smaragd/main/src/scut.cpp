@@ -994,3 +994,102 @@ bool SCut::needsRevalidation(uint32_t aspectsMask) const
     std::lock_guard<std::mutex> lock(mutex());
     return needsRevalidation_nolock(aspectsMask);
 }
+
+// Phase 5e: Page cache implementation
+void SCut::recomputePreview(CapturePageData& page)
+{
+    // Render preview for both sample-backed and container-backed cuts.
+    // Sample cuts delegate to SPlainWave::getPreview().
+    // Container cuts render the component graph.
+
+    length_t cutDuration = getDuration();
+    if (cutDuration == 0) {
+        // Empty cut; fill with silence
+        preview_t* previewData = reinterpret_cast<preview_t*>(page.data);
+        for (size_t i = 0; i < CapturePageData::PAGE_SIZE / sizeof(preview_t); ++i) {
+            previewData[i].min = 0;
+            previewData[i].max = 0;
+        }
+        page.validAspects |= Preview;
+        return;
+    }
+
+    const offset_t MAX_PREVIEW_SAMPLES = CapturePageData::PAGE_SIZE / sizeof(preview_t);
+    preview_t* pagePreview = reinterpret_cast<preview_t*>(page.data);
+
+    // Get the cut's content
+    SObject& content = getContent();
+
+    // Try to get preview from content (sample-backed or container with its own preview)
+    if (content.hasPreview()) {
+        int result = content.getPreview(
+            pagePreview,
+            getStartOffset(),
+            cutDuration,
+            MAX_PREVIEW_SAMPLES
+        );
+
+        if (result >= 0) {
+            page.validAspects |= Preview;
+            return;
+        }
+    }
+
+    // Fallback: render container graph to audio and downsample to preview
+    // (This handles container-backed cuts like grouped cuts wrapping tracks)
+    // Initialize to silence
+    for (size_t i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
+        pagePreview[i].min = 0;
+        pagePreview[i].max = 0;
+    }
+
+    try {
+        twComponent& component = content.getRootComponent();
+        const length_t RENDER_CHUNK_SIZE = 4096;
+        std::vector<sample_t> audioBuffer(RENDER_CHUNK_SIZE);
+        int previewIndex = 0;
+
+        for (length_t renderPos = 0; renderPos < cutDuration && previewIndex < MAX_PREVIEW_SAMPLES;
+             renderPos += RENDER_CHUNK_SIZE) {
+
+            length_t chunkSize = std::min(RENDER_CHUNK_SIZE, cutDuration - renderPos);
+
+            // Render stereo and average to preview
+            for (int ch = 0; ch < 2; ++ch) {
+                try {
+                    length_t rendered = component.calcOutputTo(audioBuffer.data(), (int)chunkSize, ch);
+                    if (rendered == 0) break;
+
+                    sample_t minVal = audioBuffer[0];
+                    sample_t maxVal = audioBuffer[0];
+
+                    for (length_t i = 0; i < rendered; ++i) {
+                        minVal = std::min(minVal, audioBuffer[i]);
+                        maxVal = std::max(maxVal, audioBuffer[i]);
+                    }
+
+                    if (ch == 0) {
+                        pagePreview[previewIndex].min = static_cast<signed char>(minVal * 127.0f);
+                        pagePreview[previewIndex].max = static_cast<signed char>(maxVal * 127.0f);
+                    } else {
+                        signed char minCh = static_cast<signed char>(minVal * 127.0f);
+                        signed char maxCh = static_cast<signed char>(maxVal * 127.0f);
+                        pagePreview[previewIndex].min = (pagePreview[previewIndex].min + minCh) / 2;
+                        pagePreview[previewIndex].max = (pagePreview[previewIndex].max + maxCh) / 2;
+                    }
+                } catch (...) {
+                    pagePreview[previewIndex].min = 0;
+                    pagePreview[previewIndex].max = 0;
+                    break;
+                }
+            }
+
+            previewIndex++;
+        }
+
+        page.validAspects |= Preview;
+    } catch (...) {
+        // Rendering failed; already filled with silence
+        page.validAspects |= Preview;
+    }
+}

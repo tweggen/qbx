@@ -19,9 +19,9 @@ void SObject::setSolo( bool f )
     if( f==solo_ ) return;
     solo_ = f;
     emit soloChanged( f );
-    // Solo changes audio routing but not arrangement structure:
-    // notify dependents to invalidate Playback + Metadata aspects only
-    notifyDependentsChanged(Playback | Metadata);
+    // Solo changes both preview rendering (affects visibility in composites)
+    // and audio routing. Invalidate all three aspects.
+    notifyDependentsChanged(Preview | Playback | Metadata);
 }
 
 void SObject::setMuted( bool f )
@@ -29,9 +29,9 @@ void SObject::setMuted( bool f )
     if( f==muted_ ) return;
     muted_ = f;
     emit mutedChanged( f );
-    // Mute changes audio routing but not arrangement structure:
-    // notify dependents to invalidate Playback + Metadata aspects only
-    notifyDependentsChanged(Playback | Metadata);
+    // Mute changes both preview rendering (affects visibility in composites)
+    // and audio routing. Invalidate all three aspects.
+    notifyDependentsChanged(Preview | Playback | Metadata);
 }
 
 void SObject::setArmedForRecording( bool f )
