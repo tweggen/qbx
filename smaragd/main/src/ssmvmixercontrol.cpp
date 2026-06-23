@@ -348,6 +348,7 @@ void SSMVMixerControl::onSoloChanged( bool on )
 {
     QSignalBlocker block( qSolo_ );
     qSolo_->setChecked( on );
+    update();  // Repaint to show/hide yellow background
 }
 
 void SSMVMixerControl::armToggled( bool on )
