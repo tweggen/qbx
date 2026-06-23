@@ -3390,15 +3390,22 @@ Recommended next steps for human verification:
 
 **Bugs Under Investigation:**
 
-5. **Bug (c) — Group cut playback 3-6dB louder** ⚠️ INVESTIGATING  
+5. **Bug (c) — Group cut playback 3-6dB louder** ⚠️ INVESTIGATING
    - **Symptom:** Playing group cut audio at 3-6dB higher than original
-   - **Hypothesis:** Volume scaling issue or mixing gain error in container-backed cut rendering
-   - **Key findings:**
-     - Default volume is 0.0 dB (correct, linear 1.0)
-     - Container cuts use content.getRootComponent() directly
-     - No obvious volume application step visible in rendering path
-   - **Needed:** Clarification on scenario (which group type, comparison baseline)
-   - **Next steps:** Check if cut.getVolume() applied to container outputs, verify mixer gain calculations
+   - **Analysis of rendering path:**
+     - Group cut (SCut wrapping a track) → buildCapture_() → renderObjectInto(track) → applies track's volume (line 244) → twCapturingSource
+     - Reader chain built over capture → getRootComponent() returns reader
+     - Audio rendered: capture → reader → speaker
+   - **Volume application points identified:**
+     - Track/container's own volume applied in renderObjectInto() (line 244: `pow(10.0, obj.getVolume()/20.0)`)
+     - No additional volume application visible in reader chain (twSampleReader/twLoopReader are transparent)
+     - SCut's own volume not applied in renderObjectInto() (unlike Container case) — correct, as volume should come from link
+   - **Possible causes (speculative):**
+     - Double-application of track mixer output level (mixer applies level AND container render applies level?)
+     - Incorrect dB calculation (should use ±20.0 factor for voltage, not power?)
+     - Audio clipping/normalization somewhere?
+   - **Needed:** Reproduce scenario with specific tracks and group, capture audio, measure dB difference
+   - **Next steps:** Instrument buildCapture_() with debug output to show volume being applied
 
 **Verification Status (Phase 5e.6):**
 - ✅ Build clean on macOS/Qt6/CMake
@@ -3433,3 +3440,44 @@ Unified page cache architecture now spans all SObjects:
 - Live resampler-node insertion (proposal 04 fork: when a fixed-rate source lands at a non-project rate)
 - Full signal emission for revalidation complete (Qt signals from revalidator)
 - Performance tuning: page pool pre-sizing, worker thread count auto-scaling
+
+---
+
+## Bug fix session: Container-backed cut playback issues (2026-06-23 continued)
+
+- **Date:** 2026-06-23 (continuation)
+- **Status:** Bug (b) FIXED. Bug (c) requires further investigation.
+- **Work completed:**
+  1. **Diagnosed bug (b):** Container-backed cuts (group cuts) were falling back to live content's component for playback, causing loop iteration failures when the live component's state wasn't reset
+  2. **Implemented fix:** Modified `SCut::rebuildReader()` to build the capture synchronously for container-backed cuts, ensuring a proper reader chain (with loop/grain stages) is constructed over the static capture buffer instead of the live component
+  3. **Testing:** Build verified clean on macOS/Qt6/CMake
+  4. **Documentation:** Updated STATE.md with fix details and investigation findings
+
+### Bug (b) Fix Details
+
+**What changed:** In `main/src/scut.cpp` lines 98-108, the condition that skipped reader building for container cuts now:
+1. Calls `buildCapture_()` to render the container into a buffer
+2. Uses the capture as the playback source (same as sample-backed cuts)
+3. Builds the same reader chain (with loop/grain stages) over the capture
+
+**Why this fixes it:** 
+- Old: Loop seeks on live component → component state not reset → audio drops
+- New: Loop seeks within static capture buffer → no state issues → audio continues
+
+**Thread safety:** `buildCapture_()` is called from UI thread in `rebuildReader()`, matching the original design. The capture is then safely shared with the audio thread via the reader's `captureRef`.
+
+### Bug (c) Investigation Status
+
+**Current hypothesis:** Possible double-application of volume during capture rendering, but audio path analysis shows only one volume application point.
+
+**Blocker:** Need specific reproduction scenario (which track, which group type, exact measurement of dB difference) to debug further.
+
+**Commits this session:**
+- 21a726b — Fix bug (b): Cycle mode playback for container-backed cuts
+- e41c14a — Documentation: Update STATE.md with bug (b) fix
+
+### Recommendations for next session
+
+1. **Test bug (b) fix:** Run cycle mode playback with group cuts, verify multiple iterations play correctly
+2. **Debug bug (c):** Instrument `buildCapture_()` with logging to trace volume application, create test case with specific dB measurement
+3. **Optimization:** Consider deferring `buildCapture_()` to async revalidator when `recomputePlayback()` is implemented (Phase 5f)
