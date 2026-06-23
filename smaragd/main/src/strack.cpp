@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include <stdlib.h>
+#include <vector>
 
 #include <qobject.h>
 
@@ -20,6 +21,7 @@
 #include "spluginchain.h"
 #include "spluginslot.h"
 #include "sprojectloader.h"
+#include "scut.h"  // For SCutCaptureAspect enum (Preview)
 
 using namespace std;
 
@@ -472,4 +474,64 @@ void STrack::onPluginSlotsReordered()
             }
         }
     }
+}
+
+// Phase 5e: Page cache implementation
+void STrack::recomputePreview(CapturePageData& page)
+{
+    // Composite preview: gather previews from all visible children and mix them
+
+    length_t totalDuration = getDuration();
+    if (totalDuration == 0) {
+        // Empty track; fill with silence
+        preview_t* previewData = reinterpret_cast<preview_t*>(page.data);
+        for (size_t i = 0; i < CapturePageData::PAGE_SIZE / sizeof(preview_t); ++i) {
+            previewData[i].min = 0;
+            previewData[i].max = 0;
+        }
+        page.validAspects |= Preview;
+        return;
+    }
+
+    const offset_t MAX_PREVIEW_SAMPLES = CapturePageData::PAGE_SIZE / sizeof(preview_t);
+    preview_t* pagePreview = reinterpret_cast<preview_t*>(page.data);
+
+    // Initialize composite buffer to silence
+    for (size_t i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
+        pagePreview[i].min = 0;
+        pagePreview[i].max = 0;
+    }
+
+    // Iterate through all child clips
+    for (SLink *childLink : childLinks()) {
+        if (!childLink) continue;
+
+        SObject *child = &childLink->getSObject();
+        if (!child || child->isMuted()) {
+            // Skip muted or missing children
+            continue;
+        }
+
+        // Try to get preview from this child
+        if (child->hasPreview()) {
+            std::vector<preview_t> childPreview(MAX_PREVIEW_SAMPLES);
+            int result = child->getPreview(childPreview.data(), 0, totalDuration, MAX_PREVIEW_SAMPLES);
+
+            if (result >= 0) {
+                // Mix this child's preview into the composite
+                // For each sample slot: expand the min/max range to include child's range
+                for (offset_t i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
+                    if (childPreview[i].min < pagePreview[i].min) {
+                        pagePreview[i].min = childPreview[i].min;
+                    }
+                    if (childPreview[i].max > pagePreview[i].max) {
+                        pagePreview[i].max = childPreview[i].max;
+                    }
+                }
+            }
+        }
+    }
+
+    // Mark preview as valid in the page
+    page.validAspects |= Preview;
 }
