@@ -380,16 +380,8 @@ void SMainWindow::onRenderTriggered()
         // Set dialog to auto-delete when closed
         progressDialog->setAttribute(Qt::WA_DeleteOnClose);
 
-        // Show non-modally so the event loop can process updates
-        progressDialog->show();
-
-        // Pump event loop while render is active
-        while (SApplication::app().renderSession()->isRunning()) {
-            QApplication::processEvents();
-        }
-
-        // Auto-close the dialog when rendering completes
-        progressDialog->accept();
+        // Show the dialog (will be modal-like, but allows event processing)
+        progressDialog->exec();  // Block until user closes the dialog
     }
 }
 
