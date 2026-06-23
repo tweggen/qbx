@@ -3378,17 +3378,17 @@ Recommended next steps for human verification:
    - **Files:** main/src/ssmvmixercontrol.cpp (line 351)
    - **Commits:** 2ad1368
 
-**Bugs Under Investigation:**
+4. **Bug (b) — Cycle mode playback (first iteration correct, following wrong)** ✅ FIXED
+   - **Symptom:** Playing back SCut (group cut) of another track in cycle mode: first iteration plays, subsequent iterations produce no audio
+   - **Root cause:** Container-backed cuts skipped reader construction in rebuildReader() (line 101 TODO). For playback, this caused getRootComponent() to fall back to the live content's component (the track), whose internal state wasn't being reset between loop iterations
+   - **Fix:** Modified rebuildReader() to build the capture synchronously for container-backed cuts, creating a proper reader chain (with loop/grain stages) over the static capture buffer instead of the live component
+   - **How it works:**
+     - Old behavior: Container cut reads from live track component → live component state fights loop seeking
+     - New behavior: Container cut renders once into a capture buffer → LoopReader seeks within static buffer → no state conflicts
+   - **Files:** main/src/scut.cpp (lines 98-108)
+   - **Commits:** 21a726b
 
-4. **Bug (b) — Cycle mode playback (first iteration correct, following wrong)** ⚠️ INVESTIGATING
-   - **Symptom:** Playing back SCut of another track with links in cycle mode: first iteration plays, subsequent don't
-   - **Hypothesis:** Container-backed cut state not resetting properly between loop iterations
-   - **Key findings:**
-     - twLoopReader implementation is correct (modulo wrapping works)
-     - SCut.seekTo() delegates to content for container cuts
-     - Container-backed cuts skip rebuildReader() (line 101 has TODO comment)
-     - Possible root cause: track mixer state not resetting on seek
-   - **Next steps:** Check twTrackMix seeking/reset, verify capture invalidation for looped renders
+**Bugs Under Investigation:**
 
 5. **Bug (c) — Group cut playback 3-6dB louder** ⚠️ INVESTIGATING  
    - **Symptom:** Playing group cut audio at 3-6dB higher than original
@@ -3407,12 +3407,13 @@ Recommended next steps for human verification:
 - ✅ Container-backed cuts render (group cuts have preview now)
 - ✅ Solo/Mute now properly invalidate Preview (fast response)
 - ✅ UI updates on solo/mute changes
-- ⚠️ Cycle mode playback incomplete (first iteration only)
+- ✅ Cycle mode playback now works for container-backed cuts (bug b fixed)
 - ⚠️ Group cut loudness discrepancy (3-6dB over baseline)
 
 **Commits this session:**
 - 87b0301 — Bug fixes: Solo/Mute invalidation, group cut preview
 - 2ad1368 — Bug fix (e): Un-solo-ing track doesn't refresh background color
+- 21a726b — Bug fix (b): Cycle mode playback for container-backed cuts
 - 001724d (after rebase) — All Phase 5e work + bug fixes pushed to main
 
 ### Summary: Phase 5e complete
