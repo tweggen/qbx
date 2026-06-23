@@ -53,6 +53,10 @@ public:
     virtual length_t getDuration() const;
     virtual bool hasDuration() const;
 
+    // Phase 5e: Page cache implementation
+    // Composite previews from all tracks into page cache
+    virtual void recomputePreview(CapturePageData& page) override;
+
     // Track selection for the detail panel
     STrack *getSelectedTrack() const { return selectedTrack_; }
     void setSelectedTrack( STrack *track );

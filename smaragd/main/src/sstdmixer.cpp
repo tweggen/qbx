@@ -1,6 +1,7 @@
 
 #include <iostream>
 #include <stdlib.h>
+#include <vector>
 
 #include <QDebug>
 
@@ -11,6 +12,7 @@
 #include "sstdmixerview.h"
 #include "sprojectloader.h"
 #include "sapplication.h"
+#include "scut.h"  // For SCutCaptureAspect enum (Preview)
 
 using namespace std;
 
@@ -430,4 +432,66 @@ SLink *SStdMixer::instantiateFromDomElement(
     }
                 
     return new SLink( *mixer, parent );
+}
+
+// Phase 5e: Page cache implementation
+void SStdMixer::recomputePreview(CapturePageData& page)
+{
+    // Composite preview: gather previews from all tracks and mix them
+
+    length_t totalDuration = getDuration();
+    if (totalDuration == 0) {
+        // Empty mixer; fill with silence
+        preview_t* previewData = reinterpret_cast<preview_t*>(page.data);
+        for (size_t i = 0; i < CapturePageData::PAGE_SIZE / sizeof(preview_t); ++i) {
+            previewData[i].min = 0;
+            previewData[i].max = 0;
+        }
+        page.validAspects |= Preview;
+        return;
+    }
+
+    const offset_t MAX_PREVIEW_SAMPLES = CapturePageData::PAGE_SIZE / sizeof(preview_t);
+    preview_t* pagePreview = reinterpret_cast<preview_t*>(page.data);
+
+    // Initialize composite buffer to silence
+    for (size_t i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
+        pagePreview[i].min = 0;
+        pagePreview[i].max = 0;
+    }
+
+    // Iterate through all tracks
+    int nTracks = getNTracks();
+    for (int trackIdx = 0; trackIdx < nTracks; ++trackIdx) {
+        SLink *trackLink = getTrackAt(trackIdx);
+        if (!trackLink) continue;
+
+        SObject *track = &trackLink->getSObject();
+        if (!track || track->isMuted()) {
+            // Skip muted or missing tracks
+            continue;
+        }
+
+        // Try to get preview from this track
+        if (track->hasPreview()) {
+            std::vector<preview_t> trackPreview(MAX_PREVIEW_SAMPLES);
+            int result = track->getPreview(trackPreview.data(), 0, totalDuration, MAX_PREVIEW_SAMPLES);
+
+            if (result >= 0) {
+                // Mix this track's preview into the composite
+                // For each sample slot: expand the min/max range to include track's range
+                for (offset_t i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
+                    if (trackPreview[i].min < pagePreview[i].min) {
+                        pagePreview[i].min = trackPreview[i].min;
+                    }
+                    if (trackPreview[i].max > pagePreview[i].max) {
+                        pagePreview[i].max = trackPreview[i].max;
+                    }
+                }
+            }
+        }
+    }
+
+    // Mark preview as valid in the page
+    page.validAspects |= Preview;
 }
