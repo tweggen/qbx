@@ -3241,6 +3241,80 @@ Observations motivating the unification:
 3. **Undo/redo:** Exercise action sequence + invalidation — verify preview updates asynchronously
 4. **Large project performance:** Load a project with many clips/tracks — monitor page pool utilization and staleness
 
-### Next session
+---
 
-Resume with Phase 5e.3 (STrack composite preview) once audible playback + UI responsiveness verified on macOS/Windows.
+## 09_UNIFIED_PAGE_CACHE_ARCHITECTURE.md — Phase 5e.3–5e.5 (hierarchical rendering + unified revalidator)
+
+- **Date:** 2026-06-23
+- **Status:** Phases 5e.3, 5e.4, and 5e.5 complete. Phase 5e.6 (integration and performance) pending.
+- **Verified on platform:** macOS arm64 (build only).
+
+### What landed (phases 5e.3–5e.5)
+
+| Phase | Component | Change |
+|-------|-----------|--------|
+| 5e.3 | STrack | Added `recomputePreview()` override; composites previews from all visible (non-muted) child clips by iterating `childLinks()`, mixing min/max bounds |
+| 5e.4 | SStdMixer | Added `recomputePreview()` override; composites previews from all visible tracks via `getNTracks()/getTrackAt()`, same mix strategy as STrack |
+| 5e.5 | CaptureRevalidator | Unified to work with `SObject*` instead of `SCut*`; `processJob()` dispatches to object's virtual `recomputeXXX()` methods; removed SCut-specific recomputation code |
+
+### Architecture: Hierarchical preview rendering (phases 5e.3–5e.4)
+
+Both STrack and SStdMixer now implement composite preview:
+
+1. **STrack:** Gathers previews from child clips (SCuts placed on timeline)
+   - Iterates `childLinks()` (each is a SLink to a clip)
+   - Skips muted clips
+   - Calls `child->getPreview()` for each visible clip
+   - Mixes by expanding min/max bounds per sample slot
+
+2. **SStdMixer:** Gathers previews from child tracks
+   - Iterates `getNTracks()` / `getTrackAt(trackIdx)`
+   - Skips muted tracks
+   - Calls `track->getPreview()` for each visible track
+   - Mixes by same strategy (expand min/max bounds)
+
+**Result:** A hierarchical preview render pipeline:
+- **Leaf:** SPlainWave (audio source) → generates preview via `getStraightPreview()`
+- **Mid-level:** STrack → composites clip previews
+- **High-level:** SStdMixer → composites track previews
+- **UI renders** → calls `getCapture(Preview)` on mixer → gets composite of entire project in one cache lookup
+
+### Unified revalidator (phase 5e.5)
+
+**Before:** CaptureRevalidator was SCut-specific, with internal `recomputePreview()` methods that rendered container-backed cuts (tracks) by invoking component graphs.
+
+**After:** Generic dispatcher that delegates to object's virtual methods:
+
+1. **Job structure:** `CaptureRevalidationJob` holds `SObject* object` (not `SCut*`)
+2. **Scheduling:** `scheduleRevalidation(SObject*, uint32_t aspects, int priority)` accepts any SObject
+3. **Dispatch:** `processJob()` calls `dispatchRecomputation(object, aspects, page)`, which invokes:
+   - `object->recomputePreview(page)` if Preview aspect requested
+   - `object->recomputePlayback(page)` if Playback aspect requested
+   - etc.
+4. **Removed:** 250+ lines of SCut-specific preview rendering logic; now each object type owns its recomputation
+
+**Thread safety:** Unchanged. Per-object mutex, per-page pageMutex, atomic swaps.
+
+### Commits
+
+- `22cfa42` — Phase 5e.3 (STrack composite preview)
+- `8d41381` — Phase 5e.4 (SStdMixer composite preview)
+- `982a5d6` — Phase 5e.5 (unified CaptureRevalidator)
+
+### Design benefits
+
+- **Separation of concerns:** Each object knows how to compute its own previews; revalidator is a generic dispatcher
+- **Extensibility:** Adding a new SObject type (e.g., FX group, automation clip) just requires implementing `recomputePreview()` — no changes to revalidator
+- **Cleaner architecture:** No object-type conditionals in revalidator; dispatch via virtual methods
+- **Hierarchical rendering:** Preview pipeline naturally mirrors object hierarchy (clip → track → mixer)
+
+### Next phase (5e.6)
+
+Integration and performance verification:
+1. Audible playback test on macOS/Windows/Linux
+2. UI responsiveness: drag window during playback, confirm no stalls
+3. Undo/redo cycle: verify preview updates asynchronously
+4. Large-project performance: monitor page pool utilization, staleness, cache hit rate
+5. Disable Phase 4's `try_lock` workarounds (no longer needed with fire-and-forget model)
+
+If all pass, mark Phase 5e complete and consider moving to Phase 5f (deferred: live resampler-node insertion for proposal 04).
