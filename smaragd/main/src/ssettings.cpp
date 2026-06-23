@@ -23,6 +23,7 @@ void SSettings::setValue( const QString &key, const QVariant &val )
 {
     if( settings_.value( key ) == val ) return;   // no-op: don't churn/emit
     settings_.setValue( key, val );
+    settings_.sync();  // Ensure changes are written to disk immediately
     emit changed( key );
 }
 
@@ -116,4 +117,24 @@ void SSettings::removeRecentProject( const QString &path )
         }
     }
     if( changed ) setValue( kRecentKey, list );
+}
+
+QByteArray SSettings::windowGeometry() const
+{
+    return value( "ui/windowGeometry" ).toByteArray();
+}
+
+void SSettings::setWindowGeometry( const QByteArray &geometry )
+{
+    setValue( "ui/windowGeometry", geometry );
+}
+
+QByteArray SSettings::windowState() const
+{
+    return value( "ui/windowState" ).toByteArray();
+}
+
+void SSettings::setWindowState( const QByteArray &state )
+{
+    setValue( "ui/windowState", state );
 }

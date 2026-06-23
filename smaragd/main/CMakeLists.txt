@@ -24,6 +24,7 @@ set(SMARAGD_HEADERS
     include/sstdmixer.h
     include/sstdmixerview.h
     include/strack.h
+    include/strackcolormodifier.h
     include/strackrenderer.h
     include/strackrndrinline.h
     include/spluginchain.h
@@ -76,7 +77,10 @@ set(SMARAGD_HEADERS
     include/actions/stoggleselectionaction.h
     include/actions/sinsertpluginaction.h
     include/actions/sremovepluginaction.h
+    include/actions/srenderaction.h
+    include/actions/sscreenshotaction.h
     include/sprojectprops.h
+    include/szoomscrollbar.h
 )
 
 set(SMARAGD_SOURCES
@@ -107,6 +111,7 @@ set(SMARAGD_SOURCES
     src/sstdmixer.cpp
     src/sstdmixerview.cpp
     src/strack.cpp
+    src/strackcolormodifier.cpp
     src/strackrndrinline.cpp
     src/spluginchain.cpp
     src/spluginslot.cpp
@@ -155,6 +160,9 @@ set(SMARAGD_SOURCES
     src/actions/stoggleselectionaction.cpp
     src/actions/sinsertpluginaction.cpp
     src/actions/sremovepluginaction.cpp
+    src/actions/srenderaction.cpp
+    src/actions/sscreenshotaction.cpp
+    src/szoomscrollbar.cpp
 )
 
 # Optionally embed a bundled UI font. Drop a TTF at main/resources/FreeSans.ttf
@@ -226,8 +234,16 @@ if(AUTO_DEPLOY_QT AND (SMARAGD_WINDOWS OR SMARAGD_MACOS))
     endif()
 
     if(DEPLOYQT_EXECUTABLE)
+        if(SMARAGD_MACOS)
+            # macdeployqt expects the .app bundle directory, not the executable
+            set(_DEPLOY_TARGET "$<TARGET_BUNDLE_DIR:smaragd>")
+        else()
+            # windeployqt expects the executable path
+            set(_DEPLOY_TARGET "$<TARGET_FILE:smaragd>")
+        endif()
+
         add_custom_command(TARGET smaragd POST_BUILD
-            COMMAND "${DEPLOYQT_EXECUTABLE}" ${DEPLOYQT_ARGS} "$<TARGET_FILE:smaragd>"
+            COMMAND "${DEPLOYQT_EXECUTABLE}" ${DEPLOYQT_ARGS} "${_DEPLOY_TARGET}"
             COMMENT "Deploying Qt runtime alongside $<TARGET_FILE_NAME:smaragd>"
             VERBATIM
         )

@@ -29,6 +29,7 @@
 #include "sobjectrenderer.h"
 #include "sproject.h"
 #include "ssmvmixercontrol.h"
+#include "strackcolormodifier.h"
 #include "actions/ssettrackvolumeaction.h"
 
 // The fader works in tenths of a dB so it can use an integer QSlider:
@@ -41,7 +42,7 @@ static const double FADER_MAX_DB =  24.0;
 // Volume fader curve exponent: y = x^n where x is normalized [0,1].
 // n=1.0 is linear, n=2.0 is quadratic (recommended), n>1 makes small moves
 // near center more sensitive. Configurable via SOpt if desired.
-static const double VOLUME_CURVE_EXPONENT = 2.0;
+static const double VOLUME_CURVE_EXPONENT = 0.5;
 
 // Helper: convert slider value to dB using the configured curve.
 static double sliderToDB( int sliderValue )
@@ -71,7 +72,8 @@ static const int DRAG_THRESHOLD = 4;
 
 QSize SSMVMixerControl::sizeHint() const
 {
-    return QSize( SMV_TRACK_CTRL_WIDTH, smv_.getTrackHeight() );
+    // Return current width to allow expansion, not fixed size
+    return QSize( width(), smv_.getTrackHeight() );
 }
 
 /**
@@ -107,6 +109,9 @@ void SSMVMixerControl::applyVolume_( double newVolume )
  * Double-clicking the fader resets it to unity gain (0.0 dB). We intercept the
  * event here rather than subclass QSlider; the slider would otherwise treat the
  * second press as the start of another drag.
+ *
+ * Also intercept mouse presses on the track label to allow selecting the track
+ * from anywhere on the control (d).
  */
 bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
 {
@@ -115,6 +120,17 @@ bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
         if( me->button() == Qt::LeftButton ) {
             applyVolume_( 0.0 );
             return true;   // swallow it so the slider doesn't also jump-to-position
+        }
+    }
+    // Pass mouse press events from the track label through to parent for selection (d)
+    if( watched == qTrkLabel_ && ev->type() == QEvent::MouseButtonPress ) {
+        QMouseEvent *me = static_cast<QMouseEvent *>( ev );
+        if( me->button() == Qt::LeftButton ) {
+            SStdMixer *mixer = smv_.getModel();
+            if( mixer ) {
+                mixer->setSelectedTrack( &tk_ );
+            }
+            return false;  // Let the label still handle it for editing
         }
     }
     return QWidget::eventFilter( watched, ev );
@@ -181,8 +197,17 @@ static inline int gripLeft( int depth ) { return depth*SMV_TRACK_INDENT + SMV_FO
 // Draw the indented grip strip and, for parents, a fold triangle to its left.
 void SSMVMixerControl::paintEvent( QPaintEvent *ev )
 {
-    QWidget::paintEvent( ev );
+    // Determine base color (depends on selection state)
+    QColor baseColor = selected_ ? QColor( 64, 100, 140 ) : QColor( 48, 70, 100 );
+
+    // Apply track state modifiers (muted, solo, armed for recording)
+    STrackColorModifier mod = STrackColorModifier::fromTrackState( tk_ );
+    QColor bgColor = mod.apply( baseColor );
+
     QPainter p( this );
+    p.fillRect( rect(), bgColor );
+
+    QWidget::paintEvent( ev );
 
     int gx = gripLeft( depth_ );
     QRect handle( gx, 0, HANDLE_W, height() );
@@ -265,6 +290,16 @@ void SSMVMixerControl::mouseMoveEvent( QMouseEvent *ev )
     QWidget::mouseMoveEvent( ev );
 }
 
+void SSMVMixerControl::resizeEvent( QResizeEvent *ev )
+{
+    qWarning( "SSMVMixerControl::resizeEvent: old size=%dx%d, new size=%dx%d, geometry=%dx%d+%d+%d",
+              ev->oldSize().width(), ev->oldSize().height(),
+              ev->size().width(), ev->size().height(),
+              geometry().width(), geometry().height(), geometry().x(), geometry().y() );
+    QWidget::resizeEvent( ev );
+    updateLayout();
+}
+
 void SSMVMixerControl::mouseReleaseEvent( QMouseEvent *ev )
 {
     if( dragging_ ) {
@@ -289,23 +324,24 @@ void SSMVMixerControl::mouseReleaseEvent( QMouseEvent *ev )
 void SSMVMixerControl::muteToggled( bool on )
 {
     tk_.setMuted( on );
-    // Mute/solo changes the rendered output, so drop cached renders (asset
-    // captures) — they are not actions and so don't hit the action chokepoint.
-    if( SProject *p = SApplication::app().getCurrentProject() )
-        p->notifyArrangementChanged();
+    // Lazy invalidation (proposal 06): setMuted() calls notifyDependentsChanged()
+    // to invalidate only affected cuts' Playback+Metadata aspects, not the entire
+    // arrangement. No need to call notifyArrangementChanged() here.
 }
 
 void SSMVMixerControl::soloToggled( bool on )
 {
     tk_.setSolo( on );
-    if( SProject *p = SApplication::app().getCurrentProject() )
-        p->notifyArrangementChanged();
+    // Lazy invalidation (proposal 06): setSolo() calls notifyDependentsChanged()
+    // to invalidate only affected cuts' Playback+Metadata aspects, not the entire
+    // arrangement. No need to call notifyArrangementChanged() here.
 }
 
 void SSMVMixerControl::onMutedChanged( bool on )
 {
     QSignalBlocker block( qMute_ );   // don't bounce back into muteToggled
     qMute_->setChecked( on );
+    update();  // Repaint to show/hide gray background
 }
 
 void SSMVMixerControl::onSoloChanged( bool on )
@@ -347,11 +383,16 @@ SSMVMixerControl::SSMVMixerControl(
     // Small label font derived from the application default (the bundled
     // FreeSans, antialiased) so the channel strip matches the rest of the UI.
     QFont smallFont = QApplication::font();
-    smallFont.setPointSize( 7 );
+    smallFont.setPointSize( 9 );
 
     qTrkLabel_ = new QLineEdit( tk_.getSName(), this );
     qTrkLabel_->setFrame( false );
     qTrkLabel_->setFont( smallFont );
+    // Install event filter to pass mouse clicks through to parent for track selection
+    qTrkLabel_->installEventFilter( this );
+    // Lose focus when Enter/Return is pressed
+    QObject::connect( qTrkLabel_, &QLineEdit::returnPressed,
+                      qTrkLabel_, &QLineEdit::clearFocus );
 
     // Vertical fader, like a channel strip on a console. Works in tenths of a
     // dB; loud at the top (Qt vertical sliders put the maximum at the top).
@@ -367,6 +408,10 @@ SSMVMixerControl::SSMVMixerControl(
     qVolLabel_ = new QLabel( this );
     qVolLabel_->setAlignment( Qt::AlignHCenter );
     qVolLabel_->setFont( smallFont );
+    // Set fixed width to prevent layout shifting when digit count changes
+    QFontMetrics fm( smallFont );
+    int maxWidth = fm.horizontalAdvance( "-96.0 dB" ) + 4;
+    qVolLabel_->setFixedWidth( maxWidth );
 
     // Small square Mute / Solo toggle buttons. Mute (red when on) silences this
     // track; Solo (yellow when on) silences every track that is not soloed.
@@ -423,7 +468,10 @@ SSMVMixerControl::SSMVMixerControl(
     stripRow->addLayout( faderCol );
     stripRow->addStretch( 1 );
 
-    setFixedSize( SMV_TRACK_CTRL_WIDTH, smv_.getTrackHeight() );
+    // Allow horizontal expansion instead of fixed width
+    // Set minimum width to default, but allow resizing beyond it
+    setMinimumSize( SMV_TRACK_CTRL_WIDTH, smv_.getTrackHeight() );
+    setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Fixed );
 
     qLayout_->addWidget( qTrkLabel_, 0, 0, Qt::AlignTop );
     qLayout_->addLayout( stripRow,   1, 0 );
@@ -453,6 +501,15 @@ SSMVMixerControl::SSMVMixerControl(
                       this, SLOT( onSoloChanged( bool ) ) );
     QObject::connect( &tk_, SIGNAL( armedForRecordingChanged( bool ) ),
                       this, SLOT( onArmedChanged( bool ) ) );
+
+    // Connect to mixer's track selection changes for highlighting
+    SStdMixer *mixer = smv_.getModel();
+    if( mixer ) {
+        QObject::connect( mixer, SIGNAL( selectedTrackChanged( STrack * ) ),
+                          this, SLOT( onSelectedTrackChanged( STrack * ) ) );
+        // Check if this track is currently selected
+        onSelectedTrackChanged( mixer->getSelectedTrack() );
+    }
 }
 
 void SSMVMixerControl::showChannelMenu()
@@ -547,4 +604,42 @@ void SSMVMixerControl::setRecordingChannels( uint32_t channels )
         tooltip += QString( "\nSelected: %1" ).arg( channelStr );
     }
     qArm_->setToolTip( tooltip );
+}
+
+void SSMVMixerControl::onSelectedTrackChanged( STrack *track )
+{
+    bool wasSelected = selected_;
+    selected_ = (track == &tk_);
+    if( wasSelected != selected_ ) {
+        update();  // Repaint to update background color
+    }
+}
+
+void SSMVMixerControl::updateLayout()
+{
+    // Check if we should switch to wide mode (width > ~130% of minimal width)
+    bool shouldBeWide = width() > WIDE_MODE_THRESHOLD;
+    qWarning( "SSMVMixerControl::updateLayout: width=%d, threshold=%d, shouldBeWide=%s (current mode=%s)",
+              width(), WIDE_MODE_THRESHOLD, shouldBeWide ? "true" : "false",
+              wideMode_ ? "wide" : "narrow" );
+
+    if( shouldBeWide == wideMode_ ) {
+        return;  // No change needed
+    }
+
+    wideMode_ = shouldBeWide;
+    qWarning( "  -> switching to %s mode", wideMode_ ? "WIDE" : "NARROW" );
+
+    if( wideMode_ ) {
+        // Wide mode: horizontal layout for track name and volume
+        // For now, keep the layout functional - future enhancement can reorganize controls
+        qVolume_->setOrientation( Qt::Horizontal );
+        qVolume_->setMinimumHeight( 20 );
+        qVolume_->setMaximumHeight( 20 );
+    } else {
+        // Narrow mode: vertical layout (current default)
+        qVolume_->setOrientation( Qt::Vertical );
+        qVolume_->setMinimumHeight( 60 );
+        qVolume_->setMaximumHeight( QWIDGETSIZE_MAX );
+    }
 }

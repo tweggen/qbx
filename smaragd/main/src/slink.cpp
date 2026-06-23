@@ -99,7 +99,6 @@ void SLink::setStartTime( offset_t newStartTime )
 
 SLink::~SLink()
 {
-    qWarning( "SLink dtor.\n" );
     object_.removeRef();
 }
 

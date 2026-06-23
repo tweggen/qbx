@@ -2,6 +2,7 @@
 #include "sproject.h"
 #include "sapplication.h"
 #include "twspeaker.h"
+#include "sactionregistry.h"
 #include <QDomElement>
 
 STogglePlaybackAction::STogglePlaybackAction(bool play)
@@ -43,3 +44,10 @@ bool STogglePlaybackAction::readXml(const QDomElement &elem, int /*version*/)
     play_ = elem.attribute("play", "0") == "1";
     return true;
 }
+
+static const bool s_reg_toggleplayback = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("toggle-playback"),
+        []{ return new STogglePlaybackAction(false); }
+    ), true
+);

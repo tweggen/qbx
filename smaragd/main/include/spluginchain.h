@@ -5,6 +5,8 @@
 
 class twComponent;
 class SPluginSlot;
+class SProjectLoader;
+class QDomElement;
 
 /**
  * A container object that holds an ordered chain of SPluginSlot children.
@@ -26,6 +28,11 @@ public:
     virtual QWidget *getInlineEditWidget( QWidget *parent = nullptr );
     virtual SObjectRenderer *getInlineRenderer();
 
+    // Serialization
+    static SLink *instantiateFromDomElement( SProjectLoader &projectLoader,
+                                              QDomElement &element,
+                                              SObject *parent );
+
     // Container access
     SPluginSlot *getSlotAt( int index ) const;
     int getSlotCount() const { return childCount(); }
@@ -37,6 +44,9 @@ signals:
     void slotInserted( int index, SPluginSlot &slot );
     void slotRemoved( int index, SPluginSlot &slot );
     void slotsReordered();
+
+protected:
+    void childEvent( QChildEvent *event ) override;
 
 private:
     twComponent *getChainComponent();

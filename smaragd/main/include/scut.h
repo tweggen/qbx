@@ -5,10 +5,12 @@
 #include <qobject.h>
 #include <mutex>
 #include <atomic>
+#include <memory>
 #include "sobject.h"
 #include "slink.h"
 #include "twgrainparams.h"
 #include "twfraction.h"
+#include "capture_page_pool.h"
 
 class SProject;
 class QWidget;
@@ -20,6 +22,29 @@ class twCapturingSource;
 class SObjectRenderer;
 class SCutRendererInline;
 class SProjectLoader;
+class CaptureRevalidator;
+
+/**
+ * Capture aspect bitmask: granular invalidation + lazy recomputation.
+ *
+ * Different capture data has different lifecycles:
+ * - Preview: Waveform for timeline display (batched, low priority)
+ * - Playback: Full-quality audio for real-time playback (eager, high priority)
+ * - Export: Resampled/normalized for export (on-demand only)
+ * - Metadata: Duration, peak levels, RMS (lightweight, computed with playback)
+ *
+ * Invalidation is aspect-specific: muting a track invalidates Playback+Metadata
+ * but NOT Preview (waveform shape unchanged). Revalidation is lazy: aspects
+ * recompute on demand via ensureCapture(aspects).
+ */
+enum SCutCaptureAspect : uint32_t {
+    Preview   = 1u << 0,  // Waveform peaks for timeline
+    Playback  = 1u << 1,  // Reader chain for audio output
+    Metadata  = 1u << 2,  // Duration, peak levels (computed with playback)
+    Export    = 1u << 3,  // Resampled buffer for export (on-demand)
+
+    All       = Preview | Playback | Metadata | Export,
+};
 
 /**
  * A cut (slice) of content with timing information.
@@ -40,11 +65,13 @@ class SProjectLoader;
  */
 // Double-buffer reader state: always has a complete, committed version (Unix page cache model).
 // Audio thread always reads "current"; UI thread builds "next", then swaps atomically.
+// captureRef keeps the backing container render alive for as long as any reader references it.
 struct SCutReaderState {
-    twSampleReader *reader;      // Always valid: non-null or fallback to content's root
-    twGrainSource *grain;        // Optional grain processor
-    bool looping;                // True iff reader is a twLoopReader
-    int generation;              // Incremented on each swap
+    twSampleReader *reader = nullptr;      // Always valid: non-null or fallback to content's root
+    twGrainSource *grain = nullptr;        // Optional grain processor
+    std::shared_ptr<twCapturingSource> captureRef;  // Keeps backing source alive during render
+    bool looping = false;                  // True iff reader is a twLoopReader
+    int generation = 0;                    // Incremented on each swap
 };
 
 // Window parameter change event queue for async processing after drag operations.
@@ -163,13 +190,47 @@ public slots:
     // so a cut over a group/mixer transparently reflects edits (proposal 05
     // feature (b) / 07 step 5). Also called during dragging for live preview
     // feedback. Only container-backed cuts ever use this.
+    // Async model: schedules revalidation, returns immediately (no hang).
     void invalidateCapture();
 
-    // Ensure the capture is built (used for synchronous rebuild during drags).
-    // Returns the capture if one was built, NULL if content is not capturable.
-    twRandomSource *ensureCapture();
-    // Ensure the peak cache of the capture is built (for waveform display).
+    // Lazy invalidation + aspect-based caching (Phase 3/4).
+    // Invalidate specific aspects of the capture (Preview, Playback, Metadata, Export).
+    // Schedules async revalidation to background thread; returns immediately.
+    void invalidateAspects(uint32_t aspects);
+
+    // Non-blocking capture access: get current/stale page, or schedule async revalidation.
+    // Returns immediately with current page if valid, stale page, or nullptr.
+    // Never waits for revalidation (falls back to stale data).
+    std::shared_ptr<CapturePageData> getCapture(uint32_t aspectsMask);
+
+    // Convenience: get playback capture (Playback | Metadata aspects).
+    // Used by audio thread: never blocks, stale data acceptable.
+    std::shared_ptr<CapturePageData> getPlaybackCapture() {
+        return getCapture(Playback | Metadata);
+    }
+
+    // Convenience: get preview capture (Preview aspect only).
+    // Used by UI painting: never blocks, stale data shown briefly then refreshed.
+    std::shared_ptr<CapturePageData> getPreviewCapture() {
+        return getCapture(Preview);
+    }
+
+    // Check if revalidation is needed for specific aspects.
+    // Used by revalidator to decide whether to process a job.
+    bool needsRevalidation(uint32_t aspectsMask) const;
+
+    // Query which aspects are currently valid (for diagnostics/optimization).
+    bool isAspectValid(uint32_t aspect) const {
+        return (validAspects_ & aspect) == aspect;
+    }
+
+    // Ensure peak cache is built (for waveform display).
+    // TODO: Phase 4 - integrate with capture page pool model.
     bool ensureCapturePeaks();
+
+    // Old compatibility method (deprecated, will be removed).
+    // TODO: Task 8 - replace all call sites with getPreviewCapture() or getPlaybackCapture().
+    twRandomSource *ensureCapture() { return nullptr; }  // Stub for compilation
 
 private slots:
 
@@ -177,6 +238,10 @@ protected:
     virtual int serializeSelfAttributes( QTextStream &o );
 
 private:
+    // Check if revalidation is needed for specific aspects. _nolock: caller must hold mutex().
+    // Internal version used by public needsRevalidation() when lock is acquired.
+    bool needsRevalidation_nolock(uint32_t aspectsMask) const;
+
     // Lazily acquire our own independent read cursor over the content's sample
     // data, so two cuts of one source never share a play position (proposal 07).
     // When grain params are non-identity, an owned twGrainSource is interposed
@@ -187,18 +252,49 @@ private:
     // thread setters; accepts snapshot to avoid reading unlocked members
     // (multithreading policy: Phase 1 Option B).
     void rebuildReader( const SCutSnapshot &snap );
+    // Build the capture (container render) if needed. Internal method.
+    // TODO: Phase 4 future - integrate with capture page pool revalidation.
+    void buildCapture_();
+
+    // Helper methods for revalidator integration (Phase 4)
+    // _nolock suffix indicates caller MUST hold mutex() before calling.
+    // These are friends-only methods, non-locking to avoid recursive lock deadlock.
+    friend class CaptureRevalidator;
+
+    // Return current capture page without locking.
+    // Uses std::atomic_load for thread-safe read (C++17).
+    // May return stale data if revalidator is modifying the page, which is acceptable.
+    std::shared_ptr<CapturePageData> currentPage() const {
+        return std::atomic_load(&currentPage_);
+    }
+
+    // Atomic swap pages. _nolock: caller must hold mutex()
+    // Uses std::atomic_store for thread-safe write (pairs with atomic_load in currentPage()).
+    void swapPages_nolock() {
+        std::atomic_store(&currentPage_, nextPage_);
+        nextPage_ = nullptr;
+    }
+
+    // Get next capture page. _nolock: caller must hold mutex()
+    std::shared_ptr<CapturePageData> getNextPage_nolock() const {
+        return nextPage_;
+    }
+
+    // Set next capture page. _nolock: caller must hold mutex()
+    void setNextPage_nolock(std::shared_ptr<CapturePageData> page) {
+        nextPage_ = page;
+    }
 
     // Queue of pending window parameter changes (populated during drag,
     // processed after drag completes). Allows drag operations to queue changes
     // without calling expensive invalidateCapture() on the drag event path.
+    // Protected by the same mutex() as all other SCut state (one mutex per object).
     std::vector<SCutWindowParamEvent> windowParamEventQueue_;
-    std::mutex queueMutex_;  // Protects the event queue (minimal contention)
 
     SLink *content_;
 
     // Window parameters: accessed by both UI thread (modifications) and audio thread (reading).
-    // Use windowMutex_ to synchronize access when modifying window/grain params.
-    mutable std::mutex windowMutex_;
+    // Use inherited mutex() from SObject to synchronize access.
     offset_t startOffset_;
     offset_t loopStart_;
     length_t loopLength_;
@@ -213,9 +309,9 @@ private:
     // nextReader_: being built by UI thread, swapped in atomically when ready
     // oldReader_: previous currentReader_, freed after swap
     mutable std::mutex readerSwapLock_;  // Protects swap operation
-    SCutReaderState currentReader_{nullptr, nullptr, false, 0};
-    SCutReaderState nextReader_{nullptr, nullptr, false, 0};
-    SCutReaderState oldReader_{nullptr, nullptr, false, 0};  // For deferred deletion
+    SCutReaderState currentReader_{nullptr, nullptr, nullptr, false, 0};
+    SCutReaderState nextReader_{nullptr, nullptr, nullptr, false, 0};
+    SCutReaderState oldReader_{nullptr, nullptr, nullptr, false, 0};  // For deferred deletion
     // Descriptor of the reader chain currently built, so rebuildReader() can skip
     // re-acquiring an identical chain. A non-looping sample cut's reader does not
     // depend on duration or slip offset, so a plain trim/extend (which retriggers
@@ -225,15 +321,34 @@ private:
     twGrainParams builtGrain_;
     offset_t      builtLoopStart_  = 0;
     length_t      builtLoopLength_ = 0;
-    // Cached render of a container content (proposal 07 step 5). Built lazily by
-    // ensureCapture(); invalidated on any edit via invalidateCapture().
-    twCapturingSource *capture_ = nullptr;
+
+    // Cached render of a container content (proposal 07 step 5).
+    // Used temporarily until fully integrated with capture page pool.
+    // TODO: Phase 4 future - replace entirely with two-page buffer model.
+    std::shared_ptr<twCapturingSource> capture_;
     bool captureConnected_ = false;   // connected to arrangementChanged once
-    // Peak cache over the capture, for the waveform preview. Built lazily from
-    // capture_; freed with it in invalidateCapture()/dtor.
+    // Peak cache over the capture, for the waveform preview.
+    // TODO: Phase 4 future - replace entirely with two-page buffer model.
     preview_t *capPeaks_ = nullptr;
-    offset_t   capPeakSkip_ = 0;   // capture frames per peak
-    offset_t   capPeakN_ = 0;      // number of peaks
+    offset_t   capPeakSkip_ = 0;
+    offset_t   capPeakN_ = 0;
+
+    // Two-page capture buffer model (Phase 4, async revalidation).
+    // Gradually replaces capture_ and capPeaks_ implementation with pool-based model.
+    // currentPage_: readers use this (shared_ptr increments refcount)
+    // nextPage_: revalidator builds this, then atomic swap
+    // When readers release shared_ptr, old page freed (no stale pointers, no use-after-free)
+    CaptureRevalidator *revalidator_;  // Borrowed from SProject, not owned
+    std::shared_ptr<CapturePageData> currentPage_;
+    std::shared_ptr<CapturePageData> nextPage_;
+
+    // Aspect tracking: bitmask of valid aspects in currentPage_.
+    // Updated by revalidator when pages are swapped and marked complete.
+    uint32_t validAspects_ = 0;
+
+    // Last good snapshot: returned when lock acquisition fails to prevent returning
+    // uninitialized data. Updated whenever getSnapshot() successfully acquires the lock.
+    mutable SCutSnapshot lastGoodSnapshot_{0, 0, 0, {}, {}};
 };
 
 #endif

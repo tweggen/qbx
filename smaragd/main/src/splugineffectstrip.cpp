@@ -23,12 +23,11 @@
 SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
     : QWidget(parent), track_(track)
 {
-    pluginChain_ = track->getPluginChain();
-    if (!pluginChain_) {
-        return;
-    }
+    pluginChain_ = track ? track->getPluginChain() : nullptr;
 
     setAcceptDrops(true);
+    setMinimumHeight(100);  // Ensure plugin strip is always visible
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
@@ -43,7 +42,8 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
     QScrollArea *scrollArea = new QScrollArea();
     scrollArea->setWidget(scrollContent);
     scrollArea->setWidgetResizable(true);
-    mainLayout->addWidget(scrollArea);
+    scrollArea->setMinimumHeight(80);  // Ensure scroll area is always visible
+    mainLayout->addWidget(scrollArea, 1);  // Stretch factor 1
 
     // Add button
     QHBoxLayout *addLayout = new QHBoxLayout();
@@ -55,9 +55,11 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
 
     connect(addBtn, &QPushButton::clicked, this, &SPluginEffectStrip::onAddPluginClicked);
 
-    // Connect chain signals
-    connect(pluginChain_, &SPluginChain::slotInserted, this, &SPluginEffectStrip::onPluginSlotInserted);
-    connect(pluginChain_, &SPluginChain::slotRemoved, this, &SPluginEffectStrip::onPluginSlotRemoved);
+    // Connect chain signals if it exists
+    if (pluginChain_) {
+        connect(pluginChain_, &SPluginChain::slotInserted, this, &SPluginEffectStrip::onPluginSlotInserted);
+        connect(pluginChain_, &SPluginChain::slotRemoved, this, &SPluginEffectStrip::onPluginSlotRemoved);
+    }
 
     // Initial build
     rebuildUI();

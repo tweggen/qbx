@@ -71,16 +71,35 @@ void twSpeaker::startOutput()
     // Reconcile the graph rate with the rate the device actually opened at. The
     // resamplers are passthroughs when the device honoured the request.
     const audio::AudioConfig cfg = backend_->getConfig();
-    resamplerL_.configure(graphRate, cfg.sampleRate);
-    resamplerR_.configure(graphRate, cfg.sampleRate);
-    resamplerL_.reserveHint((length_t) cfg.bufferFrames);
-    resamplerR_.reserveHint((length_t) cfg.bufferFrames);
-    resamplerL_.reset();
-    resamplerR_.reset();
+
+    // Create or reconfigure the audio engine for this session
+    // Get the synth output component from the current project
+    twComponent *synthOutput = nullptr;
+    if (SProject *proj = SApplication::app().getCurrentProject()) {
+        if (SObject *root = proj->getRootComponent()) {
+            synthOutput = &root->getRootComponent();
+        }
+    }
+
+    if (!synthOutput) {
+        TWSPK_LOG( "ERROR: Could not get synth output component" );
+        backend_->closeDevice();
+        return;
+    }
+
+    audioEngine_ = std::make_unique<audio::AudioEngine>(synthOutput, graphRate);
+    audioEngine_->configureResampling(graphRate, cfg.sampleRate);
 
     // Output-to-input frame ratio, used to bound a pull at the loop end during
     // cycle playback. 1.0 when the resampler is a passthrough.
     rateRatio_ = (graphRate > 0) ? ((double) cfg.sampleRate / (double) graphRate) : 1.0;
+
+    // Sync loop boundaries into the engine
+    audioEngine_->setLoopBoundaries(
+        cycleEnabled_.load(std::memory_order_relaxed),
+        loopStart_.load(std::memory_order_relaxed),
+        loopEnd_.load(std::memory_order_relaxed)
+    );
 
     // Sample-rate diagnostic (pitch/too-fast bug). Three numbers pin down where a
     // mismatch hides: the project rate, what the input wire claims to produce, and
@@ -92,87 +111,49 @@ void twSpeaker::startOutput()
         std::uint32_t wireRate = (pInputPlugs != nullptr && pInputPlugs[0] != nullptr)
                                      ? pInputPlugs[0]->getFormat().sampleRate
                                      : 0;
+        bool isPassthrough = (graphRate == cfg.sampleRate);
         TWSPK_LOG( "rate diag — project(env)=%d Hz, wire=%u Hz, "
                    "device=%u Hz, resampler=%s",
                    env.getSRate(), (unsigned) wireRate, (unsigned) cfg.sampleRate,
-                   resamplerL_.isPassthrough() ? "passthrough" : "active" );
+                   isPassthrough ? "passthrough" : "active" );
     }
 
-    if (!resamplerL_.isPassthrough()) {
+    if (graphRate != cfg.sampleRate) {
         TWSPK_LOG( "resampling %u Hz -> %u Hz",
                    (unsigned) graphRate, (unsigned) cfg.sampleRate );
     }
 
     backend_->setRenderCallback(
         [this](float *out, std::size_t frames, std::uint32_t channels) -> std::size_t {
-            if (pInputPlugs == nullptr || pInputPlugs[0] == nullptr) {
+            if (!audioEngine_) {
                 std::fill_n(out, frames * channels, 0.0f);
                 return frames;
             }
 
-            auto *inputL = static_cast<twLatchStreamingOutput *>(pInputPlugs[0]);
-            auto *inputR = (pInputPlugs[1] != nullptr)
-                             ? static_cast<twLatchStreamingOutput *>(pInputPlugs[1])
-                             : nullptr;
-            offset_t pos = SApplication::app().getGlobalLocatorPos();
-
-            const bool     cycle     = cycleEnabled_.load(std::memory_order_relaxed);
-            const offset_t loopStart = loopStart_.load(std::memory_order_relaxed);
-            const offset_t loopEnd   = loopEnd_.load(std::memory_order_relaxed);
-            const bool     loopValid = cycle && loopEnd > loopStart;
-
-            // Allocate temporary buffers for L and R channels (pulled at graph rate).
+            // Pull stereo frames via AudioEngine (unified component graph pull)
             std::vector<float> bufL(frames), bufR(frames);
             std::size_t filled = 0;
 
-            // Fill the buffers, wrapping back to loopStart whenever the cursor
-            // reaches loopEnd. Without cycling this runs exactly one pull.
+            // Pull frames from AudioEngine (handles resampling, loop cycling, position tracking)
             while (filled < frames) {
-                if (loopValid && pos >= loopEnd) {
-                    if (SProject *proj = SApplication::app().getCurrentProject()) {
-                        if (SObject *root = proj->getRootComponent())
-                            root->seekTo(loopStart);
-                    }
-                    pos = loopStart;
+                audio::AudioFrame frame;
+                if (!audioEngine_->pullFrame(frame)) {
+                    break;  // End of stream or underrun
                 }
-
-                length_t want = static_cast<length_t>(frames - filled);
-                if (loopValid) {
-                    double outLeft = (double)(loopEnd - pos) * rateRatio_;
-                    length_t cap = (length_t) std::llround(outLeft);
-                    if (cap < 1) cap = 1;
-                    if (want > cap) want = cap;
-                }
-
-                length_t inConsumed = 0;
-                length_t gotL = resamplerL_.process(inputL, bufL.data() + filled, want, &inConsumed);
-                if (gotL <= 0) break;
-
-                // Pull right channel with same consumed count.
-                length_t gotR = 0;
-                if (inputR != nullptr) {
-                    gotR = resamplerR_.process(inputR, bufR.data() + filled, gotL, nullptr);
-                    if (gotR < gotL) gotL = gotR;  // use the minimum
-                } else {
-                    // No right channel; copy left to right.
-                    std::copy(bufL.begin() + filled, bufL.begin() + filled + gotL,
-                              bufR.begin() + filled);
-                }
-
-                pos += (offset_t) inConsumed;
-                filled += (std::size_t) gotL;
-
-                if (!loopValid) break;
+                bufL[filled] = frame.channels[0];
+                bufR[filled] = frame.channels[1];
+                filled++;
             }
 
             if (filled == 0) {
                 std::fill_n(out, frames * channels, 0.0f);
                 if (!SApplication::app().isRecordingActive())
-                    SApplication::app().setGlobalLocatorPosRealtime(pos);
+                    SApplication::app().setGlobalLocatorPosRealtime(audioEngine_->currentPosition());
                 return frames;
             }
 
-            std::size_t outFrames = loopValid ? frames : filled;
+            // Always output what we have (never pad with zeros - causes aliasing/artifacts)
+            std::size_t outFrames = filled;
 
             // Interleave L/R into output. If channels > 2, duplicate the stereo
             // pair to all output channels.
@@ -184,9 +165,9 @@ void twSpeaker::startOutput()
                 }
             }
 
-            // Pad any unfilled tail.
-            if (filled < frames) {
-                for (std::size_t i = filled; i < frames; ++i) {
+            // Pad any unfilled tail with silence (smooth, no aliasing).
+            if (outFrames < frames) {
+                for (std::size_t i = outFrames; i < frames; ++i) {
                     for (std::uint32_t c = 0; c < channels; ++c) {
                         out[i * channels + c] = 0.0f;
                     }
@@ -194,9 +175,15 @@ void twSpeaker::startOutput()
             }
 
             if (!SApplication::app().isRecordingActive())
-                SApplication::app().setGlobalLocatorPosRealtime(pos);
+                SApplication::app().setGlobalLocatorPosRealtime(audioEngine_->currentPosition());
             return static_cast<std::size_t>(outFrames);
         });
+
+    // Seek engine to current playhead position
+    if (audioEngine_) {
+        offset_t pos = SApplication::app().getGlobalLocatorPos();
+        audioEngine_->seekTo(pos);
+    }
 
     TWSPK_LOG( "calling backend->startOutput()" );
     if (backend_->startOutput() != 0) {
@@ -231,6 +218,11 @@ void twSpeaker::setCycle(bool enabled, offset_t startFrame, offset_t endFrame)
     loopStart_.store(startFrame, std::memory_order_relaxed);
     loopEnd_.store(endFrame, std::memory_order_relaxed);
     cycleEnabled_.store(enabled, std::memory_order_relaxed);
+
+    // Sync into the audio engine if it's running
+    if (audioEngine_) {
+        audioEngine_->setLoopBoundaries(enabled, startFrame, endFrame);
+    }
 }
 
 void twSpeaker::setOutputDevice(const std::string &id)

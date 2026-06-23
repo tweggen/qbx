@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="render_test">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Create a single track -->
+    <add-track index="-1"/>
+
+    <!-- Render audio to WAV format -->
+    <render filename="render_output.wav" format="wav" quality="10"/>
+
+    <!-- Take a screenshot of the rendered state -->
+    <screenshot filename="render_complete.png" resolution="100%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

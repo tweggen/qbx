@@ -19,21 +19,12 @@ const char *twMixer::getOutputName( idx_t ) const
 
 int twMixer::seekTo( offset_t offset )
 {
-    fprintf(stderr, "[twMixer::seekTo] Forwarding seekTo(%llu) to all %d input plugs\n",
-            (unsigned long long)offset, mixerInputs_);
-    fflush(stderr);
-
     // Forward the seek to all input plugs
     for (idx_t i = 0; i < mixerInputs_; ++i) {
         if (pInputPlugs[i]) {
             twLatch &latch = pInputPlugs[i]->getParentLatch();
             twComponent &comp = latch.getComponent();
-            fprintf(stderr, "[twMixer::seekTo]   Seeking input %d (component type: %s)\n",
-                    i, typeid(comp).name());
-            fflush(stderr);
-            int result = comp.seekTo(offset);
-            fprintf(stderr, "[twMixer::seekTo]   Result: %d\n", result);
-            fflush(stderr);
+            comp.seekTo(offset);
         }
     }
     return 0;
@@ -47,15 +38,15 @@ void twMixer::init()
 void twMixer::createOutputLatches()
 {
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twMixer::createOutputLatches(): entered." );
+	fprintf( sterr, "twMixer::createOutputLatches(): entered." );
 #endif
 	// use default buffer size
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twMixer::createOutputLatches(): creating streaming latch..." );
+	fprintf( sterr, "twMixer::createOutputLatches(): creating streaming latch..." );
 #endif
 	pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
 #ifdef DEBUG_COMPONENT
-	syslog( LOG_DEBUG, "twMixer::createOutputLatches(): leaving." );
+	fprintf( sterr, "twMixer::createOutputLatches(): leaving." );
 #endif
 }
 

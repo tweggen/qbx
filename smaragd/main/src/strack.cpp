@@ -12,11 +12,13 @@
 #include "twrewire.h"
 #include "twpluginchain.h"
 #include "sobject.h"
+#include "sproject.h"
 #include "slink.h"
 #include "sapplication.h"
 #include "strack.h"
 #include "strackrndrinline.h"
 #include "spluginchain.h"
+#include "spluginslot.h"
 #include "sprojectloader.h"
 
 using namespace std;
@@ -203,11 +205,10 @@ void STrack::setNBusses( int nBusses )
     if( nBusses==nBusses_ ) return;
     int oldNBusses = nBusses_;
     if( nBusses<oldNBusses ) {
-        // The number of busses is about to shrink.
-        // This is only possible, if no object on the track needs
-        // more output channels.
-        // FIXME: Check this here.
-        // FIXME: Write this.
+        // Shrink not yet implemented; refuse rather than leaving stale wiring
+        // that would cause a use-after-free on the next render.
+        Q_ASSERT_X( false, "STrack::setNBusses", "bus count shrink not supported" );
+        return;
     } else {
         // The number of busses is about to grow.
         twTrackMix **newMixers = (twTrackMix **) ::calloc( 
@@ -230,25 +231,17 @@ void STrack::setNBusses( int nBusses )
         ::free( cpTrackMixers_ );
         cpTrackMixers_ = newMixers;
     }
-    // Reset plugin chain components
-    if( cpPluginChains_ ) {
-        for( int i=0; i<oldNBusses; ++i ) {
-            delete cpPluginChains_[i];
-            cpPluginChains_[i] = nullptr;
-        }
-    } else {
-        oldNBusses = 0;
-    }
+    // Grow plugin chain array: keep existing chains, create new ones for added buses.
     {
+        int chainOldN = cpPluginChains_ ? oldNBusses : 0;
         twPluginChain **newChains = (twPluginChain **) ::calloc(
             sizeof( twPluginChain * ), nBusses );
-        if( cpPluginChains_ ) {
-            for( int i=0; i<oldNBusses; ++i ) {
-                newChains[i] = cpPluginChains_[i];
-            }
+        // Preserve existing chains — they are already wired and may hold audio state
+        for( int i=0; i<chainOldN; ++i ) {
+            newChains[i] = cpPluginChains_[i];
         }
-        // Create new plugin chain components
-        for( int i=oldNBusses; i<nBusses; ++i ) {
+        // Create new plugin chain components for added buses only
+        for( int i=chainOldN; i<nBusses; ++i ) {
             newChains[i] = new twPluginChain(
                 *(SApplication::app().get303aEnvironment()), 1 );
             newChains[i]->init();
@@ -271,6 +264,9 @@ void STrack::setNBusses( int nBusses )
     // Wire: track mixer → plugin chain → rewire
     for( int i=0; i<nBusses; ++i ) {
         cpPluginChains_[i]->setInput( 0, cpTrackMixers_[i]->linkOutput( 0 ) );
+        // If this chain already has plugins, rebuildWiring() so it picks up the
+        // (possibly new) input latch after setInput changed pInputPlugs[0].
+        cpPluginChains_[i]->rebuildWiring();
         cpRewire_->setInput( i, cpPluginChains_[i]->linkOutput( 0 ) );
     }
     nBusses_ = nBusses;
@@ -289,8 +285,19 @@ STrack::STrack( SProject *project )
       lastDurationValid_( true )
 {
     // Create the plugin chain model object (container for effect inserts)
+    // NOTE: We do NOT call setParent(this) because the plugin chain is NOT an SLink.
+    // SObject::childEvent() expects all children to be SLink instances; setting the
+    // plugin chain as a Qt child would cause an invalid cast in childEvent().
+    // Instead, we manage the chain's lifetime manually via the destructor.
     cpPluginChain_ = new SPluginChain( project );
-    cpPluginChain_->setParent( this );
+
+    // Connect plugin chain model changes to DSP layer synchronization.
+    QObject::connect( cpPluginChain_, SIGNAL( slotInserted( int, SPluginSlot & ) ),
+                      this, SLOT( onPluginSlotInserted( int, SPluginSlot & ) ) );
+    QObject::connect( cpPluginChain_, SIGNAL( slotRemoved( int, SPluginSlot & ) ),
+                      this, SLOT( onPluginSlotRemoved( int, SPluginSlot & ) ) );
+    QObject::connect( cpPluginChain_, SIGNAL( slotsReordered() ),
+                      this, SLOT( onPluginSlotsReordered() ) );
 
     // Add a listener for added child objects.
     // We want to become noticed, if it is new.
@@ -307,13 +314,24 @@ STrack::STrack( SProject *project )
 STrack::~STrack()
 {
     DTOR_DEL( inlineRenderer_ );
+    // NOTE: cpPluginChain_ is a Qt child of the project, so it will be deleted
+    // automatically by Qt's parent-child cleanup. Do NOT manually delete it here
+    // to avoid double-delete crashes during project destruction.
+    // (Historically it was manually managed, but current design makes it a project child.)
+
     if( cpPluginChains_ ) {
         for( int i = 0; i < nBusses_; ++i ) {
             delete cpPluginChains_[i];
         }
         ::free( cpPluginChains_ );
     }
-    // cpPluginChain_ is managed by SObject parent/child system
+    if( cpTrackMixers_ ) {
+        for( int i = 0; i < nBusses_; ++i ) {
+            delete cpTrackMixers_[i];
+        }
+        ::free( cpTrackMixers_ );
+    }
+    delete cpRewire_;
 }
 
 #if 0
@@ -402,4 +420,56 @@ SLink *STrack::instantiateFromDomElement(
     }
     track->readPostChildrenAttributes( element );
     return new SLink( *track );
+}
+
+void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
+{
+    // Sync the model change to all DSP plugin chains
+    // Pre-allocate inserts for all buses to ensure they're fully initialized
+    // before the audio thread accesses them
+    if( cpPluginChains_ && nBusses_ > 0 ) {
+        // First, ensure all inserts exist and are fully initialized
+        for( int i = 0; i < nBusses_; ++i ) {
+            audio::twPluginInsert *insert = slot.getInsertForBus(i);
+            if( !insert ) {
+                // Insert creation failed - the slot will handle the error
+                return;
+            }
+        }
+
+        // Now that all inserts are safely created, add them to the chains
+        for( int i = 0; i < nBusses_; ++i ) {
+            if( cpPluginChains_[i] ) {
+                audio::twPluginInsert *insert = slot.getInsertForBus(i);
+                if( insert ) {
+                    cpPluginChains_[i]->addPlugin( insert );
+                }
+            }
+        }
+    }
+}
+
+void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
+{
+    // Sync the model change to all DSP plugin chains
+    // Note: we remove by index since the slot is being deleted
+    if( cpPluginChains_ ) {
+        for( int i = 0; i < nBusses_; ++i ) {
+            if( cpPluginChains_[i] ) {
+                cpPluginChains_[i]->removePlugin( index );
+            }
+        }
+    }
+}
+
+void STrack::onPluginSlotsReordered()
+{
+    // Sync plugin reordering to all DSP plugin chains
+    if( cpPluginChains_ ) {
+        for( int i = 0; i < nBusses_; ++i ) {
+            if( cpPluginChains_[i] ) {
+                cpPluginChains_[i]->rebuildWiring();
+            }
+        }
+    }
 }

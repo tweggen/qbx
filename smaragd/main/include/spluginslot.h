@@ -15,7 +15,7 @@ class SApplication;
 /**
  * A model object wrapping one plugin insert in a track's effect chain.
  * Each slot stores the plugin descriptor, opaque state chunk, and bypass flag.
- * The backing DSP component is a twPluginInsert.
+ * The backing DSP components are twPluginInsert instances (one per bus).
  */
 class SPluginSlot : public SObject {
     Q_OBJECT
@@ -32,8 +32,10 @@ public:
     virtual int readPreChildrenAttributes( QDomElement &element );
     virtual int serializeSelfAttributes( QTextStream &o );
 
-    // Plugin access
-    audio::twPluginInsert *getInsert() const { return insert_.get(); }
+    // Plugin access (for a single bus - returns bus 0 for backward compatibility)
+    audio::twPluginInsert *getInsert() const { return getInsertForBus(0); }
+    audio::twPluginInsert *getInsertForBus( int busIndex ) const;
+
     const audio::twPluginDescriptor &getDescriptor() const { return descriptor_; }
 
     // Bypass control
@@ -50,7 +52,7 @@ signals:
 
 private:
     audio::twPluginDescriptor descriptor_;
-    std::unique_ptr<audio::twPluginInsert> insert_;
+    std::vector<std::unique_ptr<audio::twPluginInsert>> inserts_;  // one per bus
     bool bypass_ = false;
     std::vector<std::uint8_t> savedState_;  // opaque plugin state chunk
 };

@@ -18,10 +18,12 @@
 #include <QMimeData>
 #include <QMainWindow>
 #include <QStatusBar>
+#include <QApplication>
 
 #include "twwavinput.h"
 #include "twspeaker.h"
 #include "sapplication.h"
+#include "smainwindow.h"
 #include "sstdmixer.h"
 #include "sstdmixerview.h"
 #include "strackdetailpanel.h"
@@ -218,6 +220,12 @@ void SMVActualView::paintEvent( QPaintEvent * )
     InlineRenderContext ctx( *this, p );
     p.fillRect( QRect( 0, 0, myRect.width(), SMV_TIME_RULER_HEIGHT ), QColor( 220, 220, 190 ) );
     drawRulerTicks( p, myRect );
+
+    // Fill timeline background with black. This appears as a small line between the individual tracks.
+    p.fillRect( QRect( 0, SMV_TIME_RULER_HEIGHT, myRect.width(), myRect.height() - SMV_TIME_RULER_HEIGHT ), 
+        QColor( 0x00, 0x00, 0x00 ) 
+        );
+
     // OK, we have tracks (lanes of the flattened tree).
     int nTracks = smv_.rowCount();
     int firstTrack = (upperLeftY_ + trackHeight_-1) / trackHeight_;
@@ -1283,7 +1291,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Only rebuild if offset actually changed
                 if( newOff != cut->getStartOffset() ) {
                     cut->setStartOffset( (offset_t) newOff );  // Visual feedback + queues event via invalidateCapture
-                    cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
+                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 }
                 update( oldRect );
@@ -1325,7 +1333,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 cut->setStretchRaw( newStretch );
                 cut->setStartOffsetRaw( newOffset );
                 cut->setDurationRaw( newDur );
-                cut->ensureCapturePeaks();  // refresh container-backed previews
+                cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                 smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
                 repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -1361,7 +1369,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->setDuration( newDur );
                     cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
                     cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
-                    cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
+                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 }
                 update( oldRect );
@@ -1393,10 +1401,9 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->setStartOffset( rCutStart );
                     cut->setDuration( rDur );
                     lastClickSLink_->setStartTime( rStart );
-                    cut->invalidateCapture();  // Drop cached render
-                    // Force synchronous rebuild for live feedback during drag
-                    cut->ensureCapture();
-                    cut->ensureCapturePeaks();
+                    cut->invalidateCapture();  // Drop cached render, schedule async revalidation
+                    // Non-blocking: get preview cache (or stale) for live feedback during drag
+                    cut->getPreviewCapture();
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                     update( oldRect );
                     update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -1419,7 +1426,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 if( rDur != cut->getDuration() ) {
                     cut->setDuration( rDur );
                     cut->queueWindowParamEvent( DURATION_CHANGE, (double) rDur );
-                    cut->ensureCapturePeaks();  // Rebuild peaks for consistent rendering
+                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 }
                 update( oldRect );
@@ -1706,15 +1713,22 @@ void SStdMixerView::rebuildControlColumn()
     }
     controlArray_->clear();
     int h = getTrackHeight();
+    // Use the requested trackControlWidth_ instead of the holder's actual width
+    int w = trackControlWidth_;
+    qWarning( "rebuildControlColumn: holder width=%d, control width=%d, rows=%d",
+              qTrackControlBoxHolder_->width(), w, rows_.size() );
     for( int i=0; i<rows_.size(); ++i ) {
         const STrackRow &row = rows_.at( i );
         SSMVMixerControl *mc = new SSMVMixerControl( qTrackControlBox_, *this, *row.track );
         mc->setTreeInfo( row.depth, row.hasChildren, row.collapsed );
-        mc->move( 0, h*i );
+        mc->move( 0, SMV_TIME_RULER_HEIGHT + h*i );
+        mc->resize( w, h );
         mc->show();
         controlArray_->append( mc );
     }
-    qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH, h*rows_.size() );
+    qTrackControlBox_->resize( w, SMV_TIME_RULER_HEIGHT + h*rows_.size() );
+    // Ensure qTrackControlBox_ also fills parent width
+    qTrackControlBox_->move( 0, 0 );
 }
 
 // Single entry point for any structural change (add/remove/reorder/group/fold):
@@ -1867,23 +1881,23 @@ void SStdMixerView::avLeftOffsetChanged( offset_t newValue )
 void SStdMixerView::timeSliderMoved( int newValue )
 {
     if( newValue<0 ) {
-	qWarning( "SStdMixerView::timeSliderMoved(): newValue was less than zero." );
-	newValue = 0;
+	   //qWarning( "SStdMixerView::timeSliderMoved(): newValue was less than zero." );
+	   newValue = 0;
     }
-    qWarning( "SStdMixerView::timeSliderMoved(): newValue=%d.",
-	      newValue );
+    //qWarning( "SStdMixerView::timeSliderMoved(): newValue=%d.",
+	//      newValue );
     if( model_->hasDuration() ) {
-	qContent_->setLeftOffset( (offset_t)(newValue*model_->getDuration()/HSliderRange+0.5) );
+	   qContent_->setLeftOffset( (offset_t)(newValue*model_->getDuration()/HSliderRange+0.5) );
     } else {	
-	qContent_->setLeftOffset( 0 );
+	   qContent_->setLeftOffset( 0 );
     }
 }
 
 void SStdMixerView::trackSliderMoved( int newValue )
 {
     if( newValue<0 ) {
-	qWarning( "SStdMixerView::trackSliderMoved(): newValue was less than zero." );
-	newValue = 0;
+	   qWarning( "SStdMixerView::trackSliderMoved(): newValue was less than zero." );
+	   newValue = 0;
     }
     qContent_->setTopOffset( newValue );
 }
@@ -1989,7 +2003,8 @@ void SStdMixerView::zoomInVert()
     // FIXME: Configure this
     h = (h*3)/2;
     qContent_->setTrackHeight( h );
-    qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH, getTrackHeight()*rowCount() );
+    int w = qTrackControlBoxHolder_->width();
+    qTrackControlBox_->resize( w, getTrackHeight()*rowCount() );
 }
 
 void SStdMixerView::zoomOutVert()
@@ -1999,7 +2014,8 @@ void SStdMixerView::zoomOutVert()
     // FIXME: Configure this
     h = (h*2)/3;
     qContent_->setTrackHeight( h );
-    qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH, getTrackHeight()*rowCount() );
+    int w = qTrackControlBoxHolder_->width();
+    qTrackControlBox_->resize( w, getTrackHeight()*rowCount() );
 }
 
 void SStdMixerView::setBPMTempo( double bpmTempo )
@@ -2170,7 +2186,6 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // Accept drag-drop from the resource list (assets and external files).
     setAcceptDrops(true);
 
-//    setBackgroundColor( QColor( 0, 0, 0 ) );
     trackHeight_ = 100;
     secondWidth_ = 30.;
     upperLeftX_ = upperLeftY_ = 0;
@@ -2213,7 +2228,8 @@ void SMVActualView::loadWheelConfig()
 
 int SMVActualView::wheelActionFor( Qt::KeyboardModifiers mods ) const
 {
-    bool ctrl  = mods & Qt::ControlModifier;
+    // On macOS, Command key is Qt::MetaModifier. On Windows/Linux, Ctrl is ControlModifier.
+    bool ctrl  = (mods & Qt::ControlModifier) || (mods & Qt::MetaModifier);
     bool shift = mods & Qt::ShiftModifier;
     if( ctrl && shift ) return wheelCtrlShift_;
     if( ctrl )          return wheelCtrl_;
@@ -2221,13 +2237,52 @@ int SMVActualView::wheelActionFor( Qt::KeyboardModifiers mods ) const
     return wheelPlain_;
 }
 
+QString SMVActualView::describeWheelActions() const
+{
+    auto actionName = [](int action) -> QString {
+        switch( action ) {
+        case SOpt::ScrollVertical:   return "Scroll V";
+        case SOpt::ScrollHorizontal: return "Pan";
+        case SOpt::ZoomHorizontal:   return "Zoom H";
+        case SOpt::ZoomVertical:     return "Zoom V";
+        default:                      return QString();
+        }
+    };
+
+    QStringList parts;
+    QString plain = actionName( wheelPlain_ );
+    if( !plain.isEmpty() ) parts << plain;
+
+    QString shift = actionName( wheelShift_ );
+    if( !shift.isEmpty() ) parts << ("Shift = " + shift);
+
+    QString ctrl = actionName( wheelCtrl_ );
+    if( !ctrl.isEmpty() ) parts << ("Ctrl = " + ctrl);
+
+    QString ctrlShift = actionName( wheelCtrlShift_ );
+    if( !ctrlShift.isEmpty() ) parts << ("Ctrl+Shift = " + ctrlShift);
+
+    return "Wheel: " + parts.join( ", " );
+}
+
 void SMVActualView::wheelEvent( QWheelEvent *ev )
 {
     int dy = ev->angleDelta().y();
+    int dx = ev->angleDelta().x();
+
+    // On macOS with physical mouse wheel, certain modifier combinations swap X/Y reporting.
+    // When Y delta is zero but X delta is non-zero, treat X as Y (for vertical operations).
+    // This handles Shift+wheel, Cmd+Shift+wheel, etc. on physical mouse wheels.
+    if( dy == 0 && dx != 0 ) {
+        dy = dx;
+    }
+
     if( dy == 0 ) { QWidget::wheelEvent( ev ); return; }
     int dir = (dy > 0) ? +1 : -1;   // +1 = wheel away from the user ("up")
 
-    switch( wheelActionFor( ev->modifiers() ) ) {
+    int action = wheelActionFor( ev->modifiers() );
+
+    switch( action ) {
 
     case SOpt::ScrollVertical: {
         // One track lane per notch via the scrollbar (keeps it in sync).
@@ -2273,7 +2328,8 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
         int h = in ? (trackHeight_ * 3) / 2 : (trackHeight_ * 2) / 3;
         if( h < 6 ) h = 6;
         setTrackHeight( h );
-        smv_.qTrackControlBox_->resize( SMV_TRACK_CTRL_WIDTH,
+        int w = smv_.qTrackControlBoxHolder_->width();
+        smv_.qTrackControlBox_->resize( w,
                                         getTrackHeight() * smv_.rowCount() );
         break;
     }
@@ -2284,6 +2340,13 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
         return;
     }
     ev->accept();
+
+    // Post a hint showing available wheel actions and modifiers
+    SMainWindow *mw = dynamic_cast<SMainWindow*>(
+        QApplication::activeWindow() );
+    if( mw ) {
+        mw->postHint( describeWheelActions() );
+    }
 }
 
 void SMVActualView::dragEnterEvent(QDragEnterEvent *e)
@@ -2432,21 +2495,31 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
                       this, SLOT( trackSliderMoved( int ) ) );
 
     qTrackControlBoxHolder_ = new QWidget( this );
-    qTrackControlBoxHolder_->setFixedWidth( SMV_TRACK_CTRL_WIDTH );
+    // Allow track control column to expand and fill entire left width
+    qTrackControlBoxHolder_->setMinimumWidth( TRACK_CTRL_WIDTH_MINIMAL );
+    // No maximum width - column fills all available space
+    qTrackControlBoxHolder_->setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Expanding );
     // Double-clicking the blank area below the track heads adds a new track.
     qTrackControlBoxHolder_->installEventFilter( this );
-    // qTrackControlBoxHolder_->setBackgroundColor( QColor( 100, 100, 0 ) );
+
+    // Create a vertical layout for the track control holder:
+    // - Top: track controls (scrollable, expandable)
+    // - Bottom: track detail panel (fixed height)
+    QVBoxLayout *trackHolderLayout = new QVBoxLayout( qTrackControlBoxHolder_ );
+    trackHolderLayout->setContentsMargins( 0, 0, 0, 0 );
+    trackHolderLayout->setSpacing( 0 );
+
+    // Add to grid layout spanning all rows
     qGridLayout_->addWidget(
         qTrackControlBoxHolder_,
-        0, /* fromRow */ 
+        0, /* fromRow */
         0, /* fromCol */
-        4, /* rowSpan */
-        1  /* colSpan */ 
+        4, /* rowSpan - all content rows */
+        1  /* colSpan */
         );
-    // was: qGridLayout_->addMultiCellWidget( qTrackControlBoxHolder_, 0 /* from Row */, 3 /* to Row */, 0 /* fromCol */, 0 /* toCol */ );
-    
 
-    qTrackControlBox_ = new QWidget( qTrackControlBoxHolder_ );
+    qTrackControlBox_ = new QWidget();
+    trackHolderLayout->addWidget( qTrackControlBox_, 2 );  // Stretch factor 2 = gets 2/3 of space
 
     // Track-reorder drag state + the insertion-line indicator (hidden until a
     // drag is in progress).
@@ -2557,40 +2630,46 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     qGridLayout_->addWidget(resizer, 0, 0, 4, 1, Qt::AlignRight);
     qGridLayout_->setColumnMinimumWidth(0, 8);  // Divider width
 
-    // Create the track detail panel (bottom of mixer view, spans content area only)
+    // Create the track detail panel and add it to the track holder layout (below track controls)
     qTrackDetailPanel_ = new STrackDetailPanel(this);
-    qGridLayout_->addWidget(qTrackDetailPanel_, 4, 1, 1, 4);  // Column 1-4, same as content
-    qGridLayout_->setRowStretch(4, 0);  // Don't stretch detail panel
+    // Get the track holder layout that was created earlier and add detail panel to it
+    if( QVBoxLayout *layout = qobject_cast<QVBoxLayout*>(qTrackControlBoxHolder_->layout()) ) {
+        layout->addWidget(qTrackDetailPanel_, 1);  // Stretch factor 1 = gets 1/3 of space
+    }
 
-    // Connect mixer's track selection to detail panel
+    // Connect mixer's track selection to detail panel and timeline repaint
     connect(model_, &SStdMixer::selectedTrackChanged,
             qTrackDetailPanel_, &STrackDetailPanel::setTrack);
+    connect(model_, &SStdMixer::selectedTrackChanged,
+            qContent_, QOverload<>::of(&QWidget::update));
+    // Initialize detail panel with current selection (nullptr at startup)
+    qTrackDetailPanel_->setTrack(model_->getSelectedTrack());
 }
 
 void SStdMixerView::setTrackControlWidth( int width )
 {
+    qWarning( "SStdMixerView::setTrackControlWidth( %d )", width );
     // Clamp between minimal and standard
     if( width < TRACK_CTRL_WIDTH_MINIMAL ) width = TRACK_CTRL_WIDTH_MINIMAL;
     if( width > TRACK_CTRL_WIDTH_STANDARD ) width = TRACK_CTRL_WIDTH_STANDARD;
+    qWarning( "  -> clamped to: %d", width );
 
     if( trackControlWidth_ != width ) {
         trackControlWidth_ = width;
 
-        // Remove stretch on column 0 to allow fixed sizing
+        // Constrain the holder to exactly this width (min = max = width)
+        qTrackControlBoxHolder_->setMinimumWidth( width );
+        qTrackControlBoxHolder_->setMaximumWidth( width );
+
+        // Also constrain the grid column to match
         if( qGridLayout_ ) {
             qGridLayout_->setColumnStretch( 0, 0 );
-            // Set both min and max width to force the column to that exact size
             int totalWidth = width + 8;  // +8 for divider
             qGridLayout_->setColumnMinimumWidth( 0, totalWidth );
-            // Also set maximum to prevent layout from expanding it
-            qGridLayout_->setColumnMinimumWidth( 1, 0 );  // Reset other columns
         }
 
-        // Update widget widths
-        qTrackControlBoxHolder_->setFixedWidth( width );
-        if( qTrackControlBox_ ) {
-            qTrackControlBox_->setFixedWidth( width );
-        }
+        // Rebuild individual track controls to match new width
+        rebuildControlColumn();
 
         // Trigger layout recalculation
         saveTrackControlWidth();

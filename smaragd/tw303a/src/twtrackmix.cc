@@ -13,12 +13,7 @@
 
 int twTrackMix::seekTo( offset_t newOffset )
 {
-    fprintf(stderr, "[twTrackMix::seekTo] Setting playOffset_ from %llu to %llu\n",
-            (unsigned long long)playOffset_, (unsigned long long)newOffset);
-    fflush(stderr);
-    playOffset_ = newOffset;
-    fprintf(stderr, "[twTrackMix::seekTo] playOffset_ now = %llu\n", (unsigned long long)playOffset_);
-    fflush(stderr);
+    playOffset_.store( newOffset, std::memory_order_relaxed );
     return 0;
 }
 
@@ -73,9 +68,9 @@ length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t out
 {
     // FIXME: Why getBufferSize()? We have some length given!
     sample_t *readBuffer = (sample_t *) alloca( env.getBufferSize()*sizeof( sample_t ) );
-    offset_t startInterval = playOffset_;
-    playOffset_ += playLen;
-    offset_t endInterval = playOffset_;
+    offset_t startInterval = playOffset_.load( std::memory_order_relaxed );
+    offset_t endInterval   = startInterval + playLen;
+    playOffset_.store( endInterval, std::memory_order_relaxed );
 
 //      qWarning( "twTrackMix::calcOutputTo(): Called. track_=$%08x; playOffset_ = %d.\n",
 //                &track_, playOffset_ );
@@ -111,10 +106,14 @@ length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t out
 //                  &cp, playOffset_ );
 //        cp.seekTo( startOffset );
         offset_t doRead = endTime-startTime;
-        memset( readBuffer, 0, sizeof( sample_t ) * playLen );
-        cp.calcOutputTo( readBuffer+startTime-startInterval, doRead, outChannel );
-        for( int i=startTime-startInterval; (offset_t)i<endTime-startInterval; i++ ) {
-            buffer[i] += readBuffer[i];
+        // Only zero out the range we'll actually use (not entire playLen)
+        offset_t destOffset = startTime-startInterval;
+        memset( readBuffer + destOffset, 0, sizeof( sample_t ) * doRead );
+        // Get actual amount produced (may be less than doRead if component underruns)
+        length_t actuallyGot = cp.calcOutputTo( readBuffer+destOffset, doRead, outChannel );
+        // Only mix the actual samples produced (don't mix zero-padded tail)
+        for( offset_t i = 0; i < actuallyGot; i++ ) {
+            buffer[destOffset + i] += readBuffer[destOffset + i];
         }
     }
 

@@ -16,10 +16,6 @@ const char *twRewire::getOutputName( idx_t ) const
 
 int twRewire::seekTo( offset_t offset )
 {
-    fprintf(stderr, "[twRewire::seekTo] Forwarding seekTo(%llu) to all input plugs\n",
-            (unsigned long long)offset);
-    fflush(stderr);
-
     // Forward the seek to all connected input plugs (the tracks)
     if (pInputPlugs) {
         for (idx_t i = 0; i < nInputs_; ++i) {
@@ -28,12 +24,7 @@ int twRewire::seekTo( offset_t offset )
                 // We need to seek the parent latch's component
                 twLatch &latch = pInputPlugs[i]->getParentLatch();
                 twComponent &comp = latch.getComponent();
-                fprintf(stderr, "[twRewire::seekTo]   Seeking input %d (component type: %s)\n",
-                        i, typeid(comp).name());
-                fflush(stderr);
-                int result = comp.seekTo(offset);
-                fprintf(stderr, "[twRewire::seekTo]   Result: %d\n", result);
-                fflush(stderr);
+                comp.seekTo(offset);
             }
         }
     }
@@ -158,6 +149,6 @@ twRewire::twRewire( tw303aEnvironment &env0 )
     : twComponent( env0 )
 {
     setBufferSize( env.getBufferSize() );
-    // Default
-    nInputs_ = 1;
+    // Default: 2 channels (stereo L/R pair)
+    nInputs_ = 2;
 }

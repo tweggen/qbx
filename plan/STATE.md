@@ -3046,3 +3046,71 @@ In priority order:
    proposal 07 step 5 (`twCapturingSource` consumer wiring for non-audio content).
 9. **Proposal 09 — multi-view tabs** — architectural design complete, no code yet.
 10. **Lua scripting** — deferred from proposal 11; XML action script foundation is stable and verified.
+
+---
+
+## 12_TEST_OUTPUT_ARTIFACTS.md
+
+- **Date:** 2026-06-19
+- **Status:** ✅ All three phases complete (commits 5f0aa81–fbaf963)
+- **Verified on platform:** macOS arm64 (primary); Linux/Windows path logic in place
+
+### What landed
+
+| Component | Commit | Status |
+|-----------|--------|--------|
+| `SScreenshotAction` (Phase 1) | 5f0aa81 | ✅ Complete |
+| Artifact reporting (Phase 2) | 574beb8 | ✅ Complete |
+| `SRenderAction` (Phase 3) | 517af61 | ✅ Complete |
+
+**New files:**
+
+- `main/include/actions/sscreenshotaction.h` / `.cpp` — captures main window at 100%, 50%, or custom WxH
+- `main/include/actions/srenderaction.h` / `.cpp` — exports audio to WAV/OGG/MP3 during test
+- `main/src/sapplication.cpp` — output directory plumbing + command-line `--test-output-dir` flag
+- `main/src/main.cpp` — artifact reporting in TAP/verbose output
+- `tests/cases/screenshot_test.qxa` — verified screenshot functionality
+- `tests/cases/render_test.qxa` — verified render + screenshot in same test
+
+**Key features:**
+
+- **Resolution scaling:** 100% (full), 50% (bilinear), or explicit WxH (maintains aspect)
+- **Path safety:** Filename validation prevents directory traversal (`/`, `..`, `\` rejected)
+- **Environment integration:** `--test-output-dir` flag or `SMARAGD_TEST_OUTPUT_DIR` env var
+- **Async render wait:** 30-second timeout to prevent hangs; platform-agnostic
+- **Artifact collection:** Auto-enumerate output directory; all files reported in test results
+
+### Test results
+
+**screenshot_test.qxa:**
+- ✅ 4 PNG files created (100%/50%/800x600/full)
+- ✅ File sizes: 133 KB (custom) to 740 KB (full)
+- ✅ Artifacts listed in TAP output
+
+**render_test.qxa:**
+- ✅ 11 MB WAV file generated (60-sec @ 48kHz stereo)
+- ✅ Screenshot taken post-render
+- ✅ Both artifacts reported (WAV + PNG)
+- ✅ Render progress streaming observed
+
+### Deliberate design choices
+
+1. **Non-undoable:** Screenshots/renders don't participate in undo stack (fire-and-forget artifacts)
+2. **Enumeration strategy:** Scan output directory post-run; simpler than per-action callbacks
+3. **Sync render wait:** Async render with polling; blocks test until complete (simpler than event-driven)
+4. **Format enums → strings:** Serialize as "100%", "50%", "800x600" and "wav"/"ogg"/"mp3" (readable XML)
+5. **Quality range:** 0–10 for OGG (libvorbis), 0–320 for MP3 (unified parameter; validation on readXml)
+
+### Platform-specific notes
+
+- **macOS:** Offscreen platform unavailable; tests run with native `cocoa` backend (window visible but not interactive)
+- **Linux:** `-platform offscreen` automatically injected in test-case mode for CI/CD headless runs
+- **Windows:** Native WASAPI backend used; no special headless handling needed
+
+### Next actions (deferred, Phase 4+)
+
+1. **JSON export** — instead of/alongside TAP, emit `artifacts.json` with full paths, sizes, hashes for CI archival
+2. **DSL sugar** — `.qxs` line-based syntax for hand-authoring tests (lower friction than XML)
+3. **Render output assertions** — `assert-renders-to-silence`, `assert-renders-non-zero`, etc. (wave analysis)
+4. **Recording action** — `SRecordAction` to capture from input device within test (complement to render)
+5. **CI wiring** — GitHub Actions workflow to run all tests in `tests/cases/`, archive artifacts per commit

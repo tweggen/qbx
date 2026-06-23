@@ -20,6 +20,7 @@ using namespace std;
 #include "strack.h"
 #include "scut.h"
 #include "sstdmixer.h"
+#include "spluginchain.h"
 
 
 void SProjectLoader::registerSObjectClass( 
@@ -49,7 +50,7 @@ int SProjectLoader::createObjects( SProject &project )
     }
     // SObject *rootObject = NULL;
     QString rootId;
-    
+
 //    qWarning( "Internal document representation:\n%s",
 //              (const char *) dom_.toString() );
 
@@ -90,7 +91,6 @@ int SProjectLoader::createObjects( SProject &project )
             QDomNode childNode = e.firstChild();
             while( !childNode.isNull() ) {
                 if( childNode.isElement() ) {
-                    qWarning() << "childNode.nodeName() == " << childNode.nodeName() << Qt::endl;
                     if( childNode.nodeName() == "SLink" ) {
                         QDomElement childElement = childNode.toElement();
                         QString objectId = childElement.attribute( "objectId" );
@@ -121,8 +121,6 @@ int SProjectLoader::createObjects( SProject &project )
                 if( object ) {
                     qWarning() << QString("Object of type \"%1\", id \"%2\", already had been instantiated.\n").arg(tagName).arg(id);
                 } else {
-                    qWarning() << QString( "Instantiating object of type \"%1\" with id=\"%2\".\n" )
-                        .arg( tagName ).arg( id );
                     object = instantiateSObjectFromDomElement(
                         tagName, e, NULL );
                     if( !object ) {
@@ -144,12 +142,19 @@ int SProjectLoader::createObjects( SProject &project )
             } // All Children known
         } while( !n.isNull() );
     }
+
+    // NOTE: readPostChildrenAttributes is already called in instantiateFromDomElement
+    // for all objects as they are created. A second pass here was causing issues
+    // with objects being processed twice, potentially corrupting state.
+    // If certain objects aren't getting readPostChildrenAttributes called,
+    // the fix should be to ensure they're included in the main instantiation loop.
+
     {
         SLink *rootLink = objectDict_.value( rootId );
-        if( !rootLink ) {            
+        if( !rootLink ) {
             qWarning( "Root component of project was not found.\n" );
             // TODO: Allow user to select display root id.
-        } else {            
+        } else {
             project_.setRootComponent( &rootLink->getSObject() );
         }
     }
@@ -166,6 +171,7 @@ SProjectLoader::SProjectLoader( SProject &project, const QString &name )
     registerSObjectClass( "SStdMixer", SStdMixer::instantiateFromDomElement );
     registerSObjectClass( "STrack", STrack::instantiateFromDomElement );
     registerSObjectClass( "SCut", SCut::instantiateFromDomElement );
+    registerSObjectClass( "SPluginChain", SPluginChain::instantiateFromDomElement );
 
     QFile f( name_ );
     if ( !f.open( QIODevice::ReadOnly ) )

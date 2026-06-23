@@ -237,7 +237,7 @@ int SStdMixer::setNBusses( int n )
         }
     }
     // OK, we might shrink or enlarge. Take the output latches we have with us.
-    newMixers = (twMixer **) ::calloc( sizeof( twMixer * ), n );
+    newMixers = (twMixer **) ::calloc( n, sizeof( twMixer * ) );
     // Takeover contains the the number of busses we can takeover from the current installation.
     int nTakeOver = n;
     if( nBusses_<nTakeOver ) nTakeOver = nBusses_;
@@ -299,7 +299,6 @@ void SStdMixer::insertTrack( STrack &trk )
     SLink *lk = new SLink( (SObject&)trk, this );
     (void) lk;
     int newIndex = childCount() - 1;   // actual landing index (append)
-    qWarning( "Inserted new track @%d.\n", newIndex );
     emit trackInserted( newIndex, trk );
 }
 
@@ -355,10 +354,6 @@ void SStdMixer::checkDurationChanged()
 {
     length_t oldDuration = lastDuration_;
     length_t newDuration = getDuration();
-    qWarning( "SStdMixer::checkDurationChanged() called. oldDuration = %d, newDuration = %d.",
-              (int)oldDuration, (int)newDuration );
-    qWarning( "SStdMixer::checkDurationChanged(): newDuration = %d:%d.",
-	      (int)(newDuration>>32), (int)newDuration );
     if( oldDuration!=newDuration ) {
         emit durationChanged( newDuration );
     }
@@ -372,7 +367,12 @@ void SStdMixer::mixerChildDurationChanged( length_t )
 
 SStdMixer::~SStdMixer()
 {
-    // FIXME: Free cpMixer.
+    if( cpMixers_ ) {
+        for( int i = 0; i < nBusses_; ++i )
+            delete cpMixers_[i];
+        ::free( cpMixers_ );
+    }
+    delete cpRewire_;
 }
 
 SStdMixer::SStdMixer( SProject *project )
@@ -415,7 +415,6 @@ SLink *SStdMixer::instantiateFromDomElement(
     SStdMixer *mixer = new SStdMixer( &projectLoader.getProject() );
     while( !childNode.isNull() ) {
         if( childNode.isElement() ) {
-            qWarning() << "found SStdMixer child " << childNode.nodeName() << Qt::endl;
             if( childNode.nodeName() == "SLink" ) {
                 QDomElement childElement = childNode.toElement();
                 QString objectId = childElement.attribute( "objectId" );

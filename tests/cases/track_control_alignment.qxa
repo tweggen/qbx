@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="track_control_alignment">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Add multiple tracks to show track control alignment with ruler and timeline -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Wait for initialization to complete and UI to settle -->
+    <wait-for-millis value="2000"/>
+
+    <!-- Capture at 50% resolution (quarter-size in terms of pixels) to verify alignment -->
+    <!-- Track controls (blue column on left) should align below the pale yellow ruler bar -->
+    <screenshot filename="track_control_alignment_quarter.png" resolution="50%"/>
+
+    <!-- Also capture at full resolution for reference -->
+    <screenshot filename="track_control_alignment_full.png" resolution="100%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

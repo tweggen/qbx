@@ -15,6 +15,7 @@
 int main( int argc, char *argv[] )
 {
     // Phase 4: Detect headless test mode before QApplication init to set platform
+    // (Only on Linux; macOS and Windows have native headless support or prefer native backends)
     bool headlessMode = false;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--test-case") == 0) {
@@ -23,7 +24,8 @@ int main( int argc, char *argv[] )
         }
     }
 
-    // If in headless test mode and -platform not explicitly set, use offscreen
+#ifdef Q_OS_LINUX
+    // On Linux, if in headless test mode and -platform not explicitly set, use offscreen
     if (headlessMode) {
         bool platformSet = false;
         for (int i = 1; i < argc; ++i) {
@@ -46,6 +48,7 @@ int main( int argc, char *argv[] )
             argv = newArgv;
         }
     }
+#endif
 
     SApplication app( argc, argv );
 
@@ -54,6 +57,11 @@ int main( int argc, char *argv[] )
     parser.addOption({"run-actions", "Execute an action script and keep the window open.", "file"});
     parser.addOption({"test-case", "Run an action script as a headless test (exit 0 on pass, 1 on fail).", "file"});
     parser.addOption({"list-actions", "List known action verbs and exit."});
+    parser.addOption(QCommandLineOption(
+        {"test-output-dir", "o"},
+        "Directory for test artifacts (screenshots, renders, etc.).",
+        "path"
+    ));
     parser.process(app);
 
     // --list-actions: output and exit before window creation
@@ -79,6 +87,23 @@ int main( int argc, char *argv[] )
         }
         uiFont.setStyleStrategy( QFont::PreferAntialias );
         QApplication::setFont( uiFont );
+    }
+
+    // Set test output directory if provided
+    QString outputDir = parser.value("test-output-dir");
+    if (outputDir.isEmpty()) {
+        // Try environment variable fallback
+        const char *envPath = std::getenv("SMARAGD_TEST_OUTPUT_DIR");
+        if (envPath) {
+            outputDir = QString::fromUtf8(envPath);
+        }
+    }
+    if (!outputDir.isEmpty()) {
+        app.setTestOutputDir(outputDir);
+        if (!app.ensureOutputDirExists()) {
+            std::cerr << "Warning: Failed to create output directory: " << outputDir.toStdString() << "\n";
+            std::cerr.flush();
+        }
     }
 
     // Determine test mode vs interactive mode
@@ -117,6 +142,12 @@ int main( int argc, char *argv[] )
                         }
                     }
                 }
+                if (!result.artifacts.isEmpty()) {
+                    std::cout << "# Artifacts:\n";
+                    for (const QString &artifact : result.artifacts) {
+                        std::cout << "#   - " << artifact.toStdString() << "\n";
+                    }
+                }
             } else {
                 // Verbose output for run mode
                 std::cout << "Script executed: " << (result.passed ? "PASS" : "FAIL") << "\n";
@@ -127,6 +158,12 @@ int main( int argc, char *argv[] )
                     std::cout << "  Failures:\n";
                     for (const QString &failure : result.failures) {
                         std::cout << "    - " << failure.toStdString() << "\n";
+                    }
+                }
+                if (!result.artifacts.isEmpty()) {
+                    std::cout << "  Artifacts:\n";
+                    for (const QString &artifact : result.artifacts) {
+                        std::cout << "    - " << artifact.toStdString() << "\n";
                     }
                 }
             }

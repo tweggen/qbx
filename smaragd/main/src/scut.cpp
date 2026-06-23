@@ -3,6 +3,7 @@
 #include <math.h>
 #include <cstdlib>
 #include <vector>
+#include <chrono>
 
 #include <QDebug>
 
@@ -20,18 +21,31 @@
 #include "strack.h"
 #include "scutrndrinline.h"
 #include "sprojectloader.h"
+#include "capture_revalidator.h"
 
 using namespace std;
 
 SCutSnapshot SCut::getSnapshot() const
 {
-    std::lock_guard<std::mutex> lock( windowMutex_ );
+    // Non-blocking lock to avoid deadlock during UI paint when revalidator
+    // is modifying state. If mutex is held, return the last good snapshot.
+    std::unique_lock<std::mutex> lock(mutex(), std::defer_lock);
+    if (!lock.try_lock()) {
+        // Could not acquire lock: return last good snapshot (safe for rendering).
+        // This is always initialized and contains valid data from previous successful lock.
+        return lastGoodSnapshot_;
+    }
+
     SCutSnapshot snap;
     snap.startOffset = startOffset_;
     snap.loopLength = loopLength_;
     snap.cutDuration = cutDuration_;
     snap.grainParams = grainParams_;
     snap.reader = currentReader_;  // Always valid, complete, atomic (Unix page cache)
+
+    // Update the last good snapshot for fallback use when lock fails on next call.
+    lastGoodSnapshot_ = snap;
+
     return snap;
 }
 
@@ -82,7 +96,8 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     bool newLooping = false;
 
     twRandomSource *rs = content_->getSObject().getRandomSource();
-    if( !rs ) rs = ensureCapture();
+    // TODO: Phase 4 - integrate async capture model with reader rebuild
+    // if( !rs ) rs = ensureCapture();  // OLD: sync capture fallback
     if( !rs ) goto swap_complete;   // no-op, keep current
 
     {
@@ -109,7 +124,7 @@ swap_complete:
     {
         std::lock_guard<std::mutex> lock( readerSwapLock_ );
 
-        // Clean up previous old reader
+        // Clean up previous old reader (oldReader_.captureRef shared_ptr released automatically)
         if( oldReader_.reader ) { delete oldReader_.reader; oldReader_.reader = NULL; }
         if( oldReader_.grain )  { delete oldReader_.grain;  oldReader_.grain = NULL; }
 
@@ -119,6 +134,7 @@ swap_complete:
         // Move next to current (becomes visible to audio thread immediately)
         currentReader_.reader = newReader;
         currentReader_.grain = newGrain;
+        currentReader_.captureRef = capture_;   // Share ownership: keeps capture alive during render
         currentReader_.looping = newLooping;
         currentReader_.generation++;  // Increment on successful swap
     }
@@ -222,19 +238,23 @@ static void renderObjectInto( SObject &obj, sample_t *dest, length_t len,
         for( length_t i = 0; i < len; ++i ) dest[(size_t) i] *= (sample_t) factor;
 }
 
-twRandomSource *SCut::ensureCapture()
+// Internal: build the capture (container render) if needed.
+// Initializes capture_ by rendering the container's audio.
+// Should only be called when capture_ is null.
+void SCut::buildCapture_()
 {
-    if( capture_ ) return capture_;
+    if( capture_ ) return;  // Already built
+
     SObject &c = content_->getSObject();
-    if( c.getRandomSource() ) return NULL;          // real source -> sample path
-    if( !c.hasDuration() ) return NULL;
+    if( c.getRandomSource() ) return;  // real source -> sample path, no capture needed
+    if( !c.hasDuration() ) return;
 
     // Use snapshot to read window parameters consistently (multithreading policy: Phase 1).
     SCutSnapshot snap = getSnapshot();
     length_t need = (length_t) snap.startOffset + snap.cutDuration;
     length_t dur  = (length_t) c.getDuration();
     length_t n = dur > need ? dur : need;
-    if( n <= 0 ) return NULL;
+    if( n <= 0 ) return;
 
     tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
 
@@ -244,7 +264,7 @@ twRandomSource *SCut::ensureCapture()
     // track-of-tracks). Materialise once into a resident buffer.
     std::vector<sample_t> buf( (size_t) n, 0.0f );
     renderObjectInto( c, buf.data(), n, env, env.getSRate(), 0 );
-    capture_ = new twCapturingSource( std::move( buf ), n, 1, env.getSRate() );
+    capture_ = std::make_shared<twCapturingSource>( std::move( buf ), n, 1, env.getSRate() );
 
     if( !captureConnected_ ) {
         // Transparent invalidation: any applied action drops the snapshot so the
@@ -253,19 +273,40 @@ twRandomSource *SCut::ensureCapture()
                           this, SLOT( invalidateCapture() ) );
         captureConnected_ = true;
     }
-    return capture_;
 }
+
+// Old API: ensure the capture (container render) is built.
+// TODO: Phase 4 - replace with getCapture() / getPreviewCapture() async API.
+// For now, commented out to avoid conflicting with the new getCapture(aspectsMask) method.
+/*
+twRandomSource *SCut::ensureCapture()
+{
+    // Use new aspect-based API
+    ensureCapture(Preview | Playback | Metadata);
+
+    if( capture_ ) return capture_.get();
+    return NULL;
+}
+*/
 
 void SCut::invalidateCapture()
 {
-    // Drop the cached render of a container; next access re-captures.
-    // Rebuild reader with current snapshot (double-buffer model ensures safety).
-    if( capture_ ) { delete capture_; capture_ = NULL; }
-    if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }
-    readerTried_ = false;
+    // Drop the cached render (async model).
+    // Use reset() not delete: the shared_ptr releases SCut's reference, but readers
+    // (audio thread) may still hold references via currentPage().
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        currentPage_.reset();
+        nextPage_.reset();
+    }
 
-    // Rebuild reader to work with new capture
-    rebuildReader( getSnapshot() );
+    // Invalidate affected aspects: capture rebuild affects Preview, Playback, Metadata
+    // but NOT Export (export is on-demand only and can be recomputed independently).
+    // These aspects will be recomputed lazily on demand via async revalidator.
+    invalidateAspects(Preview | Playback | Metadata);
+
+    // NOTE: Do NOT eagerly rebuild anything here (lazy invalidation model).
+    // The revalidator's background thread will handle recomputation when needed.
 
     // Notify parent containers that window parameters have changed (for live drag feedback)
     emit windowParamsChanged();
@@ -330,10 +371,33 @@ bool SCut::ensureCapturePeaks()
 int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
                       offset_t nProbes )
 {
-    // No capture (sample cut, or a container we can't snapshot): preview the
-    // content live, in the same (container) frame domain we are addressed in.
-    if( !ensureCapture() || !ensureCapturePeaks() )
-        return getContent().getPreview( dest, start, length, nProbes );
+    // Try async capture first (non-blocking, may be stale or invalid)
+    // If not ready, fall back to live content preview (sample-backed cuts only)
+    auto page = getPreviewCapture();
+    if( !page || !capture_ ) {
+        // No capture available (yet or ever)
+        // For sample-backed cuts: preview the content live
+        // For container-backed cuts: return error (no fallback)
+        if( getContent().getRandomSource() ) {
+            // Sample-backed: live preview available
+            return getContent().getPreview( dest, start, length, nProbes );
+        } else {
+            // Container-backed: no live preview; page cache only
+            // Return error so UI can show placeholder
+            return -1;
+        }
+    }
+
+    // Capture exists but may not have peaks yet
+    if( !ensureCapturePeaks() ) {
+        // For sample-backed cuts: try live preview
+        // For container-backed cuts: return error
+        if( getContent().getRandomSource() ) {
+            return getContent().getPreview( dest, start, length, nProbes );
+        } else {
+            return -1;
+        }
+    }
 
     if( nProbes <= 0 ) return -1;
     if( length < 1 ) length = 1;
@@ -407,7 +471,7 @@ int SCut::seekTo( offset_t off )
 void SCut::setStartOffset( offset_t off )
 {
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         startOffset_ = off;
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
@@ -417,7 +481,7 @@ void SCut::setDuration( length_t dur )
 {
     // FIXME: clip.
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         cutDuration_ = dur;
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
@@ -427,7 +491,7 @@ void SCut::setDuration( length_t dur )
 void SCut::setLoopStart( offset_t s )
 {
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         loopStart_ = s;
     }
 }
@@ -436,7 +500,7 @@ void SCut::setLoopLength( length_t l )
 {
     SCutSnapshot snap;
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         loopLength_ = l;
         // Capture snapshot while holding lock for consistent rebuild
         snap = getSnapshot();
@@ -451,7 +515,7 @@ void SCut::setWindow( offset_t startOffset, length_t duration,
 {
     SCutSnapshot snap;
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         startOffset_ = startOffset;
         cutDuration_ = duration;
         loopLength_  = loopLength;
@@ -485,11 +549,11 @@ void SCut::setGrainParams( const twGrainParams &p )
 {
     SCutSnapshot snap;
 
-    // All window parameter modifications must be protected by windowMutex_
+    // All window parameter modifications must be protected by mutex()
     // (formal concurrency guidelines: Contract B, Snapshot Pattern).
     // Read oldStretch INSIDE lock to avoid TOCTOU race (formal verification).
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         double oldStretch = grainParams_.stretch;  // ← Read inside lock
         grainParams_ = p;
         if( oldStretch > 0.0 && p.stretch > 0.0 && p.stretch != oldStretch ) {
@@ -513,7 +577,7 @@ void SCut::setStretch( double s )
 {
     twGrainParams p;
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );  // Read under lock
+        std::lock_guard<std::mutex> lock(mutex());  // Read under lock
         p = grainParams_;  // Snapshot params
     }
     p.stretch = s;  // Modify copy outside lock
@@ -524,7 +588,7 @@ void SCut::setPitchCents( double cents )
 {
     twGrainParams p;
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );  // Read under lock
+        std::lock_guard<std::mutex> lock(mutex());  // Read under lock
         p = grainParams_;  // Snapshot params
     }
     p.pitchCents = cents;  // Modify copy outside lock
@@ -533,6 +597,13 @@ void SCut::setPitchCents( double cents )
 
 SCut::~SCut()
 {
+    // Unregister from content's dependents (lazy invalidation, proposal 06).
+    // This cut is no longer referencing the content, so remove this link from
+    // the content's dependent set. The content can now change without affecting this cut.
+    if( content_ ) {
+        content_->getSObject().removeDependentLink(content_);
+    }
+
     // Clean up all reader states (double-buffer model)
     if( currentReader_.reader ) { delete currentReader_.reader; currentReader_.reader = NULL; }
     if( currentReader_.grain )  { delete currentReader_.grain;  currentReader_.grain = NULL; }
@@ -541,7 +612,8 @@ SCut::~SCut()
     if( nextReader_.reader ) { delete nextReader_.reader; nextReader_.reader = NULL; }
     if( nextReader_.grain )  { delete nextReader_.grain;  nextReader_.grain = NULL; }
 
-    if( capture_ ) { delete capture_; capture_ = NULL; }
+    // capture_ is a shared_ptr — it will be freed when all references are released
+    capture_.reset();
     if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; }
     delete content_;
     content_ = NULL;
@@ -554,6 +626,9 @@ SCut::SCut( SProject *parentProject, SLink &content )
       inlineRenderer_( NULL ),
       readerTried_( false )
 {
+    // Get revalidator from project (Phase 4, async capture model)
+    revalidator_ = (parentProject != nullptr) ? parentProject->getRevalidator() : nullptr;
+
     content_ = &content;
     content_->setParent(this);
     /* was:
@@ -569,6 +644,12 @@ SCut::SCut( SProject *parentProject, SLink &content )
         int srate = (parentProject != nullptr) ? parentProject->getSRate() : 48000;
         cutDuration_ = srate / 2;
     }
+
+    // Register as dependent of the content object (lazy invalidation, proposal 06).
+    // When the content's audio state changes (mute, solo, volume), this cut will be
+    // notified to invalidate only affected aspects (Playback, Metadata), not the
+    // entire arrangement.
+    content_->getSObject().addDependentLink(content_);
 }
 
 SCut::SCut( SProject *parentProject, SObject &content )
@@ -578,6 +659,9 @@ SCut::SCut( SProject *parentProject, SObject &content )
       inlineRenderer_( NULL ),
       readerTried_( false )
 {
+    // Get revalidator from project (Phase 4, async capture model)
+    revalidator_ = (parentProject != nullptr) ? parentProject->getRevalidator() : nullptr;
+
     content_ = new SLink( content, this );
     if( content_->getSObject().hasDuration() ) {
         cutDuration_ = content_->getSObject().getDuration();
@@ -588,6 +672,12 @@ SCut::SCut( SProject *parentProject, SObject &content )
     }
     // Loop start defaults to no loop.
     loopStart_ = cutDuration_;
+
+    // Register as dependent of the content object (lazy invalidation, proposal 06).
+    // When the content's audio state changes (mute, solo, volume), this cut will be
+    // notified to invalidate only affected aspects (Playback, Metadata), not the
+    // entire arrangement.
+    content_->getSObject().addDependentLink(content_);
 }
 
 int SCut::serializeSelfAttributes( QTextStream &o )
@@ -618,6 +708,10 @@ int SCut::serializeSelfAttributes( QTextStream &o )
 int SCut::readPostChildrenAttributes( QDomElement &element )
 {
     SObject::readPostChildrenAttributes( element );
+
+    // Note: Invalidation is suppressed during project load via SProject::disableInvalidation(),
+    // so calling setStartOffset() is safe - it won't trigger invalidation chains.
+    // This way setters work normally and code stays consistent.
 
     QString data;
     data = element.attribute( "startOffset", "0" );
@@ -692,14 +786,15 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     if( !grainParams_.isIdentity() || ( loopLength_ > 0 && loopLength_ < cutDuration_ ) )
         rebuildReader( getSnapshot() );
 
+    fprintf(stderr, ">>> SCut::readPostChildrenAttributes END: final cutDuration=%lld\n", (long long)cutDuration_);
     return 0;
 }
 
-SLink *SCut::instantiateFromDomElement( 
+SLink *SCut::instantiateFromDomElement(
     SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
 {
     SLink *contentLink = NULL;
-    // Find the first link child 
+    // Find the first link child
     QDomNode childNode = element.firstChild();
     while( !childNode.isNull() ) {
         if( childNode.isElement() ) {
@@ -714,7 +809,7 @@ SLink *SCut::instantiateFromDomElement(
         }
         childNode = childNode.nextSibling();
     }
-                
+
     if( !contentLink ) {
         qWarning( "SCut did not have a child!!" );
         return NULL;
@@ -730,9 +825,8 @@ SLink *SCut::instantiateFromDomElement(
 void SCut::queueWindowParamEvent( SCutWindowParamEventType type, double value )
 {
     // Queue a window parameter change event for later processing.
-    // This allows drag operations to queue changes without acquiring
-    // windowMutex_ (which would conflict with invalidateCapture).
-    std::lock_guard<std::mutex> lock( queueMutex_ );
+    // Uses inherited mutex() from SObject (one mutex per object policy).
+    std::lock_guard<std::mutex> lock( mutex() );
     SCutWindowParamEvent event{ type, value };
     windowParamEventQueue_.push_back( event );
 }
@@ -742,9 +836,10 @@ void SCut::processWindowParamEvents()
     // Process all queued window parameter events.
     // Called after drag completes to apply all changes atomically,
     // including invalidateCapture() and rebuildReader().
+    // Uses inherited mutex() from SObject (one mutex per object policy).
     std::vector<SCutWindowParamEvent> events;
     {
-        std::lock_guard<std::mutex> lock( queueMutex_ );
+        std::lock_guard<std::mutex> lock( mutex() );
         if( windowParamEventQueue_.empty() ) return;
         events = windowParamEventQueue_;
         windowParamEventQueue_.clear();
@@ -756,7 +851,7 @@ void SCut::processWindowParamEvents()
     bool needsReaderBuild = false;
 
     {
-        std::lock_guard<std::mutex> lock( windowMutex_ );
+        std::lock_guard<std::mutex> lock(mutex());
         for( const SCutWindowParamEvent &event : events ) {
             switch( event.type ) {
             case OFFSET_CHANGE:
@@ -794,4 +889,108 @@ void SCut::processWindowParamEvents()
     if( needsReaderBuild ) {
         rebuildReader( snap );
     }
+}
+
+// Lazy invalidation: mark specific aspects as needing recomputation.
+// Async model: schedules revalidation in background, returns immediately.
+// No blocking, no eager rebuild. Stale data available as fallback.
+void SCut::invalidateAspects(uint32_t aspects)
+{
+    if (aspects == 0 || !revalidator_) return;
+
+    // During project loading, invalidation is suppressed (all pages invalid anyway).
+    // When enableInvalidation() is called, a full recomputation pass will begin.
+    SProject *proj = getProjectSafe();
+    if (proj && proj->isInvalidationSuppressed()) {
+        return;  // Skip invalidation chain while loading
+    }
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+
+        // If Playback is invalidated, drop the stale page
+        // (audio data in currentPage will become stale with mute/solo applied)
+        if (aspects & Playback) {
+            currentPage_.reset();
+        }
+
+        // Clear the bits for invalidated aspects
+        validAspects_ &= ~aspects;
+    }
+
+    // Determine priority based on aspect type
+    int priority = 5;  // Default: Metadata
+    if (aspects & Playback) priority = 10;  // High: audio thread needs this
+    if (aspects & Preview)  priority = 1;   // Low: UI can tolerate stale
+
+    // Schedule async revalidation (returns immediately, no blocking)
+    revalidator_->scheduleRevalidation(this, aspects, priority);
+
+    // Propagate invalidation to dependents (transitive chain).
+    // If this cut's Playback is stale, cuts that reference this cut are also stale.
+    // Example: Track A muted → Cut C (refs Track A) invalidated → Cut D (refs Cut C) invalidated
+    if (aspects & Playback) {
+        notifyDependentsChanged(Playback | Metadata);
+    }
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::high_resolution_clock::now() - start).count();
+    if (aspects & Playback) {
+        qWarning() << "invalidateAspects(Playback) for cut" << getSName()
+                   << "took" << elapsed << "μs";
+    }
+}
+
+// Non-blocking capture access: get current/stale page or schedule async revalidation.
+// Returns immediately with current page if all aspects valid, else stale page, else nil.
+// Never waits for revalidation (falls back to stale data for zero audio dropouts).
+std::shared_ptr<CapturePageData> SCut::getCapture(uint32_t aspectsMask)
+{
+    if (aspectsMask == 0 || !revalidator_) return nullptr;
+
+    // Get current page (may be stale, may be null, never blocks)
+    // Read current page without locking (shared_ptr copy is atomic).
+    auto page = currentPage();
+
+    // If current page has all needed aspects, return immediately
+    // Acquire page lock to safely read validAspects (prevents torn reads during concurrent writes)
+    if (page) {
+        std::lock_guard<std::mutex> pageLock(page->pageMutex);
+        if ((page->validAspects & aspectsMask) == aspectsMask) {
+            return page;
+        }
+    }
+
+    // Page missing aspects: unconditionally schedule revalidation.
+    // The revalidator's job processor will check needsRevalidation_nolock() under the lock
+    // to skip if state changed between now and job dequeue. This avoids the try_lock
+    // workaround and keeps the UI render path non-blocking.
+    int priority = 5;  // Default: Metadata
+    if (aspectsMask & Playback) priority = 10;
+    if (aspectsMask & Preview)  priority = 1;
+    revalidator_->scheduleRevalidation(this, aspectsMask, priority);
+
+    // Return current page anyway (stale is OK; better than null/dropout)
+    return page;
+}
+
+// Check if revalidation is needed for specific aspects.
+// Used by revalidator to decide whether to process a job.
+bool SCut::needsRevalidation_nolock(uint32_t aspectsMask) const
+{
+    if (aspectsMask == 0) return false;
+    // Note: _nolock refers to not holding cut mutex; we still need page lock for valid aspect check
+    if (!currentPage_) return true;
+    std::lock_guard<std::mutex> pageLock(currentPage_->pageMutex);
+    return (currentPage_->validAspects & aspectsMask) != aspectsMask;
+}
+
+bool SCut::needsRevalidation(uint32_t aspectsMask) const
+{
+    if (aspectsMask == 0) return false;
+
+    std::lock_guard<std::mutex> lock(mutex());
+    return needsRevalidation_nolock(aspectsMask);
 }

@@ -104,10 +104,7 @@ bool twComponent::isSeekable() const
 
 int twComponent::seekTo( offset_t offset )
 {
-    fprintf(stderr, "[twComponent::seekTo] Base implementation called on %s with offset=%llu (seekTo not implemented for this component)\n",
-            typeid(*this).name(), (unsigned long long)offset);
-    fflush(stderr);
-    return -1;
+    return -1;  // Base implementation: component doesn't support seeking
 }
 
 void twComponent::resetAllLatches()
@@ -151,14 +148,14 @@ void twComponent::allocPlugs()
 void twComponent::init()
 {
 #ifdef DEBUG_COMPONENT
-    syslog( LOG_DEBUG, "twComponent::init(): entered." );
+    fprintf( stderr, "twComponent::init(): entered." );
 #endif
     
     allocPlugs();
     createOutputLatches();
     
 #ifdef DEBUG_COMPONENT
-    syslog( LOG_DEBUG, "twComponent::init(): leaving." );
+    fprintf( stderr, "twComponent::init(): leaving." );
 #endif
 }
 
@@ -184,7 +181,32 @@ twLatchOutput * twComponent::linkOutput( idx_t idx )
 
 void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
 {
+    // Guard: if pInputPlugs is null, the component wasn't properly initialized
+    // (likely because it reports 0 inputs, or was created but not fully initialized).
+    // Silently return to prevent a crash; the component won't have audio routed to it.
+    if( !pInputPlugs ) {
+        fprintf(stderr, "twComponent::setInput(): pInputPlugs == nullptr (component reports 0 inputs)\n");
+        return;
+    }
+
+    // Guard: bounds check to prevent array overflow
+    if( idx >= getNInputs() ) {
+        fprintf(stderr, "twComponent::setInput(): idx=%d >= getNInputs()=%d\n", (int)idx, (int)getNInputs());
+        return;
+    }
+
+    // Avoid unnecessary reconnection: if input is already set to the same output, do nothing
+    if( pInputPlugs[idx] == newOutput ) {
+        return;
+    }
+
     if( pInputPlugs[idx] ) {
+        auto parentLatch = &(pInputPlugs[idx]->getParentLatch());
+        if(parentLatch==nullptr)
+        {
+            fprintf(stderr, "twComponent::setInput(): pInputPlugs[idx]->getParentLatch() == null\n");
+            return;
+        }
         pInputPlugs[idx]->getParentLatch().deleteOutput( pInputPlugs[idx] );
         pInputPlugs[idx] = NULL;
         if( !newOutput ) --inputsSet_;

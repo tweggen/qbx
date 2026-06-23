@@ -54,6 +54,10 @@ void twPassThroughPlugin::process( const float *const *in, float *const *out,
     // On sample positions 0, 8, 16, etc., latch the current input.
     // For all 8 positions, output the held value (mixed with dry).
     for( std::uint32_t i = 0; i < nframes; ++i ) {
+        #if 0
+        out[0][i] = in[0][i];
+        out[1][i] = in[1][i];
+        #else
         // Every 8 samples, latch the current input as the held value
         if( samplePos_ == 0 ) {
             heldValueL_ = in[0][i];
@@ -66,6 +70,7 @@ void twPassThroughPlugin::process( const float *const *in, float *const *out,
 
         // Advance position in the 8-sample hold cycle
         samplePos_ = (samplePos_ + 1) % 8;
+        #endif
     }
 }
 

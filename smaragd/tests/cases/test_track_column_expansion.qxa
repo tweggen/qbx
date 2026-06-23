@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="track_column_expansion_test">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Create multiple tracks to see the column layout -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Capture at full resolution to see track column expansion -->
+    <screenshot filename="01_track_column_full.png" resolution="100%"/>
+
+    <!-- Capture at 50% to see overall layout -->
+    <screenshot filename="02_track_column_half.png" resolution="50%"/>
+
+    <!-- Capture at custom resolution to check proportions -->
+    <screenshot filename="03_track_column_custom.png" resolution="1600x900"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="5"/>
+  </assertions>
+
+</SActionScript>

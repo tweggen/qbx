@@ -13,6 +13,7 @@ using namespace std;
 #include "sprojectprops.h"
 #include "sstdmixer.h"
 #include "sexternfile.h"
+#include "capture_revalidator.h"
 
 // Minimal XML escaping for embedding a JSON string inside a single-quoted
 // attribute. JSON's own double quotes are fine inside single quotes; we only
@@ -258,8 +259,12 @@ void SProject::addExternObject( const SExternFile &extObject )
 
 void SProject::removeExternObject( QString &fileName )
 {
-    externFileDict_.remove( fileName );
-    emit externFileRemoved( fileName );
+    // Guard against being called during destruction of a partial load
+    // when this method might be called from a child's destructor
+    if( !fileName.isEmpty() && externFileDict_.contains( fileName ) ) {
+        externFileDict_.remove( fileName );
+        emit externFileRemoved( fileName );
+    }
 }
 
 void SProject::registerAsset( const QString &name, SObject *body )
@@ -315,6 +320,13 @@ SLink *SProject::linkToFile( QString &fileName )
 
 SProject::~SProject()
 {
+    // For partially-loaded projects that failed during object creation, skip
+    // the normal cleanup since accessing the partially-constructed objects
+    // could crash. Qt's parent-child mechanism will still clean them up.
+    if( isPartialLoad_ ) {
+        return;
+    }
+
     DTOR_DEL( soRoot_ );   // drop the root reference (parent==NULL, not a child)
 
     // Tear down the object graph here, in the destructor body, while our members
@@ -332,8 +344,16 @@ SProject::~SProject()
         progress = false;
         const QObjectList kids = children();   // copy: mutates as we delete
         for( QObject *kid : kids ) {
-            SObject *so = static_cast<SObject*>( kid );
-            if( so->getNReferences() == 0 ) {
+            // Use dynamic_cast to safely check if child is an SObject.
+            // Non-SObject QObjects (like DSP components) are skipped here
+            // and handled by Qt's parent-child cleanup below.
+            SObject *so = dynamic_cast<SObject*>( kid );
+            if( so && so->getNReferences() == 0 ) {
+                // Explicit lifecycle control: remove from parent first, then delete.
+                // This makes the parent-child relationship state transition explicit.
+                // Destructors that call getProjectSafe() will safely get nullptr,
+                // avoiding any implicit behavior during destruction.
+                so->setParent( nullptr );
                 delete so;
                 progress = true;
             }
@@ -348,6 +368,13 @@ SProject::~SProject()
     }
 }
 
+void SProject::markAsPartialLoad()
+{
+    // Mark project as partially-loaded so destructor skips unsafe cleanup.
+    // Qt's parent-child mechanism will still clean up children safely.
+    isPartialLoad_ = true;
+}
+
 SProject::SProject()
     : soRoot_( NULL ),
       bpmTempo_( 120. ),
@@ -356,7 +383,33 @@ SProject::SProject()
       candidateRates_{ 44100, 48000, 88200, 96000 },
       properties_( SProjectProps::defaults() )
 {
+    // Initialize async capture revalidation infrastructure (Phase 4).
+    // Pre-allocate page pool: 2048 pages × 256kB = 512MB per project.
+    // This supports ~100-500 concurrent cut revalidations with headroom.
+    pagePool_ = std::make_unique<CapturePagePool>(2048);
+
+    // Spawn worker thread pool: 8 threads for aggressive race condition testing.
+    // In production, this can be dialed back to 2-4 (diminishing returns above that).
+    revalidator_ = std::make_unique<CaptureRevalidator>(pagePool_.get(), 8);
+
 #if 0
     soRoot_ = new SStdMixer( this );
 #endif
+}
+
+void SProject::enableInvalidation()
+{
+    if (invalidationSuppressed_ > 0) {
+        invalidationSuppressed_--;
+    }
+
+    // If we just disabled the last suppression, trigger full revalidation pass.
+    // All cuts that were loaded need their captures recomputed.
+    if (invalidationSuppressed_ == 0) {
+        // Signal views to refresh: grouped assets, timelines, etc. all need to
+        // repaint as captures transition from empty to revalidated state.
+        // Individual cuts will be invalidated on first access (lazy model),
+        // but views need to know to trigger repaints as data becomes available.
+        emit arrangementChanged();
+    }
 }

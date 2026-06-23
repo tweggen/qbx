@@ -93,6 +93,11 @@ public:
     audio::RecordingSession *recordingSession() const;
     void startRecording(const audio::RecordingParams &params);
 
+    // Test output directory for artifacts (screenshots, renders, etc.)
+    void setTestOutputDir(const QString &path);
+    QString testOutputDir() const;
+    bool ensureOutputDirExists() const;
+
     // App-wide status/mode line shown in the main window's status bar. Views
     // push the active (or hover-telegraphed) gesture here; the main window
     // reflects it. Empty string means "no special mode" (idle).
@@ -141,6 +146,7 @@ private:
     bool isPlaying_;
     SProject *currentProject_;
     QString statusMode_;
+    QString testOutputDir_;        // directory for test artifacts (screenshots, renders)
 };
 
 #endif

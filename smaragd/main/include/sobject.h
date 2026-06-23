@@ -7,7 +7,10 @@
 #include <qtextstream.h>
 #include <QDomElement>
 #include <QList>
+#include <QSet>
 #include <mutex>
+#include <memory>
+#include "capture_page_pool.h"
 
 class QWidget;
 
@@ -16,6 +19,7 @@ class twRandomSource;
 class SProject;
 class SLink;
 class SObjectRenderer;
+class CaptureRevalidator;
 
 
 /**
@@ -67,7 +71,19 @@ public:
     SObject( SProject* );
     virtual ~SObject();
 
-    SProject &getProject() const { return *(SProject *)parent(); }
+    // WARNING: Returns reference. Will crash if parent is null.
+    // CRITICAL: Destructors MUST use getProjectSafe() instead.
+    // This method asserts if called during destruction (parent becoming invalid).
+    SProject &getProject() const {
+        Q_ASSERT_X(parent() != nullptr, "SObject::getProject",
+                   "Parent project is null - destructor should use getProjectSafe()");
+        return *(SProject *)parent();
+    }
+
+    // Safe accessor: returns pointer (may be null) for use during destruction.
+    // Destructors MUST use this instead of getProject() to handle the case
+    // where the SObject is being destroyed while its parent is invalid.
+    SProject *getProjectSafe() const;
 
     virtual int serialize( QTextStream & );
     virtual int readPreChildrenAttributes( QDomElement &element );
@@ -141,9 +157,56 @@ public:
     virtual length_t getDuration() const;    
     
     virtual bool hasPreview() const;
-    virtual int getPreview( preview_t *dest, 
-                    offset_t start, length_t length, 
+    virtual int getPreview( preview_t *dest,
+                    offset_t start, length_t length,
                     offset_t nProbes );
+
+    /**
+     * Phase 5e: Unified page cache API
+     *
+     * All SObjects use the same capture/revalidation system for preview,
+     * playback, metadata, and export. This provides async, non-blocking
+     * access to cached rendered output.
+     *
+     * Synchronization:
+     * - currentPage_ pointer: atomic_load/store (lock-free reads)
+     * - Page contents: protected by page->pageMutex
+     * - Single mutex() per object: protects window parameters, not pages
+     */
+
+    // Non-blocking access to capture page (may be stale or invalid).
+    // Returns immediately with current page if valid, or nullptr if not ready.
+    // Never blocks on revalidation; schedules it if needed.
+    // Returns stale data if available (acceptable for UI preview).
+    std::shared_ptr<CapturePageData> getCapture(uint32_t aspectsMask);
+
+    // Get current page without locking. Safe because shared_ptr copy is atomic
+    // (uses std::atomic_load internally).
+    std::shared_ptr<CapturePageData> currentPage() const {
+        return std::atomic_load(&currentPage_);
+    }
+
+    // Check if revalidation is needed for specific aspects.
+    // _nolock: caller must hold mutex() before calling.
+    // Internal version used by revalidator when processing jobs.
+    bool needsRevalidation_nolock(uint32_t aspectsMask) const;
+
+    /**
+     * Abstract interface for revalidation (Phase 5e).
+     *
+     * Each SObject type implements these to compute capture data.
+     * Called by CaptureRevalidator worker threads with page lock held.
+     *
+     * Implementation notes:
+     * - Called outside audio thread; can block
+     * - Revalidator guarantees page is exclusive (not visible to readers)
+     * - Aspects indicate which fields caller wants computed
+     * - Set page.validAspects |= computedAspects before returning
+     */
+    virtual void recomputePreview(CapturePageData& page) {}
+    virtual void recomputePlayback(CapturePageData& page) {}
+    virtual void recomputeMetadata(CapturePageData& page) {}
+    virtual void recomputeExport(CapturePageData& page) {}
 
     // User properties.
     bool isSolo() const
@@ -235,8 +298,59 @@ public slots:
      */
     virtual void invalidatePreview();
 
+    /**
+     * Notify dependents (objects that reference this one) that specific aspects
+     * have changed. Only affected dependents are invalidated (lazy invalidation).
+     * Called by audio state changes (mute, solo, volume) that don't affect arrangement.
+     * Example: setMuted() → notifyDependentsChanged(Playback | Metadata)
+     */
+    void notifyDependentsChanged(uint32_t affectedAspects);
+
+    /**
+     * Register a dependent link (object that references this one via SLink).
+     * Called when an asset is placed or a cut references this object.
+     * Uses SLink (the native reference primitive) to track who depends on this object.
+     */
+    void addDependentLink(SLink *dependentLink);
+
+    /**
+     * Unregister a dependent link. Called when a placement or cut is removed.
+     */
+    void removeDependentLink(SLink *dependentLink);
+
+    // Helper methods for revalidator integration (Phase 5e).
+    // _nolock suffix indicates caller MUST hold mutex() before calling.
+    // These are friends-only methods, non-locking to avoid recursive lock deadlock.
+    friend class CaptureRevalidator;
+
+    // Atomic swap pages. _nolock: caller must hold mutex()
+    // Uses std::atomic_store for thread-safe write (pairs with atomic_load in currentPage()).
+    void swapPages_nolock() {
+        std::atomic_store(&currentPage_, nextPage_);
+        nextPage_ = nullptr;
+    }
+
+    // Get next capture page. _nolock: caller must hold mutex()
+    std::shared_ptr<CapturePageData> getNextPage_nolock() const {
+        return nextPage_;
+    }
+
+    // Set next capture page. _nolock: caller must hold mutex()
+    void setNextPage_nolock(std::shared_ptr<CapturePageData> page) {
+        nextPage_ = page;
+    }
+
 protected:
-    offset_t getChildrenExtent( offset_t &firstStart, offset_t &lastEnd, 
+    /**
+     * Thread safety: all derived classes use this mutex to protect their state.
+     * Single mutex per object; see async_revalidation_phase4.md for rationale.
+     * Usage: std::lock_guard<std::mutex> lock(mutex());
+     */
+    std::mutex& mutex() const {
+        return stateMutex_;
+    }
+
+    offset_t getChildrenExtent( offset_t &firstStart, offset_t &lastEnd,
                                 int &nUndefStart, int &nUndefDuration ) const;
     offset_t getFirstChildStartTime() const;
     length_t getAllChildsDuration() const;
@@ -249,6 +363,32 @@ protected:
     int getChildIndex( SObject & ) const;
 
 private:
+    // Thread safety: mutex for all derived class state (single mutex per object).
+    // Mutable so const methods can lock. Protected by mutex() accessor.
+    // All derived classes should protect their state with this mutex.
+    mutable std::mutex stateMutex_;
+
+    // Phase 5e: Page cache infrastructure (unified across all SObjects).
+    // Two-page buffer model (Unix page cache pattern):
+    // - currentPage_: visible to readers (via atomic_load)
+    // - nextPage_: being built by revalidator (exclusive, not yet visible)
+    // When revalidator finishes, it atomic_swaps them.
+    //
+    // Access synchronization:
+    // - Pointer itself: atomic_load/store (no mutex needed)
+    // - Page contents: protected by page->pageMutex
+    // - Window parameters (startOffset, duration, etc.): protected by stateMutex_
+    std::shared_ptr<CapturePageData> currentPage_;
+    std::shared_ptr<CapturePageData> nextPage_;
+
+    // Revalidator: borrowed from SProject (not owned).
+    // Spawned background threads that build pages asynchronously.
+    CaptureRevalidator* revalidator_ = nullptr;
+
+    // Bitmask tracking which aspects are valid in currentPage_.
+    // Updated by revalidator when pages are swapped and marked complete.
+    uint32_t validAspects_ = 0;
+
     void gotChild( SLink & );
     void lostChild( SLink & );
     int straightCalcPreviewData();
@@ -256,6 +396,14 @@ private:
     // maintained in childEvent(); order is independent and set by
     // moveChildToIndex()).
     QList<SLink*> childOrder_;
+
+    // Lazy invalidation + dependency tracking (proposal 06).
+    // Set of SLink objects that reference this object (the native way to track references).
+    // When this object's state changes, dependent links are notified.
+    // Example: track output is captured by a cut link; edit track mute → cut's
+    // Playback aspect invalidated, not entire scene.
+    mutable std::mutex dependentsMutex_;
+    QSet<SLink*> dependentLinks_;
     int nRefs_;
     offset_t previewForLength_;
     offset_t nPreviewProbes_;

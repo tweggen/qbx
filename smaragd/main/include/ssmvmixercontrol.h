@@ -42,6 +42,7 @@ protected:
     void mousePressEvent( QMouseEvent * ) override;
     void mouseMoveEvent( QMouseEvent * ) override;
     void mouseReleaseEvent( QMouseEvent * ) override;
+    void resizeEvent( QResizeEvent * ) override;
     // Watches the fader for a double-click, which resets it to 0.0 dB.
     bool eventFilter( QObject *, QEvent * ) override;
 
@@ -62,6 +63,9 @@ protected slots:
     void showChannelMenu();
     void setRecordingChannels( uint32_t channels );
 
+    // Track selection highlight
+    void onSelectedTrackChanged( STrack *track );
+
 private:
     // Resolve this control's track index within the mixer model (-1 if gone).
     int trackIndex_() const;
@@ -74,10 +78,18 @@ private:
     // fader drag and the double-click-to-reset path.
     void applyVolume_( double dB );
 
+    // Responsive layout management
+    void updateLayout();
+    static constexpr int WIDE_MODE_THRESHOLD = 156;  // ~130% of minimal width (120px)
+    bool wideMode_ = false;
+
     // Tree presentation state (see setTreeInfo).
     int depth_ = 0;
     bool foldable_ = false;
     bool collapsed_ = false;
+
+    // Track selection state for styling
+    bool selected_ = false;
 
     // Track-reorder drag: armed on press in the grip strip, active once the
     // pointer moves past a small threshold.

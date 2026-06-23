@@ -123,6 +123,7 @@ private:
     // an SOpt::WheelAction. See wheelEvent().
     void loadWheelConfig();
     int  wheelActionFor( Qt::KeyboardModifiers mods ) const;
+    QString describeWheelActions() const;  // Human-readable hint for status bar
     int  wheelPlain_, wheelShift_, wheelCtrl_, wheelCtrlShift_;
     bool wheelZoomToCursor_, wheelInvertZoom_;
 
@@ -392,7 +393,8 @@ private:
         GLROWSTRETCH_2 = -1,
         GLROWSTRETCH_3 = -1,
 
-        GLCOLSTRETCH_0 = 0,
+        // Column 0 (track control): allow expansion up to max width constraint (a)
+        GLCOLSTRETCH_0 = 1,
         GLCOLSTRETCH_1 = -1,
         GLCOLSTRETCH_2 = 100,
         GLCOLSTRETCH_3 = -1,

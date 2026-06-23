@@ -89,18 +89,18 @@ void SMainWindow::nyi()
 
 void SMainWindow::destroyDocksToolbars()
 {
-    // No more extern files here.
-    delete qDockExternFileList_;
-    qDockExternFileList_ = NULL;
+    // Clear the extern file list when closing the project.
+    if( externFileList_ ) {
+        externFileList_->setProject( nullptr );
+    }
 }
 
 void SMainWindow::createDocksToolbars()
 {
-    // Create the extern file list.
-    qDockExternFileList_ = new QDockWidget( "Extern file list" );
-    SExternFileList *efl = new SExternFileList( qDockExternFileList_, *currentProject_ );
-    qDockExternFileList_->setWidget(efl);
-    addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
+    // Populate the extern file list with the current project's files and assets.
+    if( externFileList_ && currentProject_ ) {
+        externFileList_->setProject( currentProject_ );
+    }
 }
 
 bool SMainWindow::saveToPath( const QString &path )
@@ -265,8 +265,6 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     currentProject_ = new SProject();
     SApplication::app().setCurrentProject( currentProject_ );
 
-    createDocksToolbars();
-
     // Load via the same action a script or round-trip test would use.
     SLoadProjectAction action( fileName );
     SApplyResult r = action.apply( currentProject_ );
@@ -274,10 +272,19 @@ bool SMainWindow::openProjectFile( const QString &fileName )
         QMessageBox::information( nullptr, "Smaragd warning",
                                   "Unable to open specified project file.",
                                   QMessageBox::Ok );
-        closeProject();   // discard the half-built placeholder project
+        // Failed load — mark as partial so destructor skips unsafe cleanup,
+        // then use deleteLater() to safely let Qt clean up child objects.
+        SApplication::app().setCurrentProject( NULL );
+        currentProject_->markAsPartialLoad();
+        currentProject_->deleteLater();
+        currentProject_ = NULL;
+        projectRootWidget_ = NULL;
         updateWindowTitle();
-        return false;     // currentProject_ is gone; do not touch it below
+        return false;
     }
+
+    // Load succeeded; now create UI elements (docks/toolbars) that reference the project
+    createDocksToolbars();
 
     // Find out the main widget.
     // We do have a root component here as we assigned it before.
@@ -329,11 +336,16 @@ void SMainWindow::openMostRecent()
 {
     const QStringList recents = SSettings::instance().recentProjects();
     for( const QString &path : recents ) {
-        if( QFileInfo::exists( path ) && openProjectFile( path ) )
-            return;
-        // Missing on disk: forget it and try the next-newest.
-        if( !QFileInfo::exists( path ) )
+        if( !QFileInfo::exists( path ) ) {
+            // Missing on disk: forget it and try the next-newest.
             SSettings::instance().removeRecentProject( path );
+            continue;
+        }
+        // File exists; try to open it
+        if( openProjectFile( path ) )
+            return;  // Success, we're done
+        // File exists but failed to open (corrupted, etc.); remove it and try next
+        SSettings::instance().removeRecentProject( path );
     }
     // Nothing to restore — start empty (File → New to begin a session).
     updateRecentMenu();
@@ -391,11 +403,19 @@ void SMainWindow::newProject()
 void SMainWindow::closeProject()
 {
     if( !currentProject_ ) return;
+    // Stop playback before destroying the project to prevent audio thread access
+    if( SApplication::app().isPlaying() ) {
+        stopPlaying();
+    }
     SApplication::app().setCurrentProject( NULL );
-    delete projectRootWidget_;
-    projectRootWidget_ = NULL;   // avoid a dangling pointer / double-free
-    delete currentProject_;
     destroyDocksToolbars();
+    // Detach (not delete) projectRootWidget_ from the main window so it doesn't
+    // interfere with project destruction. The project may have created children
+    // that are part of its QObject tree; deleting them here would corrupt the
+    // tree before the project destructor runs.
+    setCentralWidget( nullptr );
+    projectRootWidget_ = NULL;
+    delete currentProject_;
     currentProject_ = NULL;
 }
 
@@ -441,10 +461,20 @@ void SMainWindow::closeEvent( QCloseEvent *event )
 {
     if( promptSaveUnsavedChanges() ) {
         closeProject();
+        // Save window geometry and toolbar/dock state before closing
+        SSettings::instance().setWindowGeometry( saveGeometry() );
+        SSettings::instance().setWindowState( saveState() );
+        // Ensure all settings are written to disk before exit
+        SSettings::instance().value( "dummy" );  // Triggers internal sync
         event->accept();
     } else {
         event->ignore();
     }
+}
+
+void SMainWindow::postHint( const QString &text, int durationMs )
+{
+    statusBar()->showMessage( text, durationMs );
 }
 
 void SMainWindow::startPlaying()
@@ -724,6 +754,7 @@ SMainWindow::SMainWindow()
     // For now, Ctrl-R works on all platforms
 
     qTBTransport_ = new QToolBar( "Transport" /*, this*/ );
+    qTBTransport_->setObjectName( "toolbar_transport" );
     /*
     actPlay_->addTo( qTBTransport );
     actStop_->addTo( qTBTransport );
@@ -792,7 +823,19 @@ SMainWindow::SMainWindow()
 
     buildStatusBar();
 
-    qDockExternFileList_ = NULL;
+    // Create the persistent extern file list dock. It outlives any single project;
+    // its content is managed by setProject() called from createDocksToolbars.
+    qDockExternFileList_ = new QDockWidget( tr( "Extern file list" ), this );
+    qDockExternFileList_->setObjectName( "dock_extern_file_list" );
+    externFileList_ = new SExternFileList( qDockExternFileList_, nullptr );
+    qDockExternFileList_->setWidget( externFileList_ );
+    addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
+
+    // Restore window geometry and toolbar/dock state from previous session
+    const QByteArray geo = SSettings::instance().windowGeometry();
+    if( !geo.isEmpty() ) restoreGeometry( geo );
+    const QByteArray state = SSettings::instance().windowState();
+    if( !state.isEmpty() ) restoreState( state );
 
     // Measure and cache audio device latencies on startup
     // (done after UI is built, will show modal dialog if needed)
@@ -1310,7 +1353,7 @@ static QIcon makePaletteIcon( const QString &glyph )
     pr_normal.setBrush( QColor( 235, 235, 225 ) );
     pr_normal.drawRect( 2, 2, sz - 5, sz - 5 );
     pr_normal.setPen( QColor( 40, 40, 40 ) );
-    pr_normal.setFont( QFont( "sansserif", 9, QFont::Bold ) );
+    pr_normal.setFont( QFont( "Helvetica Neue", 9, QFont::Bold ) );
     pr_normal.drawText( QRect( 2, 2, sz - 5, sz - 5 ), Qt::AlignCenter, glyph );
     pr_normal.end();
 
@@ -1323,7 +1366,7 @@ static QIcon makePaletteIcon( const QString &glyph )
     pr_checked.setBrush( QColor( 180, 200, 240 ) );  // Light blue background
     pr_checked.drawRect( 2, 2, sz - 5, sz - 5 );
     pr_checked.setPen( QColor( 20, 40, 100 ) );  // Dark blue text
-    pr_checked.setFont( QFont( "sansserif", 9, QFont::Bold ) );
+    pr_checked.setFont( QFont( "Helvetica Neue", 9, QFont::Bold ) );
     pr_checked.drawText( QRect( 2, 2, sz - 5, sz - 5 ), Qt::AlignCenter, glyph );
     pr_checked.end();
 
@@ -1342,6 +1385,7 @@ void SMainWindow::buildPaletteToolbar()
 {
     // Use new grid toolbar for compact, Reaper-like layout
     qTBPalette_ = new SGridToolbar( "Palette", this );
+    qTBPalette_->setObjectName( "toolbar_palette" );
     qTBPalette_->setColumns( 7 );  // 7 columns like Reaper
     qTBPalette_->setButtonSize( 24 );
 
@@ -1372,6 +1416,7 @@ void SMainWindow::buildPaletteToolbar()
     // Track grouping toolbar. These act on the arranger's last-clicked track
     // (click a track lane, then Group/Ungroup).
     qTBTracks_ = new QToolBar( "Tracks" );
+    qTBTracks_->setObjectName( "toolbar_tracks" );
     qTBTracks_->setIconSize( QSize( 22, 22 ) );
     QAction *aGroup = new QAction( makePaletteIcon( "[" ), "Group track", this );
     aGroup->setToolTip( "Group: wrap the clicked track in a new folder" );

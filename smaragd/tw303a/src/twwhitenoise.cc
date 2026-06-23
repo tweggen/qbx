@@ -14,15 +14,15 @@ void twWhiteNoise::init()
 void twWhiteNoise::createOutputLatches()
 {
 #ifdef DEBUG_COMPONENT
-    syslog( LOG_DEBUG, "twWhiteNoise::createOutputLatches(): entered." );
+    fprintf( sterr, "twWhiteNoise::createOutputLatches(): entered." );
 #endif
     // use default buffer size
 #ifdef DEBUG_COMPONENT
-    syslog( LOG_DEBUG, "twWhiteNoise::createOutputLatches(): creating streaming latch..." );
+    fprintf( sterr, "twWhiteNoise::createOutputLatches(): creating streaming latch..." );
 #endif
     pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
 #ifdef DEBUG_COMPONENT
-    syslog( LOG_DEBUG, "twWhiteNoise::createOutputLatches(): leaving." );
+    fprintf( sterr, "twWhiteNoise::createOutputLatches(): leaving." );
 #endif
 }
 
@@ -41,7 +41,7 @@ length_t twWhiteNoise::calcOutputTo( sample_t *pDest, length_t, idx_t )
     }
     
 #ifdef DEBUG_CALCOUTPUT
-    syslog( LOG_DEBUG, "twWhiteNoise::calOutputTo(): Starting at %d, calcing %d.", currPos, length );
+    fprintf( sterr, "twWhiteNoise::calOutputTo(): Starting at %d, calcing %d.", currPos, length );
 #endif
     a = currPos;
     b = a+realRead;

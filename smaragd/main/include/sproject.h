@@ -13,14 +13,17 @@
 
 #include <cstdint>
 #include <vector>
+#include <memory>
 
 #include "twfraction.h"
+#include "capture_page_pool.h"
 
 class QDomElement;
 
 class SObject;
 class SExternFile;
 class SLink;
+class CaptureRevalidator;
 
 struct SObjectRegistryEntry;
 
@@ -37,6 +40,10 @@ public:
     void setRootComponent( SObject * );
 
     SLink *linkToFile( QString & );
+
+    // Mark project as partial/corrupt so destructor skips risky cleanup
+    void markAsPartialLoad();
+    bool isPartialLoad() const { return isPartialLoad_; }
 
     virtual int serialize( QTextStream & );
     double getBPMTempo() const { return bpmTempo_; }
@@ -97,6 +104,22 @@ public:
     // over-invalidation only costs a re-render, never correctness.
     void notifyArrangementChanged() { emit arrangementChanged(); }
 
+    // Async capture revalidation (Phase 4).
+    // Access to pool and revalidator for SCut integration.
+    CaptureRevalidator* getRevalidator() { return revalidator_.get(); }
+    CapturePagePool* getPagePool() { return pagePool_.get(); }
+
+    // Suppress capture invalidation during project loading.
+    // During deserialization, all pages are empty anyway, so there's no point
+    // in triggering invalidation chains. Wrap entire load sequence in:
+    //   project->disableInvalidation();
+    //   // ... load from XML ...
+    //   project->enableInvalidation();  // Triggers full revalidation of all cuts
+    // All setters work normally; invalidation is simply deferred until load completes.
+    void disableInvalidation() { invalidationSuppressed_++; }
+    void enableInvalidation();  // Triggers revalidation pass for loaded cuts
+    bool isInvalidationSuppressed() const { return invalidationSuppressed_ > 0; }
+
 signals:
     void fileNameChanged( const QString & );
     void assetAdded( const QString &name, SObject &body );
@@ -132,6 +155,19 @@ private:
 
     QHash<QString,SExternFile*> externFileDict_;
     QHash<QString,SObject*> assetDict_;
+
+    bool isPartialLoad_ = false;  // True if load failed partway through
+
+    // Invalidation suppression counter (for project loading).
+    // When > 0, invalidateAspects() returns early without scheduling revalidation.
+    // Incremented by disableInvalidation(), decremented by enableInvalidation().
+    // Counter allows nested disable/enable pairs (e.g., subcomponents that also load).
+    int invalidationSuppressed_ = 0;
+
+    // Async capture revalidation (Phase 4).
+    // Pre-allocated page pool and worker thread pool for non-blocking capture access.
+    std::unique_ptr<CapturePagePool> pagePool_;       // 512MB pool (2048 pages)
+    std::unique_ptr<CaptureRevalidator> revalidator_;  // 8 worker threads (configurable)
 };
 
 #endif

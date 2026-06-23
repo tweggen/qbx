@@ -3,6 +3,7 @@
 #define _TW_TRACKMIX_H
 
 #include <qobject.h>
+#include <atomic>
 
 #include "twcomponent.h"
 
@@ -36,9 +37,9 @@ public:
 
 protected:
 
-private:    
+private:
     STrack &track_;
-    offset_t playOffset_;
+    std::atomic<offset_t> playOffset_{ 0 };  // Atomic: protects race between UI seek and audio render
     
 };
 

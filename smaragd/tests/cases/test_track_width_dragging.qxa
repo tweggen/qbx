@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="track_width_dragging_test">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Create multiple tracks -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Capture default state for baseline -->
+    <screenshot filename="01_initial_state.png" resolution="100%"/>
+
+    <!-- Capture at different zoom levels to see responsiveness -->
+    <screenshot filename="02_initial_full_height.png" resolution="1600x1200"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

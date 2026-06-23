@@ -2,11 +2,11 @@
 
 QVariant SOpt::def( const QString &key )
 {
-    // Scroll-first defaults.
+    // Pan (no Cmd) vs. Zoom (with Cmd); Vertical (no Shift) vs. Horiz (with Shift)
     if( key == WheelPlain )     return (int) ScrollVertical;
     if( key == WheelShift )     return (int) ScrollHorizontal;
-    if( key == WheelCtrl )      return (int) ZoomHorizontal;
-    if( key == WheelCtrlShift ) return (int) ZoomVertical;
+    if( key == WheelCtrl )      return (int) ZoomVertical;
+    if( key == WheelCtrlShift ) return (int) ZoomHorizontal;
     if( key == ZoomToCursor )   return true;
     if( key == InvertZoom )     return false;
     if( key == AudioDeviceId )  return QString();

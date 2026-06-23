@@ -15,6 +15,7 @@ class QLabel;
 class QToolBar;
 class SRecordingProgressDialog;
 class SGridToolbar;
+class SExternFileList;
 
 class SMainWindow
     : public QMainWindow
@@ -27,6 +28,9 @@ public:
     // Startup: open the newest still-existing entry from the recent list, if
     // any. Leaves an empty workspace when there is nothing to restore.
     void openMostRecent();
+
+    // Post a transient hint to the status bar (auto-dismisses after durationMs).
+    void postHint( const QString &text, int durationMs = 5000 );
 
 protected:
     void closeEvent( QCloseEvent *event ) override;
@@ -142,6 +146,7 @@ private:
     int64_t recordingLatencySyncOffset_ = 0;
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
+    SExternFileList *externFileList_;
 
     // Permanent mode indicator on the right of the status bar.
     QLabel *modeLabel_;
