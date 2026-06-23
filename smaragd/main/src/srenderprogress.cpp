@@ -166,7 +166,7 @@ void SRenderProgressDialog::updateTimeDisplay() {
                 // Rendering speed indicator
                 double realtimeRatio = rate / sampleRate_;
                 QString speedText =
-                    QString("Speed: %.1fx realtime").arg(realtimeRatio);
+                    QString("Speed: %1x realtime").arg(realtimeRatio, 0, 'f', 1);
                 estimatedTimeLabel_->setText(speedText);
             }
         }

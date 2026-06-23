@@ -377,6 +377,9 @@ void SMainWindow::onRenderTriggered()
             SApplication::app().renderSession(),
             QString::fromStdString(params.outputPath), this);
 
+        // Set dialog to auto-delete when closed
+        progressDialog->setAttribute(Qt::WA_DeleteOnClose);
+
         // Show non-modally so the event loop can process updates
         progressDialog->show();
 
@@ -384,6 +387,9 @@ void SMainWindow::onRenderTriggered()
         while (SApplication::app().renderSession()->isRunning()) {
             QApplication::processEvents();
         }
+
+        // Auto-close the dialog when rendering completes
+        progressDialog->accept();
     }
 }
 
