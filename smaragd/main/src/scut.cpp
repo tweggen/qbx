@@ -96,9 +96,17 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     bool newLooping = false;
 
     twRandomSource *rs = content_->getSObject().getRandomSource();
-    // TODO: Phase 4 - integrate async capture model with reader rebuild
-    // if( !rs ) rs = ensureCapture();  // OLD: sync capture fallback
-    if( !rs ) goto swap_complete;   // no-op, keep current
+    // For container-backed cuts (no random source), build the capture synchronously
+    // so the reader chain can be constructed properly. This ensures looped playback
+    // of group cuts works correctly (bug b: cycle mode playback).
+    if( !rs ) {
+        buildCapture_();
+        if( capture_ ) {
+            rs = capture_.get();
+        } else {
+            goto swap_complete;   // no-op, keep current if capture build failed
+        }
+    }
 
     {
         twRandomSource *view = rs;
