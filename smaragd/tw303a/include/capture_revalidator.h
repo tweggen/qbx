@@ -13,20 +13,20 @@
 
 // Forward declarations
 class CapturePagePool;
-class SCut;
+class SObject;
 
 /**
- * Revalidation job: request to recompute specific capture aspects for a cut.
+ * Revalidation job: request to recompute specific capture aspects for an SObject.
  *
  * Each job specifies:
- * - Which cut needs revalidation
+ * - Which object needs revalidation
  * - Which aspects (Preview, Playback, Metadata, Export)
  * - Priority (higher = process first)
  *
  * Used in priority queue: higher priority jobs dequeue first.
  */
 struct CaptureRevalidationJob {
-    SCut* cut;              // Which cut to revalidate (borrowed pointer)
+    SObject* object;        // Which object to revalidate (borrowed pointer)
     uint32_t aspects;       // Which aspects (bitmask: Preview|Playback|Metadata|Export)
     int priority;           // 0-10 (higher first)
 
@@ -49,15 +49,19 @@ struct CaptureRevalidationJob {
  *
  * Job processing:
  * 1. Allocate nextPage from pool (skip if exhausted, re-queue at low priority)
- * 2. Recompute aspects into nextPage (blocking, expected 10-100ms per job)
- * 3. Atomic swap: cut->swapPages_nolock() (cut->nextPage ← nextPage, nextPage → currentPage)
+ * 2. Recompute aspects into nextPage by calling object's virtual methods (blocking, expected 10-100ms per job)
+ * 3. Atomic swap: object->swapPages_nolock() (object->nextPage ← nextPage, nextPage → currentPage)
  * 4. Mark aspects valid in the swapped page
- * 5. Emit captureRevalidated(cut, aspects) signal (for UI redraw)
+ * 5. Emit revalidationComplete signal (for UI redraw)
  *
  * Thread safety:
  * - Job queue protected by mutex
- * - Each cut protected by its own mutex (via SObject base class)
+ * - Each object protected by its own mutex (via SObject base class)
  * - No shared state between workers (each processes one job at a time)
+ *
+ * Phase 5e.5: Unified to work with any SObject (not just SCut).
+ * Each object type implements recomputePreview(), recomputePlayback(), etc.
+ * The revalidator dispatches to the appropriate method.
  */
 class CaptureRevalidator {
 public:
@@ -84,12 +88,12 @@ public:
      * Non-blocking: returns immediately, job runs in background.
      * If queue is full or pool exhausted, job may be skipped (acceptable).
      *
-     * @param cut Which cut to revalidate (borrowed pointer)
+     * @param object Which object to revalidate (borrowed pointer)
      * @param aspects Which aspects (bitmask)
      * @param priority Job priority (higher = process first)
      *                 Suggested: 10=Playback, 5=Metadata, 2=Export, 1=Preview
      */
-    void scheduleRevalidation(SCut* cut, uint32_t aspects, int priority = 5);
+    void scheduleRevalidation(SObject* object, uint32_t aspects, int priority = 5);
 
     /**
      * Graceful shutdown: wait for workers to finish and join.
@@ -111,11 +115,9 @@ private:
     // Helper: process a single revalidation job
     void processJob(const CaptureRevalidationJob& job);
 
-    // Recompute specific aspects into the given page
-    void recomputePlayback(SCut* cut, CapturePageData& page);
-    void recomputeMetadata(SCut* cut, CapturePageData& page);
-    void recomputePreview(SCut* cut, CapturePageData& page);
-    void recomputeExport(SCut* cut, CapturePageData& page);
+    // Dispatch recomputation to object's virtual methods
+    // These no longer do the computation themselves; they delegate to the object
+    void dispatchRecomputation(SObject* object, uint32_t aspects, CapturePageData& page);
 
     // Members
     CapturePagePool* pagePool_;  // Borrowed, not owned
