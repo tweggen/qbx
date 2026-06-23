@@ -3342,6 +3342,79 @@ Recommended next steps for human verification:
    - With fire-and-forget model, Phase 4's `try_lock` workarounds (in getPreview/getSnapshot) are no longer necessary
    - Deprecate them after this verification
 
+### Phase 5e.6 — User testing and bug fixes (2026-06-23)
+
+- **Date:** 2026-06-23
+- **Status:** Phase 5e.6 verification initiated; critical bugs fixed; 2 remaining issues for investigation.
+
+**User Testing Results:**
+✅ Audible playback confirmed on macOS
+✅ Simple tracks (direct clips) play correctly  
+✅ Indirect cuts (container-backed) render correctly
+⚠️ Several bugs discovered and partially fixed
+
+**Bugs Fixed:**
+
+1. **Bug (a) — Solo button laggy** ✅ FIXED
+   - **Symptom:** Solo button had same lag as Mute button was experiencing before Phase 4
+   - **Root cause:** setSolo/setMuted were only invalidating Playback|Metadata, not Preview
+   - **Fix:** Added Preview aspect to invalidation in both setSolo() and setMuted() (main/src/sobject.cpp)
+   - **Reason:** Muted/soloed tracks affect composite preview visibility, not just playback
+   - **Commits:** 87b0301 (together with bug d)
+
+2. **Bug (d) — No preview for group cuts** ✅ FIXED
+   - **Symptom:** Group cuts (container-backed SCuts wrapping tracks/groups) showed no waveform preview
+   - **Root cause:** SCut didn't implement recomputePreview() needed by unified page cache
+   - **Fix:** Implemented SCut::recomputePreview() with two paths:
+     - Sample-backed: delegate to content.getPreview()
+     - Container-backed: render component graph, downsample to preview peaks
+   - **Files:** main/include/scut.h, main/src/scut.cpp
+   - **Commits:** 87b0301
+
+3. **Bug (e) — Un-solo-ing doesn't refresh track background** ✅ FIXED
+   - **Symptom:** Track UI background color (yellow when soloed) didn't refresh when un-soloing
+   - **Root cause:** onSoloChanged() in SSMVMixerControl was missing update() call (onMutedChanged had it)
+   - **Fix:** Added update() call in onSoloChanged() to trigger UI repaint
+   - **Files:** main/src/ssmvmixercontrol.cpp (line 351)
+   - **Commits:** 2ad1368
+
+**Bugs Under Investigation:**
+
+4. **Bug (b) — Cycle mode playback (first iteration correct, following wrong)** ⚠️ INVESTIGATING
+   - **Symptom:** Playing back SCut of another track with links in cycle mode: first iteration plays, subsequent don't
+   - **Hypothesis:** Container-backed cut state not resetting properly between loop iterations
+   - **Key findings:**
+     - twLoopReader implementation is correct (modulo wrapping works)
+     - SCut.seekTo() delegates to content for container cuts
+     - Container-backed cuts skip rebuildReader() (line 101 has TODO comment)
+     - Possible root cause: track mixer state not resetting on seek
+   - **Next steps:** Check twTrackMix seeking/reset, verify capture invalidation for looped renders
+
+5. **Bug (c) — Group cut playback 3-6dB louder** ⚠️ INVESTIGATING  
+   - **Symptom:** Playing group cut audio at 3-6dB higher than original
+   - **Hypothesis:** Volume scaling issue or mixing gain error in container-backed cut rendering
+   - **Key findings:**
+     - Default volume is 0.0 dB (correct, linear 1.0)
+     - Container cuts use content.getRootComponent() directly
+     - No obvious volume application step visible in rendering path
+   - **Needed:** Clarification on scenario (which group type, comparison baseline)
+   - **Next steps:** Check if cut.getVolume() applied to container outputs, verify mixer gain calculations
+
+**Verification Status (Phase 5e.6):**
+- ✅ Build clean on macOS/Qt6/CMake
+- ✅ App launches without crash
+- ✅ Audible playback (simple tracks confirmed)
+- ✅ Container-backed cuts render (group cuts have preview now)
+- ✅ Solo/Mute now properly invalidate Preview (fast response)
+- ✅ UI updates on solo/mute changes
+- ⚠️ Cycle mode playback incomplete (first iteration only)
+- ⚠️ Group cut loudness discrepancy (3-6dB over baseline)
+
+**Commits this session:**
+- 87b0301 — Bug fixes: Solo/Mute invalidation, group cut preview
+- 2ad1368 — Bug fix (e): Un-solo-ing track doesn't refresh background color
+- 001724d (after rebase) — All Phase 5e work + bug fixes pushed to main
+
 ### Summary: Phase 5e complete
 
 Unified page cache architecture now spans all SObjects:

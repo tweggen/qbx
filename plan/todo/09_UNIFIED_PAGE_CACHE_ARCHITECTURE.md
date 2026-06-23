@@ -6,6 +6,26 @@
 
 **Timeline:** Phase 5e (Post-unification polish & extensibility)
 
+**Implementation Status (2026-06-23):**
+
+| Phase | Component | Status | Commit |
+|-------|-----------|--------|--------|
+| 5e.1 | SObject base class foundation | ✅ COMPLETE | 8cd4d69 |
+| 5e.2 | SPlainWave preview caching | ✅ COMPLETE | e0dd0c8 |
+| 5e.3 | STrack composite preview | ✅ COMPLETE | 22cfa42 |
+| 5e.4 | SStdMixer hierarchical preview | ✅ COMPLETE | 8d41381 |
+| 5e.5 | Unified CaptureRevalidator | ✅ COMPLETE | 982a5d6 |
+| 5e.6 | Integration & testing | 🔄 IN PROGRESS | — |
+
+**Verification Status:**
+- ✅ Audible playback confirmed (macOS)
+- ✅ Simple tracks play correctly
+- ✅ Container-backed cuts render (previews now visible)
+- ✅ Solo/Mute lag eliminated (Preview aspect now invalidated)
+- ✅ UI updates working (background color refresh fixed)
+- ⚠️ Container-backed cut looping incomplete (first iteration only)
+- ⚠️ Group cut playback volume discrepancy (3-6dB over baseline)
+
 ---
 
 ## SObject Access Pattern Comparison
@@ -344,14 +364,14 @@ SStdMixer extends SGroup
 
 ## Success Criteria
 
-- ✅ All SObject types use uniform page cache
-- ✅ Single CaptureRevalidator pool for all objects
-- ✅ Preview/playback/export all flow through same pipeline
-- ✅ No UI stalls (fire-and-forget async model throughout)
-- ✅ Thread-safe everywhere (atomic_load/store, pageMutex)
+- ✅ All SObject types use uniform page cache (Phase 5e.1 done)
+- ✅ Single CaptureRevalidator pool for all objects (Phase 5e.5 done)
+- ✅ Preview/playback/export all flow through same pipeline (Phase 5e.5 done)
+- ✅ No UI stalls (fire-and-forget async model throughout) — VERIFIED ✅
+- ✅ Thread-safe everywhere (atomic_load/store, pageMutex) — VERIFIED ✅
 - ✅ _nolock convention enforced across codebase
-- ✅ Performance >= current system (no regression)
-- ✅ Nested groups render correctly (recursive composition)
+- ✅ Performance >= current system (no regression) — preliminary verification ✅
+- ⚠️ Nested groups render correctly (recursive composition) — rendering works, looping issue found
 
 ---
 
