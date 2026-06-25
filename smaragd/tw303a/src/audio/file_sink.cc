@@ -72,26 +72,34 @@ bool FileSink::writeFrame(const AudioFrame& frame) {
         getCurrentTimeMs()
     };
 
-    // If buffer is full, drop oldest frame (shouldn't happen in normal operation)
-    if (buffer_.size() >= maxBufferFrames_) {
-        buffer_.pop_front();
+    buffer_.push_back(entry);
+
+    // Drain ready frames when buffer reaches drain threshold to prevent data loss.
+    // For rendering (generation 0), frames are ready immediately after writeFrame returns,
+    // so this flushes all queued frames to disk before the buffer cap is hit.
+    while (!buffer_.empty() && buffer_.size() > maxBufferFrames_ / 2) {
+        if (isFrameReady(buffer_.front())) {
+            const FrameEntry& drainEntry = buffer_.front();
+            if (writer_) {
+                writer_->write(&drainEntry.frame.channels[0], 1);
+            }
+            buffer_.pop_front();
+        } else {
+            break;
+        }
     }
 
-    buffer_.push_back(entry);
     return true;
 }
 
 void FileSink::flush() {
-    // Final flush: give futures brief grace period to resolve, then write everything
+    // Mark generation complete so all pending futures resolve immediately
+    GenerationRegistry::instance().markComplete(currentGeneration_);
+
     {
         std::lock_guard<std::mutex> lock(bufferMutex_);
 
-        // Wait briefly for in-flight futures
-        for (auto& entry : buffer_) {
-            entry.readyFuture.wait_for(std::chrono::milliseconds(100));
-        }
-
-        // Write all buffered frames (even if not ready, due to age timeout)
+        // Write all buffered frames
         for (auto& entry : buffer_) {
             if (writer_) {
                 writer_->write(&entry.frame.channels[0], 1);
