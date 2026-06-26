@@ -28,8 +28,10 @@ int twRewire::seekTo( offset_t offset )
                 // We need to seek the parent latch's component
                 twLatch &latch = pInputPlugs[i]->getParentLatch();
                 twComponent &comp = latch.getComponent();
-                fprintf(stderr, "[twRewire] Input %d: calling comp.seekTo(%ld)\n", (int)i, (long)offset);
-                comp.seekTo(offset);
+                fprintf(stderr, "[twRewire] Input %d: comp=%p, calling comp.seekTo(%ld)\n",
+                        (int)i, (void*)&comp, (long)offset);
+                int result = comp.seekTo(offset);
+                fprintf(stderr, "[twRewire] Input %d: seekTo returned %d\n", (int)i, result);
             }
         }
     }
