@@ -313,6 +313,7 @@ void SCut::invalidateCapture()
         std::lock_guard<std::mutex> lock(mutex());
         currentPage_.reset();
         nextPage_.reset();
+        capture_.reset();  // Also clear the old capture_ cache (Phase 5e integration)
     }
 
     // Invalidate affected aspects: capture rebuild affects Preview, Playback, Metadata
