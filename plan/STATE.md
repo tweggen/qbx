@@ -3613,3 +3613,51 @@ Component addresses 0xbe0dc5740, 0xbe0dc5800, 0xbe0dc58c0, 0xbe0dc5980 all call 
 
 - Analysis: `plan/todo/11_ROOT_CAUSE_ANALYSIS.md` (complete root cause analysis with fix options)
 - Diagnostic code: Updated `tw303a/src/twrewire.cc`, `tw303a/src/twcomponent.cc`
+
+### Fix Implemented and Verified
+
+**Root cause fixed:** Added `seekTo()` implementations to `twPluginChain` and `twPluginInsert`.
+
+**Fix Details:**
+- `twPluginChain::seekTo()` - forwards seeks to all plugins in chain + input plugs
+- `twPluginInsert::seekTo()` - forwards seeks to input plugs (previous stage)
+
+**Verification:** Diagnostic logs show:
+```
+[twPluginChain::seekTo] Called with offset=192000, 0 plugins
+[twPluginChain::seekTo] Seeking input 0
+[twTrackMix::seekTo] Setting playOffset_=192000 ✓
+```
+
+**Seek chain now complete:**
+```
+RenderSession.seekTo(192000)
+  → twRewire.seekTo()
+    → twPluginChain.seekTo() ✓ NOW IMPLEMENTED
+      → twPluginInsert.seekTo() ✓ NOW IMPLEMENTED
+        → twMixer.seekTo()
+          → twTrackMix.seekTo() ✓ RECEIVES SEEK, SETS playOffset_=192000
+```
+
+**Result:** Mixer's playOffset_ is now correctly set to 192000 during render. Children at timeline positions 192000+ will be included in render range check and produce audio.
+
+### Final Status
+
+- ✅ Build clean on macOS/Qt6/CMake  
+- ✅ Root cause identified (twPluginChain blocking seeks)
+- ✅ Fix implemented (seekTo in plugin classes)
+- ✅ Fix verified via diagnostics (playOffset_ now set correctly)
+- ⏳ User testing: Render output should have audio throughout (not silent in first 4s)
+
+### Commits (final)
+
+- 2f76ea4 — Fix: Implement seekTo in twPluginChain and twPluginInsert
+
+### Next: User Testing
+
+**Action:** Render timeline 4-12 seconds and verify:
+1. Output file has audio throughout (8 seconds total)
+2. First 4 seconds (timeline 4-8s) should have audio (was silent before)
+3. Waveform should match playback result
+
+If verified working, the bug is **FIXED**.
