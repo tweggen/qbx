@@ -17,17 +17,23 @@ const char *twRewire::getOutputName( idx_t ) const
 int twRewire::seekTo( offset_t offset )
 {
     // Forward the seek to all connected input plugs (the tracks)
+    fprintf(stderr, "[twRewire::seekTo] Called with offset=%ld, nInputs_=%d, pInputPlugs=%p\n",
+            (long)offset, (int)nInputs_, (void*)pInputPlugs);
+
     if (pInputPlugs) {
         for (idx_t i = 0; i < nInputs_; ++i) {
             if (pInputPlugs[i]) {
+                fprintf(stderr, "[twRewire] Input %d: seeking...\n", (int)i);
                 // The input plug is a twLatchOutput which may be backed by a twComponent
                 // We need to seek the parent latch's component
                 twLatch &latch = pInputPlugs[i]->getParentLatch();
                 twComponent &comp = latch.getComponent();
+                fprintf(stderr, "[twRewire] Input %d: calling comp.seekTo(%ld)\n", (int)i, (long)offset);
                 comp.seekTo(offset);
             }
         }
     }
+    fprintf(stderr, "[twRewire::seekTo] Done forwarding seek\n");
     return 0;
 }
 
