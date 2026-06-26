@@ -94,10 +94,17 @@ twComponent *STrack::getCaptureComponent() const
 
 int STrack::seekTo( offset_t ofs )
 {
-    if( !cpTrackMixers_ ) return 0;
+    fprintf(stderr, "[STrack::seekTo] Called with ofs=%ld\n", (long)ofs);
+    if( !cpTrackMixers_ ) {
+        fprintf(stderr, "[STrack::seekTo] No mixers, returning early\n");
+        return 0;
+    }
     for( int i=0; i<nBusses_; i++ ) {
         twTrackMix *mix = cpTrackMixers_[i];
-        if( mix ) mix->seekTo( ofs );
+        if( mix ) {
+            fprintf(stderr, "[STrack::seekTo] Seeking mixer %d to %ld\n", i, (long)ofs);
+            mix->seekTo( ofs );
+        }
     }
     return 0;
 }
