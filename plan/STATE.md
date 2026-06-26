@@ -3481,3 +3481,96 @@ Unified page cache architecture now spans all SObjects:
 1. **Test bug (b) fix:** Run cycle mode playback with group cuts, verify multiple iterations play correctly
 2. **Debug bug (c):** Instrument `buildCapture_()` with logging to trace volume application, create test case with specific dB measurement
 3. **Optimization:** Consider deferring `buildCapture_()` to async revalidator when `recomputePlayback()` is implemented (Phase 5f)
+
+---
+
+## Bug Investigation Session: Container-backed cut render silence bug (2026-06-26)
+
+- **Date:** 2026-06-26
+- **Status:** Phase 1 & 2 diagnostics complete. Ready for test scenario reproduction.
+- **Work completed:**
+  1. **Analyzed problem:** Rendering timeline 4-12 seconds produces silence in first half (4-8s) with audio in second half (8-12s)
+  2. **Identified two rendering paths:**
+     - Path A (Mixer): `mixer → STrack 2 → children` via `twTrackMix::calcOutputTo()` = **SILENT**
+     - Path B (renderObjectInto): Static recursive rendering of container = **AUDIO**
+  3. **Added comprehensive diagnostics** to distinguish paths:
+     - `twTrackMix::calcOutputTo()`: render range, child iteration, seeking behavior, samples produced
+     - `twTrackMix::seekTo()`: playOffset_ updates
+     - `STrack::seekTo()`: track seeking propagation
+  4. **Created investigation guide** (11_INVESTIGATION_GUIDE.md) with:
+     - Reproduction steps
+     - Log interpretation guide
+     - Hypothesis testing checklist
+     - Key questions to answer
+
+### Technical Analysis
+
+**Problem hypothesis:** Path A's mixer iteration and seeking logic differs from Path B's renderObjectInto.
+
+| Aspect | Path A (Mixer) | Path B (renderObjectInto) |
+|--------|---|---|
+| Initial seek | `seekTo(192000)` on STrack 2? | `seekTo(0)` on container |
+| Content iteration | Live `twTrackMix::calcOutputTo()` | Static `renderObjectInto()` loop |
+| Child inclusion | Range check: [192000, 576000) | Direct iteration, no range skip |
+| Audio result | **SILENT** | **AUDIO** |
+
+**Critical code sections:**
+- Mixer range check: `tw303a/src/twtrackmix.cc:87-102` (lines 80-102 in old, now with diagnostics)
+- renderObjectInto iteration: `main/src/scut.cpp:231-243`
+
+**Possible divergence points:**
+1. Range check filtering children incorrectly
+2. Seek not propagating to child components
+3. Child component returning 0 samples after seek
+4. playOffset_ state not being updated/loaded correctly
+
+### Diagnostics Added
+
+**File: `tw303a/src/twtrackmix.cc`**
+- Line 16: `twTrackMix::seekTo()` logs `playOffset_` updates
+- Lines 77-79: `calcOutputTo()` logs startInterval/endInterval/playLen
+- Lines 86-127: Enhanced child iteration loop with:
+  - Child count tracking
+  - startTime range checks with logging
+  - startOffset calculation with logging
+  - Seek operation logging
+  - Samples produced logging
+
+**File: `main/src/strack.cpp`**
+- Lines 97-107: `STrack::seekTo()` logs when tracks are seeked and mixer seeking
+
+**File: `main/src/scut.cpp`** (existing, already instrumented)
+- buildCapture_() logging
+- seekTo() logging
+
+### Next Steps
+
+1. **Create test project** with container-backed cuts at timeline 4-12s render range
+2. **Capture stderr output** with diagnostic logging
+3. **Analyze logs** to identify which hypothesis matches:
+   - Children not being iterated?
+   - Seek not happening?
+   - Child producing 0 samples?
+4. **Add targeted logging** to suspected code section
+5. **Implement fix** once root cause confirmed
+
+### Verification Status
+
+- ✅ Build clean on macOS/Qt6/CMake  
+- ✅ Diagnostics integrated and building
+- ✅ Investigation guide created
+- ⏳ Test scenario reproduction (pending)
+- ⏳ Log analysis (pending)
+- ⏳ Root cause identification (pending)
+- ⏳ Fix implementation (pending)
+
+### Commits this session
+
+- c3ac0d6 — Diagnostics: Add comprehensive logging to trace render silence bug in mixer path
+
+### References
+
+- Plan: `plan/todo/11_RENDER_SILENCE_BUG_INVESTIGATION.md` (original investigation strategy)
+- Guide: `plan/todo/11_INVESTIGATION_GUIDE.md` (reproduction and diagnostics guide)
+- Diagnostic code: `tw303a/src/twtrackmix.cc`, `main/src/strack.cpp`
+
