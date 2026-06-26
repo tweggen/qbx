@@ -51,9 +51,7 @@ SCutSnapshot SCut::getSnapshot() const
 
 void SCut::ensureReader()
 {
-    fprintf(stderr, "[SCut::ensureReader] CALLED: readerTried_=%d\n", (int)readerTried_);
     if( readerTried_ ) return;
-    fprintf(stderr, "[SCut::ensureReader] Calling rebuildReader\n");
     rebuildReader( getSnapshot() );
 }
 
@@ -494,15 +492,10 @@ int SCut::seekTo( offset_t off )
     ensureReader();
     SCutSnapshot snap = getSnapshot();
 
-fprintf(stderr, "[SCut::seekTo] snap.startOffset=%ld,  snap.cutDuration=%ld (off=%ld)\n",
-              (long)snap.startOffset, (long)snap.cutDuration, (long)off);
-
     // A loop reader is cut-relative (it adds its own loop base = startOffset_);
     // a plain reader needs startOffset_ folded in here.
     // snap.reader.reader is always valid (double-buffer model: Unix page cache).
     offset_t seekPos = snap.reader.looping ? off : off + snap.startOffset;
-    fprintf(stderr, "[SCut::seekTo] off=%ld, snap.startOffset=%ld, looping=%s, final_seekPos=%ld\n",
-            (long)off, (long)snap.startOffset, snap.reader.looping ? "true" : "false", (long)seekPos);
     if( snap.reader.reader ) return snap.reader.reader->seekTo( seekPos );
     return content_->getSObject().seekTo( seekPos );
 }
