@@ -137,14 +137,13 @@ void RenderSession::renderThreadMain() {
                 params_.startTimeSec, params_.endTimeSec, totalSamples_);
         fflush(stderr);
 
-        // Seek to start position
-        synthOutput_->seekTo(startOffsetSamples_);
-        SApplication::app().setGlobalLocatorPosRealtime(startOffsetSamples_);
-
         // Create unified AudioEngine for synth pull
         audioEngine_ = std::make_unique<AudioEngine>(synthOutput_, sampleRate_);
         audioEngine_->configureResampling(sampleRate_, sampleRate_);  // No resampling needed
+
+        // Seek to start position (AudioEngine::seekTo will propagate to synthOutput)
         audioEngine_->seekTo(startOffsetSamples_);
+        SApplication::app().setGlobalLocatorPosRealtime(startOffsetSamples_);
 
         // Create FileSink for buffered file output with futures-based waiting
         fileSink_ = std::make_unique<FileSink>(writer_.get());
