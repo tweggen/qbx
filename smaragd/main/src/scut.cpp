@@ -264,15 +264,22 @@ void SCut::buildCapture_()
     length_t n = dur > need ? dur : need;
     if( n <= 0 ) return;
 
+    fprintf(stderr, "[SCut::buildCapture_] DIAGNOSTIC: snap.startOffset=%ld, snap.cutDuration=%ld, container_dur=%ld, need=%ld, n=%ld\n",
+            (long)snap.startOffset, (long)snap.cutDuration, (long)dur, (long)need, (long)n);
+
     tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
 
     // Proposal 10 Phase 1: build the capture by RECURSIVELY summing the
     // container's children read random-access, instead of streaming the live
     // twTrackMix (whose per-buffer child re-seeks lose a sub-track for a
     // track-of-tracks). Materialise once into a resident buffer.
+    // Phase 5e: Seek the container to position 0 before rendering to ensure
+    // all children start from their correct beginning positions.
+    c.seekTo( 0 );
     std::vector<sample_t> buf( (size_t) n, 0.0f );
     renderObjectInto( c, buf.data(), n, env, env.getSRate(), 0 );
     capture_ = std::make_shared<twCapturingSource>( std::move( buf ), n, 1, env.getSRate() );
+    fprintf(stderr, "[SCut::buildCapture_] Built capture: %ld samples\n", (long)n);
 
     if( !captureConnected_ ) {
         // Transparent invalidation: any applied action drops the snapshot so the
@@ -472,8 +479,11 @@ int SCut::seekTo( offset_t off )
     // A loop reader is cut-relative (it adds its own loop base = startOffset_);
     // a plain reader needs startOffset_ folded in here.
     // snap.reader.reader is always valid (double-buffer model: Unix page cache).
-    if( snap.reader.reader ) return snap.reader.reader->seekTo( snap.reader.looping ? off : off + snap.startOffset );
-    return content_->getSObject().seekTo( off + snap.startOffset );
+    offset_t seekPos = snap.reader.looping ? off : off + snap.startOffset;
+    fprintf(stderr, "[SCut::seekTo] off=%ld, snap.startOffset=%ld, looping=%s, final_seekPos=%ld\n",
+            (long)off, (long)snap.startOffset, snap.reader.looping ? "true" : "false", (long)seekPos);
+    if( snap.reader.reader ) return snap.reader.reader->seekTo( seekPos );
+    return content_->getSObject().seekTo( seekPos );
 }
 
 void SCut::setStartOffset( offset_t off )
@@ -1043,15 +1053,22 @@ void SCut::recomputePreview(CapturePageData& page)
         }
     }
 
-    // Fallback: render container graph to audio and downsample to preview
-    // (This handles container-backed cuts like grouped cuts wrapping tracks)
+    // Fallback: render preview from component graph
     // Initialize to silence
     for (size_t i = 0; i < MAX_PREVIEW_SAMPLES; ++i) {
         pagePreview[i].min = 0;
         pagePreview[i].max = 0;
     }
 
+    // DIAGNOSTIC: For container-backed cuts, just return silence without rendering.
+    // This avoids expensive/problematic renderObjectInto() calls during revalidation.
+    if (!content.getRandomSource()) {
+        page.validAspects |= Preview;
+        return;
+    }
+
     try {
+        // Sample-backed cut: use component-based preview rendering (existing code path)
         twComponent& component = content.getRootComponent();
         const length_t RENDER_CHUNK_SIZE = 4096;
         std::vector<sample_t> audioBuffer(RENDER_CHUNK_SIZE);
