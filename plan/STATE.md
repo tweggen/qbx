@@ -3574,3 +3574,42 @@ Unified page cache architecture now spans all SObjects:
 - Guide: `plan/todo/11_INVESTIGATION_GUIDE.md` (reproduction and diagnostics guide)
 - Diagnostic code: `tw303a/src/twtrackmix.cc`, `main/src/strack.cpp`
 
+
+### Root Cause Identified
+
+**The render silence bug is caused by a component hierarchy gap where intermediate wrapper components don't implement `seekTo()`, preventing seeks from reaching the track mixers.**
+
+**Diagnostic Evidence:**
+- ✅ `twRewire::seekTo()` IS called with offset=192000 during render
+- ✅ `twRewire` IS forwarding seeks to input components
+- ❌ Input components DON'T implement seekTo (return -1, base implementation)
+- ❌ Track mixers NEVER receive the seek call
+- ❌ Mixer playOffset_ remains at 0 instead of 192000
+- Result: Children at positions 192000+ filtered out, mixer produces silence
+
+**Component Analysis:**
+Component addresses 0xbe0dc5740, 0xbe0dc5800, 0xbe0dc58c0, 0xbe0dc5980 all call base `twComponent::seekTo()` which returns -1 (not implemented). These should either:
+1. Implement seekTo to forward calls down the hierarchy
+2. Be replaced with components that do implement seekTo
+3. Or the render path should bypass them entirely
+
+**Verification Status:**
+
+- ✅ Build clean on macOS/Qt6/CMake  
+- ✅ Diagnostics integrated and building
+- ✅ Investigation guide created
+- ✅ Render reproduction verified
+- ✅ Log analysis completed
+- ✅ Root cause identified
+- ⏳ Fix implementation (pending)
+- ⏳ Verification of fix (pending)
+
+### Commits this session (continued)
+
+- 84d69d2 — Diagnostics: Identify component type mismatch in render seek propagation
+- d173513 — Documentation: Root cause analysis of render silence bug
+
+### References
+
+- Analysis: `plan/todo/11_ROOT_CAUSE_ANALYSIS.md` (complete root cause analysis with fix options)
+- Diagnostic code: Updated `tw303a/src/twrewire.cc`, `tw303a/src/twcomponent.cc`
