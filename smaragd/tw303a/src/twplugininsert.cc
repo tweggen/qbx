@@ -1,6 +1,5 @@
 #include "twplugininsert.h"
 #include "plugins/twplugin.h"
-#include <cstdio>
 #include <cstring>
 #include <algorithm>
 
@@ -92,15 +91,12 @@ void twPluginInsert::copyChannels( const std::vector<std::vector<sample_t>> &in,
 
 int twPluginInsert::seekTo( offset_t offset )
 {
-    fprintf(stderr, "[twPluginInsert::seekTo] Called with offset=%ld\n", (long)offset);
-
     // Forward seek to input plugs (the previous stage in the chain)
     if( pInputPlugs ) {
         for( idx_t i = 0; i < getNInputs(); ++i ) {
             if( pInputPlugs[i] ) {
                 twLatch &latch = pInputPlugs[i]->getParentLatch();
                 twComponent &comp = latch.getComponent();
-                fprintf(stderr, "[twPluginInsert::seekTo] Seeking input %d\n", (int)i);
                 comp.seekTo( offset );
             }
         }

@@ -51,7 +51,9 @@ SCutSnapshot SCut::getSnapshot() const
 
 void SCut::ensureReader()
 {
+    fprintf(stderr, "[SCut::ensureReader] CALLED: readerTried_=%d\n", (int)readerTried_);
     if( readerTried_ ) return;
+    fprintf(stderr, "[SCut::ensureReader] Calling rebuildReader\n");
     rebuildReader( getSnapshot() );
 }
 
@@ -251,11 +253,24 @@ static void renderObjectInto( SObject &obj, sample_t *dest, length_t len,
 // Should only be called when capture_ is null.
 void SCut::buildCapture_()
 {
-    if( capture_ ) return;  // Already built
+    fprintf(stderr, "[SCut::buildCapture_] ENTER: capture_=%p\n", (void*)capture_.get());
+
+    if( capture_ ) {
+        fprintf(stderr, "[SCut::buildCapture_] EARLY RETURN: capture already exists\n");
+        return;  // Already built
+    }
 
     SObject &c = content_->getSObject();
-    if( c.getRandomSource() ) return;  // real source -> sample path, no capture needed
-    if( !c.hasDuration() ) return;
+    if( c.getRandomSource() ) {
+        fprintf(stderr, "[SCut::buildCapture_] EARLY RETURN: content has RandomSource\n");
+        return;  // real source -> sample path, no capture needed
+    }
+    if( !c.hasDuration() ) {
+        fprintf(stderr, "[SCut::buildCapture_] EARLY RETURN: content has no duration\n");
+        return;
+    }
+
+    fprintf(stderr, "[SCut::buildCapture_] PROCEEDING with capture build\n");
 
     // Use snapshot to read window parameters consistently (multithreading policy: Phase 1).
     SCutSnapshot snap = getSnapshot();
@@ -306,7 +321,8 @@ twRandomSource *SCut::ensureCapture()
 
 void SCut::invalidateCapture()
 {
-    // Drop the cached render (async model).
+ fprintf(stderr, "[SCut::invalidateCapture] CALLED for cut at position\n");
+      // Drop the cached render (async model).
     // Use reset() not delete: the shared_ptr releases SCut's reference, but readers
     // (audio thread) may still hold references via currentPage().
     {
@@ -314,6 +330,7 @@ void SCut::invalidateCapture()
         currentPage_.reset();
         nextPage_.reset();
         capture_.reset();  // Also clear the old capture_ cache (Phase 5e integration)
+        readerTried_ = false;  // Reset so ensureReader() will rebuild capture on next call
     }
 
     // Invalidate affected aspects: capture rebuild affects Preview, Playback, Metadata
@@ -476,6 +493,9 @@ int SCut::seekTo( offset_t off )
     // FIXME: bounds check!!!
     ensureReader();
     SCutSnapshot snap = getSnapshot();
+
+fprintf(stderr, "[SCut::seekTo] snap.startOffset=%ld,  snap.cutDuration=%ld (off=%ld)\n",
+              (long)snap.startOffset, (long)snap.cutDuration, (long)off);
 
     // A loop reader is cut-relative (it adds its own loop base = startOffset_);
     // a plain reader needs startOffset_ folded in here.

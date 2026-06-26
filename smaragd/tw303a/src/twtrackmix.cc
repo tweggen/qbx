@@ -13,7 +13,6 @@
 
 int twTrackMix::seekTo( offset_t newOffset )
 {
-    fprintf(stderr, "[twTrackMix::seekTo] Setting playOffset_=%ld\n", (long)newOffset);
     playOffset_.store( newOffset, std::memory_order_relaxed );
     return 0;
 }
@@ -73,54 +72,33 @@ length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t out
     offset_t endInterval   = startInterval + playLen;
     playOffset_.store( endInterval, std::memory_order_relaxed );
 
-    fprintf(stderr, "[twTrackMix::calcOutputTo] startInterval=%ld, endInterval=%ld, playLen=%ld\n",
-            (long)startInterval, (long)endInterval, (long)playLen);
-
 //      qWarning( "twTrackMix::calcOutputTo(): Called. track_=$%08x; playOffset_ = %d.\n",
 //                &track_, playOffset_ );
     memset( buffer, 0, sizeof( sample_t )*playLen );
 
-    int childCount = 0;
     // FIXME: Take advantage of sorted objects.
     for( SLink *lk : track_.childLinks() ) {
-        childCount++;
-        if( !lk->hasStartTime() ) {
-            fprintf(stderr, "[Mixer] Child %d: no startTime, skipping\n", childCount);
-            continue;
-        }
+        if( !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();
-        fprintf(stderr, "[Mixer] Child %d: startTime=%ld, checking range [%ld, %ld)\n",
-                childCount, (long)startTime, (long)startInterval, (long)endInterval);
-        if( startTime>=endInterval ) {
-            fprintf(stderr, "[Mixer] Child %d: startTime >= endInterval, skipping\n", childCount);
-            continue;
-        }
+        if( startTime>=endInterval ) continue;
         offset_t endTime = startTime;
         if( lk->getSObject().hasDuration() ) {
             endTime += lk->getSObject().getDuration();
-            fprintf(stderr, "[Mixer] Child %d: has duration, endTime=%ld\n", childCount, (long)endTime);
-            if( startInterval>=endTime ) {
-                fprintf(stderr, "[Mixer] Child %d: startInterval >= endTime, skipping\n", childCount);
-                continue;
-            }
+            if( startInterval>=endTime ) continue;
         }
         // This object is affected. Add the parts into the output buffer.
         offset_t startOffset;
         if( startTime<startInterval ) {
             startOffset = startInterval-startTime;
             startTime = startInterval;
-            fprintf(stderr, "[Mixer] Child %d: adjusted startOffset=%ld (started before interval)\n",
-                    childCount, (long)startOffset);
         } else {
             startOffset = 0;
-            fprintf(stderr, "[Mixer] Child %d: startOffset=0 (starts within interval)\n", childCount);
         }
         if( endTime ) {
             if( endTime>endInterval ) endTime = endInterval;
         } else {
             endTime = endInterval;
         }
-        fprintf(stderr, "[Mixer] Child %d: SEEKING with startOffset=%ld\n", childCount, (long)startOffset);
         // Seek on the link!!!
         lk->seekTo( startOffset );
         twComponent &cp = lk->getRootComponent();
@@ -128,19 +106,16 @@ length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t out
 //                  &cp, playOffset_ );
 //        cp.seekTo( startOffset );
         offset_t doRead = endTime-startTime;
-        fprintf(stderr, "[Mixer] Child %d: doRead=%ld\n", childCount, (long)doRead);
         // Only zero out the range we'll actually use (not entire playLen)
         offset_t destOffset = startTime-startInterval;
         memset( readBuffer + destOffset, 0, sizeof( sample_t ) * doRead );
         // Get actual amount produced (may be less than doRead if component underruns)
         length_t actuallyGot = cp.calcOutputTo( readBuffer+destOffset, doRead, outChannel );
-        fprintf(stderr, "[Mixer] Child %d: actuallyGot=%ld samples\n", childCount, (long)actuallyGot);
         // Only mix the actual samples produced (don't mix zero-padded tail)
         for( offset_t i = 0; i < actuallyGot; i++ ) {
             buffer[destOffset + i] += readBuffer[destOffset + i];
         }
     }
-    fprintf(stderr, "[twTrackMix::calcOutputTo] processed %d children\n", childCount);
 
     // Intrinsic track processing: apply the track's own gain (and mute) here so
     // the output is self-contained — correct wherever it is summed, both by the
