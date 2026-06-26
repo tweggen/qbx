@@ -27,6 +27,7 @@ public:
     void createOutputLatches() override;
     const char *getInputName( idx_t ) const override { return nullptr; }
     const char *getOutputName( idx_t ) const override { return nullptr; }
+    int seekTo( offset_t offset ) override;
 
     void resetBlock() { producedThisBlock_ = false; }
 

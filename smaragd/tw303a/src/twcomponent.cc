@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <memory.h>
 #include <string.h>
+#include <typeinfo>
 
 #include <algorithm>
 #include <iostream>
@@ -104,8 +105,10 @@ bool twComponent::isSeekable() const
 
 int twComponent::seekTo( offset_t offset )
 {
-    fprintf(stderr, "[twComponent::seekTo] Base implementation called with offset=%ld (this=%p)\n",
-            (long)offset, (void*)this);
+    // Log the actual type name using RTTI so we know what class this is
+    const char *typeName = typeid(*this).name();
+    fprintf(stderr, "[twComponent::seekTo] Base implementation called (type=%s, this=%p, offset=%ld)\n",
+            typeName ? typeName : "unknown", (void*)this, (long)offset);
     return -1;  // Base implementation: component doesn't support seeking
 }
 

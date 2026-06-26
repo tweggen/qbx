@@ -1,5 +1,6 @@
 #include "twpluginchain.h"
 #include "twplugininsert.h"
+#include <cstdio>
 #include <algorithm>
 
 twPluginChain::twPluginChain( tw303aEnvironment &env, idx_t nBusses )
@@ -75,6 +76,36 @@ void twPluginChain::reorderPlugin( int fromIndex, int toIndex )
     plugins_.erase( plugins_.begin() + fromIndex );
     plugins_.insert( plugins_.begin() + toIndex, plugin );
     rebuildWiring();
+}
+
+int twPluginChain::seekTo( offset_t offset )
+{
+    fprintf(stderr, "[twPluginChain::seekTo] Called with offset=%ld, %zu plugins\n",
+            (long)offset, plugins_.size());
+
+    std::lock_guard<std::mutex> lock( pluginsMutex_ );
+
+    // Forward seek to all plugins in the chain
+    for( auto *plugin : plugins_ ) {
+        if( plugin ) {
+            fprintf(stderr, "[twPluginChain::seekTo] Forwarding to plugin at %p\n", (void*)plugin);
+            plugin->seekTo( offset );
+        }
+    }
+
+    // Also seek the input plugs (the source feeding into the chain)
+    if( pInputPlugs ) {
+        for( idx_t i = 0; i < nBusses_; ++i ) {
+            if( pInputPlugs[i] ) {
+                twLatch &latch = pInputPlugs[i]->getParentLatch();
+                twComponent &comp = latch.getComponent();
+                fprintf(stderr, "[twPluginChain::seekTo] Seeking input %d\n", (int)i);
+                comp.seekTo( offset );
+            }
+        }
+    }
+
+    return 0;
 }
 
 void twPluginChain::rebuildWiring()
