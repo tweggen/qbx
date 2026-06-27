@@ -68,7 +68,7 @@ void twWhiteNoise::setBufferSize( length_t )
     }
 }
 
-twWhiteNoise::twWhiteNoise( tw303aEnvironment &env0 )
+twWhiteNoise::twWhiteNoise( tw303aEnvironment &env0 ) 
     : twOsc( env0 )
 {
     // start at time 0
@@ -76,10 +76,5 @@ twWhiteNoise::twWhiteNoise( tw303aEnvironment &env0 )
     // alloc frequency buffer
     freqBuffer = NULL;
     setBufferSize( env.getBufferSize() );
-}
-
-void twWhiteNoise::reset()
-{
-	// Stateless noise source: nothing to reset
 }
 

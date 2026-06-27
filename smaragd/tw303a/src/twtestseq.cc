@@ -109,10 +109,5 @@ twTestSeq::twTestSeq( tw303aEnvironment &env0, sample_t constant0, sample_t port
 	currPos = 0;
 	constant = prevConstant = freq( 12 );
 }
-
-void twTestSeq::reset()
-{
-	// Test sequencer: reset playback position
-	currPos = 0;
-}
 #endif
+
