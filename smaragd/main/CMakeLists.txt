@@ -200,6 +200,15 @@ else()
     add_executable(smaragd ${SMARAGD_SOURCES} ${SMARAGD_HEADERS})
 endif()
 
+if(SMARAGD_MACOS)
+    set_target_properties(smaragd PROPERTIES
+        MACOSX_BUNDLE_GUI_IDENTIFIER "dev.tweggen.smaragd"
+        MACOSX_BUNDLE_BUNDLE_NAME "Smaragd"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.0.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+    )
+endif()
+
 target_include_directories(smaragd
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
