@@ -10,6 +10,7 @@
 
 class twComponent;
 class twLatchStreamingOutput;
+class twOutputPage;
 
 namespace audio {
 
@@ -33,17 +34,20 @@ struct AudioFrame {
 };
 
 /**
- * AudioEngine: Unified audio pull from component graph.
+ * AudioEngine: Unified audio pull from component graph with sequential frozen pages.
+ *
+ * Tier 1 Enhancement: Playback Path Refactoring
+ * Uses sequential freezePage() rendering (like export) instead of seekTo(),
+ * preserving component state during playback looping.
+ *
+ * Solves: Reverb/delay state loss during playback (correctness issue)
  *
  * Replaces duplicated pull logic in twspeaker.cc and render_session.cc.
  * Handles:
- * - Component graph traversal and resampling
- * - Position management (seeking, playhead tracking)
+ * - Component graph traversal with frozen pages (no seekTo corruption)
+ * - Position management (playhead tracking, loop cycling)
  * - Stereo wiring (L/R channel synthesis)
- * - Loop cycling (for playback)
- *
- * Both playback and render instantiate one AudioEngine and call
- * pullFrame() in their respective loops.
+ * - Loop cycling with state preservation
  */
 class AudioEngine {
 public:
@@ -59,7 +63,7 @@ public:
     /**
      * Pull one stereo audio frame from the component graph.
      *
-     * Handles resampling, position tracking, and L/R channel wiring.
+     * Uses frozen pages for state-continuous rendering.
      * Safe to call from realtime thread (callback) or render thread.
      *
      * \param outFrame  Output: stereo frame (L, R channels)
@@ -70,8 +74,7 @@ public:
     /**
      * Pull a block of stereo audio frames from the component graph.
      *
-     * More efficient than calling pullFrame() repeatedly. Handles resampling,
-     * position tracking, and L/R channel wiring for a whole block at once.
+     * More efficient than calling pullFrame() repeatedly.
      * Safe to call from realtime thread (callback) or render thread.
      *
      * \param outL      Output: L channel samples (must hold at least nFrames floats)
@@ -84,8 +87,9 @@ public:
     /**
      * Seek to an absolute position in the component graph.
      *
-     * Called before rendering a time range, or during playback
-     * when cycling through a loop region.
+     * Called before rendering a time range, or during playback scrubbing.
+     * Note: Seeking resets component state. Looping uses frozen pages instead
+     * (via setLoopBoundaries) to preserve state.
      *
      * \param offsetSamples  Absolute position in samples
      */
@@ -99,6 +103,9 @@ public:
 
     /**
      * Set loop boundaries and enable/disable looping.
+     *
+     * Unlike seeking, looping uses sequential frozen pages to preserve state.
+     * This ensures reverb/delay/grain components maintain state across loop wraps.
      *
      * \param enabled   Whether to loop
      * \param start     Loop start position (samples)
@@ -119,6 +126,13 @@ private:
     twComponent* synthOutput_;
     uint32_t engineSampleRate_;  // The engine's native sample rate
 
+    // Frozen page rendering state (Tier 1 enhancement)
+    // Maintains sequential frozen pages for state continuity during playback
+    std::shared_ptr<twOutputPage> currentFrozenPage_;
+    std::shared_ptr<twOutputPage> prevFrozenPage_;  // For state resumption
+    uint64_t currentPageStartPos_;
+    size_t pageFrameOffset_;  // Current offset within page's sample buffer
+
     // Resampling
     twResampler resamplerL_;
     twResampler resamplerR_;
@@ -130,8 +144,11 @@ private:
     std::atomic<uint64_t> loopEnd_{0};
     std::atomic<uint64_t> currentPos_{0};
 
-    // Helper: pull one frame of L and R at engine sample rate
-    bool pullStereoFrame(float& outL, float& outR);
+    // Helper: pull one frame of L and R at engine sample rate using frozen pages
+    bool pullStereoFrameFrozen(float& outL, float& outR);
+
+    // Helper: manage frozen page transitions and state continuity
+    void updateFrozenPage(uint64_t desiredPos);
 };
 
 }  // namespace audio

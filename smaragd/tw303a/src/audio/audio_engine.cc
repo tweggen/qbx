@@ -1,6 +1,7 @@
 #include "audio/audio_engine.h"
 
 #include "twcomponent.h"
+#include "tw_output_page.h"
 #include "tw303aenv.h"
 #include <algorithm>
 #include <cstring>
@@ -10,6 +11,8 @@ namespace audio {
 AudioEngine::AudioEngine(twComponent* synthOutput, uint32_t sampleRate)
     : synthOutput_(synthOutput),
       engineSampleRate_(sampleRate),
+      currentPageStartPos_(0),
+      pageFrameOffset_(0),
       rateRatio_(1.0)
 {
     // Resamplers start in identity config (will be updated via configureResampling)
@@ -23,7 +26,7 @@ AudioEngine::~AudioEngine() = default;
 
 bool AudioEngine::pullFrame(AudioFrame& outFrame) {
     float outL, outR;
-    if (!pullStereoFrame(outL, outR)) {
+    if (!pullStereoFrameFrozen(outL, outR)) {
         outFrame.channels[0] = 0.0f;
         outFrame.channels[1] = 0.0f;
         return false;
@@ -43,63 +46,26 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         return 0;
     }
 
-    // Acquire loop state (atomic, lock-free)
-    const bool loopValid = cycleEnabled_.load(std::memory_order_relaxed);
-    uint64_t pos = currentPos_.load(std::memory_order_relaxed);
-    const uint64_t loopStart = loopStart_.load(std::memory_order_relaxed);
-    const uint64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
-
-    // If cycling and reached loop end, wrap to start
-    if (loopValid && pos >= loopEnd) {
-        if (loopEnd > loopStart) {
-            synthOutput_->seekTo(loopStart);
-            pos = loopStart;
+    // Tier 1 Enhancement: Use frozen pages for state-continuous rendering
+    // Pull frames one at a time through pullStereoFrameFrozen()
+    length_t produced = 0;
+    for (length_t i = 0; i < nFrames; ++i) {
+        if (!pullStereoFrameFrozen(outL[i], outR[i])) {
+            break;
         }
-    }
-
-    // Get output plugs
-    twLatchOutput *outputPlug = synthOutput_->linkOutput(0);
-    if (!outputPlug) {
-        std::memset(outL, 0, nFrames * sizeof(float));
-        std::memset(outR, 0, nFrames * sizeof(float));
-        currentPos_.store(pos, std::memory_order_relaxed);
-        return 0;
-    }
-
-    auto *inputL = static_cast<twLatchStreamingOutput*>(outputPlug);
-    auto *inputR = (synthOutput_->getNOutputs() > 1)
-                   ? static_cast<twLatchStreamingOutput*>(synthOutput_->linkOutput(1))
-                   : nullptr;
-
-    // Resample L channel (want nFrames at output rate)
-    length_t inConsumed = 0;
-    length_t gotL = resamplerL_.process(inputL, outL, nFrames, &inConsumed);
-
-    // Resample R channel with same consumed count
-    length_t gotR = 0;
-    if (inputR) {
-        gotR = resamplerR_.process(inputR, outR, gotL, nullptr);
-        if (gotR < gotL) gotL = gotR;  // Use minimum
-    } else {
-        // No right channel; copy left to right
-        std::memcpy(outR, outL, gotL * sizeof(float));
-        gotR = gotL;
+        produced++;
     }
 
     // Zero any remaining frames that weren't produced
-    if (gotL < nFrames) {
-        std::memset(outL + gotL, 0, (nFrames - gotL) * sizeof(float));
-        std::memset(outR + gotL, 0, (nFrames - gotL) * sizeof(float));
+    if (produced < nFrames) {
+        std::memset(outL + produced, 0, (nFrames - produced) * sizeof(float));
+        std::memset(outR + produced, 0, (nFrames - produced) * sizeof(float));
     }
 
-    // Update position (in input samples at component graph rate)
-    pos += inConsumed;
-    currentPos_.store(pos, std::memory_order_relaxed);
-
-    return gotL;
+    return produced;
 }
 
-bool AudioEngine::pullStereoFrame(float& outL, float& outR) {
+bool AudioEngine::pullStereoFrameFrozen(float& outL, float& outR) {
     if (!synthOutput_) {
         outL = outR = 0.0f;
         return false;
@@ -111,65 +77,92 @@ bool AudioEngine::pullStereoFrame(float& outL, float& outR) {
     const uint64_t loopStart = loopStart_.load(std::memory_order_relaxed);
     const uint64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
 
-    // If cycling and reached loop end, wrap to start
+    // Handle loop wrapping WITHOUT seekTo() - maintains state continuity
     if (loopValid && pos >= loopEnd) {
         if (loopEnd > loopStart) {
-            synthOutput_->seekTo(loopStart);
-            pos = loopStart;
+            pos = loopStart;  // Wrap position mathematically
+            prevFrozenPage_ = nullptr;  // Reset for loop restart
         }
     }
 
-    // Pull one frame from component graph
-    twLatchOutput *outputPlug = synthOutput_->linkOutput(0);
-    if (!outputPlug) {
+    // Update frozen page if we've moved to a new page position
+    updateFrozenPage(pos);
+
+    if (!currentFrozenPage_) {
         outL = outR = 0.0f;
         currentPos_.store(pos, std::memory_order_relaxed);
         return false;
     }
 
-    auto *inputL = static_cast<twLatchStreamingOutput*>(outputPlug);
-    auto *inputR = (synthOutput_->getNOutputs() > 1)
-                   ? static_cast<twLatchStreamingOutput*>(synthOutput_->linkOutput(1))
-                   : nullptr;
-
-    // Resample L channel (want 1 frame at output rate)
-    float bufL;
-    length_t inConsumed = 0;
-    length_t gotL = resamplerL_.process(inputL, &bufL, 1, &inConsumed);
-
-    // Resample R channel with same consumed count
-    float bufR;
-    length_t gotR = 0;
-    if (inputR) {
-        gotR = resamplerR_.process(inputR, &bufR, gotL, nullptr);
-        if (gotR < gotL) gotL = gotR;  // Use minimum
-    } else {
-        // No right channel; copy left
-        bufR = bufL;
-        gotR = gotL;
-    }
-
-    if (gotL <= 0) {
+    // Read sample from current frozen page
+    if (pageFrameOffset_ >= currentFrozenPage_->validFrames) {
         outL = outR = 0.0f;
         currentPos_.store(pos, std::memory_order_relaxed);
         return false;
     }
 
-    outL = bufL;
-    outR = bufR;
+    // Extract samples from frozen page (mono frozen output, duplicate to stereo)
+    float sample = currentFrozenPage_->samples[pageFrameOffset_];
+    outL = sample;
+    outR = sample;
 
-    // Update position (in input samples at component graph rate)
-    pos += inConsumed;
+    // Advance position
+    pageFrameOffset_++;
+    pos++;
+
     currentPos_.store(pos, std::memory_order_relaxed);
-
     return true;
 }
 
+void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
+    // Calculate which page this position belongs to
+    uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
+    uint64_t pageStartPos = (desiredPos / pageSize) * pageSize;
+
+    // If we're still in the current page, nothing to do
+    if (currentFrozenPage_ && currentFrozenPage_->startPosition == pageStartPos) {
+        return;
+    }
+
+    // Tier 1 Enhancement: Freeze pages sequentially with state continuity
+    // prevFrozenPage_ carries state snapshot from previous page
+    currentFrozenPage_ = synthOutput_->freezePage(
+        pageStartPos,
+        nullptr,            // No pre-prepared input; uses latches
+        0,
+        0,
+        engineSampleRate_,
+        prevFrozenPage_     // State chain: page N resumes from page N-1
+    );
+
+    if (currentFrozenPage_) {
+        currentPageStartPos_ = pageStartPos;
+        // Calculate offset within the new page
+        pageFrameOffset_ = desiredPos - pageStartPos;
+        if (pageFrameOffset_ > currentFrozenPage_->validFrames) {
+            pageFrameOffset_ = currentFrozenPage_->validFrames;
+        }
+        prevFrozenPage_ = currentFrozenPage_;  // Save for next page's state restoration
+    } else {
+        pageFrameOffset_ = 0;
+    }
+}
+
 void AudioEngine::seekTo(uint64_t offsetSamples) {
+    // Seeking resets state (unavoidable when scrubbing to arbitrary positions)
+    // For looping, setLoopBoundaries() uses frozen pages instead
     if (synthOutput_) {
         synthOutput_->seekTo(offsetSamples);
+        synthOutput_->reset();  // Reset to ensure clean state for the seek
     }
     currentPos_.store(offsetSamples, std::memory_order_relaxed);
+    currentFrozenPage_ = nullptr;  // Clear frozen page cache
+    prevFrozenPage_ = nullptr;
+    pageFrameOffset_ = 0;
+
+    // Reconfigure resamplers for new position
+    resamplerL_.reset();
+    resamplerR_.reset();
 }
 
 uint64_t AudioEngine::currentPosition() const {
