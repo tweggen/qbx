@@ -115,13 +115,15 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
             view = newGrain;
         }
         tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
-        // Convert startOffset from plainwave domain to grain domain if grain is active
+        // Convert startOffset and loopLength from plainwave domain to grain domain if grain is active
         offset_t adjustedStartOffset = snap.startOffset;
+        length_t adjustedLoopLength = snap.loopLength;
         if( newGrain ) {
             adjustedStartOffset = (offset_t)llround( (double)snap.startOffset * snap.grainParams.stretch );
+            adjustedLoopLength = (length_t)llround( (double)snap.loopLength * snap.grainParams.stretch );
         }
         if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
-            twLoopReader *lr = new twLoopReader( env, *view, adjustedStartOffset, snap.loopLength );
+            twLoopReader *lr = new twLoopReader( env, *view, adjustedStartOffset, adjustedLoopLength );
             lr->init();
             newReader = lr;
             newLooping = true;
