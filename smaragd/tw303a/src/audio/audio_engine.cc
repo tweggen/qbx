@@ -52,8 +52,10 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
     // If resampling needed (engine rate != output rate), pull more frames and resample
     if (!resamplerL_.isPassthrough()) {
         // Pull at engine rate, then resample to output rate
-        // Calculate input frames needed: outFrames * (inRate / outRate)
-        length_t inFramesNeeded = (length_t)std::ceil(nFrames * rateRatio_);
+        // rateRatio_ = outputRate / inputRate (e.g., 44100/48000 = 0.9187)
+        // We need more input frames when downsampling: inFrames = outFrames / rateRatio_
+        double invRatio = 1.0 / rateRatio_;  // inputRate / outputRate (e.g., 48000/44100 = 1.0884)
+        length_t inFramesNeeded = (length_t)std::ceil(nFrames * invRatio);
         std::vector<float> bufL(inFramesNeeded), bufR(inFramesNeeded);
 
         length_t inProduced = 0;
@@ -70,8 +72,9 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             return 0;
         }
 
-        // Linear interpolation resampling: step through input at engineRate/outputRate
-        double step = rateRatio_;  // engineRate / outputRate
+        // Linear interpolation resampling: advance through input at invRatio rate
+        // For output sample i, read from input at position i * invRatio
+        double step = invRatio;  // inputRate / outputRate
         length_t outProduced = 0;
         for (length_t i = 0; i < nFrames; ++i) {
             double pos = (double)i * step;
