@@ -105,5 +105,13 @@ int twPluginInsert::seekTo( offset_t offset )
     return 0;
 }
 
-}  // namespace audio
+void twPluginInsert::reset()
+{
+	// Plugin insert propagates reset to its plugin
+	producedThisBlock_ = false;
+	if (plugin_) {
+		plugin_->reset();
+	}
+}
 
+}  // namespace audio

@@ -237,3 +237,9 @@ void twSpeaker::createOutputLatches()
 #endif
 }
 
+
+void twSpeaker::reset()
+{
+	// Speaker sink: output device, no component state to reset
+	// AudioEngine resampling state is managed separately
+}

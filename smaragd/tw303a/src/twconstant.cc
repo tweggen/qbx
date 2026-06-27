@@ -4,6 +4,11 @@
 
 #include "twconstant.h"
 
+void twConstant::reset()
+{
+	// Stateless component: nothing to reset
+}
+
 void twConstant::init()
 {
 	twComponent::init();
