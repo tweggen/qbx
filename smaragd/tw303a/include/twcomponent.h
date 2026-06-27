@@ -326,6 +326,16 @@ public:
     //
     // This ensures continuous audio across page boundaries with state resumption.
     //
+    // Thread-safe multi-consumer reading (Phase 5 Gap 12):
+    //   Returned page->pageMutex protects concurrent access from multiple readers.
+    //   Readers should acquire lock when accessing internalState or during updates.
+    //   Example:
+    //     auto page = component->freezePage(...);
+    //     {
+    //       std::lock_guard<std::mutex> lock(page->pageMutex);
+    //       restoreInternalState(page->internalState);  // Protected from concurrent modification
+    //     }
+    //
     // Args:
     //   startPos - time position this page covers (for logging/debugging)
     //   inputData - pre-frozen input samples (e.g., from upstream component's frozen page)

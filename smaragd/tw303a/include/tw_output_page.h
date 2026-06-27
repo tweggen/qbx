@@ -59,6 +59,13 @@ struct twOutputPage {
     // Timing for stale-data fallback logic
     std::chrono::steady_clock::time_point createdAt;
 
+    // Phase 5 Gap 12: Multi-Consumer Page Locking
+    // Protects concurrent access from multiple render threads reading same page.
+    // Writers (revalidator) hold this lock while freezing/populating the page.
+    // Readers (render loops) acquire this lock when reading internalState or during updates.
+    // Lock acquired during freezePage() state capture/restore operations.
+    mutable std::mutex pageMutex;
+
     twOutputPage()
         : startPosition(0),
           validFrames(0),

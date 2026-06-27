@@ -410,6 +410,8 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     // Initialize state: reset if page 0, else restore from previous
     if (previousPage) {
         // Resume from previous page's snapshot
+        // Phase 5 Gap 12: Acquire lock on previous page to read its state
+        std::lock_guard<std::mutex> lock(previousPage->pageMutex);
         restoreInternalState(previousPage->internalState);
     } else {
         // First page: start from reset state
@@ -436,7 +438,11 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     );
 
     // Capture new internal state for next page resumption
-    page->internalState = captureInternalState();
+    // Phase 5 Gap 12: Acquire lock on new page while writing its state
+    {
+        std::lock_guard<std::mutex> lock(page->pageMutex);
+        page->internalState = captureInternalState();
+    }
 
     // Store in cache for future consumers to share
     {
