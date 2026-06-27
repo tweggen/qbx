@@ -369,3 +369,55 @@ void twComponent::setPageAsFrozen(
         outputPages_[startPos] = page;
     }
 }
+
+// ============================================================================
+// Sequential Freezing Implementation (Phase 2 - Gap 3)
+// ============================================================================
+
+std::shared_ptr<twOutputPage> twComponent::freezePage(
+    uint64_t startPos,
+    const sample_t *inputData,
+    uint64_t inputOffset,
+    length_t inputLength,
+    int sampleRate,
+    std::shared_ptr<twOutputPage> previousPage
+)
+{
+    // Create output page
+    auto page = std::make_shared<twOutputPage>();
+    page->startPosition = startPos;
+    page->createdAt = std::chrono::steady_clock::now();
+    
+    // Initialize state: reset if page 0, else restore from previous
+    if (previousPage) {
+        // Resume from previous page's snapshot
+        restoreInternalState(previousPage->internalState);
+    } else {
+        // First page: start from reset state
+        reset();
+    }
+    
+    // Calculate input data available for this page
+    const sample_t *pageInput = nullptr;
+    length_t pageInputLength = 0;
+    
+    if (inputData && inputOffset < inputLength) {
+        pageInput = inputData + inputOffset;
+        pageInputLength = inputLength - inputOffset;
+    }
+    
+    // Render frames into page buffer
+    length_t toRender = twOutputPage::FRAME_CAPACITY;
+    page->validFrames = renderFrames(
+        page->samples.data(),
+        toRender,
+        pageInput,
+        pageInputLength,
+        0  // idx = 0 (first output)
+    );
+    
+    // Capture new internal state for next page resumption
+    page->internalState = captureInternalState();
+    
+    return page;
+}

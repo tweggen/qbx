@@ -166,6 +166,32 @@ public:
     // Essential for freezing model: every page starts from known reset state.
     virtual void reset() = 0;
 
+    // Push-based rendering: render N frames with pre-prepared input (Phase 2 - Gap 8)
+    // Used by freezePage() to fill component output pages sequentially.
+    //
+    // Renders from current internal state (which may be restored from snapshot).
+    // Advances internal state by N frames. Different from calcOutputTo() which
+    // reads input from upstream latches; renderFrames() takes explicit input buffer.
+    //
+    // Args:
+    //   output - destination buffer (must hold N frames)
+    //   length - frames to render
+    //   input - pre-prepared input samples (may be nullptr for sources with no input)
+    //   inputLength - valid frames in input buffer
+    //   idx - output index (for multi-channel components)
+    //
+    // Returns: frames actually rendered (may be < length if input exhausted)
+    //
+    // Default: fall back to calcOutputTo() for backwards compatibility.
+    // Override: in components that need to accept pre-prepared input for freezing.
+    virtual length_t renderFrames(sample_t *output, length_t length,
+                                   const sample_t *input, length_t inputLength,
+                                   idx_t idx) {
+        // Default: components without explicit renderFrames() use pull-based calcOutputTo()
+        // This maintains compatibility during transition to push-based freezing model
+        return calcOutputTo(output, length, idx);
+    }
+
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) = 0;
 
     void setInput( idx_t idx, twLatchOutput * pLatchOutput );
@@ -273,6 +299,37 @@ public:
         uint64_t startPos,
         std::shared_ptr<twOutputPage> page,
         uint32_t aspects = twAspectAll
+    );
+
+    // Freeze component output into a page (Phase 2 - Gap 3)
+    // Called by CaptureRevalidator worker threads to materialize frozen output.
+    //
+    // Sequential rendering model:
+    //   Page 0: reset() → renderFrames() → capture state → return page
+    //   Page 1: restore state from page 0 → renderFrames() → capture new state → return page
+    //   Page N: ...
+    //
+    // This ensures continuous audio across page boundaries with state resumption.
+    //
+    // Args:
+    //   startPos - time position this page covers (for logging/debugging)
+    //   inputData - pre-frozen input samples (e.g., from upstream component's frozen page)
+    //   inputOffset - offset into inputData where this page starts
+    //   inputLength - valid frames in inputData
+    //   sampleRate - audio sample rate (for format negotiation)
+    //   previousPage - prior page's snapshot (for state resumption), or nullptr if page 0
+    //
+    // Returns: OutputPage with frozen samples + internal state snapshot
+    //
+    // Default: basic implementation that calls renderFrames().
+    // Override in complex components for custom freezing logic.
+    virtual std::shared_ptr<twOutputPage> freezePage(
+        uint64_t startPos,
+        const sample_t *inputData,
+        uint64_t inputOffset,
+        length_t inputLength,
+        int sampleRate,
+        std::shared_ptr<twOutputPage> previousPage = nullptr
     );
 
 private:
