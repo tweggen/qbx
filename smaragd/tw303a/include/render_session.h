@@ -62,7 +62,6 @@ private:
     std::unique_ptr<std::thread> renderThread_;
     std::string lastError_;
     std::unique_ptr<AudioFileWriter> writer_;
-    std::unique_ptr<AudioEngine> audioEngine_;  // Unified pull
     std::unique_ptr<FileSink> fileSink_;        // Buffered output with futures
 };
 

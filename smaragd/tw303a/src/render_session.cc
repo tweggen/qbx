@@ -137,12 +137,12 @@ void RenderSession::renderThreadMain() {
                 params_.startTimeSec, params_.endTimeSec, totalSamples_);
         fflush(stderr);
 
-        // Create unified AudioEngine for synth pull
-        audioEngine_ = std::make_unique<AudioEngine>(synthOutput_, sampleRate_);
-        audioEngine_->configureResampling(sampleRate_, sampleRate_);  // No resampling needed
+        // Phase 3: Sequential rendering via freezePage() (no seekTo)
+        // Strategy: Use freezePage() to render sequentially, eliminating seekTo() state corruption
+        // freezePage() manages state reset/restore internally, enabling correct sequential DSP
 
-        // Seek to start position (AudioEngine::seekTo will propagate to synthOutput)
-        audioEngine_->seekTo(startOffsetSamples_);
+        // Reset component to start of render range
+        synthOutput_->reset();
         SApplication::app().setGlobalLocatorPosRealtime(startOffsetSamples_);
 
         // Create FileSink for buffered file output with futures-based waiting
@@ -150,41 +150,79 @@ void RenderSession::renderThreadMain() {
 
         std::size_t samplesWrittenVal = 0;
 
-        // Render loop: pull blocks via engine, push frames to sink
+        // Render loop: sequentially freeze pages from synth output
+        // freezePage() orchestrates reset/restore/render/capture without seekTo()
         const std::size_t BLOCK_SIZE = 2048;
+        const uint64_t PAGE_SIZE = 256 * 1024 / sizeof(sample_t);  // ~256kB per page in samples
+
         std::vector<float> bufL(BLOCK_SIZE), bufR(BLOCK_SIZE);
+        std::shared_ptr<twOutputPage> prevPage;
 
         while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
-            // Pull block from AudioEngine
-            std::size_t toRender = std::min(BLOCK_SIZE, totalSamples_ - samplesWrittenVal);
-            std::size_t got = audioEngine_->pullBlock(bufL.data(), bufR.data(), toRender);
+            // Current position in component graph samples
+            uint64_t currentPos = samplesWrittenVal;
+            uint64_t pageStartPos = (currentPos / PAGE_SIZE) * PAGE_SIZE;
 
-            if (got == 0) {
-                break;  // End of stream
+            // Freeze this page sequentially
+            // prevPage is used for state resumption (page N resumes from page N-1)
+            auto frozenPage = synthOutput_->freezePage(
+                pageStartPos,
+                nullptr,            // No pre-prepared input; renderFrames uses latches
+                0,
+                0,
+                sampleRate_,
+                prevPage            // Sequential state chain: page N resumes from page N-1
+            );
+
+            if (!frozenPage || frozenPage->validFrames == 0) {
+                break;  // No more audio
             }
 
-            // Write each frame in the block to sink
-            for (std::size_t i = 0; i < got; ++i) {
+            // How many frames to extract from this frozen page
+            std::size_t pageOffset = (currentPos % PAGE_SIZE);
+            std::size_t framesAvailable = frozenPage->validFrames - pageOffset;
+            std::size_t toRender = std::min({
+                BLOCK_SIZE,
+                totalSamples_ - samplesWrittenVal,
+                framesAvailable
+            });
+
+            if (toRender == 0) {
+                prevPage = frozenPage;
+                break;
+            }
+
+            // Extract L/R samples from frozen page
+            // Page stores all channels interleaved or per-output
+            // For now, treat as mono per output; scale to stereo by duplicating
+            const sample_t *pageData = frozenPage->samples.data();
+            for (std::size_t i = 0; i < toRender; ++i) {
+                float sample = pageData[pageOffset + i];
+                bufL[i] = sample;
+                bufR[i] = sample;  // Duplicate to stereo (temporary; proper multi-channel TBD)
+            }
+
+            // Write to sink
+            for (std::size_t i = 0; i < toRender; ++i) {
                 AudioFrame frame(bufL[i], bufR[i], sampleRate_);
                 fileSink_->writeFrame(frame);
                 samplesWrittenVal++;
             }
 
             samplesWritten_.store(samplesWrittenVal);
+            SApplication::app().setGlobalLocatorPosRealtime(startOffsetSamples_ + samplesWrittenVal);
 
-            // Update global locator
-            SApplication::app().setGlobalLocatorPosRealtime(
-                startOffsetSamples_ + audioEngine_->currentPosition());
-
-            // Emit progress callback every ~50ms (at sampleRate_)
+            // Progress every ~50ms
             if (samplesWrittenVal % std::max(1u, sampleRate_ / 20) == 0) {
-                fprintf(stderr, "[RenderSession] Progress: %zu / %zu samples\n",
+                fprintf(stderr, "[RenderSession] Progress: %zu / %zu samples (sequential pages, no seekTo)\n",
                         samplesWrittenVal, totalSamples_);
                 fflush(stderr);
                 if (onProgress) {
                     onProgress(samplesWrittenVal, totalSamples_);
                 }
             }
+
+            prevPage = frozenPage;
         }
 
         fprintf(stderr, "[RenderSession] Render loop complete. Frames: %zu\n", samplesWrittenVal);
