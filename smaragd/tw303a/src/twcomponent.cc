@@ -278,3 +278,94 @@ twComponent::twComponent( tw303aEnvironment &env0 )
       pInputPlugs(0)
 {    
 }
+
+// ============================================================================
+// Output Page Caching Implementation (Phase 1 - Component-Level Freezing)
+// ============================================================================
+
+std::shared_ptr<twOutputPage> twComponent::getOrAllocatePage(
+    uint64_t startPos,
+    uint32_t aspectsMask
+)
+{
+    std::lock_guard<std::mutex> lock(outputPagesMutex_);
+    
+    auto it = outputPages_.find(startPos);
+    if (it != outputPages_.end()) {
+        // Page already exists
+        auto& page = it->second;
+        // Return it whether frozen or not; consumers check validAspects
+        return page;
+    }
+    
+    // Allocate new page
+    auto page = std::make_shared<twOutputPage>();
+    page->startPosition = startPos;
+    page->createdAt = std::chrono::steady_clock::now();
+    outputPages_[startPos] = page;
+    
+    // Schedule async freezing (handled by CaptureRevalidator)
+    // For now, just allocate; page will be filled by freezing thread
+    
+    return page;
+}
+
+void twComponent::releaseOldPages(uint64_t keepAfterPos)
+{
+    std::lock_guard<std::mutex> lock(outputPagesMutex_);
+    
+    for (auto it = outputPages_.begin(); it != outputPages_.end(); ) {
+        if (it->first + twOutputPage::PAGE_SIZE < keepAfterPos) {
+            // Page is entirely before keepAfterPos; release it
+            it = outputPages_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+std::vector<std::shared_ptr<twOutputPage>> twComponent::getPagesInRange(
+    uint64_t startPos,
+    uint64_t endPos
+) const
+{
+    std::lock_guard<std::mutex> lock(outputPagesMutex_);
+    std::vector<std::shared_ptr<twOutputPage>> result;
+    
+    for (const auto& [pos, page] : outputPages_) {
+        if (pos >= startPos && pos < endPos) {
+            result.push_back(page);
+        }
+    }
+    
+    return result;
+}
+
+void twComponent::invalidateAllPages()
+{
+    std::lock_guard<std::mutex> lock(outputPagesMutex_);
+    
+    for (auto& [pos, page] : outputPages_) {
+        page->validAspects = 0;  // Mark all aspects as stale
+    }
+}
+
+void twComponent::setPageAsFrozen(
+    uint64_t startPos,
+    std::shared_ptr<twOutputPage> page,
+    uint32_t aspects
+)
+{
+    std::lock_guard<std::mutex> lock(outputPagesMutex_);
+    
+    auto it = outputPages_.find(startPos);
+    if (it != outputPages_.end()) {
+        // Update existing page reference
+        it->second = page;
+        page->validAspects |= aspects;  // Mark aspects as complete
+    } else {
+        // Insert new page
+        page->validAspects |= aspects;
+        outputPages_[startPos] = page;
+    }
+}

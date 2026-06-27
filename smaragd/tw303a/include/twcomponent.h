@@ -3,9 +3,13 @@
 #define _TWCOMPONENT_H_
 
 #include <qobject.h>
+#include <memory>
+#include <mutex>
+#include <map>
 
 #include "exc.h"
 #include "twformat.h"
+#include "tw_output_page.h"
 
 #define DTOR_DEL(x) {if((x)) {delete (x); (x) = NULL; }}
 
@@ -200,6 +204,49 @@ public:
     virtual void setBufferSize( length_t ) {};
 
     int initOperation( int );
+
+    // --- Output Page Caching (Phase 1 of Unified Rendering) ----------------
+    // Component-level frozen output pages for efficient multi-consumer rendering.
+    // All components own a cache of their output for time windows (pages).
+    // This enables:
+    // - One computation per component per time window, no redundancy
+    // - Sequential rendering from reset state with internal state snapshots
+    // - Deterministic audio (same input → same output, always)
+
+    // Get or allocate a frozen output page covering the given time position.
+    // Returns non-null shared_ptr; page may not be frozen yet (check validAspects).
+    // Non-blocking: consumers can fall back to stale pages if not ready.
+    std::shared_ptr<twOutputPage> getOrAllocatePage(
+        uint64_t startPos,
+        uint32_t aspectsMask = twAspectAll
+    );
+
+    // Release pages outside of a time retention window (memory management).
+    // Frees pages whose [startPos, startPos+PAGE_SIZE) range ends before keepAfterPos.
+    void releaseOldPages(uint64_t keepAfterPos);
+
+    // Get all cached pages in a time range (for iteration, cleanup, debugging).
+    std::vector<std::shared_ptr<twOutputPage>> getPagesInRange(
+        uint64_t startPos,
+        uint64_t endPos
+    ) const;
+
+    // Invalidate all cached pages (called when component parameters change).
+    // Marks all pages' validAspects as 0, triggering re-freezing.
+    void invalidateAllPages();
+
+    // Internal: mark a specific page as frozen and valid for given aspects.
+    // Called by revalidator after successful freezing.
+    void setPageAsFrozen(
+        uint64_t startPos,
+        std::shared_ptr<twOutputPage> page,
+        uint32_t aspects = twAspectAll
+    );
+
+private:
+    // Page cache: maps start position → frozen output page
+    std::map<uint64_t, std::shared_ptr<twOutputPage>> outputPages_;
+    mutable std::mutex outputPagesMutex_;
 
 signals:
     void inputChanged( idx_t idx, twLatchOutput *former, twLatchOutput *recent );

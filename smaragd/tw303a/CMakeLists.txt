@@ -52,6 +52,7 @@ set(TW303A_SOURCES
     src/tw303a.cc
     src/tw303aenv.cc
     src/twcomponent.cc
+    src/tw_output_page.cc
     src/twconstant.cc
     src/twconvert.cc
     src/twnegotiator.cc
