@@ -87,6 +87,9 @@ void twSpeaker::startOutput()
         return;
     }
 
+    // Destroy old audioEngine_ before creating new one to avoid use-after-free
+    audioEngine_.reset();
+
     audioEngine_ = std::make_unique<audio::AudioEngine>(synthOutput, graphRate);
     audioEngine_->configureResampling(graphRate, cfg.sampleRate);
 
@@ -191,6 +194,7 @@ void twSpeaker::stopOutput()
     isPlaying_ = false;               // flip first: a re-entrant/observer sees "stopping"
     backend_->stopOutput();
     backend_->closeDevice();
+    audioEngine_.reset();              // Ensure audioEngine destroyed before returning
     TWSPK_LOG( "stopped" );
 }
 
@@ -237,3 +241,9 @@ void twSpeaker::createOutputLatches()
 #endif
 }
 
+
+void twSpeaker::reset()
+{
+	// Speaker sink: output device, no component state to reset
+	// AudioEngine resampling state is managed separately
+}

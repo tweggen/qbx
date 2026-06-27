@@ -153,3 +153,8 @@ twRewire::twRewire( tw303aEnvironment &env0 )
     nInputs_ = 2;
 }
 
+void twRewire::reset()
+{
+	// Stateless router: nothing to reset
+}
+

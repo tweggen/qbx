@@ -58,4 +58,9 @@ twPipe::twPipe( tw303aEnvironment &env0 )
 	setBufferSize( env.getBufferSize() );
 }
 
+void twPipe::reset()
+{
+	// Stateless pass-through: nothing to reset
+}
+
 
