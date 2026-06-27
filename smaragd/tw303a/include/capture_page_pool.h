@@ -6,6 +6,7 @@
 #include <queue>
 #include <memory>
 #include <mutex>
+#include "tw_output_page.h"  // For FROZEN_PAGE_SIZE_BYTES
 
 /**
  * Capture page pool: pre-allocated, fixed-size pages for audio capture data.
@@ -37,7 +38,8 @@
  * - Export: resampled/normalized buffer
  */
 struct CapturePageData {
-    static constexpr size_t PAGE_SIZE = 256 * 1024;  // 256kB
+    // Phase 5 Gap 11: Unified page size with twOutputPage
+    static constexpr size_t PAGE_SIZE = FROZEN_PAGE_SIZE_BYTES;  // 256 kB
 
     // Synchronization: protects concurrent read/write of data and metadata.
     // Revalidator holds this lock while writing to data/validAspects.

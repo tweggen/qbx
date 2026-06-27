@@ -153,7 +153,8 @@ void RenderSession::renderThreadMain() {
         // Render loop: sequentially freeze pages from synth output
         // freezePage() orchestrates reset/restore/render/capture without seekTo()
         const std::size_t BLOCK_SIZE = 2048;
-        const uint64_t PAGE_SIZE = 256 * 1024 / sizeof(sample_t);  // ~256kB per page in samples
+        // Phase 5 Gap 11: Use unified page size constant
+        const uint64_t PAGE_SIZE = twOutputPage::PAGE_SIZE / sizeof(sample_t);  // Pages from unified constant
 
         std::vector<float> bufL(BLOCK_SIZE), bufR(BLOCK_SIZE);
         std::shared_ptr<twOutputPage> prevPage;

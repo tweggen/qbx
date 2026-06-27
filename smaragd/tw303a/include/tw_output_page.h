@@ -15,6 +15,14 @@
 // Forward declaration
 class twComponent;
 
+// Phase 5 Gap 11: Unified page size constant
+// All frozen pages (component, SObject) use this size for alignment
+// 256 kB provides ~0.68 seconds at 48kHz stereo, balancing:
+//   - Cache coherency (fits in L3)
+//   - Granularity (fine enough for responsive updates)
+//   - Memory overhead (sparse page allocation)
+static constexpr size_t FROZEN_PAGE_SIZE_BYTES = 256 * 1024;
+
 // Aspects that can be frozen for a component's output page
 enum twRenderAspect : uint32_t {
     twAspectPreview   = 1u << 0,  // Waveform peaks for timeline visualization
@@ -28,8 +36,9 @@ enum twRenderAspect : uint32_t {
 // Frozen output of a component for a time window
 // Stores component output samples + internal state snapshot for sequential rendering
 struct twOutputPage {
-    static const size_t PAGE_SIZE = 256 * 1024;  // 256 kB per page (~0.68s @ 48kHz stereo)
-    static const size_t FRAME_CAPACITY = PAGE_SIZE / sizeof(float) / 2;  // stereo frames
+    // Phase 5 Gap 11: Unified page size
+    static constexpr size_t PAGE_SIZE = FROZEN_PAGE_SIZE_BYTES;  // 256 kB per page
+    static constexpr size_t FRAME_CAPACITY = PAGE_SIZE / sizeof(float);  // mono frames
 
     // Time range this page covers (in sample frames)
     uint64_t startPosition;
