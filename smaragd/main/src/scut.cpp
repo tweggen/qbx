@@ -115,8 +115,13 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
             view = newGrain;
         }
         tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
+        // Convert startOffset from plainwave domain to grain domain if grain is active
+        offset_t adjustedStartOffset = snap.startOffset;
+        if( newGrain ) {
+            adjustedStartOffset = (offset_t)llround( (double)snap.startOffset * snap.grainParams.stretch );
+        }
         if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
-            twLoopReader *lr = new twLoopReader( env, *view, snap.startOffset, snap.loopLength );
+            twLoopReader *lr = new twLoopReader( env, *view, adjustedStartOffset, snap.loopLength );
             lr->init();
             newReader = lr;
             newLooping = true;
@@ -212,13 +217,17 @@ static void renderObjectInto( SObject &obj, sample_t *dest, length_t len,
 
         twRandomSource *view = contentRs;
         twGrainSource *grain = NULL;
+        offset_t adjustedOff = off;
         if( !gp.isIdentity() ) {
             grain = new twGrainSource( *contentRs, gp );         // output (stretched) domain
             view = grain;
+            // Convert offset from plainwave domain to grain (stretched) domain
+            adjustedOff = (offset_t)llround( (double)off * gp.stretch );
         }
-        // startOffset and len are in the (post-grain) output domain — the same
-        // domain `view` is addressed in. read() zero-fills past end.
-        view->read( off, dest, len, 0 );
+        // When grain is active, adjustedOff is in grain domain.
+        // Otherwise, off is in plainwave domain (same as contentRs).
+        // read() zero-fills past end.
+        view->read( adjustedOff, dest, len, 0 );
 
         delete grain;
         delete ownedContent;
