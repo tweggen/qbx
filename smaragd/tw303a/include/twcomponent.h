@@ -304,8 +304,26 @@ public:
     // and A's parameters change, A->invalidateDependents() should invalidate B.
     //
     // Thread-safe: components can be called from revalidator workers or UI thread.
+    // Tier 2 Enhancement #1: Selective Invalidation Cascade
+    // Invalidate only affected downstream components that actually read from this component.
+    // By default (no-op), but can be overridden by components that track dependencies.
     virtual void invalidateDependents() {
-        // Default: no downstream invalidation
+        // Default: no downstream invalidation (no explicit dependencies tracked)
+        // Override in components that have known consumers (e.g., mixers, effects chains)
+    }
+
+    // Tier 2 Enhancement #1: Dependency tracking for selective invalidation
+    // Called when this component is wired as input to another component.
+    // Allows downstream component to register itself for selective invalidation.
+    virtual void addDependent(twComponent* dependent);
+
+    // Helper: invalidate all components in a set (used by cascade)
+    static void invalidateComponentSet(std::vector<twComponent*>& components) {
+        for (auto comp : components) {
+            if (comp) {
+                comp->invalidateAllPages();
+            }
+        }
     }
 
     // Internal: mark a specific page as frozen and valid for given aspects.
@@ -361,6 +379,11 @@ private:
     // Page cache: maps start position → frozen output page
     std::map<uint64_t, std::shared_ptr<twOutputPage>> outputPages_;
     mutable std::mutex outputPagesMutex_;
+
+    // Tier 2 Enhancement #1: Dependency tracking for selective invalidation
+    // Components that depend on this component's output (for cascade invalidation)
+    std::vector<twComponent*> dependents_;
+    mutable std::mutex dependentsMutex_;
 
 signals:
     void inputChanged( idx_t idx, twLatchOutput *former, twLatchOutput *recent );

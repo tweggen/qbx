@@ -10,6 +10,13 @@ class twConstant
     : public twComponent
 {
     virtual void reset() override;
+
+    // Tier 2 Enhancement #3: Push-based renderFrames() for sources
+    // Bypass calcOutputTo() for simple stateless sources
+    virtual length_t renderFrames(sample_t *output, length_t length,
+                                   const sample_t *input, length_t inputLength,
+                                   idx_t idx) override;
+
 private:
     sample_t constant;
 protected:

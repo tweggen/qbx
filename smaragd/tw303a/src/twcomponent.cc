@@ -351,9 +351,19 @@ void twComponent::invalidateAllPages()
         }
     }
 
-    // Phase 4 Gap 9: Invalidation Cascade
+    // Phase 4 Gap 9 + Tier 2 #1: Invalidation Cascade
     // Trigger downstream invalidation so dependent components also re-freeze
-    // (must call outside lock to prevent potential deadlock with recursive invalidation)
+    // Tier 2 #1: Selective cascade - only invalidate tracked dependencies
+    {
+        std::lock_guard<std::mutex> lock(dependentsMutex_);
+        for (auto dependent : dependents_) {
+            if (dependent) {
+                dependent->invalidateAllPages();  // Recursive cascade
+            }
+        }
+    }
+
+    // Also call hook for subclass customization
     invalidateDependents();
 }
 
@@ -451,4 +461,20 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     }
 
     return page;
+}
+
+// ============================================================================
+// Tier 2 Enhancement #1: Selective Invalidation with Dependency Tracking
+// ============================================================================
+
+void twComponent::addDependent(twComponent* dependent) {
+    if (!dependent) return;
+
+    std::lock_guard<std::mutex> lock(dependentsMutex_);
+
+    // Avoid duplicate entries
+    auto it = std::find(dependents_.begin(), dependents_.end(), dependent);
+    if (it == dependents_.end()) {
+        dependents_.push_back(dependent);
+    }
 }
