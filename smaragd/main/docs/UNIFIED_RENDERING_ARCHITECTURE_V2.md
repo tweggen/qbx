@@ -76,6 +76,31 @@ Freezing the entire signal path from start-of-project to end would:
 - Pages can be evicted when no longer needed
 - Multiple pages cover a continuous signal
 
+### Why Component-Level Caching?
+
+The component hierarchy is a **directed acyclic graph (DAG)** of signal transformations. Optimal DAG rendering is a proven principle in computer science: compute each node exactly once per time window, cache the result, and allow all downstream consumers to read the cached output. This exploits **optimal substructure**: shared computation paths automatically yield shared caches, eliminating redundancy.
+
+**Example of DAG optimization:**
+```
+Two tracks, one shared reverb:
+
+Without component caching (SObject-level):
+  Track A ──┐
+            ├─→ Reverb ──→ Output
+  Track B ──┘
+  
+  Result: Reverb rendered twice (once per track), redundant DSP
+
+With component caching (component-level):
+  Track A ──┐
+            ├─→ Mixer ──→ Reverb ──→ Output
+  Track B ──┘
+  
+  Result: Mixer computed once, Reverb computed once; both tracks read same frozen output
+```
+
+This principle is well-established in **compiler optimization** (data-flow analysis minimizes redundant computation), **graphics rendering** (render graphs cache intermediate results), and **distributed systems** (memoization strategies). Smaragd's unified rendering applies the same proven principle to audio DSP: compute the DAG of audio components once, cache the results, let all consumers read the cache.
+
 ---
 
 ## The Freezing Model
