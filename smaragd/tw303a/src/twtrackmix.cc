@@ -14,6 +14,23 @@
 int twTrackMix::seekTo( offset_t newOffset )
 {
     playOffset_.store( newOffset, std::memory_order_relaxed );
+
+    // Propagate seek to all children, computing their clip-relative offsets.
+    // This ensures all child components are positioned correctly before the next
+    // calcOutputTo call. In continuous forward play, the clip-relative offset will
+    // match what calcOutputTo would compute anyway, so seekTo becomes a no-op for
+    // reader cursors already at the right position. This design cleanly separates
+    // concerns: "seek when position changes, advance on consecutive chunks."
+    for( SLink *lk : track_.childLinks() ) {
+        if( !lk->hasStartTime() ) continue;
+        offset_t startTime = lk->getStartTime();
+        // Only seek children that are in or near the play window
+        if( startTime < newOffset + env.getBufferSize() ) {
+            offset_t clipRelative = std::max((offset_t)0, newOffset - startTime);
+            lk->seekTo( clipRelative );
+        }
+    }
+
     return 0;
 }
 
@@ -99,12 +116,10 @@ length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t out
         } else {
             endTime = endInterval;
         }
-        // Seek on the link!!!
-        lk->seekTo( startOffset );
+        // Note: seekTo is now called once per position jump in twTrackMix::seekTo(),
+        // not once per buffer. In continuous forward play, child readers are already
+        // positioned correctly. This reduces seek calls from O(blocks) to O(seeks).
         twComponent &cp = lk->getRootComponent();
-//        qWarning( "twTrackMix::calcOutputTo(): On Object $%08x. with offset %d.\n",
-//                  &cp, playOffset_ );
-//        cp.seekTo( startOffset );
         offset_t doRead = endTime-startTime;
         // Only zero out the range we'll actually use (not entire playLen)
         offset_t destOffset = startTime-startInterval;
