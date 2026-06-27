@@ -68,6 +68,20 @@ public:
     bool pullFrame(AudioFrame& outFrame);
 
     /**
+     * Pull a block of stereo audio frames from the component graph.
+     *
+     * More efficient than calling pullFrame() repeatedly. Handles resampling,
+     * position tracking, and L/R channel wiring for a whole block at once.
+     * Safe to call from realtime thread (callback) or render thread.
+     *
+     * \param outL      Output: L channel samples (must hold at least nFrames floats)
+     * \param outR      Output: R channel samples (must hold at least nFrames floats)
+     * \param nFrames   Number of frames to pull
+     * \return          Number of frames actually produced (0 on error)
+     */
+    length_t pullBlock(float* outL, float* outR, length_t nFrames);
+
+    /**
      * Seek to an absolute position in the component graph.
      *
      * Called before rendering a time range, or during playback

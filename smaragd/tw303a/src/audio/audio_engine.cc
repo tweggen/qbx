@@ -36,6 +36,69 @@ bool AudioEngine::pullFrame(AudioFrame& outFrame) {
     return true;
 }
 
+length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
+    if (!synthOutput_ || nFrames == 0) {
+        std::memset(outL, 0, nFrames * sizeof(float));
+        std::memset(outR, 0, nFrames * sizeof(float));
+        return 0;
+    }
+
+    // Acquire loop state (atomic, lock-free)
+    const bool loopValid = cycleEnabled_.load(std::memory_order_relaxed);
+    uint64_t pos = currentPos_.load(std::memory_order_relaxed);
+    const uint64_t loopStart = loopStart_.load(std::memory_order_relaxed);
+    const uint64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
+
+    // If cycling and reached loop end, wrap to start
+    if (loopValid && pos >= loopEnd) {
+        if (loopEnd > loopStart) {
+            synthOutput_->seekTo(loopStart);
+            pos = loopStart;
+        }
+    }
+
+    // Get output plugs
+    twLatchOutput *outputPlug = synthOutput_->linkOutput(0);
+    if (!outputPlug) {
+        std::memset(outL, 0, nFrames * sizeof(float));
+        std::memset(outR, 0, nFrames * sizeof(float));
+        currentPos_.store(pos, std::memory_order_relaxed);
+        return 0;
+    }
+
+    auto *inputL = static_cast<twLatchStreamingOutput*>(outputPlug);
+    auto *inputR = (synthOutput_->getNOutputs() > 1)
+                   ? static_cast<twLatchStreamingOutput*>(synthOutput_->linkOutput(1))
+                   : nullptr;
+
+    // Resample L channel (want nFrames at output rate)
+    length_t inConsumed = 0;
+    length_t gotL = resamplerL_.process(inputL, outL, nFrames, &inConsumed);
+
+    // Resample R channel with same consumed count
+    length_t gotR = 0;
+    if (inputR) {
+        gotR = resamplerR_.process(inputR, outR, gotL, nullptr);
+        if (gotR < gotL) gotL = gotR;  // Use minimum
+    } else {
+        // No right channel; copy left to right
+        std::memcpy(outR, outL, gotL * sizeof(float));
+        gotR = gotL;
+    }
+
+    // Zero any remaining frames that weren't produced
+    if (gotL < nFrames) {
+        std::memset(outL + gotL, 0, (nFrames - gotL) * sizeof(float));
+        std::memset(outR + gotL, 0, (nFrames - gotL) * sizeof(float));
+    }
+
+    // Update position (in input samples at component graph rate)
+    pos += inConsumed;
+    currentPos_.store(pos, std::memory_order_relaxed);
+
+    return gotL;
+}
+
 bool AudioEngine::pullStereoFrame(float& outL, float& outR) {
     if (!synthOutput_) {
         outL = outR = 0.0f;

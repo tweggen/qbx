@@ -132,28 +132,16 @@ void twSpeaker::startOutput()
 
             // Pull stereo frames via AudioEngine (unified component graph pull)
             std::vector<float> bufL(frames), bufR(frames);
-            std::size_t filled = 0;
 
-            // Pull frames from AudioEngine (handles resampling, loop cycling, position tracking)
-            while (filled < frames) {
-                audio::AudioFrame frame;
-                if (!audioEngine_->pullFrame(frame)) {
-                    break;  // End of stream or underrun
-                }
-                bufL[filled] = frame.channels[0];
-                bufR[filled] = frame.channels[1];
-                filled++;
-            }
+            // Pull block from AudioEngine (handles resampling, loop cycling, position tracking)
+            std::size_t outFrames = audioEngine_->pullBlock(bufL.data(), bufR.data(), frames);
 
-            if (filled == 0) {
+            if (outFrames == 0) {
                 std::fill_n(out, frames * channels, 0.0f);
                 if (!SApplication::app().isRecordingActive())
                     SApplication::app().setGlobalLocatorPosRealtime(audioEngine_->currentPosition());
                 return frames;
             }
-
-            // Always output what we have (never pad with zeros - causes aliasing/artifacts)
-            std::size_t outFrames = filled;
 
             // Interleave L/R into output. If channels > 2, duplicate the stereo
             // pair to all output channels.

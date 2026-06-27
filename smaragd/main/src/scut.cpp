@@ -488,6 +488,17 @@ SObjectRenderer *SCut::getInlineRenderer( void )
 
 int SCut::seekTo( offset_t off )
 {
+    static int callCount = 0;
+    static std::chrono::steady_clock::time_point lastReport;
+    ++callCount;
+
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastReport).count() >= 1000) {
+        fprintf(stderr, "[SCut::seekTo frequency] %d calls/sec\n", callCount);
+        callCount = 0;
+        lastReport = now;
+    }
+
     // FIXME: bounds check!!!
     ensureReader();
     SCutSnapshot snap = getSnapshot();

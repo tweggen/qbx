@@ -150,18 +150,26 @@ void RenderSession::renderThreadMain() {
 
         std::size_t samplesWrittenVal = 0;
 
-        // Render loop: pull frames via engine, push to sink
+        // Render loop: pull blocks via engine, push frames to sink
+        const std::size_t BLOCK_SIZE = 2048;
+        std::vector<float> bufL(BLOCK_SIZE), bufR(BLOCK_SIZE);
+
         while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
-            // Pull one stereo frame via unified engine
-            AudioFrame frame;
-            if (!audioEngine_->pullFrame(frame)) {
+            // Pull block from AudioEngine
+            std::size_t toRender = std::min(BLOCK_SIZE, totalSamples_ - samplesWrittenVal);
+            std::size_t got = audioEngine_->pullBlock(bufL.data(), bufR.data(), toRender);
+
+            if (got == 0) {
                 break;  // End of stream
             }
 
-            // Push frame to sink (buffers with futures-based completion waiting)
-            fileSink_->writeFrame(frame);
+            // Write each frame in the block to sink
+            for (std::size_t i = 0; i < got; ++i) {
+                AudioFrame frame(bufL[i], bufR[i], sampleRate_);
+                fileSink_->writeFrame(frame);
+                samplesWrittenVal++;
+            }
 
-            samplesWrittenVal++;
             samplesWritten_.store(samplesWrittenVal);
 
             // Update global locator
