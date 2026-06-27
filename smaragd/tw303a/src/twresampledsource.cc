@@ -12,11 +12,15 @@ twResampledSource::twResampledSource( const twRandomSource &src, int targetRate 
     int      srcRate   = src.sampleRate();
     length_t srcFrames = src.length();
     if( srcRate <= 0 || targetRate_ <= 0 || srcFrames <= 0 || channels_ <= 0 ) {
+        fprintf(stderr, "twResampledSource: invalid params (srcRate=%d, targetRate=%d, srcFrames=%ld, channels=%d)\n",
+                srcRate, targetRate_, srcFrames, channels_);
         return;   // nothing to build; read() will zero-fill
     }
 
     double ratio = (double) targetRate_ / (double) srcRate;
     nFrames_ = (length_t) llround( (double) srcFrames * ratio );
+    fprintf(stderr, "twResampledSource: resampling %d Hz (%ld frames) -> %d Hz (%ld frames), ratio=%.4f\n",
+            srcRate, srcFrames, targetRate_, nFrames_, ratio);
     if( nFrames_ <= 0 ) {
         nFrames_ = 0;
         return;

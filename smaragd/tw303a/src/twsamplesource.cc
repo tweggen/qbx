@@ -32,8 +32,11 @@ twRandomSource *twSampleSource::viewAtRate( int targetRate ) const
 {
     twSampleSource *self = const_cast<twSampleSource *>( this );
     if( !loaded_ || targetRate <= 0 || targetRate == rate_ ) {
+        fprintf(stderr, "twSampleSource::viewAtRate: returning native rate (loaded=%d, targetRate=%d, rate_=%d)\n",
+                loaded_, targetRate, rate_);
         return self;   // native rate already matches (the common case)
     }
+    fprintf(stderr, "twSampleSource::viewAtRate: creating resampled view from %d Hz to %d Hz\n", rate_, targetRate);
     if( !resampled_ || resampledRate_ != targetRate ) {
         resampled_.reset( new twResampledSource( *this, targetRate ) );
         resampledRate_ = targetRate;

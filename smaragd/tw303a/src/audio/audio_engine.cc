@@ -4,7 +4,9 @@
 #include "tw_output_page.h"
 #include "tw303aenv.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace audio {
 
@@ -47,7 +49,51 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
     }
 
     // Tier 1 Enhancement: Use frozen pages for state-continuous rendering
-    // Pull frames one at a time through pullStereoFrameFrozen()
+    // If resampling needed (engine rate != output rate), pull more frames and resample
+    if (!resamplerL_.isPassthrough()) {
+        // Pull at engine rate, then resample to output rate
+        // Calculate input frames needed: outFrames * (inRate / outRate)
+        length_t inFramesNeeded = (length_t)std::ceil(nFrames * rateRatio_);
+        std::vector<float> bufL(inFramesNeeded), bufR(inFramesNeeded);
+
+        length_t inProduced = 0;
+        for (length_t i = 0; i < inFramesNeeded; ++i) {
+            if (!pullStereoFrameFrozen(bufL[i], bufR[i])) {
+                break;
+            }
+            inProduced++;
+        }
+
+        if (inProduced == 0) {
+            std::memset(outL, 0, nFrames * sizeof(float));
+            std::memset(outR, 0, nFrames * sizeof(float));
+            return 0;
+        }
+
+        // Linear interpolation resampling: step through input at engineRate/outputRate
+        double step = rateRatio_;  // engineRate / outputRate
+        length_t outProduced = 0;
+        for (length_t i = 0; i < nFrames; ++i) {
+            double pos = (double)i * step;
+            length_t k = (length_t)pos;
+            double frac = pos - (double)k;
+
+            if (k + 1 < inProduced) {
+                outL[i] = bufL[k] + (bufL[k+1] - bufL[k]) * (float)frac;
+                outR[i] = bufR[k] + (bufR[k+1] - bufR[k]) * (float)frac;
+            } else if (k < inProduced) {
+                outL[i] = bufL[k];
+                outR[i] = bufR[k];
+            } else {
+                outL[i] = outR[i] = 0.0f;
+            }
+            outProduced++;
+        }
+
+        return outProduced;
+    }
+
+    // Passthrough: no resampling needed
     length_t produced = 0;
     for (length_t i = 0; i < nFrames; ++i) {
         if (!pullStereoFrameFrozen(outL[i], outR[i])) {
