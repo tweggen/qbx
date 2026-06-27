@@ -168,7 +168,14 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
     uint64_t pageStartPos = (desiredPos / pageSize) * pageSize;
 
-    // If we're still in the current page, nothing to do
+    // Check if current page has been invalidated (generation changed)
+    if (currentFrozenPage_ && currentFrozenPage_->generation != currentPageGeneration_) {
+        // Page was invalidated and repurposed while we held it; drop reference
+        currentFrozenPage_ = nullptr;
+        prevFrozenPage_ = nullptr;
+    }
+
+    // If we're still in the current valid page, nothing to do
     if (currentFrozenPage_ && currentFrozenPage_->startPosition == pageStartPos) {
         return;
     }
@@ -186,6 +193,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
 
     if (currentFrozenPage_) {
         currentPageStartPos_ = pageStartPos;
+        currentPageGeneration_ = currentFrozenPage_->generation;  // Snapshot generation to detect later invalidation
         // Calculate offset within the new page
         pageFrameOffset_ = desiredPos - pageStartPos;
         if (pageFrameOffset_ > currentFrozenPage_->validFrames) {

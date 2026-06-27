@@ -52,6 +52,12 @@ struct twOutputPage {
     // Which rendering aspects have been computed for this page
     std::atomic<uint32_t> validAspects;
 
+    // Generation counter to detect invalidation
+    // Incremented when invalidateAllPages() invalidates this page.
+    // Audio threads compare against their cached generation to detect stale pages.
+    // Allows audio to drop references to pages that have been invalidated and repurposed.
+    std::atomic<uint64_t> generation{0};
+
     // Internal state snapshot (for sequential components like reverbs, delays)
     // Allows resuming rendering from this page's endpoint without losing state
     std::any internalState;
@@ -70,6 +76,7 @@ struct twOutputPage {
         : startPosition(0),
           validFrames(0),
           validAspects(0),
+          generation(0),
           createdAt(std::chrono::steady_clock::now())
     {
         samples.resize(FRAME_CAPACITY);

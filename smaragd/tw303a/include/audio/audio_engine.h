@@ -132,6 +132,7 @@ private:
     std::shared_ptr<twOutputPage> prevFrozenPage_;  // For state resumption
     uint64_t currentPageStartPos_;
     size_t pageFrameOffset_;  // Current offset within page's sample buffer
+    uint64_t currentPageGeneration_{0};  // Track page generation to detect invalidation
 
     // Resampling
     twResampler resamplerL_;

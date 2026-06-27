@@ -348,6 +348,7 @@ void twComponent::invalidateAllPages()
 
         for (auto& [pos, page] : outputPages_) {
             page->validAspects = 0;  // Mark all aspects as stale
+            page->generation++;       // Increment generation so audio threads detect invalidation
         }
     }
 
