@@ -343,11 +343,18 @@ std::vector<std::shared_ptr<twOutputPage>> twComponent::getPagesInRange(
 
 void twComponent::invalidateAllPages()
 {
-    std::lock_guard<std::mutex> lock(outputPagesMutex_);
-    
-    for (auto& [pos, page] : outputPages_) {
-        page->validAspects = 0;  // Mark all aspects as stale
+    {
+        std::lock_guard<std::mutex> lock(outputPagesMutex_);
+
+        for (auto& [pos, page] : outputPages_) {
+            page->validAspects = 0;  // Mark all aspects as stale
+        }
     }
+
+    // Phase 4 Gap 9: Invalidation Cascade
+    // Trigger downstream invalidation so dependent components also re-freeze
+    // (must call outside lock to prevent potential deadlock with recursive invalidation)
+    invalidateDependents();
 }
 
 void twComponent::setPageAsFrozen(

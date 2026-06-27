@@ -291,7 +291,22 @@ public:
 
     // Invalidate all cached pages (called when component parameters change).
     // Marks all pages' validAspects as 0, triggering re-freezing.
+    // Also invalidates downstream components (Gap 9: invalidation cascade).
     void invalidateAllPages();
+
+    // Phase 4 Gap 9: Invalidation Cascade
+    // Called when this component's parameters change to invalidate downstream consumers.
+    // Default: no-op (components with no side effects need not override).
+    // Override in components that are consumed by others (mixers, effects chains, etc.)
+    // to mark dependent components for re-freezing.
+    //
+    // Example: If Component A outputs to Component B via a latch,
+    // and A's parameters change, A->invalidateDependents() should invalidate B.
+    //
+    // Thread-safe: components can be called from revalidator workers or UI thread.
+    virtual void invalidateDependents() {
+        // Default: no downstream invalidation
+    }
 
     // Internal: mark a specific page as frozen and valid for given aspects.
     // Called by revalidator after successful freezing.
