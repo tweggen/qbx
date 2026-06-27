@@ -9,11 +9,36 @@
 #include <condition_variable>
 #include <memory>
 #include <atomic>
+#include <variant>
 #include "capture_page_pool.h"
 
 // Forward declarations
 class CapturePagePool;
 class SObject;
+class twComponent;
+class twOutputPage;
+
+/**
+ * Component freezing job: request to freeze a twComponent output page.
+ * Phase 4 Gap 10: Pre-compute component pages for efficient rendering.
+ *
+ * Each component freezing job specifies:
+ * - Which component to freeze
+ * - Which time position to freeze (page start position)
+ * - Previous page (for internal state resumption)
+ * - Priority (higher = process first)
+ */
+struct ComponentFreezingJob {
+    twComponent* component;      // Which component to freeze (borrowed pointer)
+    uint64_t pageStartPos;       // Position to freeze (in component sample rate)
+    std::shared_ptr<twOutputPage> previousPage;  // For state chain (may be nullptr for page 0)
+    int priority;                // 0-10 (higher first)
+
+    // For priority queue: higher priority dequeues first
+    bool operator<(const ComponentFreezingJob& other) const {
+        return priority < other.priority;
+    }
+};
 
 /**
  * Revalidation job: request to recompute specific capture aspects for an SObject.
@@ -83,7 +108,7 @@ public:
     ~CaptureRevalidator();
 
     /**
-     * Schedule a revalidation job.
+     * Schedule a revalidation job (SObject-level).
      *
      * Non-blocking: returns immediately, job runs in background.
      * If queue is full or pool exhausted, job may be skipped (acceptable).
@@ -96,6 +121,22 @@ public:
     void scheduleRevalidation(SObject* object, uint32_t aspects, int priority = 5);
 
     /**
+     * Schedule a component freezing job (Phase 4 Gap 10).
+     *
+     * Non-blocking: pre-computes frozen component output pages for efficient rendering.
+     * Workers call component->freezePage() to materialize output.
+     *
+     * @param component Which component to freeze (borrowed pointer)
+     * @param pageStartPos Time position to freeze (in component sample rate)
+     * @param previousPage Previous page's snapshot (for state resumption), may be nullptr
+     * @param priority Job priority (higher = process first)
+     *                 Suggested: 10=Playback, 5=Metadata, 2=Export, 1=Preview
+     */
+    void scheduleComponentFreezing(twComponent* component, uint64_t pageStartPos,
+                                   std::shared_ptr<twOutputPage> previousPage = nullptr,
+                                   int priority = 5);
+
+    /**
      * Graceful shutdown: wait for workers to finish and join.
      *
      * Called by destructor; can also be called explicitly.
@@ -105,6 +146,7 @@ public:
 
     /**
      * Get pool statistics (for diagnostics).
+     * Returns total of both revalidation and freezing jobs.
      */
     size_t jobsQueued() const;
 
@@ -112,8 +154,11 @@ private:
     // Implementation: worker thread loop
     void workerLoop();
 
-    // Helper: process a single revalidation job
-    void processJob(const CaptureRevalidationJob& job);
+    // Helper: process a single revalidation job (SObject)
+    void processRevalidationJob(const CaptureRevalidationJob& job);
+
+    // Helper: process a single component freezing job
+    void processComponentFreezingJob(const ComponentFreezingJob& job);
 
     // Dispatch recomputation to object's virtual methods
     // These no longer do the computation themselves; they delegate to the object
@@ -122,9 +167,10 @@ private:
     // Members
     CapturePagePool* pagePool_;  // Borrowed, not owned
 
-    // Job queue with priority (mutable for const methods like jobsQueued())
+    // Job queues with priority (mutable for const methods like jobsQueued())
     mutable std::mutex queueLock_;
-    std::priority_queue<CaptureRevalidationJob> jobQueue_;
+    std::priority_queue<CaptureRevalidationJob> revalidationQueue_;     // SObject jobs
+    std::priority_queue<ComponentFreezingJob> freezingQueue_;           // Component jobs
     std::condition_variable queueNotEmpty_;
 
     // Shutdown coordination

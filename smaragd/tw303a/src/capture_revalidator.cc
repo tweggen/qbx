@@ -2,6 +2,8 @@
 #include "capture_page_pool.h"
 #include "sobject.h"  // For SObject::recomputeXXX virtual methods
 #include "scut.h"  // For SCutCaptureAspect enum (Preview, Playback, Metadata, Export)
+#include "twcomponent.h"  // For twComponent::freezePage() and setPageAsFrozen()
+#include "tw_output_page.h"  // For twOutputPage and twAspectAll
 #include <cassert>
 #include <vector>
 #include <algorithm>
@@ -26,7 +28,19 @@ void CaptureRevalidator::scheduleRevalidation(SObject* object, uint32_t aspects,
 
     {
         std::lock_guard<std::mutex> lock(queueLock_);
-        jobQueue_.push({object, aspects, priority});
+        revalidationQueue_.push({object, aspects, priority});
+    }
+    queueNotEmpty_.notify_one();
+}
+
+void CaptureRevalidator::scheduleComponentFreezing(twComponent* component, uint64_t pageStartPos,
+                                                    std::shared_ptr<twOutputPage> previousPage,
+                                                    int priority) {
+    if (!component) return;
+
+    {
+        std::lock_guard<std::mutex> lock(queueLock_);
+        freezingQueue_.push({component, pageStartPos, previousPage, priority});
     }
     queueNotEmpty_.notify_one();
 }
@@ -48,41 +62,47 @@ void CaptureRevalidator::shutdown() {
 
 size_t CaptureRevalidator::jobsQueued() const {
     std::lock_guard<std::mutex> lock(queueLock_);
-    return jobQueue_.size();
+    return revalidationQueue_.size() + freezingQueue_.size();
 }
 
 void CaptureRevalidator::workerLoop() {
     while (true) {
-        CaptureRevalidationJob job{nullptr, 0, 0};
-
         // Wait for job or shutdown signal
         {
             std::unique_lock<std::mutex> lock(queueLock_);
             queueNotEmpty_.wait(lock, [this]() {
-                return !jobQueue_.empty() || shutdown_;
+                return !revalidationQueue_.empty() || !freezingQueue_.empty() || shutdown_;
             });
 
-            // If shutting down and queue empty, exit
-            if (shutdown_ && jobQueue_.empty()) {
+            // If shutting down and both queues empty, exit
+            if (shutdown_ && revalidationQueue_.empty() && freezingQueue_.empty()) {
                 break;
             }
 
-            // If queue empty (but not shutting down), loop again
-            if (jobQueue_.empty()) {
+            // If both queues empty (but not shutting down), loop again
+            if (revalidationQueue_.empty() && freezingQueue_.empty()) {
                 continue;
             }
 
-            // Dequeue next job (highest priority first)
-            job = jobQueue_.top();
-            jobQueue_.pop();
+            // Dequeue highest priority job from either queue
+            // Prioritize revalidation jobs slightly (they're more UI-critical)
+            if (!revalidationQueue_.empty() && (freezingQueue_.empty() ||
+                revalidationQueue_.top().priority >= freezingQueue_.top().priority)) {
+                CaptureRevalidationJob job = revalidationQueue_.top();
+                revalidationQueue_.pop();
+                lock.unlock();
+                processRevalidationJob(job);
+            } else if (!freezingQueue_.empty()) {
+                ComponentFreezingJob job = freezingQueue_.top();
+                freezingQueue_.pop();
+                lock.unlock();
+                processComponentFreezingJob(job);
+            }
         }
-
-        // Process job outside lock (blocking OK for background thread)
-        processJob(job);
     }
 }
 
-void CaptureRevalidator::processJob(const CaptureRevalidationJob& job) {
+void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& job) {
     assert(job.object);
     assert(job.aspects != 0);
 
@@ -157,4 +177,40 @@ void CaptureRevalidator::dispatchRecomputation(SObject* object, uint32_t aspects
     if (aspects & Export) {
         object->recomputeExport(page);
     }
+}
+
+void CaptureRevalidator::processComponentFreezingJob(const ComponentFreezingJob& job) {
+    // Phase 4 Gap 10: Component-level page freezing
+    // Worker thread pre-computes frozen output pages for efficient rendering.
+    //
+    // Sequential rendering chain:
+    //   freezePage(0, nullptr) → render with reset() → capture state → page 0
+    //   freezePage(1, page0)   → restore state from page 0 → render → capture new state → page 1
+    //   freezePage(2, page1)   → resume from page 1 → render → capture new state → page 2
+    //   ...
+    //
+    // No locks needed on component during freezing (read-only state from latches).
+    // Page pool manages memory; no object-level page swapping like SObject has.
+
+    assert(job.component);
+
+    // Call component->freezePage() to materialize output
+    // This internally orchestrates: reset/restore → renderFrames() → capture state
+    auto frozenPage = job.component->freezePage(
+        job.pageStartPos,
+        nullptr,                   // No pre-prepared input; renderFrames uses latches
+        0,
+        0,
+        0,                          // sampleRate (unused in current implementation)
+        job.previousPage            // Sequential state chain
+    );
+
+    if (!frozenPage) {
+        return;  // Failed to freeze (rare; component may not be ready)
+    }
+
+    // Page is now frozen. Store it in component's page cache via setPageAsFrozen().
+    // This allows render loops (or other consumers) to read from the frozen page
+    // instead of calling calcOutputTo() redundantly.
+    job.component->setPageAsFrozen(job.pageStartPos, frozenPage, twAspectAll);
 }
