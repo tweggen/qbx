@@ -21,14 +21,20 @@ int twTrackMix::seekTo( offset_t newOffset )
     // match what calcOutputTo would compute anyway, so seekTo becomes a no-op for
     // reader cursors already at the right position. This design cleanly separates
     // concerns: "seek when position changes, advance on consecutive chunks."
+    //
+    // IMPORTANT: Seek ALL children regardless of timeline position. If we only seek
+    // clips within env.getBufferSize() of the seek point, clips starting later
+    // retain stale reader positions (e.g., from prior playback), causing sparse/silent
+    // audio when the render/playback reaches them.
     for( SLink *lk : track_.childLinks() ) {
         if( !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();
-        // Only seek children that are in or near the play window
-        if( startTime < newOffset + env.getBufferSize() ) {
-            offset_t clipRelative = std::max((offset_t)0, newOffset - startTime);
-            lk->seekTo( clipRelative );
-        }
+        // Seek this child to the correct clip-relative position.
+        // For clips not yet started (startTime > newOffset), this yields 0 (correct).
+        // For clips already playing (startTime <= newOffset), this yields the offset
+        // into the clip (also correct).
+        offset_t clipRelative = std::max((offset_t)0, newOffset - startTime);
+        lk->seekTo( clipRelative );
     }
 
     return 0;
