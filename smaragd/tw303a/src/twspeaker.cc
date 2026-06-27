@@ -195,11 +195,6 @@ void twSpeaker::stopOutput()
     TWSPK_LOG( "ENTER - stopping backend" );
     isPlaying_ = false;               // flip first: a re-entrant/observer sees "stopping"
     backend_->stopOutput();
-
-    // Give audio thread time to exit callback before closing device
-    // Without this, audio callback might still be running when closeDevice() disposes audio unit
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
     backend_->closeDevice();
     audioEngine_.reset();              // Ensure audioEngine destroyed before returning
     TWSPK_LOG( "stopped" );
