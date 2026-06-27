@@ -161,6 +161,11 @@ public:
     virtual offset_t tellPos() const;
     virtual void resetAllLatches();  // Reset all output latches to offset 0
 
+    // Reset component to initial state (silence, zero position, empty buffers).
+    // Called before sequential rendering from scratch or to resume from snapshot.
+    // Essential for freezing model: every page starts from known reset state.
+    virtual void reset() = 0;
+
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) = 0;
 
     void setInput( idx_t idx, twLatchOutput * pLatchOutput );

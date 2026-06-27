@@ -183,3 +183,4 @@ int twSampleSource::loadWav()
              (long long) nFrames_, (long long) ( data_.size() * sizeof( sample_t ) ) );
     return 0;
 }
+

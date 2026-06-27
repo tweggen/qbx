@@ -25,4 +25,5 @@ class twTestSeq : public twComponent {
 		twTestSeq( tw303aEnvironment &, sample_t constant, sample_t portamento0 );
 };
 
+    virtual void reset() override;
 #endif

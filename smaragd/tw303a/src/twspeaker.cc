@@ -236,3 +236,4 @@ void twSpeaker::createOutputLatches()
     TWSPK_LOG( "entered." );
 #endif
 }
+

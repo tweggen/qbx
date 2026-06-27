@@ -99,3 +99,4 @@ length_t twCapturingSource::read( offset_t srcOffset, sample_t *dest,
     }
     return n;
 }
+

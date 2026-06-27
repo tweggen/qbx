@@ -77,3 +77,4 @@ twWhiteNoise::twWhiteNoise( tw303aEnvironment &env0 )
     freqBuffer = NULL;
     setBufferSize( env.getBufferSize() );
 }
+

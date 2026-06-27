@@ -27,11 +27,6 @@ void twResampler::reserveHint( length_t maxOutFrames )
     if( hist_.capacity() < need ) hist_.reserve( need );
 }
 
-void twResampler::reset()
-{
-    phase_ = 0.0;
-    hist_.clear();   // keeps capacity, so no realloc on play restart
-}
 
 length_t twResampler::process( twLatchStreamingOutput *src,
                                sample_t *out, length_t outFrames,
@@ -95,4 +90,9 @@ length_t twResampler::process( twLatchStreamingOutput *src,
 
     if( inConsumed ) *inConsumed = consumed;
     return produced;
+}
+
+void twResampler::reset()
+{
+    // Stateless component: position advances in process()
 }

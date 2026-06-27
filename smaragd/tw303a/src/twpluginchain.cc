@@ -133,3 +133,9 @@ void twPluginChain::rebuildWiring()
         }
     }
 }
+
+
+void twPluginChain::reset()
+{
+    // Stateless component: plugins handle their own state
+}

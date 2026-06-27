@@ -93,3 +93,4 @@ length_t twMoog::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */
 	}
 	return realRead;
 }
+

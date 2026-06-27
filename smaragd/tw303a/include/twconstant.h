@@ -9,6 +9,7 @@ class tw303aEnvironment;
 class twConstant
     : public twComponent
 {
+    virtual void reset() override;
 private:
     sample_t constant;
 protected:

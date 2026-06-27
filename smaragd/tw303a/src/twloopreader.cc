@@ -38,3 +38,10 @@ length_t twLoopReader::calcOutputTo( sample_t *pDest, length_t length, idx_t idx
     seekTo( pos + (offset_t) length );
     return length;
 }
+
+
+void twLoopReader::reset()
+{
+    // Call parent's reset
+    twSampleReader::reset();
+}

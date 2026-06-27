@@ -37,6 +37,7 @@ public:
 
 protected:
 
+    virtual void reset() override;
 private:
     STrack &track_;
     std::atomic<offset_t> playOffset_{ 0 };  // Atomic: protects race between UI seek and audio render

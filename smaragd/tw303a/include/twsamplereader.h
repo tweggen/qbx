@@ -29,6 +29,7 @@ public:
     virtual bool isSeekable() const;
     virtual int seekTo( offset_t );
     virtual offset_t tellPos() const;
+    virtual void reset() override;  // Reset position to start of sample
 
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );
 

@@ -53,6 +53,7 @@ public:
     // mint independent readers (twRandomSource::acquireReader).
     twRandomSource *getSource() const;
 
+    virtual void reset() override;
 private:
     twSampleSource *source_;
     bool            loaded_;

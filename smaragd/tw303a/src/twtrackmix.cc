@@ -163,3 +163,10 @@ twTrackMix::twTrackMix( tw303aEnvironment &env, STrack &track )
       playOffset_( 0 )
 {
 }
+
+
+void twTrackMix::reset()
+{
+    // Reset play offset to zero
+    playOffset_ = 0;
+}

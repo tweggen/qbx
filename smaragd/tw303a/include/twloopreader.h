@@ -23,6 +23,7 @@ public:
                   offset_t loopBase, length_t loopLen );
     virtual ~twLoopReader();
 
+    virtual void reset() override;  // Inherited from twSampleReader
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );
 
 private:

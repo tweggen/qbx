@@ -7,6 +7,7 @@
 class twWhiteNoise
     : public twOsc
 {
+    virtual void reset() override;
 private:
 protected:
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );

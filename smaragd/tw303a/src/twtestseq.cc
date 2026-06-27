@@ -110,3 +110,4 @@ twTestSeq::twTestSeq( tw303aEnvironment &env0, sample_t constant0, sample_t port
 	constant = prevConstant = freq( 12 );
 }
 #endif
+

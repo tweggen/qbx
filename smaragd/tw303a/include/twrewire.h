@@ -40,6 +40,7 @@ public:
 
 protected:
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t ldx );
+    virtual void reset() override;
 private:
     int nInputs_;
 };

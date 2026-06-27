@@ -132,3 +132,9 @@ twWavInput::~twWavInput()
         source_ = NULL;
     }
 }
+
+
+void twWavInput::reset()
+{
+    // Stateless component: no internal state to reset
+}

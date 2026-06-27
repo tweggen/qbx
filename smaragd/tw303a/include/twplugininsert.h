@@ -36,6 +36,7 @@ public:
     bool getBypass() const { return bypass_; }
     twPlugin *getPlugin() const { return plugin_.get(); }
 
+    virtual void reset() override;
 private:
     std::unique_ptr<twPlugin> plugin_;
     bool bypass_ = false;

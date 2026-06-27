@@ -38,6 +38,7 @@ public:
     // Rebuild the wiring (call after modifications)
     void rebuildWiring();
 
+    virtual void reset() override;
 private:
     idx_t nBusses_;
     mutable std::mutex pluginsMutex_;  // protects plugins_ vector from concurrent access

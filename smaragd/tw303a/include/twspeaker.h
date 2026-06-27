@@ -16,6 +16,7 @@ class twSpeaker
     : public twComponent
 {
     Q_OBJECT
+    virtual void reset() override;
 private:
     std::unique_ptr<audio::AudioBackend> backend_;
     std::unique_ptr<audio::AudioEngine> audioEngine_;

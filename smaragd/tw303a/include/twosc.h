@@ -9,6 +9,7 @@ class tw303aEnvironment;
 class twOsc
     : public twComponent 
 {
+    virtual void reset() override;
 private:
 protected:
     offset_t currPos;

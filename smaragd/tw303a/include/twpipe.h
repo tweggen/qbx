@@ -28,6 +28,7 @@ class twPipe : public twComponent {
     
     void setBufferSize( length_t length );
     twPipe( tw303aEnvironment &env0 );
+    virtual void reset() override;
 };
 
 #endif
