@@ -39,7 +39,16 @@ public:
     virtual const char *getInputName( idx_t ) const;
     virtual const char *getOutputName( idx_t ) const;
 
+    // Internal state snapshot for sequential rendering resumption
+    virtual std::any captureInternalState() const override;
+    virtual void restoreInternalState(const std::any& state) override;
+
 private:
+    // State snapshot type for capture/restore
+    struct InternalState {
+        offset_t position;
+    };
+
     twRandomSource &src_;
     offset_t pos_;
 };

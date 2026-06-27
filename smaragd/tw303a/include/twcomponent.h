@@ -205,7 +205,34 @@ public:
 
     int initOperation( int );
 
-    // --- Output Page Caching (Phase 1 of Unified Rendering) ----------------
+    // --- Internal State Snapshots (Phase 1 - Gap 2) --------------------------
+    // Sequential/stateful components (reverbs, delays, grain) can save/restore state
+    // to enable sequential rendering with state resumption between pages.
+    //
+    // Example: Spring Reverb
+    //   Page 0 [0..PAGE_SIZE]: render from reset, save delay line state → OutputPage.internalState
+    //   Page 1 [PAGE_SIZE..2*PAGE_SIZE]: restore delay line state, render, save new state
+    //   Result: Reverb output is continuous; no artifacts at page boundaries
+    //
+    // Stateless components (oscillators, simple mixers) use default (empty any, no-op restore).
+
+    // Capture current internal state for serialization into OutputPage.internalState.
+    // Default: return empty std::any (stateless components need no override).
+    // Override in stateful components: reverbs, delays, grain time-stretch, etc.
+    virtual std::any captureInternalState() const {
+        return std::any();  // Default: no state to capture
+    }
+
+    // Restore internal state from snapshot (for sequential rendering resume).
+    // Called before freezing a page when resuming from a previous page's snapshot.
+    // Default: no-op (stateless components need no override).
+    // Override in stateful components to restore delay lines, grain state, etc.
+    virtual void restoreInternalState(const std::any& state) {
+        // Default: no-op (state parameter unused)
+        (void)state;  // Suppress unused parameter warning
+    }
+
+    // --- Output Page Caching (Phase 1 - Gap 1) ----------------
     // Component-level frozen output pages for efficient multi-consumer rendering.
     // All components own a cache of their output for time windows (pages).
     // This enables:

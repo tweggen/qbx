@@ -78,3 +78,25 @@ const char *twSampleReader::getOutputName( idx_t ) const
 {
     return "Sample reader output";
 }
+
+// ============================================================================
+// Internal State Snapshot Implementation (Phase 1 - Gap 2)
+// ============================================================================
+
+
+std::any twSampleReader::captureInternalState() const
+{
+    // Capture the current read position for state resumption
+    return std::any(InternalState{pos_});
+}
+
+void twSampleReader::restoreInternalState(const std::any& state)
+{
+    try {
+        auto s = std::any_cast<const InternalState&>(state);
+        pos_ = s.position;
+    } catch (const std::bad_any_cast&) {
+        // State format mismatch; log warning but don't crash
+        fprintf(stderr, "twSampleReader::restoreInternalState: state format mismatch, skipping restore\n");
+    }
+}
