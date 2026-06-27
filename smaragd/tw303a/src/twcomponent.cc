@@ -390,11 +390,23 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
-    // Create output page
+    // Phase 4 Gap 5: Multi-consumer page sharing
+    // Check if this page already exists and is valid
+    // If so, return it to enable sharing between consumers
+    {
+        std::lock_guard<std::mutex> lock(outputPagesMutex_);
+        auto it = outputPages_.find(startPos);
+        if (it != outputPages_.end() && it->second->validAspects & twAspectAll) {
+            // Page exists and is fully valid; return for sharing
+            return it->second;
+        }
+    }
+
+    // Page doesn't exist or is invalid; freeze it
     auto page = std::make_shared<twOutputPage>();
     page->startPosition = startPos;
     page->createdAt = std::chrono::steady_clock::now();
-    
+
     // Initialize state: reset if page 0, else restore from previous
     if (previousPage) {
         // Resume from previous page's snapshot
@@ -403,16 +415,16 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
         // First page: start from reset state
         reset();
     }
-    
+
     // Calculate input data available for this page
     const sample_t *pageInput = nullptr;
     length_t pageInputLength = 0;
-    
+
     if (inputData && inputOffset < inputLength) {
         pageInput = inputData + inputOffset;
         pageInputLength = inputLength - inputOffset;
     }
-    
+
     // Render frames into page buffer
     length_t toRender = twOutputPage::FRAME_CAPACITY;
     page->validFrames = renderFrames(
@@ -422,9 +434,15 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
         pageInputLength,
         0  // idx = 0 (first output)
     );
-    
+
     // Capture new internal state for next page resumption
     page->internalState = captureInternalState();
-    
+
+    // Store in cache for future consumers to share
+    {
+        std::lock_guard<std::mutex> lock(outputPagesMutex_);
+        outputPages_[startPos] = page;
+    }
+
     return page;
 }
