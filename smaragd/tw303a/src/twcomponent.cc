@@ -399,21 +399,43 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
 )
 {
     // Phase 4 Gap 5: Multi-consumer page sharing
-    // Check if this page already exists and is valid
-    // If so, return it to enable sharing between consumers
+    // ATOMIC check-and-insert: prevent race where two threads both create pages for same startPos
+    // This entire block must be under mutex to avoid TOCTOU race
     {
         std::lock_guard<std::mutex> lock(mutex());
         auto it = outputPages_.find(startPos);
-        if (it != outputPages_.end() && it->second->validAspects & twAspectAll) {
-            // Page exists and is fully valid; return for sharing
+        if (it != outputPages_.end()) {
+            // Page already exists (valid or invalid); return existing page
+            // Caller will check validAspects to see if it's ready
             return it->second;
         }
-    }
 
-    // Page doesn't exist or is invalid; freeze it
-    auto page = std::make_shared<twOutputPage>();
-    page->startPosition = startPos;
-    page->createdAt = std::chrono::steady_clock::now();
+        // Page doesn't exist; allocate and insert placeholder immediately
+        // This prevents another thread from allocating the same page concurrently
+        auto page = std::make_shared<twOutputPage>();
+        page->startPosition = startPos;
+        page->createdAt = std::chrono::steady_clock::now();
+        page->validAspects = 0;  // Not yet frozen
+        outputPages_[startPos] = page;
+
+        // Release mutex; we now own this page (it's in the map)
+        // Complete the page outside the lock to avoid holding it during long renderFrames()
+        // Key: the page IS in the map, so the placeholder is there; other threads see it
+    } // Lock released here
+
+    // Get the page we just inserted (or might have failed to insert due to race)
+    // Actually, we need to re-fetch it since we released the lock
+    std::shared_ptr<twOutputPage> page;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        auto it = outputPages_.find(startPos);
+        if (it != outputPages_.end()) {
+            page = it->second;
+        } else {
+            // Should never happen, but safety fallback
+            return nullptr;
+        }
+    }
 
     // Initialize state: reset if page 0, else restore from previous
     if (previousPage) {
@@ -436,6 +458,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     }
 
     // Render frames into page buffer
+    // Now safe: page is in the map (protected by refcount), nobody else will create it
     length_t toRender = twOutputPage::FRAME_CAPACITY;
     page->validFrames = renderFrames(
         page->samples.data(),
@@ -446,16 +469,16 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     );
 
     // Capture new internal state for next page resumption
-    // Phase 5 Gap 12: Acquire lock on new page while writing its state
+    // Phase 5 Gap 12: Acquire lock on page while writing its state
     {
         std::lock_guard<std::mutex> lock(page->pageMutex);
         page->internalState = captureInternalState();
     }
 
-    // Store in cache for future consumers to share
+    // Mark page as frozen and valid
     {
         std::lock_guard<std::mutex> lock(mutex());
-        outputPages_[startPos] = page;
+        page->validAspects = twAspectAll;  // Mark all aspects as complete
     }
 
     return page;
