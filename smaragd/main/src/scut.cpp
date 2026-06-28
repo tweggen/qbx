@@ -91,8 +91,8 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
 
     // STEP 1: Build new reader state completely out-of-band
     // (audio thread continues using currentReader_ during this entire process)
-    twSampleReader *newReader = NULL;
-    twGrainSource *newGrain = NULL;
+    std::shared_ptr<twSampleReader> newReader;
+    std::shared_ptr<twGrainSource> newGrain;
     bool newLooping = false;
 
     twRandomSource *rs = content_->getSObject().getRandomSource();
@@ -111,8 +111,8 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     {
         twRandomSource *view = rs;
         if( !snap.grainParams.isIdentity() ) {
-            newGrain = new twGrainSource( *rs, snap.grainParams );
-            view = newGrain;
+            newGrain = std::make_shared<twGrainSource>( *rs, snap.grainParams );
+            view = newGrain.get();
         }
         tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
         // Convert startOffset and loopLength from plainwave domain to grain domain if grain is active
@@ -125,25 +125,26 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
         if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
             twLoopReader *lr = new twLoopReader( env, *view, adjustedStartOffset, adjustedLoopLength );
             lr->init();
-            newReader = lr;
+            newReader = std::shared_ptr<twSampleReader>( lr );
             newLooping = true;
         } else {
-            newReader = view->acquireReader( env );
+            newReader = std::shared_ptr<twSampleReader>( view->acquireReader( env ) );
             newLooping = false;
         }
     }
 
 swap_complete:
-    // STEP 2: Atomic swap (Unix page cache model)
-    // Audio thread sees oldReader_ become available for deletion, currentReader_ updated
+    // STEP 2: Atomic swap (Unix page cache model with refcounted lifecycle)
+    // Audio thread snapshot keeps old readers alive via shared_ptr refcount.
+    // Even if swapped out, readers not deleted until all snapshots released.
     {
         std::lock_guard<std::mutex> lock( readerSwapLock_ );
 
-        // Clean up previous old reader (oldReader_.captureRef shared_ptr released automatically)
-        if( oldReader_.reader ) { delete oldReader_.reader; oldReader_.reader = NULL; }
-        if( oldReader_.grain )  { delete oldReader_.grain;  oldReader_.grain = NULL; }
+        // NO manual delete needed: shared_ptr handles deferred deletion
+        // oldReader_ refcount decrements automatically when overwritten
+        // If audio thread holds oldReader_ snapshot, it stays alive (refcount >= 1)
 
-        // Move current to old (for deferred deletion)
+        // Move current to old (for deferred deletion via refcount)
         oldReader_ = currentReader_;
 
         // Move next to current (becomes visible to audio thread immediately)
@@ -666,13 +667,15 @@ SCut::~SCut()
         content_->getSObject().removeDependentLink(content_);
     }
 
-    // Clean up all reader states (double-buffer model)
-    if( currentReader_.reader ) { delete currentReader_.reader; currentReader_.reader = NULL; }
-    if( currentReader_.grain )  { delete currentReader_.grain;  currentReader_.grain = NULL; }
-    if( oldReader_.reader ) { delete oldReader_.reader; oldReader_.reader = NULL; }
-    if( oldReader_.grain )  { delete oldReader_.grain;  oldReader_.grain = NULL; }
-    if( nextReader_.reader ) { delete nextReader_.reader; nextReader_.reader = NULL; }
-    if( nextReader_.grain )  { delete nextReader_.grain;  nextReader_.grain = NULL; }
+    // Clean up all reader states (double-buffer model with refcounting)
+    // No manual delete needed: shared_ptr handles automatic destruction
+    // when refcount reaches zero (after all audio thread snapshots released)
+    currentReader_.reader.reset();
+    currentReader_.grain.reset();
+    oldReader_.reader.reset();
+    oldReader_.grain.reset();
+    nextReader_.reader.reset();
+    nextReader_.grain.reset();
 
     // capture_ is a shared_ptr — it will be freed when all references are released
     capture_.reset();

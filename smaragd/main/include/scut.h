@@ -65,13 +65,17 @@ enum SCutCaptureAspect : uint32_t {
  */
 // Double-buffer reader state: always has a complete, committed version (Unix page cache model).
 // Audio thread always reads "current"; UI thread builds "next", then swaps atomically.
-// captureRef keeps the backing container render alive for as long as any reader references it.
+//
+// ALL pointers are refcounted (shared_ptr) to prevent use-after-free:
+// - Audio thread takes snapshot of currentReader_ (increments refcounts)
+// - UI thread swaps readers (decrements old refcounts)
+// - Objects not deleted until ALL readers release their snapshots
 struct SCutReaderState {
-    twSampleReader *reader = nullptr;      // Always valid: non-null or fallback to content's root
-    twGrainSource *grain = nullptr;        // Optional grain processor
-    std::shared_ptr<twCapturingSource> captureRef;  // Keeps backing source alive during render
-    bool looping = false;                  // True iff reader is a twLoopReader
-    int generation = 0;                    // Incremented on each swap
+    std::shared_ptr<twSampleReader> reader;      // Refcounted: always valid or null
+    std::shared_ptr<twGrainSource> grain;        // Refcounted: optional grain processor
+    std::shared_ptr<twCapturingSource> captureRef;  // Refcounted: keeps backing source alive
+    bool looping = false;                        // True iff reader is a twLoopReader
+    int generation = 0;                          // Incremented on each swap
 };
 
 // Window parameter change event queue for async processing after drag operations.
