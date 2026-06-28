@@ -517,7 +517,15 @@ int SCut::seekTo( offset_t off )
     // A loop reader is cut-relative (it adds its own loop base = startOffset_);
     // a plain reader needs startOffset_ folded in here.
     // snap.reader.reader is always valid (double-buffer model: Unix page cache).
-    offset_t seekPos = snap.reader.looping ? off : off + snap.startOffset;
+    //
+    // When grain is active, startOffset_ is in plainwave domain but the reader's
+    // underlying source (twGrainSource) is in stretched domain. Convert before seeking.
+    // The looping path handles this at reader construction (adjustedStartOffset in rebuildReader).
+    offset_t startOff = snap.startOffset;
+    if (!snap.reader.looping && snap.reader.grain) {
+        startOff = (offset_t)llround((double)startOff * snap.grainParams.stretch);
+    }
+    offset_t seekPos = snap.reader.looping ? off : off + startOff;
     if( snap.reader.reader ) return snap.reader.reader->seekTo( seekPos );
     return content_->getSObject().seekTo( seekPos );
 }
