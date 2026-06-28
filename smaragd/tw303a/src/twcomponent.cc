@@ -288,8 +288,8 @@ std::shared_ptr<twOutputPage> twComponent::getOrAllocatePage(
     uint32_t aspectsMask
 )
 {
-    std::lock_guard<std::mutex> lock(outputPagesMutex_);
-    
+    std::lock_guard<std::mutex> lock(mutex());
+
     auto it = outputPages_.find(startPos);
     if (it != outputPages_.end()) {
         // Page already exists
@@ -297,23 +297,23 @@ std::shared_ptr<twOutputPage> twComponent::getOrAllocatePage(
         // Return it whether frozen or not; consumers check validAspects
         return page;
     }
-    
+
     // Allocate new page
     auto page = std::make_shared<twOutputPage>();
     page->startPosition = startPos;
     page->createdAt = std::chrono::steady_clock::now();
     outputPages_[startPos] = page;
-    
+
     // Schedule async freezing (handled by CaptureRevalidator)
     // For now, just allocate; page will be filled by freezing thread
-    
+
     return page;
 }
 
 void twComponent::releaseOldPages(uint64_t keepAfterPos)
 {
-    std::lock_guard<std::mutex> lock(outputPagesMutex_);
-    
+    std::lock_guard<std::mutex> lock(mutex());
+
     for (auto it = outputPages_.begin(); it != outputPages_.end(); ) {
         if (it->first + twOutputPage::PAGE_SIZE < keepAfterPos) {
             // Page is entirely before keepAfterPos; release it
@@ -329,34 +329,31 @@ std::vector<std::shared_ptr<twOutputPage>> twComponent::getPagesInRange(
     uint64_t endPos
 ) const
 {
-    std::lock_guard<std::mutex> lock(outputPagesMutex_);
+    std::lock_guard<std::mutex> lock(mutex());
     std::vector<std::shared_ptr<twOutputPage>> result;
-    
+
     for (const auto& [pos, page] : outputPages_) {
         if (pos >= startPos && pos < endPos) {
             result.push_back(page);
         }
     }
-    
+
     return result;
 }
 
 void twComponent::invalidateAllPages()
 {
     {
-        std::lock_guard<std::mutex> lock(outputPagesMutex_);
+        std::lock_guard<std::mutex> lock(mutex());
 
         for (auto& [pos, page] : outputPages_) {
             page->validAspects = 0;  // Mark all aspects as stale
             page->generation++;       // Increment generation so audio threads detect invalidation
         }
-    }
 
-    // Phase 4 Gap 9 + Tier 2 #1: Invalidation Cascade
-    // Trigger downstream invalidation so dependent components also re-freeze
-    // Tier 2 #1: Selective cascade - only invalidate tracked dependencies
-    {
-        std::lock_guard<std::mutex> lock(dependentsMutex_);
+        // Phase 4 Gap 9 + Tier 2 #1: Invalidation Cascade
+        // Trigger downstream invalidation so dependent components also re-freeze
+        // Tier 2 #1: Selective cascade - only invalidate tracked dependencies
         for (auto dependent : dependents_) {
             if (dependent) {
                 dependent->invalidateAllPages();  // Recursive cascade
@@ -374,8 +371,8 @@ void twComponent::setPageAsFrozen(
     uint32_t aspects
 )
 {
-    std::lock_guard<std::mutex> lock(outputPagesMutex_);
-    
+    std::lock_guard<std::mutex> lock(mutex());
+
     auto it = outputPages_.find(startPos);
     if (it != outputPages_.end()) {
         // Update existing page reference
@@ -405,7 +402,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     // Check if this page already exists and is valid
     // If so, return it to enable sharing between consumers
     {
-        std::lock_guard<std::mutex> lock(outputPagesMutex_);
+        std::lock_guard<std::mutex> lock(mutex());
         auto it = outputPages_.find(startPos);
         if (it != outputPages_.end() && it->second->validAspects & twAspectAll) {
             // Page exists and is fully valid; return for sharing
@@ -457,7 +454,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
 
     // Store in cache for future consumers to share
     {
-        std::lock_guard<std::mutex> lock(outputPagesMutex_);
+        std::lock_guard<std::mutex> lock(mutex());
         outputPages_[startPos] = page;
     }
 
@@ -471,7 +468,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
 void twComponent::addDependent(twComponent* dependent) {
     if (!dependent) return;
 
-    std::lock_guard<std::mutex> lock(dependentsMutex_);
+    std::lock_guard<std::mutex> lock(mutex());
 
     // Avoid duplicate entries
     auto it = std::find(dependents_.begin(), dependents_.end(), dependent);

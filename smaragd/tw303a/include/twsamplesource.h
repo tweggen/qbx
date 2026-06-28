@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <vector>
+#include <mutex>
 #include <qstring.h>
 
 #include "twrandomsource.h"
@@ -47,8 +48,20 @@ public:
      * and reused (rebuilt only if the requested rate changes). The whole-object
      * "play me at the project rate" entry point — preview, readers, and duration
      * all go through it so pitch and length stay consistent.
+     *
+     * Thread-safe: coordinates with audio thread via unified component mutex.
+     * Handles lazy initialization of resampled view without race conditions.
      */
     twRandomSource *viewAtRate( int targetRate ) const;
+
+    // Internal helper: caller must hold component mutex
+    // Caller must ensure mutex() is already locked before calling this.
+    twRandomSource *viewAtRate_nolock( int targetRate ) const;
+
+protected:
+    // Unified mutex protecting mutable state (resampled_ and resampledRate_).
+    // Used by viewAtRate() to coordinate lazy initialization across threads.
+    inline std::mutex& mutex() const { return resampledMutex_; }
 
 private:
     int loadWav();
@@ -64,8 +77,12 @@ private:
 
     // Lazily-built, cached resampled view (one slot, keyed by rate). Mutable so
     // viewAtRate() can stay const for const read paths (getLength, preview).
+    // Protected by resampledMutex_ to handle concurrent viewAtRate() calls from
+    // UI thread (grain source creation) and audio thread (playback).
+    // Access via viewAtRate() which coordinates locking automatically.
     mutable std::unique_ptr<twResampledSource> resampled_;
     mutable int resampledRate_;
+    mutable std::mutex resampledMutex_;
 };
 
 #endif

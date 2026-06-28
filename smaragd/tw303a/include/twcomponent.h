@@ -375,15 +375,26 @@ public:
         std::shared_ptr<twOutputPage> previousPage = nullptr
     );
 
+protected:
+    // Unified mutex protecting all component state: parameters, internal state,
+    // page cache, and dependency tracking. Derived classes should:
+    //   1. Override public methods to acquire lock via mutex() then call _nolock variant
+    //   2. Implement _nolock() methods that assume lock is held
+    //   3. Document _nolock methods with "Caller must hold mutex()"
+    //
+    // This pattern prevents both race conditions and deadlocks across the component hierarchy.
+    // See [[unified-component-locking]] for the full strategy.
+    inline std::mutex& mutex() const { return stateMutex_; }
+
 private:
+    mutable std::mutex stateMutex_;
+
     // Page cache: maps start position → frozen output page
     std::map<uint64_t, std::shared_ptr<twOutputPage>> outputPages_;
-    mutable std::mutex outputPagesMutex_;
 
     // Tier 2 Enhancement #1: Dependency tracking for selective invalidation
     // Components that depend on this component's output (for cascade invalidation)
     std::vector<twComponent*> dependents_;
-    mutable std::mutex dependentsMutex_;
 
 signals:
     void inputChanged( idx_t idx, twLatchOutput *former, twLatchOutput *recent );
