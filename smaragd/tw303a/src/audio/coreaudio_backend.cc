@@ -393,8 +393,16 @@ void CoreAudioBackend::renderOnce_(unsigned int frames, void *buffers_)
         return;
     }
 
-    // Pull floats from the synthesizer.
-    size_t filled = callback_(floatScratch_.data(), frames, config_.channels);
+    // Clamp frames to the scratch buffer size to prevent overflow.
+    // If CoreAudio requests more frames than we can process in one callback,
+    // we process what we can and pad the rest with silence.
+    unsigned int framesToProcess = frames;
+    if (framesToProcess > config_.bufferFrames) {
+        framesToProcess = config_.bufferFrames;
+    }
+
+    // Pull floats from the synthesizer (up to framesToProcess).
+    size_t filled = callback_(floatScratch_.data(), framesToProcess, config_.channels);
 
     // Copy the float data to the audio buffers.
     const size_t frameBytes = config_.channels * sizeof(float);
@@ -405,7 +413,7 @@ void CoreAudioBackend::renderOnce_(unsigned int frames, void *buffers_)
                 std::memcpy(buffers->mBuffers[i].mData, floatScratch_.data(),
                             filled * frameBytes);
             }
-            // Silence the rest.
+            // Silence the rest of the requested frames.
             if (filled < frames) {
                 std::memset(reinterpret_cast<uint8_t *>(buffers->mBuffers[i].mData) + filled * frameBytes,
                             0, (frames - filled) * frameBytes);

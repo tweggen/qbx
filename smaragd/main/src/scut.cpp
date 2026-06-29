@@ -543,11 +543,15 @@ void SCut::setStartOffset( offset_t off )
 void SCut::setDuration( length_t dur )
 {
     // FIXME: clip.
+    SCutSnapshot snap;
     {
         std::lock_guard<std::mutex> lock(mutex());
         cutDuration_ = dur;
+        // Capture snapshot while holding lock for consistent rebuild
+        snap = getSnapshot();
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
+    rebuildReader( snap );  // Rebuild reader with new duration
     emit durationChanged( dur );
 }
 

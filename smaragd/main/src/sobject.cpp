@@ -267,7 +267,7 @@ int SObject::straightCalcPreviewData()
 }
 
 int SObject::getStraightPreview( preview_t *dest,
-                                 offset_t start, length_t length, 
+                                 offset_t start, length_t length,
                                  offset_t nProbes )
 {
     int res;
@@ -292,6 +292,10 @@ int SObject::getStraightPreview( preview_t *dest,
         // FIXME: Overflows??? Doubles??
         offset_t realPos = start + ((i*length) / nProbes);
         offset_t probeIdx = realPos/previewSkip_;
+        // Clamp probeIdx to valid range [0, nPreviewProbes_-1] to prevent out-of-bounds access
+        if( probeIdx >= nPreviewProbes_ ) {
+            probeIdx = nPreviewProbes_ - 1;
+        }
         preview_t v1 = previewData_[probeIdx];
         *dest++ = v1;
     }
