@@ -58,6 +58,10 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         length_t inFramesNeeded = (length_t)std::ceil(nFrames * invRatio);
         std::vector<float> bufL(inFramesNeeded), bufR(inFramesNeeded);
 
+        // Track current position BEFORE consuming input frames
+        // This allows us to advance by the actual output frame count, not the input count
+        uint64_t posBeforeResample = currentPos_.load(std::memory_order_relaxed);
+
         length_t inProduced = 0;
         for (length_t i = 0; i < inFramesNeeded; ++i) {
             if (!pullStereoFrameFrozen(bufL[i], bufR[i])) {
@@ -92,6 +96,20 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             }
             outProduced++;
         }
+
+        // CRITICAL: Adjust currentPos_ to reflect output frames produced, not input frames consumed.
+        // currentPos_ was advanced by pullStereoFrameFrozen() calls (inProduced times).
+        // But we're outputting outProduced frames. The discrepancy causes position lag.
+        // Correct it: currentPos_ should be posBeforeResample + outProduced (in engine rate).
+        // But we consumed inProduced engine-rate frames, so currentPos_ is now
+        // posBeforeResample + inProduced. We need to subtract the excess.
+        // Actually, currentPos_ should represent the engine-rate position that corresponds
+        // to the output-rate frame we're about to produce. This is complex with resampling.
+        // For now: set currentPos_ to the engine-rate equivalent of output position:
+        // If we've output outProduced frames at output rate, that's outProduced / rateRatio_
+        // frames at engine rate.
+        uint64_t engineFramesForOutput = (uint64_t)std::round((double)outProduced / rateRatio_);
+        currentPos_.store(posBeforeResample + engineFramesForOutput, std::memory_order_relaxed);
 
         return outProduced;
     }
