@@ -113,7 +113,12 @@ int SPlainWave::setWave( const QString fileName )
     cpWave_ = new twWavInput( *(SApplication::app().get303aEnvironment()), fileName );
     cpWave_->init();
     if( !cpWave_->wasLoaded() ) {
-        QMessageBox::information( nullptr, "QBX error", "Unable to load file.", QMessageBox::Ok );
+        // Suppress dialog in headless/test mode; log to stderr instead
+        if( SApplication::app().testOutputDir().isEmpty() ) {
+            QMessageBox::information( nullptr, "QBX error", "Unable to load file.", QMessageBox::Ok );
+        } else {
+            qWarning() << "SPlainWave: unable to load file:" << fileName;
+        }
         delete cpWave_;
         cpWave_ = NULL;
         return -1;
