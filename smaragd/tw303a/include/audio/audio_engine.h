@@ -10,7 +10,7 @@
 
 class twComponent;
 class twLatchStreamingOutput;
-class twOutputPage;
+struct twOutputPage;
 
 namespace audio {
 

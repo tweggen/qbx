@@ -130,6 +130,10 @@ void twSpeaker::startOutput()
 
     backend_->setRenderCallback(
         [this](float *out, std::size_t frames, std::uint32_t channels) -> std::size_t {
+            fprintf(stderr, "twspeaker callback: frames=%zu, channels=%u, out=%p\n",
+                    frames, channels, out);
+            fflush(stderr);
+
             // CRITICAL: Capture shared_ptr to audioEngine in callback scope to prevent
             // use-after-free. Even if stopOutput() sets this->audioEngine_ = nullptr,
             // this local copy keeps the engine alive during callback execution.
@@ -143,6 +147,8 @@ void twSpeaker::startOutput()
 
             // Pull stereo frames via AudioEngine (unified component graph pull)
             std::vector<float> bufL(frames), bufR(frames);
+            fprintf(stderr, "  allocated bufL(%zu), bufR(%zu)\n", frames, frames);
+            fflush(stderr);
 
             // Pull block from AudioEngine (handles resampling, loop cycling, position tracking)
             std::size_t outFrames = engine->pullBlock(bufL.data(), bufR.data(), frames);
