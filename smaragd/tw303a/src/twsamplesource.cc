@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include <qfile.h>
+#include <mutex>
 
 #include "twsamplesource.h"
 #include "twresampledsource.h"
@@ -14,8 +15,7 @@ twSampleSource::twSampleSource( tw303aEnvironment &env, const QString &fileName 
       channels_( 0 ),
       rate_( 0 ),
       bits_( 0 ),
-      nFrames_( 0 ),
-      resampledRate_( 0 )
+      nFrames_( 0 )
 {
     if( loadWav() < 0 ) {
         loaded_ = false;
@@ -32,28 +32,38 @@ twRandomSource *twSampleSource::viewAtRate( int targetRate ) const
 {
     twSampleSource *self = const_cast<twSampleSource *>( this );
 
-    // Fast path: native rate or not loaded (no locking needed for these checks)
+    // Fast path: native rate or not loaded (safe to read without lock—set once at construction)
     if( !loaded_ || targetRate <= 0 || targetRate == rate_ ) {
         fprintf(stderr, "twSampleSource::viewAtRate: returning native rate (loaded=%d, targetRate=%d, rate_=%d)\n",
                 loaded_, targetRate, rate_);
         return self;
     }
 
-    // Slow path: resampling needed; acquire lock and delegate to _nolock
-    fprintf(stderr, "twSampleSource::viewAtRate: acquiring lock for resampling from %d Hz to %d Hz\n", rate_, targetRate);
-    std::lock_guard<std::mutex> lock(self->mutex());
-    return viewAtRate_nolock( targetRate );
-}
+    // Slow path: resampling needed. Use std::call_once for lock-free lazy initialization.
+    // CRITICAL: Lock held only for dictionary access, NOT during constructor call.
+    // This prevents blocking the audio thread on expensive resampler creation.
 
-twRandomSource *twSampleSource::viewAtRate_nolock( int targetRate ) const
-{
-    // Caller must hold component mutex
-    fprintf(stderr, "twSampleSource::viewAtRate_nolock: (held lock) creating resampled view from %d Hz to %d Hz\n", rate_, targetRate);
-    if( !resampled_ || resampledRate_ != targetRate ) {
-        resampled_.reset( new twResampledSource( *this, targetRate ) );
-        resampledRate_ = targetRate;
-    }
-    return resampled_.get();
+    ResampledEntry *entry = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(resampledMutex_);
+        // Insert or get entry for this rate (under lock, brief operation)
+        auto& e = resampledCache_[targetRate];
+        entry = &e;
+    }  // Lock released before std::call_once
+
+    fprintf(stderr, "twSampleSource::viewAtRate: initializing resampled view from %d Hz to %d Hz\n", rate_, targetRate);
+
+    // Call constructor OUTSIDE the lock via std::call_once.
+    // If another thread calls viewAtRate concurrently with the same rate:
+    // - Both acquire lock, insert into map (happens-before)
+    // - Lock released; both call std::call_once
+    // - First thread constructs; second thread waits (via once_flag)
+    // - Both get the same object (safe, deterministic)
+    std::call_once(entry->flag, [&] {
+        entry->obj = std::make_shared<twResampledSource>(*this, targetRate);
+    });
+
+    return entry->obj.get();
 }
 
 /**

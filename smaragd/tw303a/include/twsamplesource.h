@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 #include <mutex>
+#include <map>
 #include <qstring.h>
 
 #include "twrandomsource.h"
@@ -45,26 +46,25 @@ public:
     /**
      * A playable view of this material at targetRate. Returns `this` when the
      * native rate already matches; otherwise a cached resampled view, built once
-     * and reused (rebuilt only if the requested rate changes). The whole-object
-     * "play me at the project rate" entry point — preview, readers, and duration
-     * all go through it so pitch and length stay consistent.
+     * per rate and reused. The whole-object "play me at the project rate" entry
+     * point — preview, readers, and duration all go through it so pitch and length
+     * stay consistent.
      *
-     * Thread-safe: coordinates with audio thread via unified component mutex.
-     * Handles lazy initialization of resampled view without race conditions.
+     * Thread-safe: uses std::call_once for lock-free lazy initialization.
+     * Multiple resampled views (one per rate) cached efficiently. Constructor
+     * called outside lock to avoid blocking on expensive work.
      */
     twRandomSource *viewAtRate( int targetRate ) const;
 
-    // Internal helper: caller must hold component mutex
-    // Caller must ensure mutex() is already locked before calling this.
-    twRandomSource *viewAtRate_nolock( int targetRate ) const;
-
-protected:
-    // Unified mutex protecting mutable state (resampled_ and resampledRate_).
-    // Used by viewAtRate() to coordinate lazy initialization across threads.
-    inline std::mutex& mutex() const { return resampledMutex_; }
-
 private:
     int loadWav();
+
+    // Cache entry: uses std::call_once to ensure exactly one construction per rate,
+    // even with concurrent viewAtRate() calls from different threads.
+    struct ResampledEntry {
+        std::once_flag flag;
+        std::shared_ptr<twResampledSource> obj;
+    };
 
     tw303aEnvironment &env_;
     QString  fileName_;
@@ -75,14 +75,13 @@ private:
     length_t nFrames_;
     std::vector<sample_t> data_;   // planar Float32, size channels_ * nFrames_
 
-    // Lazily-built, cached resampled view (one slot, keyed by rate). Mutable so
-    // viewAtRate() can stay const for const read paths (getLength, preview).
-    // Protected by resampledMutex_ to handle concurrent viewAtRate() calls from
-    // UI thread (grain source creation) and audio thread (playback).
-    // Access via viewAtRate() which coordinates locking automatically.
-    mutable std::unique_ptr<twResampledSource> resampled_;
-    mutable int resampledRate_;
+    // Dictionary of resampled views, keyed by target rate.
+    // Mutable so viewAtRate() can stay const for const read paths (getLength, preview).
+    // Protected by resampledMutex_ to guard dictionary access only (not constructor).
+    // Constructor (std::call_once) is called OUTSIDE the lock, avoiding mutex contention
+    // for expensive resampler creation.
     mutable std::mutex resampledMutex_;
+    mutable std::map<int, ResampledEntry> resampledCache_;
 };
 
 #endif
