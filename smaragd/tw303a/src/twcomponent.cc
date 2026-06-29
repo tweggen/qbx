@@ -398,49 +398,69 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
-    // Phase 4 Gap 5: Multi-consumer page sharing
-    // ATOMIC check-and-insert: prevent race where two threads both create pages for same startPos
-    // This entire block must be under mutex to avoid TOCTOU race
-    {
-        std::lock_guard<std::mutex> lock(mutex());
-        auto it = outputPages_.find(startPos);
-        if (it != outputPages_.end()) {
-            // Page already exists (valid or invalid); return existing page
-            // Caller will check validAspects to see if it's ready
-            return it->second;
-        }
+    // CRITICAL: Do NOT hold mutex during renderFrames, which calls calcOutputTo,
+    // which may recursively call freezePage on upstream components.
+    // Recursive lock attempts will deadlock (mutex is not recursive).
 
-        // Page doesn't exist; allocate and insert placeholder immediately
-        // This prevents another thread from allocating the same page concurrently
-        auto page = std::make_shared<twOutputPage>();
-        page->startPosition = startPos;
-        page->createdAt = std::chrono::steady_clock::now();
-        page->validAspects = 0;  // Not yet frozen
-        outputPages_[startPos] = page;
-
-        // Release mutex; we now own this page (it's in the map)
-        // Complete the page outside the lock to avoid holding it during long renderFrames()
-        // Key: the page IS in the map, so the placeholder is there; other threads see it
-    } // Lock released here
-
-    // Get the page we just inserted (or might have failed to insert due to race)
-    // Actually, we need to re-fetch it since we released the lock
+    // Step 1: Check cache and allocate placeholder under lock
     std::shared_ptr<twOutputPage> page;
+    bool needsRendering = false;
+
     {
         std::lock_guard<std::mutex> lock(mutex());
         auto it = outputPages_.find(startPos);
         if (it != outputPages_.end()) {
+            // Page already exists (valid or invalid); return it
             page = it->second;
         } else {
-            // Should never happen, but safety fallback
-            return nullptr;
+            // Page doesn't exist; allocate and insert placeholder
+            // This prevents another thread from allocating the same page concurrently
+            page = std::make_shared<twOutputPage>();
+            page->startPosition = startPos;
+            page->createdAt = std::chrono::steady_clock::now();
+            page->validAspects = 0;  // Not yet frozen
+            outputPages_[startPos] = page;
+            needsRendering = true;
         }
+    } // Lock released - safe for recursive freezePage calls
+
+    // Step 2: If page was already cached, return it
+    if (!needsRendering) {
+        return page;
     }
 
+    // Step 3: Render the page (OUTSIDE mutex to allow recursive calls)
+    // This is the lengthy operation that must not hold the lock
+    page->validFrames = freezePage_nolock(
+        page,
+        inputData,
+        inputOffset,
+        inputLength,
+        previousPage
+    );
+
+    // Step 4: Mark page as frozen and valid under lock
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        page->validAspects = twAspectAll;  // Mark all aspects as complete
+    }
+
+    return page;
+}
+
+// Caller must NOT hold mutex. This function does all work outside the lock.
+// Caller: freezePage (holds lock briefly for cache check only)
+length_t twComponent::freezePage_nolock(
+    std::shared_ptr<twOutputPage> page,
+    const sample_t *inputData,
+    uint64_t inputOffset,
+    length_t inputLength,
+    std::shared_ptr<twOutputPage> previousPage
+)
+{
     // Initialize state: reset if page 0, else restore from previous
     if (previousPage) {
         // Resume from previous page's snapshot
-        // Phase 5 Gap 12: Acquire lock on previous page to read its state
         std::lock_guard<std::mutex> lock(previousPage->pageMutex);
         restoreInternalState(previousPage->internalState);
     } else {
@@ -458,9 +478,10 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     }
 
     // Render frames into page buffer
-    // Now safe: page is in the map (protected by refcount), nobody else will create it
+    // Safe: page is in the map (protected by refcount), nobody else will create it
+    // Safe to call recursively because mutex is not held
     length_t toRender = twOutputPage::FRAME_CAPACITY;
-    page->validFrames = renderFrames(
+    length_t rendered = renderFrames(
         page->samples.data(),
         toRender,
         pageInput,
@@ -469,19 +490,12 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     );
 
     // Capture new internal state for next page resumption
-    // Phase 5 Gap 12: Acquire lock on page while writing its state
     {
         std::lock_guard<std::mutex> lock(page->pageMutex);
         page->internalState = captureInternalState();
     }
 
-    // Mark page as frozen and valid
-    {
-        std::lock_guard<std::mutex> lock(mutex());
-        page->validAspects = twAspectAll;  // Mark all aspects as complete
-    }
-
-    return page;
+    return rendered;
 }
 
 // ============================================================================

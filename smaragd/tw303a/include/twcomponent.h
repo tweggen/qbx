@@ -375,6 +375,18 @@ public:
         std::shared_ptr<twOutputPage> previousPage = nullptr
     );
 
+private:
+    // Helper for freezePage: does the actual rendering work.
+    // Caller must NOT hold mutex (called outside lock to allow recursive freezePage calls).
+    // Returns: number of frames actually rendered into the page.
+    length_t freezePage_nolock(
+        std::shared_ptr<twOutputPage> page,
+        const sample_t *inputData,
+        uint64_t inputOffset,
+        length_t inputLength,
+        std::shared_ptr<twOutputPage> previousPage
+    );
+
 protected:
     // Unified mutex protecting all component state: parameters, internal state,
     // page cache, and dependency tracking. Derived classes should:
