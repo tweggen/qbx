@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="grain_time_stretch_half">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Test grain-based time-stretching: 0.5x faster -->
+
+    <!-- Create a track -->
+    <add-track index="-1"/>
+
+    <!-- Add the sawtooth sample at position 0 -->
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Apply 0.5x time-stretch via resize-clip action -->
+    <!-- This activates grain overlap-add with 0.5x stretch (2x faster playback) -->
+    <!-- Duration halves: 21.8s becomes ~10.9s due to 0.5x stretch factor -->
+    <resize-clip clip="0/0" startTime="0" startOffset="0" duration="1440000/48000" loopLength="0" stretch="0.5"/>
+
+    <!-- Render the time-stretched audio (now plays 2x faster) -->
+    <render filename="grain_time_stretch_half.wav" format="wav" quality="10"/>
+
+    <!-- Screenshot showing the compressed timeline -->
+    <screenshot filename="grain_time_stretch_half_timeline.png" resolution="50%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

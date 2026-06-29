@@ -8,7 +8,7 @@
     <add-track index="-1"/>
 
     <!-- Add the sawtooth sample at position 0 -->
-    <add-sample trackIndex="0" filePath="test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
 
     <!-- Find the clip we just added (should be at index 0) -->
     <!-- We'll refer to it implicitly through the track -->

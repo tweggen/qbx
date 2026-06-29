@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="grain_minimal_stretch">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Minimal grain time-stretching test -->
+
+    <!-- Create a track -->
+    <add-track index="-1"/>
+
+    <!-- Add the sawtooth sample -->
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Apply a subtle 1.25x time-stretch -->
+    <!-- This activates grain overlap-add with a moderate stretch factor -->
+    <!-- Duration: 21.8s × 1.25 = ~27.25s -->
+    <resize-clip clip="0/0" startTime="0" startOffset="0" duration="1800000/48000" loopLength="0" stretch="1.25"/>
+
+    <!-- Render the grain-processed audio -->
+    <render filename="grain_minimal_stretch.wav" format="wav" quality="10"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

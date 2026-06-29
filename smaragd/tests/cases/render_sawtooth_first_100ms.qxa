@@ -8,7 +8,7 @@
     <add-track index="-1"/>
 
     <!-- Add the sawtooth sample at position 0 -->
-    <add-sample trackIndex="0" filePath="test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
 
     <!-- Render the first 100ms (4800 samples at 48kHz) -->
     <!-- This captures the very beginning of the sawtooth ramp -->

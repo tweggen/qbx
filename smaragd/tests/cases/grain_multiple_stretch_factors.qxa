@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="grain_multiple_stretch_factors">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Test multiple clips with different grain time-stretch factors -->
+
+    <!-- Create a track -->
+    <add-track index="-1"/>
+
+    <!-- Add three copies of the sample at different positions -->
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="48000000/48000"/>
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="96000000/48000"/>
+
+    <!-- Apply different stretch factors to each clip -->
+    <!-- Clip 0: 1.5x slower -->
+    <resize-clip clip="0/0" startTime="0" startOffset="0" duration="2160000/48000" loopLength="0" stretch="1.5"/>
+
+    <!-- Clip 1: 1.0x (no stretch) -->
+    <resize-clip clip="0/1" startTime="48000000/48000" startOffset="0" duration="1440000/48000" loopLength="0" stretch="1.0"/>
+
+    <!-- Clip 2: 0.75x (faster) -->
+    <resize-clip clip="0/2" startTime="96000000/48000" startOffset="0" duration="1080000/48000" loopLength="0" stretch="0.75"/>
+
+    <!-- Render the project with all three grain-processed clips -->
+    <render filename="grain_multiple_stretch_factors.wav" format="wav" quality="10"/>
+
+    <!-- Screenshot showing the three clips with different temporal scales -->
+    <screenshot filename="grain_multiple_stretch_factors_timeline.png" resolution="50%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

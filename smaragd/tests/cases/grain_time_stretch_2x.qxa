@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="grain_time_stretch_2x">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Test grain-based time-stretching: 2x slower -->
+
+    <!-- Create a track -->
+    <add-track index="-1"/>
+
+    <!-- Add the sawtooth sample at position 0 -->
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Apply 2x time-stretch via resize-clip action -->
+    <!-- This activates grain overlap-add processing with 2x slower playback -->
+    <!-- Grain size defaults to 2048 frames, crossfade 512 frames -->
+    <!-- Duration doubles: 21.8s becomes ~43.6s due to 2x stretch factor -->
+    <resize-clip clip="0/0" startTime="0" startOffset="0" duration="2880000/48000" loopLength="0" stretch="2.0"/>
+
+    <!-- Render the time-stretched audio -->
+    <render filename="grain_time_stretch_2x.wav" format="wav" quality="10"/>
+
+    <!-- Screenshot showing the stretched timeline -->
+    <screenshot filename="grain_time_stretch_2x_timeline.png" resolution="50%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

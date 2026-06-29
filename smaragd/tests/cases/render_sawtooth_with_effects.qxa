@@ -11,7 +11,7 @@
     <add-track index="-1"/>
 
     <!-- Add the sawtooth sample to the child track -->
-    <add-sample trackIndex="1" filePath="test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../../../test_sawtooth.wav" timePos="0"/>
 
     <!-- Group the child track under the master track -->
     <reparent-track sources="1" dest="0"/>

@@ -10,7 +10,7 @@
     <add-track index="-1"/>
 
     <!-- Add the test audio sample at the start -->
-    <add-sample trackIndex="0" filePath="test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
 
     <!-- Render to WAV file (minimal render test) -->
     <render filename="render_minimal.wav" format="wav" quality="10"/>

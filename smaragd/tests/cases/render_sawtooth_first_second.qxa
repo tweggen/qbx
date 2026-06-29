@@ -9,11 +9,11 @@
     <add-track index="-1"/>
 
     <!-- Add the sawtooth sample to the first track at position 0 -->
-    <add-sample trackIndex="0" filePath="test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
 
     <!-- Add the same sample to the second track at position 500ms -->
     <!-- This creates an offset of 24000 samples (0.5 seconds at 48kHz) -->
-    <add-sample trackIndex="1" filePath="test_sawtooth.wav" timePos="24000/48000"/>
+    <add-sample trackIndex="1" filePath="../../../test_sawtooth.wav" timePos="24000/48000"/>
 
     <!-- Render the entire project (captures both clips starting at different times) -->
     <render filename="render_first_second.wav" format="wav" quality="10"/>
