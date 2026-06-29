@@ -65,15 +65,19 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 	}
 
 	// CRITICAL: Sanity check on maxLength. The twStreamingLatch operates with fixed-size
-	// internal buffers (bufSize). ANY call with maxLength > bufSize/2 is suspicious and likely
-	// indicates the caller passed a buffer that's too large or the wrong size.
-	// We clamp to a fraction of bufSize to prevent overflow at this layer.
-	const length_t SAFE_MAX_SAMPLES = bufSize / 4;  // 1/4 of internal buffer as absolute max
-	if (maxLength > SAFE_MAX_SAMPLES && maxLength > 1024) {
-		fprintf(stderr, "WARNING: copyData called with large maxLength=%lld (bufSize=%lld). "
-			"Clamping to %lld. This likely indicates caller contract violation.\n",
-			maxLength, bufSize, SAFE_MAX_SAMPLES);
-		maxLength = SAFE_MAX_SAMPLES;
+	// internal buffers (bufSize). We allow up to 2x bufSize as an emergency overflow prevention,
+	// but log a warning if maxLength significantly exceeds bufSize (indicating contract violation).
+	// This is a defensive measure until the IOVector refactoring fixes the root cause.
+	const length_t MAX_SAFE_CLAMP = bufSize * 2;  // Allow up to 2x internal buffer size
+	if (maxLength > MAX_SAFE_CLAMP) {
+		fprintf(stderr, "WARNING: copyData called with extremely large maxLength=%lld (bufSize=%lld). "
+			"Clamping to %lld. Serious caller contract violation.\n",
+			maxLength, bufSize, MAX_SAFE_CLAMP);
+		maxLength = MAX_SAFE_CLAMP;
+	} else if (maxLength > bufSize && maxLength > 8192) {
+		fprintf(stderr, "DEBUG: copyData called with maxLength=%lld > bufSize=%lld. "
+			"This indicates potential caller contract violation (architectural issue).\n",
+			maxLength, bufSize);
 	}
 
 	toCopy = maxLength;
