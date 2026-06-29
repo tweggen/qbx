@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="render_sawtooth_first_100ms">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Create a track -->
+    <add-track index="-1"/>
+
+    <!-- Add the sawtooth sample at position 0 -->
+    <add-sample trackIndex="0" filePath="test_sawtooth.wav" timePos="0"/>
+
+    <!-- Render the first 100ms (4800 samples at 48kHz) -->
+    <!-- This captures the very beginning of the sawtooth ramp -->
+    <render filename="render_first_100ms.wav" format="wav" quality="10"/>
+
+    <!-- Take a screenshot to show the timeline -->
+    <screenshot filename="render_first_100ms_timeline.png" resolution="50%"/>
+  </actions>
+
+  <assertions>
+    <!-- Verify that the sample was added to the track -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

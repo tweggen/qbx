@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="render_sawtooth_minimal">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Minimal test: Create one track, add one sample, render -->
+
+    <!-- Create a single track -->
+    <add-track index="-1"/>
+
+    <!-- Add the test audio sample at the start -->
+    <add-sample trackIndex="0" filePath="test_sawtooth.wav" timePos="0"/>
+
+    <!-- Render to WAV file (minimal render test) -->
+    <render filename="render_minimal.wav" format="wav" quality="10"/>
+  </actions>
+
+  <assertions>
+    <!-- Verify the track was created -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

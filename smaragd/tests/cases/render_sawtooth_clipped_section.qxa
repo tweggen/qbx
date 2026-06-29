@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="render_sawtooth_clipped_section">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Create a track -->
+    <add-track index="-1"/>
+
+    <!-- Add the sawtooth sample at position 0 -->
+    <add-sample trackIndex="0" filePath="test_sawtooth.wav" timePos="0"/>
+
+    <!-- Find the clip we just added (should be at index 0) -->
+    <!-- We'll refer to it implicitly through the track -->
+
+    <!-- Split the clip at 1 second mark to create a clipped version -->
+    <split-clip trackIndex="0" clipIndex="0" time="48000/48000"/>
+
+    <!-- Resize the second clip to end at 2 seconds (removing the tail) -->
+    <resize-clip trackIndex="0" clipIndex="1" newDuration="48000/48000" mode="trim-end"/>
+
+    <!-- Render the project (now has two clips of 1 second each) -->
+    <render filename="render_clipped_section.wav" format="wav" quality="10"/>
+
+    <!-- Capture the timeline showing the two clips -->
+    <screenshot filename="render_clipped_timeline.png" resolution="50%"/>
+  </actions>
+
+  <assertions>
+    <!-- Verify track exists -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

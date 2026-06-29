@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="render_sawtooth_with_effects">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Create a master track -->
+    <add-track index="-1"/>
+
+    <!-- Create a child track (to be grouped under master) -->
+    <add-track index="-1"/>
+
+    <!-- Add the sawtooth sample to the child track -->
+    <add-sample trackIndex="1" filePath="test_sawtooth.wav" timePos="0"/>
+
+    <!-- Group the child track under the master track -->
+    <reparent-track sources="1" dest="0"/>
+
+    <!-- Adjust the master track volume to -6 dB (half amplitude) -->
+    <set-track-volume trackIndex="0" newVolume="-6.0"/>
+
+    <!-- Render the project (sawtooth at reduced volume due to master track attenuation) -->
+    <render filename="render_with_effects.wav" format="wav" quality="10"/>
+
+    <!-- Screenshot of the track hierarchy with volume adjustment -->
+    <screenshot filename="render_with_effects_hierarchy.png" resolution="50%"/>
+
+    <!-- Zoom in on the track headers to show the volume control -->
+    <screenshot filename="render_with_effects_controls.png" resolution="1200x600"/>
+  </actions>
+
+  <assertions>
+    <!-- Verify both tracks exist (reparent doesn't change track count, only hierarchy) -->
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
