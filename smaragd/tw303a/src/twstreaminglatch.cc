@@ -60,6 +60,10 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		startOffset, maxLength, bufSize );
 #endif
 
+	if (!pDest || maxLength <= 0) {
+		return 0;  // Nothing to copy
+	}
+
 	toCopy = maxLength;
 	destPos = 0;
 
@@ -90,6 +94,14 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 			bufStartOffset = (bufPos - (offset-startOffset) + bufSize) % bufSize;
 
 			memcpyLength = min( dataAvail, toCopy );
+			// Ensure we don't write past the destination buffer
+			if (destPos + memcpyLength > maxLength) {
+				memcpyLength = maxLength - destPos;
+			}
+			if (memcpyLength <= 0) {
+				break;  // Destination buffer is full, stop copying
+			}
+
 			// copy out the data still stored in the latch
 #ifdef DEBUG_COPYDATA
 			fprintf( sterr, "twStreamingLatch::copyData( %d, pDest, %d): "
@@ -110,8 +122,10 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 				destPos += part;
 				// then part from the buffer start.
 				part = (memcpyLength-(bufSize-bufStartOffset));
-				memcpy( pDest+destPos, pBuffer, part*sizeof( sample_t ) );
-				destPos += part;
+				if (part > 0) {
+					memcpy( pDest+destPos, pBuffer, part*sizeof( sample_t ) );
+					destPos += part;
+				}
 			}
 			toCopy -= memcpyLength;
 			startOffset += memcpyLength;
