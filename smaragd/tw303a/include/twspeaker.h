@@ -19,7 +19,12 @@ class twSpeaker
     virtual void reset() override;
 private:
     std::unique_ptr<audio::AudioBackend> backend_;
-    std::unique_ptr<audio::AudioEngine> audioEngine_;
+    // CRITICAL: Changed from unique_ptr to shared_ptr to prevent use-after-free.
+    // The render callback captures 'this' and must access audioEngine_ safely even after
+    // stopOutput() is called. With shared_ptr, stopping the backend stops the callback
+    // thread, but local copies of the shared_ptr in flight keep the engine alive.
+    // This prevents crashes when stopOutput() is called concurrently with setCycle().
+    std::shared_ptr<audio::AudioEngine> audioEngine_;
     // Atomic so isPlaying() is a lock-free read. The check-and-act transitions
     // (start/stop) are serialised by outputMutex_ below — atomicity of the flag
     // alone doesn't make "if (!isPlaying_) return; …flip + drive the backend"

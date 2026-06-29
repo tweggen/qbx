@@ -13,6 +13,15 @@
 
 int twTrackMix::seekTo( offset_t newOffset )
 {
+    std::lock_guard<std::mutex> lock(mutex());
+    return seekTo_nolock(newOffset);
+}
+
+// Caller must hold mutex() (inherited from twComponent)
+// CRITICAL: Lock protects childLinks iteration against UI thread modifications.
+// Uses base class mutex to avoid introducing a second mutex (deadlock risk).
+int twTrackMix::seekTo_nolock( offset_t newOffset )
+{
     playOffset_.store( newOffset, std::memory_order_relaxed );
 
     // Propagate seek to all children, computing their clip-relative offsets.
@@ -88,6 +97,15 @@ void twTrackMix::setBufferSize( length_t )
  * Currently we do not support mixing here, but should come.
  */
 length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t outChannel )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    return calcOutputTo_nolock(buffer, playLen, outChannel);
+}
+
+// Caller must hold mutex() (inherited from twComponent)
+// CRITICAL: Lock protects childLinks iteration against UI thread modifications.
+// Uses base class mutex to avoid introducing a second mutex (deadlock risk).
+length_t twTrackMix::calcOutputTo_nolock( sample_t *buffer, length_t playLen, idx_t outChannel )
 {
     // FIXME: Why getBufferSize()? We have some length given!
     sample_t *readBuffer = (sample_t *) alloca( env.getBufferSize()*sizeof( sample_t ) );

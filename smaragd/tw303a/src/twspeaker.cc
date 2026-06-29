@@ -130,7 +130,13 @@ void twSpeaker::startOutput()
 
     backend_->setRenderCallback(
         [this](float *out, std::size_t frames, std::uint32_t channels) -> std::size_t {
-            if (!audioEngine_) {
+            // CRITICAL: Capture shared_ptr to audioEngine in callback scope to prevent
+            // use-after-free. Even if stopOutput() sets this->audioEngine_ = nullptr,
+            // this local copy keeps the engine alive during callback execution.
+            // This is safe because stopOutput() blocks until the callback thread exits,
+            // so the local engine reference is destroyed before stopOutput() returns.
+            auto engine = audioEngine_;
+            if (!engine) {
                 std::fill_n(out, frames * channels, 0.0f);
                 return frames;
             }
@@ -139,12 +145,12 @@ void twSpeaker::startOutput()
             std::vector<float> bufL(frames), bufR(frames);
 
             // Pull block from AudioEngine (handles resampling, loop cycling, position tracking)
-            std::size_t outFrames = audioEngine_->pullBlock(bufL.data(), bufR.data(), frames);
+            std::size_t outFrames = engine->pullBlock(bufL.data(), bufR.data(), frames);
 
             if (outFrames == 0) {
                 std::fill_n(out, frames * channels, 0.0f);
                 if (!SApplication::app().isRecordingActive())
-                    SApplication::app().setGlobalLocatorPosRealtime(audioEngine_->currentPosition());
+                    SApplication::app().setGlobalLocatorPosRealtime(engine->currentPosition());
                 return frames;
             }
 
@@ -168,7 +174,7 @@ void twSpeaker::startOutput()
             }
 
             if (!SApplication::app().isRecordingActive())
-                SApplication::app().setGlobalLocatorPosRealtime(audioEngine_->currentPosition());
+                SApplication::app().setGlobalLocatorPosRealtime(engine->currentPosition());
             return static_cast<std::size_t>(outFrames);
         });
 
@@ -213,7 +219,14 @@ void twSpeaker::setCycle(bool enabled, offset_t startFrame, offset_t endFrame)
     loopEnd_.store(endFrame, std::memory_order_relaxed);
     cycleEnabled_.store(enabled, std::memory_order_relaxed);
 
-    // Sync into the audio engine if it's running
+    // CRITICAL: Acquire lock to prevent race with stopOutput() destroying audioEngine_.
+    // stopOutput() holds this lock while calling backend_->stopOutput() (which blocks
+    // the audio thread) and then destroys audioEngine_. We must hold the same lock
+    // to ensure audioEngine_ is not being destroyed while we access it.
+    // The lock scope is brief: only for the setLoopBoundaries call.
+    std::lock_guard<std::mutex> lock(outputMutex_);
+
+    // Now safe to access audioEngine_ while holding the lock that protects startOutput/stopOutput
     if (audioEngine_) {
         audioEngine_->setLoopBoundaries(enabled, startFrame, endFrame);
     }
