@@ -42,6 +42,7 @@ set(TW303A_HEADERS
     include/audio/playback_sink.h
     include/audio/generation_promise.h
     include/audio/file_sink.h
+    include/audio_analysis.h
     include/capture_page_pool.h
     include/capture_revalidator.h
     include/render_session.h
@@ -104,6 +105,7 @@ set(TW303A_SOURCES
     src/capture_revalidator.cc
     src/render_session.cc
     src/recording_session.cc
+    src/audio_analysis.cc
 )
 
 add_library(tw303a STATIC ${TW303A_SOURCES} ${TW303A_HEADERS})

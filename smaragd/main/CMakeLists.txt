@@ -79,6 +79,8 @@ set(SMARAGD_HEADERS
     include/actions/sremovepluginaction.h
     include/actions/srenderaction.h
     include/actions/sscreenshotaction.h
+    include/actions/sassertaudioenergyaction.h
+    include/actions/sassertaudiopeakaction.h
     include/sprojectprops.h
     include/szoomscrollbar.h
 )
@@ -162,6 +164,8 @@ set(SMARAGD_SOURCES
     src/actions/sremovepluginaction.cpp
     src/actions/srenderaction.cpp
     src/actions/sscreenshotaction.cpp
+    src/actions/sassertaudioenergyaction.cpp
+    src/actions/sassertaudiopeakaction.cpp
     src/szoomscrollbar.cpp
 )
 

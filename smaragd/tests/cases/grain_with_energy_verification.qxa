@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="grain_with_energy_verification">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Test grain time-stretching with acoustic energy verification -->
+
+    <!-- Create a track -->
+    <add-track index="-1"/>
+
+    <!-- Add the sawtooth sample at position 0 -->
+    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Apply 1.5x time-stretch (grain overlap-add processing) -->
+    <resize-clip clip="0/0" startTime="0" startOffset="0" duration="2160000/48000" loopLength="0" stretch="1.5"/>
+
+    <!-- Render the time-stretched audio -->
+    <render filename="grain_energy_verification.wav" format="wav" quality="10"/>
+
+    <!-- Verify acoustic energy is in healthy range (not silent, not clipped) -->
+    <assert-audio-energy filename="grain_energy_verification.wav" minRms="0.05" maxRms="0.90"/>
+
+    <!-- Verify peak amplitude doesn't clip (stays under 0.98) -->
+    <assert-audio-peak filename="grain_energy_verification.wav" maxPeak="0.98"/>
+
+    <!-- Screenshot of the stretched timeline -->
+    <screenshot filename="grain_energy_verification_timeline.png" resolution="50%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
