@@ -64,6 +64,18 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		return 0;  // Nothing to copy
 	}
 
+	// CRITICAL: Sanity check on maxLength. The twStreamingLatch operates with fixed-size
+	// internal buffers (bufSize). ANY call with maxLength > bufSize/2 is suspicious and likely
+	// indicates the caller passed a buffer that's too large or the wrong size.
+	// We clamp to a fraction of bufSize to prevent overflow at this layer.
+	const length_t SAFE_MAX_SAMPLES = bufSize / 4;  // 1/4 of internal buffer as absolute max
+	if (maxLength > SAFE_MAX_SAMPLES && maxLength > 1024) {
+		fprintf(stderr, "WARNING: copyData called with large maxLength=%lld (bufSize=%lld). "
+			"Clamping to %lld. This likely indicates caller contract violation.\n",
+			maxLength, bufSize, SAFE_MAX_SAMPLES);
+		maxLength = SAFE_MAX_SAMPLES;
+	}
+
 	toCopy = maxLength;
 	destPos = 0;
 
@@ -111,20 +123,36 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 #endif
 			if( (bufSize-bufStartOffset) >= (offset_t)memcpyLength ) {
 				// no wraparound
-				memcpy( pDest+destPos, pBuffer+bufStartOffset, memcpyLength*sizeof( sample_t ) );
-				destPos += memcpyLength;
+				if (destPos + memcpyLength > maxLength) {
+					memcpyLength = maxLength - destPos;  // Clamp again
+				}
+				if (memcpyLength > 0) {
+					memcpy( pDest+destPos, pBuffer+bufStartOffset, memcpyLength*sizeof( sample_t ) );
+					destPos += memcpyLength;
+				}
 			} else {
 				length_t part;
-				// wraparound
+				// wraparound - need extra bounds checking since we do two memcpys
 				// copy part to the end
 				part = (bufSize-bufStartOffset);
-				memcpy( pDest+destPos, pBuffer+bufStartOffset, part*sizeof( sample_t ) );
-				destPos += part;
+				if (destPos + part > maxLength) {
+					part = maxLength - destPos;  // Clamp first part
+				}
+				if (part > 0) {
+					memcpy( pDest+destPos, pBuffer+bufStartOffset, part*sizeof( sample_t ) );
+					destPos += part;
+				}
+
 				// then part from the buffer start.
 				part = (memcpyLength-(bufSize-bufStartOffset));
-				if (part > 0) {
-					memcpy( pDest+destPos, pBuffer, part*sizeof( sample_t ) );
-					destPos += part;
+				if (part > 0 && destPos < maxLength) {
+					if (destPos + part > maxLength) {
+						part = maxLength - destPos;  // Clamp second part
+					}
+					if (part > 0) {
+						memcpy( pDest+destPos, pBuffer, part*sizeof( sample_t ) );
+						destPos += part;
+					}
 				}
 			}
 			toCopy -= memcpyLength;
