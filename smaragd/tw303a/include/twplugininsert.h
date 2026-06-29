@@ -32,12 +32,20 @@ public:
     void resetBlock() { producedThisBlock_ = false; }
 
     // Plugin control.
-    void setBypass( bool bypass ) { bypass_ = bypass; }
+    // Thread-safe: acquires lock to prevent race with calcOutputTo()
+    void setBypass( bool bypass );
     bool getBypass() const { return bypass_; }
     twPlugin *getPlugin() const { return plugin_.get(); }
 
     virtual void reset() override;
+
 private:
+    // Private _nolock() helpers (caller must hold mutex())
+    // CRITICAL: Used to serialize calcOutputTo() per block and protect bypass changes
+    length_t calcOutputTo_nolock( sample_t *dst, length_t len, idx_t port );
+    void setBypass_nolock( bool bypass );
+    void reset_nolock();
+
     std::unique_ptr<twPlugin> plugin_;
     bool bypass_ = false;
     bool producedThisBlock_ = false;

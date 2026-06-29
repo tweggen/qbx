@@ -43,6 +43,16 @@ idx_t twPluginInsert::getNOutputs() const
 
 length_t twPluginInsert::calcOutputTo( sample_t *dst, length_t len, idx_t port )
 {
+    std::lock_guard<std::mutex> lock(mutex());
+    return calcOutputTo_nolock(dst, len, port);
+}
+
+// Caller must hold mutex()
+// CRITICAL: Lock ensures exactly one processing per block, even if calcOutputTo()
+// is called concurrently for multiple output ports (common with multi-channel plugins).
+// Prevents double-processing race where both threads see producedThisBlock_=false.
+length_t twPluginInsert::calcOutputTo_nolock( sample_t *dst, length_t len, idx_t port )
+{
     if( !producedThisBlock_ ) {
         // Pull every input bus into de-interleaved scratch (one mono wire each).
         for( idx_t c = 0; c < getNInputs(); ++c )
@@ -89,6 +99,18 @@ void twPluginInsert::copyChannels( const std::vector<std::vector<sample_t>> &in,
     }
 }
 
+void twPluginInsert::setBypass( bool bypass )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    setBypass_nolock(bypass);
+}
+
+// Caller must hold mutex()
+void twPluginInsert::setBypass_nolock( bool bypass )
+{
+    bypass_ = bypass;
+}
+
 int twPluginInsert::seekTo( offset_t offset )
 {
     // Forward seek to input plugs (the previous stage in the chain)
@@ -106,6 +128,13 @@ int twPluginInsert::seekTo( offset_t offset )
 }
 
 void twPluginInsert::reset()
+{
+	std::lock_guard<std::mutex> lock(mutex());
+	reset_nolock();
+}
+
+// Caller must hold mutex()
+void twPluginInsert::reset_nolock()
 {
 	// Plugin insert propagates reset to its plugin
 	producedThisBlock_ = false;
