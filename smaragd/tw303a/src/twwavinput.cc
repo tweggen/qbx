@@ -43,6 +43,13 @@ bool twWavInput::isSeekable() const
 
 int twWavInput::seekTo( offset_t newOffset )
 {
+    std::lock_guard<std::mutex> lock(mutex());
+    return seekTo_nolock(newOffset);
+}
+
+// Caller must hold mutex()
+int twWavInput::seekTo_nolock(offset_t newOffset)
+{
     playOffset_ = newOffset;
     return 0;
 }
@@ -80,6 +87,13 @@ twRandomSource *twWavInput::getSource() const
  * matching the historical contract where callers seek before every block.
  */
 length_t twWavInput::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    return calcOutputTo_nolock(pDest, length, idx);
+}
+
+// Caller must hold mutex()
+length_t twWavInput::calcOutputTo_nolock( sample_t *pDest, length_t length, idx_t idx )
 {
     if( !source_ ) {
         memset( pDest, 0, sizeof( sample_t ) * length );
@@ -136,5 +150,13 @@ twWavInput::~twWavInput()
 
 void twWavInput::reset()
 {
-    // Stateless component: no internal state to reset
+    std::lock_guard<std::mutex> lock(mutex());
+    reset_nolock();
+}
+
+// Caller must hold mutex()
+void twWavInput::reset_nolock()
+{
+    // Reset playback position to start
+    playOffset_ = 0;
 }

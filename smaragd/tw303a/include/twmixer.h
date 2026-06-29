@@ -16,6 +16,12 @@ private:
     };
     InputProperties *inputProperties_;
 
+    // Helpers: do work outside lock (caller must hold mutex)
+    int setNInputs_nolock(idx_t n);
+    void setBufferSize_nolock(length_t newSize);
+    length_t calcOutputTo_nolock(sample_t *pDest, length_t length, idx_t idx);
+    int seekTo_nolock(offset_t offset);
+
 protected:
     sample_t *inBuffer;
     

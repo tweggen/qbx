@@ -50,6 +50,15 @@ private:
         offset_t position;
     };
 
+    // Helper: do seek work outside lock (caller must hold mutex)
+    int seekTo_nolock(offset_t newOffset);
+
+    // Helper: do output work outside lock (caller must hold mutex)
+    length_t calcOutputTo_nolock(sample_t *pDest, length_t length, idx_t idx);
+
+    // Helper: do reset work outside lock (caller must hold mutex)
+    void reset_nolock();
+
     twRandomSource &src_;
     offset_t pos_;
 };

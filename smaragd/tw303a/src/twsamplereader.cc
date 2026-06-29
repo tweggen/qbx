@@ -33,6 +33,13 @@ bool twSampleReader::isSeekable() const
 
 int twSampleReader::seekTo( offset_t newOffset )
 {
+    std::lock_guard<std::mutex> lock(mutex());
+    return seekTo_nolock(newOffset);
+}
+
+// Caller must hold mutex()
+int twSampleReader::seekTo_nolock(offset_t newOffset)
+{
     pos_ = newOffset;
     return 0;
 }
@@ -43,6 +50,13 @@ offset_t twSampleReader::tellPos() const
 }
 
 length_t twSampleReader::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    return calcOutputTo_nolock(pDest, length, idx);
+}
+
+// Caller must hold mutex()
+length_t twSampleReader::calcOutputTo_nolock( sample_t *pDest, length_t length, idx_t idx )
 {
     if( length <= 0 ) return 0;
     // The source zero-fills past end-of-material, so the destination is always
@@ -89,12 +103,14 @@ const char *twSampleReader::getOutputName( idx_t ) const
 
 std::any twSampleReader::captureInternalState() const
 {
+    std::lock_guard<std::mutex> lock(mutex());
     // Capture the current read position for state resumption
     return std::any(InternalState{pos_});
 }
 
 void twSampleReader::restoreInternalState(const std::any& state)
 {
+    std::lock_guard<std::mutex> lock(mutex());
     try {
         auto s = std::any_cast<const InternalState&>(state);
         pos_ = s.position;
@@ -109,6 +125,13 @@ void twSampleReader::restoreInternalState(const std::any& state)
 // ============================================================================
 
 void twSampleReader::reset()
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    reset_nolock();
+}
+
+// Caller must hold mutex()
+void twSampleReader::reset_nolock()
 {
     // Reset to beginning of sample
     pos_ = 0;

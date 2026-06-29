@@ -19,6 +19,13 @@ const char *twMixer::getOutputName( idx_t ) const
 
 int twMixer::seekTo( offset_t offset )
 {
+    std::lock_guard<std::mutex> lock(mutex());
+    return seekTo_nolock(offset);
+}
+
+// Caller must hold mutex()
+int twMixer::seekTo_nolock( offset_t offset )
+{
     // Forward the seek to all input plugs
     for (idx_t i = 0; i < mixerInputs_; ++i) {
         if (pInputPlugs[i]) {
@@ -50,18 +57,27 @@ void twMixer::createOutputLatches()
 #endif
 }
 
-length_t twMixer::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */ )
+length_t twMixer::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    return calcOutputTo_nolock(pDest, length, idx);
+}
+
+// Caller must hold mutex()
+// CRITICAL: Lock must be held during entire read to prevent use-after-free
+// if array is reallocated by setNInputs() during this operation
+length_t twMixer::calcOutputTo_nolock( sample_t *pDest, length_t length, idx_t /* idx */ )
 {
     length_t realRead = 0;
     InputProperties *props = inputProperties_;
-    
+
     // delete destination buffer (our accu)
     memset( pDest, 0, sizeof( sample_t ) * length );
     // add channels
-    for( idx_t ch=0; ch<mixerInputs_; ch++, props++ ) {        
+    for( idx_t ch=0; ch<mixerInputs_; ch++, props++ ) {
         if( !pInputPlugs[ch] ) continue;
         float factor = props->volumeFactor_;
-//        qWarning( "twMixer::Calcing channel %d. input plug $%08x. factor = %d", 
+//        qWarning( "twMixer::Calcing channel %d. input plug $%08x. factor = %d",
 //                  ch, pInputPlugs[ch], (int) factor );
         realRead = ((twLatchStreamingOutput *)pInputPlugs[ch])->readStreamingData( inBuffer, length );
         if( realRead!=length ) {
@@ -72,7 +88,7 @@ length_t twMixer::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx *
             *pCurr++ += *pSrc++ * factor;
         }
     }
-    
+
     return realRead;
 }
 
@@ -106,10 +122,21 @@ int twMixer::setInputLevel( idx_t i, double volume )
  * Change the number of mixer inputs.
  * The number of channels can only be shrunken, if there is nothing connected.
  * Technically, the number of inputs never becomes smaller.
+ *
+ * Thread-safe: acquires lock to prevent concurrent reallocation/access races.
  */
 int twMixer::setNInputs( idx_t n )
 {
-    if( n<=0 ) return -2;    
+    std::lock_guard<std::mutex> lock(mutex());
+    return setNInputs_nolock(n);
+}
+
+// Caller must hold mutex()
+// CRITICAL: Must be called under lock to prevent use-after-free when
+// calcOutputTo() is running concurrently and dereferencing pInputPlugs array
+int twMixer::setNInputs_nolock( idx_t n )
+{
+    if( n<=0 ) return -2;
     if( n<=mixerInputs_ ) {
         // FIXME: Decrease the actual number of channels
         // connected, but don't fool around
@@ -117,12 +144,12 @@ int twMixer::setNInputs( idx_t n )
         return 0;
     }
     twLatchOutput **newInputPlugs = (twLatchOutput **) ::calloc (sizeof (twLatchOutput *), n );
-    if( !newInputPlugs ) return -1; 
-    if( mixerInputs_ ) {        
+    if( !newInputPlugs ) return -1;
+    if( mixerInputs_ ) {
         memcpy( newInputPlugs, pInputPlugs, sizeof( twLatchOutput *)*mixerInputs_ );
     }
     twLatchOutput **oldPlugs = pInputPlugs;
-    pInputPlugs = newInputPlugs;   
+    pInputPlugs = newInputPlugs;
     mixerInputs_ = n;
     ::free( oldPlugs );
 
@@ -135,7 +162,16 @@ int twMixer::setNInputs( idx_t n )
     return 0;
 }
 
-void twMixer::setBufferSize( length_t /* len */ )
+void twMixer::setBufferSize( length_t len )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    setBufferSize_nolock(len);
+}
+
+// Caller must hold mutex()
+// CRITICAL: Lock must be held to prevent use-after-free if
+// calcOutputTo_nolock() is reading inBuffer concurrently
+void twMixer::setBufferSize_nolock( length_t /* len */ )
 {
     if( inBuffer ) free( inBuffer );
 

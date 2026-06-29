@@ -41,7 +41,14 @@ public:
 protected:
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t ldx );
     virtual void reset() override;
+
 private:
+    // Helpers: do work outside lock (caller must hold mutex)
+    int setNPlugs_nolock(idx_t n);
+    length_t calcOutputTo_nolock(sample_t *pDest, length_t length, idx_t idx);
+    int seekTo_nolock(offset_t offset);
+    twLatchOutput *linkOutput_nolock(idx_t idx);
+
     int nInputs_;
 };
 

@@ -16,6 +16,13 @@ const char *twRewire::getOutputName( idx_t ) const
 
 int twRewire::seekTo( offset_t offset )
 {
+    std::lock_guard<std::mutex> lock(mutex());
+    return seekTo_nolock(offset);
+}
+
+// Caller must hold mutex()
+int twRewire::seekTo_nolock( offset_t offset )
+{
     // Forward the seek to all connected input plugs (the tracks)
     if (pInputPlugs) {
         for (idx_t i = 0; i < nInputs_; ++i) {
@@ -38,6 +45,15 @@ void twRewire::init()
 
 length_t twRewire::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
 {
+    std::lock_guard<std::mutex> lock(mutex());
+    return calcOutputTo_nolock(pDest, length, idx);
+}
+
+// Caller must hold mutex()
+// CRITICAL: Lock prevents use-after-free if setNPlugs() deallocates
+// pInputPlugs array between bounds check and dereference
+length_t twRewire::calcOutputTo_nolock( sample_t *pDest, length_t length, idx_t idx )
+{
     if( idx < 0 || idx >= nInputs_ || !pInputPlugs[idx] ) {
         // No input wired into this output → produce silence.
         memset( pDest, 0, length * sizeof( sample_t ) );
@@ -48,6 +64,17 @@ length_t twRewire::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
 }
 
 int twRewire::setNPlugs( idx_t n )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    return setNPlugs_nolock(n);
+}
+
+// Caller must hold mutex()
+// CRITICAL: Must be called under lock because:
+// 1. Reallocates pInputPlugs array (use-after-free race with calcOutputTo)
+// 2. Reallocates pOutputLatches array (use-after-free race with linkOutput)
+// 3. Deletes twStreamingLatch objects (dangling reference race with latch consumers)
+int twRewire::setNPlugs_nolock( idx_t n )
 {
     if( n < 0 ) return -1;
     if( pInputPlugs && pOutputLatches && n == nInputs_ ) return 0;
@@ -125,6 +152,14 @@ void twRewire::createOutputLatches()
 }
 
 twLatchOutput *twRewire::linkOutput( idx_t idx )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    return linkOutput_nolock(idx);
+}
+
+// Caller must hold mutex()
+// CRITICAL: Lock prevents race with setNPlugs() which may reallocate or delete pOutputLatches
+twLatchOutput *twRewire::linkOutput_nolock( idx_t idx )
 {
     if( idx < 0 || idx >= nInputs_ ) return NULL;
     if( !pOutputLatches[idx] ) return NULL;
