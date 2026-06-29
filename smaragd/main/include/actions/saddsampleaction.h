@@ -19,9 +19,9 @@ public:
     bool readXml(const QDomElement &elem, int version) override;
 
 private:
-    int trackIndex_;
+    int trackIndex_ = 0;
     QString filePath_;
-    offset_t timePos_;
+    offset_t timePos_ = 0;
 };
 
 #endif // SADDSAMPLEACTION_H

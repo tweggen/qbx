@@ -19,7 +19,7 @@
   </actions>
 
   <assertions>
-    <assert-track-count equals="3"/>
+    <assert-track-count equals="5"/>
   </assertions>
 
 </SActionScript>

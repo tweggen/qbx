@@ -26,7 +26,7 @@ public:
 private:
     QString assetName_;
     QList<int> trackPath_;
-    offset_t timePos_;
+    offset_t timePos_ = 0;
 };
 
 #endif // SPLACEASSETACTION_H

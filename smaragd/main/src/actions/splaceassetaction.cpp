@@ -105,7 +105,13 @@ bool SPlaceAssetAction::readXml(const QDomElement &elem, int /*version*/)
 {
     assetName_ = elem.attribute("assetName", "");
     trackPath_ = stringToPath(elem.attribute("trackPath", ""));
-    timePos_ = (offset_t)parseFractionOrDouble(elem.attribute("timePos", "0").toStdString()).toDouble();
+    // Preserve precision for large offset_t values by checking denominator
+    Fraction frac = parseFractionOrDouble(elem.attribute("timePos", "0").toStdString());
+    if (frac.denominator == 1) {
+        timePos_ = frac.numerator;  // Exact integer conversion
+    } else {
+        timePos_ = (offset_t)frac.toDouble();  // Fallback for fractional times
+    }
     return true;
 }
 

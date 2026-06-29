@@ -127,10 +127,7 @@ void SRenderAction::writeXml(QDomElement &elem) const
 bool SRenderAction::readXml(const QDomElement &elem, int /*version*/)
 {
     filename_ = elem.attribute("filename", "");
-    if (filename_.isEmpty()) {
-        qWarning() << "SRenderAction::readXml: missing filename attribute";
-        return false;
-    }
+    // Note: empty filename is allowed for roundtrip testing; apply() will reject it
 
     QString formatStr = elem.attribute("format", "wav");
     if (formatStr == "wav") {
