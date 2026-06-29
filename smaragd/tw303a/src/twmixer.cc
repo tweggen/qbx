@@ -138,9 +138,15 @@ int twMixer::setNInputs( idx_t n )
 void twMixer::setBufferSize( length_t /* len */ )
 {
     if( inBuffer ) free( inBuffer );
-    
-    // FIXME: Why do we read buffer size from environment?
-    inBuffer = (sample_t *) calloc( sizeof(sample_t), env.getBufferSize() );
+
+    // CRITICAL: Ensure buffer is large enough for page-based rendering.
+    // freezePage() requests 65536 samples (256KB page size / sizeof(float)).
+    // Even for real-time operation at smaller buffer sizes, we need to accommodate page rendering.
+    length_t envSize = env.getBufferSize();
+    length_t minSize = 65536;  // Full page capacity
+    length_t allocSize = (envSize > minSize) ? envSize : minSize;
+
+    inBuffer = (sample_t *) calloc( sizeof(sample_t), allocSize );
     if( !inBuffer ) {
         throw excStandard( "twMixer::setBufferSize(): Not enough memory for mixer input channels." );
     }
