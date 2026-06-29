@@ -82,6 +82,9 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 	toCopy = maxLength;
 	destPos = 0;
 
+	// SAFETY: Ensure we never write past destPos + maxLength, even in wraparound cases
+	const sample_t * const pDestMax = pDest + maxLength;  // Hard boundary
+
 	while( toCopy>0 ) {
 
 		// copy process:
@@ -130,11 +133,18 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 					memcpyLength = maxLength - destPos;  // Clamp again
 				}
 				if (memcpyLength > 0) {
+					// SAFETY: assert we're not writing past the hard boundary
+					if (pDest + destPos + memcpyLength > pDestMax) {
+						fprintf(stderr, "FATAL: memcpy would overflow: destPos=%lld, memcpyLength=%lld, maxLength=%lld\n",
+							destPos, memcpyLength, maxLength);
+						break;
+					}
 					memcpy( pDest+destPos, pBuffer+bufStartOffset, memcpyLength*sizeof( sample_t ) );
 					destPos += memcpyLength;
 				}
 			} else {
 				length_t part;
+				length_t part_actual = 0;  // Track how much we actually wrote in first part
 				// wraparound - need extra bounds checking since we do two memcpys
 				// copy part to the end
 				part = (bufSize-bufStartOffset);
@@ -142,17 +152,31 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 					part = maxLength - destPos;  // Clamp first part
 				}
 				if (part > 0) {
+					// SAFETY: assert we're not writing past the hard boundary
+					if (pDest + destPos + part > pDestMax) {
+						fprintf(stderr, "FATAL: wraparound memcpy[1] would overflow: destPos=%lld, part=%lld, maxLength=%lld\n",
+							destPos, part, maxLength);
+						break;
+					}
 					memcpy( pDest+destPos, pBuffer+bufStartOffset, part*sizeof( sample_t ) );
 					destPos += part;
+					part_actual = part;  // Track actual first part written
 				}
 
 				// then part from the buffer start.
-				part = (memcpyLength-(bufSize-bufStartOffset));
+				// CRITICAL: recalculate based on actual first part, not intended first part
+				part = (memcpyLength - part_actual);  // Use actual first part, not (bufSize-bufStartOffset)
 				if (part > 0 && destPos < maxLength) {
 					if (destPos + part > maxLength) {
 						part = maxLength - destPos;  // Clamp second part
 					}
 					if (part > 0) {
+						// SAFETY: assert we're not writing past the hard boundary
+						if (pDest + destPos + part > pDestMax) {
+							fprintf(stderr, "FATAL: wraparound memcpy[2] would overflow: destPos=%lld, part=%lld, maxLength=%lld\n",
+								destPos, part, maxLength);
+							break;
+						}
 						memcpy( pDest+destPos, pBuffer, part*sizeof( sample_t ) );
 						destPos += part;
 					}
