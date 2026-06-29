@@ -64,19 +64,18 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		return 0;  // Nothing to copy
 	}
 
-	// CRITICAL: Sanity check on maxLength. The twStreamingLatch operates with fixed-size
-	// internal buffers (bufSize). We allow up to 2x bufSize as an emergency overflow prevention,
-	// but log a warning if maxLength significantly exceeds bufSize (indicating contract violation).
-	// This is a defensive measure until the IOVector refactoring fixes the root cause.
-	const length_t MAX_SAFE_CLAMP = bufSize * 2;  // Allow up to 2x internal buffer size
-	if (maxLength > MAX_SAFE_CLAMP) {
-		fprintf(stderr, "WARNING: copyData called with extremely large maxLength=%lld (bufSize=%lld). "
-			"Clamping to %lld. Serious caller contract violation.\n",
-			maxLength, bufSize, MAX_SAFE_CLAMP);
-		maxLength = MAX_SAFE_CLAMP;
-	} else if (maxLength > bufSize && maxLength > 8192) {
-		fprintf(stderr, "DEBUG: copyData called with maxLength=%lld > bufSize=%lld. "
-			"This indicates potential caller contract violation (architectural issue).\n",
+	// CRITICAL: maxLength is the destination buffer size allocated by the caller.
+	// Do NOT clamp it based on our internal bufSize — these are independent constraints.
+	// The per-memcpy bounds checks below (destPos + length <= maxLength) ensure we never
+	// overflow pDest. The architectural issue (implicit buffer contracts) remains, but
+	// we must not silently truncate legitimate requests.
+	if (maxLength >= bufSize * 4) {
+		fprintf(stderr, "WARNING: copyData contract violation: maxLength=%lld >= 4*bufSize=%lld (ratio=%.1fx). "
+			"Likely architectural: caller pre-buffering or unit mismatch (bytes vs samples).\n",
+			maxLength, bufSize, (double)maxLength / bufSize);
+	} else if (maxLength > bufSize && maxLength > 32768) {
+		fprintf(stderr, "DEBUG: copyData called with large maxLength=%lld > bufSize=%lld. "
+			"May indicate caller needs optimization.\n",
 			maxLength, bufSize);
 	}
 
