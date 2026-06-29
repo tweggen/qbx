@@ -128,7 +128,7 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
             newReader = std::shared_ptr<twSampleReader>( lr );
             newLooping = true;
         } else {
-            newReader = std::shared_ptr<twSampleReader>( view->acquireReader( env ) );
+            newReader = std::shared_ptr<twSampleReader>( view->acquireReader( env, adjustedStartOffset ) );
             newLooping = false;
         }
     }

@@ -47,11 +47,19 @@ public:
     bool isBounded() const { return length() >= 0; }
 
     /**
-     * Mint an independent cursor over this data. The caller OWNS the returned
-     * reader and must delete it (before or together with releasing the source).
+     * Mint an independent cursor over this data at the specified initial offset.
+     * The cursor starts at `initialOffset` into the source material (default: 0).
+     *
+     * The caller OWNS the returned reader and must delete it (before or together
+     * with releasing the source).
+     *
+     * This enables resource-efficient reader initialization: the offset is set at
+     * construction time, avoiding separate seekTo() call. Future implementations
+     * can use this to avoid materializing data before the offset.
+     *
      * Defined in twsamplereader.cc, where twSampleReader is complete.
      */
-    twSampleReader *acquireReader( tw303aEnvironment &env );
+    twSampleReader *acquireReader( tw303aEnvironment &env, offset_t initialOffset = 0 );
 };
 
 #endif

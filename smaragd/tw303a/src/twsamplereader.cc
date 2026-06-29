@@ -5,10 +5,13 @@
 #include "twrandomsource.h"
 
 // Defined here, where twSampleReader is a complete type.
-twSampleReader *twRandomSource::acquireReader( tw303aEnvironment &env )
+twSampleReader *twRandomSource::acquireReader( tw303aEnvironment &env, offset_t initialOffset )
 {
     twSampleReader *r = new twSampleReader( env, *this );
     r->init();   // allocate plugs/latches, matching every other live component
+    if( initialOffset != 0 ) {
+        r->seekTo( initialOffset );  // Position reader at initial offset
+    }
     return r;
 }
 
