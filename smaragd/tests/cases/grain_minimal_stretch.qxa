@@ -10,7 +10,7 @@
     <add-track index="-1"/>
 
     <!-- Add the sawtooth sample -->
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- Apply a subtle 1.25x time-stretch -->
     <!-- This activates grain overlap-add with a moderate stretch factor -->
@@ -19,6 +19,16 @@
 
     <!-- Render the grain-processed audio -->
     <render filename="grain_minimal_stretch.wav" format="wav" quality="10"/>
+
+    <!-- Acoustic verification: ensure grain processing preserved audio quality -->
+    <!-- Sawtooth energy should be in healthy range (not silent, not clipped) -->
+    <assert-audio-energy filename="grain_minimal_stretch.wav" minRms="0.05" maxRms="0.90"/>
+
+    <!-- Peak amplitude should not clip (grain windowing may slightly reduce peak) -->
+    <assert-audio-peak filename="grain_minimal_stretch.wav" maxPeak="0.995"/>
+
+    <!-- Screenshot showing the stretched timeline -->
+    <screenshot filename="grain_minimal_stretch_timeline.png" resolution="50%"/>
   </actions>
 
   <assertions>

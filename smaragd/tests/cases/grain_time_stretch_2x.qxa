@@ -10,7 +10,7 @@
     <add-track index="-1"/>
 
     <!-- Add the sawtooth sample at position 0 -->
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- Apply 2x time-stretch via resize-clip action -->
     <!-- This activates grain overlap-add processing with 2x slower playback -->
@@ -20,6 +20,13 @@
 
     <!-- Render the time-stretched audio -->
     <render filename="grain_time_stretch_2x.wav" format="wav" quality="10"/>
+
+    <!-- Acoustic verification: aggressive 2x stretch should preserve energy -->
+    <!-- RMS energy should remain similar to original (overlap-add preserves loudness) -->
+    <assert-audio-energy filename="grain_time_stretch_2x.wav" minRms="0.05" maxRms="0.90"/>
+
+    <!-- Peak should not exceed clipping threshold despite large stretch factor -->
+    <assert-audio-peak filename="grain_time_stretch_2x.wav" maxPeak="0.995"/>
 
     <!-- Screenshot showing the stretched timeline -->
     <screenshot filename="grain_time_stretch_2x_timeline.png" resolution="50%"/>

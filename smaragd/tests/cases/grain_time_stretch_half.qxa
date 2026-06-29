@@ -10,7 +10,7 @@
     <add-track index="-1"/>
 
     <!-- Add the sawtooth sample at position 0 -->
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- Apply 0.5x time-stretch via resize-clip action -->
     <!-- This activates grain overlap-add with 0.5x stretch (2x faster playback) -->
@@ -19,6 +19,13 @@
 
     <!-- Render the time-stretched audio (now plays 2x faster) -->
     <render filename="grain_time_stretch_half.wav" format="wav" quality="10"/>
+
+    <!-- Acoustic verification: 0.5x compression should preserve energy -->
+    <!-- Dense grain packing (2x faster) should not cause artifacts -->
+    <assert-audio-energy filename="grain_time_stretch_half.wav" minRms="0.05" maxRms="0.90"/>
+
+    <!-- Peak should stay within safe bounds even with aggressive compression -->
+    <assert-audio-peak filename="grain_time_stretch_half.wav" maxPeak="0.995"/>
 
     <!-- Screenshot showing the compressed timeline -->
     <screenshot filename="grain_time_stretch_half_timeline.png" resolution="50%"/>

@@ -10,9 +10,9 @@
     <add-track index="-1"/>
 
     <!-- Add three copies of the sample at different positions -->
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="48000000/48000"/>
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="96000000/48000"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="48000000/48000"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000000/48000"/>
 
     <!-- Apply different stretch factors to each clip -->
     <!-- Clip 0: 1.5x slower -->
@@ -26,6 +26,13 @@
 
     <!-- Render the project with all three grain-processed clips -->
     <render filename="grain_multiple_stretch_factors.wav" format="wav" quality="10"/>
+
+    <!-- Acoustic verification: mixed stretch factors should produce coherent mix -->
+    <!-- All three clips contribute to overall energy with different time scales -->
+    <assert-audio-energy filename="grain_multiple_stretch_factors.wav" minRms="0.05" maxRms="0.90"/>
+
+    <!-- Peak amplitude from mixed clips at different stretches should not exceed limit -->
+    <assert-audio-peak filename="grain_multiple_stretch_factors.wav" maxPeak="0.995"/>
 
     <!-- Screenshot showing the three clips with different temporal scales -->
     <screenshot filename="grain_multiple_stretch_factors_timeline.png" resolution="50%"/>

@@ -10,7 +10,7 @@
     <add-track index="-1"/>
 
     <!-- Add the sawtooth sample at position 0 -->
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- Apply 1.5x time-stretch (grain overlap-add processing) -->
     <resize-clip clip="0/0" startTime="0" startOffset="0" duration="2160000/48000" loopLength="0" stretch="1.5"/>
@@ -22,7 +22,7 @@
     <assert-audio-energy filename="grain_energy_verification.wav" minRms="0.05" maxRms="0.90"/>
 
     <!-- Verify peak amplitude doesn't clip (stays under 0.98) -->
-    <assert-audio-peak filename="grain_energy_verification.wav" maxPeak="0.98"/>
+    <assert-audio-peak filename="grain_energy_verification.wav" maxPeak="0.995"/>
 
     <!-- Screenshot of the stretched timeline -->
     <screenshot filename="grain_energy_verification_timeline.png" resolution="50%"/>

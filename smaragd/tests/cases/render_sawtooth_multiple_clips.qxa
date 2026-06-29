@@ -8,13 +8,13 @@
     <add-track index="-1"/>
 
     <!-- Add the sawtooth sample at position 0 -->
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- Add the same sample again at position 1 second -->
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="48000/48000"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="48000/48000"/>
 
     <!-- Add the same sample a third time at position 2 seconds -->
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="96000/48000"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000/48000"/>
 
     <!-- Render the project (3 seconds of audio: three copies of sawtooth start concatenated) -->
     <render filename="render_multiple_clips.wav" format="wav" quality="10"/>

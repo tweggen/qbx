@@ -11,10 +11,10 @@
     <add-track index="-1"/>
 
     <!-- Add the sample to the first track -->
-    <add-sample trackIndex="0" filePath="../../../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- Add the same sample to the second track (unstretched for reference) -->
-    <add-sample trackIndex="1" filePath="../../../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- Apply 1.5x time-stretch to the first track (grain processing) -->
     <resize-clip clip="0/0" startTime="0" startOffset="0" duration="2160000/48000" loopLength="0" stretch="1.5"/>
@@ -27,6 +27,14 @@
 
     <!-- Render the project (mix of grain-stretched quieter audio with normal audio) -->
     <render filename="grain_with_volume_control.wav" format="wav" quality="10"/>
+
+    <!-- Acoustic verification: mix of -6dB stretched and normal audio -->
+    <!-- Two equal-amplitude sources mixed: -6dB quieter + normal = moderate energy -->
+    <!-- Total RMS should be lower than single full-volume clip but not silent -->
+    <assert-audio-energy filename="grain_with_volume_control.wav" minRms="0.05" maxRms="0.90"/>
+
+    <!-- Peak from mixed sources should stay within safe range -->
+    <assert-audio-peak filename="grain_with_volume_control.wav" maxPeak="0.995"/>
 
     <!-- Screenshot showing both tracks with different processing -->
     <screenshot filename="grain_with_volume_control_timeline.png" resolution="50%"/>
