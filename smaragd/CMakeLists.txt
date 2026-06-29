@@ -49,6 +49,15 @@ if(MSVC)
     add_compile_definitions(_USE_MATH_DEFINES NOMINMAX WIN32_LEAN_AND_MEAN)
 else()
     add_compile_options(-Wall)
+
+    # Address Sanitizer (detects memory errors: use-after-free, buffer overflows, etc.)
+    # Enable with: -DENABLE_ASAN=ON
+    option(ENABLE_ASAN "Enable Address Sanitizer for memory error detection" OFF)
+    if(ENABLE_ASAN)
+        message(STATUS "smaragd: Address Sanitizer ENABLED (will catch memory errors)")
+        add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address)
+    endif()
 endif()
 
 add_subdirectory(tw303a)
