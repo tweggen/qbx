@@ -1,5 +1,6 @@
 #include "twplugininsert.h"
 #include "plugins/twplugin.h"
+#include "io_vector.h"
 #include <cstring>
 #include <algorithm>
 
@@ -41,6 +42,41 @@ idx_t twPluginInsert::getNOutputs() const
     return plugin_->ioLayout().audioOutputs;
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twPluginInsert::calcOutputTo( IOVector& dest, idx_t port )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+
+    if( !producedThisBlock_ ) {
+        // Pull every input bus into de-interleaved scratch (one mono wire each).
+        for( idx_t c = 0; c < getNInputs(); ++c )
+            pullInput( c, inScratch_[c].data(), dest.length() );
+
+        // Bypass = copy in->out; process plugin otherwise.
+        if( bypass_ ) {
+            copyChannels( inScratch_, outScratch_, getNInputs(), dest.length() );
+        } else {
+            // Prepare scratch buffers with input data pointers.
+            std::vector<const float *> inPtrs( getNInputs() );
+            std::vector<float *> outPtrs( getNOutputs() );
+            for( idx_t c = 0; c < getNInputs(); ++c )
+                inPtrs[c] = inScratch_[c].data();
+            for( idx_t c = 0; c < getNOutputs(); ++c )
+                outPtrs[c] = outScratch_[c].data();
+
+            plugin_->process( inPtrs.data(), outPtrs.data(), dest.length() );
+        }
+        producedThisBlock_ = true;
+    }
+
+    // Write requested output port to IOVector destination
+    if( port < getNOutputs() ) {
+        return dest.copyFrom(IOVector::CreateFromBuffer(outScratch_[port].data(), dest.length()), 0, dest.length());
+    }
+    return 0;
+}
+
+// Legacy: Raw-pointer interface
 length_t twPluginInsert::calcOutputTo( sample_t *dst, length_t len, idx_t port )
 {
     std::lock_guard<std::mutex> lock(mutex());
