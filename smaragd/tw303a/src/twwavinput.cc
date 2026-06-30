@@ -105,26 +105,6 @@ length_t twWavInput::calcOutputTo( IOVector& dest, idx_t idx )
     return dest.copyFrom(IOVector::CreateFromBuffer(buffer, dest.length()), 0, dest.length());
 }
 
-// Legacy: Raw-pointer interface
-length_t twWavInput::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
-{
-    std::lock_guard<std::mutex> lock(mutex());
-    return calcOutputTo_nolock(pDest, length, idx);
-}
-
-// Caller must hold mutex()
-length_t twWavInput::calcOutputTo_nolock( sample_t *pDest, length_t length, idx_t idx )
-{
-    if( !source_ ) {
-        memset( pDest, 0, sizeof( sample_t ) * length );
-        return length;
-    }
-    // Read through the project-rate view (cached); a no-op passthrough when the
-    // sample's native rate already equals the project rate.
-    source_->viewAtRate( env.getSRate() )->read( playOffset_, pDest, length, idx );
-    return length;
-}
-
 void twWavInput::init()
 {
     twComponent::init();
