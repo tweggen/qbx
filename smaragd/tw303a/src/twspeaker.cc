@@ -253,12 +253,6 @@ length_t twSpeaker::calcOutputTo(IOVector& dest, idx_t)
     return dest.fillSilence(0, dest.length());
 }
 
-// Legacy: Raw-pointer interface
-length_t twSpeaker::calcOutputTo(sample_t *, length_t, idx_t)
-{
-    return 0;
-}
-
 void twSpeaker::createOutputLatches()
 {
 #ifdef DEBUG_COMPONENT
