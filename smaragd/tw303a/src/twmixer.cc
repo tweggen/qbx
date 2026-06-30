@@ -6,6 +6,7 @@
 #include <math.h>
 
 #include "twmixer.h"
+#include "io_vector.h"
 
 const char *twMixer::getInputName( idx_t ) const
 {
@@ -57,6 +58,40 @@ void twMixer::createOutputLatches()
 #endif
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+
+    // Allocate temp buffer for mixing (reuse strategy: could use a preallocated buffer)
+    sample_t *outputBuffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+    memset(outputBuffer, 0, dest.length() * sizeof(sample_t));
+
+    // Mix all inputs
+    length_t realRead = 0;
+    InputProperties *props = inputProperties_;
+
+    for( idx_t ch = 0; ch < mixerInputs_; ch++, props++ ) {
+        if( !pInputPlugs[ch] ) continue;
+        float factor = props->volumeFactor_;
+
+        realRead = ((twLatchStreamingOutput *)pInputPlugs[ch])->readStreamingData( inBuffer, dest.length() );
+        if( realRead != dest.length() ) {
+            throw new excStandard( "twMixer::calcOutputTo(): Source did not provide sufficient data." );
+        }
+
+        sample_t *pCurr = outputBuffer;
+        sample_t *pSrc = inBuffer;
+        for( offset_t i = 0; i < (offset_t)dest.length(); i++ ) {
+            *pCurr++ += *pSrc++ * factor;
+        }
+    }
+
+    // Write mixed result to IOVector destination
+    return dest.copyFrom(IOVector::CreateFromBuffer(outputBuffer, realRead), 0, realRead);
+}
+
+// Legacy: Raw-pointer interface
 length_t twMixer::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
 {
     std::lock_guard<std::mutex> lock(mutex());
