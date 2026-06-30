@@ -7,6 +7,7 @@
 #include "tw303aenv.h"
 #include "twtrackmix.h"
 #include "twview.h"
+#include "io_vector.h"
 
 int twTrackMix::seekTo( offset_t newOffset )
 {
@@ -310,12 +311,10 @@ length_t twTrackMix::freezePage_nolock(
                               ? (clip.startTime - startPos)
                               : 0;
 
-        // Copy child's samples to output at the correct offset
-        for( uint32_t i = 0; i < childPage->validFrames && destOffset + i < length; ++i ) {
-            if( i < childPage->samples.size() ) {
-                page->samples[destOffset + i] += childPage->samples[i];
-            }
-        }
+        // Type-safe mixing using IOVector (bounds-checked, zero-copy)
+        IOVector childVec = IOVector::CreateForPageOutput(childPage);
+        IOVector outputVec(page, 0, length);
+        outputVec.mixFrom(childVec, destOffset, childVec.length());
     }
 
     // Apply track gain and mute (same as calcOutputTo_nolock)
