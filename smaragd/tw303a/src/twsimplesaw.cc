@@ -3,6 +3,7 @@
 #include "twsyslog.h"
 
 #include "twsimplesaw.h"
+#include "io_vector.h"
 
 #undef DEBUG_CALC_OUTPUT
 
@@ -26,7 +27,41 @@ void twSimpleSaw::createOutputLatches()
 #endif
 }
 
-length_t twSimpleSaw::calcOutputTo( sample_t *pDest, 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twSimpleSaw::calcOutputTo( IOVector& dest, idx_t /* idx */ )
+{
+	sample_t *pDest = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+	sample_t *pCurr = pDest;
+	sample_t *pCurrFreq = freqBuffer;
+	length_t realRead;
+
+	realRead = ((twLatchStreamingOutput *)pInputPlugs[0])->readStreamingData(
+		freqBuffer, dest.length());
+	if( realRead == 0 ) {
+		throw new excStandard( "twSimpleSaw::calcOutputTo(): Source did not provide data." );
+	}
+
+	offset_t a = currPos;
+	offset_t b = a + realRead;
+
+	for( offset_t i = a; i < b; i++ ) {
+		unsigned currFreq;
+		currFreq = *pCurrFreq++;
+		if( currFreq == 0 ) {
+			*pCurr++ = 0;
+		} else {
+			offset_t periodLength = ((env.getSRate() * 100) / currFreq);
+			*pCurr++ = (((i % periodLength) << 16) / periodLength) - periodLength/2;
+		}
+	}
+	currPos += realRead;
+
+	// Write to IOVector destination
+	return dest.copyFrom(IOVector::CreateFromBuffer(pDest, realRead), 0, realRead);
+}
+
+// Legacy: Raw-pointer interface
+length_t twSimpleSaw::calcOutputTo( sample_t *pDest,
                                     length_t /* length*/, idx_t /* idx */ )
 {
 	int i, a, b;
