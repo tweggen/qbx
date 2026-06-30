@@ -42,10 +42,6 @@ bool AudioEngine::pullFrame(AudioFrame& outFrame) {
 }
 
 length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
-    fprintf(stderr, "audio_engine.cc:pullBlock ENTER: nFrames=%lu, synthOutput_=%p, passthrough=%d, outL=%p, outR=%p\n",
-            nFrames, synthOutput_, resamplerL_.isPassthrough(), outL, outR);
-    fflush(stderr);
-
     if (!synthOutput_ || nFrames == 0) {
         std::memset(outL, 0, nFrames * sizeof(float));
         std::memset(outR, 0, nFrames * sizeof(float));
@@ -60,48 +56,24 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         // We need more input frames when downsampling: inFrames = outFrames / rateRatio_
         double invRatio = 1.0 / rateRatio_;  // inputRate / outputRate (e.g., 48000/44100 = 1.0884)
         length_t inFramesNeeded = (length_t)std::ceil(nFrames * invRatio);
-        fprintf(stderr, "  resampling: requested_output=%lu, inFramesNeeded=%lu, rateRatio_=%.6f, invRatio=%.6f\n",
-                nFrames, inFramesNeeded, rateRatio_, invRatio);
-        fflush(stderr);
-
-        fprintf(stderr, "  allocating bufL(%lu), bufR(%lu)...\n", inFramesNeeded, inFramesNeeded);
-        fflush(stderr);
         std::vector<float> bufL(inFramesNeeded), bufR(inFramesNeeded);
-        fprintf(stderr, "  allocated bufL(%p), bufR(%p)\n", bufL.data(), bufR.data());
-        fflush(stderr);
 
         // Track current position BEFORE consuming input frames
         // This allows us to advance by the actual output frame count, not the input count
         uint64_t posBeforeResample = currentPos_.load(std::memory_order_relaxed);
 
-        fprintf(stderr, "  starting pull loop: inFramesNeeded=%lu, posBeforeResample=%lu\n",
-                inFramesNeeded, posBeforeResample);
-        fflush(stderr);
-
         length_t inProduced = 0;
         for (length_t i = 0; i < inFramesNeeded; ++i) {
-            if (i == 0) {
-                fprintf(stderr, "    pulling frame[0]...\n");
-                fflush(stderr);
-            }
             if (!pullStereoFrameFrozen(bufL[i], bufR[i])) {
-                fprintf(stderr, "    frame[%lu] underrun\n", i);
-                fflush(stderr);
                 break;
             }
             inProduced++;
         }
-        fprintf(stderr, "  pull loop done: inProduced=%lu\n", inProduced);
-        fflush(stderr);
 
         if (inProduced == 0) {
-            fprintf(stderr, "  WARNING: inProduced=0, underrun detected\n");
-            fflush(stderr);
             // Caller's buffers must be large enough to hold nFrames
             std::memset(outL, 0, nFrames * sizeof(float));
             std::memset(outR, 0, nFrames * sizeof(float));
-            fprintf(stderr, "  Zeroed output buffers, returning 0\n");
-            fflush(stderr);
             return 0;
         }
 
@@ -140,15 +112,24 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         uint64_t engineFramesForOutput = (uint64_t)std::round((double)outProduced / rateRatio_);
         currentPos_.store(posBeforeResample + engineFramesForOutput, std::memory_order_relaxed);
 
-        fprintf(stderr, "  resampling result: inProduced=%lu, outProduced=%lu\n",
-                inProduced, outProduced);
-        fflush(stderr);
+        // Diagnostic: check if output is silence
+        bool isSilent = true;
+        for (length_t i = 0; i < outProduced && isSilent; ++i) {
+            if (outL[i] != 0.0f || outR[i] != 0.0f) isSilent = false;
+        }
+        if (isSilent && outProduced > 0) {
+            static int silenceCount = 0;
+            if (++silenceCount == 1 || silenceCount % 100 == 0) {
+                fprintf(stderr, "WARNING: pullBlock producing silence (callback #%d, %lu frames)\n",
+                        silenceCount, outProduced);
+                fflush(stderr);
+            }
+        }
+
         return outProduced;
     }
 
     // Passthrough: no resampling needed
-    fprintf(stderr, "  passthrough: requested=%lu\n", nFrames);
-    fflush(stderr);
     length_t produced = 0;
     for (length_t i = 0; i < nFrames; ++i) {
         if (!pullStereoFrameFrozen(outL[i], outR[i])) {
@@ -163,16 +144,12 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         std::memset(outR + produced, 0, (nFrames - produced) * sizeof(float));
     }
 
-    fprintf(stderr, "  passthrough result: produced=%lu\n", produced);
-    fflush(stderr);
     return produced;
 }
 
 bool AudioEngine::pullStereoFrameFrozen(float& outL, float& outR) {
     if (!synthOutput_) {
         outL = outR = 0.0f;
-        fprintf(stderr, "    pullStereoFrameFrozen: synthOutput_ is null\n");
-        fflush(stderr);
         return false;
     }
 
@@ -196,18 +173,12 @@ bool AudioEngine::pullStereoFrameFrozen(float& outL, float& outR) {
     if (!currentFrozenPage_) {
         outL = outR = 0.0f;
         currentPos_.store(pos, std::memory_order_relaxed);
-        fprintf(stderr, "    pullStereoFrameFrozen: currentFrozenPage_ is null at pos=%lu\n", pos);
-        fflush(stderr);
         return false;
     }
 
     // Read sample from current frozen page. If at end, try to advance to next page.
     if (pageFrameOffset_ >= currentFrozenPage_->validFrames) {
         // At end of current page; try to move to next page
-        fprintf(stderr, "    pullStereoFrameFrozen: end of page (offset %zu >= validFrames %lu), advancing...\n",
-                pageFrameOffset_, currentFrozenPage_->validFrames);
-        fflush(stderr);
-
         // Advance position to next page and try to load it
         pos = (currentPageStartPos_ / twOutputPage::FRAME_CAPACITY + 1) * twOutputPage::FRAME_CAPACITY;
         updateFrozenPage(pos);
@@ -216,8 +187,6 @@ bool AudioEngine::pullStereoFrameFrozen(float& outL, float& outR) {
         if (!currentFrozenPage_ || pageFrameOffset_ >= currentFrozenPage_->validFrames) {
             outL = outR = 0.0f;
             currentPos_.store(pos, std::memory_order_relaxed);
-            fprintf(stderr, "    pullStereoFrameFrozen: no next page available, underrun\n");
-            fflush(stderr);
             return false;
         }
     }
@@ -230,11 +199,6 @@ bool AudioEngine::pullStereoFrameFrozen(float& outL, float& outR) {
     // Advance position
     pageFrameOffset_++;
     pos++;
-
-    if (pageFrameOffset_ < 5) {  // Log first few samples
-        fprintf(stderr, "    frame[%zu]: sample=%.6f (from frozen page at offset %zu)\n",
-                pageFrameOffset_ - 1, sample, pageFrameOffset_ - 1);
-    }
 
     currentPos_.store(pos, std::memory_order_relaxed);
     return true;
@@ -276,13 +240,13 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         if (pageFrameOffset_ > currentFrozenPage_->validFrames) {
             pageFrameOffset_ = currentFrozenPage_->validFrames;
         }
-        fprintf(stderr, "  updateFrozenPage: froze page at pos=%lu, validFrames=%lu, offset=%zu\n",
-                pageStartPos, currentFrozenPage_->validFrames, pageFrameOffset_);
-        fflush(stderr);
         prevFrozenPage_ = currentFrozenPage_;  // Save for next page's state restoration
     } else {
-        fprintf(stderr, "  updateFrozenPage: freezePage returned nullptr!\n");
-        fflush(stderr);
+        static int nullPageCount = 0;
+        if (++nullPageCount == 1) {
+            fprintf(stderr, "WARNING: freezePage() returned nullptr at pos=%lu\n", desiredPos);
+            fflush(stderr);
+        }
         pageFrameOffset_ = 0;
     }
 }
