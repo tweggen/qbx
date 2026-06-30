@@ -60,48 +60,6 @@ length_t twSimpleSaw::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 	return dest.copyFrom(IOVector::CreateFromBuffer(pDest, realRead), 0, realRead);
 }
 
-// Legacy: Raw-pointer interface
-length_t twSimpleSaw::calcOutputTo( sample_t *pDest,
-                                    length_t /* length*/, idx_t /* idx */ )
-{
-	int i, a, b;
-	sample_t *pCurr = pDest;
-	sample_t *pCurrFreq = freqBuffer;
-	length_t realRead;
-
-	realRead = ((twLatchStreamingOutput *)pInputPlugs[0]) -> readStreamingData(
-		freqBuffer,
-		env.getBufferSize()
-		);
-	if( realRead==0 ) {
-		throw new excStandard( "twSimpleSaw::calcOutputTo(): Source did not provide data." );
-	}
-	
-
-#ifdef DEBUG_CALCOUTPUT
-	fprintf( sterr, "twSimpleSaw::calOutputTo(): Starting at %d, calcing %d.", currPos, length );
-#endif
-	a = currPos;
-	b = a+realRead;
-
-	for( i=a; i<b; i++ ) {
-		unsigned currFreq;
-		currFreq = *pCurrFreq++;
-		if( currFreq==0 ) {
-			// shut up on pCurrFreq = 0;
-			*pCurr++ = 0;
-		} else {
-			offset_t periodLength = ((env.getSRate()*100) / currFreq);
-
-//			this was the cool line
-			*pCurr++ = (((i % periodLength) << 16) / periodLength)-periodLength/2;
-//			*pCurr++ = (((i % periodLength) << 16) / periodLength)-0x8000;
-		}
-	}
-	currPos += realRead;
-	return realRead;
-}
-
 void twSimpleSaw::setBufferSize( length_t /*len*/ )
 {
 	if( freqBuffer ) free( freqBuffer );

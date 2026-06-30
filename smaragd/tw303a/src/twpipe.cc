@@ -48,33 +48,6 @@ length_t twPipe::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 	return dest.copyFrom(IOVector::CreateFromBuffer(pDest, realRead), 0, realRead);
 }
 
-// Legacy: Raw-pointer interface
-length_t twPipe::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */ )
-{
-	length_t realRead;
-
-	memcpy( inBuffer, inBuffer+env.getSRate(), sizeof( sample_t ) * length );
-	realRead = ((twLatchStreamingOutput *)pInputPlugs[0]) -> readStreamingData(
-		inBuffer+env.getSRate(),
-		length
-		);
-	if( realRead==0 ) {
-		throw new excStandard( "twPipe::calcOutputTo(): Source did not provide data." );
-	}
-
-	// processData( pDest, realRead );
-	offset_t i;
-	sample_t *pSrc = inBuffer+env.getSRate();
-	for( i=0; i<(offset_t)length; i++ ) {
-		*pSrc = *pDest++ =
-			 (*pSrc*12 + (pSrc[-1310])*4 + (pSrc[-4561])*5 + (pSrc[-3364])*5
-			+(pSrc[-11710])*3 + (pSrc[-12561])*3 + (pSrc[-6364])*4) / (12+4+5+5+3+3+4);
-		pSrc++;
-	}
-
-	return realRead;
-}
-
 void twPipe::setBufferSize( length_t length )
 {
 	if( inBuffer ) free( inBuffer );
