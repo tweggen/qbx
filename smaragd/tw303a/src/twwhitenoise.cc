@@ -3,6 +3,7 @@
 #include "twsyslog.h"
 
 #include "twwhitenoise.h"
+#include "io_vector.h"
 
 #undef DEBUG_CALC_OUTPUT
 
@@ -26,6 +27,34 @@ void twWhiteNoise::createOutputLatches()
 #endif
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twWhiteNoise::calcOutputTo( IOVector& dest, idx_t idx )
+{
+    length_t realRead;
+    sample_t *pCurr = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+
+    // Read frequency control input
+    realRead = ((twLatchStreamingOutput *)pInputPlugs[0])->readStreamingData(
+        freqBuffer, dest.length());
+    if( realRead == 0 ) {
+        throw new excStandard( "twWhiteNoise::calcOutputTo(): Source did not provide data." );
+    }
+
+    // Generate white noise, gated by frequency input
+    sample_t *pCurrFreq = freqBuffer;
+    for( offset_t i = 0; i < (offset_t)realRead; i++ ) {
+        if( *pCurrFreq++ ) {
+            *pCurr++ = (rand() & 0xffff) - 0x8000;
+        } else {
+            *pCurr++ = 0;
+        }
+    }
+
+    // Write to IOVector destination
+    return dest.copyFrom(IOVector::CreateFromBuffer(pCurr - realRead, realRead), 0, realRead);
+}
+
+// Legacy: Raw-pointer interface
 length_t twWhiteNoise::calcOutputTo( sample_t *pDest, length_t, idx_t )
 {
     int i, a, b;
