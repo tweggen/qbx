@@ -3692,3 +3692,152 @@ RenderSession.seekTo(192000)
 3. Waveform should match playback result
 
 If verified working, the bug is **FIXED**.
+
+---
+
+## 13_IO_VECTOR_SAFE_BUFFERS.md - Phase 3 Start (2026-06-30)
+
+**Date:** 2026-06-30  
+**Status:** Phase 3 Interface & Migration Infrastructure Complete. Component Refactoring In Progress.  
+**Commits:** `0258d63` (IOVector interface), `2fdf81f` (twConstant refactor)
+
+### Objective
+
+Implement type-safe buffer management using IOVector to eliminate buffer overflow vulnerabilities. Adapted from proposal 13 to work with V3 unified rendering architecture (page-based freezing, twView wrappers, callback-based clip management).
+
+### Phase 3 Completed: Component calcOutputTo Interface Refactor
+
+#### 1. IOVector-Based calcOutputTo Interface Added to twComponent
+
+**Header Changes (twcomponent.h):**
+```cpp
+// NEW: Type-safe interface using IOVector for bounds-checked rendering
+// Default implementation wraps raw-pointer interface for compatibility
+// Components can override this when ready for type-safe rendering
+virtual length_t calcOutputTo(IOVector& dest, idx_t idx);
+
+// LEGACY: Raw-pointer interface (all existing components implement this)
+// Default implementation wraps in IOVector for migration path
+// Will eventually be removed once all components migrate
+virtual length_t calcOutputTo(sample_t *pDest, length_t length, idx_t idx) = 0;
+```
+
+**Migration Strategy:**
+- Raw-pointer version remains pure virtual (required for backwards compatibility)
+- IOVector version has default implementation that wraps raw-pointer version
+- Allows components to migrate incrementally without breaking existing code
+- Both interfaces coexist during transition period
+
+#### 2. IOVector API Enhancement: fillConstant()
+
+**New method added to IOVector:**
+```cpp
+length_t fillConstant(offset_t dstOffset, length_t numFrames, sample_t value);
+```
+
+**Use Cases:**
+- Stateless sources: tone generators, constant value outputs
+- Padding/initialization with non-zero values
+- Single-page optimized (bulk fill), multi-page fallback (frame-by-frame)
+
+#### 3. twConstant Component Refactored (Example Implementation)
+
+**Pattern Demonstrated:**
+
+```cpp
+// Header: Add override of IOVector version
+virtual length_t calcOutputTo(IOVector& dest, idx_t idx) override;
+virtual length_t calcOutputTo(sample_t *pDest, length_t length, idx_t idx) override;
+
+// Implementation: IOVector version (new, type-safe)
+length_t twConstant::calcOutputTo(IOVector& dest, idx_t /* idx */)
+{
+    return dest.fillConstant(0, dest.length(), constant);
+}
+
+// Legacy version preserved for backwards compatibility
+length_t twConstant::calcOutputTo(sample_t *pDest, length_t length, idx_t /* idx */)
+{
+    for(length_t i = 0; i < length; i++) {
+        pDest[i] = constant;
+    }
+    return length;
+}
+```
+
+**Benefits:**
+- No intermediate buffer allocation
+- Direct page-backed rendering
+- Bounds-safe by construction
+- Zero-copy operation
+
+### Build Status
+
+- ✅ Builds successfully on macOS/Qt6/CMake
+- ✅ All tests passing (io_vector_test, action_roundtrip_test)
+- ✅ No warnings or errors introduced
+
+### Remaining Work (Full Phase 3)
+
+**~24 component implementations still need refactoring:**
+
+**Priority 1 - Simple Stateless Sources:**
+- twRandomSource
+- twWhiteNoise
+- twTestSeq
+
+**Priority 2 - DSP Components:**
+- twOsc
+- twSaw / twSimpleSaw
+- twMoog
+- twMixer
+- twPipe
+
+**Priority 3 - Reader Components:**
+- twSampleReader / twLoopReader
+- twCapturingSource
+- twWav / twWavInput
+- twResampledSource
+
+**Priority 4 - Specialized:**
+- twPluginInsert / twPluginChain
+- twRewire
+- twSpeaker
+- twView
+
+**Pattern for each component:**
+1. Add override: `virtual length_t calcOutputTo(IOVector& dest, idx_t idx) override;`
+2. Implement using IOVector operations (copyFrom, fillConstant, etc.)
+3. Remove intermediate buffer allocations where possible
+4. Keep raw-pointer version functional for backwards compatibility
+
+### Architecture Notes
+
+**Migration Maintains Compatibility:**
+- Existing code using raw-pointer calcOutputTo continues working unchanged
+- New freezePage/twView code can use IOVector version
+- twStreamingLatch can migrate to use IOVector when ready (line 204 in twstreaminglatch.cc)
+- No forced updates required; components migrate at own pace
+
+**V3 Integration:**
+- IOVector naturally maps to twOutputPage (unified page model)
+- freezePage() calls use page-backed rendering
+- twTrackMix::freezePage_nolock already uses IOVector for mixing (line 315-317)
+- twView wrapper pattern compatible with IOVector callbacks
+
+### Next Steps
+
+1. Continue refactoring Priority 1 components (simple sources)
+2. Establish patterns for stateful components (twMoog, twOsc)
+3. Update reader components to use IOVector + page model
+4. Eventually deprecate raw-pointer version once all components migrated
+5. Integrate with twStreamingLatch for hot-path safety
+
+### Verification
+
+- ✅ Interface builds without errors or warnings
+- ✅ twConstant implementation works with both paths
+- ✅ Default adapter correctly wraps raw-pointer calls
+- ✅ No breaking changes to existing component callers
+
+---
