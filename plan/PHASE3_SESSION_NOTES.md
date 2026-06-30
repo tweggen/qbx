@@ -22,7 +22,36 @@ Tried bulk automated migration using sed + Python regex to:
 
 ---
 
-## Successful Manual Migrations (Session 1)
+## Completed Migrations
+
+### Session 1 & 2 (Prior)
+1. twConstant ✅ - Raw-pointer removed, build verified
+2. twWhiteNoise ✅ - Raw-pointer removed, build verified
+
+### Current Session (Session 3 - Completed)
+3. twMoog ✅ - Input-dependent filter, raw-pointer removed
+4. twPipe ✅ - Delay-line filter, raw-pointer removed
+5. twSimpleSaw ✅ - Sawtooth oscillator, raw-pointer removed
+6. twLoopReader ✅ - Loop reader with IOVector fallback updated
+7. twSampleReader ✅ - Sample reader, raw-pointer and _nolock removed
+8. twMixer ✅ - Multi-channel mixer, raw-pointer and _nolock removed
+9. twWav ✅ - File output sink, raw-pointer stub removed
+10. twWavInput ✅ - File input, raw-pointer and _nolock removed
+11. twRewire ✅ - Patch-bay router, raw-pointer and _nolock removed
+12. twSpeaker ✅ - Audio device output, raw-pointer stub removed
+13. **twComponent base class updated** ✅ - Raw-pointer now non-pure-virtual with default implementation
+
+**Session 3 Completed: 12/18 components (67%)**
+**Test baseline maintained: 39/41 passing throughout**
+
+### Remaining (6 components)
+- twView (delegates to wrapped component)
+- twTrackMix (clip timeline state)
+- twPluginInsert (plugin state)
+- twPluginChain (plugin chain sequencing)
+- (2 unknown - likely aliases or subclasses)
+
+## Successful Manual Migrations (Session 1 Details)
 
 These 2 components were successfully migrated and would integrate well with Phase 3 cleanup:
 
