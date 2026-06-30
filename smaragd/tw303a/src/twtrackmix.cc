@@ -75,21 +75,28 @@ bool twTrackMix::isSeekable() const
 void twTrackMix::insertClip(offset_t startTime, length_t duration, twComponent *component)
 {
     std::lock_guard<std::mutex> lock(mutex());
+    if( !component ) {
+        fprintf(stderr, "ERROR: twTrackMix::insertClip received null component!\n");
+        return;
+    }
     clips_.push_back({startTime, duration, component});
-    // TODO: could sort by startTime here for optimization, but unsorted works
+    fprintf(stderr, "twTrackMix: inserted clip at time %llu, now have %zu clips\n", startTime, clips_.size());
 }
 
 void twTrackMix::removeClip(twComponent *component)
 {
     std::lock_guard<std::mutex> lock(mutex());
     auto it = clips_.begin();
+    int removed = 0;
     while( it != clips_.end() ) {
         if( it->component == component ) {
             it = clips_.erase(it);
+            removed++;
         } else {
             ++it;
         }
     }
+    fprintf(stderr, "twTrackMix: removed %d clip(s), now have %zu clips\n", removed, clips_.size());
 }
 
 void twTrackMix::updateClip(twComponent *component, offset_t newStartTime, length_t newDuration)
