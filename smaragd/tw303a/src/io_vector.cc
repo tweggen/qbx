@@ -301,6 +301,43 @@ length_t IOVector::fillSilence(offset_t dstOffset, length_t numFrames)
     return actualFrames;
 }
 
+length_t IOVector::fillConstant(offset_t dstOffset, length_t numFrames, sample_t value)
+{
+    if (!validate()) {
+        return 0;
+    }
+
+    length_t actualFrames = clampLength(dstOffset, numFrames);
+    if (actualFrames == 0) {
+        return 0;
+    }
+
+    // For single-page case, use direct loop (can't memset for non-zero values)
+    if (pages_.size() == 1) {
+        auto dstMap = mapOffset(dstOffset);
+
+        if (pages_[0] && dstMap.pageIndex < pages_.size() &&
+            dstMap.offsetInPage < pages_[dstMap.pageIndex]->samples.size()) {
+            for (offset_t i = 0; i < actualFrames; ++i) {
+                pages_[dstMap.pageIndex]->samples[dstMap.offsetInPage + i] = value;
+            }
+        }
+    } else {
+        // Multi-page: fill frame by frame
+        for (offset_t i = 0; i < actualFrames; ++i) {
+            auto dstMap = mapOffset(dstOffset + i);
+
+            if (dstMap.pageIndex < pages_.size() && pages_[dstMap.pageIndex] &&
+                dstMap.offsetInPage < pages_[dstMap.pageIndex]->samples.size()) {
+
+                pages_[dstMap.pageIndex]->samples[dstMap.offsetInPage] = value;
+            }
+        }
+    }
+
+    return actualFrames;
+}
+
 IOVector IOVector::slice(offset_t offset, length_t length) const
 {
     // Create a new IOVector view starting at offset within this vector

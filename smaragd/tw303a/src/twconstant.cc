@@ -3,6 +3,7 @@
 #include "twsyslog.h"
 
 #include "twconstant.h"
+#include "io_vector.h"
 
 void twConstant::reset()
 {
@@ -35,6 +36,15 @@ length_t twConstant::renderFrames(sample_t *output, length_t length,
     return length;
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twConstant::calcOutputTo( IOVector& dest, idx_t /* idx */ )
+{
+    // Direct fill using IOVector's fillConstant operation
+    // No allocation or intermediate buffers needed
+    return dest.fillConstant(0, dest.length(), constant);
+}
+
+// Legacy: Raw-pointer interface
 length_t twConstant::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */ )
 {
     int i; //, a, b;

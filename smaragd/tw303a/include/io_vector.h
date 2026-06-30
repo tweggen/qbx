@@ -184,6 +184,17 @@ public:
     length_t fillSilence(offset_t dstOffset, length_t numFrames);
 
     /**
+     * Fill this IOVector with a constant sample value.
+     * Useful for stateless sources (e.g., twConstant, tone generators).
+     *
+     * @param dstOffset  Start offset
+     * @param numFrames  Number of frames to fill
+     * @param value      Sample value to write
+     * @return           Frames actually filled
+     */
+    length_t fillConstant(offset_t dstOffset, length_t numFrames, sample_t value);
+
+    /**
      * Slice this IOVector: create a new view starting at offset
      * with a subset of the data (shallow; no copy).
      *
