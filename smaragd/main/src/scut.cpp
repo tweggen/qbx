@@ -99,14 +99,19 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     // For container-backed cuts (no random source), build the capture synchronously
     // so the reader chain can be constructed properly. This ensures looped playback
     // of group cuts works correctly (bug b: cycle mode playback).
-    if( !rs ) {
+    bool needCapture = !rs;  // Only container-backed cuts need capture building
+    bool grainAlreadyApplied = false;
+    if( needCapture ) {
         buildCapture_();
         if( capture_ ) {
             rs = capture_.get();
         } else {
-            goto swap_complete;   // no-op, keep current if capture build failed
+            // Container-backed capture build failed: no fallback
+            goto swap_complete;
         }
     }
+    // For grained sample-backed cuts: grain will be applied on-demand in the reader,
+    // not pre-materialized. This avoids offset issues from materializing the entire output.
 
     {
         twRandomSource *view = rs;
@@ -115,12 +120,36 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
             view = newGrain.get();
         }
         tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
-        // Convert startOffset and loopLength from plainwave domain to grain domain if grain is active
+
+        // Compute adjusted offsets with sample rate conversion.
+        // When the source has a different sample rate than the project (e.g., 44.1 kHz file
+        // in a 48 kHz project), the offset must be converted from project domain to source domain.
+        // This is critical for grain processing which operates on the actual source samples.
         offset_t adjustedStartOffset = snap.startOffset;
         length_t adjustedLoopLength = snap.loopLength;
+
+        // Note: Each component in the chain should handle domain conversion:
+        // - SCut receives startOffset (in project domain)
+        // - Grain source should handle the grain transformation
+        // - Underlying source (twWavInput) should handle rate conversion via viewAtRate()
+        // We pass offsets directly and let each component interpret them correctly.
+        int sourceSampleRate = rs->sampleRate();
+        int projectSampleRate = env.getSRate();
+        fprintf(stderr, "[SCut::rebuildReader] startOffset=%ld, sourceSampleRate=%d, projectSampleRate=%d, grain=%.4f\n",
+                (long)snap.startOffset, sourceSampleRate, projectSampleRate, snap.grainParams.stretch);
+
         if( newGrain ) {
+            // With grain, both offset and loop length must account for the stretch.
+            // startOffset_ is in plainwave domain (position in original material);
+            // twGrainSource operates in stretched domain (position in time-stretched output).
+            // Convert: offset_stretched = offset_plainwave * stretch
             adjustedStartOffset = (offset_t)llround( (double)snap.startOffset * snap.grainParams.stretch );
             adjustedLoopLength = (length_t)llround( (double)snap.loopLength * snap.grainParams.stretch );
+            fprintf(stderr, "[SCut::rebuildReader] Grain: offset=%ld, adjustedLoop=%ld, stretch=%.4f\n",
+                    (long)adjustedStartOffset, (long)adjustedLoopLength, snap.grainParams.stretch);
+        } else {
+            fprintf(stderr, "[SCut::rebuildReader] No grain: offset=%ld, loop=%ld\n",
+                    (long)adjustedStartOffset, (long)adjustedLoopLength);
         }
         if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
             twLoopReader *lr = new twLoopReader( env, *view, adjustedStartOffset, adjustedLoopLength );
@@ -258,8 +287,8 @@ static void renderObjectInto( SObject &obj, sample_t *dest, length_t len,
         for( length_t i = 0; i < len; ++i ) dest[(size_t) i] *= (sample_t) factor;
 }
 
-// Internal: build the capture (container render) if needed.
-// Initializes capture_ by rendering the container's audio.
+// Internal: build the capture (container render or grained sample render) if needed.
+// Initializes capture_ by rendering the content's audio (with grain if applicable).
 // Should only be called when capture_ is null.
 void SCut::buildCapture_()
 {
@@ -271,40 +300,68 @@ void SCut::buildCapture_()
     }
 
     SObject &c = content_->getSObject();
-    if( c.getRandomSource() ) {
-        fprintf(stderr, "[SCut::buildCapture_] EARLY RETURN: content has RandomSource\n");
-        return;  // real source -> sample path, no capture needed
+    SCutSnapshot snap = getSnapshot();
+    tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
+
+    // Check if we need to build a capture:
+    // 1. Container-backed cuts (no random source)
+    // 2. Grained sample-backed cuts (need to materialize the grain transformation)
+    bool isContainerBacked = !c.getRandomSource();
+    bool isGrained = !snap.grainParams.isIdentity();
+
+    if( !isContainerBacked && !isGrained ) {
+        fprintf(stderr, "[SCut::buildCapture_] EARLY RETURN: sample-backed ungrained cut, no capture needed\n");
+        return;
     }
+
     if( !c.hasDuration() ) {
         fprintf(stderr, "[SCut::buildCapture_] EARLY RETURN: content has no duration\n");
         return;
     }
 
-    fprintf(stderr, "[SCut::buildCapture_] PROCEEDING with capture build\n");
+    fprintf(stderr, "[SCut::buildCapture_] PROCEEDING with capture build (container=%d, grained=%d)\n",
+            isContainerBacked, isGrained);
 
-    // Use snapshot to read window parameters consistently (multithreading policy: Phase 1).
-    SCutSnapshot snap = getSnapshot();
     length_t need = (length_t) snap.startOffset + snap.cutDuration;
     length_t dur  = (length_t) c.getDuration();
     length_t n = dur > need ? dur : need;
     if( n <= 0 ) return;
 
-    fprintf(stderr, "[SCut::buildCapture_] DIAGNOSTIC: snap.startOffset=%ld, snap.cutDuration=%ld, container_dur=%ld, need=%ld, n=%ld\n",
+    fprintf(stderr, "[SCut::buildCapture_] DIAGNOSTIC: snap.startOffset=%ld, snap.cutDuration=%ld, content_dur=%ld, need=%ld, n=%ld\n",
             (long)snap.startOffset, (long)snap.cutDuration, (long)dur, (long)need, (long)n);
 
-    tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
+    std::vector<sample_t> buf;
+    length_t captureLen = n;
 
-    // Proposal 10 Phase 1: build the capture by RECURSIVELY summing the
-    // container's children read random-access, instead of streaming the live
-    // twTrackMix (whose per-buffer child re-seeks lose a sub-track for a
-    // track-of-tracks). Materialise once into a resident buffer.
-    // Phase 5e: Seek the container to position 0 before rendering to ensure
-    // all children start from their correct beginning positions.
-    c.seekTo( 0 );
-    std::vector<sample_t> buf( (size_t) n, 0.0f );
-    renderObjectInto( c, buf.data(), n, env, env.getSRate(), 0 );
-    capture_ = std::make_shared<twCapturingSource>( std::move( buf ), n, 1, env.getSRate() );
-    fprintf(stderr, "[SCut::buildCapture_] Built capture: %ld samples\n", (long)n);
+    if( isContainerBacked ) {
+        // Container-backed: render children recursively
+        // Proposal 10 Phase 1: build the capture by RECURSIVELY summing the
+        // container's children read random-access, instead of streaming the live
+        // twTrackMix (whose per-buffer child re-seeks lose a sub-track for a
+        // track-of-tracks). Materialise once into a resident buffer.
+        // Phase 5e: Seek the container to position 0 before rendering to ensure
+        // all children start from their correct beginning positions.
+        c.seekTo( 0 );
+        buf.resize( (size_t) n, 0.0f );
+        renderObjectInto( c, buf.data(), n, env, env.getSRate(), 0 );
+    } else if( isGrained ) {
+        // Grained sample-backed: read through grain source to get transformed output
+        // The grain source materializes the time-stretched output, so we read the
+        // full transformed signal and store it for both preview and playback.
+        twRandomSource *rs = c.getRandomSource();
+        // Ensure the source is positioned at the start before grain processing
+        c.seekTo( 0 );
+        auto grainSource = std::make_shared<twGrainSource>( *rs, snap.grainParams );
+        length_t grainedLen = grainSource->length();
+        buf.resize( (size_t) grainedLen, 0.0f );
+        grainSource->read( 0, buf.data(), grainedLen, 0 );
+        captureLen = grainedLen;
+        fprintf(stderr, "[SCut::buildCapture_] Grain capture: input %ld samples -> output %ld samples\n",
+                (long)n, (long)grainedLen);
+    }
+
+    capture_ = std::make_shared<twCapturingSource>( std::move( buf ), captureLen, 1, env.getSRate() );
+    fprintf(stderr, "[SCut::buildCapture_] Built capture: %ld samples\n", (long)captureLen);
 
     if( !captureConnected_ ) {
         // Transparent invalidation: any applied action drops the snapshot so the
@@ -449,6 +506,8 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
         // Aggregate the true signed envelope over each output column: the lower
         // edge is the smallest .min, the upper edge the largest .max (this is
         // what avoids aliasing combs when zoomed out).
+        // Note: start/length are already in the grain OUTPUT (stretched) domain from InlineRenderContext,
+        // matching the peak cache indexing, so no conversion needed.
         offset_t s = start + ( k * length ) / nProbes;
         offset_t e = start + ( ( k + 1 ) * length ) / nProbes;
         offset_t i0 = s / capPeakSkip_;

@@ -50,6 +50,20 @@ region assets, is the live remaining design in proposal 05 — not a backlog ite
 
 ---
 
+## From component chain review (2026-06-30)
+
+- **Verbose qWarning() calls in SStdMixer::setNBusses** — lines 227, 248, 255, 264 spam stderr during normal operation (e.g. track add/remove). Should be debug-only or removed.
+  *Deferred:* cosmetic; does not affect correctness or performance.
+
+- **Speaker input wiring silent before first track added** — twRewire::linkOutput(0) returns NULL until wired, so rewireSpeaker() on empty project gives speaker NULL inputs. Playing outputs nothing (correct but unintuitive). Document in comment or add debug-friendly silence generation.
+  *Deferred:* correct current behavior; UX refinement only.
+
+## From offset flow investigation (2026-06-30) — FIXED
+
+- ✅ **FIXED: Grained cut offset domain mismatch** — `SCut::rebuildReader()` did not scale `adjustedStartOffset` by `snap.grainParams.stretch` when grain was active. The loop length was correctly scaled, but the offset was not, causing playback to start at wrong position in the materialized stretched buffer. Fixed by adding offset scaling at line 146 to match seekTo() behavior. See `plan/todo/OFFSET_FLOW_TRACE.md` for detailed analysis.
+
+---
+
 ## Conventions
 
 - Promote an item to a `plan/proposed/NN_*.md` proposal once it needs real design
