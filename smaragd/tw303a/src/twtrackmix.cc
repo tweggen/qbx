@@ -248,7 +248,7 @@ length_t twTrackMix::freezePage_nolock(
     uint64_t endPos = startPos + length;
 
     // Iterate through clips that overlap [startPos, endPos)
-    for( const ClipEntry &clip : clips_ ) {
+    for( ClipEntry &clip : clips_ ) {  // Non-const to update previousPage
         uint64_t clipEnd = clip.startTime;
         if( clip.duration > 0 ) {
             clipEnd += clip.duration;
@@ -273,18 +273,23 @@ length_t twTrackMix::freezePage_nolock(
                             ? (startPos - clip.startTime)
                             : 0;
 
+        // Pass the clip's previous page so state carries forward across page boundaries
+        // If this is the first page for this clip, previousPage will be nullptr (correct)
         auto childPage = clip.component->freezePage(
             childPos,
             nullptr,  // Track outputs don't consume input
             0,
             length,
             sampleRate,
-            nullptr   // No prior state to restore
+            clip.previousPage  // Resume from previous page's state snapshot
         );
 
         if( !childPage || childPage->validFrames == 0 ) {
             continue;
         }
+
+        // Save this page as the clip's previous page for the next page boundary
+        clip.previousPage = childPage;
 
         // Mix child's frozen output into track output at correct timeline position
         uint64_t destOffset = (clip.startTime >= startPos)

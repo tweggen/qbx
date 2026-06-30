@@ -10,11 +10,12 @@
 
 class tw303aEnvironment;
 
-// Clip entry: timeline position and DSP component
+// Clip entry: timeline position, DSP component, and state snapshot
 struct ClipEntry {
     offset_t     startTime;
     length_t     duration;      // 0 = unbounded
     twComponent *component;     // borrowed; lifetime managed by caller
+    std::shared_ptr<twOutputPage> previousPage;  // State snapshot for resumption
 };
 
 class twTrackMix
