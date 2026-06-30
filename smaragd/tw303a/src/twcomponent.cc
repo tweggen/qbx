@@ -11,6 +11,7 @@
 #include "twsyslog.h"
 
 #include "twcomponent.h"
+#include "io_vector.h"
 
 #define DEBUG_COMPONENT
 
@@ -547,4 +548,29 @@ void twComponent::addDependent(twComponent* dependent) {
     if (it == dependents_.end()) {
         dependents_.push_back(dependent);
     }
+}
+
+// ============================================================================
+// Phase 3 Refactor: IOVector Interface Migration
+// ============================================================================
+
+// Default implementation of calcOutputTo(IOVector&): wraps in temporary page-backed buffer
+// and calls the raw-pointer interface. This provides a migration path: existing components
+// can continue using the old raw-pointer interface, while new components can override
+// this IOVector version for direct page-backed rendering (more efficient).
+length_t twComponent::calcOutputTo( IOVector& dest, idx_t idx )
+{
+    // Create temporary buffer for old interface, then copy to dest
+    auto tmpPage = std::make_shared<twOutputPage>();
+    tmpPage->samples.resize(dest.length(), 0.0f);
+
+    // Call the raw-pointer version (which all existing components implement)
+    length_t rendered = calcOutputTo(tmpPage->samples.data(), dest.length(), idx);
+
+    // Copy rendered data into the IOVector destination
+    if (rendered > 0) {
+        dest.copyFrom(IOVector::CreateForPageOutput(tmpPage), 0, rendered);
+    }
+
+    return rendered;
 }

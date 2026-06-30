@@ -11,6 +11,9 @@
 #include "twformat.h"
 #include "tw_output_page.h"
 
+// Forward declaration to avoid circular includes
+class IOVector;
+
 #define DTOR_DEL(x) {if((x)) {delete (x); (x) = NULL; }}
 
 #undef DEBUG_COMPONENT
@@ -192,6 +195,15 @@ public:
         return calcOutputTo(output, length, idx);
     }
 
+    // ========== Phase 3 Refactor: IOVector-based interface ==========
+    // NEW: Type-safe interface using IOVector for bounds-checked rendering.
+    // Default implementation wraps raw-pointer interface for compatibility.
+    // Components can override this new interface when ready for type-safe rendering.
+    virtual length_t calcOutputTo( IOVector& dest, idx_t idx );
+
+    // LEGACY: Raw-pointer interface. All existing components implement this.
+    // Default implementation wraps in IOVector for migration towards type-safe rendering.
+    // Will eventually be removed once all components migrate to IOVector interface.
     virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) = 0;
 
     void setInput( idx_t idx, twLatchOutput * pLatchOutput );
