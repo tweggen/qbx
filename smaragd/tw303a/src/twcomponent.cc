@@ -481,9 +481,6 @@ length_t twComponent::freezePage_nolock(
     // Render frames into page buffer
     // Safe: page is in the map (protected by refcount), nobody else will create it
     // Safe to call recursively because mutex is not held
-    // NOTE: Set flag to prevent recursive freezePage calls from copyData
-    extern thread_local bool g_inCalcOutputToPath;
-    g_inCalcOutputToPath = true;
     length_t toRender = twOutputPage::FRAME_CAPACITY;
     length_t rendered = renderFrames(
         page->samples.data(),
@@ -492,7 +489,6 @@ length_t twComponent::freezePage_nolock(
         pageInputLength,
         0  // idx = 0 (first output)
     );
-    g_inCalcOutputToPath = false;
 
     // Capture new internal state for next page resumption
     {
@@ -518,6 +514,11 @@ std::shared_ptr<twOutputPage> twComponent::freezePreviewPage(
     // This allows quick redraws without waiting for full-rate processing.
     // If page not ready, return previous page for fallback rendering.
 
+    // CRITICAL: Set flag to prevent recursive freezePage calls from copyData during preview rendering.
+    // Only set during preview, not during playback freezePage calls.
+    extern thread_local bool g_inCalcOutputToPath;
+    g_inCalcOutputToPath = true;
+
     auto newPage = freezePage(
         startPos,
         nullptr,                    // No input data; component generates output
@@ -526,6 +527,8 @@ std::shared_ptr<twOutputPage> twComponent::freezePreviewPage(
         previewSampleRate,          // Render at lower rate for preview
         previousPage                // Provide previous page for state restoration
     );
+
+    g_inCalcOutputToPath = false;
 
     // Non-blocking fallback: if new page couldn't be materialized, use previous
     if( !newPage || newPage->validFrames == 0 ) {
