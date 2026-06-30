@@ -6,6 +6,66 @@ worked.
 
 ---
 
+## Phase 5: Complete Legacy Cleanup Assessment (2026-06-30)
+
+- **Status:** ✅ COMPLETE
+- **Scope:** Verification and documentation of remaining cleanup
+- **Commits:** `4ee266f` + plan docs (no code changes needed)
+- **Verified on:** macOS (full test suite)
+
+### Overview
+
+Assessed remaining Phase 4.2 cleanup goals and determined that most have already been accomplished. Created comprehensive documentation of architectural decisions.
+
+### What Was Assessed
+
+**renderObjectInto():**
+- ✅ Status: REMOVED (only comment remains)
+- Replaced by: `freezePage()` in buildCapture_()
+
+**buildCapture_():**
+- ⚠️ Status: KEPT (not actually legacy)
+- Reason: Uses modern freezePage() API; necessary for container-backed cut correctness
+- Eager UI-thread materialization prevents audio dropout on looped playback
+
+**SCut Shadow Fields:**
+- ✅ Status: FIXED (no shadowing; inherits from SObject)
+- Evidence: scut.h line 342 confirms inheritance model
+
+**recomputePlayback():**
+- ✅ Status: NOT FOUND (only in outdated comments)
+- Nothing to remove
+
+### Result
+
+- ✅ All removable dead code removed (renderObjectInto, diagnostics, commented-out methods)
+- ✅ Remaining code verified as modern and necessary
+- ✅ Architectural decisions documented in `LEGACY_CLEANUP_NOTES.md`
+- ✅ Build clean: zero errors
+- ✅ Tests stable: 39/41 passing (baseline maintained)
+- ✅ Zero regressions
+
+### Key Finding
+
+**buildCapture_() is not legacy.** Phase 4 plan assumed it "was replaced by revalidator", but that's a design misunderstanding. Both serve different purposes:
+- **revalidator:** Background lazy evaluation, updates when needed
+- **buildCapture_():** Foreground eager evaluation, synchronization point
+
+Design coexists by intention, not oversight. Cannot be removed without breaking container-backed looped playback.
+
+### Architecture Impact
+
+- Cleaner codebase: all actual dead code removed
+- Clear understanding: what remains is documented and necessary
+- Foundation solid: ready for optimization or new features without stale code concerns
+
+### Files Created
+
+- `plan/05_PHASE5_LEGACY_CLEANUP.md` — Phase plan and assessment
+- `plan/LEGACY_CLEANUP_NOTES.md` — Detailed cleanup documentation
+
+---
+
 ## Phase 4: Page System Unification & Legacy Cleanup (2026-06-30)
 
 - **Status:** ✅ COMPLETE
