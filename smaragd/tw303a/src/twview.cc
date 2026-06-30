@@ -41,17 +41,6 @@ length_t twView::calcOutputTo(IOVector& dest, idx_t outChannel)
     return comp->calcOutputTo(dest, outChannel);
 }
 
-// Legacy: Raw-pointer interface
-length_t twView::calcOutputTo(sample_t *outBuffer, length_t outLen, idx_t outChannel)
-{
-    twComponent *comp = getComponent();
-    if (!comp) {
-        memset(outBuffer, 0, outLen * sizeof(sample_t));
-        return outLen;
-    }
-    return comp->calcOutputTo(outBuffer, outLen, outChannel);
-}
-
 std::shared_ptr<twOutputPage> twView::freezePage(
     uint64_t startPos,
     const sample_t *inputData,
