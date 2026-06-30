@@ -3,6 +3,7 @@
 
 #include "twsamplereader.h"
 #include "twrandomsource.h"
+#include "io_vector.h"
 
 // Defined here, where twSampleReader is a complete type.
 twSampleReader *twRandomSource::acquireReader( tw303aEnvironment &env, offset_t initialOffset )
@@ -49,6 +50,23 @@ offset_t twSampleReader::tellPos() const
     return pos_;
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twSampleReader::calcOutputTo( IOVector& dest, idx_t idx )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+
+    // Allocate temp buffer for reading from source
+    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+
+    // Read from source at current position
+    src_.read( pos_, buffer, dest.length(), idx );
+    pos_ += (offset_t) dest.length();
+
+    // Write to IOVector destination
+    return dest.copyFrom(IOVector::CreateFromBuffer(buffer, dest.length()), 0, dest.length());
+}
+
+// Legacy: Raw-pointer interface
 length_t twSampleReader::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
 {
     std::lock_guard<std::mutex> lock(mutex());

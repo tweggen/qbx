@@ -31,7 +31,11 @@ public:
     virtual offset_t tellPos() const;
     virtual void reset() override;  // Reset position to start of sample
 
-    virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );
+    // Phase 3: New IOVector-based interface (type-safe, page-backed)
+    virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
+
+    // Legacy raw-pointer interface
+    virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) override;
 
     virtual void createOutputLatches();
 
