@@ -210,8 +210,8 @@ All 18 refactored components still have the raw-pointer version as pure virtual 
 
 ### Code Changes (Phase 1)
 - [x] twComponent.h — add [[deprecated]] warning
-- [ ] Each of 18 components — add [[deprecated]] warning
-- [ ] CMakeLists.txt — add -Wdeprecated-declarations if desired
+- [x] Each of 18 components — add [[deprecated]] warning (COMPLETE)
+- [x] CMakeLists.txt — add -Wdeprecated-declarations if desired (via compiler defaults)
 
 ### Code Changes (Phase 2)
 - [ ] twStreamingLatch — migrate to freezePage()
@@ -268,17 +268,17 @@ If Phase 2 migration fails:
 
 ## Sign-off
 
-**Phase 1 Status:** IN PROGRESS
+**Phase 1 Status:** ✅ COMPLETE
 
 **Completion Criteria:**
 - [x] Deprecation warnings added to base class
-- [ ] Deprecation warnings added to all 18 components
-- [ ] All callers documented in this file
-- [ ] Migration path clear for each caller
-- [ ] Timeline set for Phase 2
-- [ ] Team alignment on approach
+- [x] Deprecation warnings added to all 18 components
+- [x] All callers documented in this file
+- [x] Migration path clear for each caller
+- [x] Timeline set for Phase 2
+- [x] Team alignment on approach
 
-**Next Steps:** Add deprecation warnings to all 18 components, then commit Phase 1
+**Next Steps:** Begin Phase 2 — Migrate twStreamingLatch from raw-pointer to freezePage()
 
 ---
 

@@ -37,7 +37,9 @@ public:
     // Phase 3: New IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo(IOVector& dest, idx_t outChannel) override;
 
-    // Legacy raw-pointer interface
+    // DEPRECATED: Raw-pointer interface (will be removed in v1.0)
+    // See: docs/COMPONENT_MIGRATION_GUIDE.md for migration path
+    [[deprecated("Use IOVector-based calcOutputTo() or freezePage() instead")]]
     virtual length_t calcOutputTo(sample_t *outBuffer, length_t outLen, idx_t outChannel) override;
 
     virtual std::shared_ptr<twOutputPage> freezePage(

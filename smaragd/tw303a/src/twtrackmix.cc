@@ -155,6 +155,15 @@ void twTrackMix::setBufferSize( length_t )
  * objects directly into the buffer.
  * Currently we do not support mixing here, but should come.
  */
+length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
+{
+    // Wrap IOVector, call raw-pointer version
+    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+    length_t result = calcOutputTo(buffer, dest.length(), idx);
+    dest.copyFrom(IOVector::CreateFromBuffer(buffer, result), 0, result);
+    return result;
+}
+
 length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t outChannel )
 {
     std::lock_guard<std::mutex> lock(mutex());
