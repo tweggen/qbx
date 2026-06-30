@@ -63,27 +63,6 @@ length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
     return dest.copyFrom(IOVector::CreateFromBuffer(buffer, readFrames), 0, readFrames);
 }
 
-// Legacy: Raw-pointer interface
-length_t twRewire::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
-{
-    std::lock_guard<std::mutex> lock(mutex());
-    return calcOutputTo_nolock(pDest, length, idx);
-}
-
-// Caller must hold mutex()
-// CRITICAL: Lock prevents use-after-free if setNPlugs() deallocates
-// pInputPlugs array between bounds check and dereference
-length_t twRewire::calcOutputTo_nolock( sample_t *pDest, length_t length, idx_t idx )
-{
-    if( idx < 0 || idx >= nInputs_ || !pInputPlugs[idx] ) {
-        // No input wired into this output → produce silence.
-        memset( pDest, 0, length * sizeof( sample_t ) );
-        return length;
-    }
-    return ((twLatchStreamingOutput *)pInputPlugs[idx])->readStreamingData(
-        pDest, length );
-}
-
 int twRewire::setNPlugs( idx_t n )
 {
     std::lock_guard<std::mutex> lock(mutex());
