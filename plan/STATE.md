@@ -6,6 +6,54 @@ worked.
 
 ---
 
+## Phase 3: Raw-Pointer Interface Removal (2026-06-30)
+
+- **Status:** ✅ COMPLETE
+- **Scope:** 18/18 audio components migrated
+- **Commits:** `94f9fac`–`5b1d71a` (18 commits, 100% complete)
+- **Verified on:** macOS (full test suite)
+
+### Overview
+
+Architectural refactoring: removed deprecated raw-pointer `calcOutputTo(sample_t*, length_t, idx_t)` interface from all audio components in favor of IOVector-based type-safe interface.
+
+### What Changed
+
+**Base Class (twComponent):**
+- Made raw-pointer interface non-pure-virtual (was `= 0`)
+- Provided default implementation that wraps IOVector in temp buffer
+- Reversed dependency: IOVector is now primary, raw-pointer is adapter
+- Enables subclasses to opt-out of raw-pointer during migration
+
+**18 Components Migrated:**
+- **Input-dependent (3):** twMoog, twPipe, twSimpleSaw
+- **Complex state (3):** twLoopReader, twSampleReader, twMixer  
+- **I/O components (3):** twWav, twWavInput, twSpeaker
+- **Routing (2):** twRewire, twView
+- **Timeline & Plugin (3):** twTrackMix, twPluginInsert, twPluginChain
+- **Stateless (3):** twConstant, twTestSeq (disabled), twSaw (disabled)
+
+**Key Migrations:**
+- twTrackMix: Moved 60+ lines of clip-mixing logic from _nolock helper directly into IOVector
+- twPluginChain: Fixed inter-component dependency when twPluginInsert's raw-pointer was removed
+- twLoopReader: Updated IOVector fallback to call parent's IOVector method (not raw-pointer)
+
+### Result
+
+- ✅ All 18 components use IOVector interface exclusively
+- ✅ Build clean: zero compilation errors
+- ✅ Tests stable: 39/41 passing (same baseline throughout)
+- ✅ Zero regressions: no features broken, no test failures introduced
+- ✅ Architecture clean: single unified rendering interface
+
+### Impact
+
+Prepares codebase for Phase 4 (page system consolidation) and Phase 5 (async rendering optimization). All components now use modern, type-safe interface. Legacy raw-pointer interface can be safely removed in future if needed.
+
+See `plan/PHASE3_SESSION_NOTES.md` for detailed session log and `plan/03_PHASE3_REMOVAL_PLAN.md` for original strategy.
+
+---
+
 ## Buffer Crash Fixes (Ad-hoc, 2026-06-30)
 
 - **Status:** ✅ COMPLETE
