@@ -12,6 +12,8 @@
 // C++17 type erasure for internal state snapshots
 #include <any>
 
+#include "page_interface.h"
+
 // Forward declaration
 class twComponent;
 
@@ -35,7 +37,7 @@ enum twRenderAspect : uint32_t {
 
 // Frozen output of a component for a time window
 // Stores component output samples + internal state snapshot for sequential rendering
-struct twOutputPage {
+struct twOutputPage : public PageBase {
     // Phase 5 Gap 11: Unified page size
     static constexpr size_t PAGE_SIZE = FROZEN_PAGE_SIZE_BYTES;  // 256 kB per page
     static constexpr size_t FRAME_CAPACITY = PAGE_SIZE / sizeof(float);  // mono frames
@@ -81,6 +83,23 @@ struct twOutputPage {
     {
         samples.resize(FRAME_CAPACITY);
     }
+
+    // PageBase interface implementation
+    std::mutex& getMutex() const override { return pageMutex; }
+    uint64_t getStartPosition() const override { return startPosition; }
+    void setStartPosition(uint64_t pos) override { startPosition = pos; }
+    uint32_t getValidAspects() const override { return validAspects.load(); }
+    void setValidAspects(uint32_t aspects) override { validAspects.store(aspects); }
+    uint64_t getGeneration() const override { return generation.load(); }
+    void incrementGeneration() override { generation.fetch_add(1); }
+    size_t getPageSize() const override { return PAGE_SIZE; }
+    uint32_t getValidFrames() const override { return validFrames; }
+    void setValidFrames(uint32_t frames) override { validFrames = frames; }
+    void* getDataPtr() override { return samples.data(); }
+    const void* getDataPtr() const override { return samples.data(); }
+    std::any& getInternalState() override { return internalState; }
+    const std::any& getInternalState() const override { return internalState; }
+    std::chrono::steady_clock::time_point getCreatedAt() const override { return createdAt; }
 };
 
 #endif  // _TW_OUTPUT_PAGE_H_

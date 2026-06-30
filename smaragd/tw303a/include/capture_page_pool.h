@@ -6,7 +6,10 @@
 #include <queue>
 #include <memory>
 #include <mutex>
+#include <any>
+#include <chrono>
 #include "tw_output_page.h"  // For FROZEN_PAGE_SIZE_BYTES
+#include "page_interface.h"
 
 /**
  * Capture page pool: pre-allocated, fixed-size pages for audio capture data.
@@ -37,7 +40,7 @@
  * - Metadata: duration, peak levels, RMS
  * - Export: resampled/normalized buffer
  */
-struct CapturePageData {
+struct CapturePageData : public PageBase {
     // Phase 5 Gap 11: Unified page size with twOutputPage
     static constexpr size_t PAGE_SIZE = FROZEN_PAGE_SIZE_BYTES;  // 256 kB
 
@@ -53,9 +56,31 @@ struct CapturePageData {
     // Metadata (kept in-struct for locality)
     uint32_t validAspects = 0;      // Bitmask: which aspects are computed in this page
     int generation = 0;             // Incremented on each revalidation (for staleness tracking)
+    uint64_t startPosition = 0;     // Time position where page begins
+    std::any internalState;         // Internal state snapshot (for sequential components)
+    std::chrono::steady_clock::time_point createdAt;  // Creation time for staleness tracking
 
     // Constructor: initialize to empty
-    CapturePageData() : validAspects(0), generation(0) {}
+    CapturePageData()
+        : validAspects(0), generation(0), startPosition(0),
+          createdAt(std::chrono::steady_clock::now()) {}
+
+    // PageBase interface implementation
+    std::mutex& getMutex() const override { return pageMutex; }
+    uint64_t getStartPosition() const override { return startPosition; }
+    void setStartPosition(uint64_t pos) override { startPosition = pos; }
+    uint32_t getValidAspects() const override { return validAspects; }
+    void setValidAspects(uint32_t aspects) override { validAspects = aspects; }
+    uint64_t getGeneration() const override { return generation; }
+    void incrementGeneration() override { generation++; }
+    size_t getPageSize() const override { return PAGE_SIZE; }
+    uint32_t getValidFrames() const override { return PAGE_SIZE / sizeof(float); }
+    void setValidFrames(uint32_t /* frames */) override {}  // CapturePageData uses full buffer
+    void* getDataPtr() override { return data; }
+    const void* getDataPtr() const override { return data; }
+    std::any& getInternalState() override { return internalState; }
+    const std::any& getInternalState() const override { return internalState; }
+    std::chrono::steady_clock::time_point getCreatedAt() const override { return createdAt; }
 };
 
 /**
