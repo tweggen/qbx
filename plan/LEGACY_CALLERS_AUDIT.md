@@ -214,9 +214,9 @@ All 18 refactored components still have the raw-pointer version as pure virtual 
 - [x] CMakeLists.txt — add -Wdeprecated-declarations if desired (via compiler defaults)
 
 ### Code Changes (Phase 2)
-- [ ] twStreamingLatch — migrate to freezePage()
-- [ ] Plugin chain code — migrate if needed
-- [ ] Format negotiation — check and fix
+- [x] twStreamingLatch — migrate to freezePage() (COMPLETE)
+- [ ] Plugin chain code — migrate if needed (Optional)
+- [ ] Format negotiation — check and fix (Optional)
 
 ### Code Changes (Phase 3)
 - [ ] Remove raw-pointer from all 18 components
@@ -278,7 +278,7 @@ If Phase 2 migration fails:
 - [x] Timeline set for Phase 2
 - [x] Team alignment on approach
 
-**Next Steps:** Begin Phase 2 — Migrate twStreamingLatch from raw-pointer to freezePage()
+**Next Steps:** Phase 2 COMPLETE ✅ — Begin Phase 3 — Remove raw-pointer calcOutputTo() from all 18 components
 
 ---
 

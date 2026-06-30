@@ -103,12 +103,21 @@ protected:
     length_t bufSize;
     // the current position (equivalent to offset in parent class)
     offset_t bufPos;
+
+    // Phase 2: freezePage() state tracking
+    offset_t currentPos_;                              // Current playback position for snapshots
+    std::shared_ptr<twOutputPage> previousPage_;      // Cached page for state continuity
+    int sampleRate_;                                   // Project sample rate for freezePage()
+
 public:
     twStreamingLatch( twComponent & comp, idx_t idx0, length_t bufSize0 );
     virtual ~ twStreamingLatch ();
-    
+
     length_t copyData( offset_t startOffset, sample_t *pDest, length_t maxLength );
-    
+
+    // Phase 2: Reset cached page on seek (breaks state chain)
+    void resetPageCache() { previousPage_ = nullptr; }
+
     static const int bufSizeDefault;
 };
 

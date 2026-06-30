@@ -16,7 +16,7 @@ static inline int min( int a, int b )
 }
 
 twStreamingLatch::twStreamingLatch (twComponent & component0, idx_t idx0, length_t bufSize0)
-	: twLatch (component0, idx0)
+	: twLatch (component0, idx0), currentPos_(0), previousPage_(nullptr), sampleRate_(48000)
 {
 	if (bufSize0 == 0)
 		bufSize0 = bufSizeDefault;
@@ -45,6 +45,12 @@ void twStreamingLatch::init( length_t bufSize0 )
 	}
 	// reset pointer
 	offset = 0;
+
+	// Phase 2: Get sample rate from component's environment
+	// This is a temporary initialization; the actual sampleRate might change if the project sample rate changes
+	if (getComponent().env.getSRate() > 0) {
+		sampleRate_ = getComponent().env.getSRate();
+	}
 #ifdef DEBUG_COMPONENT
 	fprintf( sterr, "twStreamingLatch::init( %d ): leaving.", bufSize0 );
 #endif
@@ -199,9 +205,30 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 #endif
 
 			// not enough data in buffer, fill it up.
-			// Pass our own latch index so multi-output components
-			// (e.g. twRewire) know which output is being asked for.
-			filled = getComponent().calcOutputTo( pBuffer + bufPos, maxFill, getIndex() );
+			// Phase 2: Use freezePage() instead of raw-pointer calcOutputTo()
+			// This leverages page caching and proper state snapshots.
+			auto page = getComponent().freezePage(
+				currentPos_,              // snapshot position for state
+				nullptr,                  // no input (source component)
+				0,                        // no input offset
+				maxFill,                  // length to fill
+				sampleRate_,              // project sample rate
+				previousPage_             // cached state from last page
+			);
+
+			if (page && page->samples.size() > 0) {
+				filled = min((length_t)maxFill, (length_t)page->samples.size());
+				if (filled > 0) {
+					memcpy(pBuffer + bufPos, page->samples.data(), filled * sizeof(sample_t));
+					previousPage_ = page;  // cache for next freezePage() call
+					currentPos_ += filled; // advance position
+				} else {
+					filled = 0;
+				}
+			} else {
+				filled = 0;
+			}
+
 			if( !filled ) {
 				throw excStandard( "twLatchStreamingOutput::readStreamingData(): "
 									   "Internal: Component did not provide data." );
