@@ -91,42 +91,6 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
     return dest.copyFrom(IOVector::CreateFromBuffer(outputBuffer, realRead), 0, realRead);
 }
 
-// Legacy: Raw-pointer interface
-length_t twMixer::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
-{
-    std::lock_guard<std::mutex> lock(mutex());
-    return calcOutputTo_nolock(pDest, length, idx);
-}
-
-// Caller must hold mutex()
-// CRITICAL: Lock must be held during entire read to prevent use-after-free
-// if array is reallocated by setNInputs() during this operation
-length_t twMixer::calcOutputTo_nolock( sample_t *pDest, length_t length, idx_t /* idx */ )
-{
-    length_t realRead = 0;
-    InputProperties *props = inputProperties_;
-
-    // delete destination buffer (our accu)
-    memset( pDest, 0, sizeof( sample_t ) * length );
-    // add channels
-    for( idx_t ch=0; ch<mixerInputs_; ch++, props++ ) {
-        if( !pInputPlugs[ch] ) continue;
-        float factor = props->volumeFactor_;
-//        qWarning( "twMixer::Calcing channel %d. input plug $%08x. factor = %d",
-//                  ch, pInputPlugs[ch], (int) factor );
-        realRead = ((twLatchStreamingOutput *)pInputPlugs[ch])->readStreamingData( inBuffer, length );
-        if( realRead!=length ) {
-            throw new excStandard( "twMixer::calcOutputTo(): Source did not provide sufficient data." );
-        }
-        sample_t *pCurr = pDest, *pSrc = inBuffer;
-        for( offset_t i=0; i<(offset_t)length; i++ ) {
-            *pCurr++ += *pSrc++ * factor;
-        }
-    }
-
-    return realRead;
-}
-
 /**
  * Change the level of a given input.
  */
