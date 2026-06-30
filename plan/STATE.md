@@ -6,6 +6,66 @@ worked.
 
 ---
 
+## Phase 4: Page System Unification & Legacy Cleanup (2026-06-30)
+
+- **Status:** ✅ COMPLETE
+- **Scope:** Two phases completed
+- **Commits:** `8c4fc74` (4.1), `20781c4` (4.2)
+- **Verified on:** macOS (full test suite)
+
+### Overview
+
+Post-Phase-3 cleanup to consolidate page systems and remove legacy diagnostics, establishing a unified interface for frozen component output pages.
+
+### Phase 4.1: Page System Unification
+
+**What Changed:**
+- Created `page_interface.h` with `PageBase` abstract class (13 virtual methods)
+- Both `twOutputPage` and `CapturePageData` now inherit from `PageBase`
+- Unified interface covers: synchronization (mutex), metadata (position, aspects, generation), data access (ptr, frames), and internal state snapshots
+- Enables polymorphic rendering code that works with either page type
+
+**Key Additions:**
+- `PageBase::getMutex()`, `getStartPosition()`, `getValidAspects()`, `getGeneration()`
+- `PageBase::getPageSize()`, `getValidFrames()`, `getDataPtr()`
+- `PageBase::getInternalState()`, `getCreatedAt()`
+- `CapturePageData` enhanced with `startPosition`, `internalState`, and `createdAt` fields
+
+### Phase 4.2: Diagnostic & Legacy Code Cleanup
+
+**What Changed:**
+- Removed 8 `fprintf(stderr)` diagnostics from `buildCapture_()` method
+- Removed diagnostics from `rebuildReader()` (sample rate / grain info)
+- Removed diagnostics from `invalidateCapture()` and `seekTo()` 
+- Removed diagnostic from `readPostChildrenAttributes()`
+- Removed commented-out `ensureCapture()` method (Phase 3 replacement)
+- Removed frequency monitoring variables no longer needed
+
+**Diagnostics Removed:**
+- `[SCut::buildCapture_]` - 8 calls (ENTER, EARLY RETURN ×3, PROCEEDING, DIAGNOSTIC, Grain capture, Built)
+- `[SCut::rebuildReader]` - 3 calls (startOffset/sampleRate, Grain info, No grain)
+- `[SCut::invalidateCapture]` - 1 call
+- `[SCut::seekTo frequency]` - 1 call
+- `>>> SCut::readPostChildrenAttributes` - 1 call
+
+### Result
+
+- ✅ Unified page interface enables future rendering consolidation
+- ✅ Cleaner codebase: 48 lines of diagnostics removed
+- ✅ No functional changes, pure code cleanup
+- ✅ Build clean: zero warnings
+- ✅ Tests stable: 39/41 passing (baseline maintained)
+- ✅ Zero regressions
+
+### Architecture Impact
+
+Page unification in Phase 4.1 provides foundation for:
+- Future removal of separate `CapturePageData` and `twOutputPage` types if desired
+- Polymorphic rendering systems that work with `PageBase*`
+- Simplified component invalidation logic (one page interface, not two)
+
+---
+
 ## Phase 3: Raw-Pointer Interface Removal (2026-06-30)
 
 - **Status:** ✅ COMPLETE
