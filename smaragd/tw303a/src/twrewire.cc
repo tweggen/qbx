@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "twrewire.h"
+#include "io_vector.h"
 
 const char *twRewire::getInputName( idx_t ) const
 {
@@ -43,6 +44,26 @@ void twRewire::init()
     twComponent::init();
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+
+    // If no input wired, fill destination with silence
+    if( idx < 0 || idx >= nInputs_ || !pInputPlugs[idx] ) {
+        return dest.fillSilence(0, dest.length());
+    }
+
+    // Read from input into temp buffer
+    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+    length_t readFrames = ((twLatchStreamingOutput *)pInputPlugs[idx])->readStreamingData(
+        buffer, dest.length());
+
+    // Write to IOVector destination
+    return dest.copyFrom(IOVector::CreateFromBuffer(buffer, readFrames), 0, readFrames);
+}
+
+// Legacy: Raw-pointer interface
 length_t twRewire::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
 {
     std::lock_guard<std::mutex> lock(mutex());
