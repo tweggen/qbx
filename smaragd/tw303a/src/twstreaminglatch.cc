@@ -2,12 +2,16 @@
 #include <stdlib.h>
 #include <memory.h>
 #include <string.h>
+#include <thread>
 
 #include "twsyslog.h"
 
 #include "twcomponent.h"
 
 #undef DEBUG_COPYDATA
+
+// Thread-local flag to prevent recursive freezePage calls from within calcOutputTo path
+thread_local bool g_inCalcOutputToPath = false;
 
 static inline int min( int a, int b )
 {
@@ -205,28 +209,50 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 #endif
 
 			// not enough data in buffer, fill it up.
-			// Phase 2: Use freezePage() instead of raw-pointer calcOutputTo()
-			// This leverages page caching and proper state snapshots.
-			auto page = getComponent().freezePage(
-				currentPos_,              // snapshot position for state
-				nullptr,                  // no input (source component)
-				0,                        // no input offset
-				maxFill,                  // length to fill
-				sampleRate_,              // project sample rate
-				previousPage_             // cached state from last page
-			);
+			// CRITICAL: Avoid recursive freezePage calls when called from within calcOutputTo path.
+			// freezePage → calcOutputTo → readStreamingData → copyData → freezePage = RECURSION.
+			// When in calcOutputTo context, use a simple source-level rendering instead.
 
-			if (page && page->samples.size() > 0) {
-				filled = min((length_t)maxFill, (length_t)page->samples.size());
+			if (g_inCalcOutputToPath) {
+				// Already in calcOutputTo context: can't call freezePage (would create recursion).
+				// Fallback: fill buffer from component's raw calcOutputTo with a temporary buffer.
+				std::vector<sample_t> tempBuf(maxFill);
+				filled = getComponent().calcOutputTo(tempBuf.data(), maxFill, 0);
+
 				if (filled > 0) {
-					memcpy(pBuffer + bufPos, page->samples.data(), filled * sizeof(sample_t));
-					previousPage_ = page;  // cache for next freezePage() call
-					currentPos_ += filled; // advance position
+					// Copy into ring buffer (handle wraparound)
+					length_t part1 = min(filled, (length_t)(bufSize - bufPos));
+					memcpy(pBuffer + bufPos, tempBuf.data(), part1 * sizeof(sample_t));
+
+					if (filled > part1) {
+						// Wraparound: copy second part to beginning
+						length_t part2 = filled - part1;
+						memcpy(pBuffer, tempBuf.data() + part1, part2 * sizeof(sample_t));
+					}
+				}
+			} else {
+				// Normal path: use freezePage for proper state snapshots and caching
+				auto page = getComponent().freezePage(
+					currentPos_,              // snapshot position for state
+					nullptr,                  // no input (source component)
+					0,                        // no input offset
+					maxFill,                  // length to fill
+					sampleRate_,              // project sample rate
+					previousPage_             // cached state from last page
+				);
+
+				if (page && page->samples.size() > 0) {
+					filled = min((length_t)maxFill, (length_t)page->samples.size());
+					if (filled > 0) {
+						memcpy(pBuffer + bufPos, page->samples.data(), filled * sizeof(sample_t));
+						previousPage_ = page;  // cache for next freezePage() call
+						currentPos_ += filled; // advance position
+					} else {
+						filled = 0;
+					}
 				} else {
 					filled = 0;
 				}
-			} else {
-				filled = 0;
 			}
 
 			if( !filled ) {

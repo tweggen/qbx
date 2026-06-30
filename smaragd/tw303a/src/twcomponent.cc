@@ -481,6 +481,9 @@ length_t twComponent::freezePage_nolock(
     // Render frames into page buffer
     // Safe: page is in the map (protected by refcount), nobody else will create it
     // Safe to call recursively because mutex is not held
+    // NOTE: Set flag to prevent recursive freezePage calls from copyData
+    extern thread_local bool g_inCalcOutputToPath;
+    g_inCalcOutputToPath = true;
     length_t toRender = twOutputPage::FRAME_CAPACITY;
     length_t rendered = renderFrames(
         page->samples.data(),
@@ -489,6 +492,7 @@ length_t twComponent::freezePage_nolock(
         pageInputLength,
         0  // idx = 0 (first output)
     );
+    g_inCalcOutputToPath = false;
 
     // Capture new internal state for next page resumption
     {
