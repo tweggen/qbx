@@ -135,71 +135,84 @@ void STrack::checkDurationChanged()
     }
 }
 
-void STrack::trackChildDurationChanged( length_t /* newLength*/ )
+void STrack::trackChildDurationChanged( length_t newLength )
 {
-    // SObject *sendingObject = (SObject *) (const SObject *) sender();
+    SLink *slink = dynamic_cast<SLink *>((SLink *) (const SLink *) sender());
+    if( slink ) {
+        twComponent *comp = &slink->getRootComponent();
+        length_t duration = newLength;
+        for( int i=0; i<nBusses_; ++i ) {
+            if( cpTrackMixers_[i] ) {
+                cpTrackMixers_[i]->updateClip(comp, slink->getStartTime(), duration);
+            }
+        }
+    }
     lastDurationValid_ = false;
     checkDurationChanged();
 }
 
-void STrack::trackChildWasMoved( offset_t /*newTime*/ )
+void STrack::trackChildWasMoved( offset_t newTime )
 {
-    SLink *sendingObject = (SLink *) (const SLink *) sender();
-    // For now, do nothing, as we don't need anything to be done here.
-    // Look, if the moved object leeds to a larger end time.
-    if( sendingObject->getSObject().hasDuration() ) {
+    SLink *slink = (SLink *) (const SLink *) sender();
+    if( slink && slink->getSObject().hasDuration() ) {
+        twComponent *comp = &slink->getRootComponent();
+        length_t duration = slink->getSObject().getDuration();
+        for( int i=0; i<nBusses_; ++i ) {
+            if( cpTrackMixers_[i] ) {
+                cpTrackMixers_[i]->updateClip(comp, newTime, duration);
+            }
+        }
         lastDurationValid_ = false;
         checkDurationChanged();
     }
 }
 
 /**
- * We have a new child. Check, if we need to insert it into the starttime list.
+ * We have a new child. Insert it into the clip list on all track mixers.
  */
 void STrack::trackChildWasAdded( SLink &child )
 {
-    // SObject *sendingObject = (SObject *) (const SObject *) sender();
-    
     if( child.hasStartTime() ) {
-//      startTimeList_.inSort( &child );
         if( child.getSObject().hasDuration() ) {
-//          endTimeList_.inSort( &child );
             // If we have a new child, with a duration, attach a callback
-            // to it, which informs us, if its
-            // starttime changes.
-            QObject::connect( &child, SIGNAL( startTimeChanged( offset_t ) ), 
-                              this, SLOT( trackChildWasMoved( offset_t ) ) );    
-            QObject::connect( &(child.getSObject()), SIGNAL( durationChanged( length_t ) ), 
-                              this, SLOT( trackChildDurationChanged( length_t ) ) );    
+            // to it, which informs us, if its starttime changes.
+            QObject::connect( &child, SIGNAL( startTimeChanged( offset_t ) ),
+                              this, SLOT( trackChildWasMoved( offset_t ) ) );
+            QObject::connect( &(child.getSObject()), SIGNAL( durationChanged( length_t ) ),
+                              this, SLOT( trackChildDurationChanged( length_t ) ) );
+
+            // Insert the clip into all track mixers
+            offset_t startTime = child.getStartTime();
+            length_t duration = child.getSObject().getDuration();
+            twComponent *comp = &child.getRootComponent();
+            for( int i=0; i<nBusses_; ++i ) {
+                if( cpTrackMixers_[i] ) {
+                    cpTrackMixers_[i]->insertClip(startTime, duration, comp);
+                }
+            }
+
             lastDurationValid_ = false;
             checkDurationChanged();
         }
     }
 }
 
-void STrack::trackChildWasRemoved( SLink &/*child*/ )
+void STrack::trackChildWasRemoved( SLink &child )
 {
-    // FIXME: Unfortunately, we cannot access the child here.
-#if 0
-    SObject *sendingObject = (SObject *) (const SObject *) sender();
-    // We can try to remove it, regardless, wether we had it or not.
-//    startTimeList_.remove( child );
-//    endTimeList_.remove( child );
     if( child.hasStartTime() ) {
-//    startTimeList_.inSort( &child );
         if( child.getSObject().hasDuration() ) {
-            QObject::disconnect( &child, SIGNAL( startTimeChanged( offset_t ) ), 
-                              this, SLOT( trackChildWasMoved( offset_t ) ) );    
-            QObject::disconnect( &(child.getSObject()), SIGNAL( durationChanged( length_t ) ), 
-                              this, SLOT( trackChildDurationChanged( length_t ) ) );    
+            // Remove the clip from all track mixers
+            twComponent *comp = &child.getRootComponent();
+            for( int i=0; i<nBusses_; ++i ) {
+                if( cpTrackMixers_[i] ) {
+                    cpTrackMixers_[i]->removeClip(comp);
+                }
+            }
+
             lastDurationValid_ = false;
             checkDurationChanged();
         }
     }
-#else
-    lastDurationValid_ = false;
-    checkDurationChanged();
-#endif
 }
 
 void STrack::setNBusses( int nBusses )
@@ -226,8 +239,7 @@ void STrack::setNBusses( int nBusses )
         // Create the new ones.
         for( int i=oldNBusses; i<nBusses; ++i ) {
             newMixers[i] = new twTrackMix(
-                *(SApplication::app().get303aEnvironment()), 
-                *this );
+                *(SApplication::app().get303aEnvironment()) );
             newMixers[i]->init();
         }
         ::free( cpTrackMixers_ );
@@ -271,6 +283,19 @@ void STrack::setNBusses( int nBusses )
         cpPluginChains_[i]->rebuildWiring();
         cpRewire_->setInput( i, cpPluginChains_[i]->linkOutput( 0 ) );
     }
+
+    // Populate clip list in all track mixers with existing children (initial sync).
+    // This runs on the UI thread, so it's safe to populate before audio starts.
+    for( SLink *lk : childLinks() ) {
+        if( !lk || !lk->hasStartTime() ) continue;
+        offset_t startTime = lk->getStartTime();
+        length_t duration = lk->getSObject().hasDuration() ? lk->getSObject().getDuration() : 0;
+        twComponent *comp = &lk->getRootComponent();
+        for( int i=0; i<nBusses; ++i ) {
+            cpTrackMixers_[i]->insertClip(startTime, duration, comp);
+        }
+    }
+
     nBusses_ = nBusses;
     emit nChannelsChanged( nBusses );
 }
@@ -307,6 +332,12 @@ STrack::STrack( SProject *project )
                       this, SLOT( trackChildWasAdded( SLink & ) ) );
     QObject::connect( this, SIGNAL( childObjectRemoved( SLink & ) ),
                       this, SLOT( trackChildWasRemoved( SLink & ) ) );
+
+    // Forward track mute and volume changes to the track mixers
+    QObject::connect( this, SIGNAL( mutedChanged( bool ) ),
+                      this, SLOT( onTrackMuteChanged( bool ) ) );
+    QObject::connect( this, SIGNAL( volumeChanged( double ) ),
+                      this, SLOT( onTrackVolumeChanged( double ) ) );
 
     // Set the number of busses. This initial request will allocate
     // the track mixer objects and DSP plugin chains.
@@ -534,4 +565,24 @@ void STrack::recomputePreview(CapturePageData& page)
 
     // Mark preview as valid in the page
     page.validAspects |= Preview;
+}
+
+void STrack::onTrackMuteChanged( bool muted )
+{
+    // Forward mute change to all track mixers
+    for( int i=0; i<nBusses_; ++i ) {
+        if( cpTrackMixers_[i] ) {
+            cpTrackMixers_[i]->setTrackMute(muted);
+        }
+    }
+}
+
+void STrack::onTrackVolumeChanged( double gainDb )
+{
+    // Forward volume change to all track mixers
+    for( int i=0; i<nBusses_; ++i ) {
+        if( cpTrackMixers_[i] ) {
+            cpTrackMixers_[i]->setTrackGain(gainDb);
+        }
+    }
 }

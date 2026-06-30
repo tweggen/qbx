@@ -92,6 +92,8 @@ public slots:
     void onPluginSlotInserted( int index, SPluginSlot &slot );
     void onPluginSlotRemoved( int index, SPluginSlot &slot );
     void onPluginSlotsReordered();
+    void onTrackMuteChanged( bool muted );
+    void onTrackVolumeChanged( double gainDb );
 
 signals:
     void nChannelsChanged( int n );
