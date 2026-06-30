@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "twmoog.h"
+#include "io_vector.h"
 
 void twMoog::setBufferSize( length_t /* len */ )
 {
@@ -32,7 +33,70 @@ void twMoog::createOutputLatches()
 	pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
 }
 
-length_t twMoog::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */ )
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twMoog::calcOutputTo( IOVector& dest, idx_t /* idx */ )
+{
+	// Read inputs into temp buffers
+	sample_t *audioBuffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+	sample_t *freqBuffer_tmp = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+
+	// Read audio input
+	length_t realRead = ((twLatchStreamingOutput *)pInputPlugs[0])->readStreamingData(
+		audioBuffer, dest.length());
+	if( realRead != dest.length() ) {
+		throw new excStandard( "twMoog::calcOutputTo(): Audio source did not provide sufficient data." );
+	}
+
+	// Read frequency input
+	realRead = ((twLatchStreamingOutput *)pInputPlugs[1])->readStreamingData(
+		freqBuffer_tmp, dest.length());
+	if( realRead != dest.length() ) {
+		throw new excStandard( "twMoog::calcOutputTo(): Frequency source did not provide sufficient data." );
+	}
+
+	// Apply Moog filter DSP to audio, write to IOVector output
+	double freqCorrect = 1.16 / (double)(env.getSRate()/2);
+	sample_t *pCurr = audioBuffer;
+	sample_t *pFreq = freqBuffer_tmp;
+
+	for( offset_t i = 0; i < (offset_t)realRead; i++ ) {
+		double input = (double) *pCurr;
+		double f = ((double)(*pFreq++)) * freqCorrect;
+		double res = (double)resonance;
+		double fb = res * (1.0 - 0.15 * f * f);
+
+		input -= out4 * fb;
+		input *= 0.35013 * (f*f)*(f*f);
+
+		out1 = input + 0.3 * in1 + (1. - f) * out1; // Pole 1
+		in1  = input;
+		out2 = out1 + 0.3 * in2 + (1. - f) * out2;  // Pole 2
+		if( out1>32767.0 ) out1 = 32767.0;
+		else if( out1<-32768.0 ) out1 = -32768.0;
+		in2  = out1;
+
+		out3 = out2 + 0.3 * in3 + (1. - f) * out3;  // Pole 3
+		if( out2>32767.0 ) out2 = 32767.0;
+		else if( out2<-32768.0 ) out2 = -32768.0;
+		in3  = out2;
+
+		out4 = out3 + 0.3 * in4 + (1. - f) * out4;  // Pole 4
+		if( out3>32767.0 ) out3 = 32767.0;
+		else if( out3<-32768.0 ) out3 = -32768.0;
+		in4  = out3;
+
+		if( out4>32767.0 ) out4 = 32767.0;
+		else if( out4<-32768.0 ) out4 = -32768.0;
+
+		*pCurr++ = (sample_t)out4;
+	}
+
+	// Copy result to IOVector destination
+	return dest.copyFrom(IOVector::CreateFromBuffer(audioBuffer, realRead), 0, realRead);
+}
+
+// Legacy: Raw-pointer interface
+length_t twMoog::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
 {
 	length_t realRead;
 	sample_t *pCurr = pDest;
@@ -56,7 +120,7 @@ length_t twMoog::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */
 	}
 
     double freqCorrect = 1.16 / (double)(env.getSRate()/2);
-	
+
 	for( offset_t i=0; i<(offset_t)realRead; i++ ) {
 		double input = (double) *pCurr;
 		//input *=4;
@@ -71,18 +135,18 @@ length_t twMoog::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */
 		out1 = input + 0.3 * in1 + (1. - f) * out1; // Pole 1
 		in1  = input;
 		out2 = out1 + 0.3 * in2 + (1. - f) * out2;  // Pole 2
-		if( out1>32767.0 ) out1 = 32767.0; 
-		else if( out1<-32768.0 ) out1 = -32768.0; 
+		if( out1>32767.0 ) out1 = 32767.0;
+		else if( out1<-32768.0 ) out1 = -32768.0;
 		in2  = out1;
 
 		out3 = out2 + 0.3 * in3 + (1. - f) * out3;  // Pole 3
 		if( out2>32767.0 ) out2 = 32767.0;
-		else if( out2<-32768.0 ) out2 = -32768.0; 
+		else if( out2<-32768.0 ) out2 = -32768.0;
 		in3  = out2;
 
 		out4 = out3 + 0.3 * in4 + (1. - f) * out4;  // Pole 4
 		if( out3>32767.0 ) out3 = 32767.0;
-		else if( out3<-32768.0 ) out3 = -32768.0; 
+		else if( out3<-32768.0 ) out3 = -32768.0;
 		in4  = out3;
 
 		if( out4>32767.0 ) out4 = 32767.0;
