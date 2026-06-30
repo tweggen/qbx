@@ -6,6 +6,37 @@ worked.
 
 ---
 
+## Buffer Crash Fixes (Ad-hoc, 2026-06-30)
+
+- **Status:** ✅ COMPLETE
+- **Commits:** `a08e586`, `7b6ee1c`
+- **Verified on:** macOS (built-in speakers, Bluetooth headset)
+
+### Problem
+
+Application crashed (EXC_BAD_ACCESS in `__bzero`) immediately on audio playback when:
+- Device rate ≠ project rate (resampling active, e.g., 48kHz → 44.1kHz)
+- Audio content present (SCut→SPlainWave unmuted)
+
+### Root Causes & Fixes
+
+1. **Buffer allocation mismatch:** Resampling 48→44.1 kHz needs ceil(512 * 1.0884) = 558 input frames, but code allocated only 512. Fixed buffer allocation to use `inFramesNeeded` instead of `nFrames`.
+
+2. **Page boundary underrun:** Frozen pages (65536 frames each) didn't transition seamlessly; reaching end of page returned underrun instead of advancing to next page. Fixed by adding page transition logic in `pullStereoFrameFrozen()`.
+
+3. **Forward declaration mismatch:** `twOutputPage` declared as `class` but defined as `struct`. Fixed declaration.
+
+### Result
+
+- ✅ No crash on playback start
+- ✅ Audio streams stably across page boundaries
+- ✅ Audio is audible (tested multiple devices)
+- ✅ Resampling works correctly
+
+See `plan/done/BUFFER_CRASH_FIXES.md` for detailed analysis.
+
+---
+
 ## 01_BUILD_SYSTEM_MODERNIZATION.md
 
 - **Date:** 2026-05-30
