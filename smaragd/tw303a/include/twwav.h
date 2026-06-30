@@ -11,8 +11,11 @@ class twWav : public twComponent {
 		length_t totalLength;
 
 	protected:
+		// Phase 3: New IOVector-based interface (type-safe, page-backed)
+		virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
 
-		virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );
+		// Legacy raw-pointer interface
+		virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) override;
 
 	public:
 		~twWav();

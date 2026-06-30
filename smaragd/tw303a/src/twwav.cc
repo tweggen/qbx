@@ -10,6 +10,7 @@
 
 #include "twconvert.h"
 #include "twwav.h"
+#include "io_vector.h"
 
 #define WAVE_FORMAT_PCM 1
 
@@ -87,6 +88,15 @@ twWav::~twWav()
 	}
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+// twWav is a file output sink, not a source — calcOutputTo is a stub
+length_t twWav::calcOutputTo( IOVector& dest, idx_t )
+{
+    // Nothing to render — output sink only
+    return dest.fillSilence(0, dest.length());
+}
+
+// Legacy: Raw-pointer interface
 length_t twWav::calcOutputTo( sample_t *, length_t, idx_t )
 {
     // nothing to render.

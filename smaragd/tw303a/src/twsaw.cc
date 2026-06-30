@@ -79,6 +79,15 @@ length_t twSaw::calcOutputTo( sample_t *pDest, length_t /* length */, idx_t /* i
 	return realRead;
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twSaw::calcOutputTo( IOVector& dest, idx_t idx )
+{
+	// Use temp buffer and delegate to raw-pointer version, then copy result
+	sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+	length_t result = calcOutputTo(buffer, dest.length(), idx);
+	return dest.copyFrom(IOVector::CreateFromBuffer(buffer, result), 0, result);
+}
+
 void twSaw::__init( )
 {
 	// start at time 0

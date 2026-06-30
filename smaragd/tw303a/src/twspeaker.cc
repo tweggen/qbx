@@ -1,6 +1,7 @@
 #include "twspeaker.h"
 
 #include "audio/audio_backend.h"
+#include "io_vector.h"
 #include "sapplication.h"
 #include "sproject.h"
 #include "sobject.h"
@@ -244,6 +245,15 @@ std::vector<audio::AudioDeviceInfo> twSpeaker::outputDevices() const
     return backend_->enumerateDevices();
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+// twSpeaker is an output sink, not a source — calcOutputTo is a stub
+length_t twSpeaker::calcOutputTo(IOVector& dest, idx_t)
+{
+    // Output sink: fill destination with silence
+    return dest.fillSilence(0, dest.length());
+}
+
+// Legacy: Raw-pointer interface
 length_t twSpeaker::calcOutputTo(sample_t *, length_t, idx_t)
 {
     return 0;

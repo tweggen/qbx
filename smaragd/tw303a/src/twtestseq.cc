@@ -95,6 +95,15 @@ length_t twTestSeq::calcOutputTo( sample_t *pDest, length_t length, idx_t /*idx*
     return length;
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twTestSeq::calcOutputTo( IOVector& dest, idx_t idx )
+{
+	// Use temp buffer and delegate to raw-pointer version, then copy result
+	sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+	length_t result = calcOutputTo(buffer, dest.length(), idx);
+	return dest.copyFrom(IOVector::CreateFromBuffer(buffer, result), 0, result);
+}
+
 twTestSeq::twTestSeq( tw303aEnvironment &env0, sample_t constant0 )
 	: twComponent( env0 ), constant( constant0 )
 {
