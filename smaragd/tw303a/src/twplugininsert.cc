@@ -76,47 +76,6 @@ length_t twPluginInsert::calcOutputTo( IOVector& dest, idx_t port )
     return 0;
 }
 
-// Legacy: Raw-pointer interface
-length_t twPluginInsert::calcOutputTo( sample_t *dst, length_t len, idx_t port )
-{
-    std::lock_guard<std::mutex> lock(mutex());
-    return calcOutputTo_nolock(dst, len, port);
-}
-
-// Caller must hold mutex()
-// CRITICAL: Lock ensures exactly one processing per block, even if calcOutputTo()
-// is called concurrently for multiple output ports (common with multi-channel plugins).
-// Prevents double-processing race where both threads see producedThisBlock_=false.
-length_t twPluginInsert::calcOutputTo_nolock( sample_t *dst, length_t len, idx_t port )
-{
-    if( !producedThisBlock_ ) {
-        // Pull every input bus into de-interleaved scratch (one mono wire each).
-        for( idx_t c = 0; c < getNInputs(); ++c )
-            pullInput( c, inScratch_[c].data(), len );
-
-        // Bypass = copy in->out; process plugin otherwise.
-        if( bypass_ ) {
-            copyChannels( inScratch_, outScratch_, getNInputs(), len );
-        } else {
-            // Prepare scratch buffers with input data pointers.
-            std::vector<const float *> inPtrs( getNInputs() );
-            std::vector<float *> outPtrs( getNOutputs() );
-            for( idx_t c = 0; c < getNInputs(); ++c )
-                inPtrs[c] = inScratch_[c].data();
-            for( idx_t c = 0; c < getNOutputs(); ++c )
-                outPtrs[c] = outScratch_[c].data();
-
-            plugin_->process( inPtrs.data(), outPtrs.data(), len );
-        }
-        producedThisBlock_ = true;
-    }
-
-    // Serve the requested output port from cache.
-    if( port < getNOutputs() )
-        std::memcpy( dst, outScratch_[port].data(), len * sizeof( sample_t ) );
-    return len;
-}
-
 length_t twPluginInsert::pullInput( idx_t port, sample_t *dst, length_t len )
 {
     if( pInputPlugs == nullptr || pInputPlugs[port] == nullptr )

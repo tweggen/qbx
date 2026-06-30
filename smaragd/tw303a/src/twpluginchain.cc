@@ -47,35 +47,6 @@ length_t twPluginChain::calcOutputTo( IOVector& dest, idx_t port )
     return dest.fillSilence(0, dest.length());
 }
 
-// Legacy: Raw-pointer interface
-length_t twPluginChain::calcOutputTo( sample_t *dst, length_t len, idx_t port )
-{
-    std::lock_guard<std::mutex> lock( pluginsMutex_ );
-
-    if( plugins_.empty() ) {
-        // No plugins: passthrough from input
-        if( pInputPlugs && pInputPlugs[port] ) {
-            auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs[port]);
-            return input->readStreamingData( dst, len );
-        }
-        return 0;
-    }
-
-    // New block: reset all plugins so each processes fresh audio this callback.
-    // The streaming latch only calls calcOutputTo when it needs new data, so
-    // reaching here always means we are at the start of a new render block.
-    for( auto *plugin : plugins_ )
-        plugin->resetBlock();
-
-    // Pull from the last plugin's output (wiring already established in rebuildWiring)
-    auto *lastPlugin = plugins_.back();
-    if( lastPlugin && port < lastPlugin->getNOutputs() ) {
-        return lastPlugin->calcOutputTo( dst, len, port );
-    }
-
-    return 0;
-}
-
 void twPluginChain::addPlugin( audio::twPluginInsert *insert )
 {
     if( insert ) {
