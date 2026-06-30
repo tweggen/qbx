@@ -31,6 +31,10 @@ int twTrackMix::seekTo_nolock( offset_t newOffset )
     // retain stale reader positions (e.g., from prior playback), causing sparse/silent
     // audio when the render/playback reaches them.
     for( const ClipEntry &clip : clips_ ) {
+        if( !clip.component ) {
+            fprintf(stderr, "WARNING: twTrackMix::seekTo_nolock found null component in clips_\n");
+            continue;
+        }
         offset_t startTime = clip.startTime;
         // Seek this clip to the correct clip-relative position.
         // For clips not yet started (startTime > newOffset), this yields 0 (correct).
@@ -173,6 +177,10 @@ length_t twTrackMix::calcOutputTo_nolock( sample_t *buffer, length_t playLen, id
         // Note: seekTo is now called once per position jump in twTrackMix::seekTo(),
         // not once per buffer. In continuous forward play, child readers are already
         // positioned correctly. This reduces seek calls from O(blocks) to O(seeks).
+        if( !clip.component ) {
+            fprintf(stderr, "WARNING: twTrackMix::calcOutputTo_nolock found null component in clips_\n");
+            continue;
+        }
         twComponent &cp = *clip.component;
         offset_t doRead = endTime-startTime;
         // Only zero out the range we'll actually use (not entire playLen)
@@ -248,6 +256,11 @@ length_t twTrackMix::freezePage_nolock(
         }
 
         // Freeze the child component's output for this range
+        if( !clip.component ) {
+            fprintf(stderr, "WARNING: twTrackMix::freezePage_nolock found null component in clips_\n");
+            continue;
+        }
+
         // Child position: what frame offset in the child corresponds to startPos?
         uint64_t childPos = (startPos >= clip.startTime)
                             ? (startPos - clip.startTime)
