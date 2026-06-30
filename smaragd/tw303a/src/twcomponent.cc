@@ -574,3 +574,25 @@ length_t twComponent::calcOutputTo( IOVector& dest, idx_t idx )
 
     return rendered;
 }
+
+// Default implementation of calcOutputTo(raw-pointer) for Phase 3 migration.
+// During Phase 3, subclasses remove their raw-pointer implementations and
+// get this default, which wraps the IOVector version instead.
+// This reverses the old dependency: IOVector <= raw-pointer becomes raw-pointer <= IOVector.
+length_t twComponent::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
+{
+    // Use temporary page-backed IOVector wrapper
+    auto tmpPage = std::make_shared<twOutputPage>();
+    tmpPage->samples.resize(length, 0.0f);
+    IOVector dest = IOVector::CreateForPageOutput(tmpPage);
+
+    // Call the IOVector version (the new primary interface)
+    length_t rendered = calcOutputTo(dest, idx);
+
+    // Copy result back to raw-pointer buffer
+    if (rendered > 0) {
+        memcpy(pDest, tmpPage->samples.data(), rendered * sizeof(sample_t));
+    }
+
+    return rendered;
+}

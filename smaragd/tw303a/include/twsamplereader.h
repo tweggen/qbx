@@ -31,13 +31,8 @@ public:
     virtual offset_t tellPos() const;
     virtual void reset() override;  // Reset position to start of sample
 
-    // Phase 3: New IOVector-based interface (type-safe, page-backed)
+    // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
-
-    // DEPRECATED: Raw-pointer interface (will be removed in v1.0)
-    // See: docs/COMPONENT_MIGRATION_GUIDE.md for migration path
-    [[deprecated("Use IOVector-based calcOutputTo() or freezePage() instead")]]
-    virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) override;
 
     virtual void createOutputLatches();
 
@@ -58,9 +53,6 @@ private:
 
     // Helper: do seek work outside lock (caller must hold mutex)
     int seekTo_nolock(offset_t newOffset);
-
-    // Helper: do output work outside lock (caller must hold mutex)
-    length_t calcOutputTo_nolock(sample_t *pDest, length_t length, idx_t idx);
 
     // Helper: do reset work outside lock (caller must hold mutex)
     void reset_nolock();

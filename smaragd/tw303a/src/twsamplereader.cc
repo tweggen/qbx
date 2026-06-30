@@ -66,25 +66,6 @@ length_t twSampleReader::calcOutputTo( IOVector& dest, idx_t idx )
     return dest.copyFrom(IOVector::CreateFromBuffer(buffer, dest.length()), 0, dest.length());
 }
 
-// Legacy: Raw-pointer interface
-length_t twSampleReader::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
-{
-    std::lock_guard<std::mutex> lock(mutex());
-    return calcOutputTo_nolock(pDest, length, idx);
-}
-
-// Caller must hold mutex()
-length_t twSampleReader::calcOutputTo_nolock( sample_t *pDest, length_t length, idx_t idx )
-{
-    if( length <= 0 ) return 0;
-    // The source zero-fills past end-of-material, so the destination is always
-    // fully written. Advance by the requested length so a caller that streams
-    // without re-seeking stays in lockstep with output time.
-    src_.read( pos_, pDest, length, idx );
-    pos_ += (offset_t) length;
-    return length;
-}
-
 void twSampleReader::createOutputLatches()
 {
     idx_t n = getNOutputs();

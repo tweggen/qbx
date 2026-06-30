@@ -210,14 +210,17 @@ public:
     // Components can override this new interface when ready for type-safe rendering.
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx );
 
-    // LEGACY (DEPRECATED): Raw-pointer interface. All existing components implement this.
+    // LEGACY (DEPRECATED): Raw-pointer interface (removed in Phase 3 migration).
     // DEPRECATION TIMELINE:
     //   - v0.x: Both interfaces work (IOVector preferred for new code)
     //   - v1.0: Raw-pointer interface will be REMOVED
     //   - Migration: Use freezePage() for page-based rendering, or use IOVector for compatibility
     // For migration guide, see: docs/COMPONENT_MIGRATION_GUIDE.md
+    //
+    // Default implementation (Phase 3): wraps IOVector in temporary page buffer for compatibility.
+    // During Phase 3 migration, subclasses remove their implementations and rely on default.
     [[deprecated("Use freezePage() or IOVector-based calcOutputTo() instead. Raw-pointer interface will be removed in v1.0")]]
-    virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) = 0;
+    virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );  // NOT pure virtual
 
     void setInput( idx_t idx, twLatchOutput * pLatchOutput );
     virtual twLatchOutput *getInputPlug( idx_t ) const;
