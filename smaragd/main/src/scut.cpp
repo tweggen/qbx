@@ -353,11 +353,22 @@ void SCut::buildCapture_()
         c.seekTo( 0 );
         auto grainSource = std::make_shared<twGrainSource>( *rs, snap.grainParams );
         length_t grainedLen = grainSource->length();
-        buf.resize( (size_t) grainedLen, 0.0f );
-        grainSource->read( 0, buf.data(), grainedLen, 0 );
-        captureLen = grainedLen;
-        fprintf(stderr, "[SCut::buildCapture_] Grain capture: input %ld samples -> output %ld samples\n",
-                (long)n, (long)grainedLen);
+
+        // Apply offset: startOffset is in plainwave domain (original material position)
+        // After grain stretching, scale it to stretched domain: offset_stretched = offset * stretch
+        offset_t grainOffset = (offset_t)llround( (double)snap.startOffset * snap.grainParams.stretch );
+
+        // Read from the grain-stretched offset, limited to remaining content
+        length_t availFromOffset = grainedLen > grainOffset ? grainedLen - grainOffset : 0;
+        length_t toRead = snap.cutDuration > availFromOffset ? availFromOffset : snap.cutDuration;
+
+        buf.resize( (size_t) toRead, 0.0f );
+        if( toRead > 0 ) {
+            grainSource->read( grainOffset, buf.data(), toRead, 0 );
+        }
+        captureLen = toRead;
+        fprintf(stderr, "[SCut::buildCapture_] Grain capture: offset=%ld (stretched=%ld), input %ld samples -> read %ld samples from position %ld\n",
+                (long)snap.startOffset, (long)grainOffset, (long)grainedLen, (long)toRead, (long)grainOffset);
     }
 
     capture_ = std::make_shared<twCapturingSource>( std::move( buf ), captureLen, 1, env.getSRate() );
