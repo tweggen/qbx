@@ -20,6 +20,11 @@ public:
     // twComponent interface
     idx_t getNInputs() const override { return nBusses_; }
     idx_t getNOutputs() const override { return nBusses_; }
+
+    // Phase 3: New IOVector-based interface (type-safe, page-backed)
+    length_t calcOutputTo( IOVector& dest, idx_t port ) override;
+
+    // Legacy raw-pointer interface
     length_t calcOutputTo( sample_t *dst, length_t len, idx_t port ) override;
     void createOutputLatches() override;
     const char *getInputName( idx_t ) const override { return nullptr; }

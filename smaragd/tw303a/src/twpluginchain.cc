@@ -1,5 +1,6 @@
 #include "twpluginchain.h"
 #include "twplugininsert.h"
+#include "io_vector.h"
 #include <algorithm>
 
 twPluginChain::twPluginChain( tw303aEnvironment &env, idx_t nBusses )
@@ -17,6 +18,36 @@ void twPluginChain::createOutputLatches()
         pOutputLatches[i] = new twStreamingLatch( *this, i, 4096 );
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twPluginChain::calcOutputTo( IOVector& dest, idx_t port )
+{
+    std::lock_guard<std::mutex> lock( pluginsMutex_ );
+
+    if( plugins_.empty() ) {
+        // No plugins: passthrough from input via IOVector
+        if( pInputPlugs && pInputPlugs[port] ) {
+            sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+            auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs[port]);
+            length_t len = input->readStreamingData( buffer, dest.length() );
+            return dest.copyFrom(IOVector::CreateFromBuffer(buffer, len), 0, len);
+        }
+        return dest.fillSilence(0, dest.length());
+    }
+
+    // New block: reset all plugins so each processes fresh audio this callback.
+    for( auto *plugin : plugins_ )
+        plugin->resetBlock();
+
+    // Pull from the last plugin's output (wiring already established in rebuildWiring)
+    auto *lastPlugin = plugins_.back();
+    if( lastPlugin && port < lastPlugin->getNOutputs() ) {
+        return lastPlugin->calcOutputTo( dest, port );
+    }
+
+    return dest.fillSilence(0, dest.length());
+}
+
+// Legacy: Raw-pointer interface
 length_t twPluginChain::calcOutputTo( sample_t *dst, length_t len, idx_t port )
 {
     std::lock_guard<std::mutex> lock( pluginsMutex_ );
