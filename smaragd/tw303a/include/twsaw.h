@@ -17,13 +17,8 @@ private:
     
     void __init( void );
 protected:
-    // Phase 3: New IOVector-based interface (type-safe, page-backed)
+    // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
-
-    // DEPRECATED: Raw-pointer interface (will be removed in v1.0)
-    // See: docs/COMPONENT_MIGRATION_GUIDE.md for migration path
-    [[deprecated("Use IOVector-based calcOutputTo() or freezePage() instead")]]
-    virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) override;
     
     sample_t *freqBuffer;
     

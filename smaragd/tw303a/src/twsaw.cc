@@ -26,59 +26,6 @@ void twSaw::createOutputLatches()
 #endif
 }
 
-length_t twSaw::calcOutputTo( sample_t *pDest, length_t /* length */, idx_t /* idx*/ )
-{
-	int i, a, b;
-	sample_t *pCurr = pDest;
-	sample_t *pCurrFreq = freqBuffer;
-	length_t realRead;
-	sample_t smpl = smplState;
-	sample_t smplErr = smplStateErr;
-
-	realRead = ((twLatchStreamingOutput *)pInputPlugs[0]) -> readStreamingData(
-		freqBuffer,
-		env.getBufferSize()
-		);
-	if( realRead==0 ) {
-		throw new excStandard( "twSimpleSaw::calcOutputTo(): Source did not provide data." );
-	}
-	
-
-#ifdef DEBUG_CALCOUTPUT
-	syslog( LOG_DEBUG, "twSimpleSaw::calOutputTo(): Starting at %d, calcing %d.", currPos, length );
-#endif
-	a = currPos;
-	b = a+realRead;
-
-	for( i=a; i<b; i++ ) {
-		register unsigned currFreq;
-		currFreq = *pCurrFreq++;
-		if( currFreq==0 ) {
-			// shut up on pCurrFreq = 0;
-			*pCurr++ = 0;
-			smpl = 0;
-			smplErr = 0;
-		} else {
-			register offset_t sdiff = ampl*4096/((env.getSRate()*100) / currFreq) + smplErr;
-	
-			if( rampDown ) {
-				*pCurr++ = maxVal-smpl;
-			} else {
-				*pCurr++ = smpl+minVal;
-			}
-//			cout << smpl <<endl;
-			smpl = (smpl+(sdiff>>12))%ampl;
-			smplErr = sdiff&0xfff;
-		}
-
-//		if( (i & 0x1f) == 0 ) cout << currFreq << " " << pCurr[-1] << endl;
-	}
-	currPos += realRead;
-	smplState = smpl;
-	smplStateErr = smplErr;
-	return realRead;
-}
-
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twSaw::calcOutputTo( IOVector& dest, idx_t idx )
 {

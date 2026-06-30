@@ -44,18 +44,6 @@ length_t twConstant::calcOutputTo( IOVector& dest, idx_t /* idx */ )
     return dest.fillConstant(0, dest.length(), constant);
 }
 
-// Legacy: Raw-pointer interface
-length_t twConstant::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */ )
-{
-    int i; //, a, b;
-    sample_t *pCurr = pDest;
-
-    for( i=0; i<length; i++ ) {
-        *pCurr++ = constant;
-    }
-    return length;
-}
-
 twConstant::twConstant( tw303aEnvironment &env0, sample_t constant0 )
 	: twComponent( env0 ), constant( constant0 )
 {
