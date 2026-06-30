@@ -3841,3 +3841,58 @@ length_t twConstant::calcOutputTo(sample_t *pDest, length_t length, idx_t /* idx
 - ✅ No breaking changes to existing component callers
 
 ---
+
+### Component Refactoring Demonstrations
+
+4 example components successfully refactored to demonstrate patterns:
+
+**1. twConstant (Commit 2fdf81f)**
+- Simple stateless source (no inputs)
+- Refactoring: Direct `fillConstant()` call
+- Benefits: No buffer allocation, direct page-backed fill
+
+**2. twMoog (Commit c6e0705)**
+- Stateful DSP filter with 2 inputs (audio + frequency)
+- Refactoring: Read inputs to stack buffers, apply DSP, write to IOVector
+- Benefits: Type-safe output, maintains state correctly
+
+**3. twMixer (Commit 06f235f)**
+- Multi-input mixing component (N inputs → 1 output)
+- Refactoring: Stack-allocated output buffer, sum all inputs with volume scaling
+- Benefits: Thread-safe, bounds-checked accumulation
+
+**4. twRewire (Commit 3ed4712)**
+- Patch-bay routing component (N inputs ↔ N outputs)
+- Refactoring: Conditional logic (silence fill if not wired, read if wired)
+- Benefits: Efficient silence generation, safe boundary handling
+
+**Build Status:** ✅ All build successfully, tests pass
+
+### Patterns for Remaining Components
+
+**Simple Stateless Sources (3):**
+- twRandomSource, twWhiteNoise, twTestSeq (disabled)
+- Pattern: Direct `fillConstant()` or similar fill operation
+
+**Stateful DSP (5):**
+- twOsc, twSaw, twSimpleSaw, twGrainSource
+- Pattern: Read inputs, apply DSP, write to IOVector
+
+**Reader Components (4):**
+- twSampleReader, twLoopReader, twCapturingSource, twWav
+- Pattern: State-aware reading, output to IOVector
+
+**Specialized (8):**
+- twPluginInsert, twPluginChain, twResampledSource, twView, twSpeaker, twPipe
+- Pattern: Varies by component role
+
+### Verification & Completion
+
+- ✅ Interface compiles without errors on macOS/Qt6/CMake
+- ✅ All 4 example components build and link
+- ✅ Existing tests pass (action_roundtrip_test, serialization tests)
+- ✅ Audio synthesis works with refactored components (twConstant, twMoog, twMixer, twRewire)
+- ✅ Patterns documented and repeatable for remaining components
+
+**Phase 3 Status:** Interface complete, 4/25 components (16%) refactored, patterns established for rapid continuation.
+
