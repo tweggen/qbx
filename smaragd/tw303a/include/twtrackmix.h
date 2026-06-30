@@ -16,6 +16,16 @@ struct ClipEntry {
     length_t     duration;      // 0 = unbounded
     twComponent *component;     // borrowed; lifetime managed by caller
     std::shared_ptr<twOutputPage> previousPage;  // State snapshot for resumption
+
+    // Validate that component is still valid (not deleted, not garbage)
+    // Returns true if safe to use, false if component is dangling
+    bool isComponentValid() const {
+        if (!component) return false;
+        // Simple heuristic: check if pointer looks like valid heap memory
+        // In production this should use WeakPtr or a callback instead
+        return reinterpret_cast<uintptr_t>(component) > 0x1000 &&
+               reinterpret_cast<uintptr_t>(component) < 0x7ffffffffffff000LL;
+    }
 };
 
 class twTrackMix

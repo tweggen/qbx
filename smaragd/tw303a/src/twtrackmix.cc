@@ -31,8 +31,8 @@ int twTrackMix::seekTo_nolock( offset_t newOffset )
     // retain stale reader positions (e.g., from prior playback), causing sparse/silent
     // audio when the render/playback reaches them.
     for( const ClipEntry &clip : clips_ ) {
-        if( !clip.component ) {
-            fprintf(stderr, "WARNING: twTrackMix::seekTo_nolock found null component in clips_\n");
+        if( !clip.isComponentValid() ) {
+            fprintf(stderr, "WARNING: twTrackMix::seekTo_nolock found invalid component pointer\n");
             continue;
         }
         offset_t startTime = clip.startTime;
@@ -184,8 +184,8 @@ length_t twTrackMix::calcOutputTo_nolock( sample_t *buffer, length_t playLen, id
         // Note: seekTo is now called once per position jump in twTrackMix::seekTo(),
         // not once per buffer. In continuous forward play, child readers are already
         // positioned correctly. This reduces seek calls from O(blocks) to O(seeks).
-        if( !clip.component ) {
-            fprintf(stderr, "WARNING: twTrackMix::calcOutputTo_nolock found null component in clips_\n");
+        if( !clip.isComponentValid() ) {
+            fprintf(stderr, "WARNING: twTrackMix::calcOutputTo_nolock found invalid component pointer\n");
             continue;
         }
         twComponent &cp = *clip.component;
@@ -263,8 +263,8 @@ length_t twTrackMix::freezePage_nolock(
         }
 
         // Freeze the child component's output for this range
-        if( !clip.component ) {
-            fprintf(stderr, "WARNING: twTrackMix::freezePage_nolock found null component in clips_\n");
+        if( !clip.isComponentValid() ) {
+            fprintf(stderr, "WARNING: twTrackMix::freezePage_nolock found invalid component pointer\n");
             continue;
         }
 
