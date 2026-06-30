@@ -202,8 +202,9 @@ public:
      * - Revalidator guarantees page is exclusive (not visible to readers)
      * - Aspects indicate which fields caller wants computed
      * - Set page.validAspects |= computedAspects before returning
+     *
+     * Note: recomputePreview() removed (Phase 5 — now uses freezePreviewPage)
      */
-    virtual void recomputePreview(CapturePageData& page) {}
     virtual void recomputeMetadata(CapturePageData& page) {}
     virtual void recomputeExport(CapturePageData& page) {}
 

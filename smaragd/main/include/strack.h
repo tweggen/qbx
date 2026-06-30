@@ -83,9 +83,6 @@ public:
     virtual bool hasDuration() const;
     virtual length_t getDuration() const;
 
-    // Phase 5e: Page cache implementation
-    // Composite previews from all visible children into page cache
-    virtual void recomputePreview(CapturePageData& page) override;
 
 public slots:
     void setNBusses( int n );

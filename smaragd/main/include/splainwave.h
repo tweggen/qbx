@@ -58,9 +58,6 @@ public:
 			    offset_t start, length_t length,
 			    offset_t nProbes );
 
-    // Phase 5e: Page cache implementation
-    // Render preview waveform peaks into the page cache
-    virtual void recomputePreview(CapturePageData& page) override;
 
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );
