@@ -2,9 +2,10 @@
 #include "capture_page_pool.h"
 #include "sobject.h"  // For SObject::recomputeXXX virtual methods
 #include "scut.h"  // For SCutCaptureAspect enum (Preview, Playback, Metadata, Export)
-#include "twcomponent.h"  // For twComponent::freezePage() and setPageAsFrozen()
+#include "twcomponent.h"  // For twComponent::freezePage() and freezePreviewPage()
 #include "tw_output_page.h"  // For twOutputPage and twAspectAll
 #include <cassert>
+#include <cstring>
 #include <vector>
 #include <algorithm>
 
@@ -155,21 +156,44 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
 }
 
 void CaptureRevalidator::dispatchRecomputation(SObject* object, uint32_t aspects, CapturePageData& page) {
-    // Phase 5e.5: Dispatch to object's virtual recomputation methods
-    //
-    // Each SObject type implements its own recomputeXXX methods:
-    // - SPlainWave: recomputePreview() uses getStraightPreview()
-    // - STrack: recomputePreview() composites from child clips
-    // - SStdMixer: recomputePreview() composites from child tracks
-    // - SCut: can recomputePreview() from its content
-    //
-    // The revalidator just dispatches; the actual work is in the object.
+    // Phase 5: Unified rendering dispatch
+    // Preview now uses freezePreviewPage() pipeline (same as playback);
+    // Metadata/Export still use legacy recomputeXXX for now.
+
+    if (aspects & Preview) {
+        // Phase 5: Use freezePreviewPage() for preview rendering
+        // Provides lower-resolution waveform data via unified DSP pipeline.
+        // Falls back to previous page if new page not ready (non-blocking).
+
+        twComponent &rootComp = object->getRootComponent();
+
+        // Preview rendering parameters:
+        // - previewSampleRate: 1000 Hz typical for waveform visualization
+        // - fullSampleRate: actual component rate for state consistency
+        // - previousPage: current page for fallback if new page not ready
+        int previewRate = 1000;  // Configurable: lower = coarser visualization
+        int fullRate = 48000;    // TODO: get from environment
+
+        auto frozenPage = rootComp.freezePreviewPage(
+            0,                       // startPos: 0 for full preview
+            page.PAGE_SIZE / sizeof(float),  // length: full page capacity
+            previewRate,
+            fullRate,
+            nullptr                  // No previous page (revalidator manages fallback)
+        );
+
+        if( frozenPage && frozenPage->validFrames > 0 ) {
+            // Copy frozen preview samples into CapturePageData
+            size_t samplesToCopy = std::min((size_t)frozenPage->validFrames, (size_t)page.PAGE_SIZE / sizeof(float));
+            if( samplesToCopy > 0 ) {
+                memcpy(page.data, frozenPage->samples.data(), samplesToCopy * sizeof(float));
+                page.validAspects |= Preview;
+            }
+        }
+    }
 
     if (aspects & Metadata) {
         object->recomputeMetadata(page);
-    }
-    if (aspects & Preview) {
-        object->recomputePreview(page);
     }
     if (aspects & Export) {
         object->recomputeExport(page);
