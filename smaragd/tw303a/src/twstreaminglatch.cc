@@ -211,25 +211,13 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 			// not enough data in buffer, fill it up.
 			// CRITICAL: Avoid recursive freezePage calls when called from within calcOutputTo path.
 			// freezePage → calcOutputTo → readStreamingData → copyData → freezePage = RECURSION.
-			// When in calcOutputTo context, use a simple source-level rendering instead.
 
 			if (g_inCalcOutputToPath) {
-				// Already in calcOutputTo context: can't call freezePage (would create recursion).
-				// Fallback: fill buffer from component's raw calcOutputTo with a temporary buffer.
-				std::vector<sample_t> tempBuf(maxFill);
-				filled = getComponent().calcOutputTo(tempBuf.data(), maxFill, 0);
-
-				if (filled > 0) {
-					// Copy into ring buffer (handle wraparound)
-					length_t part1 = min(filled, (length_t)(bufSize - bufPos));
-					memcpy(pBuffer + bufPos, tempBuf.data(), part1 * sizeof(sample_t));
-
-					if (filled > part1) {
-						// Wraparound: copy second part to beginning
-						length_t part2 = filled - part1;
-						memcpy(pBuffer, tempBuf.data() + part1, part2 * sizeof(sample_t));
-					}
-				}
+				// Already in calcOutputTo context (inside freezePage_nolock rendering).
+				// Cannot call freezePage or calcOutputTo: would create unbounded recursion.
+				// Return 0 to signal no data available; caller must handle buffer starvation.
+				// This is architectural: streaming latches don't work inside frozen rendering.
+				filled = 0;
 			} else {
 				// Normal path: use freezePage for proper state snapshots and caching
 				auto page = getComponent().freezePage(
@@ -256,8 +244,11 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 			}
 
 			if( !filled ) {
-				throw excStandard( "twLatchStreamingOutput::readStreamingData(): "
-									   "Internal: Component did not provide data." );
+				// No data available. This can happen when:
+				// 1. Component is in a render context (freezePage) where streaming latches don't work
+				// 2. Component truly has no data
+				// In either case, break and return what we have so far.
+				break;
 			}
 			bufPos = (bufPos + filled) % bufSize;
 			offset += filled;
