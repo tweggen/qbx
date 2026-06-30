@@ -135,8 +135,6 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
         // We pass offsets directly and let each component interpret them correctly.
         int sourceSampleRate = rs->sampleRate();
         int projectSampleRate = env.getSRate();
-        fprintf(stderr, "[SCut::rebuildReader] startOffset=%ld, sourceSampleRate=%d, projectSampleRate=%d, grain=%.4f\n",
-                (long)snap.startOffset, sourceSampleRate, projectSampleRate, snap.grainParams.stretch);
 
         if( newGrain ) {
             // With grain, both offset and loop length must account for the stretch.
@@ -145,11 +143,6 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
             // Convert: offset_stretched = offset_plainwave * stretch
             adjustedStartOffset = (offset_t)llround( (double)snap.startOffset * snap.grainParams.stretch );
             adjustedLoopLength = (length_t)llround( (double)snap.loopLength * snap.grainParams.stretch );
-            fprintf(stderr, "[SCut::rebuildReader] Grain: offset=%ld, adjustedLoop=%ld, stretch=%.4f\n",
-                    (long)adjustedStartOffset, (long)adjustedLoopLength, snap.grainParams.stretch);
-        } else {
-            fprintf(stderr, "[SCut::rebuildReader] No grain: offset=%ld, loop=%ld\n",
-                    (long)adjustedStartOffset, (long)adjustedLoopLength);
         }
         if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
             twLoopReader *lr = new twLoopReader( env, *view, adjustedStartOffset, adjustedLoopLength );
@@ -221,10 +214,7 @@ swap_complete:
 // Should only be called when capture_ is null.
 void SCut::buildCapture_()
 {
-    fprintf(stderr, "[SCut::buildCapture_] ENTER: capture_=%p\n", (void*)capture_.get());
-
     if( capture_ ) {
-        fprintf(stderr, "[SCut::buildCapture_] EARLY RETURN: capture already exists\n");
         return;  // Already built
     }
 
@@ -239,25 +229,17 @@ void SCut::buildCapture_()
     bool isGrained = !snap.grainParams.isIdentity();
 
     if( !isContainerBacked && !isGrained ) {
-        fprintf(stderr, "[SCut::buildCapture_] EARLY RETURN: sample-backed ungrained cut, no capture needed\n");
         return;
     }
 
     if( !c.hasDuration() ) {
-        fprintf(stderr, "[SCut::buildCapture_] EARLY RETURN: content has no duration\n");
         return;
     }
-
-    fprintf(stderr, "[SCut::buildCapture_] PROCEEDING with capture build (container=%d, grained=%d)\n",
-            isContainerBacked, isGrained);
 
     length_t need = (length_t) snap.startOffset + snap.cutDuration;
     length_t dur  = (length_t) c.getDuration();
     length_t n = dur > need ? dur : need;
     if( n <= 0 ) return;
-
-    fprintf(stderr, "[SCut::buildCapture_] DIAGNOSTIC: snap.startOffset=%ld, snap.cutDuration=%ld, content_dur=%ld, need=%ld, n=%ld\n",
-            (long)snap.startOffset, (long)snap.cutDuration, (long)dur, (long)need, (long)n);
 
     std::vector<sample_t> buf;
     length_t captureLen = n;
@@ -330,12 +312,9 @@ void SCut::buildCapture_()
             grainSource->read( grainOffset, buf.data(), toRead, 0 );
         }
         captureLen = toRead;
-        fprintf(stderr, "[SCut::buildCapture_] Grain capture: offset=%ld (stretched=%ld), input %ld samples -> read %ld samples from position %ld\n",
-                (long)snap.startOffset, (long)grainOffset, (long)grainedLen, (long)toRead, (long)grainOffset);
     }
 
     capture_ = std::make_shared<twCapturingSource>( std::move( buf ), captureLen, 1, env.getSRate() );
-    fprintf(stderr, "[SCut::buildCapture_] Built capture: %ld samples\n", (long)captureLen);
 
     if( !captureConnected_ ) {
         // Transparent invalidation: any applied action drops the snapshot so the
@@ -346,24 +325,9 @@ void SCut::buildCapture_()
     }
 }
 
-// Old API: ensure the capture (container render) is built.
-// TODO: Phase 4 - replace with getCapture() / getPreviewCapture() async API.
-// For now, commented out to avoid conflicting with the new getCapture(aspectsMask) method.
-/*
-twRandomSource *SCut::ensureCapture()
-{
-    // Use new aspect-based API
-    ensureCapture(Preview | Playback | Metadata);
-
-    if( capture_ ) return capture_.get();
-    return NULL;
-}
-*/
-
 void SCut::invalidateCapture()
 {
- fprintf(stderr, "[SCut::invalidateCapture] CALLED for cut at position\n");
-      // Drop the cached render (async model).
+    // Drop the cached render (async model).
     // Use reset() not delete: the shared_ptr releases SCut's reference, but readers
     // (audio thread) may still hold references via currentPage().
     {
@@ -533,17 +497,6 @@ SObjectRenderer *SCut::getInlineRenderer( void )
 
 int SCut::seekTo( offset_t off )
 {
-    static int callCount = 0;
-    static std::chrono::steady_clock::time_point lastReport;
-    ++callCount;
-
-    auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastReport).count() >= 1000) {
-        fprintf(stderr, "[SCut::seekTo frequency] %d calls/sec\n", callCount);
-        callCount = 0;
-        lastReport = now;
-    }
-
     // FIXME: bounds check!!!
     ensureReader();
     SCutSnapshot snap = getSnapshot();
@@ -888,7 +841,6 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     if( !grainParams_.isIdentity() || ( loopLength_ > 0 && loopLength_ < cutDuration_ ) )
         rebuildReader( getSnapshot() );
 
-    fprintf(stderr, ">>> SCut::readPostChildrenAttributes END: final cutDuration=%lld\n", (long long)cutDuration_);
     return 0;
 }
 
