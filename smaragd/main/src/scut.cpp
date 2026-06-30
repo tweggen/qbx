@@ -468,12 +468,15 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
 
 twComponent &SCut::getRootComponent()
 {
-    ensureReader();
-    // Use snapshot to get double-buffered reader state (Unix page cache model).
-    // currentReader_ is always complete & valid; never becomes NULL while in use.
+    // Get reader snapshot WITHOUT triggering expensive ensureReader() during UI initialization.
+    // Only build reader if it exists (was previously built for playback).
+    // If not built yet, fall back to content component (lazy evaluation).
     SCutSnapshot snap = getSnapshot();
     if( snap.reader.reader ) return *snap.reader.reader;
-    // Content is not a random-access source: fall back to its shared component.
+
+    // Reader not yet built (no playback request yet). This is normal during project load.
+    // ensureReader() will be called lazily when audio actually needs this clip (playback).
+    // For now, use the content's component (works for UI, rendering pipeline).
     return content_->getRootComponent();
 }
 
