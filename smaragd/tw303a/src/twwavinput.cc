@@ -6,6 +6,7 @@
 
 #include "twwavinput.h"
 #include "twsamplesource.h"
+#include "io_vector.h"
 
 void twWavInput::createOutputLatches()
 {
@@ -86,6 +87,25 @@ twRandomSource *twWavInput::getSource() const
  * position. This is the shared/back-compat cursor; it does not auto-advance,
  * matching the historical contract where callers seek before every block.
  */
+
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twWavInput::calcOutputTo( IOVector& dest, idx_t idx )
+{
+    std::lock_guard<std::mutex> lock(mutex());
+
+    if( !source_ ) {
+        return dest.fillSilence(0, dest.length());
+    }
+
+    // Read through the project-rate view into temp buffer
+    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+    source_->viewAtRate( env.getSRate() )->read( playOffset_, buffer, dest.length(), idx );
+
+    // Write to IOVector destination
+    return dest.copyFrom(IOVector::CreateFromBuffer(buffer, dest.length()), 0, dest.length());
+}
+
+// Legacy: Raw-pointer interface
 length_t twWavInput::calcOutputTo( sample_t *pDest, length_t length, idx_t idx )
 {
     std::lock_guard<std::mutex> lock(mutex());
