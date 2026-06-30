@@ -323,3 +323,19 @@ target_link_libraries(serialization_roundtrip_test
     PRIVATE
         tw303a
 )
+
+# IOVector unit tests
+add_executable(io_vector_test
+    ../tw303a/tests/io_vector_test.cc
+)
+
+target_include_directories(io_vector_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tw303a/include
+        ${CMAKE_SOURCE_DIR}
+)
+
+target_link_libraries(io_vector_test
+    PRIVATE
+        tw303a
+)

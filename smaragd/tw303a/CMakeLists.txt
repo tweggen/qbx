@@ -26,6 +26,7 @@ set(TW303A_HEADERS
     include/twtestseq.h
     include/twtrackmix.h
     include/twview.h
+    include/io_vector.h
     include/twwav.h
     include/twwavinput.h
     include/twwhitenoise.h
@@ -79,6 +80,7 @@ set(TW303A_SOURCES
     src/twtestseq.cc
     src/twtrackmix.cc
     src/twview.cc
+    src/io_vector.cc
     src/twwav.cc
     src/twwavinput.cc
     src/twwhitenoise.cc
