@@ -114,7 +114,18 @@ target_include_directories(tw303a
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/main/include
+)
+
+# Only specific files that are integration points need main/include
+# These files bridge tw303a (DSP engine) with the Smaragd app (main/)
+# Use COMPILE_FLAGS to add -I directive only for these files
+set_source_files_properties(
+    src/twspeaker.cc
+    src/render_session.cc
+    src/recording_session.cc
+    src/capture_revalidator.cc
+    PROPERTIES
+    COMPILE_FLAGS "-I${CMAKE_SOURCE_DIR}/main/include"
 )
 
 target_link_libraries(tw303a PUBLIC

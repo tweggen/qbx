@@ -204,7 +204,6 @@ public:
      * - Set page.validAspects |= computedAspects before returning
      */
     virtual void recomputePreview(CapturePageData& page) {}
-    virtual void recomputePlayback(CapturePageData& page) {}
     virtual void recomputeMetadata(CapturePageData& page) {}
     virtual void recomputeExport(CapturePageData& page) {}
 
@@ -362,7 +361,7 @@ protected:
 
     int getChildIndex( SObject & ) const;
 
-private:
+protected:
     // Thread safety: mutex for all derived class state (single mutex per object).
     // Mutable so const methods can lock. Protected by mutex() accessor.
     // All derived classes should protect their state with this mutex.
@@ -388,6 +387,8 @@ private:
     // Bitmask tracking which aspects are valid in currentPage_.
     // Updated by revalidator when pages are swapped and marked complete.
     uint32_t validAspects_ = 0;
+
+private:
 
     void gotChild( SLink & );
     void lostChild( SLink & );

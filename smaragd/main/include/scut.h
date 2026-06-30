@@ -343,12 +343,9 @@ private:
 
     // Two-page capture buffer model (Phase 4, async revalidation).
     // Gradually replaces capture_ and capPeaks_ implementation with pool-based model.
-    // currentPage_: readers use this (shared_ptr increments refcount)
-    // nextPage_: revalidator builds this, then atomic swap
+    // currentPage_ and nextPage_ inherited from SObject base class (no shadowing).
     // When readers release shared_ptr, old page freed (no stale pointers, no use-after-free)
     CaptureRevalidator *revalidator_;  // Borrowed from SProject, not owned
-    std::shared_ptr<CapturePageData> currentPage_;
-    std::shared_ptr<CapturePageData> nextPage_;
 
     // Aspect tracking: bitmask of valid aspects in currentPage_.
     // Updated by revalidator when pages are swapped and marked complete.

@@ -165,9 +165,6 @@ void CaptureRevalidator::dispatchRecomputation(SObject* object, uint32_t aspects
     //
     // The revalidator just dispatches; the actual work is in the object.
 
-    if (aspects & Playback) {
-        object->recomputePlayback(page);
-    }
     if (aspects & Metadata) {
         object->recomputeMetadata(page);
     }
