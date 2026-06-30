@@ -155,35 +155,22 @@ void twTrackMix::setBufferSize( length_t )
  * objects directly into the buffer.
  * Currently we do not support mixing here, but should come.
  */
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
 {
-    // Wrap IOVector, call raw-pointer version
-    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
-    length_t result = calcOutputTo(buffer, dest.length(), idx);
-    dest.copyFrom(IOVector::CreateFromBuffer(buffer, result), 0, result);
-    return result;
-}
-
-length_t twTrackMix::calcOutputTo( sample_t *buffer, length_t playLen, idx_t outChannel )
-{
     std::lock_guard<std::mutex> lock(mutex());
-    return calcOutputTo_nolock(buffer, playLen, outChannel);
-}
 
-// Caller must hold mutex() (inherited from twComponent)
-// CRITICAL: Lock protects clips_ iteration against UI thread modifications.
-// Uses base class mutex to avoid introducing a second mutex (deadlock risk).
-length_t twTrackMix::calcOutputTo_nolock( sample_t *buffer, length_t playLen, idx_t outChannel )
-{
-    // FIXME: Why getBufferSize()? We have some length given!
+    // Allocate output buffer and read buffer
+    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
     sample_t *readBuffer = (sample_t *) alloca( env.getBufferSize()*sizeof( sample_t ) );
+
     offset_t startInterval = playOffset_.load( std::memory_order_relaxed );
-    offset_t endInterval   = startInterval + playLen;
+    offset_t endInterval   = startInterval + dest.length();
     playOffset_.store( endInterval, std::memory_order_relaxed );
 
-    memset( buffer, 0, sizeof( sample_t )*playLen );
+    memset( buffer, 0, sizeof( sample_t ) * dest.length() );
 
-    // FIXME: Take advantage of sorted clips_.
+    // Iterate through clips and mix their output
     for( const ClipEntry &clip : clips_ ) {
         offset_t startTime = clip.startTime;
         if( startTime>=endInterval ) continue;
@@ -192,6 +179,7 @@ length_t twTrackMix::calcOutputTo_nolock( sample_t *buffer, length_t playLen, id
             endTime += clip.duration;
             if( startInterval>=endTime ) continue;
         }
+
         // This clip is affected. Add the parts into the output buffer.
         offset_t startOffset;
         if( startTime<startInterval ) {
@@ -205,39 +193,36 @@ length_t twTrackMix::calcOutputTo_nolock( sample_t *buffer, length_t playLen, id
         } else {
             endTime = endInterval;
         }
-        // Note: seekTo is now called once per position jump in twTrackMix::seekTo(),
-        // not once per buffer. In continuous forward play, child readers are already
-        // positioned correctly. This reduces seek calls from O(blocks) to O(seeks).
+
         if( !clip.view ) {
-            fprintf(stderr, "WARNING: twTrackMix::calcOutputTo_nolock found null view\n");
+            fprintf(stderr, "WARNING: twTrackMix::calcOutputTo found null view\n");
             continue;
         }
         twComponent &cp = *clip.view;
         offset_t doRead = endTime-startTime;
-        // Only zero out the range we'll actually use (not entire playLen)
         offset_t destOffset = startTime-startInterval;
         memset( readBuffer + destOffset, 0, sizeof( sample_t ) * doRead );
-        // Get actual amount produced (may be less than doRead if component underruns)
-        length_t actuallyGot = cp.calcOutputTo( readBuffer+destOffset, doRead, outChannel );
-        // Only mix the actual samples produced (don't mix zero-padded tail)
+
+        // Get actual amount produced
+        length_t actuallyGot = cp.calcOutputTo( readBuffer+destOffset, doRead, idx );
+
+        // Only mix the actual samples produced
         for( offset_t i = 0; i < actuallyGot; i++ ) {
             buffer[destOffset + i] += readBuffer[destOffset + i];
         }
     }
 
-    // Intrinsic track processing: apply the track's own gain (and mute) here so
-    // the output is self-contained — correct wherever it is summed, both by the
-    // master mixer and, for groups, by a parent track. Volume is in dB (same
-    // convention as twMixer::setInputLevel).
+    // Apply track gain and mute
     double factor = trackMuted_ ? 0.0 : pow( 10., trackGainDb_/20. );
     if( factor != 1.0 ) {
-        for( offset_t i=0; i<(offset_t)playLen; i++ ) {
+        for( offset_t i=0; i<(offset_t)dest.length(); i++ ) {
             buffer[i] *= (sample_t) factor;
         }
     }
-    return playLen;
-}
 
+    // Copy to IOVector destination
+    return dest.copyFrom(IOVector::CreateFromBuffer(buffer, dest.length()), 0, dest.length());
+}
 // Phase 3: Freeze track output to a page
 // Iterates clips that overlap [startPos, startPos+length), calls freezePage() on each
 // child component, and mixes frozen outputs at correct timeline positions.
