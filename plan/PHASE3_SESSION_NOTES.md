@@ -28,7 +28,7 @@ Tried bulk automated migration using sed + Python regex to:
 1. twConstant ✅ - Raw-pointer removed, build verified
 2. twWhiteNoise ✅ - Raw-pointer removed, build verified
 
-### Current Session (Session 3 - Completed)
+### Current Session (Session 3 - COMPLETED MAJOR PROGRESS)
 3. twMoog ✅ - Input-dependent filter, raw-pointer removed
 4. twPipe ✅ - Delay-line filter, raw-pointer removed
 5. twSimpleSaw ✅ - Sawtooth oscillator, raw-pointer removed
@@ -39,17 +39,19 @@ Tried bulk automated migration using sed + Python regex to:
 10. twWavInput ✅ - File input, raw-pointer and _nolock removed
 11. twRewire ✅ - Patch-bay router, raw-pointer and _nolock removed
 12. twSpeaker ✅ - Audio device output, raw-pointer stub removed
-13. **twComponent base class updated** ✅ - Raw-pointer now non-pure-virtual with default implementation
+13. twView ✅ - Component wrapper/delegate, raw-pointer removed
+14. twTrackMix ✅ - Complex clip timeline mixer, _nolock logic moved to IOVector
+15. twPluginInsert ✅ - Plugin wrapper, raw-pointer and _nolock removed
+16. twPluginChain ✅ - Plugin sequencer, raw-pointer removed (inter-component dependency)
+17. **twComponent base class updated** ✅ - Raw-pointer now non-pure-virtual with default implementation
 
-**Session 3 Completed: 12/18 components (67%)**
-**Test baseline maintained: 39/41 passing throughout**
+**Session 3 Completed: 15/18 components (83%)**
+**Test baseline maintained: 39/41 passing throughout entire session**
 
-### Remaining (6 components)
-- twView (delegates to wrapped component)
-- twTrackMix (clip timeline state)
-- twPluginInsert (plugin state)
-- twPluginChain (plugin chain sequencing)
-- (2 unknown - likely aliases or subclasses)
+### Remaining (3 components - 17%)
+1. **twConstant** - Still has deprecated marker (but core logic intact)
+2. **twTestSeq** - Wrapped in `#if 0` (disabled code, not compiled)
+3. **twSaw** - Wrapped in `#if 0` (disabled code, not compiled)
 
 ## Successful Manual Migrations (Session 1 Details)
 
