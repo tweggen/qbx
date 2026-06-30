@@ -96,13 +96,6 @@ length_t twWav::calcOutputTo( IOVector& dest, idx_t )
     return dest.fillSilence(0, dest.length());
 }
 
-// Legacy: Raw-pointer interface
-length_t twWav::calcOutputTo( sample_t *, length_t, idx_t )
-{
-    // nothing to render.
-    return 0;
-}
-
 
 
 void twWav::createOutputLatches()
