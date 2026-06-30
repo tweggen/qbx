@@ -3,6 +3,7 @@
 #include "twsyslog.h"
 
 #include "twpipe.h"
+#include "io_vector.h"
 
 void twPipe::init()
 {
@@ -15,6 +16,39 @@ void twPipe::createOutputLatches()
 	pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twPipe::calcOutputTo( IOVector& dest, idx_t /* idx */ )
+{
+	// Allocate output buffer
+	sample_t *pDest = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+	length_t realRead;
+
+	// Shift delay line buffer (move samples left, new input goes at end)
+	memcpy( inBuffer, inBuffer+env.getSRate(), sizeof( sample_t ) * dest.length() );
+
+	// Read new input data
+	realRead = ((twLatchStreamingOutput *)pInputPlugs[0])->readStreamingData(
+		inBuffer+env.getSRate(), dest.length());
+	if( realRead == 0 ) {
+		throw new excStandard( "twPipe::calcOutputTo(): Source did not provide data." );
+	}
+
+	// Apply delay-line filter with weighted taps
+	offset_t i;
+	sample_t *pSrc = inBuffer + env.getSRate();
+	sample_t *pOut = pDest;
+	for( i = 0; i < (offset_t)realRead; i++ ) {
+		*pSrc = *pOut++ =
+			 (*pSrc*12 + (pSrc[-1310])*4 + (pSrc[-4561])*5 + (pSrc[-3364])*5
+			+(pSrc[-11710])*3 + (pSrc[-12561])*3 + (pSrc[-6364])*4) / (12+4+5+5+3+3+4);
+		pSrc++;
+	}
+
+	// Write to IOVector destination
+	return dest.copyFrom(IOVector::CreateFromBuffer(pDest, realRead), 0, realRead);
+}
+
+// Legacy: Raw-pointer interface
 length_t twPipe::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */ )
 {
 	length_t realRead;
@@ -28,7 +62,7 @@ length_t twPipe::calcOutputTo( sample_t *pDest, length_t length, idx_t /* idx */
 		throw new excStandard( "twPipe::calcOutputTo(): Source did not provide data." );
 	}
 
-	// processData( pDest, realRead ); 
+	// processData( pDest, realRead );
 	offset_t i;
 	sample_t *pSrc = inBuffer+env.getSRate();
 	for( i=0; i<(offset_t)length; i++ ) {

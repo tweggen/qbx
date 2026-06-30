@@ -12,9 +12,13 @@ class tw303aEnvironment;
 class twPipe : public twComponent {
   private:
   protected:
-    virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx );
+    // Phase 3: New IOVector-based interface (type-safe, page-backed)
+    virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
+
+    // Legacy raw-pointer interface
+    virtual length_t calcOutputTo( sample_t *pDest, length_t length, idx_t idx ) override;
     //virtual length_t processData( sample_t *pDest, length_t length ) = 0;
-    
+
     sample_t *inBuffer;
     
   public:
