@@ -334,16 +334,50 @@ void SCut::buildCapture_()
     length_t captureLen = n;
 
     if( isContainerBacked ) {
-        // Container-backed: render children recursively
-        // Proposal 10 Phase 1: build the capture by RECURSIVELY summing the
-        // container's children read random-access, instead of streaming the live
-        // twTrackMix (whose per-buffer child re-seeks lose a sub-track for a
-        // track-of-tracks). Materialise once into a resident buffer.
-        // Phase 5e: Seek the container to position 0 before rendering to ensure
-        // all children start from their correct beginning positions.
+        // Container-backed: Phase 3 - use freezePage for page-based rendering
+        // Instead of recursive offline rendering (renderObjectInto), call freezePage
+        // on the content's twComponent to materialize its output to pages.
+        // Seek container to start before freezing to ensure children are positioned.
         c.seekTo( 0 );
+        twComponent &rootComp = c.getRootComponent();
+
         buf.resize( (size_t) n, 0.0f );
-        renderObjectInto( c, buf.data(), n, env, env.getSRate(), 0 );
+
+        // Freeze the component's output to pages and copy samples to buffer
+        // Page at a time to avoid huge allocations.
+        size_t remainingSamples = n;
+        size_t bufOffset = 0;
+        uint64_t pagePos = 0;
+
+        while( remainingSamples > 0 && bufOffset < n ) {
+            auto frozenPage = rootComp.freezePage(
+                pagePos,
+                nullptr,     // No input data for container renders
+                0,
+                (length_t) remainingSamples,
+                env.getSRate(),
+                nullptr      // No prior state
+            );
+
+            if( !frozenPage || frozenPage->validFrames == 0 ) {
+                break;
+            }
+
+            // Copy frozen page samples to output buffer
+            size_t samplesToCopy = std::min((size_t)frozenPage->validFrames, remainingSamples);
+            for( size_t i = 0; i < samplesToCopy && i < frozenPage->samples.size(); ++i ) {
+                buf[bufOffset + i] = frozenPage->samples[i];
+            }
+
+            bufOffset += samplesToCopy;
+            remainingSamples -= samplesToCopy;
+            pagePos += samplesToCopy;
+
+            // Stop if we got fewer samples than requested (component can't produce more)
+            if( samplesToCopy < frozenPage->samples.size() ) {
+                break;
+            }
+        }
     } else if( isGrained ) {
         // Grained sample-backed: read through grain source to get transformed output
         // The grain source materializes the time-stretched output, so we read the

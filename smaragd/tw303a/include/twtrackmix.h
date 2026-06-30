@@ -50,6 +50,17 @@ public:
 
     virtual length_t calcOutputTo( sample_t *, length_t, idx_t );
 
+    // Phase 3: Page-based rendering — freeze track output to pages
+    // Enables renderObjectInto replacement and unified page-based pipeline
+    virtual std::shared_ptr<twOutputPage> freezePage(
+        uint64_t startPos,
+        const sample_t *inputData,
+        uint64_t inputOffset,
+        length_t inputLength,
+        int sampleRate,
+        std::shared_ptr<twOutputPage> previousPage = nullptr
+    ) override;
+
 protected:
 
     virtual void reset() override;
@@ -60,6 +71,9 @@ private:
     // introducing a second mutex which could cause deadlock.
     int seekTo_nolock(offset_t newOffset);
     length_t calcOutputTo_nolock(sample_t *buffer, length_t playLen, idx_t outChannel);
+    length_t freezePage_nolock(std::shared_ptr<twOutputPage> page, uint64_t startPos,
+                               length_t length, int sampleRate,
+                               std::shared_ptr<twOutputPage> previousPage);
 
     std::vector<ClipEntry> clips_;            // Timeline entries (sorted by startTime)
     std::atomic<offset_t> playOffset_{ 0 };   // Atomic: protects race between UI seek and audio render

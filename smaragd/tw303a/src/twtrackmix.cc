@@ -199,7 +199,98 @@ length_t twTrackMix::calcOutputTo_nolock( sample_t *buffer, length_t playLen, id
     return playLen;
 }
 
+// Phase 3: Freeze track output to a page
+// Iterates clips that overlap [startPos, startPos+length), calls freezePage() on each
+// child component, and mixes frozen outputs at correct timeline positions.
+std::shared_ptr<twOutputPage> twTrackMix::freezePage(
+    uint64_t startPos,
+    const sample_t *inputData,
+    uint64_t inputOffset,
+    length_t inputLength,
+    int sampleRate,
+    std::shared_ptr<twOutputPage> previousPage
+)
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    auto page = std::make_shared<twOutputPage>();
+    page->startPosition = startPos;
+    freezePage_nolock(page, startPos, inputLength, sampleRate, previousPage);
+    return page;
+}
 
+// Caller must hold mutex()
+length_t twTrackMix::freezePage_nolock(
+    std::shared_ptr<twOutputPage> page,
+    uint64_t startPos,
+    length_t length,
+    int sampleRate,
+    std::shared_ptr<twOutputPage> previousPage
+)
+{
+    // Initialize output buffer to silence
+    std::fill(page->samples.begin(), page->samples.begin() + length, 0.0f);
+
+    uint64_t endPos = startPos + length;
+
+    // Iterate through clips that overlap [startPos, endPos)
+    for( const ClipEntry &clip : clips_ ) {
+        uint64_t clipEnd = clip.startTime;
+        if( clip.duration > 0 ) {
+            clipEnd += clip.duration;
+        } else {
+            // Unbounded clip: treat as extending to page end
+            clipEnd = endPos;
+        }
+
+        // Skip clips that don't overlap this page
+        if( clip.startTime >= endPos || clipEnd <= startPos ) {
+            continue;
+        }
+
+        // Freeze the child component's output for this range
+        // Child position: what frame offset in the child corresponds to startPos?
+        uint64_t childPos = (startPos >= clip.startTime)
+                            ? (startPos - clip.startTime)
+                            : 0;
+
+        auto childPage = clip.component->freezePage(
+            childPos,
+            nullptr,  // Track outputs don't consume input
+            0,
+            length,
+            sampleRate,
+            nullptr   // No prior state to restore
+        );
+
+        if( !childPage || childPage->validFrames == 0 ) {
+            continue;
+        }
+
+        // Mix child's frozen output into track output at correct timeline position
+        uint64_t destOffset = (clip.startTime >= startPos)
+                              ? (clip.startTime - startPos)
+                              : 0;
+
+        // Copy child's samples to output at the correct offset
+        for( uint32_t i = 0; i < childPage->validFrames && destOffset + i < length; ++i ) {
+            if( i < childPage->samples.size() ) {
+                page->samples[destOffset + i] += childPage->samples[i];
+            }
+        }
+    }
+
+    // Apply track gain and mute (same as calcOutputTo_nolock)
+    double factor = trackMuted_ ? 0.0 : pow( 10., trackGainDb_/20. );
+    if( factor != 1.0 ) {
+        for( size_t i = 0; i < length && i < page->samples.size(); ++i ) {
+            page->samples[i] *= (sample_t) factor;
+        }
+    }
+
+    page->validFrames = std::min((uint32_t)length, (uint32_t)page->samples.size());
+    page->validAspects = twAspectPlayback;  // We've computed playback data
+    return page->validFrames;
+}
 
 twTrackMix::~twTrackMix()
 {
