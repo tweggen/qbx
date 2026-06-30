@@ -225,11 +225,11 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     // prevFrozenPage_ carries state snapshot from previous page
     currentFrozenPage_ = synthOutput_->freezePage(
         pageStartPos,
-        nullptr,            // No pre-prepared input; uses latches
+        nullptr,                           // No pre-prepared input; uses latches
         0,
-        0,
+        twOutputPage::FRAME_CAPACITY,      // Render full page of frames
         engineSampleRate_,
-        prevFrozenPage_     // State chain: page N resumes from page N-1
+        prevFrozenPage_                    // State chain: page N resumes from page N-1
     );
 
     if (currentFrozenPage_) {
