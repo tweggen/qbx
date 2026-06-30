@@ -498,6 +498,41 @@ length_t twComponent::freezePage_nolock(
     return rendered;
 }
 
+// Phase 3: Preview-specific page freezing
+// Renders component output at lower resolution for UI visualization (e.g., waveform display).
+// Non-blocking: returns previous page if new page not yet ready.
+std::shared_ptr<twOutputPage> twComponent::freezePreviewPage(
+    uint64_t startPos,
+    length_t length,
+    int previewSampleRate,
+    int fullSampleRate,
+    std::shared_ptr<twOutputPage> previousPage
+)
+{
+    // Freeze at preview resolution: lower sample rate (typically 1kHz) for visualization
+    // This allows quick redraws without waiting for full-rate processing.
+    // If page not ready, return previous page for fallback rendering.
+
+    auto newPage = freezePage(
+        startPos,
+        nullptr,                    // No input data; component generates output
+        0,
+        length,
+        previewSampleRate,          // Render at lower rate for preview
+        previousPage                // Provide previous page for state restoration
+    );
+
+    // Non-blocking fallback: if new page couldn't be materialized, use previous
+    if( !newPage || newPage->validFrames == 0 ) {
+        return previousPage;
+    }
+
+    // Mark preview aspect as valid so UI knows data is ready
+    newPage->validAspects = twAspectPreview;
+
+    return newPage;
+}
+
 // ============================================================================
 // Tier 2 Enhancement #1: Selective Invalidation with Dependency Tracking
 // ============================================================================

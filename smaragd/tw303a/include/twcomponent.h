@@ -375,6 +375,18 @@ public:
         std::shared_ptr<twOutputPage> previousPage = nullptr
     );
 
+    // Phase 3: Preview-specific freezing — lower resolution for UI visualization
+    // Renders component output at preview sample rate (e.g., 1kHz) for waveform display.
+    // Returns previous page if new page not ready (fallback for non-blocking UI redraws).
+    // Default: calls freezePage() with reduced sample rate.
+    virtual std::shared_ptr<twOutputPage> freezePreviewPage(
+        uint64_t startPos,
+        length_t length,
+        int previewSampleRate,  // Typically 1000 Hz for waveform visualization
+        int fullSampleRate,     // Actual component sample rate for state consistency
+        std::shared_ptr<twOutputPage> previousPage = nullptr
+    );
+
 private:
     // Helper for freezePage: does the actual rendering work.
     // Caller must NOT hold mutex (called outside lock to allow recursive freezePage calls).

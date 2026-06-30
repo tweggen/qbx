@@ -292,6 +292,21 @@ length_t twTrackMix::freezePage_nolock(
     return page->validFrames;
 }
 
+// Phase 3: Preview page freezing at lower resolution
+// Delegates to base class freezePreviewPage() which calls freezePage() at preview rate
+std::shared_ptr<twOutputPage> twTrackMix::freezePreviewPage(
+    uint64_t startPos,
+    length_t length,
+    int previewSampleRate,
+    int fullSampleRate,
+    std::shared_ptr<twOutputPage> previousPage
+)
+{
+    // Use base class implementation: calls freezePage() at preview resolution
+    // Non-blocking: returns previousPage if new page not ready
+    return twComponent::freezePreviewPage(startPos, length, previewSampleRate, fullSampleRate, previousPage);
+}
+
 twTrackMix::~twTrackMix()
 {
 }

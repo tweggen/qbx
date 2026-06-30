@@ -61,6 +61,15 @@ public:
         std::shared_ptr<twOutputPage> previousPage = nullptr
     ) override;
 
+    // Phase 3: Preview rendering using freezePage at lower resolution
+    virtual std::shared_ptr<twOutputPage> freezePreviewPage(
+        uint64_t startPos,
+        length_t length,
+        int previewSampleRate,
+        int fullSampleRate,
+        std::shared_ptr<twOutputPage> previousPage = nullptr
+    ) override;
+
 protected:
 
     virtual void reset() override;
