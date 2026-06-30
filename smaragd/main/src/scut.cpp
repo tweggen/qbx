@@ -528,24 +528,12 @@ void SCut::setStartOffset( offset_t off )
 
 void SCut::setDuration( length_t dur )
 {
-    // FIXME: clip.
-    SCutSnapshot snap;
     {
         std::lock_guard<std::mutex> lock(mutex());
         cutDuration_ = dur;
-        // Capture snapshot while holding lock for consistent rebuild
-        snap = getSnapshot();
     }
-    invalidateCapture();  // Window change requires new capture (formal guidelines)
-
-    // Defer reader rebuild during deserialization (project load).
-    // When loading, rebuildReader is expensive (calls buildCapture_→freezePage).
-    // Skip it here; ensureReader() will rebuild on first playback access.
-    // Only rebuild if we've already tried building (loaded from disk or user modified).
-    if( readerTried_ ) {
-        rebuildReader( snap );  // Rebuild reader with new duration
-    }
-
+    invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
+    // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
     emit durationChanged( dur );
 }
 
@@ -559,37 +547,29 @@ void SCut::setLoopStart( offset_t s )
 
 void SCut::setLoopLength( length_t l )
 {
-    SCutSnapshot snap;
+    length_t dur;
     {
         std::lock_guard<std::mutex> lock(mutex());
         loopLength_ = l;
-        // Capture snapshot while holding lock for consistent rebuild
-        snap = getSnapshot();
+        dur = cutDuration_;
     }
-    invalidateCapture();  // Window change requires new capture (formal guidelines)
-    rebuildReader( snap );   // loop on/off changes the playback chain
-    emit durationChanged( snap.cutDuration );
+    invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
+    // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
+    emit durationChanged( dur );
 }
 
 void SCut::setWindow( offset_t startOffset, length_t duration,
                       length_t loopLength, double stretch )
 {
-    SCutSnapshot snap;
     {
         std::lock_guard<std::mutex> lock(mutex());
         startOffset_ = startOffset;
         cutDuration_ = duration;
         loopLength_  = loopLength;
         grainParams_.stretch = stretch;
-        // Manually construct snapshot without re-acquiring lock
-        snap.startOffset = startOffset_;
-        snap.loopLength = loopLength_;
-        snap.cutDuration = cutDuration_;
-        snap.grainParams = grainParams_;
-        snap.reader = currentReader_;
     }
-    invalidateCapture();  // Window change requires new capture (formal guidelines)
-    rebuildReader( snap );   // one rebuild for the whole window change (UI thread)
+    invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
+    // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
     emit durationChanged( duration );
 }
 
