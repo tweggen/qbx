@@ -5,27 +5,20 @@
 #include <qobject.h>
 #include <atomic>
 #include <vector>
+#include <functional>
 
 #include "twcomponent.h"
 
 class tw303aEnvironment;
 
-// Clip entry: timeline position, DSP component, and state snapshot
+class twView;
+
+// Clip entry: timeline position, stable view wrapper, and state snapshot
 struct ClipEntry {
     offset_t     startTime;
     length_t     duration;      // 0 = unbounded
-    twComponent *component;     // borrowed; lifetime managed by caller
+    twView *view;               // Stable wrapper; owned by twTrackMix
     std::shared_ptr<twOutputPage> previousPage;  // State snapshot for resumption
-
-    // Validate that component is still valid (not deleted, not garbage)
-    // Returns true if safe to use, false if component is dangling
-    bool isComponentValid() const {
-        if (!component) return false;
-        // Simple heuristic: check if pointer looks like valid heap memory
-        // In production this should use WeakPtr or a callback instead
-        return reinterpret_cast<uintptr_t>(component) > 0x1000 &&
-               reinterpret_cast<uintptr_t>(component) < 0x7ffffffffffff000LL;
-    }
 };
 
 class twTrackMix
@@ -38,9 +31,10 @@ public:
 
     // Clip management (called by STrack on the UI thread)
     // These are protected by the inherited mutex() from twComponent
-    void insertClip(offset_t startTime, length_t duration, twComponent *component);
-    void removeClip(twComponent *component);
-    void updateClip(twComponent *component, offset_t newStartTime, length_t newDuration);
+    // Takes a callback that returns the current component (allows dynamic lookup)
+    void insertClip(offset_t startTime, length_t duration, std::function<twComponent*()> getComponentFn);
+    void removeClip(std::function<twComponent*()> getComponentFn);
+    void updateClip(std::function<twComponent*()> getComponentFn, offset_t newStartTime, length_t newDuration);
 
     // Track intrinsic properties (gain, mute) — applied to all output
     void setTrackMute(bool muted);

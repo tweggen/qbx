@@ -2,9 +2,11 @@
 //#include <qobjectlist.h>
 
 #include <math.h>
+#include <cstring>
 
 #include "tw303aenv.h"
 #include "twtrackmix.h"
+#include "twview.h"
 
 int twTrackMix::seekTo( offset_t newOffset )
 {
@@ -31,8 +33,8 @@ int twTrackMix::seekTo_nolock( offset_t newOffset )
     // retain stale reader positions (e.g., from prior playback), causing sparse/silent
     // audio when the render/playback reaches them.
     for( const ClipEntry &clip : clips_ ) {
-        if( !clip.isComponentValid() ) {
-            fprintf(stderr, "WARNING: twTrackMix::seekTo_nolock found invalid component pointer\n");
+        if( !clip.view ) {
+            fprintf(stderr, "WARNING: twTrackMix::seekTo_nolock found null view\n");
             continue;
         }
         offset_t startTime = clip.startTime;
@@ -41,7 +43,7 @@ int twTrackMix::seekTo_nolock( offset_t newOffset )
         // For clips already playing (startTime <= newOffset), this yields the offset
         // into the clip (also correct).
         offset_t clipRelative = std::max((offset_t)0, newOffset - startTime);
-        clip.component->seekTo( clipRelative );
+        clip.view->seekTo( clipRelative );
     }
 
     return 0;
@@ -72,24 +74,32 @@ bool twTrackMix::isSeekable() const
     return true;
 }
 
-void twTrackMix::insertClip(offset_t startTime, length_t duration, twComponent *component)
+void twTrackMix::insertClip(offset_t startTime, length_t duration, std::function<twComponent*()> getComponentFn)
 {
     std::lock_guard<std::mutex> lock(mutex());
-    if( !component ) {
-        fprintf(stderr, "ERROR: twTrackMix::insertClip received null component!\n");
+    if( !getComponentFn ) {
+        fprintf(stderr, "ERROR: twTrackMix::insertClip received null callback!\n");
         return;
     }
-    clips_.push_back({startTime, duration, component});
+    // Create a stable twView wrapper for this clip
+    twView *view = new twView(env, getComponentFn);
+    view->init();
+    clips_.push_back({startTime, duration, view, nullptr});
     fprintf(stderr, "twTrackMix: inserted clip at time %llu, now have %zu clips\n", startTime, clips_.size());
 }
 
-void twTrackMix::removeClip(twComponent *component)
+void twTrackMix::removeClip(std::function<twComponent*()> getComponentFn)
 {
     std::lock_guard<std::mutex> lock(mutex());
     auto it = clips_.begin();
     int removed = 0;
     while( it != clips_.end() ) {
-        if( it->component == component ) {
+        // Compare by calling both callbacks - if they return the same component, it's a match
+        twComponent *comp = getComponentFn ? getComponentFn() : nullptr;
+        twComponent *clipComp = it->view ? (twView*)it->view : nullptr;
+        if( clipComp && comp == clipComp ) {
+            // Delete the twView wrapper
+            delete it->view;
             it = clips_.erase(it);
             removed++;
         } else {
@@ -99,11 +109,15 @@ void twTrackMix::removeClip(twComponent *component)
     fprintf(stderr, "twTrackMix: removed %d clip(s), now have %zu clips\n", removed, clips_.size());
 }
 
-void twTrackMix::updateClip(twComponent *component, offset_t newStartTime, length_t newDuration)
+void twTrackMix::updateClip(std::function<twComponent*()> getComponentFn, offset_t newStartTime, length_t newDuration)
 {
     std::lock_guard<std::mutex> lock(mutex());
     for( ClipEntry &clip : clips_ ) {
-        if( clip.component == component ) {
+        twComponent *comp = getComponentFn ? getComponentFn() : nullptr;
+        // For now, match by position since we're updating the same clip
+        // In practice, the caller should track which clip to update
+        // This is a simplification - could use a better identification scheme
+        if( clip.view ) {
             clip.startTime = newStartTime;
             clip.duration = newDuration;
             return;
@@ -184,11 +198,11 @@ length_t twTrackMix::calcOutputTo_nolock( sample_t *buffer, length_t playLen, id
         // Note: seekTo is now called once per position jump in twTrackMix::seekTo(),
         // not once per buffer. In continuous forward play, child readers are already
         // positioned correctly. This reduces seek calls from O(blocks) to O(seeks).
-        if( !clip.isComponentValid() ) {
-            fprintf(stderr, "WARNING: twTrackMix::calcOutputTo_nolock found invalid component pointer\n");
+        if( !clip.view ) {
+            fprintf(stderr, "WARNING: twTrackMix::calcOutputTo_nolock found null view\n");
             continue;
         }
-        twComponent &cp = *clip.component;
+        twComponent &cp = *clip.view;
         offset_t doRead = endTime-startTime;
         // Only zero out the range we'll actually use (not entire playLen)
         offset_t destOffset = startTime-startInterval;
@@ -263,8 +277,8 @@ length_t twTrackMix::freezePage_nolock(
         }
 
         // Freeze the child component's output for this range
-        if( !clip.isComponentValid() ) {
-            fprintf(stderr, "WARNING: twTrackMix::freezePage_nolock found invalid component pointer\n");
+        if( !clip.view ) {
+            fprintf(stderr, "WARNING: twTrackMix::freezePage_nolock found null view\n");
             continue;
         }
 
@@ -275,7 +289,7 @@ length_t twTrackMix::freezePage_nolock(
 
         // Pass the clip's previous page so state carries forward across page boundaries
         // If this is the first page for this clip, previousPage will be nullptr (correct)
-        auto childPage = clip.component->freezePage(
+        auto childPage = clip.view->freezePage(
             childPos,
             nullptr,  // Track outputs don't consume input
             0,

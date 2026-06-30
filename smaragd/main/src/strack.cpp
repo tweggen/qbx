@@ -139,11 +139,12 @@ void STrack::trackChildDurationChanged( length_t newLength )
 {
     SLink *slink = dynamic_cast<SLink *>((SLink *) (const SLink *) sender());
     if( slink ) {
-        twComponent *comp = &slink->getRootComponent();
+        // Create callback that returns the component
+        auto getComponentFn = [slink]() { return &slink->getRootComponent(); };
         length_t duration = newLength;
         for( int i=0; i<nBusses_; ++i ) {
             if( cpTrackMixers_[i] ) {
-                cpTrackMixers_[i]->updateClip(comp, slink->getStartTime(), duration);
+                cpTrackMixers_[i]->updateClip(getComponentFn, slink->getStartTime(), duration);
             }
         }
     }
@@ -155,11 +156,12 @@ void STrack::trackChildWasMoved( offset_t newTime )
 {
     SLink *slink = (SLink *) (const SLink *) sender();
     if( slink && slink->getSObject().hasDuration() ) {
-        twComponent *comp = &slink->getRootComponent();
+        // Create callback that returns the component
+        auto getComponentFn = [slink]() { return &slink->getRootComponent(); };
         length_t duration = slink->getSObject().getDuration();
         for( int i=0; i<nBusses_; ++i ) {
             if( cpTrackMixers_[i] ) {
-                cpTrackMixers_[i]->updateClip(comp, newTime, duration);
+                cpTrackMixers_[i]->updateClip(getComponentFn, newTime, duration);
             }
         }
         lastDurationValid_ = false;
@@ -181,13 +183,14 @@ void STrack::trackChildWasAdded( SLink &child )
             QObject::connect( &(child.getSObject()), SIGNAL( durationChanged( length_t ) ),
                               this, SLOT( trackChildDurationChanged( length_t ) ) );
 
-            // Insert the clip into all track mixers
+            // Insert the clip into all track mixers with a callback that gets the component
             offset_t startTime = child.getStartTime();
             length_t duration = child.getSObject().getDuration();
-            twComponent *comp = &child.getRootComponent();
+            // Capture SLink by reference; callback will call getRootComponent() dynamically
+            auto getComponentFn = [&child]() { return &child.getRootComponent(); };
             for( int i=0; i<nBusses_; ++i ) {
                 if( cpTrackMixers_[i] ) {
-                    cpTrackMixers_[i]->insertClip(startTime, duration, comp);
+                    cpTrackMixers_[i]->insertClip(startTime, duration, getComponentFn);
                 }
             }
 
@@ -201,11 +204,11 @@ void STrack::trackChildWasRemoved( SLink &child )
 {
     if( child.hasStartTime() ) {
         if( child.getSObject().hasDuration() ) {
-            // Remove the clip from all track mixers
-            twComponent *comp = &child.getRootComponent();
+            // Remove the clip from all track mixers using a callback
+            auto getComponentFn = [&child]() { return &child.getRootComponent(); };
             for( int i=0; i<nBusses_; ++i ) {
                 if( cpTrackMixers_[i] ) {
-                    cpTrackMixers_[i]->removeClip(comp);
+                    cpTrackMixers_[i]->removeClip(getComponentFn);
                 }
             }
 
@@ -290,9 +293,10 @@ void STrack::setNBusses( int nBusses )
         if( !lk || !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();
         length_t duration = lk->getSObject().hasDuration() ? lk->getSObject().getDuration() : 0;
-        twComponent *comp = &lk->getRootComponent();
+        // Create a callback that returns the component dynamically
+        auto getComponentFn = [lk]() { return &lk->getRootComponent(); };
         for( int i=0; i<nBusses; ++i ) {
-            cpTrackMixers_[i]->insertClip(startTime, duration, comp);
+            cpTrackMixers_[i]->insertClip(startTime, duration, getComponentFn);
         }
     }
 

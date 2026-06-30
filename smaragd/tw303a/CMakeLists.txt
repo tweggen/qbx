@@ -25,6 +25,7 @@ set(TW303A_HEADERS
     include/twspeaker.h
     include/twtestseq.h
     include/twtrackmix.h
+    include/twview.h
     include/twwav.h
     include/twwavinput.h
     include/twwhitenoise.h
@@ -77,6 +78,7 @@ set(TW303A_SOURCES
     src/twstreaminglatch.cc
     src/twtestseq.cc
     src/twtrackmix.cc
+    src/twview.cc
     src/twwav.cc
     src/twwavinput.cc
     src/twwhitenoise.cc
