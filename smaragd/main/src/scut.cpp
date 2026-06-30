@@ -537,7 +537,15 @@ void SCut::setDuration( length_t dur )
         snap = getSnapshot();
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
-    rebuildReader( snap );  // Rebuild reader with new duration
+
+    // Defer reader rebuild during deserialization (project load).
+    // When loading, rebuildReader is expensive (calls buildCapture_→freezePage).
+    // Skip it here; ensureReader() will rebuild on first playback access.
+    // Only rebuild if we've already tried building (loaded from disk or user modified).
+    if( readerTried_ ) {
+        rebuildReader( snap );  // Rebuild reader with new duration
+    }
+
     emit durationChanged( dur );
 }
 
