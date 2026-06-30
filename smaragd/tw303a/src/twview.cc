@@ -1,5 +1,6 @@
 #include "twview.h"
 #include "tw303aenv.h"
+#include "io_vector.h"
 
 twView::twView(tw303aEnvironment &env, GetComponentFn getComponentFn)
     : twComponent(env),
@@ -30,6 +31,17 @@ int twView::seekTo(offset_t offset)
     return comp->seekTo(offset);
 }
 
+// Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+length_t twView::calcOutputTo(IOVector& dest, idx_t outChannel)
+{
+    twComponent *comp = getComponent();
+    if (!comp) {
+        return dest.fillSilence(0, dest.length());
+    }
+    return comp->calcOutputTo(dest, outChannel);
+}
+
+// Legacy: Raw-pointer interface
 length_t twView::calcOutputTo(sample_t *outBuffer, length_t outLen, idx_t outChannel)
 {
     twComponent *comp = getComponent();

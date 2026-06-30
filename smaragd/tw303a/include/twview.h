@@ -33,6 +33,11 @@ public:
 
     // Forward all rendering/seeking calls to the underlying component
     virtual int seekTo(offset_t offset) override;
+
+    // Phase 3: New IOVector-based interface (type-safe, page-backed)
+    virtual length_t calcOutputTo(IOVector& dest, idx_t outChannel) override;
+
+    // Legacy raw-pointer interface
     virtual length_t calcOutputTo(sample_t *outBuffer, length_t outLen, idx_t outChannel) override;
 
     virtual std::shared_ptr<twOutputPage> freezePage(
