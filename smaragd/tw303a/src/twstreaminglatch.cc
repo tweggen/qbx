@@ -205,28 +205,29 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 #endif
 
 			// not enough data in buffer, fill it up.
-			// Phase 2: Use freezePage() instead of raw-pointer calcOutputTo()
-			// This leverages page caching and proper state snapshots.
-			auto page = getComponent().freezePage(
-				currentPos_,              // snapshot position for state
-				nullptr,                  // no input (source component)
-				0,                        // no input offset
-				maxFill,                  // length to fill
-				sampleRate_,              // project sample rate
-				previousPage_             // cached state from last page
+			// Use calcOutputTo() with temporary buffer to pull data.
+			// Do NOT call freezePage() here — we're already inside freezePage_nolock()
+			// from the audio thread, and calling freezePage() would create unbounded recursion.
+			// Instead, use the low-level calcOutputTo() interface directly to fill pBuffer.
+			std::vector<sample_t> tempBuffer(maxFill);
+			filled = (length_t)getComponent().calcOutputTo(
+				tempBuffer.data(),        // destination buffer
+				maxFill,                  // length to fill (samples)
+				0                         // index (default output)
 			);
 
-			if (page && page->samples.size() > 0) {
-				filled = min((length_t)maxFill, (length_t)page->samples.size());
-				if (filled > 0) {
-					memcpy(pBuffer + bufPos, page->samples.data(), filled * sizeof(sample_t));
-					previousPage_ = page;  // cache for next freezePage() call
-					currentPos_ += filled; // advance position
-				} else {
-					filled = 0;
+			if (filled > 0) {
+				// Copy from temp buffer into latch ring buffer
+				length_t copyLen = min(filled, (length_t)(bufSize - bufPos));
+				memcpy(pBuffer + bufPos, tempBuffer.data(), copyLen * sizeof(sample_t));
+				currentPos_ += copyLen;
+
+				// Handle wraparound if needed
+				if (copyLen < filled) {
+					length_t remainLen = filled - copyLen;
+					memcpy(pBuffer, tempBuffer.data() + copyLen, remainLen * sizeof(sample_t));
+					currentPos_ += remainLen;
 				}
-			} else {
-				filled = 0;
 			}
 
 			if( !filled ) {
