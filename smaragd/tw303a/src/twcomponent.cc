@@ -459,6 +459,13 @@ length_t twComponent::freezePage_nolock(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
+    // CRITICAL: Set flag to prevent recursive freezePage calls from within calcOutputTo.
+    // When calcOutputTo → readStreamingData → copyData tries to call freezePage,
+    // the flag causes copyData to return early (buffer starvation) instead of recursing.
+    extern thread_local bool g_inCalcOutputToPath;
+    bool wasInCalcPath = g_inCalcOutputToPath;
+    g_inCalcOutputToPath = true;
+
     // Initialize state: reset if page 0, else restore from previous
     if (previousPage) {
         // Resume from previous page's snapshot
@@ -496,6 +503,9 @@ length_t twComponent::freezePage_nolock(
         page->internalState = captureInternalState();
     }
 
+    // Restore the flag to its previous state (for nested freezePage calls)
+    g_inCalcOutputToPath = wasInCalcPath;
+
     return rendered;
 }
 
@@ -513,11 +523,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePreviewPage(
     // Freeze at preview resolution: lower sample rate (typically 1kHz) for visualization
     // This allows quick redraws without waiting for full-rate processing.
     // If page not ready, return previous page for fallback rendering.
-
-    // CRITICAL: Set flag to prevent recursive freezePage calls from copyData during preview rendering.
-    // Only set during preview, not during playback freezePage calls.
-    extern thread_local bool g_inCalcOutputToPath;
-    g_inCalcOutputToPath = true;
+    // Note: g_inCalcOutputToPath flag is now set inside freezePage_nolock for all rendering paths.
 
     auto newPage = freezePage(
         startPos,
@@ -527,8 +533,6 @@ std::shared_ptr<twOutputPage> twComponent::freezePreviewPage(
         previewSampleRate,          // Render at lower rate for preview
         previousPage                // Provide previous page for state restoration
     );
-
-    g_inCalcOutputToPath = false;
 
     // Non-blocking fallback: if new page couldn't be materialized, use previous
     if( !newPage || newPage->validFrames == 0 ) {
