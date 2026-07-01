@@ -207,37 +207,17 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 #endif
 
 			// not enough data in buffer, fill it up.
-			// CRITICAL: Check for active FreezeContext to avoid recursive freezePage calls.
-			// When inside freezePage_nolock rendering, a FreezeContext is active and holds
-			// pre-frozen input pages. We should use those instead of calling freezePage again.
-			// Architecture: freezePage → calcOutputTo → readStreamingData → copyData
-			//             If in frozen render, use pre-frozen inputs. If streaming, use freezePage.
+			// CRITICAL: Check for cycle via FreezeContext.
+			// If the component owning this latch is currently being frozen on this thread,
+			// calling freezePage again would recurse. Cycle detection prevents this.
 
 			FreezeContext* ctx = FreezeContext::current();
-			if (ctx) {
-				// Inside a frozen render (freezePage_nolock is active).
-				// Try to get pre-frozen input from the context.
-				// Note: this latch belongs to a component; query by this latch's output index
-				auto frozenInput = ctx->getInputPage(getIndex());
-				if (frozenInput && frozenInput->samples.size() > 0) {
-					// Use pre-frozen data directly
-					filled = min((length_t)maxFill, (length_t)frozenInput->samples.size());
-					if (filled > 0) {
-						memcpy(pBuffer + bufPos, frozenInput->samples.data(), filled * sizeof(sample_t));
-						previousPage_ = frozenInput;  // cache for next iteration
-						currentPos_ += filled;         // advance position
-					} else {
-						filled = 0;
-					}
-				} else {
-					// No pre-frozen input available; buffer starvation.
-					// This component is a source or input wasn't pre-frozen.
-					// Signal no data; caller handles gracefully.
-					filled = 0;
-				}
+			if (ctx && &ctx->getComponent() == &getComponent()) {
+				// Cycle detected: this component is already being frozen on this thread.
+				// Calling freezePage again would recurse. Return silence for this frame.
+				filled = 0;
 			} else {
-				// Normal streaming path (not inside frozen render).
-				// Use freezePage for proper state snapshots and caching.
+				// No cycle; safe to call freezePage for streaming data.
 				auto page = getComponent().freezePage(
 					currentPos_,              // snapshot position for state
 					nullptr,                  // no input (source component)
@@ -247,8 +227,8 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 					previousPage_             // cached state from last page
 				);
 
-				if (page && page->samples.size() > 0) {
-					filled = min((length_t)maxFill, (length_t)page->samples.size());
+				if (page && page->validFrames > 0) {
+					filled = min((length_t)maxFill, (length_t)page->validFrames);
 					if (filled > 0) {
 						memcpy(pBuffer + bufPos, page->samples.data(), filled * sizeof(sample_t));
 						previousPage_ = page;  // cache for next freezePage() call

@@ -21,17 +21,3 @@ FreezeContext* FreezeContext::current()
 {
     return g_activeContext;
 }
-
-void FreezeContext::setInputPage(int inputIdx, std::shared_ptr<twOutputPage> page)
-{
-    inputPages_[inputIdx] = page;
-}
-
-std::shared_ptr<twOutputPage> FreezeContext::getInputPage(int inputIdx) const
-{
-    auto it = inputPages_.find(inputIdx);
-    if (it != inputPages_.end()) {
-        return it->second;
-    }
-    return nullptr;
-}

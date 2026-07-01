@@ -5,6 +5,9 @@
 #include <memory>
 #include <vector>
 #include <atomic>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 
 #include "../twresampler.h"
 
@@ -122,6 +125,10 @@ public:
      */
     void configureResampling(uint32_t inRate, uint32_t outRate);
 
+    // Read-ahead thread management
+    void startReadahead();   // Start pre-computing pages in background
+    void stopReadahead();    // Stop read-ahead thread
+
 private:
     twComponent* synthOutput_;
     uint32_t engineSampleRate_;  // The engine's native sample rate
@@ -148,8 +155,17 @@ private:
     // Helper: pull one frame of L and R at engine sample rate using frozen pages
     bool pullStereoFrameFrozen(float& outL, float& outR);
 
-    // Helper: manage frozen page transitions and state continuity
+    // Helper: manage frozen page transitions and state continuity (read-only on audio thread)
     void updateFrozenPage(uint64_t desiredPos);
+    // Read-ahead thread: pre-computes pages to keep ahead of playhead
+    std::thread readaheadThread_;
+    std::atomic<bool> readaheadRunning_{false};
+    std::mutex readaheadMutex_;
+    std::condition_variable readaheadCv_;
+    std::shared_ptr<twOutputPage> readaheadPrevPage_;   // State chain for read-ahead
+    uint64_t readaheadComputedUpTo_{0};                 // Last page start pos computed
+
+    void readaheadLoop();  // Entry point for read-ahead thread
 };
 
 }  // namespace audio

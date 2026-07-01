@@ -95,6 +95,7 @@ void twSpeaker::startOutput()
 
     audioEngine_ = std::make_unique<audio::AudioEngine>(synthOutput, graphRate);
     audioEngine_->configureResampling(graphRate, cfg.sampleRate);
+    audioEngine_->startReadahead();  // Start read-ahead thread to pre-compute pages
 
     // Output-to-input frame ratio, used to bound a pull at the loop end during
     // cycle playback. 1.0 when the resampler is a passthrough.

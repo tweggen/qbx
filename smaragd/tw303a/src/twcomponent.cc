@@ -459,38 +459,12 @@ length_t twComponent::freezePage_nolock(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
-    // CRITICAL: Install a FreezeContext for this rendering phase.
-    // This explicitly marks that we're in a frozen render, allowing downstream
-    // components (via copyData) to use pre-frozen input pages instead of trying
-    // to recursively call freezePage.
+    // CRITICAL: Install a FreezeContext for cycle detection.
+    // Marks this component as "being frozen" on this thread.
+    // If calcOutputTo → readStreamingData → copyData tries to call freezePage
+    // on this same component, FreezeContext::current() detects the cycle and
+    // returns silence instead of recursing.
     FreezeContext freezeCtx(*this);
-
-    // Pre-freeze all upstream inputs and register them in the context.
-    // This ensures calcOutputTo can access pre-frozen data without recursion.
-    if (pInputPlugs) {
-        for (idx_t i = 0; i < getNInputs(); i++) {
-            if (pInputPlugs[i]) {
-                // Get the upstream component via the latch
-                twLatch &latch = pInputPlugs[i]->getParentLatch();
-                twComponent &upstreamComp = latch.getComponent();
-
-                // Pre-freeze the upstream component's output
-                // Use the cached page from previous page if available to maintain state continuity
-                auto upstreamPage = upstreamComp.freezePage(
-                    page->startPosition,  // Same time position
-                    nullptr,              // Upstream has no input (it's a source or its inputs were already frozen)
-                    0,
-                    0,
-                    env.getSRate(),       // Use this component's sample rate for consistency
-                    nullptr               // Let upstream use its own state management
-                );
-
-                if (upstreamPage) {
-                    freezeCtx.setInputPage(i, upstreamPage);
-                }
-            }
-        }
-    }
 
     // Initialize state: reset if page 0, else restore from previous
     if (previousPage) {

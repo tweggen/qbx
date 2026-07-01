@@ -24,7 +24,14 @@ AudioEngine::AudioEngine(twComponent* synthOutput, uint32_t sampleRate)
     resamplerR_.reset();
 }
 
-AudioEngine::~AudioEngine() = default;
+AudioEngine::~AudioEngine() {
+    // Ensure read-ahead thread is stopped before destruction
+    readaheadRunning_ = false;
+    readaheadCv_.notify_all();
+    if (readaheadThread_.joinable()) {
+        readaheadThread_.join();
+    }
+}
 
 bool AudioEngine::pullFrame(AudioFrame& outFrame) {
     float outL, outR;
@@ -217,36 +224,29 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     }
 
     // If we're still in the current valid page, nothing to do
-    if (currentFrozenPage_ && currentFrozenPage_->startPosition == pageStartPos) {
+    if (currentFrozenPage_ && currentFrozenPage_->startPosition == pageStartPos &&
+        currentFrozenPage_->validAspects != 0) {
         return;
     }
 
-    // Tier 1 Enhancement: Freeze pages sequentially with state continuity
-    // prevFrozenPage_ carries state snapshot from previous page
-    currentFrozenPage_ = synthOutput_->freezePage(
-        pageStartPos,
-        nullptr,                           // No pre-prepared input; uses latches
-        0,
-        twOutputPage::FRAME_CAPACITY,      // Render full page of frames
-        engineSampleRate_,
-        prevFrozenPage_                    // State chain: page N resumes from page N-1
-    );
-
-    if (currentFrozenPage_) {
+    // Non-blocking cache lookup (read-only audio thread).
+    // Never calls freezePage on the audio thread; let read-ahead thread handle that.
+    auto page = synthOutput_->getOrAllocatePage(pageStartPos);
+    if (page && page->validAspects != 0) {
+        // Page is ready; switch to it
+        prevFrozenPage_ = currentFrozenPage_;
+        currentFrozenPage_ = page;
         currentPageStartPos_ = pageStartPos;
-        currentPageGeneration_ = currentFrozenPage_->generation;  // Snapshot generation to detect later invalidation
-        // Calculate offset within the new page
+        currentPageGeneration_ = page->generation.load();
         pageFrameOffset_ = desiredPos - pageStartPos;
         if (pageFrameOffset_ > currentFrozenPage_->validFrames) {
             pageFrameOffset_ = currentFrozenPage_->validFrames;
         }
-        prevFrozenPage_ = currentFrozenPage_;  // Save for next page's state restoration
     } else {
-        static int nullPageCount = 0;
-        if (++nullPageCount == 1) {
-            fprintf(stderr, "WARNING: freezePage() returned nullptr at pos=%lu\n", desiredPos);
-            fflush(stderr);
-        }
+        // Page not ready; output silence and nudge read-ahead thread to catch up
+        currentFrozenPage_ = nullptr;
+        pageFrameOffset_ = 0;
+        readaheadCv_.notify_one();
         pageFrameOffset_ = 0;
     }
 }
@@ -262,6 +262,10 @@ void AudioEngine::seekTo(uint64_t offsetSamples) {
     currentFrozenPage_ = nullptr;  // Clear frozen page cache
     prevFrozenPage_ = nullptr;
     pageFrameOffset_ = 0;
+
+    // Reset read-ahead state chain on seek (may skip pages)
+    readaheadPrevPage_ = nullptr;
+    readaheadComputedUpTo_ = 0;
 
     // Reconfigure resamplers for new position
     resamplerL_.reset();
@@ -284,6 +288,75 @@ void AudioEngine::configureResampling(uint32_t inRate, uint32_t outRate) {
     resamplerL_.reset();
     resamplerR_.reset();
     rateRatio_ = (inRate > 0) ? ((double)outRate / (double)inRate) : 1.0;
+}
+
+void AudioEngine::startReadahead() {
+    // Ensure no prior thread is running
+    stopReadahead();
+
+    // Reset state and start new thread
+    readaheadRunning_ = true;
+    readaheadPrevPage_ = nullptr;
+    readaheadComputedUpTo_ = 0;
+    readaheadThread_ = std::thread([this] { readaheadLoop(); });
+}
+
+void AudioEngine::stopReadahead() {
+    if (!readaheadThread_.joinable()) return;
+
+    readaheadRunning_ = false;
+    readaheadCv_.notify_all();
+    readaheadThread_.join();
+}
+
+void AudioEngine::readaheadLoop() {
+    constexpr int READAHEAD_PAGES = 3;  // How far ahead to pre-compute
+    const uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
+
+    while (readaheadRunning_.load(std::memory_order_relaxed)) {
+        std::unique_lock<std::mutex> lk(readaheadMutex_);
+        readaheadCv_.wait_for(lk, std::chrono::milliseconds(20));
+        lk.unlock();
+
+        if (!synthOutput_ || !readaheadRunning_.load(std::memory_order_relaxed)) continue;
+
+        uint64_t currentPos = currentPos_.load(std::memory_order_relaxed);
+        uint64_t pageStart = (currentPos / pageSize) * pageSize;
+
+        // Detect seek: playhead jumped backwards or far forward → reset state chain
+        if (pageStart < readaheadComputedUpTo_ ||
+            pageStart > readaheadComputedUpTo_ + READAHEAD_PAGES * pageSize) {
+            readaheadPrevPage_ = nullptr;
+            readaheadComputedUpTo_ = pageStart;
+        }
+
+        // Compute up to READAHEAD_PAGES ahead of the current playhead
+        for (int i = 0; i < READAHEAD_PAGES; i++) {
+            uint64_t pos = pageStart + (uint64_t)i * pageSize;
+            if (pos < readaheadComputedUpTo_) continue;  // Already computed
+
+            auto existing = synthOutput_->getOrAllocatePage(pos);
+            if (existing && existing->validAspects != 0) {
+                // Already frozen; update prevPage and move on
+                readaheadPrevPage_ = existing;
+                readaheadComputedUpTo_ = pos + pageSize;
+                continue;
+            }
+
+            // Compute this page (blocking, may take milliseconds)
+            auto page = synthOutput_->freezePage(
+                pos, nullptr, 0, (length_t)pageSize,
+                engineSampleRate_, readaheadPrevPage_);
+
+            if (page) {
+                readaheadPrevPage_ = page;
+                readaheadComputedUpTo_ = pos + pageSize;
+            } else {
+                // freezePage failed; give up for now
+                break;
+            }
+        }
+    }
 }
 
 }  // namespace audio
