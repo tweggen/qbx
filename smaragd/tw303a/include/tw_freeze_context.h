@@ -45,6 +45,10 @@ public:
     // Query the active freeze context for this thread (nullptr if not in freeze phase)
     static FreezeContext* current();
 
+    // Check if a component is already being frozen anywhere in the current stack
+    // (detects cycles through different components: A→B→C→A)
+    static bool isComponentInStack(const twComponent& comp);
+
     // Get the component this context is marking as "being frozen"
     twComponent& getComponent() { return component_; }
     const twComponent& getComponent() const { return component_; }

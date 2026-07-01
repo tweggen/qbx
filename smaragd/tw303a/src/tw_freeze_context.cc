@@ -21,3 +21,14 @@ FreezeContext* FreezeContext::current()
 {
     return g_activeContext;
 }
+
+bool FreezeContext::isComponentInStack(const twComponent& comp)
+{
+    // Walk the entire FreezeContext stack to detect cycles through any component
+    for (FreezeContext* ctx = g_activeContext; ctx != nullptr; ctx = ctx->previousContext_) {
+        if (&ctx->getComponent() == &comp) {
+            return true;  // Component is already being frozen somewhere in the stack
+        }
+    }
+    return false;  // Component is not in the freeze stack
+}
