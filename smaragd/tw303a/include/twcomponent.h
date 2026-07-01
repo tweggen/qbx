@@ -10,6 +10,7 @@
 #include "exc.h"
 #include "twformat.h"
 #include "tw_output_page.h"
+#include "tw_freeze_context.h"
 
 // Forward declaration to avoid circular includes
 class IOVector;

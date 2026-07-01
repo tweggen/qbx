@@ -27,6 +27,8 @@ set(TW303A_HEADERS
     include/twtrackmix.h
     include/twview.h
     include/io_vector.h
+    include/tw_freeze_context.h
+    include/tw_output_page.h
     include/twwav.h
     include/twwavinput.h
     include/twwhitenoise.h
@@ -56,6 +58,7 @@ set(TW303A_SOURCES
     src/tw303aenv.cc
     src/twcomponent.cc
     src/tw_output_page.cc
+    src/tw_freeze_context.cc
     src/twconstant.cc
     src/twconvert.cc
     src/twnegotiator.cc

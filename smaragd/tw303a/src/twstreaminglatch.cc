@@ -7,11 +7,9 @@
 #include "twsyslog.h"
 
 #include "twcomponent.h"
+#include "tw_freeze_context.h"
 
 #undef DEBUG_COPYDATA
-
-// Thread-local flag to prevent recursive freezePage calls from within calcOutputTo path
-thread_local bool g_inCalcOutputToPath = false;
 
 static inline int min( int a, int b )
 {
@@ -209,17 +207,37 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 #endif
 
 			// not enough data in buffer, fill it up.
-			// CRITICAL: Avoid recursive freezePage calls when called from within calcOutputTo path.
-			// freezePage → calcOutputTo → readStreamingData → copyData → freezePage = RECURSION.
+			// CRITICAL: Check for active FreezeContext to avoid recursive freezePage calls.
+			// When inside freezePage_nolock rendering, a FreezeContext is active and holds
+			// pre-frozen input pages. We should use those instead of calling freezePage again.
+			// Architecture: freezePage → calcOutputTo → readStreamingData → copyData
+			//             If in frozen render, use pre-frozen inputs. If streaming, use freezePage.
 
-			if (g_inCalcOutputToPath) {
-				// Already in calcOutputTo context (inside freezePage_nolock rendering).
-				// Cannot call freezePage or calcOutputTo: would create unbounded recursion.
-				// Return 0 to signal no data available; caller must handle buffer starvation.
-				// This is architectural: streaming latches don't work inside frozen rendering.
-				filled = 0;
+			FreezeContext* ctx = FreezeContext::current();
+			if (ctx) {
+				// Inside a frozen render (freezePage_nolock is active).
+				// Try to get pre-frozen input from the context.
+				// Note: this latch belongs to a component; query by this latch's output index
+				auto frozenInput = ctx->getInputPage(getIndex());
+				if (frozenInput && frozenInput->samples.size() > 0) {
+					// Use pre-frozen data directly
+					filled = min((length_t)maxFill, (length_t)frozenInput->samples.size());
+					if (filled > 0) {
+						memcpy(pBuffer + bufPos, frozenInput->samples.data(), filled * sizeof(sample_t));
+						previousPage_ = frozenInput;  // cache for next iteration
+						currentPos_ += filled;         // advance position
+					} else {
+						filled = 0;
+					}
+				} else {
+					// No pre-frozen input available; buffer starvation.
+					// This component is a source or input wasn't pre-frozen.
+					// Signal no data; caller handles gracefully.
+					filled = 0;
+				}
 			} else {
-				// Normal path: use freezePage for proper state snapshots and caching
+				// Normal streaming path (not inside frozen render).
+				// Use freezePage for proper state snapshots and caching.
 				auto page = getComponent().freezePage(
 					currentPos_,              // snapshot position for state
 					nullptr,                  // no input (source component)

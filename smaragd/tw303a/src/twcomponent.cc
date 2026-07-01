@@ -459,12 +459,38 @@ length_t twComponent::freezePage_nolock(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
-    // CRITICAL: Set flag to prevent recursive freezePage calls from within calcOutputTo.
-    // When calcOutputTo → readStreamingData → copyData tries to call freezePage,
-    // the flag causes copyData to return early (buffer starvation) instead of recursing.
-    extern thread_local bool g_inCalcOutputToPath;
-    bool wasInCalcPath = g_inCalcOutputToPath;
-    g_inCalcOutputToPath = true;
+    // CRITICAL: Install a FreezeContext for this rendering phase.
+    // This explicitly marks that we're in a frozen render, allowing downstream
+    // components (via copyData) to use pre-frozen input pages instead of trying
+    // to recursively call freezePage.
+    FreezeContext freezeCtx(*this);
+
+    // Pre-freeze all upstream inputs and register them in the context.
+    // This ensures calcOutputTo can access pre-frozen data without recursion.
+    if (pInputPlugs) {
+        for (idx_t i = 0; i < getNInputs(); i++) {
+            if (pInputPlugs[i]) {
+                // Get the upstream component via the latch
+                twLatch &latch = pInputPlugs[i]->getParentLatch();
+                twComponent &upstreamComp = latch.getComponent();
+
+                // Pre-freeze the upstream component's output
+                // Use the cached page from previous page if available to maintain state continuity
+                auto upstreamPage = upstreamComp.freezePage(
+                    page->startPosition,  // Same time position
+                    nullptr,              // Upstream has no input (it's a source or its inputs were already frozen)
+                    0,
+                    0,
+                    env.getSRate(),       // Use this component's sample rate for consistency
+                    nullptr               // Let upstream use its own state management
+                );
+
+                if (upstreamPage) {
+                    freezeCtx.setInputPage(i, upstreamPage);
+                }
+            }
+        }
+    }
 
     // Initialize state: reset if page 0, else restore from previous
     if (previousPage) {
@@ -485,9 +511,11 @@ length_t twComponent::freezePage_nolock(
         pageInputLength = inputLength - inputOffset;
     }
 
-    // Render frames into page buffer
-    // Safe: page is in the map (protected by refcount), nobody else will create it
-    // Safe to call recursively because mutex is not held
+    // Render frames into page buffer.
+    // Safe: page is in the map (protected by refcount), nobody else will create it.
+    // Safe to call recursively because mutex is not held.
+    // Safe from infinite recursion because FreezeContext is active; calcOutputTo
+    // can query pre-frozen input pages instead of calling freezePage again.
     length_t toRender = twOutputPage::FRAME_CAPACITY;
     length_t rendered = renderFrames(
         page->samples.data(),
@@ -503,9 +531,7 @@ length_t twComponent::freezePage_nolock(
         page->internalState = captureInternalState();
     }
 
-    // Restore the flag to its previous state (for nested freezePage calls)
-    g_inCalcOutputToPath = wasInCalcPath;
-
+    // FreezeContext is automatically destroyed at end of scope, restoring previous context
     return rendered;
 }
 
