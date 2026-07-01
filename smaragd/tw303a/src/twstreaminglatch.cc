@@ -207,17 +207,17 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 #endif
 
 			// not enough data in buffer, fill it up.
-			// CRITICAL: Check for cycle via FreezeContext stack walk.
-			// Detects cycles through any component in the freeze chain: A→B→C→A.
-			// If the component owning this latch is anywhere in the freeze stack,
-			// calling freezePage would recurse. Return silence instead.
+			// CRITICAL: Check for cycle via FreezeContext.
+			// If ANY component is currently being frozen, we're already inside a freeze chain.
+			// Calling freezePage again would cause recursion through the component graph.
+			// Only safe to freeze if we're NOT inside a freeze context at all.
 
-			if (FreezeContext::isComponentInStack(getComponent())) {
-				// Cycle detected: this component is already being frozen somewhere in the stack.
-				// Calling freezePage would create unbounded recursion. Return silence.
+			if (FreezeContext::current() != nullptr) {
+				// We're already inside a freeze chain. Don't recurse further.
+				// This component's data is not available; return silence.
 				filled = 0;
 			} else {
-				// No cycle; safe to call freezePage for streaming data.
+				// Normal streaming path: safe to call freezePage for streaming data.
 				auto page = getComponent().freezePage(
 					currentPos_,              // snapshot position for state
 					nullptr,                  // no input (source component)
