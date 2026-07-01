@@ -102,7 +102,9 @@ Device Buffer (44.1 kHz, 16-bit, stereo, etc.)
    - If yes, return cached page immediately
    - If no, allocate placeholder, mark `needsRendering = true`
 2. **Release Lock** (critical: avoid deadlock on recursive freezePage calls)
-3. **Render** (outside lock):
+3. **Render** (outside lock, inside FreezeContext):
+   - Install `FreezeContext` guard for this rendering phase
+   - Pre-freeze all upstream input components
    - If `previousPage` provided:
      - Restore component internal state from `previousPage->internalState`
    - Else:
@@ -113,6 +115,53 @@ Device Buffer (44.1 kHz, 16-bit, stereo, etc.)
    - Set `validAspects = twAspectAll`
    - Release lock
 5. **Return page**
+
+### FreezeContext: Explicit Rendering Phase Management
+
+**Problem:** Preventing infinite recursion during frozen rendering requires distinguishing between:
+- **Normal streaming:** `calcOutputTo` pulls data dynamically via `freezePage` on upstream components
+- **Frozen rendering:** Components must use pre-computed input, not call `freezePage` recursively
+
+**Old Approach:** Thread-local boolean flag `g_inCalcOutputToPath` scattered across codebase, easy to forget in new code paths.
+
+**New Approach (Phase 6):** Explicit `FreezeContext` RAII guard.
+
+**Architecture:**
+```cpp
+// In freezePage_nolock:
+FreezeContext freezeCtx(*this);  // Install rendering context
+
+// Pre-freeze all upstream inputs and register them
+for (idx_t i = 0; i < getNInputs(); i++) {
+    if (auto plug = getInputPlug(i)) {
+        auto upstream = &plug->getParentLatch().getComponent();
+        auto page = upstream->freezePage(...);  // Recursively freeze dependencies
+        freezeCtx.setInputPage(i, page);        // Store pre-frozen input
+    }
+}
+
+// Now renderFrames() and calcOutputTo() can access pre-frozen data
+renderFrames(...);
+// FreezeContext auto-destructs, restoring previous context
+```
+
+**Benefits:**
+- **Explicit:** `FreezeContext ctx(*this)` makes rendering phase obvious
+- **Type-safe:** C++ RAII guard, not a magic boolean
+- **Extensible:** Can hold metadata (sample rates, flags, etc.) without adding more thread-locals
+- **Architectural:** Pre-freezing eliminates recursion at the source instead of working around it
+- **Safe:** RAII ensures cleanup and proper nesting of contexts
+
+**Query (in copyData/readStreamingData):**
+```cpp
+FreezeContext* ctx = FreezeContext::current();
+if (ctx) {
+    // Use pre-frozen input page (no recursion risk)
+    auto page = ctx->getInputPage(myInputIndex);
+    if (page) { /* copy from page */ return; }
+}
+// Fallback to normal streaming path
+```
 
 ### State Continuity Across Pages
 
@@ -359,6 +408,13 @@ component->freezePreviewPage(
    - Never waits for revalidation
    - Audio keeps flowing, UI refreshes later
 
+6. **FreezeContext Enables Safe Rendering:**
+   - Active only during `freezePage_nolock()` execution
+   - All upstream dependencies pre-frozen before rendering starts
+   - Prevents infinite recursion: `copyData` accesses pre-frozen pages, not live `freezePage` calls
+   - Automatic cleanup via RAII guard ensures no cross-render contamination
+   - Thread-local storage allows nesting of contexts for hierarchical components
+
 ---
 
 ## Typical Scenario: Playing a Multi-Clip Track
@@ -534,10 +590,14 @@ updateFrozenPage(30000)
 
 The V3 architecture unifies real-time playback, preview, and export via:
 - **Page-based freezing** with explicit state snapshots
+- **FreezeContext** for safe, explicit rendering phases (Phase 6)
+  - Pre-freezes all upstream dependencies before rendering
+  - Eliminates recursion at the architectural level
+  - RAII guard ensures proper cleanup and nesting
 - **twView wrappers** for stable clip references with dynamic component lookup
 - **Push-model clip management** (STrack → twTrackMix via callbacks)
 - **Strict decoupling** between tw303a (DSP) and main/ (UI)
 - **Non-blocking audio** that tolerates preview lag
 - **Lock-free coordination** via atomics and snapshots
 
-This design enables **seamless audio playback** with **continuous state**, **no stale pointers**, and **clear separation of concerns**.
+This design enables **seamless audio playback** with **continuous state**, **no stale pointers**, **clear separation of concerns**, and **safe extensibility through explicit rendering contexts**.
