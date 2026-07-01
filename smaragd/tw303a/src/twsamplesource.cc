@@ -34,8 +34,6 @@ twRandomSource *twSampleSource::viewAtRate( int targetRate ) const
 
     // Fast path: native rate or not loaded (safe to read without lock—set once at construction)
     if( !loaded_ || targetRate <= 0 || targetRate == rate_ ) {
-        fprintf(stderr, "twSampleSource::viewAtRate: returning native rate (loaded=%d, targetRate=%d, rate_=%d)\n",
-                loaded_, targetRate, rate_);
         return self;
     }
 
@@ -50,8 +48,6 @@ twRandomSource *twSampleSource::viewAtRate( int targetRate ) const
         auto& e = resampledCache_[targetRate];
         entry = &e;
     }  // Lock released before std::call_once
-
-    fprintf(stderr, "twSampleSource::viewAtRate: initializing resampled view from %d Hz to %d Hz\n", rate_, targetRate);
 
     // Call constructor OUTSIDE the lock via std::call_once.
     // If another thread calls viewAtRate concurrently with the same rate:
