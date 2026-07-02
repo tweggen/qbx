@@ -1,9 +1,12 @@
 
 #include <stdlib.h>
 #include "twsyslog.h"
+#include <vector>
 
 #include "twwhitenoise.h"
+#include <vector>
 #include "io_vector.h"
+#include <vector>
 
 #undef DEBUG_CALC_OUTPUT
 
@@ -31,7 +34,8 @@ void twWhiteNoise::createOutputLatches()
 length_t twWhiteNoise::calcOutputTo( IOVector& dest, idx_t idx )
 {
     length_t realRead;
-    sample_t *pCurr = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+    std::vector<sample_t> buffer(dest.length());
+    sample_t *pCurr = buffer.data();
 
     // Read frequency control input
     realRead = ((twLatchStreamingOutput *)pInputPlugs[0])->readStreamingData(
@@ -51,7 +55,7 @@ length_t twWhiteNoise::calcOutputTo( IOVector& dest, idx_t idx )
     }
 
     // Write to IOVector destination
-    return dest.copyFrom(IOVector::CreateFromBuffer(pCurr - realRead, realRead), 0, realRead);
+    return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), realRead), 0, realRead);
 }
 
 // Legacy: Raw-pointer interface

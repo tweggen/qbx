@@ -1,9 +1,12 @@
 
 #include <stdlib.h>
 #include "twsyslog.h"
+#include <vector>
 
 #include "twsimplesaw.h"
+#include <vector>
 #include "io_vector.h"
+#include <vector>
 
 #undef DEBUG_CALC_OUTPUT
 
@@ -30,8 +33,8 @@ void twSimpleSaw::createOutputLatches()
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twSimpleSaw::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 {
-	sample_t *pDest = (sample_t *)alloca(dest.length() * sizeof(sample_t));
-	sample_t *pCurr = pDest;
+	std::vector<sample_t> pDest(dest.length());
+	sample_t *pCurr = pDest.data();
 	sample_t *pCurrFreq = freqBuffer;
 	length_t realRead;
 
@@ -57,7 +60,7 @@ length_t twSimpleSaw::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 	currPos += realRead;
 
 	// Write to IOVector destination
-	return dest.copyFrom(IOVector::CreateFromBuffer(pDest, realRead), 0, realRead);
+	return dest.copyFrom(IOVector::CreateFromBuffer(pDest.data(), realRead), 0, realRead);
 }
 
 void twSimpleSaw::setBufferSize( length_t /*len*/ )

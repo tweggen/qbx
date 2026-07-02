@@ -5,8 +5,11 @@
 #include <qstring.h>
 
 #include "twwavinput.h"
+#include <vector>
 #include "twsamplesource.h"
+#include <vector>
 #include "io_vector.h"
+#include <vector>
 
 void twWavInput::createOutputLatches()
 {
@@ -98,11 +101,11 @@ length_t twWavInput::calcOutputTo( IOVector& dest, idx_t idx )
     }
 
     // Read through the project-rate view into temp buffer
-    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
-    source_->viewAtRate( env.getSRate() )->read( playOffset_, buffer, dest.length(), idx );
+    std::vector<sample_t> buffer(dest.length());
+    source_->viewAtRate( env.getSRate() )->read( playOffset_, buffer.data(), dest.length(), idx );
 
     // Write to IOVector destination
-    return dest.copyFrom(IOVector::CreateFromBuffer(buffer, dest.length()), 0, dest.length());
+    return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), dest.length()), 0, dest.length());
 }
 
 void twWavInput::init()

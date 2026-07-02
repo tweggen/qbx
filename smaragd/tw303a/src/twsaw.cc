@@ -1,8 +1,10 @@
 #if 0
 #include <stdlib.h>
 #include "twsyslog.h"
+#include <vector>
 
 #include "twsaw.h"
+#include <vector>
 
 #undef DEBUG_CALC_OUTPUT
 
@@ -30,9 +32,9 @@ void twSaw::createOutputLatches()
 length_t twSaw::calcOutputTo( IOVector& dest, idx_t idx )
 {
 	// Use temp buffer and delegate to raw-pointer version, then copy result
-	sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+	std::vector<sample_t> buffer(dest.length());
 	length_t result = calcOutputTo(buffer, dest.length(), idx);
-	return dest.copyFrom(IOVector::CreateFromBuffer(buffer, result), 0, result);
+	return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), result), 0, result);
 }
 
 void twSaw::__init( )

@@ -5,9 +5,13 @@
 #include <cstring>
 
 #include "tw303aenv.h"
+#include <vector>
 #include "twtrackmix.h"
+#include <vector>
 #include "twview.h"
+#include <vector>
 #include "io_vector.h"
+#include <vector>
 
 int twTrackMix::seekTo( offset_t newOffset )
 {
@@ -160,15 +164,13 @@ length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
 {
     std::lock_guard<std::mutex> lock(mutex());
 
-    // Allocate output buffer and read buffer
-    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
-    sample_t *readBuffer = (sample_t *) alloca( env.getBufferSize()*sizeof( sample_t ) );
+    // Allocate output buffer and read buffer on heap (avoid stack overflow in deep recursion)
+    std::vector<sample_t> buffer(dest.length(), 0.0f);
+    std::vector<sample_t> readBuffer(env.getBufferSize());
 
     offset_t startInterval = playOffset_.load( std::memory_order_relaxed );
     offset_t endInterval   = startInterval + dest.length();
     playOffset_.store( endInterval, std::memory_order_relaxed );
-
-    memset( buffer, 0, sizeof( sample_t ) * dest.length() );
 
     // Iterate through clips and mix their output
     for( const ClipEntry &clip : clips_ ) {
@@ -201,14 +203,14 @@ length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
         twComponent &cp = *clip.view;
         offset_t doRead = endTime-startTime;
         offset_t destOffset = startTime-startInterval;
-        memset( readBuffer + destOffset, 0, sizeof( sample_t ) * doRead );
+        memset( readBuffer.data() + destOffset, 0, sizeof( sample_t ) * doRead );
 
         // Get actual amount produced
-        length_t actuallyGot = cp.calcOutputTo( readBuffer+destOffset, doRead, idx );
+        length_t actuallyGot = cp.calcOutputTo( readBuffer.data()+destOffset, doRead, idx );
 
         // Only mix the actual samples produced
         for( offset_t i = 0; i < actuallyGot; i++ ) {
-            buffer[destOffset + i] += readBuffer[destOffset + i];
+            buffer.data()[destOffset + i] += readBuffer.data()[destOffset + i];
         }
     }
 
@@ -216,12 +218,12 @@ length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
     double factor = trackMuted_ ? 0.0 : pow( 10., trackGainDb_/20. );
     if( factor != 1.0 ) {
         for( offset_t i=0; i<(offset_t)dest.length(); i++ ) {
-            buffer[i] *= (sample_t) factor;
+            buffer.data()[i] *= (sample_t) factor;
         }
     }
 
     // Copy to IOVector destination
-    return dest.copyFrom(IOVector::CreateFromBuffer(buffer, dest.length()), 0, dest.length());
+    return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), dest.length()), 0, dest.length());
 }
 // Phase 3: Freeze track output to a page
 // Iterates clips that overlap [startPos, startPos+length), calls freezePage() on each

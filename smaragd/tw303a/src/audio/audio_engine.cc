@@ -229,9 +229,10 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         return;
     }
 
-    // Non-blocking cache lookup (read-only audio thread).
-    // Never calls freezePage on the audio thread; let read-ahead thread handle that.
-    auto page = synthOutput_->getOrAllocatePage(pageStartPos);
+    // Lock-free cache lookup (read-only audio thread).
+    // Audio thread never allocates pages, only reads existing ones.
+    // Read-ahead thread allocates and freezes pages; this just reads the cache.
+    auto page = synthOutput_->getPageIfExists(pageStartPos);
     if (page && page->validAspects != 0) {
         // Page is ready; switch to it
         prevFrozenPage_ = currentFrozenPage_;

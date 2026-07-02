@@ -1,6 +1,9 @@
 #include "twpluginchain.h"
+#include <vector>
 #include "twplugininsert.h"
+#include <vector>
 #include "io_vector.h"
+#include <vector>
 #include <algorithm>
 
 twPluginChain::twPluginChain( tw303aEnvironment &env, idx_t nBusses )
@@ -26,10 +29,10 @@ length_t twPluginChain::calcOutputTo( IOVector& dest, idx_t port )
     if( plugins_.empty() ) {
         // No plugins: passthrough from input via IOVector
         if( pInputPlugs && pInputPlugs[port] ) {
-            sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+            std::vector<sample_t> buffer(dest.length());
             auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs[port]);
-            length_t len = input->readStreamingData( buffer, dest.length() );
-            return dest.copyFrom(IOVector::CreateFromBuffer(buffer, len), 0, len);
+            length_t len = input->readStreamingData( buffer.data(), dest.length() );
+            return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), len), 0, len);
         }
         return dest.fillSilence(0, dest.length());
     }

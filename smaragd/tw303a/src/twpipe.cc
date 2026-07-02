@@ -1,9 +1,12 @@
 
 #include <stdlib.h>
 #include "twsyslog.h"
+#include <vector>
 
 #include "twpipe.h"
+#include <vector>
 #include "io_vector.h"
+#include <vector>
 
 void twPipe::init()
 {
@@ -20,7 +23,7 @@ void twPipe::createOutputLatches()
 length_t twPipe::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 {
 	// Allocate output buffer
-	sample_t *pDest = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+	std::vector<sample_t> pDest(dest.length());
 	length_t realRead;
 
 	// Shift delay line buffer (move samples left, new input goes at end)
@@ -36,7 +39,7 @@ length_t twPipe::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 	// Apply delay-line filter with weighted taps
 	offset_t i;
 	sample_t *pSrc = inBuffer + env.getSRate();
-	sample_t *pOut = pDest;
+	sample_t *pOut = pDest.data();
 	for( i = 0; i < (offset_t)realRead; i++ ) {
 		*pSrc = *pOut++ =
 			 (*pSrc*12 + (pSrc[-1310])*4 + (pSrc[-4561])*5 + (pSrc[-3364])*5
@@ -45,7 +48,7 @@ length_t twPipe::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 	}
 
 	// Write to IOVector destination
-	return dest.copyFrom(IOVector::CreateFromBuffer(pDest, realRead), 0, realRead);
+	return dest.copyFrom(IOVector::CreateFromBuffer(pDest.data(), realRead), 0, realRead);
 }
 
 void twPipe::setBufferSize( length_t length )

@@ -3,7 +3,9 @@
 #include <string.h>
 
 #include "twrewire.h"
+#include <vector>
 #include "io_vector.h"
+#include <vector>
 
 const char *twRewire::getInputName( idx_t ) const
 {
@@ -54,13 +56,13 @@ length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
         return dest.fillSilence(0, dest.length());
     }
 
-    // Read from input into temp buffer
-    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+    // Read from input into temp buffer (heap-allocated to avoid stack overflow in deep recursion)
+    std::vector<sample_t> buffer(dest.length());
     length_t readFrames = ((twLatchStreamingOutput *)pInputPlugs[idx])->readStreamingData(
-        buffer, dest.length());
+        buffer.data(), dest.length());
 
     // Write to IOVector destination
-    return dest.copyFrom(IOVector::CreateFromBuffer(buffer, readFrames), 0, readFrames);
+    return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), readFrames), 0, readFrames);
 }
 
 int twRewire::setNPlugs( idx_t n )

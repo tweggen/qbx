@@ -308,6 +308,11 @@ public:
         uint32_t aspectsMask = twAspectAll
     );
 
+    // Lock-free page lookup (audio thread only).
+    // Returns existing page if found, nullptr if not. Never allocates.
+    // Safe for real-time threads because it uses only atomic reads.
+    std::shared_ptr<twOutputPage> getPageIfExists(uint64_t startPos);
+
     // Release pages outside of a time retention window (memory management).
     // Frees pages whose [startPos, startPos+PAGE_SIZE) range ends before keepAfterPos.
     void releaseOldPages(uint64_t keepAfterPos);

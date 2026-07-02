@@ -2,11 +2,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "twsyslog.h"
+#include <vector>
 #include <string.h>
 #include <math.h>
 
 #include "twmixer.h"
+#include <vector>
 #include "io_vector.h"
+#include <vector>
 
 const char *twMixer::getInputName( idx_t ) const
 {
@@ -63,9 +66,8 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
 {
     std::lock_guard<std::mutex> lock(mutex());
 
-    // Allocate temp buffer for mixing (reuse strategy: could use a preallocated buffer)
-    sample_t *outputBuffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
-    memset(outputBuffer, 0, dest.length() * sizeof(sample_t));
+    // Allocate temp buffer for mixing on heap (avoid stack overflow in deep recursion)
+    std::vector<sample_t> outputBuffer(dest.length(), 0.0f);
 
     // Mix all inputs
     length_t realRead = 0;
@@ -80,7 +82,7 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
             throw new excStandard( "twMixer::calcOutputTo(): Source did not provide sufficient data." );
         }
 
-        sample_t *pCurr = outputBuffer;
+        sample_t *pCurr = outputBuffer.data();
         sample_t *pSrc = inBuffer;
         for( offset_t i = 0; i < (offset_t)dest.length(); i++ ) {
             *pCurr++ += *pSrc++ * factor;
@@ -88,7 +90,7 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
     }
 
     // Write mixed result to IOVector destination
-    return dest.copyFrom(IOVector::CreateFromBuffer(outputBuffer, realRead), 0, realRead);
+    return dest.copyFrom(IOVector::CreateFromBuffer(outputBuffer.data(), realRead), 0, realRead);
 }
 
 /**

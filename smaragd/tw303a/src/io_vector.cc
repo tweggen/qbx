@@ -35,19 +35,29 @@ IOVector IOVector::CreateForPageOutput(std::shared_ptr<twOutputPage> page)
 
 IOVector IOVector::CreateFromBuffer(sample_t* buffer, length_t lengthFrames)
 {
-    // For legacy interop only: wrap raw buffer in temporary structure
-    // This is NOT memory-safe for multi-page operations
+    // Bridge for intermediate temp buffers in component rendering (twMixer, twMoog, etc).
+    // These components generate output into heap-allocated vectors, then wrap them here
+    // for copyFrom/copyTo operations with destination IOVectors.
+    //
+    // LIMITATION: This creates a temporary page view; the wrapped buffer is not owned
+    // or tracked by the page, so the caller must ensure the buffer stays alive for
+    // the duration of IOVector operations.
+    //
+    // TODO: Refactor components to render directly into page-backed IOVectors
+    // instead of creating intermediate temp buffers.
+
     if (!buffer && lengthFrames > 0) {
         throw std::runtime_error("IOVector::CreateFromBuffer: buffer is null but length > 0");
     }
 
     // Create a temporary single-page backing
-    // Note: This doesn't actually own the buffer; caller must ensure buffer stays alive
     auto tempPage = std::make_shared<twOutputPage>();
-    tempPage->samples.clear();
-    // We can't safely wrap a raw buffer, so we'll just create an empty page
-    // The caller should really use page-backed constructors
-    fprintf(stderr, "WARNING: IOVector::CreateFromBuffer is deprecated; use page-backed constructors\n");
+
+    // Directly assign the buffer as the samples (without copying)
+    // Note: This assumes the caller's vector stays alive during IOVector operations
+    tempPage->samples.assign(buffer, buffer + lengthFrames);
+    tempPage->validFrames = lengthFrames;
+    tempPage->validAspects = twAspectAll;  // Mark as valid so readers can use it
 
     return IOVector(tempPage, 0, lengthFrames);
 }

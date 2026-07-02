@@ -46,7 +46,7 @@ public:
     static FreezeContext* current();
 
     // Check if a component is already being frozen anywhere in the current stack
-    // (detects cycles through different components: A→B→C→A)
+    // (detects cycles: if component is in the freeze stack, freezing it would recurse)
     static bool isComponentInStack(const twComponent& comp);
 
     // Get the component this context is marking as "being frozen"

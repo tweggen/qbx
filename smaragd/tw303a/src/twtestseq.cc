@@ -1,8 +1,10 @@
 #if 0
 #include <iostream>
 #include "twsyslog.h"
+#include <vector>
 
 #include "twtestseq.h"
+#include <vector>
 
 sample_t freqTable[] = {
 	52325, 55436, 58733, 62225, 65925, 69845,
@@ -31,9 +33,9 @@ void twTestSeq::createOutputLatches()
 length_t twTestSeq::calcOutputTo( IOVector& dest, idx_t idx )
 {
 	// Use temp buffer and delegate to raw-pointer version, then copy result
-	sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+	std::vector<sample_t> buffer(dest.length());
 	length_t result = calcOutputTo(buffer, dest.length(), idx);
-	return dest.copyFrom(IOVector::CreateFromBuffer(buffer, result), 0, result);
+	return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), result), 0, result);
 }
 
 twTestSeq::twTestSeq( tw303aEnvironment &env0, sample_t constant0 )

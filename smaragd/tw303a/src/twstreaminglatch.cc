@@ -75,17 +75,8 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 	// CRITICAL: maxLength is the destination buffer size allocated by the caller.
 	// Do NOT clamp it based on our internal bufSize — these are independent constraints.
 	// The per-memcpy bounds checks below (destPos + length <= maxLength) ensure we never
-	// overflow pDest. The architectural issue (implicit buffer contracts) remains, but
-	// we must not silently truncate legitimate requests.
-	if (maxLength >= bufSize * 4) {
-		fprintf(stderr, "WARNING: copyData contract violation: maxLength=%lld >= 4*bufSize=%lld (ratio=%.1fx). "
-			"Likely architectural: caller pre-buffering or unit mismatch (bytes vs samples).\n",
-			maxLength, bufSize, (double)maxLength / bufSize);
-	} else if (maxLength > bufSize && maxLength > 32768) {
-		fprintf(stderr, "DEBUG: copyData called with large maxLength=%lld > bufSize=%lld. "
-			"May indicate caller needs optimization.\n",
-			maxLength, bufSize);
-	}
+	// overflow pDest. Callers may legitimately request more data than internal bufSize;
+	// this streaming latch will loop through its circular buffer to satisfy the request.
 
 	toCopy = maxLength;
 	destPos = 0;
@@ -207,17 +198,16 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 #endif
 
 			// not enough data in buffer, fill it up.
-			// CRITICAL: Check for cycle via FreezeContext.
-			// If ANY component is currently being frozen, we're already inside a freeze chain.
-			// Calling freezePage again would cause recursion through the component graph.
-			// Only safe to freeze if we're NOT inside a freeze context at all.
+			// CRITICAL: Check for cycles via proper component stack detection.
+			// If getComponent() (the upstream) is already being frozen, we have a cycle.
+			// This should never happen if the component graph is truly acyclic.
 
-			if (FreezeContext::current() != nullptr) {
-				// We're already inside a freeze chain. Don't recurse further.
-				// This component's data is not available; return silence.
+			if (FreezeContext::isComponentInStack(getComponent())) {
+				// Cycle detected: upstream component is already being frozen.
+				// This indicates a real cycle in rendering (shouldn't happen).
 				filled = 0;
 			} else {
-				// Normal streaming path: safe to call freezePage for streaming data.
+				// No cycle; safe to freeze the upstream component for data.
 				auto page = getComponent().freezePage(
 					currentPos_,              // snapshot position for state
 					nullptr,                  // no input (source component)

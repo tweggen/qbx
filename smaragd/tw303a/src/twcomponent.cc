@@ -284,6 +284,29 @@ twComponent::twComponent( tw303aEnvironment &env0 )
 // Output Page Caching Implementation (Phase 1 - Component-Level Freezing)
 // ============================================================================
 
+std::shared_ptr<twOutputPage> twComponent::getPageIfExists(uint64_t startPos)
+{
+    // Truly lock-free lookup for audio thread (real-time constraint).
+    // Attempts non-blocking lock; returns nullptr if can't acquire immediately.
+    // This prevents the audio thread from ever blocking on the page cache.
+
+    // Try to acquire lock without blocking
+    std::unique_lock<std::mutex> lock(mutex(), std::try_to_lock);
+    if (!lock.owns_lock()) {
+        // Couldn't acquire lock; another thread (likely read-ahead) is modifying the cache.
+        // Return nullptr to indicate "not available right now".
+        // Audio thread will output silence this frame and try again next frame.
+        return nullptr;
+    }
+
+    // Lock acquired; safe to read the cache
+    auto it = outputPages_.find(startPos);
+    if (it != outputPages_.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
 std::shared_ptr<twOutputPage> twComponent::getOrAllocatePage(
     uint64_t startPos,
     uint32_t aspectsMask
@@ -411,8 +434,11 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
         std::lock_guard<std::mutex> lock(mutex());
         auto it = outputPages_.find(startPos);
         if (it != outputPages_.end()) {
-            // Page already exists (valid or invalid); return it
+            // Page already exists (valid or invalid)
             page = it->second;
+            // Check if this page is already frozen. If validAspects != 0, it's complete.
+            // If validAspects == 0, it's a placeholder that needs rendering.
+            needsRendering = (page->validAspects == 0);
         } else {
             // Page doesn't exist; allocate and insert placeholder
             // This prevents another thread from allocating the same page concurrently
@@ -425,7 +451,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
         }
     } // Lock released - safe for recursive freezePage calls
 
-    // Step 2: If page was already cached, return it
+    // Step 2: If page was already cached AND frozen, return it
     if (!needsRendering) {
         return page;
     }
@@ -441,9 +467,13 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     );
 
     // Step 4: Mark page as frozen and valid under lock
+    // A page is "valid" if it has been frozen (rendering attempted), even if validFrames == 0.
+    // Rendering can return 0 frames for legitimate reasons (pass-through with silent input, etc.)
+    // The audio thread uses validAspects to know if freezing is complete; if validFrames == 0
+    // but validAspects != 0, that tells the audio thread "we tried, and this was the result".
     {
         std::lock_guard<std::mutex> lock(mutex());
-        page->validAspects = twAspectAll;  // Mark all aspects as complete
+        page->validAspects = twAspectAll;  // Mark as frozen, even if 0 frames resulted
     }
 
     return page;

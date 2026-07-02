@@ -1,5 +1,6 @@
 
 #include <string.h>
+#include <vector>
 
 #include "twsamplereader.h"
 #include "twrandomsource.h"
@@ -55,15 +56,15 @@ length_t twSampleReader::calcOutputTo( IOVector& dest, idx_t idx )
 {
     std::lock_guard<std::mutex> lock(mutex());
 
-    // Allocate temp buffer for reading from source
-    sample_t *buffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+    // Allocate temp buffer on heap (not stack) to avoid stack overflow in deep recursion
+    std::vector<sample_t> buffer(dest.length());
 
     // Read from source at current position
-    src_.read( pos_, buffer, dest.length(), idx );
+    src_.read( pos_, buffer.data(), dest.length(), idx );
     pos_ += (offset_t) dest.length();
 
     // Write to IOVector destination
-    return dest.copyFrom(IOVector::CreateFromBuffer(buffer, dest.length()), 0, dest.length());
+    return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), dest.length()), 0, dest.length());
 }
 
 void twSampleReader::createOutputLatches()

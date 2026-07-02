@@ -2,7 +2,9 @@
 #include <stdlib.h>
 
 #include "twmoog.h"
+#include <vector>
 #include "io_vector.h"
+#include <vector>
 
 void twMoog::setBufferSize( length_t /* len */ )
 {
@@ -37,27 +39,27 @@ void twMoog::createOutputLatches()
 length_t twMoog::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 {
 	// Read inputs into temp buffers
-	sample_t *audioBuffer = (sample_t *)alloca(dest.length() * sizeof(sample_t));
-	sample_t *freqBuffer_tmp = (sample_t *)alloca(dest.length() * sizeof(sample_t));
+	std::vector<sample_t> audioBuffer(dest.length());
+	std::vector<sample_t> freqBuffer_tmp(dest.length());
 
 	// Read audio input
 	length_t realRead = ((twLatchStreamingOutput *)pInputPlugs[0])->readStreamingData(
-		audioBuffer, dest.length());
+		audioBuffer.data(), dest.length());
 	if( realRead != dest.length() ) {
 		throw new excStandard( "twMoog::calcOutputTo(): Audio source did not provide sufficient data." );
 	}
 
 	// Read frequency input
 	realRead = ((twLatchStreamingOutput *)pInputPlugs[1])->readStreamingData(
-		freqBuffer_tmp, dest.length());
+		freqBuffer_tmp.data(), dest.length());
 	if( realRead != dest.length() ) {
 		throw new excStandard( "twMoog::calcOutputTo(): Frequency source did not provide sufficient data." );
 	}
 
 	// Apply Moog filter DSP to audio, write to IOVector output
 	double freqCorrect = 1.16 / (double)(env.getSRate()/2);
-	sample_t *pCurr = audioBuffer;
-	sample_t *pFreq = freqBuffer_tmp;
+	sample_t *pCurr = audioBuffer.data();
+	sample_t *pFreq = freqBuffer_tmp.data();
 
 	for( offset_t i = 0; i < (offset_t)realRead; i++ ) {
 		double input = (double) *pCurr;
@@ -92,6 +94,6 @@ length_t twMoog::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 	}
 
 	// Copy result to IOVector destination
-	return dest.copyFrom(IOVector::CreateFromBuffer(audioBuffer, realRead), 0, realRead);
+	return dest.copyFrom(IOVector::CreateFromBuffer(audioBuffer.data(), realRead), 0, realRead);
 }
 
