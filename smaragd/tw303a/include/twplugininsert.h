@@ -41,6 +41,9 @@ public:
 
     virtual void reset() override;
 
+    // Teardown protocol
+    virtual void teardown() override;
+
 private:
     // Private _nolock() helper (caller must hold mutex())
     // CRITICAL: Used to protect bypass changes from calcOutputTo()

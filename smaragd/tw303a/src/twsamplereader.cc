@@ -54,6 +54,11 @@ offset_t twSampleReader::tellPos() const
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twSampleReader::calcOutputTo( IOVector& dest, idx_t idx )
 {
+    // Fast path: Check if component is being torn down
+    if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+        return dest.fillSilence(0, dest.length());
+    }
+
     std::lock_guard<std::mutex> lock(mutex());
 
     // Allocate temp buffer on heap (not stack) to avoid stack overflow in deep recursion
@@ -135,4 +140,26 @@ void twSampleReader::reset_nolock()
 {
     // Reset to beginning of sample
     pos_ = 0;
+}
+
+void twSampleReader::teardown()
+{
+    state_.store(ComponentState::ZOMBIE, std::memory_order_release);
+
+    if (auto parent = parentComponent_.lock()) {
+        if (myInputIndex_ >= 0) {
+            parent->removeInput(myInputIndex_);
+        }
+    }
+
+    std::vector<twComponent*> depsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        depsCopy = dependents_;
+    }
+    for (auto dep : depsCopy) {
+        if (dep) dep->onDependencyTeardown(this);
+    }
+
+    // Sample reader has no children, just mark ZOMBIE
 }

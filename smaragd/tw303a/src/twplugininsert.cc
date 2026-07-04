@@ -45,6 +45,11 @@ idx_t twPluginInsert::getNOutputs() const
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twPluginInsert::calcOutputTo( IOVector& dest, idx_t port )
 {
+    // Fast path: Check if component is being torn down
+    if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+        return dest.fillSilence(0, dest.length());
+    }
+
     std::lock_guard<std::mutex> lock(mutex());
 
     if( !producedThisBlock_ ) {
@@ -136,6 +141,28 @@ void twPluginInsert::reset_nolock()
 	if (plugin_) {
 		plugin_->reset();
 	}
+}
+
+void twPluginInsert::teardown()
+{
+	state_.store(ComponentState::ZOMBIE, std::memory_order_release);
+
+	if (auto parent = parentComponent_.lock()) {
+		if (myInputIndex_ >= 0) {
+			parent->removeInput(myInputIndex_);
+		}
+	}
+
+	std::vector<twComponent*> depsCopy;
+	{
+		std::lock_guard<std::mutex> lock(mutex());
+		depsCopy = dependents_;
+	}
+	for (auto dep : depsCopy) {
+		if (dep) dep->onDependencyTeardown(this);
+	}
+
+	// Plugin insert has no children, just mark ZOMBIE
 }
 
 }  // namespace audio

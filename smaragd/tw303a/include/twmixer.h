@@ -8,6 +8,7 @@ class tw303aEnvironment;
 
 class twMixer : public twComponent {
     virtual void reset() override;
+    virtual void teardown() override;
 private:
     idx_t mixerInputs_;
     struct InputProperties {

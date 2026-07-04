@@ -162,6 +162,11 @@ void twTrackMix::setBufferSize( length_t )
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
 {
+    // Fast path: Check if component is being torn down
+    if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+        return dest.fillSilence(0, dest.length());
+    }
+
     std::lock_guard<std::mutex> lock(mutex());
 
     // Allocate output buffer and read buffer on heap (avoid stack overflow in deep recursion)
@@ -358,4 +363,41 @@ void twTrackMix::reset()
 {
     // Reset play offset to zero
     playOffset_ = 0;
+}
+
+void twTrackMix::teardown()
+{
+    state_.store(ComponentState::ZOMBIE, std::memory_order_release);
+
+    if (auto parent = parentComponent_.lock()) {
+        if (myInputIndex_ >= 0) {
+            parent->removeInput(myInputIndex_);
+        }
+    }
+
+    std::vector<twComponent*> depsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        depsCopy = dependents_;
+    }
+    for (auto dep : depsCopy) {
+        if (dep) dep->onDependencyTeardown(this);
+    }
+
+    // Snapshot clips and tear them down
+    std::vector<twView*> clipsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        for (const ClipEntry &clip : clips_) {
+            if (clip.view) {
+                clipsCopy.push_back(clip.view);
+            }
+        }
+        clips_.clear();  // Prevent audio thread from iterating stale list
+    }
+
+    // Tear down all clips
+    for (auto clip : clipsCopy) {
+        if (clip) clip->teardown();
+    }
 }

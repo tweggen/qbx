@@ -43,6 +43,9 @@ protected:
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
     virtual void reset() override;
 
+    // Teardown protocol
+    virtual void teardown() override;
+
 private:
     // Helpers: do work outside lock (caller must hold mutex)
     int setNPlugs_nolock(idx_t n);

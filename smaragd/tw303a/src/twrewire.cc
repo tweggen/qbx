@@ -48,6 +48,11 @@ void twRewire::init()
 // Phase 2: Lock-free snapshot for audio thread
 length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
 {
+    // Fast path: Check if component is being torn down
+    if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+        return dest.fillSilence(0, dest.length());
+    }
+
     // Snapshot input plug under brief lock, then release before recursive render
     std::shared_ptr<twLatchOutput> inputPlugSnapshot;
     {
@@ -173,5 +178,46 @@ twRewire::twRewire( tw303aEnvironment &env0 )
 void twRewire::reset()
 {
 	// Stateless router: nothing to reset
+}
+
+void twRewire::teardown()
+{
+    state_.store(ComponentState::ZOMBIE, std::memory_order_release);
+
+    // Deregister from parent mixer
+    if (auto parent = parentComponent_.lock()) {
+        if (myInputIndex_ >= 0) {
+            parent->removeInput(myInputIndex_);
+        }
+    }
+
+    // Notify dependents
+    std::vector<twComponent*> depsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        depsCopy = dependents_;
+    }
+    for (auto dep : depsCopy) {
+        if (dep) dep->onDependencyTeardown(this);
+    }
+
+    // Snapshot and tear down all track inputs
+    std::vector<std::shared_ptr<twComponent>> inputsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        for (idx_t i = 0; i < nInputs_; ++i) {
+            if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
+                twLatch &latch = pInputPlugs_[i]->getParentLatch();
+                twComponent &comp = latch.getComponent();
+                // Use shared_ptr with no-op deleter to keep alive during recursion
+                inputsCopy.push_back(std::shared_ptr<twComponent>(&comp, [](twComponent*){}));
+            }
+        }
+    }
+
+    // Recursive teardown (lock released above)
+    for (auto &input : inputsCopy) {
+        input->teardown();
+    }
 }
 

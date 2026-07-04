@@ -80,6 +80,9 @@ protected:
 
     virtual void reset() override;
 
+    // Teardown protocol
+    virtual void teardown() override;
+
 private:
     // Helpers: protect clips_ iteration against concurrent modification.
     // These use the inherited mutex() from twComponent base class to avoid

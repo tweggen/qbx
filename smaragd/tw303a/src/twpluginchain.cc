@@ -24,6 +24,11 @@ void twPluginChain::createOutputLatches()
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twPluginChain::calcOutputTo( IOVector& dest, idx_t port )
 {
+    // Fast path: Check if component is being torn down
+    if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+        return dest.fillSilence(0, dest.length());
+    }
+
     std::lock_guard<std::mutex> lock( pluginsMutex_ );
 
     if( plugins_.empty() ) {
@@ -143,4 +148,50 @@ void twPluginChain::rebuildWiring()
 void twPluginChain::reset()
 {
     // Stateless component: plugins handle their own state
+}
+
+void twPluginChain::teardown()
+{
+    state_.store(ComponentState::ZOMBIE, std::memory_order_release);
+
+    if (auto parent = parentComponent_.lock()) {
+        if (myInputIndex_ >= 0) {
+            parent->removeInput(myInputIndex_);
+        }
+    }
+
+    std::vector<twComponent*> depsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        depsCopy = dependents_;
+    }
+    for (auto dep : depsCopy) {
+        if (dep) dep->onDependencyTeardown(this);
+    }
+
+    // Tear down each plugin in order (snapshot raw pointers, don't hold lock during teardown)
+    std::vector<audio::twPluginInsert*> pluginsCopy;
+    {
+        std::lock_guard<std::mutex> lock(pluginsMutex_);
+        pluginsCopy = plugins_;
+        plugins_.clear();
+    }
+
+    for (auto plugin : pluginsCopy) {
+        if (plugin) plugin->teardown();
+    }
+}
+
+void twPluginChain::onDependencyTeardown(twComponent* dep)
+{
+    // A plugin is being torn down; remove it from our list
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
+    auto it = std::find_if(plugins_.begin(), plugins_.end(),
+        [dep](audio::twPluginInsert *p) {
+            return p == dep;
+        });
+    if (it != plugins_.end()) {
+        plugins_.erase(it);
+        rebuildWiring();
+    }
 }

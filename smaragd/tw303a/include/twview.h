@@ -62,6 +62,9 @@ public:
     virtual void reset() override;
     virtual void createOutputLatches() override;
 
+    // Teardown protocol
+    virtual void teardown() override;
+
 private:
     GetComponentFn getComponentFn_;
 

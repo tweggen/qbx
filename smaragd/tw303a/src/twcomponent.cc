@@ -628,3 +628,50 @@ length_t twComponent::calcOutputTo( sample_t *pDest, length_t length, idx_t idx 
 
     return rendered;
 }
+
+// Teardown protocol: mark as ZOMBIE, deregister from parent, notify dependents
+void twComponent::teardown()
+{
+    // Phase 1: Mark as ZOMBIE immediately (audio thread sees this on next render)
+    state_.store(ComponentState::ZOMBIE, std::memory_order_release);
+
+    // Phase 1b: Self-deregister from parent (bidirectional handoff)
+    if (auto parent = parentComponent_.lock()) {
+        if (myInputIndex_ >= 0) {
+            parent->removeInput(myInputIndex_);
+        }
+    }
+
+    // Phase 1c: Notify dependents this component is being torn down
+    std::vector<twComponent*> depsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        depsCopy = dependents_;
+    }
+    for (auto dep : depsCopy) {
+        if (dep) dep->onDependencyTeardown(this);
+    }
+
+    // Phase 2: Snapshot children and recurse (base class has no children, subclasses override)
+}
+
+// Set input slot to nullptr (called by child during teardown)
+void twComponent::removeInput(idx_t idx)
+{
+    std::lock_guard<std::mutex> lock(mutex());
+
+    // Bounds check
+    if (idx < 0 || idx >= (idx_t)pInputPlugs_.size()) {
+        return;
+    }
+
+    // Set to nullptr (audio thread sees this immediately)
+    pInputPlugs_[idx] = nullptr;
+}
+
+// Default callback when a dependency is torn down
+void twComponent::onDependencyTeardown(twComponent* dep)
+{
+    // Default: ignore (component handles NULL inputs gracefully)
+    (void)dep;  // Suppress unused parameter warning
+}

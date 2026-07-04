@@ -34,6 +34,9 @@ public:
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
 
+    // Teardown protocol
+    virtual void teardown() override;
+
     virtual void createOutputLatches();
 
     virtual idx_t getNInputs() const;

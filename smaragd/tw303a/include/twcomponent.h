@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <map>
+#include <atomic>
 
 #include "exc.h"
 #include "twformat.h"
@@ -14,6 +15,12 @@
 
 // Forward declaration to avoid circular includes
 class IOVector;
+
+enum class ComponentState {
+    ACTIVE,    // Normal operation
+    ZOMBIE,    // Tearing down, outputs silence
+    DELETED    // Memory freed (unused in this implementation)
+};
 
 #define DTOR_DEL(x) {if((x)) {delete (x); (x) = NULL; }}
 
@@ -162,6 +169,13 @@ protected:
     std::vector<std::shared_ptr<twLatch>> pOutputLatches_;
     std::vector<std::shared_ptr<twLatchOutput>> pInputPlugs_;
 
+    // Teardown protocol state
+    std::atomic<ComponentState> state_{ComponentState::ACTIVE};
+
+    // Teardown protocol: parent component tracking
+    std::weak_ptr<twComponent> parentComponent_;  // Parent that owns this component
+    idx_t myInputIndex_{-1};  // Which input slot am I in parent's pInputPlugs_?
+
     friend class twLatch;
     friend class twStreamingLatch;
     
@@ -209,6 +223,10 @@ public:
     // NEW: Type-safe interface using IOVector for bounds-checked rendering.
     // Default implementation wraps raw-pointer interface for compatibility.
     // Components can override this new interface when ready for type-safe rendering.
+    // NOTE: All overrides should check ZOMBIE state at the start:
+    //   if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+    //       return dest.fillSilence(0, dest.length());
+    //   }
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx );
 
     // LEGACY (DEPRECATED): Raw-pointer interface (removed in Phase 3 migration).
@@ -227,10 +245,20 @@ public:
     virtual twLatchOutput *getInputPlug( idx_t ) const;
     int getInputsSet() const { return inputsSet_; }
     virtual twLatchOutput *linkOutput( idx_t idx );
-    
+
     virtual void allocPlugs();
     virtual void init();
     virtual void createOutputLatches() = 0;
+
+    // Teardown Protocol
+    // Mark component as ZOMBIE, deregister from parent, notify dependents, then recursively tear down children
+    virtual void teardown();
+
+    // Set input slot to nullptr (called by child during teardown to deregister from parent)
+    virtual void removeInput(idx_t idx);
+
+    // Callback when a dependency is being torn down (override in components with external dependencies)
+    virtual void onDependencyTeardown(twComponent* dep);
     
     virtual idx_t getNInputs() const = 0;
     virtual idx_t getNOutputs() const = 0;
@@ -444,15 +472,16 @@ protected:
     // See [[unified-component-locking]] for the full strategy.
     inline std::mutex& mutex() const { return stateMutex_; }
 
+protected:
+    // Tier 2 Enhancement #1: Dependency tracking for selective invalidation
+    // Components that depend on this component's output (for cascade invalidation)
+    std::vector<twComponent*> dependents_;
+
 private:
     mutable std::mutex stateMutex_;
 
     // Page cache: maps start position → frozen output page
     std::map<uint64_t, std::shared_ptr<twOutputPage>> outputPages_;
-
-    // Tier 2 Enhancement #1: Dependency tracking for selective invalidation
-    // Components that depend on this component's output (for cascade invalidation)
-    std::vector<twComponent*> dependents_;
 
 signals:
     void inputChanged( idx_t idx, twLatchOutput *former, twLatchOutput *recent );

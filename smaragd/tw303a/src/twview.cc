@@ -34,6 +34,11 @@ int twView::seekTo(offset_t offset)
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twView::calcOutputTo(IOVector& dest, idx_t outChannel)
 {
+    // Fast path: Check if component is being torn down
+    if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+        return dest.fillSilence(0, dest.length());
+    }
+
     twComponent *comp = getComponent();
     if (!comp) {
         return dest.fillSilence(0, dest.length());
@@ -116,4 +121,30 @@ void twView::createOutputLatches()
 {
     twComponent *comp = getComponent();
     if (comp) comp->createOutputLatches();
+}
+
+void twView::teardown()
+{
+    state_.store(ComponentState::ZOMBIE, std::memory_order_release);
+
+    if (auto parent = parentComponent_.lock()) {
+        if (myInputIndex_ >= 0) {
+            parent->removeInput(myInputIndex_);
+        }
+    }
+
+    std::vector<twComponent*> depsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        depsCopy = dependents_;
+    }
+    for (auto dep : depsCopy) {
+        if (dep) dep->onDependencyTeardown(this);
+    }
+
+    // Forward teardown to underlying component
+    twComponent *comp = getComponent();
+    if (comp) {
+        comp->teardown();
+    }
 }

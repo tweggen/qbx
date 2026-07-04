@@ -56,6 +56,9 @@ public:
 
     virtual void reset() override;
 
+    // Teardown protocol
+    virtual void teardown() override;
+
 private:
     // Helper: do seek work outside lock (caller must hold mutex)
     int seekTo_nolock(offset_t newOffset);

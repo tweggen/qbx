@@ -41,6 +41,10 @@ public:
     void rebuildWiring();
 
     virtual void reset() override;
+
+    // Teardown protocol
+    virtual void teardown() override;
+    virtual void onDependencyTeardown(twComponent* dep) override;
 private:
     idx_t nBusses_;
     mutable std::mutex pluginsMutex_;  // protects plugins_ vector from concurrent access

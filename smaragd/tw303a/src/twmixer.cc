@@ -65,6 +65,11 @@ void twMixer::createOutputLatches()
 // Phase 2: Lock-free snapshot for audio thread
 length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
 {
+    // Fast path: Check if component is being torn down
+    if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+        return dest.fillSilence(0, dest.length());
+    }
+
     // Snapshot input plugs and properties under brief lock, then release before recursive render
     struct InputSnap { std::shared_ptr<twLatchOutput> plug; float factor; };
     std::vector<InputSnap> inputSnapshot;
@@ -225,6 +230,43 @@ twMixer::twMixer( tw303aEnvironment &env0, idx_t inputs )
 void twMixer::reset()
 {
 	// Stateless mixer: nothing to reset
+}
+
+void twMixer::teardown()
+{
+    state_.store(ComponentState::ZOMBIE, std::memory_order_release);
+
+    if (auto parent = parentComponent_.lock()) {
+        if (myInputIndex_ >= 0) {
+            parent->removeInput(myInputIndex_);
+        }
+    }
+
+    std::vector<twComponent*> depsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        depsCopy = dependents_;
+    }
+    for (auto dep : depsCopy) {
+        if (dep) dep->onDependencyTeardown(this);
+    }
+
+    // Snapshot inputs before tearing them down
+    std::vector<std::shared_ptr<twComponent>> inputsCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        for (idx_t i = 0; i < mixerInputs_; ++i) {
+            if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
+                twLatch &latch = pInputPlugs_[i]->getParentLatch();
+                twComponent &comp = latch.getComponent();
+                inputsCopy.push_back(std::shared_ptr<twComponent>(&comp, [](twComponent*){}));
+            }
+        }
+    }
+
+    for (auto &input : inputsCopy) {
+        input->teardown();
+    }
 }
 
 
