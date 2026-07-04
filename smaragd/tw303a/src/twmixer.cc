@@ -72,13 +72,17 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
         std::lock_guard<std::mutex> lock(mutex());
         inputSnapshot.reserve(mixerInputs_);
         for( idx_t ch = 0; ch < mixerInputs_; ++ch ) {
+            float volumeFactor = 0.0f;
+            if( inputProperties_ ) {
+                volumeFactor = inputProperties_[ch].volumeFactor_;
+            }
             if( ch < (idx_t)pInputPlugs_.size() && pInputPlugs_[ch] ) {
                 inputSnapshot.push_back({
                     pInputPlugs_[ch],  // Copy shared_ptr (refcount++)
-                    inputProperties_[ch].volumeFactor_
+                    volumeFactor
                 });
             } else {
-                inputSnapshot.push_back({ nullptr, 0.0f });
+                inputSnapshot.push_back({ nullptr, volumeFactor });
             }
         }
     }  // Lock released here; inputSnapshot keeps plugs alive
