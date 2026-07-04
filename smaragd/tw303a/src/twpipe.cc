@@ -16,7 +16,7 @@ void twPipe::init()
 void twPipe::createOutputLatches()
 {
 	// use default buffer size
-	pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
+	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
@@ -30,7 +30,7 @@ length_t twPipe::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 	memcpy( inBuffer, inBuffer+env.getSRate(), sizeof( sample_t ) * dest.length() );
 
 	// Read new input data
-	realRead = ((twLatchStreamingOutput *)pInputPlugs[0])->readStreamingData(
+	realRead = static_cast<twLatchStreamingOutput*>(pInputPlugs_[0].get())->readStreamingData(
 		inBuffer+env.getSRate(), dest.length());
 	if( realRead == 0 ) {
 		throw new excStandard( "twPipe::calcOutputTo(): Source did not provide data." );

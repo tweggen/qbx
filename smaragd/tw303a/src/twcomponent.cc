@@ -113,37 +113,20 @@ void twComponent::resetAllLatches()
     // Reset all output latches to offset 0, ensuring deterministic capture rebuilds.
     // This fixes the nil-operation bug where rebuilding without actual changes
     // would produce different audio due to persisted latch offsets.
-    if( pOutputLatches ) {
-        for( idx_t i = 0; i < getNOutputs(); i++ ) {
-            if( pOutputLatches[i] ) {
-                pOutputLatches[i]->resetOffset();
-            }
+    for( idx_t i = 0; i < getNOutputs(); i++ ) {
+        if( pOutputLatches_.size() > i && pOutputLatches_[i] ) {
+            pOutputLatches_[i]->resetOffset();
         }
     }
 }
 
 void twComponent::allocPlugs()
 {
-    if( getNInputs()>0 ) {
-        pInputPlugs = (twLatchOutput **) ::calloc (sizeof (twLatchOutput *), getNInputs() );
-        if( !pInputPlugs ) {
-            throw excStandard(
-                "twComponent::twComponent(): "
-                "Not enough memory to create input plug pointer table." );
-        }
-    } else {
-        pInputPlugs = NULL;
-    }
-    if( getNOutputs()>0 ) {
-        pOutputLatches = (twLatch **)  calloc (sizeof (twLatch *), getNOutputs() );
-        if( !pOutputLatches ) {
-            throw excStandard(
-                "twComponent::twPlugs(): "
-                "Not enough memory to create output plug pointer table." );
-        }
-    } else {
-        pOutputLatches = NULL;
-    }
+    // Phase 1: Convert to shared_ptr vectors for thread-safe lifetime management
+    pInputPlugs_.clear();
+    pOutputLatches_.clear();
+    pInputPlugs_.resize(getNInputs());      // Allocate slots (all nullptr initially)
+    pOutputLatches_.resize(getNOutputs());  // Allocate slots (all nullptr initially)
 }
 
 void twComponent::init()
@@ -177,44 +160,46 @@ void twComponent::init()
  */
 twLatchOutput * twComponent::linkOutput( idx_t idx )
 {
-    return pOutputLatches[idx]->addOutput();
+    if( idx < 0 || idx >= (idx_t)pOutputLatches_.size() || !pOutputLatches_[idx] ) {
+        return nullptr;
+    }
+    return pOutputLatches_[idx]->addOutput();
 }
 
 void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
 {
-    // Guard: if pInputPlugs is null, the component wasn't properly initialized
-    // (likely because it reports 0 inputs, or was created but not fully initialized).
-    // Silently return to prevent a crash; the component won't have audio routed to it.
-    if( !pInputPlugs ) {
-        fprintf(stderr, "twComponent::setInput(): pInputPlugs == nullptr (component reports 0 inputs)\n");
+    // Guard: bounds check to prevent array overflow
+    if( idx < 0 || idx >= getNInputs() ) {
+        fprintf(stderr, "twComponent::setInput(): idx=%d out of range [0, %d)\n", (int)idx, (int)getNInputs());
         return;
     }
 
-    // Guard: bounds check to prevent array overflow
-    if( idx >= getNInputs() ) {
-        fprintf(stderr, "twComponent::setInput(): idx=%d >= getNInputs()=%d\n", (int)idx, (int)getNInputs());
+    // Guard: vector must be allocated
+    if( idx >= (idx_t)pInputPlugs_.size() ) {
+        fprintf(stderr, "twComponent::setInput(): pInputPlugs_ not allocated\n");
         return;
     }
 
     // Avoid unnecessary reconnection: if input is already set to the same output, do nothing
-    if( pInputPlugs[idx] == newOutput ) {
+    if( pInputPlugs_[idx].get() == newOutput ) {
         return;
     }
 
-    if( pInputPlugs[idx] ) {
-        auto parentLatch = &(pInputPlugs[idx]->getParentLatch());
+    if( pInputPlugs_[idx] ) {
+        auto parentLatch = &(pInputPlugs_[idx]->getParentLatch());
         if(parentLatch==nullptr)
         {
-            fprintf(stderr, "twComponent::setInput(): pInputPlugs[idx]->getParentLatch() == null\n");
+            fprintf(stderr, "twComponent::setInput(): pInputPlugs_[idx]->getParentLatch() == null\n");
             return;
         }
-        pInputPlugs[idx]->getParentLatch().deleteOutput( pInputPlugs[idx] );
-        pInputPlugs[idx] = NULL;
+        pInputPlugs_[idx]->getParentLatch().deleteOutput( pInputPlugs_[idx].get() );
+        pInputPlugs_[idx] = nullptr;
         if( !newOutput ) --inputsSet_;
     } else {
         if( newOutput ) ++inputsSet_;
     }
-    pInputPlugs[idx] = newOutput;
+    // Store raw pointer; caller must ensure lifetime is managed
+    pInputPlugs_[idx] = std::shared_ptr<twLatchOutput>(newOutput);
 }
 
 /**
@@ -223,8 +208,9 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
  */
 twLatchOutput *twComponent::getInputPlug( idx_t idx ) const
 {
-    if( idx<0 || idx>getNInputs() ) return NULL;
-    return pInputPlugs[idx];
+    if( idx < 0 || idx >= getNInputs() ) return nullptr;
+    if( idx >= (idx_t)pInputPlugs_.size() ) return nullptr;
+    return pInputPlugs_[idx].get();
 } 
 
 /**
@@ -251,8 +237,8 @@ int twComponent::initOperation( int initId )
 
 twComponent::~twComponent ()
 {
-    if( pInputPlugs ) free( pInputPlugs );
-    if( pOutputLatches ) free( pOutputLatches );
+    // Phase 1: Vectors handle RAII cleanup automatically
+    // shared_ptr destructs when removed from vector or when vector is destroyed
 }
 
 /**
@@ -274,10 +260,9 @@ twComponent::~twComponent ()
 twComponent::twComponent( tw303aEnvironment &env0 )
     : currentOperation_( -1 ),
       inputsSet_(0),
-      env( env0 ),
-      pOutputLatches(0),
-      pInputPlugs(0)
-{    
+      env( env0 )
+      // Phase 1: vectors initialize empty by default
+{
 }
 
 // ============================================================================

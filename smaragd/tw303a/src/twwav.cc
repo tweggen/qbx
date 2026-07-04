@@ -137,7 +137,7 @@ int twWav::writeLoop()
 		length_t realRead;
 		length_t readNow = toWrite<env.getBufferSize()?toWrite:env.getBufferSize();
 
-		realRead = ((twLatchStreamingOutput *)pInputPlugs[0]) -> readStreamingData(
+		realRead = static_cast<twLatchStreamingOutput*>(pInputPlugs_[0].get())->readStreamingData(
 			sampleBuffer,
 			readNow
 			);

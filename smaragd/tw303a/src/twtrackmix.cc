@@ -144,7 +144,7 @@ void twTrackMix::setTrackGain(double gainDb)
 
 void twTrackMix::createOutputLatches()
 {
-    pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
+    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
 }
 
 void twTrackMix::setBufferSize( length_t )

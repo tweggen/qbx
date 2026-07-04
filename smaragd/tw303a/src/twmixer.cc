@@ -32,8 +32,8 @@ int twMixer::seekTo_nolock( offset_t offset )
 {
     // Forward the seek to all input plugs
     for (idx_t i = 0; i < mixerInputs_; ++i) {
-        if (pInputPlugs[i]) {
-            twLatch &latch = pInputPlugs[i]->getParentLatch();
+        if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
+            twLatch &latch = pInputPlugs_[i]->getParentLatch();
             twComponent &comp = latch.getComponent();
             comp.seekTo(offset);
         }
@@ -55,37 +55,51 @@ void twMixer::createOutputLatches()
 #ifdef DEBUG_COMPONENT
 	fprintf( sterr, "twMixer::createOutputLatches(): creating streaming latch..." );
 #endif
-	pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
+	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
 #ifdef DEBUG_COMPONENT
 	fprintf( sterr, "twMixer::createOutputLatches(): leaving." );
 #endif
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+// Phase 2: Lock-free snapshot for audio thread
 length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
 {
-    std::lock_guard<std::mutex> lock(mutex());
+    // Snapshot input plugs and properties under brief lock, then release before recursive render
+    struct InputSnap { std::shared_ptr<twLatchOutput> plug; float factor; };
+    std::vector<InputSnap> inputSnapshot;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        inputSnapshot.reserve(mixerInputs_);
+        for( idx_t ch = 0; ch < mixerInputs_; ++ch ) {
+            if( ch < (idx_t)pInputPlugs_.size() && pInputPlugs_[ch] ) {
+                inputSnapshot.push_back({
+                    pInputPlugs_[ch],  // Copy shared_ptr (refcount++)
+                    inputProperties_[ch].volumeFactor_
+                });
+            } else {
+                inputSnapshot.push_back({ nullptr, 0.0f });
+            }
+        }
+    }  // Lock released here; inputSnapshot keeps plugs alive
 
-    // Allocate temp buffer for mixing on heap (avoid stack overflow in deep recursion)
+    // Safe: recursive render can proceed; audio thread can try_to_lock immediately
     std::vector<sample_t> outputBuffer(dest.length(), 0.0f);
-
-    // Mix all inputs
+    std::vector<sample_t> tmpBuffer(dest.length());
     length_t realRead = 0;
-    InputProperties *props = inputProperties_;
 
-    for( idx_t ch = 0; ch < mixerInputs_; ch++, props++ ) {
-        if( !pInputPlugs[ch] ) continue;
-        float factor = props->volumeFactor_;
-
-        realRead = ((twLatchStreamingOutput *)pInputPlugs[ch])->readStreamingData( inBuffer, dest.length() );
+    for( const auto& inp : inputSnapshot ) {
+        if( !inp.plug ) continue;
+        realRead = static_cast<twLatchStreamingOutput*>
+            (inp.plug.get())->readStreamingData( tmpBuffer.data(), dest.length() );
         if( realRead != dest.length() ) {
             throw new excStandard( "twMixer::calcOutputTo(): Source did not provide sufficient data." );
         }
 
         sample_t *pCurr = outputBuffer.data();
-        sample_t *pSrc = inBuffer;
+        sample_t *pSrc = tmpBuffer.data();
         for( offset_t i = 0; i < (offset_t)dest.length(); i++ ) {
-            *pCurr++ += *pSrc++ * factor;
+            *pCurr++ += *pSrc++ * inp.factor;
         }
     }
 
@@ -134,7 +148,8 @@ int twMixer::setNInputs( idx_t n )
 
 // Caller must hold mutex()
 // CRITICAL: Must be called under lock to prevent use-after-free when
-// calcOutputTo() is running concurrently and dereferencing pInputPlugs array
+// calcOutputTo() is running concurrently and dereferencing pInputPlugs_ array
+// Phase 1: Use shared_ptr vectors to prevent dangling references
 int twMixer::setNInputs_nolock( idx_t n )
 {
     if( n<=0 ) return -2;
@@ -144,15 +159,9 @@ int twMixer::setNInputs_nolock( idx_t n )
         // in the data structures.
         return 0;
     }
-    twLatchOutput **newInputPlugs = (twLatchOutput **) ::calloc (sizeof (twLatchOutput *), n );
-    if( !newInputPlugs ) return -1;
-    if( mixerInputs_ ) {
-        memcpy( newInputPlugs, pInputPlugs, sizeof( twLatchOutput *)*mixerInputs_ );
-    }
-    twLatchOutput **oldPlugs = pInputPlugs;
-    pInputPlugs = newInputPlugs;
-    mixerInputs_ = n;
-    ::free( oldPlugs );
+
+    // Resize vector (shared_ptr destructs old elements automatically)
+    pInputPlugs_.resize(n);
 
     // (Re)alloc input properties.
     if( !inputProperties_ ) {
@@ -160,6 +169,7 @@ int twMixer::setNInputs_nolock( idx_t n )
     } else {
         inputProperties_ = (InputProperties *) ::realloc( inputProperties_, n*sizeof( InputProperties ) );
     }
+    mixerInputs_ = n;
     return 0;
 }
 

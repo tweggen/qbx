@@ -51,8 +51,8 @@ void twSpeaker::startOutput()
     // Request that rate from the device so that, when the device can open there,
     // no resampling is needed at all.
     std::uint32_t graphRate = (std::uint32_t) env.getSRate();
-    if (pInputPlugs != nullptr && pInputPlugs[0] != nullptr) {
-        graphRate = pInputPlugs[0]->getFormat().sampleRate;
+    if (!pInputPlugs_.empty() && pInputPlugs_[0] != nullptr) {
+        graphRate = pInputPlugs_[0]->getFormat().sampleRate;
     }
 
     TWSPK_LOG( "calling openDevice with rate=%u", graphRate );
@@ -115,8 +115,8 @@ void twSpeaker::startOutput()
     // (the resampler here is correctly a passthrough). If wire != device but
     // passthrough is true, the boundary resampler failed to engage.
     {
-        std::uint32_t wireRate = (pInputPlugs != nullptr && pInputPlugs[0] != nullptr)
-                                     ? pInputPlugs[0]->getFormat().sampleRate
+        std::uint32_t wireRate = (!pInputPlugs_.empty() && pInputPlugs_[0] != nullptr)
+                                     ? pInputPlugs_[0]->getFormat().sampleRate
                                      : 0;
         bool isPassthrough = (graphRate == cfg.sampleRate);
         TWSPK_LOG( "rate diag — project(env)=%d Hz, wire=%u Hz, "

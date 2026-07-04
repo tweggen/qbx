@@ -27,9 +27,9 @@ void twPluginInsert::createOutputLatches()
 {
     // Create output latches for each output port.
     idx_t nOut = getNOutputs();
-    pOutputLatches = new twLatch *[nOut];
+    pOutputLatches_.resize(nOut);
     for( idx_t i = 0; i < nOut; ++i )
-        pOutputLatches[i] = new twStreamingLatch( *this, i, 4096 );
+        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( *this, i, 4096 );
 }
 
 idx_t twPluginInsert::getNInputs() const
@@ -78,10 +78,10 @@ length_t twPluginInsert::calcOutputTo( IOVector& dest, idx_t port )
 
 length_t twPluginInsert::pullInput( idx_t port, sample_t *dst, length_t len )
 {
-    if( pInputPlugs == nullptr || pInputPlugs[port] == nullptr )
+    if( pInputPlugs_.empty() || port >= (idx_t)pInputPlugs_.size() || !pInputPlugs_[port] )
         return 0;
 
-    auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs[port]);
+    auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs_[port].get());
     return input->readStreamingData( dst, len );
 }
 
@@ -109,10 +109,10 @@ void twPluginInsert::setBypass_nolock( bool bypass )
 int twPluginInsert::seekTo( offset_t offset )
 {
     // Forward seek to input plugs (the previous stage in the chain)
-    if( pInputPlugs ) {
+    if( !pInputPlugs_.empty() ) {
         for( idx_t i = 0; i < getNInputs(); ++i ) {
-            if( pInputPlugs[i] ) {
-                twLatch &latch = pInputPlugs[i]->getParentLatch();
+            if( i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i] ) {
+                twLatch &latch = pInputPlugs_[i]->getParentLatch();
                 twComponent &comp = latch.getComponent();
                 comp.seekTo( offset );
             }

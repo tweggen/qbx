@@ -71,7 +71,7 @@ void twSampleReader::createOutputLatches()
 {
     idx_t n = getNOutputs();
     for( idx_t i = 0; i < n; ++i ) {
-        pOutputLatches[i] = new twStreamingLatch( *this, i, 0 );
+        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( *this, i, 0 );
     }
 }
 

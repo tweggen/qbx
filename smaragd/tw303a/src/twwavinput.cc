@@ -13,7 +13,7 @@
 
 void twWavInput::createOutputLatches()
 {
-    pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
+    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
 }
 
 int twWavInput::setNOutputs( idx_t )

@@ -156,12 +156,12 @@ private:
     
 protected:
     virtual int doInitOperation( int );
-    
+
     int inputsSet_;
     tw303aEnvironment &env;
-    twLatch ** pOutputLatches;
-    twLatchOutput ** pInputPlugs;
-    
+    std::vector<std::shared_ptr<twLatch>> pOutputLatches_;
+    std::vector<std::shared_ptr<twLatchOutput>> pInputPlugs_;
+
     friend class twLatch;
     friend class twStreamingLatch;
     

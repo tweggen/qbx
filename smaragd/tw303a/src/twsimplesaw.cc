@@ -24,7 +24,7 @@ void twSimpleSaw::createOutputLatches()
 #ifdef DEBUG_COMPONENT
 	fprintf( sterr, "twSimpleSaw::createOutputLatches(): creating streaming latch..." );
 #endif
-	pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
+	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
 #ifdef DEBUG_COMPONENT
 	fprintf( sterr, "twSimpleSaw::createOutputLatches(): leaving." );
 #endif
@@ -38,7 +38,7 @@ length_t twSimpleSaw::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 	sample_t *pCurrFreq = freqBuffer;
 	length_t realRead;
 
-	realRead = ((twLatchStreamingOutput *)pInputPlugs[0])->readStreamingData(
+	realRead = static_cast<twLatchStreamingOutput*>(pInputPlugs_[0].get())->readStreamingData(
 		freqBuffer, dest.length());
 	if( realRead == 0 ) {
 		throw new excStandard( "twSimpleSaw::calcOutputTo(): Source did not provide data." );

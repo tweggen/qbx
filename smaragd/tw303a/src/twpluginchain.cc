@@ -16,9 +16,9 @@ twPluginChain::~twPluginChain() = default;
 
 void twPluginChain::createOutputLatches()
 {
-    pOutputLatches = new twLatch *[nBusses_];
+    pOutputLatches_.resize(nBusses_);
     for( idx_t i = 0; i < nBusses_; ++i )
-        pOutputLatches[i] = new twStreamingLatch( *this, i, 4096 );
+        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( *this, i, 4096 );
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
@@ -28,9 +28,9 @@ length_t twPluginChain::calcOutputTo( IOVector& dest, idx_t port )
 
     if( plugins_.empty() ) {
         // No plugins: passthrough from input via IOVector
-        if( pInputPlugs && pInputPlugs[port] ) {
+        if( port < (idx_t)pInputPlugs_.size() && pInputPlugs_[port] ) {
             std::vector<sample_t> buffer(dest.length());
-            auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs[port]);
+            auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs_[port].get());
             length_t len = input->readStreamingData( buffer.data(), dest.length() );
             return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), len), 0, len);
         }
@@ -94,10 +94,10 @@ int twPluginChain::seekTo( offset_t offset )
     }
 
     // Also seek the input plugs (the source feeding into the chain)
-    if( pInputPlugs ) {
+    if( !pInputPlugs_.empty() ) {
         for( idx_t i = 0; i < nBusses_; ++i ) {
-            if( pInputPlugs[i] ) {
-                twLatch &latch = pInputPlugs[i]->getParentLatch();
+            if( i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i] ) {
+                twLatch &latch = pInputPlugs_[i]->getParentLatch();
                 twComponent &comp = latch.getComponent();
                 comp.seekTo( offset );
             }
@@ -120,8 +120,8 @@ void twPluginChain::rebuildWiring()
     for( idx_t port = 0; port < nBusses_; ++port ) {
         // First plugin gets the track input
         auto *firstPlugin = plugins_[0];
-        if( firstPlugin && port < firstPlugin->getNInputs() && pInputPlugs && pInputPlugs[port] ) {
-            firstPlugin->setInput( port, pInputPlugs[port] );
+        if( firstPlugin && port < firstPlugin->getNInputs() && port < (idx_t)pInputPlugs_.size() && pInputPlugs_[port] ) {
+            firstPlugin->setInput( port, pInputPlugs_[port].get() );
         }
 
         // Wire each subsequent plugin to the previous one's output

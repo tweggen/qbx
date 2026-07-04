@@ -27,15 +27,13 @@ int twRewire::seekTo( offset_t offset )
 int twRewire::seekTo_nolock( offset_t offset )
 {
     // Forward the seek to all connected input plugs (the tracks)
-    if (pInputPlugs) {
-        for (idx_t i = 0; i < nInputs_; ++i) {
-            if (pInputPlugs[i]) {
-                // The input plug is a twLatchOutput which may be backed by a twComponent
-                // We need to seek the parent latch's component
-                twLatch &latch = pInputPlugs[i]->getParentLatch();
-                twComponent &comp = latch.getComponent();
-                comp.seekTo(offset);
-            }
+    for (idx_t i = 0; i < nInputs_; ++i) {
+        if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
+            // The input plug is a twLatchOutput which may be backed by a twComponent
+            // We need to seek the parent latch's component
+            twLatch &latch = pInputPlugs_[i]->getParentLatch();
+            twComponent &comp = latch.getComponent();
+            comp.seekTo(offset);
         }
     }
     return 0;
@@ -47,19 +45,24 @@ void twRewire::init()
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
+// Phase 2: Lock-free snapshot for audio thread
 length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
 {
-    std::lock_guard<std::mutex> lock(mutex());
+    // Snapshot input plug under brief lock, then release before recursive render
+    std::shared_ptr<twLatchOutput> inputPlugSnapshot;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        if( idx < 0 || idx >= nInputs_ || !pInputPlugs_[idx] ) {
+            return dest.fillSilence(0, dest.length());
+        }
+        inputPlugSnapshot = pInputPlugs_[idx];  // Copy shared_ptr (refcount++)
+    }  // Lock released here; inputPlugSnapshot keeps plug alive
 
-    // If no input wired, fill destination with silence
-    if( idx < 0 || idx >= nInputs_ || !pInputPlugs[idx] ) {
-        return dest.fillSilence(0, dest.length());
-    }
-
+    // Safe: recursive render can proceed; audio thread can try_to_lock immediately
     // Read from input into temp buffer (heap-allocated to avoid stack overflow in deep recursion)
     std::vector<sample_t> buffer(dest.length());
-    length_t readFrames = ((twLatchStreamingOutput *)pInputPlugs[idx])->readStreamingData(
-        buffer.data(), dest.length());
+    length_t readFrames = static_cast<twLatchStreamingOutput*>
+        (inputPlugSnapshot.get())->readStreamingData(buffer.data(), dest.length());
 
     // Write to IOVector destination
     return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), readFrames), 0, readFrames);
@@ -73,52 +76,29 @@ int twRewire::setNPlugs( idx_t n )
 
 // Caller must hold mutex()
 // CRITICAL: Must be called under lock because:
-// 1. Reallocates pInputPlugs array (use-after-free race with calcOutputTo)
-// 2. Reallocates pOutputLatches array (use-after-free race with linkOutput)
-// 3. Deletes twStreamingLatch objects (dangling reference race with latch consumers)
+// 1. Reallocates pInputPlugs_ vector (use-after-free race with calcOutputTo)
+// 2. Reallocates pOutputLatches_ vector (use-after-free race with linkOutput)
+// Phase 1: Use shared_ptr to prevent dangling references; RAII handles cleanup
 int twRewire::setNPlugs_nolock( idx_t n )
 {
     if( n < 0 ) return -1;
-    if( pInputPlugs && pOutputLatches && n == nInputs_ ) return 0;
+    if( n == nInputs_ ) return 0;
 
     // Refuse to shrink when an outgoing slot is still wired up.
-    if( pInputPlugs ) {
-        for( int i = n; i < nInputs_; ++i ) {
-            if( pInputPlugs[i] ) return -2;
+    for( int i = n; i < nInputs_; ++i ) {
+        if( i < (int)pInputPlugs_.size() && pInputPlugs_[i] ) {
+            return -2;
         }
     }
 
-    const idx_t allocN = (n > 0 ? n : 1);
-    const int toCopy = (n < nInputs_) ? n : nInputs_;
-
-    twLatchOutput **newPlugs =
-        (twLatchOutput **) ::calloc( sizeof( twLatchOutput * ), allocN );
-    if( pInputPlugs ) {
-        if( toCopy > 0 ) {
-            ::memcpy( newPlugs, pInputPlugs, toCopy * sizeof( twLatchOutput * ) );
-        }
-        ::free( pInputPlugs );
-    }
-    pInputPlugs = newPlugs;
-
-    twLatch **newLatches =
-        (twLatch **) ::calloc( sizeof( twLatch * ), allocN );
-    if( pOutputLatches ) {
-        if( toCopy > 0 ) {
-            ::memcpy( newLatches, pOutputLatches, toCopy * sizeof( twLatch * ) );
-        }
-        // Latches in slots that are going away need to be deleted.
-        for( int i = n; i < nInputs_; ++i ) {
-            if( pOutputLatches[i] ) delete pOutputLatches[i];
-        }
-        ::free( pOutputLatches );
-    }
-    pOutputLatches = newLatches;
+    // Resize vectors (shared_ptr destructs old elements automatically on shrink)
+    pInputPlugs_.resize(n);
+    pOutputLatches_.resize(n);
 
     // Fill any freshly-created slots with their own streaming latch.
     for( int i = 0; i < n; ++i ) {
-        if( !pOutputLatches[i] ) {
-            pOutputLatches[i] = new twStreamingLatch( *this, i, 0 );
+        if( !pOutputLatches_[i] ) {
+            pOutputLatches_[i] = std::make_shared<twStreamingLatch>( *this, i, 0 );
         }
     }
 
@@ -160,26 +140,18 @@ twLatchOutput *twRewire::linkOutput( idx_t idx )
 }
 
 // Caller must hold mutex()
-// CRITICAL: Lock prevents race with setNPlugs() which may reallocate or delete pOutputLatches
+// CRITICAL: Lock prevents race with setNPlugs() which may reallocate pOutputLatches_
 twLatchOutput *twRewire::linkOutput_nolock( idx_t idx )
 {
-    if( idx < 0 || idx >= nInputs_ ) return NULL;
-    if( !pOutputLatches[idx] ) return NULL;
-    return pOutputLatches[idx]->addOutput();
+    if( idx < 0 || idx >= nInputs_ ) return nullptr;
+    if( idx >= (idx_t)pOutputLatches_.size() || !pOutputLatches_[idx] ) return nullptr;
+    return pOutputLatches_[idx]->addOutput();
 }
 
 twRewire::~twRewire()
 {
-    // Base class frees the pOutputLatches array itself; we have to
-    // delete the latch objects it points at first.
-    if( pOutputLatches ) {
-        for( int i = 0; i < nInputs_; ++i ) {
-            if( pOutputLatches[i] ) {
-                delete pOutputLatches[i];
-                pOutputLatches[i] = NULL;
-            }
-        }
-    }
+    // Phase 1: Vectors and shared_ptr handle RAII cleanup automatically
+    // Latches in pOutputLatches_ are destroyed when removed from vector
 }
 
 twRewire::twRewire( tw303aEnvironment &env0 )

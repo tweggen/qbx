@@ -32,7 +32,7 @@ void twMoog::init()
 
 void twMoog::createOutputLatches()
 {
-	pOutputLatches[0] = new twStreamingLatch( *this, 0, 0 );
+	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
@@ -43,14 +43,14 @@ length_t twMoog::calcOutputTo( IOVector& dest, idx_t /* idx */ )
 	std::vector<sample_t> freqBuffer_tmp(dest.length());
 
 	// Read audio input
-	length_t realRead = ((twLatchStreamingOutput *)pInputPlugs[0])->readStreamingData(
+	length_t realRead = static_cast<twLatchStreamingOutput*>(pInputPlugs_[0].get())->readStreamingData(
 		audioBuffer.data(), dest.length());
 	if( realRead != dest.length() ) {
 		throw new excStandard( "twMoog::calcOutputTo(): Audio source did not provide sufficient data." );
 	}
 
 	// Read frequency input
-	realRead = ((twLatchStreamingOutput *)pInputPlugs[1])->readStreamingData(
+	realRead = static_cast<twLatchStreamingOutput*>(pInputPlugs_[1].get())->readStreamingData(
 		freqBuffer_tmp.data(), dest.length());
 	if( realRead != dest.length() ) {
 		throw new excStandard( "twMoog::calcOutputTo(): Frequency source did not provide sufficient data." );
