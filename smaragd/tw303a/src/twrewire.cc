@@ -52,7 +52,7 @@ length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
     std::shared_ptr<twLatchOutput> inputPlugSnapshot;
     {
         std::lock_guard<std::mutex> lock(mutex());
-        if( idx < 0 || idx >= nInputs_ || !pInputPlugs_[idx] ) {
+        if( idx < 0 || idx >= nInputs_ || idx >= (idx_t)pInputPlugs_.size() || !pInputPlugs_[idx] ) {
             return dest.fillSilence(0, dest.length());
         }
         inputPlugSnapshot = pInputPlugs_[idx];  // Copy shared_ptr (refcount++)
