@@ -89,6 +89,9 @@ int twRewire::setNPlugs_nolock( idx_t n )
 {
     if( n < 0 ) return -1;
 
+    // If size unchanged AND vectors are already initialized, no-op
+    if( n == nInputs_ && (size_t)n == pInputPlugs_.size() ) return 0;
+
     // Refuse to shrink when an outgoing slot is still wired up.
     for( int i = n; i < nInputs_; ++i ) {
         if( i < (int)pInputPlugs_.size() && pInputPlugs_[i] ) {
@@ -96,8 +99,7 @@ int twRewire::setNPlugs_nolock( idx_t n )
         }
     }
 
-    // Always resize vectors to ensure they're initialized, even on first call
-    // (shared_ptr destructs old elements automatically on shrink)
+    // Resize vectors (shared_ptr destructs old elements automatically on shrink)
     pInputPlugs_.resize(n);
     pOutputLatches_.resize(n);
 
