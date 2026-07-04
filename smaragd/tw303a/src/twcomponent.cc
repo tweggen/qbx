@@ -186,20 +186,26 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
     }
 
     if( pInputPlugs_[idx] ) {
-        auto parentLatch = &(pInputPlugs_[idx]->getParentLatch());
+        twLatchOutput* oldPlug = pInputPlugs_[idx].get();
+        auto parentLatch = &(oldPlug->getParentLatch());
         if(parentLatch==nullptr)
         {
             fprintf(stderr, "twComponent::setInput(): pInputPlugs_[idx]->getParentLatch() == null\n");
             return;
         }
-        pInputPlugs_[idx]->getParentLatch().deleteOutput( pInputPlugs_[idx].get() );
+        oldPlug->getParentLatch().deleteOutput(oldPlug);
         pInputPlugs_[idx] = nullptr;
         if( !newOutput ) --inputsSet_;
     } else {
         if( newOutput ) ++inputsSet_;
     }
-    // Store raw pointer; caller must ensure lifetime is managed
-    pInputPlugs_[idx] = std::shared_ptr<twLatchOutput>(newOutput);
+    // Create a no-op shared_ptr wrapper that doesn't take ownership
+    // (ownership is managed by the output latch)
+    if( newOutput ) {
+        pInputPlugs_[idx] = std::shared_ptr<twLatchOutput>(newOutput, [](twLatchOutput*){});
+    } else {
+        pInputPlugs_[idx] = nullptr;
+    }
 }
 
 /**
