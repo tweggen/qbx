@@ -92,8 +92,11 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
     std::vector<sample_t> tmpBuffer(dest.length());
     length_t realRead = 0;
 
+    static int processedChannels = 0;
+    int validChannels = 0;
     for( const auto& inp : inputSnapshot ) {
         if( !inp.plug ) continue;
+        validChannels++;
         realRead = static_cast<twLatchStreamingOutput*>
             (inp.plug.get())->readStreamingData( tmpBuffer.data(), dest.length() );
         if( realRead != dest.length() ) {
@@ -108,6 +111,12 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
     }
 
     // Write mixed result to IOVector destination
+    if (validChannels == 0) {
+        static int emptyCount = 0;
+        if (++emptyCount % 100 == 1) {
+            fprintf(stderr, "twMixer::calcOutputTo() has no valid input channels (snapshot size=%zu)\n", inputSnapshot.size());
+        }
+    }
     return dest.copyFrom(IOVector::CreateFromBuffer(outputBuffer.data(), realRead), 0, realRead);
 }
 

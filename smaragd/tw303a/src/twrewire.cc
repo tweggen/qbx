@@ -53,6 +53,12 @@ length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
     {
         std::lock_guard<std::mutex> lock(mutex());
         if( idx < 0 || idx >= nInputs_ || idx >= (idx_t)pInputPlugs_.size() || !pInputPlugs_[idx] ) {
+            static int silenceCount = 0;
+            if (++silenceCount % 100 == 1) {
+                fprintf(stderr, "twRewire::calcOutputTo() returning silence: idx=%d, nInputs=%d, pPlugs.size=%zu, plug=%s\n",
+                    (int)idx, (int)nInputs_, pInputPlugs_.size(),
+                    (idx >= (idx_t)pInputPlugs_.size()) ? "OOB" : (!pInputPlugs_[idx] ? "null" : "valid"));
+            }
             return dest.fillSilence(0, dest.length());
         }
         inputPlugSnapshot = pInputPlugs_[idx];  // Copy shared_ptr (refcount++)
@@ -82,7 +88,6 @@ int twRewire::setNPlugs( idx_t n )
 int twRewire::setNPlugs_nolock( idx_t n )
 {
     if( n < 0 ) return -1;
-    if( n == nInputs_ ) return 0;
 
     // Refuse to shrink when an outgoing slot is still wired up.
     for( int i = n; i < nInputs_; ++i ) {
@@ -91,7 +96,8 @@ int twRewire::setNPlugs_nolock( idx_t n )
         }
     }
 
-    // Resize vectors (shared_ptr destructs old elements automatically on shrink)
+    // Always resize vectors to ensure they're initialized, even on first call
+    // (shared_ptr destructs old elements automatically on shrink)
     pInputPlugs_.resize(n);
     pOutputLatches_.resize(n);
 
