@@ -64,37 +64,28 @@ void twMixer::createOutputLatches()
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
 {
-    // Snapshot input plugs and volume factors under brief lock, then release before recursive render
-    struct InputSnap { twLatchStreamingOutput* plug; float factor; };
-    std::vector<InputSnap> inputs;
-    {
-        std::lock_guard<std::mutex> lock(mutex());
-        inputs.reserve(mixerInputs_);
-        for (idx_t ch = 0; ch < mixerInputs_; ++ch) {
-            inputs.push_back({
-                static_cast<twLatchStreamingOutput*>(pInputPlugs[ch]),
-                inputProperties_[ch].volumeFactor_
-            });
-        }
-    }
+    std::lock_guard<std::mutex> lock(mutex());
 
-    // Allocate temp buffers for mixing on heap (avoid stack overflow in deep recursion)
-    // Lock released: recursive freezePage calls on upstream components can proceed without blocking audio thread
+    // Allocate temp buffer for mixing on heap (avoid stack overflow in deep recursion)
     std::vector<sample_t> outputBuffer(dest.length(), 0.0f);
-    std::vector<sample_t> tmpBuffer(dest.length());
-    length_t realRead = 0;
 
-    for (const auto& inp : inputs) {
-        if (!inp.plug) continue;
-        realRead = inp.plug->readStreamingData(tmpBuffer.data(), dest.length());
-        if (realRead != dest.length()) {
-            throw new excStandard("twMixer::calcOutputTo(): Source did not provide sufficient data.");
+    // Mix all inputs
+    length_t realRead = 0;
+    InputProperties *props = inputProperties_;
+
+    for( idx_t ch = 0; ch < mixerInputs_; ch++, props++ ) {
+        if( !pInputPlugs[ch] ) continue;
+        float factor = props->volumeFactor_;
+
+        realRead = ((twLatchStreamingOutput *)pInputPlugs[ch])->readStreamingData( inBuffer, dest.length() );
+        if( realRead != dest.length() ) {
+            throw new excStandard( "twMixer::calcOutputTo(): Source did not provide sufficient data." );
         }
 
         sample_t *pCurr = outputBuffer.data();
-        sample_t *pSrc = tmpBuffer.data();
-        for (offset_t i = 0; i < (offset_t)dest.length(); i++) {
-            *pCurr++ += *pSrc++ * inp.factor;
+        sample_t *pSrc = inBuffer;
+        for( offset_t i = 0; i < (offset_t)dest.length(); i++ ) {
+            *pCurr++ += *pSrc++ * factor;
         }
     }
 
