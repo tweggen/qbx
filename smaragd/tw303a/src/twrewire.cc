@@ -49,17 +49,21 @@ void twRewire::init()
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
 length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
 {
-    std::lock_guard<std::mutex> lock(mutex());
-
-    // If no input wired, fill destination with silence
-    if( idx < 0 || idx >= nInputs_ || !pInputPlugs[idx] ) {
-        return dest.fillSilence(0, dest.length());
+    // Snapshot plug pointer under brief lock, then release before recursive render
+    twLatchStreamingOutput* inputPlug = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        if (idx >= 0 && idx < nInputs_ && pInputPlugs[idx])
+            inputPlug = static_cast<twLatchStreamingOutput*>(pInputPlugs[idx]);
     }
 
+    if (!inputPlug)
+        return dest.fillSilence(0, dest.length());
+
     // Read from input into temp buffer (heap-allocated to avoid stack overflow in deep recursion)
+    // Lock released: recursive freezePage calls on upstream components can proceed without blocking audio thread
     std::vector<sample_t> buffer(dest.length());
-    length_t readFrames = ((twLatchStreamingOutput *)pInputPlugs[idx])->readStreamingData(
-        buffer.data(), dest.length());
+    length_t readFrames = inputPlug->readStreamingData(buffer.data(), dest.length());
 
     // Write to IOVector destination
     return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), readFrames), 0, readFrames);
