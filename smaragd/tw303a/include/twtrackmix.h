@@ -21,6 +21,11 @@ struct ClipEntry {
     std::shared_ptr<twOutputPage> previousPage;  // State snapshot for resumption
 };
 
+// State snapshot for page boundary continuity
+struct TrackInternalState {
+    offset_t playOffset;  // Track timeline cursor position at page freeze
+};
+
 class twTrackMix
     : public twComponent
 {
@@ -79,6 +84,11 @@ public:
 protected:
 
     virtual void reset() override;
+
+    // State snapshot for page boundary continuity
+    // Captures/restores playOffset_ to ensure consistent clip positions across pages
+    std::any captureInternalState() const override;
+    void restoreInternalState(const std::any& state) override;
 
     // Teardown protocol
     virtual void teardown() override;

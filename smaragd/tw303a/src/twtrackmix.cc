@@ -246,6 +246,8 @@ std::shared_ptr<twOutputPage> twTrackMix::freezePage(
     auto page = std::make_shared<twOutputPage>();
     page->startPosition = startPos;
     freezePage_nolock(page, startPos, inputLength, sampleRate, previousPage);
+    // Snapshot track state for restoration at next page boundary
+    page->internalState = captureInternalState();
     return page;
 }
 
@@ -258,6 +260,11 @@ length_t twTrackMix::freezePage_nolock(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
+    // Restore track-level state from previous page snapshot
+    if (previousPage) {
+        restoreInternalState(previousPage->internalState);
+    }
+
     // Initialize output buffer to silence
     std::fill(page->samples.begin(), page->samples.begin() + length, 0.0f);
 
@@ -344,6 +351,27 @@ std::shared_ptr<twOutputPage> twTrackMix::freezePreviewPage(
     // Use base class implementation: calls freezePage() at preview resolution
     // Non-blocking: returns previousPage if new page not ready
     return twComponent::freezePreviewPage(startPos, length, previewSampleRate, fullSampleRate, previousPage);
+}
+
+// Capture track-level state for snapshot-based rendering across page boundaries
+std::any twTrackMix::captureInternalState() const
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    return std::any(TrackInternalState{
+        playOffset_.load(std::memory_order_relaxed)
+    });
+}
+
+// Restore track-level state from previous page snapshot
+void twTrackMix::restoreInternalState(const std::any& state)
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    try {
+        auto s = std::any_cast<const TrackInternalState&>(state);
+        playOffset_.store(s.playOffset, std::memory_order_relaxed);
+    } catch (const std::bad_any_cast&) {
+        fprintf(stderr, "twTrackMix::restoreInternalState: state format mismatch\n");
+    }
 }
 
 twTrackMix::~twTrackMix()
