@@ -259,6 +259,14 @@ public:
 
     // Callback when a dependency is being torn down (override in components with external dependencies)
     virtual void onDependencyTeardown(twComponent* dep);
+
+    // Set parent tracking for safe teardown (called when component is wired to a parent)
+    // parent: shared_ptr to parent component (weak_ptr internally prevents circular refs)
+    // inputIndex: which slot in parent's pInputPlugs_ array this component occupies
+    void setParentComponent(std::shared_ptr<twComponent> parent, idx_t inputIndex) {
+        parentComponent_ = parent;
+        myInputIndex_ = inputIndex;
+    }
     
     virtual idx_t getNInputs() const = 0;
     virtual idx_t getNOutputs() const = 0;

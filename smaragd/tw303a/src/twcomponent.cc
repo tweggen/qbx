@@ -203,8 +203,21 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
     // (ownership is managed by the output latch)
     if( newOutput ) {
         pInputPlugs_[idx] = std::shared_ptr<twLatchOutput>(newOutput, [](twLatchOutput*){});
+
+        // Auto-detect and track parent component for safe teardown
+        // Extract parent from the latch that owns this output
+        twLatch& parentLatch = newOutput->getParentLatch();
+        twComponent& parentComp = parentLatch.getComponent();
+
+        // Track parent using a no-op shared_ptr (lifetime owned by latch, not by us)
+        // This enables child->teardown() to call parent->removeInput(idx) safely
+        parentComponent_ = std::shared_ptr<twComponent>(&parentComp, [](twComponent*){});
+        myInputIndex_ = idx;
     } else {
         pInputPlugs_[idx] = nullptr;
+        // Clear parent tracking when input is disconnected
+        parentComponent_.reset();
+        myInputIndex_ = -1;
     }
 }
 
