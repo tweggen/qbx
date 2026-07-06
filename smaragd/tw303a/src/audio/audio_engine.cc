@@ -126,9 +126,11 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         }
         if (isSilent && outProduced > 0) {
             static int silenceCount = 0;
+            uint64_t playPos = currentPos_.load(std::memory_order_relaxed);
+            int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)playPos;
             if (++silenceCount == 1 || silenceCount % 100 == 0) {
-                fprintf(stderr, "WARNING: pullBlock producing silence (callback #%d, %lu frames)\n",
-                        silenceCount, outProduced);
+                fprintf(stderr, "[SILENCE] Callback #%d producing %lld silent frames at playback=%llu, readahead=%llu, gap=%.2f sec\n",
+                        silenceCount, (long long)outProduced, playPos, readaheadComputedUpTo_, (double)gap / 48000.0);
                 fflush(stderr);
             }
         }
@@ -216,6 +218,9 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
     uint64_t pageStartPos = (desiredPos / pageSize) * pageSize;
 
+    // DEBUG: Track readahead gap
+    static int gapLogCounter = 0;
+
     // Check if current page has been invalidated (generation changed)
     if (currentFrozenPage_ && currentFrozenPage_->generation != currentPageGeneration_) {
         // Page was invalidated and repurposed while we held it; drop reference
@@ -243,8 +248,22 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         if (pageFrameOffset_ > currentFrozenPage_->validFrames) {
             pageFrameOffset_ = currentFrozenPage_->validFrames;
         }
+
+        // DEBUG: Page found
+        if (gapLogCounter++ % 500 == 0) {
+            int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
+            fprintf(stderr, "[AUDIO] Page FOUND: playback=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k)\n",
+                    pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0);
+            fflush(stderr);
+        }
     } else {
         // Page not ready; output silence and nudge read-ahead thread to catch up
+        int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
+        if (gapLogCounter++ % 10 == 0 || gap < 0) {
+            fprintf(stderr, "[AUDIO] Page MISSING: playback wants=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k) ***SILENCE***\n",
+                    pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0);
+            fflush(stderr);
+        }
         currentFrozenPage_ = nullptr;
         pageFrameOffset_ = 0;
         readaheadCv_.notify_one();
@@ -313,6 +332,7 @@ void AudioEngine::stopReadahead() {
 void AudioEngine::readaheadLoop() {
     constexpr int READAHEAD_PAGES = 3;  // How far ahead to pre-compute
     const uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
+    static int readaheadLogCounter = 0;
 
     while (readaheadRunning_.load(std::memory_order_relaxed)) {
         std::unique_lock<std::mutex> lk(readaheadMutex_);
@@ -327,6 +347,11 @@ void AudioEngine::readaheadLoop() {
         // Detect seek: playhead jumped backwards or far forward → reset state chain
         if (pageStart < readaheadComputedUpTo_ ||
             pageStart > readaheadComputedUpTo_ + READAHEAD_PAGES * pageSize) {
+            if (readaheadLogCounter++ % 50 == 0) {
+                fprintf(stderr, "[READAHEAD] Seek detected: pageStart=%llu, was computing=%llu, resetting state\n",
+                        pageStart, readaheadComputedUpTo_);
+                fflush(stderr);
+            }
             readaheadPrevPage_ = nullptr;
             readaheadComputedUpTo_ = pageStart;
         }
@@ -341,19 +366,43 @@ void AudioEngine::readaheadLoop() {
                 // Already frozen; update prevPage and move on
                 readaheadPrevPage_ = existing;
                 readaheadComputedUpTo_ = pos + pageSize;
+                if (readaheadLogCounter++ % 100 == 0) {
+                    int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)currentPos;
+                    fprintf(stderr, "[READAHEAD] Page already exists: computed up to=%llu, playhead=%llu, gap=%.2f sec\n",
+                            readaheadComputedUpTo_, currentPos, (double)gap / 48000.0);
+                    fflush(stderr);
+                }
                 continue;
             }
+
+            // DEBUG: About to compute page
+            auto start = std::chrono::steady_clock::now();
 
             // Compute this page (blocking, may take milliseconds)
             auto page = synthOutput_->freezePage(
                 pos, nullptr, 0, (length_t)pageSize,
                 engineSampleRate_, readaheadPrevPage_);
 
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start).count();
+
             if (page) {
                 readaheadPrevPage_ = page;
                 readaheadComputedUpTo_ = pos + pageSize;
+
+                // DEBUG: Log completed page
+                int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)currentPos;
+                if (readaheadLogCounter++ % 50 == 0 || elapsed > 50) {
+                    fprintf(stderr, "[READAHEAD] Froze page at=%llu, computed up to=%llu, playhead=%llu, gap=%.2f sec, time=%.1fms\n",
+                            pos, readaheadComputedUpTo_, currentPos, (double)gap / 48000.0, (double)elapsed);
+                    fflush(stderr);
+                }
             } else {
                 // freezePage failed; give up for now
+                if (readaheadLogCounter++ % 10 == 0) {
+                    fprintf(stderr, "[READAHEAD] freezePage returned nullptr at pos=%llu, giving up\n", pos);
+                    fflush(stderr);
+                }
                 break;
             }
         }
