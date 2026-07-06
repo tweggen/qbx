@@ -209,10 +209,46 @@ Return shared_ptr<twOutputPage>
 - Bounded: pages auto-released outside retention window
 - Thread-safe: protected by component's unified mutex
 
+**Critical Implementation Detail:**
+> **REQUIRED:** `freezePage()` MUST store the frozen page in `outputPages_[startPos]` before returning.
+> Without this, `getPageIfExists()` cannot find pages frozen by the readahead thread, causing
+> buffer underruns and silent playback. See Phase 6 readahead integration for details.
+
 **Eliminates:**
 - ✅ Redundant freezePage() calls (same position cached)
 - ✅ Deadlocks (lock released during recursive calls)
 - ✅ State discontinuities (internal state snapshots preserve continuity)
+- ✅ Buffer underruns (readahead pages discoverable by audio callback)
+
+### Read-Ahead Thread Integration
+
+**Phase 6 Feature:** Pre-compute pages asynchronously to buffer before playback starts.
+
+**Architecture:**
+```
+Read-Ahead Thread (AudioEngine::readaheadLoop)
+    ↓ polls currentPos_ (playback position)
+    ├→ Calculate desired page positions (currentPos + READAHEAD_PAGES)
+    ├→ For each page:
+    │   ├→ Call synthOutput_->freezePage(pos, ...)
+    │   ├→ Page MUST be stored in outputPages_ by freezePage()
+    │   └→ Update readaheadComputedUpTo_ = pos + pageSize
+    │
+Audio Callback (AudioEngine::pullStereoFrameFrozen)
+    ↓ calls updateFrozenPage(currentPos)
+    ├→ Calculate which page is needed
+    ├→ Call synthOutput_->getPageIfExists(pageStartPos)
+    │   └→ Returns nullptr if page not found OR validAspects == 0
+    └→ If page missing → output silence, notify readahead thread
+```
+
+**Critical Requirement:** `freezePage()` must store pages in `outputPages_` cache immediately upon completion, otherwise the audio callback cannot find pre-computed pages and outputs silence.
+
+**Thread Safety:**
+- Readahead thread: holds lock while calling `freezePage()`
+- Audio callback: uses `try_to_lock` on `getPageIfExists()` (non-blocking)
+- If lock held by readahead: audio returns null → silence (non-blocking behavior)
+- Once page is in cache and `validAspects` is set: audio finds it immediately
 
 ### Cascading Pattern
 
@@ -566,6 +602,12 @@ When adding a new component or refactoring an existing one:
 ---
 
 ## Future Work
+
+### Critical (Phase 6 Readahead)
+1. **Page cache integration:** Ensure `freezePage()` stores pages in `outputPages_` cache before returning
+   - **Current gap:** Pages frozen by readahead thread are not discoverable by audio callback
+   - **Symptom:** Readahead progress (readaheadComputedUpTo_) doesn't match page availability → buffer underrun → silent playback
+   - **Fix:** Modify base `twComponent::freezePage()` to call `getOrAllocatePage()` and store result before returning
 
 ### High Priority
 1. **Platform completeness:** Full ALSA Linux testing (currently untested since refactor)
