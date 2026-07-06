@@ -622,6 +622,19 @@ When adding a new component or refactoring an existing one:
    - **Status:** Implemented in commit 729728c, validated with debug instrumentation
    - **Result:** Gap now accurately reflects buffer cushion (positive = readahead ahead)
 
+### Completed (Phase 6b ✅)
+1. **Minimum buffering before playback:** Delay audio start until readahead builds initial buffer
+   - **Implementation:** `AudioEngine::startPlayback()` checks `readaheadComputedUpTo_ >= currentPos + 3*pageSize` (144k frames)
+   - **Benefit:** Eliminates early underruns; audio callback always has > 3 second cushion at startup
+   - **Status:** Implemented with enum PlaybackState (STOPPED, BUFFERING, PLAYING)
+
+2. **Readahead skip-ahead optimization:** Continuous buffer building via state reinitialization
+   - **Architecture:** When sequential freeze at position N fails, skip to position N+5*pageSize with `readaheadPrevPage_=nullptr` (fresh state)
+   - **Mechanism:** Independent state chains avoid blocking on upstream delays
+   - **Underrun tolerance:** If gap < 1 second, output silence but continue (graceful degradation)
+   - **Status:** Implemented in `readaheadLoop()` with SKIP_DISTANCE=5 pages (~5.5 sec)
+   - **Result:** Readahead progresses continuously even during transient input blocking
+
 ### High Priority
 1. **Platform completeness:** Full ALSA Linux testing (currently untested since refactor)
 2. **CoreAudio input:** Currently stub (returns silence)
@@ -650,4 +663,4 @@ When adding a new component or refactoring an existing one:
 
 ---
 
-**Last Updated:** 2026-06-30 (Post-Phase 3 IOVector Refactoring)
+**Last Updated:** 2026-07-06 (Phase 6b: Buffer Management & Skip-Ahead Optimization)

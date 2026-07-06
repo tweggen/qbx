@@ -17,6 +17,13 @@ struct twOutputPage;
 
 namespace audio {
 
+// Playback state for Phase 6b: minimum buffering before playback starts
+enum class PlaybackState {
+    STOPPED = 0,    // Not playing
+    BUFFERING = 1,  // Readahead building initial buffer (3sec)
+    PLAYING = 2     // Sufficient buffer; audio flowing
+};
+
 // Universal audio frame (L and R channels)
 struct AudioFrame {
     static constexpr size_t MAX_CHANNELS = 2;
@@ -125,6 +132,21 @@ public:
      */
     void configureResampling(uint32_t inRate, uint32_t outRate);
 
+    /**
+     * Start playback after buffering.
+     * Phase 6b: Waits for readahead to build minimum 3-second buffer before transitioning to PLAYING.
+     * Returns BUFFERING if not ready, PLAYING when buffer threshold met.
+     *
+     * \return Playback state: BUFFERING (still waiting) or PLAYING (ready)
+     */
+    PlaybackState startPlayback();
+
+    /**
+     * Get current playback state.
+     * \return Current state: STOPPED, BUFFERING, or PLAYING
+     */
+    PlaybackState getPlaybackState() const;
+
     // Read-ahead thread management
     void startReadahead();   // Start pre-computing pages in background
     void stopReadahead();    // Stop read-ahead thread
@@ -145,6 +167,11 @@ private:
     twResampler resamplerL_;
     twResampler resamplerR_;
     double rateRatio_;  // output / input sample rate
+
+    // Playback state management (Phase 6b: minimum buffering before playback)
+    std::atomic<PlaybackState> playbackState_{PlaybackState::STOPPED};
+    static constexpr uint64_t minBufferFrames_ = 144000;       // ~3 seconds at 48kHz (3 pages × 48000 frames)
+    static constexpr uint64_t underrunThresholdFrames_ = 48000; // 1 second at 48kHz (Phase 6b confirmed)
 
     // Loop state (atomic for lockfree access)
     std::atomic<bool> cycleEnabled_{false};

@@ -257,13 +257,26 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
             fflush(stderr);
         }
     } else {
-        // Page not ready; output silence and nudge read-ahead thread to catch up
+        // Page not ready; check if within underrun threshold or too far behind
         int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
-        if (gapLogCounter++ % 10 == 0 || gap < 0) {
-            fprintf(stderr, "[AUDIO] Page MISSING: playback wants=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k) ***SILENCE***\n",
-                    pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0);
-            fflush(stderr);
+
+        // Phase 6b: Underrun detection
+        if (gap >= 0 && gap < (int64_t)underrunThresholdFrames_) {
+            // Gap is small (< 1 sec): output silence but continue (graceful degradation)
+            if (gapLogCounter++ % 50 == 0) {
+                fprintf(stderr, "[AUDIO] UNDERRUN THRESHOLD: gap=%.2f sec (< 1 sec), outputting silence for recovery\n",
+                        (double)gap / 48000.0);
+                fflush(stderr);
+            }
+        } else {
+            // Gap is large or negative: serious issue
+            if (gapLogCounter++ % 10 == 0 || gap < 0) {
+                fprintf(stderr, "[AUDIO] Page MISSING: playback wants=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k) ***SILENCE***\n",
+                        pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0);
+                fflush(stderr);
+            }
         }
+
         currentFrozenPage_ = nullptr;
         pageFrameOffset_ = 0;
         readaheadCv_.notify_one();
@@ -308,6 +321,34 @@ void AudioEngine::configureResampling(uint32_t inRate, uint32_t outRate) {
     resamplerL_.reset();
     resamplerR_.reset();
     rateRatio_ = (inRate > 0) ? ((double)outRate / (double)inRate) : 1.0;
+}
+
+PlaybackState AudioEngine::startPlayback() {
+    // Phase 6b: Delay playback start until readahead has built minimum buffer
+    uint64_t readaheadPos = readaheadComputedUpTo_;  // Plain uint64_t, no .load() needed
+    uint64_t playPos = currentPos_.load(std::memory_order_relaxed);
+
+    if (readaheadPos >= playPos + minBufferFrames_) {
+        // Sufficient buffer built; transition to PLAYING
+        playbackState_.store(PlaybackState::PLAYING, std::memory_order_release);
+        fprintf(stderr, "[PLAYBACK] Minimum buffer reached (%.1f sec), starting playback\n",
+                (double)minBufferFrames_ / 48000.0);
+        fflush(stderr);
+        return PlaybackState::PLAYING;
+    }
+
+    // Not ready; stay in BUFFERING
+    playbackState_.store(PlaybackState::BUFFERING, std::memory_order_release);
+    if (readaheadPos == 0) {
+        fprintf(stderr, "[PLAYBACK] Waiting for readahead to build buffer... (need %.1f sec)\n",
+                (double)minBufferFrames_ / 48000.0);
+        fflush(stderr);
+    }
+    return PlaybackState::BUFFERING;
+}
+
+PlaybackState AudioEngine::getPlaybackState() const {
+    return playbackState_.load(std::memory_order_acquire);
 }
 
 void AudioEngine::startReadahead() {
@@ -357,7 +398,10 @@ void AudioEngine::readaheadLoop() {
             // This prevents claiming we've computed pages we haven't actually frozen yet
         }
 
+        // Phase 6b: Skip-ahead optimization
         // Compute up to READAHEAD_PAGES ahead of the current playhead
+        constexpr int SKIP_DISTANCE = 5;  // Pages to skip on blocking (Phase 6b confirmed)
+
         for (int i = 0; i < READAHEAD_PAGES; i++) {
             uint64_t pos = pageStart + (uint64_t)i * pageSize;
             if (pos < readaheadComputedUpTo_) continue;  // Already computed
@@ -401,7 +445,31 @@ void AudioEngine::readaheadLoop() {
                     fflush(stderr);
                 }
             } else {
-                // freezePage failed or page not frozen; give up for now
+                // Phase 6b: Sequential freeze blocked; try skip-ahead with fresh state
+                if (readaheadPrevPage_ != nullptr) {
+                    uint64_t skipPos = pos + (uint64_t)SKIP_DISTANCE * pageSize;
+                    auto start_skip = std::chrono::steady_clock::now();
+
+                    // Try to freeze skip-ahead page with NO prior state (fresh chain)
+                    auto skipPage = synthOutput_->freezePage(
+                        skipPos, nullptr, 0, (length_t)pageSize,
+                        engineSampleRate_, nullptr);  // Fresh state!
+
+                    auto elapsed_skip = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start_skip).count();
+
+                    if (skipPage && skipPage->validAspects != 0) {
+                        // Success: start new independent chain from skipPos
+                        readaheadPrevPage_ = skipPage;
+                        readaheadComputedUpTo_ = skipPos + pageSize;
+                        fprintf(stderr, "[READAHEAD] Skip-ahead: pos %llu -> %llu (5 pages forward, fresh state), time=%.1fms\n",
+                                pos, skipPos, (double)elapsed_skip);
+                        fflush(stderr);
+                        continue;  // Continue loop, next iteration tries skipPos+pageSize
+                    }
+                }
+
+                // Neither sequential nor skip-ahead worked; give up for now
                 if (readaheadLogCounter++ % 10 == 0) {
                     fprintf(stderr, "[READAHEAD] freezePage failed or not frozen at pos=%llu (validAspects=%u), giving up\n",
                             pos, page ? page->validAspects.load() : 0);

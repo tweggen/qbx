@@ -84,6 +84,9 @@ public:
     // Get the audio backend for querying configuration, latency, and buffer sizes.
     audio::AudioBackend *getBackend() const { return backend_.get(); }
 
+    // Get the audio engine for readahead control and playback state management
+    audio::AudioEngine *getAudioEngine() const { return audioEngine_.get(); }
+
 public slots:
     void startOutput();
     void stopOutput();

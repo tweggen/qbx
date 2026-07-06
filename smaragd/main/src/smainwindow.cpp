@@ -496,6 +496,7 @@ void SMainWindow::startPlaying()
         // Arm cycle (loop) playback from the current project state before output
         // starts, so the loop region is honoured from the first buffer.
         syncCyclePlayback();
+
         qWarning() << "startPlaying(): About to call getSpeaker()->startOutput()" << Qt::endl;
         SApplication::app().getSpeaker()->startOutput();
         qWarning() << "startPlaying(): After getSpeaker()->startOutput()" << Qt::endl;
