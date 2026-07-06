@@ -90,8 +90,9 @@ protected:
     std::any captureInternalState() const override;
     void restoreInternalState(const std::any& state) override;
 
-    // Helper: capture state without acquiring mutex (caller must hold mutex)
+    // Helpers: capture/restore state without acquiring mutex (caller must hold mutex)
     std::any captureInternalState_nolock() const;
+    void restoreInternalState_nolock(const std::any& state);
 
     // Teardown protocol
     virtual void teardown() override;

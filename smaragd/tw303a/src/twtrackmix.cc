@@ -260,9 +260,9 @@ length_t twTrackMix::freezePage_nolock(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
-    // Restore track-level state from previous page snapshot
+    // Restore track-level state from previous page snapshot (mutex already held)
     if (previousPage) {
-        restoreInternalState(previousPage->internalState);
+        restoreInternalState_nolock(previousPage->internalState);
     }
 
     // Initialize output buffer to silence
@@ -368,16 +368,22 @@ std::any twTrackMix::captureInternalState() const
     return captureInternalState_nolock();
 }
 
-// Restore track-level state from previous page snapshot
-void twTrackMix::restoreInternalState(const std::any& state)
+// Helper: restore state without acquiring mutex (caller must hold mutex)
+void twTrackMix::restoreInternalState_nolock(const std::any& state)
 {
-    std::lock_guard<std::mutex> lock(mutex());
     try {
         auto s = std::any_cast<const TrackInternalState&>(state);
         playOffset_.store(s.playOffset, std::memory_order_relaxed);
     } catch (const std::bad_any_cast&) {
         fprintf(stderr, "twTrackMix::restoreInternalState: state format mismatch\n");
     }
+}
+
+// Restore track-level state from previous page snapshot
+void twTrackMix::restoreInternalState(const std::any& state)
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    restoreInternalState_nolock(state);
 }
 
 twTrackMix::~twTrackMix()
