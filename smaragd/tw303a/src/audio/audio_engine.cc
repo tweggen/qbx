@@ -334,6 +334,8 @@ PlaybackState AudioEngine::startPlayback() {
         fprintf(stderr, "[PLAYBACK] Minimum buffer reached (%.1f sec), starting playback\n",
                 (double)minBufferFrames_ / 48000.0);
         fflush(stderr);
+        // Signal twSpeaker that playback is ready
+        playbackReadyCv_.notify_all();
         return PlaybackState::PLAYING;
     }
 

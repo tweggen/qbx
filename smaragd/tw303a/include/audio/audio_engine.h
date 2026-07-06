@@ -147,6 +147,13 @@ public:
      */
     PlaybackState getPlaybackState() const;
 
+    /**
+     * Get the condition variable that signals when playback is ready.
+     * Used by twSpeaker to wait until readahead has buffered enough.
+     * \return Reference to playbackReadyCv
+     */
+    std::condition_variable& getPlaybackReadyCv() { return playbackReadyCv_; }
+
     // Read-ahead thread management
     void startReadahead();   // Start pre-computing pages in background
     void stopReadahead();    // Stop read-ahead thread
@@ -189,6 +196,7 @@ private:
     std::atomic<bool> readaheadRunning_{false};
     std::mutex readaheadMutex_;
     std::condition_variable readaheadCv_;
+    std::condition_variable playbackReadyCv_;  // Signals twSpeaker when buffer ready for playback
     std::shared_ptr<twOutputPage> readaheadPrevPage_;   // State chain for read-ahead
     uint64_t readaheadComputedUpTo_{0};                 // Last page start pos computed
 

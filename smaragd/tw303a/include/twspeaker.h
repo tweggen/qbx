@@ -10,7 +10,17 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
+
+// Playback output state machine (Phase 6b: deferred backend startup until buffer ready)
+enum class OutputState {
+    STOPPED = 0,    // No output, no engine
+    OPENING = 1,    // Device opening, engine creating
+    BUFFERING = 2,  // Readahead buffering, callback not started
+    PLAYING = 3,    // Audio flowing
+    STOPPING = 4    // Shutting down
+};
 
 class twSpeaker
     : public twComponent
@@ -50,6 +60,14 @@ private:
     // a pull so it doesn't overshoot the loop end. Set in startOutput().
     double                rateRatio_ = 1.0;
 
+    // Phase 6b: Output state machine (deferred backend startup until buffer ready)
+    std::atomic<OutputState> outputState_{OutputState::STOPPED};
+    std::thread bufferingTask_;          // Background thread monitoring readahead progress
+    std::atomic<bool> bufferingTaskRunning_{false};  // Signal to stop buffering task
+
+    // Helper: Background task that waits for readahead buffer, then starts backend output
+    void monitorReadaheadBuffer();
+
 protected:
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo(IOVector& dest, idx_t idx) override;
@@ -86,6 +104,9 @@ public:
 
     // Get the audio engine for readahead control and playback state management
     audio::AudioEngine *getAudioEngine() const { return audioEngine_.get(); }
+
+    // Get current output state (for UI status line display)
+    OutputState getOutputState() const { return outputState_.load(std::memory_order_relaxed); }
 
 public slots:
     void startOutput();

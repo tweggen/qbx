@@ -44,8 +44,17 @@ void twSpeaker::startOutput()
     std::lock_guard<std::mutex> lock(outputMutex_);
     if (isPlaying_) return;
 
+    OutputState curState = outputState_.load(std::memory_order_relaxed);
+    if (curState != OutputState::STOPPED) {
+        TWSPK_LOG( "already starting or playing (state=%d)", (int)curState );
+        return;
+    }
+
     TWSPK_LOG( "ENTER - backend=%p, outputDeviceId=%s",
                backend_.get(), outputDeviceId_.c_str() );
+
+    // Transition to OPENING state
+    outputState_.store(OutputState::OPENING, std::memory_order_relaxed);
 
     // The graph (synth) runs at its input wire's rate — the project/env rate.
     // Request that rate from the device so that, when the device can open there,
@@ -58,6 +67,7 @@ void twSpeaker::startOutput()
     TWSPK_LOG( "calling openDevice with rate=%u", graphRate );
     if (backend_->openDevice(outputDeviceId_, graphRate) != 0) {
         TWSPK_LOG( "openDevice FAILED" );
+        outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
         return;
     }
     TWSPK_LOG( "openDevice succeeded" );
@@ -87,6 +97,7 @@ void twSpeaker::startOutput()
     if (!synthOutput) {
         TWSPK_LOG( "ERROR: Could not get synth output component" );
         backend_->closeDevice();
+        outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
         return;
     }
 
@@ -186,31 +197,141 @@ void twSpeaker::startOutput()
         audioEngine_->seekTo(pos);
     }
 
-    TWSPK_LOG( "calling backend->startOutput()" );
-    if (backend_->startOutput() != 0) {
-        TWSPK_LOG( "backend startOutput FAILED" );
-        backend_->closeDevice();
-        return;
-    }
-    TWSPK_LOG( "backend->startOutput() succeeded" );
-    isPlaying_ = true;
+    // Transition to BUFFERING state
+    outputState_.store(OutputState::BUFFERING, std::memory_order_relaxed);
+    isPlaying_ = true;  // Set flag for UI status checks
+
+    // Spawn background task to monitor readahead buffer and start backend output when ready
+    // Phase 6b: Defer backend_->startOutput() until readahead has buffered 3+ seconds
+    bufferingTaskRunning_.store(true, std::memory_order_relaxed);
+    if (bufferingTask_.joinable()) bufferingTask_.join();  // Clean up old thread if any
+    bufferingTask_ = std::thread([this] { monitorReadaheadBuffer(); });
+
+    TWSPK_LOG( "transitioned to BUFFERING; background task monitoring readahead" );
 }
 
 void twSpeaker::stopOutput()
 {
     std::lock_guard<std::mutex> lock(outputMutex_);
-    if (!isPlaying_) { TWSPK_LOG( "already stopped" ); return; }
-    TWSPK_LOG( "ENTER - stopping backend" );
-    isPlaying_ = false;               // flip first: a re-entrant/observer sees "stopping"
-    backend_->stopOutput();
+
+    OutputState curState = outputState_.load(std::memory_order_relaxed);
+    if (curState == OutputState::STOPPED) {
+        TWSPK_LOG( "already stopped" );
+        return;
+    }
+
+    TWSPK_LOG( "ENTER - stopping (state=%d)", (int)curState );
+    isPlaying_ = false;  // flip first: observers see "stopping"
+
+    // Transition to STOPPING state
+    outputState_.store(OutputState::STOPPING, std::memory_order_relaxed);
+
+    // Cancel buffering task if still running
+    bufferingTaskRunning_.store(false, std::memory_order_relaxed);
+    if (bufferingTask_.joinable()) {
+        bufferingTask_.join();
+    }
+
+    // If in PLAYING state, stop the backend callback
+    if (curState == OutputState::PLAYING) {
+        TWSPK_LOG( "stopping backend output" );
+        backend_->stopOutput();
+    } else if (curState == OutputState::BUFFERING || curState == OutputState::OPENING) {
+        TWSPK_LOG( "stopped before playback started (state=%d)", (int)curState );
+    }
+
     backend_->closeDevice();
-    audioEngine_.reset();              // Ensure audioEngine destroyed before returning
+    audioEngine_.reset();  // Ensure audioEngine destroyed before returning
+
+    // Transition to STOPPED state
+    outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
     TWSPK_LOG( "stopped" );
 }
 
 bool twSpeaker::isPlaying()
 {
     return isPlaying_;
+}
+
+void twSpeaker::monitorReadaheadBuffer()
+{
+    // Phase 6b: Background task that waits for readahead buffer to be ready,
+    // then starts the backend output callback.
+    // This runs in a background thread, spawned from startOutput().
+
+    if (!audioEngine_) {
+        TWSPK_LOG( "monitorReadaheadBuffer: audioEngine is null, exiting" );
+        return;
+    }
+
+    TWSPK_LOG( "monitorReadaheadBuffer: waiting for playback buffer to be ready (3+ sec)..." );
+
+    // Wait on the readahead buffer ready condition variable with a 10-second timeout
+    std::unique_lock<std::mutex> lk(outputMutex_);
+    auto &cv = audioEngine_->getPlaybackReadyCv();
+
+    // Use a dummy mutex for the CV (CV requires a mutex to hold during wait)
+    // Actually, we can use a temporary local approach. The CV is owned by audioEngine_.
+    // We need to wait without holding outputMutex_ to avoid deadlock.
+    lk.unlock();
+
+    // Create a local mutex for waiting on the CV
+    std::mutex cvMutex;
+    std::unique_lock<std::mutex> cvLock(cvMutex);
+    bool timed_out = false;
+
+    // Wait for the readahead buffer to reach minimum size (signaled via playbackReadyCv_)
+    // Use a simple polling approach with timeout instead of direct CV wait
+    // (since we don't have exclusive ownership of the CV's mutex)
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+
+    while (bufferingTaskRunning_.load(std::memory_order_relaxed)) {
+        // Check if audioEngine has reached PLAYING state
+        if (audioEngine_ && audioEngine_->getPlaybackState() == audio::PlaybackState::PLAYING) {
+            TWSPK_LOG( "monitorReadaheadBuffer: buffer ready, starting backend output" );
+            // Lock outputMutex_ before accessing backend and state
+            std::lock_guard<std::mutex> lock(outputMutex_);
+
+            // Verify we're still in BUFFERING state (haven't been stopped)
+            if (outputState_.load(std::memory_order_relaxed) == OutputState::BUFFERING) {
+                // Now safe to call backend_->startOutput()
+                if (backend_->startOutput() == 0) {
+                    TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() succeeded" );
+                    outputState_.store(OutputState::PLAYING, std::memory_order_relaxed);
+                } else {
+                    TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() FAILED" );
+                    outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
+                    isPlaying_ = false;
+                    return;
+                }
+            }
+            return;
+        }
+
+        // Check timeout
+        if (std::chrono::steady_clock::now() >= deadline) {
+            TWSPK_LOG( "monitorReadaheadBuffer: TIMEOUT waiting for buffer (>10 sec), stopping playback" );
+            fprintf(stderr, "[twSpeaker] Readahead timeout (>10 sec); stopping playback\n");
+            fflush(stderr);
+            timed_out = true;
+            break;
+        }
+
+        // Sleep for 50ms before checking again
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    if (timed_out || !bufferingTaskRunning_.load(std::memory_order_relaxed)) {
+        // Timeout or stop signal; clean up
+        std::lock_guard<std::mutex> lock(outputMutex_);
+        if (outputState_.load(std::memory_order_relaxed) == OutputState::BUFFERING) {
+            TWSPK_LOG( "monitorReadaheadBuffer: cleaning up after timeout/stop" );
+            outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
+            isPlaying_ = false;
+            backend_->closeDevice();
+            audioEngine_.reset();
+        }
+    }
 }
 
 void twSpeaker::setCycle(bool enabled, offset_t startFrame, offset_t endFrame)

@@ -6,7 +6,7 @@ This document describes how audio playback is initiated in Smaragd, from user ac
 
 ---
 
-## High-Level Flow
+## High-Level Flow (Phase 6b+: Deferred Backend Startup)
 
 ```
 User clicks Play button
@@ -16,7 +16,8 @@ SMainWindow::startPlaying()
     ├─ syncCyclePlayback()                    # Set loop boundaries if enabled
     └─ getSpeaker()->startOutput()            # Start audio output (CRITICAL PATH)
             ↓
-twSpeaker::startOutput()
+twSpeaker::startOutput() [NON-BLOCKING]
+    ├─ Transition state: STOPPED → OPENING
     ├─ Open audio device (backend-specific)
     ├─ Negotiate sample rates across component graph
     ├─ Create new AudioEngine instance
@@ -24,20 +25,35 @@ twSpeaker::startOutput()
     ├─ Configure resampling (engine rate ↔ device rate)
     ├─ Start readahead thread (Phase 6b)
     │   └─ audioEngine_->startReadahead()
-    └─ Start backend audio callback thread
-            ↓
-AudioEngine::readaheadLoop() [background thread]
-    └─ Pre-compute frozen pages ahead of playback position
-            ↓
-AudioEngine::pullBlock() [realtime audio callback]
-    ├─ Check playback state via currentPos_
-    ├─ Fetch pre-computed pages from cache
-    ├─ Output audio or silence (Phase 6b: gap tolerance)
-    └─ Advance playback position
-            ↓
-twSpeaker backend
-    └─ Write audio to device (CoreAudio/WASAPI/ALSA)
+    ├─ Register render callback (NOT STARTED YET)
+    ├─ Transition state: OPENING → BUFFERING
+    ├─ Spawn background task: monitorReadaheadBuffer()
+    └─ Return immediately (non-blocking)
+            ↓ [UI thread continues; background task runs in parallel]
+            ├─ [Main thread: responsive, user can interact]
+            │
+            └─ monitorReadaheadBuffer() [background thread]
+                ├─ Poll audioEngine_->startPlayback() every 50ms
+                ├─ Wait until playback state = PLAYING (3+ sec buffered)
+                ├─ Lock outputMutex_, call backend_->startOutput()
+                ├─ Transition state: BUFFERING → PLAYING
+                └─ Return (background thread exits)
+                        ↓
+            AudioEngine::readaheadLoop() [background thread, parallel]
+                └─ Pre-compute frozen pages ahead of playback position
+                └─ Signal playbackReadyCv_ when 3+ seconds buffered
+                        ↓
+            AudioEngine::pullBlock() [realtime audio callback, after PLAYING state]
+                ├─ Check playback state via currentPos_
+                ├─ Fetch pre-computed pages from cache
+                ├─ Output audio or silence (Phase 6b: gap tolerance)
+                └─ Advance playback position
+                        ↓
+            twSpeaker backend
+                └─ Write audio to device (CoreAudio/WASAPI/ALSA)
 ```
+
+**Key Improvement:** Playback starts (audio callback fires) only after readahead has buffered 3+ seconds, eliminating initial silence gap.
 
 ---
 
@@ -78,51 +94,127 @@ void SMainWindow::startPlaying() {
 
 ---
 
-### 2. Audio Device Layer: twSpeaker::startOutput()
+### 2. Audio Device Layer: twSpeaker::startOutput() (Phase 6b+)
 
-**File:** `tw303a/src/twspeaker.cc` (lines 42-190)
+**File:** `tw303a/src/twspeaker.cc` (lines 42-200)
 
-**Responsibilities:**
+**Responsibilities (Non-Blocking State Machine):**
 - Open audio device via backend (CoreAudio/WASAPI/ALSA)
 - Negotiate sample rates across component graph
 - Create AudioEngine instance
 - Start readahead thread
-- Launch backend render callback thread
+- Register (but NOT start) backend render callback
+- Spawn background task to monitor readahead and defer backend startup
 
-**Code Flow (Simplified):**
+**Code Flow (Deferred Backend Startup):**
 ```cpp
 void twSpeaker::startOutput() {
-    // 1. Open device
+    std::lock_guard<std::mutex> lock(outputMutex_);
+    if (isPlaying_) return;
+    
+    // 1. Transition to OPENING state
+    outputState_.store(OutputState::OPENING, std::memory_order_relaxed);
+    
+    // 2. Open device
     backend_->openDevice(outputDeviceId_, graphRate);
     
-    // 2. Negotiate rates
+    // 3. Negotiate rates
     twNegotiator negotiator(env);
     negotiator.negotiate(this, backend_->supportedRates());
     
-    // 3. Get synth output component from project
+    // 4. Get synth output component from project
     twComponent *synthOutput = &root->getRootComponent();
     
-    // 4. Create AudioEngine (Tier 1: frozen page rendering)
+    // 5. Create AudioEngine (Tier 1: frozen page rendering)
     audioEngine_ = std::make_unique<audio::AudioEngine>(
         synthOutput, graphRate);
     
-    // 5. Configure resampling (if device rate != project rate)
+    // 6. Configure resampling (if device rate != project rate)
     audioEngine_->configureResampling(graphRate, deviceRate);
     
-    // 6. START READAHEAD THREAD (Phase 6b)
+    // 7. START READAHEAD THREAD (Phase 6b)
     audioEngine_->startReadahead();
     
-    // 7. Start backend callback thread
-    backend_->startOutput();
+    // 8. Register render callback (DEFERRED STARTUP)
+    backend_->setRenderCallback([this](...) { ... });
     
+    // 9. Seek engine to current position
+    audioEngine_->seekTo(currentLocatorPos);
+    
+    // 10. Transition to BUFFERING state
+    outputState_.store(OutputState::BUFFERING, std::memory_order_relaxed);
     isPlaying_ = true;
+    
+    // 11. Spawn background task to monitor readahead (NON-BLOCKING)
+    bufferingTaskRunning_.store(true, std::memory_order_relaxed);
+    bufferingTask_ = std::thread([this] { monitorReadaheadBuffer(); });
+    
+    // Return immediately without calling backend_->startOutput()
 }
 ```
 
-**Key Design Decisions:**
+**Key Design Decisions (Phase 6b+):**
 - AudioEngine created fresh per startOutput() (allows device changes)
-- Readahead starts automatically (no UI integration needed)
-- Backend callback is non-blocking (uses try_to_lock pattern)
+- Readahead starts automatically and pre-computes pages
+- **Backend callback deferred:** `backend_->startOutput()` NOT called here
+- **Non-blocking:** startOutput() returns immediately; actual playback delayed until buffered
+- Background task monitors readahead progress and starts backend when ready
+- State machine ensures clean transitions (OPENING → BUFFERING → PLAYING)
+
+---
+
+### 2b. Background Buffering Task: twSpeaker::monitorReadaheadBuffer()
+
+**File:** `tw303a/src/twspeaker.cc` (lines 256-330)
+
+**Responsibilities:**
+- Monitor readahead progress (audioEngine_->getPlaybackState())
+- Wait until playback buffer is sufficient (3+ seconds, ~144k frames)
+- Call backend_->startOutput() when buffer is ready
+- Handle timeout (10 seconds max) with graceful degradation
+
+**Algorithm:**
+```cpp
+void twSpeaker::monitorReadaheadBuffer() {
+    // Polling loop: check every 50ms if audioEngine has PLAYING state
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    
+    while (bufferingTaskRunning_.load()) {
+        // Check if buffer is ready (audioEngine transitioned to PLAYING)
+        if (audioEngine_ && 
+            audioEngine_->getPlaybackState() == audio::PlaybackState::PLAYING) {
+            // Lock and start backend callback
+            std::lock_guard<std::mutex> lock(outputMutex_);
+            if (outputState_ == OutputState::BUFFERING) {
+                backend_->startOutput();
+                outputState_.store(OutputState::PLAYING);
+            }
+            return;
+        }
+        
+        // Check timeout
+        if (std::chrono::steady_clock::now() >= deadline) {
+            fprintf(stderr, "[twSpeaker] Readahead timeout (>10 sec); stopping playback\n");
+            // Gracefully stop playback
+            std::lock_guard<std::mutex> lock(outputMutex_);
+            outputState_.store(OutputState::STOPPED);
+            isPlaying_ = false;
+            backend_->closeDevice();
+            audioEngine_.reset();
+            return;
+        }
+        
+        // Sleep 50ms before checking again
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+}
+```
+
+**Key Features:**
+- **Non-blocking polling:** Doesn't block UI thread; runs in background
+- **Timeout protection:** If readahead takes >10 seconds, stops playback gracefully
+- **State-driven:** Waits for AudioEngine's startPlayback() to signal PLAYING state
+- **Mutex-safe:** Protects backend_->startOutput() call with outputMutex_
 
 ---
 
@@ -296,53 +388,99 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
 
 ---
 
-## Phase 6b: Readahead Buffer Management
+## OutputState State Machine (Phase 6b+: Deferred Backend Startup)
 
-### Problem (Pre-Phase 6b)
+twSpeaker now uses a state machine to defer backend callback startup until readahead has buffered sufficiently:
+
+```cpp
+enum class OutputState {
+    STOPPED = 0,    // No output, no engine
+    OPENING = 1,    // Device opening, engine creating
+    BUFFERING = 2,  // Readahead buffering, callback not started
+    PLAYING = 3,    // Audio flowing
+    STOPPING = 4    // Shutting down
+};
+```
+
+**State Transitions:**
+- `startOutput()`: STOPPED → OPENING → BUFFERING (then spawns background task)
+- `monitorReadaheadBuffer()`: BUFFERING → PLAYING (when audioEngine achieves PLAYING state)
+- `stopOutput()`: Any state → STOPPING → STOPPED
+- **Timeout (10 sec):** BUFFERING → STOPPED (if readahead doesn't complete in time)
+
+**State Machine Benefits:**
+- **Clear transitions:** Each state has well-defined entry/exit conditions
+- **Timeout safety:** Never waits indefinitely for buffer
+- **Non-blocking:** startOutput() returns immediately; buffering happens in background
+- **UI feedback:** States available via `getOutputState()` for status line display
+
+---
+
+## Phase 6b+: Readahead Buffer Management with Deferred Backend Startup
+
+### Problem (Pre-Phase 6b+)
 - Audio callback fires immediately after startOutput()
 - Readahead thread hasn't pre-computed any pages yet
-- Audio callback finds no cached pages → outputs silence
-- Buffer gap shows negative (readahead far behind playback)
+- Audio callback finds no cached pages → outputs silence for 4+ seconds
+- User hears ~5 seconds of silence before audio plays
 
-### Solution (Phase 6b)
-Two complementary mechanisms:
+### Solution (Phase 6b+)
+Three complementary mechanisms:
 
-#### 1. Skip-Ahead Optimization (readaheadLoop)
+#### 1. Deferred Backend Startup (twSpeaker state machine)
+- `startOutput()` does NOT call `backend_->startOutput()` immediately
+- Instead, spawns background task `monitorReadaheadBuffer()` to wait for buffer
+- Audio callback thread doesn't start until buffer is ready (~3+ seconds)
+- Main thread returns immediately (non-blocking); UI stays responsive
+
+#### 2. Skip-Ahead Optimization (readaheadLoop)
 - When sequential page freeze at position N blocks, skip to N + 5*pageSize
 - Reinitialize state chain (readaheadPrevPage_ = nullptr) for fresh computation
 - Allows readahead to continue building buffer even if one position is slow
 - Later iterations backfill the gaps
 
-#### 2. Underrun Tolerance (updateFrozenPage)
+#### 3. Underrun Tolerance (updateFrozenPage)
 - If gap falls below 1 second (48000 frames), output silence but continue
 - Gives readahead time to replenish without blocking audio callback
 - Graceful degradation instead of crash
 
 ### Measurements
 - **Buffer startup:** Readahead pre-computes 3 pages (144k frames, ~3 seconds)
+- **Backend startup:** Deferred until audioEngine reports PLAYING state (3+ sec buffered)
+- **Buffering monitor poll:** 50ms (checks readahead progress in background task)
+- **Startup timeout:** 10 seconds max before gracefully stopping playback
 - **Skip distance:** 5 pages (~5.5 seconds) forward when blocked
 - **Underrun threshold:** 1 second (48000 frames) before triggering silence output
 - **Readahead poll interval:** 20ms (waits for signal or timeout)
 
 ---
 
-## Thread Safety
+## Thread Safety (Phase 6b+)
 
 ### Atomics (Lock-Free)
 - `currentPos_` — playback position (read by audio, written by audio)
 - `cycleEnabled_`, `loopStart_`, `loopEnd_` — loop settings (read by audio, written by UI)
 - `readaheadRunning_` — readahead thread control flag
 - `playbackState_` — Phase 6b playback state (STOPPED, BUFFERING, PLAYING)
+- `outputState_` — Phase 6b+ output state machine (STOPPED, OPENING, BUFFERING, PLAYING, STOPPING)
+- `bufferingTaskRunning_` — Buffering task control flag (set to false to stop monitoring)
 
 ### Mutexes (Blocking)
-- `outputMutex_` — Serializes startOutput/stopOutput (no callback thread access)
+- `outputMutex_` — Serializes startOutput/stopOutput, and protects backend_->startOutput() call
 - `readaheadMutex_` / `readaheadCv_` — Readahead thread sleep/wake (brief holds)
 - Per-component mutex — Protects component state during freezePage() (released before recursive calls)
 
+### Thread Roles
+- **UI thread:** Calls startOutput()/stopOutput(), holds outputMutex_ during state changes
+- **Background buffering task:** Polls readahead progress, holds outputMutex_ only to call backend_->startOutput()
+- **Audio callback thread:** Non-blocking (try_to_lock), uses cached pages; starts only after BUFFERING→PLAYING
+- **Readahead thread:** Can block (for freezePage), holds locks briefly; signals playbackReadyCv_ when PLAYING
+
 ### Design Principle
-- **Audio callback:** Non-blocking (try_to_lock), uses cached pages
+- **startOutput():** Non-blocking; returns immediately after spawning buffering task
+- **Audio callback:** Non-blocking (doesn't start until buffer ready)
 - **Readahead thread:** Can block (for freezePage), holds locks briefly
-- **UI thread:** Can block (startOutput/stopOutput), uses lock while changing state
+- **Buffering task:** Low-priority monitoring, 50ms poll interval prevents starvation
 
 ---
 
@@ -353,10 +491,10 @@ Two complementary mechanisms:
 **Cause:** Calling getAudioEngine() before audioEngine_ is created
 **Solution:** AudioEngine is created in startOutput(), not before. Readahead is started automatically there.
 
-### Issue 2: Silent Audio at Startup
-**Symptom:** First 2-3 seconds of playback are silent
-**Cause:** Readahead hasn't pre-computed pages by the time audio callbacks fire
-**Solution:** Phase 6b skip-ahead and underrun tolerance. May delay playback start in future.
+### Issue 2: Silent Audio at Startup (FIXED in Phase 6b+)
+**Symptom (Pre-6b+):** First 4-5 seconds of playback were silent
+**Cause:** Audio callback fired before readahead pre-computed pages
+**Solution (Phase 6b+):** Defer backend_->startOutput() until readahead reaches PLAYING state. Audio callback now starts only when 3+ seconds are buffered. Initial silence gap eliminated.
 
 ### Issue 3: Slow Freezing (4+ seconds per page)
 **Symptom:** Readahead takes 4-5 seconds to freeze a single page
@@ -370,28 +508,37 @@ Two complementary mechanisms:
 
 ---
 
-## Key Files
+## Key Files (Phase 6b+)
 
 | File | Role |
 |------|------|
 | `main/src/smainwindow.cpp` | UI integration (startPlaying/stopPlaying) |
-| `tw303a/src/twspeaker.cc` | Device layer (startOutput/stopOutput, audioEngine lifecycle) |
-| `tw303a/include/audio/audio_engine.h` | AudioEngine interface (readahead, pullBlock, page cache) |
-| `tw303a/src/audio/audio_engine.cc` | AudioEngine implementation (readaheadLoop, pullBlock, gap management) |
+| `tw303a/include/twspeaker.h` | OutputState enum, state machine members, public getOutputState() |
+| `tw303a/src/twspeaker.cc` | State machine (startOutput/stopOutput, monitorReadaheadBuffer, buffering task) |
+| `tw303a/include/audio/audio_engine.h` | AudioEngine interface (readahead, pullBlock, playbackReadyCv_, getPlaybackReadyCv()) |
+| `tw303a/src/audio/audio_engine.cc` | AudioEngine implementation (readaheadLoop, pullBlock, state signaling) |
 | `tw303a/include/tw_output_page.h` | Frozen page structure (validAspects, startPosition, samples) |
 | `tw303a/src/twcomponent.cc` | Page caching (getPageIfExists, getOrAllocatePage) |
 
 ---
 
+## Completed Improvements (Phase 6b+)
+
+1. ✅ **Non-blocking buffering delay:** Playback start deferred until 3+ seconds buffered (non-blocking)
+2. ✅ **Output state machine:** OutputState enum with OPENING/BUFFERING/PLAYING/STOPPING states
+3. ✅ **UI status line integration:** OutputState exposed via getOutputState() for "Buffering..." display
+4. ✅ **Timeout safety:** 10-second max timeout with graceful playback stop if readahead stalls
+
 ## Future Improvements
 
-1. **Minimum buffering delay:** Delay playback start until readahead has 3-second cushion (UI-blocking)
-2. **Playback state enum:** Expose BUFFERING/PLAYING states to UI for progress indication
-3. **Configurable buffer sizes:** Let users tune skip distance and underrun threshold
+1. **Direct CV signaling:** Replace polling with direct condition variable wait (more efficient)
+2. **Configurable buffer sizes:** Let users tune minimum buffer duration and timeout values
+3. **Progressive buffering feedback:** Show "Buffering: 30%..." progress in status line
 4. **Async file I/O:** Stream WAV reads instead of pre-buffering entire files
 5. **Plugin streaming:** Support real-time plugin processing without pre-computation
 6. **Latency monitoring:** Expose actual buffer gaps and page freeze times to UI
+7. **Early playback start:** Option to start playback before 3-second buffer (with underrun tolerance)
 
 ---
 
-**Last Updated:** 2026-07-06 (Phase 6b: Readahead Buffer Management Complete)
+**Last Updated:** 2026-07-06 (Phase 6b+: Non-Blocking Playback Buffering State Machine Complete)
