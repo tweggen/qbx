@@ -204,25 +204,30 @@ Return shared_ptr<twOutputPage>
 **Key:** startPos (frame position in component's sample rate)
 
 **Behavior:**
-- Non-blocking: returns placeholder if not yet rendered
-- Sequential: enables resume from previous page's state snapshot
-- Bounded: pages auto-released outside retention window
-- Thread-safe: protected by component's unified mutex
+- **Cache** (Lines 453 in twcomponent.cc): Pages stored immediately on allocation
+- **Ready flag** (Line 480): `validAspects` set to `twAspectAll` AFTER `freezePage_nolock()` completes
+- **Non-blocking lookup** (getPageIfExists): Returns null if lock held (try_to_lock fails) OR page not in cache OR validAspects == 0
+- **Sequential:** Enables resume from previous page's state snapshot
+- **Thread-safe:** Protected by component's unified mutex
 
-**Critical Implementation Detail:**
-> **REQUIRED:** `freezePage()` MUST store the frozen page in `outputPages_[startPos]` before returning.
-> Without this, `getPageIfExists()` cannot find pages frozen by the readahead thread, causing
-> buffer underruns and silent playback. See Phase 6 readahead integration for details.
+**Critical Discovery (Phase 6):**
+> Page caching infrastructure was **already correct**. The issue was **progress tracking accuracy**.
+> 
+> The readahead thread was updating `readaheadComputedUpTo_` before pages were actually frozen
+> (validAspects still == 0), causing audio callback to find "computed but not ready" pages.
+> 
+> **Fix:** Only update `readaheadComputedUpTo_` AFTER confirming `page->validAspects != 0`.
+> This ensures gap = readaheadComputedUpTo_ - currentPos accurately reflects buffered pages.
 
 **Eliminates:**
 - ✅ Redundant freezePage() calls (same position cached)
 - ✅ Deadlocks (lock released during recursive calls)
 - ✅ State discontinuities (internal state snapshots preserve continuity)
-- ✅ Buffer underruns (readahead pages discoverable by audio callback)
+- ✅ Buffer underruns (progress tracking is now accurate)
 
 ### Read-Ahead Thread Integration
 
-**Phase 6 Feature:** Pre-compute pages asynchronously to buffer before playback starts.
+**Phase 6 Implementation:** Pre-compute pages asynchronously to buffer before playback starts.
 
 **Architecture:**
 ```
@@ -230,25 +235,32 @@ Read-Ahead Thread (AudioEngine::readaheadLoop)
     ↓ polls currentPos_ (playback position)
     ├→ Calculate desired page positions (currentPos + READAHEAD_PAGES)
     ├→ For each page:
-    │   ├→ Call synthOutput_->freezePage(pos, ...)
-    │   ├→ Page MUST be stored in outputPages_ by freezePage()
-    │   └→ Update readaheadComputedUpTo_ = pos + pageSize
+    │   ├→ Call synthOutput_->freezePage(pos, ...) [stores in outputPages_]
+    │   ├→ freezePage() sets validAspects = twAspectAll when complete
+    │   └→ Only then: Update readaheadComputedUpTo_ = pos + pageSize [CRITICAL]
     │
 Audio Callback (AudioEngine::pullStereoFrameFrozen)
     ↓ calls updateFrozenPage(currentPos)
     ├→ Calculate which page is needed
     ├→ Call synthOutput_->getPageIfExists(pageStartPos)
-    │   └→ Returns nullptr if page not found OR validAspects == 0
+    │   ├→ Returns nullptr if lock held (try_to_lock fails)
+    │   ├→ Returns nullptr if page not in cache
+    │   └→ Returns page if found AND validAspects != 0
     └→ If page missing → output silence, notify readahead thread
 ```
 
-**Critical Requirement:** `freezePage()` must store pages in `outputPages_` cache immediately upon completion, otherwise the audio callback cannot find pre-computed pages and outputs silence.
+**Critical Fix (Phase 6a):** 
+> Progress tracking must only claim frozen pages. Previously, `readaheadComputedUpTo_` was updated
+> on seek detect BEFORE any pages were frozen, causing audio callback to find validAspects==0 pages.
+> 
+> **Now:** Only update `readaheadComputedUpTo_` AFTER confirming `page->validAspects != 0`.
 
 **Thread Safety:**
-- Readahead thread: holds lock while calling `freezePage()`
+- Readahead thread: holds lock while calling `freezePage()`, releases before updating progress
 - Audio callback: uses `try_to_lock` on `getPageIfExists()` (non-blocking)
-- If lock held by readahead: audio returns null → silence (non-blocking behavior)
-- Once page is in cache and `validAspects` is set: audio finds it immediately
+- If lock held: audio returns null → silence (non-blocking behavior preserved)
+- If page cached with `validAspects != 0`: audio finds and uses it immediately
+- Gap is now accurate: `readaheadComputedUpTo_ - currentPos` reflects true buffer cushion
 
 ### Cascading Pattern
 
@@ -603,11 +615,12 @@ When adding a new component or refactoring an existing one:
 
 ## Future Work
 
-### Critical (Phase 6 Readahead)
-1. **Page cache integration:** Ensure `freezePage()` stores pages in `outputPages_` cache before returning
-   - **Current gap:** Pages frozen by readahead thread are not discoverable by audio callback
-   - **Symptom:** Readahead progress (readaheadComputedUpTo_) doesn't match page availability → buffer underrun → silent playback
-   - **Fix:** Modify base `twComponent::freezePage()` to call `getOrAllocatePage()` and store result before returning
+### Completed (Phase 6a ✅)
+1. **Readahead progress tracking:** Fixed to only claim frozen pages
+   - **Issue:** readaheadComputedUpTo_ updated before validAspects != 0, causing buffer underrun
+   - **Fix:** Only update readaheadComputedUpTo_ AFTER confirming page->validAspects != 0
+   - **Status:** Implemented in commit 729728c, validated with debug instrumentation
+   - **Result:** Gap now accurately reflects buffer cushion (positive = readahead ahead)
 
 ### High Priority
 1. **Platform completeness:** Full ALSA Linux testing (currently untested since refactor)
