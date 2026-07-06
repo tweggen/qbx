@@ -353,7 +353,8 @@ void AudioEngine::readaheadLoop() {
                 fflush(stderr);
             }
             readaheadPrevPage_ = nullptr;
-            readaheadComputedUpTo_ = pageStart;
+            // DON'T update readaheadComputedUpTo_ here - let the loop naturally advance it
+            // This prevents claiming we've computed pages we haven't actually frozen yet
         }
 
         // Compute up to READAHEAD_PAGES ahead of the current playhead
@@ -386,8 +387,10 @@ void AudioEngine::readaheadLoop() {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - start).count();
 
-            if (page) {
+            if (page && page->validAspects != 0) {
                 readaheadPrevPage_ = page;
+                // CRITICAL: Only update readaheadComputedUpTo_ AFTER page is confirmed frozen
+                // This ensures audio callback never finds validAspects == 0
                 readaheadComputedUpTo_ = pos + pageSize;
 
                 // DEBUG: Log completed page
@@ -398,9 +401,10 @@ void AudioEngine::readaheadLoop() {
                     fflush(stderr);
                 }
             } else {
-                // freezePage failed; give up for now
+                // freezePage failed or page not frozen; give up for now
                 if (readaheadLogCounter++ % 10 == 0) {
-                    fprintf(stderr, "[READAHEAD] freezePage returned nullptr at pos=%llu, giving up\n", pos);
+                    fprintf(stderr, "[READAHEAD] freezePage failed or not frozen at pos=%llu (validAspects=%u), giving up\n",
+                            pos, page ? page->validAspects.load() : 0);
                     fflush(stderr);
                 }
                 break;
