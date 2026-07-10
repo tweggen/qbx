@@ -293,10 +293,11 @@ void twSpeaker::monitorReadaheadBuffer()
     bool timed_out = false;
 
     while (bufferingTaskRunning_.load(std::memory_order_relaxed)) {
-        // Check if audioEngine has reached PLAYING state (lock-free, atomic read)
+        // Check if audioEngine has reached PLAYING state
+        // Critical: Call startPlayback() to update state, don't just read cached value
         {
             std::lock_guard<std::mutex> lock(engineMutex_);
-            if (audioEngine_ && audioEngine_->getPlaybackState() == audio::PlaybackState::PLAYING) {
+            if (audioEngine_ && audioEngine_->startPlayback() == audio::PlaybackState::PLAYING) {
                 TWSPK_LOG( "monitorReadaheadBuffer: buffer ready, starting backend output" );
 
                 // Brief lock to check state and start backend
