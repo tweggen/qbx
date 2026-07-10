@@ -40,11 +40,17 @@ private:
     // alone doesn't make "if (!isPlaying_) return; …flip + drive the backend"
     // safe against a concurrent/re-entrant caller.
     std::atomic<bool> isPlaying_;
-    // Serialises startOutput()/stopOutput() so a play can't interleave with a
-    // stop (and a double stop is idempotent). The backend render thread never
-    // takes this lock, so holding it across backend_->stopOutput()'s join is
-    // deadlock-free.
-    std::mutex outputMutex_;
+    // Engine lifecycle: protects audioEngine_ creation/destruction. Brief hold,
+    // no expensive I/O. Render callback accesses audioEngine_ lock-free via shared_ptr
+    // (captured in callback scope; holds ref even if audioEngine_ is reset).
+    mutable std::mutex engineMutex_;
+
+    // Task lifecycle: protects bufferingTask_ creation/joining. Brief hold.
+    // Prevents race on std::thread assignment between startOutput() and stopOutput().
+    mutable std::mutex taskMutex_;
+
+    // Note: stateMutex_ (inherited from twComponent) protects outputState_ transitions.
+    // Each lock scope is brief (no expensive I/O), preventing UI thread freezes.
     std::string outputDeviceId_ = "default";
 
     // Cycle (loop) playback. When enabled with a valid range, the render
