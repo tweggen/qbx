@@ -9,6 +9,17 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
 
+# Ensure Debug builds include full source line information for LLDB/GDB
+if(NOT MSVC)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR NOT CMAKE_BUILD_TYPE)
+        # GCC/Clang: -g3 = full debug info with macros, -O0 = no optimization
+        # Set CMAKE_CXX_FLAGS directly (not _DEBUG variant) for single-config generators
+        string(APPEND CMAKE_CXX_FLAGS " -g3 -O0 -fno-omit-frame-pointer")
+        string(APPEND CMAKE_C_FLAGS " -g3 -O0 -fno-omit-frame-pointer")
+        message(STATUS "Debug build: full source line info enabled (-g3 -O0 -fno-omit-frame-pointer)")
+    endif()
+endif()
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
