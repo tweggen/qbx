@@ -63,7 +63,11 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         // We need more input frames when downsampling: inFrames = outFrames / rateRatio_
         double invRatio = 1.0 / rateRatio_;  // inputRate / outputRate (e.g., 48000/44100 = 1.0884)
         length_t inFramesNeeded = (length_t)std::ceil(nFrames * invRatio);
-        std::vector<float> bufL(inFramesNeeded), bufR(inFramesNeeded);
+        // Phase 1 perf: Use pre-allocated buffers instead of malloc per block
+        if (inFramesNeeded > resampleBufL_.size()) {
+            resampleBufL_.resize(inFramesNeeded);
+            resampleBufR_.resize(inFramesNeeded);
+        }
 
         // Track current position BEFORE consuming input frames
         // This allows us to advance by the actual output frame count, not the input count
@@ -71,7 +75,7 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
 
         length_t inProduced = 0;
         for (length_t i = 0; i < inFramesNeeded; ++i) {
-            if (!pullStereoFrameFrozen(bufL[i], bufR[i])) {
+            if (!pullStereoFrameFrozen(resampleBufL_[i], resampleBufR_[i])) {
                 break;
             }
             inProduced++;
@@ -94,11 +98,11 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             double frac = pos - (double)k;
 
             if (k + 1 < inProduced) {
-                outL[i] = bufL[k] + (bufL[k+1] - bufL[k]) * (float)frac;
-                outR[i] = bufR[k] + (bufR[k+1] - bufR[k]) * (float)frac;
+                outL[i] = resampleBufL_[k] + (resampleBufL_[k+1] - resampleBufL_[k]) * (float)frac;
+                outR[i] = resampleBufR_[k] + (resampleBufR_[k+1] - resampleBufR_[k]) * (float)frac;
             } else if (k < inProduced) {
-                outL[i] = bufL[k];
-                outR[i] = bufR[k];
+                outL[i] = resampleBufL_[k];
+                outR[i] = resampleBufR_[k];
             } else {
                 outL[i] = outR[i] = 0.0f;
             }
@@ -138,19 +142,89 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         return outProduced;
     }
 
-    // Passthrough: no resampling needed
+    // Phase 2 Optimization: Batching architecture for passthrough (no per-sample atomic loads)
+    // Cache atomic state once, compute safe batch size, use tight operations for batch
     length_t produced = 0;
-    for (length_t i = 0; i < nFrames; ++i) {
-        if (!pullStereoFrameFrozen(outL[i], outR[i])) {
-            break;
-        }
-        produced++;
-    }
+    length_t outOffset = 0;
 
-    // Zero any remaining frames that weren't produced
-    if (produced < nFrames) {
-        std::memset(outL + produced, 0, (nFrames - produced) * sizeof(float));
-        std::memset(outR + produced, 0, (nFrames - produced) * sizeof(float));
+    while (produced < nFrames) {
+        // Step 1: Cache atomic state ONCE per batch
+        uint64_t pos = currentPos_.load(std::memory_order_relaxed);
+        const bool loopValid = cycleEnabled_.load(std::memory_order_relaxed);
+        const uint64_t loopStart = loopStart_.load(std::memory_order_relaxed);
+        const uint64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
+        const uint64_t readaheadPos = readaheadComputedUpTo_;
+
+        // Handle loop wrapping (before page load)
+        if (loopValid && pos >= loopEnd) {
+            if (loopEnd > loopStart) {
+                pos = loopStart;
+                prevFrozenPage_ = nullptr;  // Reset state chain for loop restart
+            }
+        }
+
+        // Step 2: Load page if needed (only when entering new page, not per-sample)
+        uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
+        uint64_t pageStartPos = (pos / pageSize) * pageSize;
+
+        // Check if we need to load a new page
+        if (!currentFrozenPage_ || currentFrozenPage_->startPosition != pageStartPos ||
+            currentFrozenPage_->validAspects == 0) {
+            updateFrozenPage(pos);
+        }
+
+        // If page not available, output silence and stop
+        if (!currentFrozenPage_ || currentFrozenPage_->validAspects == 0) {
+            std::memset(outL + outOffset, 0, (nFrames - produced) * sizeof(float));
+            std::memset(outR + outOffset, 0, (nFrames - produced) * sizeof(float));
+            readaheadCv_.notify_one();  // Wake readahead to fetch page
+            return produced;
+        }
+
+        // Step 3: Compute safe batch size (frames until page end, loop boundary, etc.)
+        length_t batchSize = nFrames - produced;
+
+        // Limit to current page capacity (use cached validFrames for performance)
+        uint64_t framesInPage = cachedPageValidFrames_ - pageFrameOffset_;
+        batchSize = std::min(batchSize, (length_t)framesInPage);
+
+        // Limit to loop boundary (if looping and approaching loop end)
+        if (loopValid && pos + batchSize > loopEnd) {
+            batchSize = (length_t)(loopEnd - pos);
+        }
+
+        // Limit to readahead buffer (underrun protection)
+        if (readaheadPos > pos) {
+            int64_t readaheadGap = (int64_t)readaheadPos - (int64_t)pos;
+            batchSize = std::min(batchSize, (length_t)readaheadGap);
+        } else {
+            // Serious underrun: output silence
+            std::memset(outL + outOffset, 0, (nFrames - produced) * sizeof(float));
+            std::memset(outR + outOffset, 0, (nFrames - produced) * sizeof(float));
+            return produced;
+        }
+
+        // Step 4: Fast path - copy batch from frozen page
+        if (batchSize > 0) {
+            const float *pageData = &currentFrozenPage_->samples[pageFrameOffset_];
+            // Duplicate mono frozen output to stereo
+            std::copy(pageData, pageData + batchSize, outL + outOffset);
+            std::copy(pageData, pageData + batchSize, outR + outOffset);
+
+            // Step 5: Update state ONCE per batch (not per-sample)
+            pageFrameOffset_ += batchSize;
+            pos += batchSize;
+            outOffset += batchSize;
+            produced += batchSize;
+
+            // Store position once per batch
+            currentPos_.store(pos, std::memory_order_relaxed);
+        } else {
+            // Safety: batchSize is 0, output remainder and exit
+            std::memset(outL + outOffset, 0, (nFrames - produced) * sizeof(float));
+            std::memset(outR + outOffset, 0, (nFrames - produced) * sizeof(float));
+            return produced;
+        }
     }
 
     return produced;
@@ -245,8 +319,10 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         currentPageStartPos_ = pageStartPos;
         currentPageGeneration_ = page->generation.load();
         pageFrameOffset_ = desiredPos - pageStartPos;
-        if (pageFrameOffset_ > currentFrozenPage_->validFrames) {
-            pageFrameOffset_ = currentFrozenPage_->validFrames;
+        // Phase 2 perf: Cache validFrames to avoid repeated loads in batching loop
+        cachedPageValidFrames_ = currentFrozenPage_->validFrames;
+        if (pageFrameOffset_ > cachedPageValidFrames_) {
+            pageFrameOffset_ = cachedPageValidFrames_;
         }
 
         // DEBUG: Page found
@@ -321,6 +397,15 @@ void AudioEngine::configureResampling(uint32_t inRate, uint32_t outRate) {
     resamplerL_.reset();
     resamplerR_.reset();
     rateRatio_ = (inRate > 0) ? ((double)outRate / (double)inRate) : 1.0;
+
+    // Phase 1 perf: Pre-allocate resampling buffers once (avoid malloc per block)
+    // Max input frames when downsampling: ceil(maxOutputFrames * invRatio)
+    // Assuming max output block is 4096 frames, and worst-case ratio is ~1.1x
+    constexpr length_t maxOutputFrames = 4096;
+    double invRatio = (rateRatio_ > 0.0) ? (1.0 / rateRatio_) : 1.0;
+    length_t maxInputFrames = (length_t)std::ceil(maxOutputFrames * invRatio) + 16;  // +16 for safety
+    resampleBufL_.resize(maxInputFrames);
+    resampleBufR_.resize(maxInputFrames);
 }
 
 PlaybackState AudioEngine::startPlayback() {
@@ -424,11 +509,23 @@ void AudioEngine::readaheadLoop() {
 
             // DEBUG: About to compute page
             auto start = std::chrono::steady_clock::now();
+            auto pageStart = std::chrono::high_resolution_clock::now();
 
             // Compute this page (blocking, may take milliseconds)
             auto page = synthOutput_->freezePage(
                 pos, nullptr, 0, (length_t)pageSize,
                 engineSampleRate_, readaheadPrevPage_);
+
+            auto pageEnd = std::chrono::high_resolution_clock::now();
+            auto duration_ms = std::chrono::duration<double, std::milli>(pageEnd -
+                pageStart).count();
+
+            fprintf(stderr, "[READAHEAD] Generated page [%llu, %llu) in %.2f ms (%.1f%% of page duration)\n",
+                (uint64_t) readaheadComputedUpTo_,
+                (uint64_t) (readaheadComputedUpTo_ + twOutputPage::FRAME_CAPACITY),
+                duration_ms,
+                (duration_ms / 1370.0) * 100  // 1370ms = 65536 frames at 48kHz
+            );
 
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - start).count();

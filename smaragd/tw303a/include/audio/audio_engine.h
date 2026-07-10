@@ -169,11 +169,14 @@ private:
     uint64_t currentPageStartPos_;
     size_t pageFrameOffset_;  // Current offset within page's sample buffer
     uint64_t currentPageGeneration_{0};  // Track page generation to detect invalidation
+    uint32_t cachedPageValidFrames_{0};  // Phase 2 perf: Cache validFrames to avoid repeated loads
 
     // Resampling
     twResampler resamplerL_;
     twResampler resamplerR_;
     double rateRatio_;  // output / input sample rate
+    std::vector<float> resampleBufL_;  // Pre-allocated resampling buffers (Phase 1 perf optimization)
+    std::vector<float> resampleBufR_;  // Allocated once in configureResampling(), reused per block
 
     // Playback state management (Phase 6b: minimum buffering before playback)
     std::atomic<PlaybackState> playbackState_{PlaybackState::STOPPED};
