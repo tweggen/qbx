@@ -12,11 +12,19 @@ endif()
 # Ensure Debug builds include full source line information for LLDB/GDB
 if(NOT MSVC)
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR NOT CMAKE_BUILD_TYPE)
-        # GCC/Clang: -g3 = full debug info with macros, -O0 = no optimization
+        # -g = full debug info, -O0 = no optimization (preserves line numbers)
         # Set CMAKE_CXX_FLAGS directly (not _DEBUG variant) for single-config generators
-        string(APPEND CMAKE_CXX_FLAGS " -g3 -O0 -fno-omit-frame-pointer")
-        string(APPEND CMAKE_C_FLAGS " -g3 -O0 -fno-omit-frame-pointer")
-        message(STATUS "Debug build: full source line info enabled (-g3 -O0 -fno-omit-frame-pointer)")
+        string(APPEND CMAKE_CXX_FLAGS " -g -O0 -fno-omit-frame-pointer")
+        string(APPEND CMAKE_C_FLAGS " -g -O0 -fno-omit-frame-pointer")
+
+        # macOS: Keep debug symbols in executable (don't strip)
+        if(APPLE)
+            string(APPEND CMAKE_EXE_LINKER_FLAGS " -Wl,-dead_strip_dylibs")
+        endif()
+
+        message(STATUS "Debug build: full source line info enabled (-g -O0 -fno-omit-frame-pointer)")
+        message(STATUS "To debug with line numbers, use:")
+        message(STATUS "  lldb -s .lldbinit ./smaragd/build/bin/smaragd.app/Contents/MacOS/smaragd")
     endif()
 endif()
 
