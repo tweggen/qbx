@@ -73,12 +73,77 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         // This allows us to advance by the actual output frame count, not the input count
         uint64_t posBeforeResample = currentPos_.load(std::memory_order_relaxed);
 
+        // Phase 3 Optimization: Batch input pulling for resampling path (same as passthrough)
+        // Instead of per-sample pullStereoFrameFrozen calls, use batching with cached state
         length_t inProduced = 0;
-        for (length_t i = 0; i < inFramesNeeded; ++i) {
-            if (!pullStereoFrameFrozen(resampleBufL_[i], resampleBufR_[i])) {
+        length_t inOffset = 0;
+
+        while (inProduced < inFramesNeeded) {
+            // Step 1: Cache atomic state ONCE per batch
+            uint64_t pos = currentPos_.load(std::memory_order_relaxed);
+            const bool loopValid = cycleEnabled_.load(std::memory_order_relaxed);
+            const uint64_t loopStart = loopStart_.load(std::memory_order_relaxed);
+            const uint64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
+            const uint64_t readaheadPos = readaheadComputedUpTo_;
+
+            // Handle loop wrapping
+            if (loopValid && pos >= loopEnd) {
+                if (loopEnd > loopStart) {
+                    pos = loopStart;
+                    prevFrozenPage_ = nullptr;
+                }
+            }
+
+            // Step 2: Load page if needed
+            uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
+            uint64_t pageStartPos = (pos / pageSize) * pageSize;
+
+            if (!currentFrozenPage_ || currentFrozenPage_->startPosition != pageStartPos ||
+                currentFrozenPage_->validAspects == 0) {
+                updateFrozenPage(pos);
+            }
+
+            // If page not available, stop pulling
+            if (!currentFrozenPage_ || currentFrozenPage_->validAspects == 0) {
+                readaheadCv_.notify_one();
                 break;
             }
-            inProduced++;
+
+            // Step 3: Compute safe batch size for input pulling
+            length_t batchSize = inFramesNeeded - inProduced;
+
+            // Limit to current page capacity
+            uint64_t framesInPage = cachedPageValidFrames_ - pageFrameOffset_;
+            batchSize = std::min(batchSize, (length_t)framesInPage);
+
+            // Limit to loop boundary
+            if (loopValid && pos + batchSize > loopEnd) {
+                batchSize = (length_t)(loopEnd - pos);
+            }
+
+            // Limit to readahead buffer
+            if (readaheadPos > pos) {
+                int64_t readaheadGap = (int64_t)readaheadPos - (int64_t)pos;
+                batchSize = std::min(batchSize, (length_t)readaheadGap);
+            } else {
+                break;  // Underrun
+            }
+
+            // Step 4: Fast path - copy batch from frozen page into resampling buffers
+            if (batchSize > 0) {
+                const float *pageData = &currentFrozenPage_->samples[pageFrameOffset_];
+                std::copy(pageData, pageData + batchSize, resampleBufL_.data() + inOffset);
+                std::copy(pageData, pageData + batchSize, resampleBufR_.data() + inOffset);
+
+                // Step 5: Update state ONCE per batch
+                pageFrameOffset_ += batchSize;
+                pos += batchSize;
+                inOffset += batchSize;
+                inProduced += batchSize;
+                currentPos_.store(pos, std::memory_order_relaxed);
+            } else {
+                break;
+            }
         }
 
         if (inProduced == 0) {
