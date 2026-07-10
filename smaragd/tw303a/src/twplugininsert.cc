@@ -143,6 +143,113 @@ void twPluginInsert::reset_nolock()
 	}
 }
 
+std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
+    uint64_t startPos,
+    const sample_t *inputData,
+    uint64_t inputOffset,
+    length_t inputLength,
+    int sampleRate,
+    std::shared_ptr<twOutputPage> previousPage )
+{
+	// Phase 6c: Process plugin on frozen input pages (non-blocking)
+	// Plugin state flows through sequential pages; reset if seeking
+
+	if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+		// Return silence page for zombie component
+		auto silencePage = std::make_shared<twOutputPage>();
+		silencePage->setValidFrames(0);
+		return silencePage;
+	}
+
+	std::lock_guard<std::mutex> lock(mutex());
+
+	// Cache page size on first call
+	if (pageSize_ == 0) {
+		pageSize_ = twOutputPage::FRAME_CAPACITY;
+	}
+
+	// Detect non-sequential pages (seek case)
+	if (lastFrozenPos_ > 0 && startPos != lastFrozenPos_) {
+		fprintf(stderr, "[twPluginInsert] Non-sequential page request at %llu (expected %llu); "
+			"resetting plugin state\n", (unsigned long long)startPos, (unsigned long long)lastFrozenPos_);
+		plugin_->reset();  // Reset to avoid state corruption
+		producedThisBlock_ = false;
+	}
+
+	// Get frozen input pages from upstream
+	for (idx_t c = 0; c < getNInputs(); ++c) {
+		if (c >= (idx_t)pInputPlugs_.size() || !pInputPlugs_[c]) {
+			std::fill(inScratch_[c].begin(), inScratch_[c].end(), 0.0f);
+			continue;
+		}
+
+		auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs_[c].get());
+		twLatch &latch = input->getParentLatch();
+		twComponent &comp = latch.getComponent();
+
+		// Freeze upstream to get input page
+		auto inputPage = comp.freezePage(startPos, nullptr, 0, inputLength, sampleRate, previousPage);
+		if (!inputPage) {
+			std::fill(inScratch_[c].begin(), inScratch_[c].end(), 0.0f);
+			continue;
+		}
+
+		// Copy frozen page samples into de-interleaved scratch buffer
+		const float *pageData = static_cast<const float *>(inputPage->getDataPtr());
+		uint32_t validFrames = inputPage->getValidFrames();
+		size_t copyLen = std::min((size_t)inputLength, (size_t)validFrames);
+		if (pageData && copyLen > 0) {
+			std::copy(pageData, pageData + copyLen, inScratch_[c].begin());
+		}
+	}
+
+	// Process plugin on de-interleaved buffers
+	if (!bypass_) {
+		// Prepare pointer arrays for plugin
+		std::vector<const float *> inPtrs(getNInputs());
+		std::vector<float *> outPtrs(getNOutputs());
+		for (idx_t c = 0; c < getNInputs(); ++c) {
+			inPtrs[c] = inScratch_[c].data();
+		}
+		for (idx_t c = 0; c < getNOutputs(); ++c) {
+			outPtrs[c] = outScratch_[c].data();
+		}
+
+		// Process plugin (stateful; state carries to next page if sequential)
+		plugin_->process(inPtrs.data(), outPtrs.data(), inputLength);
+	} else {
+		// Bypass: copy inputs to outputs
+		copyChannels(inScratch_, outScratch_, getNInputs(), inputLength);
+	}
+
+	// Create frozen output page
+	auto outputPage = std::make_shared<twOutputPage>();
+	if (outputPage && !outputPage->samples.empty()) {
+		// Interleave output channels into page (stereo only for now)
+		if (getNOutputs() >= 2 && outScratch_.size() >= 2) {
+			for (size_t i = 0; i < (size_t)inputLength && i < outputPage->samples.size() / 2; ++i) {
+				outputPage->samples[i * 2] = outScratch_[0][i];      // L
+				outputPage->samples[i * 2 + 1] = outScratch_[1][i];  // R
+			}
+		} else if (getNOutputs() >= 1 && !outScratch_.empty()) {
+			// Mono: copy to both channels
+			for (size_t i = 0; i < (size_t)inputLength && i < outputPage->samples.size() / 2; ++i) {
+				float sample = outScratch_[0][i];
+				outputPage->samples[i * 2] = sample;
+				outputPage->samples[i * 2 + 1] = sample;
+			}
+		}
+		outputPage->setStartPosition(startPos);
+		outputPage->setValidFrames(inputLength);
+		outputPage->setValidAspects(twAspectPlayback);
+	}
+
+	// Update position tracker
+	lastFrozenPos_ = startPos + inputLength;
+
+	return outputPage;
+}
+
 void twPluginInsert::teardown()
 {
 	state_.store(ComponentState::ZOMBIE, std::memory_order_release);

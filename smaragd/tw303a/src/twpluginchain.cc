@@ -145,6 +145,67 @@ void twPluginChain::rebuildWiring()
 }
 
 
+std::shared_ptr<twOutputPage> twPluginChain::freezePage(
+    uint64_t startPos,
+    const sample_t *inputData,
+    uint64_t inputOffset,
+    length_t inputLength,
+    int sampleRate,
+    std::shared_ptr<twOutputPage> previousPage )
+{
+    // Phase 6c: Thread frozen pages through plugin chain
+    // Each plugin processes the output of the previous stage
+
+    if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+        auto silencePage = std::make_shared<twOutputPage>();
+        silencePage->setValidFrames(0);
+        return silencePage;
+    }
+
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
+
+    // No plugins: passthrough from input
+    if (plugins_.empty()) {
+        if (!pInputPlugs_.empty() && pInputPlugs_[0]) {
+            auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs_[0].get());
+            twLatch &latch = input->getParentLatch();
+            twComponent &comp = latch.getComponent();
+            return comp.freezePage(startPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
+        }
+        auto silencePage = std::make_shared<twOutputPage>();
+        silencePage->setValidFrames(0);
+        return silencePage;
+    }
+
+    // Thread through plugin chain: input → plugin0 → plugin1 → ... → output
+    std::shared_ptr<twOutputPage> currentPage = nullptr;
+
+    // Get input page from upstream
+    if (!pInputPlugs_.empty() && pInputPlugs_[0]) {
+        auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs_[0].get());
+        twLatch &latch = input->getParentLatch();
+        twComponent &comp = latch.getComponent();
+        currentPage = comp.freezePage(startPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
+    } else {
+        currentPage = std::make_shared<twOutputPage>();
+        currentPage->setValidFrames(0);
+    }
+
+    // Pass through each plugin in sequence
+    for (auto *plugin : plugins_) {
+        if (!plugin) continue;
+
+        // Plugin processes frozen page (stateful; state carries across sequential pages)
+        currentPage = plugin->freezePage(startPos, nullptr, 0, inputLength, sampleRate, currentPage);
+        if (!currentPage) {
+            currentPage = std::make_shared<twOutputPage>();
+            currentPage->setValidFrames(0);
+        }
+    }
+
+    return currentPage;
+}
+
 void twPluginChain::reset()
 {
     // Stateless component: plugins handle their own state

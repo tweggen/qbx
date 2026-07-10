@@ -31,6 +31,17 @@ public:
     const char *getOutputName( idx_t ) const override { return nullptr; }
     int seekTo( offset_t offset ) override;
 
+    // Phase 6c: Freeze-page interface for non-blocking plugin processing
+    // Assumes pages arrive sequentially; detects and warns on non-sequential pages (seek case)
+    std::shared_ptr<twOutputPage> freezePage(
+        uint64_t startPos,
+        const sample_t *inputData,
+        uint64_t inputOffset,
+        length_t inputLength,
+        int sampleRate,
+        std::shared_ptr<twOutputPage> previousPage = nullptr
+    ) override;
+
     void resetBlock() { producedThisBlock_ = false; }
 
     // Plugin control.
@@ -53,6 +64,11 @@ private:
     std::unique_ptr<twPlugin> plugin_;
     bool bypass_ = false;
     bool producedThisBlock_ = false;
+
+    // Phase 6c: Track frozen page position for sequential page detection
+    // If pages arrive non-sequentially (seek case), reset plugin to avoid state corruption
+    uint64_t lastFrozenPos_ = 0;
+    size_t pageSize_ = 0;  // Cached page size for sequential check
 
     // De-interleaved scratch buffers for processing.
     std::vector<std::vector<sample_t>> inScratch_, outScratch_;

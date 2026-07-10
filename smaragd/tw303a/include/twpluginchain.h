@@ -28,6 +28,17 @@ public:
     const char *getOutputName( idx_t ) const override { return nullptr; }
     int seekTo( offset_t offset ) override;
 
+    // Phase 6c: Freeze-page interface for non-blocking plugin chain processing
+    // Threads frozen pages sequentially through plugin chain
+    std::shared_ptr<twOutputPage> freezePage(
+        uint64_t startPos,
+        const sample_t *inputData,
+        uint64_t inputOffset,
+        length_t inputLength,
+        int sampleRate,
+        std::shared_ptr<twOutputPage> previousPage = nullptr
+    ) override;
+
     // Add a plugin insert to the chain
     void addPlugin( audio::twPluginInsert *insert );
 
