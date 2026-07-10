@@ -147,6 +147,12 @@ void twSpeaker::startOutput()
                 return frames;
             }
 
+            // Defensive: Only pull audio if engine is in PLAYING state (Phase 6b safety)
+            if (engine->getPlaybackState() != audio::PlaybackState::PLAYING) {
+                std::fill_n(out, frames * channels, 0.0f);
+                return frames;
+            }
+
             std::vector<float> bufL(frames), bufR(frames);
             std::size_t outFrames = engine->pullBlock(bufL.data(), bufR.data(), frames);
 
