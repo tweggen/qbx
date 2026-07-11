@@ -200,7 +200,7 @@ void SMVActualView::resizeEvent( QResizeEvent * )
  */
 void SMVActualView::paintEvent( QPaintEvent * )
 {
-    QPainter p( this );   
+    QPainter p( this );
     QRect myRect = rect();
     if( !smv_.model_ ) {
         p.setPen( QColor( 160, 32, 32 ) );
@@ -2143,7 +2143,12 @@ SMVActualView::~SMVActualView()
 SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     : QWidget( parent ),
       smv_( smv )
-{    
+{
+    // The lane area must also stay usable regardless of layout ordering, so it cannot
+    // collapse within the grid (see the matching note in SStdMixerView's constructor).
+    setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Expanding );
+    setMinimumSize( 150, 60 );
+
     // setBackgroundMode( NoBackground );
     qGlobalPopup_ = new QMenu( this );
     QObject::connect( qGlobalPopup_, SIGNAL( aboutToShow() ),
@@ -2451,8 +2456,18 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     : QWidget( parent ),
       model_( model ),
       snapToTimeGrid_( true ),
-      currentSnapSpec_( NULL )      
+      currentSnapSpec_( NULL )
 {
+    // The mixer view is the window's primary content and must never be collapsible
+    // to a sliver by the dock layout. Without an explicit minimum + expanding policy,
+    // QMainWindow can — depending on the order of restoreState()/setCentralWidget()/
+    // show() — squeeze this central widget so the lane area ends up ~47x9 (tracks are
+    // drawn but into a few pixels, i.e. invisible), and because the extern-file dock is
+    // also expanding it never recovers on resize. An expanding policy with a usable
+    // minimum keeps the layout correct under any ordering.
+    setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Expanding );
+    setMinimumSize( 300, 150 );
+
     controlArray_ = new QVector<SSMVMixerControl*>();
 
     qGridLayout_ = new QGridLayout( this /* , 4, 5 */ );    
