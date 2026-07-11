@@ -99,11 +99,23 @@ void SLink::setStartTime( offset_t newStartTime )
 
 SLink::~SLink()
 {
+    // Detach from the parent NOW, while this object is still a fully-typed, live
+    // SLink. If we don't, QObject::~QObject() fires the ChildRemoved event only
+    // AFTER ~SLink has run — i.e. with the SLink vtable already torn down — so
+    // the slots it reaches (SObject::childObjectRemoved →
+    // STrack::trackChildWasRemoved) would call our virtual methods
+    // (hasStartTime(), getRootComponent(), getStartTime(), …) on a
+    // half-destroyed object. That is undefined behaviour and was observed as a
+    // hang (a virtual dispatch through the being-destroyed vtable). Detaching
+    // here makes the notification happen while every virtual method — and the
+    // referenced SObject (removeRef runs after this) — is still valid. This
+    // mirrors the construction-side rule documented in slink.h.
+    setParent( nullptr );
     object_.removeRef();
 }
 
 SLink::SLink( SObject &sobject, SObject *parent /*=0*/ )
-    : QObject( parent ),      
+    : QObject( parent ),
       startTime_( 0 ),
       object_( sobject )
 {
