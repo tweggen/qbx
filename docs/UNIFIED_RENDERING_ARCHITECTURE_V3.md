@@ -1,8 +1,15 @@
-# Unified Rendering Architecture V3: Teardown Protocol
+# Unified Rendering Architecture V3: Teardown & Page Rendering Protocols
 
 ## Overview
 
-This document describes the component teardown protocol that enables safe, lock-free removal of components from the DSP graph while the audio thread renders continuously without interruption.
+This document describes two protocols of the unified rendering architecture:
+
+1. **Teardown protocol** — safe, lock-free removal of components from the DSP
+   graph while the audio thread renders continuously without interruption.
+2. **Sequential page rendering protocol** (added 2026-07-11) — how frozen
+   output pages are positioned and state-chained so that page content always
+   matches the timeline position it is keyed by. See
+   [Sequential Page Rendering](#sequential-page-rendering-position--state-protocol).
 
 ## Core Principles
 
@@ -10,6 +17,10 @@ This document describes the component teardown protocol that enables safe, lock-
 2. **Mathematical correctness**: Removing a component should only affect audio output by its mathematical absence (output silence)
 3. **DAG topology awareness**: Components can have multiple parents; each parent relationship must be severed independently
 4. **Bidirectional handoff**: Child components initiate their own deregistration from parents
+5. **Position is generic, state is not**: any seekable component can jump to an
+   arbitrary timeline position, but internal DSP state (a reverb tail, filter
+   memory) cannot be reconstructed for an arbitrary position — it can only be
+   carried forward contiguously or cleared
 
 ---
 
@@ -402,4 +413,152 @@ Methods that need updates:
 2. **Race conditions on pInputPlugs_**: NULL assignment is atomic; ZOMBIE check is separate
 3. **Audio thread blocking**: All locks released before recursive operations
 4. **Multi-parent DAG removal**: Each parent-child link severed independently via `removeInput()`
+
+---
+
+# Sequential Page Rendering: Position & State Protocol
+
+*(Added 2026-07-11 — fixes the "playback produces only repeating clicks" class
+of bugs. Implementation: `tw303a/src/twcomponent.cc` (`freezePage_nolock`),
+`tw303a/src/twstreaminglatch.cc` (`copyData`),
+`tw303a/src/audio/audio_engine.cc` (`readaheadLoop`).)*
+
+## The Contract
+
+**`startPos` is authoritative for page content.** A page returned by
+`freezePage(startPos, …)` always contains the component's output for
+`[startPos, startPos + FRAME_CAPACITY)`. The component's current cursor is
+never trusted; the page key and the page content can no longer diverge.
+
+**Pages are full, aligned units.** All pages are `twOutputPage::FRAME_CAPACITY`
+(65536) frames. Callers request page-aligned positions and extract sub-ranges;
+they never request partial pages. This keeps every component's `outputPages_`
+cache uniform (no overlapping variable-size fragments).
+
+## Position vs. State
+
+Position and internal DSP state are handled separately, because position is
+generic but state is not:
+
+```cpp
+// twComponent::freezePage_nolock — initialization before renderFrames():
+
+const bool contiguous = previousPage
+    && previousPage->validAspects != 0
+    && previousPage->startPosition + previousPage->validFrames == startPos;
+
+if (contiguous) {
+    // DSP state (reverb tails, filter memory) is the correct continuation.
+    restoreInternalState(previousPage->internalState);
+} else {
+    // State cannot be reconstructed for an arbitrary position — clear it.
+    reset();
+}
+// Position is set explicitly in BOTH cases:
+seekTo(startPos);           // component's own cursor (state-preserving!)
+seekInputStreams(startPos); // input-side twLatchOutput reader offsets
+```
+
+- **Contiguous** means the previous page ends *exactly* where this page begins.
+  Only then is state restored; any gap or jump is a discontinuity.
+- **`seekTo()` must be state-preserving.** It is a position operation. A
+  component whose `seekTo()` clears DSP state breaks the contiguous path.
+- **`reset()` clears state**, and only runs on discontinuities. A reverb tail is
+  cut at a seek — by design, since it cannot be reconstructed.
+- **`seekInputStreams(pos)`** jumps this component's input readers
+  (`twLatchOutput::seekStream`). Without it, the next render keeps pulling
+  upstream content for the old position.
+- Components that cannot seek (free-running sources) simply continue from their
+  restored/reset state; `twComponent::seekTo` returns -1 harmlessly.
+
+The explicit seek runs on the contiguous path too. This is deliberate: it makes
+correctness independent of `captureInternalState()` support. Components like
+`twWavInput` (cursor does not auto-advance, no state capture) render correct
+pages purely because the position is pinned per page.
+
+**Self-aligning cascade.** The protocol needs no global coordinator. When the
+root freezes a page at a new position, its render pulls its input latches at
+the new offsets; each upstream component's own `freezePage()` sees a
+non-contiguous `previousPage`, and re-seeks *its* level. Position flows down
+through the page requests themselves.
+
+## Streaming Latches Serve Pages
+
+`twStreamingLatch::copyData()` no longer refills a ring buffer. Reads are
+served directly from position-aligned frozen pages:
+
+```cpp
+// consumer's startOffset IS a timeline position
+pageStart = (pos / FRAME_CAPACITY) * FRAME_CAPACITY;
+
+// reuse the held page while the consumer is inside it;
+// otherwise freeze the needed page:
+chainFrom = (held page ends exactly at pageStart) ? heldPage : nullptr;
+page = component.freezePage(pageStart, nullptr, 0, FRAME_CAPACITY,
+                            sampleRate, chainFrom);
+memcpy(dest, page->samples.data() + (pos - pageStart), n);
+```
+
+Key properties:
+
+- The consumer's `twLatchOutput::offset` maps 1:1 onto producer page positions —
+  a consumer can never receive content for a different position than it reads at.
+- State chains only across the *immediately following* page (`chainFrom`);
+  any other transition is a discontinuity the producer answers with
+  `reset()` + `seekTo(pageStart)`.
+- The held page is reused without re-freezing while the consumer is inside it,
+  so non-caching producers (e.g. `twTrackMix`) freeze each page once per
+  consumer, not once per read.
+- Cycle guard unchanged: if the producer is already in this thread's
+  `FreezeContext` stack, the read returns short instead of recursing.
+
+## Read-Ahead: Playhead-Jump Detection
+
+The readahead loop (`AudioEngine::readaheadLoop`) restarts its state chain only
+on a *real* playhead jump:
+
+```cpp
+// A jump is: playhead moved backwards, or past everything we've frozen.
+if (lastPlayheadPage != UINT64_MAX &&
+    (pageStart < lastPlayheadPage || pageStart > readaheadComputedUpTo_)) {
+    readaheadPrevPage_ = nullptr;
+    readaheadComputedUpTo_ = pageStart;   // chain restarts at the playhead
+}
+lastPlayheadPage = pageStart;
+```
+
+The comparison must NOT be against the frozen frontier
+(`pageStart < readaheadComputedUpTo_`): during normal playback the readahead is
+*supposed* to run ahead of the playhead, so that condition is always true and
+resets the chain on every wakeup — the historical bug. After a detected jump,
+the first page frozen is a discontinuity, which `freezePage()` answers with
+`reset()` + `seekTo()`; previously visited regions come back as cache hits.
+
+## Historical Failure Modes This Replaced
+
+The pre-2026-07-11 implementation produced "repeating clicks, no usable audio"
+during playback through the compounding of three defects:
+
+1. **Refill/render mismatch**: the latch requested `maxFill` (4096/16384)
+   frames but base `freezePage` always rendered 65536 and captured post-render
+   state; the next refill resumed from +65536 while the stream advanced only
+   +16384 → 49,152 frames of content skipped per refill, at every base-class
+   hop (root rewire ← mixer ← track rewire).
+2. **Position as cache key only**: `freezePage_nolock` never seeked; content
+   came from wherever streaming cursors happened to be, so after any seek the
+   page key and content diverged by the seek amount.
+3. **Inverted readahead seek detection**: the chain reset every 20 ms wakeup
+   (see above).
+
+Verification (see `plan/STATE.md`): headless `--test-case` renders are
+bit-exact against source WAVs, including a two-track scenario with a
+non-page-aligned clip offset and saturated mixing.
+
+## Invariants
+
+1. Page content always corresponds to `page->startPosition`.
+2. All cached pages are `FRAME_CAPACITY` frames, page-aligned.
+3. State is restored only across exactly-contiguous pages; otherwise cleared.
+4. `seekTo()` implementations are position-only (state-preserving).
+5. A latch consumer's read offset and the content it receives cannot diverge.
 

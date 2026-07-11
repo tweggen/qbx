@@ -31,6 +31,11 @@ bool WAVWriter::open(const std::string &path, const AudioFileConfig &config) {
         return false;
     }
 
+    // libsndfile does NOT clip float input to integer formats by default —
+    // out-of-range samples wrap around (e.g. -1.9 becomes ~+0.1), turning a
+    // hot mix into garbage. Enable saturating conversion instead.
+    sf_command(static_cast<SNDFILE *>(sndFile), SFC_SET_CLIPPING, nullptr, SF_TRUE);
+
     return true;
 }
 

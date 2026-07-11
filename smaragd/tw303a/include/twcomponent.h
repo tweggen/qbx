@@ -87,6 +87,11 @@ public:
         : parentLatch(latch) { offset = latch.getOffset(); }
     inline twLatch & getParentLatch () { return parentLatch; }
 
+    // Re-position this reader on the producer's timeline. Must be called when
+    // the consuming component seeks; readStreamingData() otherwise keeps
+    // pulling content for the old position.
+    void seekStream( offset_t pos ) { offset = pos; }
+
     // The consumer's single entry point for "what am I about to read?".
     // Delegates to the producing latch.
     twFormat getFormat() const { return parentLatch.getFormat(); }
@@ -181,6 +186,12 @@ public:
     virtual int seekTo( offset_t );
     virtual offset_t tellPos() const;
     virtual void resetAllLatches();  // Reset all output latches to offset 0
+
+    // Re-position this component's input-side stream readers (twLatchOutput
+    // offsets) to pos. Part of the position protocol in freezePage(): after
+    // seekTo(pos), the input readers must jump too, or the next render keeps
+    // pulling upstream content for the old position.
+    void seekInputStreams( offset_t pos );
 
     // Reset component to initial state (silence, zero position, empty buffers).
     // Called before sequential rendering from scratch or to resume from snapshot.
@@ -400,12 +411,23 @@ public:
     // Freeze component output into a page (Phase 2 - Gap 3)
     // Called by CaptureRevalidator worker threads to materialize frozen output.
     //
-    // Sequential rendering model:
-    //   Page 0: reset() → renderFrames() → capture state → return page
-    //   Page 1: restore state from page 0 → renderFrames() → capture new state → return page
-    //   Page N: ...
+    // Position contract: startPos is AUTHORITATIVE for the page content — the
+    // page always contains this component's output for [startPos, startPos +
+    // FRAME_CAPACITY). Pages are full FRAME_CAPACITY units; callers should
+    // request page-aligned positions and extract sub-ranges.
     //
-    // This ensures continuous audio across page boundaries with state resumption.
+    // Sequential rendering model (position is generic, state is not):
+    //   Contiguous (previousPage ends exactly at startPos):
+    //     restore state from previousPage → seekTo(startPos) →
+    //     seekInputStreams(startPos) → renderFrames() → capture new state
+    //   Discontinuity (no previousPage, or a gap/jump):
+    //     reset() → seekTo(startPos) → seekInputStreams(startPos) →
+    //     renderFrames() → capture state
+    //   The position is set explicitly in BOTH cases (seekTo must be
+    //   state-preserving — it is a position operation). Stateful components
+    //   (reverbs, filters) cannot reconstruct state for an arbitrary position,
+    //   so a discontinuity clears state via reset(); only a contiguous
+    //   previous page allows seamless state continuation.
     //
     // Thread-safe multi-consumer reading (Phase 5 Gap 12):
     //   Returned page->pageMutex protects concurrent access from multiple readers.
@@ -418,7 +440,7 @@ public:
     //     }
     //
     // Args:
-    //   startPos - time position this page covers (for logging/debugging)
+    //   startPos - time position this page covers (authoritative for content)
     //   inputData - pre-frozen input samples (e.g., from upstream component's frozen page)
     //   inputOffset - offset into inputData where this page starts
     //   inputLength - valid frames in inputData

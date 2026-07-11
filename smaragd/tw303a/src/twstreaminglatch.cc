@@ -9,14 +9,6 @@
 #include "twcomponent.h"
 #include "tw_freeze_context.h"
 
-#undef DEBUG_COPYDATA
-
-static inline int min( int a, int b )
-{
-	if( a<b ) return a;
-	return b;
-}
-
 twStreamingLatch::twStreamingLatch (twComponent & component0, idx_t idx0, length_t bufSize0)
 	: twLatch (component0, idx0), currentPos_(0), previousPage_(nullptr), sampleRate_(48000)
 {
@@ -60,196 +52,71 @@ void twStreamingLatch::init( length_t bufSize0 )
 
 length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, length_t maxLength )
 {
-	length_t toCopy;
-	offset_t destPos;
-
-#ifdef DEBUG_COPYDATA
-	fprintf( sterr, "twStreamingLatch::copyData( %d, pDest, %d): entered, bufSize = %d",
-		startOffset, maxLength, bufSize );
-#endif
-
-	if (!pDest || maxLength <= 0) {
+	if (!pDest || maxLength <= 0 || startOffset < 0) {
 		return 0;  // Nothing to copy
 	}
 
-	// CRITICAL: maxLength is the destination buffer size allocated by the caller.
-	// Do NOT clamp it based on our internal bufSize — these are independent constraints.
-	// The per-memcpy bounds checks below (destPos + length <= maxLength) ensure we never
-	// overflow pDest. Callers may legitimately request more data than internal bufSize;
-	// this streaming latch will loop through its circular buffer to satisfy the request.
+	// Serve reads from position-aligned frozen pages.
+	//
+	// The consumer's startOffset is a timeline position; it maps directly onto
+	// page-aligned freezePage() requests against the producing component, so
+	// the position a consumer reads at and the content it receives can never
+	// diverge. The held page (previousPage_) is reused while the consumer is
+	// still inside it, and passed as the state-chain predecessor when crossing
+	// into the immediately following page, so stateful producers (reverbs,
+	// filters) continue seamlessly across page boundaries. Any other page
+	// transition is a discontinuity, which the producer's freezePage() answers
+	// with reset() + seekTo(pageStart).
+	const uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
+	length_t written = 0;
 
-	toCopy = maxLength;
-	destPos = 0;
+	while (written < maxLength) {
+		const uint64_t pos = (uint64_t)startOffset + (uint64_t)written;
+		const uint64_t pageStart = (pos / pageSize) * pageSize;
 
-	// SAFETY: Ensure we never write past destPos + maxLength, even in wraparound cases
-	const sample_t * const pDestMax = pDest + maxLength;  // Hard boundary
-
-	while( toCopy>0 ) {
-
-		// copy process:
-		// first get all out off the loaded stuff, then reload.
-		// exit, if everything loaded.
-
-		// still data from buffer (stuff loaded)?
-		if( startOffset<offset ) {
-			// yes, load it.
-			length_t memcpyLength;
-			// bufStartOffset is the position of startOffset in the buffer.
-			offset_t bufStartOffset;
-
-	
-			// calculate the number of samples not read in the ringbuffer.
-			length_t dataAvail = offset-startOffset;
-	
-#ifdef DEBUG_COMPONENT
-			if( dataAvail>bufSizeDefault ) {
-				throw excStandard( "twLatchStreamingOutput::readStreamingData(): Latch buffer overrun." );
-			}
-#endif
-			// the startOffset equivalent in the buffer is (offset-startOffset) before bufPos.
-			// modulo bufSize.
-			bufStartOffset = (bufPos - (offset-startOffset) + bufSize) % bufSize;
-
-			memcpyLength = min( dataAvail, toCopy );
-			// Ensure we don't write past the destination buffer
-			if (destPos + memcpyLength > maxLength) {
-				memcpyLength = maxLength - destPos;
-			}
-			if (memcpyLength <= 0) {
-				break;  // Destination buffer is full, stop copying
-			}
-
-			// copy out the data still stored in the latch
-#ifdef DEBUG_COPYDATA
-			fprintf( sterr, "twStreamingLatch::copyData( %d, pDest, %d): "
-			                   "bufSize = %d; reading %d bytes, "
-			                   "bufStartOffset = %d;",
-				startOffset, maxLength, bufSize, memcpyLength, bufStartOffset );
-#endif
-			if( (bufSize-bufStartOffset) >= (offset_t)memcpyLength ) {
-				// no wraparound
-				if (destPos + memcpyLength > maxLength) {
-					memcpyLength = maxLength - destPos;  // Clamp again
-				}
-				if (memcpyLength > 0) {
-					// SAFETY: assert we're not writing past the hard boundary
-					if (pDest + destPos + memcpyLength > pDestMax) {
-						fprintf(stderr, "FATAL: memcpy would overflow: destPos=%lld, memcpyLength=%lld, maxLength=%lld\n",
-							destPos, memcpyLength, maxLength);
-						break;
-					}
-					memcpy( pDest+destPos, pBuffer+bufStartOffset, memcpyLength*sizeof( sample_t ) );
-					destPos += memcpyLength;
-				}
-			} else {
-				length_t part;
-				length_t part_actual = 0;  // Track how much we actually wrote in first part
-				// wraparound - need extra bounds checking since we do two memcpys
-				// copy part to the end
-				part = (bufSize-bufStartOffset);
-				if (destPos + part > maxLength) {
-					part = maxLength - destPos;  // Clamp first part
-				}
-				if (part > 0) {
-					// SAFETY: assert we're not writing past the hard boundary
-					if (pDest + destPos + part > pDestMax) {
-						fprintf(stderr, "FATAL: wraparound memcpy[1] would overflow: destPos=%lld, part=%lld, maxLength=%lld\n",
-							destPos, part, maxLength);
-						break;
-					}
-					memcpy( pDest+destPos, pBuffer+bufStartOffset, part*sizeof( sample_t ) );
-					destPos += part;
-					part_actual = part;  // Track actual first part written
-				}
-
-				// then part from the buffer start.
-				// CRITICAL: recalculate based on actual first part, not intended first part
-				part = (memcpyLength - part_actual);  // Use actual first part, not (bufSize-bufStartOffset)
-				if (part > 0 && destPos < maxLength) {
-					if (destPos + part > maxLength) {
-						part = maxLength - destPos;  // Clamp second part
-					}
-					if (part > 0) {
-						// SAFETY: assert we're not writing past the hard boundary
-						if (pDest + destPos + part > pDestMax) {
-							fprintf(stderr, "FATAL: wraparound memcpy[2] would overflow: destPos=%lld, part=%lld, maxLength=%lld\n",
-								destPos, part, maxLength);
-							break;
-						}
-						memcpy( pDest+destPos, pBuffer, part*sizeof( sample_t ) );
-						destPos += part;
-					}
-				}
-			}
-			toCopy -= memcpyLength;
-			startOffset += memcpyLength;
-		} else if( startOffset>=offset ) {
-			// startOffset now is greater or equal (most probably equal) 
-			// to this latch's offset.
-			// read more stuff into the latch.
-			length_t toFill = maxLength;
-			length_t filled, maxFill;
-
-			maxFill = min( (bufSize-bufPos), toFill );
-
-#ifdef DEBUG_COPYDATA
-			fprintf( sterr, "twStreamingLatch::copyData( %d, pDest, %d): trying to fill up %d bytes.",
-				startOffset, maxLength, maxFill );
-#endif
-
-			// not enough data in buffer, fill it up.
-			// CRITICAL: Check for cycles via proper component stack detection.
-			// If getComponent() (the upstream) is already being frozen, we have a cycle.
-			// This should never happen if the component graph is truly acyclic.
-
+		std::shared_ptr<twOutputPage> page = previousPage_;
+		if (!page || page->startPosition != pageStart || page->validAspects == 0) {
+			// Need a different page than the one we hold.
+			// Cycle guard: if the producer is already being frozen on this
+			// thread, recursing into freezePage() would loop forever.
 			if (FreezeContext::isComponentInStack(getComponent())) {
-				// Cycle detected: upstream component is already being frozen.
-				// This indicates a real cycle in rendering (shouldn't happen).
-				filled = 0;
-			} else {
-				// No cycle; safe to freeze the upstream component for data.
-				auto page = getComponent().freezePage(
-					currentPos_,              // snapshot position for state
-					nullptr,                  // no input (source component)
-					0,                        // no input offset
-					maxFill,                  // length to fill
-					sampleRate_,              // project sample rate
-					previousPage_             // cached state from last page
-				);
-
-				if (page && page->validFrames > 0) {
-					filled = min((length_t)maxFill, (length_t)page->validFrames);
-					if (filled > 0) {
-						memcpy(pBuffer + bufPos, page->samples.data(), filled * sizeof(sample_t));
-						previousPage_ = page;  // cache for next freezePage() call
-						currentPos_ += filled; // advance position
-					} else {
-						filled = 0;
-					}
-				} else {
-					filled = 0;
-				}
-			}
-
-			if( !filled ) {
-				// No data available. This can happen when:
-				// 1. Component is in a render context (freezePage) where streaming latches don't work
-				// 2. Component truly has no data
-				// In either case, break and return what we have so far.
 				break;
 			}
-			bufPos = (bufPos + filled) % bufSize;
-			offset += filled;
+
+			// Chain state only from the immediate predecessor page; anything
+			// else is a discontinuity the producer must reset+seek for.
+			std::shared_ptr<twOutputPage> chainFrom;
+			if (previousPage_ && previousPage_->validAspects != 0 &&
+			    previousPage_->startPosition + previousPage_->validFrames == pageStart) {
+				chainFrom = previousPage_;
+			}
+
+			page = getComponent().freezePage(
+				pageStart,
+				nullptr,                // no pre-prepared input (pull model)
+				0,
+				(length_t)pageSize,     // full page
+				sampleRate_,
+				chainFrom);
+
+			if (!page || page->validAspects == 0) {
+				break;  // producer could not materialize this page
+			}
+			previousPage_ = page;
 		}
+
+		const uint64_t inPage = pos - pageStart;
+		if (inPage >= (uint64_t)page->validFrames) {
+			break;  // producer ran dry inside this page
+		}
+
+		const uint64_t avail = (uint64_t)page->validFrames - inPage;
+		const uint64_t want  = (uint64_t)(maxLength - written);
+		const length_t n = (length_t)(avail < want ? avail : want);
+
+		memcpy(pDest + written, page->samples.data() + inPage, (size_t)n * sizeof(sample_t));
+		written += n;
 	}
 
-#ifdef DEBUG_COPYDATA
-	fprintf( sterr, "twStreamingLatch::copyData( %d, pDest, %d): Leaving.",
-		startOffset, maxLength  );
-#endif
-
-	return destPos;
+	return written;
 }
-
-
-

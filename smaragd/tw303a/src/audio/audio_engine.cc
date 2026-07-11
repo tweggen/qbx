@@ -526,6 +526,7 @@ void AudioEngine::readaheadLoop() {
     constexpr int READAHEAD_PAGES = 3;  // How far ahead to pre-compute
     const uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
     static int readaheadLogCounter = 0;
+    uint64_t lastPlayheadPage = UINT64_MAX;  // playhead page seen last iteration
 
     while (readaheadRunning_.load(std::memory_order_relaxed)) {
         std::unique_lock<std::mutex> lk(readaheadMutex_);
@@ -537,18 +538,23 @@ void AudioEngine::readaheadLoop() {
         uint64_t currentPos = currentPos_.load(std::memory_order_relaxed);
         uint64_t pageStart = (currentPos / pageSize) * pageSize;
 
-        // Detect seek: playhead jumped backwards or far forward → reset state chain
-        if (pageStart < readaheadComputedUpTo_ ||
-            pageStart > readaheadComputedUpTo_ + READAHEAD_PAGES * pageSize) {
-            if (readaheadLogCounter++ % 50 == 0) {
-                fprintf(stderr, "[READAHEAD] Seek detected: pageStart=%llu, was computing=%llu, resetting state\n",
-                        pageStart, readaheadComputedUpTo_);
-                fflush(stderr);
-            }
+        // Detect a real playhead jump (transport seek or loop wrap): the playhead
+        // moved backwards, or past everything we've frozen. During normal playback
+        // pageStart advances monotonically and stays at or behind the frontier, so
+        // this never fires. (Comparing pageStart against the frontier itself fires
+        // on every iteration — the readahead is *supposed* to run ahead.)
+        if (lastPlayheadPage != UINT64_MAX &&
+            (pageStart < lastPlayheadPage || pageStart > readaheadComputedUpTo_)) {
+            fprintf(stderr, "[READAHEAD] Playhead jump: page %llu -> %llu (frontier=%llu), restarting chain\n",
+                    (unsigned long long)lastPlayheadPage, (unsigned long long)pageStart,
+                    (unsigned long long)readaheadComputedUpTo_);
+            fflush(stderr);
             readaheadPrevPage_ = nullptr;
-            // DON'T update readaheadComputedUpTo_ here - let the loop naturally advance it
-            // This prevents claiming we've computed pages we haven't actually frozen yet
+            // The chain restarts at the playhead; the first page frozen from here
+            // is a discontinuity, which freezePage() answers with reset()+seekTo().
+            readaheadComputedUpTo_ = pageStart;
         }
+        lastPlayheadPage = pageStart;
 
         // Phase 6b: Skip-ahead optimization
         // Compute up to READAHEAD_PAGES ahead of the current playhead
@@ -586,8 +592,8 @@ void AudioEngine::readaheadLoop() {
                 pageStart).count();
 
             fprintf(stderr, "[READAHEAD] Generated page [%llu, %llu) in %.2f ms (%.1f%% of page duration)\n",
-                (uint64_t) readaheadComputedUpTo_,
-                (uint64_t) (readaheadComputedUpTo_ + twOutputPage::FRAME_CAPACITY),
+                (unsigned long long) pos,
+                (unsigned long long) (pos + pageSize),
                 duration_ms,
                 (duration_ms / 1370.0) * 100  // 1370ms = 65536 frames at 48kHz
             );

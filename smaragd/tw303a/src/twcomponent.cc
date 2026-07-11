@@ -115,6 +115,18 @@ void twComponent::resetAllLatches()
     }
 }
 
+void twComponent::seekInputStreams( offset_t pos )
+{
+    // Jump this component's input readers to pos. Each twLatchOutput tracks its
+    // own read offset on the producer's timeline; after a seek the reader must
+    // move too, or readStreamingData() keeps serving content for the old
+    // position. Brief lock: pInputPlugs_ may be rewired from the UI thread.
+    std::lock_guard<std::mutex> lock(mutex());
+    for( auto &plug : pInputPlugs_ ) {
+        if( plug ) plug->seekStream( pos );
+    }
+}
+
 void twComponent::allocPlugs()
 {
     // Phase 1: Convert to shared_ptr vectors for thread-safe lifetime management
@@ -495,15 +507,38 @@ length_t twComponent::freezePage_nolock(
     // returns silence instead of recursing.
     FreezeContext freezeCtx(*this);
 
-    // Initialize state: reset if page 0, else restore from previous
-    if (previousPage) {
-        // Resume from previous page's snapshot
+    // Initialize position and state. page->startPosition is authoritative for
+    // the content; the component's current cursor is never trusted. Position is
+    // generic (every seekable component can jump to startPos), internal DSP
+    // state is not (a reverb tail cannot be reconstructed for an arbitrary
+    // position) — so the two are handled separately:
+    //
+    // Contiguous case: previousPage ends exactly where this page begins, so its
+    // captured internal state (reverb tails, filter memory) is the correct
+    // continuation — restore it, keep state.
+    //
+    // Discontinuity (no previous page, or a gap/jump): state cannot be
+    // reconstructed, so clear it with reset().
+    //
+    // In BOTH cases the position is then set explicitly: seekTo() for the
+    // component's own cursor (must be state-preserving — it is a position
+    // operation), seekInputStreams() for its input-side latch readers.
+    // Components that cannot seek (free-running sources) simply continue from
+    // their restored/reset state.
+    const uint64_t startPos = page->startPosition;
+    const bool contiguous = previousPage
+        && previousPage->validAspects != 0
+        && previousPage->startPosition + previousPage->validFrames == startPos;
+
+    if (contiguous) {
+        // Resume DSP state from previous page's snapshot
         std::lock_guard<std::mutex> lock(previousPage->pageMutex);
         restoreInternalState(previousPage->internalState);
     } else {
-        // First page: start from reset state
         reset();
     }
+    seekTo((offset_t)startPos);
+    seekInputStreams((offset_t)startPos);
 
     // Calculate input data available for this page
     const sample_t *pageInput = nullptr;

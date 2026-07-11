@@ -4205,3 +4205,90 @@ Implement type-safe buffer management using IOVector to eliminate buffer overflo
 - **No degradation:** Maintains real-time safety and latency
 
 **Status Summary:** ✅ Phase 3 DELIVERED — Complete type-safe IOVector interface across all 18 DSP components. Ready for Phase 4 architectural cleanup.
+
+## Bug Fix Session: Playback signal path — position-explicit freezePage (2026-07-11)
+
+**Symptom:** Loading a project and starting playback produced only repeating clicks
+(~100–340 ms apart), no usable audio. Log showed `[READAHEAD] Seek detected` firing
+on every 20 ms wakeup and `Generated page [0, 65536)` while the playhead was at 283200.
+
+### Root Causes (three, compounding)
+
+1. **Latch refill vs. page size mismatch** (`twStreamingLatch::copyData`):
+   each ring-buffer refill requested `maxFill` (4096/16384) frames via
+   `freezePage()`, but the base implementation always rendered a full 65536-frame
+   page and captured post-render state. The latch consumed only `maxFill`, then
+   chained the next freeze from the +65536 state → **49,152 frames of upstream
+   content skipped per refill, at every base-class hop** (root twRewire ← twMixer
+   ← track twRewire). Output = 85–340 ms snippets separated by discontinuities.
+
+2. **Page position was only a cache key.** Base `freezePage_nolock()` never
+   positioned the graph at `startPos`; content came from wherever the streaming
+   cursors happened to be. After a seek, page keys and content diverged by the
+   seek amount (`Generated page [0, …)` at playhead 283200 was literally true).
+   Additionally `twWavInput::calcOutputTo` does not auto-advance its cursor and
+   captures no internal state, so contiguous restore alone re-read `[0, 65536)`
+   into every page.
+
+3. **Inverted readahead seek detection** (`audio_engine.cc`): the condition
+   `pageStart < readaheadComputedUpTo_` is *always* true during normal playback
+   (readahead runs ahead by design) → state chain reset on every wakeup.
+
+### Fixes
+
+- **Position-explicit base `freezePage_nolock()`** (`twcomponent.cc`): position is
+  generic, state is not. Contiguous previous page → `restoreInternalState()`
+  (reverb tails, filter memory). Discontinuity → `reset()` (state cannot be
+  reconstructed generically). In BOTH cases the position is then set explicitly:
+  `seekTo(startPos)` + new `seekInputStreams(startPos)` (jumps the component's
+  input-side `twLatchOutput` reader offsets; `seekTo` must be state-preserving).
+  The seek cascade self-aligns the whole graph: each downstream component's own
+  freeze detects its discontinuity and re-seeks its level.
+- **Page-aligned latch serving** (`twStreamingLatch::copyData` rewritten): reads
+  are served directly from position-aligned full-size frozen pages keyed by the
+  consumer's timeline offset; the held page is reused while the consumer is
+  inside it and passed as state-chain predecessor only when crossing into the
+  immediately following page. The old ring-buffer fill logic (and its
+  consume-less-than-rendered desync) is gone.
+- **Readahead playhead-jump detection** (`audio_engine.cc`): compare the playhead
+  page against the previous playhead page and the frozen frontier
+  (backwards jump or past-frontier jump = real seek/loop-wrap); on jump, restart
+  the chain at the playhead (`readaheadComputedUpTo_ = pageStart`). Fixed the
+  `Generated page` log to print the actual page range.
+- **WAV writer saturation** (`wav_writer.cc`): libsndfile does not clip float
+  input to PCM16 by default — out-of-range samples *wrapped* (-1.9 → ~+0.1).
+  Enabled `SFC_SET_CLIPPING`. (Found because a 2-clip full-scale sum rendered as
+  a wrapped double-slope sawtooth even after the engine was correct.)
+
+### Verification
+
+- `render_sawtooth_minimal.qxa`: rendered WAV is **bit-exact** vs `test_sawtooth.wav`
+  over all 1,048,576 frames; silence after clip end.
+- New offset-clip scenario (two tracks, second clip at frame 24000 — non-page-aligned
+  child positions): output bit-exact vs `clip(saw[t] + saw[t-24000])` including
+  saturation; silent tail. Exercises mixer, both track chains, pluginchain
+  passthrough, per-clip discontinuity/chaining, latch page serving.
+- All 14 `tests/cases/*.qxa` PASS; io_vector / exact_arithmetic / serialization
+  unit tests pass. (`action_roundtrip_test` still has 2 pre-existing failures:
+  `assert-audio-peak`/`assert-audio-energy` XML deserialization — unrelated.)
+
+### Notes / Deferred
+
+- `tests/cases/render_sawtooth_first_second.qxa` uses `timePos="24000/48000"`,
+  which parses as the fraction 0.5 *frames* → truncates to 0; the intended
+  24000-frame offset never reaches the engine. `timePos` is in frames
+  (`writeXml` emits `Fraction(timePos_, 1)`). Test data issue, not engine.
+- Component `outputPages_` caches grow without eviction during long playback
+  (pre-existing; now also holds intermediate-hop pages). Eviction policy TBD.
+- A consumer attached to a latch mid-playback starts its reader offset at 0
+  (pre-existing behavior, unchanged by the rewrite).
+- Playback on-device (WASAPI) still to be confirmed by ear; the render path
+  exercises the identical freeze/latch/mixer chain.
+- **Pre-existing crash found (not fixed):** starting playback via the scripted
+  action runner (`--run-actions` + `<toggle-playback play="1"/>`) segfaults the
+  main thread ~1 s after `startOutput()` (during BUFFERING, before any page is
+  frozen). Reproduces on unmodified `main` (verified via `git stash` build) and
+  with an EMPTY project, so it is unrelated to the signal-path fix and to
+  project content — likely a test-runner-mode threading issue around
+  startOutput/monitor/UI. Manual GUI playback did not crash in the user's
+  original session. Needs its own investigation.
