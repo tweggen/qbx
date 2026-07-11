@@ -4292,3 +4292,70 @@ on every 20 ms wakeup and `Generated page [0, 65536)` while the playhead was at 
   project content — likely a test-runner-mode threading issue around
   startOutput/monitor/UI. Manual GUI playback did not crash in the user's
   original session. Needs its own investigation.
+
+---
+
+## Bug Fix Session: Startup window-layout corruption (2026-07-11)
+
+- **Status:** ✅ FIXED
+- **Scope:** `main/src/main.cpp`, `main/src/smainwindow.cpp`, `main/include/smainwindow.h`
+- **Platform:** Windows 11, Qt 6.11 (reproduced and verified there)
+
+### Symptom
+
+After startup, the whole UI was sometimes crammed overlapping into the
+top-left ~370×230 px of the (maximized) window: mixer control strip painted
+over the menu bar, ruler/waveform overlapping both, extern-file dock floating
+over the timeline. Reproduced 100% via repeated launch + `PrintWindow`
+screenshot capture once the trigger condition was in the settings INI.
+
+### Root cause
+
+An ordering hazard between `restoreGeometry()`/`restoreState()` and central
+widget creation, with two aggravating factors:
+
+1. `SMainWindow`'s constructor restored geometry **and** dock/toolbar state
+   while the window had **no central widget** (the mixer view is only created
+   when a project opens, later, in `openMostRecent()`).
+2. `main()` then unconditionally clobbered the restored geometry with
+   `move(100,100); resize(800,600); showMaximized()`.
+3. `closeEvent()` saved `saveState()` **after** `closeProject()`, i.e. the
+   persisted state also described a window without its central widget.
+
+When the saved geometry carries the *maximized* flag, `restoreGeometry()`
+makes Qt create the platform window directly maximized — no resize transition
+is ever delivered — so the dock/toolbar layout applied by `restoreState()` at
+the tiny pre-show size is never re-fitted. Empirically: restoring **either**
+`ui/windowGeometry` **or** `ui/windowState` alone was fine; only the
+combination froze the layout ("sometimes" for the user = depends on what the
+previous session saved).
+
+### Fix (ordering, self-healing under any saved state)
+
+- `SMainWindow` constructor no longer restores geometry/state; new
+  `restoreWindowLayout()` does both and reports whether a geometry existed.
+- `main()` interactive startup order is now: `openMostRecent()` (creates the
+  central widget) → `restoreWindowLayout()` → `show()` (honors the restored
+  maximized flag); first-run fallback keeps the old default
+  `move/resize/showMaximized`. `--run-actions` keeps a deterministic default
+  window and skips per-user layout restore.
+- `closeEvent()` saves geometry/state **before** `closeProject()` so the
+  persisted state round-trips a complete window.
+
+### Verification
+
+- Repro harness: launch → 2.5 s settle → `PrintWindow` capture → kill, looped.
+  Broken 2/2 before the fix with the user's INI; correct 6/6 after, including
+  a graceful-close → relaunch round trip (new save order) and a fresh-INI
+  first start.
+- Ruled out en route: the `measureAudioLatenciesIfNeeded()` modal dialog +
+  `processEvents()` at t=100 ms (INI with cached latencies still broke), and
+  the CaptureRevalidator worker pool (no Qt access on workers).
+- All 14 `tests/cases/*.qxa` still PASS after the `main.cpp` changes.
+
+### Notes / Deferred
+
+- Output/input latency probing (`measureAudioLatenciesIfNeeded`) never caches
+  when the backend reports 0 latency frames, so its modal "Initializing
+  Audio" dialog runs on **every** startup on this machine. Harmless but
+  worth caching a "measured, unknown" marker some day.

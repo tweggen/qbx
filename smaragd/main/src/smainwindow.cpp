@@ -332,6 +332,15 @@ void SMainWindow::updateRecentMenu()
     }
 }
 
+bool SMainWindow::restoreWindowLayout()
+{
+    const QByteArray geo = SSettings::instance().windowGeometry();
+    const bool geoRestored = !geo.isEmpty() && restoreGeometry( geo );
+    const QByteArray state = SSettings::instance().windowState();
+    if( !state.isEmpty() ) restoreState( state );
+    return geoRestored;
+}
+
 void SMainWindow::openMostRecent()
 {
     const QStringList recents = SSettings::instance().recentProjects();
@@ -458,10 +467,13 @@ bool SMainWindow::promptSaveUnsavedChanges()
 void SMainWindow::closeEvent( QCloseEvent *event )
 {
     if( promptSaveUnsavedChanges() ) {
-        closeProject();
-        // Save window geometry and toolbar/dock state before closing
+        // Save window geometry and toolbar/dock state while the full UI —
+        // including the project's central widget — still exists. Saving after
+        // closeProject() records a layout without a central widget, which does
+        // not round-trip through restoreState().
         SSettings::instance().setWindowGeometry( saveGeometry() );
         SSettings::instance().setWindowState( saveState() );
+        closeProject();
         // Ensure all settings are written to disk before exit
         SSettings::instance().value( "dummy" );  // Triggers internal sync
         event->accept();
@@ -830,11 +842,11 @@ SMainWindow::SMainWindow()
     qDockExternFileList_->setWidget( externFileList_ );
     addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
 
-    // Restore window geometry and toolbar/dock state from previous session
-    const QByteArray geo = SSettings::instance().windowGeometry();
-    if( !geo.isEmpty() ) restoreGeometry( geo );
-    const QByteArray state = SSettings::instance().windowState();
-    if( !state.isEmpty() ) restoreState( state );
+    // NOTE: window geometry/state restore deliberately does NOT happen here.
+    // The saved state describes a window that includes the project's central
+    // widget; restoring it before that widget exists (it is only created once
+    // a project is opened) freezes the QMainWindow layout at the tiny pre-show
+    // size. main() calls restoreWindowLayout() after openMostRecent().
 
     // Measure and cache audio device latencies on startup
     // (done after UI is built, will show modal dialog if needed)

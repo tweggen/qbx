@@ -29,6 +29,14 @@ public:
     // any. Leaves an empty workspace when there is nothing to restore.
     void openMostRecent();
 
+    // Startup: restore the saved window geometry and toolbar/dock layout.
+    // Must be called only after the full UI exists (central widget included) —
+    // QMainWindow::restoreState() applied to a window without its central
+    // widget freezes the layout at the pre-show size once the geometry restore
+    // recreates the window directly maximized (no resize transition ever
+    // arrives to re-fit it). Returns true if a saved geometry was applied.
+    bool restoreWindowLayout();
+
     // Post a transient hint to the status bar (auto-dismisses after durationMs).
     void postHint( const QString &text, int durationMs = 5000 );
 

@@ -113,8 +113,9 @@ int main( int argc, char *argv[] )
 
     // Create main window (only shown in interactive mode)
     SMainWindow *win = new SMainWindow();
-    if (!testMode) {
-        // Restored (un-maximized) geometry, then start maximized to fill the screen.
+    if (!testMode && runMode) {
+        // Script-driven interactive session: deterministic default window,
+        // no per-user layout restore.
         win->move( 100, 100 );
         win->resize( 800, 600 );
         win->showMaximized();
@@ -182,8 +183,32 @@ int main( int argc, char *argv[] )
             }
         }
     } else {
-        // Re-open the most recently used project (if any still exist on disk).
+        // Interactive startup. Order matters and must not be changed casually:
+        //
+        //   1. openMostRecent()      — creates the project and with it the
+        //                              central widget (the mixer view).
+        //   2. restoreWindowLayout() — QMainWindow::restoreGeometry/restoreState.
+        //                              Restoring earlier (without the central
+        //                              widget, or before the final show) lands in
+        //                              a Qt edge case: a geometry saved maximized
+        //                              recreates the window directly maximized,
+        //                              no resize transition is delivered, and the
+        //                              restored dock/toolbar layout stays frozen
+        //                              at the tiny pre-show size — all widgets
+        //                              crammed overlapping into the top-left
+        //                              corner.
+        //   3. show()                — honors the maximized flag restoreGeometry
+        //                              put on the window.
+        //
+        // First run (nothing saved yet): default placement, maximized.
         win->openMostRecent();
+        if( win->restoreWindowLayout() ) {
+            win->show();
+        } else {
+            win->move( 100, 100 );
+            win->resize( 800, 600 );
+            win->showMaximized();
+        }
     }
 
     app.exec();
