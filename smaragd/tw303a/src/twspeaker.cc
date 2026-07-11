@@ -39,6 +39,23 @@ twSpeaker::~twSpeaker()
     backend_->closeDevice();
 }
 
+std::shared_ptr<audio::AudioEngine> twSpeaker::engineSnapshot() const
+{
+    std::lock_guard<std::mutex> lock(engineMutex_);
+    return audioEngine_;
+}
+
+void twSpeaker::releaseEngine()
+{
+    std::shared_ptr<audio::AudioEngine> dying;
+    {
+        std::lock_guard<std::mutex> lock(engineMutex_);
+        dying.swap(audioEngine_);
+    }
+    // ~AudioEngine joins the readahead thread; run it with no lock held.
+    dying.reset();
+}
+
 void twSpeaker::startOutput()
 {
     // Phase 1: Check and transition state atomically
@@ -101,25 +118,33 @@ void twSpeaker::startOutput()
         return;
     }
 
-    // Phase 3: Create engine (brief lock on engineMutex_)
-    {
-        std::lock_guard<std::mutex> lock(engineMutex_);
-        audioEngine_.reset();  // Destroy old before creating new
-        audioEngine_ = std::make_unique<audio::AudioEngine>(synthOutput, graphRate);
-    }
+    // Phase 3: Create engine. Destroy the old one first, outside engineMutex_ —
+    // ~AudioEngine joins the readahead thread and must not run under a lock.
+    releaseEngine();
 
-    // Phase 4: Configure engine (no lock needed for these operations)
-    audioEngine_->configureResampling(graphRate, cfg.sampleRate);
-    audioEngine_->startReadahead();
+    auto engine = std::make_shared<audio::AudioEngine>(synthOutput, graphRate);
+
+    // Phase 4: Configure the engine before publishing the handle. Nothing else can
+    // observe it yet (outputState_ is OPENING, so no concurrent start/stop gets past
+    // Phase 1), so this needs no lock.
+    engine->configureResampling(graphRate, cfg.sampleRate);
+    engine->startReadahead();
 
     rateRatio_ = (graphRate > 0) ? ((double) cfg.sampleRate / (double) graphRate) : 1.0;
 
-    // Sync loop boundaries (no lock needed, atomics used internally)
-    audioEngine_->setLoopBoundaries(
+    engine->setLoopBoundaries(
         cycleEnabled_.load(std::memory_order_relaxed),
         loopStart_.load(std::memory_order_relaxed),
         loopEnd_.load(std::memory_order_relaxed)
     );
+
+    // Seek to the current playhead, then publish the handle (leaf-lock write).
+    engine->seekTo(SApplication::app().getGlobalLocatorPos());
+
+    {
+        std::lock_guard<std::mutex> lock(engineMutex_);
+        audioEngine_ = engine;
+    }
 
     // Rate diagnostics
     {
@@ -184,15 +209,6 @@ void twSpeaker::startOutput()
             return static_cast<std::size_t>(outFrames);
         });
 
-    // Seek engine to current position (no lock needed, atomics used internally)
-    {
-        std::lock_guard<std::mutex> lock(engineMutex_);
-        if (audioEngine_) {
-            offset_t pos = SApplication::app().getGlobalLocatorPos();
-            audioEngine_->seekTo(pos);
-        }
-    }
-
     // Phase 6: Transition to BUFFERING and spawn monitor task
     {
         std::lock_guard<std::mutex> lock(mutex());
@@ -251,11 +267,8 @@ void twSpeaker::stopOutput()
     // Phase 4: Close device (no lock - potentially blocking I/O)
     backend_->closeDevice();
 
-    // Phase 5: Destroy engine (brief lock on engineMutex_)
-    {
-        std::lock_guard<std::mutex> lock(engineMutex_);
-        audioEngine_.reset();
-    }
+    // Phase 5: Destroy engine (handle cleared under engineMutex_, destructor runs unlocked)
+    releaseEngine();
 
     // Phase 6: Final state transition (brief lock)
     {
@@ -275,15 +288,15 @@ void twSpeaker::monitorReadaheadBuffer()
 {
     // Phase 6b: Background task that polls readahead progress and starts backend output
     // when buffer is ready. Runs in background thread spawned from startOutput().
-    // Uses fine-grained locking to avoid blocking UI thread or read-ahead.
+    //
+    // Lock discipline (see twspeaker.h): engineMutex_ is a leaf lock, only ever held to
+    // read the audioEngine_ handle. Everything below works on a local shared_ptr copy, so
+    // mutex() is never acquired with engineMutex_ held, and neither lock is held across
+    // backend I/O or engine destruction.
 
-    // Capture audioEngine_ with brief lock (verify it exists)
-    {
-        std::lock_guard<std::mutex> lock(engineMutex_);
-        if (!audioEngine_) {
-            TWSPK_LOG( "monitorReadaheadBuffer: audioEngine is null, exiting" );
-            return;
-        }
+    if (!engineSnapshot()) {
+        TWSPK_LOG( "monitorReadaheadBuffer: audioEngine is null, exiting" );
+        return;
     }
 
     TWSPK_LOG( "monitorReadaheadBuffer: waiting for playback buffer to be ready (3+ sec)..." );
@@ -293,37 +306,52 @@ void twSpeaker::monitorReadaheadBuffer()
     bool timed_out = false;
 
     while (bufferingTaskRunning_.load(std::memory_order_relaxed)) {
-        // Check if audioEngine has reached PLAYING state
-        // Critical: Call startPlayback() to update state, don't just read cached value
-        {
-            std::lock_guard<std::mutex> lock(engineMutex_);
-            if (audioEngine_ && audioEngine_->startPlayback() == audio::PlaybackState::PLAYING) {
-                TWSPK_LOG( "monitorReadaheadBuffer: buffer ready, starting backend output" );
+        std::shared_ptr<audio::AudioEngine> engine = engineSnapshot();
+        if (!engine) {
+            TWSPK_LOG( "monitorReadaheadBuffer: audioEngine went away, exiting" );
+            return;
+        }
 
-                // Brief lock to check state and start backend
-                {
-                    std::lock_guard<std::mutex> stateLock(mutex());
-                    if (outputState_.load(std::memory_order_relaxed) == OutputState::BUFFERING) {
-                        if (backend_->startOutput() == 0) {
-                            TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() succeeded" );
-                            outputState_.store(OutputState::PLAYING, std::memory_order_relaxed);
-                        } else {
-                            TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() FAILED" );
-                            outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
-                            isPlaying_ = false;
-                            return;
-                        }
-                    }
+        // Critical: Call startPlayback() to update state, don't just read cached value
+        if (engine->startPlayback() == audio::PlaybackState::PLAYING) {
+            TWSPK_LOG( "monitorReadaheadBuffer: buffer ready, starting backend output" );
+
+            bool startFailed = false;
+            {
+                std::lock_guard<std::mutex> stateLock(mutex());
+                if (outputState_.load(std::memory_order_relaxed) != OutputState::BUFFERING) {
+                    // stopOutput() has taken over; it owns the teardown.
+                    return;
                 }
-                return;
+
+                if (backend_->startOutput() == 0) {
+                    TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() succeeded" );
+                    outputState_.store(OutputState::PLAYING, std::memory_order_relaxed);
+                } else {
+                    TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() FAILED" );
+                    // Hold BUFFERING until the device is released below: a startOutput()
+                    // that saw STOPPED could otherwise openDevice() while we close it.
+                    outputState_.store(OutputState::STOPPING, std::memory_order_relaxed);
+                    isPlaying_ = false;
+                    startFailed = true;
+                }
             }
+
+            if (startFailed) {
+                // Teardown with no lock held: closeDevice() waits for the render thread
+                // and ~AudioEngine joins the readahead thread.
+                engine.reset();
+                backend_->closeDevice();
+                releaseEngine();
+                std::lock_guard<std::mutex> stateLock(mutex());
+                outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
+            }
+            return;
         }
 
         // Check timeout
         if (std::chrono::steady_clock::now() >= deadline) {
             TWSPK_LOG( "monitorReadaheadBuffer: TIMEOUT waiting for buffer (>10 sec), stopping playback" );
-            fprintf(stderr, "[twSpeaker] Readahead timeout (>10 sec); stopping playback\n");
-            fflush(stderr);
             timed_out = true;
             break;
         }
@@ -333,17 +361,24 @@ void twSpeaker::monitorReadaheadBuffer()
     }
 
     if (timed_out || !bufferingTaskRunning_.load(std::memory_order_relaxed)) {
-        // Timeout or stop signal; clean up
-        std::lock_guard<std::mutex> stateLock(mutex());
-        if (outputState_.load(std::memory_order_relaxed) == OutputState::BUFFERING) {
-            TWSPK_LOG( "monitorReadaheadBuffer: cleaning up after timeout/stop" );
-            outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
-            isPlaying_ = false;
-            backend_->closeDevice();
-            {
-                std::lock_guard<std::mutex> engineLock(engineMutex_);
-                audioEngine_.reset();
+        // Timeout or stop signal. Claim the teardown by moving BUFFERING -> STOPPING
+        // under mutex(); if we don't win the race, stopOutput() is already doing it.
+        bool ownsTeardown = false;
+        {
+            std::lock_guard<std::mutex> stateLock(mutex());
+            if (outputState_.load(std::memory_order_relaxed) == OutputState::BUFFERING) {
+                TWSPK_LOG( "monitorReadaheadBuffer: cleaning up after timeout/stop" );
+                outputState_.store(OutputState::STOPPING, std::memory_order_relaxed);
+                isPlaying_ = false;
+                ownsTeardown = true;
             }
+        }
+
+        if (ownsTeardown) {
+            backend_->closeDevice();
+            releaseEngine();
+            std::lock_guard<std::mutex> stateLock(mutex());
+            outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
         }
     }
 }
@@ -358,13 +393,11 @@ void twSpeaker::setCycle(bool enabled, offset_t startFrame, offset_t endFrame)
     loopEnd_.store(endFrame, std::memory_order_relaxed);
     cycleEnabled_.store(enabled, std::memory_order_relaxed);
 
-    // Acquire engineMutex_ to prevent race with stopOutput() destroying audioEngine_
-    // startOutput()/stopOutput() hold this lock when modifying audioEngine_.
-    // Lock scope is brief: only for the setLoopBoundaries call.
-    std::lock_guard<std::mutex> lock(engineMutex_);
-
-    if (audioEngine_) {
-        audioEngine_->setLoopBoundaries(enabled, startFrame, endFrame);
+    // Snapshot the engine under engineMutex_ and call it with the lock released. The
+    // shared_ptr copy keeps the engine alive even if stopOutput() clears the handle
+    // concurrently, so no lock needs to be held across the call.
+    if (auto engine = engineSnapshot()) {
+        engine->setLoopBoundaries(enabled, startFrame, endFrame);
     }
 }
 

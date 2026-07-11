@@ -17,7 +17,6 @@
 class twRewire
     : public twComponent
 {
-    Q_OBJECT
 public:
     twRewire( tw303aEnvironment &env );
     virtual ~twRewire();

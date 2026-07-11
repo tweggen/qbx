@@ -25,7 +25,6 @@ enum class OutputState {
 class twSpeaker
     : public twComponent
 {
-    Q_OBJECT
     virtual void reset() override;
 private:
     std::unique_ptr<audio::AudioBackend> backend_;
@@ -40,9 +39,21 @@ private:
     // alone doesn't make "if (!isPlaying_) return; …flip + drive the backend"
     // safe against a concurrent/re-entrant caller.
     std::atomic<bool> isPlaying_;
-    // Engine lifecycle: protects audioEngine_ creation/destruction. Brief hold,
-    // no expensive I/O. Render callback accesses audioEngine_ lock-free via shared_ptr
-    // (captured in callback scope; holds ref even if audioEngine_ is reset).
+    // Engine lifecycle: protects the audioEngine_ *handle* only.
+    //
+    // LOCK ORDER — engineMutex_ is a LEAF lock. It is never held while acquiring
+    // mutex() or taskMutex_, and never held across blocking work. In particular:
+    //   - ~AudioEngine joins the readahead thread, so the engine must be destroyed
+    //     with no lock held: detach it with engineSnapshot()/releaseEngine() and let
+    //     the last shared_ptr die outside the lock.
+    //   - backend_ calls (openDevice/startOutput/closeDevice) block on the device and
+    //     on the render thread; they must never run under engineMutex_.
+    // Taking engineMutex_ inside mutex() and mutex() inside engineMutex_ in different
+    // places is what previously made the order inverted (latent AB-BA); the leaf rule
+    // removes the inversion by construction.
+    //
+    // Render callback accesses audioEngine_ via a shared_ptr copy (holds a ref even if
+    // audioEngine_ is reset); the backend is always stopped before the handle is cleared.
     mutable std::mutex engineMutex_;
 
     // Task lifecycle: protects bufferingTask_ creation/joining. Brief hold.
@@ -73,6 +84,15 @@ private:
 
     // Helper: Background task that waits for readahead buffer, then starts backend output
     void monitorReadaheadBuffer();
+
+    // Read the engine handle under engineMutex_ and return a copy. The caller works on
+    // the copy with no lock held; the ref keeps the engine alive even if another thread
+    // clears audioEngine_ meanwhile.
+    std::shared_ptr<audio::AudioEngine> engineSnapshot() const;
+
+    // Detach audioEngine_ under engineMutex_, then destroy it *outside* the lock
+    // (~AudioEngine joins the readahead thread — see the lock-order note above).
+    void releaseEngine();
 
 protected:
     // Phase 3: IOVector-based interface (type-safe, page-backed)
@@ -114,7 +134,7 @@ public:
     // Get current output state (for UI status line display)
     OutputState getOutputState() const { return outputState_.load(std::memory_order_relaxed); }
 
-public slots:
+public:
     void startOutput();
     void stopOutput();
 };

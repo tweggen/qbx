@@ -29,7 +29,6 @@ struct TrackInternalState {
 class twTrackMix
     : public twComponent
 {
-    Q_OBJECT
 public:
     twTrackMix( tw303aEnvironment &env );
     ~twTrackMix();
@@ -45,7 +44,7 @@ public:
     void setTrackMute(bool muted);
     void setTrackGain(double gainDb);
 
-public slots:
+public:
     virtual void setBufferSize( length_t );
 
 public:

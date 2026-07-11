@@ -45,9 +45,7 @@ class twLatchOutput;
 class twComponent;
 
 class twLatch
-    : public QObject
 {
-    Q_OBJECT
 private:
     twLatch();
     twComponent & component;
@@ -79,9 +77,7 @@ public:
 };
 
 class twLatchOutput
-    : public QObject
 {
-    Q_OBJECT
 private:
     twLatch & parentLatch;
 protected:
@@ -155,9 +151,7 @@ public:
 };
 
 class twComponent
-    : public QObject
 {
-    Q_OBJECT
 private:
     int currentOperation_;
     
@@ -291,9 +285,8 @@ public:
 
     // Commit a single chosen format per port after the negotiation fixpoint.
     // The node records them and does any heavy, node-specific setup (a
-    // resampler would build its kernel here). Default: record the formats and
-    // emit formatChanged for any output whose format changed. Returns false if
-    // the committed format is unworkable for this node.
+    // resampler would build its kernel here). Default: record the formats.
+    // Returns false if the committed format is unworkable for this node.
     virtual bool commitFormats( const twFormat *in,  idx_t nIn,
                                 const twFormat *out, idx_t nOut );
     
@@ -490,17 +483,6 @@ private:
 
     // Page cache: maps start position → frozen output page
     std::map<uint64_t, std::shared_ptr<twOutputPage>> outputPages_;
-
-signals:
-    void inputChanged( idx_t idx, twLatchOutput *former, twLatchOutput *recent );
-    void outputChanged( idx_t idx, twLatchOutput *former, twLatchOutput *recent );
-    // A node's constraints changed (e.g. a fixed-rate source reloaded); the
-    // negotiator should re-run before the next play. Reserved for cached
-    // negotiation — today twSpeaker re-negotiates on every startOutput, so the
-    // trigger is implicit.
-    void renegotiationRequired( twComponent *origin );
-    // Emitted by commitFormats when an output port's negotiated format changes.
-    void formatChanged( idx_t idx, twFormat oldFmt, twFormat newFmt );
 
 private:
     std::vector<twFormat> committedIn_;
