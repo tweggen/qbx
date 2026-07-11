@@ -9,6 +9,7 @@
 #include "sobject.h"
 #include "sexternfile.h"
 #include "sexternfilelist.h"
+#include "sproject.h"
 
 void SExternFileList::externFileAdded( const SExternFile &ef )
 {
@@ -178,10 +179,22 @@ void SExternFileList::disconnectSignals()
 
 void SExternFileList::populate()
 {
-    // Note: Initial population via signals only. The original code had a FIXME
-    // about this and relied on signals for population. To fully populate existing
-    // files/assets, SProject would need public getter methods for externFileDict_
-    // and assetDict_.
+    if( !project_ ) return;
+    // Back-fill rows for files/assets that already exist on the project. During a
+    // project load the files are added (and externFileAdded/assetAdded emitted)
+    // BEFORE this list is attached and connectSignals() runs, so those signals are
+    // lost. Here we reuse the very same row-building slots for the already-present
+    // entries, keeping the item dicts and per-file nRefsChanged connections
+    // consistent. Called from setProject() before connectSignals(), so there is no
+    // double-add. Any files added later still arrive via the live signal.
+    const QHash<QString,SExternFile*> &files = project_->externFiles();
+    for( auto it = files.constBegin(); it != files.constEnd(); ++it ) {
+        if( it.value() ) externFileAdded( *it.value() );
+    }
+    const QHash<QString,SObject*> &assets = project_->assets();
+    for( auto it = assets.constBegin(); it != assets.constEnd(); ++it ) {
+        if( it.value() ) assetAdded( it.key(), *it.value() );
+    }
 }
 
 void SExternFileList::connectSignals()
@@ -218,7 +231,15 @@ SExternFileList::SExternFileList( QWidget *parent, SProject *project )
       project_( nullptr )
 {
     setColumnCount(3);
+    // The extern-file list is a bounded side panel, not the primary content: cap its
+    // width and give it a non-greedy horizontal policy so it cannot starve the
+    // Expanding central mixer view. Without this, QMainWindow hands all resize space
+    // to this dock (a QTreeWidget is Expanding by default) and the mixer stays pinned
+    // at its minimum; a bad, oversized dock width persisted from a previous session is
+    // also clamped here. Keeps a usable min so it never collapses either.
+    setSizePolicy( QSizePolicy::Preferred, QSizePolicy::Expanding );
     setMinimumWidth(200);
+    setMaximumWidth(360);
     setMinimumHeight(100);
     QStringList headers = { "File name", "Type", "Refs" };
     setHeaderLabels(headers);

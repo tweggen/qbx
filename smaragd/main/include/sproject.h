@@ -120,6 +120,12 @@ public:
     void enableInvalidation();  // Triggers revalidation pass for loaded cuts
     bool isInvalidationSuppressed() const { return invalidationSuppressed_ > 0; }
 
+    // Read-only access to the loaded extern files / assets, so views (e.g. the
+    // extern-file list) can back-fill their rows for a project that was already
+    // populated during load — before they connected to the add/remove signals.
+    const QHash<QString,SExternFile*> &externFiles() const { return externFileDict_; }
+    const QHash<QString,SObject*> &assets() const { return assetDict_; }
+
 signals:
     void fileNameChanged( const QString & );
     void assetAdded( const QString &name, SObject &body );
