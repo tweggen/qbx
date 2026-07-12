@@ -81,8 +81,8 @@ burn-down.**
    another module's sources escalates the task.
 2. Recipe: read the module's CONTRACT.md → read the PUBLIC headers of its
    dependencies (not their src/) → run the tests it names → implement →
-   green: module tests + `python tools/check_layering.py` + the full qxa
-   suite (`for t in smaragd/tests/cases/*.qxa; …`, run from tests/cases/).
+   green: `ctest` from smaragd/build/ (runs the module unit tests AND every
+   qxa case) plus `python tools/check_layering.py`.
 3. Changing a public header or an invariant is its own, human-reviewed
    change — land it before dependent work.
 4. Update the module's CONTRACT.md "Known debt" when you add or retire debt;

@@ -30,8 +30,9 @@ Invariants:
 Threading: sources are immutable after load; readers are single-consumer
 cursors (one per clip placement).
 
-How to test: full qxa suite; grain_*.qxa for the grain path;
-render_split_slip_offset.qxa for reader/offset semantics.
+How to test: `ctest -R sources_test` (reader absolute seeks, loop window,
+zero-fill, grain stretch — sources/tests/); grain_*.qxa for the audible
+grain path; qxa.render_split_slip_offset for offset semantics end-to-end.
 
 Known debt: loader supports 16-bit PCM only and scans the first 8 KiB for
 the data chunk (naive RIFF walk); QString file paths (QtCore); linear

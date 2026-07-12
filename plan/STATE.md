@@ -4625,3 +4625,39 @@ Documentation layer that makes per-module independent development real:
 - CLAUDE.md gained a "Modular layout" section pointing at all of the above.
 
 No code changes in this phase.
+
+## Modularization (proposal 14) — Phase 4: per-module tests + CTest (2026-07-12)
+
+- Existing test sources moved into their modules' tests/ directories:
+  core/tests/ (exact_arithmetic, serialization_roundtrip, and the
+  previously-UNBUILT twfraction test — now built and green), pages/tests/
+  (io_vector), plugins/tests/ (the previously-unbuilt plugin-insert test,
+  enabled via TEST_PLUGIN_INSERT_MAIN).
+- New module tests, each linking ONLY its module's subtree (so a test that
+  stops linking is itself a layering regression):
+  - sources_test: twRandomSource statelessness + zero-fill past end;
+    twSampleReader initial-offset positioning, sequential advance, and
+    ABSOLUTE seekTo; twLoopReader cut-relative cursor + wrap at the segment
+    end; twGrainSource stretched-domain length (identity ≈ source, 2.0x ≈
+    doubled) — all over a synthetic vector-backed twCapturingSource.
+  - mix_test: scripted RampComponent emitting val(position); asserts
+    silence before clip start, MapPosFn slip translation (clip start plays
+    the slipped material), continuity through the clip, the CLIP-END CLAMP
+    (no page bleed), updateClip(key) window changes, and that removeClip
+    matches by KEY (a different key with equal-by-chance address semantics
+    removes nothing; the right key silences).
+  - render_test: RenderSession against a scripted absolute-position ramp;
+    asserts a marked range NOT starting at 0 renders the right material
+    (the 2026-07-12 regression), onPosition reports absolute positions,
+    frame count matches the range, and there is no discontinuity across
+    the 65536-frame page boundary. Hand-rolled RIFF parser (PCM16+float32;
+    discovered en route that WAVWriter emits PCM16 regardless of the
+    Float32 config — noted as sinks debt candidate).
+- Engine test targets are now defined in tw303a/CMakeLists.txt (tw_module_test
+  helper); the three engine test targets were removed from main/CMakeLists.
+- CTest wired at the top level: enable_testing() + add_test per unit test +
+  add_test per qxa case (qxa.<name>, WORKING_DIRECTORY tests/cases so the
+  ../test_sawtooth.wav fixture resolves). `ctest` from smaragd/build/ is now
+  the single gate: 23 tests (8 unit + 15 qxa), 100% green (~74 s wall).
+- CONTRACT.md "How to test" sections updated to name ctest filters;
+  ARCHITECTURE.md working agreement now says: done = ctest + check_layering.

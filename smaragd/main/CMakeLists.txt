@@ -339,33 +339,3 @@ target_link_libraries(action_roundtrip_test
     PRIVATE
         smaragd_app
 )
-
-# Exact arithmetic integration tests (engine-only: tw/core)
-add_executable(exact_arithmetic_test
-    ../tw303a/src/test_exact_arithmetic.cpp
-)
-
-target_link_libraries(exact_arithmetic_test
-    PRIVATE
-        tw_core
-)
-
-# Serialization roundtrip tests (engine-only: tw/core)
-add_executable(serialization_roundtrip_test
-    ../tw303a/src/test_serialization_roundtrip.cpp
-)
-
-target_link_libraries(serialization_roundtrip_test
-    PRIVATE
-        tw_core
-)
-
-# IOVector unit tests (engine-only: tw/pages)
-add_executable(io_vector_test
-    ../tw303a/tests/io_vector_test.cc
-)
-
-target_link_libraries(io_vector_test
-    PRIVATE
-        tw_pages
-)

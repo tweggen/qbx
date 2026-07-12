@@ -23,8 +23,10 @@ Invariants (normative detail in CLIP_MODEL.md and POSITION_DOMAINS.md):
 Threading: clips_ mutations (insert/update/remove) are UI-thread under the
 component mutex; render paths hold the same mutex during page assembly.
 
-How to test: render_split_slip_offset.qxa (slip offset + move + clamp),
-render_sawtooth_multiple_clips.qxa, grain_multiple_stretch_factors.qxa.
+How to test: `ctest -R mix_test` (clip windows, MapPosFn, clamp, key-based
+update/remove against a scripted component — mix/tests/);
+qxa.render_split_slip_offset and qxa.render_sawtooth_multiple_clips
+end-to-end.
 
 Known debt: calcOutputTo allocates buffers per block; per-clip gain/pan not
 yet modeled (track-level only).

@@ -21,8 +21,9 @@ Invariants:
 4. start() rejects overlapping renders; requestCancel() is safe from any
    thread; the file is closed even on cancel/error.
 
-How to test: every render_*.qxa and grain_*.qxa case; the region-RMS
-assertions in render_split_slip_offset.qxa are the strongest gate.
+How to test: `ctest -R render_test` (absolute-range content, onPosition,
+page-boundary continuity against a scripted component — render/tests/);
+every render_*.qxa and grain_*.qxa case end-to-end.
 
 Known debt: output is duplicated-mono stereo (proper multi-channel TBD);
 Extent enum in RenderParams is advisory (start/end seconds are what counts).

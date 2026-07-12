@@ -23,8 +23,8 @@ Invariants:
 3. Fraction is exact: position math that must round-trip through project
    files goes through Fraction, not double (see proposal 04).
 
-How to test: build/bin/exact_arithmetic_test.exe and
-serialization_roundtrip_test.exe (link only tw_core).
+How to test: `ctest -R 'exact_arithmetic|serialization_roundtrip|twfraction'`
+(three executables under core/tests/, linking only tw_core).
 
 Known debt: QtCore dependency (QString in twfraction.cpp tail); SAMPLE_NORM_*
 are macros; DTOR_DEL macro survives for legacy call sites.

@@ -407,6 +407,17 @@ Known debt: <list>
   agreement); CLAUDE.md points at all of it.
 - **Phase 4 — per-module tests**: move existing test_*.cpp into module
   tests; add the thin engine test exes (tw/render first).
+  ✅ DONE 2026-07-12: existing tests moved into <module>/tests/ (core:
+  exact_arithmetic + serialization_roundtrip + the previously-unbuilt
+  twfraction test; pages: io_vector; plugins: the previously-unbuilt
+  plugin-insert test). NEW module tests: sources_test (reader absolute
+  seeks, loop window, zero-fill, grain stretch over a synthetic vector
+  source), mix_test (ClipEntry windows, MapPosFn slip translation, the
+  clip-end clamp, key-based update/remove against a scripted component),
+  render_test (RenderSession end-to-end: absolute marked-range content,
+  onPosition, page-boundary continuity, via a hand-rolled WAV parser).
+  Each test target links ONLY its module subtree. CTest wired at the top
+  level: `ctest` runs the 8 unit tests + all 15 qxa cases (23 green).
 - **Phase 5 — vertical object slices**: regroup scut/splainwave/strack/
   sstdmixer with their renderers and actions. Mechanical; the framework
   interfaces already exist.

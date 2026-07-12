@@ -341,3 +341,24 @@ target_link_libraries(tw303a INTERFACE
 # Legacy include strings ("twcomponent.h", "audio/audio_backend.h", …) resolve
 # through forwarding headers; new code uses "tw/<module>/<header>.h" directly.
 target_include_directories(tw303a INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
+
+# --- Module tests (proposal 14, Phase 4) -------------------------------------
+# Thin per-module executables: each links ONLY its module's subtree, so a
+# test that stops linking is a layering regression in itself. Registered
+# with CTest (see also the qxa suite registered in ../CMakeLists.txt).
+
+function(tw_module_test NAME SRC)
+    add_executable(${NAME} ${SRC})
+    target_link_libraries(${NAME} PRIVATE ${ARGN})
+    add_test(NAME ${NAME} COMMAND ${NAME})
+endfunction()
+
+tw_module_test(exact_arithmetic_test        core/tests/test_exact_arithmetic.cpp        tw_core)
+tw_module_test(serialization_roundtrip_test core/tests/test_serialization_roundtrip.cpp tw_core)
+tw_module_test(twfraction_test              core/tests/test_twfraction.cpp              tw_core)
+tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)
+tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
+target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
+tw_module_test(sources_test                 sources/tests/sources_test.cc               tw_sources)
+tw_module_test(mix_test                     mix/tests/mix_test.cc                       tw_mix)
+tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)

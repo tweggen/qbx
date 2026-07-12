@@ -19,8 +19,9 @@ Invariants:
 3. saveState()/loadState() blobs round-trip through project files — versioned
    and tolerant of unknown trailing data.
 
-How to test: render_sawtooth_with_effects.qxa (chain in the signal path);
-plugin browser lists exactly the registry contents.
+How to test: `ctest -R plugins_test` (registry + insert processing) and
+qxa.render_sawtooth_with_effects (chain in the signal path); the plugin
+browser lists exactly the registry contents.
 
 Known debt: registry hardcodes the built-in plugin (CLAP/external scan is
 proposal 08); insert latency compensation not modeled.

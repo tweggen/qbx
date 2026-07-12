@@ -23,7 +23,7 @@ Invariants:
    pointers across page boundaries (CreateFromBuffer is legacy interop only).
 4. generation increments on invalidation so lock-free readers detect staleness.
 
-How to test: build/bin/io_vector_test.exe (links only tw_pages); page
+How to test: `ctest -R io_vector` (pages/tests/, links only tw_pages); page
 behavior is exercised by every render qxa case.
 
 Known debt: twOutputPage.samples is always FRAME_CAPACITY (memory over-
