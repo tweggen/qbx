@@ -4661,3 +4661,36 @@ No code changes in this phase.
   the single gate: 23 tests (8 unit + 15 qxa), 100% green (~74 s wall).
 - CONTRACT.md "How to test" sections updated to name ctest filters;
   ARCHITECTURE.md working agreement now says: done = ctest + check_layering.
+
+## Modularization (proposal 14) — Phase 5: self-contained object slices (2026-07-12)
+
+The slice regrouping itself landed with the Phase 2 app split; Phase 5's
+remaining substance was removing the framework modules' knowledge of
+concrete object types — the first real edge burn-down:
+
+- SProjectLoader's type registry is now populated by SELF-REGISTRATION:
+  registerSObjectClass() became static (function-local static map, immune
+  to init order), and each slice registers its element name from a static
+  initializer in its own .cpp (SCut, SPlainWave, STrack, SStdMixer,
+  SPluginChain). The loader no longer includes any object header. Relies on
+  the app staying an OBJECT library (STATIC would drop the registration
+  TUs, the same constraint as the actions).
+- SProject::linkToFile() goes through a registered ExternFileFactory (the
+  wave slice registers its WAV loader), resolving the literal
+  "FIXME: Replace that by kind of factory" at that call site. The include
+  for the dead "#if 0 new SStdMixer" block is gone too.
+- SObject::notifyDependentsChanged() calls a new virtual
+  SObject::invalidateAspects() (base no-op) instead of
+  dynamic_cast<SCut*> — behavior identical (non-cut dependents were
+  skipped before, now hit the no-op); SCut's method is now marked override.
+- sobject.cpp includes tw/schedule/capture_aspects.h directly (it had been
+  leeching the bits through scut.h).
+
+Result, locked into tools/check_layering.py: app/model has ZERO declared
+app-internal outgoing edges (was 3), app/persistence dropped from 7 to
+{actions, model, shell}. Contracts updated (model, persistence, four
+slices).
+
+Verification: full ctest 23/23 green; layering checker clean with the
+SHRUNK edge set (any regression re-introducing a concrete-type include now
+fails the check).

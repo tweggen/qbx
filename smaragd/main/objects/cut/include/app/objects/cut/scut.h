@@ -187,7 +187,7 @@ public slots:
     // Lazy invalidation + aspect-based caching (Phase 3/4).
     // Invalidate specific aspects of the capture (Preview, Playback, Metadata, Export).
     // Schedules async revalidation to background thread; returns immediately.
-    void invalidateAspects(uint32_t aspects);
+    void invalidateAspects(uint32_t aspects) override;
 
     // Non-blocking capture access: get current/stale page, or schedule async revalidation.
     // Returns immediately with current page if valid, stale page, or nullptr.

@@ -1065,3 +1065,10 @@ bool SCut::needsRevalidation(uint32_t aspectsMask) const
 }
 
 // Phase 5e: Page cache implementation
+
+// Self-registration with the project loader (proposal 14, Phase 5): the
+// persistence module names no concrete types; each slice registers its own
+// element name. Relies on the app being an OBJECT library (no TU elision).
+static const bool s_registered_scut =
+    ( SProjectLoader::registerSObjectClass( "SCut",
+          SCut::instantiateFromDomElement ), true );

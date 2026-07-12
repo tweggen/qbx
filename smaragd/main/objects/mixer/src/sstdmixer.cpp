@@ -435,3 +435,10 @@ SLink *SStdMixer::instantiateFromDomElement(
 }
 
 // Phase 5e: Page cache implementation
+
+// Self-registration with the project loader (proposal 14, Phase 5): the
+// persistence module names no concrete types; each slice registers its own
+// element name. Relies on the app being an OBJECT library (no TU elision).
+static const bool s_registered_sstdmixer =
+    ( SProjectLoader::registerSObjectClass( "SStdMixer",
+          SStdMixer::instantiateFromDomElement ), true );

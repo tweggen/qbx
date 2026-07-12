@@ -63,7 +63,9 @@ APP_INCLUDE = re.compile(r'#\s*include\s*["<]app/([a-z/]+)/[^">]+[">]')
 # every edge here is real today. Phase 6 shrinks this list — do not grow it
 # without a conscious decision.
 APP_DEPS = {
-    'model':          {'objects/cut', 'objects/mixer', 'objects/wave'},
+    # model and persistence name NO concrete object types since Phase 5
+    # (loader/extern-file self-registration, virtual invalidateAspects).
+    'model':          set(),
     'objects/cut':    {'actions', 'model', 'objects/mixer', 'objects/track',
                        'objects/wave', 'persistence', 'shell'},
     'objects/wave':   {'actions', 'model', 'objects/cut', 'objects/mixer',
@@ -73,8 +75,7 @@ APP_DEPS = {
     'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/track',
                        'persistence', 'pluginui', 'shell', 'timeline'},
     'actions':        {'model', 'objects/track', 'persistence', 'shell'},
-    'persistence':    {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'shell'},
+    'persistence':    {'actions', 'model', 'shell'},
     'selection':      {'actions', 'model', 'objects/track', 'shell'},
     'timeline':       {'actions', 'model', 'objects/cut', 'objects/mixer',
                        'objects/track', 'objects/wave', 'pluginui',

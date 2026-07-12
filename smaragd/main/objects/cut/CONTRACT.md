@@ -24,6 +24,9 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
 5. Container-backed cuts capture via freezePage of the content root;
    arrangementChanged drops the capture transparently.
 
+Self-registration (Phase 5): scut.cpp registers "SCut" with
+SProjectLoader from a static initializer.
+
 How to test: render_split_slip_offset.qxa (THE regression),
 render_sawtooth_clipped_section.qxa, grain_*.qxa.
 

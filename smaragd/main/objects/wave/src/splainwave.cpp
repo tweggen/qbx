@@ -168,3 +168,24 @@ SLink *SPlainWave::instantiateFromDomElement(
 }
 
 // Phase 5e: Page cache implementation
+
+// Self-registration with the project loader (proposal 14, Phase 5): the
+// persistence module names no concrete types; each slice registers its own
+// element name. Relies on the app being an OBJECT library (no TU elision).
+static const bool s_registered_splainwave =
+    ( SProjectLoader::registerSObjectClass( "SPlainWave",
+          SPlainWave::instantiateFromDomElement ), true );
+
+// Extern-file factory for the model (proposal 14, Phase 5): SProject names
+// no concrete types; the wave slice provides the WAV-file loader.
+static SExternFile *createPlainWaveFile( SProject *project, QString &fileName )
+{
+    SPlainWave *w = new SPlainWave( project );
+    if( w->setWave( fileName ) < 0 ) {
+        delete w;
+        return nullptr;
+    }
+    return w;
+}
+static const bool s_registered_wavefactory =
+    ( SProject::registerExternFileFactory( createPlainWaveFile ), true );

@@ -20,6 +20,10 @@ Invariants:
 4. Preview goes through the page cache with live fallback
    (getStraightPreview) — never block painting on revalidation.
 
+Self-registration (Phase 5): splainwave.cpp registers "SPlainWave" with
+SProjectLoader AND the SProject extern-file factory (WAV loading) from
+static initializers.
+
 How to test: every qxa case that add-samples; the user-project renders
 (loading real WAVs, including truncated ones).
 

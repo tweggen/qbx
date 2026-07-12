@@ -186,6 +186,13 @@ public:
      * - Single mutex() per object: protects window parameters, not pages
      */
 
+    // Invalidate specific capture aspects (Preview/Playback/Metadata/Export
+    // bits from tw/schedule/capture_aspects.h). Base: no-op — objects without
+    // a capture have nothing to invalidate. SCut overrides to drop stale
+    // pages and schedule async revalidation. Virtual so dependency
+    // notification needs no knowledge of concrete types (proposal 14, Phase 5).
+    virtual void invalidateAspects( uint32_t aspects ) { (void) aspects; }
+
     // Non-blocking access to capture page (may be stale or invalid).
     // Returns immediately with current page if valid, or nullptr if not ready.
     // Never blocks on revalidation; schedules it if needed.

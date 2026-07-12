@@ -18,6 +18,9 @@ Invariants:
 3. SPluginChain mirrors its model into tw/plugins chain components; wiring
    rebuilds go through rebuildWiring() after input changes.
 
+Self-registration (Phase 5): sstdmixer.cpp and spluginchain.cpp register
+"SStdMixer" / "SPluginChain" with SProjectLoader from static initializers.
+
 How to test: render_sawtooth_with_effects.qxa; asset actions have roundtrip
 coverage via action_roundtrip_test.
 

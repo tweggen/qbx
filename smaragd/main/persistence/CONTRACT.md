@@ -6,9 +6,11 @@ actions. Wire format background: plan/proposed/04_WIRE_FORMAT_AND_SAMPLE_RATE.md
 
 Public headers: app/persistence/*.h
 
-Depends on (engine): tw/core, tw/graph (via model). App edges: knows every
-object type (instantiateFromDomElement dispatch) — the biggest single knot
-in the app SCC.
+Depends on (engine): tw/core, tw/graph (via model). App edges: actions,
+model, shell — since Phase 5 the loader names NO concrete types: each
+object slice self-registers its element name via
+SProjectLoader::registerSObjectClass() from a static initializer (the app
+must stay an OBJECT library or those TUs are dropped at link).
 
 Invariants:
 1. Loading runs with invalidation SUPPRESSED (disableInvalidation /
@@ -25,5 +27,5 @@ Invariants:
 How to test: load-project + save-project qxa actions; the test4 user
 project is the realistic corpus.
 
-Known debt: type dispatch is hardcoded per class — a registration-based
-factory removes persistence→objects edges (Phase 6).
+Known debt: an unknown element name in a project file warns and yields a
+null link (unchanged legacy behavior) — consider a hard load error.

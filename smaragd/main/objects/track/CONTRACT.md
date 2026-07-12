@@ -23,6 +23,9 @@ Invariants (normative detail: CLIP_MODEL.md):
 5. strackpath resolution: comma-separated child indices from the root
    mixer; reparent guards against self/descendant cycles.
 
+Self-registration (Phase 5): strack.cpp registers "STrack" with
+SProjectLoader from a static initializer.
+
 How to test: render_split_slip_offset.qxa (move-clip across tracks +
 removeClip), render_sawtooth_with_effects.qxa (reparent),
 test_track_*.qxa (UI).

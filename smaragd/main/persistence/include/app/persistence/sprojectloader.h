@@ -8,8 +8,6 @@
 class SProject;
 typedef QHash<QString,SLink*> SObjectDictionary;
 
-struct SObjectRegistryEntry;
-
 class SProjectLoader 
 {
 public:
@@ -24,7 +22,11 @@ public:
     int createObjects( SProject &project );
     SObjectDictionary &getObjectDictionary() {return objectDict_;};
 
-    void registerSObjectClass( const QString &nane, instantiateFromDomElement_f creationFunction );
+    // Type registry: each object slice self-registers its element name from a
+    // static initializer in its own .cpp (proposal 14, Phase 5) — the loader
+    // names NO concrete types. Requires the app to stay an OBJECT library
+    // (a STATIC lib would drop the registration TUs; see main/CMakeLists.txt).
+    static void registerSObjectClass( const QString &name, instantiateFromDomElement_f creationFunction );
     SLink *instantiateSObjectFromDomElement(
         const QString &name, QDomElement &, SObject *parent );
 
@@ -32,18 +34,14 @@ public:
 
 protected:
 private:
-    QHash<QString,SObjectRegistryEntry*> sObjectRegistry_;
+    // Accessor for the process-wide type registry (function-local static
+    // avoids the static-initialization-order fiasco with the registrants).
+    static QHash<QString, instantiateFromDomElement_f> &sObjectRegistry();
     SObjectDictionary objectDict_;
     SProject &project_;
     QString name_;
     QDomDocument dom_;
     bool loaded_;
 };
-
-struct SObjectRegistryEntry {
-    SProjectLoader::instantiateFromDomElement_f creator_;
-    QString name_;
-};
-
 
 #endif

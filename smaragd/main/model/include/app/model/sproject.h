@@ -40,6 +40,12 @@ public:
     void setRootComponent( SObject * );
 
     SLink *linkToFile( QString & );
+    // Factory for creating an extern-file object from a path, registered by
+    // the owning slice (SPlainWave) from a static initializer — the model
+    // names no concrete types (proposal 14, Phase 5). Returns NULL on load
+    // failure (the factory owns cleanup of its partial object).
+    typedef SExternFile *(*ExternFileFactory)( SProject *, QString &fileName );
+    static void registerExternFileFactory( ExternFileFactory );
 
     // Mark project as partial/corrupt so destructor skips risky cleanup
     void markAsPartialLoad();

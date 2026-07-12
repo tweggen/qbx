@@ -421,6 +421,14 @@ Known debt: <list>
 - **Phase 5 — vertical object slices**: regroup scut/splainwave/strack/
   sstdmixer with their renderers and actions. Mechanical; the framework
   interfaces already exist.
+  ✅ DONE 2026-07-12 (regrouping landed with the Phase 2 app split; the
+  remaining substance was making slices SELF-CONTAINED): the loader type
+  table is populated by self-registration from each slice, SProject
+  extern-file creation goes through a registered factory (wave slice), and
+  dependency invalidation uses a virtual SObject::invalidateAspects instead
+  of dynamic_cast<SCut*>. model now has ZERO app-internal outgoing edges
+  and persistence only {actions, model, shell} — first measurable Phase 6
+  burn-down, locked in by tools/check_layering.py.
 - **Phase 6 (ongoing) — debt burn-down** per module: Qt out of engine
   file-loading, allocation-free calcOutputTo, etc., each tracked in the
   module's CONTRACT.md "Known debt".

@@ -8,9 +8,9 @@
 #include <QChildEvent>
 
 #include "app/model/sobject.h"
+#include "tw/schedule/capture_aspects.h"  // Preview/Playback/Metadata/Export bits
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
-#include "app/objects/cut/scut.h"
 #include "tw/sources/twrandomsource.h"
 #include "tw/schedule/capture_revalidator.h"
 
@@ -603,16 +603,12 @@ void SObject::notifyDependentsChanged(uint32_t affectedAspects)
         dependents = dependentLinks_;
     }
 
-    // Notify each dependent (typically a cut) to invalidate affected aspects
+    // Notify each dependent (typically a cut) to invalidate affected aspects.
+    // Virtual dispatch: the base no-op covers objects without captures, so
+    // this file needs no knowledge of concrete types.
     for (SLink *link : dependents) {
         if (!link) continue;  // Defensive: skip if somehow null (shouldn't happen)
-
-        // Try to cast the linked object to SCut and invalidate its aspects
-        SObject &linkedObj = link->getSObject();
-        SCut *cut = dynamic_cast<SCut*>(&linkedObj);
-        if (cut) {
-            cut->invalidateAspects(affectedAspects);
-        }
+        link->getSObject().invalidateAspects(affectedAspects);
     }
 }
 

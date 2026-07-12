@@ -11,7 +11,6 @@ using namespace std;
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
-#include "app/objects/mixer/sstdmixer.h"
 #include "app/model/sexternfile.h"
 #include "tw/schedule/capture_revalidator.h"
 
@@ -29,7 +28,6 @@ static QString xmlAttrEscape( const QString &s )
 
 #include "app/model/slink.h"
 
-#include "app/objects/wave/splainwave.h"
 
 QString QuoteString( const QString &org )
 {
@@ -303,17 +301,25 @@ QList<QString> SProject::assetNames() const
     return assetDict_.keys();
 }
 
+static SProject::ExternFileFactory &externFileFactory()
+{
+    static SProject::ExternFileFactory factory = nullptr;
+    return factory;
+}
+
+void SProject::registerExternFileFactory( ExternFileFactory f )
+{
+    externFileFactory() = f;
+}
+
 SLink *SProject::linkToFile( QString &fileName )
 {
     SExternFile *ef = externFileDict_.value( fileName );
     if( !ef ) {
-        // FIXME: Replace that by kind of factory (in SApplication)
-        SPlainWave *w = new SPlainWave( this );
-        if( w->setWave( fileName ) < 0 ) {
-            delete w;
-            return NULL;
-        } 
-        ef = w;
+        ExternFileFactory factory = externFileFactory();
+        if( !factory ) return NULL;
+        ef = factory( this, fileName );
+        if( !ef ) return NULL;
     }
     return new SLink( *ef );
 }

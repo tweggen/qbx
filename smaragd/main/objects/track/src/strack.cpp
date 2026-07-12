@@ -544,3 +544,10 @@ void STrack::onTrackVolumeChanged( double gainDb )
         }
     }
 }
+
+// Self-registration with the project loader (proposal 14, Phase 5): the
+// persistence module names no concrete types; each slice registers its own
+// element name. Relies on the app being an OBJECT library (no TU elision).
+static const bool s_registered_strack =
+    ( SProjectLoader::registerSObjectClass( "STrack",
+          STrack::instantiateFromDomElement ), true );

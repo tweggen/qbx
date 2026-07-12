@@ -16,31 +16,30 @@ using namespace std;
 #include "app/model/slink.h"
 
 // For the factory stuff.
-#include "app/objects/wave/splainwave.h"
-#include "app/objects/track/strack.h"
-#include "app/objects/cut/scut.h"
-#include "app/objects/mixer/sstdmixer.h"
-#include "app/objects/mixer/spluginchain.h"
 
 
-void SProjectLoader::registerSObjectClass( 
+QHash<QString, SProjectLoader::instantiateFromDomElement_f> &
+SProjectLoader::sObjectRegistry()
+{
+    static QHash<QString, instantiateFromDomElement_f> registry;
+    return registry;
+}
+
+void SProjectLoader::registerSObjectClass(
     const QString &name, SProjectLoader::instantiateFromDomElement_f creator )
 {
-    SObjectRegistryEntry *entry = new SObjectRegistryEntry;
-    entry->name_ = name;
-    entry->creator_ = creator;
-    sObjectRegistry_.insert( name, entry );
+    sObjectRegistry().insert( name, creator );
 }
 
 SLink *SProjectLoader::instantiateSObjectFromDomElement( 
     const QString &name, QDomElement &element, SObject *parent )
 {
-    SObjectRegistryEntry *entry = sObjectRegistry_.value( name );    
-    if( !entry ) {
+    instantiateFromDomElement_f creator = sObjectRegistry().value( name );
+    if( !creator ) {
         qWarning() << QString( "Internal error: Unable to instantiate object of type "+name+" !" );
         return NULL;
     }
-    return entry->creator_( *this, element, parent );
+    return creator( *this, element, parent );
 }
 
 int SProjectLoader::createObjects( SProject &project )
@@ -167,12 +166,6 @@ SProjectLoader::SProjectLoader( SProject &project, const QString &name )
       dom_( name ),
       loaded_( false )
 {
-    registerSObjectClass( "SPlainWave", SPlainWave::instantiateFromDomElement );
-    registerSObjectClass( "SStdMixer", SStdMixer::instantiateFromDomElement );
-    registerSObjectClass( "STrack", STrack::instantiateFromDomElement );
-    registerSObjectClass( "SCut", SCut::instantiateFromDomElement );
-    registerSObjectClass( "SPluginChain", SPluginChain::instantiateFromDomElement );
-
     QFile f( name_ );
     if ( !f.open( QIODevice::ReadOnly ) )
         return;
@@ -198,9 +191,5 @@ SProjectLoader::~SProjectLoader()
     }
     objectDict_.clear();
 
-    for( SObjectRegistryEntry *entry : sObjectRegistry_ ) {
-        delete entry;
-    }
-    sObjectRegistry_.clear();
 }
 

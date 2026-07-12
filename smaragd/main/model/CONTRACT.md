@@ -10,8 +10,11 @@ Public headers: app/model/{sobject,slink,sproject,sprojectprops,
 ssortedobjlist,sexternfile,sexternfilelist,sobjectrenderer}.h
 
 Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources.
-App edges: see tools/check_layering.py APP_DEPS (model→objects/* are known
-debt: sobject/sproject still name concrete types).
+App edges: NONE since Phase 5 — the model names no concrete object types.
+Dependency invalidation goes through the virtual
+SObject::invalidateAspects() (base no-op, SCut overrides); extern-file
+creation goes through SProject::registerExternFileFactory() (the wave slice
+registers its WAV loader from a static initializer).
 
 Threading: SObject follows THREADING.md rule 2 (mutex per object, snapshot
 reads, atomic currentPage_); the revalidator calls the reval* delegations.
@@ -31,5 +34,5 @@ Invariants:
 How to test: full qxa suite; action_roundtrip_test for serialization
 adjacency.
 
-Known debt: model→objects includes (loader/type knowledge) block build-level
-module enforcement — Phase 6 (type registry) removes them.
+Known debt: none of the former model→objects edges remain; the module is
+ready to become a real build target once its remaining consumers are.

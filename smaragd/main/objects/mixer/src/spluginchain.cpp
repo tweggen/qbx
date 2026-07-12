@@ -138,3 +138,10 @@ SLink *SPluginChain::instantiateFromDomElement(
     chain->readPostChildrenAttributes( element );
     return new SLink( *chain, nullptr );
 }
+
+// Self-registration with the project loader (proposal 14, Phase 5): the
+// persistence module names no concrete types; each slice registers its own
+// element name. Relies on the app being an OBJECT library (no TU elision).
+static const bool s_registered_spluginchain =
+    ( SProjectLoader::registerSObjectClass( "SPluginChain",
+          SPluginChain::instantiateFromDomElement ), true );
