@@ -58,7 +58,7 @@ These made independent engine development impossible.
 | `recording_session.cc` includes `sapplication.h` | `RecordingParams::startLocatorFrames` + `RecordingSession::onPosition` callback; wired in `SApplication::startRecording`. | ✅ DONE |
 | `twspeaker.cc` includes `sapplication.h`, `sproject.h`, `sobject.h` | `audio::PlaybackContext` interface (`audio/playback_context.h`), implemented by `SApplication`, injected via `setPlaybackContext()`. | ✅ DONE |
 | `capture_revalidator.cc` includes `sobject.h`, `scut.h` (Open Question 2) | `IRevalidatable` interface (`revalidatable.h`) implemented by `SObject` via thin delegations that preserve the historical dispatch; aspect enum moved to engine `capture_aspects.h` (SCutCaptureAspect kept as alias). | ✅ DONE |
-| `twcomponent.h` is a god-header: core types (`sample_t`, `offset_t`, …) + `twLatch`/`twLatchOutput` + `twComponent`, and includes `<qobject.h>`/`QList` | Split into `tw/core/types.h`, `tw/graph/latch.h`, `tw/graph/component.h`; replace `QList` with `std::vector` in latches. | Phase 1 |
+| `twcomponent.h` is a god-header: core types (`sample_t`, `offset_t`, …) + `twLatch`/`twLatchOutput` + `twComponent`, and includes `<qobject.h>`/`QList` | Split into `twtypes.h` (core types) and `twlatch.h` (latch machinery, `QList`→`std::vector`); `twcomponent.h` keeps forwarding includes and is now Qt-free. Files move to `tw/core/`⁄`tw/graph/` paths in Phase 2. | ✅ DONE (Phase 1, 2026-07-12) |
 | `QString`/QtCore usage in `twsamplesource`, `twwavinput`, `tw303aenv` | Confine Qt in the engine to **QtCore-only, in `tw/sources` and `tw/schedule` explicitly** (short term), target `std::string`/`std::filesystem::path` at the file-loading boundary (long term). Realtime code must stay Qt-free (already policy, see plan/STATE.md thread-adoption findings). | Phase 6 |
 
 ## 4. Module map
@@ -359,6 +359,9 @@ Known debt: <list>
 - **Phase 1 — split the god-header**: extract `tw/core/types.h` and
   `tw/graph/latch.h` from `twcomponent.h`; de-Qt the latch (QList→vector).
   Old header keeps working via forwarding includes.
+  ✅ DONE 2026-07-12 as `twtypes.h` + `twlatch.h` (paths get their module
+  directories in Phase 2). `twLatchOutput` also gained the virtual
+  destructor it always needed (it is deleted through the base pointer).
 - **Phase 2 — move files into module directories** with per-module CMake
   targets and path-qualified includes; add `check_layering.py`. No code
   edits beyond include lines. (Biggest diff, zero logic change; do it in

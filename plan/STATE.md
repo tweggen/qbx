@@ -4493,3 +4493,19 @@ include, the precondition for everything else:
 
 Verification: `grep -rn "sapplication.h|sproject.h|sobject.h|scut.h" tw303a/`
 is empty; clean rebuild; all 15 tests/cases qxa PASS.
+
+## Modularization (proposal 14) — Phase 1: twcomponent.h god-header split (2026-07-12)
+
+- New `twtypes.h`: core engine types (sample_t, offset_t, length_t, idx_t,
+  preview_t, SAMPLE_NORM_*, DTOR_DEL). Bottom of the dependency graph;
+  includes nothing, Qt-free.
+- New `twlatch.h`: twLatch / twLatchOutput / twStreamingLatch /
+  twLatchStreamingOutput, de-Qt'd (QList → std::vector; twlatch.cc updated
+  append→push_back, removeOne→find+erase). twLatchOutput gained the virtual
+  destructor it always needed (deleteOutput() deletes via the base pointer —
+  previously UB with derived outputs).
+- `twcomponent.h` keeps forwarding includes (twtypes.h + twlatch.h) so every
+  call site compiles unchanged, and no longer includes any Qt header.
+
+Verification: clean rebuild with no include fallout (nothing relied on the
+transitive <qobject.h>); all 15 tests/cases qxa PASS.

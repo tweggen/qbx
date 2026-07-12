@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <memory.h>
 #include <string.h>
+#include <algorithm>
 
 #include "twsyslog.h"
 
@@ -100,7 +101,7 @@ twLatchOutput * twLatch::addOutput()
 	twLatchOutput *pOutput = new twLatchOutput( *this );
 	if( !pOutput ) throw excStandard( "twLatch::addOutput(): Unable to create new output." );
 
-	outputList.append( pOutput );
+	outputList.push_back( pOutput );
 
 	return pOutput;
 }
@@ -110,7 +111,8 @@ int twLatch::deleteOutput( twLatchOutput * pOutput )
 #ifdef DEBUG_COMPONENT
 	if( !pOutput ) throw excStandard( "twLatch::deleteOutput(): pOutput was NULL." );
 #endif
-	outputList.removeOne( pOutput );
+	auto it = std::find( outputList.begin(), outputList.end(), pOutput );
+	if( it != outputList.end() ) outputList.erase( it );
 	delete pOutput;
 	return 0;
 }
