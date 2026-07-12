@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression for REGISTRY-BASED project loading (proposal 14, Phase 5): the
+  loader names no concrete types; every object slice self-registers its
+  element name from a static initializer. This case deserializes all five
+  registered types (SPlainWave, SCut, STrack, SPluginChain, SStdMixer) from
+  a committed fixture and verifies the AUDIO, not just the structure: the
+  cut has startOffset=48000 into the ramped sawtooth, so the render must
+  play source sec1..sec3 (unique RMS per second) — a slice whose
+  registration went missing would fail loudly here.
+-->
+<SActionScript version="1" name="load_project_render">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../load_fixture.qxp"/>
+
+    <render filename="load_project_render.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: cut plays source sec1 (slip offset via the loaded startOffset) -->
+    <assert-audio-energy filename="load_project_render.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 1-2 s: source sec2 -->
+    <assert-audio-energy filename="load_project_render.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <!-- past the 2 s cut: silence -->
+    <assert-audio-energy filename="load_project_render.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
