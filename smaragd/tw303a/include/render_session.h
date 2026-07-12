@@ -47,6 +47,11 @@ public:
     // Callbacks (called from render thread, must be thread-safe)
     std::function<void(std::size_t written, std::size_t total)> onProgress;
     std::function<void(bool success, const char *error)> onComplete;
+    // Playhead publication: absolute project position in frames, so the app
+    // can move its locator along with the render. Called from the render
+    // thread — the handler must be realtime-safe (atomic store, no Qt/UI).
+    // Replaces the former direct SApplication call (proposal 14, Phase 0).
+    std::function<void(std::uint64_t absPos)> onPosition;
 
 private:
     void renderThreadMain();

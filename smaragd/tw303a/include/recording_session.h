@@ -19,6 +19,10 @@ struct RecordingParams {
     double startTimeSeconds = 0.0;                // locator position (not used yet)
     std::uint32_t sampleRate = 48000;
     std::uint32_t channels = 2;                   // device input channel count
+    // Absolute project position (frames) capture starts at; the session
+    // advances the playhead from here via onPosition. Supplied by the app
+    // (was read from SApplication directly — proposal 14, Phase 0).
+    std::uint64_t startLocatorFrames = 0;
 };
 
 class RecordingSession {
@@ -54,6 +58,10 @@ public:
     // from the GUI thread instead.
     std::function<void(double durationSeconds)> onProgress;
     std::function<void(bool success, const char *error)> onComplete;
+    // Playhead publication: absolute project position in frames
+    // (startLocatorFrames + captured project-rate frames). Called on the
+    // RECORD THREAD — handler must be realtime-safe (atomic store, no Qt).
+    std::function<void(std::uint64_t absPos)> onPosition;
 
 private:
     void recordThreadMain();

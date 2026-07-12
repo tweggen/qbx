@@ -2,7 +2,6 @@
 
 #include "audio/audio_input.h"
 #include "audio/audio_file_writer.h"
-#include "sapplication.h"
 
 #include <chrono>
 #include <cmath>
@@ -362,13 +361,14 @@ void RecordingSession::recordThreadMain() {
     bool success = true;
     std::string errorMsg;
 
-    // Advance the global playback locator in lock-step with what we capture, so
-    // the playhead tracks the recording. Start from the locator position the user
-    // armed at; advance by output (project-rate) frames written. Realtime store
-    // only — never emit Qt signals from this worker thread (a main-thread QTimer
-    // turns these stores into playhead repaints; see SApplication::pumpLocator).
-    const offset_t startLocator = SApplication::app().getGlobalLocatorPos();
-    offset_t recordedProjectFrames = 0;
+    // Advance the playback locator in lock-step with what we capture, so the
+    // playhead tracks the recording. Start from the locator position the user
+    // armed at (supplied via params — the engine never asks the app); advance
+    // by output (project-rate) frames written. onPosition must be a realtime
+    // store only — never emit Qt signals from this worker thread (a main-thread
+    // QTimer turns these stores into playhead repaints; see SApplication::pumpLocator).
+    const std::uint64_t startLocator = params_.startLocatorFrames;
+    std::uint64_t recordedProjectFrames = 0;
 
     // Empirical capture-rate check (for the "take plays back too low" bug). We
     // count the input frames the device actually hands us and divide by real
@@ -430,9 +430,8 @@ void RecordingSession::recordThreadMain() {
 
                 // Advance the playhead by the project-rate frames just captured.
                 if (outFrames > 0) {
-                    recordedProjectFrames += static_cast<offset_t>(outFrames);
-                    SApplication::app().setGlobalLocatorPosRealtime(
-                        startLocator + recordedProjectFrames);
+                    recordedProjectFrames += static_cast<std::uint64_t>(outFrames);
+                    if (onPosition) onPosition(startLocator + recordedProjectFrames);
                 }
 
                 // Emit progress every ~0.1s

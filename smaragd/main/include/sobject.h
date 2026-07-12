@@ -11,6 +11,7 @@
 #include <mutex>
 #include <memory>
 #include "capture_page_pool.h"
+#include "revalidatable.h"
 
 class QWidget;
 
@@ -51,8 +52,9 @@ private:
  *
  * All things marked as properties are user editable.
  */
-class SObject 
-    : public QObject
+class SObject
+    : public QObject,
+      public IRevalidatable   // engine-side revalidator contract (proposal 14)
 {
     Q_OBJECT
     Q_PROPERTY( bool Solo READ isSolo WRITE setSolo )
@@ -217,6 +219,25 @@ public:
      */
     virtual void recomputeMetadata(CapturePageData& page) {}
     virtual void recomputeExport(CapturePageData& page) {}
+
+    // IRevalidatable (the engine-side revalidator contract): thin delegations
+    // to the members above, preserving the historical dispatch exactly — the
+    // *_nolock page methods bind statically to SObject's own implementations
+    // (as the revalidator's SObject* calls always did), while the recompute
+    // hooks and getRootComponent() stay virtual per object type.
+    std::mutex &revalMutex() const override { return mutex(); }
+    bool revalNeeded_nolock(uint32_t aspects) const override
+        { return needsRevalidation_nolock(aspects); }
+    std::shared_ptr<CapturePageData> revalGetNextPage_nolock() const override
+        { return getNextPage_nolock(); }
+    void revalSetNextPage_nolock(std::shared_ptr<CapturePageData> page) override
+        { setNextPage_nolock(page); }
+    void revalSwapPages_nolock() override { swapPages_nolock(); }
+    twComponent &revalRootComponent() override { return getRootComponent(); }
+    void revalRecomputeMetadata(CapturePageData &page) override
+        { recomputeMetadata(page); }
+    void revalRecomputeExport(CapturePageData &page) override
+        { recomputeExport(page); }
 
     // User properties.
     bool isSolo() const

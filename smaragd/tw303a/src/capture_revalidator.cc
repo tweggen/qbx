@@ -1,7 +1,7 @@
 #include "capture_revalidator.h"
 #include "capture_page_pool.h"
-#include "sobject.h"  // For SObject::recomputeXXX virtual methods
-#include "scut.h"  // For SCutCaptureAspect enum (Preview, Playback, Metadata, Export)
+#include "revalidatable.h"    // engine-side object contract (proposal 14, Phase 0)
+#include "capture_aspects.h"  // Preview / Playback / Metadata / Export bits
 #include "twcomponent.h"  // For twComponent::freezePage() and freezePreviewPage()
 #include "tw_output_page.h"  // For twOutputPage and twAspectAll
 #include <cassert>
@@ -24,7 +24,7 @@ CaptureRevalidator::~CaptureRevalidator() {
     shutdown();
 }
 
-void CaptureRevalidator::scheduleRevalidation(SObject* object, uint32_t aspects, int priority) {
+void CaptureRevalidator::scheduleRevalidation(IRevalidatable* object, uint32_t aspects, int priority) {
     if (!object || aspects == 0) return;
 
     {
@@ -111,16 +111,16 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
 
     // === CRITICAL SECTION 1: Check state and allocate page ===
     {
-        std::lock_guard<std::mutex> lock(job.object->mutex());
+        std::lock_guard<std::mutex> lock(job.object->revalMutex());
 
         // Check if object still needs revalidation (state may have changed while queued)
         // _nolock: we hold the lock (std::lock_guard above)
-        if (!job.object->needsRevalidation_nolock(job.aspects)) {
+        if (!job.object->revalNeeded_nolock(job.aspects)) {
             return;
         }
 
         // Get or allocate nextPage (under lock)
-        nextPage = job.object->getNextPage_nolock();
+        nextPage = job.object->revalGetNextPage_nolock();
         if (!nextPage) {
             nextPage = pagePool_->allocatePage();
             if (!nextPage) {
@@ -128,7 +128,7 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
                 scheduleRevalidation(job.object, job.aspects, 0);
                 return;
             }
-            job.object->setNextPage_nolock(nextPage);
+            job.object->revalSetNextPage_nolock(nextPage);
         }
     }  // Release lock before potentially long-running recomputation
 
@@ -140,8 +140,8 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
 
     // === CRITICAL SECTION 2: Atomic swap and mark valid ===
     {
-        std::lock_guard<std::mutex> objectLock(job.object->mutex());
-        job.object->swapPages_nolock();
+        std::lock_guard<std::mutex> objectLock(job.object->revalMutex());
+        job.object->revalSwapPages_nolock();
 
         // Now currentPage is nextPage. Update its metadata while holding page lock
         // to prevent concurrent reads from seeing torn updates.
@@ -155,7 +155,7 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
     // For now, UI will re-read via getCapture() on next paint
 }
 
-void CaptureRevalidator::dispatchRecomputation(SObject* object, uint32_t aspects, CapturePageData& page) {
+void CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint32_t aspects, CapturePageData& page) {
     // Phase 5: Unified rendering dispatch
     // Preview now uses freezePreviewPage() pipeline (same as playback);
     // Metadata/Export still use legacy recomputeXXX for now.
@@ -165,7 +165,7 @@ void CaptureRevalidator::dispatchRecomputation(SObject* object, uint32_t aspects
         // Provides lower-resolution waveform data via unified DSP pipeline.
         // Falls back to previous page if new page not ready (non-blocking).
 
-        twComponent &rootComp = object->getRootComponent();
+        twComponent &rootComp = object->revalRootComponent();
 
         // Preview rendering parameters:
         // - previewSampleRate: 1000 Hz typical for waveform visualization
@@ -193,10 +193,10 @@ void CaptureRevalidator::dispatchRecomputation(SObject* object, uint32_t aspects
     }
 
     if (aspects & Metadata) {
-        object->recomputeMetadata(page);
+        object->revalRecomputeMetadata(page);
     }
     if (aspects & Export) {
-        object->recomputeExport(page);
+        object->revalRecomputeExport(page);
     }
 }
 

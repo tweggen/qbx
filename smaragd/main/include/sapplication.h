@@ -9,6 +9,7 @@
 #include <twcomponent.h>
 #include <render_session.h>
 #include <recording_session.h>
+#include <audio/playback_context.h>
 #include <QApplication>
 #include <QString>
 //#include <qptrlist.h>
@@ -34,7 +35,8 @@ typedef QList<SLink*> SSelectionList;
  * - The default speaker output object.
  */
 class SApplication
-    : public QApplication 
+    : public QApplication,
+      public audio::PlaybackContext   // app services for twSpeaker (proposal 14, Phase 0)
 {
     Q_OBJECT
 public:
@@ -92,6 +94,16 @@ public:
 
     audio::RecordingSession *recordingSession() const;
     void startRecording(const audio::RecordingParams &params);
+
+    // audio::PlaybackContext — the speaker's view of the app. rootComponent()
+    // and locatorPosition() run on the UI thread; locatorHeldElsewhere() and
+    // publishPosition() run on the AUDIO thread (atomic ops only, no Qt).
+    twComponent *rootComponent() override;
+    std::uint64_t locatorPosition() override { return getGlobalLocatorPos(); }
+    bool locatorHeldElsewhere() override { return isRecordingActive(); }
+    void publishPosition(std::uint64_t absPos) override {
+        setGlobalLocatorPosRealtime((offset_t) absPos);
+    }
 
     // Test output directory for artifacts (screenshots, renders, etc.)
     void setTestOutputDir(const QString &path);

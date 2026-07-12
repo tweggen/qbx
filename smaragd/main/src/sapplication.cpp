@@ -258,6 +258,7 @@ SApplication::SApplication( int &argc, char **argv )
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
     t3Speaker_ = new twSpeaker( *t3Env_ );
+    t3Speaker_->setPlaybackContext( this );   // app services; we outlive the speaker
     t3Speaker_->init();
     actionHistory_ = new SActionHistory( this );
 
@@ -286,6 +287,15 @@ void SApplication::submitAction(SAction *action)
     }
 }
 
+// audio::PlaybackContext: root of the component graph to play (null when no
+// project is open). Shared by the speaker, the render path, and monitoring.
+twComponent *SApplication::rootComponent()
+{
+    if (!currentProject_) return nullptr;
+    SObject *root = currentProject_->getRootComponent();
+    return root ? &root->getRootComponent() : nullptr;
+}
+
 audio::RenderSession *SApplication::renderSession() const
 {
     return renderSession_.get();
@@ -307,18 +317,17 @@ void SApplication::startRender(const audio::RenderParams &params)
     }
 
     // Get the synth output component
-    twComponent *synthOutput = nullptr;
-    if (currentProject_) {
-        SObject *root = currentProject_->getRootComponent();
-        if (root) {
-            synthOutput = &root->getRootComponent();
-        }
-    }
-
+    twComponent *synthOutput = rootComponent();
     if (!synthOutput) {
         // TODO: Emit error signal to UI
         return;
     }
+
+    // Playhead tracking: the render thread publishes positions through this
+    // callback (realtime-safe atomic store; the engine has no app knowledge).
+    renderSession_->onPosition = [this](std::uint64_t pos) {
+        setGlobalLocatorPosRealtime((offset_t) pos);
+    };
 
     // Start rendering
     int sampleRate = t3Env_ ? t3Env_->getSRate() : 48000;
@@ -345,11 +354,19 @@ void SApplication::startRecording(const audio::RecordingParams &params)
     // region (the worker advances the locator from here as it captures).
     recordingStartFrame_ = getGlobalLocatorPos();
 
+    // The engine session has no app knowledge: hand it the start position and
+    // a realtime-safe playhead callback (atomic store only — record thread!).
+    audio::RecordingParams p = params;
+    p.startLocatorFrames = (std::uint64_t) recordingStartFrame_;
+    recordingSession_->onPosition = [this](std::uint64_t pos) {
+        setGlobalLocatorPosRealtime((offset_t) pos);
+    };
+
     // Start capture first, so isRecordingActive() is already true before the
     // monitoring playback below produces its first buffer. That keeps the record
     // worker the sole locator authority (the playback callback won't advance the
     // locator while recording — see twSpeaker).
-    recordingSession_->start(params);
+    recordingSession_->start(p);
 
     // Monitoring: play the existing arrangement so the user hears it while
     // recording. Output is best-effort — capture and the playhead still work if

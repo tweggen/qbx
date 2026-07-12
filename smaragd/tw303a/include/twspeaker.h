@@ -5,6 +5,7 @@
 #include "twresampler.h"
 #include "audio/audio_backend.h"
 #include "audio/audio_engine.h"
+#include "audio/playback_context.h"
 
 #include <atomic>
 #include <memory>
@@ -77,6 +78,11 @@ private:
     // a pull so it doesn't overshoot the loop end. Set in startOutput().
     double                rateRatio_ = 1.0;
 
+    // App services (graph root, locator authority). Set once at startup via
+    // setPlaybackContext(); read on UI and audio threads (the pointer itself
+    // never changes after setup, so no synchronization is needed).
+    audio::PlaybackContext *context_ = nullptr;
+
     // Phase 6b: Output state machine (deferred backend startup until buffer ready)
     std::atomic<OutputState> outputState_{OutputState::STOPPED};
     std::thread bufferingTask_;          // Background thread monitoring readahead progress
@@ -133,6 +139,11 @@ public:
 
     // Get current output state (for UI status line display)
     OutputState getOutputState() const { return outputState_.load(std::memory_order_relaxed); }
+
+    // App services (graph root, locator). Set once at startup, before any
+    // startOutput(); the context must outlive this speaker. See
+    // audio/playback_context.h for the threading contract.
+    void setPlaybackContext(audio::PlaybackContext *ctx) { context_ = ctx; }
 
 public:
     void startOutput();

@@ -14,7 +14,7 @@
 
 // Forward declarations
 class CapturePagePool;
-class SObject;
+class IRevalidatable;
 class twComponent;
 class twOutputPage;
 
@@ -41,7 +41,7 @@ struct ComponentFreezingJob {
 };
 
 /**
- * Revalidation job: request to recompute specific capture aspects for an SObject.
+ * Revalidation job: request to recompute specific capture aspects for a revalidatable object.
  *
  * Each job specifies:
  * - Which object needs revalidation
@@ -51,7 +51,7 @@ struct ComponentFreezingJob {
  * Used in priority queue: higher priority jobs dequeue first.
  */
 struct CaptureRevalidationJob {
-    SObject* object;        // Which object to revalidate (borrowed pointer)
+    IRevalidatable* object; // Which object to revalidate (borrowed pointer)
     uint32_t aspects;       // Which aspects (bitmask: Preview|Playback|Metadata|Export)
     int priority;           // 0-10 (higher first)
 
@@ -81,10 +81,11 @@ struct CaptureRevalidationJob {
  *
  * Thread safety:
  * - Job queue protected by mutex
- * - Each object protected by its own mutex (via SObject base class)
+ * - Each object protected by its own mutex (via IRevalidatable::revalMutex())
  * - No shared state between workers (each processes one job at a time)
  *
- * Phase 5e.5: Unified to work with any SObject (not just SCut).
+ * Works with any IRevalidatable (the app's SObject implements it;
+ * the engine has no app knowledge — proposal 14, Phase 0).
  * Each object type implements recomputePreview(), recomputePlayback(), etc.
  * The revalidator dispatches to the appropriate method.
  */
@@ -108,7 +109,7 @@ public:
     ~CaptureRevalidator();
 
     /**
-     * Schedule a revalidation job (SObject-level).
+     * Schedule a revalidation job (object-level).
      *
      * Non-blocking: returns immediately, job runs in background.
      * If queue is full or pool exhausted, job may be skipped (acceptable).
@@ -118,7 +119,7 @@ public:
      * @param priority Job priority (higher = process first)
      *                 Suggested: 10=Playback, 5=Metadata, 2=Export, 1=Preview
      */
-    void scheduleRevalidation(SObject* object, uint32_t aspects, int priority = 5);
+    void scheduleRevalidation(IRevalidatable* object, uint32_t aspects, int priority = 5);
 
     /**
      * Schedule a component freezing job (Phase 4 Gap 10).
@@ -154,7 +155,7 @@ private:
     // Implementation: worker thread loop
     void workerLoop();
 
-    // Helper: process a single revalidation job (SObject)
+    // Helper: process a single revalidation job
     void processRevalidationJob(const CaptureRevalidationJob& job);
 
     // Helper: process a single component freezing job
@@ -162,14 +163,14 @@ private:
 
     // Dispatch recomputation to object's virtual methods
     // These no longer do the computation themselves; they delegate to the object
-    void dispatchRecomputation(SObject* object, uint32_t aspects, CapturePageData& page);
+    void dispatchRecomputation(IRevalidatable* object, uint32_t aspects, CapturePageData& page);
 
     // Members
     CapturePagePool* pagePool_;  // Borrowed, not owned
 
     // Job queues with priority (mutable for const methods like jobsQueued())
     mutable std::mutex queueLock_;
-    std::priority_queue<CaptureRevalidationJob> revalidationQueue_;     // SObject jobs
+    std::priority_queue<CaptureRevalidationJob> revalidationQueue_;     // object jobs
     std::priority_queue<ComponentFreezingJob> freezingQueue_;           // Component jobs
     std::condition_variable queueNotEmpty_;
 

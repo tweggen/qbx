@@ -6,7 +6,6 @@
 
 #include "twcomponent.h"
 #include "twresampler.h"
-#include "sapplication.h"
 
 namespace audio {
 
@@ -143,7 +142,7 @@ void RenderSession::renderThreadMain() {
 
         // Reset component to start of render range
         synthOutput_->reset();
-        SApplication::app().setGlobalLocatorPosRealtime(startOffsetSamples_);
+        if (onPosition) onPosition(startOffsetSamples_);
 
         // Create FileSink for buffered file output with futures-based waiting
         fileSink_ = std::make_unique<FileSink>(writer_.get());
@@ -214,7 +213,7 @@ void RenderSession::renderThreadMain() {
             }
 
             samplesWritten_.store(samplesWrittenVal);
-            SApplication::app().setGlobalLocatorPosRealtime(startOffsetSamples_ + samplesWrittenVal);
+            if (onPosition) onPosition(startOffsetSamples_ + samplesWrittenVal);
 
             // Progress every ~50ms
             if (samplesWrittenVal % std::max(1u, sampleRate_ / 20) == 0) {

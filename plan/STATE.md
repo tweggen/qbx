@@ -4461,3 +4461,35 @@ rendered the region starting at 0 instead.
 - `action_roundtrip_test.exe` fails on `assert-audio-energy` /
   `assert-audio-peak` (they serialize an empty default `filename` which
   their own `readXml` rejects) — pre-existing, unrelated.
+
+## Modularization (proposal 14) — Phase 0: engine no longer includes app headers (2026-07-12)
+
+Proposal 14 (plan/proposed/14_MODULARIZATION.md) defines ~25 modules with
+build-enforced dependency direction. Phase 0 removed every engine→app
+include, the precondition for everything else:
+
+- `RenderSession` gained an `onPosition(uint64_t)` callback (realtime-safe);
+  `SApplication::startRender` wires it to `setGlobalLocatorPosRealtime`.
+  No more `sapplication.h` in render_session.cc.
+- `RecordingSession`: `RecordingParams::startLocatorFrames` (app supplies the
+  arm position it already tracked) + `onPosition` callback replace the
+  direct locator reads/writes.
+- `twSpeaker`: new engine interface `audio::PlaybackContext`
+  (audio/playback_context.h) with rootComponent()/locatorPosition()/
+  locatorHeldElsewhere()/publishPosition(). `SApplication` implements it
+  (multiple inheritance next to QApplication) and injects itself via
+  `setPlaybackContext()` at startup. The audio-callback methods are
+  documented lock-free/no-Qt, matching the existing locator rules.
+- `CaptureRevalidator` (proposal 14 Open Question 2, resolved): now targets
+  a new engine interface `IRevalidatable` (revalidatable.h) instead of
+  SObject/SCut. SObject implements it with thin delegations (revalMutex,
+  revalNeeded_nolock, revalGet/SetNextPage_nolock, revalSwapPages_nolock,
+  revalRootComponent, revalRecomputeMetadata/Export) that preserve the
+  historical dispatch exactly (the _nolock page methods bind statically to
+  SObject's own implementations, as the revalidator's SObject* calls always
+  did). The capture aspect enum (Preview/Playback/Metadata/Export) moved to
+  engine `capture_aspects.h`; scut.h includes it and `SCutCaptureAspect`
+  survives as an alias, so all app call sites compile unchanged.
+
+Verification: `grep -rn "sapplication.h|sproject.h|sobject.h|scut.h" tw303a/`
+is empty; clean rebuild; all 15 tests/cases qxa PASS.

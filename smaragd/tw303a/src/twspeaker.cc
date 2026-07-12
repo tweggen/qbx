@@ -1,10 +1,8 @@
 #include "twspeaker.h"
 
 #include "audio/audio_backend.h"
+#include "audio/playback_context.h"
 #include "io_vector.h"
-#include "sapplication.h"
-#include "sproject.h"
-#include "sobject.h"
 #include "twnegotiator.h"
 #include "twsyslog.h"
 
@@ -100,13 +98,8 @@ void twSpeaker::startOutput()
 
     const audio::AudioConfig cfg = backend_->getConfig();
 
-    // Get synth output component (no lock needed)
-    twComponent *synthOutput = nullptr;
-    if (SProject *proj = SApplication::app().getCurrentProject()) {
-        if (SObject *root = proj->getRootComponent()) {
-            synthOutput = &root->getRootComponent();
-        }
-    }
+    // Get synth output component from the app context (no lock needed)
+    twComponent *synthOutput = context_ ? context_->rootComponent() : nullptr;
 
     if (!synthOutput) {
         TWSPK_LOG( "ERROR: Could not get synth output component" );
@@ -139,7 +132,7 @@ void twSpeaker::startOutput()
     );
 
     // Seek to the current playhead, then publish the handle (leaf-lock write).
-    engine->seekTo(SApplication::app().getGlobalLocatorPos());
+    engine->seekTo((offset_t) context_->locatorPosition());
 
     {
         std::lock_guard<std::mutex> lock(engineMutex_);
@@ -183,8 +176,8 @@ void twSpeaker::startOutput()
 
             if (outFrames == 0) {
                 std::fill_n(out, frames * channels, 0.0f);
-                if (!SApplication::app().isRecordingActive())
-                    SApplication::app().setGlobalLocatorPosRealtime(engine->currentPosition());
+                if (context_ && !context_->locatorHeldElsewhere())
+                    context_->publishPosition(engine->currentPosition());
                 return frames;
             }
 
@@ -204,8 +197,8 @@ void twSpeaker::startOutput()
                 }
             }
 
-            if (!SApplication::app().isRecordingActive())
-                SApplication::app().setGlobalLocatorPosRealtime(engine->currentPosition());
+            if (context_ && !context_->locatorHeldElsewhere())
+                context_->publishPosition(engine->currentPosition());
             return static_cast<std::size_t>(outFrames);
         });
 
