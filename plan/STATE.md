@@ -4359,3 +4359,105 @@ previous session saved).
   when the backend reports 0 latency frames, so its modal "Initializing
   Audio" dialog runs on **every** startup on this machine. Harmless but
   worth caching a "measured, unknown" marker some day.
+
+## Bug Fix Session: Split-clip render — slip offset lost in the freeze path (2026-07-12)
+
+### Symptom
+
+Rendering a project with a split imported wave (head moved to its own track)
+produced a file where the tail clip replayed the **beginning** of the source
+instead of continuing from the split point. Reproduced headlessly from the
+user's `test4.qxp`: seconds 8-16 of the render were a copy of seconds 0-8.
+
+### Root causes (four independent bugs)
+
+1. **Slip offset never reached the component.** The freeze path
+   (`twTrackMix::freezePage_nolock` → `twView::freezePage` →
+   `twComponent::freezePage` → `seekTo(startPos)`) hands CLIP-RELATIVE
+   positions to the clip's component (a `twSampleReader` over the source, or
+   the shared `twWavInput` before a reader exists). The only place
+   `SCut::startOffset_` was folded in — `SCut::seekTo()` — is an SObject
+   method that is not part of the component chain, so every split/slipped
+   clip rendered from source position 0. Same loss in the streaming path
+   (`twTrackMix::seekTo_nolock` → `twView::seekTo`).
+2. **Clip-end bleed.** `freezePage_nolock` mixed the child page's full
+   `validFrames` into the track page, so the last page of a clip leaked up to
+   a page's worth (~0.19 s at 1.365 s/page) of source material past the
+   clip's end.
+3. **`twTrackMix::removeClip` never matched.** It compared the caller's
+   component against the `twView` wrapper pointer (never equal), so removed
+   clips stayed registered (and audible/dangling) forever. Component
+   pointers can't identify a clip anyway: two cuts of one sample share the
+   content component until their readers exist.
+4. **`STrack::trackChildDurationChanged` dead cast.** `durationChanged` is
+   connected on the child's OBJECT (the SCut), but the slot did
+   `dynamic_cast<SLink*>(sender())` — always null — so the engine never
+   learned a clip's new duration. After a split, the head kept sounding over
+   its full pre-split span (audible as doubled/clipped audio where head and
+   tail overlap).
+
+Also: `RenderSession` computed freeze positions from `samplesWrittenVal`
+alone, ignoring `startOffsetSamples_` — a marked range starting at t>0
+rendered the region starting at 0 instead.
+
+### Fix
+
+- `twView` gains an optional `MapPosFn`: positions are translated from
+  clip-relative to the component's own domain before `seekTo` /
+  `freezePage` / `freezePreviewPage`. The mapping is supplied per clip by
+  `STrack` and implemented by the object: new virtual
+  `SObject::mapTimelineToComponentPos()` (identity) overridden by
+  `SCut` (mirrors `SCut::seekTo`'s logic: `off + startOffset`, grain-stretch
+  scaled; identity for looping readers, which are already cut-relative). The
+  mapping calls `ensureReader()` first so the track always talks to the
+  cut's own reader. Pages get cached on the reader keyed by SOURCE-domain
+  positions, so slipping a clip later doesn't invalidate them.
+- `twTrackMix::freezePage_nolock` clamps the mixed child page to
+  `clipEnd - mixStart` frames.
+- Clip identity: `ClipEntry` carries an opaque `key` (STrack passes the
+  `SLink*`); `insertClip/removeClip/updateClip` match by key. Fixes both the
+  never-matching removal and `updateClip`'s "update the first clip with a
+  view" behavior.
+- `STrack::trackChildDurationChanged` resolves the sender OBJECT and updates
+  every link of this track referencing it.
+- `RenderSession::renderThreadMain` uses
+  `currentPos = startOffsetSamples_ + samplesWrittenVal` for page positions.
+
+### Test-harness hardening (was hiding all of the above)
+
+- `SActionRunner` now detects rejected actions per-submit (via new
+  `SActionHistory::rejectedCount()`) and fails the test unless the action is
+  marked `expectReject` (implements the Phase 4 TODO). Previously a failed
+  `assert-audio-energy` — or a `split-clip` whose attributes didn't even
+  parse — passed silently.
+- Created the missing `tests/test_sawtooth.wav` fixture (4 s, 48 kHz, 16-bit
+  stereo sawtooth with 0→0.8 amplitude ramp — every source second has a
+  unique RMS, so wrong-offset bugs are detectable by region RMS).
+- New regression test `tests/cases/render_split_slip_offset.qxa`: split at
+  1 s, move head to another track, render, assert per-second region RMS and
+  silence after the clip end.
+- Modernized stale test schemas: `render_sawtooth_clipped_section.qxa`
+  (split-clip/resize-clip attrs, + energy assertions),
+  `render_sawtooth_with_effects.qxa` (reparent-track attrs, track-count 1
+  after reparent), all six `grain_*.qxa` (comma clip paths, frame-domain
+  windows for the 4 s fixture, region-scoped energy/peak assertions).
+
+### Verification
+
+- User project (`test4.qxp`, tail track unmuted): render seconds 8-16 now
+  play source 8 s onward, seamless at the split; with the track muted as
+  saved, seconds 8-16 are exact silence (no more 0.38-peak page bleed at 8 s).
+- All 15 `tests/cases/*.qxa` PASS, now with real audio-content assertions.
+- Grain sanity: 1.25x/1.5x/2x/0.5x stretches render the ramp with preserved
+  RMS and stop exactly at the stretched clip end.
+
+### Notes / findings for the user
+
+- `test4.qxp` saves the tail's track with `muted='true'` — mute is honored by
+  the render, so unmute it to hear the tail.
+- `smaragd/05_trick_me.wav` is a truncated file: header claims 211 s
+  (37,241,568 data bytes) but only 11 MB are present. The loader's
+  short-read clamp (62.4133 s) is correct behavior.
+- `action_roundtrip_test.exe` fails on `assert-audio-energy` /
+  `assert-audio-peak` (they serialize an empty default `filename` which
+  their own `readXml` rejects) — pre-existing, unrelated.

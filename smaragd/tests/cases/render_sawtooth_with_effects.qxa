@@ -14,10 +14,10 @@
     <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- Group the child track under the master track -->
-    <reparent-track sources="1" dest="0"/>
+    <reparent-track source="1" destParent="0"/>
 
     <!-- Adjust the master track volume to -6 dB (half amplitude) -->
-    <set-track-volume trackIndex="0" newVolume="-6.0"/>
+    <set-track-volume trackIndex="0" volume="-6.0"/>
 
     <!-- Render the project (sawtooth at reduced volume due to master track attenuation) -->
     <render filename="render_with_effects.wav" format="wav" quality="10"/>
@@ -30,8 +30,9 @@
   </actions>
 
   <assertions>
-    <!-- Verify both tracks exist (reparent doesn't change track count, only hierarchy) -->
-    <assert-track-count equals="2"/>
+    <!-- After reparenting, the mixer has one top-level track (the master);
+         the child lives underneath it. -->
+    <assert-track-count equals="1"/>
   </assertions>
 
 </SActionScript>

@@ -160,8 +160,11 @@ void RenderSession::renderThreadMain() {
         std::shared_ptr<twOutputPage> prevPage;
 
         while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
-            // Current position in component graph samples
-            uint64_t currentPos = samplesWrittenVal;
+            // Current position in component graph samples. The render range may
+            // start mid-project (marked in/out range), so the graph position is
+            // the range start plus what we've written so far — not just the
+            // written count (that rendered the wrong region for ranges > 0).
+            uint64_t currentPos = startOffsetSamples_ + samplesWrittenVal;
             uint64_t pageStartPos = (currentPos / PAGE_SIZE) * PAGE_SIZE;
 
             // Freeze this page sequentially

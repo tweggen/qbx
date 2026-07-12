@@ -1,34 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Grain time-stretch 2x: 4 s ramped sawtooth becomes 8 s (384000 frames). -->
 <SActionScript version="1" name="grain_time_stretch_2x">
 
   <setup project="new"/>
 
   <actions>
-    <!-- Test grain-based time-stretching: 2x slower -->
-
-    <!-- Create a track -->
     <add-track index="-1"/>
 
-    <!-- Add the sawtooth sample at position 0 -->
+    <!-- 4 s sawtooth (192000 frames) -->
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
-    <!-- Apply 2x time-stretch via resize-clip action -->
-    <!-- This activates grain overlap-add processing with 2x slower playback -->
-    <!-- Grain size defaults to 2048 frames, crossfade 512 frames -->
-    <!-- Duration doubles: 21.8s becomes ~43.6s due to 2x stretch factor -->
-    <resize-clip clip="0/0" startTime="0" startOffset="0" duration="2880000/48000" loopLength="0" stretch="2.0"/>
+    <!-- 2x stretch: 192000 x 2 = 384000 frames -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="384000" loopLength="0" stretch="2.0"/>
 
-    <!-- Render the time-stretched audio -->
     <render filename="grain_time_stretch_2x.wav" format="wav" quality="10"/>
 
-    <!-- Acoustic verification: aggressive 2x stretch should preserve energy -->
-    <!-- RMS energy should remain similar to original (overlap-add preserves loudness) -->
-    <assert-audio-energy filename="grain_time_stretch_2x.wav" minRms="0.05" maxRms="0.90"/>
+    <!-- Clip region: stretched ramp keeps its RMS (~0.25-0.27) -->
+    <assert-audio-energy filename="grain_time_stretch_2x.wav"
+                         startFrame="0" frameCount="384000"
+                         minRms="0.20" maxRms="0.32"/>
 
-    <!-- Peak should not exceed clipping threshold despite large stretch factor -->
+    <!-- Past the stretched clip end: silence -->
+    <assert-audio-energy filename="grain_time_stretch_2x.wav"
+                         startFrame="384000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
     <assert-audio-peak filename="grain_time_stretch_2x.wav" maxPeak="0.995"/>
 
-    <!-- Screenshot showing the stretched timeline -->
     <screenshot filename="grain_time_stretch_2x_timeline.png" resolution="50%"/>
   </actions>
 

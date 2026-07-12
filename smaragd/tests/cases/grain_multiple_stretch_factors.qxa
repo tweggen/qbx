@@ -1,40 +1,49 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Three placements of the 4 s ramped sawtooth at different stretch factors,
+  spaced apart on the timeline so each region can be verified alone:
+    clip 0 at  0 s: 1.5x  -> 288000 frames
+    clip 1 at 10 s: 1.0x  -> 192000 frames (no grain stage)
+    clip 2 at 20 s: 0.75x -> 144000 frames
+-->
 <SActionScript version="1" name="grain_multiple_stretch_factors">
 
   <setup project="new"/>
 
   <actions>
-    <!-- Test multiple clips with different grain time-stretch factors -->
-
-    <!-- Create a track -->
     <add-track index="-1"/>
 
-    <!-- Add three copies of the sample at different positions -->
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
-    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="48000000/48000"/>
-    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000000/48000"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="480000"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="960000"/>
 
-    <!-- Apply different stretch factors to each clip -->
-    <!-- Clip 0: 1.5x slower -->
-    <resize-clip clip="0/0" startTime="0" startOffset="0" duration="2160000/48000" loopLength="0" stretch="1.5"/>
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="288000" loopLength="0" stretch="1.5"/>
+    <resize-clip clip="0,1" startTime="480000" startOffset="0"
+                 duration="192000" loopLength="0" stretch="1.0"/>
+    <resize-clip clip="0,2" startTime="960000" startOffset="0"
+                 duration="144000" loopLength="0" stretch="0.75"/>
 
-    <!-- Clip 1: 1.0x (no stretch) -->
-    <resize-clip clip="0/1" startTime="48000000/48000" startOffset="0" duration="1440000/48000" loopLength="0" stretch="1.0"/>
-
-    <!-- Clip 2: 0.75x (faster) -->
-    <resize-clip clip="0/2" startTime="96000000/48000" startOffset="0" duration="1080000/48000" loopLength="0" stretch="0.75"/>
-
-    <!-- Render the project with all three grain-processed clips -->
     <render filename="grain_multiple_stretch_factors.wav" format="wav" quality="10"/>
 
-    <!-- Acoustic verification: mixed stretch factors should produce coherent mix -->
-    <!-- All three clips contribute to overall energy with different time scales -->
-    <assert-audio-energy filename="grain_multiple_stretch_factors.wav" minRms="0.05" maxRms="0.90"/>
+    <!-- Each clip region carries the ramp RMS (~0.25-0.27) -->
+    <assert-audio-energy filename="grain_multiple_stretch_factors.wav"
+                         startFrame="0" frameCount="288000"
+                         minRms="0.20" maxRms="0.32"/>
+    <assert-audio-energy filename="grain_multiple_stretch_factors.wav"
+                         startFrame="480000" frameCount="192000"
+                         minRms="0.20" maxRms="0.32"/>
+    <assert-audio-energy filename="grain_multiple_stretch_factors.wav"
+                         startFrame="960000" frameCount="144000"
+                         minRms="0.20" maxRms="0.32"/>
 
-    <!-- Peak amplitude from mixed clips at different stretches should not exceed limit -->
+    <!-- Gap between clip 0 and clip 1: silence -->
+    <assert-audio-energy filename="grain_multiple_stretch_factors.wav"
+                         startFrame="336000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
     <assert-audio-peak filename="grain_multiple_stretch_factors.wav" maxPeak="0.995"/>
 
-    <!-- Screenshot showing the three clips with different temporal scales -->
     <screenshot filename="grain_multiple_stretch_factors_timeline.png" resolution="50%"/>
   </actions>
 

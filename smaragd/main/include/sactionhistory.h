@@ -33,6 +33,11 @@ public:
     // Access to the undo stack (for binding to UI, QUndoView, etc.).
     QUndoStack *undoStack() const;
 
+    // Total actions whose apply() returned failure since construction. The test
+    // runner samples this around each submit to detect rejected actions (e.g. a
+    // failed assert-audio-energy), which previously vanished silently.
+    int rejectedCount() const { return rejectedCount_; }
+
 private:
     // Internal: drain the queue synchronously, apply each action, populate undo stack.
     void drain_();
@@ -52,6 +57,7 @@ private:
     QList<InFlight> inFlight_;     // GUI-thread only; FIFO order
     SActionQueue   *queue_;
     QUndoStack     *undoStack_;
+    int             rejectedCount_ = 0;
 };
 
 #endif // SACTIONHISTORY_H

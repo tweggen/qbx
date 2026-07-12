@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include <cstring>
+#include <algorithm>
 
 #include "tw303aenv.h"
 #include <vector>
@@ -79,7 +80,9 @@ bool twTrackMix::isSeekable() const
     return true;
 }
 
-void twTrackMix::insertClip(offset_t startTime, length_t duration, std::function<twComponent*()> getComponentFn)
+void twTrackMix::insertClip(const void *key, offset_t startTime, length_t duration,
+                            std::function<twComponent*()> getComponentFn,
+                            std::function<offset_t(offset_t)> mapPosFn)
 {
     std::lock_guard<std::mutex> lock(mutex());
     if( !getComponentFn ) {
@@ -87,22 +90,24 @@ void twTrackMix::insertClip(offset_t startTime, length_t duration, std::function
         return;
     }
     // Create a stable twView wrapper for this clip
-    twView *view = new twView(env, getComponentFn);
+    twView *view = new twView(env, getComponentFn, mapPosFn);
     view->init();
-    clips_.push_back({startTime, duration, view, nullptr});
+    clips_.push_back({startTime, duration, key, view, nullptr});
     fprintf(stderr, "twTrackMix: inserted clip at time %llu, now have %zu clips\n", startTime, clips_.size());
 }
 
-void twTrackMix::removeClip(std::function<twComponent*()> getComponentFn)
+void twTrackMix::removeClip(const void *key)
 {
     std::lock_guard<std::mutex> lock(mutex());
     auto it = clips_.begin();
     int removed = 0;
     while( it != clips_.end() ) {
-        // Compare by calling both callbacks - if they return the same component, it's a match
-        twComponent *comp = getComponentFn ? getComponentFn() : nullptr;
-        twComponent *clipComp = it->view ? (twView*)it->view : nullptr;
-        if( clipComp && comp == clipComp ) {
+        // Match by the caller-supplied key. The previous component-based
+        // matching was doubly broken: it compared the caller's component to the
+        // twView wrapper pointer (never equal, so nothing was ever removed),
+        // and even comparing underlying components would remove EVERY clip of
+        // the same sample, since unbuilt readers share one content component.
+        if( it->key == key ) {
             // Delete the twView wrapper
             delete it->view;
             it = clips_.erase(it);
@@ -114,15 +119,11 @@ void twTrackMix::removeClip(std::function<twComponent*()> getComponentFn)
     fprintf(stderr, "twTrackMix: removed %d clip(s), now have %zu clips\n", removed, clips_.size());
 }
 
-void twTrackMix::updateClip(std::function<twComponent*()> getComponentFn, offset_t newStartTime, length_t newDuration)
+void twTrackMix::updateClip(const void *key, offset_t newStartTime, length_t newDuration)
 {
     std::lock_guard<std::mutex> lock(mutex());
     for( ClipEntry &clip : clips_ ) {
-        twComponent *comp = getComponentFn ? getComponentFn() : nullptr;
-        // For now, match by position since we're updating the same clip
-        // In practice, the caller should track which clip to update
-        // This is a simplification - could use a better identification scheme
-        if( clip.view ) {
+        if( clip.key == key ) {
             clip.startTime = newStartTime;
             clip.duration = newDuration;
             return;
@@ -319,10 +320,17 @@ length_t twTrackMix::freezePage_nolock(
                               ? (clip.startTime - startPos)
                               : 0;
 
+        // Clamp to the clip's end: a frozen page always carries a full page of
+        // source material, so without this the last page of a clip would bleed
+        // audio past the clip boundary into the track sum.
+        uint64_t mixStart = startPos + destOffset;
+        uint64_t framesToMix = std::min<uint64_t>(childPage->validFrames,
+                                                  clipEnd > mixStart ? clipEnd - mixStart : 0);
+
         // Type-safe mixing using IOVector (bounds-checked, zero-copy)
         IOVector childVec = IOVector::CreateForPageOutput(childPage);
         IOVector outputVec(page, 0, length);
-        outputVec.mixFrom(childVec, destOffset, childVec.length());
+        outputVec.mixFrom(childVec, destOffset, (length_t) framesToMix);
     }
 
     // Apply track gain and mute (same as calcOutputTo_nolock)

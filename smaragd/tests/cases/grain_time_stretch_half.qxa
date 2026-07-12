@@ -1,33 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Grain time-compress 0.5x: 4 s ramped sawtooth becomes 2 s (96000 frames). -->
 <SActionScript version="1" name="grain_time_stretch_half">
 
   <setup project="new"/>
 
   <actions>
-    <!-- Test grain-based time-stretching: 0.5x faster -->
-
-    <!-- Create a track -->
     <add-track index="-1"/>
 
-    <!-- Add the sawtooth sample at position 0 -->
+    <!-- 4 s sawtooth (192000 frames) -->
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
-    <!-- Apply 0.5x time-stretch via resize-clip action -->
-    <!-- This activates grain overlap-add with 0.5x stretch (2x faster playback) -->
-    <!-- Duration halves: 21.8s becomes ~10.9s due to 0.5x stretch factor -->
-    <resize-clip clip="0/0" startTime="0" startOffset="0" duration="1440000/48000" loopLength="0" stretch="0.5"/>
+    <!-- 0.5x stretch: 192000 x 0.5 = 96000 frames -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="96000" loopLength="0" stretch="0.5"/>
 
-    <!-- Render the time-stretched audio (now plays 2x faster) -->
     <render filename="grain_time_stretch_half.wav" format="wav" quality="10"/>
 
-    <!-- Acoustic verification: 0.5x compression should preserve energy -->
-    <!-- Dense grain packing (2x faster) should not cause artifacts -->
-    <assert-audio-energy filename="grain_time_stretch_half.wav" minRms="0.05" maxRms="0.90"/>
+    <!-- Clip region: compressed ramp keeps its RMS (~0.25-0.27) -->
+    <assert-audio-energy filename="grain_time_stretch_half.wav"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.20" maxRms="0.32"/>
 
-    <!-- Peak should stay within safe bounds even with aggressive compression -->
+    <!-- Past the compressed clip end: silence -->
+    <assert-audio-energy filename="grain_time_stretch_half.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
     <assert-audio-peak filename="grain_time_stretch_half.wav" maxPeak="0.995"/>
 
-    <!-- Screenshot showing the compressed timeline -->
     <screenshot filename="grain_time_stretch_half_timeline.png" resolution="50%"/>
   </actions>
 

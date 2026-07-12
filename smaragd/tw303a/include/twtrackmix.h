@@ -17,6 +17,9 @@ class twView;
 struct ClipEntry {
     offset_t     startTime;
     length_t     duration;      // 0 = unbounded
+    const void  *key;           // Caller-supplied identity (e.g. the SLink); two
+                                // clips of one sample share a component, so the
+                                // component pointer can NOT identify a clip
     twView *view;               // Stable wrapper; owned by twTrackMix
     std::shared_ptr<twOutputPage> previousPage;  // State snapshot for resumption
 };
@@ -35,10 +38,17 @@ public:
 
     // Clip management (called by STrack on the UI thread)
     // These are protected by the inherited mutex() from twComponent
-    // Takes a callback that returns the current component (allows dynamic lookup)
-    void insertClip(offset_t startTime, length_t duration, std::function<twComponent*()> getComponentFn);
-    void removeClip(std::function<twComponent*()> getComponentFn);
-    void updateClip(std::function<twComponent*()> getComponentFn, offset_t newStartTime, length_t newDuration);
+    // Clips are identified by an opaque caller-supplied key (STrack passes the
+    // SLink) — component pointers are ambiguous because two clips of the same
+    // sample resolve to the same shared component until their readers exist.
+    // getComponentFn returns the current component (allows dynamic lookup);
+    // mapPosFn optionally folds the clip's slip offset into clip-relative
+    // positions before they reach the component (see twView).
+    void insertClip(const void *key, offset_t startTime, length_t duration,
+                    std::function<twComponent*()> getComponentFn,
+                    std::function<offset_t(offset_t)> mapPosFn = nullptr);
+    void removeClip(const void *key);
+    void updateClip(const void *key, offset_t newStartTime, length_t newDuration);
 
     // Track intrinsic properties (gain, mute) — applied to all output
     void setTrackMute(bool muted);

@@ -520,6 +520,30 @@ int SCut::seekTo( offset_t off )
     return content_->getSObject().seekTo( seekPos );
 }
 
+// Map a clip-relative position into the reader's own domain. This is the same
+// mapping SCut::seekTo applies before seeking, factored out so twView can
+// translate positions for BOTH seekTo and freezePage: the freeze path seeks the
+// component directly with the position it is given, so the slip offset must be
+// folded in up front (this was the split-clip-renders-from-file-start bug).
+// ensureReader() runs first so the component handed to the track (via
+// getRootComponent) is our own reader, in the domain this mapping targets.
+offset_t SCut::mapTimelineToComponentPos( offset_t off )
+{
+    ensureReader();
+    SCutSnapshot snap = getSnapshot();
+
+    // A loop reader is cut-relative (it adds its own loop base = startOffset_).
+    if( snap.reader.looping ) return off;
+
+    // Plain reader over source/grain view: fold the slip offset in, converting
+    // to the stretched domain when a grain stage is interposed.
+    offset_t startOff = snap.startOffset;
+    if( snap.reader.grain ) {
+        startOff = (offset_t) llround( (double) startOff * snap.grainParams.stretch );
+    }
+    return off + startOff;
+}
+
 void SCut::setStartOffset( offset_t off )
 {
     {

@@ -137,14 +137,20 @@ void STrack::checkDurationChanged()
 
 void STrack::trackChildDurationChanged( length_t newLength )
 {
-    SLink *slink = dynamic_cast<SLink *>((SLink *) (const SLink *) sender());
-    if( slink ) {
-        // Create callback that returns the component
-        auto getComponentFn = [slink]() { return &slink->getRootComponent(); };
-        length_t duration = newLength;
-        for( int i=0; i<nBusses_; ++i ) {
-            if( cpTrackMixers_[i] ) {
-                cpTrackMixers_[i]->updateClip(getComponentFn, slink->getStartTime(), duration);
+    // durationChanged is connected on the child's OBJECT (see
+    // trackChildWasAdded), so sender() is the SObject — an SCut, say — not the
+    // SLink. The old dynamic_cast<SLink*>(sender()) was therefore always null,
+    // and the engine's clip window silently kept its stale duration (a split
+    // clip's head kept sounding over its full pre-split span). Resolve every
+    // link of ours that references the sender object and update each placement.
+    SObject *obj = dynamic_cast<SObject *>( sender() );
+    if( obj ) {
+        for( SLink *lk : childLinks() ) {
+            if( !lk || &lk->getSObject() != obj ) continue;
+            for( int i=0; i<nBusses_; ++i ) {
+                if( cpTrackMixers_[i] ) {
+                    cpTrackMixers_[i]->updateClip(lk, lk->getStartTime(), newLength);
+                }
             }
         }
     }
@@ -156,12 +162,10 @@ void STrack::trackChildWasMoved( offset_t newTime )
 {
     SLink *slink = (SLink *) (const SLink *) sender();
     if( slink && slink->getSObject().hasDuration() ) {
-        // Create callback that returns the component
-        auto getComponentFn = [slink]() { return &slink->getRootComponent(); };
         length_t duration = slink->getSObject().getDuration();
         for( int i=0; i<nBusses_; ++i ) {
             if( cpTrackMixers_[i] ) {
-                cpTrackMixers_[i]->updateClip(getComponentFn, newTime, duration);
+                cpTrackMixers_[i]->updateClip(slink, newTime, duration);
             }
         }
         lastDurationValid_ = false;
@@ -188,9 +192,14 @@ void STrack::trackChildWasAdded( SLink &child )
             length_t duration = child.getSObject().getDuration();
             // Capture SLink by reference; callback will call getRootComponent() dynamically
             auto getComponentFn = [&child]() { return &child.getRootComponent(); };
+            // Position mapper: folds a windowed clip's slip offset into
+            // clip-relative positions before the component is seeked/frozen.
+            auto mapPosFn = [&child]( offset_t off ) {
+                return child.getSObject().mapTimelineToComponentPos( off );
+            };
             for( int i=0; i<nBusses_; ++i ) {
                 if( cpTrackMixers_[i] ) {
-                    cpTrackMixers_[i]->insertClip(startTime, duration, getComponentFn);
+                    cpTrackMixers_[i]->insertClip(&child, startTime, duration, getComponentFn, mapPosFn);
                 }
             }
 
@@ -204,11 +213,10 @@ void STrack::trackChildWasRemoved( SLink &child )
 {
     if( child.hasStartTime() ) {
         if( child.getSObject().hasDuration() ) {
-            // Remove the clip from all track mixers using a callback
-            auto getComponentFn = [&child]() { return &child.getRootComponent(); };
+            // Remove the clip from all track mixers, keyed by the link itself.
             for( int i=0; i<nBusses_; ++i ) {
                 if( cpTrackMixers_[i] ) {
-                    cpTrackMixers_[i]->removeClip(getComponentFn);
+                    cpTrackMixers_[i]->removeClip(&child);
                 }
             }
 
@@ -295,8 +303,13 @@ void STrack::setNBusses( int nBusses )
         length_t duration = lk->getSObject().hasDuration() ? lk->getSObject().getDuration() : 0;
         // Create a callback that returns the component dynamically
         auto getComponentFn = [lk]() { return &lk->getRootComponent(); };
+        // Position mapper: folds a windowed clip's slip offset into
+        // clip-relative positions before the component is seeked/frozen.
+        auto mapPosFn = [lk]( offset_t off ) {
+            return lk->getSObject().mapTimelineToComponentPos( off );
+        };
         for( int i=0; i<nBusses; ++i ) {
-            cpTrackMixers_[i]->insertClip(startTime, duration, getComponentFn);
+            cpTrackMixers_[i]->insertClip(lk, startTime, duration, getComponentFn, mapPosFn);
         }
     }
 

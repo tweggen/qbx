@@ -118,10 +118,20 @@ public:
     /**
      * Seek the underlying twComponents to a given point, so that subsequent
      * playback will start there.
-     * This method is provided inside the objects to facilate different underlying 
+     * This method is provided inside the objects to facilate different underlying
      * interfaces.
      */
     virtual int seekTo( offset_t );
+
+    /**
+     * Map a clip-relative timeline position into this object's root component's
+     * own position domain. Tracks compute clip-relative positions; a windowed
+     * clip (SCut) plays a reader over the SOURCE material, so its slip offset
+     * (grain-stretched as needed) must be folded in before the component is
+     * seeked or page-frozen. Default is the identity: most objects' root
+     * components are already clip-relative. Consumed via twView (see STrack).
+     */
+    virtual offset_t mapTimelineToComponentPos( offset_t off ) { return off; }
 
     /**
      * Ordered view of this container's SLink children. Prefer this and the

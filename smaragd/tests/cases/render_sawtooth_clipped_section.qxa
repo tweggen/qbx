@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Split a clip, trim the tail to one second, and verify the rendered audio:
+  the fixture's amplitude ramp gives every source second a unique RMS
+  (sec0 ~0.067, sec1 ~0.176), so the tail playing the wrong material or the
+  trim not taking effect fails the energy assertions.
+-->
 <SActionScript version="1" name="render_sawtooth_clipped_section">
 
   <setup project="new"/>
@@ -7,20 +13,34 @@
     <!-- Create a track -->
     <add-track index="-1"/>
 
-    <!-- Add the sawtooth sample at position 0 -->
+    <!-- Add the sawtooth sample at position 0 (4 s clip) -->
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
-    <!-- Find the clip we just added (should be at index 0) -->
-    <!-- We'll refer to it implicitly through the track -->
+    <!-- Split the clip at the 1 second mark -->
+    <split-clip clip="0,0" splitTime="48000"/>
 
-    <!-- Split the clip at 1 second mark to create a clipped version -->
-    <split-clip trackIndex="0" clipIndex="0" time="48000/48000"/>
+    <!-- Trim the second clip (tail) to end at 2 seconds: keep its placement at
+         1 s and slip offset 48000, shorten its duration to 1 s -->
+    <resize-clip clip="0,1" startTime="48000" startOffset="48000"
+                 duration="48000" loopLength="0" stretch="1.0"/>
 
-    <!-- Resize the second clip to end at 2 seconds (removing the tail) -->
-    <resize-clip trackIndex="0" clipIndex="1" newDuration="48000/48000" mode="trim-end"/>
-
-    <!-- Render the project (now has two clips of 1 second each) -->
+    <!-- Render the project (two clips of 1 second each) -->
     <render filename="render_clipped_section.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: head clip = source sec0 -->
+    <assert-audio-energy filename="render_clipped_section.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- 1-2 s: trimmed tail = source sec1 (slip offset honored) -->
+    <assert-audio-energy filename="render_clipped_section.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 2-3 s: past the trimmed tail; must be silence -->
+    <assert-audio-energy filename="render_clipped_section.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
 
     <!-- Capture the timeline showing the two clips -->
     <screenshot filename="render_clipped_timeline.png" resolution="50%"/>

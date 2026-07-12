@@ -1,30 +1,39 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal grain time-stretch: 4 s ramped sawtooth stretched 1.25x -> 5 s.
+  The fixture's amplitude ramp (0 -> 0.8) gives the whole clip an RMS of
+  ~0.25-0.27 regardless of stretch factor (time stretching preserves the
+  amplitude profile), so the energy assertion is region-scoped to the clip.
+-->
 <SActionScript version="1" name="grain_minimal_stretch">
 
   <setup project="new"/>
 
   <actions>
-    <!-- Minimal grain time-stretching test -->
-
     <!-- Create a track -->
     <add-track index="-1"/>
 
-    <!-- Add the sawtooth sample -->
+    <!-- Add the sawtooth sample (4 s = 192000 frames) -->
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
-    <!-- Apply a subtle 1.25x time-stretch -->
-    <!-- This activates grain overlap-add with a moderate stretch factor -->
-    <!-- Duration: 21.8s × 1.25 = ~27.25s -->
-    <resize-clip clip="0/0" startTime="0" startOffset="0" duration="1800000/48000" loopLength="0" stretch="1.25"/>
+    <!-- Apply a subtle 1.25x time-stretch: 192000 x 1.25 = 240000 frames -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="240000" loopLength="0" stretch="1.25"/>
 
     <!-- Render the grain-processed audio -->
     <render filename="grain_minimal_stretch.wav" format="wav" quality="10"/>
 
-    <!-- Acoustic verification: ensure grain processing preserved audio quality -->
-    <!-- Sawtooth energy should be in healthy range (not silent, not clipped) -->
-    <assert-audio-energy filename="grain_minimal_stretch.wav" minRms="0.05" maxRms="0.90"/>
+    <!-- Clip region: healthy stretched-ramp energy -->
+    <assert-audio-energy filename="grain_minimal_stretch.wav"
+                         startFrame="0" frameCount="240000"
+                         minRms="0.20" maxRms="0.32"/>
 
-    <!-- Peak amplitude should not clip (grain windowing may slightly reduce peak) -->
+    <!-- Past the stretched clip end: silence -->
+    <assert-audio-energy filename="grain_minimal_stretch.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Peak amplitude should not clip (ramp tops out at 0.8) -->
     <assert-audio-peak filename="grain_minimal_stretch.wav" maxPeak="0.995"/>
 
     <!-- Screenshot showing the stretched timeline -->

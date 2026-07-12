@@ -98,6 +98,8 @@ void SActionHistory::onApplied_(quint64 id, SAction *inverse)
 
 void SActionHistory::onRejected_(quint64 id, const QString &reason)
 {
+    rejectedCount_++;
+
     // Remove from in-flight and log.
     for (int i = 0; i < inFlight_.count(); ++i) {
         if (inFlight_[i].id == id) {

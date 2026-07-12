@@ -27,8 +27,16 @@ class twView : public twComponent
 public:
     // Callback signature: returns the current component to forward to
     using GetComponentFn = std::function<twComponent*()>;
+    // Callback signature: map a clip-relative position (what the track computes)
+    // to the underlying component's position domain. A plain sample clip's
+    // component is a reader over the SOURCE material, so the clip's slip offset
+    // (SCut::startOffset, grain-stretched as needed) must be folded in before
+    // seeking or freezing pages. Only the clip object knows that mapping; the
+    // track and this wrapper stay domain-agnostic. Null = identity.
+    using MapPosFn = std::function<offset_t(offset_t)>;
 
-    twView(tw303aEnvironment &env, GetComponentFn getComponentFn);
+    twView(tw303aEnvironment &env, GetComponentFn getComponentFn,
+           MapPosFn mapPosFn = nullptr);
     virtual ~twView();
 
     // Forward all rendering/seeking calls to the underlying component
@@ -65,11 +73,18 @@ public:
     // Teardown protocol
     virtual void teardown() override;
 
-private:
-    GetComponentFn getComponentFn_;
-
+public:
     // Helper: safely get the underlying component with null check
     twComponent *getComponent() const;
+
+private:
+    GetComponentFn getComponentFn_;
+    MapPosFn mapPosFn_;
+
+    // Apply mapPosFn_ (identity when unset). Call BEFORE getComponent(): the
+    // mapping may lazily build the clip's reader chain, which changes what
+    // getComponent() returns.
+    offset_t mapPos(offset_t pos) const;
 };
 
 #endif

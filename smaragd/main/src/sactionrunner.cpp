@@ -41,10 +41,12 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
     for (int i = 0; i < actions.size(); ++i) {
         SAction *action = actions[i];
         bool expectReject = (i < actionsMeta.size()) ? actionsMeta[i].expectReject : false;
+        QString actionName = action->name();
 
         // Submit via the normal action history path.
         // This ensures coalescing, undo stack, and Phase 2 draining are all exercised.
         // Note: submitAction takes ownership; actions in the script are consumed.
+        int rejectedBefore = app.actionHistory() ? app.actionHistory()->rejectedCount() : 0;
         app.submitAction(action);
 
         // Pump the event loop to drain Qt events and allow UI updates.
@@ -55,12 +57,28 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
         // async draining mechanism. For now, assume synchronous.
         // app.actionHistory()->waitForEngineQueue();  // TODO: implement in Phase 2
 
-        result.actionsApplied++;
-
-        // Phase 4: Handle expectReject for negative tests
-        // (Note: In a full implementation, we would check SApplyResult.applied here
-        // and validate against expectReject. For now, we assume all submitted actions
-        // were applied; tracking rejections would require modifying the submission path.)
+        // Phase 4: expectReject handling. The drain is synchronous, so the
+        // history's rejection counter tells us whether THIS action failed.
+        // A failed action (e.g. assert-audio-energy out of range) fails the
+        // test unless the script marked it expectReject; an expectReject
+        // action that unexpectedly succeeds fails the test too.
+        bool wasRejected = app.actionHistory()
+            && app.actionHistory()->rejectedCount() > rejectedBefore;
+        if (wasRejected) {
+            result.actionsRejected++;
+            if (!expectReject) {
+                result.passed = false;
+                result.failures.append(QString("Action %1 (#%2) failed to apply")
+                    .arg(actionName).arg(i + 1));
+            }
+        } else {
+            result.actionsApplied++;
+            if (expectReject) {
+                result.passed = false;
+                result.failures.append(QString("Action %1 (#%2) applied but expectReject was set")
+                    .arg(actionName).arg(i + 1));
+            }
+        }
     }
 
     // Step 3: Evaluate assertions (Phase 2).
@@ -91,7 +109,9 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
         }
     }
 
-    result.passed = result.passed && (result.actionsRejected == 0) && (result.assertionsFailed == 0);
+    // Note: unexpected rejections already set passed=false per-action above;
+    // expectReject'd rejections count in actionsRejected but are not failures.
+    result.passed = result.passed && (result.assertionsFailed == 0);
     return result;
 }
 

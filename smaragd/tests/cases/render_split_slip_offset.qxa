@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: a split clip's tail must render from its slip offset
+  (SCut::startOffset), not from the start of the source material, and the
+  head moved to another track must still end exactly at its clip boundary.
+
+  Fixture: test_sawtooth.wav is a 4 s sawtooth whose amplitude ramps 0 -> 0.8,
+  so every second of source material has a unique RMS:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+  A tail that wrongly replays the source from 0 shows sec0's RMS at 1-2 s and
+  fails the second assertion.
+-->
+<SActionScript version="1" name="render_split_slip_offset">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Two tracks: the clip starts on track 0; its head is moved to track 1 -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- 4 s ramped sawtooth at position 0 on track 0 -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Split at 1 s: head [0,1s) stays clip 0, tail [1s,4s) becomes clip 1
+         with startOffset = 48000 -->
+    <split-clip clip="0,0" splitTime="48000"/>
+
+    <!-- Move the head to track 1 (also exercises clip removal from track 0) -->
+    <move-clip clip="0,0" destTrack="1" startTime="0"/>
+
+    <render filename="render_split_slip.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: head clip = source sec0 -->
+    <assert-audio-energy filename="render_split_slip.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- 1-2 s: tail's first second = source sec1 (slip offset honored).
+         The repeat-from-start bug yields ~0.067 here and fails. -->
+    <assert-audio-energy filename="render_split_slip.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 2-3 s and 3-4 s: tail continues through source sec2 and sec3 -->
+    <assert-audio-energy filename="render_split_slip.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="render_split_slip.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- 4-5 s: past the clip end; must be silence (catches page bleed) -->
+    <assert-audio-energy filename="render_split_slip.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

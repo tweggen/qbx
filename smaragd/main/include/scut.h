@@ -129,6 +129,10 @@ public:
     virtual int readPostChildrenAttributes( QDomElement &element );
     
     virtual int seekTo( offset_t );
+    // Fold the slip offset (grain-stretched when a grain stage is active) into
+    // a clip-relative position, so tracks can seek/freeze our reader directly.
+    // A looping reader is already cut-relative and maps identically.
+    virtual offset_t mapTimelineToComponentPos( offset_t off );
     SObject &getContent() const { return content_->getSObject(); }
     offset_t getLoopStart() const;
     offset_t getStartOffset() const { return startOffset_; }

@@ -2,10 +2,17 @@
 #include "tw303aenv.h"
 #include "io_vector.h"
 
-twView::twView(tw303aEnvironment &env, GetComponentFn getComponentFn)
+twView::twView(tw303aEnvironment &env, GetComponentFn getComponentFn,
+               MapPosFn mapPosFn)
     : twComponent(env),
-      getComponentFn_(getComponentFn)
+      getComponentFn_(getComponentFn),
+      mapPosFn_(mapPosFn)
 {
+}
+
+offset_t twView::mapPos(offset_t pos) const
+{
+    return mapPosFn_ ? mapPosFn_(pos) : pos;
 }
 
 twView::~twView()
@@ -26,9 +33,12 @@ twComponent *twView::getComponent() const
 
 int twView::seekTo(offset_t offset)
 {
+    // Map first: the mapping may lazily build the clip's reader, which changes
+    // what getComponent() returns (reader instead of the shared content cursor).
+    offset_t mapped = mapPos(offset);
     twComponent *comp = getComponent();
     if (!comp) return -1;
-    return comp->seekTo(offset);
+    return comp->seekTo(mapped);
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
@@ -55,6 +65,10 @@ std::shared_ptr<twOutputPage> twView::freezePage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
+    // Map the clip-relative position into the component's own domain (slip
+    // offset folded in). Pages end up cached on the component keyed by its own
+    // (source) positions, so slipping a clip later still hits valid pages.
+    uint64_t mapped = (uint64_t) mapPos((offset_t) startPos);
     twComponent *comp = getComponent();
     if (!comp) {
         auto page = std::make_shared<twOutputPage>();
@@ -62,7 +76,7 @@ std::shared_ptr<twOutputPage> twView::freezePage(
         page->validFrames = 0;
         return page;
     }
-    return comp->freezePage(startPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
+    return comp->freezePage(mapped, inputData, inputOffset, inputLength, sampleRate, previousPage);
 }
 
 std::shared_ptr<twOutputPage> twView::freezePreviewPage(
@@ -73,6 +87,7 @@ std::shared_ptr<twOutputPage> twView::freezePreviewPage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
+    uint64_t mapped = (uint64_t) mapPos((offset_t) startPos);
     twComponent *comp = getComponent();
     if (!comp) {
         auto page = std::make_shared<twOutputPage>();
@@ -80,7 +95,7 @@ std::shared_ptr<twOutputPage> twView::freezePreviewPage(
         page->validFrames = 0;
         return page;
     }
-    return comp->freezePreviewPage(startPos, length, previewSampleRate, fullSampleRate, previousPage);
+    return comp->freezePreviewPage(mapped, length, previewSampleRate, fullSampleRate, previousPage);
 }
 
 idx_t twView::getNInputs() const
