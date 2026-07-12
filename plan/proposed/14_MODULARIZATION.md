@@ -400,6 +400,11 @@ Known debt: <list>
 - **Phase 3 — write the contracts**: 4 cross-module protocol docs +
   CONTRACT.md per module (much of the content already exists in
   plan/STATE.md; this is distillation, a good AI task per module).
+  ✅ DONE 2026-07-12: docs/contracts/{POSITION_DOMAINS,FREEZE_PROTOCOL,
+  THREADING,CLIP_MODEL}.md; CONTRACT.md in all 14 engine and 13 app module
+  directories; docs/ACTIONS.md (all 41 verbs with attributes, generated
+  from the sources); docs/ARCHITECTURE.md (module map + working
+  agreement); CLAUDE.md points at all of it.
 - **Phase 4 — per-module tests**: move existing test_*.cpp into module
   tests; add the thin engine test exes (tw/render first).
 - **Phase 5 — vertical object slices**: regroup scut/splainwave/strack/

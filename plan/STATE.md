@@ -4592,3 +4592,36 @@ Verification: layering checker clean; all 15 tests/cases qxa PASS
 (--list-actions still shows 41 verbs — registration survived); engine test
 binaries pass (roundtrip keeps only its 2 pre-existing assert-action
 failures); test4 project renders unchanged end-to-end.
+
+## Modularization (proposal 14) — Phase 3: contracts and protocol docs (2026-07-12)
+
+Documentation layer that makes per-module independent development real:
+
+- docs/contracts/POSITION_DOMAINS.md — the four time domains (timeline /
+  clip-relative / component-source / native-file), the six rules (tracks
+  speak clip-relative; twView::MapPosFn is the only translator; SCut's
+  mapping mirrors seekTo; page caches keyed in the component's own domain;
+  viewAtRate is the one rate seam; render positions are absolute), and the
+  historical failures each rule encodes.
+- docs/contracts/FREEZE_PROTOCOL.md — the normative freezePage sequence
+  (startPos authoritative; contiguous→restore else reset; seekTo always),
+  cache/concurrency rules, page geometry, sequential-consumer patterns.
+- docs/contracts/THREADING.md — thread inventory table, the no-Qt-off-main
+  rule and its deadlock mechanism, snapshot/double-buffer patterns, lock
+  discipline (leaf locks, _nolock convention), order-independent fixes.
+- docs/contracts/CLIP_MODEL.md — SLink/SCut/ClipEntry layers, SLink-pointer
+  identity, STrack→twTrackMix sync signals (sender types!), the track-page
+  mix algorithm with the clip-end clamp, reader-chain variants.
+- docs/ACTIONS.md — generated reference of all 41 action verbs → class →
+  source → XML attributes with defaults (the .qxa scripting API).
+- CONTRACT.md in every module directory (14 engine + 13 app), following the
+  proposal §6.4 template: purpose, public headers, deps + forbidden,
+  threading, numbered invariants (referencing the protocol docs), exact
+  test commands, known debt.
+- docs/ARCHITECTURE.md — module map (engine DAG diagram + app table) and
+  the working agreement: one module per task; read CONTRACT + deps' public
+  headers; done = module tests + check_layering.py + qxa suite green;
+  contract changes are separate human-reviewed commits.
+- CLAUDE.md gained a "Modular layout" section pointing at all of the above.
+
+No code changes in this phase.

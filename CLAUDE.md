@@ -6,6 +6,26 @@
 
 The synth engine is in `tw303a/` (static library); the Qt UI and project management live in `main/`.
 
+## Modular layout (2026-07: proposal 14 executed)
+
+**Start here: `docs/ARCHITECTURE.md`** — the module map. Every module has a
+`CONTRACT.md` next to its sources (purpose, public headers, invariants,
+threading, how to test, known debt). Cross-module protocols are in
+`docs/contracts/` (POSITION_DOMAINS, FREEZE_PROTOCOL, THREADING, CLIP_MODEL);
+the action-verb reference is `docs/ACTIONS.md`.
+
+- Engine: `tw303a/<module>/` builds one `tw_<module>` static lib each with a
+  build-enforced dependency DAG; includes are `tw/<module>/<header>.h`.
+- App: `main/<module>/` with `app/<module>/<header>.h` includes, built as ONE
+  OBJECT library (`smaragd_app`) — the app is a single strongly-connected
+  component until the Phase 6 interface work; OBJECT (not STATIC) is required
+  because actions self-register via static initializers.
+- Before committing: `python tools/check_layering.py` (module boundaries) and
+  the qxa suite from `tests/cases/` must be green.
+- Key-file paths below predate the split; the classes are unchanged — find
+  headers at `tw303a/<module>/include/tw/<module>/…` and
+  `main/<module>/include/app/<module>/…`.
+
 ## Architecture: Key Points
 
 ### Audio Path
