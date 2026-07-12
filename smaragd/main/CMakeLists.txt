@@ -268,6 +268,21 @@ if(AUTO_DEPLOY_QT AND (SMARAGD_WINDOWS OR SMARAGD_MACOS))
     endif()
 endif()
 
+# vcpkg render deps (libsndfile/libvorbis/libogg and their codec DLLs) are
+# dynamic on the x64-mingw-dynamic triplet; copy them next to the exe so the
+# binary stays self-contained (windeployqt handles only the Qt DLLs). Without
+# this the exe silently fails to start after a clean build.
+if(SMARAGD_WINDOWS AND DEFINED VCPKG_INSTALLED_DIR)
+    file(GLOB _VCPKG_RUNTIME_DLLS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*.dll")
+    if(_VCPKG_RUNTIME_DLLS)
+        add_custom_command(TARGET smaragd POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_VCPKG_RUNTIME_DLLS} "$<TARGET_FILE_DIR:smaragd>"
+            COMMENT "Copying vcpkg runtime DLLs next to smaragd.exe"
+            VERBATIM
+        )
+    endif()
+endif()
+
 # Action round-trip test (Phase 0 of action scripts): verify all actions
 # can serialize and deserialize without loss.
 # Exclude src/main.cpp since the test has its own main()
@@ -299,7 +314,6 @@ add_executable(exact_arithmetic_test
 
 target_include_directories(exact_arithmetic_test
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/../tw303a/include
         ${CMAKE_SOURCE_DIR}
 )
 
@@ -315,7 +329,6 @@ add_executable(serialization_roundtrip_test
 
 target_include_directories(serialization_roundtrip_test
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/../tw303a/include
         ${CMAKE_SOURCE_DIR}
 )
 
@@ -331,7 +344,6 @@ add_executable(io_vector_test
 
 target_include_directories(io_vector_test
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/../tw303a/include
         ${CMAKE_SOURCE_DIR}
 )
 

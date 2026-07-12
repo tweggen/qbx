@@ -4509,3 +4509,43 @@ is empty; clean rebuild; all 15 tests/cases qxa PASS.
 
 Verification: clean rebuild with no include fallout (nothing relied on the
 transitive <qobject.h>); all 15 tests/cases qxa PASS.
+
+## Modularization (proposal 14) — Phase 2, engine side: module directories + enforced DAG (2026-07-12)
+
+tw303a/ restructured into 14 modules, each `<mod>/include/tw/<mod>/*.h` +
+`<mod>/src/`, built as `tw_<mod>` STATIC libs whose dependencies are declared
+via target_link_libraries — a module physically cannot include a header of a
+module it does not link. Engine-internal includes are path-qualified
+("tw/graph/twcomponent.h"). An umbrella `tw303a` INTERFACE target links all
+modules and publishes `compat/` (63 generated forwarding headers under the
+pre-modularization include strings), so main/ compiles completely unchanged.
+
+Modules: core, pages, graph, sources, dsp, mix, plugins, devices, sinks,
+playback, render, record, schedule, analysis (proposal 14 §4.1; sndfile/
+vorbis are PRIVATE to tw_sinks + tw_analysis, platform SDK libs PRIVATE to
+tw_devices).
+
+Real dependency findings surfaced by the enforcement, all fixed:
+- `twconvert.h` (core) and `io_vector.h` (pages) included twcomponent.h for
+  the basic types — now tw/core/twtypes.h.
+- `AudioFrame` lived in audio_engine.h (playback) but is the sinks API's
+  frame type — moved to tw/core/audio_frame.h.
+- `generation_promise` (pure std futures utility) lived in playback but is
+  used by file_sink — moved to tw/core.
+- playback needs tw_sources (twresampler), and does NOT need tw_sinks.
+- graph/src/tw303a.cc (dead `_TW303A_STANDALONE` demo main) textually
+  included half the engine — retired from the build, parked in tw303a/src/.
+
+`tools/check_layering.py` (new) greps the module DAG + the no-app-headers
+rule and validates compat/ headers; runs clean. Keep its DEPS table in sync
+with tw303a/CMakeLists.txt.
+
+Also fixed: vcpkg runtime DLLs (libsndfile/libvorbis/libogg + codec deps)
+are now copied next to smaragd.exe POST_BUILD. They were never wired into
+the build — the old build/bin copies only survived until a clean rebuild,
+which made every test silently fail to launch (exe died on missing DLLs
+with no output).
+
+Verification: clean rebuild; layering checker clean; all 15 tests/cases qxa
+PASS; test4 project end-to-end render still correct (head 0-8 s, tail
+continues at 8 s).

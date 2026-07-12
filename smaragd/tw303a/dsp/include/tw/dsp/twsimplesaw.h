@@ -1,0 +1,26 @@
+
+#ifndef _TW_SIMPLE_SAW_
+#define _TW_SIMPLE_SAW_
+
+#include "tw/dsp/twosc.h"
+
+class twSimpleSaw : public twOsc {
+	private:
+	protected:
+		// Phase 3: IOVector-based interface (type-safe, page-backed)
+		virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
+
+		sample_t *freqBuffer;
+
+	public:
+		void createOutputLatches( void );
+
+		virtual void init( void );
+		virtual char *getInputName( idx_t ) { return 0; }
+		virtual char *getOutputName( idx_t ) { return 0; }
+		twSimpleSaw( tw303aEnvironment & );
+
+		void setBufferSize( length_t newSize );
+};
+
+#endif

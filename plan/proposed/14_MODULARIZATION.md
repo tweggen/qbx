@@ -366,6 +366,19 @@ Known debt: <list>
   targets and path-qualified includes; add `check_layering.py`. No code
   edits beyond include lines. (Biggest diff, zero logic change; do it in
   one sitting to avoid long-lived divergence.)
+  ✅ ENGINE SIDE DONE 2026-07-12: tw303a/ is now 14 module dirs
+  (`<mod>/include/tw/<mod>/` + `<mod>/src/`), one `tw_<mod>` STATIC lib per
+  module with the DAG declared via target_link_libraries, plus an umbrella
+  `tw303a` INTERFACE target publishing `compat/` forwarding headers so the
+  app compiles unchanged. `tools/check_layering.py` verifies the DAG and
+  the no-app-includes rule. Findings fixed en route: twconvert.h and
+  io_vector.h illegally included twcomponent.h (needed only twtypes.h);
+  `AudioFrame` and `generation_promise` moved to tw/core (shared by
+  playback and sinks); playback needs tw_sources (resampler), not tw_sinks;
+  the dead `_TW303A_STANDALONE` demo tw303a.cc was retired from the build;
+  vcpkg runtime DLLs (libsndfile & co.) are now deployed post-build —
+  previously they only survived by accident until a clean rebuild.
+  App side (main/ → app/ modules) remains for a follow-up session.
 - **Phase 3 — write the contracts**: 4 cross-module protocol docs +
   CONTRACT.md per module (much of the content already exists in
   plan/STATE.md; this is distillation, a good AI task per module).

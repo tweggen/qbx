@@ -7,21 +7,21 @@
 #include <stddef.h>
 #include <iostream>
 
-#include "twsyslog.h"
+#include "tw/core/twsyslog.h"
 
-#include "tw303aenv.h"
+#include "tw/graph/tw303aenv.h"
 
-#include "twcomponent.h"
-#include "twsimplesaw.h"
-#include "twsaw.h"
-#include "twspeaker.h"
-#include "twconstant.h"
-#include "twmixer.h"
-#include "twmoog.h"
-#include "twtestseq.h"
-#include "twwav.h"
-#include "twwhitenoise.h"
-#include "twpipe.h"
+#include "tw/graph/twcomponent.h"
+#include "tw/dsp/twsimplesaw.h"
+#include "tw/dsp/twsaw.h"
+#include "tw/playback/twspeaker.h"
+#include "tw/dsp/twconstant.h"
+#include "tw/mix/twmixer.h"
+#include "tw/dsp/twmoog.h"
+#include "tw/dsp/twtestseq.h"
+#include "tw/sources/twwav.h"
+#include "tw/dsp/twwhitenoise.h"
+#include "tw/dsp/twpipe.h"
 
 // channels frequency length
 
