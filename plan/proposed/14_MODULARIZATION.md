@@ -445,11 +445,15 @@ Known debt: <list>
   playback dep (toggle-playback goes through
   SAppContext::setPlaybackRunning). Remaining cyclic groups, both honest:
   the four object slices among themselves (placement actions know the
-  track tree and the types they create) and the UI+shell top layer. NEXT:
-  split the app into ~4 real build targets along these layers
-  (app_model / app_core / app_objects / app_ui+shell) for build-level
-  enforcement; then shrink the objects cycle if slice actions get a
-  placement service.
+  track tree and the types they create) and the UI+shell top layer. ✅ COMPILE-TIME ENFORCEMENT DONE 2026-07-12: the app builds as four
+  layered OBJECT libraries (app_model < app_core < app_objects < app_ui),
+  each publishing only its own include dirs and linking only lower layers
+  + its APP_ENG engine union (model: core/graph/pages/schedule/sources;
+  core: +render; objects: +mix/plugins; ui: umbrella). A deliberate
+  model→actions include was verified to FAIL COMPILATION. The executables
+  link all four targets directly (object files do not propagate through
+  object libraries). Remaining for later: shrink the objects cycle via a
+  placement service; a selection service to slim SAppContext.
 
 ## 8. Working agreement for independent development
 

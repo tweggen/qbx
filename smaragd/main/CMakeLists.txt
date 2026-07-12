@@ -1,105 +1,44 @@
-# Smaragd application (proposal 14, Phase 2 app side).
+# Smaragd application (proposal 14). The app is LAYERED (Phase 6):
 #
-# main/ is organized into module directories (app/<module>/... include paths):
-#   model, objects/{cut,wave,track,mixer}, actions, persistence, selection,
-#   timeline, pluginui, servicesui, shell, testkit
-# The app is still ONE strongly-connected component (see proposal 14 —
-# SApplication singleton, objects creating their own views, the loader knowing
-# all types), so it builds as a single OBJECT library until the Phase 6
-# interface work breaks the knot. An OBJECT library is deliberate: the actions
-# self-register via static initializers, which a STATIC library would silently
-# drop at link time. Module boundaries are checked review-time by
-# tools/check_layering.py.
+#     app_model < app_core < app_objects < app_ui
+#
+# and since this file, the layers are COMPILE-TIME ENFORCED: each layer is
+# an OBJECT library that publishes only its own modules' include dirs and
+# links only the lower layers plus its declared engine modules — a
+# cross-layer include (model -> actions, core -> objects, anything below the
+# UI -> shell) fails to compile. Intra-layer module edges are still guarded
+# by tools/check_layering.py.
+#
+# OBJECT (not STATIC) libraries are load-bearing: the actions and the
+# loader/editor/extern-file registries self-register via static
+# initializers, which STATIC libraries would silently drop at link time.
+# Consequence: the executables must link ALL FOUR layer targets directly
+# (object files do not propagate transitively through object libraries).
 
-set(SMARAGD_APP_FILES
+set(APP_MODEL_FILES
     # --- app/model
     model/include/app/model/sappcontext.h
     model/include/app/model/sdetaileditors.h
-    model/include/app/model/sobjectpath.h
-    model/src/sappcontext.cpp
-    model/src/sdetaileditors.cpp
     model/include/app/model/sexternfile.h
     model/include/app/model/sexternfilelist.h
     model/include/app/model/slink.h
     model/include/app/model/sobject.h
+    model/include/app/model/sobjectpath.h
     model/include/app/model/sobjectrenderer.h
     model/include/app/model/sproject.h
     model/include/app/model/sprojectprops.h
     model/include/app/model/ssortedobjlist.h
+    model/src/sappcontext.cpp
+    model/src/sdetaileditors.cpp
     model/src/sexternfile.cpp
     model/src/sexternfilelist.cpp
     model/src/slink.cpp
     model/src/sobject.cpp
     model/src/sobjectrenderer.cpp
     model/src/sproject.cpp
-    # --- app/objects/cut
-    objects/cut/include/app/objects/cut/scut.h
-    objects/cut/include/app/objects/cut/scutrndrinline.h
-    objects/cut/include/app/objects/cut/sduplicateclipaction.h
-    objects/cut/include/app/objects/cut/sresizeclipaction.h
-    objects/cut/include/app/objects/cut/ssplitclipaction.h
-    objects/cut/include/app/objects/cut/sunsplitclipaction.h
-    objects/cut/src/scut.cpp
-    objects/cut/src/scutrndrinline.cpp
-    objects/cut/src/sduplicateclipaction.cpp
-    objects/cut/src/sresizeclipaction.cpp
-    objects/cut/src/ssplitclipaction.cpp
-    objects/cut/src/sunsplitclipaction.cpp
-    # --- app/objects/wave
-    objects/wave/include/app/objects/wave/saddsampleaction.h
-    objects/wave/include/app/objects/wave/splainwave.h
-    objects/wave/include/app/objects/wave/splainwaverndrinline.h
-    objects/wave/include/app/objects/wave/sremovesampleaction.h
-    objects/wave/include/app/objects/wave/swaveformdraw.h
-    objects/wave/src/saddsampleaction.cpp
-    objects/wave/src/splainwave.cpp
-    objects/wave/src/splainwaverndrinline.cpp
-    objects/wave/src/sremovesampleaction.cpp
-    objects/wave/src/swaveformdraw.cpp
-    # --- app/objects/track
-    objects/track/include/app/objects/track/strackcolormodifier.h
-    objects/track/src/strackcolormodifier.cpp
-    objects/track/include/app/objects/track/saddtrackaction.h
-    objects/track/include/app/objects/track/smoveclipaction.h
-    objects/track/include/app/objects/track/smovetrackaction.h
-    objects/track/include/app/objects/track/sremoveclipaction.h
-    objects/track/include/app/objects/track/sremovetrackaction.h
-    objects/track/include/app/objects/track/sreparenttrackaction.h
-    objects/track/include/app/objects/track/srestoretrackaction.h
-    objects/track/include/app/objects/track/ssettrackvolumeaction.h
-    objects/track/include/app/objects/track/strack.h
-    objects/track/include/app/objects/track/strackpath.h
-    objects/track/include/app/objects/track/strackrenderer.h
-    objects/track/include/app/objects/track/strackrndrinline.h
-    objects/track/src/saddtrackaction.cpp
-    objects/track/src/smoveclipaction.cpp
-    objects/track/src/smovetrackaction.cpp
-    objects/track/src/sremoveclipaction.cpp
-    objects/track/src/sremovetrackaction.cpp
-    objects/track/src/sreparenttrackaction.cpp
-    objects/track/src/srestoretrackaction.cpp
-    objects/track/src/ssettrackvolumeaction.cpp
-    objects/track/src/strack.cpp
-    objects/track/src/strackrndrinline.cpp
-    # --- app/objects/mixer
-    objects/mixer/include/app/objects/mixer/spluginslot.h
-    objects/mixer/src/spluginslot.cpp
-    objects/mixer/include/app/objects/mixer/screateassetaction.h
-    objects/mixer/include/app/objects/mixer/sinsertpluginaction.h
-    objects/mixer/include/app/objects/mixer/splaceassetaction.h
-    objects/mixer/include/app/objects/mixer/spluginchain.h
-    objects/mixer/include/app/objects/mixer/sremoveassetaction.h
-    objects/mixer/include/app/objects/mixer/sremoveassetplacementaction.h
-    objects/mixer/include/app/objects/mixer/sremovepluginaction.h
-    objects/mixer/include/app/objects/mixer/sstdmixer.h
-    objects/mixer/src/screateassetaction.cpp
-    objects/mixer/src/sinsertpluginaction.cpp
-    objects/mixer/src/splaceassetaction.cpp
-    objects/mixer/src/spluginchain.cpp
-    objects/mixer/src/sremoveassetaction.cpp
-    objects/mixer/src/sremoveassetplacementaction.cpp
-    objects/mixer/src/sremovepluginaction.cpp
-    objects/mixer/src/sstdmixer.cpp
+)
+
+set(APP_CORE_FILES
     # --- app/actions
     actions/include/app/actions/saction.h
     actions/include/app/actions/sactionhistory.h
@@ -127,9 +66,9 @@ set(SMARAGD_APP_FILES
     actions/src/stoggleplaybackaction.cpp
     # --- app/persistence
     persistence/include/app/persistence/sloadprojectaction.h
-    persistence/src/sloadprojectaction.cpp
     persistence/include/app/persistence/sprojectloader.h
     persistence/include/app/persistence/ssaveprojectaction.h
+    persistence/src/sloadprojectaction.cpp
     persistence/src/sprojectloader.cpp
     persistence/src/ssaveprojectaction.cpp
     # --- app/selection
@@ -145,6 +84,80 @@ set(SMARAGD_APP_FILES
     selection/src/sselectionmanager.cpp
     selection/src/ssetselectionaction.cpp
     selection/src/stoggleselectionaction.cpp
+)
+
+set(APP_OBJECTS_FILES
+    # --- app/objects/cut
+    objects/cut/include/app/objects/cut/scut.h
+    objects/cut/include/app/objects/cut/scutrndrinline.h
+    objects/cut/include/app/objects/cut/sduplicateclipaction.h
+    objects/cut/include/app/objects/cut/sresizeclipaction.h
+    objects/cut/include/app/objects/cut/ssplitclipaction.h
+    objects/cut/include/app/objects/cut/sunsplitclipaction.h
+    objects/cut/src/scut.cpp
+    objects/cut/src/scutrndrinline.cpp
+    objects/cut/src/sduplicateclipaction.cpp
+    objects/cut/src/sresizeclipaction.cpp
+    objects/cut/src/ssplitclipaction.cpp
+    objects/cut/src/sunsplitclipaction.cpp
+    # --- app/objects/wave
+    objects/wave/include/app/objects/wave/saddsampleaction.h
+    objects/wave/include/app/objects/wave/splainwave.h
+    objects/wave/include/app/objects/wave/splainwaverndrinline.h
+    objects/wave/include/app/objects/wave/sremovesampleaction.h
+    objects/wave/include/app/objects/wave/swaveformdraw.h
+    objects/wave/src/saddsampleaction.cpp
+    objects/wave/src/splainwave.cpp
+    objects/wave/src/splainwaverndrinline.cpp
+    objects/wave/src/sremovesampleaction.cpp
+    objects/wave/src/swaveformdraw.cpp
+    # --- app/objects/track
+    objects/track/include/app/objects/track/saddtrackaction.h
+    objects/track/include/app/objects/track/smoveclipaction.h
+    objects/track/include/app/objects/track/smovetrackaction.h
+    objects/track/include/app/objects/track/sremoveclipaction.h
+    objects/track/include/app/objects/track/sremovetrackaction.h
+    objects/track/include/app/objects/track/sreparenttrackaction.h
+    objects/track/include/app/objects/track/srestoretrackaction.h
+    objects/track/include/app/objects/track/ssettrackvolumeaction.h
+    objects/track/include/app/objects/track/strack.h
+    objects/track/include/app/objects/track/strackcolormodifier.h
+    objects/track/include/app/objects/track/strackpath.h
+    objects/track/include/app/objects/track/strackrenderer.h
+    objects/track/include/app/objects/track/strackrndrinline.h
+    objects/track/src/saddtrackaction.cpp
+    objects/track/src/smoveclipaction.cpp
+    objects/track/src/smovetrackaction.cpp
+    objects/track/src/sremoveclipaction.cpp
+    objects/track/src/sremovetrackaction.cpp
+    objects/track/src/sreparenttrackaction.cpp
+    objects/track/src/srestoretrackaction.cpp
+    objects/track/src/ssettrackvolumeaction.cpp
+    objects/track/src/strack.cpp
+    objects/track/src/strackcolormodifier.cpp
+    objects/track/src/strackrndrinline.cpp
+    # --- app/objects/mixer
+    objects/mixer/include/app/objects/mixer/screateassetaction.h
+    objects/mixer/include/app/objects/mixer/sinsertpluginaction.h
+    objects/mixer/include/app/objects/mixer/splaceassetaction.h
+    objects/mixer/include/app/objects/mixer/spluginchain.h
+    objects/mixer/include/app/objects/mixer/spluginslot.h
+    objects/mixer/include/app/objects/mixer/sremoveassetaction.h
+    objects/mixer/include/app/objects/mixer/sremoveassetplacementaction.h
+    objects/mixer/include/app/objects/mixer/sremovepluginaction.h
+    objects/mixer/include/app/objects/mixer/sstdmixer.h
+    objects/mixer/src/screateassetaction.cpp
+    objects/mixer/src/sinsertpluginaction.cpp
+    objects/mixer/src/splaceassetaction.cpp
+    objects/mixer/src/spluginchain.cpp
+    objects/mixer/src/spluginslot.cpp
+    objects/mixer/src/sremoveassetaction.cpp
+    objects/mixer/src/sremoveassetplacementaction.cpp
+    objects/mixer/src/sremovepluginaction.cpp
+    objects/mixer/src/sstdmixer.cpp
+)
+
+set(APP_UI_FILES
     # --- app/timeline
     timeline/include/app/timeline/sgridtoolbar.h
     timeline/include/app/timeline/sobjecttreeview.h
@@ -198,34 +211,51 @@ set(SMARAGD_APP_FILES
     testkit/src/sscreenshotaction.cpp
 )
 
-add_library(smaragd_app OBJECT ${SMARAGD_APP_FILES})
+# Layer 1 — the document model (+ the Phase 6 seams: SAppContext,
+# sdetaileditors, sobjectpath). Engine access: exactly APP_ENG(model).
+add_library(app_model OBJECT ${APP_MODEL_FILES})
+target_include_directories(app_model PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/model/include)
+target_link_libraries(app_model
+    PUBLIC
+        tw_core tw_graph tw_pages tw_schedule tw_sources
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::Gui
+        Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Xml
+)
 
-target_include_directories(smaragd_app PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/model/include
+# Layer 2 — command framework, persistence, selection.
+add_library(app_core OBJECT ${APP_CORE_FILES})
+target_include_directories(app_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/actions/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/persistence/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/selection/include
+)
+target_link_libraries(app_core PUBLIC app_model tw_render)
+
+# Layer 3 — the object slices (cut, wave, track, mixer).
+add_library(app_objects OBJECT ${APP_OBJECTS_FILES})
+target_include_directories(app_objects PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/cut/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/wave/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/track/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/mixer/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/actions/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/persistence/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/selection/include
+)
+target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins)
+
+# Layer 4 — the UI and the shell (the only layer that may see everything).
+add_library(app_ui OBJECT ${APP_UI_FILES})
+target_include_directories(app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/timeline/include
     ${CMAKE_CURRENT_SOURCE_DIR}/pluginui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/servicesui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/shell/include
     ${CMAKE_CURRENT_SOURCE_DIR}/testkit/include
 )
-
 # XPM icon includes ("pix/zoomin.xpm") resolve from the smaragd/ source root.
-target_include_directories(smaragd_app PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(app_ui PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(app_ui PUBLIC app_objects tw303a)
 
-target_link_libraries(smaragd_app
-    PUBLIC
-        tw303a
-        Qt${QT_VERSION_MAJOR}::Core
-        Qt${QT_VERSION_MAJOR}::Widgets
-        Qt${QT_VERSION_MAJOR}::Xml
-)
 
 # Optionally embed a bundled UI font. Drop a TTF at main/resources/FreeSans.ttf
 # and re-run CMake: it is compiled into the binary (AUTORCC) and used as the
@@ -274,7 +304,7 @@ endif()
 
 target_link_libraries(smaragd
     PRIVATE
-        smaragd_app
+        app_ui app_objects app_core app_model
 )
 
 # Auto-deploy Qt runtime DLLs / plugins next to smaragd.exe on Windows
@@ -342,5 +372,5 @@ add_executable(action_roundtrip_test
 
 target_link_libraries(action_roundtrip_test
     PRIVATE
-        smaragd_app
+        app_ui app_objects app_core app_model
 )

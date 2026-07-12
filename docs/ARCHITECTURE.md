@@ -42,20 +42,26 @@ core ── pages ── graph ─┬─ sources ─┐
 
 ## App (`smaragd/main/`) — one SCC, checker-enforced boundaries
 
-13 module directories with `app/<module>/…` includes, built as ONE OBJECT
-library `smaragd_app` (OBJECT is load-bearing: actions and the loader/
+13 module directories with `app/<module>/…` includes, built as FOUR
+layered OBJECT libraries (OBJECT is load-bearing: actions and the loader/
 editor/extern-file registries self-register via static initializers, which
-a STATIC lib would drop). Since Phase 6 the app is LAYERED —
+a STATIC lib would drop):
 
-    model < actions < {persistence, selection} < objects/* < UI + shell
+    app_model < app_core < app_objects < app_ui
+    (model)     (actions,     (objects/cut,   (timeline, pluginui,
+                persistence,   wave, track,    servicesui, shell,
+                selection)     mixer)          testkit)
 
-— the core modules are shell-free (they reach the application only through
-`app/model/sappcontext.h`), and only two cyclic groups remain: the four
-object slices among themselves (placement actions know the track tree and
-the types they create) and the UI+shell top layer. Boundaries are enforced
-by `python tools/check_layering.py`: per-module allowed engine deps + the
-declared app-internal edge set. Do not add SApplication::app() call sites
-below the UI layer, and keep SAppContext minimal.
+The layer boundaries are COMPILE-TIME ENFORCED: each layer target publishes
+only its own include dirs and links only the lower layers plus its declared
+engine modules — a cross-layer include (model→actions, core→objects,
+anything below the UI→shell) fails to compile. The core modules reach the
+application only through `app/model/sappcontext.h`.
+`python tools/check_layering.py` guards the finer grain the build cannot:
+per-MODULE engine deps and the declared intra-layer edge set (the remaining
+cyclic groups: the four object slices among themselves; UI+shell). Do not
+add SApplication::app() call sites below the UI layer, and keep SAppContext
+minimal.
 
 | Module | One-liner | Contract |
 |---|---|---|

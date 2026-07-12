@@ -6,13 +6,13 @@ Engine side (build-enforced too; this is the greppable review view):
   2. Every cross-module include inside an engine module respects the declared
      module DAG (transitively).
 
-App side (NOT build-enforced — the app is one strongly-connected component
-built as a single OBJECT library until the Phase 6 interface work; this
-checker is the only guard):
-  3. Each app module's engine includes stay within its declared tw/ modules.
-  4. App-internal cross-module includes stay within the DECLARED edge set
-     (the measured coupling as of 2026-07-12). New edges must be added here
-     consciously — shrinking this list is the Phase 6 burn-down.
+App side: the LAYER boundaries (app_model < app_core < app_objects <
+app_ui) are compile-time enforced by the four OBJECT-library targets in
+main/CMakeLists.txt. This checker guards the FINER grain the build cannot:
+  3. Each app module's engine includes stay within its declared tw/ modules
+     (per MODULE — CMake only scopes per LAYER union).
+  4. Intra-layer cross-module includes stay within the DECLARED edge set.
+     New edges must be added here consciously.
 
 Run from the repo root:  python tools/check_layering.py
 Exit code 0 = clean, 1 = violations (printed one per line).

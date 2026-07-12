@@ -4745,3 +4745,36 @@ Next (documented in the proposal): split the app into ~4 real build
 targets along the new layers for build-level enforcement; optionally a
 placement service to shrink the objects-slice cycle; a selection service
 to shrink SAppContext.
+
+## Modularization (proposal 14) — compile-time layer enforcement (2026-07-12)
+
+The single smaragd_app OBJECT library is replaced by FOUR layered OBJECT
+libraries matching the Phase 6 structure:
+
+  app_model  (model)                       — engine: core/graph/pages/schedule/sources
+  app_core   (actions, persistence,        — + tw_render
+              selection)
+  app_objects(objects/{cut,wave,track,     — + tw_mix, tw_plugins
+              mixer})
+  app_ui     (timeline, pluginui,          — tw303a umbrella (everything)
+              servicesui, shell, testkit)
+
+Each target publishes ONLY its own modules' include dirs and links only the
+lower layers plus its engine union, so a cross-layer include — model→
+actions, core→objects, anything below the UI→shell — now FAILS TO COMPILE
+(verified by injecting a deliberate model→actions include: fatal error, no
+such file). tools/check_layering.py remains for the finer grain the build
+cannot express: per-MODULE engine deps and the declared intra-layer edges.
+
+Notes:
+- The executables (smaragd, action_roundtrip_test) link all four layer
+  targets DIRECTLY: object files do not propagate transitively through
+  object libraries, and OBJECT (not STATIC) remains load-bearing for the
+  self-registration TUs (actions + loader/editor/extern-file registries).
+- Fixed en route: spluginbrowserdialog.h wrapped an #include in
+  `namespace audio { }` (an old fwd-decl hack) and held a
+  unique_ptr<twPluginDescriptor> over an incomplete type — surfaced by the
+  new per-layer moc jumbo TU; now includes the real descriptor header.
+
+Verification: clean reconfigure + build; ctest 24/24 green; layering
+checker clean; violation-injection test compiles-fails as intended.

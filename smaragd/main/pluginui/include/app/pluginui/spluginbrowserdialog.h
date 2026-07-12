@@ -4,9 +4,9 @@
 #include <QDialog>
 #include <memory>
 
-namespace audio {
-struct twPluginDescriptor;
-}
+// Complete type needed: the unique_ptr member's deleter is instantiated in
+// every TU including this header (e.g. the moc jumbo file).
+#include "tw/plugins/twplugindescriptor.h"
 
 class QLineEdit;
 class QListWidget;
