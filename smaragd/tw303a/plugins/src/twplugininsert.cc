@@ -1,5 +1,6 @@
 #include "tw/plugins/twplugininsert.h"
 #include "tw/plugins/twplugin.h"
+#include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
 #include <cstring>
 #include <algorithm>
@@ -22,6 +23,19 @@ twPluginInsert::twPluginInsert( tw303aEnvironment &env, std::unique_ptr<twPlugin
 }
 
 twPluginInsert::~twPluginInsert() = default;
+
+// Caller must hold mutex(). Scratch buffers start at 4096 frames but freezePage
+// is called with full pages (twOutputPage::FRAME_CAPACITY = 65536 frames);
+// without growing them, the std::copy/process calls below overflow the heap.
+void twPluginInsert::ensureScratchCapacity( length_t len )
+{
+	for( auto &buf : inScratch_ ) {
+		if( buf.size() < (size_t)len ) buf.resize( len );
+	}
+	for( auto &buf : outScratch_ ) {
+		if( buf.size() < (size_t)len ) buf.resize( len );
+	}
+}
 
 void twPluginInsert::createOutputLatches()
 {
@@ -51,6 +65,8 @@ length_t twPluginInsert::calcOutputTo( IOVector& dest, idx_t port )
     }
 
     std::lock_guard<std::mutex> lock(mutex());
+
+    ensureScratchCapacity( dest.length() );
 
     if( !producedThisBlock_ ) {
         // Pull every input bus into de-interleaved scratch (one mono wire each).
@@ -163,6 +179,12 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
 
 	std::lock_guard<std::mutex> lock(mutex());
 
+	// Content epoch read before rendering: if an edit lands while we process,
+	// the resulting page is already stale and consumers will re-request it.
+	const uint64_t epochNow = env.contentEpoch();
+
+	ensureScratchCapacity( inputLength );
+
 	// Cache page size on first call
 	if (pageSize_ == 0) {
 		pageSize_ = twOutputPage::FRAME_CAPACITY;
@@ -241,6 +263,7 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
 		}
 		outputPage->setStartPosition(startPos);
 		outputPage->setValidFrames(inputLength);
+		outputPage->contentEpoch.store(epochNow);
 		outputPage->setValidAspects(twAspectPlayback);
 	}
 

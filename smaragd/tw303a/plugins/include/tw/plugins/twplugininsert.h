@@ -73,6 +73,10 @@ private:
     // De-interleaved scratch buffers for processing.
     std::vector<std::vector<sample_t>> inScratch_, outScratch_;
 
+    // Grow scratch buffers to at least len frames (caller must hold mutex()).
+    // freezePage renders full pages (65536 frames), far above the 4096 default.
+    void ensureScratchCapacity( length_t len );
+
     // Copy channels in->out with matching channel count.
     void copyChannels( const std::vector<std::vector<sample_t>> &in,
                        std::vector<std::vector<sample_t>> &out,

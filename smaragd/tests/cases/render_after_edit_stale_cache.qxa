@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: playback/render AFTER an edit must reflect the edited
+  arrangement, not the pre-edit audio.
+
+  Frozen output pages are cached at every level of the pull chain (content
+  readers, plugin chains, rewire, root mix) and served by position. Before the
+  content-epoch invalidation (tw303aEnvironment::contentEpoch), an edit only
+  updated the twTrackMix clip list; every already-frozen page upstream kept its
+  validAspects and was served verbatim on the next playback or render — the
+  "old or intermediate state" bug. The FIRST render below freezes the whole
+  timeline into those caches on purpose; the assertions on the SECOND render
+  fail if any cache still serves pre-edit pages.
+
+  Fixture: test_sawtooth.wav is a 4 s sawtooth whose amplitude ramps 0 -> 0.8,
+  so every second of source material has a unique RMS:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+-->
+<SActionScript version="1" name="render_after_edit_stale_cache">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s ramped sawtooth at position 0 -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- FIRST render: bakes the pre-edit timeline into the page caches -->
+    <render filename="render_pre_edit.wav" format="wav" quality="10"/>
+
+    <!-- Sanity: pre-edit timeline is source sec0..sec3 in order -->
+    <assert-audio-energy filename="render_pre_edit.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="render_pre_edit.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- EDIT: split at 2 s (head [0,2s) = clip 0, tail [2,4s) = clip 1),
+         then move the head out to 4 s. Post-edit timeline:
+           0-2 s : silence
+           2-4 s : tail (source sec2, sec3 — slip offset 96000)
+           4-6 s : head (source sec0, sec1)                        -->
+    <split-clip clip="0,0" splitTime="96000"/>
+    <move-clip clip="0,0" destTrack="0" startTime="192000"/>
+
+    <!-- SECOND render: must reflect the edit, not the cached pages -->
+    <render filename="render_post_edit.wav" format="wav" quality="10"/>
+
+    <!-- 0-2 s: now empty. Stale caches replay source sec0/sec1 here. -->
+    <assert-audio-energy filename="render_post_edit.wav"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- 2-3 s and 3-4 s: tail = source sec2, sec3 -->
+    <assert-audio-energy filename="render_post_edit.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="render_post_edit.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- 4-5 s and 5-6 s: moved head = source sec0, sec1 -->
+    <assert-audio-energy filename="render_post_edit.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="render_post_edit.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

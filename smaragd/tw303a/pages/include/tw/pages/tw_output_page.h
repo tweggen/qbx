@@ -60,6 +60,12 @@ struct twOutputPage : public PageBase {
     // Allows audio to drop references to pages that have been invalidated and repurposed.
     std::atomic<uint64_t> generation{0};
 
+    // Global content epoch this page was rendered at (tw303aEnvironment::contentEpoch()).
+    // Any timeline/graph edit bumps the environment's epoch; a page whose epoch is
+    // older than the environment's is stale and must not be served, regardless of
+    // validAspects. 0 = never stamped (always stale).
+    std::atomic<uint64_t> contentEpoch{0};
+
     // Internal state snapshot (for sequential components like reverbs, delays)
     // Allows resuming rendering from this page's endpoint without losing state
     std::any internalState;

@@ -5,6 +5,7 @@
 #include <qobject.h>
 #include <qlist.h>
 
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -52,6 +53,17 @@ public:
 
     const std::vector<std::uint32_t> &candidateRates() const { return candidateRates_; }
     void setCandidateRates( std::vector<std::uint32_t> rates );
+
+    // Global content epoch: monotonically increasing counter bumped by any edit
+    // that changes what the graph sounds like (clip insert/remove/move/resize,
+    // track mute/gain, graph rewiring). Frozen output pages are stamped with the
+    // epoch they were rendered at; consumers treat pages from an older epoch as
+    // stale. Lock-free — safe to read from the audio thread.
+    std::uint64_t contentEpoch() const { return contentEpoch_.load(std::memory_order_acquire); }
+    void bumpContentEpoch() { contentEpoch_.fetch_add(1, std::memory_order_acq_rel); }
+
+private:
+    std::atomic<std::uint64_t> contentEpoch_{1};
 };
 
 #endif

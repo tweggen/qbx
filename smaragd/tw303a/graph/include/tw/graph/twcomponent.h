@@ -245,6 +245,12 @@ public:
     // Also invalidates downstream components (Gap 9: invalidation cascade).
     void invalidateAllPages();
 
+    // Current global content epoch (see tw303aEnvironment::contentEpoch()).
+    // Exposed so page consumers that only hold a twComponent* (audio engine,
+    // latches) can check whether a frozen page is from the current epoch.
+    // Lock-free; safe on the audio thread.
+    uint64_t contentEpochNow() const;
+
     // Phase 4 Gap 9: Invalidation Cascade
     // Called when this component's parameters change to invalidate downstream consumers.
     // Default: no-op (components with no side effects need not override).

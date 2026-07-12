@@ -11,6 +11,7 @@
 #include "tw/core/twsyslog.h"
 
 #include "tw/graph/twcomponent.h"
+#include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
 
 #define DEBUG_COMPONENT
@@ -226,6 +227,10 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
         parentComponent_.reset();
         myInputIndex_ = -1;
     }
+
+    // Rewiring changes what downstream caches would produce; any frozen page
+    // rendered before this connection change is stale.
+    env.bumpContentEpoch();
 }
 
 /**
@@ -294,6 +299,11 @@ twComponent::twComponent( tw303aEnvironment &env0 )
 // ============================================================================
 // Output Page Caching Implementation (Phase 1 - Component-Level Freezing)
 // ============================================================================
+
+uint64_t twComponent::contentEpochNow() const
+{
+    return env.contentEpoch();
+}
 
 std::shared_ptr<twOutputPage> twComponent::getPageIfExists(uint64_t startPos)
 {
@@ -437,22 +447,35 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     // which may recursively call freezePage on upstream components.
     // Recursive lock attempts will deadlock (mutex is not recursive).
 
-    // Step 1: Check cache and allocate placeholder under lock
+    // Step 1: Check cache and allocate placeholder under lock.
+    // A cached page is only served if it is frozen AND from the current content
+    // epoch — a page rendered before the last edit no longer matches the graph.
+    // Stale pages are replaced with a fresh placeholder (not re-rendered in
+    // place), so consumers still holding the old shared_ptr keep reading a
+    // consistent — if outdated — buffer until they notice the epoch change.
+    const uint64_t epochNow = env.contentEpoch();
     std::shared_ptr<twOutputPage> page;
     bool needsRendering = false;
 
     {
         std::lock_guard<std::mutex> lock(mutex());
         auto it = outputPages_.find(startPos);
-        if (it != outputPages_.end()) {
-            // Page already exists (valid or invalid)
+        if (it != outputPages_.end() &&
+            it->second->contentEpoch.load() >= epochNow) {
+            // Page exists and is current (frozen, or a placeholder another
+            // thread is rendering right now)
             page = it->second;
-            // Check if this page is already frozen. If validAspects != 0, it's complete.
-            // If validAspects == 0, it's a placeholder that needs rendering.
             needsRendering = (page->validAspects == 0);
+        } else if (it != outputPages_.end() && it->second->validAspects == 0) {
+            // Stale-epoch placeholder: another thread is (or was) rendering it
+            // for an older epoch. Reuse it rather than racing a second render
+            // into the same position; it will be re-frozen once that render
+            // finishes and a consumer requests the page again.
+            page = it->second;
+            needsRendering = true;
         } else {
-            // Page doesn't exist; allocate and insert placeholder
-            // This prevents another thread from allocating the same page concurrently
+            // Page doesn't exist, or exists but predates the last edit;
+            // allocate a fresh placeholder (claims the render for this thread)
             page = std::make_shared<twOutputPage>();
             page->startPosition = startPos;
             page->createdAt = std::chrono::steady_clock::now();
@@ -484,6 +507,9 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     // but validAspects != 0, that tells the audio thread "we tried, and this was the result".
     {
         std::lock_guard<std::mutex> lock(mutex());
+        // Stamp with the epoch read BEFORE rendering: if an edit landed while we
+        // rendered, the page is already stale and will be re-frozen on demand.
+        page->contentEpoch.store(epochNow);
         page->validAspects = twAspectAll;  // Mark as frozen, even if 0 frames resulted
     }
 
@@ -526,8 +552,11 @@ length_t twComponent::freezePage_nolock(
     // Components that cannot seek (free-running sources) simply continue from
     // their restored/reset state.
     const uint64_t startPos = page->startPosition;
+    // A predecessor from an older content epoch carries DSP state computed
+    // against pre-edit audio; treat it as a discontinuity (reset) instead.
     const bool contiguous = previousPage
         && previousPage->validAspects != 0
+        && previousPage->contentEpoch.load() >= env.contentEpoch()
         && previousPage->startPosition + previousPage->validFrames == startPos;
 
     if (contiguous) {

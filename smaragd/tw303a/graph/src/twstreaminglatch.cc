@@ -68,14 +68,19 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 	// transition is a discontinuity, which the producer's freezePage() answers
 	// with reset() + seekTo(pageStart).
 	const uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
+	const uint64_t epochNow = getComponent().contentEpochNow();
 	length_t written = 0;
 
 	while (written < maxLength) {
 		const uint64_t pos = (uint64_t)startOffset + (uint64_t)written;
 		const uint64_t pageStart = (pos / pageSize) * pageSize;
 
+		// The held page must be frozen AND from the current content epoch —
+		// an edit (clip move/split/stretch, mute, rewiring) makes every page
+		// rendered before it stale, even though its validAspects are still set.
 		std::shared_ptr<twOutputPage> page = previousPage_;
-		if (!page || page->startPosition != pageStart || page->validAspects == 0) {
+		if (!page || page->startPosition != pageStart || page->validAspects == 0 ||
+		    page->contentEpoch.load() < epochNow) {
 			// Need a different page than the one we hold.
 			// Cycle guard: if the producer is already being frozen on this
 			// thread, recursing into freezePage() would loop forever.
@@ -85,8 +90,11 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 
 			// Chain state only from the immediate predecessor page; anything
 			// else is a discontinuity the producer must reset+seek for.
+			// A stale-epoch predecessor is also a discontinuity: its DSP state
+			// was computed against pre-edit audio.
 			std::shared_ptr<twOutputPage> chainFrom;
 			if (previousPage_ && previousPage_->validAspects != 0 &&
+			    previousPage_->contentEpoch.load() >= epochNow &&
 			    previousPage_->startPosition + previousPage_->validFrames == pageStart) {
 				chainFrom = previousPage_;
 			}

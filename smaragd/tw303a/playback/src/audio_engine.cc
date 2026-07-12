@@ -94,14 +94,10 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
                 }
             }
 
-            // Step 2: Load page if needed
-            uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
-            uint64_t pageStartPos = (pos / pageSize) * pageSize;
-
-            if (!currentFrozenPage_ || currentFrozenPage_->startPosition != pageStartPos ||
-                currentFrozenPage_->validAspects == 0) {
-                updateFrozenPage(pos);
-            }
+            // Step 2: Validate/load page (always: updateFrozenPage also detects
+            // pages outdated by an edit mid-playback, and early-returns cheaply
+            // when the held page is still current)
+            updateFrozenPage(pos);
 
             // If page not available, stop pulling
             if (!currentFrozenPage_ || currentFrozenPage_->validAspects == 0) {
@@ -228,15 +224,10 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             }
         }
 
-        // Step 2: Load page if needed (only when entering new page, not per-sample)
-        uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
-        uint64_t pageStartPos = (pos / pageSize) * pageSize;
-
-        // Check if we need to load a new page
-        if (!currentFrozenPage_ || currentFrozenPage_->startPosition != pageStartPos ||
-            currentFrozenPage_->validAspects == 0) {
-            updateFrozenPage(pos);
-        }
+        // Step 2: Validate/load page (always: updateFrozenPage also detects
+        // pages outdated by an edit mid-playback, and early-returns cheaply
+        // when the held page is still current)
+        updateFrozenPage(pos);
 
         // If page not available, output silence and stop
         if (!currentFrozenPage_ || currentFrozenPage_->validAspects == 0) {
@@ -360,9 +351,16 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     // DEBUG: Track readahead gap
     static int gapLogCounter = 0;
 
-    // Check if current page has been invalidated (generation changed)
-    if (currentFrozenPage_ && currentFrozenPage_->generation != currentPageGeneration_) {
-        // Page was invalidated and repurposed while we held it; drop reference
+    // Current content epoch: pages rendered before the last edit are stale
+    // even though their validAspects are still set (lock-free atomic read).
+    const uint64_t epochNow = synthOutput_->contentEpochNow();
+
+    // Check if current page has been invalidated (generation changed) or
+    // outdated by an edit (content epoch changed)
+    if (currentFrozenPage_ &&
+        (currentFrozenPage_->generation != currentPageGeneration_ ||
+         currentFrozenPage_->contentEpoch.load() < epochNow)) {
+        // Page no longer reflects the timeline; drop reference
         currentFrozenPage_ = nullptr;
         prevFrozenPage_ = nullptr;
     }
@@ -377,7 +375,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     // Audio thread never allocates pages, only reads existing ones.
     // Read-ahead thread allocates and freezes pages; this just reads the cache.
     auto page = synthOutput_->getPageIfExists(pageStartPos);
-    if (page && page->validAspects != 0) {
+    if (page && page->validAspects != 0 && page->contentEpoch.load() >= epochNow) {
         // Page is ready; switch to it
         prevFrozenPage_ = currentFrozenPage_;
         currentFrozenPage_ = page;
@@ -562,13 +560,19 @@ void AudioEngine::readaheadLoop() {
 
         for (int i = 0; i < READAHEAD_PAGES; i++) {
             uint64_t pos = pageStart + (uint64_t)i * pageSize;
-            if (pos < readaheadComputedUpTo_) continue;  // Already computed
+            // No "already computed" shortcut on the frontier here: an edit can
+            // invalidate pages BEHIND readaheadComputedUpTo_ (content epoch
+            // bump), and those must be re-frozen. Validity is re-checked per
+            // page instead, which self-heals under any edit/playback ordering.
+            const uint64_t epochNow = synthOutput_->contentEpochNow();
 
             auto existing = synthOutput_->getOrAllocatePage(pos);
-            if (existing && existing->validAspects != 0) {
-                // Already frozen; update prevPage and move on
+            if (existing && existing->validAspects != 0 &&
+                existing->contentEpoch.load() >= epochNow) {
+                // Already frozen and current; update prevPage and move on
                 readaheadPrevPage_ = existing;
-                readaheadComputedUpTo_ = pos + pageSize;
+                if (pos + pageSize > readaheadComputedUpTo_)
+                    readaheadComputedUpTo_ = pos + pageSize;
                 if (readaheadLogCounter++ % 100 == 0) {
                     int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)currentPos;
                     fprintf(stderr, "[READAHEAD] Page already exists: computed up to=%llu, playhead=%llu, gap=%.2f sec\n",
@@ -605,7 +609,8 @@ void AudioEngine::readaheadLoop() {
                 readaheadPrevPage_ = page;
                 // CRITICAL: Only update readaheadComputedUpTo_ AFTER page is confirmed frozen
                 // This ensures audio callback never finds validAspects == 0
-                readaheadComputedUpTo_ = pos + pageSize;
+                if (pos + pageSize > readaheadComputedUpTo_)
+                    readaheadComputedUpTo_ = pos + pageSize;
 
                 // DEBUG: Log completed page
                 int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)currentPos;
