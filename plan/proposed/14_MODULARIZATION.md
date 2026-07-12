@@ -379,6 +379,24 @@ Known debt: <list>
   vcpkg runtime DLLs (libsndfile & co.) are now deployed post-build —
   previously they only survived by accident until a clean rebuild.
   App side (main/ → app/ modules) remains for a follow-up session.
+  ✅ APP SIDE DONE 2026-07-12 (structure + canonical includes):
+  main/ is now 13 module directories (model, objects/{cut,wave,track,mixer},
+  actions, persistence, selection, timeline, pluginui, servicesui, shell,
+  testkit) with `app/<module>/…` include paths; all engine includes were
+  rewritten to canonical `tw/<module>/…` paths and tw303a/compat/ was
+  RETIRED. Finding: the app is ONE strongly-connected component (the
+  SApplication singleton, objects creating their own views/detail widgets,
+  the loader knowing all types, strackpath in every placement action), so it
+  builds as a single OBJECT library `smaragd_app` — deliberately OBJECT, not
+  STATIC: the actions self-register via static initializers, which a STATIC
+  library would silently drop at link time. Build-level module enforcement
+  app-internally is therefore NOT possible yet; tools/check_layering.py now
+  carries the declared app edge set (the measured coupling) plus per-module
+  allowed engine deps, and flags any new edge. Shrinking that edge list is
+  the Phase 6 burn-down (SAppContext interface, loader registry, renderer
+  factory). Side benefit: action_roundtrip_test now links smaragd_app
+  instead of recompiling every app source; the engine test binaries link
+  only tw_core / tw_pages.
 - **Phase 3 — write the contracts**: 4 cross-module protocol docs +
   CONTRACT.md per module (much of the content already exists in
   plan/STATE.md; this is distillation, a good AI task per module).

@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Layering checker (proposal 14 §6.2).
 
-Verifies two things the CMake DAG cannot express as greppable review rules:
+Engine side (build-enforced too; this is the greppable review view):
   1. No engine file includes an app (main/) header.
   2. Every cross-module include inside an engine module respects the declared
-     module DAG (a module may include its own headers and those of modules it
-     depends on, transitively).
+     module DAG (transitively).
+
+App side (NOT build-enforced — the app is one strongly-connected component
+built as a single OBJECT library until the Phase 6 interface work; this
+checker is the only guard):
+  3. Each app module's engine includes stay within its declared tw/ modules.
+  4. App-internal cross-module includes stay within the DECLARED edge set
+     (the measured coupling as of 2026-07-12). New edges must be added here
+     consciously — shrinking this list is the Phase 6 burn-down.
 
 Run from the repo root:  python tools/check_layering.py
 Exit code 0 = clean, 1 = violations (printed one per line).
@@ -48,6 +55,59 @@ def closure(mod):
         stack.extend(DEPS.get(m, []))
     return seen
 
+MAIN = os.path.join('smaragd', 'main')
+
+APP_INCLUDE = re.compile(r'#\s*include\s*["<]app/([a-z/]+)/[^">]+[">]')
+
+# Declared app-internal coupling (measured 2026-07-12). The app is one SCC;
+# every edge here is real today. Phase 6 shrinks this list — do not grow it
+# without a conscious decision.
+APP_DEPS = {
+    'model':          {'objects/cut', 'objects/mixer', 'objects/wave'},
+    'objects/cut':    {'actions', 'model', 'objects/mixer', 'objects/track',
+                       'objects/wave', 'persistence', 'shell'},
+    'objects/wave':   {'actions', 'model', 'objects/cut', 'objects/mixer',
+                       'objects/track', 'persistence', 'shell'},
+    'objects/track':  {'actions', 'model', 'objects/cut', 'objects/mixer',
+                       'persistence', 'pluginui', 'shell', 'timeline'},
+    'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/track',
+                       'persistence', 'pluginui', 'shell', 'timeline'},
+    'actions':        {'model', 'objects/track', 'persistence', 'shell'},
+    'persistence':    {'actions', 'model', 'objects/cut', 'objects/mixer',
+                       'objects/track', 'objects/wave', 'shell'},
+    'selection':      {'actions', 'model', 'objects/track', 'shell'},
+    'timeline':       {'actions', 'model', 'objects/cut', 'objects/mixer',
+                       'objects/track', 'objects/wave', 'pluginui',
+                       'servicesui', 'shell'},
+    'pluginui':       {'model', 'objects/mixer', 'objects/track', 'shell'},
+    'servicesui':     {'model', 'shell'},
+    'shell':          {'actions', 'model', 'objects/cut', 'objects/mixer',
+                       'objects/track', 'objects/wave', 'persistence',
+                       'selection', 'servicesui', 'testkit', 'timeline'},
+    'testkit':        {'actions', 'model', 'objects/mixer', 'objects/track',
+                       'shell'},
+}
+
+# Which engine modules each app module may include (tw/<mod>/... paths).
+# core and graph are foundational and allowed everywhere.
+_ENG_BASE = {'core', 'graph'}
+APP_ENG = {
+    'model':          _ENG_BASE | {'pages', 'schedule', 'sources'},
+    'objects/cut':    _ENG_BASE | {'pages', 'schedule', 'sources'},
+    'objects/wave':   _ENG_BASE | {'pages', 'schedule', 'sources'},
+    'objects/track':  _ENG_BASE | {'mix', 'plugins'},
+    'objects/mixer':  _ENG_BASE | {'mix', 'plugins'},
+    'actions':        _ENG_BASE | {'playback', 'render'},
+    'persistence':    _ENG_BASE,
+    'selection':      _ENG_BASE,
+    'timeline':       _ENG_BASE | {'devices', 'playback', 'sources'},
+    'pluginui':       _ENG_BASE | {'plugins'},
+    'servicesui':     _ENG_BASE | {'devices', 'playback', 'record', 'render'},
+    'shell':          _ENG_BASE | {'devices', 'dsp', 'playback', 'record',
+                                   'render'},
+    'testkit':        _ENG_BASE | {'analysis'},
+}
+
 def main():
     bad = []
     for mod in DEPS:
@@ -68,15 +128,28 @@ def main():
                         bad.append(f'{p}:{i}: {mod} may not include tw/'
                                    f'{m.group(1)} (allowed: '
                                    f'{", ".join(sorted(allowed))})')
-    # compat/ must contain nothing but forwarding headers (single tw/ include)
-    compat = os.path.join(TW, 'compat')
-    for root, _dirs, files in os.walk(compat):
-        for fn in files:
-            p = os.path.join(root, fn)
-            body = open(p, encoding='utf-8', errors='replace').read()
-            if len(TW_INCLUDE.findall(body)) != 1:
-                bad.append(f'{p}: compat header must forward to exactly one '
-                           f'tw/<module> header')
+    # ---- app side ----
+    for mod in APP_DEPS:
+        moddir = os.path.join(MAIN, *mod.split('/'))
+        allowed_app = APP_DEPS[mod] | {mod}
+        allowed_eng = APP_ENG[mod]
+        for root, _dirs, files in os.walk(moddir):
+            for fn in files:
+                if not fn.endswith(('.h', '.cc', '.cpp')):
+                    continue
+                p = os.path.join(root, fn)
+                for i, line in enumerate(open(p, encoding='utf-8',
+                                              errors='replace'), 1):
+                    m = TW_INCLUDE.search(line)
+                    if m and m.group(1) not in allowed_eng:
+                        bad.append(f'{p}:{i}: app/{mod} may not include tw/'
+                                   f'{m.group(1)} (allowed: '
+                                   f'{", ".join(sorted(allowed_eng))})')
+                    a = APP_INCLUDE.search(line)
+                    if a and a.group(1) not in allowed_app:
+                        bad.append(f'{p}:{i}: app/{mod} -> app/{a.group(1)} is '
+                                   f'not a declared edge (add it here '
+                                   f'consciously or remove the include)')
     if bad:
         print('\n'.join(bad))
         print(f'\n{len(bad)} layering violation(s).')

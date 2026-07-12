@@ -1,6 +1,6 @@
-#include "twplugininsert.h"
-#include "tw303aenv.h"
-#include "plugins/twplugindescriptor.h"
+#include "tw/plugins/twplugininsert.h"
+#include "tw/graph/tw303aenv.h"
+#include "tw/plugins/twplugindescriptor.h"
 #include <iostream>
 #include <cstring>
 #include <vector>

@@ -4549,3 +4549,46 @@ with no output).
 Verification: clean rebuild; layering checker clean; all 15 tests/cases qxa
 PASS; test4 project end-to-end render still correct (head 0-8 s, tail
 continues at 8 s).
+
+## Modularization (proposal 14) — Phase 2, app side: module directories + canonical includes (2026-07-12)
+
+main/ restructured into 13 module directories — model, objects/{cut,wave,
+track,mixer}, actions, persistence, selection, timeline, pluginui,
+servicesui, shell, testkit — each `<mod>/include/app/<mod>/*.h` +
+`<mod>/src/`. 610+ include lines rewritten: app-internal includes are now
+path-qualified ("app/model/sobject.h"), and ALL engine includes use the
+canonical tw/<module>/ paths, so tw303a/compat/ (the 63 forwarding headers)
+is retired. Engine test sources updated likewise; exact_arithmetic/
+serialization tests now link only tw_core, io_vector_test only tw_pages.
+
+Key finding (measured, not assumed): the app is ONE strongly-connected
+component — every module reaches every other, chiefly through the
+SApplication singleton (sapplication.h included nearly everywhere), model
+objects creating their own views (getDetailEditWidget/getInlineRenderer),
+the project loader knowing every object type, and strackpath.h (track-path
+resolution) used by every placement action. Build-level enforcement inside
+the app is therefore impossible without interface work; the app builds as a
+single OBJECT library `smaragd_app`.
+
+OBJECT (not STATIC) is load-bearing: all 41 actions self-register via
+static initializers (`static const bool s_reg_… = registerType(…)`), and a
+STATIC library would silently drop those TUs at link time — the same
+elision trap checked for (and absent) in the engine's plugin registry,
+which references its factory by symbol.
+
+tools/check_layering.py extended: per-app-module allowed engine modules and
+the declared app-internal edge set (the measured coupling). Any new edge
+fails the check; the declared list is the Phase 6 burn-down inventory
+(break via an app-context interface, loader type registry, renderer
+factory). The checker immediately caught six selection→objects/track edges
+the pre-move analysis missed (strackpath.h), now declared.
+
+Also: smaragd exe target is now just shell/src/main.cpp + smaragd_app;
+action_roundtrip_test links smaragd_app instead of recompiling all app
+sources; windeployqt + vcpkg DLL deploy unchanged; XPM icons resolve via a
+PRIVATE source-root include dir.
+
+Verification: layering checker clean; all 15 tests/cases qxa PASS
+(--list-actions still shows 41 verbs — registration survived); engine test
+binaries pass (roundtrip keeps only its 2 pre-existing assert-action
+failures); test4 project renders unchanged end-to-end.
