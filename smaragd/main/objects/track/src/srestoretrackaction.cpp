@@ -3,7 +3,7 @@
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include <QDomElement>
 
 SRestoreTrackAction::SRestoreTrackAction(SRemoveTrackAction *owner, int index)
@@ -34,7 +34,7 @@ SApplyResult SRestoreTrackAction::apply(SProject *project)
     }
     owner_->releaseHeld();
 
-    SApplication::app().rewireSpeaker();
+    SAppContext::get().rewireSpeaker();
     mixer->notifyTreeChanged();
 
     return {true, new SRemoveTrackAction(index_)};

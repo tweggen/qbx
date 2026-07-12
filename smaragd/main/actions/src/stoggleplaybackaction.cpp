@@ -1,7 +1,6 @@
 #include "app/actions/stoggleplaybackaction.h"
 #include "app/model/sproject.h"
-#include "app/shell/sapplication.h"
-#include "tw/playback/twspeaker.h"
+#include "app/model/sappcontext.h"
 #include "app/actions/sactionregistry.h"
 #include <QDomElement>
 
@@ -16,19 +15,7 @@ SApplyResult STogglePlaybackAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SApplication &app = SApplication::app();
-    twSpeaker *speaker = app.getSpeaker();
-    if (!speaker) {
-        return {false, nullptr};
-    }
-
-    if (play_) {
-        speaker->startOutput();
-        app.setPlaying(true);
-    } else {
-        speaker->stopOutput();
-        app.setPlaying(false);
-    }
+    SAppContext::get().setPlaybackRunning( play_ );
 
     // Not undoable: playback state is transient and not persisted in the project.
     return {true, nullptr};

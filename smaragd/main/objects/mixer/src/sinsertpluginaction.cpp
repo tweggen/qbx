@@ -3,7 +3,7 @@
 #include "app/model/sproject.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/mixer/spluginchain.h"
-#include "app/pluginui/spluginslot.h"
+#include "app/objects/mixer/spluginslot.h"
 #include "app/objects/track/strackpath.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "app/actions/sactionregistry.h"

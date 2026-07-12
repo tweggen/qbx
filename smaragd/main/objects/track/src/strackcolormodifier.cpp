@@ -1,4 +1,4 @@
-#include "app/timeline/strackcolormodifier.h"
+#include "app/objects/track/strackcolormodifier.h"
 #include "app/objects/track/strack.h"
 #include <algorithm>
 

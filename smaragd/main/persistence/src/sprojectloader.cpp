@@ -8,7 +8,6 @@
 
 using namespace std;
 
-#include "app/shell/sapplication.h"
 #include "app/persistence/sprojectloader.h"
 
 #include "app/model/sobject.h"

@@ -6,9 +6,9 @@
 #include <qlabel.h>
 #include "qmessagebox.h"
 
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "app/model/sproject.h"
-#include "app/objects/cut/scut.h"  // For SCutCaptureAspect enum
+#include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
 #include "tw/graph/twcomponent.h"
 #include "tw/sources/twwavinput.h"
 #include "app/objects/wave/splainwave.h"
@@ -110,11 +110,11 @@ int SPlainWave::setWave( const QString fileName )
     // Fail, if we already have a wave set.
     if( cpWave_ ) return -2;
     fileName_ = fileName;
-    cpWave_ = new twWavInput( *(SApplication::app().get303aEnvironment()), fileName );
+    cpWave_ = new twWavInput( *(SAppContext::get().get303aEnvironment()), fileName );
     cpWave_->init();
     if( !cpWave_->wasLoaded() ) {
         // Suppress dialog in headless/test mode; log to stderr instead
-        if( SApplication::app().testOutputDir().isEmpty() ) {
+        if( SAppContext::get().testOutputDir().isEmpty() ) {
             QMessageBox::information( nullptr, "QBX error", "Unable to load file.", QMessageBox::Ok );
         } else {
             qWarning() << "SPlainWave: unable to load file:" << fileName;
@@ -125,7 +125,7 @@ int SPlainWave::setWave( const QString fileName )
     }
     // Add myselves tob the list of extern objects.
     qWarning() << "Filename here is" << fileName_;
-    SApplication::app().getCurrentProject()->addExternObject( *this );
+    SAppContext::get().getCurrentProject()->addExternObject( *this );
     return 0;
 }
 

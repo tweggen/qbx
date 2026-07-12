@@ -5,8 +5,10 @@ selection actions (set/add/remove/toggle/clear).
 
 Public headers: app/selection/*.h
 
-Depends on (engine): tw/core, tw/graph (transitively). App edges: actions,
-model, objects/track (strackpath), shell (SApplication holds the list).
+Depends on (engine): tw/core, tw/graph (transitively). App edges:
+{actions, model} — shell-free since Phase 6 (selection state is reached via
+SAppContext) and track-free (generic path helpers live in
+app/model/sobjectpath.h).
 
 Invariants:
 1. Selection is stored as SLink pointers but SERIALIZED as paths — actions
@@ -17,5 +19,5 @@ Invariants:
 How to test: action_roundtrip_test covers the XML; test_selection_actions.cpp
 is a parked (unbuilt) unit test awaiting a harness.
 
-Known debt: selection list lives on SApplication (shell edge); move to a
-selection service in Phase 6.
+Known debt: selection STATE still lives on the application behind
+SAppContext; a dedicated selection service would let the context shrink.

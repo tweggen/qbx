@@ -14,11 +14,10 @@
 #include "tw/sources/twloopreader.h"
 #include "tw/sources/twgrainsource.h"
 #include "tw/sources/twcapturingsource.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "app/model/sproject.h"
 #include "app/objects/cut/scut.h"
 #include "app/model/slink.h"
-#include "app/objects/track/strack.h"
 #include "app/objects/cut/scutrndrinline.h"
 #include "app/persistence/sprojectloader.h"
 #include "tw/schedule/capture_revalidator.h"
@@ -119,7 +118,7 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
             newGrain = std::make_shared<twGrainSource>( *rs, snap.grainParams );
             view = newGrain.get();
         }
-        tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
+        tw303aEnvironment &env = *(SAppContext::get().get303aEnvironment());
 
         // Compute adjusted offsets with sample rate conversion.
         // When the source has a different sample rate than the project (e.g., 44.1 kHz file
@@ -220,7 +219,7 @@ void SCut::buildCapture_()
 
     SObject &c = content_->getSObject();
     SCutSnapshot snap = getSnapshot();
-    tw303aEnvironment &env = *(SApplication::app().get303aEnvironment());
+    tw303aEnvironment &env = *(SAppContext::get().get303aEnvironment());
 
     // Check if we need to build a capture:
     // 1. Container-backed cuts (no random source)

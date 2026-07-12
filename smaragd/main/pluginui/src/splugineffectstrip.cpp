@@ -1,6 +1,6 @@
 #include "app/pluginui/splugineffectstrip.h"
 #include "app/objects/mixer/spluginchain.h"
-#include "app/pluginui/spluginslot.h"
+#include "app/objects/mixer/spluginslot.h"
 #include "app/objects/track/strack.h"
 #include "app/pluginui/spluginbrowserdialog.h"
 #include "app/shell/sapplication.h"

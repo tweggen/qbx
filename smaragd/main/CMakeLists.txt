@@ -13,6 +13,11 @@
 
 set(SMARAGD_APP_FILES
     # --- app/model
+    model/include/app/model/sappcontext.h
+    model/include/app/model/sdetaileditors.h
+    model/include/app/model/sobjectpath.h
+    model/src/sappcontext.cpp
+    model/src/sdetaileditors.cpp
     model/include/app/model/sexternfile.h
     model/include/app/model/sexternfilelist.h
     model/include/app/model/slink.h
@@ -52,6 +57,8 @@ set(SMARAGD_APP_FILES
     objects/wave/src/sremovesampleaction.cpp
     objects/wave/src/swaveformdraw.cpp
     # --- app/objects/track
+    objects/track/include/app/objects/track/strackcolormodifier.h
+    objects/track/src/strackcolormodifier.cpp
     objects/track/include/app/objects/track/saddtrackaction.h
     objects/track/include/app/objects/track/smoveclipaction.h
     objects/track/include/app/objects/track/smovetrackaction.h
@@ -75,6 +82,8 @@ set(SMARAGD_APP_FILES
     objects/track/src/strack.cpp
     objects/track/src/strackrndrinline.cpp
     # --- app/objects/mixer
+    objects/mixer/include/app/objects/mixer/spluginslot.h
+    objects/mixer/src/spluginslot.cpp
     objects/mixer/include/app/objects/mixer/screateassetaction.h
     objects/mixer/include/app/objects/mixer/sinsertpluginaction.h
     objects/mixer/include/app/objects/mixer/splaceassetaction.h
@@ -99,7 +108,6 @@ set(SMARAGD_APP_FILES
     actions/include/app/actions/sactionundocommand.h
     actions/include/app/actions/scycleaction.h
     actions/include/app/actions/sgridaction.h
-    actions/include/app/actions/sloadprojectaction.h
     actions/include/app/actions/smetronomeaction.h
     actions/include/app/actions/srenderaction.h
     actions/include/app/actions/ssetpropertyaction.h
@@ -112,13 +120,14 @@ set(SMARAGD_APP_FILES
     actions/src/sactionundocommand.cpp
     actions/src/scycleaction.cpp
     actions/src/sgridaction.cpp
-    actions/src/sloadprojectaction.cpp
     actions/src/smetronomeaction.cpp
     actions/src/srenderaction.cpp
     actions/src/ssetpropertyaction.cpp
     actions/src/ssnaptogridaction.cpp
     actions/src/stoggleplaybackaction.cpp
     # --- app/persistence
+    persistence/include/app/persistence/sloadprojectaction.h
+    persistence/src/sloadprojectaction.cpp
     persistence/include/app/persistence/sprojectloader.h
     persistence/include/app/persistence/ssaveprojectaction.h
     persistence/src/sprojectloader.cpp
@@ -141,7 +150,6 @@ set(SMARAGD_APP_FILES
     timeline/include/app/timeline/sobjecttreeview.h
     timeline/include/app/timeline/ssmvmixercontrol.h
     timeline/include/app/timeline/sstdmixerview.h
-    timeline/include/app/timeline/strackcolormodifier.h
     timeline/include/app/timeline/strackdetailpanel.h
     timeline/include/app/timeline/strackheaderresizer.h
     timeline/include/app/timeline/szoomscrollbar.h
@@ -149,7 +157,6 @@ set(SMARAGD_APP_FILES
     timeline/src/sobjecttreeview.cpp
     timeline/src/ssmvmixercontrol.cpp
     timeline/src/sstdmixerview.cpp
-    timeline/src/strackcolormodifier.cpp
     timeline/src/strackdetailpanel.cpp
     timeline/src/strackheaderresizer.cpp
     timeline/src/szoomscrollbar.cpp
@@ -157,11 +164,9 @@ set(SMARAGD_APP_FILES
     pluginui/include/app/pluginui/spluginbrowserdialog.h
     pluginui/include/app/pluginui/splugineffectstrip.h
     pluginui/include/app/pluginui/spluginparamereditor.h
-    pluginui/include/app/pluginui/spluginslot.h
     pluginui/src/spluginbrowserdialog.cpp
     pluginui/src/splugineffectstrip.cpp
     pluginui/src/spluginparamereditor.cpp
-    pluginui/src/spluginslot.cpp
     # --- app/servicesui
     servicesui/include/app/servicesui/soptions.h
     servicesui/include/app/servicesui/soptionsdialog.h

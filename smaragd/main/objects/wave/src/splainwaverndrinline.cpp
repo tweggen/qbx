@@ -4,7 +4,6 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/graph/twcomponent.h"
 
-#include "app/shell/sapplication.h"
 #include "app/model/sobject.h"
 #include "app/model/slink.h"
 #include "app/objects/wave/splainwave.h"

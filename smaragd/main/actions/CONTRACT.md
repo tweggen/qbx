@@ -8,8 +8,10 @@ load-project, render).
 
 Public headers: app/actions/*.h. The verb reference is docs/ACTIONS.md.
 
-Depends on (engine): tw/core, tw/graph, tw/playback, tw/render. App edges:
-per tools/check_layering.py.
+Depends on (engine): tw/core, tw/graph, tw/render. App edges: {model}
+ONLY (Phase 6): the framework reaches the app via SAppContext, playback
+toggling goes through SAppContext::setPlaybackRunning (no engine speaker
+include), and load-project moved to persistence.
 
 Invariants:
 1. Every user-visible mutation is an SAction; apply() returns the INVERSE

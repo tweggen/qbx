@@ -9,10 +9,10 @@
 #include "tw/mix/twmixer.h"
 
 #include "app/objects/mixer/sstdmixer.h"
-#include "app/timeline/sstdmixerview.h"
+#include "app/model/sdetaileditors.h"
 #include "app/persistence/sprojectloader.h"
-#include "app/shell/sapplication.h"
-#include "app/objects/cut/scut.h"  // For SCutCaptureAspect enum (Preview)
+#include "app/model/sappcontext.h"
+#include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
 
 using namespace std;
 
@@ -47,7 +47,9 @@ length_t SStdMixer::getDuration() const
 
 QWidget *SStdMixer::getDetailEditWidget( QWidget *parent )
 {
-    return new SStdMixerView( parent, this );
+    // Created via the registered factory (app/timeline registers
+    // SStdMixerView) — the model constructs no view types (Phase 6).
+    return sdetaileditors::create( *this, parent );
 }
 
 QWidget *SStdMixer::getInlineEditWidget( QWidget * )
@@ -264,7 +266,7 @@ int SStdMixer::setNBusses( int n )
         qWarning( "SStdMixer::setNBusses( %d ): Creating new mixer #%d.\n", n, i );
         int nc = nTracks;
         if( nc<1 ) nc = 1;
-        twMixer *mix = new twMixer( *(SApplication::app().get303aEnvironment()), nc );
+        twMixer *mix = new twMixer( *(SAppContext::get().get303aEnvironment()), nc );
         mix->init();
         cpRewire_->setInput( i, mix->linkOutput( 0 ) );
         newMixers[i] = mix;
@@ -385,7 +387,7 @@ SStdMixer::SStdMixer( SProject *project )
       lastDuration_( 1 ),
       lastDurationValid_( true )
 {
-    cpRewire_ = new twRewire( *(SApplication::app().get303aEnvironment()) );
+    cpRewire_ = new twRewire( *(SAppContext::get().get303aEnvironment()) );
     cpRewire_->init();
     QObject::connect( this, SIGNAL( trackInserted( int, STrack & ) ),
                       this, SLOT( mixerUpdateTrackAdded( int, STrack & ) ) );

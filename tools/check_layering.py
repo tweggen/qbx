@@ -63,20 +63,23 @@ APP_INCLUDE = re.compile(r'#\s*include\s*["<]app/([a-z/]+)/[^">]+[">]')
 # every edge here is real today. Phase 6 shrinks this list — do not grow it
 # without a conscious decision.
 APP_DEPS = {
-    # model and persistence name NO concrete object types since Phase 5
-    # (loader/extern-file self-registration, virtual invalidateAspects).
+    # Phase 5/6: model+persistence name no concrete types; the core modules
+    # (model, actions, persistence, selection, objects/*) are SHELL-FREE —
+    # they reach the app only through app/model/sappcontext.h. The remaining
+    # objects/* cross-edges are semantic (placement actions know the track
+    # tree and the types they create).
     'model':          set(),
     'objects/cut':    {'actions', 'model', 'objects/mixer', 'objects/track',
-                       'objects/wave', 'persistence', 'shell'},
+                       'objects/wave', 'persistence'},
     'objects/wave':   {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'persistence', 'shell'},
+                       'objects/track', 'persistence'},
     'objects/track':  {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'persistence', 'pluginui', 'shell', 'timeline'},
+                       'persistence'},
     'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/track',
-                       'persistence', 'pluginui', 'shell', 'timeline'},
-    'actions':        {'model', 'objects/track', 'persistence', 'shell'},
-    'persistence':    {'actions', 'model', 'shell'},
-    'selection':      {'actions', 'model', 'objects/track', 'shell'},
+                       'persistence'},
+    'actions':        {'model'},
+    'persistence':    {'actions', 'model'},
+    'selection':      {'actions', 'model'},
     'timeline':       {'actions', 'model', 'objects/cut', 'objects/mixer',
                        'objects/track', 'objects/wave', 'pluginui',
                        'servicesui', 'shell'},
@@ -96,9 +99,9 @@ APP_ENG = {
     'model':          _ENG_BASE | {'pages', 'schedule', 'sources'},
     'objects/cut':    _ENG_BASE | {'pages', 'schedule', 'sources'},
     'objects/wave':   _ENG_BASE | {'pages', 'schedule', 'sources'},
-    'objects/track':  _ENG_BASE | {'mix', 'plugins'},
-    'objects/mixer':  _ENG_BASE | {'mix', 'plugins'},
-    'actions':        _ENG_BASE | {'playback', 'render'},
+    'objects/track':  _ENG_BASE | {'mix', 'plugins', 'schedule'},
+    'objects/mixer':  _ENG_BASE | {'mix', 'plugins', 'schedule'},
+    'actions':        _ENG_BASE | {'render'},
     'persistence':    _ENG_BASE,
     'selection':      _ENG_BASE,
     'timeline':       _ENG_BASE | {'devices', 'playback', 'sources'},

@@ -6,8 +6,9 @@ actions. Wire format background: plan/proposed/04_WIRE_FORMAT_AND_SAMPLE_RATE.md
 
 Public headers: app/persistence/*.h
 
-Depends on (engine): tw/core, tw/graph (via model). App edges: actions,
-model, shell — since Phase 5 the loader names NO concrete types: each
+Depends on (engine): tw/core, tw/graph (via model). App edges: {actions,
+model} — shell-free since Phase 6 (sloadprojectaction lives here now, and
+the loader's stale sapplication include is gone). Since Phase 5 the loader names NO concrete types: each
 object slice self-registers its element name via
 SProjectLoader::registerSObjectClass() from a static initializer (the app
 must stay an OBJECT library or those TUs are dropped at link).

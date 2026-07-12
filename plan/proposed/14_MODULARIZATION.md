@@ -432,6 +432,24 @@ Known debt: <list>
 - **Phase 6 (ongoing) — debt burn-down** per module: Qt out of engine
   file-loading, allocation-free calcOutputTo, etc., each tracked in the
   module's CONTRACT.md "Known debt".
+  ▶ MAJOR PROGRESS 2026-07-12 — the app SCC is broken into layers:
+  `model < actions < {persistence, selection} < objects/* < UI+shell`.
+  Mechanisms: SAppContext (narrow app interface in model; SApplication
+  implements it; core modules include NO shell headers anymore),
+  sdetaileditors (view-widget factory — SStdMixer no longer constructs
+  SStdMixerView), sobjectpath.h (generic path helpers + virtual
+  SObject::isPathContainer replacing the STrack cast), file re-homing
+  (sloadprojectaction→persistence, SPluginSlot→objects/mixer where the
+  model object belongs, STrackColorModifier→objects/track), plus stale
+  include cleanup. actions now depends on {model} only and lost its engine
+  playback dep (toggle-playback goes through
+  SAppContext::setPlaybackRunning). Remaining cyclic groups, both honest:
+  the four object slices among themselves (placement actions know the
+  track tree and the types they create) and the UI+shell top layer. NEXT:
+  split the app into ~4 real build targets along these layers
+  (app_model / app_core / app_objects / app_ui+shell) for build-level
+  enforcement; then shrink the objects cycle if slice actions get a
+  placement service.
 
 ## 8. Working agreement for independent development
 

@@ -1,6 +1,6 @@
 #include "app/selection/sselectionmanager.h"
 #include "app/model/sproject.h"
-#include "app/objects/track/strackpath.h"
+#include "app/model/sobjectpath.h"
 
 QList<QList<int>> SSelectionManager::linksToPaths(const SSelectionList &links, SProject *project) const
 {

@@ -15,13 +15,13 @@
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
 #include "app/model/slink.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/strackrndrinline.h"
 #include "app/objects/mixer/spluginchain.h"
-#include "app/pluginui/spluginslot.h"
+#include "app/objects/mixer/spluginslot.h"
 #include "app/persistence/sprojectloader.h"
-#include "app/objects/cut/scut.h"  // For SCutCaptureAspect enum (Preview)
+#include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
 
 using namespace std;
 
@@ -250,7 +250,7 @@ void STrack::setNBusses( int nBusses )
         // Create the new ones.
         for( int i=oldNBusses; i<nBusses; ++i ) {
             newMixers[i] = new twTrackMix(
-                *(SApplication::app().get303aEnvironment()) );
+                *(SAppContext::get().get303aEnvironment()) );
             newMixers[i]->init();
         }
         ::free( cpTrackMixers_ );
@@ -268,7 +268,7 @@ void STrack::setNBusses( int nBusses )
         // Create new plugin chain components for added buses only
         for( int i=chainOldN; i<nBusses; ++i ) {
             newChains[i] = new twPluginChain(
-                *(SApplication::app().get303aEnvironment()), 1 );
+                *(SAppContext::get().get303aEnvironment()), 1 );
             newChains[i]->init();
         }
         ::free( cpPluginChains_ );
@@ -281,7 +281,7 @@ void STrack::setNBusses( int nBusses )
             cpRewire_->setInput( i, NULL );
         }
     } else {
-        cpRewire_ = new twRewire( *(SApplication::app().get303aEnvironment()) );
+        cpRewire_ = new twRewire( *(SAppContext::get().get303aEnvironment()) );
         cpRewire_->init();
     }
     cpRewire_->setNPlugs( nBusses );

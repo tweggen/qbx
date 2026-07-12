@@ -29,7 +29,7 @@
 #include "app/model/sobjectrenderer.h"
 #include "app/model/sproject.h"
 #include "app/timeline/ssmvmixercontrol.h"
-#include "app/timeline/strackcolormodifier.h"
+#include "app/objects/track/strackcolormodifier.h"
 #include "app/objects/track/ssettrackvolumeaction.h"
 
 // The fader works in tenths of a dB so it can use an integer QSlider:

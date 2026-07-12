@@ -2,12 +2,12 @@
 #include <qpainter.h>
 #include <qobject.h>
 
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "app/model/slink.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
-#include "app/timeline/strackcolormodifier.h"
+#include "app/objects/track/strackcolormodifier.h"
 #include "app/objects/track/strackrndrinline.h"
 
 /**
@@ -25,7 +25,7 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
 
     // Check if this track is selected
     bool isTrackSelected = false;
-    SProject *project = SApplication::app().getCurrentProject();
+    SProject *project = SAppContext::get().getCurrentProject();
     if( project ) {
         SObject *root = project->getRootComponent();
         if( root ) {
@@ -56,7 +56,7 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         // their own lanes — don't draw them as clips here. The lane shows only
         // this track's own clips.
         if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
-        bool isSelected = SApplication::app().isSLinkSelected( lk );
+        bool isSelected = SAppContext::get().isSLinkSelected( lk );
         //printf( "Link found: $%08x.\n", lk );
         //fflush( stdout ); fflush( stderr );
         if( !lk->hasStartTime() ) continue;

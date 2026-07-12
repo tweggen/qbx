@@ -1,15 +1,15 @@
 #include "app/selection/sclearselectionaction.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
-#include "app/objects/track/strackpath.h"
+#include "app/model/sobjectpath.h"
 #include <QDomElement>
 
 SApplyResult SClearSelectionAction::apply(SProject *project)
 {
     if (!project) return {false, nullptr};
 
-    SApplication &app = SApplication::app();
+    SAppContext &app = SAppContext::get();
 
     // Snapshot current selection for inverse
     QList<QList<int>> priorPaths = app.getCurrentSelectionPaths();

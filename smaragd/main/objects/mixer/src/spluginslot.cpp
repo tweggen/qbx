@@ -1,6 +1,6 @@
-#include "app/pluginui/spluginslot.h"
+#include "app/objects/mixer/spluginslot.h"
 #include "app/model/sproject.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "tw/plugins/twplugininsert.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include <QDomElement>
@@ -31,7 +31,7 @@ audio::twPluginInsert *SPluginSlot::getInsertForBus( int busIndex ) const
         }
 
         auto insert = std::make_unique<audio::twPluginInsert>(
-            *SApplication::app().get303aEnvironment(), std::move( plugin ) );
+            *SAppContext::get().get303aEnvironment(), std::move( plugin ) );
 
         // Initialize the insert component (allocates plugs and latches)
         insert->init();

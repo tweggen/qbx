@@ -136,6 +136,14 @@ public:
     virtual offset_t mapTimelineToComponentPos( offset_t off ) { return off; }
 
     /**
+     * True for containers the index-path search may descend into (track
+     * lanes). Path RESOLUTION follows explicit indices and needs no flag;
+     * this only scopes the reverse search (pathOf) exactly as the historical
+     * dynamic_cast<STrack*> did. STrack returns true.
+     */
+    virtual bool isPathContainer() const { return false; }
+
+    /**
      * Ordered view of this container's SLink children. Prefer this and the
      * childAt()/childCount() accessors over QObject::children() everywhere order
      * matters, so call sites stay decoupled from the storage.

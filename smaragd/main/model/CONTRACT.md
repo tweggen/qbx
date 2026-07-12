@@ -10,7 +10,11 @@ Public headers: app/model/{sobject,slink,sproject,sprojectprops,
 ssortedobjlist,sexternfile,sexternfilelist,sobjectrenderer}.h
 
 Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources.
-App edges: NONE since Phase 5 — the model names no concrete object types.
+App edges: NONE — the model names no concrete object types (Phase 5) and
+hosts the Phase 6 decoupling seams: sappcontext.h (the ONLY way core
+modules reach the application), sdetaileditors.h (view-widget factory),
+sobjectpath.h (generic index-path helpers; SObject::isPathContainer scopes
+the reverse search exactly as the old STrack cast did).
 Dependency invalidation goes through the virtual
 SObject::invalidateAspects() (base no-op, SCut overrides); extern-file
 creation goes through SProject::registerExternFileFactory() (the wave slice

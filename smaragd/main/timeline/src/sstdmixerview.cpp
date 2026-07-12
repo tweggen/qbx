@@ -2764,3 +2764,13 @@ SStdMixerView::~SStdMixerView()
     delete currentSnapSpec_;
     delete controlArray_;
 }
+
+// Detail-editor registration (proposal 14, Phase 6): the model asks the
+// factory; this UI module supplies the widget for SStdMixer.
+#include "app/model/sdetaileditors.h"
+static QWidget *createStdMixerEditor( SObject &obj, QWidget *parent )
+{
+    return new SStdMixerView( parent, static_cast<SStdMixer *>( &obj ) );
+}
+static const bool s_registered_mixereditor =
+    ( sdetaileditors::registerEditor( "SStdMixer", createStdMixerEditor ), true );

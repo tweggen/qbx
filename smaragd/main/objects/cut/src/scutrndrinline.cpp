@@ -3,7 +3,6 @@
 #include <qpainter.h>
 #include <qobject.h>
 
-#include "app/shell/sapplication.h"
 #include "app/model/slink.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/scutrndrinline.h"

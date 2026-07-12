@@ -4694,3 +4694,54 @@ slices).
 Verification: full ctest 23/23 green; layering checker clean with the
 SHRUNK edge set (any regression re-introducing a concrete-type include now
 fails the check).
+
+## Modularization (proposal 14) — Phase 6: the app SCC is broken into layers (2026-07-12)
+
+The app's single strongly-connected component is gone; the layering is now
+`model < actions < {persistence, selection} < objects/* < UI+shell`, with
+two remaining (honest) cyclic groups: the four object slices among
+themselves, and the UI+shell top layer.
+
+Mechanisms:
+- **SAppContext** (app/model/sappcontext.h): the narrow application
+  interface the core modules see — currentProject, environment,
+  rewireSpeaker, selection path ops, testOutputDir, render service, and a
+  new setPlaybackRunning(bool) that subsumes toggle-playback's direct
+  speaker handling (which also removed actions' tw/playback engine dep).
+  SApplication implements it by inheritance (method names/signatures were
+  chosen to match) and sets the instance in its ctor. NO core module
+  includes app/shell/sapplication.h anymore (three of the includes turned
+  out to be entirely stale; the parked selection test file was converted
+  too).
+- **sdetaileditors** (model): view-widget factory. SStdMixer::
+  getDetailEditWidget no longer constructs SStdMixerView; timeline
+  registers the factory from a static initializer.
+- **sobjectpath.h** (model): the generic half of strackpath (childLinkAt,
+  resolveByPath, path<->string, findPathRec/pathOf). The STrack cast in the
+  reverse search became virtual SObject::isPathContainer() (STrack returns
+  true) — identical traversal scope. Track-specific isSelfOrDescendant
+  stays in objects/track. Selection switched to the generic header.
+- **File re-homing**: sloadprojectaction → persistence (actions no longer
+  depends on persistence); SPluginSlot → objects/mixer (it is a MODEL
+  object that was misfiled in pluginui — killing objects→pluginui edges);
+  STrackColorModifier → objects/track (pure track color math).
+- **Stale include cleanup**: scut.cpp's strack.h (comment-only),
+  sprojectloader.cpp's sapplication.h (unused), aspect-enum leeching via
+  scut.h in sstdmixer/strack/splainwave (now tw/schedule/capture_aspects.h
+  — track/mixer gained 'schedule' in APP_ENG for it).
+
+Edge deltas locked into tools/check_layering.py:
+  actions: {model,objects/track,persistence,shell} → {model}
+  selection: {actions,model,objects/track,shell} → {actions,model}
+  persistence: {actions,model,shell} → {actions,model}
+  objects/cut|wave|track|mixer: all lost shell; track/mixer lost
+  pluginui+timeline. APP_ENG: actions lost 'playback'.
+
+Verification: full ctest 24/24 green (includes registry-loading and the
+timeline screenshots that exercise the editor factory); layering checker
+clean against the shrunk edge set.
+
+Next (documented in the proposal): split the app into ~4 real build
+targets along the new layers for build-level enforcement; optionally a
+placement service to shrink the objects-slice cycle; a selection service
+to shrink SAppContext.

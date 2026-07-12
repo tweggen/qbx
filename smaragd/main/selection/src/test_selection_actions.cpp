@@ -6,7 +6,7 @@
 #include "app/selection/sclearselectionaction.h"
 #include "app/selection/stoggleselectionaction.h"
 #include "app/selection/sselectionmanager.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "app/model/sproject.h"
 
 class TestSelectionActions : public QObject
@@ -36,7 +36,7 @@ void TestSelectionActions::testSetSelectionAction()
     SSetSelectionAction setAction(paths);
 
     // Apply should return true with valid inverse
-    SProject *proj = SApplication::app().getCurrentProject();
+    SProject *proj = SAppContext::get().getCurrentProject();
     SApplyResult result = setAction.apply(proj);
     QVERIFY(result.success);
     QVERIFY(result.inverse != nullptr);
@@ -52,7 +52,7 @@ void TestSelectionActions::testAddToSelectionAction()
     SAddToSelectionAction addAction(paths);
     QCOMPARE(addAction.name(), QStringLiteral("add-to-selection"));
 
-    SProject *proj = SApplication::app().getCurrentProject();
+    SProject *proj = SAppContext::get().getCurrentProject();
     SApplyResult result = addAction.apply(proj);
     QVERIFY(result.success);
     QVERIFY(result.inverse != nullptr);
@@ -69,7 +69,7 @@ void TestSelectionActions::testRemoveFromSelectionAction()
     SRemoveFromSelectionAction removeAction(paths);
     QCOMPARE(removeAction.name(), QStringLiteral("remove-from-selection"));
 
-    SProject *proj = SApplication::app().getCurrentProject();
+    SProject *proj = SAppContext::get().getCurrentProject();
     SApplyResult result = removeAction.apply(proj);
     QVERIFY(result.success);
     QVERIFY(result.inverse != nullptr);
@@ -84,7 +84,7 @@ void TestSelectionActions::testClearSelectionAction()
     SClearSelectionAction clearAction;
     QCOMPARE(clearAction.name(), QStringLiteral("clear-selection"));
 
-    SProject *proj = SApplication::app().getCurrentProject();
+    SProject *proj = SAppContext::get().getCurrentProject();
     SApplyResult result = clearAction.apply(proj);
     QVERIFY(result.success);
     QVERIFY(result.inverse != nullptr);
@@ -101,7 +101,7 @@ void TestSelectionActions::testToggleSelectionAction()
     SToggleSelectionAction toggleAction(paths);
     QCOMPARE(toggleAction.name(), QStringLiteral("toggle-selection"));
 
-    SProject *proj = SApplication::app().getCurrentProject();
+    SProject *proj = SAppContext::get().getCurrentProject();
     SApplyResult result = toggleAction.apply(proj);
     QVERIFY(result.success);
     QVERIFY(result.inverse != nullptr);
@@ -149,7 +149,7 @@ void TestSelectionActions::testInverseChaining()
     paths << (QList<int>() << 0 << 1);
     paths << (QList<int>() << 1 << 2);
 
-    SProject *proj = SApplication::app().getCurrentProject();
+    SProject *proj = SAppContext::get().getCurrentProject();
 
     // Apply SetSelection
     SSetSelectionAction setAction(paths);

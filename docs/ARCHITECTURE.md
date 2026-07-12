@@ -43,13 +43,19 @@ core ── pages ── graph ─┬─ sources ─┐
 ## App (`smaragd/main/`) — one SCC, checker-enforced boundaries
 
 13 module directories with `app/<module>/…` includes, built as ONE OBJECT
-library `smaragd_app` (the app is a single strongly-connected component —
-SApplication singleton, objects create their own views, the loader knows
-all types; and the actions self-register via static initializers, which a
-STATIC lib would drop). Boundaries are enforced by
-`python tools/check_layering.py`: per-module allowed engine deps + the
-declared app-internal edge set. **Shrinking that edge list is the Phase 6
-burn-down.**
+library `smaragd_app` (OBJECT is load-bearing: actions and the loader/
+editor/extern-file registries self-register via static initializers, which
+a STATIC lib would drop). Since Phase 6 the app is LAYERED —
+
+    model < actions < {persistence, selection} < objects/* < UI + shell
+
+— the core modules are shell-free (they reach the application only through
+`app/model/sappcontext.h`), and only two cyclic groups remain: the four
+object slices among themselves (placement actions know the track tree and
+the types they create) and the UI+shell top layer. Boundaries are enforced
+by `python tools/check_layering.py`: per-module allowed engine deps + the
+declared app-internal edge set. Do not add SApplication::app() call sites
+below the UI layer, and keep SAppContext minimal.
 
 | Module | One-liner | Contract |
 |---|---|---|

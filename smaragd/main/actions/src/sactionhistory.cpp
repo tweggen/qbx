@@ -3,7 +3,7 @@
 #include "app/actions/sactionundocommand.h"
 #include "app/actions/saction.h"
 #include "app/model/sproject.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 
 #include <QUndoStack>
 
@@ -24,7 +24,7 @@ void SActionHistory::submit(SAction *forward, bool skipHistory)
     // Phase 1: synchronous drain on GUI thread.
     // Phase 2 would defer this to engine thread + async signal.
 
-    SProject *project = SApplication::app().getCurrentProject();
+    SProject *project = SAppContext::get().getCurrentProject();
     if (!project || !forward) {
         delete forward;
         return;
@@ -51,7 +51,7 @@ void SActionHistory::submit(SAction *forward, bool skipHistory)
 
 void SActionHistory::drain_()
 {
-    SProject *project = SApplication::app().getCurrentProject();
+    SProject *project = SAppContext::get().getCurrentProject();
     if (!project) {
         // No active project; skip.
         return;

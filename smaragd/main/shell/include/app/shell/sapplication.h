@@ -10,6 +10,7 @@
 #include "tw/render/render_session.h"
 #include "tw/record/recording_session.h"
 #include "tw/playback/playback_context.h"
+#include "app/model/sappcontext.h"
 #include <QApplication>
 #include <QString>
 //#include <qptrlist.h>
@@ -36,7 +37,8 @@ typedef QList<SLink*> SSelectionList;
  */
 class SApplication
     : public QApplication,
-      public audio::PlaybackContext   // app services for twSpeaker (proposal 14, Phase 0)
+      public audio::PlaybackContext,  // app services for twSpeaker (proposal 14, Phase 0)
+      public SAppContext              // app services for the core modules (Phase 6)
 {
     Q_OBJECT
 public:
@@ -94,6 +96,9 @@ public:
 
     audio::RecordingSession *recordingSession() const;
     void startRecording(const audio::RecordingParams &params);
+
+    // SAppContext: start/stop transport playback (speaker + playing flag).
+    void setPlaybackRunning( bool play ) override;
 
     // audio::PlaybackContext — the speaker's view of the app. rootComponent()
     // and locatorPosition() run on the UI thread; locatorHeldElsewhere() and

@@ -1,7 +1,6 @@
 #include "app/objects/mixer/spluginchain.h"
-#include "app/pluginui/spluginslot.h"
+#include "app/objects/mixer/spluginslot.h"
 #include "app/model/sproject.h"
-#include "app/shell/sapplication.h"
 #include "tw/mix/twmixer.h"
 #include "tw/graph/twcomponent.h"
 #include "app/model/slink.h"

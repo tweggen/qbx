@@ -61,7 +61,7 @@
 #include "app/objects/wave/saddsampleaction.h"
 #include "app/objects/track/ssettrackvolumeaction.h"
 #include "app/persistence/ssaveprojectaction.h"
-#include "app/actions/sloadprojectaction.h"
+#include "app/persistence/sloadprojectaction.h"
 #include "app/actions/ssnaptogridaction.h"
 #include "app/actions/sgridaction.h"
 #include "app/actions/smetronomeaction.h"

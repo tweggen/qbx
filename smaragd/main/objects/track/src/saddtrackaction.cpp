@@ -3,7 +3,7 @@
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "app/actions/sactionregistry.h"
 #include <QDomElement>
 #include <QString>
@@ -71,7 +71,7 @@ SApplyResult SAddTrackAction::apply(SProject *project)
     }
 
     // Rewire speaker so new track is audible.
-    SApplication::app().rewireSpeaker();
+    SAppContext::get().rewireSpeaker();
 
     // Auto-select the newly added track (c)
     mixer->setSelectedTrack(track);

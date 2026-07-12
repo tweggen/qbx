@@ -7,9 +7,14 @@ layout), SSettings (per-user INI), main().
 
 Public headers: app/shell/*.h
 
-Depends on: everything (the ONLY module allowed to). Everyone else's shell
-edge is DEBT tracked in tools/check_layering.py — do not add new
-SApplication::app() call sites casually.
+Depends on: everything (the ONLY module allowed to). Since Phase 6 the
+CORE modules (model, actions, persistence, selection, objects/*) are
+shell-free: they reach the app exclusively through SAppContext
+(app/model/sappcontext.h), which SApplication implements (setInstance in
+the ctor, before any project exists). Keep that interface MINIMAL — every
+method added is coupling handed to everything below the shell. Remaining
+shell edges (timeline/pluginui/servicesui/testkit) are the UI layer and
+legitimate.
 
 Invariants:
 1. setGlobalLocatorPosRealtime is an ATOMIC STORE ONLY — no signal, no

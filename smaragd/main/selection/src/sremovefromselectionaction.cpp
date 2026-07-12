@@ -1,9 +1,9 @@
 #include "app/selection/sremovefromselectionaction.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "app/model/sproject.h"
 #include "app/selection/sselectionmanager.h"
 #include "app/actions/sactionregistry.h"
-#include "app/objects/track/strackpath.h"
+#include "app/model/sobjectpath.h"
 #include <QDomElement>
 
 SRemoveFromSelectionAction::SRemoveFromSelectionAction(const QList<QList<int>> &paths)
@@ -15,7 +15,7 @@ SApplyResult SRemoveFromSelectionAction::apply(SProject *project)
 {
     if (!project) return {false, nullptr};
 
-    SApplication &app = SApplication::app();
+    SAppContext &app = SAppContext::get();
 
     // Validate all paths before applying
     SSelectionManager mgr;

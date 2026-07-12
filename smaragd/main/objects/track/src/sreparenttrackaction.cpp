@@ -5,7 +5,7 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/slink.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -113,7 +113,7 @@ SApplyResult SReparentTrackAction::apply(SProject *project)
     track->removeRef();
 
     // Refresh the engine graph root (mirrors SAddTrackAction).
-    SApplication::app().rewireSpeaker();
+    SAppContext::get().rewireSpeaker();
 
     // Detach fired a mid-operation view refresh (track briefly parentless) and
     // the folder-side attach emits no mixer signal; announce the final tree so

@@ -1,5 +1,5 @@
 #include "app/actions/srenderaction.h"
-#include "app/shell/sapplication.h"
+#include "app/model/sappcontext.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
 #include "app/model/sobject.h"
@@ -32,7 +32,7 @@ SApplyResult SRenderAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SApplication &app = SApplication::app();
+    SAppContext &app = SAppContext::get();
     QString outputDir = app.testOutputDir();
     if (outputDir.isEmpty()) {
         qWarning() << "SRenderAction: no test output directory configured";

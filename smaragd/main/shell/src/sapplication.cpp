@@ -257,6 +257,7 @@ SApplication::SApplication( int &argc, char **argv )
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
+    SAppContext::setInstance( this );        // core modules reach us only via this
     t3Speaker_ = new twSpeaker( *t3Env_ );
     t3Speaker_->setPlaybackContext( this );   // app services; we outlive the speaker
     t3Speaker_->init();
@@ -332,6 +333,18 @@ void SApplication::startRender(const audio::RenderParams &params)
     // Start rendering
     int sampleRate = t3Env_ ? t3Env_->getSRate() : 48000;
     renderSession_->start(synthOutput, params, static_cast<std::uint32_t>(sampleRate));
+}
+
+void SApplication::setPlaybackRunning( bool play )
+{
+    if( !t3Speaker_ ) return;
+    if( play ) {
+        t3Speaker_->startOutput();
+        setPlaying( true );
+    } else {
+        t3Speaker_->stopOutput();
+        setPlaying( false );
+    }
 }
 
 audio::RecordingSession *SApplication::recordingSession() const

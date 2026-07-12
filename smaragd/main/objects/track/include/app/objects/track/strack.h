@@ -80,6 +80,8 @@ public:
     SPluginChain *getPluginChain() const { return cpPluginChain_; }
     virtual int seekTo( offset_t ofs );
 
+    // Path search may descend into track lanes (see SObject::isPathContainer).
+    virtual bool isPathContainer() const override { return true; }
     virtual bool hasDuration() const;
     virtual length_t getDuration() const;
 
