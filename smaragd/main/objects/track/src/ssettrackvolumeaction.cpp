@@ -1,7 +1,7 @@
 #include "app/objects/track/ssettrackvolumeaction.h"
+#include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
-#include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/slink.h"
 #include <QDomElement>
@@ -17,14 +17,14 @@ SApplyResult SSetTrackVolumeAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *root = project->getRootComponent();
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
+    SObject *root = splacements::rootContainer( project );
+    SObject *mixer = root;
     if (!mixer) {
         return {false, nullptr};
     }
 
     // Resolve the track at the stored index.
-    SLink *trackLink = mixer->getTrackAt(trackIndex_);
+    SLink *trackLink = mixer->childAt(trackIndex_);
     if (!trackLink) {
         return {false, nullptr};
     }

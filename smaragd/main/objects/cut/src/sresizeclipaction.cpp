@@ -1,9 +1,8 @@
 #include "app/objects/cut/sresizeclipaction.h"
-#include "app/objects/track/strackpath.h"
+#include "app/model/sobjectpath.h"
+#include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
-#include "app/objects/mixer/sstdmixer.h"
-#include "app/objects/track/strack.h"
 #include "app/model/slink.h"
 #include "app/objects/cut/scut.h"
 #include "tw/core/twfraction.h"
@@ -26,13 +25,13 @@ SApplyResult SResizeClipAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>( project->getRootComponent() );
+    SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) {
         return {false, nullptr};
     }
     QList<int> trackPath = clipPath_;
     int idx = trackPath.takeLast();
-    STrack *track = dynamic_cast<STrack*>( resolveByPath( mixer, trackPath ) );
+    SObject *track = splacements::laneAt( mixer, trackPath );
     if( !track ) {
         return {false, nullptr};
     }

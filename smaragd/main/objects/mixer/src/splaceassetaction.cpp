@@ -1,10 +1,10 @@
 #include "app/objects/mixer/splaceassetaction.h"
+#include "app/model/splacements.h"
 #include "app/objects/mixer/sremoveassetplacementaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
 #include "app/objects/mixer/sstdmixer.h"
-#include "app/objects/track/strack.h"
 #include "app/objects/cut/scut.h"
 #include "app/model/slink.h"
 #include "tw/core/twfraction.h"
@@ -25,8 +25,8 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *root = project->getRootComponent();
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
+    SObject *root = splacements::rootContainer( project );
+    SObject *mixer = root;
     if (!mixer) {
         return {false, nullptr};
     }
@@ -37,9 +37,9 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    STrack *track = dynamic_cast<STrack*>(trackObj);
-    if (!track) {
-        return {false, nullptr};
+    SObject *track = trackObj;
+    if (!track->isPathContainer()) {
+        return {false, nullptr};   // destination is not a lane
     }
 
     // Resolve the asset by name from the project registry.

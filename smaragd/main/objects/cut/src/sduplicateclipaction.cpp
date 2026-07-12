@@ -1,10 +1,9 @@
 #include "app/objects/cut/sduplicateclipaction.h"
-#include "app/objects/track/sremoveclipaction.h"
-#include "app/objects/track/strackpath.h"
+#include "app/model/sobjectpath.h"
+#include "app/model/splacements.h"
+#include "app/objects/cut/sremoveclipaction.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
-#include "app/objects/mixer/sstdmixer.h"
-#include "app/objects/track/strack.h"
 #include "app/model/slink.h"
 #include "app/objects/cut/scut.h"
 #include "tw/core/twfraction.h"
@@ -14,9 +13,9 @@
 using namespace strackpath;
 
 SLink *makeDuplicateClip( SProject *project, SObject &srcObj,
-                          STrack *destTrack, offset_t startTime )
+                          SObject *destLane, offset_t startTime )
 {
-    if( !project || !destTrack ) return nullptr;
+    if( !project || !destLane ) return nullptr;
     SCut *copy;
     if( strcmp( srcObj.metaObject()->className(), "SCut" ) == 0 ) {
         SCut *s = static_cast<SCut*>( &srcObj );
@@ -33,7 +32,7 @@ SLink *makeDuplicateClip( SProject *project, SObject &srcObj,
     }
     SLink *link = new SLink( *copy, NULL );
     link->setStartTime( startTime );
-    link->setParent( destTrack );
+    link->setParent( destLane );
     return link;
 }
 
@@ -50,7 +49,7 @@ SApplyResult SDuplicateClipAction::apply( SProject *project )
     if( !project || sourceClipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>( project->getRootComponent() );
+    SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -58,16 +57,16 @@ SApplyResult SDuplicateClipAction::apply( SProject *project )
     // Resolve the source clip.
     QList<int> srcTrackPath = sourceClipPath_;
     int srcIdx = srcTrackPath.takeLast();
-    STrack *srcTrack = dynamic_cast<STrack*>( resolveByPath( mixer, srcTrackPath ) );
+    SObject *srcTrack = splacements::laneAt( mixer, srcTrackPath );
     if( !srcTrack ) {
         return {false, nullptr};
     }
     SLink *srcLink = srcTrack->childAt( srcIdx );
-    if( !srcLink || dynamic_cast<STrack*>( &srcLink->getSObject() ) ) {
+    if( !srcLink || (srcLink->getSObject().isPathContainer() ) ) {
         return {false, nullptr};   // missing, or a nested track lane (not a clip)
     }
 
-    STrack *destTrack = dynamic_cast<STrack*>( resolveByPath( mixer, destTrackPath_ ) );
+    SObject *destTrack = splacements::laneAt( mixer, destTrackPath_ );
     if( !destTrack ) {
         return {false, nullptr};
     }

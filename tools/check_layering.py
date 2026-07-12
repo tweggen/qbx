@@ -12,7 +12,9 @@ main/CMakeLists.txt. This checker guards the FINER grain the build cannot:
   3. Each app module's engine includes stay within its declared tw/ modules
      (per MODULE — CMake only scopes per LAYER union).
   4. Intra-layer cross-module includes stay within the DECLARED edge set.
-     New edges must be added here consciously.
+     New edges must be added here consciously. Since the placement service
+     the object slices are a DAG (wave < cut < track < mixer); the only
+     remaining cyclic group is UI+shell.
 
 Run from the repo root:  python tools/check_layering.py
 Exit code 0 = clean, 1 = violations (printed one per line).
@@ -69,12 +71,11 @@ APP_DEPS = {
     # objects/* cross-edges are semantic (placement actions know the track
     # tree and the types they create).
     'model':          set(),
-    'objects/cut':    {'actions', 'model', 'objects/mixer', 'objects/track',
-                       'objects/wave', 'persistence'},
-    'objects/wave':   {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'persistence'},
-    'objects/track':  {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'persistence'},
+    # The object slices form a DAG since the placement service:
+    #   wave < cut < track < mixer (only downward edges below).
+    'objects/wave':   {'model', 'persistence'},
+    'objects/cut':    {'actions', 'model', 'objects/wave', 'persistence'},
+    'objects/track':  {'actions', 'model', 'persistence'},
     'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/track',
                        'persistence'},
     'actions':        {'model'},
@@ -100,7 +101,7 @@ APP_ENG = {
     'objects/cut':    _ENG_BASE | {'pages', 'schedule', 'sources'},
     'objects/wave':   _ENG_BASE | {'pages', 'schedule', 'sources'},
     'objects/track':  _ENG_BASE | {'mix', 'plugins', 'schedule'},
-    'objects/mixer':  _ENG_BASE | {'mix', 'plugins', 'schedule'},
+    'objects/mixer':  _ENG_BASE | {'mix', 'schedule'},
     'actions':        _ENG_BASE | {'render'},
     'persistence':    _ENG_BASE,
     'selection':      _ENG_BASE,

@@ -1,9 +1,8 @@
 #include "app/objects/cut/sunsplitclipaction.h"
+#include "app/model/sobjectpath.h"
+#include "app/model/splacements.h"
 #include "app/objects/cut/ssplitclipaction.h"
-#include "app/objects/track/strackpath.h"
 #include "app/model/sproject.h"
-#include "app/objects/mixer/sstdmixer.h"
-#include "app/objects/track/strack.h"
 #include "app/model/slink.h"
 #include "app/objects/cut/scut.h"
 #include "tw/core/twfraction.h"
@@ -24,7 +23,7 @@ SApplyResult SUnsplitClipAction::apply(SProject *project)
     if (!project || firstPath_.isEmpty() || secondPath_.isEmpty()) {
         return {false, nullptr};
     }
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(project->getRootComponent());
+    SObject *mixer = splacements::rootContainer( project );
     if (!mixer) {
         return {false, nullptr};
     }
@@ -33,7 +32,7 @@ SApplyResult SUnsplitClipAction::apply(SProject *project)
     // first), so removing it does not shift the first part's index.
     QList<int> stp = secondPath_;
     int sidx = stp.takeLast();
-    STrack *sTrack = dynamic_cast<STrack*>(resolveByPath(mixer, stp));
+    SObject *sTrack = splacements::laneAt( mixer, stp);
     if (sTrack) {
         if (SLink *sl2 = sTrack->childAt(sidx)) {
             delete sl2;     // its SCut becomes unreferenced -> deleteLater
@@ -43,7 +42,7 @@ SApplyResult SUnsplitClipAction::apply(SProject *project)
     // Restore the first part's pre-split length.
     QList<int> ftp = firstPath_;
     int fidx = ftp.takeLast();
-    STrack *fTrack = dynamic_cast<STrack*>(resolveByPath(mixer, ftp));
+    SObject *fTrack = splacements::laneAt( mixer, ftp);
     SLink *first = fTrack ? fTrack->childAt(fidx) : nullptr;
     if (!first) {
         return {false, nullptr};

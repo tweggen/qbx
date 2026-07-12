@@ -6,7 +6,6 @@
 #include <QList>
 
 class SProject;
-class STrack;
 class SLink;
 class SObject;
 
@@ -14,7 +13,7 @@ class SObject;
 // place it at startTime on a destination track. Both the live drag-preview and
 // the action use makeDuplicateClip() so the copy is identical.
 SLink *makeDuplicateClip( SProject *project, SObject &srcObj,
-                          STrack *destTrack, offset_t startTime );
+                          SObject *destLane, offset_t startTime );
 
 // Action: duplicate the clip at sourceClipPath onto destTrackPath at startTime
 // (the undoable form of a Ctrl-drag duplicate). Inverse: SRemoveClipAction,

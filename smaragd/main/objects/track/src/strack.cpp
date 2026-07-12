@@ -18,8 +18,8 @@
 #include "app/model/sappcontext.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/strackrndrinline.h"
-#include "app/objects/mixer/spluginchain.h"
-#include "app/objects/mixer/spluginslot.h"
+#include "app/objects/track/spluginchain.h"
+#include "app/objects/track/spluginslot.h"
 #include "app/persistence/sprojectloader.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
 

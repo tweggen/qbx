@@ -4778,3 +4778,45 @@ Notes:
 
 Verification: clean reconfigure + build; ctest 24/24 green; layering
 checker clean; violation-injection test compiles-fails as intended.
+
+## Modularization (proposal 14) — placement service: the object slices are a DAG (2026-07-12)
+
+app/model/splacements.h introduces the placement service: rootContainer(),
+laneAt() and placementAt() — generic container/placement resolution over
+SObject::isPathContainer(). Nearly every STrack/SStdMixer cast in the
+action code was validation-only ("is this a lane?", "is there a root?")
+followed exclusively by generic SObject/SLink API (childAt, indexOfChild,
+childCount, setParent, setVolume, setSName, addRef); those casts WERE the
+objects-slice cycle.
+
+Changes:
+- Converted to the service: split/unsplit/resize/duplicate-clip,
+  add/remove-sample, move/remove-clip, set-track-volume, the four asset
+  actions, and the root casts in the plugin actions. getTrackAt→childAt,
+  getNTracks→childCount at converted sites.
+- Genuinely type-specific things became small model virtuals:
+  SObject::activeLane() (SStdMixer returns its selected track; the track
+  renderer no longer includes the mixer) and SObject::volumeDbSnapshot()
+  (the volume mutex was ALWAYS SObject's — the waveform drawer's STrack
+  cast was needless). SStdMixer::isPathContainer() is now true (the mixer
+  is a lane container).
+- Re-homed to their true slices: add/remove-sample → objects/cut (they
+  place clips; they never named SPlainWave thanks to the Phase 5 factory);
+  the five track lifecycle actions (add/remove/move/reparent/restore-track,
+  which genuinely need SStdMixer::insertTrack/removeTrack/reorderTrack) →
+  objects/mixer; plugin chain/slot/insert/remove-plugin → objects/track
+  (the chain hangs on tracks; STrack::getPluginChain is the real API);
+  remove-clip → objects/cut next to duplicate-clip (they are each other's
+  inverses — the pair was the last wrong-direction edge).
+- makeDuplicateClip takes SObject *destLane (callers upcast).
+
+Result: the object slices form a DAG — wave < cut < track < mixer, only
+downward edges (cut→wave: renderer waveform; mixer→cut/track: assets
+create cuts, lifecycle creates tracks). The only remaining cyclic group in
+the app is UI+shell. Locked into tools/check_layering.py (wave {model,
+persistence}; cut {actions,model,wave,persistence}; track
+{actions,model,persistence}; mixer {actions,model,cut,track,persistence};
+mixer's engine set dropped 'plugins'). docs/ACTIONS.md regenerated for the
+moved sources.
+
+Verification: ctest 24/24 green; layering checker clean on the DAG edges.

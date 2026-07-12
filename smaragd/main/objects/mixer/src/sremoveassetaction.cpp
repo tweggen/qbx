@@ -1,4 +1,5 @@
 #include "app/objects/mixer/sremoveassetaction.h"
+#include "app/model/splacements.h"
 #include "app/objects/mixer/screateassetaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/model/sproject.h"

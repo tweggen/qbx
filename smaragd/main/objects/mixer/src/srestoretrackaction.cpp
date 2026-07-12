@@ -1,5 +1,5 @@
-#include "app/objects/track/srestoretrackaction.h"
-#include "app/objects/track/sremovetrackaction.h"
+#include "app/objects/mixer/srestoretrackaction.h"
+#include "app/objects/mixer/sremovetrackaction.h"
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"

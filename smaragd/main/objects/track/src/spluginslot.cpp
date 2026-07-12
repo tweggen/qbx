@@ -1,4 +1,4 @@
-#include "app/objects/mixer/spluginslot.h"
+#include "app/objects/track/spluginslot.h"
 #include "app/model/sproject.h"
 #include "app/model/sappcontext.h"
 #include "tw/plugins/twplugininsert.h"

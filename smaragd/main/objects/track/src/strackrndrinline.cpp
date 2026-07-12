@@ -6,7 +6,6 @@
 #include "app/model/slink.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sproject.h"
-#include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strackcolormodifier.h"
 #include "app/objects/track/strackrndrinline.h"
 
@@ -29,8 +28,7 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
     if( project ) {
         SObject *root = project->getRootComponent();
         if( root ) {
-            SStdMixer *mixer = dynamic_cast<SStdMixer*>( root );
-            if( mixer && mixer->getSelectedTrack() == &getTrack() ) {
+            if( root && root->activeLane() == &getTrack() ) {
                 isTrackSelected = true;
             }
         }

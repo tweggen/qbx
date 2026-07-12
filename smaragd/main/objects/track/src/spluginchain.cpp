@@ -1,5 +1,5 @@
-#include "app/objects/mixer/spluginchain.h"
-#include "app/objects/mixer/spluginslot.h"
+#include "app/objects/track/spluginchain.h"
+#include "app/objects/track/spluginslot.h"
 #include "app/model/sproject.h"
 #include "tw/mix/twmixer.h"
 #include "tw/graph/twcomponent.h"

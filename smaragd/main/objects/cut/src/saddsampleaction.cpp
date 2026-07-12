@@ -1,9 +1,8 @@
-#include "app/objects/wave/saddsampleaction.h"
-#include "app/objects/wave/sremovesampleaction.h"
+#include "app/objects/cut/saddsampleaction.h"
+#include "app/model/splacements.h"
+#include "app/objects/cut/sremovesampleaction.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
-#include "app/objects/mixer/sstdmixer.h"
-#include "app/objects/track/strack.h"
 #include "app/objects/cut/scut.h"
 #include "app/model/slink.h"
 #include "tw/core/twfraction.h"
@@ -20,22 +19,20 @@ SApplyResult SAddSampleAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *root = project->getRootComponent();
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
-    if (!mixer) {
+    SObject *root = splacements::rootContainer( project );
+    if (!root || !root->isPathContainer()) {
         return {false, nullptr};
     }
 
     // Get the track at the specified index.
-    SLink *trackLink = mixer->getTrackAt(trackIndex_);
+    SLink *trackLink = root->childAt(trackIndex_);
     if (!trackLink) {
         return {false, nullptr};
     }
 
-    SObject *trackObj = &trackLink->getSObject();
-    STrack *track = dynamic_cast<STrack*>(trackObj);
-    if (!track) {
-        return {false, nullptr};
+    SObject *track = &trackLink->getSObject();
+    if (!track->isPathContainer()) {
+        return {false, nullptr};   // addressed child is not a lane
     }
 
     // Link to the file.

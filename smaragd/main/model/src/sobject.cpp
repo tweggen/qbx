@@ -615,6 +615,12 @@ void SObject::notifyDependentsChanged(uint32_t affectedAspects)
 // Phase 5e: Page cache API
 // Base implementation: just returns current page without scheduling.
 // Derived classes (SCut, STrack, etc.) override to call scheduleRevalidation().
+double SObject::volumeDbSnapshot() const
+{
+    std::lock_guard<std::mutex> lock( volumeMutex_ );
+    return getVolume();
+}
+
 std::shared_ptr<CapturePageData> SObject::getCapture(uint32_t aspectsMask)
 {
     if (aspectsMask == 0) return nullptr;

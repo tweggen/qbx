@@ -25,6 +25,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sobject.h
     model/include/app/model/sobjectpath.h
     model/include/app/model/sobjectrenderer.h
+    model/include/app/model/splacements.h
     model/include/app/model/sproject.h
     model/include/app/model/sprojectprops.h
     model/include/app/model/ssortedobjlist.h
@@ -88,72 +89,72 @@ set(APP_CORE_FILES
 
 set(APP_OBJECTS_FILES
     # --- app/objects/cut
+    objects/cut/include/app/objects/cut/saddsampleaction.h
     objects/cut/include/app/objects/cut/scut.h
     objects/cut/include/app/objects/cut/scutrndrinline.h
     objects/cut/include/app/objects/cut/sduplicateclipaction.h
+    objects/cut/include/app/objects/cut/sremoveclipaction.h
+    objects/cut/include/app/objects/cut/sremovesampleaction.h
     objects/cut/include/app/objects/cut/sresizeclipaction.h
     objects/cut/include/app/objects/cut/ssplitclipaction.h
     objects/cut/include/app/objects/cut/sunsplitclipaction.h
+    objects/cut/src/saddsampleaction.cpp
     objects/cut/src/scut.cpp
     objects/cut/src/scutrndrinline.cpp
     objects/cut/src/sduplicateclipaction.cpp
+    objects/cut/src/sremoveclipaction.cpp
+    objects/cut/src/sremovesampleaction.cpp
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/ssplitclipaction.cpp
     objects/cut/src/sunsplitclipaction.cpp
     # --- app/objects/wave
-    objects/wave/include/app/objects/wave/saddsampleaction.h
     objects/wave/include/app/objects/wave/splainwave.h
     objects/wave/include/app/objects/wave/splainwaverndrinline.h
-    objects/wave/include/app/objects/wave/sremovesampleaction.h
     objects/wave/include/app/objects/wave/swaveformdraw.h
-    objects/wave/src/saddsampleaction.cpp
     objects/wave/src/splainwave.cpp
     objects/wave/src/splainwaverndrinline.cpp
-    objects/wave/src/sremovesampleaction.cpp
     objects/wave/src/swaveformdraw.cpp
     # --- app/objects/track
-    objects/track/include/app/objects/track/saddtrackaction.h
+    objects/track/include/app/objects/track/sinsertpluginaction.h
     objects/track/include/app/objects/track/smoveclipaction.h
-    objects/track/include/app/objects/track/smovetrackaction.h
-    objects/track/include/app/objects/track/sremoveclipaction.h
-    objects/track/include/app/objects/track/sremovetrackaction.h
-    objects/track/include/app/objects/track/sreparenttrackaction.h
-    objects/track/include/app/objects/track/srestoretrackaction.h
+    objects/track/include/app/objects/track/spluginchain.h
+    objects/track/include/app/objects/track/spluginslot.h
+    objects/track/include/app/objects/track/sremovepluginaction.h
     objects/track/include/app/objects/track/ssettrackvolumeaction.h
     objects/track/include/app/objects/track/strack.h
     objects/track/include/app/objects/track/strackcolormodifier.h
     objects/track/include/app/objects/track/strackpath.h
     objects/track/include/app/objects/track/strackrenderer.h
     objects/track/include/app/objects/track/strackrndrinline.h
-    objects/track/src/saddtrackaction.cpp
+    objects/track/src/sinsertpluginaction.cpp
     objects/track/src/smoveclipaction.cpp
-    objects/track/src/smovetrackaction.cpp
-    objects/track/src/sremoveclipaction.cpp
-    objects/track/src/sremovetrackaction.cpp
-    objects/track/src/sreparenttrackaction.cpp
-    objects/track/src/srestoretrackaction.cpp
+    objects/track/src/spluginchain.cpp
+    objects/track/src/spluginslot.cpp
+    objects/track/src/sremovepluginaction.cpp
     objects/track/src/ssettrackvolumeaction.cpp
     objects/track/src/strack.cpp
     objects/track/src/strackcolormodifier.cpp
     objects/track/src/strackrndrinline.cpp
     # --- app/objects/mixer
+    objects/mixer/include/app/objects/mixer/saddtrackaction.h
     objects/mixer/include/app/objects/mixer/screateassetaction.h
-    objects/mixer/include/app/objects/mixer/sinsertpluginaction.h
+    objects/mixer/include/app/objects/mixer/smovetrackaction.h
     objects/mixer/include/app/objects/mixer/splaceassetaction.h
-    objects/mixer/include/app/objects/mixer/spluginchain.h
-    objects/mixer/include/app/objects/mixer/spluginslot.h
     objects/mixer/include/app/objects/mixer/sremoveassetaction.h
     objects/mixer/include/app/objects/mixer/sremoveassetplacementaction.h
-    objects/mixer/include/app/objects/mixer/sremovepluginaction.h
+    objects/mixer/include/app/objects/mixer/sremovetrackaction.h
+    objects/mixer/include/app/objects/mixer/sreparenttrackaction.h
+    objects/mixer/include/app/objects/mixer/srestoretrackaction.h
     objects/mixer/include/app/objects/mixer/sstdmixer.h
+    objects/mixer/src/saddtrackaction.cpp
     objects/mixer/src/screateassetaction.cpp
-    objects/mixer/src/sinsertpluginaction.cpp
+    objects/mixer/src/smovetrackaction.cpp
     objects/mixer/src/splaceassetaction.cpp
-    objects/mixer/src/spluginchain.cpp
-    objects/mixer/src/spluginslot.cpp
     objects/mixer/src/sremoveassetaction.cpp
     objects/mixer/src/sremoveassetplacementaction.cpp
-    objects/mixer/src/sremovepluginaction.cpp
+    objects/mixer/src/sremovetrackaction.cpp
+    objects/mixer/src/sreparenttrackaction.cpp
+    objects/mixer/src/srestoretrackaction.cpp
     objects/mixer/src/sstdmixer.cpp
 )
 

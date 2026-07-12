@@ -144,6 +144,21 @@ public:
     virtual bool isPathContainer() const { return false; }
 
     /**
+     * Volume (dB) snapshot safe to take while audio runs / UI sliders move:
+     * the read holds volumeMutex_ (the paint path races setVolume). Lets
+     * renderers stay type-agnostic — the mutex was always SObject's, the
+     * historical STrack cast in the waveform drawer was needless.
+     */
+    double volumeDbSnapshot() const;
+
+    /**
+     * The container's currently active/selected lane object (UI highlight),
+     * or null. SStdMixer overrides with its selected track; generic so lane
+     * renderers need no mixer type.
+     */
+    virtual SObject *activeLane() const { return nullptr; }
+
+    /**
      * Ordered view of this container's SLink children. Prefer this and the
      * childAt()/childCount() accessors over QObject::children() everywhere order
      * matters, so call sites stay decoupled from the storage.

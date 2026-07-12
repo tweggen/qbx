@@ -14,7 +14,11 @@ App edges: NONE — the model names no concrete object types (Phase 5) and
 hosts the Phase 6 decoupling seams: sappcontext.h (the ONLY way core
 modules reach the application), sdetaileditors.h (view-widget factory),
 sobjectpath.h (generic index-path helpers; SObject::isPathContainer scopes
-the reverse search exactly as the old STrack cast did).
+the reverse search exactly as the old STrack cast did), and splacements.h
+(the placement service: rootContainer/laneAt/placementAt — the generic
+resolution+validation that action code uses instead of STrack/SStdMixer
+casts; lane-ness is isPathContainer, the active lane is activeLane, and
+volumeDbSnapshot gives renderers a thread-safe volume read).
 Dependency invalidation goes through the virtual
 SObject::invalidateAspects() (base no-op, SCut overrides); extern-file
 creation goes through SProject::registerExternFileFactory() (the wave slice

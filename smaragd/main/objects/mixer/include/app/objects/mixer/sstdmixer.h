@@ -46,6 +46,11 @@ public:
     virtual SObjectRenderer *getInlineRenderer();
     
     virtual int getNTracks() const;
+    // The mixer holds lanes; path search and the placement service treat it
+    // as a container (see SObject::isPathContainer).
+    virtual bool isPathContainer() const override { return true; }
+    // Generic view of the selected track (see SObject::activeLane).
+    virtual SObject *activeLane() const override;
     virtual SLink *getTrackAt( int idx );
 
     virtual int seekTo( offset_t );

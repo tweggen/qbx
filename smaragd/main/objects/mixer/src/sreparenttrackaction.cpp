@@ -1,4 +1,4 @@
-#include "app/objects/track/sreparenttrackaction.h"
+#include "app/objects/mixer/sreparenttrackaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"

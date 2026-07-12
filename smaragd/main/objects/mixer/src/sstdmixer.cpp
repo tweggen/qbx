@@ -9,6 +9,7 @@
 #include "tw/mix/twmixer.h"
 
 #include "app/objects/mixer/sstdmixer.h"
+#include "app/objects/track/strack.h"   // upcast of the selected track
 #include "app/model/sdetaileditors.h"
 #include "app/persistence/sprojectloader.h"
 #include "app/model/sappcontext.h"
@@ -60,6 +61,11 @@ QWidget *SStdMixer::getInlineEditWidget( QWidget * )
 SObjectRenderer *SStdMixer::getInlineRenderer()
 {
     return NULL;
+}
+
+SObject *SStdMixer::activeLane() const
+{
+    return getSelectedTrack();
 }
 
 int SStdMixer::getNTracks() const

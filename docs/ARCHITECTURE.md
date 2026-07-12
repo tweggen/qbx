@@ -58,8 +58,9 @@ engine modules — a cross-layer include (model→actions, core→objects,
 anything below the UI→shell) fails to compile. The core modules reach the
 application only through `app/model/sappcontext.h`.
 `python tools/check_layering.py` guards the finer grain the build cannot:
-per-MODULE engine deps and the declared intra-layer edge set (the remaining
-cyclic groups: the four object slices among themselves; UI+shell). Do not
+per-MODULE engine deps and the declared intra-layer edge set. Since the
+placement service (`app/model/splacements.h`) the object slices form a DAG
+— wave < cut < track < mixer — leaving UI+shell as the only cyclic group. Do not
 add SApplication::app() call sites below the UI layer, and keep SAppContext
 minimal.
 

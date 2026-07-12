@@ -1,8 +1,8 @@
 #include "app/objects/track/smoveclipaction.h"
+#include "app/model/splacements.h"
 #include "app/objects/track/strackpath.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
-#include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/slink.h"
 #include "tw/core/twfraction.h"
@@ -22,8 +22,8 @@ SApplyResult SMoveClipAction::apply(SProject *project)
     if (!project || clipPath_.isEmpty()) {
         return {false, nullptr};
     }
-    SObject *root = project->getRootComponent();
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
+    SObject *root = splacements::rootContainer( project );
+    SObject *mixer = root;
     if (!mixer) {
         return {false, nullptr};
     }
@@ -36,7 +36,7 @@ SApplyResult SMoveClipAction::apply(SProject *project)
         return {false, nullptr};
     }
     SLink *link = srcTrack->childAt(clipIdx);
-    if (!link || dynamic_cast<STrack*>(&link->getSObject())) {
+    if (!link || (link->getSObject().isPathContainer())) {
         return {false, nullptr};        // missing, or it's a track lane not a clip
     }
 

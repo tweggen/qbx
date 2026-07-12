@@ -7,7 +7,6 @@
 #include "app/model/sobject.h"
 #include "app/model/slink.h"
 #include "app/model/sobjectrenderer.h"
-#include "app/objects/track/strack.h"
 
 bool drawObjectWaveform( SObject &obj, SLink &lk, SRenderContext &ctx,
                          const QColor &waveColor )
@@ -38,19 +37,10 @@ bool drawObjectWaveform( SObject &obj, SLink &lk, SRenderContext &ctx,
     // Snapshot the volume to avoid race conditions with the audio thread.
     // Track parent is typically an STrack; get its volume in dB.
     double volumeGain = 1.0;
-    QObject *qparent = lk.parent();
-    if( qparent ) {
-        if( STrack *track = dynamic_cast<STrack*>( qparent ) ) {
-            // Thread-safe volume read: use mutex to prevent audio thread from
-            // modifying volume during our read (audio playback + UI slider move).
-            double volumeDB = 0.0;
-            {
-                std::lock_guard<std::mutex> lock( track->volumeMutex_ );
-                volumeDB = track->getVolume();
-            }
-            // Convert dB to linear: gain = 10^(dB/20)
-            volumeGain = pow( 10.0, volumeDB / 20.0 );
-        }
+    if( SObject *parentObj = dynamic_cast<SObject *>( lk.parent() ) ) {
+        // Thread-safe volume read (volumeDbSnapshot holds the volume mutex;
+        // the paint path races the UI slider / audio thread).
+        volumeGain = pow( 10.0, parentObj->volumeDbSnapshot() / 20.0 );
     }
 
     p.setPen( waveColor );

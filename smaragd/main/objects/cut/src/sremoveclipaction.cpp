@@ -1,9 +1,8 @@
-#include "app/objects/track/sremoveclipaction.h"
+#include "app/objects/cut/sremoveclipaction.h"
+#include "app/model/splacements.h"
 #include "app/objects/cut/sduplicateclipaction.h"
-#include "app/objects/track/strackpath.h"
+#include "app/model/sobjectpath.h"
 #include "app/model/sproject.h"
-#include "app/objects/mixer/sstdmixer.h"
-#include "app/objects/track/strack.h"
 #include "app/model/slink.h"
 #include "tw/core/twfraction.h"
 #include <QDomElement>
@@ -24,18 +23,18 @@ SApplyResult SRemoveClipAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>( project->getRootComponent() );
+    SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) {
         return {false, nullptr};
     }
     QList<int> trackPath = clipPath_;
     int idx = trackPath.takeLast();
-    STrack *track = dynamic_cast<STrack*>( resolveByPath( mixer, trackPath ) );
+    SObject *track = splacements::laneAt( mixer, trackPath );
     if( !track ) {
         return {false, nullptr};
     }
     SLink *link = track->childAt( idx );
-    if( !link || dynamic_cast<STrack*>( &link->getSObject() ) ) {
+    if( !link || (link->getSObject().isPathContainer() ) ) {
         return {false, nullptr};
     }
     delete link;   // the SCut becomes unreferenced -> deleteLater

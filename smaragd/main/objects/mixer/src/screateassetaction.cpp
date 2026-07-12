@@ -1,9 +1,9 @@
 #include "app/objects/mixer/screateassetaction.h"
+#include "app/model/splacements.h"
 #include "app/objects/mixer/sremoveassetaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
-#include "app/objects/track/strack.h"
 #include "app/objects/cut/scut.h"
 #include "app/actions/sactionregistry.h"
 #include "tw/core/twfraction.h"
@@ -37,8 +37,8 @@ SApplyResult SCreateAssetAction::apply( SProject *project )
         return { false, nullptr };
     }
 
-    SObject *root = project->getRootComponent();
-    if( !dynamic_cast<SStdMixer *>( root ) ) {
+    SObject *root = splacements::rootContainer( project );
+    if( !root || !root->isPathContainer() ) {
         return { false, nullptr };
     }
 
@@ -49,8 +49,7 @@ SApplyResult SCreateAssetAction::apply( SProject *project )
     if( !container ) {
         return { false, nullptr };
     }
-    if( !dynamic_cast<SStdMixer *>( container )
-        && !dynamic_cast<STrack *>( container ) ) {
+    if( !container->isPathContainer() ) {
         return { false, nullptr };          // only containers can be windowed
     }
 

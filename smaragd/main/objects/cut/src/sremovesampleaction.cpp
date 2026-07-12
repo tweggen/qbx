@@ -1,11 +1,10 @@
-#include "app/objects/wave/sremovesampleaction.h"
-#include "app/objects/wave/saddsampleaction.h"
+#include "app/objects/cut/sremovesampleaction.h"
+#include "app/model/splacements.h"
+#include "app/objects/cut/saddsampleaction.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
 #include "app/objects/cut/scut.h"
 #include "app/model/slink.h"
-#include "app/objects/mixer/sstdmixer.h"
-#include "app/objects/track/strack.h"
 #include "app/model/sexternfile.h"
 #include "tw/core/twfraction.h"
 #include <QDomElement>
@@ -21,22 +20,20 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *root = project->getRootComponent();
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
-    if (!mixer) {
+    SObject *root = splacements::rootContainer( project );
+    if (!root || !root->isPathContainer()) {
         return {false, nullptr};
     }
 
     // Get the track.
-    SLink *trackLink = mixer->getTrackAt(trackIndex_);
+    SLink *trackLink = root->childAt(trackIndex_);
     if (!trackLink) {
         return {false, nullptr};
     }
 
-    SObject *trackObj = &trackLink->getSObject();
-    STrack *track = dynamic_cast<STrack*>(trackObj);
-    if (!track) {
-        return {false, nullptr};
+    SObject *track = &trackLink->getSObject();
+    if (!track->isPathContainer()) {
+        return {false, nullptr};   // addressed child is not a lane
     }
 
     // Get the clip at the specified index.

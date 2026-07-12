@@ -1,4 +1,4 @@
-#include "app/objects/track/smovetrackaction.h"
+#include "app/objects/mixer/smovetrackaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
