@@ -102,6 +102,18 @@ int STrack::seekTo( offset_t ofs )
     return 0;
 }
 
+void STrack::bumpRenderChainEpoch()
+{
+    for( int i=0; i<nBusses_; ++i ) {
+        if( cpTrackMixers_ && cpTrackMixers_[i] )
+            cpTrackMixers_[i]->bumpContentEpoch();
+        if( cpPluginChains_ && cpPluginChains_[i] )
+            cpPluginChains_[i]->bumpContentEpoch();   // forwards to inserts
+    }
+    if( cpRewire_ )
+        cpRewire_->bumpContentEpoch();
+}
+
 SLink *STrack::getTopMostSLinkAt( offset_t queryTime ) const
 {
     for( SLink *lk : childLinks() ) {
@@ -153,6 +165,9 @@ void STrack::trackChildDurationChanged( length_t newLength )
                 }
             }
         }
+        // AFTER the engine mutation: stale this chain and every container up
+        // to the root (scoped — siblings keep their caches).
+        invalidateRenderPath();
     }
     lastDurationValid_ = false;
     checkDurationChanged();
@@ -168,6 +183,7 @@ void STrack::trackChildWasMoved( offset_t newTime )
                 cpTrackMixers_[i]->updateClip(slink, newTime, duration);
             }
         }
+        invalidateRenderPath();
         lastDurationValid_ = false;
         checkDurationChanged();
     }
@@ -202,6 +218,7 @@ void STrack::trackChildWasAdded( SLink &child )
                     cpTrackMixers_[i]->insertClip(&child, startTime, duration, getComponentFn, mapPosFn);
                 }
             }
+            invalidateRenderPath();
 
             lastDurationValid_ = false;
             checkDurationChanged();
@@ -219,6 +236,7 @@ void STrack::trackChildWasRemoved( SLink &child )
                     cpTrackMixers_[i]->removeClip(&child);
                 }
             }
+            invalidateRenderPath();
 
             lastDurationValid_ = false;
             checkDurationChanged();
@@ -496,6 +514,7 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
                 }
             }
         }
+        invalidateRenderPath();
     }
 }
 
@@ -509,6 +528,7 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
                 cpPluginChains_[i]->removePlugin( index );
             }
         }
+        invalidateRenderPath();
     }
 }
 
@@ -521,6 +541,7 @@ void STrack::onPluginSlotsReordered()
                 cpPluginChains_[i]->rebuildWiring();
             }
         }
+        invalidateRenderPath();
     }
 }
 
@@ -533,6 +554,8 @@ void STrack::onTrackMuteChanged( bool muted )
             cpTrackMixers_[i]->setTrackMute(muted);
         }
     }
+    // Mute is baked into frozen pages downstream of the track mixer
+    invalidateRenderPath();
 }
 
 void STrack::onTrackVolumeChanged( double gainDb )
@@ -543,6 +566,8 @@ void STrack::onTrackVolumeChanged( double gainDb )
             cpTrackMixers_[i]->setTrackGain(gainDb);
         }
     }
+    // Gain is baked into frozen pages downstream of the track mixer
+    invalidateRenderPath();
 }
 
 // Self-registration with the project loader (proposal 14, Phase 5): the

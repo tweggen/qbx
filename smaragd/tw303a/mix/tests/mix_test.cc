@@ -3,6 +3,7 @@
 // clip-end clamp, key-based update/remove. Normative background:
 // docs/contracts/CLIP_MODEL.md and POSITION_DOMAINS.md.
 #include "tw/mix/twtrackmix.h"
+#include "tw/mix/twrewire.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
@@ -95,6 +96,62 @@ int main()
     auto page4 = track.freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
     CHECK(page4->samples[(size_t)clipStart] == 0.0f,
           "removeClip with the right key silences the clip");
+
+    // ------------------------------------------------------------------
+    // Scoped invalidation (proposal 15): two independent track→rewire
+    // chains share one environment. Editing track A and bumping A's path
+    // must re-render A's rewire cache; B's cached page object must be
+    // served untouched (the scoping property itself, not just audibility).
+    {
+        twTrackMix trackA(env), trackB(env);
+        trackA.init();
+        trackB.init();
+        RampComponent compA(env), compB(env);
+        compA.init();
+        compB.init();
+
+        const int keyA = 0, keyB = 0;   // distinct addresses = distinct keys
+        trackA.insertClip(&keyA, clipStart, clipDur,
+                          [&]() -> twComponent * { return &compA; });
+        trackB.insertClip(&keyB, clipStart, clipDur,
+                          [&]() -> twComponent * { return &compB; });
+
+        twRewire rewA(env), rewB(env);
+        rewA.init();
+        rewB.init();
+        rewA.setNPlugs(1);
+        rewB.setNPlugs(1);
+        rewA.setInput(0, trackA.linkOutput(0));
+        rewB.setInput(0, trackB.linkOutput(0));
+
+        const length_t FULL = (length_t)twOutputPage::FRAME_CAPACITY;
+        auto a1 = rewA.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        auto b1 = rewB.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(a1 && a1->validAspects != 0 && b1 && b1->validAspects != 0,
+              "both rewires freeze their first page");
+        CHECK(a1->samples[(size_t)clipStart] != 0.0f,
+              "rewire A's page carries track A's clip");
+
+        auto a1again = rewA.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(a1again.get() == a1.get(),
+              "unedited re-freeze is a cache hit (same page object)");
+
+        // Edit track A (engine mutation self-bumps the trackmix), then bump
+        // A's downstream path the way SObject::invalidateRenderPath() does.
+        trackA.updateClip(&keyA, clipStart, 500);
+        rewA.bumpContentEpoch();
+
+        auto a2 = rewA.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(a2.get() != a1.get(),
+              "edited path re-renders into a fresh page object");
+        CHECK(a2->samples[(size_t)clipStart + 499] != 0.0f
+                  && a2->samples[(size_t)clipStart + 500] == 0.0f,
+              "re-rendered page reflects the edit (shrunk clip window)");
+
+        auto b2 = rewB.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(b2.get() == b1.get(),
+              "SIBLING cache is untouched by the edit (scoped invalidation)");
+    }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall mix tests passed\n",
            failures);

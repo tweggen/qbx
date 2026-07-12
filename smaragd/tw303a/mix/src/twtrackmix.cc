@@ -95,7 +95,7 @@ void twTrackMix::insertClip(const void *key, offset_t startTime, length_t durati
     clips_.push_back({startTime, duration, key, view, nullptr});
     // Every frozen page downstream (plugin chains, rewire, root mix) rendered
     // before this edit no longer matches the timeline; mark them stale.
-    env.bumpContentEpoch();
+    bumpContentEpoch();
     fprintf(stderr, "twTrackMix: inserted clip at time %llu, now have %zu clips\n", startTime, clips_.size());
 }
 
@@ -120,7 +120,7 @@ void twTrackMix::removeClip(const void *key)
         }
     }
     if( removed > 0 ) {
-        env.bumpContentEpoch();  // Downstream frozen pages are now stale
+        bumpContentEpoch();  // This track's held/downstream pages are now stale
     }
     fprintf(stderr, "twTrackMix: removed %d clip(s), now have %zu clips\n", removed, clips_.size());
 }
@@ -135,7 +135,7 @@ void twTrackMix::updateClip(const void *key, offset_t newStartTime, length_t new
             // Bump unconditionally, even if startTime/duration are unchanged:
             // slip- or stretch-only edits arrive here with the same window but
             // changed content (SCut::setWindow always emits durationChanged).
-            env.bumpContentEpoch();
+            bumpContentEpoch();
             return;
         }
     }
@@ -146,7 +146,7 @@ void twTrackMix::setTrackMute(bool muted)
     std::lock_guard<std::mutex> lock(mutex());
     if( trackMuted_ != muted ) {
         trackMuted_ = muted;
-        env.bumpContentEpoch();  // Mute is baked into frozen pages
+        bumpContentEpoch();  // Mute is baked into frozen pages
     }
 }
 
@@ -155,7 +155,7 @@ void twTrackMix::setTrackGain(double gainDb)
     std::lock_guard<std::mutex> lock(mutex());
     if( trackGainDb_ != gainDb ) {
         trackGainDb_ = gainDb;
-        env.bumpContentEpoch();  // Gain is baked into frozen pages
+        bumpContentEpoch();  // Gain is baked into frozen pages
     }
 }
 
@@ -264,7 +264,7 @@ std::shared_ptr<twOutputPage> twTrackMix::freezePage(
     page->startPosition = startPos;
     // Stamp with the epoch read BEFORE rendering; consumers (streaming latch,
     // downstream caches) reject pages from before the last edit.
-    page->contentEpoch.store(env.contentEpoch());
+    page->contentEpoch.store(contentEpochNow());
     freezePage_nolock(page, startPos, inputLength, sampleRate, previousPage);
     // Snapshot track state for restoration at next page boundary (mutex already held)
     page->internalState = captureInternalState_nolock();

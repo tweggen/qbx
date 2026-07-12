@@ -379,6 +379,34 @@ public slots:
      */
     void removeDependentLink(SLink *dependentLink);
 
+    // --- Scoped render-cache invalidation (proposal 15) -------------------
+    // An edit must stale the frozen pages of the edited object's engine chain
+    // and every container on the path(s) to the root — and nothing else, so
+    // sibling tracks' caches (and reused material behind other paths) survive.
+
+    /**
+     * Bump the content epoch of THIS object's engine components (track mixers,
+     * plugin chains, rewire — whatever this object owns). Default: no-op;
+     * overridden by lane containers (STrack, SStdMixer).
+     */
+    virtual void bumpRenderChainEpoch() {}
+
+    /**
+     * Walk this subtree; if it contains `target` (or IS the target), bump this
+     * object's render chain. Visits every path, so material linked under
+     * multiple parents invalidates all of its containers. Returns whether the
+     * subtree contains the target.
+     */
+    bool invalidateRenderChainsContaining(SObject *target);
+
+    /**
+     * Entry point after an edit on this object: bump the render chains on
+     * every path from the project root down to this object. Call AFTER the
+     * engine-side mutation (clip list, wiring) so a freeze racing the edit is
+     * re-rendered rather than a pre-edit freeze being stamped current.
+     */
+    void invalidateRenderPath();
+
     // Helper methods for revalidator integration (Phase 5e).
     // _nolock suffix indicates caller MUST hold mutex() before calling.
     // These are friends-only methods, non-locking to avoid recursive lock deadlock.

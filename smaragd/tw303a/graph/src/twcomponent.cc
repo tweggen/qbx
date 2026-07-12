@@ -228,9 +228,10 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
         myInputIndex_ = -1;
     }
 
-    // Rewiring changes what downstream caches would produce; any frozen page
-    // rendered before this connection change is stale.
-    env.bumpContentEpoch();
+    // Rewiring changes what THIS component produces; its cached/held pages
+    // are stale. Scoped (proposal 15): callers that rewire mid-graph are
+    // responsible for the downstream path (SObject::invalidateRenderPath()).
+    bumpContentEpoch();
 }
 
 /**
@@ -299,11 +300,6 @@ twComponent::twComponent( tw303aEnvironment &env0 )
 // ============================================================================
 // Output Page Caching Implementation (Phase 1 - Component-Level Freezing)
 // ============================================================================
-
-uint64_t twComponent::contentEpochNow() const
-{
-    return env.contentEpoch();
-}
 
 std::shared_ptr<twOutputPage> twComponent::getPageIfExists(uint64_t startPos)
 {
@@ -448,12 +444,13 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     // Recursive lock attempts will deadlock (mutex is not recursive).
 
     // Step 1: Check cache and allocate placeholder under lock.
-    // A cached page is only served if it is frozen AND from the current content
-    // epoch — a page rendered before the last edit no longer matches the graph.
-    // Stale pages are replaced with a fresh placeholder (not re-rendered in
-    // place), so consumers still holding the old shared_ptr keep reading a
-    // consistent — if outdated — buffer until they notice the epoch change.
-    const uint64_t epochNow = env.contentEpoch();
+    // A cached page is only served if it is frozen AND from this component's
+    // current content epoch — a page rendered before the last edit affecting
+    // this component no longer matches the graph. Stale pages are replaced
+    // with a fresh placeholder (not re-rendered in place), so consumers still
+    // holding the old shared_ptr keep reading a consistent — if outdated —
+    // buffer until they notice the epoch change.
+    const uint64_t epochNow = contentEpochNow();
     std::shared_ptr<twOutputPage> page;
     bool needsRendering = false;
 
@@ -556,7 +553,7 @@ length_t twComponent::freezePage_nolock(
     // against pre-edit audio; treat it as a discontinuity (reset) instead.
     const bool contiguous = previousPage
         && previousPage->validAspects != 0
-        && previousPage->contentEpoch.load() >= env.contentEpoch()
+        && previousPage->contentEpoch.load() >= contentEpochNow()
         && previousPage->startPosition + previousPage->validFrames == startPos;
 
     if (contiguous) {

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression for SCOPED invalidation (proposal 15) in a multitrack project:
+  after editing ONE track, a re-render must (a) reflect the edit and (b) still
+  render the sibling track correctly. This guards the app-side propagation
+  walk (SObject::invalidateRenderPath): the edited track's chain and the root
+  mixer's rewire must be bumped — a missed hop leaves the summed root pages
+  stale; an over-eager global bump stays correct but is caught by the
+  mix-module unit test asserting the sibling's cached page object survives.
+
+  Fixture: test_sawtooth.wav is a 4 s sawtooth whose amplitude ramps 0 -> 0.8,
+  unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+  Two identical clips at 0 sum coherently: RMS doubles (~0.134 in sec0).
+-->
+<SActionScript version="1" name="render_after_edit_sibling_tracks">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- FIRST render: bakes the summed pre-edit mix into the page caches -->
+    <render filename="siblings_pre_edit.wav" format="wav" quality="10"/>
+
+    <!-- Sanity: coherent sum of two sec0 ramps ≈ 2 × 0.067 -->
+    <assert-audio-energy filename="siblings_pre_edit.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.10" maxRms="0.17"/>
+
+    <!-- EDIT track 0 only: move its clip out to 4 s -->
+    <move-clip clip="0,0" destTrack="0" startTime="192000"/>
+
+    <!-- SECOND render: 0-4 s = track 1 alone; 4-8 s = track 0's moved clip -->
+    <render filename="siblings_post_edit.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: single sec0 (the cached SUM here would read ~0.134 and fail) -->
+    <assert-audio-energy filename="siblings_post_edit.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- 1-2 s: sibling track's sec1 renders correctly after the edit -->
+    <assert-audio-energy filename="siblings_post_edit.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 3-4 s: sibling's sec3 -->
+    <assert-audio-energy filename="siblings_post_edit.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- 4-5 s: moved clip's sec0 -->
+    <assert-audio-energy filename="siblings_post_edit.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- 7-8 s: moved clip's sec3 -->
+    <assert-audio-energy filename="siblings_post_edit.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

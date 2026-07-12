@@ -127,6 +127,20 @@ twComponent &SStdMixer::getRootComponent()
     return *cpRewire_;
 }
 
+void SStdMixer::bumpRenderChainEpoch()
+{
+    // The summed mix is cached at TWO levels: the per-bus twMixer (sums the
+    // track outputs) and the rewire behind it (the engine's synthOutput_).
+    if( cpMixers_ ) {
+        for( int bus=0; bus<nBusses_; ++bus ) {
+            if( cpMixers_[bus] )
+                cpMixers_[bus]->bumpContentEpoch();
+        }
+    }
+    if( cpRewire_ )
+        cpRewire_->bumpContentEpoch();
+}
+
 int SStdMixer::seekTo( offset_t off )
 {
     for( SLink *lk : childLinks() ) {

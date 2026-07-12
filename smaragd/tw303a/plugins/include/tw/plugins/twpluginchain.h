@@ -51,6 +51,10 @@ public:
     // Rebuild the wiring (call after modifications)
     void rebuildWiring();
 
+    // Scoped invalidation (proposal 15): a chain has no page cache of its own,
+    // but its inserts' pages bake in upstream audio — forward the bump to them.
+    void bumpContentEpoch() override;
+
     virtual void reset() override;
 
     // Teardown protocol

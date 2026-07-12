@@ -245,11 +245,23 @@ public:
     // Also invalidates downstream components (Gap 9: invalidation cascade).
     void invalidateAllPages();
 
-    // Current global content epoch (see tw303aEnvironment::contentEpoch()).
-    // Exposed so page consumers that only hold a twComponent* (audio engine,
-    // latches) can check whether a frozen page is from the current epoch.
+    // Per-component content epoch (proposal 15: scoped invalidation).
+    // Pages this component renders are stamped with the epoch read before
+    // rendering; a page is stale when page->contentEpoch < contentEpochNow().
+    // Bumping is SCOPED: an edit bumps the edited component and everything on
+    // its path to the root (the app walks the SObject tree — see
+    // SObject::invalidateRenderPath()), leaving sibling caches untouched.
     // Lock-free; safe on the audio thread.
-    uint64_t contentEpochNow() const;
+    uint64_t contentEpochNow() const {
+        return contentEpoch_.load(std::memory_order_acquire);
+    }
+
+    // Mark this component's cached/held pages stale (its output changed).
+    // Virtual so containers can forward (twPluginChain bumps its inserts,
+    // whose pages bake in upstream audio).
+    virtual void bumpContentEpoch() {
+        contentEpoch_.fetch_add(1, std::memory_order_acq_rel);
+    }
 
     // Phase 4 Gap 9: Invalidation Cascade
     // Called when this component's parameters change to invalidate downstream consumers.
@@ -382,6 +394,10 @@ protected:
     // Tier 2 Enhancement #1: Dependency tracking for selective invalidation
     // Components that depend on this component's output (for cascade invalidation)
     std::vector<twComponent*> dependents_;
+
+    // Per-component content epoch (see contentEpochNow()/bumpContentEpoch()).
+    // Starts at 1 so a default-constructed page (contentEpoch 0) is stale.
+    std::atomic<uint64_t> contentEpoch_{1};
 
 private:
     mutable std::mutex stateMutex_;

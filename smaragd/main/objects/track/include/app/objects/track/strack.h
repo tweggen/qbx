@@ -85,6 +85,11 @@ public:
     virtual bool hasDuration() const;
     virtual length_t getDuration() const;
 
+    // Scoped invalidation (proposal 15): stale this track's engine chain
+    // (mixers, plugin chains + inserts, rewire). Ancestors are handled by
+    // SObject::invalidateRenderPath()'s walk from the project root.
+    void bumpRenderChainEpoch() override;
+
 
 public slots:
     void setNBusses( int n );

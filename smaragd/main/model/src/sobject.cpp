@@ -551,6 +551,40 @@ SProject *SObject::getProjectSafe() const
     return dynamic_cast<SProject*>( parent() );
 }
 
+// --- Scoped render-cache invalidation (proposal 15) ------------------------
+
+// Depth-first containment walk. Bumps AFTER recursing so the deepest chains
+// go stale first; harmless either way (staleness is checked per producer),
+// but it mirrors the render pull order. Multiple links to the same object
+// bump it more than once — a spare atomic increment, not a problem.
+bool SObject::invalidateRenderChainsContaining(SObject *target)
+{
+    bool contains = (this == target);
+    for (SLink *lk : childLinks()) {
+        if (!lk) continue;
+        if (lk->getSObject().invalidateRenderChainsContaining(target))
+            contains = true;
+    }
+    if (contains)
+        bumpRenderChainEpoch();
+    return contains;
+}
+
+void SObject::invalidateRenderPath()
+{
+    SProject *project = getProjectSafe();
+    SObject *root = project ? project->getRootComponent() : nullptr;
+    if (root) {
+        root->invalidateRenderChainsContaining(this);
+    } else {
+        // Not (yet) reachable from a project root — e.g. during construction
+        // or teardown. Our own caches are all we can reach; when this object
+        // is later linked into the tree, the container's child-added path
+        // invalidates the ancestors.
+        bumpRenderChainEpoch();
+    }
+}
+
 // Register a dependent link (object that references this one).
 // Called when a cut or asset placement references this object.
 // Uses SLink (the native way to track references) for dependency tracking.

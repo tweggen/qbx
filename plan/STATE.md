@@ -4820,3 +4820,49 @@ mixer's engine set dropped 'plugins'). docs/ACTIONS.md regenerated for the
 moved sources.
 
 Verification: ctest 24/24 green; layering checker clean on the DAG edges.
+
+---
+
+## Proposal 15: Scoped page invalidation (2026-07-12)
+
+- **Status:** ✅ COMPLETE
+- **Scope:** `tw303a/{graph,mix,plugins}`, `main/{model,objects/track,objects/mixer}`, tests
+- **Follow-up to:** content-epoch invalidation (c3268a5), which was global
+
+### What changed
+
+The single `tw303aEnvironment::contentEpoch()` became a **per-component**
+epoch (`twComponent::contentEpochNow()/bumpContentEpoch()`). Every staleness
+check stayed where c3268a5 put it, retargeted to the producing component:
+base `freezePage` cache + state-chain contiguity (`this`), streaming latch
+held page + chainFrom (`getComponent()`), AudioEngine + readahead
+(`synthOutput_`). `twComponent::setInput` bumps the consumer only;
+`twPluginChain::bumpContentEpoch` forwards to its inserts.
+
+Propagation is app-driven (no engine dependency graph, no raw-pointer
+lifetime protocol): `SObject::invalidateRenderPath()` walks the tree from
+`SProject::getRootComponent()` and calls `bumpRenderChainEpoch()` on every
+container whose subtree contains the edited object — all paths, so material
+reused under several parents invalidates each of its containers. Overrides:
+`STrack` (track mixers, plugin chains, rewire), `SStdMixer` (per-bus
+`twMixer`s AND the rewire). STrack calls it from the four child-event slots,
+the plugin-slot slots, and mute/volume — always AFTER the engine mutation, so
+a racing freeze re-renders instead of a pre-edit page being stamped current.
+
+### Pitfall found while executing
+
+The root chain is `track rewire → twMixer (per bus) → SStdMixer rewire`; the
+per-bus **twMixer uses the base caching freezePage** and initially wasn't
+bumped — the summed mix kept being served from its cache even though the
+rewire re-rendered around it. Any future cache added mid-chain must be added
+to its owner's `bumpRenderChainEpoch()`.
+
+### Verification
+
+- `mix_test` asserts the scoping property directly: after an edit + path
+  bump, the edited rewire re-renders into a fresh page object while the
+  sibling rewire's cached page is served untouched (pointer identity).
+- New `tests/cases/render_after_edit_sibling_tracks.qxa`: two-track render →
+  edit one track → render; catches any missed hop in the propagation walk.
+- ctest 24/24; audio qxa suite 18/18 (needs `SMARAGD_TEST_OUTPUT_DIR`, run
+  from `smaragd/tests/cases/`); layering clean.

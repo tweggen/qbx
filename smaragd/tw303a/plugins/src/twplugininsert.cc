@@ -181,7 +181,7 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
 
 	// Content epoch read before rendering: if an edit lands while we process,
 	// the resulting page is already stale and consumers will re-request it.
-	const uint64_t epochNow = env.contentEpoch();
+	const uint64_t epochNow = contentEpochNow();
 
 	ensureScratchCapacity( inputLength );
 

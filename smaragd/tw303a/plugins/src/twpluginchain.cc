@@ -211,6 +211,17 @@ void twPluginChain::reset()
     // Stateless component: plugins handle their own state
 }
 
+void twPluginChain::bumpContentEpoch()
+{
+    twComponent::bumpContentEpoch();
+
+    // Insert pages carry rendered upstream audio; stale them along with us.
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
+    for (auto *plugin : plugins_) {
+        if (plugin) plugin->bumpContentEpoch();
+    }
+}
+
 void twPluginChain::teardown()
 {
     state_.store(ComponentState::ZOMBIE, std::memory_order_release);

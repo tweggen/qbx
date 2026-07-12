@@ -62,6 +62,11 @@ public:
     STrack *getSelectedTrack() const { return selectedTrack_; }
     void setSelectedTrack( STrack *track );
 
+    // Scoped invalidation (proposal 15): the mixer's rewire is the engine's
+    // synthOutput_ — its cached pages hold the summed mix and go stale on any
+    // contained edit.
+    void bumpRenderChainEpoch() override;
+
 signals:
     void nBussesChanged( int n );
     void trackInserted( int newIndex, STrack &pt );
