@@ -452,8 +452,18 @@ Known debt: <list>
   core: +render; objects: +mix/plugins; ui: umbrella). A deliberate
   model→actions include was verified to FAIL COMPILATION. The executables
   link all four targets directly (object files do not propagate through
-  object libraries). Remaining for later: shrink the objects cycle via a
-  placement service; a selection service to slim SAppContext.
+  object libraries).
+  ▶ PLACEMENT SERVICE 2026-07-12: app/model/splacements.h
+  (rootContainer/laneAt/placementAt over SObject::isPathContainer) replaced
+  every validation-only STrack/SStdMixer cast in the action code, and the
+  misfiled placement/lifecycle/plugin files were re-homed (add/remove-
+  sample→cut, track lifecycle actions→mixer, plugin chain/slot/actions→
+  track, remove-clip→cut beside its inverse). Small model virtuals covered
+  the genuinely type-specific bits (activeLane, volumeDbSnapshot). The
+  object slices are now a DAG — wave < cut < track < mixer — leaving
+  UI+shell as the app's only cyclic group. Remaining for later: a selection
+  service to slim SAppContext; optionally per-slice build targets now that
+  the slice DAG allows them.
 
 ## 8. Working agreement for independent development
 
