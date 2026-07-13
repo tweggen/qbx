@@ -66,6 +66,13 @@ struct twOutputPage : public PageBase {
     // validAspects. 0 = never stamped (always stale).
     std::atomic<uint64_t> contentEpoch{0};
 
+    // Proposal 16: the frozen pre-edit page this placeholder replaced.
+    // While a stale page is being re-frozen (validAspects == 0 here), playback
+    // serves the predecessor as stale-but-consistent audio instead of silence.
+    // Access ONLY via std::atomic_load/atomic_store (the audio thread reads it
+    // without the component mutex); cleared when this page is stamped frozen.
+    std::shared_ptr<twOutputPage> stalePredecessor;
+
     // Internal state snapshot (for sequential components like reverbs, delays)
     // Allows resuming rendering from this page's endpoint without losing state
     std::any internalState;

@@ -477,6 +477,12 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
             page->startPosition = startPos;
             page->createdAt = std::chrono::steady_clock::now();
             page->validAspects = 0;  // Not yet frozen
+            if (it != outputPages_.end()) {
+                // Replacing a stale-frozen page: keep it reachable while this
+                // placeholder renders — playback serves it as a stale-but-
+                // consistent fallback instead of silence (proposal 16).
+                std::atomic_store(&page->stalePredecessor, it->second);
+            }
             outputPages_[startPos] = page;
             needsRendering = true;
         }
@@ -508,6 +514,9 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
         // rendered, the page is already stale and will be re-frozen on demand.
         page->contentEpoch.store(epochNow);
         page->validAspects = twAspectAll;  // Mark as frozen, even if 0 frames resulted
+        // The frozen page supersedes its pre-edit predecessor; release it
+        std::atomic_store(&page->stalePredecessor,
+                          std::shared_ptr<twOutputPage>{});
     }
 
     return page;

@@ -4866,3 +4866,47 @@ to its owner's `bumpRenderChainEpoch()`.
   edit one track → render; catches any missed hop in the propagation walk.
 - ctest 24/24; audio qxa suite 18/18 (needs `SMARAGD_TEST_OUTPUT_DIR`, run
   from `smaragd/tests/cases/`); layering clean.
+
+## Proposal 16: Stale-page fallback during live playback (2026-07-13)
+
+- **Status:** EXECUTED
+- **Scope:** `tw303a/{pages,graph,playback}`, new playback module test
+- **Follow-up to:** proposal 15 (scoped invalidation), which made edits
+  mid-playback degrade to silence on the edited path while pages re-freeze
+
+### What changed
+
+`AudioEngine::updateFrozenPage` became a preference ladder: fresh held page →
+fresh cached page → **stale held page** (keeps playing, pokes the readahead
+CV) → **stale cached page** (the pre-edit page still in the map, or — if the
+map entry is already a mid-render placeholder — its `stalePredecessor`) →
+silence. A stale held page no longer satisfies the fast path, so adoption of
+the re-frozen page is retried every batch and the edit becomes audible the
+moment it lands (mid-page swap, deliberate: the edit already implies a
+discontinuity). Generation mismatches still drop hard — a repurposed page's
+buffer cannot be trusted, fallback included.
+
+To keep the pre-edit page reachable during exactly the window where playback
+needs it, `twOutputPage` gained `stalePredecessor` (accessed only via
+`std::atomic_load/atomic_store`; the audio thread reads it without the
+component mutex): `twComponent::freezePage` sets it when replacing a
+stale-frozen map entry with a placeholder and clears it when the placeholder
+is stamped frozen — at most one predecessor alive per in-flight render.
+
+### Safety
+
+Offline renders are untouched: `RenderSession` pulls via
+`synthOutput_->freezePage()` directly (synchronous, always fresh) and never
+goes through `updateFrozenPage`; `seekTo` still clears all held pages and the
+readahead frontier, so a fresh playback never starts on fallback pages.
+
+### Verification
+
+- New `playback_test` (first tw_playback module test): engine-level — after a
+  mid-playback edit with an artificially slow (300 ms) re-freeze, the very
+  next `pullBlock` must return full frames of the PRE-edit content (unfixed
+  engine: 0 frames), no short pull until the post-edit content is heard;
+  component-level — the placeholder exposes the pre-edit page as
+  `stalePredecessor` while rendering and releases it once frozen.
+  Fail-on-baseline verified (4 engine-level FAILs on the unfixed engine).
+- ctest 27/27; audio qxa suite 18/18; layering clean.

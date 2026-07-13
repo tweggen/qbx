@@ -355,18 +355,24 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     // even though their validAspects are still set (lock-free atomic read).
     const uint64_t epochNow = synthOutput_->contentEpochNow();
 
-    // Check if current page has been invalidated (generation changed) or
-    // outdated by an edit (content epoch changed)
+    // A generation change means the page object was invalidated/repurposed
+    // (invalidateAllPages) — its buffer cannot be trusted at all; drop hard.
     if (currentFrozenPage_ &&
-        (currentFrozenPage_->generation != currentPageGeneration_ ||
-         currentFrozenPage_->contentEpoch.load() < epochNow)) {
-        // Page no longer reflects the timeline; drop reference
+        currentFrozenPage_->generation != currentPageGeneration_) {
         currentFrozenPage_ = nullptr;
         prevFrozenPage_ = nullptr;
     }
 
+    // A held page from an older content epoch is still a consistent waveform
+    // (proposal 16): it stays playable as a FALLBACK, but no longer satisfies
+    // the fast path — every batch re-checks the cache for its re-frozen
+    // replacement so the edit becomes audible as soon as it lands.
+    const bool heldIsStale = currentFrozenPage_ &&
+        currentFrozenPage_->contentEpoch.load() < epochNow;
+
     // If we're still in the current valid page, nothing to do
-    if (currentFrozenPage_ && currentFrozenPage_->startPosition == pageStartPos &&
+    if (currentFrozenPage_ && !heldIsStale &&
+        currentFrozenPage_->startPosition == pageStartPos &&
         currentFrozenPage_->validAspects != 0) {
         return;
     }
@@ -393,6 +399,50 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
             int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
             fprintf(stderr, "[AUDIO] Page FOUND: playback=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k)\n",
                     pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0);
+            fflush(stderr);
+        }
+    } else if (currentFrozenPage_ &&
+               currentFrozenPage_->startPosition == pageStartPos &&
+               currentFrozenPage_->validAspects != 0) {
+        // No current-epoch page yet, but the (stale) held page still covers
+        // this position: keep playing pre-edit audio rather than going silent
+        // while the readahead re-freezes the page (proposal 16).
+        readaheadCv_.notify_one();
+        if (gapLogCounter++ % 500 == 0) {
+            fprintf(stderr, "[AUDIO] Serving STALE page at %llu as fallback (epoch %llu < %llu), awaiting re-freeze\n",
+                    (unsigned long long)pageStartPos,
+                    (unsigned long long)currentFrozenPage_->contentEpoch.load(),
+                    (unsigned long long)epochNow);
+            fflush(stderr);
+        }
+    } else if (auto fallbackPage = [&]() -> std::shared_ptr<twOutputPage> {
+                   // Stale-but-frozen fallback from the cache: either the
+                   // pre-edit page still sitting in the map, or — if the map
+                   // entry is already a mid-render placeholder — the pre-edit
+                   // page it replaced (kept reachable as stalePredecessor).
+                   if (page && page->validAspects != 0) return page;
+                   if (page) return std::atomic_load(&page->stalePredecessor);
+                   return nullptr;
+               }();
+               fallbackPage && fallbackPage->validAspects != 0 &&
+               fallbackPage->startPosition == pageStartPos) {
+        // Crossed into a page whose re-freeze is pending or in flight; adopt
+        // the pre-edit page as fallback (proposal 16). The fast path stays
+        // unsatisfied (stale epoch), so adoption of the fresh page is retried
+        // every batch.
+        prevFrozenPage_ = currentFrozenPage_;
+        currentFrozenPage_ = fallbackPage;
+        currentPageStartPos_ = pageStartPos;
+        currentPageGeneration_ = fallbackPage->generation.load();
+        pageFrameOffset_ = desiredPos - pageStartPos;
+        cachedPageValidFrames_ = currentFrozenPage_->validFrames;
+        if (pageFrameOffset_ > cachedPageValidFrames_) {
+            pageFrameOffset_ = cachedPageValidFrames_;
+        }
+        readaheadCv_.notify_one();
+        if (gapLogCounter++ % 500 == 0) {
+            fprintf(stderr, "[AUDIO] Adopted STALE fallback page at %llu, awaiting re-freeze\n",
+                    (unsigned long long)pageStartPos);
             fflush(stderr);
         }
     } else {
