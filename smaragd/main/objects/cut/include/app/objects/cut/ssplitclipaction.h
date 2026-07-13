@@ -16,7 +16,8 @@
 class SSplitClipAction : public SAction {
 public:
     SSplitClipAction() = default;
-    SSplitClipAction(const QList<int> &clipPath, offset_t splitTime);
+    SSplitClipAction(const QList<int> &clipPath, offset_t splitTime,
+                     bool broadcast = true);
 
     QString name() const override { return QStringLiteral("split-clip"); }
     SApplyResult apply(SProject *project) override;
@@ -26,6 +27,9 @@ public:
 private:
     QList<int> clipPath_;
     offset_t   splitTime_ = 0;
+    // Edit groups: fan out to the corresponding clips of the track's group
+    // members (one atomic composite). Fan-out children carry broadcast=false.
+    bool       broadcast_ = true;
 };
 
 #endif // SSPLITCLIPACTION_H

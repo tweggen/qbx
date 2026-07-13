@@ -55,6 +55,8 @@
 #include "app/objects/mixer/splaceassetaction.h"
 #include "app/objects/cut/saddsampleaction.h"
 #include "app/objects/cut/sremovesampleaction.h"
+#include "app/objects/cut/stakestack.h"
+#include "app/objects/cut/sselecttakeaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/actions/sactionhistory.h"
 #include <QFrame>
@@ -241,8 +243,14 @@ void SMVActualView::paintEvent( QPaintEvent * )
         p.drawLine( 0, laneTop, myRect.bottomRight().x(), laneTop );
         p.drawLine( 0, laneTop+trackHeight_-1,
                     myRect.bottomRight().x(), laneTop+trackHeight_-1 );
-        // Draw the track's clips.
-        row->track->getInlineRenderer()->draw( *row->link, ctx );
+        if( row->takeRow >= 0 ) {
+            // A take lane: take k of every stack on the track (phase 3).
+            drawTakeLane( p, *row, i,
+                          QRect( 0, laneTop+1, myRect.width(), trackHeight_-2 ) );
+        } else {
+            // Draw the track's clips.
+            row->track->getInlineRenderer()->draw( *row->link, ctx );
+        }
     }
 
     // While recording, show the in-progress capture as a translucent region that
@@ -439,6 +447,12 @@ void SStdMixerView::ctSplitSample()
     qContent_->update();
 }
 
+void SMVActualView::ctToggleTakeLanes()
+{
+    if( lastClickTrack_ )
+        smv_.toggleTrackTakesExpanded( lastClickTrack_ );
+}
+
 void SMVActualView::ctGlobalShow()
 {
     qGlobalPopup_->clear();
@@ -456,6 +470,11 @@ void SMVActualView::ctGlobalShow()
     qGlobalPopup_->addAction( smv_.actNewTrack_ );
     if( lastClickTrack_ ) {
         qGlobalPopup_->addAction( "Remove track", &smv_, SLOT( ctRemoveTrack() ) );
+        qGlobalPopup_->addSeparator();
+        qGlobalPopup_->addAction(
+            smv_.isTrackTakesExpanded( lastClickTrack_ )
+                ? "Hide take lanes" : "Show take lanes",
+            this, SLOT( ctToggleTakeLanes() ) );
         qGlobalPopup_->addSeparator();
         qGlobalPopup_->addAction( "Indent track (nest under above)", &smv_, SLOT( ctIndentTrack() ) );
         qGlobalPopup_->addAction( "Outdent track", &smv_, SLOT( ctOutdentTrack() ) );
@@ -869,6 +888,44 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
  *
  * FIXME: Remove the 44100.
  */
+// Take k of every take stack on the row's track, in one lane (phase 3). The
+// active take draws bright with a highlight frame; inactive takes are dimmed
+// (click-to-comp lives in mousePressEvent). Plain cuts have no takes and
+// appear only on the composite lane.
+void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
+                                  int /*rowIdx*/, const QRect &laneRect )
+{
+    p.fillRect( laneRect, QColor( 26, 38, 50 ) );   // darker than track lanes
+    for( SLink *lk : row.track->childLinks() ) {
+        STakeStack *stack = dynamic_cast<STakeStack*>( &lk->getSObject() );
+        if( !stack ) continue;
+        SCut *cut = stack->takeCutAt( row.takeRow );
+        if( !cut ) continue;                        // this stack has fewer takes
+        const offset_t start = lk->getStartTime();
+        const length_t dur = stack->getDuration();
+        int x0 = getXPosOfOffset( start );
+        int x1 = getXPosOfOffset( start + (offset_t)dur );
+        if( x1 <= laneRect.left() || x0 >= laneRect.right() ) continue;
+        if( x0 < laneRect.left() ) x0 = laneRect.left();
+        if( x1 > laneRect.right() ) x1 = laneRect.right();
+        QRect vr( x0, laneRect.y()+1, x1-x0, laneRect.height()-2 );
+        if( vr.width() < 1 ) continue;
+
+        const bool active = ( stack->activeTakeIndex() == row.takeRow );
+        p.fillRect( vr, QColor( 160, 160, 160 ) );
+        InlineRenderContext myctx( *this, p );
+        myctx.setVisibRect( vr );
+        if( SObjectRenderer *rndr = cut->getInlineRenderer() )
+            rndr->draw( *lk, myctx );   // outer link for timing, his own window
+        if( active ) {
+            p.setPen( QColor( 240, 220, 80 ) );
+            p.drawRect( vr.adjusted( 0, 0, -1, -1 ) );
+        } else {
+            p.fillRect( vr, QColor( 0, 0, 0, 130 ) );   // dim inactive takes
+        }
+    }
+}
+
 QRect SMVActualView::getSLinkVisibRect( int trackIdx, const SLink &lk )
 {
     QRect r( 0, SMV_TIME_RULER_HEIGHT+trackIdx*trackHeight_, rect().width(), trackHeight_ );
@@ -1497,6 +1554,29 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         }
     }
 
+    // Take-lane rows: a left click on a take ACTIVATES it — the comping
+    // gesture (proposal 17 phase 3, undoable select-take). Take lanes host no
+    // other gestures yet, so the click is consumed either way.
+    if( ev->buttons() & Qt::LeftButton ) {
+        const STrackRow *clickRow = smv_.rowAt( lastClickTrackIdx_ );
+        if( clickRow && clickRow->takeRow >= 0 ) {
+            if( lastClickSLink_ ) {
+                STakeStack *stack = dynamic_cast<STakeStack*>(
+                    &lastClickSLink_->getSObject() );
+                if( stack && stack->takeCutAt( clickRow->takeRow ) ) {
+                    QList<int> path =
+                        strackpath::pathOf( smv_.getModel(), clickRow->track );
+                    path.append(
+                        clickRow->track->indexOfChild( lastClickSLink_ ) );
+                    SApplication::app().submitAction(
+                        new SSelectTakeAction( path, clickRow->takeRow ) );
+                    update();
+                }
+            }
+            return;
+        }
+    }
+
     if( ev->buttons() & Qt::RightButton ) {
 	// Also emulate legacy right mouse button events for the events
 	// we do not receive via QContextHelpEvent
@@ -1658,6 +1738,20 @@ static bool hasChildTracks( SObject *container )
     return false;
 }
 
+// The take-lane row count of a track: the widest take stack among its clips
+// (proposal 17 phase 3). 0 = no stacks, nothing to expand.
+static int maxTakesOf( STrack *tk )
+{
+    int maxTakes = 0;
+    for( SLink *lk : tk->childLinks() ) {
+        if( STakeStack *stack =
+                dynamic_cast<STakeStack*>( &lk->getSObject() ) ) {
+            if( stack->nTakes() > maxTakes ) maxTakes = stack->nTakes();
+        }
+    }
+    return maxTakes;
+}
+
 void SStdMixerView::appendRowsFor( SObject *container, int depth )
 {
     for( SLink *lk : container->childLinks() ) {
@@ -1666,8 +1760,39 @@ void SStdMixerView::appendRowsFor( SObject *container, int depth )
         bool kids = hasChildTracks( tk );
         bool col = collapsed_.contains( tk );
         rows_.append( STrackRow{ tk, lk, container, depth, kids, col } );
+        // Take lanes directly below the track's composite lane.
+        if( takesExpanded_.contains( tk ) ) {
+            const int mt = maxTakesOf( tk );
+            for( int k = 0; k < mt; ++k ) {
+                rows_.append( STrackRow{ tk, lk, container, depth,
+                                         false, false, k } );
+            }
+        }
         if( kids && !col ) appendRowsFor( tk, depth+1 );   // recurse if expanded
     }
+}
+
+void SStdMixerView::toggleTrackTakesExpanded( STrack *t )
+{
+    if( !t ) return;
+    if( takesExpanded_.contains( t ) ) takesExpanded_.remove( t );
+    else                               takesExpanded_.insert( t );
+    refreshTrackTree();
+}
+
+// Applied actions (add-take, remove-take, split of a stack …) can change an
+// expanded track's take-row count without any track-structure signal. Rebuild
+// the rows; only a changed count needs the full (control column) refresh.
+void SStdMixerView::onArrangementChangedRows()
+{
+    if( takesExpanded_.isEmpty() ) return;   // canvas repaint happens anyway
+    const int before = rows_.size();
+    rebuildRows();
+    if( rows_.size() != before ) {
+        rebuildControlColumn();
+        nTracksChanged();
+    }
+    qContent_->update();
 }
 
 void SStdMixerView::rebuildRows()
@@ -1719,6 +1844,9 @@ void SStdMixerView::rebuildControlColumn()
               qTrackControlBoxHolder_->width(), w, rows_.size() );
     for( int i=0; i<rows_.size(); ++i ) {
         const STrackRow &row = rows_.at( i );
+        // Take-lane rows carry no channel strip; the vertical position of the
+        // FOLLOWING controls still advances with the row index i.
+        if( row.takeRow >= 0 ) continue;
         SSMVMixerControl *mc = new SSMVMixerControl( qTrackControlBox_, *this, *row.track );
         mc->setTreeInfo( row.depth, row.hasChildren, row.collapsed );
         mc->move( 0, SMV_TIME_RULER_HEIGHT + h*i );
@@ -2604,6 +2732,11 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
 
     QObject::connect( &(model_->getProject()), SIGNAL( bpmTempoChanged( double ) ),
                       this, SLOT( setBPMTempo( double ) ) );
+
+    // Take lanes: clip-level edits (add-take/remove-take/stack split) change
+    // an expanded track's row count without a track-structure signal.
+    QObject::connect( &(model_->getProject()), SIGNAL( arrangementChanged() ),
+                      this, SLOT( onArrangementChangedRows() ) );
 
     // Persistent actions with keyboard shortcuts (active whenever the arranger
     // window is up). They are also placed in the right-click menu by ctGlobalShow.

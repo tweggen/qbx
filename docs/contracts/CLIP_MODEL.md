@@ -82,3 +82,27 @@ already including stretch. `SPlainWave::getDuration()` is the source length
 in project-rate frames (`twWavInput::getLength()` reports via
 `viewAtRate(projectRate)`; a truncated file is clamped to real data at load
 with a warning — the header's claim is not trusted).
+
+## Take stacks (proposal 17): a fourth, optional layer
+
+A multi-take clip inserts `STakeStack` between the placement and the
+window: `SLink → STakeStack → (SLink → SCut)*`. The stack is the COLUMN of
+parallel takes; exactly one is audible (`activeTake_`, -1 = none). To
+`twTrackMix` a stack is ONE clip keyed by the OUTER link: the stack
+delegates `getRootComponent`/`mapTimelineToComponentPos`/preview to the
+active take's cut, and the clip's `twView` resolves that lazily — so
+`select-take` is just a model change + `durationChanged` (→ `updateClip`,
+which bumps the epoch AND resets the clip's state-chain page, because the
+component identity changed) + `invalidateRenderPath`.
+
+Rules:
+- All take cuts share the stack's timeline duration. Length edits go
+  through `setDurationAll`/`applyWindowAll` (slip offsets rescale on
+  stretch change); slip/pitch stay per-take.
+- Take links' startTime is always 0; the OUTER link owns placement.
+- A stack exists only with ≥2 takes: `stakes::wrapCutLinkIntoStack` /
+  `collapseSingleTakeStack` convert in place, PRESERVING the child index
+  (recorded action/inverse paths must stay valid).
+- Splitting a stack splits every take with the plain-cut arithmetic
+  (offsets/durations live in the stretched output domain, so the timeline
+  split offset applies per take verbatim).

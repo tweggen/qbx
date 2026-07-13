@@ -27,6 +27,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sobjectrenderer.h
     model/include/app/model/splacements.h
     model/include/app/model/sproject.h
+    model/include/app/model/seditgroups.h
     model/include/app/model/sprojectprops.h
     model/include/app/model/ssortedobjlist.h
     model/src/sappcontext.cpp
@@ -46,6 +47,7 @@ set(APP_CORE_FILES
     actions/include/app/actions/sactionqueue.h
     actions/include/app/actions/sactionregistry.h
     actions/include/app/actions/sactionundocommand.h
+    actions/include/app/actions/scompositeaction.h
     actions/include/app/actions/scycleaction.h
     actions/include/app/actions/sgridaction.h
     actions/include/app/actions/smetronomeaction.h
@@ -58,6 +60,7 @@ set(APP_CORE_FILES
     actions/src/sactionqueue.cpp
     actions/src/sactionregistry.cpp
     actions/src/sactionundocommand.cpp
+    actions/src/scompositeaction.cpp
     actions/src/scycleaction.cpp
     actions/src/sgridaction.cpp
     actions/src/smetronomeaction.cpp
@@ -96,16 +99,30 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/sremoveclipaction.h
     objects/cut/include/app/objects/cut/sremovesampleaction.h
     objects/cut/include/app/objects/cut/sresizeclipaction.h
+    objects/cut/include/app/objects/cut/saddtakeaction.h
+    objects/cut/include/app/objects/cut/sremovetakeaction.h
+    objects/cut/include/app/objects/cut/sselecttakeaction.h
+    objects/cut/include/app/objects/cut/splaceclipaction.h
+    objects/cut/include/app/objects/cut/splacerecordingaction.h
     objects/cut/include/app/objects/cut/ssplitclipaction.h
+    objects/cut/include/app/objects/cut/stakehelpers.h
+    objects/cut/include/app/objects/cut/stakestack.h
     objects/cut/include/app/objects/cut/sunsplitclipaction.h
     objects/cut/src/saddsampleaction.cpp
+    objects/cut/src/saddtakeaction.cpp
     objects/cut/src/scut.cpp
     objects/cut/src/scutrndrinline.cpp
     objects/cut/src/sduplicateclipaction.cpp
     objects/cut/src/sremoveclipaction.cpp
     objects/cut/src/sremovesampleaction.cpp
+    objects/cut/src/sremovetakeaction.cpp
     objects/cut/src/sresizeclipaction.cpp
+    objects/cut/src/sselecttakeaction.cpp
+    objects/cut/src/splaceclipaction.cpp
+    objects/cut/src/splacerecordingaction.cpp
     objects/cut/src/ssplitclipaction.cpp
+    objects/cut/src/stakehelpers.cpp
+    objects/cut/src/stakestack.cpp
     objects/cut/src/sunsplitclipaction.cpp
     # --- app/objects/wave
     objects/wave/include/app/objects/wave/splainwave.h
@@ -116,6 +133,7 @@ set(APP_OBJECTS_FILES
     objects/wave/src/swaveformdraw.cpp
     # --- app/objects/track
     objects/track/include/app/objects/track/sinsertpluginaction.h
+    objects/track/include/app/objects/track/seteditgroupaction.h
     objects/track/include/app/objects/track/smoveclipaction.h
     objects/track/include/app/objects/track/spluginchain.h
     objects/track/include/app/objects/track/spluginslot.h
@@ -126,6 +144,7 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/strackpath.h
     objects/track/include/app/objects/track/strackrenderer.h
     objects/track/include/app/objects/track/strackrndrinline.h
+    objects/track/src/seteditgroupaction.cpp
     objects/track/src/sinsertpluginaction.cpp
     objects/track/src/smoveclipaction.cpp
     objects/track/src/spluginchain.cpp

@@ -269,6 +269,13 @@ public:
     void revalRecomputeExport(CapturePageData &page) override
         { recomputeExport(page); }
 
+    // Edit group (proposal 17 phase 4): tracks sharing a nonzero id form one
+    // ARBITRARY group set (not tied to the hierarchy); clip edits on one
+    // member broadcast to the corresponding clips of the others (see
+    // seditgroups.h and the `broadcast` attribute on the clip verbs).
+    int getEditGroup() const
+        { return editGroup_; }
+
     // User properties.
     bool isSolo() const
         { return solo_; }
@@ -292,6 +299,7 @@ public slots:
     void setSolo( bool );
     void setMuted( bool );
     void setArmedForRecording( bool );
+    void setEditGroup( int );
     void setRecordingChannels( uint32_t channels );
     void setVolume( double );
     void setPan( double );
@@ -303,6 +311,7 @@ signals:
     void soloChanged( bool );
     void mutedChanged( bool );
     void armedForRecordingChanged( bool );
+    void editGroupChanged( int );
     void recordingChannelsChanged( uint32_t );
     void volumeChanged( double );
     void panChanged( double );
@@ -504,6 +513,7 @@ private:
     bool solo_;
     bool muted_;
     bool armed_;
+    int editGroup_ = 0;   // 0 = ungrouped (proposal 17 phase 4)
     double volume_;
     // Recording channel selection: bitmask of channels (bit 0 = ch 0, etc)
     // 0 means "all channels" (default). Set via setRecordingChannels().

@@ -47,6 +47,9 @@ struct STrackRow {
     int      depth;        // 0 = top-level (mixer child)
     bool     hasChildren;  // has at least one child *track* (is foldable)
     bool     collapsed;    // children hidden
+    // Take lanes (proposal 17 phase 3): -1 = the track's normal (composite)
+    // lane; k >= 0 = the row showing take k of every take stack on the track.
+    int      takeRow = -1;
 };
 
 class SMVActualView 
@@ -100,6 +103,8 @@ protected slots:
     // Track context menu: make a live asset from the right-clicked track over
     // the current ruler range (vertical scope = that track).
     void ctCreateAssetFromTrack();
+    // Track context menu: expand/collapse the clicked track's take lanes.
+    void ctToggleTakeLanes();
 
 protected:
     virtual void paintEvent( QPaintEvent * );
@@ -117,6 +122,11 @@ private slots:
 
 private:
     void updateLastClickVars( const QPoint & );
+
+    // Paint one take-lane row: take `row.takeRow` of every take stack on the
+    // track, dimmed when inactive, highlighted when audible (phase 3).
+    void drawTakeLane( QPainter &, const STrackRow &row, int rowIdx,
+                       const QRect &laneRect );
 
     // Mouse-wheel navigation config, cached from SSettings (SOpt keys) and
     // refreshed when settings change. wheelActionFor() maps a modifier combo to
@@ -288,6 +298,11 @@ public:
     int rowIndexOfTrack( const STrack * ) const;
     bool isTrackCollapsed( STrack *t ) const { return collapsed_.contains( t ); }
     void toggleTrackCollapsed( STrack * );
+    // Take lanes (proposal 17 phase 3): per-track expanded state, UI-only.
+    // An expanded track shows one extra row per take index below its lane.
+    bool isTrackTakesExpanded( STrack *t ) const
+        { return takesExpanded_.contains( t ); }
+    void toggleTrackTakesExpanded( STrack * );
     void refreshTrackTree();   // rebuild rows + control column + relayout + repaint
     // --------------------------------------------------------------------
 
@@ -345,6 +360,10 @@ protected slots:
 private slots:
     void contentDurationChanged( length_t newDuration );
     void nTracksChanged();
+    // Clip-level edits (add-take/remove-take) change the take-row count of an
+    // expanded track without any track-structure signal; resync the rows on
+    // every applied action, cheaply when nothing changed.
+    void onArrangementChangedRows();
     void timeSliderMoved( int newValue );
     void trackSliderMoved( int newValue );
     void zoomOutHor();
@@ -432,6 +451,7 @@ private:
     // Flattened track tree + per-track fold state (UI-only).
     QVector<STrackRow> rows_;
     QSet<STrack*> collapsed_;
+    QSet<STrack*> takesExpanded_;   // tracks showing their take lanes
     void rebuildRows();
     void rebuildControlColumn();
 

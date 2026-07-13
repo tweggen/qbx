@@ -33,6 +33,10 @@
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
 #include "app/objects/track/strack.h"
+#include "app/objects/cut/splacerecordingaction.h"
+#include "app/actions/sactionhistory.h"
+#include <QUndoStack>
+#include <QPair>
 #include "tw/record/recording_session.h"
 #include <QFileInfo>
 #include "app/model/sprojectprops.h"
@@ -549,6 +553,28 @@ void SMainWindow::gotoRangeStart()
     SApplication::app().setGlobalLocatorPos( pos );
 }
 
+// Collect armed tracks depth-first WITH their root-relative paths — nested
+// (folder) tracks record too. The order is the contract between recording
+// start (armedTrackIds) and completion (createdFiles are matched
+// positionally), so both sides call this.
+static void collectArmedTracks( SObject *container, const QList<int> &path,
+                                QList<QPair<STrack *, QList<int>>> &out )
+{
+    if( !container ) return;
+    for( int i = 0; i < container->childCount(); ++i ) {
+        SLink *lk = container->childAt( i );
+        if( !lk ) continue;
+        STrack *track = dynamic_cast<STrack *>( &lk->getSObject() );
+        if( !track ) continue;
+        QList<int> childPath = path;
+        childPath.append( i );
+        if( track->isArmedForRecording() ) {
+            out.append( qMakePair( track, childPath ) );
+        }
+        collectArmedTracks( track, childPath, out );
+    }
+}
+
 void SMainWindow::onRecordTriggered()
 {
     if( !currentProject_ ) return;
@@ -561,16 +587,12 @@ void SMainWindow::onRecordTriggered()
         }
         actRecord_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
     } else {
-        // Check if any tracks are armed
-        bool anyArmed = false;
-        for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
-            if( trackLink->getSObject().isArmedForRecording() ) {
-                anyArmed = true;
-                break;
-            }
-        }
+        // Check if any tracks are armed (recursively — tracks nested in
+        // folder tracks record too, proposal 17 phase 2)
+        QList<QPair<STrack *, QList<int>>> armed;
+        collectArmedTracks( currentProject_->getRootComponent(), QList<int>(), armed );
 
-        if( !anyArmed ) {
+        if( armed.isEmpty() ) {
             // Inform user to arm a track
             QMessageBox::information( this, "No Tracks Armed",
                 "Please arm at least one track for recording before starting." );
@@ -590,16 +612,12 @@ void SMainWindow::onRecordTriggered()
         params.sampleRate = currentProject_->getSRate();
         params.channels = 2;
 
-        // Collect armed track IDs, STrack pointers, and per-track channel selections
-        std::vector<STrack*> armedTracks;
-        for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
-            if( trackLink->getSObject().isArmedForRecording() ) {
-                params.armedTrackIds.push_back( trackLink->getSObject().getSName().toStdString() );
-                params.trackChannels.push_back( trackLink->getSObject().getRecordingChannels() );
-                if( STrack *track = dynamic_cast<STrack*>( &trackLink->getSObject() ) ) {
-                    armedTracks.push_back( track );
-                }
-            }
+        // Collect armed track IDs and per-track channel selections, in the
+        // SAME recursive order onRecordingCompleted will use — created files
+        // are matched to tracks positionally.
+        for( const auto &pr : armed ) {
+            params.armedTrackIds.push_back( pr.first->getSName().toStdString() );
+            params.trackChannels.push_back( pr.first->getRecordingChannels() );
         }
 
         // Remember where the playhead is now: the cut goes here, and the playhead
@@ -669,50 +687,33 @@ void SMainWindow::onRecordingCompleted()
         recordingStartTime += latencySyncFrames;
     }
 
-    // Place cuts on all armed tracks, using the corresponding per-track WAV file
+    // Place the recordings through the action system (proposal 17 phase 2):
+    // one place-recording per armed track, all inside ONE undo macro. The
+    // action plans the file against the track's existing columns — new take
+    // per covered column (auto-activated), plain cuts for the gaps — so
+    // recording over material stacks takes instead of layering clips, and
+    // Ctrl-Z removes the whole recording pass.
+    QList<QPair<STrack *, QList<int>>> armed;
+    collectArmedTracks( currentProject_->getRootComponent(), QList<int>(), armed );
+
+    QUndoStack *undoStack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = !armed.isEmpty() && undoStack;
+    if( macro ) undoStack->beginMacro( QStringLiteral( "Recording" ) );
     int fileIndex = 0;
-    for( SLink *trackLink : currentProject_->getRootComponent()->childLinks() ) {
-        if( !trackLink->getSObject().isArmedForRecording() ) continue;
-
-        STrack *track = dynamic_cast<STrack*>( &trackLink->getSObject() );
-        if( !track ) continue;
-
-        // Get the corresponding WAV file for this track
-        if( fileIndex >= (int)createdFiles.size() ) {
-            // No file for this track (shouldn't happen, but safety check)
-            track->setArmedForRecording( false );
-            fileIndex++;
-            continue;
+    for( const auto &pr : armed ) {
+        STrack *track = pr.first;
+        if( fileIndex < (int)createdFiles.size() ) {
+            QString recordedFile = QString::fromStdString( createdFiles[fileIndex] );
+            if( QFileInfo( recordedFile ).exists() ) {
+                SApplication::app().submitAction( new SPlaceRecordingAction(
+                    pr.second, recordedFile, recordingStartTime ) );
+            }
         }
-
-        QString recordedFile = QString::fromStdString( createdFiles[fileIndex] );
-        if( !QFileInfo( recordedFile ).exists() ) {
-            track->setArmedForRecording( false );
-            fileIndex++;
-            continue;
-        }
-
-        // Create a SPlainWave for the recorded file
-        SPlainWave *wave = new SPlainWave( currentProject_ );
-        if( wave->setWave( recordedFile ) < 0 ) {
-            delete wave;
-            track->setArmedForRecording( false );
-            fileIndex++;
-            continue;
-        }
-
-        // Create a SCut wrapping the wave
-        SCut *cut = new SCut( currentProject_, *wave );
-
-        // Create an SLink to place the cut in the track
-        SLink *link = new SLink( *cut, nullptr );
-        link->setStartTime( recordingStartTime );
-        link->setParent( track );
-
-        // Mark track as no longer armed
+        // Auto-disarm stays a direct UI-state mutation (not undoable).
         track->setArmedForRecording( false );
         fileIndex++;
     }
+    if( macro ) undoStack->endMacro();
 
     // Return the playhead to where recording began, lining it up with the cut we
     // just placed (it had advanced to the end during capture).

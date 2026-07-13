@@ -83,6 +83,13 @@ void SObject::setDelay( double d )
     emit delayChanged( d );
 }
 
+void SObject::setEditGroup( int id )
+{
+    if( editGroup_ == id ) return;
+    editGroup_ = id;
+    emit editGroupChanged( id );
+}
+
 void SObject::setSName( const QString &n )
 {
     QString newName;
@@ -113,6 +120,8 @@ int SObject::serializeSelfAttributes( QTextStream &o )
     o << " volume='" << getVolume() << "'";
     o << " pan='" << getPan() << "'";
     o << " delay='" << getDelay() << "'";
+    if( editGroup_ != 0 )
+        o << " editGroup='" << editGroup_ << "'";
     return 0;
 }
 
@@ -154,6 +163,7 @@ int SObject::readPreChildrenAttributes( QDomElement &element )
     setPan( data.toDouble() );
     data = element.attribute( "delay", "0.0" );
     setDelay( data.toDouble() );
+    setEditGroup( element.attribute( "editGroup", "0" ).toInt() );
     return 0;
 }
 

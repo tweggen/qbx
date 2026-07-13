@@ -6,14 +6,18 @@
 #include "app/actions/sactionregistry.h"
 #include "app/model/slink.h"
 #include "app/objects/cut/scut.h"
+#include "app/objects/cut/stakestack.h"
+#include "app/model/seditgroups.h"
+#include "app/actions/scompositeaction.h"
 #include "tw/core/twfraction.h"
 #include <QDomElement>
 #include <cstring>
 
 using namespace strackpath;
 
-SSplitClipAction::SSplitClipAction(const QList<int> &clipPath, offset_t splitTime)
-    : clipPath_(clipPath), splitTime_(splitTime)
+SSplitClipAction::SSplitClipAction(const QList<int> &clipPath, offset_t splitTime,
+                                   bool broadcast)
+    : clipPath_(clipPath), splitTime_(splitTime), broadcast_(broadcast)
 {
 }
 
@@ -21,6 +25,17 @@ SApplyResult SSplitClipAction::apply(SProject *project)
 {
     if (!project || clipPath_.isEmpty()) {
         return {false, nullptr};
+    }
+    // Edit-group broadcast: split every member's corresponding clip too.
+    if (broadcast_) {
+        QList<QList<int>> targets =
+            seditgroups::expandClipPaths(project, clipPath_);
+        if (targets.size() > 1) {
+            SCompositeAction composite;
+            for (const QList<int> &p : targets)
+                composite.append(new SSplitClipAction(p, splitTime_, false));
+            return composite.apply(project);
+        }
     }
     SObject *mixer = splacements::rootContainer( project );
     if (!mixer) {
@@ -43,6 +58,37 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     length_t fullDur = obj0.getDuration();
     if (inObjOffset <= 1 || inObjOffset >= (offset_t)fullDur - 1) {
         return {false, nullptr};        // split point outside the clip
+    }
+
+    // A take stack splits into two stacks: every take cut is split with the
+    // plain-cut arithmetic below (offsets and durations live in the stretched
+    // OUTPUT domain, so the timeline split offset applies to each take as-is,
+    // whatever its stretch). Both columns keep the active-take selection —
+    // this is what turns takes into per-region comping.
+    if (STakeStack *stack = dynamic_cast<STakeStack*>(&obj0)) {
+        STakeStack *stack2 = new STakeStack(project);
+        for (int i = 0; i < stack->nTakes(); ++i) {
+            SCut *c1 = stack->takeCutAt(i);
+            if (!c1) continue;
+            SCut *c2 = new SCut(project, c1->getContent());
+            c2->setGrainParamsRaw(c1->getGrainParams());
+            c2->setStartOffset(c1->getStartOffset() + inObjOffset);
+            c2->setDuration(fullDur - inObjOffset);
+            stack2->insertTake(*c2);
+        }
+        stack2->setActiveTake(stack->activeTakeIndex());
+        stack->setDurationAll(inObjOffset);
+        SLink *sl2 = new SLink(*stack2, NULL);
+        sl2->setStartTime(startTime + inObjOffset);
+        sl2->setParent(track);
+
+        QList<int> firstPath = trackPath;
+        firstPath.append(track->indexOfChild(link));
+        QList<int> secondPath = trackPath;
+        secondPath.append(track->indexOfChild(sl2));
+        SAction *inverse = new SUnsplitClipAction(firstPath, secondPath,
+                                                  fullDur, inObjOffset);
+        return {true, inverse};
     }
 
     // Ensure the clip is an SCut (wrap a raw link), replacing the link in place.
@@ -92,12 +138,14 @@ void SSplitClipAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("clip", pathToString(clipPath_));
     elem.setAttribute("splitTime", QString::fromStdString(Fraction(splitTime_, 1).toString()));
+    elem.setAttribute("broadcast", broadcast_ ? 1 : 0);
 }
 
 bool SSplitClipAction::readXml(const QDomElement &elem, int /*version*/)
 {
     clipPath_ = stringToPath(elem.attribute("clip"));
     splitTime_ = (offset_t)parseFractionOrDouble(elem.attribute("splitTime", "0").toStdString()).toDouble();
+    broadcast_ = elem.attribute("broadcast", "1").toInt() != 0;
     return true;
 }
 

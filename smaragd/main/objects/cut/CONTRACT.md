@@ -32,3 +32,43 @@ render_sawtooth_clipped_section.qxa, grain_*.qxa.
 
 Known debt: loop tiling of container captures deferred; FIXME bounds check
 in seekTo.
+
+## Take stacks (proposal 17, phase 1)
+
+STakeStack (stakestack.h) is the column of parallel takes — see the "Take
+stacks" section of CLIP_MODEL.md for the model rules. Verbs: add-take
+(wraps a plain cut on first use), remove-take (collapses at 1 take),
+select-take; split-clip/resize-clip/unsplit are stack-aware (length ops
+write through to every take, slip targets one take via `take`).
+
+Notes:
+- The stack serves a private silent component while no take is active
+  (STakeSilence in stakestack.cpp) — objects/cut may not include tw/mix,
+  so no twRewire here.
+- Wrap/collapse preserve the lane child index (moveChildToIndex) so
+  recorded action paths and inverses stay valid — do not "simplify" this
+  away.
+- Undo fidelity limit: removing a take whose content is not file-backed
+  (container asset) is applied but NOT undoable (inverse = null); a
+  collapse triggered with activeTake == -1 resurfaces the remaining take
+  audible (plain cuts cannot be inaudible).
+
+How to test: takes_comping.qxa (audibility, comping per column, undo),
+takes_serialize_roundtrip.qxa (loader registration, per-column activeTake
+persistence incl. -1).
+
+Phase 2 verbs (recording): place-clip (path-addressed windowed plain-cut
+placement; inverse SUnplaceClipAction), place-recording (plans the file
+span against the lane's columns — takes for covered columns, place-clips
+for gaps, straddling columns untouched — applied atomically via
+SCompositeAction from app/actions). Test:
+takes_recording_placement.qxa.
+
+Phase 4 (edit groups): split-clip/resize-clip/select-take (and move-clip in
+objects/track) carry a `broadcast` attribute — a grouped anchor
+(SObject::editGroup, helpers in app/model/seditgroups.h) fans out to every
+member's corresponding clip (positional: same startTime+duration) as one
+SCompositeAction; fan-out children carry broadcast=0. select-take comps the
+same take INDEX; resize syncs the slip to the corresponding take (an
+active-take anchor resolves its index first). Test:
+takes_group_broadcast.qxa.

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 17 phase 1: STakeStack survives a save/load round trip.
+
+  Builds a comped arrangement (2-take stack split into two columns, head
+  playing take 1, tail deliberately playing NO take), saves it, loads it
+  back, and asserts the AUDIO: per-column activeTake must persist —
+  including -1 — and the registry-based loader must rebuild the stack
+  (registerSObjectClass("STakeStack")) with its take cuts wired by id.
+
+  Head column take 1 is the source slipped by 2 s: sec0 ~0.291, sec1 ~0.405.
+  The tail column renders silence (activeTake = -1).
+-->
+<SActionScript version="1" name="takes_serialize_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <split-clip clip="0,0" splitTime="96000"/>
+    <select-take clip="0,0" take="1"/>
+    <select-take clip="0,1" take="-1"/>
+
+    <save-project path="../../build/takes_roundtrip.qxp"/>
+    <load-project path="../../build/takes_roundtrip.qxp"/>
+
+    <render filename="takes_roundtrip.wav" format="wav" quality="10"/>
+
+    <!-- head column, take 1 (slip 96000): source sec2, sec3 -->
+    <assert-audio-energy filename="takes_roundtrip.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="takes_roundtrip.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- tail column, NO take active: silence despite two takes present -->
+    <assert-audio-energy filename="takes_roundtrip.wav"
+                         startFrame="96000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -1,5 +1,7 @@
 #include "app/objects/track/smoveclipaction.h"
 #include "app/model/splacements.h"
+#include "app/model/seditgroups.h"
+#include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
@@ -12,8 +14,10 @@ using namespace strackpath;
 
 SMoveClipAction::SMoveClipAction(const QList<int> &clipPath,
                                  const QList<int> &destTrackPath,
-                                 offset_t newStartTime)
-    : clipPath_(clipPath), destTrackPath_(destTrackPath), newStartTime_(newStartTime)
+                                 offset_t newStartTime,
+                                 bool broadcast)
+    : clipPath_(clipPath), destTrackPath_(destTrackPath),
+      newStartTime_(newStartTime), broadcast_(broadcast)
 {
 }
 
@@ -26,6 +30,27 @@ SApplyResult SMoveClipAction::apply(SProject *project)
     SObject *mixer = root;
     if (!mixer) {
         return {false, nullptr};
+    }
+
+    // Edit-group broadcast — same-track moves only: each member's
+    // corresponding clip moves to the same start time within its OWN lane.
+    if (broadcast_) {
+        QList<int> srcLane = clipPath_;
+        srcLane.removeLast();
+        if (srcLane == destTrackPath_) {
+            QList<QList<int>> targets =
+                seditgroups::expandClipPaths(project, clipPath_);
+            if (targets.size() > 1) {
+                SCompositeAction composite;
+                for (const QList<int> &p : targets) {
+                    QList<int> lane = p;
+                    lane.removeLast();
+                    composite.append(new SMoveClipAction(
+                        p, lane, newStartTime_, false));
+                }
+                return composite.apply(project);
+            }
+        }
     }
 
     // Resolve the clip: its track (path minus last) and its link index.
@@ -66,6 +91,7 @@ void SMoveClipAction::writeXml(QDomElement &elem) const
     elem.setAttribute("clip", pathToString(clipPath_));
     elem.setAttribute("destTrack", pathToString(destTrackPath_));
     elem.setAttribute("startTime", QString::fromStdString(Fraction(newStartTime_, 1).toString()));
+    elem.setAttribute("broadcast", broadcast_ ? 1 : 0);
 }
 
 bool SMoveClipAction::readXml(const QDomElement &elem, int /*version*/)
@@ -73,6 +99,7 @@ bool SMoveClipAction::readXml(const QDomElement &elem, int /*version*/)
     clipPath_ = stringToPath(elem.attribute("clip"));
     destTrackPath_ = stringToPath(elem.attribute("destTrack"));
     newStartTime_ = (offset_t)parseFractionOrDouble(elem.attribute("startTime", "0").toStdString()).toDouble();
+    broadcast_ = elem.attribute("broadcast", "1").toInt() != 0;
     return true;
 }
 

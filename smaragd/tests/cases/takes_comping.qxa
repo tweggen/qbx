@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 17 phase 1: take stacks — multi-take audibility and comping.
+
+  Builds a 2-take stack over the ramped-sawtooth fixture (take 1 slipped by
+  2 s, so the two takes have distinct per-second RMS), then asserts via
+  renders that:
+    - add-take wraps a plain cut into a stack and auto-activates the new
+      take (decision 1),
+    - select-take flips the audible material (scoped invalidation makes the
+      change actually render),
+    - select-take -1 renders silence (column keeps its extent),
+    - split-clip splits BOTH takes and comping per column works (activate
+      take 1 on the head column only).
+
+  Fixture RMS per source second: sec0 ~0.067, sec1 ~0.176, sec2 ~0.291,
+  sec3 ~0.405.
+-->
+<SActionScript version="1" name="takes_comping">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- take 0: 4 s ramped sawtooth at position 0 (a plain cut) -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- take 1: same source slipped by 2 s — wraps the cut into a stack,
+         newest take active. Audible content: source sec2, sec3, then
+         silence (the slipped window runs past the source). -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+
+    <render filename="takes_take1.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="takes_take1.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="takes_take1.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="takes_take1.wav"
+                         startFrame="96000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- comp back to take 0: the original material must render again -->
+    <select-take clip="0,0" take="0"/>
+    <render filename="takes_take0.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="takes_take0.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="takes_take0.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- no take audible: the column stays, the audio does not -->
+    <select-take clip="0,0" take="-1"/>
+    <render filename="takes_none.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="takes_none.wav"
+                         startFrame="0" frameCount="192000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- selecting past the end is rejected -->
+    <select-take clip="0,0" take="2" expectReject="true"/>
+
+    <!-- comping per column: split the stack at 2 s (both takes split),
+         head column plays take 1 (source sec2, sec3), tail column plays
+         take 0's tail (slip 96000 -> also source sec2, sec3).
+         Timeline: sec0 ~0.291, sec1 ~0.405, sec2 ~0.291, sec3 ~0.405. -->
+    <select-take clip="0,0" take="0"/>
+    <split-clip clip="0,0" splitTime="96000"/>
+    <select-take clip="0,0" take="1"/>
+    <render filename="takes_comped.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="takes_comped.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="takes_comped.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="takes_comped.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="takes_comped.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- a removed take collapses the stack back to a plain cut; the tail
+         column (still a 2-take stack) is untouched -->
+    <remove-take clip="0,0" take="1"/>
+    <render filename="takes_removed.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="takes_removed.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <!-- every take verb must round-trip through undo/redo -->
+  <verify-undo/>
+
+</SActionScript>

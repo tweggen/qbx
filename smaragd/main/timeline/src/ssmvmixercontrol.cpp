@@ -31,6 +31,12 @@
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/objects/track/strackcolormodifier.h"
 #include "app/objects/track/ssettrackvolumeaction.h"
+#include "app/objects/track/seteditgroupaction.h"
+#include "app/model/seditgroups.h"
+#include "app/model/sobjectpath.h"
+#include "app/actions/sactionhistory.h"
+#include <QUndoStack>
+#include <QPair>
 
 // The fader works in tenths of a dB so it can use an integer QSlider:
 // slider value v  <->  v/10 dB. Range -96.0 .. +24.0 dB.
@@ -351,6 +357,53 @@ void SSMVMixerControl::onSoloChanged( bool on )
     update();  // Repaint to show/hide yellow background
 }
 
+// The "G" shortcut (proposal 17 phase 4, decision 4): grouped -> dissolve
+// the WHOLE group (every member, wherever it lives); ungrouped -> lock this
+// track and its subtree together under a fresh id. One undo macro either
+// way. Arbitrary sets beyond the shortcut go through set-edit-group.
+void SSMVMixerControl::groupToggled( bool /*checked*/ )
+{
+    SStdMixer *mixer = smv_.getModel();
+    if( !mixer ) return;
+    SObject *root = mixer;
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+
+    QList<QPair<QList<int>, int>> assignments;   // (trackPath, group id)
+    if( tk_.getEditGroup() != 0 ) {
+        QList<SObject *> members;
+        seditgroups::membersOf( root, tk_.getEditGroup(), members );
+        for( SObject *m : members )
+            assignments.append( qMakePair( strackpath::pathOf( root, m ), 0 ) );
+    } else {
+        const int freshId = seditgroups::maxEditGroupId( root ) + 1;
+        QList<SObject *> lanes;
+        seditgroups::collectSubtreeLanes( &tk_, lanes );
+        for( SObject *l : lanes )
+            assignments.append(
+                qMakePair( strackpath::pathOf( root, l ), freshId ) );
+    }
+
+    const bool macro = assignments.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Edit group" ) );
+    for( const auto &a : assignments )
+        SApplication::app().submitAction(
+            new SSetEditGroupAction( a.first, a.second ) );
+    if( macro ) stack->endMacro();
+}
+
+void SSMVMixerControl::onEditGroupChanged( int id )
+{
+    QSignalBlocker block( qGroup_ );
+    qGroup_->setChecked( id != 0 );
+}
+
+void SSMVMixerControl::takesToggled( bool /*checked*/ )
+{
+    // View-level UI state; triggers refreshTrackTree(), which rebuilds the
+    // control column (this control dies via deleteLater — safe from here).
+    smv_.toggleTrackTakesExpanded( &tk_ );
+}
+
 void SSMVMixerControl::armToggled( bool on )
 {
     tk_.setArmedForRecording( on );
@@ -443,6 +496,20 @@ SSMVMixerControl::SSMVMixerControl(
     qArm_->setStyleSheet( "QPushButton:checked { background:#c04040; color:white; }" );
     qArm_->setContextMenuPolicy( Qt::CustomContextMenu );
 
+    qTakes_ = new QPushButton( "T", this );
+    qTakes_->setCheckable( true );
+    qTakes_->setFixedSize( 20, 20 );
+    qTakes_->setFont( btnFont );
+    qTakes_->setToolTip( "Show take lanes (takes stack up when you record over a clip)" );
+    qTakes_->setStyleSheet( "QPushButton:checked { background:#4080c0; color:white; }" );
+
+    qGroup_ = new QPushButton( "G", this );
+    qGroup_->setCheckable( true );
+    qGroup_->setFixedSize( 20, 20 );
+    qGroup_->setFont( btnFont );
+    qGroup_->setToolTip( "Edit group: lock this track (and its subtree) together" );
+    qGroup_->setStyleSheet( "QPushButton:checked { background:#40a060; color:white; }" );
+
     // Mute over Solo over Arm in a column.
     QVBoxLayout *muteSoloCol = new QVBoxLayout();
     muteSoloCol->setContentsMargins( 0, 0, 0, 0 );
@@ -450,6 +517,8 @@ SSMVMixerControl::SSMVMixerControl(
     muteSoloCol->addWidget( qMute_, 0, Qt::AlignTop );
     muteSoloCol->addWidget( qSolo_, 0, Qt::AlignTop );
     muteSoloCol->addWidget( qArm_, 0, Qt::AlignTop );
+    muteSoloCol->addWidget( qTakes_, 0, Qt::AlignTop );
+    muteSoloCol->addWidget( qGroup_, 0, Qt::AlignTop );
     muteSoloCol->addStretch( 1 );
 
     // Fader with its dB readout directly beneath it, both centred so they line
@@ -483,6 +552,8 @@ SSMVMixerControl::SSMVMixerControl(
     qMute_->setChecked( tk_.isMuted() );
     qSolo_->setChecked( tk_.isSolo() );
     qArm_->setChecked( tk_.isArmedForRecording() );
+    qTakes_->setChecked( smv_.isTrackTakesExpanded( &tk_ ) );
+    qGroup_->setChecked( tk_.getEditGroup() != 0 );
 
     QObject::connect( qVolume_, SIGNAL( valueChanged( int ) ),
                       this, SLOT( sliderValueChanged( int ) ) );
@@ -496,6 +567,12 @@ SSMVMixerControl::SSMVMixerControl(
                       this, SLOT( armToggled( bool ) ) );
     QObject::connect( qArm_, SIGNAL( customContextMenuRequested( const QPoint& ) ),
                       this, SLOT( showChannelMenu() ) );
+    QObject::connect( qTakes_, SIGNAL( toggled( bool ) ),
+                      this, SLOT( takesToggled( bool ) ) );
+    QObject::connect( qGroup_, SIGNAL( toggled( bool ) ),
+                      this, SLOT( groupToggled( bool ) ) );
+    QObject::connect( &tk_, SIGNAL( editGroupChanged( int ) ),
+                      this, SLOT( onEditGroupChanged( int ) ) );
     QObject::connect( &tk_, SIGNAL( mutedChanged( bool ) ),
                       this, SLOT( onMutedChanged( bool ) ) );
     QObject::connect( &tk_, SIGNAL( soloChanged( bool ) ),

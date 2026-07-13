@@ -10,12 +10,17 @@
 // grain stretch factor. The undoable form of every clip-edge gesture (trim,
 // extend, slip, loop, time-stretch). Inverse restores the previous window (so it
 // round-trips on undo/redo). The clip is addressed by track-path + link index.
+//
+// Take stacks (proposal 17): duration/loopLength/stretch write through to
+// EVERY take (length ops affect all lanes); startOffset — the slip — applies
+// to ONE take only, selected by `take` (-1 = the active take).
 class SResizeClipAction : public SAction {
 public:
     SResizeClipAction() = default;
     SResizeClipAction( const QList<int> &clipPath,
                        offset_t startTime, offset_t startOffset, length_t duration,
-                       length_t loopLength = 0, double stretch = 1.0 );
+                       length_t loopLength = 0, double stretch = 1.0,
+                       int take = -1, bool broadcast = true );
 
     QString name() const override { return QStringLiteral("resize-clip"); }
     SApplyResult apply( SProject *project ) override;
@@ -29,6 +34,11 @@ private:
     length_t   duration_    = 0;
     length_t   loopLength_  = 0;
     double     stretch_     = 1.0;
+    int        take_        = -1;   // stacks only: which take the slip targets
+    // Edit groups: fan out to the members' corresponding clips. The slip is
+    // synced by EXPLICIT take index (decision 3), so a stack anchor resolves
+    // its take before fanning out.
+    bool       broadcast_   = true;
 };
 
 #endif // SRESIZECLIPACTION_H

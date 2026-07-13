@@ -136,6 +136,11 @@ void twTrackMix::updateClip(const void *key, offset_t newStartTime, length_t new
             // slip- or stretch-only edits arrive here with the same window but
             // changed content (SCut::setWindow always emits durationChanged).
             bumpContentEpoch();
+            // Restart the clip's state chain: the edit may have changed the
+            // component behind the view (reader rebuild, take selection), and
+            // a predecessor page from another component would restore foreign
+            // DSP state. Discontinuity (reset+seek) is always correct.
+            clip.previousPage.reset();
             return;
         }
     }

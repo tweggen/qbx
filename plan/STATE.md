@@ -4910,3 +4910,181 @@ readahead frontier, so a fresh playback never starts on fallback pages.
   `stalePredecessor` while rendering and releases it once frozen.
   Fail-on-baseline verified (4 engine-level FAILs on the unfixed engine).
 - ctest 27/27; audio qxa suite 18/18; layering clean.
+
+## Proposal 17 phase 1: take stacks — model, audibility, take actions (2026-07-13)
+
+- **Status:** phase 1 of 4 EXECUTED (design: plan/proposed/17, decisions in
+  its header block)
+- **Scope:** `main/objects/cut` (new STakeStack + helpers + 3 actions,
+  stack-aware split/unsplit/resize), one-line `tw303a/mix` hardening, tests
+
+### What changed
+
+`STakeStack : SObject` is the COLUMN of parallel takes — placed on a track
+like any clip, holding one child link per take (each an SCut), exactly one
+audible (`activeTake_`, -1 = none). The engine is untouched by design: to
+`twTrackMix` a stack is one clip whose component the existing `twView`
+resolves lazily through the stack to the ACTIVE take's cut. `select-take`
+is a model change + `durationChanged` (→ `updateClip` + path invalidation);
+proposals 15/16 make comping during playback scoped and dropout-free.
+While no take is active the stack serves a private silent component
+(objects/cut may not include tw/mix, so no twRewire).
+
+New verbs (all undoable, `.qxa`-scriptable): `add-take` (wraps a plain cut
+into a stack on first use, newest take auto-activated — decision 1),
+`remove-take` (collapses to a plain cut at 1 take — decision 2, invariant
+3), `select-take` (-1 allowed). `split-clip` splits every take (offsets/
+durations live in the stretched output domain, so the timeline offset
+applies per take verbatim); `resize-clip` gained `take`: duration/loop/
+stretch write through to ALL takes (`applyWindowAll`, slip offsets rescale
+on stretch change), the slip targets one take. Serialization: one
+`registerSObjectClass("STakeStack")`, attribute `activeTake`.
+
+### Pitfalls found while executing
+
+- **Wrap/collapse must preserve the lane child index.** Replacing a link
+  via delete+setParent APPENDS, permuting sibling indices — recorded
+  action paths and inverses (verify-undo replays them) then target the
+  wrong clips. `moveChildToIndex` (signal-free) restores the index.
+- **`twTrackMix::updateClip` now resets the clip's state-chain page**: an
+  update can mean the component behind the view changed (reader rebuild,
+  take switch); a predecessor page from another component would restore
+  foreign DSP state. Discontinuity (reset+seek) is always correct.
+
+### Verification
+
+- New `takes_comping.qxa`: 2-take stack over the sawtooth fixture (take 1
+  slipped 2 s → distinct per-second RMS), renders assert add-take
+  auto-activation, select-take content flips, silence at -1, reject on
+  out-of-range, per-column comping after split, collapse on remove-take;
+  `verify-undo` green over the full script.
+- New `takes_serialize_roundtrip.qxa`: save→load→render; per-column
+  `activeTake` (incl. -1) survives, loader registration covered.
+- Full suites: audio qxa 20/20, ctest 27/27, root suite 5/9 (baseline),
+  layering clean.
+
+## Proposal 17 phase 2: recording through actions (2026-07-13)
+
+- **Status:** phase 2 of 4 EXECUTED
+- **Scope:** `main/actions` (SCompositeAction), `main/objects/cut`
+  (place-clip, place-recording), `main/shell` (recording flow), tests
+
+### What changed
+
+Recording placement no longer bypasses the action framework. New pieces:
+
+- **`SCompositeAction`** (app/actions): ordered child actions applied as
+  one — child failure rolls back the applied prefix; the inverse is the
+  reversed child inverses. Reused by the phase-4 group broadcast.
+- **`place-clip`**: path-addressed, WINDOWED plain-cut placement (the
+  add-sample sibling that handles nested tracks, slip and duration).
+  Inverse pair `SUnplaceClipAction` mirrors split/unsplit.
+- **`place-recording`**: THE multi-take verb. Plans the file's span
+  against the lane's columns: covered column → new take (slip =
+  columnStart − recStart, auto-activated; plain cuts wrapped by add-take);
+  gaps → place-clip; columns starting before the recording are left
+  untouched ("as applicable"). Empty region degenerates to today's single
+  plain cut. Applied via one composite → recording over material STACKS
+  takes, and one Ctrl-Z removes the whole pass.
+- **`SMainWindow`**: armed-track scan is now recursive with root-relative
+  paths (`collectArmedTracks`) — tracks nested in folder tracks record too
+  (closes a pre-existing gap); scan order is the positional contract with
+  `RecordingSession::createdFiles`, used identically at start and
+  completion. Placement submits one place-recording per armed track inside
+  a `QUndoStack` macro. Auto-disarm stays a direct UI mutation.
+
+### Verification
+
+- New `takes_recording_placement.qxa`: arrangement with a clip at 2 s,
+  "recording" placed at 0 → gap cut (source sec0-1) + new auto-activated
+  take on the column (slip 2 s), original take still selectable;
+  `verify-undo` exercises the composite inverse.
+- Suites: audio qxa 21/21, layering clean, root suite 7/9 (the two
+  screenshot cases pass with SMARAGD_TEST_OUTPUT_DIR set; remaining 2 are
+  the known pre-existing failures).
+
+## Proposal 17 phase 3: expanded take-lane UI (2026-07-13)
+
+- **Status:** phase 3 of 4 EXECUTED
+- **Scope:** `main/timeline` (row model, painting, hit-testing, control
+  strip), test
+
+### What changed
+
+- **Row model:** `STrackRow` gained `takeRow` (-1 = the track's composite
+  lane, k ≥ 0 = the lane showing take k of every stack on the track). Rows
+  stay UNIFORM height, so a take lane is just another row — no per-row
+  y-table was needed after all; `appendRowsFor` emits `maxTakesOf(track)`
+  extra rows below an expanded track. Expansion state is UI-only
+  (`takesExpanded_`, like `collapsed_`).
+- **Painting:** `SMVActualView::drawTakeLane` draws take k of each stack —
+  the cut renderer is called with the OUTER link ("my link but his
+  object"), active take framed, inactive takes dimmed, missing takes
+  empty. Compact mode is untouched (stack renderer delegates + "k/n"
+  badge, phase 1).
+- **Comping click:** a left click on a take lane submits `select-take`
+  (undoable) and is consumed — take lanes host no other gestures yet.
+- **Entry points:** a checkable "T" button on the channel strip (rebuild
+  via deleteLater is safe from inside the handler — same pattern as the
+  fold triangle) and a "Show/hide take lanes" context-menu item.
+- **Row-count sync:** clip-level edits (add-take, stack split) change an
+  expanded track's row count without a track-structure signal;
+  `onArrangementChangedRows` (connected to `arrangementChanged`) rebuilds
+  the rows and refreshes the control column only when the count drifted.
+- **Control column:** take rows carry no channel strip; following controls
+  keep their row-indexed positions.
+
+### Verification
+
+- `takes_screenshot.qxa` exercises the compact stack renderer + row model
+  headlessly (the screenshot artifact itself captures the desktop in this
+  environment — pre-existing screenshot-action quirk — so visuals need a
+  manual pass: expand lanes via "T", click takes while looping).
+- Suites: audio qxa 22/22, layering clean.
+
+## Proposal 17 phase 4: edit groups + broadcast (2026-07-13)
+
+- **Status:** phase 4 of 4 EXECUTED — proposal 17 complete (loop recording
+  deferred as designed, "phase 5")
+- **Scope:** `main/model` (group flag + helpers), `main/objects/track`
+  (set-edit-group), broadcast in the clip verbs, "G" button, test
+
+### What changed
+
+- **Model:** `SObject::editGroup_` (int, 0 = ungrouped, serialized only
+  when set) — tracks sharing a nonzero id form one ARBITRARY set, not tied
+  to the hierarchy (decision 4). Helpers in `app/model/seditgroups.h`:
+  membersOf / collectSubtreeLanes / maxEditGroupId / correspondingClip
+  (positional: same startTime + duration) / `expandClipPaths`. Model-level
+  ON PURPOSE: the clip verbs live in objects/cut AND objects/track, which
+  may not include each other — both reach the group logic through model.
+- **Broadcast lives INSIDE the actions** (not the UI submission layer), so
+  scripts, gestures, and future callers all get it: `split-clip`,
+  `resize-clip`, `select-take`, `move-clip` gained a `broadcast` attribute
+  (default 1). A grouped anchor expands to the members' corresponding
+  clips and applies as ONE `SCompositeAction` (fan-out children carry
+  broadcast=0 — the recursion guard); the composite inverse undoes the
+  group edit atomically. Per decisions: `select-take` comps the SAME take
+  index everywhere (inapplicable members skipped up front — "as
+  applicable"); `resize-clip` syncs the slip to the CORRESPONDING take
+  (an active-take anchor resolves its explicit index before fan-out;
+  decision 3, drum-timing fix); `move-clip` broadcasts same-track moves
+  only.
+- **`set-edit-group`** (`trackPath`, `group`): the arbitrary-membership
+  verb, undoable.
+- **"G" button** on the channel strip: grouped → dissolve the WHOLE group
+  (every member, wherever it lives); ungrouped → lock this track + its
+  subtree under a fresh id. One undo macro of set-edit-group actions.
+
+### Verification
+
+- New `takes_group_broadcast.qxa`: two tracks with identical 2-take
+  columns locked into group 1; select-take on ONE flips BOTH (render RMS,
+  coherent sum = ×2), split on one splits both, slip on take 0 of one head
+  column follows on the other member; `verify-undo` green over composite
+  inverses and set-edit-group. Pitfall encoded in the test: doubled
+  material past ~sec2 of the fixture peaks over 1.0 and CLIPS in the
+  rendered WAV — assert only non-clipping seconds.
+- Suites: audio qxa 23/23, layering clean, root suite 7/9 (baseline).
+  Engine untouched in this phase (ctest last run green after phase 1's
+  one-line twTrackMix change).

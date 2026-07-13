@@ -48,9 +48,9 @@ SApplyResult SUnsplitClipAction::apply(SProject *project)
         return {false, nullptr};
     }
     offset_t startTime = first->getStartTime();
-    if (SCut *sc1 = dynamic_cast<SCut*>(&first->getSObject())) {
-        sc1->setDuration(restoreDuration_);
-    }
+    // setDuration is virtual: SCut restores its window; a take stack
+    // (STakeStack) forwards to every take (setDurationAll).
+    first->getSObject().setDuration(restoreDuration_);
 
     // Inverse: re-split at the same point.
     SAction *inverse = new SSplitClipAction(firstPath_, startTime + inObjOffset_);

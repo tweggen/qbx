@@ -54,6 +54,15 @@ protected slots:
     void muteToggled( bool );
     void soloToggled( bool );
     void armToggled( bool );
+    // Button -> view: expand/collapse this track's take lanes (UI-only state
+    // on SStdMixerView; the rebuild this triggers deletes this control via
+    // deleteLater, which is safe from inside the handler).
+    void takesToggled( bool );
+    // "G": edit-group shortcut — lock this track's subtree together, or
+    // dissolve the whole group it belongs to (one undo macro of
+    // set-edit-group actions).
+    void groupToggled( bool );
+    void onEditGroupChanged( int );
     // Model -> button (keeps the buttons in sync if the flag changes elsewhere).
     void onMutedChanged( bool );
     void onSoloChanged( bool );
@@ -106,6 +115,8 @@ private:
     QPushButton *qMute_;
     QPushButton *qSolo_;
     QPushButton *qArm_;
+    QPushButton *qTakes_;   // "T": show/hide this track's take lanes
+    QPushButton *qGroup_;   // "G": edit-group lock (proposal 17 phase 4)
 };
 
 #endif

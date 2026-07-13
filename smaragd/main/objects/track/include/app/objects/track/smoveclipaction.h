@@ -21,7 +21,8 @@ public:
     SMoveClipAction() = default;
     SMoveClipAction(const QList<int> &clipPath,
                     const QList<int> &destTrackPath,
-                    offset_t newStartTime);
+                    offset_t newStartTime,
+                    bool broadcast = true);
 
     QString name() const override { return QStringLiteral("move-clip"); }
     SApplyResult apply(SProject *project) override;
@@ -32,6 +33,10 @@ private:
     QList<int> clipPath_;        // [track path..., link index in that track]
     QList<int> destTrackPath_;   // path TO the destination track
     offset_t   newStartTime_ = 0;
+    // Edit groups: broadcast to the members' corresponding clips — but only
+    // for SAME-TRACK moves (each member moves within its own lane); a
+    // cross-track move has no meaningful counterpart and stays single.
+    bool       broadcast_ = true;
 };
 
 #endif // SMOVECLIPACTION_H

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 17 phase 2: place-recording — the multi-take recording verb.
+
+  A "recording" (the sawtooth fixture standing in for a recorded WAV) is
+  placed against a track that already has material:
+
+    arrangement before: one 4 s clip at 2 s (source sec0..3 at timeline 2-6 s)
+    recording:          4 s file at timeline 0
+
+  The planner must
+    - fill the uncovered gap [0,2s) with a plain windowed cut (recording
+      material sec0, sec1),
+    - add the covered segment as a NEW take on the existing column (slip
+      2 s -> source sec2, sec3), auto-activated (decision 1),
+  and the original take must remain selectable. Undo removes the whole
+  placement and unwraps the column (composite inverse).
+-->
+<SActionScript version="1" name="takes_recording_placement">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000"/>
+
+    <!-- "record" 4 s starting at 0: gap [0,2s) + take on the column at 2s -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <render filename="takes_rec.wav" format="wav" quality="10"/>
+
+    <!-- gap cut: recording sec0, sec1 on the timeline 0-2 s -->
+    <assert-audio-energy filename="takes_rec.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="takes_rec.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- column now plays the NEW take: recording slipped 2 s = source
+         sec2, sec3 at timeline 2-4 s, then silence (recording ended but
+         the column window continues) -->
+    <assert-audio-energy filename="takes_rec.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="takes_rec.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="takes_rec.wav"
+                         startFrame="192000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- the pre-recording take is still there: comp back to it -->
+    <select-take clip="0,0" take="0"/>
+    <render filename="takes_rec_orig.wav" format="wav" quality="10"/>
+    <!-- original clip content restored on the column (source sec0 at 2 s) -->
+    <assert-audio-energy filename="takes_rec_orig.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="takes_rec_orig.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

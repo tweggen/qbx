@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 17 phase 4: edit groups — one edit on a member is carried out on
+  every member's CORRESPONDING clip (the drum-kit use case).
+
+  Two tracks with identical 2-take columns (take 1 = source slipped 2 s)
+  are locked into edit group 1. Coherent summing doubles the RMS, so the
+  per-second fixture values read ×2:
+    take 0: sec0 0.134, sec1 0.352, sec2 0.582, sec3 0.810
+    take 1: sec0 0.582, sec1 0.810, then silence
+
+  Asserted broadcasts: select-take (same take index on both), split-clip
+  (both columns split), resize-clip slip on an EXPLICIT take (decision 3:
+  synced to the corresponding take, drum-timing fix). verify-undo covers
+  the composite inverses and set-edit-group.
+-->
+<SActionScript version="1" name="takes_group_broadcast">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+
+    <set-edit-group trackPath="0" group="1"/>
+    <set-edit-group trackPath="1" group="1"/>
+
+    <!-- both play take 1 (auto-activated): slipped content, doubled -->
+    <render filename="group_take1.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="group_take1.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.52" maxRms="0.66"/>
+    <assert-audio-energy filename="group_take1.wav"
+                         startFrame="96000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- comp ONE track back to take 0: the group must flip BOTH.
+         (Assert sec0/sec1 only — the doubled sec2+ peaks past 1.0 and the
+         rendered WAV clips, deflating the RMS.) -->
+    <select-take clip="0,0" take="0"/>
+    <render filename="group_take0.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="group_take0.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.11" maxRms="0.16"/>
+    <assert-audio-energy filename="group_take0.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.31" maxRms="0.40"/>
+
+    <!-- split ONE track at 2 s: both tracks' columns must split; then comp
+         the tail column to take 1 on ONE track: tail take 1 is slipped past
+         the source end on BOTH -> silence, heads keep take 0 -->
+    <split-clip clip="0,0" splitTime="96000"/>
+    <select-take clip="0,1" take="1"/>
+    <render filename="group_comped.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="group_comped.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.11" maxRms="0.16"/>
+    <assert-audio-energy filename="group_comped.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.31" maxRms="0.40"/>
+    <assert-audio-energy filename="group_comped.wav"
+                         startFrame="96000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- drum-timing fix: slip take 0 of the HEAD column by 1 s on ONE
+         track; the corresponding take on the other member must follow -->
+    <resize-clip clip="0,0" take="0" startTime="0" startOffset="48000"
+                 duration="96000" loopLength="0" stretch="1.0"/>
+    <render filename="group_slipped.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="group_slipped.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.31" maxRms="0.40"/>
+    <assert-audio-energy filename="group_slipped.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.52" maxRms="0.66"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 17 phase 3: the arranger renders a multi-take stack in compact
+  mode (active take's waveform + "k/n" badge) without crashing. The
+  expanded take-lane painting is interactive-only (UI state) and is
+  covered manually; this guards the delegating renderer and the row model
+  against structural changes.
+-->
+<SActionScript version="1" name="takes_screenshot">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <split-clip clip="0,0" splitTime="96000"/>
+    <select-take clip="0,1" take="-1"/>
+    <screenshot filename="takes_compact.png" resolution="100%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
