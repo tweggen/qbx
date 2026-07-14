@@ -796,26 +796,23 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
         if( cut ) {
             offset_t newStart   = lastClickSLink_->getStartTime();
-            offset_t newOffset  = (offset_t) cut->getStartOffset().frames();
+            Fraction newAnchor  = cut->getSrcStart();
             length_t newDur     = cut->getDuration();
             length_t newLoop    = cut->getLoopLength().frames();
             Fraction newStretch = clipStretch0_;
             if( clipDragIsStretch_ ) {
-                // The grain view is addressed in the OUTPUT (stretched) domain, so
-                // startOffset scales with the stretch factor. Keep the SAME source
-                // window: srcSpan and the source start stay fixed, the offset and
-                // duration are rescaled to the new stretch. Same exact-ratio
-                // computation as the live drag (the values must agree).
+                // Same exact-ratio computation as the live drag (the values
+                // must agree). The SOURCE ANCHOR is invariant under a
+                // stretch edit (proposal 18 Phase 3) - no offset rescale.
                 Fraction s0 = clipStretch0_ > Fraction(0) ? clipStretch0_
                                                           : Fraction(1);
                 Fraction srcSpan = Fraction( lastClickDuration_ ) / s0;
                 if( srcSpan < Fraction(1) ) srcSpan = Fraction(1);
                 newStretch = ( Fraction( newDur ) / srcSpan )
                                  .limitedTo( (uint64_t)1 << 20 );
-                newOffset = (offset_t)( Fraction( clipResizeOffset0_ )
-                            * ( newStretch / s0 ) ).floorToInt();
+                newAnchor = clipSrcStart0_;
             }
-            bool changed = newStart != clipDragStart0_ || newOffset != clipResizeOffset0_
+            bool changed = newStart != clipDragStart0_ || newAnchor != clipSrcStart0_
                         || newDur != lastClickDuration_ || newLoop != clipLoopLen0_
                         || newStretch != clipStretch0_;
             if( changed ) {
@@ -825,13 +822,13 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 
                 // Then revert to pre-drag state and re-apply via action
                 lastClickSLink_->setStartTime( clipDragStart0_ );
-                cut->setWindow( WarpedPos( (int64_t)clipResizeOffset0_ ),
+                cut->setWindow( clipSrcStart0_,
                                 ClipLen( lastClickDuration_ ),
                                 WarpedLen( clipLoopLen0_ ), clipStretch0_ );
                 QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
                 clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
                 SApplication::app().submitAction(
-                    new SResizeClipAction( clipPath, newStart, newOffset, newDur,
+                    new SResizeClipAction( clipPath, newStart, newAnchor, newDur,
                                            newLoop, newStretch ) );
                 update();
             }
@@ -1388,18 +1385,15 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // counts: newDur / srcSpan where srcSpan = duration0 / s0.
                 // Computed exactly and denominator-capped ONCE at creation
                 // (proposal 18 Phase 2); repeated re-stretching composes
-                // rationally instead of drifting through doubles.
+                // rationally instead of drifting through doubles. The SOURCE
+                // ANCHOR is authoritative and invariant under a stretch edit
+                // (Phase 3), so no offset rescale happens here at all - the
+                // derived warped offset follows the stretch automatically.
                 Fraction srcSpan = Fraction( lastClickDuration_ ) / s0;
                 if( srcSpan < Fraction(1) ) srcSpan = Fraction(1);
                 Fraction newStretch = ( Fraction( newDur ) / srcSpan )
                                           .limitedTo( (uint64_t)1 << 20 );
-                // Rescale the output-domain start offset by the SAME factor as the
-                // stretch so the source start (startOffset/stretch) is invariant; the
-                // source span is fixed by srcSpan, so the source end stays put too.
-                offset_t newOffset = (offset_t)( Fraction( clipResizeOffset0_ )
-                                     * ( newStretch / s0 ) ).floorToInt();
                 cut->setStretchRaw( newStretch );
-                cut->setStartOffsetRaw( WarpedPos( (int64_t)newOffset ) );
                 cut->setDurationRaw( ClipLen( newDur ) );
                 cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                 smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
@@ -1672,10 +1666,12 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                         if( qstrcmp( o.metaObject()->className(), "SCut" ) == 0 ) {
                             SCut *c = (SCut*)&o;
                             clipResizeOffset0_ = (offset_t) c->getStartOffset().frames();
+                            clipSrcStart0_     = c->getSrcStart();
                             clipLoopLen0_      = c->getLoopLength().frames();
                             clipStretch0_ = c->getStretchExact();
                         } else {
                             clipResizeOffset0_ = 0;
+                            clipSrcStart0_     = Fraction(0);
                             clipLoopLen0_      = 0;
                             clipStretch0_      = Fraction(1);
                         }

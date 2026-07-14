@@ -72,8 +72,12 @@ SApplyResult SSplitClipAction::apply(SProject *project)
             if (!c1) continue;
             SCut *c2 = new SCut(project, c1->getContent());
             c2->setGrainParamsRaw(c1->getGrainParams());
-            c2->setStartOffset( (offset_t) warpedFromClip(
-                ClipPos((int64_t)inObjOffset), c1->getStartOffset() ).frames() );
+            // Tail anchor = head anchor + split offset mapped to source:
+            // exact rational, no floor (proposal 18 Phase 3).
+            c2->setSrcStartRaw( c1->getSrcStart()
+                + ( c1->getStretchExact() > Fraction(0)
+                        ? Fraction( (int64_t)inObjOffset ) / c1->getStretchExact()
+                        : Fraction( (int64_t)inObjOffset ) ) );
             c2->setDuration(fullDur - inObjOffset);
             stack2->insertTake(*c2);
         }
@@ -107,7 +111,7 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     if (!sc1) {
         return {false, nullptr};
     }
-    WarpedPos sc1StartOffset = sc1->getStartOffset();
+    Fraction sc1Anchor = sc1->getSrcStart();
     length_t origDur = sc1->getDuration();
 
     // Second part: a new cut over the same content, starting at the split point.
@@ -121,8 +125,10 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     // reader with these params in place.
     SCut *sc2 = new SCut(project, sc1->getContent());
     sc2->setGrainParamsRaw(sc1->getGrainParams());
-    sc2->setStartOffset( (offset_t) warpedFromClip(
-        ClipPos((int64_t)inObjOffset), sc1StartOffset ).frames() );
+    sc2->setSrcStartRaw( sc1Anchor
+        + ( sc1->getStretchExact() > Fraction(0)
+                ? Fraction( (int64_t)inObjOffset ) / sc1->getStretchExact()
+                : Fraction( (int64_t)inObjOffset ) ) );
     sc2->setDuration(origDur - inObjOffset);
     sc1->setDuration(inObjOffset);
     SLink *sl2 = new SLink(*sc2, NULL);

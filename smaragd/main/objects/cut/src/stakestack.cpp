@@ -134,13 +134,11 @@ void STakeStack::applyWindowAll( length_t duration, length_t loopLength,
         if( !cut ) continue;
         // Slip offsets live in the stretched OUTPUT domain: a stretch change
         // rescales them so every take keeps pointing at the same material.
-        WarpedPos off = cut->getStartOffset();
-        const Fraction oldStretch = cut->getStretchExact();
-        if( oldStretch > Fraction(0) && stretch != oldStretch )
-            off = WarpedPos( ( Fraction( off.frames() )
-                             * ( stretch / oldStretch ) ).floorToInt() );
-        cut->setWindow( off, ClipLen( duration ), WarpedLen( loopLength ),
-                        stretch );
+        // The source anchor is authoritative (proposal 18 Phase 3): a
+        // stretch change does not move it, so the old warped-offset rescale
+        // (and its per-take rounding) is simply gone.
+        cut->setWindow( cut->getSrcStart(), ClipLen( duration ),
+                        WarpedLen( loopLength ), stretch );
     }
     forwardSuppressed_ = false;
     emit durationChanged( getDuration() );

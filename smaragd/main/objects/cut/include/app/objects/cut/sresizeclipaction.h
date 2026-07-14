@@ -19,7 +19,7 @@ class SResizeClipAction : public SAction {
 public:
     SResizeClipAction() = default;
     SResizeClipAction( const QList<int> &clipPath,
-                       offset_t startTime, offset_t startOffset, length_t duration,
+                       offset_t startTime, const Fraction &srcStart, length_t duration,
                        length_t loopLength = 0, const Fraction &stretch = Fraction(1),
                        int take = -1, bool broadcast = true );
 
@@ -31,7 +31,7 @@ public:
 private:
     QList<int> clipPath_;
     offset_t   startTime_   = 0;
-    offset_t   startOffset_ = 0;
+    Fraction   srcStart_    = Fraction(0);  // exact source-domain slip anchor
     length_t   duration_    = 0;
     length_t   loopLength_  = 0;
     Fraction   stretch_     = Fraction(1);

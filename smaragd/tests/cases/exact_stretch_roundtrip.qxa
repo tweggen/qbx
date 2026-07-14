@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 18 Phase 3: the clip window's SOURCE anchor is authoritative.
+
+  A clip is slipped+stretched (legacy warped startOffset attr: 72000 at
+  stretch 3/2 migrates to the exact source anchor 48000 = source 1 s), then
+  un-stretched back to unity via the NEW srcStart attribute. The source
+  window must be exactly [1 s, 2.333 s) of the ramped sawtooth in both
+  states - under the old warped-authoritative storage each stretch edit
+  re-rounded the offset, so stretch/unstretch cycles drifted the window.
+
+  Fixture: test_sawtooth.wav, 4 s ramp 0 -> 0.8 (RMS(t) = 0.2 t / sqrt(3)).
+
+  Stretched render (2 s = source [1, 2.333) s x1.5):
+    out [0,1)s   = src [1.000,1.667)s -> RMS ~0.156
+    out [1,2)s   = src [1.667,2.333)s -> RMS ~0.232
+  Unstretched render (1.333 s = source [1, 2.333) s unity):
+    out [0,1)s        = src [1,2)s        -> RMS ~0.176
+    out [1,1.333)s    = src [2,2.333)s    -> RMS ~0.250
+-->
+<SActionScript version="1" name="exact_stretch_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Slip + stretch x3/2, LEGACY warped-offset form: startOffset 72000
+         at stretch 3/2 must migrate to srcStart = 48000 exactly -->
+    <resize-clip clip="0,0" startTime="0" startOffset="72000"
+                 duration="96000" loopLength="0" stretch="3/2"/>
+
+    <render filename="exact_stretch_a.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="exact_stretch_a.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.125" maxRms="0.19"/>
+    <assert-audio-energy filename="exact_stretch_a.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.19" maxRms="0.27"/>
+    <assert-audio-energy filename="exact_stretch_a.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Un-stretch via the NEW exact-anchor form: same source window
+         [48000, 48000+64000) at unity -->
+    <resize-clip clip="0,0" startTime="0" srcStart="48000"
+                 duration="64000" loopLength="0" stretch="1"/>
+
+    <render filename="exact_stretch_b.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="exact_stretch_b.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.14" maxRms="0.21"/>
+    <assert-audio-energy filename="exact_stretch_b.wav"
+                         startFrame="48000" frameCount="16000"
+                         minRms="0.21" maxRms="0.29"/>
+    <assert-audio-energy filename="exact_stretch_b.wav"
+                         startFrame="64000" frameCount="32000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Serialization roundtrip: the exact anchor survives save/load -->
+    <save-project path="../../build/exact_stretch_roundtrip.qxp"/>
+    <load-project path="../../build/exact_stretch_roundtrip.qxp"/>
+    <render filename="exact_stretch_c.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="exact_stretch_c.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.14" maxRms="0.21"/>
+    <assert-audio-energy filename="exact_stretch_c.wav"
+                         startFrame="48000" frameCount="16000"
+                         minRms="0.21" maxRms="0.29"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <!-- Undo/redo of the whole history must restore identical state -->
+  <verify-undo/>
+
+</SActionScript>

@@ -122,7 +122,15 @@ public:
     virtual offset_t mapTimelineToComponentPos( offset_t off );
     SObject &getContent() const { return content_->getSObject(); }
     WarpedPos getLoopStart() const;
-    WarpedPos getStartOffset() const { return startOffset_; }
+    // The clip's slip anchor. AUTHORITATIVE storage is the SOURCE-domain
+    // anchor srcStart_ (proposal 18 Phase 3): it points into concrete
+    // material and is invariant under stretch edits, so re-stretching can
+    // never drift it. The warped-domain offset is DERIVED exactly and
+    // floored once here — the render-boundary rounding rule.
+    const Fraction &getSrcStart() const { return srcStart_; }
+    WarpedPos getStartOffset() const {
+        return WarpedPos( ( srcStart_ * grainParams_.stretch ).floorToInt() );
+    }
     // Length of the segment that repeats when this cut is longer than it (the
     // "previously visible cut" captured by the right-upper edge loop gesture).
     // 0 means no loop; the loop is active iff 0 < loopLength_ < cutDuration_.
@@ -136,8 +144,18 @@ public:
     // feedback and for cloning; the chain is rebuilt once afterwards, e.g. by
     // setWindow on release).
     void setLoopLengthRaw( WarpedLen l ) { loopLength_ = l; }
+    // Changing the stretch does NOT move the source anchor — that is the
+    // point of source-authoritative storage (the old per-edit offset
+    // rescale, and its rounding, are gone).
     void setStretchRaw( const Fraction &s ) { grainParams_.stretch = s; }
-    void setStartOffsetRaw( WarpedPos o ) { startOffset_ = o; }
+    void setSrcStartRaw( const Fraction &s ) { srcStart_ = s; }
+    // Warped-domain setter (gestures/actions that measured in the warped
+    // domain): converts EXACTLY via the current stretch.
+    void setStartOffsetRaw( WarpedPos o ) {
+        srcStart_ = grainParams_.stretch > Fraction(0)
+                  ? Fraction( o.frames() ) / grainParams_.stretch
+                  : Fraction( o.frames() );
+    }
     void setDurationRaw( ClipLen d ) { cutDuration_ = d; }
     void setGrainParamsRaw( const twGrainParams &p ) { grainParams_ = p; }
     virtual bool hasDuration() const { return true; }
@@ -156,8 +174,11 @@ public:
     // once. Unlike setGrainParams() this does NOT preserve-span-rescale — the
     // caller supplies already-final values. The undoable form of the clip-edge
     // gestures (see SResizeClipAction).
-    void setWindow( WarpedPos startOffset, ClipLen duration,
+    void setWindow( const Fraction &srcStart, ClipLen duration,
                     WarpedLen loopLength, const Fraction &stretch );
+    // Source-anchor slip with capture invalidation (exact counterpart of
+    // the warped setStartOffset slot).
+    void setSrcStart( const Fraction &srcStart );
 
     // Grain time-stretch / pitch-shift parameters for this clip (proposal 06).
     // The stretch is an EXACT rational (proposal 18 Phase 2); getStretch()
@@ -305,9 +326,12 @@ private:
 
     // Window parameters: accessed by both UI thread (modifications) and audio thread (reading).
     // Use inherited mutex() from SObject to synchronize access.
-    // Domain-typed (proposal 18 Phase 1): the window lives in the grain
-    // OUTPUT (warped) domain; the duration is a clip-relative length.
-    WarpedPos startOffset_;
+    // Domain-typed (proposal 18 Phases 1+3): the slip anchor is stored in
+    // the SOURCE domain as an exact rational (integral for freshly edited
+    // clips; legacy loads may carry the old rounding as a fraction). The
+    // loop segment stays a warped/timeline length (musical quantity), the
+    // duration a clip-relative length.
+    Fraction  srcStart_;
     WarpedPos loopStart_;
     WarpedLen loopLength_;
     ClipLen   cutDuration_;

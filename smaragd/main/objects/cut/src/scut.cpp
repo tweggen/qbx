@@ -36,7 +36,7 @@ SCutSnapshot SCut::getSnapshot() const
     }
 
     SCutSnapshot snap;
-    snap.startOffset = startOffset_;
+    snap.startOffset = getStartOffset();   // derived: floor(srcStart * stretch)
     snap.loopLength = loopLength_;
     snap.cutDuration = cutDuration_;
     snap.grainParams = grainParams_;
@@ -574,7 +574,16 @@ void SCut::setStartOffset( offset_t off )
 {
     {
         std::lock_guard<std::mutex> lock(mutex());
-        startOffset_ = WarpedPos( (int64_t) off );
+        setStartOffsetRaw( WarpedPos( (int64_t) off ) );
+    }
+    invalidateCapture();  // Window change requires new capture (formal guidelines)
+}
+
+void SCut::setSrcStart( const Fraction &srcStart )
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        srcStart_ = srcStart;
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
 }
@@ -611,12 +620,12 @@ void SCut::setLoopLength( length_t l )
     emit durationChanged( dur );
 }
 
-void SCut::setWindow( WarpedPos startOffset, ClipLen duration,
+void SCut::setWindow( const Fraction &srcStart, ClipLen duration,
                       WarpedLen loopLength, const Fraction &stretch )
 {
     {
         std::lock_guard<std::mutex> lock(mutex());
-        startOffset_ = startOffset;
+        srcStart_    = srcStart;
         cutDuration_ = duration;
         loopLength_  = loopLength;
         grainParams_.stretch = stretch;
@@ -652,16 +661,16 @@ void SCut::setGrainParams( const twGrainParams &p )
         grainParams_ = p;
         if( oldStretch > Fraction(0) && p.stretch > Fraction(0)
             && p.stretch != oldStretch ) {
-            // Preserve-span rescale: warped-domain values scale with the
-            // stretch so the SOURCE window stays invariant. The ratio is
-            // exact; floor is the single rounding (proposal 18 rule) until
-            // Phase 3 makes the source window authoritative.
+            // Preserve-span rescale of the timeline duration (the source
+            // span duration/stretch stays put). The SOURCE ANCHOR is
+            // authoritative and simply does not move under a stretch edit;
+            // the old warped-offset rescale, and its per-edit rounding,
+            // are gone (proposal 18 Phase 3).
             Fraction k = p.stretch / oldStretch;
             cutDuration_ = ClipLen( ( Fraction( cutDuration_.frames() ) * k ).floorToInt() );
-            startOffset_ = WarpedPos( ( Fraction( startOffset_.frames() ) * k ).floorToInt() );
         }
         // Manually construct snapshot without re-acquiring lock
-        snap.startOffset = startOffset_;
+        snap.startOffset = getStartOffset();
         snap.loopLength = loopLength_;
         snap.cutDuration = cutDuration_;
         snap.grainParams = grainParams_;
@@ -723,7 +732,7 @@ SCut::~SCut()
 
 SCut::SCut( SProject *parentProject, SLink &content )
     : SObject( parentProject ),
-      startOffset_( 0 ),
+      srcStart_( 0 ),
       loopLength_( 0 ),
       inlineRenderer_( NULL ),
       readerTried_( false )
@@ -756,7 +765,7 @@ SCut::SCut( SProject *parentProject, SLink &content )
 
 SCut::SCut( SProject *parentProject, SObject &content )
     : SObject( parentProject ),
-      startOffset_( 0 ),
+      srcStart_( 0 ),
       loopLength_( 0 ),
       inlineRenderer_( NULL ),
       readerTried_( false )
@@ -784,11 +793,13 @@ SCut::SCut( SProject *parentProject, SObject &content )
 
 int SCut::serializeSelfAttributes( QTextStream &o )
 {
-    Fraction startOffsetFrac(startOffset_.frames(), 1);
     Fraction cutDurationFrac(cutDuration_.frames(), 1);
     Fraction loopLengthFrac(loopLength_.frames(), 1);
 
-    o << " startOffset='" << QString::fromStdString(startOffsetFrac.toString()) << "'"
+    // srcStart is the exact, authoritative anchor; startOffset is the
+    // derived warped-domain value kept for older builds reading this file.
+    o << " srcStart='" << QString::fromStdString(srcStart_.toString()) << "'"
+      << " startOffset='" << QString::fromStdString(Fraction(getStartOffset().frames(), 1).toString()) << "'"
       << " cutDuration='" << QString::fromStdString(cutDurationFrac.toString()) << "'"
       << " loopLength='" << QString::fromStdString(loopLengthFrac.toString()) << "'"
       << " stretch='" << QString::fromStdString( grainParams_.stretch.toString() ) << "'"
@@ -815,10 +826,25 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     // so calling setStartOffset() is safe - it won't trigger invalidation chains.
     // This way setters work normally and code stays consistent.
 
-    QString data;
-    data = element.attribute( "startOffset", "0" );
-    Fraction startOffsetFrac = parseFractionOrDouble( data.toStdString() );
-    setStartOffset( (offset_t)startOffsetFrac.toDouble() );
+    // The stretch must be parsed BEFORE the anchor: the legacy startOffset
+    // migration divides by it. Exact "n/d" parses losslessly; legacy
+    // decimals recover once via lookup/continued fractions.
+    grainParams_.stretch = parseFractionOrDouble(
+        element.attribute( "stretch", "1" ).toStdString() );
+
+    QString data = element.attribute( "srcStart" );
+    if( !data.isEmpty() ) {
+        // Exact anchor (proposal 18 Phase 3 format)
+        srcStart_ = parseFractionOrDouble( data.toStdString() );
+    } else {
+        // Legacy warped-domain offset: migrate by exact division. The
+        // result may be rational (the legacy rounding made visible);
+        // keeping it exact avoids re-rounding on every load.
+        Fraction warped = parseFractionOrDouble(
+            element.attribute( "startOffset", "0" ).toStdString() );
+        srcStart_ = grainParams_.stretch > Fraction(0)
+                  ? warped / grainParams_.stretch : warped;
+    }
 
     // Load cutDuration. If missing, use a sensible default based on project sample rate
     // (0.5 seconds). This matches the constructor default and ensures consistency
@@ -836,13 +862,9 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     Fraction loopLengthFrac = parseFractionOrDouble( data.toStdString() );
     loopLength_ = WarpedLen( (length_t)loopLengthFrac.toDouble() );
 
-    // Grain params: stretch and pitchCents are dimensionless, grainSize and
-    // crossfade are now stored as milliseconds (rate-independent) and converted
-    // to samples based on project sample rate.
-    // Exact "n/d" parses losslessly; legacy decimals recover once via the
-    // lookup table / continued fractions (EXACT_ARITHMETIC_DESIGN.md).
-    grainParams_.stretch    = parseFractionOrDouble(
-        element.attribute( "stretch", "1" ).toStdString() );
+    // Grain params: pitchCents is dimensionless (stretch was parsed above,
+    // before the anchor); grainSize and crossfade are stored as milliseconds
+    // (rate-independent) and converted to samples at the project rate.
     grainParams_.pitchCents = element.attribute( "pitchCents", "0.0" ).toDouble();
 
     int srate = 48000;  // default fallback
@@ -961,7 +983,7 @@ void SCut::processWindowParamEvents()
         for( const SCutWindowParamEvent &event : events ) {
             switch( event.type ) {
             case OFFSET_CHANGE:
-                startOffset_ = WarpedPos( (int64_t) event.value );
+                setStartOffsetRaw( WarpedPos( (int64_t) event.value ) );
                 needsCaptureBuild = true;
                 break;
             case DURATION_CHANGE:
@@ -982,7 +1004,7 @@ void SCut::processWindowParamEvents()
             }
         }
         // Manually construct snapshot without re-acquiring lock (we already hold it)
-        snap.startOffset = startOffset_;
+        snap.startOffset = getStartOffset();
         snap.loopLength = loopLength_;
         snap.cutDuration = cutDuration_;
         snap.grainParams = grainParams_;

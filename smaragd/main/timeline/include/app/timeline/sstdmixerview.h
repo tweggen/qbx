@@ -194,6 +194,7 @@ private:
     offset_t clipDragStart0_ = 0;
     // SCut start-offset at press, for the resize (edge-drag) undo snapshot.
     offset_t clipResizeOffset0_ = 0;
+    Fraction clipSrcStart0_ = Fraction(0);  // exact pre-drag source anchor
     // Loop length / grain stretch at press, for the loop & time-stretch gestures.
     length_t clipLoopLen0_ = 0;   // original loop length (revert snapshot)
     length_t clipLoopSeg_  = 0;   // loop segment captured during a loop drag

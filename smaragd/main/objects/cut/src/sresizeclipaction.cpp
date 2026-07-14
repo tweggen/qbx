@@ -14,11 +14,11 @@
 using namespace strackpath;
 
 SResizeClipAction::SResizeClipAction( const QList<int> &clipPath,
-                                      offset_t startTime, offset_t startOffset,
+                                      offset_t startTime, const Fraction &srcStart,
                                       length_t duration, length_t loopLength,
                                       const Fraction &stretch, int take, bool broadcast )
     : clipPath_( clipPath ), startTime_( startTime ),
-      startOffset_( startOffset ), duration_( duration ),
+      srcStart_( srcStart ), duration_( duration ),
       loopLength_( loopLength ), stretch_( stretch ), take_( take ),
       broadcast_( broadcast )
 {
@@ -48,7 +48,7 @@ SApplyResult SResizeClipAction::apply( SProject *project )
             SCompositeAction composite;
             for( const QList<int> &p : targets ) {
                 composite.append( new SResizeClipAction(
-                    p, startTime_, startOffset_, duration_, loopLength_,
+                    p, startTime_, srcStart_, duration_, loopLength_,
                     stretch_, t, false ) );
             }
             return composite.apply( project );
@@ -76,7 +76,7 @@ SApplyResult SResizeClipAction::apply( SProject *project )
         SCut *takeCut = stack->takeCutAt( t );   // may be null (no active take)
 
         offset_t oldStart  = link->getStartTime();
-        offset_t oldOffset = takeCut ? (offset_t) takeCut->getStartOffset().frames() : 0;
+        Fraction oldAnchor = takeCut ? takeCut->getSrcStart() : Fraction(0);
         length_t oldDur    = stack->getDuration();
         length_t oldLoop   = takeCut ? takeCut->getLoopLength().frames() : 0;
         Fraction oldStretch = takeCut ? takeCut->getStretchExact() : Fraction(1);
@@ -84,12 +84,11 @@ SApplyResult SResizeClipAction::apply( SProject *project )
         link->setStartTime( startTime_ );
         stack->applyWindowAll( duration_, loopLength_, stretch_ );
         if( takeCut ) {
-            takeCut->setWindow( WarpedPos( (int64_t)startOffset_ ),
-                                ClipLen( duration_ ), WarpedLen( loopLength_ ),
-                                stretch_ );
+            takeCut->setWindow( srcStart_, ClipLen( duration_ ),
+                                WarpedLen( loopLength_ ), stretch_ );
         }
 
-        SAction *inverse = new SResizeClipAction( clipPath_, oldStart, oldOffset,
+        SAction *inverse = new SResizeClipAction( clipPath_, oldStart, oldAnchor,
                                                   oldDur, oldLoop, oldStretch,
                                                   take_ );
         return {true, inverse};
@@ -102,16 +101,16 @@ SApplyResult SResizeClipAction::apply( SProject *project )
 
     // Capture the pre-mutation window for the inverse, then apply the new one.
     offset_t oldStart  = link->getStartTime();
-    offset_t oldOffset = (offset_t) cut->getStartOffset().frames();
+    Fraction oldAnchor = cut->getSrcStart();
     length_t oldDur    = cut->getDuration();
     length_t oldLoop   = cut->getLoopLength().frames();
     Fraction oldStretch = cut->getStretchExact();
 
     link->setStartTime( startTime_ );
-    cut->setWindow( WarpedPos( (int64_t)startOffset_ ), ClipLen( duration_ ),
+    cut->setWindow( srcStart_, ClipLen( duration_ ),
                     WarpedLen( loopLength_ ), stretch_ );
 
-    SAction *inverse = new SResizeClipAction( clipPath_, oldStart, oldOffset, oldDur,
+    SAction *inverse = new SResizeClipAction( clipPath_, oldStart, oldAnchor, oldDur,
                                               oldLoop, oldStretch );
     return {true, inverse};
 }
@@ -120,7 +119,7 @@ void SResizeClipAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "clip", pathToString( clipPath_ ) );
     elem.setAttribute( "startTime", QString::fromStdString( Fraction(startTime_, 1).toString() ) );
-    elem.setAttribute( "startOffset", QString::fromStdString( Fraction(startOffset_, 1).toString() ) );
+    elem.setAttribute( "srcStart", QString::fromStdString( srcStart_.toString() ) );
     elem.setAttribute( "duration", QString::fromStdString( Fraction(duration_, 1).toString() ) );
     elem.setAttribute( "loopLength", QString::fromStdString( Fraction(loopLength_, 1).toString() ) );
     elem.setAttribute( "stretch", QString::fromStdString( stretch_.toString() ) );
@@ -132,10 +131,19 @@ bool SResizeClipAction::readXml( const QDomElement &elem, int /*version*/ )
 {
     clipPath_    = stringToPath( elem.attribute( "clip" ) );
     startTime_   = (offset_t) parseFractionOrDouble( elem.attribute( "startTime", "0" ).toStdString() ).toDouble();
-    startOffset_ = (offset_t) parseFractionOrDouble( elem.attribute( "startOffset", "0" ).toStdString() ).toDouble();
     duration_    = (length_t) parseFractionOrDouble( elem.attribute( "duration", "0" ).toStdString() ).toDouble();
     loopLength_  = (length_t) parseFractionOrDouble( elem.attribute( "loopLength", "0" ).toStdString() ).toDouble();
     stretch_     = parseFractionOrDouble( elem.attribute( "stretch", "1" ).toStdString() );
+    QString anchorStr = elem.attribute( "srcStart" );
+    if( !anchorStr.isEmpty() ) {
+        srcStart_ = parseFractionOrDouble( anchorStr.toStdString() );
+    } else {
+        // Legacy scripts/actions carry a warped-domain startOffset; migrate
+        // by exact division through the (already parsed) stretch.
+        Fraction warped = parseFractionOrDouble(
+            elem.attribute( "startOffset", "0" ).toStdString() );
+        srcStart_ = stretch_ > Fraction(0) ? warped / stretch_ : warped;
+    }
     take_        = elem.attribute( "take", "-1" ).toInt();
     broadcast_   = elem.attribute( "broadcast", "1" ).toInt() != 0;
     return true;
