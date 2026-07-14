@@ -1,6 +1,7 @@
 #include "tw/core/twfraction.h"
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iostream>
 
@@ -10,8 +11,8 @@
 
 struct KnownDecimal {
     double value;
-    uint64_t numerator;
-    uint64_t denominator;
+    int64_t numerator;
+    int64_t denominator;
 };
 
 static const KnownDecimal KNOWN_DECIMALS[] = {
@@ -23,23 +24,13 @@ static const KnownDecimal KNOWN_DECIMALS[] = {
     {2.0,     2,     1},      // 200% speed (2x)
     {2.5,     5,     2},      // 250% speed (2.5x)
 
-    // Grain sizes @ 48kHz (milliseconds)
-    // Note: 2048 samples @ 48000 Hz = 42.6667 ms
-    // To match "42.6667" as input, we store: 2048 * 1000 / 48000 = 42666.7 / 1000 = 42.6667
-    // Or more directly: 2048000 / 48000 when input is "42.6667"
-    // Actually simpler: just store as 2048, 48000 and it gives 0.0426667 seconds = 42.6667 ms
-    // But we're matching decimal "42.6667" which is the millisecond value, not seconds
-    // So we need: {42.6667, 2048*1000, 48000} or we match approximately
-    {0.0426667, 2048,  48000},  // 2048 samples / 48000 = 0.0426667 seconds = 42.6667 ms
-    {0.0106667, 512,   48000},  // 512 samples / 48000 = 0.0106667 seconds = 10.6667 ms
+    // Grain sizes @ 48kHz (seconds)
+    {0.0426667, 2048,  48000},  // 2048 samples / 48000 = 42.6667 ms
+    {0.0106667, 512,   48000},  // 512 samples / 48000 = 10.6667 ms
     {0.0053333, 256,   48000},  // 256 samples / 48000
-
-    // Note: The grain size in milliseconds as a decimal like "42.6667" will be matched
-    // by continued fractions approximation, not by exact lookup
 
     // Duration values
     {0.208333, 10000, 48000}, // Default duration (10000 samples @ 48kHz)
-    {0.208333, 9223,  44100}, // Default duration @ 44.1kHz
 
     // Sentinel
     {-1, 0, 0}
@@ -50,77 +41,61 @@ static const KnownDecimal KNOWN_DECIMALS[] = {
 // ============================================================================
 
 /**
- * Convert a decimal to a fraction using continued fractions algorithm.
- * This produces increasingly good rational approximations.
- *
- * Algorithm:
- *   1. Extract integer part, keep remainder
- *   2. Take reciprocal of remainder
- *   3. Repeat until remainder is near zero or denominator exceeds limit
- *   4. Track convergents (best rational approximations)
- *
- * Example: 0.208333... → [0; 4, 1, 4] → 1/5
+ * Convert a decimal to a fraction using the continued fractions algorithm.
+ * Produces the best rational approximation within maxDenominator.
+ * Sign is peeled off first; the core runs on the magnitude.
  */
 Fraction doubleToFraction(double value, uint64_t maxDenominator) {
-    // Handle special cases
     if (std::isnan(value) || std::isinf(value)) {
         return {0, 1};
     }
 
-    // Check if it's effectively an integer
-    if (std::fabs(value - std::round(value)) < 1e-10) {
-        return {(uint64_t)std::round(value), 1};
+    bool negative = value < 0.0;
+    double v = negative ? -value : value;
+
+    // Effectively an integer?
+    if (std::fabs(v - std::round(v)) < 1e-10) {
+        int64_t whole = (int64_t)std::round(v);
+        return Fraction(negative ? -whole : whole, 1);
     }
 
-    // Initialize for continued fractions
-    int64_t wholePart = (int64_t)std::floor(value);
-    double remainder = value - wholePart;
+    int64_t wholePart = (int64_t)std::floor(v);
+    double remainder = v - wholePart;
 
     uint64_t num_prev = 1, den_prev = 0;
-    uint64_t num_curr = wholePart, den_curr = 1;
+    uint64_t num_curr = (uint64_t)wholePart, den_curr = 1;
 
-    // Clamp whole part to valid range
-    if (num_curr > 1e15) {
-        num_curr = 1e15;
-    }
-
-    // Iterate: find convergents
     const int MAX_ITERATIONS = 20;
     const double EPSILON = 1e-10;
 
     for (int iteration = 0; iteration < MAX_ITERATIONS; ++iteration) {
-        // Stop if remainder is negligible
         if (remainder < EPSILON) {
             break;
         }
-
-        // Stop if denominator would exceed limit
         if (den_curr > maxDenominator) {
             break;
         }
 
-        // Compute next partial quotient
         remainder = 1.0 / remainder;
         int64_t a = (int64_t)std::floor(remainder);
         remainder -= a;
 
-        // Compute next convergent
-        uint64_t num_next = a * num_curr + num_prev;
-        uint64_t den_next = a * den_curr + den_prev;
+        uint64_t num_next = (uint64_t)a * num_curr + num_prev;
+        uint64_t den_next = (uint64_t)a * den_curr + den_prev;
 
-        // Check for overflow or exceeding limit
-        if (den_next > maxDenominator || num_next > 1e15 || den_next > 1e15) {
+        if (den_next > maxDenominator || num_next > (uint64_t)1e15 ||
+            den_next > (uint64_t)1e15) {
             break;  // Return current best approximation
         }
 
-        // Update for next iteration
         num_prev = num_curr;
         den_prev = den_curr;
         num_curr = num_next;
         den_curr = den_next;
     }
 
-    return {num_curr, den_curr};
+    Fraction f((int64_t)num_curr, (int64_t)den_curr);
+    return negative ? -f : f;
 }
 
 // ============================================================================
@@ -128,19 +103,20 @@ Fraction doubleToFraction(double value, uint64_t maxDenominator) {
 // ============================================================================
 
 Fraction doubleToFractionWithLookup(double value) {
-    // Tolerance for matching known decimals
     const double TOLERANCE = 1e-6;
 
-    // Check known decimal values
+    bool negative = value < 0.0;
+    double v = negative ? -value : value;
+
     for (int i = 0; KNOWN_DECIMALS[i].value >= 0; ++i) {
-        double diff = std::fabs(value - KNOWN_DECIMALS[i].value);
+        double diff = std::fabs(v - KNOWN_DECIMALS[i].value);
         if (diff < TOLERANCE) {
-            return {KNOWN_DECIMALS[i].numerator,
-                    KNOWN_DECIMALS[i].denominator};
+            Fraction f(KNOWN_DECIMALS[i].numerator,
+                       KNOWN_DECIMALS[i].denominator);
+            return negative ? -f : f;
         }
     }
 
-    // Not in lookup table, use continued fractions
     return doubleToFraction(value, 1000000);
 }
 
@@ -148,13 +124,37 @@ Fraction doubleToFractionWithLookup(double value) {
 // Main Parser Function
 // ============================================================================
 
-Fraction parseFractionOrDouble(const std::string& str) {
-    // Trim whitespace
-    std::string s = str;
+// True iff `s` is a plain (optionally signed) decimal integer that fits
+// int64. Used for the exact "n/d" fast path.
+static bool parseInt64Exact(const std::string& s, int64_t& out) {
+    if (s.empty()) return false;
+    size_t i = 0;
+    if (s[0] == '+' || s[0] == '-') i = 1;
+    if (i >= s.size()) return false;
+    for (size_t k = i; k < s.size(); ++k) {
+        if (!std::isdigit((unsigned char)s[k])) return false;
+    }
+    try {
+        size_t pos = 0;
+        long long v = std::stoll(s, &pos);
+        if (pos != s.size()) return false;
+        out = (int64_t)v;
+        return true;
+    } catch (const std::exception&) {
+        return false;  // out of range
+    }
+}
+
+static std::string trimmed(const std::string& in) {
+    std::string s = in;
     s.erase(0, s.find_first_not_of(" \t\n\r\f\v"));
     s.erase(s.find_last_not_of(" \t\n\r\f\v") + 1);
+    return s;
+}
 
-    // Handle empty string
+Fraction parseFractionOrDouble(const std::string& str) {
+    std::string s = trimmed(str);
+
     if (s.empty()) {
         return {0, 1};
     }
@@ -162,29 +162,32 @@ Fraction parseFractionOrDouble(const std::string& str) {
     // Case 1: Explicit fraction "numerator/denominator"
     size_t slashPos = s.find('/');
     if (slashPos != std::string::npos) {
+        std::string numStr = trimmed(s.substr(0, slashPos));
+        std::string denStr = trimmed(s.substr(slashPos + 1));
+
+        // Exact fast path: integer/integer parses WITHOUT any double
+        // round-trip, so large exact fractions (positions, long
+        // denominator chains) survive serialization bit-exactly.
+        int64_t inum, iden;
+        if (parseInt64Exact(numStr, inum) && parseInt64Exact(denStr, iden)) {
+            if (iden == 0) {
+                std::cerr << "Fraction parser: division by zero in " << str
+                          << std::endl;
+                return {0, 1};
+            }
+            return Fraction(inum, iden);
+        }
+
+        // Legacy/lenient path: decimal parts ("3.5/2.0") via doubles.
         try {
-            std::string numStr = s.substr(0, slashPos);
-            std::string denStr = s.substr(slashPos + 1);
-
-            // Trim each part
-            numStr.erase(0, numStr.find_first_not_of(" \t"));
-            numStr.erase(numStr.find_last_not_of(" \t") + 1);
-            denStr.erase(0, denStr.find_first_not_of(" \t"));
-            denStr.erase(denStr.find_last_not_of(" \t") + 1);
-
-            // Parse both parts as doubles (to handle "3.5/2.0")
             double num = std::stod(numStr);
             double den = std::stod(denStr);
-
             if (den == 0) {
                 std::cerr << "Fraction parser: division by zero in " << str
                           << std::endl;
                 return {0, 1};
             }
-
-            // Convert ratio to fraction
-            Fraction result = doubleToFraction(num / den);
-            return result;
+            return doubleToFraction(num / den);
         } catch (const std::exception& e) {
             std::cerr << "Fraction parser error parsing '" << str << "': "
                       << e.what() << std::endl;
@@ -193,6 +196,10 @@ Fraction parseFractionOrDouble(const std::string& str) {
     }
 
     // Case 2: Plain number (integer or decimal)
+    int64_t ival;
+    if (parseInt64Exact(s, ival)) {
+        return Fraction(ival, 1);
+    }
     try {
         double value = std::stod(s);
         return doubleToFractionWithLookup(value);

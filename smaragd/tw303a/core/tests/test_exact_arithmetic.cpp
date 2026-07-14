@@ -365,6 +365,136 @@ void testXMLSerialization(TestRunner& runner) {
 }
 
 // ============================================================================
+// Proposal 18 Phase 0: signedness, overflow, rounding, exact-parse properties
+// ============================================================================
+
+void testSignedArithmetic(TestRunner& runner) {
+    std::cout << "\n--- Signed Arithmetic (Phase 0) ---" << std::endl;
+
+    Fraction a(3, 4), b(5, 2);
+
+    // Subtraction is exact below zero (old implementation clamped to 0/1)
+    Fraction d = a - b;
+    runner.assertEqual("3/4 - 5/2 = -7/4", d, Fraction(-7, 4));
+    runner.assertEqual("(a-b)+b == a", d + b, a);
+
+    // Sign normalization: denominator always positive
+    Fraction n(3, -4);
+    runner.assertEqual("3/-4 normalizes to -3/4", n, Fraction(-3, 4));
+    runner.assertTrue("denominator kept positive", n.denominator > 0);
+
+    // Unary minus, abs
+    runner.assertEqual("-(−3/4) == 3/4", -Fraction(-3, 4), Fraction(3, 4));
+    runner.assertEqual("abs(-3/4) == 3/4", Fraction(-3, 4).abs(), Fraction(3, 4));
+
+    // Negative multiplication/division
+    runner.assertEqual("(-3/4)*(2/3) = -1/2",
+                      Fraction(-3, 4) * Fraction(2, 3), Fraction(-1, 2));
+    runner.assertEqual("(-3/4)/(-3/2) = 1/2",
+                      Fraction(-3, 4) / Fraction(-3, 2), Fraction(1, 2));
+
+    // Ordering across zero
+    runner.assertTrue("-7/4 < 3/4", Fraction(-7, 4) < Fraction(3, 4));
+    runner.assertTrue("-1/2 > -3/4", Fraction(-1, 2) > Fraction(-3, 4));
+
+    // Negative parse/serialize roundtrip
+    Fraction neg = parseFractionOrDouble("-7/4");
+    runner.assertEqual("parse '-7/4'", neg, Fraction(-7, 4));
+    runner.assertEqual("toString/parse roundtrip of -7/4",
+                      parseFractionOrDouble(neg.toString()), neg);
+}
+
+void testOverflowSafety(TestRunner& runner) {
+    std::cout << "\n--- Overflow Safety (Phase 0) ---" << std::endl;
+
+    // Cross products beyond 64 bits: (2^40/3) + (2^40/5) has a*d + b*c
+    // around 2^43 (fine), but (big/1) * (1/big) used to be the dangerous
+    // shape: reduce-before-narrow must survive it.
+    int64_t big = (int64_t)1 << 40;
+    Fraction f1(big, 3), f2(big, 5);
+    Fraction sum = f1 + f2;
+    runner.assertEqual("2^40/3 + 2^40/5 = 8*2^40/15",
+                      sum, Fraction(big * 8, 15));
+
+    // Product whose UNREDUCED numerator/denominator exceed 64 bits but
+    // whose reduced value is tiny: (2^62/3) * (3/2^62) == 1.
+    int64_t huge = (int64_t)1 << 62;
+    Fraction g1(huge, 3), g2(3, huge);
+    runner.assertEqual("(2^62/3)*(3/2^62) == 1 (reduce before narrow)",
+                      g1 * g2, Fraction(1, 1));
+
+    // Comparison with large cross products must not wrap:
+    // (2^61/1) > (2^61-1)/1
+    runner.assertTrue("2^61 > 2^61-1 (no comparison wrap)",
+                     Fraction(((int64_t)1 << 61), 1) >
+                     Fraction(((int64_t)1 << 61) - 1, 1));
+
+    // Exact integer/integer parse survives values a double cannot hold:
+    // 2^60+1 is not representable in double; the exact parser keeps it.
+    int64_t precise = ((int64_t)1 << 60) + 1;
+    std::string s = std::to_string(precise) + "/48000";
+    Fraction p = parseFractionOrDouble(s);
+    runner.assertEqual("exact parse of (2^60+1)/48000",
+                      p, Fraction(precise, 48000));
+}
+
+void testFloorCeil(TestRunner& runner) {
+    std::cout << "\n--- floor/ceil Projections (Phase 0) ---" << std::endl;
+
+    // The render-boundary rounding rule: starts floor, ends floor(start+len).
+    runner.assertTrue("floor(7/2) == 3", Fraction(7, 2).floorToInt() == 3);
+    runner.assertTrue("ceil(7/2) == 4", Fraction(7, 2).ceilToInt() == 4);
+    runner.assertTrue("floor(-7/2) == -4 (floor division, not truncation)",
+                     Fraction(-7, 2).floorToInt() == -4);
+    runner.assertTrue("ceil(-7/2) == -3", Fraction(-7, 2).ceilToInt() == -3);
+    runner.assertTrue("floor(6/2) == 3 (integral unchanged)",
+                     Fraction(6, 2).floorToInt() == 3);
+    runner.assertTrue("ceil(6/2) == 3", Fraction(6, 2).ceilToInt() == 3);
+
+    // Tiling property (small exhaustive check): for exact start s and
+    // lengths l1,l2, segments [floor(s),floor(s+l1)) and
+    // [floor(s+l1),floor(s+l1+l2)) tile [floor(s),floor(s+l1+l2)) with
+    // no gap or overlap by construction.
+    bool tiled = true;
+    for (int sn = -8; sn <= 8 && tiled; ++sn) {
+        for (int l1n = 0; l1n <= 8 && tiled; ++l1n) {
+            for (int l2n = 0; l2n <= 8 && tiled; ++l2n) {
+                Fraction s(sn, 3), l1(l1n, 3), l2(l2n, 3);
+                int64_t a = s.floorToInt();
+                int64_t b = (s + l1).floorToInt();
+                int64_t c = (s + l1 + l2).floorToInt();
+                // segment1 = [a,b), segment2 = [b,c): contiguous & ordered
+                if (!(a <= b && b <= c)) tiled = false;
+            }
+        }
+    }
+    runner.assertTrue("floor-rounding tiles adjacent exact intervals", tiled);
+}
+
+void testCompositionProperties(TestRunner& runner) {
+    std::cout << "\n--- Composition Properties (Phase 0) ---" << std::endl;
+
+    // stretch(a) ∘ stretch(b) == stretch(a*b), exactly — the proposal-18
+    // repeated-stretch property, on a chain whose double equivalent drifts.
+    Fraction stretches[] = {{44543, 48000}, {3, 2}, {48000, 44543},
+                            {2, 3}, {7, 5}, {5, 7}};
+    Fraction net(1, 1);
+    for (const Fraction& st : stretches) net = net * st;
+    runner.assertEqual("six-factor stretch chain cancels to exactly 1/1",
+                      net, Fraction(1, 1));
+
+    // map/inverse identity: x * s / s == x for awkward s and x
+    Fraction x(157954, 1), st(44543, 48000);
+    runner.assertEqual("x * s / s == x (exact inverse)",
+                      x * st / st, x);
+
+    // Associativity spot-check with mixed signs
+    Fraction p(-7, 12), q(5, 8), r(9, 14);
+    runner.assertEqual("(p*q)*r == p*(q*r)", (p * q) * r, p * (q * r));
+    runner.assertEqual("(p+q)+r == p+(q+r)", (p + q) + r, p + (q + r));
+}
+
+// ============================================================================
 // Main Test Suite
 // ============================================================================
 
@@ -402,6 +532,12 @@ int main() {
 
     // XML serialization
     testXMLSerialization(runner);
+
+    // Proposal 18 Phase 0
+    testSignedArithmetic(runner);
+    testOverflowSafety(runner);
+    testFloorCeil(runner);
+    testCompositionProperties(runner);
 
     runner.printSummary();
 

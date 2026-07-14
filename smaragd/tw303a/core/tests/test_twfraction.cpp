@@ -281,12 +281,15 @@ void testEdgeCases(TestRunner& runner) {
     runner.assertEqual("Parse '  3/2  ' (with whitespace)", f3,
                       Fraction(3, 2));
 
-    // Negative numbers (should clamp)
+    // Negative results are EXACT (proposal 18 Phase 0: the old clamp to
+    // zero silently corrupted position deltas)
     Fraction f4(5, 2);
     Fraction f5(3, 4);
-    Fraction diff = f5 - f4;  // 0.75 - 2.5 = negative, clamps to 0
-    runner.assertTrue("Subtraction that goes negative clamps to 0",
-                     diff.isZero());
+    Fraction diff = f5 - f4;  // 0.75 - 2.5 = -7/4, exact
+    runner.assertEqual("Subtraction below zero is exact (-7/4)",
+                      diff, Fraction(-7, 4));
+    runner.assertTrue("Negative fraction detected", diff.isNegative());
+    runner.assertEqual("(a-b)+b == a", diff + f4, f5);
 }
 
 // ============================================================================
