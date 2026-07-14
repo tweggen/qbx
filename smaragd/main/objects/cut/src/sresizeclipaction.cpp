@@ -76,15 +76,17 @@ SApplyResult SResizeClipAction::apply( SProject *project )
         SCut *takeCut = stack->takeCutAt( t );   // may be null (no active take)
 
         offset_t oldStart  = link->getStartTime();
-        offset_t oldOffset = takeCut ? takeCut->getStartOffset() : 0;
+        offset_t oldOffset = takeCut ? (offset_t) takeCut->getStartOffset().frames() : 0;
         length_t oldDur    = stack->getDuration();
-        length_t oldLoop   = takeCut ? takeCut->getLoopLength() : 0;
+        length_t oldLoop   = takeCut ? takeCut->getLoopLength().frames() : 0;
         double   oldStretch = takeCut ? takeCut->getStretch() : 1.0;
 
         link->setStartTime( startTime_ );
         stack->applyWindowAll( duration_, loopLength_, stretch_ );
         if( takeCut ) {
-            takeCut->setWindow( startOffset_, duration_, loopLength_, stretch_ );
+            takeCut->setWindow( WarpedPos( (int64_t)startOffset_ ),
+                                ClipLen( duration_ ), WarpedLen( loopLength_ ),
+                                stretch_ );
         }
 
         SAction *inverse = new SResizeClipAction( clipPath_, oldStart, oldOffset,
@@ -100,13 +102,14 @@ SApplyResult SResizeClipAction::apply( SProject *project )
 
     // Capture the pre-mutation window for the inverse, then apply the new one.
     offset_t oldStart  = link->getStartTime();
-    offset_t oldOffset = cut->getStartOffset();
+    offset_t oldOffset = (offset_t) cut->getStartOffset().frames();
     length_t oldDur    = cut->getDuration();
-    length_t oldLoop   = cut->getLoopLength();
+    length_t oldLoop   = cut->getLoopLength().frames();
     double   oldStretch = cut->getStretch();
 
     link->setStartTime( startTime_ );
-    cut->setWindow( startOffset_, duration_, loopLength_, stretch_ );
+    cut->setWindow( WarpedPos( (int64_t)startOffset_ ), ClipLen( duration_ ),
+                    WarpedLen( loopLength_ ), stretch_ );
 
     SAction *inverse = new SResizeClipAction( clipPath_, oldStart, oldOffset, oldDur,
                                               oldLoop, oldStretch );

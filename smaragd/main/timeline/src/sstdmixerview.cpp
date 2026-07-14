@@ -796,9 +796,9 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
         if( cut ) {
             offset_t newStart   = lastClickSLink_->getStartTime();
-            offset_t newOffset  = cut->getStartOffset();
+            offset_t newOffset  = (offset_t) cut->getStartOffset().frames();
             length_t newDur     = cut->getDuration();
-            length_t newLoop    = cut->getLoopLength();
+            length_t newLoop    = cut->getLoopLength().frames();
             double   newStretch = clipStretch0_;
             if( clipDragIsStretch_ ) {
                 // The grain view is addressed in the OUTPUT (stretched) domain, so
@@ -822,8 +822,9 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 
                 // Then revert to pre-drag state and re-apply via action
                 lastClickSLink_->setStartTime( clipDragStart0_ );
-                cut->setWindow( clipResizeOffset0_, lastClickDuration_,
-                                clipLoopLen0_, clipStretch0_ );
+                cut->setWindow( WarpedPos( (int64_t)clipResizeOffset0_ ),
+                                ClipLen( lastClickDuration_ ),
+                                WarpedLen( clipLoopLen0_ ), clipStretch0_ );
                 QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
                 clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
                 SApplication::app().submitAction(
@@ -1346,7 +1347,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 // Only rebuild if offset actually changed
-                if( newOff != cut->getStartOffset() ) {
+                if( WarpedPos( (int64_t)newOff ) != cut->getStartOffset() ) {
                     cut->setStartOffset( (offset_t) newOff );  // Visual feedback + queues event via invalidateCapture
                     cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
@@ -1388,8 +1389,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 offset_t newOffset =
                     (offset_t)( (double) clipResizeOffset0_ * newStretch / s0 + 0.5 );
                 cut->setStretchRaw( newStretch );
-                cut->setStartOffsetRaw( newOffset );
-                cut->setDurationRaw( newDur );
+                cut->setStartOffsetRaw( WarpedPos( (int64_t)newOffset ) );
+                cut->setDurationRaw( ClipLen( newDur ) );
                 cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
                 smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 update( oldRect );
@@ -1421,8 +1422,9 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 if( newDur < SMV_CUT_MIN_TIME ) newDur = SMV_CUT_MIN_TIME;
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 // Only rebuild if duration actually changed
-                if( newDur != cut->getDuration() || clipLoopSeg_ != cut->getLoopLength() ) {
-                    cut->setLoopLengthRaw( clipLoopSeg_ );
+                if( newDur != cut->getDuration()
+                    || WarpedLen( clipLoopSeg_ ) != cut->getLoopLength() ) {
+                    cut->setLoopLengthRaw( WarpedLen( clipLoopSeg_ ) );
                     cut->setDuration( newDur );
                     cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
                     cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
@@ -1659,8 +1661,8 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                         SObject &o = lastClickSLink_->getSObject();
                         if( qstrcmp( o.metaObject()->className(), "SCut" ) == 0 ) {
                             SCut *c = (SCut*)&o;
-                            clipResizeOffset0_ = c->getStartOffset();
-                            clipLoopLen0_      = c->getLoopLength();
+                            clipResizeOffset0_ = (offset_t) c->getStartOffset().frames();
+                            clipLoopLen0_      = c->getLoopLength().frames();
                             clipStretch0_      = c->getStretch();
                         } else {
                             clipResizeOffset0_ = 0;

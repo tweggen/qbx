@@ -134,11 +134,13 @@ void STakeStack::applyWindowAll( length_t duration, length_t loopLength,
         if( !cut ) continue;
         // Slip offsets live in the stretched OUTPUT domain: a stretch change
         // rescales them so every take keeps pointing at the same material.
-        offset_t off = cut->getStartOffset();
+        WarpedPos off = cut->getStartOffset();
         const double oldStretch = cut->getStretch();
         if( oldStretch > 0.0 && stretch != oldStretch )
-            off = (offset_t)llround( (double)off * stretch / oldStretch );
-        cut->setWindow( off, duration, loopLength, stretch );
+            off = WarpedPos( (int64_t)llround(
+                (double)off.frames() * stretch / oldStretch ) );
+        cut->setWindow( off, ClipLen( duration ), WarpedLen( loopLength ),
+                        stretch );
     }
     forwardSuppressed_ = false;
     emit durationChanged( getDuration() );

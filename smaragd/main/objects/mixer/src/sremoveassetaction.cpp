@@ -33,7 +33,8 @@ SApplyResult SRemoveAssetAction::apply( SProject *project )
     if( cut ) {
         SObject *root = project->getRootComponent();
         QList<int> containerPath = pathOf( root, &cut->getContent() );
-        inverse = new SCreateAssetAction( containerPath, cut->getStartOffset(),
+        inverse = new SCreateAssetAction( containerPath,
+                                          (offset_t) cut->getStartOffset().frames(),
                                           cut->getDuration(), assetName_ );
     }
 

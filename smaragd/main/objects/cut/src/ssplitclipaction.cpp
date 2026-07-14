@@ -72,7 +72,8 @@ SApplyResult SSplitClipAction::apply(SProject *project)
             if (!c1) continue;
             SCut *c2 = new SCut(project, c1->getContent());
             c2->setGrainParamsRaw(c1->getGrainParams());
-            c2->setStartOffset(c1->getStartOffset() + inObjOffset);
+            c2->setStartOffset( (offset_t) warpedFromClip(
+                ClipPos((int64_t)inObjOffset), c1->getStartOffset() ).frames() );
             c2->setDuration(fullDur - inObjOffset);
             stack2->insertTake(*c2);
         }
@@ -106,7 +107,7 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     if (!sc1) {
         return {false, nullptr};
     }
-    offset_t sc1StartOffset = sc1->getStartOffset();
+    WarpedPos sc1StartOffset = sc1->getStartOffset();
     length_t origDur = sc1->getDuration();
 
     // Second part: a new cut over the same content, starting at the split point.
@@ -120,7 +121,8 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     // reader with these params in place.
     SCut *sc2 = new SCut(project, sc1->getContent());
     sc2->setGrainParamsRaw(sc1->getGrainParams());
-    sc2->setStartOffset(sc1StartOffset + inObjOffset);
+    sc2->setStartOffset( (offset_t) warpedFromClip(
+        ClipPos((int64_t)inObjOffset), sc1StartOffset ).frames() );
     sc2->setDuration(origDur - inObjOffset);
     sc1->setDuration(inObjOffset);
     SLink *sl2 = new SLink(*sc2, NULL);

@@ -50,7 +50,7 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     QString filePath;
     if( SExternFile *xf = dynamic_cast<SExternFile *>( &cut->getContent() ) )
         filePath = xf->getFileName();
-    const offset_t off = cut->getStartOffset();
+    const offset_t off = (offset_t) cut->getStartOffset().frames();
     const double stretch = cut->getStretch();
     const double pitchCents = cut->getPitchCents();
     const bool wasActive = ( stack->activeTakeIndex() == takeIndex_ );

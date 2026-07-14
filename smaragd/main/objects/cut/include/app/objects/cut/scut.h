@@ -10,6 +10,7 @@
 #include "app/model/slink.h"
 #include "tw/sources/twgrainparams.h"
 #include "tw/core/twfraction.h"
+#include "tw/core/twdomains.h"
 #include "tw/pages/capture_page_pool.h"
 
 class SProject;
@@ -76,10 +77,13 @@ struct SCutWindowParamEvent {
 // Immutable snapshot of SCut's playback window parameters for lock-free audio-thread reads.
 // Audio thread takes a snapshot at buffer boundaries; UI thread modifies the original.
 // ReaderState is swapped atomically (Unix page cache model).
+// Window values carry their domain in the type (proposal 18 Phase 1, see
+// tw/core/twdomains.h): the cut window lives in the grain OUTPUT (warped)
+// domain; the clip duration is a clip-relative (timeline-rate) length.
 struct SCutSnapshot {
-    offset_t startOffset;        // Source sample position where clip window begins
-    length_t loopLength;         // Loop segment length; 0 = no loop
-    length_t cutDuration;        // Timeline duration of clip (includes stretching)
+    WarpedPos startOffset;       // Warped position where the clip window begins
+    WarpedLen loopLength;        // Loop segment length (warped); 0 = no loop
+    ClipLen   cutDuration;       // Timeline duration of the clip
     twGrainParams grainParams;   // Time-stretch/pitch-shift parameters
     SCutReaderState reader;      // Double-buffered reader state (always complete & valid)
 };
@@ -117,21 +121,24 @@ public:
     // A looping reader is already cut-relative and maps identically.
     virtual offset_t mapTimelineToComponentPos( offset_t off );
     SObject &getContent() const { return content_->getSObject(); }
-    offset_t getLoopStart() const;
-    offset_t getStartOffset() const { return startOffset_; }
+    WarpedPos getLoopStart() const;
+    WarpedPos getStartOffset() const { return startOffset_; }
     // Length of the segment that repeats when this cut is longer than it (the
     // "previously visible cut" captured by the right-upper edge loop gesture).
     // 0 means no loop; the loop is active iff 0 < loopLength_ < cutDuration_.
-    length_t getLoopLength() const { return loopLength_; }
-    bool isLooping() const { return loopLength_ > 0 && loopLength_ < cutDuration_; }
+    WarpedLen getLoopLength() const { return loopLength_; }
+    bool isLooping() const {
+        return loopLength_ > WarpedLen(0)
+            && loopLength_ < warpedFromClip(cutDuration_);
+    }
     // Set the loop length / stretch / full grain params for drawing only, without
     // rebuilding the audio chain or the preserve-span rescale (used for live drag
     // feedback and for cloning; the chain is rebuilt once afterwards, e.g. by
     // setWindow on release).
-    void setLoopLengthRaw( length_t l ) { loopLength_ = l; }
+    void setLoopLengthRaw( WarpedLen l ) { loopLength_ = l; }
     void setStretchRaw( double s ) { grainParams_.stretch = s; }
-    void setStartOffsetRaw( offset_t o ) { startOffset_ = o; }
-    void setDurationRaw( length_t d ) { cutDuration_ = d; }
+    void setStartOffsetRaw( WarpedPos o ) { startOffset_ = o; }
+    void setDurationRaw( ClipLen d ) { cutDuration_ = d; }
     void setGrainParamsRaw( const twGrainParams &p ) { grainParams_ = p; }
     virtual bool hasDuration() const { return true; }
     virtual length_t getDuration() const;
@@ -149,8 +156,8 @@ public:
     // once. Unlike setGrainParams() this does NOT preserve-span-rescale — the
     // caller supplies already-final values. The undoable form of the clip-edge
     // gestures (see SResizeClipAction).
-    void setWindow( offset_t startOffset, length_t duration,
-                    length_t loopLength, double stretch );
+    void setWindow( WarpedPos startOffset, ClipLen duration,
+                    WarpedLen loopLength, double stretch );
 
     // Grain time-stretch / pitch-shift parameters for this clip (proposal 06).
     double getStretch() const { return grainParams_.stretch; }
@@ -295,10 +302,12 @@ private:
 
     // Window parameters: accessed by both UI thread (modifications) and audio thread (reading).
     // Use inherited mutex() from SObject to synchronize access.
-    offset_t startOffset_;
-    offset_t loopStart_;
-    length_t loopLength_;
-    length_t cutDuration_;
+    // Domain-typed (proposal 18 Phase 1): the window lives in the grain
+    // OUTPUT (warped) domain; the duration is a clip-relative length.
+    WarpedPos startOffset_;
+    WarpedPos loopStart_;
+    WarpedLen loopLength_;
+    ClipLen   cutDuration_;
     twGrainParams grainParams_;
 
     SCutRendererInline *inlineRenderer_;
@@ -319,8 +328,8 @@ private:
     bool          builtNeedGrain_ = false;
     bool          builtNeedLoop_  = false;
     twGrainParams builtGrain_;
-    offset_t      builtLoopStart_  = 0;
-    length_t      builtLoopLength_ = 0;
+    WarpedPos     builtLoopStart_;
+    WarpedLen     builtLoopLength_;
 
     // Cached render of a container content (proposal 07 step 5).
     // Used temporarily until fully integrated with capture page pool.
@@ -345,7 +354,7 @@ private:
 
     // Last good snapshot: returned when lock acquisition fails to prevent returning
     // uninitialized data. Updated whenever getSnapshot() successfully acquires the lock.
-    mutable SCutSnapshot lastGoodSnapshot_{0, 0, 0, {}, {}};
+    mutable SCutSnapshot lastGoodSnapshot_{};
 };
 
 #endif

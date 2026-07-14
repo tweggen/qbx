@@ -74,7 +74,8 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     // change there genuinely requires a fresh capture/reader.
     if( content_->getSObject().getRandomSource() && currentReader_.reader ) {
         bool needGrain = !snap.grainParams.isIdentity();
-        bool needLoop  = ( snap.loopLength > 0 && snap.loopLength < snap.cutDuration );
+        bool needLoop  = ( snap.loopLength > WarpedLen(0)
+                        && snap.loopLength < warpedFromClip(snap.cutDuration) );
         bool sameGrain = !needGrain
             || ( builtGrain_.stretch    == snap.grainParams.stretch
               && builtGrain_.pitchCents == snap.grainParams.pitchCents
@@ -121,23 +122,24 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
         tw303aEnvironment &env = *(SAppContext::get().get303aEnvironment());
 
         // The cut window (startOffset_, cutDuration_, loopLength_) lives in the
-        // grain OUTPUT (stretched) domain — the same domain twGrainSource is
+        // grain OUTPUT (warped) domain — the same domain twGrainSource is
         // addressed in (split action, stretch drag and the waveform preview all
-        // agree on this; the source position is startOffset/stretch). So the
-        // offsets pass through UNCHANGED whether or not a grain stage is
-        // interposed. Multiplying by the stretch here (the old code) applied the
-        // factor twice and made playback read a different source window than the
-        // preview displayed.
-        offset_t adjustedStartOffset = snap.startOffset;
-        length_t adjustedLoopLength = snap.loopLength;
-
-        if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
-            twLoopReader *lr = new twLoopReader( env, *view, adjustedStartOffset, adjustedLoopLength );
+        // agree on this; the source position is startOffset/stretch). The
+        // WarpedPos/WarpedLen types guarantee no stretch factor is folded in
+        // here (multiplying by the stretch was the old double-apply bug);
+        // .frames() unwraps at the reader seam, which is integral — no
+        // rounding takes place.
+        if( snap.loopLength > WarpedLen(0)
+            && snap.loopLength < warpedFromClip(snap.cutDuration) ) {
+            twLoopReader *lr = new twLoopReader( env, *view,
+                                                 snap.startOffset.frames(),
+                                                 snap.loopLength.frames() );
             lr->init();
             newReader = std::shared_ptr<twSampleReader>( lr );
             newLooping = true;
         } else {
-            newReader = std::shared_ptr<twSampleReader>( view->acquireReader( env, adjustedStartOffset ) );
+            newReader = std::shared_ptr<twSampleReader>(
+                view->acquireReader( env, snap.startOffset.frames() ) );
             newLooping = false;
         }
     }
@@ -229,7 +231,10 @@ void SCut::buildCapture_()
         return;
     }
 
-    length_t need = (length_t) snap.startOffset + snap.cutDuration;
+    // The capture must cover the window's warped end (slip offset folded in).
+    WarpedPos windowEnd = warpedFromClip( ClipPos( snap.cutDuration.frames() ),
+                                          snap.startOffset );
+    length_t need = (length_t) windowEnd.frames();
     length_t dur  = (length_t) c.getDuration();
     length_t n = dur > need ? dur : need;
     if( n <= 0 ) return;
@@ -292,13 +297,15 @@ void SCut::buildCapture_()
         auto grainSource = std::make_shared<twGrainSource>( *rs, snap.grainParams );
         length_t grainedLen = grainSource->length();
 
-        // startOffset already lives in the grain OUTPUT (stretched) domain, the
-        // domain the grain source is addressed in — use it directly.
-        offset_t grainOffset = snap.startOffset;
+        // startOffset already lives in the grain OUTPUT (warped) domain, the
+        // domain the grain source is addressed in — unwrap at the seam.
+        offset_t grainOffset = (offset_t) snap.startOffset.frames();
 
         // Read from the grain-stretched offset, limited to remaining content
-        length_t availFromOffset = grainedLen > grainOffset ? grainedLen - grainOffset : 0;
-        length_t toRead = snap.cutDuration > availFromOffset ? availFromOffset : snap.cutDuration;
+        length_t availFromOffset = grainedLen > (length_t) grainOffset
+                                 ? grainedLen - (length_t) grainOffset : 0;
+        length_t wantFrames = snap.cutDuration.frames();
+        length_t toRead = wantFrames > availFromOffset ? availFromOffset : wantFrames;
 
         buf.resize( (size_t) toRead, 0.0f );
         if( toRead > 0 ) {
@@ -531,10 +538,11 @@ int SCut::seekTo( offset_t off )
     // a plain reader needs startOffset_ folded in here.
     // snap.reader.reader is always valid (double-buffer model: Unix page cache).
     //
-    // startOffset_ already lives in the grain OUTPUT (stretched) domain — the
-    // domain the reader (twGrainSource view) is addressed in — so no stretch
-    // conversion is applied here.
-    offset_t seekPos = snap.reader.looping ? off : off + snap.startOffset;
+    // startOffset_ already lives in the grain OUTPUT (warped) domain — the
+    // domain the reader (twGrainSource view) is addressed in. The typed
+    // conversion folds the slip offset in; no stretch factor can appear here.
+    WarpedPos warped = warpedFromClip( ClipPos( (int64_t) off ), snap.startOffset );
+    offset_t seekPos = snap.reader.looping ? off : (offset_t) warped.frames();
     if( snap.reader.reader ) return snap.reader.reader->seekTo( seekPos );
     return content_->getSObject().seekTo( seekPos );
 }
@@ -556,16 +564,17 @@ offset_t SCut::mapTimelineToComponentPos( offset_t off )
 
     // Plain reader over source/grain view: fold the slip offset in. Both `off`
     // (clip-relative, timeline samples) and startOffset_ live in the grain
-    // OUTPUT (stretched) domain, which is also the domain the grain view is
-    // addressed in — no stretch conversion.
-    return off + snap.startOffset;
+    // OUTPUT (warped) domain, which is also the domain the grain view is
+    // addressed in — the typed conversion cannot introduce a stretch factor.
+    return (offset_t) warpedFromClip( ClipPos( (int64_t) off ),
+                                      snap.startOffset ).frames();
 }
 
 void SCut::setStartOffset( offset_t off )
 {
     {
         std::lock_guard<std::mutex> lock(mutex());
-        startOffset_ = off;
+        startOffset_ = WarpedPos( (int64_t) off );
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
 }
@@ -574,7 +583,7 @@ void SCut::setDuration( length_t dur )
 {
     {
         std::lock_guard<std::mutex> lock(mutex());
-        cutDuration_ = dur;
+        cutDuration_ = ClipLen( dur );
     }
     invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
@@ -585,7 +594,7 @@ void SCut::setLoopStart( offset_t s )
 {
     {
         std::lock_guard<std::mutex> lock(mutex());
-        loopStart_ = s;
+        loopStart_ = WarpedPos( (int64_t) s );
     }
 }
 
@@ -594,16 +603,16 @@ void SCut::setLoopLength( length_t l )
     length_t dur;
     {
         std::lock_guard<std::mutex> lock(mutex());
-        loopLength_ = l;
-        dur = cutDuration_;
+        loopLength_ = WarpedLen( l );
+        dur = cutDuration_.frames();
     }
     invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
     emit durationChanged( dur );
 }
 
-void SCut::setWindow( offset_t startOffset, length_t duration,
-                      length_t loopLength, double stretch )
+void SCut::setWindow( WarpedPos startOffset, ClipLen duration,
+                      WarpedLen loopLength, double stretch )
 {
     {
         std::lock_guard<std::mutex> lock(mutex());
@@ -614,10 +623,10 @@ void SCut::setWindow( offset_t startOffset, length_t duration,
     }
     invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
-    emit durationChanged( duration );
+    emit durationChanged( duration.frames() );
 }
 
-offset_t SCut::getLoopStart() const
+WarpedPos SCut::getLoopStart() const
 {
     return loopStart_;
 }
@@ -627,7 +636,7 @@ length_t SCut::getDuration() const
     // Use snapshot for consistent reads (multithreading policy: Phase 1).
     // Audio thread may be reading duration during rendering; ensure we get
     // a consistent value taken together with other window parameters.
-    return getSnapshot().cutDuration;
+    return getSnapshot().cutDuration.frames();
 }
 
 void SCut::setGrainParams( const twGrainParams &p )
@@ -642,9 +651,12 @@ void SCut::setGrainParams( const twGrainParams &p )
         double oldStretch = grainParams_.stretch;  // ← Read inside lock
         grainParams_ = p;
         if( oldStretch > 0.0 && p.stretch > 0.0 && p.stretch != oldStretch ) {
+            // Preserve-span rescale: warped-domain values scale with the
+            // stretch so the SOURCE window stays invariant. (Rounds through
+            // double until Phase 3 makes the source window authoritative.)
             double k = p.stretch / oldStretch;
-            cutDuration_ = (length_t) llround( (double) cutDuration_ * k );
-            startOffset_ = (offset_t) llround( (double) startOffset_ * k );
+            cutDuration_ = ClipLen( (length_t) llround( (double) cutDuration_.frames() * k ) );
+            startOffset_ = WarpedPos( (int64_t) llround( (double) startOffset_.frames() * k ) );
         }
         // Manually construct snapshot without re-acquiring lock
         snap.startOffset = startOffset_;
@@ -655,7 +667,7 @@ void SCut::setGrainParams( const twGrainParams &p )
     }
 
     rebuildReader( snap );   // pre-build off the audio thread (caller is the UI thread)
-    emit durationChanged( snap.cutDuration );
+    emit durationChanged( snap.cutDuration.frames() );
 }
 
 void SCut::setStretch( double s )
@@ -725,11 +737,11 @@ SCut::SCut( SProject *parentProject, SLink &content )
     insertChild( content_ );
     */
     if( content_->getSObject().hasDuration() ) {
-        cutDuration_ = content_->getSObject().getDuration();
+        cutDuration_ = ClipLen( content_->getSObject().getDuration() );
     } else {
         // Default to 0.5 seconds, calculated from project sample rate
         int srate = (parentProject != nullptr) ? parentProject->getSRate() : 48000;
-        cutDuration_ = srate / 2;
+        cutDuration_ = ClipLen( srate / 2 );
     }
 
     // Register as dependent of the content object (lazy invalidation, proposal 06).
@@ -751,14 +763,14 @@ SCut::SCut( SProject *parentProject, SObject &content )
 
     content_ = new SLink( content, this );
     if( content_->getSObject().hasDuration() ) {
-        cutDuration_ = content_->getSObject().getDuration();
+        cutDuration_ = ClipLen( content_->getSObject().getDuration() );
     } else {
         // Default to 0.5 seconds, calculated from project sample rate
         int srate = (parentProject != nullptr) ? parentProject->getSRate() : 48000;
-        cutDuration_ = srate / 2;
+        cutDuration_ = ClipLen( srate / 2 );
     }
     // Loop start defaults to no loop.
-    loopStart_ = cutDuration_;
+    loopStart_ = WarpedPos( cutDuration_.frames() );
 
     // Register as dependent of the content object (lazy invalidation, proposal 06).
     // When the content's audio state changes (mute, solo, volume), this cut will be
@@ -769,9 +781,9 @@ SCut::SCut( SProject *parentProject, SObject &content )
 
 int SCut::serializeSelfAttributes( QTextStream &o )
 {
-    Fraction startOffsetFrac(getStartOffset(), 1);
-    Fraction cutDurationFrac(cutDuration_, 1);
-    Fraction loopLengthFrac(loopLength_, 1);
+    Fraction startOffsetFrac(startOffset_.frames(), 1);
+    Fraction cutDurationFrac(cutDuration_.frames(), 1);
+    Fraction loopLengthFrac(loopLength_.frames(), 1);
 
     o << " startOffset='" << QString::fromStdString(startOffsetFrac.toString()) << "'"
       << " cutDuration='" << QString::fromStdString(cutDurationFrac.toString()) << "'"
@@ -812,14 +824,14 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     if( data.isEmpty() ) {
         int srate = 48000;  // default fallback
         if( parent() ) srate = getProject().getSRate();
-        cutDuration_ = srate / 2;
+        cutDuration_ = ClipLen( srate / 2 );
     } else {
         Fraction cutDurationFrac = parseFractionOrDouble( data.toStdString() );
-        cutDuration_ = (length_t)cutDurationFrac.toDouble();
+        cutDuration_ = ClipLen( (length_t)cutDurationFrac.toDouble() );
     }
     data = element.attribute( "loopLength", "0" );
     Fraction loopLengthFrac = parseFractionOrDouble( data.toStdString() );
-    loopLength_ = (length_t)loopLengthFrac.toDouble();
+    loopLength_ = WarpedLen( (length_t)loopLengthFrac.toDouble() );
 
     // Grain params: stretch and pitchCents are dimensionless, grainSize and
     // crossfade are now stored as milliseconds (rate-independent) and converted
@@ -870,7 +882,9 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
 
     // Pre-build the playback chain now (load thread) so a stretched or looping
     // clip restored from disk does not materialise on the first realtime block.
-    if( !grainParams_.isIdentity() || ( loopLength_ > 0 && loopLength_ < cutDuration_ ) )
+    if( !grainParams_.isIdentity()
+        || ( loopLength_ > WarpedLen(0)
+          && loopLength_ < warpedFromClip(cutDuration_) ) )
         rebuildReader( getSnapshot() );
 
     return 0;
@@ -941,15 +955,15 @@ void SCut::processWindowParamEvents()
         for( const SCutWindowParamEvent &event : events ) {
             switch( event.type ) {
             case OFFSET_CHANGE:
-                startOffset_ = (offset_t) event.value;
+                startOffset_ = WarpedPos( (int64_t) event.value );
                 needsCaptureBuild = true;
                 break;
             case DURATION_CHANGE:
-                cutDuration_ = (length_t) event.value;
+                cutDuration_ = ClipLen( (length_t) event.value );
                 needsCaptureBuild = true;
                 break;
             case LOOP_LENGTH_CHANGE:
-                loopLength_ = (length_t) event.value;
+                loopLength_ = WarpedLen( (length_t) event.value );
                 needsCaptureBuild = true;
                 needsReaderBuild = true;
                 break;

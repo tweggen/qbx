@@ -96,7 +96,7 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         return;
     }
 
-    length_t segLen   = cut.getLoopLength();
+    length_t segLen   = cut.getLoopLength().frames();
 
     // Pixels-per-sample from two probe points of the parent (timeline) mapping.
     int xa = visibRect.x();
@@ -121,7 +121,7 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         int isx = (int)( sx > visibRect.x() ? sx : visibRect.x() );
         int iex = (int)( ex < right ? ex : right );
         if( iex <= isx ) continue;
-        LoopSegmentContext lctx( p, lk.getStartTime(), cut.getStartOffset(),
+        LoopSegmentContext lctx( p, lk.getStartTime(), (offset_t) cut.getStartOffset().frames(),
                                  cut.getStretch(), sx, segWpx, segLen );
         lctx.setVisibRect( QRect( isx, visibRect.y(), iex - isx, visibRect.height() ) );
         rndr->draw( lk, lctx );
@@ -147,7 +147,7 @@ offset_t SCutRendererInline::InlineRenderContext::getTimeOf( int x ) const
     double stretch = cut_.getStretch();
     if( stretch <= 0.0 ) stretch = 1.0;
     double rel = (double) parentRC_.getTimeOf( x )
-               - (double) clipStart_ + (double) cut_.getStartOffset();
+               - (double) clipStart_ + (double) cut_.getStartOffset().frames();
     if( rel < 0 ) rel = 0;
     return clipStart_ + (offset_t)( rel / stretch );
 }
