@@ -541,8 +541,8 @@ int SCut::seekTo( offset_t off )
     // startOffset_ already lives in the grain OUTPUT (warped) domain — the
     // domain the reader (twGrainSource view) is addressed in. The typed
     // conversion folds the slip offset in; no stretch factor can appear here.
-    WarpedPos warped = warpedFromClip( ClipPos( (int64_t) off ), snap.startOffset );
-    offset_t seekPos = snap.reader.looping ? off : (offset_t) warped.frames();
+    offset_t seekPos = (offset_t) clipToReaderMap( snap.reader.looping )
+                           .map( Fraction( (int64_t) off ) ).floorToInt();
     if( snap.reader.reader ) return snap.reader.reader->seekTo( seekPos );
     return content_->getSObject().seekTo( seekPos );
 }
@@ -559,15 +559,11 @@ offset_t SCut::mapTimelineToComponentPos( offset_t off )
     ensureReader();
     SCutSnapshot snap = getSnapshot();
 
-    // A loop reader is cut-relative (it adds its own loop base = startOffset_).
-    if( snap.reader.looping ) return off;
-
-    // Plain reader over source/grain view: fold the slip offset in. Both `off`
-    // (clip-relative, timeline samples) and startOffset_ live in the grain
-    // OUTPUT (warped) domain, which is also the domain the grain view is
-    // addressed in — the typed conversion cannot introduce a stretch factor.
-    return (offset_t) warpedFromClip( ClipPos( (int64_t) off ),
-                                      snap.startOffset ).frames();
+    // Same shared map as seekTo and the preview (proposal 18 Phase 4): a
+    // loop reader is cut-relative (identity), a plain reader is addressed
+    // in the warped domain (slip folded in, never a stretch factor).
+    return (offset_t) clipToReaderMap( snap.reader.looping )
+               .map( Fraction( (int64_t) off ) ).floorToInt();
 }
 
 void SCut::setStartOffset( offset_t off )

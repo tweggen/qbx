@@ -11,6 +11,7 @@
 #include "tw/sources/twgrainparams.h"
 #include "tw/core/twfraction.h"
 #include "tw/core/twdomains.h"
+#include "tw/core/twtimemap.h"
 #include "tw/pages/capture_page_pool.h"
 
 class SProject;
@@ -179,6 +180,29 @@ public:
     // Source-anchor slip with capture invalidation (exact counterpart of
     // the warped setStartOffset slot).
     void setSrcStart( const Fraction &srcStart );
+
+    // Shared time maps (proposal 18 Phase 4). BOTH the audio path and the
+    // waveform preview consume these - there is no second implementation
+    // of the clip's position mapping to disagree with.
+    //
+    // clipToSourceMap: clip-relative timeline position -> SOURCE sample,
+    // source = srcStart + rel/stretch, exact. (For a looping clip this maps
+    // a position WITHIN one repetition - the tiling itself is the reader's
+    // twLoopMap.)
+    twAffineMap clipToSourceMap() const {
+        Fraction st = grainParams_.stretch > Fraction(0) ? grainParams_.stretch
+                                                         : Fraction(1);
+        return twAffineMap( Fraction(1) / st, srcStart_ );
+    }
+    // clipToReaderMap: clip-relative position -> the reader's own domain
+    // (what twView::MapPosFn needs). A looping reader is cut-relative
+    // (identity - it owns its loop base internally via twLoopMap); a plain
+    // reader is addressed in the warped domain, so the slip offset folds in.
+    twAffineMap clipToReaderMap( bool looping ) const {
+        return looping ? twAffineMap( Fraction(1), Fraction(0) )
+                       : twAffineMap( Fraction(1),
+                                      Fraction( getStartOffset().frames() ) );
+    }
 
     // Grain time-stretch / pitch-shift parameters for this clip (proposal 06).
     // The stretch is an EXACT rational (proposal 18 Phase 2); getStretch()

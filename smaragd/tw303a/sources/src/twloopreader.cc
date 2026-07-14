@@ -2,9 +2,8 @@
 #include "tw/sources/twloopreader.h"
 #include <vector>
 #include "tw/sources/twrandomsource.h"
-#include <vector>
+#include "tw/core/twtimemap.h"
 #include "tw/pages/io_vector.h"
-#include <vector>
 
 twLoopReader::twLoopReader( tw303aEnvironment &env, twRandomSource &src,
                             offset_t loopBase, length_t loopLen )
@@ -30,14 +29,22 @@ length_t twLoopReader::calcOutputTo( IOVector& dest, idx_t idx )
     // Allocate temp buffer for reading
     std::vector<sample_t> buffer(dest.length());
 
-    // Read with loop wrapping (same logic as raw-pointer version)
+    // The loop tiling IS a twLoopMap (cut-relative -> loop-window
+    // positions): render the block by walking its affine segments
+    // (proposal 18 Phase 4 - the wrap arithmetic lives in the map, shared
+    // with everything else that reasons about the tiling). All quantities
+    // here are integral, so the exact-rational segment endpoints floor
+    // without loss.
     offset_t pos = tellPos();
+    twLoopMap map( Fraction( (int64_t) loopBase_ ),
+                   Fraction( (int64_t) loopLen_ ) );
     length_t filled = 0;
-    while( filled < dest.length() ) {
-        offset_t inLoop = ( pos + (offset_t) filled ) % (offset_t) loopLen_;
-        length_t chunk = loopLen_ - (length_t) inLoop;
-        if( chunk > dest.length() - filled ) chunk = dest.length() - filled;
-        getSource().read( loopBase_ + inLoop, buffer.data() + filled, chunk, idx );
+    for( const twMapSegment &seg : map.mapInterval(
+             Fraction( (int64_t) pos ),
+             Fraction( (int64_t) dest.length() ) ) ) {
+        length_t chunk = (length_t) seg.length.floorToInt();
+        getSource().read( (offset_t) seg.childStart.floorToInt(),
+                          buffer.data() + filled, chunk, idx );
         filled += chunk;
     }
     seekTo( pos + (offset_t) dest.length() );

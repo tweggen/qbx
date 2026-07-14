@@ -21,26 +21,28 @@ namespace {
 // added back here.
 class LoopSegmentContext : public SRenderContext {
 public:
-    LoopSegmentContext( QPainter &p, offset_t clipStart, offset_t startOffset,
-                        double stretch, double segLeftX, double segWpx,
-                        length_t segLen )
-        : SRenderContext( p ), clipStart_( clipStart ), startOffset_( startOffset ),
-          stretch_( stretch > 0.0 ? stretch : 1.0 ),
+    LoopSegmentContext( QPainter &p, offset_t clipStart,
+                        const twAffineMap &clipToSource,
+                        double segLeftX, double segWpx, length_t segLen )
+        : SRenderContext( p ), clipStart_( clipStart ),
+          clipToSource_( clipToSource ),
           segLeftX_( segLeftX ), segWpx_( segWpx ), segLen_( segLen ) {}
     virtual offset_t getTimeOf( int x ) const {
         double rel = ( (double) x - segLeftX_ ) * (double) segLen_ / segWpx_;
         if( rel < 0 ) rel = 0;
-        // (startOffset + rel) is the OUTPUT position inside this repetition;
-        // /stretch maps it to the source sample the waveform is read from.
-        return clipStart_ + (offset_t)( ( (double) startOffset_ + rel ) / stretch_ );
+        // rel is the position inside this repetition; the SHARED
+        // clip->source map (the one playback derives its window from,
+        // proposal 18 Phase 4) yields the source sample the waveform is
+        // read from. Pixels quantize rel; the map itself is exact.
+        return clipStart_ + (offset_t) clipToSource_
+                   .map( Fraction( (int64_t) rel ) ).floorToInt();
     }
 private:
-    offset_t clipStart_;
-    offset_t startOffset_;
-    double   stretch_;
-    double   segLeftX_;
-    double   segWpx_;
-    length_t segLen_;
+    offset_t    clipStart_;
+    twAffineMap clipToSource_;
+    double      segLeftX_;
+    double      segWpx_;
+    length_t    segLen_;
 };
 }
 
@@ -121,8 +123,8 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         int isx = (int)( sx > visibRect.x() ? sx : visibRect.x() );
         int iex = (int)( ex < right ? ex : right );
         if( iex <= isx ) continue;
-        LoopSegmentContext lctx( p, lk.getStartTime(), (offset_t) cut.getStartOffset().frames(),
-                                 cut.getStretch(), sx, segWpx, segLen );
+        LoopSegmentContext lctx( p, lk.getStartTime(), cut.clipToSourceMap(),
+                                 sx, segWpx, segLen );
         lctx.setVisibRect( QRect( isx, visibRect.y(), iex - isx, visibRect.height() ) );
         rndr->draw( lk, lctx );
         if( ex < right ) {                              // loop boundary divider
@@ -139,17 +141,16 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
  */
 offset_t SCutRendererInline::InlineRenderContext::getTimeOf( int x ) const
 {
-    // The content (raw source) is indexed in the SOURCE domain, but startOffset
-    // and the cut window live in the grain OUTPUT (stretched) domain. Map the
-    // clip-relative output position back to the source by dividing by the stretch
-    // factor, so the drawn waveform lines up with what plays. (The wave renderer
-    // subtracts the link start time again, so we add it back here.)
-    double stretch = cut_.getStretch();
-    if( stretch <= 0.0 ) stretch = 1.0;
-    double rel = (double) parentRC_.getTimeOf( x )
-               - (double) clipStart_ + (double) cut_.getStartOffset().frames();
+    // The content (raw source) is indexed in the SOURCE domain. The SHARED
+    // clip->source map (srcStart + rel/stretch, exact - the same map the
+    // playback window derives from, proposal 18 Phase 4) translates the
+    // clip-relative position; there is no second stretch computation to
+    // disagree with what plays. (The wave renderer subtracts the link start
+    // time again, so we add it back here.)
+    int64_t rel = (int64_t) parentRC_.getTimeOf( x ) - (int64_t) clipStart_;
     if( rel < 0 ) rel = 0;
-    return clipStart_ + (offset_t)( rel / stretch );
+    return clipStart_ + (offset_t) cut_.clipToSourceMap()
+               .map( Fraction( rel ) ).floorToInt();
 }
 
 SCutRendererInline::InlineRenderContext::~InlineRenderContext()
