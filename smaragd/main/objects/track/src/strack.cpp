@@ -358,8 +358,8 @@ STrack::STrack( SProject *project )
                       this, SLOT( onPluginSlotInserted( int, SPluginSlot & ) ) );
     QObject::connect( cpPluginChain_, SIGNAL( slotRemoved( int, SPluginSlot & ) ),
                       this, SLOT( onPluginSlotRemoved( int, SPluginSlot & ) ) );
-    QObject::connect( cpPluginChain_, SIGNAL( slotsReordered() ),
-                      this, SLOT( onPluginSlotsReordered() ) );
+    QObject::connect( cpPluginChain_, SIGNAL( slotsReordered( int, int ) ),
+                      this, SLOT( onPluginSlotsReordered( int, int ) ) );
 
     // Add a listener for added child objects.
     // We want to become noticed, if it is new.
@@ -520,25 +520,31 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
 
 void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
 {
-    // Sync the model change to all DSP plugin chains
-    // Note: we remove by index since the slot is being deleted
+    // Sync the model change to all DSP plugin chains. Remove by identity, not by
+    // index: the model index can diverge from the DSP plugins_ order after a
+    // reorder, and removing the wrong pointer would leave the just-deleted
+    // insert dangling in the chain. The slot's inserts already exist (it was in
+    // the chain), so getInsertForBus returns the existing pointer here.
+    (void)index;
     if( cpPluginChains_ ) {
         for( int i = 0; i < nBusses_; ++i ) {
             if( cpPluginChains_[i] ) {
-                cpPluginChains_[i]->removePlugin( index );
+                cpPluginChains_[i]->removePlugin( slot.getInsertForBus( i ) );
             }
         }
         invalidateRenderPath();
     }
 }
 
-void STrack::onPluginSlotsReordered()
+void STrack::onPluginSlotsReordered( int fromIndex, int toIndex )
 {
-    // Sync plugin reordering to all DSP plugin chains
+    // Sync plugin reordering to all DSP plugin chains. Reorder the plugin vector
+    // (not just rewire) so plugins_ order matches the model order; otherwise the
+    // reorder is inaudible and later index-based operations target wrong plugins.
     if( cpPluginChains_ ) {
         for( int i = 0; i < nBusses_; ++i ) {
             if( cpPluginChains_[i] ) {
-                cpPluginChains_[i]->rebuildWiring();
+                cpPluginChains_[i]->reorderPlugin( fromIndex, toIndex );
             }
         }
         invalidateRenderPath();

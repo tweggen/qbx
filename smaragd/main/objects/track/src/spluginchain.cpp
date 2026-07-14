@@ -37,19 +37,24 @@ void SPluginChain::childEvent( QChildEvent *event )
             }
         }
     } else if( event->type() == QEvent::ChildRemoved ) {
-        // Extract child info BEFORE parent's childEvent deletes it
+        // Do NOT use children().indexOf() here: by the time a ChildRemoved event
+        // is delivered, Qt has already dropped the child from children() (that
+        // removal is what fires the event — see SLink::~SLink's setParent(nullptr)),
+        // so indexOf() would return -1 and slotRemoved would never be emitted,
+        // leaving the DSP chain holding a dangling twPluginInsert*. Instead read
+        // the logical index from childOrder_, which still contains the link until
+        // the base childEvent runs below. The link and its slot are still fully
+        // alive at this point (removeRef runs after setParent(nullptr)).
         QObject *child = event->child();
-        int index = children().indexOf( child );
-        if( index >= 0 ) {
-            SLink *link = dynamic_cast<SLink *>( child );
-            if( link ) {
-                SPluginSlot *slot = dynamic_cast<SPluginSlot *>( &link->getSObject() );
-                if( slot ) {
-                    // Let parent process removal first
-                    SObject::childEvent( event );
-                    emit slotRemoved( index, *slot );
-                    return;
-                }
+        SLink *link = dynamic_cast<SLink *>( child );
+        if( link ) {
+            int index = indexOfChild( link );
+            SPluginSlot *slot = dynamic_cast<SPluginSlot *>( &link->getSObject() );
+            if( index >= 0 && slot ) {
+                // Let parent process removal first (drops link from childOrder_)
+                SObject::childEvent( event );
+                emit slotRemoved( index, *slot );
+                return;
             }
         }
     }
@@ -94,8 +99,10 @@ SPluginSlot *SPluginChain::getSlotAt( int index ) const
 void SPluginChain::reorderSlot( int fromIndex, int toIndex )
 {
     moveChildToIndex( fromIndex, toIndex );
-    // Emit signal to trigger DSP graph rewiring (STrack::onPluginSlotsReordered listens)
-    emit slotsReordered();
+    // Emit signal to trigger DSP graph reordering (STrack::onPluginSlotsReordered
+    // listens). Pass from/to so the DSP chain reorders its plugin vector to match
+    // the new model order — rewiring alone would leave plugins_ in the old order.
+    emit slotsReordered( fromIndex, toIndex );
 }
 
 twComponent *SPluginChain::getChainComponent()

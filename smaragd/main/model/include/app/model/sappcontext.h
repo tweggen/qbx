@@ -51,6 +51,11 @@ public:
     virtual QString testOutputDir() const = 0;
     virtual bool ensureOutputDirExists() const = 0;
 
+    // True when running a headless/scripted test (`--test-case`): code below the
+    // UI must suppress modal dialogs and other user prompts so tests never block
+    // waiting for interaction. Log to stderr instead.
+    virtual bool isNonInteractive() const = 0;
+
     // Services (for generic actions)
     virtual void startRender( const audio::RenderParams &params ) = 0;
     virtual bool isRenderingActive() const = 0;

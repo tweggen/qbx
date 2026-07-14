@@ -113,11 +113,14 @@ int SPlainWave::setWave( const QString fileName )
     cpWave_ = new twWavInput( *(SAppContext::get().get303aEnvironment()), fileName );
     cpWave_->init();
     if( !cpWave_->wasLoaded() ) {
-        // Suppress dialog in headless/test mode; log to stderr instead
-        if( SAppContext::get().testOutputDir().isEmpty() ) {
-            QMessageBox::information( nullptr, "QBX error", "Unable to load file.", QMessageBox::Ok );
-        } else {
+        // Suppress the modal dialog in non-interactive (scripted test) mode so
+        // tests never block on a click; log to stderr instead. (Gated on the
+        // explicit test-mode flag, not on testOutputDir — a --test-case run
+        // without -o still must not pop dialogs.)
+        if( SAppContext::get().isNonInteractive() ) {
             qWarning() << "SPlainWave: unable to load file:" << fileName;
+        } else {
+            QMessageBox::information( nullptr, "QBX error", "Unable to load file.", QMessageBox::Ok );
         }
         delete cpWave_;
         cpWave_ = NULL;

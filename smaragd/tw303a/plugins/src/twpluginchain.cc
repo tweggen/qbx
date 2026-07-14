@@ -73,6 +73,17 @@ void twPluginChain::removePlugin( int index )
     }
 }
 
+void twPluginChain::removePlugin( audio::twPluginInsert *insert )
+{
+    if( !insert ) return;
+    std::lock_guard<std::mutex> lock( pluginsMutex_ );
+    auto it = std::find( plugins_.begin(), plugins_.end(), insert );
+    if( it != plugins_.end() ) {
+        plugins_.erase( it );
+        rebuildWiring();
+    }
+}
+
 void twPluginChain::reorderPlugin( int fromIndex, int toIndex )
 {
     std::lock_guard<std::mutex> lock( pluginsMutex_ );

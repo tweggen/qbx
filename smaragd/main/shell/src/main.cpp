@@ -109,6 +109,12 @@ int main( int argc, char *argv[] )
     // Determine test mode vs interactive mode
     bool testMode = parser.isSet("test-case");
     bool runMode = parser.isSet("run-actions");
+
+    // In headless test mode, suppress modal dialogs below the UI so scripted
+    // tests never block waiting for a click (errors go to stderr instead).
+    if (testMode) {
+        app.setNonInteractive(true);
+    }
     QString scriptPath = testMode ? parser.value("test-case") : parser.value("run-actions");
 
     // Create main window (only shown in interactive mode)

@@ -95,7 +95,7 @@ public slots:
     void setNBusses( int n );
     void onPluginSlotInserted( int index, SPluginSlot &slot );
     void onPluginSlotRemoved( int index, SPluginSlot &slot );
-    void onPluginSlotsReordered();
+    void onPluginSlotsReordered( int fromIndex, int toIndex );
     void onTrackMuteChanged( bool muted );
     void onTrackVolumeChanged( double gainDb );
 

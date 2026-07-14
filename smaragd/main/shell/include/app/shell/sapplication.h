@@ -115,6 +115,11 @@ public:
     QString testOutputDir() const;
     bool ensureOutputDirExists() const;
 
+    // Non-interactive (headless/scripted test) mode: set once at startup for
+    // `--test-case`. When true, modules below the UI suppress modal dialogs.
+    void setNonInteractive(bool v);
+    bool isNonInteractive() const override;
+
     // App-wide status/mode line shown in the main window's status bar. Views
     // push the active (or hover-telegraphed) gesture here; the main window
     // reflects it. Empty string means "no special mode" (idle).
@@ -164,6 +169,7 @@ private:
     SProject *currentProject_;
     QString statusMode_;
     QString testOutputDir_;        // directory for test artifacts (screenshots, renders)
+    bool nonInteractive_ = false;  // headless/scripted test mode (--test-case)
 };
 
 #endif

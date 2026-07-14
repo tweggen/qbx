@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_remove_during_playback">
+
+  <!-- Regression smoke test for the "crash shortly after removing a plugin" bug.
+
+       Root cause (confirmed): SPluginChain::childEvent()'s ChildRemoved branch
+       read the slot index from children().indexOf(child), but Qt removes the
+       child from children() *before* delivering ChildRemoved, so indexOf
+       returned -1, the >=0 guard skipped the emit, and slotRemoved never fired.
+       twPluginChain::removePlugin() was therefore never called, leaving a raw
+       twPluginInsert* dangling in the DSP chain after the owning SPluginSlot was
+       freed (deleteLater on the next event-loop reentry) -> use-after-free on the
+       next audio render. The fix reads the index from childOrder_ instead.
+
+       NOTE: a use-after-free is non-deterministic and may not crash in a short
+       headless run (freed memory isn't necessarily reused), so this is a smoke
+       test of the add/remove-during-playback path rather than a guaranteed crash
+       reproducer. It also exercises the identity-based DSP removal added
+       alongside the fix (two inserts, remove the first by slot index).
+
+       Flow: add track; add two PassThrough plugins; play; remove the first one
+       mid-playback; keep rendering while the event loop drains the deferred
+       free; stop. Crash / failed assertion = FAIL. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-plugin trackPath="0" slotIndex="-1"
+                   format="tw" uid="tw.passthrough"
+                   name="PassThrough" vendor="tw"
+                   nIn="2" nOut="2"/>
+    <insert-plugin trackPath="0" slotIndex="-1"
+                   format="tw" uid="tw.passthrough"
+                   name="PassThrough" vendor="tw"
+                   nIn="2" nOut="2"/>
+
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="2048" timeoutMs="10000"/>
+
+    <!-- Remove the first plugin mid-playback (identity-based DSP removal). -->
+    <remove-plugin trackPath="0" slotIndex="0"/>
+
+    <!-- Keep rendering + pump the event loop so the deferred free lands and the
+         (formerly dangling) pointer would be dereferenced. -->
+    <wait-playhead minAdvance="4096" timeoutMs="10000"/>
+
+    <toggle-playback play="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

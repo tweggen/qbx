@@ -45,6 +45,11 @@ public:
     // Remove a plugin insert by index
     void removePlugin( int index );
 
+    // Remove a plugin insert by identity. Preferred over the index overload:
+    // the caller's model index can diverge from plugins_ order after a reorder,
+    // and removing the wrong pointer would leave a dangling insert in the chain.
+    void removePlugin( audio::twPluginInsert *insert );
+
     // Reorder plugins in the chain
     void reorderPlugin( int fromIndex, int toIndex );
 

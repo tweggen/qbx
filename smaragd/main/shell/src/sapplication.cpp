@@ -490,6 +490,16 @@ QString SApplication::testOutputDir() const
     return testOutputDir_;
 }
 
+void SApplication::setNonInteractive(bool v)
+{
+    nonInteractive_ = v;
+}
+
+bool SApplication::isNonInteractive() const
+{
+    return nonInteractive_;
+}
+
 bool SApplication::ensureOutputDirExists() const
 {
     if (testOutputDir_.isEmpty()) {

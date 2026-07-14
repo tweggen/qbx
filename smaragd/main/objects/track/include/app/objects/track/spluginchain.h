@@ -43,7 +43,7 @@ public:
 signals:
     void slotInserted( int index, SPluginSlot &slot );
     void slotRemoved( int index, SPluginSlot &slot );
-    void slotsReordered();
+    void slotsReordered( int fromIndex, int toIndex );
 
 protected:
     void childEvent( QChildEvent *event ) override;
