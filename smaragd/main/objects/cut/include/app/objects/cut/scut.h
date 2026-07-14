@@ -219,6 +219,12 @@ public slots:
     // TODO: Phase 4 - integrate with capture page pool model.
     bool ensureCapturePeaks();
 
+    // IRevalidatable: build the offline capture on the revalidator worker so
+    // container-backed (and grained) cuts have preview data without waiting
+    // for the first playback to construct the reader chain. Returns false
+    // while the capture cannot be built yet (Preview stays stale and retries).
+    bool revalPrepPreview() override;
+
     // Old compatibility method (deprecated, will be removed).
     // TODO: Task 8 - replace all call sites with getPreviewCapture() or getPlaybackCapture().
     twRandomSource *ensureCapture() { return nullptr; }  // Stub for compilation
@@ -244,8 +250,11 @@ private:
     // (multithreading policy: Phase 1 Option B).
     void rebuildReader( const SCutSnapshot &snap );
     // Build the capture (container render) if needed. Internal method.
+    // Callable from the UI thread (rebuildReader) and the revalidator worker
+    // (revalPrepPreview); captureBuildMutex_ serializes concurrent builders.
     // TODO: Phase 4 future - integrate with capture page pool revalidation.
     void buildCapture_();
+    mutable std::mutex captureBuildMutex_;  // Serializes buildCapture_() across threads
 
     // Helper methods for revalidator integration (Phase 4)
     // _nolock suffix indicates caller MUST hold mutex() before calling.

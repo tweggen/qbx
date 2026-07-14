@@ -268,6 +268,8 @@ public:
         { recomputeMetadata(page); }
     void revalRecomputeExport(CapturePageData &page) override
         { recomputeExport(page); }
+    // Worker thread → queued UI repaint when a revalidation lands (Phase 5e.6).
+    void revalCompleted(uint32_t aspects) override;
 
     // Edit group (proposal 17 phase 4): tracks sharing a nonzero id form one
     // ARBITRARY group set (not tied to the hierarchy); clip edits on one

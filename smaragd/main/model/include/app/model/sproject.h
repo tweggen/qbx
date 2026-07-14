@@ -110,6 +110,12 @@ public:
     // over-invalidation only costs a re-render, never correctness.
     void notifyArrangementChanged() { emit arrangementChanged(); }
 
+    // Fire captureRevalidated(). Invoked (queued) from revalidator worker
+    // threads when an async recompute lands, so views repaint and pick up the
+    // fresh preview. Deliberately NOT arrangementChanged: that one also drops
+    // caches, which would re-schedule the very revalidation that completed.
+    Q_INVOKABLE void notifyCaptureRevalidated() { emit captureRevalidated(); }
+
     // Async capture revalidation (Phase 4).
     // Access to pool and revalidator for SCut integration.
     CaptureRevalidator* getRevalidator() { return revalidator_.get(); }
@@ -138,6 +144,9 @@ signals:
     void assetRemoved( const QString &name );
     // Any applied action; consumers that cache rendered audio drop their cache.
     void arrangementChanged();
+    // An async capture revalidation landed (preview/metadata fresh); views
+    // repaint but nothing invalidates (see notifyCaptureRevalidated()).
+    void captureRevalidated();
     void externFileAdded( const SExternFile & );
     void externFileRemoved( const QString );
     void bpmTempoChanged( double );

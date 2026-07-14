@@ -136,7 +136,14 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
     // This may take 10-100ms depending on aspect complexity
     // No locks held, so UI/audio threads can proceed
     // Dispatch to the object's virtual recomputation methods
-    dispatchRecomputation(job.object, job.aspects, *nextPage);
+    uint32_t succeeded = dispatchRecomputation(job.object, job.aspects, *nextPage);
+
+    if (succeeded == 0) {
+        // Nothing recomputed (e.g. preview source not materializable yet).
+        // Keep the current page as-is; nextPage stays parked on the object for
+        // the retry that the next getCapture() schedules.
+        return;
+    }
 
     // === CRITICAL SECTION 2: Atomic swap and mark valid ===
     {
@@ -146,19 +153,33 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
         // Now currentPage is nextPage. Update its metadata while holding page lock
         // to prevent concurrent reads from seeing torn updates.
         std::lock_guard<std::mutex> pageLock(nextPage->pageMutex);
-        nextPage->validAspects |= job.aspects;
+        nextPage->validAspects |= succeeded;
         nextPage->generation++;
     }
 
-    // TODO: Phase 5e.6 - emit Qt signal for UI redraw
-    // Once SObject is connected to Qt, emit revalidationComplete(object, aspects)
-    // For now, UI will re-read via getCapture() on next paint
+    // Phase 5e.6: notify the object (no locks held) so it can queue a UI
+    // repaint — without this, a preview that lands while the app is idle
+    // stays invisible until some unrelated repaint happens.
+    job.object->revalCompleted(succeeded);
 }
 
-void CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint32_t aspects, CapturePageData& page) {
+uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint32_t aspects, CapturePageData& page) {
     // Phase 5: Unified rendering dispatch
     // Preview now uses freezePreviewPage() pipeline (same as playback);
     // Metadata/Export still use legacy recomputeXXX for now.
+    uint32_t succeeded = 0;
+
+    if (aspects & Preview) {
+        // Let the object materialize its preview source first (e.g. a container
+        // cut's offline capture). On failure the Preview aspect stays stale so
+        // the next getCapture() retries once the source becomes available.
+        if (!object->revalPrepPreview()) {
+            fprintf(stderr, "[PREVIEW] prep failed for obj=%p; preview stays stale for retry\n",
+                    (void*)object);
+            fflush(stderr);
+            aspects &= ~Preview;
+        }
+    }
 
     if (aspects & Preview) {
         // Phase 5: Use freezePreviewPage() for preview rendering
@@ -182,22 +203,37 @@ void CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint32_t 
             nullptr                  // No previous page (revalidator manages fallback)
         );
 
+        fprintf(stderr, "[PREVIEW] recompute obj=%p comp=%p -> %s validFrames=%u\n",
+                (void*)object, (void*)&rootComp,
+                frozenPage ? "page" : "NULL",
+                frozenPage ? frozenPage->validFrames : 0u);
+        fflush(stderr);
+
         if( frozenPage && frozenPage->validFrames > 0 ) {
             // Copy frozen preview samples into CapturePageData
             size_t samplesToCopy = std::min((size_t)frozenPage->validFrames, (size_t)page.PAGE_SIZE / sizeof(float));
             if( samplesToCopy > 0 ) {
                 memcpy(page.data, frozenPage->samples.data(), samplesToCopy * sizeof(float));
                 page.validAspects |= Preview;
+                succeeded |= Preview;
             }
         }
     }
 
     if (aspects & Metadata) {
         object->revalRecomputeMetadata(page);
+        succeeded |= Metadata;
     }
     if (aspects & Export) {
         object->revalRecomputeExport(page);
+        succeeded |= Export;
     }
+
+    // Aspects requested but not handled above (e.g. Playback) keep the
+    // historical behavior of being marked valid by the caller.
+    succeeded |= (aspects & ~(Preview | Metadata | Export));
+
+    return succeeded;
 }
 
 void CaptureRevalidator::processComponentFreezingJob(const ComponentFreezingJob& job) {

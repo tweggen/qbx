@@ -213,6 +213,12 @@ swap_complete:
 // Should only be called when capture_ is null.
 void SCut::buildCapture_()
 {
+    // Serialize concurrent builders: the UI thread (rebuildReader) and the
+    // revalidator worker (revalPrepPreview) may both arrive here. The render
+    // below can take tens of milliseconds, so this is a dedicated mutex — the
+    // object mutex() must never be held that long.
+    std::lock_guard<std::mutex> buildLock( captureBuildMutex_ );
+
     if( capture_ ) {
         return;  // Already built
     }
@@ -313,7 +319,13 @@ void SCut::buildCapture_()
         captureLen = toRead;
     }
 
-    capture_ = std::make_shared<twCapturingSource>( std::move( buf ), captureLen, 1, env.getSRate() );
+    {
+        // Publish under the object mutex: readers (getPreview's null check,
+        // invalidateCapture's reset) synchronize on the same lock.
+        auto newCapture = std::make_shared<twCapturingSource>( std::move( buf ), captureLen, 1, env.getSRate() );
+        std::lock_guard<std::mutex> lock( mutex() );
+        capture_ = newCapture;
+    }
 
     if( !captureConnected_ ) {
         // Transparent invalidation: any applied action drops the snapshot so the
@@ -334,6 +346,9 @@ void SCut::invalidateCapture()
         currentPage_.reset();
         nextPage_.reset();
         capture_.reset();  // Also clear the old capture_ cache (Phase 5e integration)
+        // Peaks are derived from capture_; a rebuilt capture must not be drawn
+        // through the old envelope.
+        if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }
         readerTried_ = false;  // Reset so ensureReader() will rebuild capture on next call
     }
 
@@ -347,6 +362,27 @@ void SCut::invalidateCapture()
 
     // Notify parent containers that window parameters have changed (for live drag feedback)
     emit windowParamsChanged();
+}
+
+// IRevalidatable: runs on a revalidator worker before the generic preview
+// render, no locks held. Container-backed (and grained) cuts preview from the
+// offline capture; historically that was only built when PLAYBACK first
+// touched the clip (ensureReader), so such clips sat as gray boxes after
+// project load until played. Building it here gives them preview data as soon
+// as the Preview aspect is revalidated.
+bool SCut::revalPrepPreview()
+{
+    // No-ops for plain sample-backed cuts (they preview straight from the wave).
+    buildCapture_();
+
+    // Container-backed cuts have no live-preview fallback: without a capture
+    // the clip cannot be drawn. Report failure so Preview stays stale and the
+    // next paint's getCapture() retries (e.g. content still loading).
+    if( !content_->getSObject().getRandomSource() ) {
+        std::lock_guard<std::mutex> lock( mutex() );
+        return capture_ != nullptr;
+    }
+    return true;
 }
 
 // Build a peak cache of the capture (the rendered snapshot) for waveform

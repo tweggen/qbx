@@ -44,6 +44,19 @@ public:
     // Aspect recomputation hooks (virtual dispatch to the concrete object).
     virtual void revalRecomputeMetadata(CapturePageData &page) = 0;
     virtual void revalRecomputeExport(CapturePageData &page) = 0;
+
+    // Called on the worker BEFORE the generic preview render, with no object
+    // lock held. Lets the object materialize whatever its preview reads from
+    // (e.g. a container cut's offline capture). Return false if the source
+    // could not be materialized: the Preview aspect is then NOT marked valid,
+    // so the next getCapture() re-schedules and the preview retries instead
+    // of staying blank forever.
+    virtual bool revalPrepPreview() { return true; }
+
+    // Called on the worker after aspects were recomputed and published, with
+    // no locks held. `aspects` holds only the aspects that actually succeeded.
+    // Implementations use this to notify the UI thread to repaint (queued).
+    virtual void revalCompleted(uint32_t aspects) { (void)aspects; }
 };
 
 #endif

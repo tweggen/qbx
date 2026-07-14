@@ -2341,6 +2341,13 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
                       SIGNAL( arrangementChanged() ),
                       this, SLOT( update() ) );
 
+    // Repaint when an async capture revalidation lands (worker thread, queued
+    // delivery): previews computed in the background become visible without
+    // waiting for an unrelated repaint (e.g. the playhead moving).
+    QObject::connect( &smv_.model_->getProject(),
+                      SIGNAL( captureRevalidated() ),
+                      this, SLOT( update() ) );
+
     // Mouse-wheel navigation config: cache now and refresh whenever the user
     // changes it in the options dialog.
     loadWheelConfig();

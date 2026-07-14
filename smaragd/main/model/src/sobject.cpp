@@ -561,6 +561,19 @@ SProject *SObject::getProjectSafe() const
     return dynamic_cast<SProject*>( parent() );
 }
 
+// Phase 5e.6: revalidator worker → queued UI repaint. Runs on a worker thread
+// with no locks held; the queued invocation delivers on the project's (UI)
+// thread, where views connected to captureRevalidated() repaint and re-pull
+// the now-valid capture.
+void SObject::revalCompleted(uint32_t aspects)
+{
+    if (!(aspects & (Preview | Metadata))) return;
+    SProject *project = getProjectSafe();
+    if (!project) return;
+    QMetaObject::invokeMethod(project, "notifyCaptureRevalidated",
+                              Qt::QueuedConnection);
+}
+
 // --- Scoped render-cache invalidation (proposal 15) ------------------------
 
 // Depth-first containment walk. Bumps AFTER recursing so the deepest chains

@@ -161,9 +161,11 @@ private:
     // Helper: process a single component freezing job
     void processComponentFreezingJob(const ComponentFreezingJob& job);
 
-    // Dispatch recomputation to object's virtual methods
-    // These no longer do the computation themselves; they delegate to the object
-    void dispatchRecomputation(IRevalidatable* object, uint32_t aspects, CapturePageData& page);
+    // Dispatch recomputation to object's virtual methods.
+    // These no longer do the computation themselves; they delegate to the object.
+    // Returns the subset of `aspects` that was actually recomputed successfully;
+    // only those get marked valid (failed aspects stay stale and retry later).
+    uint32_t dispatchRecomputation(IRevalidatable* object, uint32_t aspects, CapturePageData& page);
 
     // Members
     CapturePagePool* pagePool_;  // Borrowed, not owned
