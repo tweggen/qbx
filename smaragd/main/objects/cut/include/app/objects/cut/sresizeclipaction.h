@@ -2,6 +2,7 @@
 #define SRESIZECLIPACTION_H
 
 #include "app/actions/saction.h"
+#include "tw/core/twfraction.h"
 #include "tw/graph/tw303aenv.h"
 #include <QList>
 
@@ -19,7 +20,7 @@ public:
     SResizeClipAction() = default;
     SResizeClipAction( const QList<int> &clipPath,
                        offset_t startTime, offset_t startOffset, length_t duration,
-                       length_t loopLength = 0, double stretch = 1.0,
+                       length_t loopLength = 0, const Fraction &stretch = Fraction(1),
                        int take = -1, bool broadcast = true );
 
     QString name() const override { return QStringLiteral("resize-clip"); }
@@ -33,7 +34,7 @@ private:
     offset_t   startOffset_ = 0;
     length_t   duration_    = 0;
     length_t   loopLength_  = 0;
-    double     stretch_     = 1.0;
+    Fraction   stretch_     = Fraction(1);
     int        take_        = -1;   // stacks only: which take the slip targets
     // Edit groups: fan out to the members' corresponding clips. The slip is
     // synced by EXPLICIT take index (decision 3), so a stack anchor resolves

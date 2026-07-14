@@ -799,18 +799,21 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
             offset_t newOffset  = (offset_t) cut->getStartOffset().frames();
             length_t newDur     = cut->getDuration();
             length_t newLoop    = cut->getLoopLength().frames();
-            double   newStretch = clipStretch0_;
+            Fraction newStretch = clipStretch0_;
             if( clipDragIsStretch_ ) {
                 // The grain view is addressed in the OUTPUT (stretched) domain, so
                 // startOffset scales with the stretch factor. Keep the SAME source
                 // window: srcSpan and the source start stay fixed, the offset and
-                // duration are rescaled to the new stretch. (Without rescaling the
-                // offset, the clip would start at a different point in the source.)
-                double s0 = clipStretch0_ > 0 ? clipStretch0_ : 1.0;
-                double srcSpan = (double) lastClickDuration_ / s0;
-                if( srcSpan < 1 ) srcSpan = 1;
-                newStretch = (double) newDur / srcSpan;
-                newOffset = (offset_t)( (double) clipResizeOffset0_ * newStretch / s0 + 0.5 );
+                // duration are rescaled to the new stretch. Same exact-ratio
+                // computation as the live drag (the values must agree).
+                Fraction s0 = clipStretch0_ > Fraction(0) ? clipStretch0_
+                                                          : Fraction(1);
+                Fraction srcSpan = Fraction( lastClickDuration_ ) / s0;
+                if( srcSpan < Fraction(1) ) srcSpan = Fraction(1);
+                newStretch = ( Fraction( newDur ) / srcSpan )
+                                 .limitedTo( (uint64_t)1 << 20 );
+                newOffset = (offset_t)( Fraction( clipResizeOffset0_ )
+                            * ( newStretch / s0 ) ).floorToInt();
             }
             bool changed = newStart != clipDragStart0_ || newOffset != clipResizeOffset0_
                         || newDur != lastClickDuration_ || newLoop != clipLoopLen0_
@@ -1366,9 +1369,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
                 SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
                 offset_t m = smv_.alignTime( getTimeOf( ev->pos().x() ) );
-                double s0 = clipStretch0_ > 0 ? clipStretch0_ : 1.0;
-                double srcSpan = (double) lastClickDuration_ / s0;
-                if( srcSpan < 1 ) srcSpan = 1;
+                Fraction s0 = clipStretch0_ > Fraction(0) ? clipStretch0_
+                                                          : Fraction(1);
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 length_t newDur;
                 if( lastClickedEnd_ ) {
@@ -1382,12 +1384,20 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     newDur = (length_t) end0 - (length_t) rStart;
                     lastClickSLink_->setStartTime( rStart );
                 }
-                double newStretch = (double) newDur / srcSpan;
+                // The stretch is BORN here as a ratio of two integer frame
+                // counts: newDur / srcSpan where srcSpan = duration0 / s0.
+                // Computed exactly and denominator-capped ONCE at creation
+                // (proposal 18 Phase 2); repeated re-stretching composes
+                // rationally instead of drifting through doubles.
+                Fraction srcSpan = Fraction( lastClickDuration_ ) / s0;
+                if( srcSpan < Fraction(1) ) srcSpan = Fraction(1);
+                Fraction newStretch = ( Fraction( newDur ) / srcSpan )
+                                          .limitedTo( (uint64_t)1 << 20 );
                 // Rescale the output-domain start offset by the SAME factor as the
                 // stretch so the source start (startOffset/stretch) is invariant; the
                 // source span is fixed by srcSpan, so the source end stays put too.
-                offset_t newOffset =
-                    (offset_t)( (double) clipResizeOffset0_ * newStretch / s0 + 0.5 );
+                offset_t newOffset = (offset_t)( Fraction( clipResizeOffset0_ )
+                                     * ( newStretch / s0 ) ).floorToInt();
                 cut->setStretchRaw( newStretch );
                 cut->setStartOffsetRaw( WarpedPos( (int64_t)newOffset ) );
                 cut->setDurationRaw( ClipLen( newDur ) );
@@ -1663,11 +1673,11 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                             SCut *c = (SCut*)&o;
                             clipResizeOffset0_ = (offset_t) c->getStartOffset().frames();
                             clipLoopLen0_      = c->getLoopLength().frames();
-                            clipStretch0_      = c->getStretch();
+                            clipStretch0_ = c->getStretchExact();
                         } else {
                             clipResizeOffset0_ = 0;
                             clipLoopLen0_      = 0;
-                            clipStretch0_      = 1.0;
+                            clipStretch0_      = Fraction(1);
                         }
                     }
                     switch( modifiers & (Qt::ShiftModifier) ) {

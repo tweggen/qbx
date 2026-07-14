@@ -494,6 +494,32 @@ void testCompositionProperties(TestRunner& runner) {
     runner.assertEqual("(p+q)+r == p+(q+r)", (p + q) + r, p + (q + r));
 }
 
+void testDenominatorCap(TestRunner& runner) {
+    std::cout << "\n--- Creation-Time Denominator Cap (Phase 2) ---" << std::endl;
+
+    // Already-fitting fractions pass through unchanged
+    runner.assertEqual("3/2 unchanged under cap 1000",
+                      Fraction(3, 2).limitedTo(1000), Fraction(3, 2));
+
+    // Classic convergent: pi's 355/113 from a huge exact ratio
+    Fraction piish(3141592653, 1000000000);
+    runner.assertEqual("pi ratio capped at 200 -> 355/113",
+                      piish.limitedTo(200), Fraction(355, 113));
+
+    // Negative values keep their sign
+    runner.assertEqual("negative cap keeps sign",
+                      (-piish).limitedTo(200), Fraction(-355, 113));
+
+    // The gesture shape: a stretch ratio of two frame counts stays close
+    // after capping (error < 1/maxDen^2 by CF convergent property)
+    Fraction gest(4432157, 4800000);
+    Fraction capped = gest.limitedTo((uint64_t)1 << 20);
+    runner.assertTrue("capped gesture ratio within CF error bound",
+                     (gest - capped).abs() < Fraction(1, (int64_t)1 << 20));
+    runner.assertTrue("capped denominator respects bound",
+                     capped.denominator <= ((int64_t)1 << 20));
+}
+
 // ============================================================================
 // Main Test Suite
 // ============================================================================
@@ -538,6 +564,7 @@ int main() {
     testOverflowSafety(runner);
     testFloorCeil(runner);
     testCompositionProperties(runner);
+    testDenominatorCap(runner);
 
     runner.printSummary();
 

@@ -3,6 +3,7 @@
 #define _SSTDMIXERVIEW_H
 
 #include <qwidget.h>
+#include "tw/core/twfraction.h"
 #include "app/model/sobjectrenderer.h"
 //#include <qptrvector.h>
 #include <qtoolbutton.h>
@@ -196,7 +197,7 @@ private:
     // Loop length / grain stretch at press, for the loop & time-stretch gestures.
     length_t clipLoopLen0_ = 0;   // original loop length (revert snapshot)
     length_t clipLoopSeg_  = 0;   // loop segment captured during a loop drag
-    double   clipStretch0_ = 1.0;
+    Fraction clipStretch0_ = Fraction(1);
     // Which clip-edit gesture this drag is: Alt-body = slip, Ctrl-border = stretch,
     // right-upper edge = loop. (Resize/extend/trim use lastClickedStart_/End_.)
     bool clipDragIsSlip_ = false;

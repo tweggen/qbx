@@ -37,6 +37,38 @@ static const KnownDecimal KNOWN_DECIMALS[] = {
 };
 
 // ============================================================================
+// Exact denominator cap (integer continued fractions on the fraction itself)
+// ============================================================================
+
+Fraction Fraction::limitedTo(uint64_t maxDen) const {
+    if (maxDen < 1) maxDen = 1;
+    if ((uint64_t)denominator <= maxDen) return *this;
+
+    bool negative = numerator < 0;
+    uint64_t n = negative ? (uint64_t)(-(numerator + 1)) + 1 : (uint64_t)numerator;
+    uint64_t d = (uint64_t)denominator;
+
+    // Continued-fraction convergents p/q of n/d, integer arithmetic only.
+    uint64_t p0 = 1, q0 = 0;        // convergent k-2
+    uint64_t p1 = n / d, q1 = 1;    // convergent k-1 (integer part)
+    uint64_t r  = n % d;
+
+    while (r != 0) {
+        n = d; d = r;
+        uint64_t a = n / d;
+        r = n % d;
+        uint64_t p2 = a * p1 + p0;
+        uint64_t q2 = a * q1 + q0;
+        if (q2 > maxDen) break;
+        p0 = p1; q0 = q1;
+        p1 = p2; q1 = q2;
+    }
+
+    Fraction f((int64_t)p1, (int64_t)q1);
+    return negative ? -f : f;
+}
+
+// ============================================================================
 // Continued Fractions Algorithm
 // ============================================================================
 

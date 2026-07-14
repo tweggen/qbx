@@ -16,7 +16,14 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         return;
     }
 
-    double   stretch = ( p.stretch > 1e-6 ) ? p.stretch : 1e-6;
+    // Output length is EXACT (proposal 18 Phase 2): floor(inLen * stretch)
+    // computed rationally — the render-boundary rounding rule. The grain
+    // scheduling below (hop spacing, per-sample interpolation) stays double:
+    // it is synthesis-internal and never feeds back into position math.
+    Fraction stretchFrac = ( p.stretch > Fraction(0) ) ? p.stretch
+                                                       : Fraction(1, 1000000);
+    double   stretch = stretchFrac.approxDouble();
+    if( stretch < 1e-6 ) stretch = 1e-6;
     double   r       = pow( 2.0, p.pitchCents / 1200.0 );   // pitch ratio
     length_t G       = ( p.grainSize > 0 ) ? p.grainSize : 2048;
     length_t C       = p.crossfade;
@@ -26,7 +33,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     if( Ho <= 0 ) Ho = 1;
     double   Hi = (double) Ho / stretch;  // input hop (frames)
 
-    nFrames_ = (length_t) llround( (double) inLen * stretch );
+    nFrames_ = (length_t) ( Fraction( inLen ) * stretchFrac ).floorToInt();
     if( nFrames_ <= 0 ) {
         nFrames_ = 0;
         return;

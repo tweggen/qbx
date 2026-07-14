@@ -612,7 +612,7 @@ void SCut::setLoopLength( length_t l )
 }
 
 void SCut::setWindow( WarpedPos startOffset, ClipLen duration,
-                      WarpedLen loopLength, double stretch )
+                      WarpedLen loopLength, const Fraction &stretch )
 {
     {
         std::lock_guard<std::mutex> lock(mutex());
@@ -648,15 +648,17 @@ void SCut::setGrainParams( const twGrainParams &p )
     // Read oldStretch INSIDE lock to avoid TOCTOU race (formal verification).
     {
         std::lock_guard<std::mutex> lock(mutex());
-        double oldStretch = grainParams_.stretch;  // ← Read inside lock
+        Fraction oldStretch = grainParams_.stretch;  // ← Read inside lock
         grainParams_ = p;
-        if( oldStretch > 0.0 && p.stretch > 0.0 && p.stretch != oldStretch ) {
+        if( oldStretch > Fraction(0) && p.stretch > Fraction(0)
+            && p.stretch != oldStretch ) {
             // Preserve-span rescale: warped-domain values scale with the
-            // stretch so the SOURCE window stays invariant. (Rounds through
-            // double until Phase 3 makes the source window authoritative.)
-            double k = p.stretch / oldStretch;
-            cutDuration_ = ClipLen( (length_t) llround( (double) cutDuration_.frames() * k ) );
-            startOffset_ = WarpedPos( (int64_t) llround( (double) startOffset_.frames() * k ) );
+            // stretch so the SOURCE window stays invariant. The ratio is
+            // exact; floor is the single rounding (proposal 18 rule) until
+            // Phase 3 makes the source window authoritative.
+            Fraction k = p.stretch / oldStretch;
+            cutDuration_ = ClipLen( ( Fraction( cutDuration_.frames() ) * k ).floorToInt() );
+            startOffset_ = WarpedPos( ( Fraction( startOffset_.frames() ) * k ).floorToInt() );
         }
         // Manually construct snapshot without re-acquiring lock
         snap.startOffset = startOffset_;
@@ -677,7 +679,8 @@ void SCut::setStretch( double s )
         std::lock_guard<std::mutex> lock(mutex());  // Read under lock
         p = grainParams_;  // Snapshot params
     }
-    p.stretch = s;  // Modify copy outside lock
+    // UI double -> exact rational once, at creation (denominator capped).
+    p.stretch = doubleToFractionWithLookup( s ).limitedTo( (uint64_t)1 << 20 );
     setGrainParams( p );  // Pass modified copy
 }
 
@@ -788,7 +791,7 @@ int SCut::serializeSelfAttributes( QTextStream &o )
     o << " startOffset='" << QString::fromStdString(startOffsetFrac.toString()) << "'"
       << " cutDuration='" << QString::fromStdString(cutDurationFrac.toString()) << "'"
       << " loopLength='" << QString::fromStdString(loopLengthFrac.toString()) << "'"
-      << " stretch='" << grainParams_.stretch << "'"
+      << " stretch='" << QString::fromStdString( grainParams_.stretch.toString() ) << "'"
       << " pitchCents='" << grainParams_.pitchCents << "'";
 
     // Grain parameters stored as time (milliseconds) for rate independence.
@@ -836,7 +839,10 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     // Grain params: stretch and pitchCents are dimensionless, grainSize and
     // crossfade are now stored as milliseconds (rate-independent) and converted
     // to samples based on project sample rate.
-    grainParams_.stretch    = element.attribute( "stretch", "1.0" ).toDouble();
+    // Exact "n/d" parses losslessly; legacy decimals recover once via the
+    // lookup table / continued fractions (EXACT_ARITHMETIC_DESIGN.md).
+    grainParams_.stretch    = parseFractionOrDouble(
+        element.attribute( "stretch", "1" ).toStdString() );
     grainParams_.pitchCents = element.attribute( "pitchCents", "0.0" ).toDouble();
 
     int srate = 48000;  // default fallback
@@ -968,7 +974,8 @@ void SCut::processWindowParamEvents()
                 needsReaderBuild = true;
                 break;
             case STRETCH_CHANGE:
-                grainParams_.stretch = event.value;
+                grainParams_.stretch = doubleToFractionWithLookup( event.value )
+                                           .limitedTo( (uint64_t)1 << 20 );
                 needsCaptureBuild = true;
                 needsReaderBuild = true;
                 break;

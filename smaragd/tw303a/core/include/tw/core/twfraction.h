@@ -152,6 +152,13 @@ struct Fraction {
         return (numerator < 0) ? Fraction(-numerator, denominator) : *this;
     }
 
+    // Best rational approximation with denominator <= maxDen, computed
+    // EXACTLY (integer continued-fraction convergents — no double detour).
+    // Proposal 18's creation-time denominator cap: approximate ONCE when a
+    // value (e.g. a gesture-minted stretch ratio) is born, never during
+    // arithmetic. Returns *this unchanged when it already fits.
+    Fraction limitedTo(uint64_t maxDen) const;
+
     // Approximate comparison (testing/diagnostics only).
     bool approximatelyEqual(const Fraction& other, double tolerance = 1e-9) const {
         double diff = std::fabs(approxDouble() - other.approxDouble());

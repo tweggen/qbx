@@ -2,6 +2,7 @@
 #define SADDTAKEACTION_H
 
 #include "app/actions/saction.h"
+#include "tw/core/twfraction.h"
 #include "tw/graph/tw303aenv.h"
 #include <QList>
 #include <QString>
@@ -21,7 +22,7 @@ public:
     SAddTakeAction() = default;
     SAddTakeAction( const QList<int> &clipPath, const QString &filePath,
                     offset_t startOffset = 0, int index = -1,
-                    bool activate = true, double stretch = 1.0,
+                    bool activate = true, const Fraction &stretch = Fraction(1),
                     double pitchCents = 0.0 );
 
     QString name() const override { return QStringLiteral("add-take"); }
@@ -35,7 +36,7 @@ private:
     offset_t   startOffset_ = 0;
     int        index_ = -1;
     bool       activate_ = true;
-    double     stretch_ = 1.0;
+    Fraction   stretch_ = Fraction(1);
     double     pitchCents_ = 0.0;
 };
 

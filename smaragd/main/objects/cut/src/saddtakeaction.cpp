@@ -16,7 +16,7 @@ using namespace strackpath;
 
 SAddTakeAction::SAddTakeAction( const QList<int> &clipPath,
                                 const QString &filePath, offset_t startOffset,
-                                int index, bool activate, double stretch,
+                                int index, bool activate, const Fraction &stretch,
                                 double pitchCents )
     : clipPath_( clipPath ), filePath_( filePath ),
       startOffset_( startOffset ), index_( index ), activate_( activate ),
@@ -96,7 +96,7 @@ void SAddTakeAction::writeXml( QDomElement &elem ) const
                            Fraction( startOffset_, 1 ).toString() ) );
     elem.setAttribute( "index", index_ );
     elem.setAttribute( "activate", activate_ ? 1 : 0 );
-    elem.setAttribute( "stretch", QString::number( stretch_ ) );
+    elem.setAttribute( "stretch", QString::fromStdString( stretch_.toString() ) );
     elem.setAttribute( "pitchCents", QString::number( pitchCents_ ) );
 }
 
@@ -108,7 +108,7 @@ bool SAddTakeAction::readXml( const QDomElement &elem, int /*version*/ )
         elem.attribute( "startOffset", "0" ).toStdString() ).toDouble();
     index_ = elem.attribute( "index", "-1" ).toInt();
     activate_ = elem.attribute( "activate", "1" ).toInt() != 0;
-    stretch_ = elem.attribute( "stretch", "1.0" ).toDouble();
+    stretch_ = parseFractionOrDouble( elem.attribute( "stretch", "1" ).toStdString() );
     pitchCents_ = elem.attribute( "pitchCents", "0" ).toDouble();
     return true;
 }

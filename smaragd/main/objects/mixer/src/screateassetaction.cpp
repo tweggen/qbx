@@ -60,7 +60,7 @@ SApplyResult SCreateAssetAction::apply( SProject *project )
     // startOffset_ for duration_. No copy — placements read the container live.
     SCut *cut = new SCut( project, *container );
     cut->setWindow( WarpedPos( (int64_t)startOffset_ ), ClipLen( duration_ ),
-                    WarpedLen( 0 ), 1.0 );
+                    WarpedLen( 0 ), Fraction(1) );
     cut->setSName( assetName );
 
     project->registerAsset( assetName, cut );

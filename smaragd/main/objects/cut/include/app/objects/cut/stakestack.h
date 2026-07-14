@@ -3,6 +3,7 @@
 
 #include "app/model/sobject.h"
 #include "app/model/sobjectrenderer.h"
+#include "tw/core/twfraction.h"
 
 class SProject;
 class SLink;
@@ -98,7 +99,7 @@ public:
      *  by newStretch/oldStretch (offsets live in the stretched OUTPUT
      *  domain — see CLIP_MODEL.md invariant 4). */
     void applyWindowAll( length_t duration, length_t loopLength,
-                         double stretch );
+                         const Fraction &stretch );
 
     // --- SObject ---------------------------------------------------------
     twComponent &getRootComponent() override;

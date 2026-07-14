@@ -26,7 +26,7 @@ SLink *makeDuplicateClip( SProject *project, SObject &srcObj,
         // the stretch would land the copy elsewhere in the source (and unstretched).
         copy->setGrainParamsRaw( s->getGrainParams() );
         copy->setWindow( s->getStartOffset(), ClipLen( s->getDuration() ),
-                         s->getLoopLength(), s->getStretch() );
+                         s->getLoopLength(), s->getStretchExact() );
     } else {
         copy = new SCut( project, srcObj );             // wrap a raw clip whole
     }

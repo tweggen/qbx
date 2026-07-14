@@ -126,7 +126,7 @@ void STakeStack::setDuration( length_t duration )
 }
 
 void STakeStack::applyWindowAll( length_t duration, length_t loopLength,
-                                 double stretch )
+                                 const Fraction &stretch )
 {
     forwardSuppressed_ = true;
     for( int i = 0; i < childCount(); ++i ) {
@@ -135,10 +135,10 @@ void STakeStack::applyWindowAll( length_t duration, length_t loopLength,
         // Slip offsets live in the stretched OUTPUT domain: a stretch change
         // rescales them so every take keeps pointing at the same material.
         WarpedPos off = cut->getStartOffset();
-        const double oldStretch = cut->getStretch();
-        if( oldStretch > 0.0 && stretch != oldStretch )
-            off = WarpedPos( (int64_t)llround(
-                (double)off.frames() * stretch / oldStretch ) );
+        const Fraction oldStretch = cut->getStretchExact();
+        if( oldStretch > Fraction(0) && stretch != oldStretch )
+            off = WarpedPos( ( Fraction( off.frames() )
+                             * ( stretch / oldStretch ) ).floorToInt() );
         cut->setWindow( off, ClipLen( duration ), WarpedLen( loopLength ),
                         stretch );
     }

@@ -16,7 +16,7 @@ using namespace strackpath;
 SResizeClipAction::SResizeClipAction( const QList<int> &clipPath,
                                       offset_t startTime, offset_t startOffset,
                                       length_t duration, length_t loopLength,
-                                      double stretch, int take, bool broadcast )
+                                      const Fraction &stretch, int take, bool broadcast )
     : clipPath_( clipPath ), startTime_( startTime ),
       startOffset_( startOffset ), duration_( duration ),
       loopLength_( loopLength ), stretch_( stretch ), take_( take ),
@@ -79,7 +79,7 @@ SApplyResult SResizeClipAction::apply( SProject *project )
         offset_t oldOffset = takeCut ? (offset_t) takeCut->getStartOffset().frames() : 0;
         length_t oldDur    = stack->getDuration();
         length_t oldLoop   = takeCut ? takeCut->getLoopLength().frames() : 0;
-        double   oldStretch = takeCut ? takeCut->getStretch() : 1.0;
+        Fraction oldStretch = takeCut ? takeCut->getStretchExact() : Fraction(1);
 
         link->setStartTime( startTime_ );
         stack->applyWindowAll( duration_, loopLength_, stretch_ );
@@ -105,7 +105,7 @@ SApplyResult SResizeClipAction::apply( SProject *project )
     offset_t oldOffset = (offset_t) cut->getStartOffset().frames();
     length_t oldDur    = cut->getDuration();
     length_t oldLoop   = cut->getLoopLength().frames();
-    double   oldStretch = cut->getStretch();
+    Fraction oldStretch = cut->getStretchExact();
 
     link->setStartTime( startTime_ );
     cut->setWindow( WarpedPos( (int64_t)startOffset_ ), ClipLen( duration_ ),
@@ -123,7 +123,7 @@ void SResizeClipAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "startOffset", QString::fromStdString( Fraction(startOffset_, 1).toString() ) );
     elem.setAttribute( "duration", QString::fromStdString( Fraction(duration_, 1).toString() ) );
     elem.setAttribute( "loopLength", QString::fromStdString( Fraction(loopLength_, 1).toString() ) );
-    elem.setAttribute( "stretch", QString::number( stretch_ ) );
+    elem.setAttribute( "stretch", QString::fromStdString( stretch_.toString() ) );
     elem.setAttribute( "take", take_ );
     elem.setAttribute( "broadcast", broadcast_ ? 1 : 0 );
 }
@@ -135,7 +135,7 @@ bool SResizeClipAction::readXml( const QDomElement &elem, int /*version*/ )
     startOffset_ = (offset_t) parseFractionOrDouble( elem.attribute( "startOffset", "0" ).toStdString() ).toDouble();
     duration_    = (length_t) parseFractionOrDouble( elem.attribute( "duration", "0" ).toStdString() ).toDouble();
     loopLength_  = (length_t) parseFractionOrDouble( elem.attribute( "loopLength", "0" ).toStdString() ).toDouble();
-    stretch_     = elem.attribute( "stretch", "1.0" ).toDouble();
+    stretch_     = parseFractionOrDouble( elem.attribute( "stretch", "1" ).toStdString() );
     take_        = elem.attribute( "take", "-1" ).toInt();
     broadcast_   = elem.attribute( "broadcast", "1" ).toInt() != 0;
     return true;

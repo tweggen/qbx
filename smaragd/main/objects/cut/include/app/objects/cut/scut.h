@@ -136,7 +136,7 @@ public:
     // feedback and for cloning; the chain is rebuilt once afterwards, e.g. by
     // setWindow on release).
     void setLoopLengthRaw( WarpedLen l ) { loopLength_ = l; }
-    void setStretchRaw( double s ) { grainParams_.stretch = s; }
+    void setStretchRaw( const Fraction &s ) { grainParams_.stretch = s; }
     void setStartOffsetRaw( WarpedPos o ) { startOffset_ = o; }
     void setDurationRaw( ClipLen d ) { cutDuration_ = d; }
     void setGrainParamsRaw( const twGrainParams &p ) { grainParams_ = p; }
@@ -157,10 +157,13 @@ public:
     // caller supplies already-final values. The undoable form of the clip-edge
     // gestures (see SResizeClipAction).
     void setWindow( WarpedPos startOffset, ClipLen duration,
-                    WarpedLen loopLength, double stretch );
+                    WarpedLen loopLength, const Fraction &stretch );
 
     // Grain time-stretch / pitch-shift parameters for this clip (proposal 06).
-    double getStretch() const { return grainParams_.stretch; }
+    // The stretch is an EXACT rational (proposal 18 Phase 2); getStretch()
+    // is the APPROXIMATE view for display/pixel math and the Qt property.
+    const Fraction &getStretchExact() const { return grainParams_.stretch; }
+    double getStretch() const { return grainParams_.stretch.approxDouble(); }
     double getPitchCents() const { return grainParams_.pitchCents; }
     const twGrainParams &getGrainParams() const { return grainParams_; }
     void setGrainParams( const twGrainParams & );
