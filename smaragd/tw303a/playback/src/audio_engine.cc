@@ -69,10 +69,6 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             resampleBufR_.resize(inFramesNeeded);
         }
 
-        // Track current position BEFORE consuming input frames
-        // This allows us to advance by the actual output frame count, not the input count
-        uint64_t posBeforeResample = currentPos_.load(std::memory_order_relaxed);
-
         // Phase 3 Optimization: Batch input pulling for resampling path (same as passthrough)
         // Instead of per-sample pullStereoFrameFrozen calls, use batching with cached state
         length_t inProduced = 0;
@@ -108,8 +104,10 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             // Step 3: Compute safe batch size for input pulling
             length_t batchSize = inFramesNeeded - inProduced;
 
-            // Limit to current page capacity
-            uint64_t framesInPage = cachedPageValidFrames_ - pageFrameOffset_;
+            // Limit to the page's fixed timeline range. A page may hold fewer
+            // rendered frames than its range covers (content ends mid-page);
+            // the tail counts as silence, not as a wall, so playback can cross.
+            uint64_t framesInPage = twOutputPage::FRAME_CAPACITY - pageFrameOffset_;
             batchSize = std::min(batchSize, (length_t)framesInPage);
 
             // Limit to loop boundary
@@ -127,9 +125,20 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
 
             // Step 4: Fast path - copy batch from frozen page into resampling buffers
             if (batchSize > 0) {
+                // Only [0, validFrames) holds rendered samples; the rest of the
+                // page's range is silence (buffer tail may be stale pool data).
+                length_t dataFrames = (pageFrameOffset_ < cachedPageValidFrames_)
+                    ? std::min(batchSize, (length_t)(cachedPageValidFrames_ - pageFrameOffset_))
+                    : 0;
                 const float *pageData = &currentFrozenPage_->samples[pageFrameOffset_];
-                std::copy(pageData, pageData + batchSize, resampleBufL_.data() + inOffset);
-                std::copy(pageData, pageData + batchSize, resampleBufR_.data() + inOffset);
+                std::copy(pageData, pageData + dataFrames, resampleBufL_.data() + inOffset);
+                std::copy(pageData, pageData + dataFrames, resampleBufR_.data() + inOffset);
+                if (dataFrames < batchSize) {
+                    std::fill(resampleBufL_.data() + inOffset + dataFrames,
+                              resampleBufL_.data() + inOffset + batchSize, 0.0f);
+                    std::fill(resampleBufR_.data() + inOffset + dataFrames,
+                              resampleBufR_.data() + inOffset + batchSize, 0.0f);
+                }
 
                 // Step 5: Update state ONCE per batch
                 pageFrameOffset_ += batchSize;
@@ -143,6 +152,24 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         }
 
         if (inProduced == 0) {
+            // DEBUG: why did the batch loop break without producing anything?
+            static int stallLogCounter = 0;
+            if (stallLogCounter++ % 200 == 0) {
+                uint64_t pos = currentPos_.load(std::memory_order_relaxed);
+                fprintf(stderr, "[STALL] pullBlock(resample) produced 0: pos=%llu page=%s pageStart=%llu offs=%zu cachedValid=%u pageValid=%u pageEpoch=%llu epochNow=%llu readahead=%llu cycle=%d loopEnd=%llu\n",
+                        (unsigned long long)pos,
+                        currentFrozenPage_ ? "held" : "NULL",
+                        currentFrozenPage_ ? (unsigned long long)currentFrozenPage_->startPosition : 0ULL,
+                        pageFrameOffset_,
+                        cachedPageValidFrames_,
+                        currentFrozenPage_ ? currentFrozenPage_->validFrames : 0u,
+                        currentFrozenPage_ ? (unsigned long long)currentFrozenPage_->contentEpoch.load() : 0ULL,
+                        synthOutput_ ? (unsigned long long)synthOutput_->contentEpochNow() : 0ULL,
+                        (unsigned long long)readaheadComputedUpTo_,
+                        (int)cycleEnabled_.load(std::memory_order_relaxed),
+                        (unsigned long long)loopEnd_.load(std::memory_order_relaxed));
+                fflush(stderr);
+            }
             // Caller's buffers must be large enough to hold nFrames
             std::memset(outL, 0, nFrames * sizeof(float));
             std::memset(outR, 0, nFrames * sizeof(float));
@@ -170,19 +197,14 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             outProduced++;
         }
 
-        // CRITICAL: Adjust currentPos_ to reflect output frames produced, not input frames consumed.
-        // currentPos_ was advanced by pullStereoFrameFrozen() calls (inProduced times).
-        // But we're outputting outProduced frames. The discrepancy causes position lag.
-        // Correct it: currentPos_ should be posBeforeResample + outProduced (in engine rate).
-        // But we consumed inProduced engine-rate frames, so currentPos_ is now
-        // posBeforeResample + inProduced. We need to subtract the excess.
-        // Actually, currentPos_ should represent the engine-rate position that corresponds
-        // to the output-rate frame we're about to produce. This is complex with resampling.
-        // For now: set currentPos_ to the engine-rate equivalent of output position:
-        // If we've output outProduced frames at output rate, that's outProduced / rateRatio_
-        // frames at engine rate.
-        uint64_t engineFramesForOutput = (uint64_t)std::round((double)outProduced / rateRatio_);
-        currentPos_.store(posBeforeResample + engineFramesForOutput, std::memory_order_relaxed);
+        // currentPos_ was already advanced by exactly the input frames consumed
+        // (Step 5 stores per batch). It must NOT be rewritten from outProduced:
+        // pageFrameOffset_ advanced by inProduced in lockstep with the position,
+        // and rounding the position back from the output-frame count makes the
+        // page offset drift ahead of the playhead by up to a frame per block —
+        // until the offset exhausts a page while the playhead is still inside
+        // it, which pins playback permanently. The sub-frame phase loss per
+        // block is inherent to this per-block linear resampler.
 
         // Diagnostic: check if output is silence
         bool isSilent = true;
@@ -240,8 +262,10 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         // Step 3: Compute safe batch size (frames until page end, loop boundary, etc.)
         length_t batchSize = nFrames - produced;
 
-        // Limit to current page capacity (use cached validFrames for performance)
-        uint64_t framesInPage = cachedPageValidFrames_ - pageFrameOffset_;
+        // Limit to the page's fixed timeline range. A page may hold fewer
+        // rendered frames than its range covers (content ends mid-page);
+        // the tail counts as silence, not as a wall, so playback can cross.
+        uint64_t framesInPage = twOutputPage::FRAME_CAPACITY - pageFrameOffset_;
         batchSize = std::min(batchSize, (length_t)framesInPage);
 
         // Limit to loop boundary (if looping and approaching loop end)
@@ -262,10 +286,19 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
 
         // Step 4: Fast path - copy batch from frozen page
         if (batchSize > 0) {
+            // Only [0, validFrames) holds rendered samples; the rest of the
+            // page's range is silence (buffer tail may be stale pool data).
+            length_t dataFrames = (pageFrameOffset_ < cachedPageValidFrames_)
+                ? std::min(batchSize, (length_t)(cachedPageValidFrames_ - pageFrameOffset_))
+                : 0;
             const float *pageData = &currentFrozenPage_->samples[pageFrameOffset_];
             // Duplicate mono frozen output to stereo
-            std::copy(pageData, pageData + batchSize, outL + outOffset);
-            std::copy(pageData, pageData + batchSize, outR + outOffset);
+            std::copy(pageData, pageData + dataFrames, outL + outOffset);
+            std::copy(pageData, pageData + dataFrames, outR + outOffset);
+            if (dataFrames < batchSize) {
+                std::memset(outL + outOffset + dataFrames, 0, (batchSize - dataFrames) * sizeof(float));
+                std::memset(outR + outOffset + dataFrames, 0, (batchSize - dataFrames) * sizeof(float));
+            }
 
             // Step 5: Update state ONCE per batch (not per-sample)
             pageFrameOffset_ += batchSize;
@@ -315,23 +348,27 @@ bool AudioEngine::pullStereoFrameFrozen(float& outL, float& outR) {
         return false;
     }
 
-    // Read sample from current frozen page. If at end, try to advance to next page.
-    if (pageFrameOffset_ >= currentFrozenPage_->validFrames) {
+    // Read sample from current frozen page. If at the end of the page's fixed
+    // timeline range, try to advance to the next page.
+    if (pageFrameOffset_ >= twOutputPage::FRAME_CAPACITY) {
         // At end of current page; try to move to next page
         // Advance position to next page and try to load it
         pos = (currentPageStartPos_ / twOutputPage::FRAME_CAPACITY + 1) * twOutputPage::FRAME_CAPACITY;
         updateFrozenPage(pos);
 
         // Try again with the new page
-        if (!currentFrozenPage_ || pageFrameOffset_ >= currentFrozenPage_->validFrames) {
+        if (!currentFrozenPage_ || pageFrameOffset_ >= twOutputPage::FRAME_CAPACITY) {
             outL = outR = 0.0f;
             currentPos_.store(pos, std::memory_order_relaxed);
             return false;
         }
     }
 
-    // Extract samples from frozen page (mono frozen output, duplicate to stereo)
-    float sample = currentFrozenPage_->samples[pageFrameOffset_];
+    // Extract samples from frozen page (mono frozen output, duplicate to stereo).
+    // Beyond validFrames the page's range is silence (content ended mid-page).
+    float sample = (pageFrameOffset_ < currentFrozenPage_->validFrames)
+        ? currentFrozenPage_->samples[pageFrameOffset_]
+        : 0.0f;
     outL = sample;
     outR = sample;
 
@@ -388,11 +425,10 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         currentPageStartPos_ = pageStartPos;
         currentPageGeneration_ = page->generation.load();
         pageFrameOffset_ = desiredPos - pageStartPos;
-        // Phase 2 perf: Cache validFrames to avoid repeated loads in batching loop
+        // Phase 2 perf: Cache validFrames to avoid repeated loads in batching loop.
+        // pageFrameOffset_ may exceed validFrames: that region of the page's
+        // range is silence, and the pull paths handle it without reading samples.
         cachedPageValidFrames_ = currentFrozenPage_->validFrames;
-        if (pageFrameOffset_ > cachedPageValidFrames_) {
-            pageFrameOffset_ = cachedPageValidFrames_;
-        }
 
         // DEBUG: Page found
         if (gapLogCounter++ % 500 == 0) {
@@ -436,9 +472,6 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         currentPageGeneration_ = fallbackPage->generation.load();
         pageFrameOffset_ = desiredPos - pageStartPos;
         cachedPageValidFrames_ = currentFrozenPage_->validFrames;
-        if (pageFrameOffset_ > cachedPageValidFrames_) {
-            pageFrameOffset_ = cachedPageValidFrames_;
-        }
         readaheadCv_.notify_one();
         if (gapLogCounter++ % 500 == 0) {
             fprintf(stderr, "[AUDIO] Adopted STALE fallback page at %llu, awaiting re-freeze\n",
@@ -571,7 +604,7 @@ void AudioEngine::stopReadahead() {
 }
 
 void AudioEngine::readaheadLoop() {
-    constexpr int READAHEAD_PAGES = 3;  // How far ahead to pre-compute
+    constexpr int READAHEAD_PAGES = 3;  // Minimum lookahead; actual count grows to cover minBufferFrames_
     const uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
     static int readaheadLogCounter = 0;
     uint64_t lastPlayheadPage = UINT64_MAX;  // playhead page seen last iteration
@@ -608,7 +641,15 @@ void AudioEngine::readaheadLoop() {
         // Compute up to READAHEAD_PAGES ahead of the current playhead
         constexpr int SKIP_DISTANCE = 5;  // Pages to skip on blocking (Phase 6b confirmed)
 
-        for (int i = 0; i < READAHEAD_PAGES; i++) {
+        // The window is anchored at the playhead's page start, so a fixed page
+        // count under-covers by up to one page depending on where inside the
+        // page the playhead sits; startPlayback() needs minBufferFrames_ beyond
+        // the playhead itself, so size the window to reach that.
+        const uint64_t targetEnd = currentPos + minBufferFrames_;
+        int pagesNeeded = (int)((targetEnd - pageStart + pageSize - 1) / pageSize);
+        if (pagesNeeded < READAHEAD_PAGES) pagesNeeded = READAHEAD_PAGES;
+
+        for (int i = 0; i < pagesNeeded; i++) {
             uint64_t pos = pageStart + (uint64_t)i * pageSize;
             // No "already computed" shortcut on the frontier here: an edit can
             // invalidate pages BEHIND readaheadComputedUpTo_ (content epoch

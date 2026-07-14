@@ -163,7 +163,7 @@ private:
 
     // Playback state management (Phase 6b: minimum buffering before playback)
     std::atomic<PlaybackState> playbackState_{PlaybackState::STOPPED};
-    static constexpr uint64_t minBufferFrames_ = 144000;       // ~3 seconds at 48kHz (3 pages × 48000 frames)
+    static constexpr uint64_t minBufferFrames_ = 144000;       // ~3 seconds at 48kHz; readahead sizes its page window to cover this
     static constexpr uint64_t underrunThresholdFrames_ = 48000; // 1 second at 48kHz (Phase 6b confirmed)
 
     // Loop state (atomic for lockfree access)

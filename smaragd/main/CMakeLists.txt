@@ -224,11 +224,13 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudioenergyaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sscreenshotaction.h
+    testkit/include/app/testkit/stransporttestactions.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
     testkit/src/sassertaudioenergyaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sscreenshotaction.cpp
+    testkit/src/stransporttestactions.cpp
 )
 
 # Layer 1 — the document model (+ the Phase 6 seams: SAppContext,

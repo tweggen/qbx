@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="playback_song3_bar3">
+
+  <!-- Regression test for the readahead/short-page playback stalls:
+       load song3.qxp, cycle off, unmute the first track, play from bar 3
+       (frame 192000 @ 48kHz, 120bpm 4/4) and require the playhead to
+       advance at least 5 seconds (240000 frames) without stalling. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="/Users/tweggen/Documents/smaragd/song3.qxp"/>
+    <cycle-disable/>
+    <set-track-mute trackIndex="0" muted="0"/>
+    <set-locator position="192000"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="240000" timeoutMs="20000"/>
+    <toggle-playback play="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>
