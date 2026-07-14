@@ -1,9 +1,13 @@
 # Proposal 18: Exact, typed position domains and composable time maps
 
-> **Status: PROPOSED 2026-07-14.** Follow-up to the 2026-07-12
-> split-clip-offset bug and the 2026-07-13/14 stretch double-apply bug
-> (commit `eaa1bec`); companion to `docs/EXACT_ARITHMETIC_DESIGN.md`
-> (2025-06) and `docs/contracts/POSITION_DOMAINS.md`.
+> **Status: EXECUTED 2026-07-14 (Phases 0-4)** — see `plan/STATE.md`.
+> Phase 5's exact-invalidation primitive (`twLoopMap::preimagesWithin`)
+> landed with Phase 4; wiring it into scoped invalidation, and the
+> deep-nesting drift fixture, remain open.
+> Follow-up to the 2026-07-12 split-clip-offset bug and the 2026-07-13/14
+> stretch double-apply bug (commit `eaa1bec`); companion to
+> `docs/EXACT_ARITHMETIC_DESIGN.md` (2025-06) and
+> `docs/contracts/POSITION_DOMAINS.md`.
 
 ## Problem
 

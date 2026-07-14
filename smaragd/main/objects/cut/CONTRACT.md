@@ -13,14 +13,22 @@ App edges: per tools/check_layering.py.
 Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
 1. Audio threads read via getSnapshot() only; window params change under
    mutex() then invalidate (drag path queues events, applies after).
-2. mapTimelineToComponentPos mirrors seekTo exactly: ensureReader() first;
-   identity for looping; +startOffset otherwise (NO stretch scaling — see
-   invariant 4). If you change one, change both.
+2. mapTimelineToComponentPos mirrors seekTo exactly: both consume the ONE
+   shared map, SCut::clipToReaderMap (proposal 18 Phase 4) — identity for
+   looping, +startOffset otherwise (NO stretch scaling, see invariant 4).
+   ensureReader() runs first. The preview consumes clipToSourceMap the
+   same way; never hand-roll a second mapping.
 3. rebuildReader is chain-descriptor-checked: plain trim/slip REUSES the
    reader; grain/loop changes mint a new one (fresh page cache).
-4. startOffset_/cutDuration_ live in the grain OUTPUT (stretched) domain;
-   split arithmetic relies on the second cut inheriting grain params RAW
-   (setGrainParams would double-apply the rescale).
+4. The slip anchor is stored SOURCE-authoritative (proposal 18 Phase 3):
+   srcStart_ is an exact Fraction, invariant under stretch edits; the
+   warped-domain startOffset is DERIVED (floor(srcStart * stretch), the
+   single render-boundary rounding). stretch is an exact Fraction born as
+   a ratio of integer frame counts, denominator-capped at creation.
+   cutDuration_/loopLength_ are integer timeline lengths. Positions are
+   domain-typed (twdomains.h). Split arithmetic is exact rational and
+   relies on the second cut inheriting grain params RAW (setGrainParams
+   would preserve-span-rescale the duration).
 5. Container-backed cuts capture via freezePage of the content root;
    arrangementChanged drops the capture transparently.
 

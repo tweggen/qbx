@@ -5182,3 +5182,86 @@ path, whose offset error at stretch 0.93 was small enough to escape notice.
   `twSpeaker::startOutput` seek-before-readahead reorder; bf3dee8 had
   landed its own equivalent of the readahead-window fix but not this
   ordering fix.
+
+## Proposal 18: exact, typed position domains and composable time maps (2026-07-14)
+
+Executed phases 0-4 in one session, one commit per phase, suite green after
+each (engine ctest, audio qxa from `tests/cases/`, layering).
+
+### Phase 0 — Fraction hardened for position arithmetic (c84bcea)
+
+Signed int64 numerator (subtraction is exact below zero — the old clamp to
+0/1 silently corrupted deltas), all arithmetic/comparisons through __int128
+with reduce-before-narrow (overflow saturates + debug-asserts),
+floorToInt/ceilToInt exact projections (floor division), exact
+integer/integer parse path (no double round-trip), negative parse/
+serialize, approxDouble() as the explicit lossy name. Property tests:
+(a−b)+b==a, reduce-before-narrow shapes, comparison wrap, floor tiling,
+six-factor stretch-chain cancellation.
+
+### Phase 1 — typed domains in the clip layer (7a86f5e)
+
+`tw/core/twdomains.h`: TimelinePos/ClipPos/WarpedPos/SourcePos (+Len) as
+strong int64 wrappers with the position algebra (Pos−Pos=Len, Pos+Len=Pos;
+Pos+Pos and cross-domain arithmetic do not compile) and the NAMED
+conversions, one implementation each. SCut window state and API, the clip
+actions, the take stack, and the gesture code carry the types; `.frames()`
+unwraps at integral seams only. Both shipped domain bugs are now compile
+errors.
+
+### Phase 2 — rational stretch end-to-end (5a815cb)
+
+`twGrainParams.stretch` is a Fraction. Born exact in the stretch gesture as
+`newDur / srcSpan` (ratio of integer frame counts), denominator-capped ONCE
+at creation via the new `Fraction::limitedTo` (integer CF convergents).
+Grain output length = exact `floor(inLen · stretch)`; synthesis internals
+stay double. `.qxp`/action XML serialize `stretch='n/d'`; legacy decimals
+recover once at load (lookup + continued fractions). `getStretchExact()` is
+the exact accessor; `getStretch()` the approximate display view.
+
+### Phase 3 — source-domain anchor authoritative (538cd20)
+
+SCut persists `srcStart` (exact Fraction, SOURCE domain); the warped
+`startOffset` is DERIVED as `floor(srcStart · stretch)` — the single
+render-boundary rounding. Stretch edits do not move the anchor: the
+gesture/applyWindowAll offset-rescale sites (one rounding per edit, the
+drift the proposal targets) are deleted. Split arithmetic exact
+(`anchor + inObjOffset/stretch`). SResizeClipAction carries `srcStart`;
+legacy `startOffset` attrs/files migrate once by exact division (the .qxp
+keeps a derived startOffset for older builds). Verified fixpoint: at
+stretch 44543/48000 the migrated anchor `3456000000/44543` reproduces
+`startOffset='72000'` identically across repeated save/load cycles. New
+`exact_stretch_roundtrip.qxa`: legacy-form stretch → verify-undo →
+unstretch via srcStart → render bands match analytic RMS to 4 decimals →
+save/load/render identity.
+
+### Phase 4 — twTimeMap shared by preview and playback (b03ef4e)
+
+`tw/core/twtimemap.h`: twTimeMap (exact map/inverse + mapInterval into
+maximal affine segments) with twAffineMap (exact composition) and twLoopMap
+(loop tiling as a piecewise-affine map; `preimagesWithin` enumerates every
+timeline image of a source interval — the exact-invalidation primitive).
+twLoopReader renders blocks by walking `twLoopMap::mapInterval` (the old
+modulo chunk loop, extracted). `SCut::clipToReaderMap` is the one mapping
+behind BOTH seekTo and mapTimelineToComponentPos; `SCut::clipToSourceMap`
+(source = srcStart + rel/stretch, exact) is consumed by BOTH preview
+contexts — the preview no longer owns a second stretch computation that
+can disagree with what plays. timemap_test covers roundtrip, composition,
+tiling (contiguous, sums to input, inside window), preimages.
+
+### Docs
+
+POSITION_DOMAINS.md rule 3, CLIP_MODEL.md reader chain, objects/cut
+CONTRACT invariants 2/4 updated to the source-authoritative + shared-map
+model. Proposal 18 header marked executed.
+
+### Remaining (tracked in proposal 18 header)
+
+- Wire `preimagesWithin` into scoped invalidation (today epochs dirty the
+  whole component — correct, coarse).
+- Deep-nesting drift fixture (capture-of-stretched-cut chains with factors
+  cancelling to 1/1, sample-exact across depth).
+- Pre-existing, surfaced while testing: the load-project test verb loads
+  into the current project without purging the old object registry, so
+  save/load/save cycles accumulate orphaned (inaudible) objects in the
+  file.

@@ -67,7 +67,10 @@ Track gain/mute applies to the summed page (`trackMuted_` → factor 0).
   `twWavInput`'s cursor between cuts).
 - Grained: interpose `twGrainSource`; the cut window already lives in the
   grain OUTPUT (stretched) domain, so offsets pass through unchanged
-  (the source position is `startOffset / stretch`).
+  (the source position is `startOffset / stretch`). Since proposal 18
+  Phase 3 the PERSISTED anchor is the exact rational SOURCE position
+  `srcStart` (startOffset is derived as `floor(srcStart * stretch)`), and
+  the stretch itself is an exact Fraction; see POSITION_DOMAINS.md rule 3.
 - Looping (`0 < loopLength < cutDuration`): `twLoopReader` with the loop
   base baked in — the reader is CUT-RELATIVE (identity in MapPosFn).
 - Container-backed (content is a track/mixer): render the content once via

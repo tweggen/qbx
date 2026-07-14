@@ -25,16 +25,25 @@ domains. Learn the table, then the rules.
    `child.getSObject().mapTimelineToComponentPos(off)`.
 
 3. **`SObject::mapTimelineToComponentPos` defaults to identity.**
-   `SCut` overrides it (mirrors `SCut::seekTo`):
+   `SCut` overrides it (and `SCut::seekTo` uses the SAME shared map,
+   `SCut::clipToReaderMap` — proposal 18 Phase 4):
    - looping reader (`twLoopReader`): identity — the loop reader is
-     cut-relative, it owns its loop base internally;
-   - plain reader (grained or not): `off + startOffset` — the cut window
-     (`startOffset`, `cutDuration`, `loopLength`) is stored in the grain
-     OUTPUT (stretched) domain, the same domain the grain view is addressed
-     in, so no stretch conversion is applied (the source position is
-     `startOffset / stretch`).
+     cut-relative, it owns its loop base internally (a `twLoopMap`);
+   - plain reader (grained or not): `off + startOffset` — the reader is
+     addressed in the grain OUTPUT (warped) domain, so no stretch
+     conversion is applied.
    The override calls `ensureReader()` first, so the component the track
    talks to is the cut's OWN reader, never the shared `twWavInput` cursor.
+
+   **Storage is source-authoritative (proposal 18 Phase 3):** `SCut`
+   persists the slip anchor as the EXACT rational SOURCE position
+   `srcStart` (plus the exact rational `stretch`); the warped-domain
+   `startOffset` is DERIVED as `floor(srcStart * stretch)`. A stretch edit
+   does not move the anchor, so re-stretching can never drift the window.
+   Positions are domain-typed (`tw/core/twdomains.h`): mixing domains or
+   transforming a length like a point is a compile error, and every
+   conversion is a named function with one implementation. The waveform
+   preview consumes the same maps (`SCut::clipToSourceMap`) as playback.
 
 4. **Page caches are keyed in the component's OWN domain.** A frozen page on
    a sample reader is keyed by SOURCE position. Consequence: slipping a clip
