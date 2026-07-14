@@ -28,9 +28,11 @@ domains. Learn the table, then the rules.
    `SCut` overrides it (mirrors `SCut::seekTo`):
    - looping reader (`twLoopReader`): identity — the loop reader is
      cut-relative, it owns its loop base internally;
-   - grain stage active: `off + llround(startOffset * stretch)` — offset is
-     stored in the plainwave domain, the reader runs in the stretched domain;
-   - plain reader: `off + startOffset`.
+   - plain reader (grained or not): `off + startOffset` — the cut window
+     (`startOffset`, `cutDuration`, `loopLength`) is stored in the grain
+     OUTPUT (stretched) domain, the same domain the grain view is addressed
+     in, so no stretch conversion is applied (the source position is
+     `startOffset / stretch`).
    The override calls `ensureReader()` first, so the component the track
    talks to is the cut's OWN reader, never the shared `twWavInput` cursor.
 

@@ -5088,3 +5088,97 @@ Recording placement no longer bypasses the action framework. New pieces:
 - Suites: audio qxa 23/23, layering clean, root suite 7/9 (baseline).
   Engine untouched in this phase (ctest last run green after phase 1's
   one-line twTrackMix change).
+
+## Bugfix: stretch double-apply on slipped clips + playback-start stall (2026-07-13)
+
+User report after a split → slip → ~10% stretch session: (a) playback played
+a different source region than the waveform preview displayed; (b) roughly
+every other transport start went silent (state said "playing", locator never
+moved).
+
+### (a) Playback double-applied the stretch to the slip offset
+
+The cut window (`startOffset_`, `cutDuration_`, `loopLength_`) lives in the
+grain OUTPUT (stretched) domain — the split action, the stretch drag
+(sstdmixerview rescales the offset so `startOffset/stretch` is invariant),
+`setGrainParams`' rescale and the waveform preview (`(rel+startOffset)/
+stretch`) all agree. But the four playback-side sites in `scut.cpp`
+(`rebuildReader`, `seekTo`, `mapTimelineToComponentPos`, `buildCapture_`'s
+grained branch) treated the offset as SOURCE-domain and multiplied by the
+stretch again, so a slipped+stretched clip audibly played
+`startOffset·(1−1/stretch)` away from what the preview showed (~0.4 s for a
+4 s slip at 10%). Fix: the offsets pass through unchanged. Docs that
+codified the wrong mapping updated: POSITION_DOMAINS.md rule 3,
+CLIP_MODEL.md reader chain, objects/cut CONTRACT invariant 2.
+
+### (b) Transport start could never leave BUFFERING near a page boundary
+
+`AudioEngine::startPlayback()` gates on `readaheadComputedUpTo_ >= playPos +
+minBufferFrames_` (144000), but `readaheadLoop` froze a fixed
+`READAHEAD_PAGES = 3` pages from the playhead's page start — a hard frontier
+ceiling of `pageStart + 196608`. Any start position in the last
+`65536−52608 = 12928` frames of a page (~20% of positions) could never
+satisfy the gate: the monitor sat in BUFFERING, timed out after 10 s and
+tore down silently while the UI showed "playing" — the alternating dead
+transport of the report. Fix: the readahead now freezes until the frontier
+covers `currentPos + minBufferFrames_ + one page of slack` (never less than
+the old 3-page depth), so the gate is satisfiable at every position. Also
+reordered `twSpeaker::startOutput` to `seekTo()` BEFORE `startReadahead()`:
+the readahead thread used to start on position 0 and race the seek's reset
+of the (unsynchronized) frontier.
+
+### Verification
+
+- New `render_split_slip_stretch.qxa`: split at 2 s, tail stretched ×1.5
+  with the UI convention (offset/duration rescaled). RMS bands discriminate:
+  on the pre-fix build the three tail bands fail (plays source from 3 s and
+  runs off the material end); fixed build passes.
+- Audio qxa suite 24/24 green (run with `--test-output-dir`), layering clean.
+- (b) is a startup-timing property of the live WASAPI path, not coverable by
+  the offline qxa render; verified by analysis of the gate arithmetic.
+
+## Bugfix follow-up: looped+stretched clip repeats the wrong segment (2026-07-14)
+
+User report (test5.qxp): a recorded drum loop, cut/slipped/stretched to the
+BPM grid (stretch 0.9276), sounds right under cycle playback — but extending
+the clip with the loop gesture makes each repetition come out short, "like
+1/8 note missing at the end". Hypothesis offered: loop applied in
+seconds-length without timestretching.
+
+### Root cause: the same stretch double-apply, on the loop window
+
+The 2026-07-13 session above identified and fixed the double-apply in
+`rebuildReader` — but that fix was NEVER COMMITTED; it sat in this machine's
+working tree while the other machine ran plain git HEAD, which still had the
+old code:
+
+    adjustedStartOffset = startOffset * stretch;
+    adjustedLoopLength  = loopLength  * stretch;
+
+So the `twLoopReader` wrapped after `loopLength * stretch` output frames
+(89052 instead of 96000 — each bar repeats 0.145 s early, between a 1/16 and
+1/8 note at 120 BPM) AND read the loop base from `startOffset * stretch`
+(0.24 s of earlier source material than the preview shows). The user's
+hypothesis was right in spirit (a loop-length domain mix-up), inverted in
+direction: the stretch was applied twice, not omitted.
+
+Cycle playback of the un-extended bar was unaffected because with
+`loopLength == cutDuration` the loop is inactive (`isLooping()` requires
+`loopLength < cutDuration`) — the clip plays through the non-looping reader
+path, whose offset error at stretch 0.93 was small enough to escape notice.
+
+### Verification
+
+- New `grain_loop_stretch.qxa`: ramped-sawtooth source, stretch x0.5, loop
+  segment = source [1,2) s repeated 4x. Per-half-loop RMS bands discriminate
+  correct behavior from both failure modes (double-applied stretch shows a
+  constant 0.084 RMS — wrong segment AND wrong period; source-domain loop
+  would fail high). Fails on unfixed HEAD, passes with the fix.
+- Audio qxa suite 25/25 green, layering clean. NOTE: the suite must be run
+  from `tests/cases/` (fixture paths like `../test_sawtooth.wav` resolve
+  against the CWD — run from `smaragd/` they silently load the stale junk
+  `qbx/test_sawtooth.wav` and everything fails with nonsense RMS values).
+- Also committed from the 2026-07-13 session (same working tree): the
+  `twSpeaker::startOutput` seek-before-readahead reorder; bf3dee8 had
+  landed its own equivalent of the readahead-window fix but not this
+  ordering fix.

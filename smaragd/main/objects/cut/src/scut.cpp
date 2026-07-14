@@ -120,29 +120,17 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
         }
         tw303aEnvironment &env = *(SAppContext::get().get303aEnvironment());
 
-        // Compute adjusted offsets with sample rate conversion.
-        // When the source has a different sample rate than the project (e.g., 44.1 kHz file
-        // in a 48 kHz project), the offset must be converted from project domain to source domain.
-        // This is critical for grain processing which operates on the actual source samples.
+        // The cut window (startOffset_, cutDuration_, loopLength_) lives in the
+        // grain OUTPUT (stretched) domain — the same domain twGrainSource is
+        // addressed in (split action, stretch drag and the waveform preview all
+        // agree on this; the source position is startOffset/stretch). So the
+        // offsets pass through UNCHANGED whether or not a grain stage is
+        // interposed. Multiplying by the stretch here (the old code) applied the
+        // factor twice and made playback read a different source window than the
+        // preview displayed.
         offset_t adjustedStartOffset = snap.startOffset;
         length_t adjustedLoopLength = snap.loopLength;
 
-        // Note: Each component in the chain should handle domain conversion:
-        // - SCut receives startOffset (in project domain)
-        // - Grain source should handle the grain transformation
-        // - Underlying source (twWavInput) should handle rate conversion via viewAtRate()
-        // We pass offsets directly and let each component interpret them correctly.
-        int sourceSampleRate = rs->sampleRate();
-        int projectSampleRate = env.getSRate();
-
-        if( newGrain ) {
-            // With grain, both offset and loop length must account for the stretch.
-            // startOffset_ is in plainwave domain (position in original material);
-            // twGrainSource operates in stretched domain (position in time-stretched output).
-            // Convert: offset_stretched = offset_plainwave * stretch
-            adjustedStartOffset = (offset_t)llround( (double)snap.startOffset * snap.grainParams.stretch );
-            adjustedLoopLength = (length_t)llround( (double)snap.loopLength * snap.grainParams.stretch );
-        }
         if( snap.loopLength > 0 && snap.loopLength < snap.cutDuration ) {
             twLoopReader *lr = new twLoopReader( env, *view, adjustedStartOffset, adjustedLoopLength );
             lr->init();
@@ -304,9 +292,9 @@ void SCut::buildCapture_()
         auto grainSource = std::make_shared<twGrainSource>( *rs, snap.grainParams );
         length_t grainedLen = grainSource->length();
 
-        // Apply offset: startOffset is in plainwave domain (original material position)
-        // After grain stretching, scale it to stretched domain: offset_stretched = offset * stretch
-        offset_t grainOffset = (offset_t)llround( (double)snap.startOffset * snap.grainParams.stretch );
+        // startOffset already lives in the grain OUTPUT (stretched) domain, the
+        // domain the grain source is addressed in — use it directly.
+        offset_t grainOffset = snap.startOffset;
 
         // Read from the grain-stretched offset, limited to remaining content
         length_t availFromOffset = grainedLen > grainOffset ? grainedLen - grainOffset : 0;
@@ -543,14 +531,10 @@ int SCut::seekTo( offset_t off )
     // a plain reader needs startOffset_ folded in here.
     // snap.reader.reader is always valid (double-buffer model: Unix page cache).
     //
-    // When grain is active, startOffset_ is in plainwave domain but the reader's
-    // underlying source (twGrainSource) is in stretched domain. Convert before seeking.
-    // The looping path handles this at reader construction (adjustedStartOffset in rebuildReader).
-    offset_t startOff = snap.startOffset;
-    if (!snap.reader.looping && snap.reader.grain) {
-        startOff = (offset_t)llround((double)startOff * snap.grainParams.stretch);
-    }
-    offset_t seekPos = snap.reader.looping ? off : off + startOff;
+    // startOffset_ already lives in the grain OUTPUT (stretched) domain — the
+    // domain the reader (twGrainSource view) is addressed in — so no stretch
+    // conversion is applied here.
+    offset_t seekPos = snap.reader.looping ? off : off + snap.startOffset;
     if( snap.reader.reader ) return snap.reader.reader->seekTo( seekPos );
     return content_->getSObject().seekTo( seekPos );
 }
@@ -570,13 +554,11 @@ offset_t SCut::mapTimelineToComponentPos( offset_t off )
     // A loop reader is cut-relative (it adds its own loop base = startOffset_).
     if( snap.reader.looping ) return off;
 
-    // Plain reader over source/grain view: fold the slip offset in, converting
-    // to the stretched domain when a grain stage is interposed.
-    offset_t startOff = snap.startOffset;
-    if( snap.reader.grain ) {
-        startOff = (offset_t) llround( (double) startOff * snap.grainParams.stretch );
-    }
-    return off + startOff;
+    // Plain reader over source/grain view: fold the slip offset in. Both `off`
+    // (clip-relative, timeline samples) and startOffset_ live in the grain
+    // OUTPUT (stretched) domain, which is also the domain the grain view is
+    // addressed in — no stretch conversion.
+    return off + snap.startOffset;
 }
 
 void SCut::setStartOffset( offset_t off )

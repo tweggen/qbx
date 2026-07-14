@@ -14,8 +14,8 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
 1. Audio threads read via getSnapshot() only; window params change under
    mutex() then invalidate (drag path queues events, applies after).
 2. mapTimelineToComponentPos mirrors seekTo exactly: ensureReader() first;
-   identity for looping; +startOffset (×stretch under grain) otherwise.
-   If you change one, change both.
+   identity for looping; +startOffset otherwise (NO stretch scaling — see
+   invariant 4). If you change one, change both.
 3. rebuildReader is chain-descriptor-checked: plain trim/slip REUSES the
    reader; grain/loop changes mint a new one (fresh page cache).
 4. startOffset_/cutDuration_ live in the grain OUTPUT (stretched) domain;

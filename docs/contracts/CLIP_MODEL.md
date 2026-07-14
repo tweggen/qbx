@@ -65,8 +65,9 @@ Track gain/mute applies to the summed page (`trackMuted_` → factor 0).
 - Plain sample cut: `content.getRandomSource()->acquireReader(env, off)` —
   an independent cursor over the shared resident data (never share
   `twWavInput`'s cursor between cuts).
-- Grained: interpose `twGrainSource`; offsets scale by `stretch`
-  (plainwave domain → stretched domain).
+- Grained: interpose `twGrainSource`; the cut window already lives in the
+  grain OUTPUT (stretched) domain, so offsets pass through unchanged
+  (the source position is `startOffset / stretch`).
 - Looping (`0 < loopLength < cutDuration`): `twLoopReader` with the loop
   base baked in — the reader is CUT-RELATIVE (identity in MapPosFn).
 - Container-backed (content is a track/mixer): render the content once via

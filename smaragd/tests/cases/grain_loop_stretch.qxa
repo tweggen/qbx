@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: a LOOPING clip that is also time-STRETCHED must repeat a segment
+  of loopLength TIMELINE samples (the grain OUTPUT domain), not a segment
+  scaled by the stretch factor. Reported as: a beat-synced stretched drum loop
+  extended via the loop gesture repeats too early ("1/8 note missing at the
+  end of each repetition").
+
+  Fixture: test_sawtooth.wav is a 4 s sawtooth whose amplitude ramps 0 -> 0.8
+  (a(t) = 0.2 t, sawtooth RMS = a/sqrt(3)), so every source region has a
+  distinct RMS.
+
+  Arrangement: stretch x0.5 (grain output = 2 s, output pos p <-> source
+  t = p/24000 s), startOffset 24000 (source 1 s), loopLength 24000 (0.5 s of
+  output = source [1,2) s), duration 96000 (2 s = FOUR repetitions).
+
+  Expected: four identical 0.5 s segments. Each segment's first half is
+  source [1.0,1.5) s (RMS ~0.145), second half source [1.5,2.0) s (~0.203).
+
+  If the loop length is (mis)applied with the stretch factor folded in once
+  more (wraps after 12000 frames), every quarter-second window shows the
+  first-half RMS and the second-half assertions fail low. If it is applied in
+  the SOURCE domain (wraps after 48000 frames), the second repetition plays
+  source [2,3) s (~0.29) and fails high.
+-->
+<SActionScript version="1" name="grain_loop_stretch">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s sawtooth (192000 frames) -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- stretch x0.5, window = source [1,2) s, loop 0.5 s, 4 repetitions -->
+    <resize-clip clip="0,0" startTime="0" startOffset="24000"
+                 duration="96000" loopLength="24000" stretch="0.5"/>
+
+    <render filename="grain_loop_stretch.wav" format="wav" quality="10"/>
+
+    <!-- rep 0, first half = source [1.0,1.5) s, RMS ~0.145 -->
+    <assert-audio-energy filename="grain_loop_stretch.wav"
+                         startFrame="0" frameCount="12000"
+                         minRms="0.115" maxRms="0.175"/>
+    <!-- rep 0, second half = source [1.5,2.0) s, RMS ~0.203 -->
+    <assert-audio-energy filename="grain_loop_stretch.wav"
+                         startFrame="12000" frameCount="12000"
+                         minRms="0.175" maxRms="0.23"/>
+
+    <!-- rep 1 -->
+    <assert-audio-energy filename="grain_loop_stretch.wav"
+                         startFrame="24000" frameCount="12000"
+                         minRms="0.115" maxRms="0.175"/>
+    <assert-audio-energy filename="grain_loop_stretch.wav"
+                         startFrame="36000" frameCount="12000"
+                         minRms="0.175" maxRms="0.23"/>
+
+    <!-- rep 2 -->
+    <assert-audio-energy filename="grain_loop_stretch.wav"
+                         startFrame="48000" frameCount="12000"
+                         minRms="0.115" maxRms="0.175"/>
+    <assert-audio-energy filename="grain_loop_stretch.wav"
+                         startFrame="60000" frameCount="12000"
+                         minRms="0.175" maxRms="0.23"/>
+
+    <!-- rep 3 -->
+    <assert-audio-energy filename="grain_loop_stretch.wav"
+                         startFrame="72000" frameCount="12000"
+                         minRms="0.115" maxRms="0.175"/>
+    <assert-audio-energy filename="grain_loop_stretch.wav"
+                         startFrame="84000" frameCount="12000"
+                         minRms="0.175" maxRms="0.23"/>
+
+    <!-- past the clip end: silence -->
+    <assert-audio-energy filename="grain_loop_stretch.wav"
+                         startFrame="96000" frameCount="24000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <assert-audio-peak filename="grain_loop_stretch.wav" maxPeak="0.995"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

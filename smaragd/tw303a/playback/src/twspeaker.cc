@@ -121,7 +121,6 @@ void twSpeaker::startOutput()
     // observe it yet (outputState_ is OPENING, so no concurrent start/stop gets past
     // Phase 1), so this needs no lock.
     engine->configureResampling(graphRate, cfg.sampleRate);
-    engine->startReadahead();
 
     rateRatio_ = (graphRate > 0) ? ((double) cfg.sampleRate / (double) graphRate) : 1.0;
 
@@ -131,8 +130,14 @@ void twSpeaker::startOutput()
         loopEnd_.load(std::memory_order_relaxed)
     );
 
-    // Seek to the current playhead, then publish the handle (leaf-lock write).
+    // Seek to the current playhead BEFORE starting the readahead: seekTo resets
+    // the readahead frontier/state-chain, so starting the thread first would let
+    // it freeze pages from position 0 and race the reset (unsynchronized frontier
+    // writes from two threads).
     engine->seekTo((offset_t) context_->locatorPosition());
+    engine->startReadahead();
+
+    // Publish the handle (leaf-lock write).
 
     {
         std::lock_guard<std::mutex> lock(engineMutex_);
