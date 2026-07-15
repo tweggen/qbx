@@ -101,12 +101,13 @@ twFormat twLatch::getFormat() const
  */
 twLatchOutput * twLatch::addOutput()
 {
-	twLatchOutput *pOutput = new twLatchOutput( *this );
-	if( !pOutput ) throw excStandard( "twLatch::addOutput(): Unable to create new output." );
+	auto pOutput = std::make_shared<twLatchOutput>( *this );
 
 	outputList.push_back( pOutput );
 
-	return pOutput;
+	// The caller wires with a raw pointer (linkOutput/setInput signatures); the
+	// consumer takes shared ownership via sharedOutput() in twComponent::setInput.
+	return pOutput.get();
 }
 
 int twLatch::deleteOutput( twLatchOutput * pOutput )
@@ -114,10 +115,19 @@ int twLatch::deleteOutput( twLatchOutput * pOutput )
 #ifdef DEBUG_COMPONENT
 	if( !pOutput ) throw excStandard( "twLatch::deleteOutput(): pOutput was NULL." );
 #endif
-	auto it = std::find( outputList.begin(), outputList.end(), pOutput );
+	auto it = std::find_if( outputList.begin(), outputList.end(),
+		[pOutput]( const std::shared_ptr<twLatchOutput> &p ) { return p.get() == pOutput; } );
+	// Drop the latch's reference. If a consumer (or an audio-thread snapshot)
+	// still holds the plug, the object survives until that reference is released.
 	if( it != outputList.end() ) outputList.erase( it );
-	delete pOutput;
 	return 0;
+}
+
+std::shared_ptr<twLatchOutput> twLatch::sharedOutput( twLatchOutput * pOutput )
+{
+	auto it = std::find_if( outputList.begin(), outputList.end(),
+		[pOutput]( const std::shared_ptr<twLatchOutput> &p ) { return p.get() == pOutput; } );
+	return it != outputList.end() ? *it : nullptr;
 }
 
 

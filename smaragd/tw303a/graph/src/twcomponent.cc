@@ -207,10 +207,11 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
     } else {
         if( newOutput ) ++inputsSet_;
     }
-    // Create a no-op shared_ptr wrapper that doesn't take ownership
-    // (ownership is managed by the output latch)
+    // Share ownership of the plug with the producing latch. Holding a real
+    // shared_ptr (not a no-op wrapper) means an audio-thread snapshot of this
+    // plug keeps it alive across a concurrent deleteOutput/disconnect.
     if( newOutput ) {
-        pInputPlugs_[idx] = std::shared_ptr<twLatchOutput>(newOutput, [](twLatchOutput*){});
+        pInputPlugs_[idx] = newOutput->getParentLatch().sharedOutput( newOutput );
 
         // Auto-detect and track parent component for safe teardown
         // Extract parent from the latch that owns this output

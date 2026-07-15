@@ -28,7 +28,11 @@ private:
     std::weak_ptr<twComponent> component;
     idx_t idx;
 protected:
-    std::vector<twLatchOutput*> outputList;
+    // The latch owns its outputs. Consumers hold a shared_ptr to the plug they
+    // read from (twComponent::pInputPlugs_), so a plug snapshotted by the audio
+    // thread stays alive across a concurrent disconnect. deleteOutput() drops
+    // this list's reference; the object frees once the last consumer releases it.
+    std::vector<std::shared_ptr<twLatchOutput>> outputList;
     // the current top offset of the Latch
     offset_t offset;
 
@@ -50,6 +54,11 @@ public:
 
     virtual twLatchOutput * addOutput();
     virtual int deleteOutput( twLatchOutput * latchOutput );
+
+    // Return the owning shared_ptr for a raw output pointer this latch created,
+    // so a consumer can share ownership of the plug it reads from. Returns
+    // nullptr if the output does not belong to this latch.
+    std::shared_ptr<twLatchOutput> sharedOutput( twLatchOutput * latchOutput );
 
 };
 
