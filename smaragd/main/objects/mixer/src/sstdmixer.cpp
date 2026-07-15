@@ -268,6 +268,15 @@ int SStdMixer::setNBusses( int n )
     // Set the rewirer to the proper number of channels.
     cpRewire_->setNPlugs( n );
 
+    // Resize the mixer vector to exactly n slots. The old raw-pointer code
+    // allocated a fresh array of size n on every call; the vector port must
+    // grow (or shrink) it explicitly, otherwise the alloc loop below writes
+    // past the end via operator[] — undefined behavior. This bites on the very
+    // first call from the constructor, where nBusses_==0 and cpMixers_ is
+    // still empty. Existing takeover slots [0,nTakeOver) are preserved; freed
+    // tail slots were already reset above, so shrinking just drops nulls.
+    cpMixers_.resize( n );
+
     // If we have to alloc new ones, do it.
     for( int i=nTakeOver; i<n; i++ ) {
         qWarning( "SStdMixer::setNBusses( %d ): Creating new mixer #%d.\n", n, i );

@@ -253,10 +253,14 @@ void STrack::setNBusses( int nBusses )
         Q_ASSERT_X( false, "STrack::setNBusses", "bus count shrink not supported" );
         return;
     } else {
-        // The number of busses is about to grow.
+        // The number of busses is about to grow. Base the growth start index on
+        // the actual container size, not nBusses_: the constructor sets
+        // nBusses_==1 while leaving this vector empty, so trusting nBusses_ here
+        // would skip creating bus 0 and leave a null shared_ptr behind.
+        int oldMixerCount = (int)cpTrackMixers_.size();
         cpTrackMixers_.resize(nBusses);
         // Create the new ones.
-        for( int i=oldNBusses; i<nBusses; ++i ) {
+        for( int i=oldMixerCount; i<nBusses; ++i ) {
             cpTrackMixers_[i] = std::make_shared<twTrackMix>(
                 *(SAppContext::get().get303aEnvironment()) );
             cpTrackMixers_[i]->init();
@@ -264,10 +268,11 @@ void STrack::setNBusses( int nBusses )
     }
     // Grow plugin chain array: keep existing chains, create new ones for added buses.
     {
+        int oldChainCount = (int)cpPluginChains_.size();
         cpPluginChains_.resize(nBusses);
 
         // Create new plugin chain components for added buses only
-        for( int i=oldNBusses; i<nBusses; ++i ) {
+        for( int i=oldChainCount; i<nBusses; ++i ) {
             cpPluginChains_[i] = std::make_shared<twPluginChain>(
                 *(SAppContext::get().get303aEnvironment()), 1 );
             cpPluginChains_[i]->init();
