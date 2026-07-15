@@ -34,8 +34,8 @@ int twMixer::seekTo_nolock( offset_t offset )
     for (idx_t i = 0; i < mixerInputs_; ++i) {
         if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
             twLatch &latch = pInputPlugs_[i]->getParentLatch();
-            twComponent &comp = latch.getComponent();
-            comp.seekTo(offset);
+            std::shared_ptr<twComponent> comp = latch.getComponent();
+            comp->seekTo(offset);
         }
     }
     return 0;
@@ -55,7 +55,7 @@ void twMixer::createOutputLatches()
 #ifdef DEBUG_COMPONENT
 	fprintf( sterr, "twMixer::createOutputLatches(): creating streaming latch..." );
 #endif
-	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
+	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 0 );
 #ifdef DEBUG_COMPONENT
 	fprintf( sterr, "twMixer::createOutputLatches(): leaving." );
 #endif
@@ -242,24 +242,24 @@ void twMixer::teardown()
         }
     }
 
-    std::vector<twComponent*> depsCopy;
+    std::vector<std::shared_ptr<twComponent> > depsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         depsCopy = dependents_;
     }
     for (auto dep : depsCopy) {
-        if (dep) dep->onDependencyTeardown(this);
+        if (dep) dep->onDependencyTeardown(shared_from_this());
     }
 
     // Snapshot inputs before tearing them down
-    std::vector<std::shared_ptr<twComponent>> inputsCopy;
+    std::vector<std::shared_ptr<twComponent> > inputsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         for (idx_t i = 0; i < mixerInputs_; ++i) {
             if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
                 twLatch &latch = pInputPlugs_[i]->getParentLatch();
-                twComponent &comp = latch.getComponent();
-                inputsCopy.push_back(std::shared_ptr<twComponent>(&comp, [](twComponent*){}));
+                std::shared_ptr<twComponent> comp = latch.getComponent();
+                inputsCopy.push_back(comp);
             }
         }
     }

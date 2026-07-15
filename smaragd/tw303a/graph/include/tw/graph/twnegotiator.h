@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <memory>
 
 class tw303aEnvironment;
 class twComponent;
@@ -26,12 +27,12 @@ public:
     // Returns true if a consistent format assignment was committed for the
     // subgraph feeding `target`; false if some wire was infeasible. The caller
     // may treat the result as advisory.
-    bool negotiate( twComponent *target );
+    bool negotiate( std::shared_ptr<twComponent> target );
 
     // As above, but also folds `extraRates` (e.g. the rates the audio device
     // advertises via AudioBackend::supportedRates()) into the candidate domain
     // D, so a device-native rate can be chosen to avoid resampling.
-    bool negotiate( twComponent *target,
+    bool negotiate( std::shared_ptr<twComponent> target,
                     const std::vector<std::uint32_t> &extraRates );
 
 private:

@@ -43,7 +43,7 @@ void twPluginInsert::createOutputLatches()
     idx_t nOut = getNOutputs();
     pOutputLatches_.resize(nOut);
     for( idx_t i = 0; i < nOut; ++i )
-        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( *this, i, 4096 );
+        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( shared_from_this(), i, 4096 );
 }
 
 idx_t twPluginInsert::getNInputs() const
@@ -134,8 +134,8 @@ int twPluginInsert::seekTo( offset_t offset )
         for( idx_t i = 0; i < getNInputs(); ++i ) {
             if( i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i] ) {
                 twLatch &latch = pInputPlugs_[i]->getParentLatch();
-                twComponent &comp = latch.getComponent();
-                comp.seekTo( offset );
+                std::shared_ptr<twComponent> comp = latch.getComponent();
+                comp->seekTo( offset );
             }
         }
     }
@@ -207,10 +207,10 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
 
 		auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs_[c].get());
 		twLatch &latch = input->getParentLatch();
-		twComponent &comp = latch.getComponent();
+		std::shared_ptr<twComponent> comp = latch.getComponent();
 
 		// Freeze upstream to get input page
-		auto inputPage = comp.freezePage(startPos, nullptr, 0, inputLength, sampleRate, previousPage);
+		auto inputPage = comp->freezePage(startPos, nullptr, 0, inputLength, sampleRate, previousPage);
 		if (!inputPage) {
 			std::fill(inScratch_[c].begin(), inScratch_[c].end(), 0.0f);
 			continue;
@@ -283,13 +283,13 @@ void twPluginInsert::teardown()
 		}
 	}
 
-	std::vector<twComponent*> depsCopy;
+	std::vector<std::shared_ptr<twComponent> > depsCopy;
 	{
 		std::lock_guard<std::mutex> lock(mutex());
 		depsCopy = dependents_;
 	}
 	for (auto dep : depsCopy) {
-		if (dep) dep->onDependencyTeardown(this);
+		if (dep) dep->onDependencyTeardown(shared_from_this());
 	}
 
 	// Plugin insert has no children, just mark ZOMBIE

@@ -28,13 +28,14 @@ void CaptureRevalidator::scheduleRevalidation(IRevalidatable* object, uint32_t a
     if (!object || aspects == 0) return;
 
     {
+        object->revalAddRef();
         std::lock_guard<std::mutex> lock(queueLock_);
         revalidationQueue_.push({object, aspects, priority});
     }
     queueNotEmpty_.notify_one();
 }
 
-void CaptureRevalidator::scheduleComponentFreezing(twComponent* component, uint64_t pageStartPos,
+void CaptureRevalidator::scheduleComponentFreezing(std::shared_ptr<twComponent> component, uint64_t pageStartPos,
                                                     std::shared_ptr<twOutputPage> previousPage,
                                                     int priority) {
     if (!component) return;
@@ -111,7 +112,7 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
 
     // === CRITICAL SECTION 1: Check state and allocate page ===
     {
-        std::lock_guard<std::mutex> lock(job.object->revalMutex());
+        std::unique_lock<std::mutex> lock(job.object->revalMutex());
 
         // Check if object still needs revalidation (state may have changed while queued)
         // _nolock: we hold the lock (std::lock_guard above)
@@ -126,6 +127,9 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
             if (!nextPage) {
                 // Pool exhausted: re-queue at lowest priority and skip for now
                 scheduleRevalidation(job.object, job.aspects, 0);
+                // Unlock before removing reference.
+                lock.unlock();
+                job.object->revalRemoveRef();
                 return;
             }
             job.object->revalSetNextPage_nolock(nextPage);
@@ -139,6 +143,8 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
     uint32_t succeeded = dispatchRecomputation(job.object, job.aspects, *nextPage);
 
     if (succeeded == 0) {
+        job.object->revalRemoveRef();
+
         // Nothing recomputed (e.g. preview source not materializable yet).
         // Keep the current page as-is; nextPage stays parked on the object for
         // the retry that the next getCapture() schedules.
@@ -161,6 +167,7 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
     // repaint — without this, a preview that lands while the app is idle
     // stays invisible until some unrelated repaint happens.
     job.object->revalCompleted(succeeded);
+    job.object->revalRemoveRef();
 }
 
 uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint32_t aspects, CapturePageData& page) {

@@ -22,7 +22,7 @@ class tw303aEnvironment
 {
     Q_OBJECT
 private:
-    QList<twComponent*> listModules;
+    QList<std::shared_ptr<twComponent> > listModules;
 
     length_t bufferSize;
     int sampleRate;

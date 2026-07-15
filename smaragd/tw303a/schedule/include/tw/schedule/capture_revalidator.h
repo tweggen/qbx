@@ -29,7 +29,7 @@ class twOutputPage;
  * - Priority (higher = process first)
  */
 struct ComponentFreezingJob {
-    twComponent* component;      // Which component to freeze (borrowed pointer)
+    std::shared_ptr<twComponent> component;      // Which component to freeze (borrowed pointer)
     uint64_t pageStartPos;       // Position to freeze (in component sample rate)
     std::shared_ptr<twOutputPage> previousPage;  // For state chain (may be nullptr for page 0)
     int priority;                // 0-10 (higher first)
@@ -51,7 +51,7 @@ struct ComponentFreezingJob {
  * Used in priority queue: higher priority jobs dequeue first.
  */
 struct CaptureRevalidationJob {
-    IRevalidatable* object; // Which object to revalidate (borrowed pointer)
+    IRevalidatable* object; // Which object to revalidate (borrowed pointer), reference is added.
     uint32_t aspects;       // Which aspects (bitmask: Preview|Playback|Metadata|Export)
     int priority;           // 0-10 (higher first)
 
@@ -133,7 +133,7 @@ public:
      * @param priority Job priority (higher = process first)
      *                 Suggested: 10=Playback, 5=Metadata, 2=Export, 1=Preview
      */
-    void scheduleComponentFreezing(twComponent* component, uint64_t pageStartPos,
+    void scheduleComponentFreezing(std::shared_ptr<twComponent> component, uint64_t pageStartPos,
                                    std::shared_ptr<twOutputPage> previousPage = nullptr,
                                    int priority = 5);
 

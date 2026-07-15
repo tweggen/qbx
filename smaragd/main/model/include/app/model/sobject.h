@@ -256,6 +256,8 @@ public:
     // (as the revalidator's SObject* calls always did), while the recompute
     // hooks and getRootComponent() stay virtual per object type.
     std::mutex &revalMutex() const override { return mutex(); }
+    void revalAddRef() override { addRef(); }
+    void revalRemoveRef() override { removeRef(); }
     bool revalNeeded_nolock(uint32_t aspects) const override
         { return needsRevalidation_nolock(aspects); }
     std::shared_ptr<CapturePageData> revalGetNextPage_nolock() const override

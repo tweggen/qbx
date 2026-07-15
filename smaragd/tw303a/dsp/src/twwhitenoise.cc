@@ -24,7 +24,7 @@ void twWhiteNoise::createOutputLatches()
 #ifdef DEBUG_COMPONENT
     fprintf( sterr, "twWhiteNoise::createOutputLatches(): creating streaming latch..." );
 #endif
-    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
+    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 0 );
 #ifdef DEBUG_COMPONENT
     fprintf( sterr, "twWhiteNoise::createOutputLatches(): leaving." );
 #endif

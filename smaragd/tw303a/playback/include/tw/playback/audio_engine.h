@@ -50,7 +50,7 @@ public:
      * \param synthOutput Component to pull audio from (e.g., rewire root)
      * \param sampleRate  Sample rate for the engine
      */
-    AudioEngine(twComponent* synthOutput, uint32_t sampleRate);
+    AudioEngine(std::shared_ptr<twComponent> synthOutput, uint32_t sampleRate);
     ~AudioEngine();
 
     /**
@@ -142,7 +142,7 @@ public:
     void stopReadahead();    // Stop read-ahead thread
 
 private:
-    twComponent* synthOutput_;
+    std::shared_ptr<twComponent> synthOutput_;
     uint32_t engineSampleRate_;  // The engine's native sample rate
 
     // Frozen page rendering state (Tier 1 enhancement)

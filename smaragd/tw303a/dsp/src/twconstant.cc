@@ -17,7 +17,7 @@ void twConstant::init()
 
 void twConstant::createOutputLatches()
 {
-	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
+	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 0 );
 }
 
 length_t twConstant::renderFrames(sample_t *output, length_t length,

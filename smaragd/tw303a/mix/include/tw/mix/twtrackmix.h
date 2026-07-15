@@ -45,7 +45,7 @@ public:
     // mapPosFn optionally folds the clip's slip offset into clip-relative
     // positions before they reach the component (see twView).
     void insertClip(const void *key, offset_t startTime, length_t duration,
-                    std::function<twComponent*()> getComponentFn,
+                    std::function<std::shared_ptr<twComponent>()> getComponentFn,
                     std::function<offset_t(offset_t)> mapPosFn = nullptr);
     void removeClip(const void *key);
     void updateClip(const void *key, offset_t newStartTime, length_t newDuration);

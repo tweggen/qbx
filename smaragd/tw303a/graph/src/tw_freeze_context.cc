@@ -4,7 +4,7 @@
 // Thread-local storage for the active freeze context
 thread_local FreezeContext* FreezeContext::g_activeContext = nullptr;
 
-FreezeContext::FreezeContext(twComponent& component)
+FreezeContext::FreezeContext(std::shared_ptr<twComponent> component)
     : component_(component), previousContext_(g_activeContext)
 {
     // Install this context as the active freeze context for this thread
@@ -22,11 +22,11 @@ FreezeContext* FreezeContext::current()
     return g_activeContext;
 }
 
-bool FreezeContext::isComponentInStack(const twComponent& comp)
+bool FreezeContext::isComponentInStack(std::shared_ptr<twComponent> comp)
 {
     // Walk the entire FreezeContext stack to detect cycles through any component
     for (FreezeContext* ctx = g_activeContext; ctx != nullptr; ctx = ctx->previousContext_) {
-        if (&ctx->getComponent() == &comp) {
+        if (ctx->getComponent() == comp) {
             return true;  // Component is already being frozen somewhere in the stack
         }
     }

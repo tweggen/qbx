@@ -21,7 +21,7 @@ class twLatch
 {
 private:
     twLatch();
-    twComponent & component;
+    std::shared_ptr<twComponent> component;
     idx_t idx;
 protected:
     std::vector<twLatchOutput*> outputList;
@@ -29,13 +29,13 @@ protected:
     offset_t offset;
 
 public:
-    twLatch( twComponent & component0, idx_t idx0 );
+    twLatch( std::shared_ptr<twComponent> component0, idx_t idx0 );
 
     virtual offset_t getOffset () { return offset; }
     virtual void resetOffset() { offset = 0; }  // Reset for capture rebuilds
     virtual ~ twLatch();
 
-    inline twComponent & getComponent() { return component; }
+    inline std::shared_ptr<twComponent> getComponent() { return component; }
     inline idx_t getIndex() { return idx; }
 
     // Native format of the data this latch produces. The default reports the
@@ -93,7 +93,7 @@ protected:
     int sampleRate_;                                   // Project sample rate for freezePage()
 
 public:
-    twStreamingLatch( twComponent & comp, idx_t idx0, length_t bufSize0 );
+    twStreamingLatch( std::shared_ptr<twComponent> comp, idx_t idx0, length_t bufSize0 );
     virtual ~ twStreamingLatch ();
 
     length_t copyData( offset_t startOffset, sample_t *pDest, length_t maxLength );

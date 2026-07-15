@@ -76,7 +76,7 @@ void twSampleReader::createOutputLatches()
 {
     idx_t n = getNOutputs();
     for( idx_t i = 0; i < n; ++i ) {
-        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( *this, i, 0 );
+        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( shared_from_this(), i, 0 );
     }
 }
 
@@ -152,13 +152,13 @@ void twSampleReader::teardown()
         }
     }
 
-    std::vector<twComponent*> depsCopy;
+    std::vector<std::shared_ptr<twComponent> > depsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         depsCopy = dependents_;
     }
     for (auto dep : depsCopy) {
-        if (dep) dep->onDependencyTeardown(this);
+        if (dep) dep->onDependencyTeardown(shared_from_this());
     }
 
     // Sample reader has no children, just mark ZOMBIE

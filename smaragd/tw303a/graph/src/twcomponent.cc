@@ -215,11 +215,11 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
         // Auto-detect and track parent component for safe teardown
         // Extract parent from the latch that owns this output
         twLatch& parentLatch = newOutput->getParentLatch();
-        twComponent& parentComp = parentLatch.getComponent();
+        std::shared_ptr<twComponent> parentComp = parentLatch.getComponent();
 
         // Track parent using a no-op shared_ptr (lifetime owned by latch, not by us)
         // This enables child->teardown() to call parent->removeInput(idx) safely
-        parentComponent_ = std::shared_ptr<twComponent>(&parentComp, [](twComponent*){});
+        parentComponent_ = parentComp;
         myInputIndex_ = idx;
     } else {
         pInputPlugs_[idx] = nullptr;
@@ -537,7 +537,7 @@ length_t twComponent::freezePage_nolock(
     // If calcOutputTo → readStreamingData → copyData tries to call freezePage
     // on this same component, FreezeContext::current() detects the cycle and
     // returns silence instead of recursing.
-    FreezeContext freezeCtx(*this);
+    FreezeContext freezeCtx(shared_from_this());
 
     // Initialize position and state. page->startPosition is authoritative for
     // the content; the component's current cursor is never trusted. Position is
@@ -648,7 +648,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePreviewPage(
 // Tier 2 Enhancement #1: Selective Invalidation with Dependency Tracking
 // ============================================================================
 
-void twComponent::addDependent(twComponent* dependent) {
+void twComponent::addDependent(std::shared_ptr<twComponent> dependent) {
     if (!dependent) return;
 
     std::lock_guard<std::mutex> lock(mutex());
@@ -721,13 +721,13 @@ void twComponent::teardown()
     }
 
     // Phase 1c: Notify dependents this component is being torn down
-    std::vector<twComponent*> depsCopy;
+    std::vector<std::shared_ptr<twComponent> > depsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         depsCopy = dependents_;
     }
     for (auto dep : depsCopy) {
-        if (dep) dep->onDependencyTeardown(this);
+        if (dep) dep->onDependencyTeardown(shared_from_this());
     }
 
     // Phase 2: Snapshot children and recurse (base class has no children, subclasses override)
@@ -748,7 +748,7 @@ void twComponent::removeInput(idx_t idx)
 }
 
 // Default callback when a dependency is torn down
-void twComponent::onDependencyTeardown(twComponent* dep)
+void twComponent::onDependencyTeardown(std::shared_ptr<twComponent> dep)
 {
     // Default: ignore (component handles NULL inputs gracefully)
     (void)dep;  // Suppress unused parameter warning

@@ -81,7 +81,7 @@ bool twTrackMix::isSeekable() const
 }
 
 void twTrackMix::insertClip(const void *key, offset_t startTime, length_t duration,
-                            std::function<twComponent*()> getComponentFn,
+                            std::function<std::shared_ptr<twComponent>()> getComponentFn,
                             std::function<offset_t(offset_t)> mapPosFn)
 {
     std::lock_guard<std::mutex> lock(mutex());
@@ -166,7 +166,7 @@ void twTrackMix::setTrackGain(double gainDb)
 
 void twTrackMix::createOutputLatches()
 {
-    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
+    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 0 );
 }
 
 void twTrackMix::setBufferSize( length_t )
@@ -447,13 +447,13 @@ void twTrackMix::teardown()
         }
     }
 
-    std::vector<twComponent*> depsCopy;
+    std::vector<std::shared_ptr<twComponent> > depsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         depsCopy = dependents_;
     }
     for (auto dep : depsCopy) {
-        if (dep) dep->onDependencyTeardown(this);
+        if (dep) dep->onDependencyTeardown(shared_from_this());
     }
 
     // Snapshot clips and tear them down

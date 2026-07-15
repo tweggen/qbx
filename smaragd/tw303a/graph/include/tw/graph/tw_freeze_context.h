@@ -1,6 +1,8 @@
 #ifndef _TW_FREEZE_CONTEXT_H_
 #define _TW_FREEZE_CONTEXT_H_
 
+#include <memory>
+
 // Forward declarations to avoid circular includes
 class twComponent;
 
@@ -37,7 +39,7 @@ class twComponent;
 class FreezeContext {
 public:
     // RAII guard: install this context as the active freeze context for this thread
-    explicit FreezeContext(twComponent& component);
+    explicit FreezeContext(std::shared_ptr<twComponent> component);
 
     // Automatically remove this context on destruction (restore previous context)
     ~FreezeContext();
@@ -47,14 +49,14 @@ public:
 
     // Check if a component is already being frozen anywhere in the current stack
     // (detects cycles: if component is in the freeze stack, freezing it would recurse)
-    static bool isComponentInStack(const twComponent& comp);
+    static bool isComponentInStack(std::shared_ptr<twComponent> comp);
 
     // Get the component this context is marking as "being frozen"
-    twComponent& getComponent() { return component_; }
-    const twComponent& getComponent() const { return component_; }
+    std::shared_ptr<twComponent> getComponent() { return component_; }
+    const std::shared_ptr<twComponent> getComponent() const { return component_; }
 
 private:
-    twComponent& component_;
+    std::shared_ptr<twComponent> component_;
     FreezeContext* previousContext_;  // For restoring nested contexts
 
     // Thread-local active freeze context (nullptr if not in freeze phase)

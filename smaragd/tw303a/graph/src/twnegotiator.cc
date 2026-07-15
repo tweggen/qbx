@@ -32,9 +32,9 @@ Rates intersect( const Rates &a, const Rates &b )
 
 // A directed wire: producer output `outIdx` feeds consumer input `inIdx`.
 struct Wire {
-    twComponent *producer;
+    std::shared_ptr<twComponent> producer;
     idx_t        outIdx;
-    twComponent *consumer;
+    std::shared_ptr<twComponent> consumer;
     idx_t        inIdx;
 };
 
@@ -45,36 +45,36 @@ twNegotiator::twNegotiator( tw303aEnvironment &env )
 {
 }
 
-bool twNegotiator::negotiate( twComponent *target )
+bool twNegotiator::negotiate( std::shared_ptr<twComponent> target )
 {
     return negotiate( target, {} );
 }
 
-bool twNegotiator::negotiate( twComponent *target,
+bool twNegotiator::negotiate( std::shared_ptr<twComponent> target,
                               const std::vector<std::uint32_t> &extraRates )
 {
     if( !target ) return true;
 
     // 1. Discover the upstream subgraph (BFS over input plugs).
-    std::vector<twComponent *> comps;
-    std::set<twComponent *>    seen;
+    std::vector<std::shared_ptr<twComponent> > comps;
+    std::set<std::shared_ptr<twComponent> >    seen;
     std::vector<Wire>          wires;
 
-    std::vector<twComponent *> stack{ target };
+    std::vector<std::shared_ptr<twComponent> > stack{ target };
     seen.insert( target );
     while( !stack.empty() ) {
-        twComponent *c = stack.back();
+        std::shared_ptr<twComponent> c = stack.back();
         stack.pop_back();
         comps.push_back( c );
         for( idx_t i = 0; i < c->getNInputs(); ++i ) {
             twLatchOutput *plug = c->getInputPlug( i );
             if( !plug ) continue;
             twLatch     &lat = plug->getParentLatch();
-            twComponent &p   = lat.getComponent();
-            wires.push_back( Wire{ &p, lat.getIndex(), c, i } );
-            if( !seen.count( &p ) ) {
-                seen.insert( &p );
-                stack.push_back( &p );
+            std::shared_ptr<twComponent> p   = lat.getComponent();
+            wires.push_back( Wire{ p, lat.getIndex(), c, i } );
+            if( !seen.count( p ) ) {
+                seen.insert( p );
+                stack.push_back( p );
             }
         }
     }
@@ -93,8 +93,8 @@ bool twNegotiator::negotiate( twComponent *target,
         if( caps.rates.empty() ) return D;
         return intersect( sortedUnique( caps.rates ), D );
     };
-    std::map<twComponent *, twPortDomains> dom;
-    for( twComponent *c : comps ) {
+    std::map<twComponent*, twPortDomains> dom;
+    for( std::shared_ptr<twComponent> c : comps ) {
         twPortDomains pd;
         for( idx_t i = 0; i < c->getNInputs();  ++i ) {
             twFormatCaps caps; caps.rates = expand( c->getInputCaps( i ) );
@@ -104,7 +104,7 @@ bool twNegotiator::negotiate( twComponent *target,
             twFormatCaps caps; caps.rates = expand( c->getOutputCaps( j ) );
             pd.out.push_back( caps );
         }
-        dom[c] = std::move( pd );
+        dom[c.get()] = std::move( pd );
     }
 
     // 4. Arc-consistency fixpoint: node coupling (narrowCaps) + wire equality.
@@ -123,12 +123,12 @@ bool twNegotiator::negotiate( twComponent *target,
         }
         changed = false;
 
-        for( twComponent *c : comps )
-            if( c->narrowCaps( dom[c] ) ) changed = true;
+        for( std::shared_ptr<twComponent> c : comps )
+            if( c->narrowCaps( dom[c.get()] ) ) changed = true;
 
         for( const Wire &w : wires ) {
-            Rates &po = dom[w.producer].out[w.outIdx].rates;
-            Rates &pi = dom[w.consumer].in[w.inIdx].rates;
+            Rates &po = dom[w.producer.get()].out[w.outIdx].rates;
+            Rates &pi = dom[w.consumer.get()].in[w.inIdx].rates;
             Rates common = intersect( sortedUnique( po ), sortedUnique( pi ) );
             if( sortedUnique( po ) != common ) { po = common; changed = true; }
             if( sortedUnique( pi ) != common ) { pi = common; changed = true; }
@@ -138,15 +138,15 @@ bool twNegotiator::negotiate( twComponent *target,
     // 5. Detect infeasible wires (empty domain after the fixpoint).
     bool feasible = true;
     for( const Wire &w : wires ) {
-        if( dom[w.producer].out[w.outIdx].rates.empty() ) {
+        if( dom[w.producer.get()].out[w.outIdx].rates.empty() ) {
             feasible = false;
             syslog( LOG_ERR,
                     "twNegotiator: no common rate on wire %p[out %d] -> "
                     "%p[in %d]. Automatic resampler insertion is not yet "
                     "enabled (open fork); the speaker resampler will bridge "
                     "the sink instead.",
-                    (void *) w.producer, (int) w.outIdx,
-                    (void *) w.consumer, (int) w.inIdx );
+                    (void *) w.producer.get(), (int) w.outIdx,
+                    (void *) w.consumer.get(), (int) w.inIdx );
         }
     }
 
@@ -160,8 +160,8 @@ bool twNegotiator::negotiate( twComponent *target,
     };
 
     // 7. Commit one format per port (mono Float32 at the chosen rate).
-    for( twComponent *c : comps ) {
-        twPortDomains &pd = dom[c];
+    for( std::shared_ptr<twComponent> c : comps ) {
+        twPortDomains &pd = dom[c.get()];
         std::vector<twFormat> ins, outs;
         ins.reserve( pd.in.size() );
         outs.reserve( pd.out.size() );

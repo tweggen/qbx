@@ -32,8 +32,8 @@ int twRewire::seekTo_nolock( offset_t offset )
             // The input plug is a twLatchOutput which may be backed by a twComponent
             // We need to seek the parent latch's component
             twLatch &latch = pInputPlugs_[i]->getParentLatch();
-            twComponent &comp = latch.getComponent();
-            comp.seekTo(offset);
+            std::shared_ptr<twComponent> comp = latch.getComponent();
+            comp->seekTo(offset);
         }
     }
     return 0;
@@ -111,7 +111,7 @@ int twRewire::setNPlugs_nolock( idx_t n )
     // Fill any freshly-created slots with their own streaming latch.
     for( int i = 0; i < n; ++i ) {
         if( !pOutputLatches_[i] ) {
-            pOutputLatches_[i] = std::make_shared<twStreamingLatch>( *this, i, 0 );
+            pOutputLatches_[i] = std::make_shared<twStreamingLatch>( shared_from_this(), i, 0 );
         }
     }
 
@@ -192,13 +192,13 @@ void twRewire::teardown()
     }
 
     // Notify dependents
-    std::vector<twComponent*> depsCopy;
+    std::vector<std::shared_ptr<twComponent> > depsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         depsCopy = dependents_;
     }
     for (auto dep : depsCopy) {
-        if (dep) dep->onDependencyTeardown(this);
+        if (dep) dep->onDependencyTeardown(shared_from_this());
     }
 
     // Snapshot and tear down all track inputs
@@ -208,9 +208,9 @@ void twRewire::teardown()
         for (idx_t i = 0; i < nInputs_; ++i) {
             if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
                 twLatch &latch = pInputPlugs_[i]->getParentLatch();
-                twComponent &comp = latch.getComponent();
+                std::shared_ptr<twComponent> comp = latch.getComponent();
                 // Use shared_ptr with no-op deleter to keep alive during recursion
-                inputsCopy.push_back(std::shared_ptr<twComponent>(&comp, [](twComponent*){}));
+                inputsCopy.push_back(comp);
             }
         }
     }

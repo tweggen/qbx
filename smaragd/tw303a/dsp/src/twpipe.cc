@@ -16,7 +16,7 @@ void twPipe::init()
 void twPipe::createOutputLatches()
 {
 	// use default buffer size
-	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
+	pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 0 );
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)

@@ -13,7 +13,7 @@
 
 void twWavInput::createOutputLatches()
 {
-    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( *this, 0, 0 );
+    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 0 );
 }
 
 int twWavInput::setNOutputs( idx_t )
@@ -179,13 +179,13 @@ void twWavInput::teardown()
         }
     }
 
-    std::vector<twComponent*> depsCopy;
+    std::vector<std::shared_ptr<twComponent> > depsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         depsCopy = dependents_;
     }
     for (auto dep : depsCopy) {
-        if (dep) dep->onDependencyTeardown(this);
+        if (dep) dep->onDependencyTeardown(shared_from_this());
     }
 
     // WAV input has no children, just mark ZOMBIE

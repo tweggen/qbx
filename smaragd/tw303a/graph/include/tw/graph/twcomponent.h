@@ -33,6 +33,7 @@ class tw303aEnvironment;
 class twComponent;
 
 class twComponent
+    : public std::enable_shared_from_this<twComponent>
 {
 private:
     int currentOperation_;
@@ -140,7 +141,7 @@ public:
     virtual void removeInput(idx_t idx);
 
     // Callback when a dependency is being torn down (override in components with external dependencies)
-    virtual void onDependencyTeardown(twComponent* dep);
+    virtual void onDependencyTeardown(std::shared_ptr<twComponent> dep);
 
     // Set parent tracking for safe teardown (called when component is wired to a parent)
     // parent: shared_ptr to parent component (weak_ptr internally prevents circular refs)
@@ -284,10 +285,10 @@ public:
     // Tier 2 Enhancement #1: Dependency tracking for selective invalidation
     // Called when this component is wired as input to another component.
     // Allows downstream component to register itself for selective invalidation.
-    virtual void addDependent(twComponent* dependent);
+    virtual void addDependent(std::shared_ptr<twComponent> dependent);
 
     // Helper: invalidate all components in a set (used by cascade)
-    static void invalidateComponentSet(std::vector<twComponent*>& components) {
+    static void invalidateComponentSet(std::vector<std::shared_ptr<twComponent> >& components) {
         for (auto comp : components) {
             if (comp) {
                 comp->invalidateAllPages();
@@ -393,7 +394,7 @@ protected:
 protected:
     // Tier 2 Enhancement #1: Dependency tracking for selective invalidation
     // Components that depend on this component's output (for cascade invalidation)
-    std::vector<twComponent*> dependents_;
+    std::vector<std::shared_ptr<twComponent> > dependents_;
 
     // Per-component content epoch (see contentEpochNow()/bumpContentEpoch()).
     // Starts at 1 so a default-constructed page (contentEpoch 0) is stale.

@@ -9,7 +9,7 @@
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw_freeze_context.h"
 
-twStreamingLatch::twStreamingLatch (twComponent & component0, idx_t idx0, length_t bufSize0)
+twStreamingLatch::twStreamingLatch (std::shared_ptr<twComponent> component0, idx_t idx0, length_t bufSize0)
 	: twLatch (component0, idx0), currentPos_(0), previousPage_(nullptr), sampleRate_(48000)
 {
 	if (bufSize0 == 0)
@@ -42,8 +42,8 @@ void twStreamingLatch::init( length_t bufSize0 )
 
 	// Phase 2: Get sample rate from component's environment
 	// This is a temporary initialization; the actual sampleRate might change if the project sample rate changes
-	if (getComponent().env.getSRate() > 0) {
-		sampleRate_ = getComponent().env.getSRate();
+	if (getComponent()->env.getSRate() > 0) {
+		sampleRate_ = getComponent()->env.getSRate();
 	}
 #ifdef DEBUG_COMPONENT
 	fprintf( sterr, "twStreamingLatch::init( %d ): leaving.", bufSize0 );
@@ -68,7 +68,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 	// transition is a discontinuity, which the producer's freezePage() answers
 	// with reset() + seekTo(pageStart).
 	const uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
-	const uint64_t epochNow = getComponent().contentEpochNow();
+	const uint64_t epochNow = getComponent()->contentEpochNow();
 	length_t written = 0;
 
 	while (written < maxLength) {
@@ -80,7 +80,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		// rendered before it stale, even though its validAspects are still set.
 		std::shared_ptr<twOutputPage> page = previousPage_;
 		if (!page || page->startPosition != pageStart || page->validAspects == 0 ||
-		    page->contentEpoch.load() < epochNow) {
+		    page->contentEpoch.load() < epochNow) {	
 			// Need a different page than the one we hold.
 			// Cycle guard: if the producer is already being frozen on this
 			// thread, recursing into freezePage() would loop forever.
@@ -99,7 +99,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 				chainFrom = previousPage_;
 			}
 
-			page = getComponent().freezePage(
+			page = getComponent()->freezePage(
 				pageStart,
 				nullptr,                // no pre-prepared input (pull model)
 				0,

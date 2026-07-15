@@ -28,6 +28,10 @@ public:
     // The object's one mutex; guards the page pointers below.
     virtual std::mutex &revalMutex() const = 0;
 
+    // Keep references for objects in queues
+    virtual void revalAddRef() = 0;
+    virtual void revalRemoveRef() = 0;
+
     // True if the given aspects are stale on the current page.
     virtual bool revalNeeded_nolock(uint32_t aspects) const = 0;
 

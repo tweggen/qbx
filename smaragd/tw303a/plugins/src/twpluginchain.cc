@@ -18,7 +18,7 @@ void twPluginChain::createOutputLatches()
 {
     pOutputLatches_.resize(nBusses_);
     for( idx_t i = 0; i < nBusses_; ++i )
-        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( *this, i, 4096 );
+        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( shared_from_this(), i, 4096 );
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
@@ -43,11 +43,11 @@ length_t twPluginChain::calcOutputTo( IOVector& dest, idx_t port )
     }
 
     // New block: reset all plugins so each processes fresh audio this callback.
-    for( auto *plugin : plugins_ )
-        plugin->resetBlock();
+    for( std::shared_ptr<twComponent> plugin : plugins_ )
+        std::static_pointer_cast<audio::twPluginInsert>(plugin)->resetBlock();
 
     // Pull from the last plugin's output (wiring already established in rebuildWiring)
-    auto *lastPlugin = plugins_.back();
+    std::shared_ptr<twComponent> lastPlugin = plugins_.back();
     if( lastPlugin && port < lastPlugin->getNOutputs() ) {
         return lastPlugin->calcOutputTo( dest, port );
     }
@@ -55,11 +55,11 @@ length_t twPluginChain::calcOutputTo( IOVector& dest, idx_t port )
     return dest.fillSilence(0, dest.length());
 }
 
-void twPluginChain::addPlugin( audio::twPluginInsert *insert )
+void twPluginChain::addPlugin( std::shared_ptr<audio::twPluginInsert> insert )
 {
     if( insert ) {
         std::lock_guard<std::mutex> lock( pluginsMutex_ );
-        plugins_.push_back( insert );
+        plugins_.push_back( std::static_pointer_cast<twComponent>(insert) );
         rebuildWiring();
     }
 }
@@ -92,7 +92,7 @@ int twPluginChain::seekTo( offset_t offset )
     std::lock_guard<std::mutex> lock( pluginsMutex_ );
 
     // Forward seek to all plugins in the chain
-    for( auto *plugin : plugins_ ) {
+    for( std::shared_ptr<twComponent> plugin : plugins_ ) {
         if( plugin ) {
             plugin->seekTo( offset );
         }
@@ -103,8 +103,8 @@ int twPluginChain::seekTo( offset_t offset )
         for( idx_t i = 0; i < nBusses_; ++i ) {
             if( i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i] ) {
                 twLatch &latch = pInputPlugs_[i]->getParentLatch();
-                twComponent &comp = latch.getComponent();
-                comp.seekTo( offset );
+                std::shared_ptr<twComponent> comp = latch.getComponent();
+                comp->seekTo( offset );
             }
         }
     }
@@ -124,18 +124,18 @@ void twPluginChain::rebuildWiring()
     // For each channel (port), set up the series wiring
     for( idx_t port = 0; port < nBusses_; ++port ) {
         // First plugin gets the track input
-        auto *firstPlugin = plugins_[0];
+        std::shared_ptr<twComponent> firstPlugin = plugins_[0];
         if( firstPlugin && port < firstPlugin->getNInputs() && port < (idx_t)pInputPlugs_.size() && pInputPlugs_[port] ) {
             firstPlugin->setInput( port, pInputPlugs_[port].get() );
         }
 
         // Wire each subsequent plugin to the previous one's output
         for( size_t i = 1; i < plugins_.size(); ++i ) {
-            auto *prevPlugin = plugins_[i-1];
-            auto *nextPlugin = plugins_[i];
+            std::shared_ptr<twComponent> prevPlugin = plugins_[i-1];
+            std::shared_ptr<twComponent> nextPlugin = plugins_[i];
             if( prevPlugin && nextPlugin &&
                 port < prevPlugin->getNOutputs() && port < nextPlugin->getNInputs() ) {
-                auto *prevOutput = prevPlugin->linkOutput( port );
+                auto* prevOutput = prevPlugin->linkOutput( port );
                 if( prevOutput ) {
                     nextPlugin->setInput( port, prevOutput );
                 }
@@ -169,8 +169,8 @@ std::shared_ptr<twOutputPage> twPluginChain::freezePage(
         if (!pInputPlugs_.empty() && pInputPlugs_[0]) {
             auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs_[0].get());
             twLatch &latch = input->getParentLatch();
-            twComponent &comp = latch.getComponent();
-            return comp.freezePage(startPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
+            std::shared_ptr<twComponent> comp = latch.getComponent();
+            return comp->freezePage(startPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
         }
         auto silencePage = std::make_shared<twOutputPage>();
         silencePage->setValidFrames(0);
@@ -184,15 +184,15 @@ std::shared_ptr<twOutputPage> twPluginChain::freezePage(
     if (!pInputPlugs_.empty() && pInputPlugs_[0]) {
         auto *input = static_cast<twLatchStreamingOutput *>(pInputPlugs_[0].get());
         twLatch &latch = input->getParentLatch();
-        twComponent &comp = latch.getComponent();
-        currentPage = comp.freezePage(startPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
+        std::shared_ptr<twComponent> comp = latch.getComponent();
+        currentPage = comp->freezePage(startPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
     } else {
         currentPage = std::make_shared<twOutputPage>();
         currentPage->setValidFrames(0);
     }
 
     // Pass through each plugin in sequence
-    for (auto *plugin : plugins_) {
+    for (std::shared_ptr<twComponent> plugin : plugins_) {
         if (!plugin) continue;
 
         // Plugin processes frozen page (stateful; state carries across sequential pages)
@@ -217,7 +217,7 @@ void twPluginChain::bumpContentEpoch()
 
     // Insert pages carry rendered upstream audio; stale them along with us.
     std::lock_guard<std::mutex> lock(pluginsMutex_);
-    for (auto *plugin : plugins_) {
+    for (std::shared_ptr<twComponent> plugin : plugins_) {
         if (plugin) plugin->bumpContentEpoch();
     }
 }
@@ -232,17 +232,17 @@ void twPluginChain::teardown()
         }
     }
 
-    std::vector<twComponent*> depsCopy;
+    std::vector<std::shared_ptr<twComponent> > depsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         depsCopy = dependents_;
     }
     for (auto dep : depsCopy) {
-        if (dep) dep->onDependencyTeardown(this);
+        if (dep) dep->onDependencyTeardown(shared_from_this());
     }
 
     // Tear down each plugin in order (snapshot raw pointers, don't hold lock during teardown)
-    std::vector<audio::twPluginInsert*> pluginsCopy;
+    std::vector<std::shared_ptr<twComponent> > pluginsCopy;
     {
         std::lock_guard<std::mutex> lock(pluginsMutex_);
         pluginsCopy = plugins_;
@@ -254,12 +254,12 @@ void twPluginChain::teardown()
     }
 }
 
-void twPluginChain::onDependencyTeardown(twComponent* dep)
+void twPluginChain::onDependencyTeardown(std::shared_ptr<twComponent> dep)
 {
     // A plugin is being torn down; remove it from our list
     std::lock_guard<std::mutex> lock(pluginsMutex_);
     auto it = std::find_if(plugins_.begin(), plugins_.end(),
-        [dep](audio::twPluginInsert *p) {
+        [dep](std::shared_ptr<twComponent> p) {
             return p == dep;
         });
     if (it != plugins_.end()) {

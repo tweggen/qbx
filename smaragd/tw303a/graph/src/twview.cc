@@ -19,12 +19,12 @@ twView::~twView()
 {
 }
 
-twComponent *twView::getComponent() const
+std::shared_ptr<twComponent> twView::getComponent() const
 {
     if (!getComponentFn_) {
         return nullptr;
     }
-    twComponent *comp = getComponentFn_();
+    std::shared_ptr<twComponent> comp = getComponentFn_();
     if (!comp) {
         fprintf(stderr, "WARNING: twView::getComponent() returned nullptr\n");
     }
@@ -36,7 +36,7 @@ int twView::seekTo(offset_t offset)
     // Map first: the mapping may lazily build the clip's reader, which changes
     // what getComponent() returns (reader instead of the shared content cursor).
     offset_t mapped = mapPos(offset);
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (!comp) return -1;
     return comp->seekTo(mapped);
 }
@@ -49,7 +49,7 @@ length_t twView::calcOutputTo(IOVector& dest, idx_t outChannel)
         return dest.fillSilence(0, dest.length());
     }
 
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (!comp) {
         return dest.fillSilence(0, dest.length());
     }
@@ -69,7 +69,7 @@ std::shared_ptr<twOutputPage> twView::freezePage(
     // offset folded in). Pages end up cached on the component keyed by its own
     // (source) positions, so slipping a clip later still hits valid pages.
     uint64_t mapped = (uint64_t) mapPos((offset_t) startPos);
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (!comp) {
         auto page = std::make_shared<twOutputPage>();
         page->startPosition = startPos;
@@ -88,7 +88,7 @@ std::shared_ptr<twOutputPage> twView::freezePreviewPage(
 )
 {
     uint64_t mapped = (uint64_t) mapPos((offset_t) startPos);
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (!comp) {
         auto page = std::make_shared<twOutputPage>();
         page->startPosition = startPos;
@@ -100,41 +100,41 @@ std::shared_ptr<twOutputPage> twView::freezePreviewPage(
 
 idx_t twView::getNInputs() const
 {
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (!comp) return 0;
     return comp->getNInputs();
 }
 
 idx_t twView::getNOutputs() const
 {
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (!comp) return 0;
     return comp->getNOutputs();
 }
 
 const char *twView::getInputName(idx_t idx) const
 {
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (!comp) return nullptr;
     return comp->getInputName(idx);
 }
 
 const char *twView::getOutputName(idx_t idx) const
 {
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (!comp) return nullptr;
     return comp->getOutputName(idx);
 }
 
 void twView::reset()
 {
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (comp) comp->reset();
 }
 
 void twView::createOutputLatches()
 {
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (comp) comp->createOutputLatches();
 }
 
@@ -148,17 +148,17 @@ void twView::teardown()
         }
     }
 
-    std::vector<twComponent*> depsCopy;
+    std::vector<std::shared_ptr<twComponent> > depsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         depsCopy = dependents_;
     }
     for (auto dep : depsCopy) {
-        if (dep) dep->onDependencyTeardown(this);
+        if (dep) dep->onDependencyTeardown(shared_from_this());
     }
 
     // Forward teardown to underlying component
-    twComponent *comp = getComponent();
+    std::shared_ptr<twComponent> comp = getComponent();
     if (comp) {
         comp->teardown();
     }

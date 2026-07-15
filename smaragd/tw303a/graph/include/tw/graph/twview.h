@@ -26,7 +26,7 @@ class twView : public twComponent
 {
 public:
     // Callback signature: returns the current component to forward to
-    using GetComponentFn = std::function<twComponent*()>;
+    using GetComponentFn = std::function<std::shared_ptr<twComponent>()>;
     // Callback signature: map a clip-relative position (what the track computes)
     // to the underlying component's position domain. A plain sample clip's
     // component is a reader over the SOURCE material, so the clip's slip offset
@@ -75,7 +75,7 @@ public:
 
 public:
     // Helper: safely get the underlying component with null check
-    twComponent *getComponent() const;
+    std::shared_ptr<twComponent> getComponent() const;
 
 private:
     GetComponentFn getComponentFn_;

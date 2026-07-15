@@ -56,7 +56,7 @@ length_t twLatchStreamingOutput::readRaw( void * dest, length_t maxFrames )
  *	@returns
  *		(nothing, constructor).
  */
-twLatch::twLatch( twComponent & component0, idx_t idx0 )
+twLatch::twLatch( std::shared_ptr<twComponent> component0, idx_t idx0 )
 	: component( component0 ),
 	  idx( idx0 ),
 	  offset( 0 )
@@ -80,7 +80,7 @@ twLatch::~twLatch()
  */
 twFormat twLatch::getFormat() const
 {
-    return twCanonicalFormat( (std::uint32_t) component.env.getSRate() );
+    return twCanonicalFormat( (std::uint32_t) component->env.getSRate() );
 }
 
 /**

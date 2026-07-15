@@ -40,7 +40,7 @@ public:
     ) override;
 
     // Add a plugin insert to the chain
-    void addPlugin( audio::twPluginInsert *insert );
+    void addPlugin( std::shared_ptr<audio::twPluginInsert> insert );
 
     // Remove a plugin insert by index
     void removePlugin( int index );
@@ -59,11 +59,11 @@ public:
 
     // Teardown protocol
     virtual void teardown() override;
-    virtual void onDependencyTeardown(twComponent* dep) override;
+    virtual void onDependencyTeardown(std::shared_ptr<twComponent> dep) override;
 private:
     idx_t nBusses_;
     mutable std::mutex pluginsMutex_;  // protects plugins_ vector from concurrent access
-    std::vector<audio::twPluginInsert *> plugins_;  // not owned; managed by SPluginSlot
+    std::vector<std::shared_ptr<twComponent> > plugins_;  // not owned; managed by SPluginSlot
 };
 
 #endif

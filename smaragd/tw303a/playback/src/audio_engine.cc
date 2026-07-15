@@ -10,7 +10,7 @@
 
 namespace audio {
 
-AudioEngine::AudioEngine(twComponent* synthOutput, uint32_t sampleRate)
+AudioEngine::AudioEngine(std::shared_ptr<twComponent> synthOutput, uint32_t sampleRate)
     : synthOutput_(synthOutput),
       engineSampleRate_(sampleRate),
       currentPageStartPos_(0),
