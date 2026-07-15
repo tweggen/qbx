@@ -46,7 +46,7 @@ public:
     virtual ~SApplication();
     static SApplication &app();
 
-    twSpeaker *getSpeaker() const;
+    std::shared_ptr<twSpeaker> getSpeaker() const;
     tw303aEnvironment *get303aEnvironment() const;
 
     SLink *getCurrentSelectedSLink() const;
@@ -103,7 +103,7 @@ public:
     // audio::PlaybackContext — the speaker's view of the app. rootComponent()
     // and locatorPosition() run on the UI thread; locatorHeldElsewhere() and
     // publishPosition() run on the AUDIO thread (atomic ops only, no Qt).
-    twComponent *rootComponent() override;
+    std::shared_ptr<twComponent> rootComponent() override;
     std::uint64_t locatorPosition() override { return getGlobalLocatorPos(); }
     bool locatorHeldElsewhere() override { return isRecordingActive(); }
     void publishPosition(std::uint64_t absPos) override {
@@ -146,8 +146,8 @@ private:
     static SApplication *singleton_;
     SSelectionList *selectionList_;
     tw303aEnvironment *t3Env_;
-    twSpeaker *t3Speaker_;
-    twWhiteNoise *t3WhiteNoise_;
+    std::shared_ptr<twSpeaker> t3Speaker_;
+    std::shared_ptr<twWhiteNoise> t3WhiteNoise_;
     SActionHistory *actionHistory_;
     std::unique_ptr<audio::RenderSession> renderSession_;
     std::unique_ptr<audio::RecordingSession> recordingSession_;

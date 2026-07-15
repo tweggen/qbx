@@ -93,13 +93,13 @@ void twSpeaker::startOutput()
     // Negotiate rates (no lock needed)
     {
         twNegotiator negotiator(env);
-        negotiator.negotiate(this, backend_->supportedRates());
+        negotiator.negotiate(shared_from_this(), backend_->supportedRates());
     }
 
     const audio::AudioConfig cfg = backend_->getConfig();
 
     // Get synth output component from the app context (no lock needed)
-    twComponent *synthOutput = context_ ? context_->rootComponent() : nullptr;
+    std::shared_ptr<twComponent> synthOutput = context_->rootComponent();
 
     if (!synthOutput) {
         TWSPK_LOG( "ERROR: Could not get synth output component" );

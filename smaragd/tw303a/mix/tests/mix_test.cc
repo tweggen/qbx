@@ -48,23 +48,28 @@ public:
 int main()
 {
     tw303aEnvironment env;
-    twTrackMix track(env);
-    track.init();
 
-    RampComponent comp(env);
-    comp.init();
+    // twComponent derives from std::enable_shared_from_this and calls
+    // shared_from_this() during init() (createOutputLatches) and freezePage(),
+    // so every component must be owned by a std::shared_ptr — it can no longer
+    // live as a stack local. getComponentFn now hands back a shared_ptr too.
+    auto track = std::make_shared<twTrackMix>(env);
+    track->init();
+
+    auto comp = std::make_shared<RampComponent>(env);
+    comp->init();
 
     const int dummyKeyA = 0;                 // opaque identity — NOT the component
     const offset_t clipStart = 1000;
     const length_t clipDur = 3000;
     const offset_t slip = 7000;              // the clip's media offset
 
-    track.insertClip(&dummyKeyA, clipStart, clipDur,
-                     [&]() -> twComponent * { return &comp; },
-                     [=](offset_t off) { return (offset_t)(off + slip); });
+    track->insertClip(&dummyKeyA, clipStart, clipDur,
+                      [comp]() -> std::shared_ptr<twComponent> { return comp; },
+                      [=](offset_t off) { return (offset_t)(off + slip); });
 
     const length_t PAGE = 8192;
-    auto page = track.freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
+    auto page = track->freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
     CHECK(page && page->validFrames == PAGE, "track page freezes");
 
     const auto &s = page->samples;
@@ -79,21 +84,21 @@ int main()
           "mix is CLAMPED at the clip end (no page bleed)");
 
     // Key-based update: shrink the duration; a fresh page must honor it.
-    track.updateClip(&dummyKeyA, clipStart, 500);
-    auto page2 = track.freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
+    track->updateClip(&dummyKeyA, clipStart, 500);
+    auto page2 = track->freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
     CHECK(page2->samples[(size_t)clipStart + 499] != 0.0f
               && page2->samples[(size_t)clipStart + 500] == 0.0f,
           "updateClip(key) changes the audible window");
 
     // Key-based removal: the WRONG key must remove nothing.
     const int wrongKey = 0;
-    track.removeClip(&wrongKey);
-    auto page3 = track.freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
+    track->removeClip(&wrongKey);
+    auto page3 = track->freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
     CHECK(page3->samples[(size_t)clipStart] != 0.0f,
           "removeClip with a different key leaves the clip alone");
 
-    track.removeClip(&dummyKeyA);
-    auto page4 = track.freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
+    track->removeClip(&dummyKeyA);
+    auto page4 = track->freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
     CHECK(page4->samples[(size_t)clipStart] == 0.0f,
           "removeClip with the right key silences the clip");
 
@@ -103,52 +108,55 @@ int main()
     // must re-render A's rewire cache; B's cached page object must be
     // served untouched (the scoping property itself, not just audibility).
     {
-        twTrackMix trackA(env), trackB(env);
-        trackA.init();
-        trackB.init();
-        RampComponent compA(env), compB(env);
-        compA.init();
-        compB.init();
+        auto trackA = std::make_shared<twTrackMix>(env);
+        auto trackB = std::make_shared<twTrackMix>(env);
+        trackA->init();
+        trackB->init();
+        auto compA = std::make_shared<RampComponent>(env);
+        auto compB = std::make_shared<RampComponent>(env);
+        compA->init();
+        compB->init();
 
         const int keyA = 0, keyB = 0;   // distinct addresses = distinct keys
-        trackA.insertClip(&keyA, clipStart, clipDur,
-                          [&]() -> twComponent * { return &compA; });
-        trackB.insertClip(&keyB, clipStart, clipDur,
-                          [&]() -> twComponent * { return &compB; });
+        trackA->insertClip(&keyA, clipStart, clipDur,
+                           [compA]() -> std::shared_ptr<twComponent> { return compA; });
+        trackB->insertClip(&keyB, clipStart, clipDur,
+                           [compB]() -> std::shared_ptr<twComponent> { return compB; });
 
-        twRewire rewA(env), rewB(env);
-        rewA.init();
-        rewB.init();
-        rewA.setNPlugs(1);
-        rewB.setNPlugs(1);
-        rewA.setInput(0, trackA.linkOutput(0));
-        rewB.setInput(0, trackB.linkOutput(0));
+        auto rewA = std::make_shared<twRewire>(env);
+        auto rewB = std::make_shared<twRewire>(env);
+        rewA->init();
+        rewB->init();
+        rewA->setNPlugs(1);
+        rewB->setNPlugs(1);
+        rewA->setInput(0, trackA->linkOutput(0));
+        rewB->setInput(0, trackB->linkOutput(0));
 
         const length_t FULL = (length_t)twOutputPage::FRAME_CAPACITY;
-        auto a1 = rewA.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
-        auto b1 = rewB.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        auto a1 = rewA->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        auto b1 = rewB->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
         CHECK(a1 && a1->validAspects != 0 && b1 && b1->validAspects != 0,
               "both rewires freeze their first page");
         CHECK(a1->samples[(size_t)clipStart] != 0.0f,
               "rewire A's page carries track A's clip");
 
-        auto a1again = rewA.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        auto a1again = rewA->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
         CHECK(a1again.get() == a1.get(),
               "unedited re-freeze is a cache hit (same page object)");
 
         // Edit track A (engine mutation self-bumps the trackmix), then bump
         // A's downstream path the way SObject::invalidateRenderPath() does.
-        trackA.updateClip(&keyA, clipStart, 500);
-        rewA.bumpContentEpoch();
+        trackA->updateClip(&keyA, clipStart, 500);
+        rewA->bumpContentEpoch();
 
-        auto a2 = rewA.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        auto a2 = rewA->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
         CHECK(a2.get() != a1.get(),
               "edited path re-renders into a fresh page object");
         CHECK(a2->samples[(size_t)clipStart + 499] != 0.0f
                   && a2->samples[(size_t)clipStart + 500] == 0.0f,
               "re-rendered page reflects the edit (shrunk clip window)");
 
-        auto b2 = rewB.freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        auto b2 = rewB->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
         CHECK(b2.get() == b1.get(),
               "SIBLING cache is untouched by the edit (scoped invalidation)");
     }

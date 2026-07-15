@@ -40,7 +40,7 @@ public:
 					     QDomElement &element, 
 					     SObject *parent );
 
-    virtual twComponent &getRootComponent();
+    virtual std::shared_ptr<twComponent> getRootComponent();
     virtual twRandomSource *getRandomSource();
     virtual int setWave( const QString url );
     virtual QString getFileName() const;
@@ -63,7 +63,7 @@ protected:
     virtual int serializeSelfAttributes( QTextStream &o );
 
 private:
-    twWavInput *cpWave_;
+    std::shared_ptr<twWavInput> cpWave_;
     QString fileName_;
     SPlainWaveRendererInline *inlineRenderer_;
 };

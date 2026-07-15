@@ -7,9 +7,11 @@
 #include "tw/pages/io_vector.h"
 
 // Defined here, where twSampleReader is a complete type.
-twSampleReader *twRandomSource::acquireReader( tw303aEnvironment &env, offset_t initialOffset )
+std::shared_ptr<twSampleReader> twRandomSource::acquireReader( tw303aEnvironment &env, offset_t initialOffset )
 {
-    twSampleReader *r = new twSampleReader( env, *this );
+    // Must be a shared_ptr before init(): createOutputLatches() calls
+    // shared_from_this(), which throws std::bad_weak_ptr on a non-shared object.
+    auto r = std::make_shared<twSampleReader>( env, *this );
     r->init();   // allocate plugs/latches, matching every other live component
     if( initialOffset != 0 ) {
         r->seekTo( initialOffset );  // Position reader at initial offset

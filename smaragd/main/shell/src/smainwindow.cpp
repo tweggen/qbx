@@ -671,7 +671,7 @@ void SMainWindow::onRecordingCompleted()
     // Offset = output_latency - input_latency (in frames).
     // Positive offset: input is faster, so shift the clip earlier to compensate.
     int64_t latencySyncFrames = 0;
-    twSpeaker *speaker = SApplication::app().getSpeaker();
+    auto speaker = SApplication::app().getSpeaker();
     if( speaker ) {
         audio::AudioBackend *backend = speaker->getBackend();
         uint32_t inputLatency = recSession->getInputLatencyFrames();
@@ -882,7 +882,7 @@ void SMainWindow::buildAudioMenu()
     deviceGroup_ = new QActionGroup( this );
     deviceGroup_->setExclusive( true );
 
-    twSpeaker *spk = SApplication::app().getSpeaker();
+    auto spk = SApplication::app().getSpeaker();
     const std::string current = spk->outputDevice();
     std::vector<audio::AudioDeviceInfo> devs = spk->outputDevices();
 
@@ -1485,7 +1485,7 @@ void SMainWindow::onProjectPropertyChanged( const QString &key, const QVariant &
 // range, so it is off whenever no range is set.
 void SMainWindow::syncCyclePlayback()
 {
-    twSpeaker *speaker = SApplication::app().getSpeaker();
+    auto speaker = SApplication::app().getSpeaker();
     if( !speaker ) return;
 
     if( !currentProject_ ) {
@@ -1590,7 +1590,7 @@ void SMainWindow::measureAudioLatenciesIfNeeded()
 
     // Measure output latency if not cached
     if( !outKnown ) {
-        twSpeaker *spk = SApplication::app().getSpeaker();
+        auto spk = SApplication::app().getSpeaker();
         if( spk ) {
             audio::AudioBackend *backend = spk->getBackend();
             if( backend ) {

@@ -121,21 +121,19 @@ SSMPerTrack *SStdMixer::findTrack( STrack &trk )
 }
 #endif
 
-twComponent &SStdMixer::getRootComponent()
+std::shared_ptr<twComponent> SStdMixer::getRootComponent()
 {
     // FIXME: Generate a channel reassignment.
-    return *cpRewire_;
+    return std::static_pointer_cast<twComponent>(cpRewire_);
 }
 
 void SStdMixer::bumpRenderChainEpoch()
 {
     // The summed mix is cached at TWO levels: the per-bus twMixer (sums the
     // track outputs) and the rewire behind it (the engine's synthOutput_).
-    if( cpMixers_ ) {
-        for( int bus=0; bus<nBusses_; ++bus ) {
-            if( cpMixers_[bus] )
-                cpMixers_[bus]->bumpContentEpoch();
-        }
+    for( int bus=0; bus<nBusses_; ++bus ) {
+        if( cpMixers_[bus] )
+            cpMixers_[bus]->bumpContentEpoch();
     }
     if( cpRewire_ )
         cpRewire_->bumpContentEpoch();
@@ -155,15 +153,11 @@ int SStdMixer::seekTo( offset_t off )
  */
 void SStdMixer::reconnectTracksToMixer()
 {
-    if( !cpMixers_ ) {
-        qWarning( "Should reconnect tracks although no mixer was created yet.\n" );
-        return;
-    }
     int nTracks = childCount();
     const bool solo = anyTrackSoloed();
     // For all busses.
     for( int bus=0; bus<nBusses_; bus++ ) {
-        twMixer *mix = cpMixers_[bus];
+        std::shared_ptr<twMixer> mix = cpMixers_[bus];
         if( !mix ) continue;
         // Ensure the given number of inputs.
         mix->setNInputs( nTracks );
@@ -181,8 +175,8 @@ void SStdMixer::reconnectTracksToMixer()
                 mix->setInput( channel, NULL );
                 mix->setInputLevel( channel, 0 );
             } else {
-                twComponent &root = lk->getRootComponent();
-                mix->setInput( channel, root.linkOutput( bus ) );
+                std::shared_ptr<twComponent> root = lk->getRootComponent();
+                mix->setInput( channel, root->linkOutput( bus ) );
                 // Unity (0 dB): the track applies its own gain intrinsically
                 // (see twTrackMix::calcOutputTo), so the mixer just sums.
                 mix->setInputLevel( channel, 0.0 );
@@ -240,19 +234,18 @@ void SStdMixer::mixerUpdateTrackAdded( int, STrack & )
  */
 int SStdMixer::setNBusses( int n )
 {
-    twMixer **newMixers, **oldMixers = cpMixers_;
     // no change?
     if( n<0 ) return -2;
-    if( n==nBusses_ && cpMixers_ ) return 0;
+    if( n==nBusses_ ) return 0;
     int nTracks = childCount();
 
     qWarning( "SStdMixer::setNBusses( %d ): called.\n", n );
 
     // First check, if still input tracks are connected to the
     // busses that should vanish.
-    if( n<nBusses_ && oldMixers ) {
+    if( n<nBusses_ ) {
         for( int i=n; i<nBusses_; i++ ) {
-            int still = oldMixers[i]->getInputsSet();
+            int still = cpMixers_[i]->getInputsSet();
             if( still ) {
                 qWarning( "SStdMixer::setNBusses(): Unable to remove channel %d: "
                           "Still %d objects connected.\n", i, still );
@@ -260,23 +253,17 @@ int SStdMixer::setNBusses( int n )
             }
         }
     }
-    // OK, we might shrink or enlarge. Take the output latches we have with us.
-    newMixers = (twMixer **) ::calloc( n, sizeof( twMixer * ) );
     // Takeover contains the the number of busses we can takeover from the current installation.
     int nTakeOver = n;
     if( nBusses_<nTakeOver ) nTakeOver = nBusses_;
     // Use the old mixers
-    for( int i=0; i<nTakeOver; i++ ) {
-        qWarning( "SStdMixer::setNBusses( %d ): Using old mixer #%d.\n", n, i );
-        newMixers[i] = cpMixers_[i];
-    }
+
     // If we have to free old unused ones, do it.
     // In the same shot, we remove them from our rewirer.
     for( int i=nTakeOver; i<nBusses_; i++ ) {
         cpRewire_->setInput( i, NULL );
         qWarning( "SStdMixer::setNBusses( %d ): Deleting old mixer #%d.\n", n, i );
-        delete cpMixers_[i];
-        cpMixers_[i] = NULL;
+        cpMixers_[i].reset();
     }
     // Set the rewirer to the proper number of channels.
     cpRewire_->setNPlugs( n );
@@ -286,14 +273,12 @@ int SStdMixer::setNBusses( int n )
         qWarning( "SStdMixer::setNBusses( %d ): Creating new mixer #%d.\n", n, i );
         int nc = nTracks;
         if( nc<1 ) nc = 1;
-        twMixer *mix = new twMixer( *(SAppContext::get().get303aEnvironment()), nc );
+        std::shared_ptr<twMixer> mix = std::make_shared<twMixer>( *(SAppContext::get().get303aEnvironment()), nc );
         mix->init();
         cpRewire_->setInput( i, mix->linkOutput( 0 ) );
-        newMixers[i] = mix;
+        cpMixers_[i] = mix;
     }
     nBusses_ = n;
-    cpMixers_ = newMixers;
-    if( oldMixers ) ::free( oldMixers );
 
     // Wire every existing track into every freshly-created bus mixer.
     // reconnectTracksToMixer iterates over all (bus, track) pairs and
@@ -391,23 +376,17 @@ void SStdMixer::mixerChildDurationChanged( length_t )
 
 SStdMixer::~SStdMixer()
 {
-    if( cpMixers_ ) {
-        for( int i = 0; i < nBusses_; ++i )
-            delete cpMixers_[i];
-        ::free( cpMixers_ );
-    }
-    delete cpRewire_;
+    cpMixers_.resize(0);
+    cpRewire_.reset();
 }
 
 SStdMixer::SStdMixer( SProject *project )
     : SObject( project ),
-      cpMixers_( NULL ),
-      cpRewire_( NULL ),
       nBusses_( 0 ),
       lastDuration_( 1 ),
       lastDurationValid_( true )
 {
-    cpRewire_ = new twRewire( *(SAppContext::get().get303aEnvironment()) );
+    cpRewire_ = std::make_shared<twRewire>( *(SAppContext::get().get303aEnvironment()) );
     cpRewire_->init();
     QObject::connect( this, SIGNAL( trackInserted( int, STrack & ) ),
                       this, SLOT( mixerUpdateTrackAdded( int, STrack & ) ) );

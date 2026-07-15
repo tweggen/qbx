@@ -61,10 +61,13 @@ int main()
     // Engine-level: edit mid-playback must degrade to STALE audio, not
     // silence, and the new content must become audible without a dropout.
     {
-        ToneComponent src(env);
-        src.init();
+        // twComponent uses shared_from_this() (createOutputLatches, freezePage),
+        // and AudioEngine now takes a std::shared_ptr<twComponent>, so the
+        // source must be heap-owned rather than a stack local.
+        auto src = std::make_shared<ToneComponent>(env);
+        src->init();
 
-        audio::AudioEngine engine(&src, (uint32_t)env.getSRate());
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
         engine.startReadahead();
 
         constexpr length_t BLOCK = 512;
@@ -82,9 +85,9 @@ int main()
         // The edit: new amplitude, and make the re-freeze slow enough that
         // the next pullBlock is guaranteed to land inside the re-render
         // window (readahead wakes within 20ms, then sleeps 300ms rendering).
-        src.amp.store(0.5f);
-        src.renderDelayMs.store(300);
-        src.bumpContentEpoch();
+        src->amp.store(0.5f);
+        src->renderDelayMs.store(300);
+        src->bumpContentEpoch();
 
         length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
         CHECK(n == BLOCK,
@@ -94,7 +97,7 @@ int main()
 
         // Keep pulling at roughly realtime pace: the post-edit content must
         // arrive, and no pull in between may come up short (silence).
-        src.renderDelayMs.store(0);
+        src->renderDelayMs.store(0);
         bool freshHeard = false, dropout = false;
         for (int i = 0; i < 500 && !freshHeard && !dropout; ++i) {
             length_t got = engine.pullBlock(L.data(), R.data(), BLOCK);
@@ -112,31 +115,31 @@ int main()
     // Component-level: replacing a stale-frozen page keeps the pre-edit
     // page reachable (stalePredecessor) until the replacement is frozen.
     {
-        ToneComponent src(env);
-        src.init();
+        auto src = std::make_shared<ToneComponent>(env);
+        src->init();
 
         const length_t FULL = (length_t)twOutputPage::FRAME_CAPACITY;
-        auto oldPage = src.freezePage(0, nullptr, 0, FULL, env.getSRate(),
-                                      nullptr);
+        auto oldPage = src->freezePage(0, nullptr, 0, FULL, env.getSRate(),
+                                       nullptr);
         CHECK(oldPage && oldPage->validAspects != 0 &&
                   oldPage->samples[0] == 0.25f,
               "initial page freezes with the original content");
 
-        src.amp.store(0.75f);
-        src.renderDelayMs.store(300);
-        src.bumpContentEpoch();
+        src->amp.store(0.75f);
+        src->renderDelayMs.store(300);
+        src->bumpContentEpoch();
 
         std::shared_ptr<twOutputPage> freshPage;
         std::thread rerender([&] {
-            freshPage = src.freezePage(0, nullptr, 0, FULL, env.getSRate(),
-                                       nullptr);
+            freshPage = src->freezePage(0, nullptr, 0, FULL, env.getSRate(),
+                                        nullptr);
         });
 
         // The re-freeze replaces the map entry with a placeholder right away,
         // then spends 300ms rendering; observe the entry inside that window.
         std::shared_ptr<twOutputPage> placeholder;
         for (int i = 0; i < 200; ++i) {
-            placeholder = src.getPageIfExists(0);
+            placeholder = src->getPageIfExists(0);
             if (placeholder && placeholder.get() != oldPage.get()) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }

@@ -80,23 +80,22 @@ length_t STrack::getDuration() const
     return lastDuration_;
 }
 
-twComponent &STrack::getRootComponent()
+std::shared_ptr<twComponent> STrack::getRootComponent()
 {
-    return *(twComponent *)cpRewire_;
+    return std::static_pointer_cast<twComponent>(cpRewire_);
 }
 
-twComponent *STrack::getCaptureComponent() const
+std::shared_ptr<twComponent> STrack::getCaptureComponent() const
 {
-    if( cpTrackMixers_ && nBusses_ > 0 && cpTrackMixers_[0] )
-        return (twComponent *) cpTrackMixers_[0];
-    return NULL;
+    if( nBusses_ > 0 && cpTrackMixers_[0] )
+        return std::static_pointer_cast<twComponent>(cpTrackMixers_[0]);
+    return std::shared_ptr<twComponent>();
 }
 
 int STrack::seekTo( offset_t ofs )
 {
-    if( !cpTrackMixers_ ) return 0;
     for( int i=0; i<nBusses_; i++ ) {
-        twTrackMix *mix = cpTrackMixers_[i];
+        std::shared_ptr<twTrackMix> mix = cpTrackMixers_[i];
         if( mix ) mix->seekTo( ofs );
     }
     return 0;
@@ -105,9 +104,9 @@ int STrack::seekTo( offset_t ofs )
 void STrack::bumpRenderChainEpoch()
 {
     for( int i=0; i<nBusses_; ++i ) {
-        if( cpTrackMixers_ && cpTrackMixers_[i] )
+        if( cpTrackMixers_[i] )
             cpTrackMixers_[i]->bumpContentEpoch();
-        if( cpPluginChains_ && cpPluginChains_[i] )
+        if( cpPluginChains_[i] )
             cpPluginChains_[i]->bumpContentEpoch();   // forwards to inserts
     }
     if( cpRewire_ )
@@ -207,7 +206,7 @@ void STrack::trackChildWasAdded( SLink &child )
             offset_t startTime = child.getStartTime();
             length_t duration = child.getSObject().getDuration();
             // Capture SLink by reference; callback will call getRootComponent() dynamically
-            auto getComponentFn = [&child]() { return &child.getRootComponent(); };
+            auto getComponentFn = [&child]() { return child.getRootComponent(); };
             // Position mapper: folds a windowed clip's slip offset into
             // clip-relative positions before the component is seeked/frozen.
             auto mapPosFn = [&child]( offset_t off ) {
@@ -255,42 +254,24 @@ void STrack::setNBusses( int nBusses )
         return;
     } else {
         // The number of busses is about to grow.
-        twTrackMix **newMixers = (twTrackMix **) ::calloc( 
-            sizeof( twTrackMix * ), nBusses );
-        if( cpTrackMixers_ ) {
-            // We formerly had some allocated. Copy them.
-            for( int i=0; i<oldNBusses; ++i ) {
-                newMixers[i] = cpTrackMixers_[i];
-            }
-        } else {
-            oldNBusses = 0;
-        }
+        cpTrackMixers_.resize(nBusses);
         // Create the new ones.
         for( int i=oldNBusses; i<nBusses; ++i ) {
-            newMixers[i] = new twTrackMix(
+            cpTrackMixers_[i] = std::make_shared<twTrackMix>(
                 *(SAppContext::get().get303aEnvironment()) );
-            newMixers[i]->init();
+            cpTrackMixers_[i]->init();
         }
-        ::free( cpTrackMixers_ );
-        cpTrackMixers_ = newMixers;
     }
     // Grow plugin chain array: keep existing chains, create new ones for added buses.
     {
-        int chainOldN = cpPluginChains_ ? oldNBusses : 0;
-        twPluginChain **newChains = (twPluginChain **) ::calloc(
-            sizeof( twPluginChain * ), nBusses );
-        // Preserve existing chains — they are already wired and may hold audio state
-        for( int i=0; i<chainOldN; ++i ) {
-            newChains[i] = cpPluginChains_[i];
-        }
+        cpPluginChains_.resize(nBusses);
+
         // Create new plugin chain components for added buses only
-        for( int i=chainOldN; i<nBusses; ++i ) {
-            newChains[i] = new twPluginChain(
+        for( int i=oldNBusses; i<nBusses; ++i ) {
+            cpPluginChains_[i] = std::make_shared<twPluginChain>(
                 *(SAppContext::get().get303aEnvironment()), 1 );
-            newChains[i]->init();
+            cpPluginChains_[i]->init();
         }
-        ::free( cpPluginChains_ );
-        cpPluginChains_ = newChains;
     }
 
     // Reset rewirer.
@@ -299,7 +280,7 @@ void STrack::setNBusses( int nBusses )
             cpRewire_->setInput( i, NULL );
         }
     } else {
-        cpRewire_ = new twRewire( *(SAppContext::get().get303aEnvironment()) );
+        cpRewire_ = std::make_shared<twRewire>( *(SAppContext::get().get303aEnvironment()) );
         cpRewire_->init();
     }
     cpRewire_->setNPlugs( nBusses );
@@ -320,7 +301,7 @@ void STrack::setNBusses( int nBusses )
         offset_t startTime = lk->getStartTime();
         length_t duration = lk->getSObject().hasDuration() ? lk->getSObject().getDuration() : 0;
         // Create a callback that returns the component dynamically
-        auto getComponentFn = [lk]() { return &lk->getRootComponent(); };
+        auto getComponentFn = [lk]() { return lk->getRootComponent(); };
         // Position mapper: folds a windowed clip's slip offset into
         // clip-relative positions before the component is seeked/frozen.
         auto mapPosFn = [lk]( offset_t off ) {
@@ -340,7 +321,6 @@ STrack::STrack( SProject *project )
       inlineRenderer_( 0 ),
       nBusses_( 1 ),
       cpTrackMixers_( 0 ),
-      cpRewire_( 0 ),
       cpPluginChain_( 0 ),
       cpPluginChains_( 0 ),
       lastDuration_( 1 ),
@@ -387,19 +367,9 @@ STrack::~STrack()
     // to avoid double-delete crashes during project destruction.
     // (Historically it was manually managed, but current design makes it a project child.)
 
-    if( cpPluginChains_ ) {
-        for( int i = 0; i < nBusses_; ++i ) {
-            delete cpPluginChains_[i];
-        }
-        ::free( cpPluginChains_ );
-    }
-    if( cpTrackMixers_ ) {
-        for( int i = 0; i < nBusses_; ++i ) {
-            delete cpTrackMixers_[i];
-        }
-        ::free( cpTrackMixers_ );
-    }
-    delete cpRewire_;
+    cpPluginChains_.resize(0);
+    cpTrackMixers_.resize(0);
+    cpRewire_.reset();
 }
 
 #if 0
@@ -495,10 +465,10 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
     // Sync the model change to all DSP plugin chains
     // Pre-allocate inserts for all buses to ensure they're fully initialized
     // before the audio thread accesses them
-    if( cpPluginChains_ && nBusses_ > 0 ) {
+    if( nBusses_ > 0 ) {
         // First, ensure all inserts exist and are fully initialized
         for( int i = 0; i < nBusses_; ++i ) {
-            audio::twPluginInsert *insert = slot.getInsertForBus(i);
+            std::shared_ptr<audio::twPluginInsert> insert = slot.getInsertForBus(i);
             if( !insert ) {
                 // Insert creation failed - the slot will handle the error
                 return;
@@ -508,7 +478,7 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
         // Now that all inserts are safely created, add them to the chains
         for( int i = 0; i < nBusses_; ++i ) {
             if( cpPluginChains_[i] ) {
-                audio::twPluginInsert *insert = slot.getInsertForBus(i);
+                std::shared_ptr<audio::twPluginInsert> insert = slot.getInsertForBus(i);
                 if( insert ) {
                     cpPluginChains_[i]->addPlugin( insert );
                 }
@@ -522,7 +492,7 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
 {
     // Sync the model change to all DSP plugin chains
     // Note: we remove by index since the slot is being deleted
-    if( cpPluginChains_ ) {
+    {
         for( int i = 0; i < nBusses_; ++i ) {
             if( cpPluginChains_[i] ) {
                 cpPluginChains_[i]->removePlugin( index );
@@ -535,7 +505,7 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
 void STrack::onPluginSlotsReordered()
 {
     // Sync plugin reordering to all DSP plugin chains
-    if( cpPluginChains_ ) {
+    {
         for( int i = 0; i < nBusses_; ++i ) {
             if( cpPluginChains_[i] ) {
                 cpPluginChains_[i]->rebuildWiring();

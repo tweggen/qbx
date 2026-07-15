@@ -96,7 +96,7 @@ public:
      * Its outputs may be connected in various ways, as the SObject
      * may be included at different parts of the entire arrangement.
      */
-    virtual twComponent &getRootComponent() = 0;
+    virtual std::shared_ptr<twComponent> getRootComponent() = 0;
 
     /**
      * If this object is backed by random-access sample data, return that source
@@ -265,7 +265,7 @@ public:
     void revalSetNextPage_nolock(std::shared_ptr<CapturePageData> page) override
         { setNextPage_nolock(page); }
     void revalSwapPages_nolock() override { swapPages_nolock(); }
-    twComponent &revalRootComponent() override { return getRootComponent(); }
+    std::shared_ptr<twComponent> revalRootComponent() override { return getRootComponent(); }
     void revalRecomputeMetadata(CapturePageData &page) override
         { recomputeMetadata(page); }
     void revalRecomputeExport(CapturePageData &page) override

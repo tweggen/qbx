@@ -60,10 +60,10 @@ void SPluginChain::childEvent( QChildEvent *event )
 
 SPluginChain::~SPluginChain() = default;
 
-twComponent &SPluginChain::getRootComponent()
+std::shared_ptr<twComponent> SPluginChain::getRootComponent()
 {
-    twComponent *comp = getChainComponent();
-    if( comp ) return *comp;
+    std::shared_ptr<twComponent> comp = getChainComponent();
+    if( comp ) return comp;
     // TODO: build chain component from current slots
     throw std::runtime_error( "SPluginChain: no chain component available" );
 }
@@ -98,7 +98,7 @@ void SPluginChain::reorderSlot( int fromIndex, int toIndex )
     emit slotsReordered();
 }
 
-twComponent *SPluginChain::getChainComponent()
+std::shared_ptr<twComponent> SPluginChain::getChainComponent()
 {
     // TODO: Build or rebuild the chain component from current slots.
     // For now, return nullptr (will be implemented with proper wiring).

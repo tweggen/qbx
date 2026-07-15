@@ -131,15 +131,16 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
         // rounding takes place.
         if( snap.loopLength > WarpedLen(0)
             && snap.loopLength < warpedFromClip(snap.cutDuration) ) {
-            twLoopReader *lr = new twLoopReader( env, *view,
-                                                 snap.startOffset.frames(),
-                                                 snap.loopLength.frames() );
+            // Must be shared before init(): createOutputLatches() calls
+            // shared_from_this() (throws std::bad_weak_ptr on a raw instance).
+            auto lr = std::make_shared<twLoopReader>( env, *view,
+                                                      snap.startOffset.frames(),
+                                                      snap.loopLength.frames() );
             lr->init();
-            newReader = std::shared_ptr<twSampleReader>( lr );
+            newReader = lr;
             newLooping = true;
         } else {
-            newReader = std::shared_ptr<twSampleReader>(
-                view->acquireReader( env, snap.startOffset.frames() ) );
+            newReader = view->acquireReader( env, snap.startOffset.frames() );
             newLooping = false;
         }
     }
@@ -248,7 +249,7 @@ void SCut::buildCapture_()
         // on the content's twComponent to materialize its output to pages.
         // Seek container to start before freezing to ensure children are positioned.
         c.seekTo( 0 );
-        twComponent &rootComp = c.getRootComponent();
+        std::shared_ptr<twComponent> rootComp = c.getRootComponent();
 
         buf.resize( (size_t) n, 0.0f );
 
@@ -259,7 +260,7 @@ void SCut::buildCapture_()
         uint64_t pagePos = 0;
 
         while( remainingSamples > 0 && bufOffset < n ) {
-            auto frozenPage = rootComp.freezePage(
+            auto frozenPage = rootComp->freezePage(
                 pagePos,
                 nullptr,     // No input data for container renders
                 0,
@@ -496,13 +497,13 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
     return 0;
 }
 
-twComponent &SCut::getRootComponent()
+std::shared_ptr<twComponent> SCut::getRootComponent()
 {
     // Get reader snapshot WITHOUT triggering expensive ensureReader() during UI initialization.
     // Only build reader if it exists (was previously built for playback).
     // If not built yet, fall back to content component (lazy evaluation).
     SCutSnapshot snap = getSnapshot();
-    if( snap.reader.reader ) return *snap.reader.reader;
+    if( snap.reader.reader ) return std::static_pointer_cast<twComponent>(snap.reader.reader);
 
     // Reader not yet built (no playback request yet). This is normal during project load.
     // ensureReader() will be called lazily when audio actually needs this clip (playback).

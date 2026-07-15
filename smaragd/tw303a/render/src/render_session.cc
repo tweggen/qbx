@@ -22,7 +22,7 @@ RenderSession::~RenderSession() {
     }
 }
 
-bool RenderSession::start(twComponent *synthOutput, const RenderParams &params,
+bool RenderSession::start(std::shared_ptr<twComponent> synthOutput, const RenderParams &params,
                            std::uint32_t sampleRate) {
     if (running_) {
         lastError_ = "Render already in progress";

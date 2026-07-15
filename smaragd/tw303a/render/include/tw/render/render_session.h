@@ -33,7 +33,7 @@ public:
     ~RenderSession();
 
     // Start rendering. Returns false if already rendering or invalid params.
-    bool start(twComponent *synthOutput, const RenderParams &params, std::uint32_t sampleRate);
+    bool start(std::shared_ptr<twComponent> synthOutput, const RenderParams &params, std::uint32_t sampleRate);
 
     // Request cancellation. Safe to call from any thread.
     void requestCancel();
@@ -56,7 +56,7 @@ public:
 private:
     void renderThreadMain();
 
-    twComponent *synthOutput_ = nullptr;
+    std::shared_ptr<twComponent> synthOutput_;
     RenderParams params_;
     std::uint32_t sampleRate_ = 48000;
     std::size_t totalSamples_ = 0;

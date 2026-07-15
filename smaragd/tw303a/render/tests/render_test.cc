@@ -14,6 +14,7 @@
 #include <cstring>
 #include <cmath>
 #include <fstream>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -98,8 +99,11 @@ int main(int argc, char **argv)
         (argc > 1) ? argv[1] : "render_module_test.wav";
 
     tw303aEnvironment env;
-    RampComponent comp(env);
-    comp.init();
+    // twComponent calls shared_from_this() in freezePage()/createOutputLatches(),
+    // which RenderSession drives internally, so the component must be owned by a
+    // std::shared_ptr rather than living on the stack.
+    auto comp = std::make_shared<RampComponent>(env);
+    comp->init();
 
     const std::uint32_t rate = (std::uint32_t)env.getSRate();
     // A range that (a) does NOT start at 0 and (b) crosses the 65536-frame
@@ -124,7 +128,7 @@ int main(int argc, char **argv)
     };
     session.onPosition = [&](std::uint64_t p) { lastPos = p; };
 
-    CHECK(session.start(&comp, params, rate), "render session starts");
+    CHECK(session.start(std::static_pointer_cast<twComponent>(comp), params, rate), "render session starts");
     for (int i = 0; i < 600 && !done; ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     CHECK(done && ok, "render completes successfully");

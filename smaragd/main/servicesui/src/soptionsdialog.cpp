@@ -151,7 +151,7 @@ void SOptionsDialog::loadAudioPage()
 {
     // Load output devices
     audioDevice_->clear();
-    twSpeaker *spk = SApplication::app().getSpeaker();
+    auto spk = SApplication::app().getSpeaker();
     std::vector<audio::AudioDeviceInfo> devs = spk ? spk->outputDevices()
                                                    : std::vector<audio::AudioDeviceInfo>();
     if( devs.empty() ) {
@@ -241,7 +241,7 @@ void SOptionsDialog::applyAudioPage()
     // Save output device
     QString id = audioDevice_->currentData().toString();
     if( !id.isEmpty() ) {
-        if( twSpeaker *spk = SApplication::app().getSpeaker() ) {
+        if( auto spk = SApplication::app().getSpeaker() ) {
             spk->setOutputDevice( id.toStdString() );
         }
         SSettings::instance().setAudioDeviceId( id );
@@ -254,7 +254,7 @@ void SOptionsDialog::applyAudioPage()
     }
 
     // Apply buffer size change (if supported)
-    if( twSpeaker *spk = SApplication::app().getSpeaker() ) {
+    if( auto spk = SApplication::app().getSpeaker() ) {
         audio::AudioBackend *backend = spk->getBackend();
         if( backend && bufferSizeCombo_->isEnabled() &&
             bufferSizeCombo_->currentData().toUInt() > 0 ) {

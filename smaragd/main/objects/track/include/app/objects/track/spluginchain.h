@@ -23,7 +23,7 @@ public:
     virtual ~SPluginChain();
 
     // SObject interface
-    virtual twComponent &getRootComponent();
+    virtual std::shared_ptr<twComponent> getRootComponent();
     virtual QWidget *getDetailEditWidget( QWidget *parent = nullptr );
     virtual QWidget *getInlineEditWidget( QWidget *parent = nullptr );
     virtual SObjectRenderer *getInlineRenderer();
@@ -49,8 +49,8 @@ protected:
     void childEvent( QChildEvent *event ) override;
 
 private:
-    twComponent *getChainComponent();
-    twComponent *chainComponent_ = nullptr;
+    std::shared_ptr<twComponent> getChainComponent();
+    std::shared_ptr<twComponent> chainComponent_;
 };
 
 #endif

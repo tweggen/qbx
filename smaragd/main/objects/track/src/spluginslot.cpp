@@ -16,7 +16,7 @@ SPluginSlot::SPluginSlot( SProject *project, const audio::twPluginDescriptor &de
 
 SPluginSlot::~SPluginSlot() = default;
 
-audio::twPluginInsert *SPluginSlot::getInsertForBus( int busIndex ) const
+std::shared_ptr<audio::twPluginInsert> SPluginSlot::getInsertForBus( int busIndex ) const
 {
     // Create inserts on-demand up to the requested bus index
     if( busIndex < 0 ) return nullptr;
@@ -30,7 +30,7 @@ audio::twPluginInsert *SPluginSlot::getInsertForBus( int busIndex ) const
             return nullptr;
         }
 
-        auto insert = std::make_unique<audio::twPluginInsert>(
+        auto insert = std::make_shared<audio::twPluginInsert>(
             *SAppContext::get().get303aEnvironment(), std::move( plugin ) );
 
         // Initialize the insert component (allocates plugs and latches)
@@ -45,14 +45,14 @@ audio::twPluginInsert *SPluginSlot::getInsertForBus( int busIndex ) const
         self->inserts_.push_back( std::move( insert ) );
     }
 
-    return self->inserts_[busIndex].get();
+    return self->inserts_[busIndex];
 }
 
-twComponent &SPluginSlot::getRootComponent()
+std::shared_ptr<twComponent> SPluginSlot::getRootComponent()
 {
-    auto *insert = getInsertForBus(0);
+    auto insert = getInsertForBus(0);
     if( insert ) {
-        return *insert;
+        return std::static_pointer_cast<twComponent>(insert);
     }
     // Fallback (shouldn't happen - insert should always exist).
     throw std::runtime_error( "SPluginSlot: no plugin insert available" );
@@ -88,7 +88,7 @@ int SPluginSlot::readPreChildrenAttributes( QDomElement &element )
         std::copy( decoded.begin(), decoded.end(), savedState_.begin() );
 
         // Restore state to the plugin
-        auto *insert = getInsertForBus(0);
+        auto insert = getInsertForBus(0);
         if( insert && insert->getPlugin() ) {
             insert->getPlugin()->loadState( savedState_ );
         }
@@ -123,7 +123,7 @@ void SPluginSlot::setBypass( bool bypass )
 
 void SPluginSlot::saveState( std::vector<std::uint8_t> &state )
 {
-    auto *insert = getInsertForBus(0);
+    auto insert = getInsertForBus(0);
     if( insert && insert->getPlugin() ) {
         state = insert->getPlugin()->saveState();
     }
@@ -131,7 +131,7 @@ void SPluginSlot::saveState( std::vector<std::uint8_t> &state )
 
 void SPluginSlot::restoreState( const std::vector<std::uint8_t> &state )
 {
-    auto *insert = getInsertForBus(0);
+    auto insert = getInsertForBus(0);
     if( insert && insert->getPlugin() ) {
         insert->getPlugin()->loadState( state );
     }
@@ -146,7 +146,7 @@ void SPluginSlot::restoreState( const std::vector<std::uint8_t> &state )
 void SPluginSlot::serializeStateChunk( QDomElement &parentElem, QDomDocument &doc )
 {
     // Save current state from the plugin
-    auto *insert = getInsertForBus(0);
+    auto insert = getInsertForBus(0);
     if( insert && insert->getPlugin() ) {
         savedState_ = insert->getPlugin()->saveState();
     }

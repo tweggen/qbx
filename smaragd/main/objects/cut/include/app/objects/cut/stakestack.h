@@ -102,7 +102,7 @@ public:
                          const Fraction &stretch );
 
     // --- SObject ---------------------------------------------------------
-    twComponent &getRootComponent() override;
+    std::shared_ptr<twComponent> getRootComponent() override;
     offset_t mapTimelineToComponentPos( offset_t off ) override;
     int seekTo( offset_t ) override;
     bool hasDuration() const override { return true; }
@@ -132,13 +132,13 @@ protected:
     int serializeSelfAttributes( QTextStream &o ) override;
 
 private:
-    twComponent &ensureSilence();
+    std::shared_ptr<twComponent> ensureSilence();
 
     int activeTake_ = -1;
     // Guards against per-take forwarding storms while setDurationAll/
     // applyWindowAll mutate every take; they emit ONE durationChanged after.
     bool forwardSuppressed_ = false;
-    twComponent *cpSilence_ = nullptr;   // lazily-built silent component
+    std::shared_ptr<twComponent> cpSilence_ = nullptr;   // lazily-built silent component
     STakeStackRendererInline *inlineRenderer_ = nullptr;
 };
 

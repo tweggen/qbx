@@ -51,7 +51,7 @@ STakeStack::STakeStack( SProject *project )
 STakeStack::~STakeStack()
 {
     delete inlineRenderer_;
-    delete cpSilence_;
+    cpSilence_.reset();
 }
 
 SCut *STakeStack::takeCutAt( int index ) const
@@ -157,19 +157,19 @@ void STakeStack::onTakeCutChanged( length_t )
 
 // --- SObject delegation ----------------------------------------------------
 
-twComponent &STakeStack::ensureSilence()
+std::shared_ptr<twComponent> STakeStack::ensureSilence()
 {
     if( !cpSilence_ ) {
-        cpSilence_ = new STakeSilence(
+        cpSilence_ = std::make_shared<STakeSilence>(
             *( SAppContext::get().get303aEnvironment() ) );
         cpSilence_->init();
     }
-    return *cpSilence_;
+    return cpSilence_;
 }
 
-twComponent &STakeStack::getRootComponent()
+std::shared_ptr<twComponent> STakeStack::getRootComponent()
 {
-    if( SCut *cut = activeCut() )
+    if( SCut* cut = activeCut() )
         return cut->getRootComponent();
     return ensureSilence();
 }

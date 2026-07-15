@@ -37,7 +37,7 @@ public:
     virtual int serializeSelfAttributes( QTextStream & );
     virtual int readAttributes( QDomElement & e );
 
-    virtual twComponent &getRootComponent() const;
+    virtual std::shared_ptr<twComponent> getRootComponent() const;
     virtual QWidget *getDetailEditWidget( QWidget *parent = NULL );
     virtual QWidget *getInlineEditWidget( QWidget *parent = NULL );
     

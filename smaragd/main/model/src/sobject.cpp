@@ -249,8 +249,8 @@ int SObject::straightCalcPreviewData()
         if( rs ) {
             rs->read( i, buffer, previewSkip_, 0 );
         } else {
-            getRootComponent().seekTo( i );
-            getRootComponent().calcOutputTo( buffer, previewSkip_, 0 );
+            getRootComponent()->seekTo( i );
+            getRootComponent()->calcOutputTo( buffer, previewSkip_, 0 );
         }
         sample_t *p = buffer;
         for( offset_t j=0; j<previewSkip_; ++j ) {
@@ -324,7 +324,7 @@ void SObject::setDuration( length_t )
 
 int SObject::seekTo( offset_t ofs )
 {
-    return getRootComponent().seekTo( ofs );
+    return getRootComponent()->seekTo( ofs );
 }
 
 int SObject::getNReferences() const

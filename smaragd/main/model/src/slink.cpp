@@ -52,7 +52,7 @@ int SLink::serialize( QTextStream &o )
     return 0;
 }
 
-twComponent &SLink::getRootComponent() const
+std::shared_ptr<twComponent> SLink::getRootComponent() const
 {
     return getSObject().getRootComponent();
 }

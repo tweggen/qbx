@@ -109,7 +109,7 @@ public:
     // always complete & valid. Safe to call from audio thread.
     SCutSnapshot getSnapshot() const;
 
-    virtual twComponent &getRootComponent();
+    virtual std::shared_ptr<twComponent> getRootComponent();
     virtual QWidget *getDetailEditWidget( QWidget *parent );
     virtual QWidget *getInlineEditWidget( QWidget *parent );
     virtual SObjectRenderer *getInlineRenderer();    

@@ -43,7 +43,7 @@ public:
     virtual void revalSwapPages_nolock() = 0;
 
     // The object's DSP root, for freezePreviewPage()-based preview rendering.
-    virtual twComponent &revalRootComponent() = 0;
+    virtual std::shared_ptr<twComponent> revalRootComponent() = 0;
 
     // Aspect recomputation hooks (virtual dispatch to the concrete object).
     virtual void revalRecomputeMetadata(CapturePageData &page) = 0;

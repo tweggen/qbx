@@ -2,6 +2,8 @@
 #ifndef _TWRANDOMSOURCE_H_
 #define _TWRANDOMSOURCE_H_
 
+#include <memory>
+
 #include "tw/graph/twcomponent.h"   // sample_t, length_t, offset_t, idx_t
 
 class tw303aEnvironment;
@@ -50,8 +52,10 @@ public:
      * Mint an independent cursor over this data at the specified initial offset.
      * The cursor starts at `initialOffset` into the source material (default: 0).
      *
-     * The caller OWNS the returned reader and must delete it (before or together
-     * with releasing the source).
+     * Returns a std::shared_ptr: twSampleReader is a twComponent, and its
+     * init()/createOutputLatches() call shared_from_this(), so the reader MUST be
+     * owned by a shared_ptr. The caller shares ownership and the reader is freed
+     * when the last reference drops (before or together with releasing the source).
      *
      * This enables resource-efficient reader initialization: the offset is set at
      * construction time, avoiding separate seekTo() call. Future implementations
@@ -59,7 +63,7 @@ public:
      *
      * Defined in twsamplereader.cc, where twSampleReader is complete.
      */
-    twSampleReader *acquireReader( tw303aEnvironment &env, offset_t initialOffset = 0 );
+    std::shared_ptr<twSampleReader> acquireReader( tw303aEnvironment &env, offset_t initialOffset = 0 );
 };
 
 #endif

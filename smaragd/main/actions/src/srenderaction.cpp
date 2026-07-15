@@ -62,10 +62,10 @@ SApplyResult SRenderAction::apply(SProject *project)
     }
 
     // Get synth output component
-    twComponent *synthOutput = nullptr;
+    std::shared_ptr<twComponent> synthOutput;
     SObject *root = project->getRootComponent();
     if (root) {
-        synthOutput = &root->getRootComponent();
+        synthOutput = root->getRootComponent();
     }
 
     if (!synthOutput) {

@@ -193,7 +193,7 @@ uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint3
         // Provides lower-resolution waveform data via unified DSP pipeline.
         // Falls back to previous page if new page not ready (non-blocking).
 
-        twComponent &rootComp = object->revalRootComponent();
+        std::shared_ptr<twComponent> rootComp = object->revalRootComponent();
 
         // Preview rendering parameters:
         // - previewSampleRate: 1000 Hz typical for waveform visualization
@@ -202,7 +202,7 @@ uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint3
         int previewRate = 1000;  // Configurable: lower = coarser visualization
         int fullRate = 48000;    // TODO: get from environment
 
-        auto frozenPage = rootComp.freezePreviewPage(
+        auto frozenPage = rootComp->freezePreviewPage(
             0,                       // startPos: 0 for full preview
             page.PAGE_SIZE / sizeof(float),  // length: full page capacity
             previewRate,
@@ -211,7 +211,7 @@ uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint3
         );
 
         fprintf(stderr, "[PREVIEW] recompute obj=%p comp=%p -> %s validFrames=%u\n",
-                (void*)object, (void*)&rootComp,
+                (void*)object, (void*)rootComp.get(),
                 frozenPage ? "page" : "NULL",
                 frozenPage ? frozenPage->validFrames : 0u);
         fflush(stderr);

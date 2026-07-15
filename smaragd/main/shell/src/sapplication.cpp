@@ -57,10 +57,10 @@ void SApplication::rewireSpeaker()
     // twRewire (the rewire root inside SStdMixer) returns NULL from
     // linkOutput() when nothing has been wired into it yet, so this call
     // is only meaningful once the graph has at least one track / bus.
-    twComponent &root = currentProject_->getRootComponent()->getRootComponent();
-    getSpeaker()->setInput( 0, root.linkOutput( 0 ) );
-    if( root.getNOutputs() > 1 )
-        getSpeaker()->setInput( 1, root.linkOutput( 1 ) );
+    std::shared_ptr<twComponent> root = currentProject_->getRootComponent()->getRootComponent();
+    getSpeaker()->setInput( 0, root->linkOutput( 0 ) );
+    if( root->getNOutputs() > 1 )
+        getSpeaker()->setInput( 1, root->linkOutput( 1 ) );
 }
 
 bool SApplication::isPlaying() const
@@ -184,7 +184,7 @@ SApplication &SApplication::app()
     return *singleton_;
 }
 
-twSpeaker *SApplication::getSpeaker() const
+std::shared_ptr<twSpeaker> SApplication::getSpeaker() const
 {
     return t3Speaker_;
 }
@@ -258,7 +258,7 @@ SApplication::SApplication( int &argc, char **argv )
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
     SAppContext::setInstance( this );        // core modules reach us only via this
-    t3Speaker_ = new twSpeaker( *t3Env_ );
+    t3Speaker_ = std::make_shared<twSpeaker>( *t3Env_ );
     t3Speaker_->setPlaybackContext( this );   // app services; we outlive the speaker
     t3Speaker_->init();
     actionHistory_ = new SActionHistory( this );
@@ -271,7 +271,7 @@ SApplication::SApplication( int &argc, char **argv )
 SApplication::~SApplication()
 {
     DTOR_DEL( actionHistory_ );
-    DTOR_DEL( t3Speaker_ );
+    t3Speaker_.reset();
     DTOR_DEL( t3Env_ );
     DTOR_DEL( selectionList_ );
 }
@@ -290,11 +290,11 @@ void SApplication::submitAction(SAction *action)
 
 // audio::PlaybackContext: root of the component graph to play (null when no
 // project is open). Shared by the speaker, the render path, and monitoring.
-twComponent *SApplication::rootComponent()
+std::shared_ptr<twComponent> SApplication::rootComponent()
 {
     if (!currentProject_) return nullptr;
     SObject *root = currentProject_->getRootComponent();
-    return root ? &root->getRootComponent() : nullptr;
+    return root ? root->getRootComponent() : nullptr;
 }
 
 audio::RenderSession *SApplication::renderSession() const
@@ -318,7 +318,7 @@ void SApplication::startRender(const audio::RenderParams &params)
     }
 
     // Get the synth output component
-    twComponent *synthOutput = rootComponent();
+    std::shared_ptr<twComponent> synthOutput = rootComponent();
     if (!synthOutput) {
         // TODO: Emit error signal to UI
         return;

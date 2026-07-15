@@ -59,7 +59,7 @@ public:
 					     QDomElement &element, 
 					     SObject *parent );
 
-    virtual twComponent &getRootComponent();
+    virtual std::shared_ptr<twComponent> getRootComponent();
 
     // A *seekable* component rendering this track's summed output, for snapshot
     // capture (asset previews / proposal 07). Unlike getRootComponent() (the
@@ -67,7 +67,7 @@ public:
     // to zero), the per-bus twTrackMix seeks cleanly and re-seeks its children
     // each buffer. Bus 0 is the output for the common single-bus track. NULL if
     // unbuilt.
-    twComponent *getCaptureComponent() const;
+    std::shared_ptr<twComponent> getCaptureComponent() const;
 
     virtual int readPreChildrenAttributes( QDomElement &element );
 
@@ -111,10 +111,10 @@ private:
     SEndTimeList endTimeList_;
     STrackRendererInline *inlineRenderer_;
     int nBusses_;
-    twTrackMix **cpTrackMixers_;
-    twRewire *cpRewire_;
+    std::vector<std::shared_ptr<twTrackMix> > cpTrackMixers_;
+    std::shared_ptr<twRewire> cpRewire_;
     SPluginChain *cpPluginChain_;  // Model object for effects inserts
-    twPluginChain **cpPluginChains_;  // DSP components (one per bus)
+    std::vector<std::shared_ptr<twPluginChain> > cpPluginChains_;  // DSP components (one per bus)
     
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;

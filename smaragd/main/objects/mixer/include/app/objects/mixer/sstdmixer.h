@@ -39,7 +39,7 @@ public:
 					     SObject *parent );
 
     /// For SObject
-    virtual twComponent &getRootComponent();
+    virtual std::shared_ptr<twComponent> getRootComponent();
 
     virtual QWidget *getDetailEditWidget( QWidget *parent );
     virtual QWidget *getInlineEditWidget( QWidget *parent );
@@ -143,8 +143,8 @@ private:
     void checkDurationChanged();
     void reconnectTracksToMixer();
     bool anyTrackSoloed() const;
-    twMixer **cpMixers_;
-    twRewire *cpRewire_;
+    std::vector<std::shared_ptr<twMixer> > cpMixers_;
+    std::shared_ptr<twRewire> cpRewire_;
     int nBusses_;
 
     mutable length_t lastDuration_;

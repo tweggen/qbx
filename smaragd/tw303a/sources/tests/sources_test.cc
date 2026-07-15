@@ -56,7 +56,9 @@ int main()
 
     // --- twSampleReader: absolute seeks, sequential advance -----------------
     {
-        std::unique_ptr<twSampleReader> r(src.acquireReader(env, 100));
+        // acquireReader() now returns a shared_ptr: the reader is a twComponent
+        // and shared_from_this() (via init()) requires shared ownership.
+        auto r = src.acquireReader(env, 100);
         auto a = pull(*r, 4);
         CHECK(a[0] == val(100) && a[3] == val(103),
               "acquireReader initial offset positions the cursor");
@@ -71,10 +73,13 @@ int main()
     {
         const offset_t base = 300;
         const length_t loop = 50;
-        twLoopReader lr(env, src, base, loop);
-        lr.init();
-        lr.seekTo(0);      // CUT-relative (CONTRACT inv. 2)
-        auto a = pull(lr, (length_t)(loop + 10));
+        // A twComponent (via twSampleReader) must be shared-owned: init() ->
+        // createOutputLatches() calls shared_from_this(). A stack local would
+        // throw std::bad_weak_ptr.
+        auto lr = std::make_shared<twLoopReader>(env, src, base, loop);
+        lr->init();
+        lr->seekTo(0);      // CUT-relative (CONTRACT inv. 2)
+        auto a = pull(*lr, (length_t)(loop + 10));
         CHECK(a[0] == val(base) && a[(size_t)loop - 1] == val(base + loop - 1),
               "loop reader maps cut-relative 0 to the loop base");
         CHECK(a[(size_t)loop] == val(base) && a[(size_t)loop + 9] == val(base + 9),

@@ -62,9 +62,9 @@ QString SPlainWave::getFileName() const
     return fileName_;
 }
 
-twComponent &SPlainWave::getRootComponent()
+std::shared_ptr<twComponent> SPlainWave::getRootComponent()
 {
-    return *cpWave_;
+    return cpWave_;
 }
 
 twRandomSource *SPlainWave::getRandomSource()
@@ -110,7 +110,7 @@ int SPlainWave::setWave( const QString fileName )
     // Fail, if we already have a wave set.
     if( cpWave_ ) return -2;
     fileName_ = fileName;
-    cpWave_ = new twWavInput( *(SAppContext::get().get303aEnvironment()), fileName );
+    cpWave_ = std::make_shared<twWavInput>( *(SAppContext::get().get303aEnvironment()), fileName );
     cpWave_->init();
     if( !cpWave_->wasLoaded() ) {
         // Suppress dialog in headless/test mode; log to stderr instead
@@ -119,8 +119,7 @@ int SPlainWave::setWave( const QString fileName )
         } else {
             qWarning() << "SPlainWave: unable to load file:" << fileName;
         }
-        delete cpWave_;
-        cpWave_ = NULL;
+        cpWave_.reset();
         return -1;
     }
     // Add myselves tob the list of extern objects.
@@ -145,7 +144,6 @@ SPlainWave::~SPlainWave()
 
 SPlainWave::SPlainWave( SProject *project ) 
     : SExternFile( project ),
-      cpWave_( NULL ),
       fileName_( "" ),
       inlineRenderer_( NULL )
 {    

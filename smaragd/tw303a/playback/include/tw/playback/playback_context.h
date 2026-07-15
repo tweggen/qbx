@@ -25,7 +25,7 @@ struct PlaybackContext {
     virtual ~PlaybackContext() = default;
 
     // Root of the component graph to play, or null when no project is open.
-    virtual twComponent *rootComponent() = 0;
+    virtual std::shared_ptr<twComponent> rootComponent() = 0;
 
     // Absolute project position (frames) playback should start from.
     virtual std::uint64_t locatorPosition() = 0;

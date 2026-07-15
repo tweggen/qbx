@@ -24,7 +24,7 @@ public:
     virtual ~SPluginSlot();
 
     // SObject interface
-    virtual twComponent &getRootComponent();
+    virtual std::shared_ptr<twComponent> getRootComponent();
     virtual QWidget *getDetailEditWidget( QWidget *parent = nullptr );
     virtual QWidget *getInlineEditWidget( QWidget *parent = nullptr );
     virtual SObjectRenderer *getInlineRenderer();
@@ -33,8 +33,8 @@ public:
     virtual int serializeSelfAttributes( QTextStream &o );
 
     // Plugin access (for a single bus - returns bus 0 for backward compatibility)
-    audio::twPluginInsert *getInsert() const { return getInsertForBus(0); }
-    audio::twPluginInsert *getInsertForBus( int busIndex ) const;
+    std::shared_ptr<audio::twPluginInsert> getInsert() const { return getInsertForBus(0); }
+    std::shared_ptr<audio::twPluginInsert> getInsertForBus( int busIndex ) const;
 
     const audio::twPluginDescriptor &getDescriptor() const { return descriptor_; }
 
@@ -52,7 +52,7 @@ signals:
 
 private:
     audio::twPluginDescriptor descriptor_;
-    std::vector<std::unique_ptr<audio::twPluginInsert>> inserts_;  // one per bus
+    std::vector<std::shared_ptr<audio::twPluginInsert> > inserts_;  // one per bus
     bool bypass_ = false;
     std::vector<std::uint8_t> savedState_;  // opaque plugin state chunk
 };
