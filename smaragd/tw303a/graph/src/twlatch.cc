@@ -80,7 +80,10 @@ twLatch::~twLatch()
  */
 twFormat twLatch::getFormat() const
 {
-    return twCanonicalFormat( (std::uint32_t) component->env.getSRate() );
+    // component is a weak_ptr (non-owning back-ref); lock to read the env.
+    std::shared_ptr<twComponent> comp = component.lock();
+    std::uint32_t srate = comp ? (std::uint32_t) comp->env.getSRate() : 0;
+    return twCanonicalFormat( srate );
 }
 
 /**

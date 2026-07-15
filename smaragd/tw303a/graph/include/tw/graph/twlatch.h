@@ -21,7 +21,11 @@ class twLatch
 {
 private:
     twLatch();
-    std::shared_ptr<twComponent> component;
+    // Non-owning back-reference to the component that owns this latch. The
+    // owner holds the latch strongly (twComponent::pOutputLatches_), so a
+    // shared_ptr here would form a component<->latch cycle that leaks the
+    // whole DSP subgraph. weak_ptr breaks the cycle; getComponent() locks it.
+    std::weak_ptr<twComponent> component;
     idx_t idx;
 protected:
     std::vector<twLatchOutput*> outputList;
@@ -35,7 +39,7 @@ public:
     virtual void resetOffset() { offset = 0; }  // Reset for capture rebuilds
     virtual ~ twLatch();
 
-    inline std::shared_ptr<twComponent> getComponent() { return component; }
+    inline std::shared_ptr<twComponent> getComponent() { return component.lock(); }
     inline idx_t getIndex() { return idx; }
 
     // Native format of the data this latch produces. The default reports the
