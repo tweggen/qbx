@@ -217,8 +217,9 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
         twLatch& parentLatch = newOutput->getParentLatch();
         std::shared_ptr<twComponent> parentComp = parentLatch.getComponent();
 
-        // Track parent using a no-op shared_ptr (lifetime owned by latch, not by us)
-        // This enables child->teardown() to call parent->removeInput(idx) safely
+        // Track the parent as a weak_ptr (non-owning): the parent owns us, so a
+        // strong ref would form a cycle. .lock() in teardown lets child->teardown()
+        // call parent->removeInput(idx) safely when the parent is still alive.
         parentComponent_ = parentComp;
         myInputIndex_ = idx;
     } else {
