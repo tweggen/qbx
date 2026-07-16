@@ -89,6 +89,7 @@ public:
     // (mixers, plugin chains + inserts, rewire). Ancestors are handled by
     // SObject::invalidateRenderPath()'s walk from the project root.
     void bumpRenderChainEpoch() override;
+    void bumpRenderChainEpochRange( offset_t start, offset_t end ) override;
 
 
 public slots:

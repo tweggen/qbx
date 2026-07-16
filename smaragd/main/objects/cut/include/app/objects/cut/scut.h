@@ -162,6 +162,13 @@ public:
     virtual bool hasDuration() const { return true; }
     virtual length_t getDuration() const;
 
+    // Range-scoped invalidation (proposal 18 Phase 5): dirty ranges of our
+    // CONTENT arrive in the SOURCE domain; map them through the cut window
+    // (stretch, slip, loop tiling) into clip-relative ranges. An edit
+    // outside the audible window maps to NOTHING.
+    QList<SDirtyRange> mapChildRangesToSelf(
+        SLink *childLink, const QList<SDirtyRange> &childRanges ) override;
+
     // Waveform preview for a container-backed asset cut: peaks come from the
     // capture (the rendered snapshot shared with audio), in the container's frame
     // domain, so `start` is the container offset the cut window maps to. Sample

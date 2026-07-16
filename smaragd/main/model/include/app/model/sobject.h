@@ -420,6 +420,57 @@ public slots:
      */
     void invalidateRenderPath();
 
+    // --- Range-scoped variant (proposal 18 Phase 5) -------------------------
+    // Plain methods, not slots (moc must not see the struct declaration).
+public:
+    // A dirty interval [start, end) in SOME object's own timeline domain.
+    struct SDirtyRange {
+        offset_t start;
+        offset_t end;
+    };
+
+    /**
+     * Range-scoped bump of THIS object's engine components: only pages
+     * intersecting [start, end) (this object's timeline domain) go stale.
+     * Default falls back to the whole-chain bump; lane containers override
+     * with twComponent::invalidatePagesInRange.
+     */
+    virtual void bumpRenderChainEpochRange( offset_t start, offset_t end ) {
+        (void) start; (void) end;
+        bumpRenderChainEpoch();
+    }
+
+    /**
+     * Translate dirty ranges from a child's timeline domain into THIS
+     * object's domain. Default: the containment ShiftMap (+ the link's
+     * startTime, saturating). SCut overrides with the full window mapping
+     * (stretch, slip, loop tiling preimages); STakeStack drops ranges from
+     * inactive takes. May return FEWER ranges than given (an edit outside
+     * the audible window dirties nothing here or above).
+     */
+    virtual QList<SDirtyRange> mapChildRangesToSelf(
+        SLink *childLink, const QList<SDirtyRange> &childRanges );
+
+    /**
+     * Range-carrying version of invalidateRenderChainsContaining: the walk
+     * finds `target`, then maps [targetStart, targetEnd) upward through
+     * each containment hop, bumping every container ONLY over the mapped
+     * ranges. `rangesInSelf` returns the dirty ranges in THIS object's
+     * domain (may be empty even when the subtree contains the target — the
+     * edit can be windowed away).
+     */
+    bool invalidateRenderChainsContainingRange(
+        SObject *target, offset_t targetStart, offset_t targetEnd,
+        QList<SDirtyRange> &rangesInSelf );
+
+    /**
+     * Entry point after an edit affecting [start, end) of THIS object's
+     * timeline: stale exactly the affected page ranges on every path from
+     * the project root down to this object. Same ordering contract as
+     * invalidateRenderPath (call AFTER the engine mutation).
+     */
+    void invalidateRenderPathRange( offset_t start, offset_t end );
+
     // Helper methods for revalidator integration (Phase 5e).
     // _nolock suffix indicates caller MUST hold mutex() before calling.
     // These are friends-only methods, non-locking to avoid recursive lock deadlock.

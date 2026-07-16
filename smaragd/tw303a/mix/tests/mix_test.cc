@@ -161,6 +161,79 @@ int main()
               "SIBLING cache is untouched by the edit (scoped invalidation)");
     }
 
+    // ------------------------------------------------------------------
+    // RANGE-scoped invalidation (proposal 18 Phase 5): ONE track with two
+    // clips in different pages, cached downstream by a rewire (twTrackMix
+    // itself mints fresh pages; the page CACHES are the downstream
+    // components — same layering the app's STrack::bumpRenderChainEpochRange
+    // drives). Editing clip D re-renders only D's page range: the rewire
+    // page over clip C is served as the SAME page object. And a page
+    // already stale from an earlier edit must NOT be re-blessed by a
+    // later, disjoint edit (that would resurrect outdated audio).
+    {
+        auto track2 = std::make_shared<twTrackMix>(env);
+        track2->init();
+        auto compC = std::make_shared<RampComponent>(env);
+        auto compD = std::make_shared<RampComponent>(env);
+        compC->init();
+        compD->init();
+
+        const uint64_t CAP = twOutputPage::FRAME_CAPACITY;
+        const int keyC = 0, keyD = 0;            // distinct addresses
+        const offset_t cStart = 1000;            // inside page 0
+        const offset_t dStart = (offset_t)(2 * CAP + 1000);   // inside page 2
+        track2->insertClip(&keyC, cStart, 3000,
+                           [compC]() -> std::shared_ptr<twComponent> { return compC; });
+        track2->insertClip(&keyD, dStart, 3000,
+                           [compD]() -> std::shared_ptr<twComponent> { return compD; });
+
+        auto rew = std::make_shared<twRewire>(env);
+        rew->init();
+        rew->setNPlugs(1);
+        rew->setInput(0, track2->linkOutput(0));
+
+        const length_t FULL = (length_t)CAP;
+        auto q0 = rew->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        auto q2 = rew->freezePage(2 * CAP, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(q0 && q0->validAspects != 0 && q2 && q2->validAspects != 0,
+              "both rewire pages of the two-clip track freeze");
+        CHECK(q0->samples[(size_t)cStart] != 0.0f && q2->samples[1000] != 0.0f,
+              "page 0 carries clip C, page 2 carries clip D");
+
+        // Edit clip D only (shrink). The mutator reports the affected
+        // extent — the union of the pre- and post-edit windows — and the
+        // caller applies it downstream (as STrack::bumpRenderChainEpochRange
+        // does for plugin chains and the rewire).
+        twEditRange r = track2->updateClip(&keyD, dStart, 500);
+        CHECK(r.start == (uint64_t)dStart && r.end == (uint64_t)dStart + 3000,
+              "updateClip reports the union extent of the edit");
+        rew->invalidatePagesInRange(r.start, r.end);
+
+        auto q0b = rew->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(q0b.get() == q0.get(),
+              "page OUTSIDE the edit range is a cache hit (range scoping)");
+        auto q2b = rew->freezePage(2 * CAP, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(q2b.get() != q2.get(),
+              "page INSIDE the edit range re-renders");
+        CHECK(q2b->samples[1000 + 499] != 0.0f && q2b->samples[1000 + 500] == 0.0f,
+              "re-rendered page reflects the shrunk clip D");
+
+        // Stale-page protection: stale page 0 via an edit at clip C, then
+        // edit D again (disjoint). The disjoint edit re-blesses only pages
+        // that were CURRENT — page 0 must stay stale and re-render with
+        // clip C's edit, not serve pre-edit audio as current.
+        twEditRange rc = track2->updateClip(&keyC, cStart, 500);
+        rew->invalidatePagesInRange(rc.start, rc.end);   // page 0 goes stale
+        twEditRange rd = track2->updateClip(&keyD, dStart, 400);
+        rew->invalidatePagesInRange(rd.start, rd.end);   // disjoint edit
+        auto q0c = rew->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(q0c.get() != q0b.get(),
+              "a stale page is NOT re-blessed by a disjoint later edit");
+        CHECK(q0c->samples[(size_t)cStart + 499] != 0.0f
+                  && q0c->samples[(size_t)cStart + 500] == 0.0f,
+              "page 0's re-render reflects clip C's edit");
+    }
+
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall mix tests passed\n",
            failures);
     return failures ? 1 : 0;

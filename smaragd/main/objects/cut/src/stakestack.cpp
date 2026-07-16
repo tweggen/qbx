@@ -174,6 +174,20 @@ std::shared_ptr<twComponent> STakeStack::getRootComponent()
     return ensureSilence();
 }
 
+
+QList<SObject::SDirtyRange> STakeStack::mapChildRangesToSelf(
+    SLink *childLink, const QList<SDirtyRange> &childRanges )
+{
+    // Only the active take reaches the mix; an edit inside an inactive
+    // take's content changes nothing audible (selecting that take later
+    // goes through updateClip, which re-stales the column's extent).
+    SCut *active = takeCutAt( activeTakeIndex() );
+    if( !childLink || !active
+        || &childLink->getSObject() != (SObject *) active )
+        return {};
+    return SObject::mapChildRangesToSelf( childLink, childRanges );
+}
+
 offset_t STakeStack::mapTimelineToComponentPos( offset_t off )
 {
     if( SCut *cut = activeCut() )

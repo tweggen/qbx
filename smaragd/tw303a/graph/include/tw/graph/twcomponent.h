@@ -264,6 +264,23 @@ public:
         contentEpoch_.fetch_add(1, std::memory_order_acq_rel);
     }
 
+    // RANGE-SCOPED variant (proposal 18 Phase 5, refining proposal 15):
+    // only pages intersecting [start, end) go stale. Advances the epoch,
+    // then RE-BLESSES every cached page that (a) does not intersect the
+    // range and (b) was CURRENT at the moment of the bump — a page already
+    // stale from an earlier, un-refrozen edit stays stale (re-blessing it
+    // would resurrect outdated audio). Placeholders being rendered right
+    // now are left alone: they stamp the epoch they read at entry and
+    // simply re-freeze once more if they raced the edit. Virtual with the
+    // same forwarding structure as bumpContentEpoch.
+    virtual void invalidatePagesInRange(uint64_t start, uint64_t end);
+
+protected:
+    // Caller already holds mutex() (e.g. twTrackMix's clip mutators).
+    void invalidatePagesInRange_nolock(uint64_t start, uint64_t end);
+
+public:
+
     // Phase 4 Gap 9: Invalidation Cascade
     // Called when this component's parameters change to invalidate downstream consumers.
     // Default: no-op (components with no side effects need not override).

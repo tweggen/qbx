@@ -1,9 +1,9 @@
 # Proposal 18: Exact, typed position domains and composable time maps
 
-> **Status: EXECUTED 2026-07-14 (Phases 0-4)** — see `plan/STATE.md`.
-> Phase 5's exact-invalidation primitive (`twLoopMap::preimagesWithin`)
-> landed with Phase 4; wiring it into scoped invalidation, and the
-> deep-nesting drift fixture, remain open.
+> **Status: EXECUTED 2026-07-14 (Phases 0-5)** — see `plan/STATE.md`.
+> Phase 5 (range-scoped invalidation: twComponent::invalidatePagesInRange,
+> the range-carrying SObject walk, SCut's loop-preimage mapping) landed the
+> same day. The deep-nesting drift fixture remains open.
 > Follow-up to the 2026-07-12 split-clip-offset bug and the 2026-07-13/14
 > stretch double-apply bug (commit `eaa1bec`); companion to
 > `docs/EXACT_ARITHMETIC_DESIGN.md` (2025-06) and

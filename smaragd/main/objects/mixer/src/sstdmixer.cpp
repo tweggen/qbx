@@ -139,6 +139,18 @@ void SStdMixer::bumpRenderChainEpoch()
         cpRewire_->bumpContentEpoch();
 }
 
+// Range-scoped variant (proposal 18 Phase 5); positions are shared across
+// the summing chain.
+void SStdMixer::bumpRenderChainEpochRange( offset_t start, offset_t end )
+{
+    for( int bus=0; bus<nBusses_; ++bus ) {
+        if( cpMixers_[bus] )
+            cpMixers_[bus]->invalidatePagesInRange(start, end);
+    }
+    if( cpRewire_ )
+        cpRewire_->invalidatePagesInRange(start, end);
+}
+
 int SStdMixer::seekTo( offset_t off )
 {
     for( SLink *lk : childLinks() ) {

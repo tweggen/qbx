@@ -13,6 +13,23 @@ class tw303aEnvironment;
 
 class twView;
 
+// Timeline extent affected by a clip edit ([start, end) in track/absolute
+// frames): the union of the clip's pre- and post-edit windows. Returned by
+// the clip mutators so the app's invalidation walk (proposal 18 Phase 5)
+// can stale only this range on the downstream chain. empty() means the
+// edit touched nothing audible.
+struct twEditRange {
+    uint64_t start = 0;
+    uint64_t end = 0;
+    bool empty() const { return end <= start; }
+    void unite(uint64_t s, uint64_t e) {
+        if (e <= s) return;
+        if (empty()) { start = s; end = e; return; }
+        if (s < start) start = s;
+        if (e > end) end = e;
+    }
+};
+
 // Clip entry: timeline position, stable view wrapper, and state snapshot
 struct ClipEntry {
     offset_t     startTime;
@@ -46,11 +63,14 @@ public:
     // getComponentFn returns the current component (allows dynamic lookup);
     // mapPosFn optionally folds the clip's slip offset into clip-relative
     // positions before they reach the component (see twView).
-    void insertClip(const void *key, offset_t startTime, length_t duration,
+    // Each mutator range-scopes its own page invalidation (only pages
+    // intersecting the affected extent go stale) and RETURNS that extent
+    // so the caller can stale the downstream chain the same way.
+    twEditRange insertClip(const void *key, offset_t startTime, length_t duration,
                     std::function<std::shared_ptr<twComponent>()> getComponentFn,
                     std::function<offset_t(offset_t)> mapPosFn = nullptr);
-    void removeClip(const void *key);
-    void updateClip(const void *key, offset_t newStartTime, length_t newDuration);
+    twEditRange removeClip(const void *key);
+    twEditRange updateClip(const void *key, offset_t newStartTime, length_t newDuration);
 
     // Track intrinsic properties (gain, mute) — applied to all output
     void setTrackMute(bool muted);

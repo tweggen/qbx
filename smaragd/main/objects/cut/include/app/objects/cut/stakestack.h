@@ -104,6 +104,10 @@ public:
     // --- SObject ---------------------------------------------------------
     std::shared_ptr<twComponent> getRootComponent() override;
     offset_t mapTimelineToComponentPos( offset_t off ) override;
+    // Range-scoped invalidation: only the ACTIVE take is audible, so
+    // dirty ranges inside an inactive take's content map to NOTHING.
+    QList<SDirtyRange> mapChildRangesToSelf(
+        SLink *childLink, const QList<SDirtyRange> &childRanges ) override;
     int seekTo( offset_t ) override;
     bool hasDuration() const override { return true; }
     length_t getDuration() const override;

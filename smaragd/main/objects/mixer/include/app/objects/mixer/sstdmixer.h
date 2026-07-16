@@ -66,6 +66,7 @@ public:
     // synthOutput_ — its cached pages hold the summed mix and go stale on any
     // contained edit.
     void bumpRenderChainEpoch() override;
+    void bumpRenderChainEpochRange( offset_t start, offset_t end ) override;
 
 signals:
     void nBussesChanged( int n );

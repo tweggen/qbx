@@ -5265,3 +5265,59 @@ model. Proposal 18 header marked executed.
   into the current project without purging the old object registry, so
   save/load/save cycles accumulate orphaned (inaudible) objects in the
   file.
+
+## Proposal 18 Phase 5: range-scoped invalidation (2026-07-14)
+
+Edits now stale only the page ranges they can actually affect, instead of
+every page of every component on the path to the root (proposal 15's
+whole-component epochs stay as the mechanism AND the conservative
+fallback).
+
+### Engine
+
+- `twComponent::invalidatePagesInRange(start, end)`: advances the content
+  epoch, then RE-BLESSES every cached page that (a) does not intersect the
+  range and (b) was CURRENT at the bump — a page already stale from an
+  earlier, un-refrozen edit stays stale (re-blessing it would resurrect
+  outdated audio; mix_test asserts this trap). Placeholders mid-render are
+  left alone. `twPluginChain` forwards to its inserts like
+  bumpContentEpoch.
+- `twTrackMix::insertClip/updateClip/removeClip` range-scope their own
+  epoch advance and RETURN the affected extent (union of the pre- and
+  post-edit clip windows) as `twEditRange` — the mix knows the old window,
+  the caller does not. (twTrackMix itself mints fresh pages per freeze;
+  the caches that benefit are the downstream rewire/mixer/insert pages.)
+
+### Model walk
+
+- `SObject::invalidateRenderPathRange(start, end)` mirrors
+  invalidateRenderPath but carries dirty ranges upward, translating at
+  each containment hop via the virtual `mapChildRangesToSelf`:
+  - default: the ShiftMap (+ link startTime, saturating at INT64_MAX for
+    unbounded extents);
+  - `SCut`: content(SOURCE)-domain ranges through the window — × stretch
+    (exact, conservative floor/ceil), then non-looping: − slip anchor,
+    clamped to the window; looping: `twLoopMap::preimagesWithin` yields
+    ONE image per repetition — an edit inside a looped asset dirties
+    exactly the affected slices of every repetition, and an edit OUTSIDE
+    the audible window dirties nothing on that branch at all;
+  - `STakeStack`: ranges from INACTIVE takes' content map to nothing
+    (take switches go through updateClip, which re-stales the column).
+- `STrack`/`SStdMixer` override `bumpRenderChainEpochRange` with
+  invalidatePagesInRange over their chains; every other container falls
+  back to the whole-chain bump (conservative, correct).
+- Trigger sites converted: STrack's child added/removed/moved/duration-
+  changed slots feed the extents reported by the trackmix mutators.
+  Mute/solo/volume/plugin edits keep the full-path bump (they affect the
+  whole duration anyway).
+
+### Verification
+
+- mix_test: two clips in different pages behind a rewire — the page
+  OUTSIDE an edit's range is a cache hit (same page object), the page
+  inside re-renders with the edit, and a page staled by an earlier edit
+  is NOT re-blessed by a later disjoint edit.
+- New `render_after_edit_same_track.qxa`: move one of two distant clips
+  on one track; re-render reflects the move, the untouched clip's regions
+  stay correct. Suite 27/27, timemap/fraction/sources/playback/plugins
+  unit tests green, layering clean.

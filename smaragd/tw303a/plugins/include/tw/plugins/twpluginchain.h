@@ -54,6 +54,7 @@ public:
     // Scoped invalidation (proposal 15): a chain has no page cache of its own,
     // but its inserts' pages bake in upstream audio — forward the bump to them.
     void bumpContentEpoch() override;
+    void invalidatePagesInRange(uint64_t start, uint64_t end) override;
 
     virtual void reset() override;
 

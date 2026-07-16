@@ -113,6 +113,20 @@ void STrack::bumpRenderChainEpoch()
         cpRewire_->bumpContentEpoch();
 }
 
+// Range-scoped variant (proposal 18 Phase 5): every component in the chain
+// speaks the same timeline positions, so one range fits all of them.
+void STrack::bumpRenderChainEpochRange( offset_t start, offset_t end )
+{
+    for( int i=0; i<nBusses_; ++i ) {
+        if( cpTrackMixers_[i] )
+            cpTrackMixers_[i]->invalidatePagesInRange(start, end);
+        if( cpPluginChains_[i] )
+            cpPluginChains_[i]->invalidatePagesInRange(start, end);   // forwards to inserts
+    }
+    if( cpRewire_ )
+        cpRewire_->invalidatePagesInRange(start, end);
+}
+
 SLink *STrack::getTopMostSLinkAt( offset_t queryTime ) const
 {
     for( SLink *lk : childLinks() ) {
@@ -156,17 +170,23 @@ void STrack::trackChildDurationChanged( length_t newLength )
     // link of ours that references the sender object and update each placement.
     SObject *obj = dynamic_cast<SObject *>( sender() );
     if( obj ) {
+        twEditRange affected;
         for( SLink *lk : childLinks() ) {
             if( !lk || &lk->getSObject() != obj ) continue;
             for( int i=0; i<nBusses_; ++i ) {
                 if( cpTrackMixers_[i] ) {
-                    cpTrackMixers_[i]->updateClip(lk, lk->getStartTime(), newLength);
+                    twEditRange r = cpTrackMixers_[i]->updateClip(
+                        lk, lk->getStartTime(), newLength);
+                    affected.unite(r.start, r.end);
                 }
             }
         }
         // AFTER the engine mutation: stale this chain and every container up
-        // to the root (scoped — siblings keep their caches).
-        invalidateRenderPath();
+        // to the root over EXACTLY the affected extent (union of the pre-
+        // and post-edit clip windows, reported by the mix) — pages elsewhere
+        // in the song survive (proposal 18 Phase 5).
+        invalidateRenderPathRange( (offset_t) affected.start,
+                                   (offset_t) affected.end );
     }
     lastDurationValid_ = false;
     checkDurationChanged();
@@ -177,12 +197,16 @@ void STrack::trackChildWasMoved( offset_t newTime )
     SLink *slink = (SLink *) (const SLink *) sender();
     if( slink && slink->getSObject().hasDuration() ) {
         length_t duration = slink->getSObject().getDuration();
+        twEditRange affected;
         for( int i=0; i<nBusses_; ++i ) {
             if( cpTrackMixers_[i] ) {
-                cpTrackMixers_[i]->updateClip(slink, newTime, duration);
+                twEditRange r = cpTrackMixers_[i]->updateClip(slink, newTime, duration);
+                affected.unite(r.start, r.end);
             }
         }
-        invalidateRenderPath();
+        // Union of the old and new placements (the mix knew the old one).
+        invalidateRenderPathRange( (offset_t) affected.start,
+                                   (offset_t) affected.end );
         lastDurationValid_ = false;
         checkDurationChanged();
     }
@@ -212,12 +236,17 @@ void STrack::trackChildWasAdded( SLink &child )
             auto mapPosFn = [&child]( offset_t off ) {
                 return child.getSObject().mapTimelineToComponentPos( off );
             };
+            twEditRange affected;
             for( int i=0; i<nBusses_; ++i ) {
                 if( cpTrackMixers_[i] ) {
-                    cpTrackMixers_[i]->insertClip(&child, startTime, duration, getComponentFn, mapPosFn);
+                    twEditRange r = cpTrackMixers_[i]->insertClip(
+                        &child, startTime, duration, getComponentFn, mapPosFn);
+                    affected.unite(r.start, r.end);
                 }
             }
-            invalidateRenderPath();
+            // Only the new clip's extent changed (proposal 18 Phase 5).
+            invalidateRenderPathRange( (offset_t) affected.start,
+                                       (offset_t) affected.end );
 
             lastDurationValid_ = false;
             checkDurationChanged();
@@ -230,12 +259,16 @@ void STrack::trackChildWasRemoved( SLink &child )
     if( child.hasStartTime() ) {
         if( child.getSObject().hasDuration() ) {
             // Remove the clip from all track mixers, keyed by the link itself.
+            twEditRange affected;
             for( int i=0; i<nBusses_; ++i ) {
                 if( cpTrackMixers_[i] ) {
-                    cpTrackMixers_[i]->removeClip(&child);
+                    twEditRange r = cpTrackMixers_[i]->removeClip(&child);
+                    affected.unite(r.start, r.end);
                 }
             }
-            invalidateRenderPath();
+            // Only the removed clip's extent went silent (proposal 18 Phase 5).
+            invalidateRenderPathRange( (offset_t) affected.start,
+                                       (offset_t) affected.end );
 
             lastDurationValid_ = false;
             checkDurationChanged();

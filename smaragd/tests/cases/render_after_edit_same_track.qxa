@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression for RANGE-scoPED invalidation (proposal 18 Phase 5): two clips
+  far apart on the SAME track. After moving the second clip, a re-render
+  must (a) reflect the move and (b) still render the first clip correctly.
+  The engine now stales only pages intersecting the edit's extent (union of
+  the old and new clip windows, reported by twTrackMix's mutators, walked up
+  the containment tree with SObject::invalidateRenderPathRange) - the first
+  clip's pages survive as cache hits, which the mix-module unit test asserts
+  at the page-object level; this case guards end-to-end audibility.
+
+  Fixture: test_sawtooth.wav, 4 s ramp 0 -> 0.8, unique RMS per source
+  second: sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405.
+
+  Arrangement: clip A at 0 s, clip B at 8 s (384000). Edit: move B to 12 s.
+-->
+<SActionScript version="1" name="render_after_edit_same_track">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="384000"/>
+
+    <!-- FIRST render bakes both clips into the page caches -->
+    <render filename="same_track_pre_edit.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="same_track_pre_edit.wav"
+                         startFrame="384000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- EDIT: move clip B from 8 s to 12 s -->
+    <move-clip clip="0,1" destTrack="0" startTime="576000"/>
+
+    <!-- SECOND render -->
+    <render filename="same_track_post_edit.wav" format="wav" quality="10"/>
+
+    <!-- Clip A's region is untouched (served from surviving pages): sec0/sec1 -->
+    <assert-audio-energy filename="same_track_post_edit.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="same_track_post_edit.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- B's OLD position is silent now (the union extent re-rendered) -->
+    <assert-audio-energy filename="same_track_post_edit.wav"
+                         startFrame="384000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- B plays at its NEW position -->
+    <assert-audio-energy filename="same_track_post_edit.wav"
+                         startFrame="576000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="same_track_post_edit.wav"
+                         startFrame="624000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

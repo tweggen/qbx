@@ -608,6 +608,71 @@ void SObject::invalidateRenderPath()
     }
 }
 
+// --- Range-scoped invalidation (proposal 18 Phase 5) ------------------------
+
+// Positions saturate at INT64_MAX: unbounded clip extents use UINT64_MAX,
+// and downstream mapping (SCut's exact rational math) works in int64.
+static offset_t satShift(offset_t pos, offset_t shift)
+{
+    const offset_t CAP = (offset_t) INT64_MAX;
+    if (pos >= CAP - shift) return CAP;
+    return pos + shift;
+}
+
+QList<SObject::SDirtyRange> SObject::mapChildRangesToSelf(
+    SLink *childLink, const QList<SDirtyRange> &childRanges )
+{
+    // Default containment mapping: the child's timeline is shifted into
+    // ours by the link's start time (the ShiftMap of proposal 18).
+    offset_t shift = (childLink && childLink->hasStartTime())
+                   ? childLink->getStartTime() : 0;
+    QList<SDirtyRange> out;
+    for (const SDirtyRange &r : childRanges)
+        out.append({ satShift(r.start, shift), satShift(r.end, shift) });
+    return out;
+}
+
+// Same depth-first containment walk as invalidateRenderChainsContaining,
+// carrying the dirty ranges upward. Each level bumps its OWN chain only over
+// the ranges mapped into its domain — a windowed-away edit (empty ranges)
+// bumps nothing on that branch even though the branch contains the target.
+bool SObject::invalidateRenderChainsContainingRange(
+    SObject *target, offset_t targetStart, offset_t targetEnd,
+    QList<SDirtyRange> &rangesInSelf )
+{
+    bool contains = (this == target);
+    if (contains)
+        rangesInSelf.append({ targetStart, targetEnd });
+    for (SLink *lk : childLinks()) {
+        if (!lk) continue;
+        QList<SDirtyRange> childRanges;
+        if (lk->getSObject().invalidateRenderChainsContainingRange(
+                target, targetStart, targetEnd, childRanges)) {
+            contains = true;
+            rangesInSelf.append( mapChildRangesToSelf(lk, childRanges) );
+        }
+    }
+    if (contains) {
+        for (const SDirtyRange &r : rangesInSelf)
+            if (r.end > r.start)
+                bumpRenderChainEpochRange(r.start, r.end);
+    }
+    return contains;
+}
+
+void SObject::invalidateRenderPathRange( offset_t start, offset_t end )
+{
+    if (end <= start) return;
+    SProject *project = getProjectSafe();
+    SObject *root = project ? project->getRootComponent() : nullptr;
+    if (root) {
+        QList<SDirtyRange> ranges;
+        root->invalidateRenderChainsContainingRange(this, start, end, ranges);
+    } else {
+        bumpRenderChainEpoch();
+    }
+}
+
 // Register a dependent link (object that references this one).
 // Called when a cut or asset placement references this object.
 // Uses SLink (the native way to track references) for dependency tracking.

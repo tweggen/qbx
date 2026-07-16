@@ -222,6 +222,19 @@ void twPluginChain::bumpContentEpoch()
     }
 }
 
+void twPluginChain::invalidatePagesInRange(uint64_t start, uint64_t end)
+{
+    twComponent::invalidatePagesInRange(start, end);
+
+    // Same forwarding as bumpContentEpoch: insert pages bake in upstream
+    // audio, so the affected range stales them too (positions are shared -
+    // the whole chain speaks absolute timeline frames).
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
+    for (const std::shared_ptr<twComponent> &plugin : plugins_) {
+        if (plugin) plugin->invalidatePagesInRange(start, end);
+    }
+}
+
 void twPluginChain::teardown()
 {
     state_.store(ComponentState::ZOMBIE, std::memory_order_release);

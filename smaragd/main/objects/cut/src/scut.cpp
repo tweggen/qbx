@@ -567,6 +567,51 @@ offset_t SCut::mapTimelineToComponentPos( offset_t off )
                .map( Fraction( (int64_t) off ) ).floorToInt();
 }
 
+
+// Map content (SOURCE-domain) dirty ranges into clip-relative ranges
+// (proposal 18 Phase 5). source -> warped is the exact StretchMap
+// (conservative floor/ceil at the edges); a looping window then yields one
+// image per repetition via twLoopMap::preimagesWithin - the exact
+// counterpart of "an edit inside the loop segment dirties EVERY repetition,
+// and nothing else". Non-looping windows subtract the slip anchor and clamp.
+QList<SObject::SDirtyRange> SCut::mapChildRangesToSelf(
+    SLink *childLink, const QList<SDirtyRange> &childRanges )
+{
+    Q_UNUSED( childLink );
+    SCutSnapshot snap = getSnapshot();
+    const Fraction stretch = snap.grainParams.stretch > Fraction(0)
+                           ? snap.grainParams.stretch : Fraction(1);
+    const int64_t dur = snap.cutDuration.frames();
+    const bool looping = snap.loopLength > WarpedLen(0)
+                      && snap.loopLength < warpedFromClip(snap.cutDuration);
+
+    QList<SDirtyRange> out;
+    for( const SDirtyRange &r : childRanges ) {
+        if( r.end <= r.start ) continue;
+        Fraction wStart = Fraction( (int64_t) r.start ) * stretch;
+        Fraction wEnd   = Fraction( (int64_t) r.end ) * stretch;
+        if( looping ) {
+            twLoopMap loop( Fraction( snap.startOffset.frames() ),
+                            Fraction( snap.loopLength.frames() ) );
+            for( const twMapSegment &seg : loop.preimagesWithin(
+                     wStart, wEnd - wStart, Fraction(0), Fraction(dur) ) ) {
+                int64_t s = seg.parentStart.floorToInt();
+                int64_t e = ( seg.parentStart + seg.length ).ceilToInt();
+                if( s < 0 ) s = 0;
+                if( e > dur ) e = dur;
+                if( e > s ) out.append( { (offset_t) s, (offset_t) e } );
+            }
+        } else {
+            int64_t s = ( wStart - Fraction( snap.startOffset.frames() ) ).floorToInt();
+            int64_t e = ( wEnd - Fraction( snap.startOffset.frames() ) ).ceilToInt();
+            if( s < 0 ) s = 0;
+            if( e > dur ) e = dur;
+            if( e > s ) out.append( { (offset_t) s, (offset_t) e } );
+        }
+    }
+    return out;
+}
+
 void SCut::setStartOffset( offset_t off )
 {
     {

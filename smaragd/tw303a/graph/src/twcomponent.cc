@@ -432,6 +432,36 @@ void twComponent::setPageAsFrozen(
 // Sequential Freezing Implementation (Phase 2 - Gap 3)
 // ============================================================================
 
+// Range-scoped page invalidation (proposal 18 Phase 5; see the header
+// comment). The page's covered extent is taken as a FULL page from its
+// start position — conservative: a partially-filled page intersecting the
+// range only in its unfilled tail still goes stale, never the other way.
+void twComponent::invalidatePagesInRange(uint64_t start, uint64_t end)
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    invalidatePagesInRange_nolock(start, end);
+}
+
+void twComponent::invalidatePagesInRange_nolock(uint64_t start, uint64_t end)
+{
+    if (end <= start) return;
+    const uint64_t before = contentEpoch_.fetch_add(1, std::memory_order_acq_rel);
+    const uint64_t now = before + 1;
+    for (auto &kv : outputPages_) {
+        auto &page = kv.second;
+        if (!page) continue;
+        if (page->validAspects == 0) continue;   // placeholder mid-render
+        const uint64_t pStart = page->startPosition;
+        const uint64_t pEnd = pStart + twOutputPage::FRAME_CAPACITY;
+        const bool intersects = pStart < end && start < pEnd;
+        if (!intersects && page->contentEpoch.load() == before) {
+            page->contentEpoch.store(now);       // untouched AND current: re-bless
+        }
+        // Intersecting pages (and pages stale from earlier edits) keep
+        // their old stamp and read as stale against the new epoch.
+    }
+}
+
 std::shared_ptr<twOutputPage> twComponent::freezePage(
     uint64_t startPos,
     const sample_t *inputData,

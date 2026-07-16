@@ -80,13 +80,24 @@ bool twTrackMix::isSeekable() const
     return true;
 }
 
-void twTrackMix::insertClip(const void *key, offset_t startTime, length_t duration,
+// A clip's audible extent on the track timeline. Unbounded clips
+// (duration 0) reach to the end of representable time.
+static twEditRange clipExtent(offset_t startTime, length_t duration)
+{
+    twEditRange r;
+    r.start = (uint64_t) startTime;
+    r.end = duration > 0 ? (uint64_t) startTime + (uint64_t) duration
+                         : UINT64_MAX;
+    return r;
+}
+
+twEditRange twTrackMix::insertClip(const void *key, offset_t startTime, length_t duration,
                             std::function<std::shared_ptr<twComponent>()> getComponentFn,
                             std::function<offset_t(offset_t)> mapPosFn)
 {
     if( !getComponentFn ) {
         fprintf(stderr, "ERROR: twTrackMix::insertClip received null callback!\n");
-        return;
+        return {};
     }
     // Create a stable twView wrapper for this clip. Owned by shared_ptr so that
     // a preview/freeze job that captured this view stays valid even if the clip
@@ -104,13 +115,16 @@ void twTrackMix::insertClip(const void *key, offset_t startTime, length_t durati
 
     std::lock_guard<std::mutex> lock(mutex());
     clips_.push_back({startTime, duration, key, view, nullptr});
-    // Every frozen page downstream (plugin chains, rewire, root mix) rendered
-    // before this edit no longer matches the timeline; mark them stale.
-    bumpContentEpoch();
+    // Pages rendered before this edit no longer match the timeline WITHIN
+    // the new clip's extent; pages elsewhere stay valid (proposal 18
+    // Phase 5 range scoping).
+    twEditRange r = clipExtent(startTime, duration);
+    invalidatePagesInRange_nolock(r.start, r.end);
     fprintf(stderr, "twTrackMix: inserted clip at time %llu, now have %zu clips\n", startTime, clips_.size());
+    return r;
 }
 
-void twTrackMix::removeClip(const void *key)
+twEditRange twTrackMix::removeClip(const void *key)
 {
     // Deferred-destruction bucket: matched entries are MOVED here (keeping the
     // twView / previousPage shared_ptrs alive) and only destruct when this
@@ -120,6 +134,7 @@ void twTrackMix::removeClip(const void *key)
     // may take other locks) happens with our mutex OPEN — avoiding a deadlock.
     std::vector<ClipEntry> doomed;
     int removed = 0;
+    twEditRange r;
     {
         std::lock_guard<std::mutex> lock(mutex());
         auto it = clips_.begin();
@@ -131,6 +146,8 @@ void twTrackMix::removeClip(const void *key)
             // EVERY clip of the same sample, since unbuilt readers share one
             // content component.
             if( it->key == key ) {
+                twEditRange e = clipExtent(it->startTime, it->duration);
+                r.unite(e.start, e.end);
                 // Move the entry (and its shared_ptrs) out under the lock; the
                 // actual ref-count drop / dtor happens after we unlock. If a
                 // preview/freeze job still holds the view, it stays alive until
@@ -143,29 +160,39 @@ void twTrackMix::removeClip(const void *key)
             }
         }
         if( removed > 0 ) {
-            bumpContentEpoch();  // This track's held/downstream pages are now stale
+            // Only the removed clip's extent went silent; pages elsewhere are
+            // still correct (proposal 18 Phase 5 range scoping).
+            invalidatePagesInRange_nolock(r.start, r.end);
         }
         fprintf(stderr, "twTrackMix: removed %d clip(s), now have %zu clips\n", removed, clips_.size());
     }
     // lock released here; `doomed` destructs next with the mutex open.
+    return r;
 }
 
-void twTrackMix::updateClip(const void *key, offset_t newStartTime, length_t newDuration)
+twEditRange twTrackMix::updateClip(const void *key, offset_t newStartTime, length_t newDuration)
 {
     // Deferred drop of the clip's previous-page snapshot. Declared before the
     // lock_guard so it destructs AFTER the mutex is released: ~twOutputPage
     // (and the shared_ptr chain it may head) must not run under our lock.
     std::shared_ptr<twOutputPage> doomedPage;
+    twEditRange r;
     {
         std::lock_guard<std::mutex> lock(mutex());
         for( ClipEntry &clip : clips_ ) {
             if( clip.key == key ) {
+                // The affected extent is the UNION of the pre- and post-edit
+                // windows: material vanished from the old extent and appeared
+                // in the new one. Invalidate unconditionally, even if
+                // startTime/duration are unchanged: slip- or stretch-only edits
+                // arrive here with the same window but changed content
+                // (SCut::setWindow always emits durationChanged).
+                r = clipExtent(clip.startTime, clip.duration);
+                twEditRange n = clipExtent(newStartTime, newDuration);
+                r.unite(n.start, n.end);
                 clip.startTime = newStartTime;
                 clip.duration = newDuration;
-                // Bump unconditionally, even if startTime/duration are unchanged:
-                // slip- or stretch-only edits arrive here with the same window but
-                // changed content (SCut::setWindow always emits durationChanged).
-                bumpContentEpoch();
+                invalidatePagesInRange_nolock(r.start, r.end);
                 // Restart the clip's state chain: the edit may have changed the
                 // component behind the view (reader rebuild, take selection), and
                 // a predecessor page from another component would restore foreign
@@ -178,6 +205,7 @@ void twTrackMix::updateClip(const void *key, offset_t newStartTime, length_t new
         }
     }
     // lock released here; `doomedPage` destructs next with the mutex open.
+    return r;
 }
 
 void twTrackMix::setTrackMute(bool muted)
