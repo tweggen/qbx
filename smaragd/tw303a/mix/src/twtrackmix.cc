@@ -89,8 +89,12 @@ void twTrackMix::insertClip(const void *key, offset_t startTime, length_t durati
         fprintf(stderr, "ERROR: twTrackMix::insertClip received null callback!\n");
         return;
     }
-    // Create a stable twView wrapper for this clip
-    twView *view = new twView(env, getComponentFn, mapPosFn);
+    // Create a stable twView wrapper for this clip. Owned by shared_ptr so that
+    // a preview/freeze job that captured this view stays valid even if the clip
+    // is removed while the job is still queued (the queue holds its own ref).
+    // make_shared also wires up enable_shared_from_this, so twView::teardown()'s
+    // shared_from_this() no longer throws bad_weak_ptr.
+    auto view = std::make_shared<twView>(env, getComponentFn, mapPosFn);
     view->init();
     clips_.push_back({startTime, duration, key, view, nullptr});
     // Every frozen page downstream (plugin chains, rewire, root mix) rendered
@@ -111,8 +115,8 @@ void twTrackMix::removeClip(const void *key)
         // and even comparing underlying components would remove EVERY clip of
         // the same sample, since unbuilt readers share one content component.
         if( it->key == key ) {
-            // Delete the twView wrapper
-            delete it->view;
+            // Drop our reference to the twView wrapper. If a preview/freeze job
+            // still holds it, it stays alive until that job releases its ref.
             it = clips_.erase(it);
             removed++;
         } else {
@@ -457,7 +461,7 @@ void twTrackMix::teardown()
     }
 
     // Snapshot clips and tear them down
-    std::vector<twView*> clipsCopy;
+    std::vector<std::shared_ptr<twView>> clipsCopy;
     {
         std::lock_guard<std::mutex> lock(mutex());
         for (const ClipEntry &clip : clips_) {

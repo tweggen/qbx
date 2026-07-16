@@ -20,7 +20,9 @@ struct ClipEntry {
     const void  *key;           // Caller-supplied identity (e.g. the SLink); two
                                 // clips of one sample share a component, so the
                                 // component pointer can NOT identify a clip
-    twView *view;               // Stable wrapper; owned by twTrackMix
+    std::shared_ptr<twView> view;  // Stable wrapper; shared so it outlives any
+                                // async preview/freeze job that still references
+                                // it after the clip is removed (see teardown)
     std::shared_ptr<twOutputPage> previousPage;  // State snapshot for resumption
 };
 
