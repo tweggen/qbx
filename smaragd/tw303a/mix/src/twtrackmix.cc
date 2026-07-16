@@ -84,7 +84,6 @@ void twTrackMix::insertClip(const void *key, offset_t startTime, length_t durati
                             std::function<std::shared_ptr<twComponent>()> getComponentFn,
                             std::function<offset_t(offset_t)> mapPosFn)
 {
-    std::lock_guard<std::mutex> lock(mutex());
     if( !getComponentFn ) {
         fprintf(stderr, "ERROR: twTrackMix::insertClip received null callback!\n");
         return;
@@ -94,8 +93,16 @@ void twTrackMix::insertClip(const void *key, offset_t startTime, length_t durati
     // is removed while the job is still queued (the queue holds its own ref).
     // make_shared also wires up enable_shared_from_this, so twView::teardown()'s
     // shared_from_this() no longer throws bad_weak_ptr.
+    //
+    // Construct and init the view OUTSIDE our lock: twView's ctor/init() may
+    // call back into getComponentFn and the component graph, which take their
+    // own locks — doing that under mutex() risks a lock-order inversion. The
+    // view is not reachable by any other thread until the push_back below, so
+    // building it unlocked is safe.
     auto view = std::make_shared<twView>(env, getComponentFn, mapPosFn);
     view->init();
+
+    std::lock_guard<std::mutex> lock(mutex());
     clips_.push_back({startTime, duration, key, view, nullptr});
     // Every frozen page downstream (plugin chains, rewire, root mix) rendered
     // before this edit no longer matches the timeline; mark them stale.
@@ -105,49 +112,72 @@ void twTrackMix::insertClip(const void *key, offset_t startTime, length_t durati
 
 void twTrackMix::removeClip(const void *key)
 {
-    std::lock_guard<std::mutex> lock(mutex());
-    auto it = clips_.begin();
+    // Deferred-destruction bucket: matched entries are MOVED here (keeping the
+    // twView / previousPage shared_ptrs alive) and only destruct when this
+    // vector goes out of scope. It is declared BEFORE the lock_guard so that,
+    // by reverse destruction order, the mutex is released first and the
+    // ~twView() run (which tears down the component, touches async queues, and
+    // may take other locks) happens with our mutex OPEN — avoiding a deadlock.
+    std::vector<ClipEntry> doomed;
     int removed = 0;
-    while( it != clips_.end() ) {
-        // Match by the caller-supplied key. The previous component-based
-        // matching was doubly broken: it compared the caller's component to the
-        // twView wrapper pointer (never equal, so nothing was ever removed),
-        // and even comparing underlying components would remove EVERY clip of
-        // the same sample, since unbuilt readers share one content component.
-        if( it->key == key ) {
-            // Drop our reference to the twView wrapper. If a preview/freeze job
-            // still holds it, it stays alive until that job releases its ref.
-            it = clips_.erase(it);
-            removed++;
-        } else {
-            ++it;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        auto it = clips_.begin();
+        while( it != clips_.end() ) {
+            // Match by the caller-supplied key. The previous component-based
+            // matching was doubly broken: it compared the caller's component to
+            // the twView wrapper pointer (never equal, so nothing was ever
+            // removed), and even comparing underlying components would remove
+            // EVERY clip of the same sample, since unbuilt readers share one
+            // content component.
+            if( it->key == key ) {
+                // Move the entry (and its shared_ptrs) out under the lock; the
+                // actual ref-count drop / dtor happens after we unlock. If a
+                // preview/freeze job still holds the view, it stays alive until
+                // that job releases its ref regardless.
+                doomed.push_back(std::move(*it));
+                it = clips_.erase(it);
+                removed++;
+            } else {
+                ++it;
+            }
         }
+        if( removed > 0 ) {
+            bumpContentEpoch();  // This track's held/downstream pages are now stale
+        }
+        fprintf(stderr, "twTrackMix: removed %d clip(s), now have %zu clips\n", removed, clips_.size());
     }
-    if( removed > 0 ) {
-        bumpContentEpoch();  // This track's held/downstream pages are now stale
-    }
-    fprintf(stderr, "twTrackMix: removed %d clip(s), now have %zu clips\n", removed, clips_.size());
+    // lock released here; `doomed` destructs next with the mutex open.
 }
 
 void twTrackMix::updateClip(const void *key, offset_t newStartTime, length_t newDuration)
 {
-    std::lock_guard<std::mutex> lock(mutex());
-    for( ClipEntry &clip : clips_ ) {
-        if( clip.key == key ) {
-            clip.startTime = newStartTime;
-            clip.duration = newDuration;
-            // Bump unconditionally, even if startTime/duration are unchanged:
-            // slip- or stretch-only edits arrive here with the same window but
-            // changed content (SCut::setWindow always emits durationChanged).
-            bumpContentEpoch();
-            // Restart the clip's state chain: the edit may have changed the
-            // component behind the view (reader rebuild, take selection), and
-            // a predecessor page from another component would restore foreign
-            // DSP state. Discontinuity (reset+seek) is always correct.
-            clip.previousPage.reset();
-            return;
+    // Deferred drop of the clip's previous-page snapshot. Declared before the
+    // lock_guard so it destructs AFTER the mutex is released: ~twOutputPage
+    // (and the shared_ptr chain it may head) must not run under our lock.
+    std::shared_ptr<twOutputPage> doomedPage;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        for( ClipEntry &clip : clips_ ) {
+            if( clip.key == key ) {
+                clip.startTime = newStartTime;
+                clip.duration = newDuration;
+                // Bump unconditionally, even if startTime/duration are unchanged:
+                // slip- or stretch-only edits arrive here with the same window but
+                // changed content (SCut::setWindow always emits durationChanged).
+                bumpContentEpoch();
+                // Restart the clip's state chain: the edit may have changed the
+                // component behind the view (reader rebuild, take selection), and
+                // a predecessor page from another component would restore foreign
+                // DSP state. Discontinuity (reset+seek) is always correct.
+                // Move (not reset) the old page out so it dies after we unlock;
+                // moving leaves clip.previousPage empty, which is the intent.
+                doomedPage = std::move(clip.previousPage);
+                break;
+            }
         }
     }
+    // lock released here; `doomedPage` destructs next with the mutex open.
 }
 
 void twTrackMix::setTrackMute(bool muted)
