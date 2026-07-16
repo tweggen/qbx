@@ -10,11 +10,24 @@
 #include "tw/graph/tw_freeze_context.h"
 
 twStreamingLatch::twStreamingLatch (std::shared_ptr<twComponent> component0, idx_t idx0, length_t bufSize0)
-	: twLatch (component0, idx0), currentPos_(0), previousPage_(nullptr), sampleRate_(48000)
+	: twLatch (component0, idx0), sampleRate_(48000)
 {
 	if (bufSize0 == 0)
 		bufSize0 = bufSizeDefault;
 	init(bufSize0);
+}
+
+twLatchOutput * twStreamingLatch::addOutput()
+{
+	// Allocate the streaming subtype: consumers static_cast their input plug to
+	// twLatchStreamingOutput and it carries the per-reader page-chain hint, so
+	// the object must actually BE one (the base addOutput would make a plain
+	// twLatchOutput, and touching the extra field through it is out-of-bounds).
+	auto pOutput = std::make_shared<twLatchStreamingOutput>( *this );
+	outputList.push_back( pOutput );
+	// The caller wires with a raw pointer (linkOutput/setInput signatures); the
+	// consumer takes shared ownership via sharedOutput() in twComponent::setInput.
+	return pOutput.get();
 }
 
 twStreamingLatch::~twStreamingLatch ()
@@ -50,7 +63,8 @@ void twStreamingLatch::init( length_t bufSize0 )
 #endif
 }
 
-length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, length_t maxLength )
+length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, length_t maxLength,
+                                     std::shared_ptr<twOutputPage>& readerPrevPage )
 {
 	if (!pDest || maxLength <= 0 || startOffset < 0) {
 		return 0;  // Nothing to copy
@@ -61,15 +75,24 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 	// The consumer's startOffset is a timeline position; it maps directly onto
 	// page-aligned freezePage() requests against the producing component, so
 	// the position a consumer reads at and the content it receives can never
-	// diverge. The held page (previousPage_) is reused while the consumer is
-	// still inside it, and passed as the state-chain predecessor when crossing
-	// into the immediately following page, so stateful producers (reverbs,
-	// filters) continue seamlessly across page boundaries. Any other page
-	// transition is a discontinuity, which the producer's freezePage() answers
-	// with reset() + seekTo(pageStart).
+	// diverge. The held page is reused while the consumer is still inside it,
+	// and passed as the state-chain predecessor when crossing into the
+	// immediately following page, so stateful producers (reverbs, filters)
+	// continue seamlessly across page boundaries. Any other page transition is
+	// a discontinuity, which the producer's freezePage() answers with reset() +
+	// seekTo(pageStart).
+	//
+	// The hint belongs to the CALLING reader (readerPrevPage), not to this
+	// shared latch, so two readers of one fanned-out latch cannot corrupt each
+	// other's chain. Snapshot it once into a local, work on the local, and
+	// publish the final value back before returning. The load/store are atomic
+	// because a double-render of this reader can run copyData concurrently on
+	// two freeze threads; the hint is advisory, so last-writer-wins is fine.
 	const uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
 	const uint64_t epochNow = getComponent()->contentEpochNow();
 	length_t written = 0;
+
+	std::shared_ptr<twOutputPage> held = std::atomic_load(&readerPrevPage);
 
 	while (written < maxLength) {
 		const uint64_t pos = (uint64_t)startOffset + (uint64_t)written;
@@ -78,9 +101,9 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		// The held page must be frozen AND from the current content epoch —
 		// an edit (clip move/split/stretch, mute, rewiring) makes every page
 		// rendered before it stale, even though its validAspects are still set.
-		std::shared_ptr<twOutputPage> page = previousPage_;
+		std::shared_ptr<twOutputPage> page = held;
 		if (!page || page->startPosition != pageStart || page->validAspects == 0 ||
-		    page->contentEpoch.load() < epochNow) {	
+		    page->contentEpoch.load() < epochNow) {
 			// Need a different page than the one we hold.
 			// Cycle guard: if the producer is already being frozen on this
 			// thread, recursing into freezePage() would loop forever.
@@ -93,10 +116,10 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 			// A stale-epoch predecessor is also a discontinuity: its DSP state
 			// was computed against pre-edit audio.
 			std::shared_ptr<twOutputPage> chainFrom;
-			if (previousPage_ && previousPage_->validAspects != 0 &&
-			    previousPage_->contentEpoch.load() >= epochNow &&
-			    previousPage_->startPosition + previousPage_->validFrames == pageStart) {
-				chainFrom = previousPage_;
+			if (held && held->validAspects != 0 &&
+			    held->contentEpoch.load() >= epochNow &&
+			    held->startPosition + held->validFrames == pageStart) {
+				chainFrom = held;
 			}
 
 			page = getComponent()->freezePage(
@@ -110,7 +133,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 			if (!page || page->validAspects == 0) {
 				break;  // producer could not materialize this page
 			}
-			previousPage_ = page;
+			held = page;
 		}
 
 		const uint64_t inPage = pos - pageStart;
@@ -126,5 +149,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		written += n;
 	}
 
+	// Publish the last page this reader served, for continuity on its next call.
+	std::atomic_store(&readerPrevPage, held);
 	return written;
 }

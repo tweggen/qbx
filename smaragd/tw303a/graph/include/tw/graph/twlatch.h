@@ -100,19 +100,33 @@ protected:
     // the current position (equivalent to offset in parent class)
     offset_t bufPos;
 
-    // Phase 2: freezePage() state tracking
-    offset_t currentPos_;                              // Current playback position for snapshots
-    std::shared_ptr<twOutputPage> previousPage_;      // Cached page for state continuity
     int sampleRate_;                                   // Project sample rate for freezePage()
 
 public:
     twStreamingLatch( std::shared_ptr<twComponent> comp, idx_t idx0, length_t bufSize0 );
     virtual ~ twStreamingLatch ();
 
-    length_t copyData( offset_t startOffset, sample_t *pDest, length_t maxLength );
+    // Streaming latches hand out streaming outputs. The base twLatch::addOutput
+    // allocates a plain twLatchOutput; override so the object is really a
+    // twLatchStreamingOutput. Consumers static_cast their input plug to that
+    // type, and it now carries per-reader state (its own page-chain hint), so
+    // allocating the exact type is REQUIRED for correctness, not just tidiness.
+    virtual twLatchOutput * addOutput() override;
 
-    // Phase 2: Reset cached page on seek (breaks state chain)
-    void resetPageCache() { previousPage_ = nullptr; }
+    // Serve up to maxLength frames from startOffset (a timeline position),
+    // sourced from position-aligned frozen pages of the producing component.
+    //
+    // readerPrevPage is the CALLING reader's OWN page-chain hint: the frozen
+    // page it last served, used to continue stateful DSP (reverb/filter memory)
+    // across page boundaries. It lives on the reader (twLatchStreamingOutput),
+    // not on the shared latch, so fan-out readers at different positions cannot
+    // clobber one another. It is read/written here only via std::atomic_load/
+    // std::atomic_store, because a double-render of one reader can enter this
+    // concurrently on two freeze threads — the hint is advisory (a wrong value
+    // costs at most a reset+seek discontinuity), so last-writer-wins is fine,
+    // but the shared_ptr access itself must be atomic to avoid a refcount race.
+    length_t copyData( offset_t startOffset, sample_t *pDest, length_t maxLength,
+                       std::shared_ptr<twOutputPage>& readerPrevPage );
 
     static const int bufSizeDefault;
 };
@@ -121,6 +135,14 @@ class twLatchStreamingOutput
     : public twLatchOutput
 {
 private:
+    // This reader's private page-chain hint: the frozen page it most recently
+    // served. Handed to twStreamingLatch::copyData so DSP state chains across
+    // page boundaries for THIS reader, independently of any other reader that
+    // shares the same latch. Accessed exclusively via std::atomic_load/store
+    // (see copyData) because the same reader can be entered by two freeze
+    // threads during a double-render. shared_ptr so the page survives a
+    // concurrent page invalidation while we still reference it.
+    std::shared_ptr<twOutputPage> previousPage_;
 protected:
 public:
     twLatchStreamingOutput (twStreamingLatch & latch)
