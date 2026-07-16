@@ -46,3 +46,6 @@ compile_commands.json
 .vscode/
 .idea/
 *.user
+
+# Local git worktrees (never track as gitlinks)
+.claude/worktrees/
