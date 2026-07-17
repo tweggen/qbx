@@ -93,6 +93,11 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     // (audio thread continues using currentReader_ during this entire process)
     std::shared_ptr<twSampleReader> newReader;
     std::shared_ptr<twGrainSource> newGrain;
+    // Owned snapshot of capture_ for container-backed cuts: keeps the source
+    // alive across this rebuild and the swap below even if invalidateCapture()
+    // resets the member on another thread (declared before the goto so it is in
+    // scope at swap_complete).
+    std::shared_ptr<twCapturingSource> capHold;
     bool newLooping = false;
 
     twRandomSource *rs = content_->getSObject().getRandomSource();
@@ -103,8 +108,9 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     bool grainAlreadyApplied = false;
     if( needCapture ) {
         buildCapture_();
-        if( capture_ ) {
-            rs = capture_.get();
+        capHold = captureSnapshot();   // own it: member may be reset concurrently
+        if( capHold ) {
+            rs = capHold.get();
         } else {
             // Container-backed capture build failed: no fallback
             goto swap_complete;
@@ -162,7 +168,7 @@ swap_complete:
         // Move next to current (becomes visible to audio thread immediately)
         currentReader_.reader = newReader;
         currentReader_.grain = newGrain;
-        currentReader_.captureRef = capture_;   // Share ownership: keeps capture alive during render
+        currentReader_.captureRef = capHold;   // Share ownership: keeps capture alive during render
         currentReader_.looping = newLooping;
         currentReader_.generation++;  // Increment on successful swap
     }
@@ -210,8 +216,9 @@ void SCut::buildCapture_()
     // object mutex() must never be held that long.
     std::lock_guard<std::mutex> buildLock( captureBuildMutex_ );
 
-    if( capture_ ) {
-        return;  // Already built
+    if( captureSnapshot() ) {
+        return;  // Already built (read capture_ under mutex(): another thread
+                 // may be resetting it concurrently via invalidateCapture()).
     }
 
     SObject &c = content_->getSObject();
@@ -233,12 +240,23 @@ void SCut::buildCapture_()
     }
 
     // The capture must cover the window's warped end (slip offset folded in).
+    // Every quantity here is attacker-controlled through resize/slip gestures:
+    // a right-edge drag past the left edge yields a negative cutDuration, and a
+    // far slip yields an enormous windowEnd. Clamp so the buffer sizing below can
+    // never go negative (→ huge size_t → std::length_error) or run away past the
+    // real content (→ multi-GB allocation).
     WarpedPos windowEnd = warpedFromClip( ClipPos( snap.cutDuration.frames() ),
                                           snap.startOffset );
     length_t need = (length_t) windowEnd.frames();
+    if( need < 0 ) need = 0;
     length_t dur  = (length_t) c.getDuration();
+    if( dur < 0 ) dur = 0;
     length_t n = dur > need ? dur : need;
     if( n <= 0 ) return;
+    // A window slipped past the source end reads silence, which twCapturingSource
+    // already returns for out-of-range offsets — so never capture more than the
+    // content actually has. This bounds `need >> dur` (far slip) to `dur`.
+    if( dur > 0 && n > dur ) n = dur;
 
     std::vector<sample_t> buf;
     length_t captureLen = n;
@@ -299,14 +317,23 @@ void SCut::buildCapture_()
         length_t grainedLen = grainSource->length();
 
         // startOffset already lives in the grain OUTPUT (warped) domain, the
-        // domain the grain source is addressed in — unwrap at the seam.
+        // domain the grain source is addressed in — unwrap at the seam. A
+        // negative slip anchor (drag content start before 0) would make this
+        // negative and drive an out-of-bounds read in twGrainSource::read();
+        // clamp to 0 (the pre-roll is silence, which the reader supplies).
         offset_t grainOffset = (offset_t) snap.startOffset.frames();
+        if( grainOffset < 0 ) grainOffset = 0;
 
-        // Read from the grain-stretched offset, limited to remaining content
+        // Read from the grain-stretched offset, limited to remaining content.
+        // wantFrames (cutDuration) can be negative after a right-edge drag past
+        // the left edge; clamp so toRead — and thus buf.resize() — never sees a
+        // negative value that casts to a huge size_t (std::length_error).
         length_t availFromOffset = grainedLen > (length_t) grainOffset
                                  ? grainedLen - (length_t) grainOffset : 0;
         length_t wantFrames = snap.cutDuration.frames();
+        if( wantFrames < 0 ) wantFrames = 0;
         length_t toRead = wantFrames > availFromOffset ? availFromOffset : wantFrames;
+        if( toRead < 0 ) toRead = 0;
 
         buf.resize( (size_t) toRead, 0.0f );
         if( toRead > 0 ) {
@@ -388,8 +415,13 @@ bool SCut::revalPrepPreview()
 bool SCut::ensureCapturePeaks()
 {
     if( capPeaks_ ) return true;
-    if( !capture_ ) return false;
-    length_t len = (length_t) capture_->length();
+    // Own the capture for the duration of the scan: a revalidator worker may
+    // publish/replace capture_ (and invalidateCapture may reset it) while this
+    // GUI-thread peak build is running — reading the member directly is a
+    // shared_ptr data race.
+    std::shared_ptr<twCapturingSource> cap = captureSnapshot();
+    if( !cap ) return false;
+    length_t len = (length_t) cap->length();
     if( len <= 0 ) return false;
 
     offset_t skip = 256;
@@ -408,7 +440,7 @@ bool SCut::ensureCapturePeaks()
 
     for( offset_t i = 0; i < (offset_t) len; i += skip ) {
         offset_t chunk = ( i + skip <= (offset_t) len ) ? skip : ( (offset_t) len - i );
-        capture_->read( i, buf, chunk, 0 );
+        cap->read( i, buf, chunk, 0 );
         sample_t mn = SAMPLE_NORM_MAX, mx = SAMPLE_NORM_MIN;
         for( offset_t j = 0; j < chunk; ++j ) {
             sample_t a = buf[j];
@@ -443,7 +475,7 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
     // Try async capture first (non-blocking, may be stale or invalid)
     // If not ready, fall back to live content preview (sample-backed cuts only)
     auto page = getPreviewCapture();
-    if( !page || !capture_ ) {
+    if( !page || !captureSnapshot() ) {
         // No capture available (yet or ever)
         // For sample-backed cuts: preview the content live
         // For container-backed cuts: return error (no fallback)

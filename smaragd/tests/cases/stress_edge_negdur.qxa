@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Deterministic: a grained clip whose duration goes negative (right-edge drag
+  past the left edge). In buildCapture_() the grained branch computes
+  toRead = min(cutDuration, availFromOffset); a negative cutDuration casts to a
+  huge size_t in buf.resize() -> std::length_error, thrown on a revalidator worker
+  -> std::terminate. Must not crash.
+-->
+<SActionScript version="1" name="stress_edge_negdur">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="96000" loopLength="0" stretch="1.5"/>
+    <render filename="negdur_a.wav" format="wav" quality="10"/>
+
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="-12000" loopLength="0" stretch="1.5"/>
+    <render filename="negdur_b.wav" format="wav" quality="10"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

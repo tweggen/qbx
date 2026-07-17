@@ -117,6 +117,8 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
         // Check if object still needs revalidation (state may have changed while queued)
         // _nolock: we hold the lock (std::lock_guard above)
         if (!job.object->revalNeeded_nolock(job.aspects)) {
+            lock.unlock();
+            job.object->revalRemoveRef();
             return;
         }
 

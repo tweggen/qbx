@@ -10,6 +10,7 @@
 #include <QSet>
 #include <mutex>
 #include <memory>
+#include <atomic>
 #include "tw/pages/capture_page_pool.h"
 #include "tw/schedule/revalidatable.h"
 
@@ -559,7 +560,12 @@ private:
     // Playback aspect invalidated, not entire scene.
     mutable std::mutex dependentsMutex_;
     QSet<SLink*> dependentLinks_;
-    int nRefs_;
+    // Reference count. Atomic because the capture revalidator's worker threads
+    // release references (revalRemoveRef) concurrently with the GUI thread
+    // adding/removing them (SLink parenting, clip deletion) — a plain int made
+    // the read-modify-write racy, corrupting the count into a premature delete
+    // (use-after-free) or a leak.
+    std::atomic<int> nRefs_;
     offset_t previewForLength_;
     offset_t nPreviewProbes_;
     preview_t *previewData_;

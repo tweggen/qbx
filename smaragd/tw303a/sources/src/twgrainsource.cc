@@ -101,6 +101,17 @@ length_t twGrainSource::read( offset_t srcOffset, sample_t *dest,
     if( ch < 0 ) ch = 0;
     if( ch >= channels_ ) ch = channels_ - 1;
 
+    // A negative source offset (a slip anchor dragged before the material start)
+    // would make `avail` exceed nFrames_ and the memcpy below read before the
+    // buffer. The pre-roll is silence: emit zeros for the leading gap and start
+    // the copy at frame 0.
+    if( srcOffset < 0 ) {
+        length_t gap = (length_t) ( -srcOffset );
+        if( gap >= len ) { memset( dest, 0, sizeof( sample_t ) * len ); return 0; }
+        memset( dest, 0, sizeof( sample_t ) * gap );
+        return read( 0, dest + gap, len - gap, channel );
+    }
+
     length_t avail = 0;
     if( srcOffset < (offset_t) nFrames_ ) {
         avail = nFrames_ - (length_t) srcOffset;

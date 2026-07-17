@@ -364,7 +364,9 @@ void SObject::moveChildToIndex( int fromIndex, int toIndex )
 
 void SObject::addRef()
 {
-    if( ++nRefs_ == 1 ) {
+    // Atomic RMW: the returned pre-increment value pins the 0→1 transition to
+    // exactly one caller even under concurrent refs from worker + GUI threads.
+    if( nRefs_.fetch_add( 1, std::memory_order_acq_rel ) == 0 ) {
         emit gotReferenced();
     }
     emit nRefsChanged();
@@ -372,15 +374,19 @@ void SObject::addRef()
 
 void SObject::removeRef()
 {
-    if( nRefs_==0 ) {
+    int prev = nRefs_.fetch_sub( 1, std::memory_order_acq_rel );
+    if( prev <= 0 ) {
+        // Was already zero: undo the decrement and warn (no delete — nobody
+        // owns this object, so releasing again would double-free).
+        nRefs_.fetch_add( 1, std::memory_order_acq_rel );
         qWarning( "SObject::removeRef(): Called although reference count was zero.\n" );
         return;
     }
-    if( (--nRefs_)==0 ) {
-        emit gotUnreferenced();
-    }
     emit nRefsChanged();
-    if( 0==nRefs_ ) {
+    if( prev == 1 ) {
+        // We took the count 1→0: exactly one caller reaches here, so the
+        // gotUnreferenced emit and deleteLater fire once (no double-delete race).
+        emit gotUnreferenced();
         // This will delete the object if the application reenters the main loop.
         deleteLater();
     }

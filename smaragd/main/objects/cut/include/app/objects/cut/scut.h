@@ -393,6 +393,17 @@ private:
     // Used temporarily until fully integrated with capture page pool.
     // TODO: Phase 4 future - replace entirely with two-page buffer model.
     std::shared_ptr<twCapturingSource> capture_;
+    // Atomically read the capture shared_ptr into an owned copy. capture_ is
+    // published by buildCapture_() (a revalidator worker OR the render thread)
+    // and reset by invalidateCapture() (UI/arrangement thread); reading the
+    // member directly from another thread is a shared_ptr data race and was the
+    // use-after-free in buildCapture_(). Every cross-thread reader takes a
+    // snapshot under mutex() so the source stays alive for its own use, whatever
+    // the interleaving.
+    std::shared_ptr<twCapturingSource> captureSnapshot() const {
+        std::lock_guard<std::mutex> lock( mutex() );
+        return capture_;
+    }
     bool captureConnected_ = false;   // connected to arrangementChanged once
     // Peak cache over the capture, for the waveform preview.
     // TODO: Phase 4 future - replace entirely with two-page buffer model.
