@@ -1,8 +1,12 @@
 # Proposal 19: Fully-async, DAG-scheduled page freezing (fix shared-component freeze races)
 
-> **Status: PROPOSED 2026-07-18.** Not started. Supersedes the ad-hoc
-> concurrency of the current recursive `freezePage`. Motivated by a confirmed
-> data race behind the flaky `takes_group_broadcast` test.
+> **Status: IN PROGRESS 2026-07-18.** Phase 0 (CWD-independent sample paths +
+> `repeat_test.sh` gate) and Phase 1 (single-cursor freeze serialization) are
+> committed. Phase 1b DIAGNOSED the flake precisely (issue #3b, see below) but
+> its three targeted fixes all failed — so **Phase 2 is now the flake fix**, not
+> just an architectural cleanup. Supersedes the ad-hoc concurrency of the current
+> recursive `freezePage`. Motivated by a confirmed data race behind the flaky
+> `takes_group_broadcast` test.
 >
 > Companion context (must-read before implementing):
 > `plan/proposed/16_STALE_PAGE_FALLBACK.md` (stale-but-consistent playback),
@@ -320,13 +324,59 @@ If Phase 1b cannot make it deterministic without the recursion inversion, it
 still yields the exact invariant Phase 2 must enforce, and we proceed to Phase 2
 with that spec.
 
-### Phase 2 — Invert the mix graph to request/ready scheduling
-Convert `twTrackMix`, `twMixer`, `twRewire`, `twPluginChain` to render from
-ready input pages (no synchronous `copyData` pull). Introduce `requestPage` +
-the task scheduler + dedup map.
-- **Acceptance:** no `freezePage`→`freezePage` synchronous recursion remains
-  (assert via the collision tracker / a stack-depth guard); full qxa suite
-  green; no perf regression on the render benchmark (§ Test plan).
+### Phase 2 — Invert the mix graph to request/ready scheduling (THIS is the flake fix)
+
+**Why this fixes issue #3(b) when the targeted fixes could not.** Phase 1b
+pinned the flake to the render thread's *own recursive freeze* producing stale
+content: `freezePage_nolock` synchronously pulls its inputs
+(`freezePage → renderFrames → calcOutputTo → copyData → input->freezePage`) and,
+along the way, reads mutable component/clip state (readers, clip windows, active
+take, capture) that a background revalidation worker is concurrently mutating.
+No single lock closes this because the read set spans the whole subgraph and many
+objects. The request/ready model removes the race *by construction*: a freeze
+task renders **purely from already-frozen, immutable input pages** it requested
+and received — it never pulls live, mutating state mid-render. Combined with the
+per-component serial actor (Phase 1's `usesSerialCursor`, promoted to a real
+queue here), a component's edits and freezes are ordered, so content can never
+lag its epoch. That is the invariant the three incremental fixes each only
+partially enforced.
+
+**Scope.** Convert the cached, pulling components — `twTrackMix`, `twMixer`,
+`twRewire`, `twPluginChain`/`twPluginInsert` — to render from ready input pages
+instead of the synchronous `copyData` pull. Introduce the request/ready
+scheduler and the per-`(component,startPos,epoch)` dedup map (the user's
+`map<twComponent*, JobEntry>`, correctly keyed per page).
+
+**Sub-steps (each independently buildable + gated):**
+- **2a — `requestPage(component,startPos,epoch) → PageHandle`** over the existing
+  `outputPages_` cache: cache-hit (frozen + current) resolves immediately; else
+  enqueue one freeze task (deduped) and resolve on completion. No behaviour
+  change yet — just the handle API + dedup map.
+- **2b — readiness-driven freeze** in `freezePage_nolock`: a task computes its
+  input page dependencies, `requestPage`s them, and renders **only from the
+  returned ready pages** (replace `calcOutputTo`/`copyData` pulls with reads of
+  ready input pages). Park + re-enqueue if a dependency is pending. This is the
+  core inversion and where the flake dies — verify against the N=100 gate here.
+- **2c — retire the interim guards** now subsumed: Phase 1's `cursorMutex_`/
+  `usesSerialCursor` becomes the actor's serial queue; drop the `getSnapshot`
+  stale-fallback risk on the freeze path (freeze no longer reads live SCut state,
+  only frozen pages).
+
+**Watch-outs (from Phase 1b):**
+- The graph is an acyclic DAG guarded by `FreezeContext`; keep that guarantee so
+  the scheduler's readiness walk is ancestor-after-descendant (no cycle → no
+  deadlock/livelock).
+- `twTrackMix` already has its own (non-caching) `freezePage` that holds
+  `mutex()` across recursion — fold it into the same model.
+- Preserve proposal 16 stale-fallback playback and proposal 18 Phase 5
+  range-scoped invalidation semantics.
+
+- **Acceptance:** `repeat_test.sh takes_group_broadcast 100` → **100/100** at the
+  default worker count AND swept over `SMARAGD_REVAL_WORKERS ∈ {1,2,4,8,16}`
+  (this is the whole point); no `freezePage`→`freezePage` *synchronous* recursion
+  remains (assert via a stack-depth guard); full qxa suite green; offline-render
+  goldens bit-identical to the Phase 0 references; no perf regression on the
+  render benchmark (§ Test plan).
 
 ### Phase 3 — Async readahead / render
 `AudioEngine` readahead and `RenderSession` become request-driven consumers.
