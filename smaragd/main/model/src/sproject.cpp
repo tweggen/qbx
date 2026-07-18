@@ -1,6 +1,8 @@
 
 #include <qobject.h>
 #include <QDebug>
+#include <QDir>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -314,6 +316,21 @@ void SProject::registerExternFileFactory( ExternFileFactory f )
 
 SLink *SProject::linkToFile( QString &fileName )
 {
+    // Resolve a relative path against the action-script directory when one is
+    // set and the file actually exists there. This makes a .qxa's
+    // "../foo.wav" resolve next to the script regardless of the working
+    // directory — otherwise a test run from the wrong CWD silently picks up a
+    // stale same-named file elsewhere (see proposal 19 Phase 0). Falls back to
+    // the path as given (CWD-relative) when unset or not found, so GUI use is
+    // unchanged.
+    if( !sampleBaseDir_.isEmpty() && QFileInfo( fileName ).isRelative() ) {
+        const QString resolved =
+            QDir::cleanPath( QDir( sampleBaseDir_ ).filePath( fileName ) );
+        if( QFileInfo::exists( resolved ) ) {
+            fileName = resolved;
+        }
+    }
+
     SExternFile *ef = externFileDict_.value( fileName );
     if( !ef ) {
         ExternFileFactory factory = externFileFactory();

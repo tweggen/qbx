@@ -40,6 +40,15 @@ public:
     void setRootComponent( SObject * );
 
     SLink *linkToFile( QString & );
+
+    // Base directory for resolving RELATIVE sample paths passed to linkToFile
+    // (set by the action-script runner to the .qxa's directory). When set and a
+    // relative path exists under it, linkToFile rewrites the path to that
+    // absolute location, so scripts find their fixtures regardless of the
+    // process working directory. Empty (default) = resolve against the CWD, as
+    // before — interactive/GUI use is unaffected.
+    void setSampleBaseDir( const QString &dir ) { sampleBaseDir_ = dir; }
+    QString sampleBaseDir() const { return sampleBaseDir_; }
     // Factory for creating an extern-file object from a path, registered by
     // the owning slice (SPlainWave) from a static initializer — the model
     // names no concrete types (proposal 14, Phase 5). Returns NULL on load
@@ -167,6 +176,7 @@ private slots:
 
 private:
     QString fileName_;
+    QString sampleBaseDir_;   // see setSampleBaseDir()
     SLink *soRoot_;
     double bpmTempo_;
     int sampleRate_;

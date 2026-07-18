@@ -22,6 +22,10 @@ bool SActionScript::readFile(const QString &path)
         return false;
     }
 
+    // Record the script's directory so relative sample paths resolve next to
+    // the .qxa regardless of the process working directory.
+    baseDir_ = QFileInfo(path).absolutePath();
+
     QString errorMsg;
     QDomDocument doc;
     if (!doc.setContent(&file, &errorMsg)) {

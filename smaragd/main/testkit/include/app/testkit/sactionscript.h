@@ -46,6 +46,12 @@ public:
 
     QString error() const { return error_; }
 
+    // Absolute directory the script was loaded from (empty for scripts parsed
+    // from an in-memory document). Relative sample paths in add-sample/add-take
+    // are resolved against this so a .qxa's "../foo.wav" always finds the file
+    // next to the script, independent of the process working directory.
+    QString baseDir() const { return baseDir_; }
+
 private:
     Setup setup_;
     QList<SAction*> actions_;
@@ -53,6 +59,7 @@ private:
     QList<Assertion> assertions_;
     bool verifyUndo_ = false;
     mutable QString error_;
+    QString baseDir_;
 };
 
 #endif // SACTIONSCRIPT_H

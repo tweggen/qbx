@@ -28,6 +28,10 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
         return result;
     }
 
+    // Resolve the script's relative sample paths against the .qxa's directory,
+    // not the process working directory (proposal 19 Phase 0).
+    project->setSampleBaseDir(script.baseDir());
+
     // Initialize with a root mixer (standard for new projects).
     project->setRootComponent(new SStdMixer(project));
 
