@@ -342,15 +342,53 @@ Why the earlier partial fixes fell short:
   didn't help because the wrong state is the SCut reader/offset, not a latch-path
   page cache.
 
-Candidate real fixes (decision pending):
-  (A) Make the split tail-take's `srcStart_`/reader resolution correct and
-      race-immune: recompute the source offset from current window params at
-      resolve time (independent of any worker-built `currentReader_`), and reset
-      `readerTried_` when the window/take changes so a worker's early build can't
-      latch a stale offset.
-  (B) The full request/ready inversion (the clean end-state): a freeze resolves
-      structure from an immutable per-edit snapshot, never from live SCut state a
-      worker mutates.
+Correction (2026-07-18, after reading the source): `acquireReader` mints a
+**fresh** reader per SCut (twsamplereader.cc:14), so this is NOT a shared-reader
+`startOffset` fight. The real inconsistency is in `SCut::getRootComponent()`: it
+returns the cut's OWN built reader iff `readerTried_`, else falls back to
+`content_->getRootComponent()` (the content's *shared* source component). A
+background worker building the tail cut's reader between the edit and the render
+flips which branch the render takes, and the position mapping (`srcStart` folded
+for the built reader vs the shared source's own domain) becomes inconsistent →
+the shared `twSampleReader` is addressed at 131072 (inside the sample) instead of
+227072 (past its end). So the flaky quantity is *which component + mapping* the
+tail resolves to, decided by a worker-vs-render race on the SCut's lazy reader
+build. The provenance table above is the ground truth; this is the mechanism.
+
+**DECISION (user, 2026-07-18): pursue (B), the request/ready inversion** — the
+clean end-state. (A) — race-immune lazy resolution + `readerTried_` reset — was
+the smaller alternative; not chosen.
+
+### Phase 2b (revised) — request/ready inversion, gated sub-steps
+
+Invariant to establish: **a freeze resolves ALL structure (which component, which
+reader, the position mapping) from a single immutable snapshot taken atomically
+with the content epoch, and renders only from already-frozen input pages — never
+from live SCut/reader state a worker can mutate.**
+
+- **2b-1 — Structural resolution snapshot (kills THIS flake).** Replace the live
+  `getRootComponent()` + `mapTimelineToComponentPos()` pair (two independent
+  reads that can straddle a worker's lazy build) with ONE `SCut` resolution
+  snapshot: `{ component, clip→reader map, srcStart, looping }`, built under
+  `mutex()` and refreshed only on edit. `twView` captures this once per freeze
+  and uses it for both the component and the mapping, so component and mapping
+  can never disagree. Build the reader eagerly on edit (or make the freeze path's
+  resolution not depend on `readerTried_`). Gate: `repeat_test takes_group_
+  broadcast 100` → 100/100 across `SMARAGD_REVAL_WORKERS ∈ {1,2,4,8,16}`;
+  offline goldens bit-identical; full qxa audio asserts green.
+- **2b-2 — Freeze from ready pages only.** Convert the mix-graph freeze
+  (`twTrackMix`/`twMixer`/`twRewire`/plugins) to request already-frozen input
+  pages (Phase 2a `requestPage`) and render only from them, removing the
+  synchronous `calcOutputTo`/`copyData` live pull. Park+re-enqueue on a pending
+  dependency. Keeps the DAG/`FreezeContext` ordering.
+- **2b-3 — Retire interim guards** now subsumed: `cursorMutex_`/`usesSerialCursor`
+  → the actor's serial queue; the render-quiesce `pause()` and the
+  `getSnapshotBlocking` freeze-path reads become unnecessary once the freeze
+  never reads live structural state (keep as belt-and-suspenders only if a gate
+  regresses without them).
+
+The reader-lock hardening + revalidation `pause()` already landed (commit
+72a63e6) are compatible with (B) and can be simplified in 2b-3.
 
 Three targeted fixes have now missed. Meta-conclusion: the incremental route is
 not converging; the shared-state path the render reads and a worker corrupts is
