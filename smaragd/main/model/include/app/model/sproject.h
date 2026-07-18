@@ -130,6 +130,13 @@ public:
     CaptureRevalidator* getRevalidator() { return revalidator_.get(); }
     CapturePagePool* getPagePool() { return pagePool_.get(); }
 
+    // Proposal 19 Phase 2b: quiesce background revalidation for an exclusive
+    // offline render (the render owns the graph; "offline renders stay exact").
+    // pauseRevalidation() blocks until in-flight worker jobs drain. Wrappers so
+    // app/shell need not include tw/schedule (layering). No-op if no revalidator.
+    void pauseRevalidation();
+    void resumeRevalidation();
+
     // Suppress capture invalidation during project loading.
     // During deserialization, all pages are empty anyway, so there's no point
     // in triggering invalidation chains. Wrap entire load sequence in:

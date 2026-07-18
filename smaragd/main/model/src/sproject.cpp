@@ -420,6 +420,16 @@ SProject::SProject()
 #endif
 }
 
+void SProject::pauseRevalidation()
+{
+    if (revalidator_) revalidator_->pause();
+}
+
+void SProject::resumeRevalidation()
+{
+    if (revalidator_) revalidator_->resume();
+}
+
 void SProject::enableInvalidation()
 {
     if (invalidationSuppressed_ > 0) {

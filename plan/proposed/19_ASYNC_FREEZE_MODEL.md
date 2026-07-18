@@ -273,6 +273,85 @@ render's own recursive freeze produces stale content, and only under ≥2 worker
    `lastGoodSnapshot_` when a worker held the SCut mutex. **59/100, no change**
    → that was not the (main) path. Reverted.
 
+**2026-07-18 root-cause finding (explains why #3 failed).** `SCut::currentReader_`
+is a *struct of four `shared_ptr`s* that is **read and written under two different
+locks**:
+- read in `getSnapshot()` under `mutex()` (scut.cpp:43), plus an *unlocked* read
+  in `rebuildReader()`'s fast path (scut.cpp:75);
+- **written** (member-by-member reassignment + `generation++`) in
+  `rebuildReader()` under `readerSwapLock_` — **not** `mutex()` (scut.cpp:153-167).
+`readerSwapLock_` is used at *only* that one site; nothing reads under it. So the
+swap was never atomic w.r.t. readers: a freeze on a render/worker thread can
+observe a **torn** reader chain (new `.reader` + old `.grain`, or a `shared_ptr`
+mid-reassignment → refcount hazard) while an edit swaps it. This is the "reads
+mutable structural state a worker concurrently mutates" invariant, localized to
+SCut reader management (not the twComponent page cache). It also explains why fix
+#3 missed: blocking on `mutex()` never excluded a swap happening under
+`readerSwapLock_`.
+
+Targeted 2b fix (the two halves the prior attempts each did *separately*):
+(1) unify all `currentReader_` access under `mutex()` — do the swap (and the
+paired `builtXxx_` write) and the fast-path read under `mutex()`, retiring
+`readerSwapLock_`; (2) resolve the freeze path with a **blocking** snapshot
+(getRootComponent/seekTo/mapTimelineToComponentPos) so a freeze that observes the
+post-edit epoch also observes the post-edit reader — never `lastGoodSnapshot_`.
+The RT audio path keeps the try-lock → `lastGoodSnapshot_` fallback (proposal 16).
+Gate is the confirmation; if <100/100, instrument the freeze-serve provenance.
+
+Trigger in `takes_group_broadcast`: a *broadcast* places the **same `SCut`** on
+two tracks, so both `twTrackMix` instances freeze that one SCut concurrently. On a
+fresh process the reader is unbuilt (`readerTried_==false`), so both render
+threads enter `rebuildReader()` at the same time — concurrent build + the
+mismatched-lock read/write of `currentReader_` = a torn/garbage or stale tail,
+timing-dependent (hence ~40-58% flaky). Also make `readerTried_` atomic.
+
+**2026-07-18 CONFIRMED root cause (provenance capture, not hypothesis).** The
+above two-lock fix + `getSnapshotBlocking` was implemented and did NOT fix the
+gate (~50-70%). A decisive experiment settled the mechanism class: disabling ALL
+background revalidation (`SMARAGD_NO_REVAL`, workers never run) → **15/15**;
+workers on → ~50%. So the flake is the **offline render racing background
+revalidation workers** — these are `<render>` actions, not playback. A
+low-overhead in-memory provenance capture (no hot-path I/O → no Heisenbug),
+dumped at exit and tagged per render, pinned the exact failure in the
+`group_comped` render (3rd), tail region [96000,192000) which must be silent:
+
+| run | `twSampleReader` asked at reader-pos | source content | tail RMS |
+|-----|--------------------------------------|----------------|----------|
+| PASS | 192000 / 227072 (past source end)   | none           | 0.0 (silence) ✓ |
+| FAIL | 131072 (inside source)              | ramp           | 0.3769 ✗ |
+
+The difference is exactly the split offset (96000): the tail split-take's source
+start (`SCut::srcStart_` → `getStartOffset()`) is flakily **96000 (take1's raw
+slip, pre-split-adjust)** instead of **192000 (slip + the 96000 of timeline the
+head consumed)**. `mapTimelineToComponentPos` then addresses the shared
+`twSampleReader` inside the sample instead of past its end, so the mixer/rewire
+(which re-render fresh at the correct epoch) sum real audio into a region that
+should be silent. So it is NOT a stale mixer cache and NOT the `currentReader_`
+torn read alone — it is the split tail-take's source-offset / reader resolution
+being left wrong by a background worker that touched the shared SCut between the
+`split-clip`/`select-take` edit and the render. `readerTried_` then latches the
+wrong build so the render cannot correct it.
+
+Why the earlier partial fixes fell short:
+- `currentReader_` two-lock unification + `getSnapshotBlocking` (KEEP — real UB
+  fix) hardens the reader read, but the wrong value is `srcStart_`/the built
+  reader itself, latched by `readerTried_`.
+- Quiesce revalidation *during* the render (KEEP — correct, "offline renders stay
+  exact") lifted ~50%→~70% but workers still corrupt the SCut in the window
+  *between* the edit and the render's pause; `invalidateInputSubtree` (reverted)
+  didn't help because the wrong state is the SCut reader/offset, not a latch-path
+  page cache.
+
+Candidate real fixes (decision pending):
+  (A) Make the split tail-take's `srcStart_`/reader resolution correct and
+      race-immune: recompute the source offset from current window params at
+      resolve time (independent of any worker-built `currentReader_`), and reset
+      `readerTried_` when the window/take changes so a worker's early build can't
+      latch a stale offset.
+  (B) The full request/ready inversion (the clean end-state): a freeze resolves
+      structure from an immutable per-edit snapshot, never from live SCut state a
+      worker mutates.
+
 Three targeted fixes have now missed. Meta-conclusion: the incremental route is
 not converging; the shared-state path the render reads and a worker corrupts is
 subtler than each hypothesis. Two remaining options, in order of preference:

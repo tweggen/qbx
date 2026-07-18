@@ -24,34 +24,57 @@
 
 using namespace std;
 
+// Caller must hold mutex(). Assemble a consistent snapshot from live fields and
+// refresh lastGoodSnapshot_ for the try-lock fallback path.
+SCutSnapshot SCut::buildSnapshot_nolock() const
+{
+    SCutSnapshot snap;
+    snap.startOffset = getStartOffset();   // derived: floor(srcStart * stretch)
+    snap.loopLength = loopLength_;
+    snap.cutDuration = cutDuration_;
+    snap.grainParams = grainParams_;
+    snap.reader = currentReader_;  // consistent with builtXxx_ under mutex()
+
+    // Update the last good snapshot for fallback use when lock fails on next call.
+    lastGoodSnapshot_ = snap;
+    return snap;
+}
+
 SCutSnapshot SCut::getSnapshot() const
 {
     // Non-blocking lock to avoid deadlock during UI paint when revalidator
     // is modifying state. If mutex is held, return the last good snapshot.
     std::unique_lock<std::mutex> lock(mutex(), std::defer_lock);
     if (!lock.try_lock()) {
-        // Could not acquire lock: return last good snapshot (safe for rendering).
-        // This is always initialized and contains valid data from previous successful lock.
+        // Could not acquire lock: return last good snapshot (safe for RT audio;
+        // proposal 16 serves the stale-but-consistent reader during an edit).
         return lastGoodSnapshot_;
     }
+    return buildSnapshot_nolock();
+}
 
-    SCutSnapshot snap;
-    snap.startOffset = getStartOffset();   // derived: floor(srcStart * stretch)
-    snap.loopLength = loopLength_;
-    snap.cutDuration = cutDuration_;
-    snap.grainParams = grainParams_;
-    snap.reader = currentReader_;  // Always valid, complete, atomic (Unix page cache)
-
-    // Update the last good snapshot for fallback use when lock fails on next call.
-    lastGoodSnapshot_ = snap;
-
-    return snap;
+// Proposal 19 Phase 2b: the freeze path must resolve the CURRENT reader, never a
+// stale lastGoodSnapshot_ — a freeze that observes the post-edit content epoch
+// must also observe the post-edit reader, or it stamps stale content as current
+// (the takes_group_broadcast flake). Blocks on mutex(); this is bounded because
+// edits and the reader swap hold mutex() only for short critical sections (the
+// heavy reader build runs unlocked). Only the freeze/resolution path uses this;
+// the RT audio path keeps getSnapshot()'s try-lock fallback.
+SCutSnapshot SCut::getSnapshotBlocking() const
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    return buildSnapshot_nolock();
 }
 
 void SCut::ensureReader()
 {
     if( readerTried_ ) return;
-    rebuildReader( getSnapshot() );
+    // Blocking snapshot (Phase 2b): build from the CURRENT window params. With
+    // the try-lock getSnapshot(), a second concurrent first-build (two broadcast
+    // tracks sharing this SCut) could fail the try-lock and build from the
+    // DEFAULT lastGoodSnapshot_ — minting an identity-grain/no-loop reader that
+    // overwrites the correct one. Blocking guarantees the real params.
+    rebuildReader( getSnapshotBlocking() );
 }
 
 // (Re)build the playback chain: content source -> optional grain stretch ->
@@ -72,21 +95,28 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     // new component + latch on every drag tick. Only sample-backed cuts qualify:
     // a container cut reads through a capture sized to the window, so a duration
     // change there genuinely requires a fresh capture/reader.
-    if( content_->getSObject().getRandomSource() && currentReader_.reader ) {
-        bool needGrain = !snap.grainParams.isIdentity();
-        bool needLoop  = ( snap.loopLength > WarpedLen(0)
-                        && snap.loopLength < warpedFromClip(snap.cutDuration) );
-        bool sameGrain = !needGrain
-            || ( builtGrain_.stretch    == snap.grainParams.stretch
-              && builtGrain_.pitchCents == snap.grainParams.pitchCents
-              && builtGrain_.grainSize  == snap.grainParams.grainSize
-              && builtGrain_.crossfade  == snap.grainParams.crossfade );
-        bool sameLoop = !needLoop
-            || ( builtLoopStart_ == snap.startOffset
-              && builtLoopLength_ == snap.loopLength );
-        if( builtNeedGrain_ == needGrain && builtNeedLoop_ == needLoop
-            && sameGrain && sameLoop )
-            return;   // chain unchanged — keep the current reader
+    // Proposal 19 Phase 2b: read currentReader_/builtXxx_ under mutex() — the
+    // swap below and getSnapshot() both use mutex(), so this fast-path read can
+    // never tear against a concurrent swap (two broadcast tracks freezing the
+    // same shared SCut used to race here on first build).
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        if( content_->getSObject().getRandomSource() && currentReader_.reader ) {
+            bool needGrain = !snap.grainParams.isIdentity();
+            bool needLoop  = ( snap.loopLength > WarpedLen(0)
+                            && snap.loopLength < warpedFromClip(snap.cutDuration) );
+            bool sameGrain = !needGrain
+                || ( builtGrain_.stretch    == snap.grainParams.stretch
+                  && builtGrain_.pitchCents == snap.grainParams.pitchCents
+                  && builtGrain_.grainSize  == snap.grainParams.grainSize
+                  && builtGrain_.crossfade  == snap.grainParams.crossfade );
+            bool sameLoop = !needLoop
+                || ( builtLoopStart_ == snap.startOffset
+                  && builtLoopLength_ == snap.loopLength );
+            if( builtNeedGrain_ == needGrain && builtNeedLoop_ == needLoop
+                && sameGrain && sameLoop )
+                return;   // chain unchanged — keep the current reader
+        }
     }
 
     // STEP 1: Build new reader state completely out-of-band
@@ -149,8 +179,15 @@ swap_complete:
     // STEP 2: Atomic swap (Unix page cache model with refcounted lifecycle)
     // Audio thread snapshot keeps old readers alive via shared_ptr refcount.
     // Even if swapped out, readers not deleted until all snapshots released.
+    //
+    // Proposal 19 Phase 2b: publish currentReader_ AND the "last built chain"
+    // record (builtXxx_) atomically under mutex() — the same lock getSnapshot()
+    // and the fast path use. A struct-of-shared_ptr assignment is NOT atomic, so
+    // the old readerSwapLock_ (used at only this one site, never on the read
+    // side) never actually excluded a reader; a freeze could observe a torn
+    // currentReader_ (new .reader + old .grain, or a shared_ptr mid-reassign).
     {
-        std::lock_guard<std::mutex> lock( readerSwapLock_ );
+        std::lock_guard<std::mutex> lock( mutex() );
 
         // NO manual delete needed: shared_ptr handles deferred deletion
         // oldReader_ refcount decrements automatically when overwritten
@@ -165,15 +202,16 @@ swap_complete:
         currentReader_.captureRef = capture_;   // Share ownership: keeps capture alive during render
         currentReader_.looping = newLooping;
         currentReader_.generation++;  // Increment on successful swap
-    }
 
-    // Record the chain we just built so the next call can take the fast path.
-    if( rs ) {
-        builtNeedGrain_  = ( newGrain != NULL );
-        builtNeedLoop_   = newLooping;
-        builtGrain_      = snap.grainParams;
-        builtLoopStart_  = snap.startOffset;
-        builtLoopLength_ = snap.loopLength;
+        // Record the chain we just built so the next call can take the fast path
+        // (paired with currentReader_ under the same lock — no torn read).
+        if( rs ) {
+            builtNeedGrain_  = ( newGrain != NULL );
+            builtNeedLoop_   = newLooping;
+            builtGrain_      = snap.grainParams;
+            builtLoopStart_  = snap.startOffset;
+            builtLoopLength_ = snap.loopLength;
+        }
     }
 }
 
@@ -502,7 +540,8 @@ std::shared_ptr<twComponent> SCut::getRootComponent()
     // Get reader snapshot WITHOUT triggering expensive ensureReader() during UI initialization.
     // Only build reader if it exists (was previously built for playback).
     // If not built yet, fall back to content component (lazy evaluation).
-    SCutSnapshot snap = getSnapshot();
+    // Blocking snapshot (Phase 2b): the freeze path must see the current reader.
+    SCutSnapshot snap = getSnapshotBlocking();
     if( snap.reader.reader ) return std::static_pointer_cast<twComponent>(snap.reader.reader);
 
     // Reader not yet built (no playback request yet). This is normal during project load.
@@ -533,7 +572,8 @@ int SCut::seekTo( offset_t off )
 {
     // FIXME: bounds check!!!
     ensureReader();
-    SCutSnapshot snap = getSnapshot();
+    // Blocking snapshot (Phase 2b): seek the CURRENT reader, not a stale one.
+    SCutSnapshot snap = getSnapshotBlocking();
 
     // A loop reader is cut-relative (it adds its own loop base = startOffset_);
     // a plain reader needs startOffset_ folded in here.
@@ -558,7 +598,9 @@ int SCut::seekTo( offset_t off )
 offset_t SCut::mapTimelineToComponentPos( offset_t off )
 {
     ensureReader();
-    SCutSnapshot snap = getSnapshot();
+    // Blocking snapshot (Phase 2b): map against the CURRENT reader domain so a
+    // freeze never folds a pre-edit slip/loop mapping into a post-edit page.
+    SCutSnapshot snap = getSnapshotBlocking();
 
     // Same shared map as seekTo and the preview (proposal 18 Phase 4): a
     // loop reader is cut-relative (identity), a plain reader is addressed

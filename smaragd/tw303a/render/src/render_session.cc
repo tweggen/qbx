@@ -254,13 +254,15 @@ void RenderSession::renderThreadMain() {
         writer_->close();
     }
 
-    running_ = false;
-
     fprintf(stderr, "[RenderSession] Render complete. Success: %s\n",
             success ? "true" : "false");
     fflush(stderr);
 
-    // Emit completion callback
+    // Emit completion callback BEFORE clearing running_: a consumer that polls
+    // isRunning() (SRenderAction) must not observe completion until onComplete
+    // has run, or it could start the next render while this one's teardown
+    // (e.g. resuming background revalidation) is still pending. (Proposal 19
+    // Phase 2b: the render-quiesce resume lives in onComplete.)
     if (onComplete) {
         fprintf(stderr, "[RenderSession] Calling onComplete callback\n");
         fflush(stderr);
@@ -268,6 +270,7 @@ void RenderSession::renderThreadMain() {
     }
 
     lastError_ = errorMsg;
+    running_ = false;
 }
 
 }  // namespace audio

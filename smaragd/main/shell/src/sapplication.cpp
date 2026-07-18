@@ -330,9 +330,27 @@ void SApplication::startRender(const audio::RenderParams &params)
         setGlobalLocatorPosRealtime((offset_t) pos);
     };
 
+    // Proposal 19 Phase 2b: an offline render owns the graph exclusively ("one
+    // player at a time"; proposal 16 "offline renders stay exact"). Quiesce
+    // background revalidation for the render's lifetime — a worker freezing the
+    // same shared components concurrently corrupts the render's output (the
+    // confirmed takes_group_broadcast flake: NO_REVAL → 15/15, workers on → ~50%).
+    // pause() drains in-flight jobs before start; resume on completion.
+    SProject *proj = currentProject_;
+    if (proj) {
+        proj->pauseRevalidation();
+        renderSession_->onComplete =
+            [proj](bool /*success*/, const char * /*error*/) { proj->resumeRevalidation(); };
+    }
+
     // Start rendering
     int sampleRate = t3Env_ ? t3Env_->getSRate() : 48000;
-    renderSession_->start(synthOutput, params, static_cast<std::uint32_t>(sampleRate));
+    bool started = renderSession_->start(synthOutput, params,
+                                         static_cast<std::uint32_t>(sampleRate));
+    if (!started && proj) {
+        // Render never launched → onComplete will not fire; resume now.
+        proj->resumeRevalidation();
+    }
 }
 
 void SApplication::setPlaybackRunning( bool play )

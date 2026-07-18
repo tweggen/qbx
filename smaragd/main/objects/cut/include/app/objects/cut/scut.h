@@ -109,6 +109,12 @@ public:
     // always complete & valid. Safe to call from audio thread.
     SCutSnapshot getSnapshot() const;
 
+    // Proposal 19 Phase 2b: blocking snapshot for the freeze/resolution path —
+    // always returns the CURRENT reader (never the try-lock lastGoodSnapshot_
+    // fallback), so a freeze that observes the post-edit epoch also observes the
+    // post-edit reader. NOT for the RT audio thread (use getSnapshot() there).
+    SCutSnapshot getSnapshotBlocking() const;
+
     virtual std::shared_ptr<twComponent> getRootComponent();
     virtual QWidget *getDetailEditWidget( QWidget *parent );
     virtual QWidget *getInlineEditWidget( QWidget *parent );
@@ -311,6 +317,9 @@ private:
     // thread setters; accepts snapshot to avoid reading unlocked members
     // (multithreading policy: Phase 1 Option B).
     void rebuildReader( const SCutSnapshot &snap );
+    // Assemble a consistent snapshot from live fields; caller MUST hold mutex().
+    // Shared by getSnapshot() (try-lock) and getSnapshotBlocking().
+    SCutSnapshot buildSnapshot_nolock() const;
     // Build the capture (container render) if needed. Internal method.
     // Callable from the UI thread (rebuildReader) and the revalidator worker
     // (revalPrepPreview); captureBuildMutex_ serializes concurrent builders.
@@ -369,13 +378,17 @@ private:
     twGrainParams grainParams_;
 
     SCutRendererInline *inlineRenderer_;
-    bool readerTried_;
+    // Atomic: ensureReader() reads it outside mutex() (Phase 2b).
+    std::atomic<bool> readerTried_;
 
     // DOUBLE-BUFFER READER STATE (Unix page cache model)
     // currentReader_: always valid & complete, read by audio thread
     // nextReader_: being built by UI thread, swapped in atomically when ready
     // oldReader_: previous currentReader_, freed after swap
-    mutable std::mutex readerSwapLock_;  // Protects swap operation
+    // Proposal 19 Phase 2b: currentReader_ is now published and read under the
+    // object mutex() (getSnapshot/getSnapshotBlocking/rebuildReader swap), so a
+    // separate readerSwapLock_ is gone — it guarded only the write side, never
+    // the readers, so the swap was never atomic against a concurrent freeze.
     SCutReaderState currentReader_{nullptr, nullptr, nullptr, false, 0};
     SCutReaderState nextReader_{nullptr, nullptr, nullptr, false, 0};
     SCutReaderState oldReader_{nullptr, nullptr, nullptr, false, 0};  // For deferred deletion

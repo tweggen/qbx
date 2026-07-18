@@ -69,11 +69,17 @@ size_t CaptureRevalidator::jobsQueued() const {
 
 void CaptureRevalidator::workerLoop() {
     while (true) {
-        // Wait for job or shutdown signal
+        CaptureRevalidationJob revalJob;
+        ComponentFreezingJob freezeJob;
+        bool haveReval = false, haveFreeze = false;
+
         {
             std::unique_lock<std::mutex> lock(queueLock_);
+            // Wait for work — but not while paused (an offline render owns the
+            // graph then; see pause()). Still wake for shutdown.
             queueNotEmpty_.wait(lock, [this]() {
-                return !revalidationQueue_.empty() || !freezingQueue_.empty() || shutdown_;
+                return shutdown_ ||
+                    (!paused_ && (!revalidationQueue_.empty() || !freezingQueue_.empty()));
             });
 
             // If shutting down and both queues empty, exit
@@ -81,8 +87,8 @@ void CaptureRevalidator::workerLoop() {
                 break;
             }
 
-            // If both queues empty (but not shutting down), loop again
-            if (revalidationQueue_.empty() && freezingQueue_.empty()) {
+            // Paused (woke only for a shutdown check) or nothing to do: loop.
+            if (paused_ || (revalidationQueue_.empty() && freezingQueue_.empty())) {
                 continue;
             }
 
@@ -90,18 +96,50 @@ void CaptureRevalidator::workerLoop() {
             // Prioritize revalidation jobs slightly (they're more UI-critical)
             if (!revalidationQueue_.empty() && (freezingQueue_.empty() ||
                 revalidationQueue_.top().priority >= freezingQueue_.top().priority)) {
-                CaptureRevalidationJob job = revalidationQueue_.top();
+                revalJob = revalidationQueue_.top();
                 revalidationQueue_.pop();
-                lock.unlock();
-                processRevalidationJob(job);
+                haveReval = true;
             } else if (!freezingQueue_.empty()) {
-                ComponentFreezingJob job = freezingQueue_.top();
+                freezeJob = freezingQueue_.top();
                 freezingQueue_.pop();
-                lock.unlock();
-                processComponentFreezingJob(job);
+                haveFreeze = true;
             }
+
+            // Mark in-flight under the lock so pause() can drain reliably.
+            if (haveReval || haveFreeze) ++activeJobs_;
+        }
+
+        // Process outside the lock.
+        if (haveReval) {
+            processRevalidationJob(revalJob);
+        } else if (haveFreeze) {
+            processComponentFreezingJob(freezeJob);
+        }
+
+        if (haveReval || haveFreeze) {
+            {
+                std::lock_guard<std::mutex> lock(queueLock_);
+                --activeJobs_;
+            }
+            idleCv_.notify_all();  // wake a pause() that is draining
         }
     }
+}
+
+void CaptureRevalidator::pause() {
+    std::unique_lock<std::mutex> lock(queueLock_);
+    paused_ = true;
+    // Block until every in-flight job has finished, so the caller owns the graph
+    // alone. New jobs may still be enqueued; they run after resume().
+    idleCv_.wait(lock, [this]() { return activeJobs_ == 0; });
+}
+
+void CaptureRevalidator::resume() {
+    {
+        std::lock_guard<std::mutex> lock(queueLock_);
+        paused_ = false;
+    }
+    queueNotEmpty_.notify_all();
 }
 
 void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& job) {

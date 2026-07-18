@@ -151,6 +151,34 @@ public:
      */
     size_t jobsQueued() const;
 
+    /**
+     * Quiesce background revalidation for an exclusive operation (offline
+     * render — "one player at a time"; proposal 16 "offline renders stay
+     * exact"). Proposal 19 Phase 2b: an offline render pulls pages synchronously
+     * and mutates shared component cursors while freezing; a background worker
+     * freezing the same components concurrently corrupts the render's output
+     * (the confirmed takes_group_broadcast flake). pause() stops workers from
+     * dequeuing AND blocks until every in-flight job has finished, so the caller
+     * then owns the graph alone. Jobs may still be enqueued while paused; they
+     * run after resume(). Idempotent-safe to pair via RevalidationPause (RAII).
+     */
+    void pause();
+    void resume();
+
+    /**
+     * RAII guard: pause() on construction (drains in-flight jobs), resume() on
+     * destruction. Use around an offline render so it never races a worker.
+     */
+    class Guard {
+    public:
+        explicit Guard(CaptureRevalidator* r) : r_(r) { if (r_) r_->pause(); }
+        ~Guard() { if (r_) r_->resume(); }
+        Guard(const Guard&) = delete;
+        Guard& operator=(const Guard&) = delete;
+    private:
+        CaptureRevalidator* r_;
+    };
+
 private:
     // Implementation: worker thread loop
     void workerLoop();
@@ -178,6 +206,13 @@ private:
 
     // Shutdown coordination
     std::atomic<bool> shutdown_{false};
+
+    // Pause/drain coordination (see pause()/resume()). paused_ gates workers
+    // from dequeuing; activeJobs_ counts jobs currently being processed; idleCv_
+    // lets pause() block until activeJobs_ reaches 0. All guarded by queueLock_.
+    bool paused_{false};
+    int  activeJobs_{0};
+    std::condition_variable idleCv_;
 
     // Worker threads
     std::vector<std::thread> workers_;
