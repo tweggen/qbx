@@ -166,9 +166,10 @@ void RenderSession::renderThreadMain() {
             uint64_t currentPos = startOffsetSamples_ + samplesWrittenVal;
             uint64_t pageStartPos = (currentPos / PAGE_SIZE) * PAGE_SIZE;
 
-            // Freeze this page sequentially
+            // Freeze this page sequentially (via requestPage, Phase 2a: dedups
+            // against any concurrent revalidation of the same page).
             // prevPage is used for state resumption (page N resumes from page N-1)
-            auto frozenPage = synthOutput_->freezePage(
+            auto frozenPage = synthOutput_->requestPage(
                 pageStartPos,
                 nullptr,            // No pre-prepared input; renderFrames uses latches
                 0,

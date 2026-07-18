@@ -258,9 +258,10 @@ void CaptureRevalidator::processComponentFreezingJob(const ComponentFreezingJob&
 
     assert(job.component);
 
-    // Call component->freezePage() to materialize output
-    // This internally orchestrates: reset/restore → renderFrames() → capture state
-    auto frozenPage = job.component->freezePage(
+    // Materialize output via requestPage() (Proposal 19 Phase 2a): dedups
+    // against any concurrent worker/driver freezing the same page, then
+    // internally orchestrates reset/restore → renderFrames() → capture state.
+    auto frozenPage = job.component->requestPage(
         job.pageStartPos,
         nullptr,                   // No pre-prepared input; renderFrames uses latches
         0,

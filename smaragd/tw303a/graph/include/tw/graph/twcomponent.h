@@ -7,6 +7,7 @@
 // sites compile unchanged; it no longer pulls in any Qt header.
 #include <memory>
 #include <mutex>
+#include <condition_variable>
 #include <map>
 #include <atomic>
 #include <vector>
@@ -373,6 +374,31 @@ public:
         std::shared_ptr<twOutputPage> previousPage = nullptr
     );
 
+    // Proposal 19 Phase 2a — request/ready front door over freezePage().
+    // Resolves a frozen, current page for startPos. On a cache hit (frozen page
+    // whose contentEpoch is current) it returns immediately; otherwise it
+    // dedups: the first requester for a given (this,startPos,epoch) performs the
+    // freeze while any concurrent requester for the SAME page waits for that one
+    // render instead of launching a duplicate. This collapses the double-render
+    // that pure (non-serial) nodes could otherwise suffer when two drivers
+    // (revalidation worker, playback readahead, offline render) request the same
+    // page at once — serial-cursor nodes were already serialized by
+    // cursorMutex_, so this changes their timing only, not their output.
+    //
+    // Semantically equivalent to freezePage(): same arguments, same returned
+    // page. It dispatches through the virtual freezePage(), so component-
+    // specific freeze overrides (twTrackMix, twMixer, twView, plugins) are
+    // honoured. Phase 2b routes the recursive input pulls through here too, at
+    // which point the freeze reads only already-ready input pages.
+    std::shared_ptr<twOutputPage> requestPage(
+        uint64_t startPos,
+        const sample_t *inputData,
+        uint64_t inputOffset,
+        length_t inputLength,
+        int sampleRate,
+        std::shared_ptr<twOutputPage> previousPage = nullptr
+    );
+
     // Proposal 19 Phase 1 — single-cursor serialization policy.
     // freezePage() renders by MUTATING this component's instance state
     // (reset/seekTo/restoreInternalState → pos_, file cursor, DSP memory). A
@@ -446,6 +472,21 @@ private:
 
     // Page cache: maps start position → frozen output page
     std::map<uint64_t, std::shared_ptr<twOutputPage>> outputPages_;
+
+    // Proposal 19 Phase 2a — in-flight freeze dedup (see requestPage()).
+    // At most one freeze task per startPos may be active; concurrent requesters
+    // for the same page wait on the entry's condition variable rather than
+    // launching a duplicate render. Keyed by startPos; the entry carries the
+    // epoch it was launched for so a newer-epoch request supersedes a stale one.
+    struct InFlightFreeze {
+        uint64_t epoch = 0;                     // contentEpoch this render targets
+        bool done = false;                      // set true when page is ready
+        std::shared_ptr<twOutputPage> page;     // result (nullptr if render failed)
+        std::mutex m;                           // guards done/page for the CV
+        std::condition_variable cv;
+    };
+    std::map<uint64_t, std::shared_ptr<InFlightFreeze>> inflight_;
+    std::mutex inflightMutex_;                   // guards inflight_ only
 
 private:
     std::vector<twFormat> committedIn_;

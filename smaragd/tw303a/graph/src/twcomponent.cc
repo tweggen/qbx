@@ -564,6 +564,87 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     return page;
 }
 
+// Proposal 19 Phase 2a — request/ready front door with in-flight dedup.
+// See requestPage() doc in twcomponent.h. Behaviour is a strict superset of
+// freezePage(): identical result page, but concurrent requests for the same
+// (this,startPos,epoch) collapse to a single render.
+std::shared_ptr<twOutputPage> twComponent::requestPage(
+    uint64_t startPos,
+    const sample_t *inputData,
+    uint64_t inputOffset,
+    length_t inputLength,
+    int sampleRate,
+    std::shared_ptr<twOutputPage> previousPage
+)
+{
+    const uint64_t epochNow = contentEpochNow();
+
+    // Fast path: cache hit (frozen AND current epoch) resolves immediately,
+    // with no dedup bookkeeping. Mirrors freezePage()'s own cache check.
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        auto it = outputPages_.find(startPos);
+        if (it != outputPages_.end() &&
+            it->second->validAspects != 0 &&
+            it->second->contentEpoch.load() >= epochNow) {
+            return it->second;
+        }
+    }
+
+    // Dedup: claim the render for this (startPos,epoch) or attach to whoever
+    // already holds it. Only one thread becomes the renderer; the rest wait.
+    std::shared_ptr<InFlightFreeze> entry;
+    bool iAmRenderer = false;
+    {
+        std::lock_guard<std::mutex> lock(inflightMutex_);
+        auto it = inflight_.find(startPos);
+        if (it != inflight_.end() && it->second->epoch >= epochNow) {
+            entry = it->second;                 // someone is already rendering this
+        } else {
+            entry = std::make_shared<InFlightFreeze>();
+            entry->epoch = epochNow;
+            inflight_[startPos] = entry;        // supersedes any stale-epoch entry
+            iAmRenderer = true;
+        }
+    }
+
+    if (!iAmRenderer) {
+        // Wait for the in-flight render, then return its page. We hold no
+        // component lock while waiting; the renderer follows the acyclic DAG
+        // (FreezeContext), so a waiter can never block the renderer.
+        std::unique_lock<std::mutex> wl(entry->m);
+        entry->cv.wait(wl, [&]{ return entry->done; });
+        if (entry->page) {
+            return entry->page;
+        }
+        // Renderer produced nothing usable — fall through and render ourselves
+        // (undeduped, but correct). Rare; keeps the API total.
+        return freezePage(startPos, inputData, inputOffset, inputLength,
+                          sampleRate, previousPage);
+    }
+
+    // We own the render. Dispatch through the virtual freezePage() so component-
+    // specific freeze logic is honoured, then publish + wake any waiters.
+    std::shared_ptr<twOutputPage> page = freezePage(
+        startPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
+
+    {
+        std::lock_guard<std::mutex> lock(inflightMutex_);
+        auto it = inflight_.find(startPos);
+        if (it != inflight_.end() && it->second == entry) {
+            inflight_.erase(it);                // only clear if still ours
+        }
+    }
+    {
+        std::lock_guard<std::mutex> wl(entry->m);
+        entry->page = page;
+        entry->done = true;
+    }
+    entry->cv.notify_all();
+
+    return page;
+}
+
 // Caller must NOT hold mutex. This function does all work outside the lock.
 // Caller: freezePage (holds lock briefly for cache check only)
 length_t twComponent::freezePage_nolock(

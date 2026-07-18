@@ -677,8 +677,10 @@ void AudioEngine::readaheadLoop() {
             auto start = std::chrono::steady_clock::now();
             auto pageStart = std::chrono::high_resolution_clock::now();
 
-            // Compute this page (blocking, may take milliseconds)
-            auto page = synthOutput_->freezePage(
+            // Compute this page (blocking, may take milliseconds). Via
+            // requestPage (Phase 2a): dedups against concurrent revalidation of
+            // the same page rather than double-rendering it.
+            auto page = synthOutput_->requestPage(
                 pos, nullptr, 0, (length_t)pageSize,
                 engineSampleRate_, readaheadPrevPage_);
 
@@ -717,7 +719,7 @@ void AudioEngine::readaheadLoop() {
                     auto start_skip = std::chrono::steady_clock::now();
 
                     // Try to freeze skip-ahead page with NO prior state (fresh chain)
-                    auto skipPage = synthOutput_->freezePage(
+                    auto skipPage = synthOutput_->requestPage(
                         skipPos, nullptr, 0, (length_t)pageSize,
                         engineSampleRate_, nullptr);  // Fresh state!
 
