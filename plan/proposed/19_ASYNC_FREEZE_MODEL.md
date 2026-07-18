@@ -1,0 +1,324 @@
+# Proposal 19: Fully-async, DAG-scheduled page freezing (fix shared-component freeze races)
+
+> **Status: PROPOSED 2026-07-18.** Not started. Supersedes the ad-hoc
+> concurrency of the current recursive `freezePage`. Motivated by a confirmed
+> data race behind the flaky `takes_group_broadcast` test.
+>
+> Companion context (must-read before implementing):
+> `plan/proposed/16_STALE_PAGE_FALLBACK.md` (stale-but-consistent playback),
+> `plan/proposed/18_EXACT_POSITION_DOMAINS.md` (position math),
+> `smaragd/docs/contracts/FREEZE_PROTOCOL.md`, `THREADING.md`, `CLIP_MODEL.md`,
+> and the memory note `flaky_takes_group_broadcast`.
+
+---
+
+## Problem (confirmed, with evidence)
+
+`smaragd/tests/cases/takes_group_broadcast.qxa` fails ~25–40 % of runs. On
+failure, `group_comped.wav`'s should-be-silent tail `[96000,192000)` renders
+stale pre-edit content (RMS ≈ **0.35274**, byte-identical every time), i.e. a
+specific stale page slips through.
+
+**It is a concurrency race** (proven 2026-07-18):
+- `SMARAGD_REVAL_WORKERS=1` (see "Repro" — an env knob prototyped on
+  `SProject`) → 16/16 pass. Default 8 workers → ~25 % fail.
+- A freeze-collision tracker added to `twComponent::freezePage` (diagnostic,
+  see "Repro") prints, on every failing run:
+
+  ```
+  [DBG FREEZE-COLLISION comp] type=twWavInput this=0xa8b377198 startPos=0 me=… other=… epoch=1
+  [DBG FREEZE-COLLISION page] type=twWavInput this=0xa8b377198 startPos=0 me=… other=… epoch=1
+  ```
+
+  3–4 distinct threads freeze the **same `twWavInput`** (the single WAV source
+  shared by both tracks, both takes, and the split head/tail — they all
+  reference `test_sawtooth.wav`) at the same page, concurrently. `twWavInput`
+  renders by advancing **one file cursor**, so concurrent freezes read each
+  other's positions → cross-clip content corruption. Epoch stays 1 (a source
+  never invalidates), so this is a pure instance-state race, not an epoch bug.
+
+This is the general case: **a component shared by multiple graph paths is frozen
+by multiple threads at once, and freezing mutates instance state.**
+
+## Root cause (three coupled issues)
+
+1. **Freezing mutates shared instance state.** `twComponent::freezePage_nolock`
+   (`tw303a/graph/src/twcomponent.cc`) does `reset()/restoreInternalState()/
+   seekTo()/seekInputStreams()` then `renderFrames()`; readers/sources advance
+   `pos_`, DSP nodes advance filter/reverb memory. Two threads doing this to one
+   component instance corrupt each other. The old shared-placeholder logic
+   (twcomponent.cc, the `validAspects == 0` reuse branch) was crude, incorrect
+   serialization — it actually let two threads render into the *same*
+   `page->samples`.
+
+2. **Sync recursion, many independent drivers.** `freezePage` is synchronous and
+   recursive (`freezePage → renderFrames → calcOutputTo → readStreamingData →
+   copyData → input->freezePage`). The readahead thread
+   (`tw303a/playback/src/audio_engine.cc`), the offline render
+   (`tw303a/render/src/render_session.cc`), and N `CaptureRevalidator` workers
+   (`tw303a/schedule/src/capture_revalidator.cc`, default 8, set in
+   `main/model/src/sproject.cpp`) each drive that recursion independently and
+   collide on shared upstream components.
+
+3. **Content-vs-epoch ordering windows.** Edits bump per-component content
+   epochs (`twComponent::bumpContentEpoch`) but some content changes lag (lazy
+   reader rebuild in `SCut::ensureReader`). A freeze that observes the new epoch
+   but old content can stamp a stale page as current. (Secondary here — #1 is
+   the dominant cause of *this* test — but must be closed for a complete fix.)
+
+## Prior attempts (this session — all reverted, do not redo)
+
+- **Private-page render + post-render epoch recheck** → *regressed* to 5/14: it
+  parallelised same-component renders, amplifying issue #1.
+- **Per-component `freezeMutex_` held across `freezePage`** → marginal (11/14):
+  closes issue #1 for base-`twComponent` components, but a residual remains
+  (issue #3 in the broadcast path) and the user judged an ambient mutex
+  semantically muddy — the fix belongs in the ownership/scheduling model.
+
+Committed this session and unaffected by this proposal (both good): twStreamingLatch
+per-reader page hint (`f73ae14`), twTrackMix deferred shared_ptr drop (`744899a`).
+
+---
+
+## Goals
+
+1. **No two threads ever render the same component concurrently** — by
+   construction, not by an ambient lock.
+2. **One call model: async.** No synchronous `freezePage`-calls-`freezePage`
+   recursion; no synchronous pull from the playback/render threads.
+3. **Correctly serve single-cursor components** (`twWavInput`, `twGrainSource`
+   stream, sample readers, and future real VST plugins that expose exactly one
+   processing instance): later requests queue behind the in-flight one.
+4. **Exploit the DAG:** as freeze requests descend the graph they increasingly
+   hit already-frozen, still-valid pages (leaves freeze first and cache).
+5. Keep offline render bit-exact and keep proposal-16 stale-fallback playback.
+
+## Non-goals / safety
+
+- **Offline render stays exact.** It becomes a *consumer* of frozen pages
+  (requests + waits), never a second concurrent freezer.
+- **RT audio thread never allocates or freezes.** It reads ready pages and,
+  when a page is pending, plays the stale-but-consistent predecessor
+  (proposal 16). Unchanged guarantee.
+- **Epoch/invalidation semantics from proposals 15/16 are preserved** — a page
+  is served only if frozen AND `contentEpoch >= epochNow`.
+
+---
+
+## Design
+
+### 1. Requests, not recursive calls
+
+Replace the synchronous recursive call with a request that resolves later:
+
+```
+PageHandle requestPage(twComponent* c, uint64_t startPos, uint64_t epoch);
+```
+
+- If a frozen page with `contentEpoch >= epoch` is cached → resolve
+  immediately (this is goal 4: descent hits cache).
+- Otherwise enqueue a **freeze task** for `(c, startPos, epoch)` (deduped — see
+  §5) and resolve the handle when it completes.
+
+`PageHandle` is a completion handle (promise/future, or a callback + parked
+continuation). Callers that must block (offline render) wait on it; callers
+that must not (RT readahead) poll and fall back (proposal 16).
+
+### 2. Render on readiness (invert the recursion)
+
+A freeze task for `(C, pos)`:
+1. Computes input dependencies: for each input port, the child component's
+   page(s) covering `pos`'s time range (uses the existing position mapping —
+   `twView::mapPos`, `twTrackMix` clip windows).
+2. `requestPage`s each dependency. If all are ready → the task is **runnable**
+   and renders `C` purely from those ready input pages. If any is pending → the
+   task **parks** and is re-enqueued when its dependencies signal completion.
+
+No thread holds a stack through the subgraph; the scheduler fills the DAG
+bottom-up by readiness. The current pull (`calcOutputTo`/`copyData`) is replaced
+by "read already-frozen input pages" — a pure function of inputs + carried
+state.
+
+### 3. Component execution policy — the single-cursor answer
+
+Each component declares an execution class (new virtual, default parallel):
+
+- **Parallel / pure** (gain, `twTrackMix`/`twMixer` summing *given* input pages,
+  `twRewire` routing): freeze tasks run on any worker, parallel across
+  positions — they mutate no shared instance state (their "state" is the input
+  pages handed to them).
+- **Serial-cursor / stateful** (`twWavInput`, sample readers, `twGrainSource`
+  streaming, future VST): the component is an **actor** — it owns a
+  single-consumer task queue. *All* its page tasks, from any track/take/thread,
+  funnel into that one queue and run **one at a time, in timeline order**. A
+  later request simply queues behind the current one.
+
+  This is the clean form of "one cursor blocks later cursors": serialization by
+  construction (no render-path mutex), and monotone cursor advance gives free
+  state continuity. It is the principled version of the reverted `freezeMutex_`
+  — a queue *owned by the component* instead of an ambient lock, which also
+  gives **ordering** (in-position-order processing) that a mutex does not.
+
+### 4. State is a cursor owned by its actor
+
+For serial components, DSP/file state advances page-by-page on the actor's
+queue (the user's cursor idea). Ordered requests need no snapshot restore. Only
+out-of-order / seek requests trigger reset-and-fast-forward, or restore from a
+snapshot page if the component supports it (existing `captureInternalState`/
+`restoreInternalState` become the snapshot mechanism for random access).
+
+### 5. Dedup + epoch consistency
+
+- A `map<FreezeKey, TaskHandle>` where `FreezeKey = {component, startPos,
+  epoch}` coalesces duplicate in-flight requests (the user's
+  `map<twComponent*, JobEntry>` idea, correctly keyed per *page* now that tasks
+  are per-page, not per-whole-graph recursion). Value holds a
+  `shared_ptr<twComponent>` for lifetime.
+- Because a serial component's edits and freezes are ordered through its actor
+  (or stale-epoch queued tasks are dropped on a `bumpContentEpoch`), issue #3
+  cannot produce "stale content stamped current". Pure components inherit
+  correctness from their input pages' epochs.
+
+### 6. Playback / render as pure consumers
+
+- RT callback + readahead: `requestPage` ahead; consume ready pages; on pending,
+  serve the stale predecessor (proposal 16, `audio_engine.cc:454-…`). No sync
+  freeze on the audio path.
+- `RenderSession`: `requestPage` sequentially and wait on each handle. Still
+  sequential and exact; just no longer a *concurrent* freezer.
+
+---
+
+## Phasing (each phase independently shippable and test-gated)
+
+### Phase 1 — Actorize stateful/source components (closes the confirmed race)
+Give `twWavInput`, sample readers (`twSampleReader`), `twGrainSource` streaming,
+`twLoopReader` a **serial task queue** (one consumer). Route their `freezePage`
+through it; other components stay recursive for now. Smallest change that
+provably serializes the observed `twWavInput` collision.
+- **Acceptance:** `takes_group_broadcast` passes 100/100 at 8 workers; the
+  freeze-collision tracker prints zero collisions on `twWavInput`/readers.
+
+### Phase 2 — Invert the mix graph to request/ready scheduling
+Convert `twTrackMix`, `twMixer`, `twRewire`, `twPluginChain` to render from
+ready input pages (no synchronous `copyData` pull). Introduce `requestPage` +
+the task scheduler + dedup map.
+- **Acceptance:** no `freezePage`→`freezePage` synchronous recursion remains
+  (assert via the collision tracker / a stack-depth guard); full qxa suite
+  green; no perf regression on the render benchmark (§ Test plan).
+
+### Phase 3 — Async readahead / render
+`AudioEngine` readahead and `RenderSession` become request-driven consumers.
+Remove the last synchronous pulls.
+- **Acceptance:** RT thread never calls `freezePage` (guard/assert); playback
+  underrun + stale-fallback tests (proposal 16) still pass; offline render
+  bit-identical to Phase 0 golden WAVs.
+
+---
+
+## Test plan (built from the start — do NOT defer)
+
+**Reproduction harness (Phase 0, land first).** Make the flake a *deterministic
+gate* so every later phase is measurable:
+1. Fix the test foot-gun: the `.qxa` uses relative `../test_sawtooth.wav`, which
+   silently resolves to the stale 1048576-frame `qbx/test_sawtooth.wav` when run
+   from the wrong CWD. Either resolve sample paths relative to the `.qxa` file,
+   or delete the stale root file. (See memory `flaky_takes_group_broadcast`.)
+2. Add a repeat-runner: run `takes_group_broadcast` (and the grain/render suite)
+   **N=100** times at the default worker count; require 100/100. One iteration
+   ≈ a few seconds, so N=100 is a CI-scale gate.
+   Command (correct CWD + output dir mandatory):
+   ```
+   cd smaragd/tests/cases
+   BIN=../../build/bin/smaragd.app/Contents/MacOS/smaragd
+   for i in $(seq 100); do "$BIN" --test-case ./takes_group_broadcast.qxa \
+       --test-output-dir /tmp/o 2>/dev/null | grep -q '^PASS - ' || echo "FAIL $i"; done
+   ```
+
+**Unit tests (new, `tw303a/graph/tests/` + `schedule/tests/`):**
+- *Serial-actor ordering:* a stateful stub component records the order/positions
+  it was asked to render; fire 50 concurrent `requestPage`s across positions
+  from 8 threads; assert it processed them **one at a time** and its cursor
+  advanced monotonically (no interleave).
+- *Shared-source correctness:* one source, two independent reader chains request
+  overlapping pages concurrently; assert both get byte-correct data (the direct
+  `twWavInput` race regression test).
+- *Dedup:* two identical `(component,pos,epoch)` requests in flight → exactly one
+  freeze task runs; both handles resolve to the same page.
+- *DAG readiness:* a 3-level graph; assert a parent task renders only after all
+  child pages are ready, and a re-request of an already-frozen child is a cache
+  hit (no re-render — count renders via a stub).
+- *Epoch/edit interleave:* bump a component's epoch mid-freeze; assert no page
+  with old content is ever served as `contentEpoch >= epochNow`.
+
+**Stress test (new):** randomized edits (select-take/split/slip broadcast) +
+concurrent playback + revalidation on a multi-track/multi-take project for a
+fixed wall-clock budget, with the freeze-collision tracker compiled in as an
+assert (abort on any collision). Run under TSan if feasible on macOS/Linux.
+
+**Regression gates (must stay green each phase):**
+- Full qxa suite from `smaragd/tests/cases/` (grain, render_sawtooth, takes_*),
+  run correctly (right CWD + `--test-output-dir`).
+- Module tests: `graph`, `mix`, `sources`, `plugins`, `playback`, `render`,
+  `schedule`.
+- Offline-render golden WAVs: freeze a set of reference renders at Phase 0;
+  assert bit-identical after each phase (async must not change output).
+- `python tools/check_layering.py` clean.
+
+**Determinism check:** the reproduction harness (N=100) is the headline gate for
+Phases 1–3; also run with `SMARAGD_REVAL_WORKERS` swept over {1,2,4,8,16}.
+
+---
+
+## Key files & symbols (implementer map)
+
+- Freeze core: `tw303a/graph/src/twcomponent.cc`
+  (`freezePage`, `freezePage_nolock`, `getOrAllocatePage`, `outputPages_`,
+  `contentEpochNow`/`bumpContentEpoch`), header
+  `tw303a/graph/include/tw/graph/twcomponent.h`.
+- Serial-cursor sources: `tw303a/sources/src/twwavinput.cc`,
+  `twsamplereader.cc`, `twgrainsource.cc`, `twloopreader.cc`.
+- Mix graph: `tw303a/mix/src/{twtrackmix,twmixer,twrewire}.cc`,
+  `tw303a/plugins/src/{twpluginchain,twplugininsert}.cc`.
+- Pull seam being replaced: `tw303a/graph/src/twlatch.cc` +
+  `twstreaminglatch.cc` (`copyData`/`readStreamingData`).
+- Schedulers/drivers: `tw303a/schedule/src/capture_revalidator.cc`
+  (worker pool; `numWorkers` from `main/model/src/sproject.cpp`),
+  `tw303a/playback/src/audio_engine.cc` (readahead),
+  `tw303a/render/src/render_session.cc` (offline render).
+- Page type + fallback field: `tw303a/pages/include/tw/pages/tw_output_page.h`
+  (`contentEpoch`, `validAspects`, `stalePredecessor`, `pageMutex`,
+  `internalState`).
+- Cycle guard (keep — prevents self-recursion): `tw_freeze_context.h`.
+
+**Diagnostic instrumentation** currently in `twcomponent.cc` (flagged
+`[DBG freeze-collision]`, uncommitted): a global tracker that prints when two
+threads render the same component/page. Keep it while implementing Phases 1–2
+(promote to an assert in the stress test); strip before final merge.
+
+## Effort / risk
+
+Large, staged. Phase 1 is small and high-value (kills the confirmed race).
+Phase 2 is the real architectural work (recursion inversion + scheduler) and the
+main risk surface (deadlock/liveness, back-pressure, latency). Phase 3 is
+mechanical once 2 lands. Mitigations: each phase gated by the N=100 repro + the
+bit-identical render golden + layering check; the collision tracker as a
+compiled-in assert during development.
+
+## Open questions
+
+1. **Deadlock/liveness of the task scheduler** under diamond DAGs and
+   serial-actor back-pressure — needs an explicit ordering argument (the graph
+   is an acyclic DAG guarded by `FreezeContext`; formalize that acquisition is
+   always ancestor-after-descendant in the request/ready model).
+2. **Back-pressure & memory:** unbounded parked tasks vs the fixed
+   `CapturePagePool` (2048 pages). Cap in-flight requests; define eviction.
+3. **Preview vs playback vs export aspects:** do they share one task graph with
+   priorities (current `Job.priority`), or separate lanes? Prefer one graph,
+   priority-ordered.
+4. **VST reality:** a plugin with N instances = N parallel cursors; model as a
+   small actor pool per component rather than strict serial. Design the actor
+   abstraction to take a concurrency-degree (1 for `twWavInput`, N for a
+   pooled plugin).
+5. Whether to keep `stalePredecessor` or rely on "old page stays cached until
+   atomically replaced" (the request model makes the latter natural).
