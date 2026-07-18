@@ -254,6 +254,33 @@ Findings so far (2026-07-18, Phase 1b instrumentation, since reverted):
   served with `rms>0.01` (an atomic test-and-set), or a post-render assertion on
   the WAV — not always-on logging.
 
+Update (2026-07-18, later): the exact publisher WAS pinned with a lightweight
+one-shot (fires only on the stale serve, no Heisenbug): on every failure,
+`[DBG STALE-SERVE] type=twRewire pos=65536 stampEpoch==liveEpoch serveTid==
+stamperTid`. So **the render thread itself stamps AND serves the stale page, at
+a consistent epoch** — not a worker stamping cross-thread, not an epoch bug. The
+render's own recursive freeze produces stale content, and only under ≥2 workers.
+
+**Fixes attempted for #3(b) — ALL FAILED (do not redo):**
+1. private-page render + epoch recheck → regressed (5/14).
+2. per-component freezeMutex_ (Phase 1) → 0 collisions but flake unchanged.
+3. `SCut::getSnapshot(blocking)` on the freeze path (getRootComponent/seekTo/
+   mapTimelineToComponentPos) — hypothesis was that the render read the stale
+   `lastGoodSnapshot_` when a worker held the SCut mutex. **59/100, no change**
+   → that was not the (main) path. Reverted.
+
+Three targeted fixes have now missed. Meta-conclusion: the incremental route is
+not converging; the shared-state path the render reads and a worker corrupts is
+subtler than each hypothesis. Two remaining options, in order of preference:
+  (i) **Quiesce background revalidation for the duration of the offline render**
+      (needs a pause/wait-idle on CaptureRevalidator; matches proposal 16's
+      "offline renders stay exact"). Since `workers=1` all but eliminates it,
+      removing workers entirely during the render should make it deterministic —
+      and it is the smallest correct change if the stale page is stamped DURING
+      the render (which STALE-SERVE shows: the render thread stamps it).
+  (ii) Proceed to **Phase 2** (request/ready + actor) which orders freeze/edit by
+       construction — the user's preferred clean end-state.
+
 Step 1 — pin the exact publisher of the stale page (lightweight capture):
 - Narrowed target: find WHO stamps the rewire/mixer tail page at the served
   epoch with non-silent content. Candidates: (b1) a revalidator worker freezes
