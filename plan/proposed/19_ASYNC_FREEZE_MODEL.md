@@ -207,11 +207,64 @@ change. Interim scaffolding; Phase 2's actor queue replaces it.
   the take-swap / edit-group broadcast: a background worker caches a page with
   pre-edit take-0 content stamped at the *current* epoch, and the sequential
   render accepts it). `workers=1` masks it by removing the second worker that
-  caches the stale page during the edit window. **The flake fix therefore lands
-  in Phase 2**, where request/ready scheduling + the actor model order a
-  component's edits and freezes so content can never lag its epoch. Phase 1's
-  value is only the invariant "single-cursor components are never frozen
-  concurrently."
+  caches the stale page during the edit window. **The flake fix is now
+  Phase 1b** (below), not Phase 2 — see that section for why. Phase 1's value is
+  only the invariant "single-cursor components are never frozen concurrently."
+
+### Phase 1b — Pin & fix issue #3 (the actual flake) under range-scoped invalidation
+Do this BEFORE the big Phase 2 inversion: it is small, high-value, and may make
+the determinism gate green on its own; and it produces the precise spec of what
+Phase 2 must guarantee. Starting Phase 2 blind to how issue #3 behaves risks
+building against a moving target.
+
+Context that changed the ground (must read first): proposal 18 Phase 5 landed
+`invalidatePagesInRange_nolock` — trackmix edits now invalidate only the pages
+in the edited *range* instead of bumping a coarse content epoch
+(`smaragd/tw303a/mix/src/twtrackmix.cc`: `insertClip`/`removeClip`/`updateClip`
+return a `twEditRange`; `SCut`/`STakeStack` edits flow through it). **Issue #3
+now lives inside that machinery**, so it is likely a range-scoping or
+edit/re-freeze ordering gap, not something that needs the full async rewrite.
+
+What the 2026-07-18 provenance run established (evidence to build on):
+- The stale tail is **take-0 content from a page frozen when the clip was the
+  pre-split full `[0,192000)` take-0 clip** (trackmix logs showed
+  `win=[0,192000) … childRMS≈0.376` feeding the tail page; after the split the
+  tail clip resolves to a take-1 reader with `childRMS=0.0`).
+- So after `split-clip` + `select-take 1` (broadcast to both tracks), a **cached
+  page in the tail `[96000,192000)` from before the edit intermittently
+  survives** and is served by the sequential render. `workers=1` avoids it;
+  ≥2 workers hit it ~40 %.
+
+Step 1 — pin it precisely (instrumentation, then remove):
+- Tag each render so logs are attributable (the `.qxa` runs 4 renders ×
+  2 tracks × N pages; today's logs interleaved). Add a per-render sequence id
+  (e.g. an env/counter bumped by the `render` action) into the trackmix and
+  freeze logs.
+- Log, for the tail pages of the failing (`group_comped`) render: which clip /
+  component each clip resolves to, the child page's epoch, whether it was a
+  fresh freeze or a cache hit, and which thread froze/stamped the served page.
+- Determine which of these is true: (a) the split/select-take edit's invalidated
+  range does not cover the pre-split clip's tail pages; (b) a background worker
+  re-freezes a tail page *after* invalidation but reading pre-edit state
+  (content-lags-invalidation ordering); (c) the broadcast to the second track
+  applies the edit with a window where its clip/reader is transiently pre-edit.
+
+Step 2 — targeted fix, depending on the finding:
+- (a) → widen the invalidated range (or invalidate the union of pre/post-edit
+  extents) so no pre-edit tail page survives; likely in the `twEditRange`
+  computation for split/select-take.
+- (b) → make edit → invalidate → re-freeze ordered so a re-freeze cannot read
+  pre-edit state (e.g. invalidate under the same lock/sequence that applies the
+  model change; or stamp re-freezes against a monotonically-checked edit id).
+- (c) → make the edit-group broadcast apply model change + invalidation
+  atomically per member before any freeze can observe an intermediate state.
+- **Acceptance:** `repeat_test.sh takes_group_broadcast 100` → 100/100 at the
+  default worker count, and swept over `SMARAGD_REVAL_WORKERS` ∈ {1,2,4,8,16};
+  offline-render goldens bit-identical; full qxa suite green.
+
+If Phase 1b cannot make it deterministic without the recursion inversion, it
+still yields the exact invariant Phase 2 must enforce, and we proceed to Phase 2
+with that spec.
 
 ### Phase 2 — Invert the mix graph to request/ready scheduling
 Convert `twTrackMix`, `twMixer`, `twRewire`, `twPluginChain` to render from
