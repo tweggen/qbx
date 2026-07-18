@@ -117,7 +117,14 @@ void STakeStack::setDurationAll( length_t duration )
             cut->setDuration( duration );
     }
     forwardSuppressed_ = false;
-    emit durationChanged( getDuration() );
+    // Emit the value we just set on every take — NOT getDuration(), which reads
+    // the active cut via SCut::getSnapshot()'s try-lock and can return the stale
+    // pre-edit duration when a background revalidation worker holds the cut mutex.
+    // That stale value reached the track (STrack::trackChildDurationChanged →
+    // twTrackMix::updateClip), leaving a split clip's HEAD at its full pre-split
+    // length so it bled into the tail region — the confirmed takes_group_broadcast
+    // flake (proposal 19 Phase 2b). Emitting the authoritative value is race-free.
+    emit durationChanged( duration );
 }
 
 void STakeStack::setDuration( length_t duration )

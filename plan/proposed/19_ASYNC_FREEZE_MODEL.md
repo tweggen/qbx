@@ -359,6 +359,38 @@ build. The provenance table above is the ground truth; this is the mechanism.
 clean end-state. (A) — race-immune lazy resolution + `readerTried_` reset — was
 the smaller alternative; not chosen.
 
+**ACTUAL ROOT CAUSE + FIX (2026-07-18, render-tagged provenance — supersedes the
+reader-resolution theory above).** Deeper capture proved the flake is NOT on the
+freeze/reader-resolution path at all — it is an **edit-path stale read**, so
+neither (A) nor (B) as framed would fix it. Render-tagged twTrackMix mix capture
+for the failing `group_comped` render showed one track carrying TWO tail
+contributions: the correct tail clip (`startTime 96000, dur 96000`, silence) AND
+a stale **head clip at `startTime 0, dur 192000`** (not shortened) bleeding take0
+(rms 0.3769) into [96000,192000). The `updateClip` trace then showed the split's
+head-shorten `updateClip(head, …)` firing with `newDur=192000` (not 96000) for
+the flaky track. Mechanism: `STakeStack::setDurationAll` (the split's
+head-shorten) emitted `durationChanged(getDuration())`; `getDuration()` →
+`activeCut()->getDuration()` → `SCut::getSnapshot()` which uses a **try-lock →
+stale `lastGoodSnapshot_`** fallback. When a background revalidation worker held
+the SCut mutex, `getDuration()` returned the pre-shorten 192000, which propagated
+`STrack::trackChildDurationChanged → twTrackMix::updateClip(head, 192000)`,
+leaving the head full-length. `SMARAGD_NO_REVAL` (no worker ever holds the mutex)
+→ 15/15; workers on → ~50%.
+
+**FIX (committed):** `STakeStack::setDurationAll` now emits `durationChanged(
+duration)` — the authoritative value it just set on every take — instead of
+re-reading via the try-lock `getDuration()`. Race-free. Gate: 20/20 immediately;
+N=100 sweep pending. This is a one-line-of-intent fix in the EDIT path; the
+freeze-side hardening (72a63e6: `currentReader_` UB fix, `getSnapshotBlocking`,
+revalidation `pause()`) is correct but was not what fixed the flake. The
+request/ready inversion (2b-1/2/3 below) remains a valid future cleanup but is
+NOT required for this flake.
+
+NOTE: the sibling emit sites in STakeStack (`setActiveTake`, `removeTake`,
+`onTakeCutChanged`, `applyWindowAll` all `emit durationChanged(getDuration())`)
+have the SAME stale-read shape and could flake other broadcast edits under worker
+contention; follow-up: give them the same authoritative/blocking treatment.
+
 ### Phase 2b (revised) — request/ready inversion, gated sub-steps
 
 Invariant to establish: **a freeze resolves ALL structure (which component, which
