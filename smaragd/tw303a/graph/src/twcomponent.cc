@@ -14,6 +14,27 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
 
+#include <thread>
+#include <typeinfo>
+#include <unordered_map>
+#include <functional>
+
+// [DBG freeze-collision] Diagnostic-only: detect two threads rendering the same
+// component (or the same page) concurrently — the suspected source of the
+// takes_group_broadcast stale-tail flake. Remove once the concurrency model is
+// fixed.
+namespace {
+struct FreezeCollisionTracker {
+    std::mutex m;
+    std::unordered_map<const void*, std::size_t> compInFlight;   // component -> renderer tid-hash
+    std::unordered_map<uint64_t, std::size_t>    pageInFlight;   // (comp,pos) -> renderer tid-hash
+} g_freezeTracker;
+
+inline std::size_t tidHash() {
+    return std::hash<std::thread::id>{}( std::this_thread::get_id() );
+}
+} // namespace
+
 #define DEBUG_COMPONENT
 
 offset_t twComponent::tellPos() const
@@ -527,6 +548,32 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
 
     // Step 3: Render the page (OUTSIDE mutex to allow recursive calls)
     // This is the lengthy operation that must not hold the lock
+
+    // [DBG freeze-collision] mark this (component, page) as being rendered and
+    // shout if another thread is already rendering the same component/page.
+    const std::size_t me = tidHash();
+    const uint64_t pageKey =
+        (uint64_t)(uintptr_t)this ^ (startPos * 0x9E3779B97F4A7C15ull);
+    {
+        std::lock_guard<std::mutex> lk(g_freezeTracker.m);
+        auto itc = g_freezeTracker.compInFlight.find(this);
+        if (itc != g_freezeTracker.compInFlight.end() && itc->second != me) {
+            fprintf(stderr, "[DBG FREEZE-COLLISION comp] type=%s this=%p startPos=%llu me=%zu other=%zu epoch=%llu\n",
+                    typeid(*this).name(), (const void*)this,
+                    (unsigned long long)startPos, me, itc->second,
+                    (unsigned long long)epochNow);
+        }
+        auto itp = g_freezeTracker.pageInFlight.find(pageKey);
+        if (itp != g_freezeTracker.pageInFlight.end() && itp->second != me) {
+            fprintf(stderr, "[DBG FREEZE-COLLISION page] type=%s this=%p startPos=%llu me=%zu other=%zu epoch=%llu\n",
+                    typeid(*this).name(), (const void*)this,
+                    (unsigned long long)startPos, me, itp->second,
+                    (unsigned long long)epochNow);
+        }
+        g_freezeTracker.compInFlight[this] = me;
+        g_freezeTracker.pageInFlight[pageKey] = me;
+    }
+
     page->validFrames = freezePage_nolock(
         page,
         inputData,
@@ -534,6 +581,12 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
         inputLength,
         previousPage
     );
+
+    {
+        std::lock_guard<std::mutex> lk(g_freezeTracker.m);
+        g_freezeTracker.compInFlight.erase(this);
+        g_freezeTracker.pageInFlight.erase(pageKey);
+    }
 
     // Step 4: Mark page as frozen and valid under lock
     // A page is "valid" if it has been frozen (rendering attempted), even if validFrames == 0.
