@@ -167,6 +167,14 @@ public:
     void setGrainParamsRaw( const twGrainParams &p ) { grainParams_ = p; }
     virtual bool hasDuration() const { return true; }
     virtual length_t getDuration() const;
+    // Proposal 19 Phase 2b: blocking-snapshot duration for the EDIT/signal path.
+    // getDuration() uses getSnapshot()'s try-lock → stale lastGoodSnapshot_
+    // fallback (correct for the RT audio thread), which under background-worker
+    // mutex contention can return a pre-edit duration; propagated through a
+    // durationChanged emit that becomes twTrackMix::updateClip, that stale value
+    // leaves clip windows wrong (the takes_group_broadcast flake). Edit-path
+    // emitters must read the CURRENT duration. Not for the RT audio thread.
+    length_t getDurationBlocking() const;
 
     // Range-scoped invalidation (proposal 18 Phase 5): dirty ranges of our
     // CONTENT arrive in the SOURCE domain; map them through the cut window

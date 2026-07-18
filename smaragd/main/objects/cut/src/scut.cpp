@@ -732,6 +732,13 @@ length_t SCut::getDuration() const
     return getSnapshot().cutDuration.frames();
 }
 
+length_t SCut::getDurationBlocking() const
+{
+    // Blocking read for the edit/signal path (see header) — never the stale
+    // try-lock fallback.
+    return getSnapshotBlocking().cutDuration.frames();
+}
+
 void SCut::setGrainParams( const twGrainParams &p )
 {
     SCutSnapshot snap;

@@ -92,8 +92,9 @@ void STakeStack::removeTake( int index )
         --activeTake_;
     }
     // Track resync (updateClip resets the clip state chain; the render path
-    // to the root is re-frozen, siblings keep their caches).
-    emit durationChanged( getDuration() );
+    // to the root is re-frozen, siblings keep their caches). Blocking read:
+    // never the stale try-lock duration (proposal 19 Phase 2b).
+    emit durationChanged( getDurationBlocking() );
 }
 
 void STakeStack::setActiveTake( int index )
@@ -106,7 +107,8 @@ void STakeStack::setActiveTake( int index )
     // updateClip (content-epoch bump + state-chain reset — our component
     // identity just changed) and invalidateRenderPath. During playback,
     // proposal 16 serves the old take until the new pages land.
-    emit durationChanged( getDuration() );
+    // Blocking read: never the stale try-lock duration (proposal 19 Phase 2b).
+    emit durationChanged( getDurationBlocking() );
 }
 
 void STakeStack::setDurationAll( length_t duration )
@@ -148,7 +150,9 @@ void STakeStack::applyWindowAll( length_t duration, length_t loopLength,
                         WarpedLen( loopLength ), stretch );
     }
     forwardSuppressed_ = false;
-    emit durationChanged( getDuration() );
+    // Authoritative value we just set on every take (proposal 19 Phase 2b) —
+    // not a try-lock re-read that can return the stale pre-edit duration.
+    emit durationChanged( duration );
 }
 
 void STakeStack::onTakeCutChanged( length_t )
@@ -159,7 +163,8 @@ void STakeStack::onTakeCutChanged( length_t )
     // bumps the epoch unconditionally for exactly this case).
     SObject *obj = dynamic_cast<SObject *>( sender() );
     if( obj && static_cast<SObject *>( activeCut() ) == obj )
-        emit durationChanged( getDuration() );
+        // Blocking read: never the stale try-lock duration (proposal 19 Phase 2b).
+        emit durationChanged( getDurationBlocking() );
 }
 
 // --- SObject delegation ----------------------------------------------------
@@ -217,6 +222,18 @@ length_t STakeStack::getDuration() const
         return cut->getDuration();
     if( const SCut *cut = takeCutAt( 0 ) )
         return cut->getDuration();
+    return 0;
+}
+
+length_t STakeStack::getDurationBlocking() const
+{
+    // Blocking-snapshot duration for the edit/signal path (proposal 19 Phase 2b):
+    // a durationChanged emit must carry the CURRENT duration, not the stale
+    // try-lock value getDuration() can return under background-worker contention.
+    if( const SCut *cut = activeCut() )
+        return cut->getDurationBlocking();
+    if( const SCut *cut = takeCutAt( 0 ) )
+        return cut->getDurationBlocking();
     return 0;
 }
 
