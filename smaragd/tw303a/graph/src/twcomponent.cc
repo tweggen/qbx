@@ -492,6 +492,16 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
+    // Proposal 19 Phase 1: single-cursor components serialize their whole
+    // freeze (see usesSerialCursor()). One freeze at a time per component, so
+    // two threads can never race this component's instance cursor. Held across
+    // the recursive upstream freeze; the DAG guarantees ancestor-before-
+    // descendant order, so it cannot deadlock (see cursorMutex_ declaration).
+    std::unique_lock<std::mutex> cursorLock;
+    if (usesSerialCursor()) {
+        cursorLock = std::unique_lock<std::mutex>(cursorMutex_);
+    }
+
     // CRITICAL: Do NOT hold mutex during renderFrames, which calls calcOutputTo,
     // which may recursively call freezePage on upstream components.
     // Recursive lock attempts will deadlock (mutex is not recursive).

@@ -31,6 +31,10 @@ public:
     virtual offset_t tellPos() const;
     virtual void reset() override;  // Reset position to start of sample
 
+    // Single read cursor (pos_): freezes must be serialized (proposal 19 Ph1).
+    // twLoopReader inherits this.
+    bool usesSerialCursor() const override { return true; }
+
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
 

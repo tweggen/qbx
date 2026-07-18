@@ -191,13 +191,27 @@ snapshot page if the component supports it (existing `captureInternalState`/
 
 ## Phasing (each phase independently shippable and test-gated)
 
-### Phase 1 — Actorize stateful/source components (closes the confirmed race)
-Give `twWavInput`, sample readers (`twSampleReader`), `twGrainSource` streaming,
-`twLoopReader` a **serial task queue** (one consumer). Route their `freezePage`
-through it; other components stay recursive for now. Smallest change that
-provably serializes the observed `twWavInput` collision.
-- **Acceptance:** `takes_group_broadcast` passes 100/100 at 8 workers; the
-  freeze-collision tracker prints zero collisions on `twWavInput`/readers.
+### Phase 1 — Serialize single-cursor components (closes the confirmed freeze race)
+Give `twWavInput`, sample readers (`twSampleReader`, and `twLoopReader` by
+inheritance) a component-owned serial-cursor guard: `twComponent::freezePage`
+holds `cursorMutex_` when `usesSerialCursor()` (default false; overridden true
+on those). `twGrainSource` is a `twRandomSource` (read via `src_.read`, no
+`freezePage`), so the reader that wraps it carries the cursor — no separate
+change. Interim scaffolding; Phase 2's actor queue replaces it.
+- **Acceptance (met 2026-07-18):** freeze-collision tracker prints **zero**
+  collisions on any component (verified).
+- **IMPORTANT finding:** eliminating freeze collisions did **NOT** fix the
+  flake — `takes_group_broadcast` still fails ~40 % with the identical stale
+  value (`0.35274`). So the freeze-collision was a *correlate*, not the cause.
+  The flake's real cause is **issue #3** (content lags the content-epoch during
+  the take-swap / edit-group broadcast: a background worker caches a page with
+  pre-edit take-0 content stamped at the *current* epoch, and the sequential
+  render accepts it). `workers=1` masks it by removing the second worker that
+  caches the stale page during the edit window. **The flake fix therefore lands
+  in Phase 2**, where request/ready scheduling + the actor model order a
+  component's edits and freezes so content can never lag its epoch. Phase 1's
+  value is only the invariant "single-cursor components are never frozen
+  concurrently."
 
 ### Phase 2 — Invert the mix graph to request/ready scheduling
 Convert `twTrackMix`, `twMixer`, `twRewire`, `twPluginChain` to render from

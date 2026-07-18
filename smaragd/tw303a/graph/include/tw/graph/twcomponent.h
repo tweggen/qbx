@@ -373,6 +373,21 @@ public:
         std::shared_ptr<twOutputPage> previousPage = nullptr
     );
 
+    // Proposal 19 Phase 1 — single-cursor serialization policy.
+    // freezePage() renders by MUTATING this component's instance state
+    // (reset/seekTo/restoreInternalState → pos_, file cursor, DSP memory). A
+    // component that carries such a cursor cannot be frozen by two threads at
+    // once: concurrent freezes of one shared component (e.g. one twWavInput
+    // shared by every clip/take/track) read each other's positions and corrupt
+    // output — the confirmed takes_group_broadcast flake. When this returns
+    // true, freezePage() serializes on the component's own cursorMutex_ (a
+    // queue-of-one owned by the component; becomes a real async actor queue in
+    // Phase 2). Default false: pure nodes (mixers/routers combining already-
+    // frozen input pages) stay parallel; single-cursor/stateful components
+    // (sources, readers) override to true. Phase 2 inverts the mix graph so
+    // pure nodes no longer double-render either, retiring this policy.
+    virtual bool usesSerialCursor() const { return false; }
+
     // Phase 3: Preview-specific freezing — lower resolution for UI visualization
     // Renders component output at preview sample rate (e.g., 1kHz) for waveform display.
     // Returns previous page if new page not ready (fallback for non-blocking UI redraws).
@@ -419,6 +434,15 @@ protected:
 
 private:
     mutable std::mutex stateMutex_;
+
+    // Serializes freezePage() for single-cursor components (see
+    // usesSerialCursor()). Held across the whole freeze INCLUDING the recursive
+    // upstream freeze; each component takes its OWN cursorMutex_ and the graph
+    // is an acyclic DAG (FreezeContext breaks cycles), so acquisition is always
+    // ancestor-before-descendant — no lock-order inversion. Distinct from
+    // stateMutex_/mutex() (short data-structure critical sections); ordering is
+    // always cursorMutex_ (outer) → mutex() (inner).
+    std::mutex cursorMutex_;
 
     // Page cache: maps start position → frozen output page
     std::map<uint64_t, std::shared_ptr<twOutputPage>> outputPages_;

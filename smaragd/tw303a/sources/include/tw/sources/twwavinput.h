@@ -56,6 +56,9 @@ public:
 
     virtual void reset() override;
 
+    // Single file cursor (pos_): freezes must be serialized (proposal 19 Ph1).
+    bool usesSerialCursor() const override { return true; }
+
     // Teardown protocol
     virtual void teardown() override;
 
