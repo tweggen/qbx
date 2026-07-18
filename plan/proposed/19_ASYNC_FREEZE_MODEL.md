@@ -235,7 +235,34 @@ What the 2026-07-18 provenance run established (evidence to build on):
   survives** and is served by the sequential render. `workers=1` avoids it;
   ≥2 workers hit it ~40 %.
 
-Step 1 — pin it precisely (instrumentation, then remove):
+Findings so far (2026-07-18, Phase 1b instrumentation, since reverted):
+- **#3(a) RULED OUT — invalidation ranges are correct.** Logging `updateClip`'s
+  united range and every `invalidatePagesInRange` showed the split's head resize
+  computes `old=[0,192000) new=[0,96000) united=[0,192000)`, and the root
+  `twMixer`/`twRewire` receive `[0,192000)`, `[0,96000)`, AND `[96000,192000)`
+  invalidations. The vacated tail *is* invalidated. So it is NOT a range gap.
+- **#3(b) CONFIRMED — a stale page is served at a CURRENT epoch.** On a failing
+  run the render logs a cache-hit `type=twRewire pos=65536 epoch=22 rms=0.42`:
+  a rewire tail page holding pre-edit (take-0, full-clip) content but stamped at
+  the *current* content epoch, so `freezePage`'s fast path serves it. Since the
+  ranges are correct, that page must have been (re)frozen with stale content and
+  stamped current — i.e. content lagging its epoch, published by a concurrent
+  freezer during the multi-step broadcast edit window.
+- **Heisenbug caution:** always-on `fprintf` under the freeze path serialized it
+  enough to make the flake vanish (6/6 pass). The next capture MUST be
+  lightweight — e.g. a single one-shot dump triggered only when a tail page is
+  served with `rms>0.01` (an atomic test-and-set), or a post-render assertion on
+  the WAV — not always-on logging.
+
+Step 1 — pin the exact publisher of the stale page (lightweight capture):
+- Narrowed target: find WHO stamps the rewire/mixer tail page at the served
+  epoch with non-silent content. Candidates: (b1) a revalidator worker freezes
+  it reading epoch-after-bump but content-before the broadcast finished; (b2)
+  the offline render races background revalidation that cached it during the
+  edit window (RenderSession does not quiesce workers; contrast proposal 16's
+  "offline renders stay exact"). Capture the stamping thread id + whether it is
+  the render thread or a worker.
+- Original (superseded) step 1 notes:
 - Tag each render so logs are attributable (the `.qxa` runs 4 renders ×
   2 tracks × N pages; today's logs interleaved). Add a per-render sequence id
   (e.g. an env/counter bumped by the `render` action) into the trackmix and
