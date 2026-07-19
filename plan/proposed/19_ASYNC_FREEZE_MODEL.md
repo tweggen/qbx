@@ -658,6 +658,15 @@ goldens + module tests + layering):**
    schedule_test proves dependency ordering, exact render counts, cache-hit
    dedup, pause gating, and epoch-staled re-render.
 4. Offline render → watermark consumer (bit-identical goldens gate).
+   **DONE 2026-07-19** (see STATE.md "dataflow stage 4"): `RenderSession::
+   setScheduler` + sequential per-page demands (full-range look-ahead
+   deliberately reverted: it re-rendered the NON-CACHING twTrackMix out of
+   position order against the in-order chain — pipelining returns once node
+   results are the cache for such components);
+   `pauseBackground()/resumeBackground()` background-only quiesce (full
+   pause would deadlock the demand waits; none at all was nondeterministic).
+   Gate: 11 golden WAVs bit-identical to the pre-change baseline AND
+   deterministic across 3 runs.
 5. Readahead → watermark consumer; RT unchanged.
 6. Delete the sync recursion; `cursorMutex_` → must-succeed assert for one
    full gate cycle, then removed (Inv-3). Edit-path `getDurationBlocking()`

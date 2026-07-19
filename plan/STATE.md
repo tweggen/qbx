@@ -5552,3 +5552,43 @@ readahead still use the legacy pull; the scheduler is exercised by tests.)
 Verification: module tests + layering green; takes_group_broadcast 50/50 at
 workers=8; placement 10/10; crash repro 0/5. Next: stage 4 — the offline
 render as a watermark consumer (bit-identical goldens gate).
+
+## Proposal 19 dataflow stage 4: the offline render as a watermark consumer (2026-07-19)
+
+Fourth migration stage: `RenderSession` no longer drives the freeze — it
+demands pages from the scheduler and waits only at the edge, then reads
+them from the component caches. Gated on BIT-IDENTICAL goldens (11 WAVs vs
+the pre-change baseline) plus determinism across 3 full runs.
+
+- `RenderSession::setScheduler(CaptureRevalidator*)`: when set, the render
+  loop issues a single-page demand per page transition and `wait()`s it —
+  the pipeline's only blocking point — then `requestPage` is a cache hit.
+  Null keeps the legacy sequential pull (e.g. `SMARAGD_REVAL_WORKERS=0`).
+- **Sequential per-page demands, deliberately NO full-range look-ahead.**
+  The first attempt demanded the whole range up front; a later per-page
+  demand then re-expanded already-completed (erased) nodes and re-rendered
+  the NON-CACHING `twTrackMix` (it mints a fresh page every freeze) OUT OF
+  POSITION ORDER against the in-order chain, racing its per-clip state
+  (`clip.previousPage`) — observed as a nondeterministically missing track
+  contribution in the goldens (0 vs content / half vs full amplitude,
+  always from a page boundary). Per-page sequential demands restore the
+  legacy cadence per component while the scheduler still parallelizes
+  ACROSS the graph within each page. Cross-page pipelining can return once
+  node results are the cache for non-caching components.
+- `CaptureRevalidator::pauseBackground()/resumeBackground()`: background-
+  only quiesce — gates + drains the reval/freezing queues while graph
+  demands keep executing. A FULL pause would deadlock the render's demand
+  waits; no quiesce at all made post-edit renders nondeterministic (aspect
+  jobs mutate shared component state mid-render). Applied by
+  `SApplication::startRender` around scheduler-driven renders; the legacy
+  full pause remains for the no-scheduler path.
+- Layering: new sanctioned edges render→schedule and shell+schedule in
+  `tools/check_layering.py` (CMake dep added likewise).
+- Debug diary (of note): the first golden "mismatches" were an artifact of
+  parsing 16-bit PCM WAVs as float32 — the 1e38/NaN "explosions" were pure
+  misparsing; the byte-level cmp results were the ground truth throughout.
+
+Verification: goldens 11/11 bit-identical to baseline + deterministic ×3;
+module tests green; layering clean; takes_group_broadcast 50/50 at
+workers=8; placement 10/10; crash repro 0/5. Next: stage 5 — playback
+readahead as a demand consumer (RT path keeps prop-16 stale fallback).
