@@ -6,7 +6,7 @@ components, twView (the position-translating clip wrapper), the format
 negotiator, and tw303aEnvironment (sample rate / buffer size context).
 
 Public headers: twcomponent.h, twlatch.h, twview.h, twnegotiator.h,
-tw_freeze_context.h, tw303aenv.h.
+tw_freeze_context.h, tw_frozen_inputs.h, tw303aenv.h.
 
 Depends on: tw/core, tw/pages. Forbidden: everything above (sources, dsp,
 mix, ... — the graph defines the interface they implement).

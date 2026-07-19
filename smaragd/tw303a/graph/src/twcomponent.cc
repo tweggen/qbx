@@ -12,6 +12,7 @@
 
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw303aenv.h"
+#include "tw/graph/tw_frozen_inputs.h"
 #include "tw/pages/io_vector.h"
 
 #define DEBUG_COMPONENT
@@ -643,6 +644,19 @@ std::shared_ptr<twOutputPage> twComponent::requestPage(
     entry->cv.notify_all();
 
     return page;
+}
+
+// Proposal 19 dataflow stage 1 — the leaf renderer. See the declaration doc.
+// Installs the ready-input set thread-scoped and runs the classic freeze body;
+// twStreamingLatch::copyData consults the scope before any recursive pull.
+length_t twComponent::freezePageFromInputs(
+    std::shared_ptr<twOutputPage> page,
+    const twFrozenInputs &inputs,
+    std::shared_ptr<twOutputPage> previousPage
+)
+{
+    twFrozenInputScope scope( &inputs );
+    return freezePage_nolock( page, nullptr, 0, 0, previousPage );
 }
 
 // Caller must NOT hold mutex. This function does all work outside the lock.

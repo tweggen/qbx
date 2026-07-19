@@ -60,6 +60,7 @@ tw_module(graph
         graph/include/tw/graph/twcomponent.h
         graph/include/tw/graph/twlatch.h
         graph/include/tw/graph/tw_freeze_context.h
+        graph/include/tw/graph/tw_frozen_inputs.h
         graph/include/tw/graph/twview.h
         graph/include/tw/graph/twnegotiator.h
         graph/include/tw/graph/tw303aenv.h
@@ -67,6 +68,7 @@ tw_module(graph
         graph/src/twlatch.cc
         graph/src/twstreaminglatch.cc
         graph/src/tw_freeze_context.cc
+        graph/src/tw_frozen_inputs.cc
         graph/src/twview.cc
         graph/src/twnegotiator.cc
         graph/src/tw303aenv.cc

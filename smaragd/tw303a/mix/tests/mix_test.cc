@@ -6,6 +6,7 @@
 #include "tw/mix/twrewire.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw303aenv.h"
+#include "tw/graph/tw_frozen_inputs.h"
 #include "tw/pages/io_vector.h"
 
 #include <cstdio>
@@ -28,12 +29,14 @@ class RampComponent : public twComponent {
 public:
     explicit RampComponent(tw303aEnvironment &e) : twComponent(e) {}
     offset_t pos = 0;
+    int renders = 0;   // how many times material was actually produced
 
     bool isSeekable() const override { return true; }
     int seekTo(offset_t p) override { pos = p; return 0; }
     void reset() override { pos = 0; }
     length_t renderFrames(sample_t *out, length_t n, const sample_t *,
                           length_t, idx_t) override {
+        ++renders;
         for (length_t i = 0; i < n; ++i) out[i] = val((long long)(pos + i));
         pos += (offset_t)n;
         return n;
@@ -236,6 +239,80 @@ int main()
         CHECK(q0c->samples[(size_t)cStart + 499] != 0.0f
                   && q0c->samples[(size_t)cStart + 500] == 0.0f,
               "page 0's re-render reflects clip C's edit");
+    }
+
+    // ------------------------------------------------------------------
+    // Proposal 19 dataflow stage 1: the LEAF RENDERER renders from BOUND
+    // input pages with no recursive pull (twFrozenInputs served at the
+    // twStreamingLatch::copyData seam). A rewire over one track:
+    //   1) classic pull-freeze = baseline samples,
+    //   2) stale the track (epoch bump), then freeze the rewire AGAIN with
+    //      the track's OLD page BOUND — must serve the bound page (baseline
+    //      content, no source re-render: the pull is bypassed),
+    //   3) control: same stale state, EMPTY set — legacy pull re-renders
+    //      the source (proves 2 really bypassed it).
+    {
+        auto trackS = std::make_shared<twTrackMix>(env);
+        trackS->init();
+        auto compS = std::make_shared<RampComponent>(env);
+        compS->init();
+        const int keyS = 0;
+        trackS->insertClip(&keyS, 1000, 3000,
+                           [compS]() -> std::shared_ptr<twComponent> { return compS; });
+
+        auto rewS = std::make_shared<twRewire>(env);
+        rewS->init();
+        rewS->setNPlugs(1);
+        rewS->setInput(0, trackS->linkOutput(0));
+
+        const length_t FULL = (length_t)twOutputPage::FRAME_CAPACITY;
+
+        // 1) Baseline: classic pull path.
+        auto base = rewS->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(base && base->validFrames == FULL && base->samples[1000] != 0.0f,
+              "leaf-renderer test: pull baseline freezes");
+
+        // Take the TRACK page to bind (twTrackMix mints a page per call).
+        auto trackPage = trackS->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(trackPage && trackPage->validAspects != 0,
+              "leaf-renderer test: track page frozen for binding");
+
+        // 2) Stale the WHOLE upstream chain (track AND source), then render
+        //    the rewire from the BOUND page. Staling the source matters for
+        //    the control in 3): with only the track staled, the legacy pull
+        //    would serve the source's still-current page cache and the
+        //    "did the pull run" signal (renderFrames count) would not fire.
+        trackS->bumpContentEpoch();
+        compS->bumpContentEpoch();
+        int rendersBefore = compS->renders;
+
+        twFrozenInputs inputs;
+        inputs.bind(trackS.get(), trackPage);
+
+        auto boundPage = std::make_shared<twOutputPage>();
+        boundPage->startPosition = 0;
+        length_t n = rewS->freezePageFromInputs(boundPage, inputs, nullptr);
+
+        CHECK(n == FULL, "leaf renderer produces a full page");
+        CHECK(compS->renders == rendersBefore,
+              "bound input page served WITHOUT re-rendering the source");
+        CHECK(inputs.misses.empty(),
+              "no misses recorded when the input set covers the render");
+        bool same = true;
+        for (size_t i = 0; i < (size_t)FULL; ++i)
+            if (boundPage->samples[i] != base->samples[i]) { same = false; break; }
+        CHECK(same, "bound-input render is byte-identical to the pull baseline");
+
+        // 3) Control: EMPTY set falls back to the legacy pull, which must
+        //    re-render the (staled) track from the source.
+        twFrozenInputs empty;
+        auto ctrlPage = std::make_shared<twOutputPage>();
+        ctrlPage->startPosition = 0;
+        rewS->freezePageFromInputs(ctrlPage, empty, nullptr);
+        CHECK(compS->renders > rendersBefore,
+              "empty set falls back to the legacy pull (source re-renders)");
+        CHECK(!empty.misses.empty(),
+              "the fallback records the missing dependency for the scheduler");
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall mix tests passed\n",

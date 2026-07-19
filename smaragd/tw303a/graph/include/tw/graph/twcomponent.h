@@ -32,6 +32,7 @@ enum class ComponentState {
 
 class tw303aEnvironment;
 class twComponent;
+struct twFrozenInputs;   // tw/graph/tw_frozen_inputs.h (dataflow leaf renderer)
 
 // Proposal 19 Inv-1: the atomic result of resolving one clip position. A
 // windowed clip (SCut/STakeStack) must hand a freeze BOTH the component to
@@ -407,6 +408,27 @@ public:
         uint64_t inputOffset,
         length_t inputLength,
         int sampleRate,
+        std::shared_ptr<twOutputPage> previousPage = nullptr
+    );
+
+    // Proposal 19 dataflow, stage 1 — the LEAF RENDERER: render one page of
+    // this component consuming ONLY the already-frozen input pages in
+    // `inputs` (see tw/graph/tw_frozen_inputs.h and "Phase 2 REVISED" in the
+    // proposal). The set is installed thread-scoped for the duration of the
+    // render; twStreamingLatch::copyData serves bound pages directly instead
+    // of recursively pulling the producer's freezePage(). A wanted-but-unbound
+    // page is recorded in inputs.misses and — in stage 1 — falls back to the
+    // legacy recursive pull, so an EMPTY set makes this byte-identical to the
+    // classic freeze. Later stages turn misses into "node not ready".
+    //
+    // `page` is caller-allocated (the dataflow scheduler owns page identity
+    // and publication; this function neither consults nor updates
+    // outputPages_). Serialization (usesSerialCursor/cursorMutex_, or the
+    // future per-component lane) is the CALLER's responsibility, exactly as
+    // for freezePage_nolock. Returns the rendered frame count.
+    length_t freezePageFromInputs(
+        std::shared_ptr<twOutputPage> page,
+        const twFrozenInputs &inputs,
         std::shared_ptr<twOutputPage> previousPage = nullptr
     );
 

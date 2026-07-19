@@ -8,6 +8,7 @@
 
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw_freeze_context.h"
+#include "tw/graph/tw_frozen_inputs.h"
 
 twStreamingLatch::twStreamingLatch (std::shared_ptr<twComponent> component0, idx_t idx0, length_t bufSize0)
 	: twLatch (component0, idx0), sampleRate_(48000)
@@ -105,6 +106,31 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		if (!page || page->startPosition != pageStart || page->validAspects == 0 ||
 		    page->contentEpoch.load() < epochNow) {
 			// Need a different page than the one we hold.
+
+			// Proposal 19 dataflow stage 1: a leaf render in progress on this
+			// thread may have BOUND this producer's page (see
+			// tw/graph/tw_frozen_inputs.h) — serve it with NO recursive pull.
+			// Bound pages are trusted (no epoch re-check): epoch validity is
+			// the scheduler's verify-at-publish job, which is what lets a
+			// planned node render from exactly the pages it was planned
+			// against. An installed-but-missing binding is recorded (stage >1
+			// turns that into "node not ready") and falls through to the
+			// legacy pull below, unchanged.
+			bool boundServed = false;
+			if (const twFrozenInputs *fi = twFrozenInputScope::active()) {
+				std::shared_ptr<twOutputPage> bound =
+					fi->find(getComponent().get(), pageStart);
+				if (bound && bound->validAspects != 0 &&
+				    bound->startPosition == pageStart) {
+					held = bound;
+					page = bound;
+					boundServed = true;
+				} else {
+					fi->noteMiss(getComponent().get(), pageStart);
+				}
+			}
+
+			if (!boundServed) {
 			// Cycle guard: if the producer is already being frozen on this
 			// thread, recursing into freezePage() would loop forever.
 			if (FreezeContext::isComponentInStack(getComponent())) {
@@ -134,6 +160,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 				break;  // producer could not materialize this page
 			}
 			held = page;
+			} // !boundServed (legacy pull)
 		}
 
 		const uint64_t inPage = pos - pageStart;
