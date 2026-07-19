@@ -11,7 +11,10 @@
 #include <atomic>
 #include <variant>
 #include <unordered_map>
+#include <map>
+#include <deque>
 #include "tw/pages/capture_page_pool.h"
+#include "tw/graph/tw_page_plan.h"   // dataflow stage 3: node plans
 
 // Forward declarations
 class CapturePagePool;
@@ -166,6 +169,50 @@ public:
     void pause();
     void resume();
 
+    // --- Proposal 19 dataflow stage 3: dependency-counting page scheduler ---
+    //
+    // A DEMAND is the consumer-facing watermark: "root pages
+    // [startPos, startPos + nPages*FRAME_CAPACITY) should be frozen". The
+    // scheduler expands it into (component, pageStart) NODES via
+    // twComponent::planPage() (structural, no rendering), wires dependency
+    // counters (input pages + the same-component predecessor page for DSP
+    // state chaining), and executes READY nodes on the worker pool via
+    // freezePageWithInputs() with the deps' pages bound. Nothing inside the
+    // graph ever waits: a node either sits on counters or runs; workers are
+    // never parked. Nodes own shared_ptrs to their components (no dangling —
+    // the retireObject lesson; components are lifetime-safe by construction
+    // here). Verify-at-publish: a node whose dep pages went stale mid-render
+    // or whose plan proved incomplete (misses) retries once with re-frozen
+    // deps; content correctness is guaranteed regardless by the stage-2
+    // legacy fallback inside the render — the retry improves cache quality.
+    class GraphDemand {
+    public:
+        // Block until every demanded root page is frozen, or the revalidator
+        // shuts down (abort). NOT for the RT audio thread.
+        void wait();
+        bool done() const;
+    private:
+        friend class CaptureRevalidator;
+        mutable std::mutex m_;
+        std::condition_variable cv_;
+        int  outstanding_ = 0;
+        bool aborted_ = false;
+        int  priority_ = 5;
+    };
+
+    /**
+     * Demand that `root`'s pages [startPos, startPos + nPages*capacity) be
+     * frozen, expanding and scheduling the whole dependency graph. Returns
+     * immediately; wait on the returned handle for completion. Pages land in
+     * the components' own caches (freezePage publication semantics), so any
+     * consumer — including the legacy pull path — hits them.
+     */
+    std::shared_ptr<GraphDemand> requestGraphPages(
+        std::shared_ptr<twComponent> root,
+        uint64_t startPos,
+        int nPages,
+        int priority = 5);
+
     /**
      * Retire a revalidatable object that is about to be destroyed.
      *
@@ -240,6 +287,38 @@ private:
     // of the reval job it is processing here (under queueLock_) and clears it on
     // completion, so a destructor can block until no worker still touches it.
     std::unordered_map<IRevalidatable*, int> activeRevalObjects_;
+
+    // --- Dataflow stage 3 scheduler state (all guarded by queueLock_ unless
+    //     noted) -----------------------------------------------------------
+    struct PageNode {
+        std::shared_ptr<twComponent> component;
+        uint64_t pageStart = 0;
+        int priority = 5;
+        int pendingDeps = 0;                 // unresolved edges (inputs + pred)
+        int attempts = 0;                    // verify-at-publish retries
+        enum State { Waiting, Ready, Running, Done } state = Waiting;
+        std::shared_ptr<twOutputPage> result;
+        twPagePlan plan;
+        std::vector<std::shared_ptr<PageNode>> deps;      // owning (binding)
+        std::shared_ptr<PageNode> predecessor;            // state-chain edge
+        std::vector<std::weak_ptr<PageNode>> dependents;  // notify on Done
+        std::vector<std::shared_ptr<GraphDemand>> demands;
+    };
+    using NodeKey = std::pair<const twComponent *, uint64_t>;
+    std::map<NodeKey, std::shared_ptr<PageNode>> graphNodes_;  // in-flight only
+    std::deque<std::shared_ptr<PageNode>> graphReady_;
+
+    // Serializes demand expansion. planPage() takes component mutexes, so
+    // expansion must NOT hold queueLock_ across it (a worker finishing a
+    // render holds a component mutex and then takes queueLock_ — inversion).
+    std::mutex expansionMutex_;
+
+    std::shared_ptr<PageNode> expandNode_(std::shared_ptr<twComponent> comp,
+                                          uint64_t pageStart, int priority,
+                                          int depth);
+    void processGraphNode(const std::shared_ptr<PageNode> &node);
+    void completeGraphNode(const std::shared_ptr<PageNode> &node,
+                           std::shared_ptr<twOutputPage> page);
 
     // Worker threads
     std::vector<std::thread> workers_;
