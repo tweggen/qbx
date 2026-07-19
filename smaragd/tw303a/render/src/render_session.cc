@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "tw/graph/twcomponent.h"
+#include "tw/schedule/capture_revalidator.h"   // Stage 4: watermark demands
 #include "tw/sources/twresampler.h"
 
 namespace audio {
@@ -158,6 +159,22 @@ void RenderSession::renderThreadMain() {
         std::vector<float> bufL(BLOCK_SIZE), bufR(BLOCK_SIZE);
         std::shared_ptr<twOutputPage> prevPage;
 
+        // Proposal 19 dataflow stage 4: as a watermark consumer the render
+        // demands pages ONE AT A TIME, strictly sequentially (the per-page
+        // wait in the loop below). Within each page the scheduler still
+        // parallelizes across the graph (a page's trackmix/reader/chain nodes
+        // run concurrently on the pool), but pages of one component execute in
+        // position order — the legacy cadence.
+        //
+        // Deliberately NO full-range look-ahead demand: non-caching components
+        // (twTrackMix mints a fresh page every freeze) would be re-rendered by
+        // a later per-page demand OUT OF POSITION ORDER against the full
+        // demand's in-order chain, racing their internal per-clip state
+        // (clip.previousPage) — observed as a nondeterministically missing
+        // track contribution in the goldens. Cross-page pipelining can return
+        // once node results are the cache for non-caching components too.
+        uint64_t awaitedPage = (uint64_t)-1;
+
         while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
             // Current position in component graph samples. The render range may
             // start mid-project (marked in/out range), so the graph position is
@@ -165,6 +182,19 @@ void RenderSession::renderThreadMain() {
             // written count (that rendered the wrong region for ranges > 0).
             uint64_t currentPos = startOffsetSamples_ + samplesWrittenVal;
             uint64_t pageStartPos = (currentPos / PAGE_SIZE) * PAGE_SIZE;
+
+            // Stage 4: wait for the scheduler to have this page frozen — a
+            // single-page demand that dedups onto the in-flight full-range
+            // node. This is the pipeline's ONLY blocking point, at the edge:
+            // the render observes pages, it no longer executes the graph.
+            // The requestPage below is then a cache hit; if an edit landed in
+            // between (or the demand was aborted by shutdown), it re-renders
+            // synchronously — the unchanged legacy fallback.
+            if (scheduler_ && pageStartPos != awaitedPage) {
+                scheduler_->requestGraphPages(synthOutput_, pageStartPos, 1,
+                                              /*priority*/ 8)->wait();
+                awaitedPage = pageStartPos;
+            }
 
             // Freeze this page sequentially (via requestPage, Phase 2a: dedups
             // against any concurrent revalidation of the same page).

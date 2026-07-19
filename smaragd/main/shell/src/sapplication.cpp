@@ -5,6 +5,7 @@
 
 #include "tw/graph/tw303aenv.h"
 #include "tw/playback/twspeaker.h"
+#include "tw/schedule/capture_revalidator.h"
 #include "tw/dsp/twwhitenoise.h"
 #include "tw/dsp/twconstant.h"
 
@@ -330,14 +331,28 @@ void SApplication::startRender(const audio::RenderParams &params)
         setGlobalLocatorPosRealtime((offset_t) pos);
     };
 
-    // Proposal 19 Phase 2b: an offline render owns the graph exclusively ("one
-    // player at a time"; proposal 16 "offline renders stay exact"). Quiesce
-    // background revalidation for the render's lifetime — a worker freezing the
-    // same shared components concurrently corrupts the render's output (the
-    // confirmed takes_group_broadcast flake: NO_REVAL → 15/15, workers on → ~50%).
-    // pause() drains in-flight jobs before start; resume on completion.
+    // Proposal 19 dataflow stage 4: the render is a scheduler CONSUMER — it
+    // demands watermarks and waits at the edge; the shared worker pool
+    // executes the page DAG (bound inputs, serial cursors, dedup). The old
+    // render-quiesce pause() must NOT run on this path: pausing the
+    // revalidator would gate the very workers the render's demands execute
+    // on. Coordination IS the scheduler now (the Inv-3 retirement the
+    // proposal anticipated). The pause remains only for the legacy pull path
+    // (no revalidator available, e.g. SMARAGD_REVAL_WORKERS=0).
     SProject *proj = currentProject_;
-    if (proj) {
+    CaptureRevalidator *sched = proj ? proj->getRevalidator() : nullptr;
+    if (sched) {
+        renderSession_->setScheduler(sched);
+        // Background aspect jobs (preview recomputation etc.) mutate shared
+        // component state and made the render NONDETERMINISTIC when they
+        // overlapped it (goldens diverged run-to-run). Quiesce THEM for the
+        // render's lifetime while the render's own graph demands keep
+        // executing on the pool — the background-only variant of the old
+        // full pause ("offline renders stay exact").
+        sched->pauseBackground();
+        renderSession_->onComplete =
+            [sched](bool /*success*/, const char * /*error*/) { sched->resumeBackground(); };
+    } else if (proj) {
         proj->pauseRevalidation();
         renderSession_->onComplete =
             [proj](bool /*success*/, const char * /*error*/) { proj->resumeRevalidation(); };
@@ -347,9 +362,10 @@ void SApplication::startRender(const audio::RenderParams &params)
     int sampleRate = t3Env_ ? t3Env_->getSRate() : 48000;
     bool started = renderSession_->start(synthOutput, params,
                                          static_cast<std::uint32_t>(sampleRate));
-    if (!started && proj) {
+    if (!started) {
         // Render never launched → onComplete will not fire; resume now.
-        proj->resumeRevalidation();
+        if (sched) sched->resumeBackground();
+        else if (proj) proj->resumeRevalidation();
     }
 }
 

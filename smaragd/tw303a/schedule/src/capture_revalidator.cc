@@ -92,11 +92,15 @@ void CaptureRevalidator::workerLoop() {
         {
             std::unique_lock<std::mutex> lock(queueLock_);
             // Wait for work — but not while paused (an offline render owns the
-            // graph then; see pause()). Still wake for shutdown.
+            // graph then; see pause()). While only BACKGROUND work is paused
+            // (pauseBackground(), a scheduler-driven render in progress),
+            // graph nodes still count as work. Still wake for shutdown.
             queueNotEmpty_.wait(lock, [this]() {
                 return shutdown_ ||
-                    (!paused_ && (!revalidationQueue_.empty() || !freezingQueue_.empty()
-                                  || !graphReady_.empty()));
+                    (!paused_ &&
+                     ((!backgroundPaused_ && (!revalidationQueue_.empty()
+                                              || !freezingQueue_.empty()))
+                      || !graphReady_.empty()));
             });
 
             // If shutting down and all queues empty, exit
@@ -106,20 +110,23 @@ void CaptureRevalidator::workerLoop() {
             }
 
             // Paused (woke only for a shutdown check) or nothing to do: loop.
-            if (paused_ || (revalidationQueue_.empty() && freezingQueue_.empty()
-                            && graphReady_.empty())) {
+            const bool backgroundAvailable =
+                !backgroundPaused_ && (!revalidationQueue_.empty()
+                                       || !freezingQueue_.empty());
+            if (paused_ || (!backgroundAvailable && graphReady_.empty())) {
                 continue;
             }
 
             // Dequeue the highest-priority job across the three sources.
             // Ties: reval > graph > freeze (reval is the most UI-critical).
+            // Background sources are masked while backgroundPaused_.
             const int INT_NONE = -2147483647;
-            const int rp = revalidationQueue_.empty() ? INT_NONE
-                            : revalidationQueue_.top().priority;
+            const int rp = (backgroundPaused_ || revalidationQueue_.empty())
+                            ? INT_NONE : revalidationQueue_.top().priority;
             const int gp = graphReady_.empty() ? INT_NONE
                             : graphReady_.front()->priority;
-            const int fp = freezingQueue_.empty() ? INT_NONE
-                            : freezingQueue_.top().priority;
+            const int fp = (backgroundPaused_ || freezingQueue_.empty())
+                            ? INT_NONE : freezingQueue_.top().priority;
 
             if (rp != INT_NONE && rp >= gp && rp >= fp) {
                 revalJob = revalidationQueue_.top();
@@ -134,8 +141,10 @@ void CaptureRevalidator::workerLoop() {
                 haveFreeze = true;
             }
 
-            // Mark in-flight under the lock so pause() can drain reliably.
+            // Mark in-flight under the lock so pause() can drain reliably;
+            // background jobs also count separately for pauseBackground().
             if (haveReval || haveFreeze || graphNode) ++activeJobs_;
+            if (haveReval || haveFreeze) ++activeBackgroundJobs_;
             // Record the specific object so retireObject() can block on just it
             // (the reval queue holds borrowed IRevalidatable*; the freeze queue
             // and graph nodes hold shared_ptr and are already lifetime-safe).
@@ -155,6 +164,7 @@ void CaptureRevalidator::workerLoop() {
             {
                 std::lock_guard<std::mutex> lock(queueLock_);
                 --activeJobs_;
+                if (haveReval || haveFreeze) --activeBackgroundJobs_;
                 if (haveReval && revalJob.object) {
                     auto it = activeRevalObjects_.find(revalJob.object);
                     if (it != activeRevalObjects_.end() && --it->second <= 0)
@@ -178,6 +188,22 @@ void CaptureRevalidator::resume() {
     {
         std::lock_guard<std::mutex> lock(queueLock_);
         paused_ = false;
+    }
+    queueNotEmpty_.notify_all();
+}
+
+void CaptureRevalidator::pauseBackground() {
+    std::unique_lock<std::mutex> lock(queueLock_);
+    backgroundPaused_ = true;
+    // Drain in-flight BACKGROUND jobs only; graph nodes keep running (the
+    // caller's own render demands execute on these workers).
+    idleCv_.wait(lock, [this]() { return activeBackgroundJobs_ == 0; });
+}
+
+void CaptureRevalidator::resumeBackground() {
+    {
+        std::lock_guard<std::mutex> lock(queueLock_);
+        backgroundPaused_ = false;
     }
     queueNotEmpty_.notify_all();
 }

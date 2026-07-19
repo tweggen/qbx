@@ -35,7 +35,9 @@ DEPS = {
     'devices':  ['core'],
     'sinks':    ['core'],
     'playback': ['core', 'pages', 'graph', 'devices', 'sources'],
-    'render':   ['core', 'pages', 'graph', 'sinks', 'playback'],
+    # render → schedule since proposal 19 stage 4: the offline render is a
+    # watermark CONSUMER of the page scheduler instead of pulling freezes.
+    'render':   ['core', 'pages', 'graph', 'sinks', 'playback', 'schedule'],
     'record':   ['core', 'devices', 'sinks', 'sources'],
     'schedule': ['core', 'pages', 'graph'],
     'analysis': ['core'],
@@ -108,8 +110,11 @@ APP_ENG = {
     'timeline':       _ENG_BASE | {'devices', 'playback', 'sources'},
     'pluginui':       _ENG_BASE | {'plugins'},
     'servicesui':     _ENG_BASE | {'devices', 'playback', 'record', 'render'},
+    # shell + schedule since proposal 19 stage 4: startRender wires the
+    # project's CaptureRevalidator (page scheduler) into the RenderSession
+    # and quiesces background aspects around a scheduler-driven render.
     'shell':          _ENG_BASE | {'devices', 'dsp', 'playback', 'record',
-                                   'render'},
+                                   'render', 'schedule'},
     'testkit':        _ENG_BASE | {'analysis'},
 }
 

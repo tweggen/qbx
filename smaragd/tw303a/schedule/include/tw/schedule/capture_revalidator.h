@@ -169,6 +169,18 @@ public:
     void pause();
     void resume();
 
+    /**
+     * Stage 4 — quiesce BACKGROUND work only. Gates the reval + component-
+     * freezing queues (preview/aspect recomputation, which mutates shared
+     * component state) and drains their in-flight jobs, while GRAPH DEMANDS
+     * keep executing: an offline render must not race background aspect jobs
+     * ("offline renders stay exact"), but its own page DAG must proceed on
+     * these very workers — a full pause() here would deadlock the render's
+     * demand waits. Queued background jobs run after resumeBackground().
+     */
+    void pauseBackground();
+    void resumeBackground();
+
     // --- Proposal 19 dataflow stage 3: dependency-counting page scheduler ---
     //
     // A DEMAND is the consumer-facing watermark: "root pages
@@ -282,6 +294,12 @@ private:
     bool paused_{false};
     int  activeJobs_{0};
     std::condition_variable idleCv_;
+
+    // Background-only quiesce (see pauseBackground()): gates reval/freezing
+    // dequeues and counts their in-flight jobs separately so the drain can
+    // wait on exactly them while graph nodes keep running.
+    bool backgroundPaused_{false};
+    int  activeBackgroundJobs_{0};
 
     // Per-object in-flight count for retireObject(): a worker records the object
     // of the reval job it is processing here (under queueLock_) and clears it on

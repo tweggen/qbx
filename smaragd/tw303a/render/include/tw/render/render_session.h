@@ -13,6 +13,7 @@
 #include "tw/sinks/file_sink.h"
 
 class twComponent;
+class CaptureRevalidator;
 
 namespace audio {
 
@@ -34,6 +35,17 @@ public:
 
     // Start rendering. Returns false if already rendering or invalid params.
     bool start(std::shared_ptr<twComponent> synthOutput, const RenderParams &params, std::uint32_t sampleRate);
+
+    // Proposal 19 dataflow stage 4 — render as a WATERMARK CONSUMER. When a
+    // scheduler is set (before start()), the render thread no longer drives
+    // the freeze itself: it issues one full-range demand up front (the whole
+    // page DAG, with predecessor chaining for exact sequential DSP state) and
+    // then, per page, a single-page demand it WAITS on — the only blocking in
+    // the pipeline, at the very edge — before reading the page from the
+    // component cache. The caller must NOT pause the revalidator around such
+    // a render (the demand executes on its worker pool); coordination is the
+    // scheduler itself. Null (default) keeps the legacy sequential pull.
+    void setScheduler(CaptureRevalidator *scheduler) { scheduler_ = scheduler; }
 
     // Request cancellation. Safe to call from any thread.
     void requestCancel();
@@ -68,6 +80,7 @@ private:
     std::string lastError_;
     std::unique_ptr<AudioFileWriter> writer_;
     std::unique_ptr<FileSink> fileSink_;        // Buffered output with futures
+    CaptureRevalidator *scheduler_ = nullptr;   // Stage 4: borrowed, optional
 };
 
 }  // namespace audio

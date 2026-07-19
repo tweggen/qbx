@@ -201,7 +201,7 @@ tw_module(render
     SOURCES
         render/include/tw/render/render_session.h
         render/src/render_session.cc
-    DEPS tw_core tw_pages tw_graph tw_sinks tw_playback
+    DEPS tw_core tw_pages tw_graph tw_sinks tw_playback tw_schedule
 )
 
 # --- E11 record: capture from input devices -----------------------------------
