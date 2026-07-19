@@ -25,18 +25,23 @@ class tw303aEnvironment;
 class twView : public twComponent
 {
 public:
-    // Callback signature: returns the current component to forward to
+    // Callback signature: returns the current component to forward to. Used for
+    // the position-INDEPENDENT queries (structure, teardown, live pull) that
+    // must NOT trigger the clip's lazy reader build.
     using GetComponentFn = std::function<std::shared_ptr<twComponent>()>;
-    // Callback signature: map a clip-relative position (what the track computes)
-    // to the underlying component's position domain. A plain sample clip's
-    // component is a reader over the SOURCE material, so the clip's slip offset
-    // (SCut::startOffset, grain-stretched as needed) must be folded in before
-    // seeking or freezing pages. Only the clip object knows that mapping; the
-    // track and this wrapper stay domain-agnostic. Null = identity.
-    using MapPosFn = std::function<offset_t(offset_t)>;
+    // Proposal 19 Inv-1: the position-DEPENDENT freeze/seek path resolves the
+    // component AND the mapped position together, atomically, from ONE clip
+    // snapshot. A plain sample clip's component is a reader over the SOURCE
+    // material, so the clip's slip offset (SCut::startOffset, grain-stretched as
+    // needed) must be folded in — and it must be folded against the SAME reader
+    // the resolver returns, or a concurrent lazy reader build can make the
+    // mapping and the component disagree. Only the clip object knows this
+    // mapping; the track and this wrapper stay domain-agnostic. Null = identity
+    // mapping over getComponentFn's component.
+    using ResolveFn = std::function<twResolvedClip(offset_t)>;
 
     twView(tw303aEnvironment &env, GetComponentFn getComponentFn,
-           MapPosFn mapPosFn = nullptr);
+           ResolveFn resolveFn = nullptr);
     virtual ~twView();
 
     // Forward all rendering/seeking calls to the underlying component
@@ -79,12 +84,14 @@ public:
 
 private:
     GetComponentFn getComponentFn_;
-    MapPosFn mapPosFn_;
+    ResolveFn resolveFn_;
 
-    // Apply mapPosFn_ (identity when unset). Call BEFORE getComponent(): the
-    // mapping may lazily build the clip's reader chain, which changes what
-    // getComponent() returns.
-    offset_t mapPos(offset_t pos) const;
+    // Proposal 19 Inv-1: resolve {component, mappedPos} together for the
+    // freeze/seek path. When no resolver was supplied, fall back to the identity
+    // mapping over getComponentFn's component (matches the old null-MapPosFn
+    // default). This is the ONE place the component and mapping are read; they
+    // can no longer straddle a concurrent lazy reader build.
+    twResolvedClip resolve(offset_t pos) const;
 };
 
 #endif

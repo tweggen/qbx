@@ -609,6 +609,30 @@ offset_t SCut::mapTimelineToComponentPos( offset_t off )
                .map( Fraction( (int64_t) off ) ).floorToInt();
 }
 
+// Proposal 19 Inv-1: resolve component AND mapped position from ONE snapshot.
+// This is exactly getRootComponent() + mapTimelineToComponentPos() fused so both
+// read the SAME reader — a freeze that observes the post-edit reader as its
+// component also folds the post-edit slip/loop mapping, and vice versa. Splitting
+// them into two getSnapshotBlocking() calls (as twView used to) let a concurrent
+// lazy rebuildReader() land between them, so the component and the mapping could
+// come from different reader generations (the takes_group_broadcast race class).
+twResolvedClip SCut::resolveClip( offset_t off )
+{
+    ensureReader();
+    SCutSnapshot snap = getSnapshotBlocking();
+
+    twResolvedClip r;
+    // Component: the built reader if we have one, else the shared content source
+    // (matches getRootComponent()'s fallback for the not-yet-built case).
+    r.component = snap.reader.reader
+        ? std::static_pointer_cast<twComponent>( snap.reader.reader )
+        : content_->getRootComponent();
+    // Mapping: identical fold to mapTimelineToComponentPos(), against THIS snap.
+    r.mappedPos = (offset_t) clipToReaderMap( snap.reader.looping )
+                      .map( Fraction( (int64_t) off ) ).floorToInt();
+    return r;
+}
+
 
 // Map content (SOURCE-domain) dirty ranges into clip-relative ranges
 // (proposal 18 Phase 5). source -> warped is the exact StretchMap

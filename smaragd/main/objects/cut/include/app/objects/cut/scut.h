@@ -127,6 +127,9 @@ public:
     // a clip-relative position, so tracks can seek/freeze our reader directly.
     // A looping reader is already cut-relative and maps identically.
     virtual offset_t mapTimelineToComponentPos( offset_t off );
+    // Inv-1: resolve component + mapped position from ONE snapshot (never two
+    // straddling getSnapshotBlocking() reads that a lazy reader build can split).
+    virtual twResolvedClip resolveClip( offset_t off ) override;
     SObject &getContent() const { return content_->getSObject(); }
     WarpedPos getLoopStart() const;
     // The clip's slip anchor. AUTHORITATIVE storage is the SOURCE-domain
@@ -216,7 +219,7 @@ public:
         return twAffineMap( Fraction(1) / st, srcStart_ );
     }
     // clipToReaderMap: clip-relative position -> the reader's own domain
-    // (what twView::MapPosFn needs). A looping reader is cut-relative
+    // (what SCut::resolveClip folds via twView). A looping reader is cut-relative
     // (identity - it owns its loop base internally via twLoopMap); a plain
     // reader is addressed in the warped domain, so the slip offset folds in.
     twAffineMap clipToReaderMap( bool looping ) const {

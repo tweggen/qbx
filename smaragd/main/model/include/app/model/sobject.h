@@ -136,6 +136,20 @@ public:
     virtual offset_t mapTimelineToComponentPos( offset_t off ) { return off; }
 
     /**
+     * Proposal 19 Inv-1: resolve, from ONE structural snapshot, both the root
+     * component to freeze/seek AND the timeline→component position mapping. For
+     * a windowed clip (SCut/STakeStack) the component identity (built reader vs
+     * shared content source) and the slip mapping both depend on the lazily
+     * built reader; resolving them in separate getRootComponent() /
+     * mapTimelineToComponentPos() calls can straddle a concurrent reader build
+     * and disagree (the takes_group_broadcast race class). Overriders compute
+     * both under one lock. The default is safe for objects whose mapping is the
+     * identity and whose component is stable. Consumed via twView (see STrack).
+     */
+    virtual twResolvedClip resolveClip( offset_t off )
+    { return twResolvedClip{ getRootComponent(), mapTimelineToComponentPos( off ) }; }
+
+    /**
      * True for containers the index-path search may descend into (track
      * lanes). Path RESOLUTION follows explicit indices and needs no flag;
      * this only scopes the reverse search (pathOf) exactly as the historical
@@ -189,7 +203,7 @@ public:
     virtual bool isEmpty() const;
 
     virtual bool hasDuration() const;
-    virtual length_t getDuration() const;    
+    virtual length_t getDuration() const;
     
     virtual bool hasPreview() const;
     virtual int getPreview( preview_t *dest,

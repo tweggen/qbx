@@ -231,16 +231,16 @@ void STrack::trackChildWasAdded( SLink &child )
             length_t duration = child.getSObject().getDuration();
             // Capture SLink by reference; callback will call getRootComponent() dynamically
             auto getComponentFn = [&child]() { return child.getRootComponent(); };
-            // Position mapper: folds a windowed clip's slip offset into
-            // clip-relative positions before the component is seeked/frozen.
-            auto mapPosFn = [&child]( offset_t off ) {
-                return child.getSObject().mapTimelineToComponentPos( off );
+            // Inv-1: single resolver — component + slip-folded position from ONE
+            // clip snapshot, so the freeze can't straddle a lazy reader build.
+            auto resolveFn = [&child]( offset_t off ) {
+                return child.getSObject().resolveClip( off );
             };
             twEditRange affected;
             for( int i=0; i<nBusses_; ++i ) {
                 if( cpTrackMixers_[i] ) {
                     twEditRange r = cpTrackMixers_[i]->insertClip(
-                        &child, startTime, duration, getComponentFn, mapPosFn);
+                        &child, startTime, duration, getComponentFn, resolveFn);
                     affected.unite(r.start, r.end);
                 }
             }
@@ -340,13 +340,13 @@ void STrack::setNBusses( int nBusses )
         length_t duration = lk->getSObject().hasDuration() ? lk->getSObject().getDuration() : 0;
         // Create a callback that returns the component dynamically
         auto getComponentFn = [lk]() { return lk->getRootComponent(); };
-        // Position mapper: folds a windowed clip's slip offset into
-        // clip-relative positions before the component is seeked/frozen.
-        auto mapPosFn = [lk]( offset_t off ) {
-            return lk->getSObject().mapTimelineToComponentPos( off );
+        // Inv-1: single resolver — component + slip-folded position from ONE
+        // clip snapshot, so the freeze can't straddle a lazy reader build.
+        auto resolveFn = [lk]( offset_t off ) {
+            return lk->getSObject().resolveClip( off );
         };
         for( int i=0; i<nBusses; ++i ) {
-            cpTrackMixers_[i]->insertClip(lk, startTime, duration, getComponentFn, mapPosFn);
+            cpTrackMixers_[i]->insertClip(lk, startTime, duration, getComponentFn, resolveFn);
         }
     }
 

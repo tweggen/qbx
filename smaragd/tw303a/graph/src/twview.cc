@@ -3,16 +3,21 @@
 #include "tw/pages/io_vector.h"
 
 twView::twView(tw303aEnvironment &env, GetComponentFn getComponentFn,
-               MapPosFn mapPosFn)
+               ResolveFn resolveFn)
     : twComponent(env),
       getComponentFn_(getComponentFn),
-      mapPosFn_(mapPosFn)
+      resolveFn_(resolveFn)
 {
 }
 
-offset_t twView::mapPos(offset_t pos) const
+twResolvedClip twView::resolve(offset_t pos) const
 {
-    return mapPosFn_ ? mapPosFn_(pos) : pos;
+    if (resolveFn_) {
+        return resolveFn_(pos);
+    }
+    // No resolver: identity mapping over the component-only accessor (the old
+    // null-MapPosFn behaviour).
+    return twResolvedClip{ getComponent(), pos };
 }
 
 twView::~twView()
@@ -33,12 +38,11 @@ std::shared_ptr<twComponent> twView::getComponent() const
 
 int twView::seekTo(offset_t offset)
 {
-    // Map first: the mapping may lazily build the clip's reader, which changes
-    // what getComponent() returns (reader instead of the shared content cursor).
-    offset_t mapped = mapPos(offset);
-    std::shared_ptr<twComponent> comp = getComponent();
-    if (!comp) return -1;
-    return comp->seekTo(mapped);
+    // Inv-1: resolve component + mapped position from ONE snapshot, so the
+    // mapping is always folded against the very reader we seek.
+    twResolvedClip r = resolve(offset);
+    if (!r.component) return -1;
+    return r.component->seekTo(r.mappedPos);
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
@@ -65,18 +69,19 @@ std::shared_ptr<twOutputPage> twView::freezePage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
-    // Map the clip-relative position into the component's own domain (slip
-    // offset folded in). Pages end up cached on the component keyed by its own
-    // (source) positions, so slipping a clip later still hits valid pages.
-    uint64_t mapped = (uint64_t) mapPos((offset_t) startPos);
-    std::shared_ptr<twComponent> comp = getComponent();
-    if (!comp) {
+    // Inv-1: resolve the component AND the clip-relative → component-domain
+    // position mapping from ONE snapshot (slip offset folded in against the
+    // reader we actually freeze). Pages end up cached on the component keyed by
+    // its own (source) positions, so slipping a clip later still hits valid
+    // pages.
+    twResolvedClip r = resolve((offset_t) startPos);
+    if (!r.component) {
         auto page = std::make_shared<twOutputPage>();
         page->startPosition = startPos;
         page->validFrames = 0;
         return page;
     }
-    return comp->freezePage(mapped, inputData, inputOffset, inputLength, sampleRate, previousPage);
+    return r.component->freezePage((uint64_t) r.mappedPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
 }
 
 std::shared_ptr<twOutputPage> twView::freezePreviewPage(
@@ -87,15 +92,14 @@ std::shared_ptr<twOutputPage> twView::freezePreviewPage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
-    uint64_t mapped = (uint64_t) mapPos((offset_t) startPos);
-    std::shared_ptr<twComponent> comp = getComponent();
-    if (!comp) {
+    twResolvedClip r = resolve((offset_t) startPos);
+    if (!r.component) {
         auto page = std::make_shared<twOutputPage>();
         page->startPosition = startPos;
         page->validFrames = 0;
         return page;
     }
-    return comp->freezePreviewPage(mapped, length, previewSampleRate, fullSampleRate, previousPage);
+    return r.component->freezePreviewPage((uint64_t) r.mappedPos, length, previewSampleRate, fullSampleRate, previousPage);
 }
 
 idx_t twView::getNInputs() const

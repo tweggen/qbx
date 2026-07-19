@@ -64,9 +64,13 @@ int main()
     const length_t clipDur = 3000;
     const offset_t slip = 7000;              // the clip's media offset
 
+    // Inv-1: the freeze/seek path takes a single resolver returning
+    // {component, mappedPos} atomically. Here the mapping just folds the slip.
     track->insertClip(&dummyKeyA, clipStart, clipDur,
                       [comp]() -> std::shared_ptr<twComponent> { return comp; },
-                      [=](offset_t off) { return (offset_t)(off + slip); });
+                      [=](offset_t off) {
+                          return twResolvedClip{ comp, (offset_t)(off + slip) };
+                      });
 
     const length_t PAGE = 8192;
     auto page = track->freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
@@ -76,7 +80,7 @@ int main()
     CHECK(s[0] == 0.0f && s[(size_t)clipStart - 1] == 0.0f,
           "silence before the clip start");
     CHECK(s[(size_t)clipStart] == val(slip),
-          "clip start plays the MapPosFn-translated (slipped) material");
+          "clip start plays the resolver-translated (slipped) material");
     CHECK(s[(size_t)clipStart + clipDur - 1] == val(slip + clipDur - 1),
           "material is continuous through the clip");
     CHECK(s[(size_t)(clipStart + clipDur)] == 0.0f

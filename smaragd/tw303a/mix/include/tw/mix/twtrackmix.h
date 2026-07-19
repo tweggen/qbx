@@ -60,15 +60,17 @@ public:
     // Clips are identified by an opaque caller-supplied key (STrack passes the
     // SLink) — component pointers are ambiguous because two clips of the same
     // sample resolve to the same shared component until their readers exist.
-    // getComponentFn returns the current component (allows dynamic lookup);
-    // mapPosFn optionally folds the clip's slip offset into clip-relative
-    // positions before they reach the component (see twView).
+    // getComponentFn returns the current component for position-independent
+    // queries (structure/teardown/live pull); resolveFn (proposal 19 Inv-1)
+    // resolves {component, mappedPos} together for the freeze/seek path so the
+    // slip mapping and the component can never straddle a lazy reader build
+    // (see twView). resolveFn null = identity mapping over getComponentFn.
     // Each mutator range-scopes its own page invalidation (only pages
     // intersecting the affected extent go stale) and RETURNS that extent
     // so the caller can stale the downstream chain the same way.
     twEditRange insertClip(const void *key, offset_t startTime, length_t duration,
                     std::function<std::shared_ptr<twComponent>()> getComponentFn,
-                    std::function<offset_t(offset_t)> mapPosFn = nullptr);
+                    std::function<twResolvedClip(offset_t)> resolveFn = nullptr);
     twEditRange removeClip(const void *key);
     twEditRange updateClip(const void *key, offset_t newStartTime, length_t newDuration);
 

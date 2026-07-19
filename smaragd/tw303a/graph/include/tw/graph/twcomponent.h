@@ -33,6 +33,17 @@ enum class ComponentState {
 class tw303aEnvironment;
 class twComponent;
 
+// Proposal 19 Inv-1: the atomic result of resolving one clip position. A
+// windowed clip (SCut/STakeStack) must hand a freeze BOTH the component to
+// render AND the position mapped into that component's own domain, computed
+// from ONE structural snapshot — resolving them separately can straddle a
+// concurrent lazy reader build (the takes_group_broadcast race class). twView
+// carries a resolver returning this; SObject::resolveClip produces it.
+struct twResolvedClip {
+    std::shared_ptr<twComponent> component;
+    offset_t                     mappedPos = 0;
+};
+
 class twComponent
     : public std::enable_shared_from_this<twComponent>
 {

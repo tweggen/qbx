@@ -93,7 +93,7 @@ static twEditRange clipExtent(offset_t startTime, length_t duration)
 
 twEditRange twTrackMix::insertClip(const void *key, offset_t startTime, length_t duration,
                             std::function<std::shared_ptr<twComponent>()> getComponentFn,
-                            std::function<offset_t(offset_t)> mapPosFn)
+                            std::function<twResolvedClip(offset_t)> resolveFn)
 {
     if( !getComponentFn ) {
         fprintf(stderr, "ERROR: twTrackMix::insertClip received null callback!\n");
@@ -110,7 +110,7 @@ twEditRange twTrackMix::insertClip(const void *key, offset_t startTime, length_t
     // own locks — doing that under mutex() risks a lock-order inversion. The
     // view is not reachable by any other thread until the push_back below, so
     // building it unlocked is safe.
-    auto view = std::make_shared<twView>(env, getComponentFn, mapPosFn);
+    auto view = std::make_shared<twView>(env, getComponentFn, resolveFn);
     view->init();
 
     std::lock_guard<std::mutex> lock(mutex());

@@ -207,6 +207,17 @@ offset_t STakeStack::mapTimelineToComponentPos( offset_t off )
     return off;
 }
 
+twResolvedClip STakeStack::resolveClip( offset_t off )
+{
+    // Read activeCut() ONCE and resolve the whole clip through that take, so the
+    // component and the mapping can't come from different takes (getRootComponent
+    // and mapTimelineToComponentPos used to call activeCut() separately) nor from
+    // different reader generations of the same take (SCut::resolveClip fuses it).
+    if( SCut *cut = activeCut() )
+        return cut->resolveClip( off );
+    return twResolvedClip{ ensureSilence(), off };
+}
+
 int STakeStack::seekTo( offset_t off )
 {
     if( SCut *cut = activeCut() )

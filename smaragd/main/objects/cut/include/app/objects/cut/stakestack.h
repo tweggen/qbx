@@ -104,6 +104,9 @@ public:
     // --- SObject ---------------------------------------------------------
     std::shared_ptr<twComponent> getRootComponent() override;
     offset_t mapTimelineToComponentPos( offset_t off ) override;
+    // Inv-1: resolve component + mapped position via the active take's SCut in
+    // ONE call, so a take switch or lazy reader build can't split them.
+    twResolvedClip resolveClip( offset_t off ) override;
     // Range-scoped invalidation: only the ACTIVE take is audible, so
     // dirty ranges inside an inactive take's content map to NOTHING.
     QList<SDirtyRange> mapChildRangesToSelf(
