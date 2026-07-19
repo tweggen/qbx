@@ -821,6 +821,19 @@ void SCut::setPitchCents( double cents )
 
 SCut::~SCut()
 {
+    // FIRST, before tearing down any member: retire from the revalidator. The
+    // reval queue holds a BORROWED pointer to this cut, and removeRef()'s
+    // deleteLater() is a one-way trip — a preview job scheduled (e.g. from a
+    // repaint's getCapture()) AFTER our ref hit zero cannot keep us alive, so a
+    // worker could otherwise run SCut::buildCapture_() on freed memory and lock a
+    // destroyed captureBuildMutex_ (std::mutex::lock() throws → terminate). This
+    // drops our queued jobs and blocks until no worker still touches us, while
+    // every member below is still intact. (Grain-backed cuts hit this most: they
+    // build a capture on the worker; repro = split a grained cut, delete the tail.)
+    if( revalidator_ ) {
+        revalidator_->retireObject( this );
+    }
+
     // Unregister from content's dependents (lazy invalidation, proposal 06).
     // This cut is no longer referencing the content, so remove this link from
     // the content's dependent set. The content can now change without affecting this cut.

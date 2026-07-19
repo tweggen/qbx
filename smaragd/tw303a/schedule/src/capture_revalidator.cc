@@ -107,6 +107,10 @@ void CaptureRevalidator::workerLoop() {
 
             // Mark in-flight under the lock so pause() can drain reliably.
             if (haveReval || haveFreeze) ++activeJobs_;
+            // Record the specific object so retireObject() can block on just it
+            // (the reval queue holds borrowed IRevalidatable*; the freeze queue
+            // holds shared_ptr and is already lifetime-safe).
+            if (haveReval && revalJob.object) ++activeRevalObjects_[revalJob.object];
         }
 
         // Process outside the lock.
@@ -120,8 +124,13 @@ void CaptureRevalidator::workerLoop() {
             {
                 std::lock_guard<std::mutex> lock(queueLock_);
                 --activeJobs_;
+                if (haveReval && revalJob.object) {
+                    auto it = activeRevalObjects_.find(revalJob.object);
+                    if (it != activeRevalObjects_.end() && --it->second <= 0)
+                        activeRevalObjects_.erase(it);
+                }
             }
-            idleCv_.notify_all();  // wake a pause() that is draining
+            idleCv_.notify_all();  // wake a pause()/retireObject() that is draining
         }
     }
 }
@@ -142,6 +151,35 @@ void CaptureRevalidator::resume() {
     queueNotEmpty_.notify_all();
 }
 
+void CaptureRevalidator::retireObject(IRevalidatable* object) {
+    if (!object) return;
+
+    std::unique_lock<std::mutex> lock(queueLock_);
+
+    // 1. Drop every queued reval job for this object. It is being destroyed, so
+    //    its reference count is moot — we intentionally do NOT revalRemoveRef()
+    //    the surviving jobs (that would re-enter removeRef()/deleteLater() on an
+    //    object already in its destructor). Rebuild the priority queue without
+    //    the retiring object's jobs; other objects' jobs and ordering survive.
+    if (!revalidationQueue_.empty()) {
+        std::priority_queue<CaptureRevalidationJob> kept;
+        while (!revalidationQueue_.empty()) {
+            CaptureRevalidationJob j = revalidationQueue_.top();
+            revalidationQueue_.pop();
+            if (j.object != object) kept.push(j);
+        }
+        revalidationQueue_.swap(kept);
+    }
+
+    // 2. Block until no worker is still processing a job for this object, so no
+    //    worker can dereference it after we return (and it is torn down). Workers
+    //    release queueLock_ while processing, then re-take it to clear the entry
+    //    and notify idleCv_.
+    idleCv_.wait(lock, [this, object]() {
+        return activeRevalObjects_.find(object) == activeRevalObjects_.end();
+    });
+}
+
 void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& job) {
     assert(job.object);
     assert(job.aspects != 0);
@@ -155,6 +193,10 @@ void CaptureRevalidator::processRevalidationJob(const CaptureRevalidationJob& jo
         // Check if object still needs revalidation (state may have changed while queued)
         // _nolock: we hold the lock (std::lock_guard above)
         if (!job.object->revalNeeded_nolock(job.aspects)) {
+            // Balance the revalAddRef() from scheduleRevalidation() on EVERY exit
+            // path (this early-out used to leak a ref, over-holding the object).
+            lock.unlock();
+            job.object->revalRemoveRef();
             return;
         }
 

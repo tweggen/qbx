@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 19 crash repro: split a GRAIN-backed cut, then delete the second
+  half. The tail SCut is destroyed while a background revalidation worker still
+  has a queued/in-flight Preview job for it (SCut::invalidateCapture on the
+  split/resize schedules Preview; removeRef()'s deleteLater() is a one-way trip
+  so a later-scheduled job cannot keep the freed cut alive). The worker then runs
+  SCut::buildCapture_() on freed memory and locks a destroyed captureBuildMutex_
+  → std::mutex::lock() throws → terminate. Fixed by SCut::~SCut() retiring itself
+  from the revalidator (drops queued jobs, drains in-flight) before teardown.
+
+  Deterministic on the buggy build; must pass cleanly on the fixed build.
+-->
+<SActionScript version="1" name="grain_split_delete_crash">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- make the cut grain-backed (stretch != 1 → buildCapture_ materializes it) -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="48000" loopLength="0" stretch="2.0" broadcast="0"/>
+
+    <!-- split → head [0,24000) + tail [24000,48000), both grained -->
+    <split-clip clip="0,0" splitTime="24000" broadcast="0"/>
+
+    <!-- delete the second half while its Preview reval job is in flight -->
+    <remove-sample trackIndex="0" clipIndex="1"
+                   filePath="../test_sawtooth.wav" timePos="24000"/>
+
+    <!-- keep the app (and revalidator workers) running so the stale job lands -->
+    <render filename="grain_split_delete.wav" format="wav" quality="10"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

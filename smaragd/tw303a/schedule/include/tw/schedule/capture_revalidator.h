@@ -10,6 +10,7 @@
 #include <memory>
 #include <atomic>
 #include <variant>
+#include <unordered_map>
 #include "tw/pages/capture_page_pool.h"
 
 // Forward declarations
@@ -166,6 +167,27 @@ public:
     void resume();
 
     /**
+     * Retire a revalidatable object that is about to be destroyed.
+     *
+     * The revalidation queue holds BORROWED IRevalidatable* pointers (unlike the
+     * component-freezing queue, which holds shared_ptr and is lifetime-safe).
+     * The object's own reference count uses Qt deleteLater(), which is a one-way
+     * trip: once a delete is deferred, a later revalAddRef() from a freshly
+     * scheduled job cannot rescind it, so the object can be destroyed while a job
+     * that references it is still queued or in flight. A worker then dereferences
+     * freed memory (e.g. locks a destroyed captureBuildMutex_ inside
+     * SCut::buildCapture_ → std::mutex::lock() throws → terminate).
+     *
+     * Every enqueuing object MUST call this from the TOP of its destructor, while
+     * it is still fully constructed: it drops all queued jobs for `object` and
+     * BLOCKS until no worker is still processing a job for it. After this returns
+     * the revalidator holds no reference to `object` and none will be touched.
+     * Safe to call with pending or no jobs. Must NOT be called from a worker
+     * thread (it would deadlock waiting on itself).
+     */
+    void retireObject(IRevalidatable* object);
+
+    /**
      * RAII guard: pause() on construction (drains in-flight jobs), resume() on
      * destruction. Use around an offline render so it never races a worker.
      */
@@ -213,6 +235,11 @@ private:
     bool paused_{false};
     int  activeJobs_{0};
     std::condition_variable idleCv_;
+
+    // Per-object in-flight count for retireObject(): a worker records the object
+    // of the reval job it is processing here (under queueLock_) and clears it on
+    // completion, so a destructor can block until no worker still touches it.
+    std::unordered_map<IRevalidatable*, int> activeRevalObjects_;
 
     // Worker threads
     std::vector<std::thread> workers_;
