@@ -5675,3 +5675,12 @@ Remaining forward work: preview lanes (aspect-separated state, unlocking
 cursorMutex_ retirement), freeze-in-place for capacity-limited components,
 and cross-page pipelining via node-result caching for non-caching
 components (twTrackMix).
+
+### Follow-ups captured as proposal 20
+
+The remaining forward work (preview lanes → cursorMutex_ retirement,
+cross-page pipelining via node-result caching, legacy-pull deletion gated
+on zero-miss metrics, freeze-in-place, VST execution-class lanes, and the
+housekeeping list incl. the pre-existing save/load qxa trio and a headless
+playback test) is specced with per-item acceptance gates in
+`plan/proposed/20_DATAFLOW_FOLLOWUPS.md`.

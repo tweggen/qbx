@@ -33,6 +33,33 @@ the action-verb reference is `docs/ACTIONS.md`.
 - **Sample format/rate are first-class:** Every project has its own sample rate (default 48 kHz, legacy loads as 44.1 kHz). The engine is rate-aware; a resampler at the device boundary reconciles project rate ↔ device rate.
 - **Data flows:** Synth graph → `twSpeaker` (holds resampler + format converter) → AudioBackend → device.
 
+### Freeze / rendering model (2026-07: proposal 19 executed — demand-driven dataflow)
+- Audio is produced as page-frozen output (`twOutputPage`, 65536 frames). Consumers
+  never freeze synchronously: the **offline render** (`RenderSession::setScheduler`)
+  and the **playback readahead** (`AudioEngine::setScheduler`) declare *demands*
+  (`CaptureRevalidator::requestGraphPages`) and wait/observe at the edge.
+- The scheduler expands structural plans (`twComponent::planPage`, per-clip
+  resolution via `twView::resolve`) into dependency-counted nodes executed on the
+  shared worker pool via `freezePageWithInputs()`; bound input pages are served at
+  two seams (`twStreamingLatch::copyData` and the top of `twComponent::freezePage`).
+  The same-component predecessor edge gives in-position order + DSP state chaining.
+- The **RT audio callback never renders** — enforced by `twRtThreadGuard`
+  (one-shot report + assert in `freezePage`); it reads ready pages with the
+  stale-predecessor fallback (proposal 16).
+- Renders quiesce background aspect jobs via `pauseBackground()` (graph demands
+  keep running; a full `pause()` would deadlock them).
+- Hard-won invariants and remaining follow-ups (preview lanes, pipelining,
+  legacy-pull deletion): `plan/proposed/19_ASYNC_FREEZE_MODEL.md` ("Phase 2
+  REVISED") and `plan/proposed/20_DATAFLOW_FOLLOWUPS.md`.
+
+### Testing knobs & determinism gates
+- `SMARAGD_REVAL_WORKERS=<n>` overrides the revalidation/scheduler worker count
+  (clamped [1,64]); `0` disables the revalidator entirely (legacy pull paths).
+- `smaragd/tests/repeat_test.sh <bin> <case.qxa> [N] [workers]` — the flake gate
+  (e.g. `takes_group_broadcast` N=50..100, swept over workers {1,4,8,16}).
+- Render exactness is gated by **byte-level `cmp` of the rendered WAVs** across
+  builds/runs (they are 16-bit PCM — do not parse as float32).
+
 ### Supported Platforms
 | Platform | Backend | Status |
 |----------|---------|--------|
@@ -65,13 +92,20 @@ the action-verb reference is `docs/ACTIONS.md`.
 ```
 plan/
 ├── STATE.md              # Chronological record of implementation (authoritative)
-└── proposed/
-    ├── 01_BUILD_SYSTEM_MODERNIZATION.md
-    ├── 02_AUDIO_DRIVER_STRATEGY.md
-    ├── 03_ACTION_MODEL.md (command/undo/scripting, design only)
-    └── 04_WIRE_FORMAT_AND_SAMPLE_RATE.md
+└── proposed/             # Numbered proposals 02..20; highlights:
+    ├── 14_MODULARIZATION.md         (executed — module DAG, CONTRACT.md files)
+    ├── 15_SCOPED_INVALIDATION.md    (executed)
+    ├── 16_STALE_PAGE_FALLBACK.md    (executed — RT stale-page playback)
+    ├── 17_TAKE_LANES_AND_COMPING.md (executed)
+    ├── 18_EXACT_POSITION_DOMAINS.md (executed — typed positions, exact maps)
+    ├── 19_ASYNC_FREEZE_MODEL.md     (executed — demand-driven dataflow; keep
+    │                                 its "Phase 2 REVISED" design current)
+    └── 20_DATAFLOW_FOLLOWUPS.md     (OPEN — preview lanes, pipelining,
+                                      retirements, housekeeping; start here
+                                      for the next engine work)
 docs/
 ├── PROJECT_OVERVIEW.md   # This document's source
+├── ARCHITECTURE.md       # Module map (start here for code navigation)
 └── BUILD.md              # Build instructions
 ```
 
