@@ -338,6 +338,43 @@ std::shared_ptr<twOutputPage> twTrackMix::freezePage(
     return page;
 }
 
+// Proposal 19 dataflow stage 2 — planner override (see header doc). Mirrors
+// freezePage_nolock's clip-overlap walk EXACTLY (same clipEnd/childPos
+// arithmetic), but resolves structurally instead of rendering.
+twPagePlan twTrackMix::planPage( uint64_t pageStart )
+{
+    twPagePlan plan;
+    plan.component = shared_from_this();
+    plan.pageStart = pageStart;
+    plan.epoch     = contentEpochNow();
+
+    const uint64_t endPos = pageStart + twOutputPage::FRAME_CAPACITY;
+
+    std::lock_guard<std::mutex> lock(mutex());
+    for( const ClipEntry &clip : clips_ ) {
+        uint64_t clipEnd = clip.startTime;
+        if( clip.duration > 0 ) {
+            clipEnd += clip.duration;
+        } else {
+            clipEnd = endPos;      // unbounded clip: extends to page end
+        }
+        if( clip.startTime >= endPos || clipEnd <= pageStart ) {
+            continue;              // no overlap with this page
+        }
+        if( !clip.view ) continue;
+
+        uint64_t childPos = (pageStart >= clip.startTime)
+                            ? (pageStart - clip.startTime)
+                            : 0;
+        // The SAME single resolution the render's view->freezePage performs
+        // (Inv-1): component identity + mapped position from one snapshot.
+        twResolvedClip r = clip.view->resolve( (offset_t) childPos );
+        if( !r.component ) continue;
+        plan.deps.push_back( twPageDep{ r.component, (uint64_t) r.mappedPos } );
+    }
+    return plan;
+}
+
 // Caller must hold mutex()
 length_t twTrackMix::freezePage_nolock(
     std::shared_ptr<twOutputPage> page,

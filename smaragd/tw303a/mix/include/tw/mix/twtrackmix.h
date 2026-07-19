@@ -74,6 +74,14 @@ public:
     twEditRange removeClip(const void *key);
     twEditRange updateClip(const void *key, offset_t newStartTime, length_t newDuration);
 
+    // Proposal 19 dataflow stage 2 — planner override: the trackmix consumes
+    // its clips by DIRECT view->freezePage calls, so its deps are not input
+    // plugs but, per clip overlapping the page, the resolveClip()-resolved
+    // {component, mappedPos} — captured under mutex() through the SAME
+    // single-resolution path (twView::resolve) the render uses, so plan and
+    // render cannot disagree (Inv-1 extended to the plan).
+    twPagePlan planPage(uint64_t pageStart) override;
+
     // Track intrinsic properties (gain, mute) — applied to all output
     void setTrackMute(bool muted);
     void setTrackGain(double gainDb);

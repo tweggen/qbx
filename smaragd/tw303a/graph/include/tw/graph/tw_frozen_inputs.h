@@ -72,12 +72,22 @@ struct twFrozenInputs {
  */
 class twFrozenInputScope {
 public:
-    explicit twFrozenInputScope( const twFrozenInputs *inputs )
-        : previous_( active_ )
+    // `self` is the component the scope's NODE renders (stage 2): its own
+    // freezePage must render, not look itself up as a dependency — the input
+    // set describes its INPUTS. Children looked up under the scope that are
+    // not bound get a miss recorded and (stage 2) render via the legacy path.
+    explicit twFrozenInputScope( const twFrozenInputs *inputs,
+                                 const twComponent *self = nullptr )
+        : previous_( active_ ), previousSelf_( activeSelf_ )
     {
         active_ = inputs;
+        activeSelf_ = self;
     }
-    ~twFrozenInputScope() { active_ = previous_; }
+    ~twFrozenInputScope()
+    {
+        active_ = previous_;
+        activeSelf_ = previousSelf_;
+    }
 
     twFrozenInputScope( const twFrozenInputScope & ) = delete;
     twFrozenInputScope &operator=( const twFrozenInputScope & ) = delete;
@@ -85,10 +95,14 @@ public:
     // The set active on this thread, or null when no leaf render is bound
     // (every legacy synchronous freeze).
     static const twFrozenInputs *active() { return active_; }
+    // The component the active scope is rendering (see ctor), or null.
+    static const twComponent *self() { return activeSelf_; }
 
 private:
     const twFrozenInputs *previous_;
+    const twComponent    *previousSelf_;
     inline static thread_local const twFrozenInputs *active_ = nullptr;
+    inline static thread_local const twComponent    *activeSelf_ = nullptr;
 };
 
 #endif

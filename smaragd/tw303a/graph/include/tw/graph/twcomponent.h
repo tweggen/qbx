@@ -18,6 +18,7 @@
 #include "tw/core/twformat.h"
 #include "tw/pages/tw_output_page.h"
 #include "tw/graph/tw_freeze_context.h"
+#include "tw/graph/tw_page_plan.h"
 
 // Forward declaration to avoid circular includes
 class IOVector;
@@ -431,6 +432,36 @@ public:
         const twFrozenInputs &inputs,
         std::shared_ptr<twOutputPage> previousPage = nullptr
     );
+
+    // Proposal 19 dataflow, stage 2 — planned render through the VIRTUAL
+    // freeze path. Installs `inputs` thread-scoped (self = this) and calls
+    // freezePage(startPos, …), so component-specific freeze overrides
+    // (twTrackMix's clip rendering, twView forwarding) are honoured: every
+    // input the render reaches — via the copyData seam OR a direct child
+    // freezePage() call (the twTrackMix clip path) — is served from the bound
+    // set; unbound wants are recorded in inputs.misses and (stage 2) fall
+    // back to the legacy pull. Unlike freezePageFromInputs (the raw base-body
+    // leaf), publication follows the component's own freezePage semantics.
+    std::shared_ptr<twOutputPage> freezePageWithInputs(
+        uint64_t startPos,
+        const twFrozenInputs &inputs,
+        std::shared_ptr<twOutputPage> previousPage = nullptr
+    );
+
+    // Proposal 19 dataflow, stage 2 — the PLANNER hook: capture the
+    // structural snapshot of the node (this, pageStart): which producer pages
+    // a render of [pageStart, pageStart+FRAME_CAPACITY) will consume, plus
+    // this component's content epoch at plan time (the scheduler's
+    // verify-at-publish reference). STRUCTURAL walk only — must not render,
+    // and must capture any lazily-resolved structure (readers, clip windows)
+    // through the same single-resolution path the render itself uses
+    // (Inv-1's resolveClip), so plan and render cannot disagree.
+    //
+    // Base implementation: one grid-aligned dep per streaming input plug
+    // (mixer/rewire/plugin-chain shape — copyData reads the producer at the
+    // consumer's own timeline positions). Sources with no inputs plan empty.
+    // twTrackMix overrides with its clip enumeration.
+    virtual twPagePlan planPage( uint64_t pageStart );
 
     // Proposal 19 Phase 1 — single-cursor serialization policy.
     // freezePage() renders by MUTATING this component's instance state

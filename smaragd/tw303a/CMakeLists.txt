@@ -61,6 +61,7 @@ tw_module(graph
         graph/include/tw/graph/twlatch.h
         graph/include/tw/graph/tw_freeze_context.h
         graph/include/tw/graph/tw_frozen_inputs.h
+        graph/include/tw/graph/tw_page_plan.h
         graph/include/tw/graph/twview.h
         graph/include/tw/graph/twnegotiator.h
         graph/include/tw/graph/tw303aenv.h

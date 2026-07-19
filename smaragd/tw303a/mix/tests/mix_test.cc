@@ -315,6 +315,88 @@ int main()
               "the fallback records the missing dependency for the scheduler");
     }
 
+    // ------------------------------------------------------------------
+    // Proposal 19 dataflow stage 2: the PLANNER. planPage() captures a
+    // node's structural snapshot — which producer pages its render will
+    // consume — without rendering:
+    //   A) a latch consumer (rewire) plans one grid-aligned dep per input;
+    //   B) the trackmix plans, per overlapping clip, the resolveClip()-
+    //      resolved {component, mappedPos} — matching what the render
+    //      actually requests;
+    //   C) end-to-end: freeze the planned deps, bind them, execute the
+    //      TRACKMIX node via freezePageWithInputs — the direct child-freeze
+    //      seam serves the bound page (no source re-render), byte-identical.
+    {
+        auto trackP = std::make_shared<twTrackMix>(env);
+        trackP->init();
+        auto compP = std::make_shared<RampComponent>(env);
+        compP->init();
+        const int keyP = 0;
+        const offset_t pStart = 1000;
+        const length_t pDur = 3000;
+        const offset_t pSlip = 7000;
+        trackP->insertClip(&keyP, pStart, pDur,
+                           [compP]() -> std::shared_ptr<twComponent> { return compP; },
+                           [=](offset_t off) {
+                               return twResolvedClip{ compP, (offset_t)(off + pSlip) };
+                           });
+
+        auto rewP = std::make_shared<twRewire>(env);
+        rewP->init();
+        rewP->setNPlugs(1);
+        rewP->setInput(0, trackP->linkOutput(0));
+
+        const length_t FULL = (length_t)twOutputPage::FRAME_CAPACITY;
+
+        // A) Latch consumer: rewire's page-0 plan = one dep on (track, 0).
+        twPagePlan rewPlan = rewP->planPage(0);
+        CHECK(rewPlan.component.get() == rewP.get() && rewPlan.epoch > 0,
+              "rewire plan carries the node identity and epoch");
+        CHECK(rewPlan.deps.size() == 1 &&
+              rewPlan.deps[0].producer.get() == trackP.get() &&
+              rewPlan.deps[0].pageStart == 0,
+              "latch consumer plans one grid-aligned dep per input");
+
+        // B) Trackmix: page-0 plan = the clip's resolved {component, mappedPos}.
+        //    Page 0 starts before the clip (childPos 0) -> mappedPos = slip.
+        twPagePlan trackPlan = trackP->planPage(0);
+        CHECK(trackPlan.deps.size() == 1 &&
+              trackPlan.deps[0].producer.get() == compP.get() &&
+              trackPlan.deps[0].pageStart == (uint64_t)pSlip,
+              "trackmix plans the resolveClip()-resolved component + mappedPos");
+        //    A page past the clip's end plans no deps.
+        twPagePlan farPlan = trackP->planPage(4 * (uint64_t)FULL);
+        CHECK(farPlan.deps.empty(), "a page with no overlapping clips plans empty");
+
+        // C) End-to-end: baseline pull render, then plan-driven render.
+        auto baseT = trackP->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(baseT && baseT->samples[(size_t)pStart] == val(pSlip),
+              "planner test: pull baseline renders the slipped clip");
+
+        //    Freeze the planned dep exactly as planned, bind it.
+        twFrozenInputs planInputs;
+        for (const twPageDep &d : trackPlan.deps) {
+            auto depPage = d.producer->freezePage(d.pageStart, nullptr, 0, FULL,
+                                                  env.getSRate(), nullptr);
+            planInputs.bind(d.producer.get(), depPage);
+        }
+
+        //    Stale the source; the bound page must carry the content.
+        compP->bumpContentEpoch();
+        int rendersBefore = compP->renders;
+        auto planPage0 = trackP->freezePageWithInputs(0, planInputs, nullptr);
+        CHECK(planPage0 && planPage0->validFrames == FULL,
+              "plan-driven trackmix node renders a full page");
+        CHECK(compP->renders == rendersBefore,
+              "direct child-freeze seam serves the bound page (no re-render)");
+        CHECK(planInputs.misses.empty(),
+              "a complete plan records no misses");
+        bool sameT = true;
+        for (size_t i = 0; i < (size_t)FULL; ++i)
+            if (planPage0->samples[i] != baseT->samples[i]) { sameT = false; break; }
+        CHECK(sameT, "plan-driven render is byte-identical to the pull baseline");
+    }
+
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall mix tests passed\n",
            failures);
     return failures ? 1 : 0;

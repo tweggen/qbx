@@ -82,16 +82,18 @@ public:
     // Helper: safely get the underlying component with null check
     std::shared_ptr<twComponent> getComponent() const;
 
-private:
-    GetComponentFn getComponentFn_;
-    ResolveFn resolveFn_;
-
     // Proposal 19 Inv-1: resolve {component, mappedPos} together for the
     // freeze/seek path. When no resolver was supplied, fall back to the identity
     // mapping over getComponentFn's component (matches the old null-MapPosFn
     // default). This is the ONE place the component and mapping are read; they
-    // can no longer straddle a concurrent lazy reader build.
+    // can no longer straddle a concurrent lazy reader build. Public since
+    // stage 2: the planner (twTrackMix::planPage) captures the SAME resolution
+    // the render will use, so plan and render cannot disagree.
     twResolvedClip resolve(offset_t pos) const;
+
+private:
+    GetComponentFn getComponentFn_;
+    ResolveFn resolveFn_;
 };
 
 #endif

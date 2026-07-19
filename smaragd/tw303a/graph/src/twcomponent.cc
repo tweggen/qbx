@@ -472,6 +472,26 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
+    // Proposal 19 dataflow stage 2: a planned render on this thread may have
+    // BOUND this component's page as one of its node's inputs — serve it with
+    // no rendering and no instance-state mutation (state continuity is the
+    // producing node's own chain). The node's SELF component must render, not
+    // look itself up (its set describes its INPUTS). A wanted-but-unbound
+    // child is recorded (the scheduler's plan-incompleteness signal) and, in
+    // stage 2, renders via the legacy path below. This covers the DIRECT
+    // child-freeze path (twTrackMix → twView → component); the copyData seam
+    // covers the latch-pull path.
+    if (const twFrozenInputs *fi = twFrozenInputScope::active()) {
+        if (twFrozenInputScope::self() != this) {
+            std::shared_ptr<twOutputPage> bound = fi->find(this, startPos);
+            if (bound && bound->validAspects != 0 &&
+                bound->startPosition == startPos) {
+                return bound;
+            }
+            fi->noteMiss(this, startPos);
+        }
+    }
+
     // Proposal 19 Phase 1: single-cursor components serialize their whole
     // freeze (see usesSerialCursor()). One freeze at a time per component, so
     // two threads can never race this component's instance cursor. Held across
@@ -655,8 +675,44 @@ length_t twComponent::freezePageFromInputs(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
-    twFrozenInputScope scope( &inputs );
+    twFrozenInputScope scope( &inputs, this );
     return freezePage_nolock( page, nullptr, 0, 0, previousPage );
+}
+
+// Proposal 19 dataflow stage 2 — planned render through the VIRTUAL freeze
+// path (see the declaration doc).
+std::shared_ptr<twOutputPage> twComponent::freezePageWithInputs(
+    uint64_t startPos,
+    const twFrozenInputs &inputs,
+    std::shared_ptr<twOutputPage> previousPage
+)
+{
+    twFrozenInputScope scope( &inputs, this );
+    return freezePage( startPos, nullptr, 0,
+                       (length_t) twOutputPage::FRAME_CAPACITY,
+                       env.getSRate(), previousPage );
+}
+
+// Proposal 19 dataflow stage 2 — base planner: one grid-aligned dep per
+// streaming input plug. copyData reads each producer at the consumer's own
+// timeline positions, so a render of [pageStart, +capacity) starting on the
+// page grid consumes exactly the producer's page at the same pageStart.
+twPagePlan twComponent::planPage( uint64_t pageStart )
+{
+    twPagePlan plan;
+    plan.component = shared_from_this();
+    plan.pageStart = pageStart;
+    plan.epoch     = contentEpochNow();
+
+    std::lock_guard<std::mutex> lock( mutex() );
+    for (const std::shared_ptr<twLatchOutput> &plug : pInputPlugs_) {
+        if (!plug) continue;
+        std::shared_ptr<twComponent> producer =
+            plug->getParentLatch().getComponent();
+        if (!producer) continue;
+        plan.deps.push_back( twPageDep{ std::move(producer), pageStart } );
+    }
+    return plan;
 }
 
 // Caller must NOT hold mutex. This function does all work outside the lock.
