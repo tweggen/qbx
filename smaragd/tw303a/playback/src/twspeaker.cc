@@ -167,6 +167,10 @@ void twSpeaker::startOutput()
     // Phase 5: Register callback (no lock needed)
     backend_->setRenderCallback(
         [this](float *out, std::size_t frames, std::uint32_t channels) -> std::size_t {
+            // Stage 6: mark the RT thread so twComponent::freezePage can
+            // ENFORCE "the RT path never renders" (thread-local flag; a
+            // repeated store of `true` is free).
+            twRtThreadGuard::markRtThread();
             auto engine = audioEngine_;  // Lock-free capture via shared_ptr
             if (!engine) {
                 std::fill_n(out, frames * channels, 0.0f);

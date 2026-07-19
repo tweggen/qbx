@@ -254,6 +254,17 @@ int main()
         CHECK(d4->done(), "resume completes the pending demand");
         CHECK(src->renders() == 3 && pass->renders.load() == 3,
               "stale pages re-render exactly once each after the epoch bump");
+
+        // Stage 6 — completeness metrics (assert-first retirement of the
+        // legacy pull): complete plans over current deps execute with ZERO
+        // misses and ZERO retries.
+        auto stats = reval.graphStats();
+        CHECK(stats.nodesExecuted >= 6,
+              "graph stats count the executed nodes");
+        CHECK(stats.missPages == 0,
+              "no bound-set misses across all scheduled renders");
+        CHECK(stats.nodeRetries == 0,
+              "no verify-at-publish retries across all scheduled renders");
     }
 
     if (failures == 0) { printf("all schedule tests passed\n"); return 0; }

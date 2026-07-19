@@ -36,6 +36,22 @@ class twComponent;
  *       auto page = getComponent().freezePage(...);
  *   }
  */
+/**
+ * Proposal 19 dataflow stage 6 — the RT-thread freeze guard (assert-first
+ * retirement). The realtime audio callback must NEVER render/freeze: it reads
+ * ready pages and falls back to the stale predecessor (proposal 16). That has
+ * been true structurally; this guard makes it ENFORCED: the RT callback marks
+ * its thread once, and twComponent::freezePage refuses (one-shot stderr +
+ * debug assert) if ever entered on it.
+ */
+class twRtThreadGuard {
+public:
+    static void markRtThread()   { isRt_ = true; }
+    static bool onRtThread()     { return isRt_; }
+private:
+    inline static thread_local bool isRt_ = false;
+};
+
 class FreezeContext {
 public:
     // RAII guard: install this context as the active freeze context for this thread

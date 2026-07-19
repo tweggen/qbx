@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cassert>
 #include <iostream>
 #include <iterator>
 #include <vector>
@@ -472,6 +473,25 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
+    // Proposal 19 dataflow stage 6 — enforce the RT invariant: the realtime
+    // audio callback reads ready pages (stale fallback per proposal 16) and
+    // must NEVER render. One-shot report + debug assert; in release we return
+    // a defused empty page rather than render on the RT thread.
+    if (twRtThreadGuard::onRtThread()) {
+        static std::atomic<bool> reported{false};
+        if (!reported.exchange(true)) {
+            fprintf(stderr, "ERROR: freezePage() entered on the RT audio thread "
+                            "(component=%p pos=%llu) — the RT path must only read "
+                            "ready pages. Returning empty page.\n",
+                    (void *)this, (unsigned long long)startPos);
+        }
+        assert(!"freezePage on RT audio thread");
+        auto empty = std::make_shared<twOutputPage>();
+        empty->startPosition = startPos;
+        empty->validFrames = 0;
+        return empty;
+    }
+
     // Proposal 19 dataflow stage 2: a planned render on this thread may have
     // BOUND this component's page as one of its node's inputs — serve it with
     // no rendering and no instance-state mutation (state continuity is the

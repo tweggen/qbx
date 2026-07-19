@@ -36,18 +36,6 @@ void CaptureRevalidator::scheduleRevalidation(IRevalidatable* object, uint32_t a
     queueNotEmpty_.notify_one();
 }
 
-void CaptureRevalidator::scheduleComponentFreezing(std::shared_ptr<twComponent> component, uint64_t pageStartPos,
-                                                    std::shared_ptr<twOutputPage> previousPage,
-                                                    int priority) {
-    if (!component) return;
-
-    {
-        std::lock_guard<std::mutex> lock(queueLock_);
-        freezingQueue_.push({component, pageStartPos, previousPage, priority});
-    }
-    queueNotEmpty_.notify_one();
-}
-
 void CaptureRevalidator::shutdown() {
     {
         std::lock_guard<std::mutex> lock(queueLock_);
@@ -79,15 +67,22 @@ void CaptureRevalidator::shutdown() {
 
 size_t CaptureRevalidator::jobsQueued() const {
     std::lock_guard<std::mutex> lock(queueLock_);
-    return revalidationQueue_.size() + freezingQueue_.size();
+    return revalidationQueue_.size() + graphReady_.size();
+}
+
+CaptureRevalidator::GraphStats CaptureRevalidator::graphStats() const {
+    GraphStats s;
+    s.nodesExecuted = statNodesExecuted_.load();
+    s.nodeRetries   = statNodeRetries_.load();
+    s.missPages     = statMissPages_.load();
+    return s;
 }
 
 void CaptureRevalidator::workerLoop() {
     while (true) {
         CaptureRevalidationJob revalJob;
-        ComponentFreezingJob freezeJob;
         std::shared_ptr<PageNode> graphNode;
-        bool haveReval = false, haveFreeze = false;
+        bool haveReval = false;
 
         {
             std::unique_lock<std::mutex> lock(queueLock_);
@@ -98,56 +93,47 @@ void CaptureRevalidator::workerLoop() {
             queueNotEmpty_.wait(lock, [this]() {
                 return shutdown_ ||
                     (!paused_ &&
-                     ((!backgroundPaused_ && (!revalidationQueue_.empty()
-                                              || !freezingQueue_.empty()))
+                     ((!backgroundPaused_ && !revalidationQueue_.empty())
                       || !graphReady_.empty()));
             });
 
             // If shutting down and all queues empty, exit
-            if (shutdown_ && revalidationQueue_.empty() && freezingQueue_.empty()
-                && graphReady_.empty()) {
+            if (shutdown_ && revalidationQueue_.empty() && graphReady_.empty()) {
                 break;
             }
 
             // Paused (woke only for a shutdown check) or nothing to do: loop.
             const bool backgroundAvailable =
-                !backgroundPaused_ && (!revalidationQueue_.empty()
-                                       || !freezingQueue_.empty());
+                !backgroundPaused_ && !revalidationQueue_.empty();
             if (paused_ || (!backgroundAvailable && graphReady_.empty())) {
                 continue;
             }
 
-            // Dequeue the highest-priority job across the three sources.
-            // Ties: reval > graph > freeze (reval is the most UI-critical).
-            // Background sources are masked while backgroundPaused_.
+            // Dequeue the higher-priority job of the two sources.
+            // Ties: reval first (the most UI-critical). Background (reval)
+            // is masked while backgroundPaused_.
             const int INT_NONE = -2147483647;
             const int rp = (backgroundPaused_ || revalidationQueue_.empty())
                             ? INT_NONE : revalidationQueue_.top().priority;
             const int gp = graphReady_.empty() ? INT_NONE
                             : graphReady_.front()->priority;
-            const int fp = (backgroundPaused_ || freezingQueue_.empty())
-                            ? INT_NONE : freezingQueue_.top().priority;
 
-            if (rp != INT_NONE && rp >= gp && rp >= fp) {
+            if (rp != INT_NONE && rp >= gp) {
                 revalJob = revalidationQueue_.top();
                 revalidationQueue_.pop();
                 haveReval = true;
-            } else if (gp != INT_NONE && gp >= fp) {
+            } else if (gp != INT_NONE) {
                 graphNode = graphReady_.front();
                 graphReady_.pop_front();
-            } else if (fp != INT_NONE) {
-                freezeJob = freezingQueue_.top();
-                freezingQueue_.pop();
-                haveFreeze = true;
             }
 
             // Mark in-flight under the lock so pause() can drain reliably;
             // background jobs also count separately for pauseBackground().
-            if (haveReval || haveFreeze || graphNode) ++activeJobs_;
-            if (haveReval || haveFreeze) ++activeBackgroundJobs_;
+            if (haveReval || graphNode) ++activeJobs_;
+            if (haveReval) ++activeBackgroundJobs_;
             // Record the specific object so retireObject() can block on just it
-            // (the reval queue holds borrowed IRevalidatable*; the freeze queue
-            // and graph nodes hold shared_ptr and are already lifetime-safe).
+            // (the reval queue holds borrowed IRevalidatable*; graph nodes hold
+            // shared_ptr and are already lifetime-safe).
             if (haveReval && revalJob.object) ++activeRevalObjects_[revalJob.object];
         }
 
@@ -156,15 +142,13 @@ void CaptureRevalidator::workerLoop() {
             processRevalidationJob(revalJob);
         } else if (graphNode) {
             processGraphNode(graphNode);
-        } else if (haveFreeze) {
-            processComponentFreezingJob(freezeJob);
         }
 
-        if (haveReval || haveFreeze || graphNode) {
+        if (haveReval || graphNode) {
             {
                 std::lock_guard<std::mutex> lock(queueLock_);
                 --activeJobs_;
-                if (haveReval || haveFreeze) --activeBackgroundJobs_;
+                if (haveReval) --activeBackgroundJobs_;
                 if (haveReval && revalJob.object) {
                     auto it = activeRevalObjects_.find(revalJob.object);
                     if (it != activeRevalObjects_.end() && --it->second <= 0)
@@ -383,7 +367,9 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
             break;
         }
     }
+    statMissPages_.fetch_add(inputs.misses.size(), std::memory_order_relaxed);
     if ((staleDep || !inputs.misses.empty()) && node->attempts++ < 1) {
+        statNodeRetries_.fetch_add(1, std::memory_order_relaxed);
         twFrozenInputs fresh;
         for (auto &d : node->deps) {
             auto p = d->component->requestPage(
@@ -393,6 +379,7 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
         }
         page = node->component->freezePageWithInputs(node->pageStart, fresh, prev);
     }
+    statNodesExecuted_.fetch_add(1, std::memory_order_relaxed);
 
     completeGraphNode(node, std::move(page));
 }
@@ -570,39 +557,5 @@ uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint3
     return succeeded;
 }
 
-void CaptureRevalidator::processComponentFreezingJob(const ComponentFreezingJob& job) {
-    // Phase 4 Gap 10: Component-level page freezing
-    // Worker thread pre-computes frozen output pages for efficient rendering.
-    //
-    // Sequential rendering chain:
-    //   freezePage(0, nullptr) → render with reset() → capture state → page 0
-    //   freezePage(1, page0)   → restore state from page 0 → render → capture new state → page 1
-    //   freezePage(2, page1)   → resume from page 1 → render → capture new state → page 2
-    //   ...
-    //
-    // No locks needed on component during freezing (read-only state from latches).
-    // Page pool manages memory; no object-level page swapping like SObject has.
-
-    assert(job.component);
-
-    // Materialize output via requestPage() (Proposal 19 Phase 2a): dedups
-    // against any concurrent worker/driver freezing the same page, then
-    // internally orchestrates reset/restore → renderFrames() → capture state.
-    auto frozenPage = job.component->requestPage(
-        job.pageStartPos,
-        nullptr,                   // No pre-prepared input; renderFrames uses latches
-        0,
-        0,
-        0,                          // sampleRate (unused in current implementation)
-        job.previousPage            // Sequential state chain
-    );
-
-    if (!frozenPage) {
-        return;  // Failed to freeze (rare; component may not be ready)
-    }
-
-    // Page is now frozen. Store it in component's page cache via setPageAsFrozen().
-    // This allows render loops (or other consumers) to read from the frozen page
-    // instead of calling calcOutputTo() redundantly.
-    job.component->setPageAsFrozen(job.pageStartPos, frozenPage, twAspectAll);
-}
+// (Dataflow stage 6: processComponentFreezingJob and its queue were retired —
+// zero callers; page pre-computation is the graph scheduler's job.)

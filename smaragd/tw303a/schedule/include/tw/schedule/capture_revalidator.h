@@ -23,28 +23,6 @@ class twComponent;
 class twOutputPage;
 
 /**
- * Component freezing job: request to freeze a twComponent output page.
- * Phase 4 Gap 10: Pre-compute component pages for efficient rendering.
- *
- * Each component freezing job specifies:
- * - Which component to freeze
- * - Which time position to freeze (page start position)
- * - Previous page (for internal state resumption)
- * - Priority (higher = process first)
- */
-struct ComponentFreezingJob {
-    std::shared_ptr<twComponent> component;      // Which component to freeze (borrowed pointer)
-    uint64_t pageStartPos;       // Position to freeze (in component sample rate)
-    std::shared_ptr<twOutputPage> previousPage;  // For state chain (may be nullptr for page 0)
-    int priority;                // 0-10 (higher first)
-
-    // For priority queue: higher priority dequeues first
-    bool operator<(const ComponentFreezingJob& other) const {
-        return priority < other.priority;
-    }
-};
-
-/**
  * Revalidation job: request to recompute specific capture aspects for a revalidatable object.
  *
  * Each job specifies:
@@ -125,21 +103,10 @@ public:
      */
     void scheduleRevalidation(IRevalidatable* object, uint32_t aspects, int priority = 5);
 
-    /**
-     * Schedule a component freezing job (Phase 4 Gap 10).
-     *
-     * Non-blocking: pre-computes frozen component output pages for efficient rendering.
-     * Workers call component->freezePage() to materialize output.
-     *
-     * @param component Which component to freeze (borrowed pointer)
-     * @param pageStartPos Time position to freeze (in component sample rate)
-     * @param previousPage Previous page's snapshot (for state resumption), may be nullptr
-     * @param priority Job priority (higher = process first)
-     *                 Suggested: 10=Playback, 5=Metadata, 2=Export, 1=Preview
-     */
-    void scheduleComponentFreezing(std::shared_ptr<twComponent> component, uint64_t pageStartPos,
-                                   std::shared_ptr<twOutputPage> previousPage = nullptr,
-                                   int priority = 5);
+    // (Dataflow stage 6: the Phase-4 "component freezing job" queue was
+    // retired — zero callers remained; page pre-computation is the graph
+    // scheduler's job now, with dedup, dependency ordering, and lifetime
+    // handled per node. See requestGraphPages().)
 
     /**
      * Graceful shutdown: wait for workers to finish and join.
@@ -151,9 +118,20 @@ public:
 
     /**
      * Get pool statistics (for diagnostics).
-     * Returns total of both revalidation and freezing jobs.
+     * Returns queued revalidation jobs plus ready graph nodes.
      */
     size_t jobsQueued() const;
+
+    // Dataflow stage 6 — scheduler completeness metrics (assert-first
+    // retirement of the legacy pull): if a plan is complete and its deps stay
+    // current, node execution records ZERO misses and needs zero retries. The
+    // stress/unit gates assert on these before any legacy path is deleted.
+    struct GraphStats {
+        uint64_t nodesExecuted = 0;   // graph nodes run to completion
+        uint64_t nodeRetries   = 0;   // verify-at-publish re-renders
+        uint64_t missPages     = 0;   // bound-set misses seen during renders
+    };
+    GraphStats graphStats() const;
 
     /**
      * Quiesce background revalidation for an exclusive operation (offline
@@ -267,9 +245,6 @@ private:
     // Helper: process a single revalidation job
     void processRevalidationJob(const CaptureRevalidationJob& job);
 
-    // Helper: process a single component freezing job
-    void processComponentFreezingJob(const ComponentFreezingJob& job);
-
     // Dispatch recomputation to object's virtual methods.
     // These no longer do the computation themselves; they delegate to the object.
     // Returns the subset of `aspects` that was actually recomputed successfully;
@@ -282,8 +257,12 @@ private:
     // Job queues with priority (mutable for const methods like jobsQueued())
     mutable std::mutex queueLock_;
     std::priority_queue<CaptureRevalidationJob> revalidationQueue_;     // object jobs
-    std::priority_queue<ComponentFreezingJob> freezingQueue_;           // Component jobs
     std::condition_variable queueNotEmpty_;
+
+    // Stage 6 stats (atomics: read via graphStats() without queueLock_).
+    std::atomic<uint64_t> statNodesExecuted_{0};
+    std::atomic<uint64_t> statNodeRetries_{0};
+    std::atomic<uint64_t> statMissPages_{0};
 
     // Shutdown coordination
     std::atomic<bool> shutdown_{false};
