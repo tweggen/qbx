@@ -5592,3 +5592,34 @@ Verification: goldens 11/11 bit-identical to baseline + deterministic ×3;
 module tests green; layering clean; takes_group_broadcast 50/50 at
 workers=8; placement 10/10; crash repro 0/5. Next: stage 5 — playback
 readahead as a demand consumer (RT path keeps prop-16 stale fallback).
+
+## Proposal 19 dataflow stage 5: playback readahead as a demand consumer (2026-07-19)
+
+Fifth migration stage: the readahead thread no longer executes freezes — it
+demands and observes. The RT audio callback path is UNTOUCHED (cache reads +
+the proposal-16 stale fallback; it never rendered and still never does).
+
+- `AudioEngine::setScheduler(CaptureRevalidator*)`: with a scheduler, the
+  readahead loop, on the first page of its window that is not frozen-and-
+  current, issues ONE demand for the remaining contiguous window (pages
+  predecessor-chained within the demand) and re-checks on the next 20ms
+  tick — it never blocks and never renders. The pending-demand handle
+  (window + done()) stops the tick from re-issuing an identical demand
+  while nodes still execute. Already-valid pages are NEVER demanded — a
+  re-demand would re-render non-caching components out of position order
+  (the stage-4 lesson). The frontier (`readaheadComputedUpTo_`) advances on
+  later ticks as pages land, driven by the existing per-page validity
+  re-check (which also self-heals after edits, unchanged). The legacy
+  requestPage pull (with skip-ahead heuristic) remains for scheduler==null.
+- `twSpeaker::setPageScheduler()`: stored per speaker, handed to every
+  AudioEngine it mints (before startReadahead). Wired in
+  `SApplication::setCurrentProject` from the project's revalidator (null on
+  no project / SMARAGD_REVAL_WORKERS=0 → legacy).
+- Layering: playback→schedule edge sanctioned (CMake + check_layering.py).
+
+Verification: goldens 11/11 bit-identical (renders untouched by the
+readahead change); module tests (incl. playback_test) green; layering
+clean; takes_group_broadcast 50/50 at workers=8; placement 10/10; crash
+repro 0/5. NOTE: no headless playback qxa exists — interactive playback
+(start/stop, seek, loop, edits during playback) should be verified by ear.
+Next: stage 6 — retire the sync recursion; cursorMutex_ assert-first.

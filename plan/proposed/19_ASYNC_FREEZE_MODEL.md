@@ -668,6 +668,12 @@ goldens + module tests + layering):**
    Gate: 11 golden WAVs bit-identical to the pre-change baseline AND
    deterministic across 3 runs.
 5. Readahead → watermark consumer; RT unchanged.
+   **DONE 2026-07-19** (see STATE.md "dataflow stage 5"):
+   `AudioEngine::setScheduler` — the readahead demands the remaining
+   not-yet-current window (never blocks, never renders, never re-demands
+   valid pages) and observes on its 20ms tick; RT path untouched;
+   `twSpeaker::setPageScheduler` pass-through wired per project. Goldens
+   stayed 11/11 bit-identical. Interactive playback pending a by-ear check.
 6. Delete the sync recursion; `cursorMutex_` → must-succeed assert for one
    full gate cycle, then removed (Inv-3). Edit-path `getDurationBlocking()`
    reads stay permanently.
