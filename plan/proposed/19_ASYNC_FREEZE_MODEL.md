@@ -640,6 +640,14 @@ goldens + module tests + layering):**
    legacy pull). mix_test seam suite proves bypass, byte-identity, and
    fallback.
 2. Planner + per-node structural snapshot (reuses Inv-1 `resolveClip`).
+   **DONE 2026-07-19** (see STATE.md "dataflow stage 2"): `twPagePlan`/
+   `twComponent::planPage` (base: per-input-plug grid deps; `twTrackMix`
+   override: per-clip `twView::resolve` — the same Inv-1 resolution the
+   render uses), `freezePageWithInputs` (virtual-path planned render), and
+   the bound-serve seam extended to the top of `twComponent::freezePage`
+   (self-skip + miss recording) so the trackmix's DIRECT child-freeze path
+   is covered alongside stage 1's copyData seam. mix_test proves plan
+   correctness and byte-identical plan-driven rendering.
 3. Dependency-counting scheduler inside `CaptureRevalidator` (it already has
    the pool, priority queues, pause/drain, retireObject).
 4. Offline render → watermark consumer (bit-identical goldens gate).

@@ -5475,3 +5475,37 @@ explicit and injectable, with the legacy behaviour unchanged.
 Verification: module tests + layering green; takes_group_broadcast 50/50 at
 workers=8; takes_recording_placement 10/10; crash repro 0/5. Next: stage 2 —
 the planner + per-node structural snapshot.
+
+## Proposal 19 dataflow stage 2: the planner + per-node structural snapshot (2026-07-19)
+
+Second migration stage: a node's input dependencies are now capturable
+structurally (no rendering), and a planned node renders end-to-end from
+bound pages through BOTH consumption seams.
+
+- `tw/graph/tw_page_plan.h`: `twPagePlan { component, pageStart, epoch,
+  deps }` / `twPageDep { producer (owning shared_ptr), pageStart }` — the
+  structural snapshot of one dataflow node; epoch is the scheduler's
+  verify-at-publish reference; owning deps per the retireObject lesson.
+- `twComponent::planPage(pageStart)` virtual: base = one grid-aligned dep
+  per streaming input plug (mixer/rewire/plugin-chain shape); sources plan
+  empty. `twTrackMix::planPage` override mirrors freezePage_nolock's
+  clip-overlap walk exactly but resolves via `twView::resolve` (made public)
+  — the SAME Inv-1 single resolution the render uses, captured under
+  mutex(), so plan and render cannot disagree.
+- `twComponent::freezePageWithInputs(startPos, inputs, prev)`: planned
+  render through the VIRTUAL freeze path (trackmix clip rendering honoured),
+  scope self = this.
+- Bound-serve extended to the SECOND consumption seam: the top of
+  `twComponent::freezePage` serves a bound page for (this,startPos) — with a
+  self-skip so the node's own component renders instead of finding itself —
+  covering the trackmix→twView→component DIRECT child-freeze path that the
+  stage-1 copyData seam does not see. Unbound wants are recorded
+  (plan-incompleteness signal) and render via the legacy path (stage 2).
+- mix_test planner suite: latch-consumer plan (one grid-aligned dep),
+  trackmix plan ({resolved component, mappedPos}, empty past the clip),
+  end-to-end plan→freeze-deps→bind→freezePageWithInputs: byte-identical to
+  the pull baseline, source NOT re-rendered, zero misses.
+
+Verification: module tests + layering green; takes_group_broadcast 50/50 at
+workers=8; placement 10/10; crash repro 0/5. Next: stage 3 — the
+dependency-counting scheduler in CaptureRevalidator.
