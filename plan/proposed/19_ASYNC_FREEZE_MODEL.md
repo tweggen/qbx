@@ -650,6 +650,13 @@ goldens + module tests + layering):**
    correctness and byte-identical plan-driven rendering.
 3. Dependency-counting scheduler inside `CaptureRevalidator` (it already has
    the pool, priority queues, pause/drain, retireObject).
+   **DONE 2026-07-19** (see STATE.md "dataflow stage 3"): `GraphDemand`/
+   `requestGraphPages` (the watermark), `PageNode` counters with owning refs,
+   predecessor edges as ordinary counter edges (in-position order + state
+   chaining, no actor machinery), verify-at-publish with one bounded retry,
+   three-way priority in workerLoop, pause/drain + shutdown-abort integration.
+   schedule_test proves dependency ordering, exact render counts, cache-hit
+   dedup, pause gating, and epoch-staled re-render.
 4. Offline render → watermark consumer (bit-identical goldens gate).
 5. Readahead → watermark consumer; RT unchanged.
 6. Delete the sync recursion; `cursorMutex_` → must-succeed assert for one

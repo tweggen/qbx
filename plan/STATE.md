@@ -5509,3 +5509,46 @@ bound pages through BOTH consumption seams.
 Verification: module tests + layering green; takes_group_broadcast 50/50 at
 workers=8; placement 10/10; crash repro 0/5. Next: stage 3 — the
 dependency-counting scheduler in CaptureRevalidator.
+
+## Proposal 19 dataflow stage 3: the dependency-counting page scheduler (2026-07-19)
+
+Third migration stage: the scheduler itself — demands, nodes, counters,
+ready-queue execution on the existing CaptureRevalidator worker pool. Nothing
+inside the graph ever waits: a node either sits on counters or runs; workers
+are never parked. (No production consumer is converted yet — the render/
+readahead still use the legacy pull; the scheduler is exercised by tests.)
+
+- `CaptureRevalidator::GraphDemand` + `requestGraphPages(root, startPos,
+  nPages, priority)`: the consumer-facing watermark. Expansion runs in the
+  caller's thread under `expansionMutex_`, calling `planPage()` per node and
+  taking `queueLock_` only in short bursts — planPage takes component
+  mutexes, and a worker finishing a render holds a component mutex before
+  taking queueLock_, so holding queueLock_ across planning would deadlock.
+- `PageNode` {component (owning), pageStart, plan, pendingDeps, state,
+  result, deps (owning), predecessor, dependents (weak), demands}: dedup map
+  keyed (component, pageStart), in-flight only — Done nodes leave the map
+  immediately (their pages live on in the component caches; dependents hold
+  their shared_ptrs until they run).
+- Predecessor edge: (c, k) additionally depends on in-flight (c, k-capacity)
+  — in-position-order execution + DSP state chaining per component, as an
+  ordinary counter edge (no actor machinery).
+- Execution: bind dep results into `twFrozenInputs`, render via
+  `freezePageWithInputs` (virtual path), then VERIFY-AT-PUBLISH: if a dep
+  page went stale mid-render or the plan proved incomplete (misses), one
+  bounded retry with freshly frozen deps. Content correctness holds
+  regardless via the stage-2 legacy fallback inside the render; the retry
+  improves cache quality.
+- workerLoop: three-way priority selection (reval > graph > freeze on ties)
+  over the same pool; graph nodes count into `activeJobs_`, so `pause()`
+  gates and drains them like everything else. `shutdown()` aborts pending
+  demands so no consumer stays blocked in `wait()`.
+- schedule_test scheduler suite (real latch plumbing: GraphSource →
+  GraphPass): dependency-ordered execution with exact render counts (the
+  bound-serve seam prevented any double render), predecessor-edge position
+  ordering, scheduled pages serving the legacy pull as cache hits with
+  correct content, overlapping-demand dedup, pause gating, and
+  exactly-one-re-render after an epoch bump.
+
+Verification: module tests + layering green; takes_group_broadcast 50/50 at
+workers=8; placement 10/10; crash repro 0/5. Next: stage 4 — the offline
+render as a watermark consumer (bit-identical goldens gate).
