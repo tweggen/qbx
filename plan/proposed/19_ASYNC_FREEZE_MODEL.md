@@ -1,12 +1,29 @@
 # Proposal 19: Fully-async, DAG-scheduled page freezing (fix shared-component freeze races)
 
-> **Status: IN PROGRESS 2026-07-18.** Phase 0 (CWD-independent sample paths +
-> `repeat_test.sh` gate) and Phase 1 (single-cursor freeze serialization) are
-> committed. Phase 1b DIAGNOSED the flake precisely (issue #3b, see below) but
-> its three targeted fixes all failed — so **Phase 2 is now the flake fix**, not
-> just an architectural cleanup. Supersedes the ad-hoc concurrency of the current
-> recursive `freezePage`. Motivated by a confirmed data race behind the flaky
-> `takes_group_broadcast` test.
+> **Status: FLAKE FIXED 2026-07-19; inversion is now optional cleanup.**
+> The `takes_group_broadcast` flake — the thing that motivated this proposal — was
+> ROOT-CAUSED and FIXED in the EDIT path (commits `a1e6011` + `48a38bd`), NOT via
+> the freeze-side inversion. See "ACTUAL ROOT CAUSE + FIX" below: a stale
+> try-lock `SCut::getDuration()` in `STakeStack`'s `durationChanged` emits let a
+> split clip's head stay full-length under worker contention. Gate is now
+> **100/100 deterministic** (swept over `SMARAGD_REVAL_WORKERS ∈ {1,4,8,16}`).
+>
+> What landed and stays (all correct on their own merits, none required for the
+> flake but good hardening): Phase 0 (CWD-independent sample paths +
+> `repeat_test.sh` gate), Phase 1 (single-cursor `cursorMutex_` freeze
+> serialization), Phase 2a (`requestPage` dedup front door, `8621a3b`), and the
+> reader/render hardening (`72a63e6`: `SCut::currentReader_` unified under
+> `mutex()` retiring `readerSwapLock_` — a real UB fix; `getSnapshotBlocking()`;
+> `readerTried_` atomic; `CaptureRevalidator::pause()/resume()` drain wired via
+> `SProject`; `RenderSession` runs `onComplete` before clearing `running_`).
+>
+> **The request/ready inversion (Phase 2b) is now a FORWARD-LOOKING architectural
+> cleanup, not a bug fix** — see "The request/ready inversion" section. It removes
+> a whole class of shared-component freeze races by construction and lets the
+> interim guards retire, but it is optional and independently gated. The
+> investigation history below is kept verbatim for context (it contains several
+> superseded hypotheses — read the dated "CONFIRMED"/"ACTUAL ROOT CAUSE" notes as
+> the ground truth).
 >
 > Companion context (must-read before implementing):
 > `plan/proposed/16_STALE_PAGE_FALLBACK.md` (stale-but-consistent playback),
@@ -377,50 +394,83 @@ the SCut mutex, `getDuration()` returned the pre-shorten 192000, which propagate
 leaving the head full-length. `SMARAGD_NO_REVAL` (no worker ever holds the mutex)
 → 15/15; workers on → ~50%.
 
-**FIX (committed):** `STakeStack::setDurationAll` now emits `durationChanged(
-duration)` — the authoritative value it just set on every take — instead of
-re-reading via the try-lock `getDuration()`. Race-free. Gate: 20/20 immediately;
-N=100 sweep pending. This is a one-line-of-intent fix in the EDIT path; the
-freeze-side hardening (72a63e6: `currentReader_` UB fix, `getSnapshotBlocking`,
-revalidation `pause()`) is correct but was not what fixed the flake. The
-request/ready inversion (2b-1/2/3 below) remains a valid future cleanup but is
-NOT required for this flake.
+**FIX (committed `a1e6011`):** `STakeStack::setDurationAll` now emits
+`durationChanged(duration)` — the authoritative value it just set on every take —
+instead of re-reading via the try-lock `getDuration()`. Race-free. Gate: **N=100
+→ 100/100 deterministic** at default workers, and 40/40 each swept over
+`SMARAGD_REVAL_WORKERS ∈ {1,4,16}`. This is an EDIT-path fix; the freeze-side
+hardening (72a63e6) is correct but was not what fixed the flake. The request/ready
+inversion (below) remains a valid future cleanup but is NOT required.
 
-NOTE: the sibling emit sites in STakeStack (`setActiveTake`, `removeTake`,
-`onTakeCutChanged`, `applyWindowAll` all `emit durationChanged(getDuration())`)
-have the SAME stale-read shape and could flake other broadcast edits under worker
-contention; follow-up: give them the same authoritative/blocking treatment.
+**Sibling emits hardened (committed `48a38bd`):** the other STakeStack emitters
+(`setActiveTake`, `removeTake`, `onTakeCutChanged`, `applyWindowAll`) shared the
+same stale try-lock `getDuration()` shape and could flake other broadcast edits.
+Added `SCut::getDurationBlocking()`/`STakeStack::getDurationBlocking()` (blocking
+snapshot, edit-path only — no `getDuration()` caller runs on the RT audio thread)
+and routed those emits through it; `applyWindowAll` emits its authoritative
+`duration` like `setDurationAll`.
 
-### Phase 2b (revised) — request/ready inversion, gated sub-steps
+### The request/ready inversion — forward-looking design (current state)
 
-Invariant to establish: **a freeze resolves ALL structure (which component, which
-reader, the position mapping) from a single immutable snapshot taken atomically
-with the content epoch, and renders only from already-frozen input pages — never
-from live SCut/reader state a worker can mutate.**
+**This is now optional.** The flake that drove it is fixed (edit path). But the
+underlying structural weakness the inversion targets is still real and worth
+removing when the app pushes further into concurrent freezing (real-time
+playback + preview + export overlapping): **freezing a component MUTATES its
+instance state** (`reset`/`seekTo`/`restoreInternalState` → cursor + DSP memory),
+and a component shared by multiple graph paths (one `twWavInput` under both
+tracks, both takes, split head/tail) can be frozen by several threads at once.
+Today that is held together by Phase 1's per-component `cursorMutex_` (one freeze
+at a time per component) plus the freeze-side hardening — correct but coarse.
 
-- **2b-1 — Structural resolution snapshot (kills THIS flake).** Replace the live
-  `getRootComponent()` + `mapTimelineToComponentPos()` pair (two independent
-  reads that can straddle a worker's lazy build) with ONE `SCut` resolution
-  snapshot: `{ component, clip→reader map, srcStart, looping }`, built under
-  `mutex()` and refreshed only on edit. `twView` captures this once per freeze
-  and uses it for both the component and the mapping, so component and mapping
-  can never disagree. Build the reader eagerly on edit (or make the freeze path's
-  resolution not depend on `readerTried_`). Gate: `repeat_test takes_group_
-  broadcast 100` → 100/100 across `SMARAGD_REVAL_WORKERS ∈ {1,2,4,8,16}`;
-  offline goldens bit-identical; full qxa audio asserts green.
-- **2b-2 — Freeze from ready pages only.** Convert the mix-graph freeze
-  (`twTrackMix`/`twMixer`/`twRewire`/plugins) to request already-frozen input
-  pages (Phase 2a `requestPage`) and render only from them, removing the
-  synchronous `calcOutputTo`/`copyData` live pull. Park+re-enqueue on a pending
-  dependency. Keeps the DAG/`FreezeContext` ordering.
-- **2b-3 — Retire interim guards** now subsumed: `cursorMutex_`/`usesSerialCursor`
-  → the actor's serial queue; the render-quiesce `pause()` and the
-  `getSnapshotBlocking` freeze-path reads become unnecessary once the freeze
-  never reads live structural state (keep as belt-and-suspenders only if a gate
-  regresses without them).
+**Target invariant.** A freeze resolves ALL structure — which component, which
+reader, the position mapping — from a single immutable snapshot taken atomically
+with the content epoch, and renders only from already-frozen input pages, never
+from live SCut/reader/clip state a worker can mutate. With that, the shared
+mutable cursor stops being observable across threads and the interim guards go
+away.
 
-The reader-lock hardening + revalidation `pause()` already landed (commit
-72a63e6) are compatible with (B) and can be simplified in 2b-3.
+**Already landed toward it (reuse, don't redo):**
+- `requestPage(component,startPos,epoch)` dedup front door over `outputPages_`
+  (Phase 2a, `8621a3b`) — the request half of request/ready; drivers
+  (revalidator, offline render, playback readahead) already call it.
+- `SCut::currentReader_` published + read under one lock; `getSnapshotBlocking()`
+  for consistent structural reads; `readerTried_` atomic (`72a63e6`).
+- `CaptureRevalidator::pause()/resume()` with in-flight drain (`72a63e6`) — lets
+  an exclusive consumer (offline render) own the graph; a stepping stone toward
+  a per-component actor.
+
+**Remaining sub-steps (each independently buildable + gated; NOT flake-blocking):**
+- **Inv-1 — one structural-resolution snapshot per freeze.** `twView` currently
+  calls `mapPos()` (→ `SCut::mapTimelineToComponentPos`, which lazily builds the
+  reader) and then `getComponent()` (→ `SCut::getRootComponent`, which returns
+  the built reader iff `readerTried_` else the shared content component) as two
+  separate reads that can straddle a concurrent lazy build. Replace them with ONE
+  `SCut`/`STakeStack` resolution — `{ component, mappedPos }` (plus `srcStart`,
+  `looping`) — computed under `mutex()` and captured once per `twView` freeze, so
+  component and mapping can never disagree and the result never depends on
+  `readerTried_` timing. (This is the `twView` two-callback → single-resolver
+  change: `twView` ctor, `twTrackMix::insertClip`, `STrack`, `SObject`/`SCut`/
+  `STakeStack`.)
+- **Inv-2 — freeze from ready pages only.** Convert the caching mix-graph nodes
+  (`twMixer`/`twRewire`/`twPluginChain`/`twPluginInsert`, and fold in
+  `twTrackMix`'s own freeze) to request already-frozen input pages via
+  `requestPage` and render only from them, replacing the synchronous
+  `calcOutputTo`/`copyData` live pull. Park + re-enqueue when a dependency is
+  still pending. Keep the acyclic DAG guard (`FreezeContext`) so the readiness
+  walk stays ancestor-after-descendant (no deadlock/livelock).
+- **Inv-3 — retire the interim guards** now subsumed: promote `cursorMutex_`/
+  `usesSerialCursor` into the per-component actor's serial queue; the
+  `getSnapshotBlocking()` freeze-path reads and the render-quiesce `pause()`
+  become unnecessary once a freeze never reads live structural state (keep only
+  as belt-and-suspenders if a gate regresses without them). The edit-path
+  `getDurationBlocking()` emits (the actual flake fix) stay regardless — they are
+  independent of the freeze model.
+
+**Acceptance for each sub-step:** `repeat_test.sh takes_group_broadcast 100` →
+stays 100/100 across `SMARAGD_REVAL_WORKERS ∈ {1,2,4,8,16}`; offline-render
+golden WAVs bit-identical to the current output; full qxa **audio** asserts
+green; `python tools/check_layering.py` clean. Because the flake is already gone,
+these gates are regression gates, not the pass/fail of the fix.
 
 Three targeted fixes have now missed. Meta-conclusion: the incremental route is
 not converging; the shared-state path the render reads and a worker corrupts is
