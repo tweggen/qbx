@@ -45,6 +45,11 @@ void SApplication::setCurrentProject( SProject *cp )
         t3Env_->setSRate( cp->getSRate() );
         t3Env_->setCandidateRates( cp->candidateRates() );
     }
+    // Stage 5: the playback readahead consumes the project's page scheduler
+    // (demands instead of pulling freezes). Null (no project / workers=0)
+    // keeps the legacy pull. Takes effect on the next startOutput().
+    if( t3Speaker_ )
+        t3Speaker_->setPageScheduler( cp ? cp->getRevalidator() : nullptr );
     rewireSpeaker();
 }
 

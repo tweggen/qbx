@@ -121,6 +121,9 @@ void twSpeaker::startOutput()
     // observe it yet (outputState_ is OPENING, so no concurrent start/stop gets past
     // Phase 1), so this needs no lock.
     engine->configureResampling(graphRate, cfg.sampleRate);
+    // Stage 5: hand the project's page scheduler to the engine — the readahead
+    // becomes a demand consumer (set BEFORE startReadahead below).
+    engine->setScheduler(pageScheduler_);
 
     rateRatio_ = (graphRate > 0) ? ((double) cfg.sampleRate / (double) graphRate) : 1.0;
 

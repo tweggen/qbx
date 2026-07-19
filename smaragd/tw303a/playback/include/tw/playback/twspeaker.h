@@ -82,6 +82,8 @@ private:
     // setPlaybackContext(); read on UI and audio threads (the pointer itself
     // never changes after setup, so no synchronization is needed).
     audio::PlaybackContext *context_ = nullptr;
+    // Stage 5: borrowed page scheduler for minted engines (see setPageScheduler).
+    CaptureRevalidator *pageScheduler_ = nullptr;
 
     // Phase 6b: Output state machine (deferred backend startup until buffer ready)
     std::atomic<OutputState> outputState_{OutputState::STOPPED};
@@ -144,6 +146,13 @@ public:
     // startOutput(); the context must outlive this speaker. See
     // audio/playback_context.h for the threading contract.
     void setPlaybackContext(audio::PlaybackContext *ctx) { context_ = ctx; }
+
+    // Proposal 19 dataflow stage 5: the page scheduler handed to every
+    // AudioEngine this speaker mints (readahead becomes a demand consumer;
+    // see AudioEngine::setScheduler). Set per project (the revalidator is
+    // project-owned); null keeps the legacy pull. Takes effect on the next
+    // startOutput().
+    void setPageScheduler(CaptureRevalidator *scheduler) { pageScheduler_ = scheduler; }
 
 public:
     void startOutput();

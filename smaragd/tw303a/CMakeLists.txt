@@ -193,7 +193,7 @@ tw_module(playback
         playback/src/twspeaker.cc
         playback/src/audio_engine.cc
         playback/src/audio_readahead.cc
-    DEPS tw_core tw_pages tw_graph tw_devices tw_sources
+    DEPS tw_core tw_pages tw_graph tw_devices tw_sources tw_schedule
 )
 
 # --- E10 render: the offline rendering engine ---------------------------------

@@ -34,7 +34,9 @@ DEPS = {
     'plugins':  ['core', 'graph'],
     'devices':  ['core'],
     'sinks':    ['core'],
-    'playback': ['core', 'pages', 'graph', 'devices', 'sources'],
+    # playback → schedule since proposal 19 stage 5: the readahead is a
+    # demand consumer of the page scheduler instead of pulling freezes.
+    'playback': ['core', 'pages', 'graph', 'devices', 'sources', 'schedule'],
     # render → schedule since proposal 19 stage 4: the offline render is a
     # watermark CONSUMER of the page scheduler instead of pulling freezes.
     'render':   ['core', 'pages', 'graph', 'sinks', 'playback', 'schedule'],

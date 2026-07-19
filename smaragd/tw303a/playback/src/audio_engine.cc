@@ -673,6 +673,29 @@ void AudioEngine::readaheadLoop() {
                 continue;
             }
 
+            // Proposal 19 dataflow stage 5: with a scheduler, the readahead is
+            // a pure DEMAND CONSUMER — it never renders. Demand the remaining
+            // contiguous window (pages predecessor-chained within the demand)
+            // and re-check on the next tick; the worker pool executes the page
+            // DAG. Only NOT-current pages reach this point, so a demand can
+            // never re-render a non-caching component out of position order
+            // (the stage-4 lesson). The in-flight handle keeps the 20ms tick
+            // from re-issuing an identical demand while nodes still execute.
+            if (scheduler_) {
+                const uint64_t wantEnd =
+                    pageStart + (uint64_t)pagesNeeded * pageSize;
+                const bool covered = pendingDemand_ && !pendingDemand_->done()
+                    && pendingDemandStart_ <= pos && pendingDemandEnd_ >= wantEnd;
+                if (!covered) {
+                    const int n = (int)((wantEnd - pos) / pageSize);
+                    pendingDemand_ = scheduler_->requestGraphPages(
+                        synthOutput_, pos, n, /*priority*/ 9);
+                    pendingDemandStart_ = pos;
+                    pendingDemandEnd_ = wantEnd;
+                }
+                break;   // frontier advances on later ticks as pages land
+            }
+
             // DEBUG: About to compute page
             auto start = std::chrono::steady_clock::now();
             auto pageStart = std::chrono::high_resolution_clock::now();

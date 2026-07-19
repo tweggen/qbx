@@ -11,6 +11,7 @@
 #include <condition_variable>
 
 #include "tw/sources/twresampler.h"
+#include "tw/schedule/capture_revalidator.h"  // stage 5: demand consumer
 
 class twComponent;
 class twLatchStreamingOutput;
@@ -141,6 +142,18 @@ public:
     void startReadahead();   // Start pre-computing pages in background
     void stopReadahead();    // Stop read-ahead thread
 
+    // Proposal 19 dataflow stage 5 — readahead as a DEMAND CONSUMER. When a
+    // scheduler is set (before startReadahead()), the readahead thread no
+    // longer executes freezes: on the first page of its window that is not
+    // frozen-and-current it issues ONE demand for the remaining contiguous
+    // window (pages predecessor-chained within the demand) and re-checks on
+    // the next tick — it never blocks and never renders. Already-valid pages
+    // are never demanded (a re-demand would re-render non-caching components
+    // out of position order — the stage-4 lesson). The RT callback path is
+    // untouched: cache reads + the proposal-16 stale fallback. Null (default)
+    // keeps the legacy synchronous requestPage pull.
+    void setScheduler(CaptureRevalidator *scheduler) { scheduler_ = scheduler; }
+
 private:
     std::shared_ptr<twComponent> synthOutput_;
     uint32_t engineSampleRate_;  // The engine's native sample rate
@@ -185,6 +198,15 @@ private:
     std::condition_variable playbackReadyCv_;  // Signals twSpeaker when buffer ready for playback
     std::shared_ptr<twOutputPage> readaheadPrevPage_;   // State chain for read-ahead
     uint64_t readaheadComputedUpTo_{0};                 // Last page start pos computed
+
+    // Stage 5: scheduler consumer state (readahead thread only). The pending
+    // demand handle stops the 20ms tick from re-issuing an identical demand
+    // while its nodes are still in flight; re-issue happens when it completes
+    // (or the wanted window/epoch moved on).
+    CaptureRevalidator *scheduler_ = nullptr;           // borrowed, optional
+    std::shared_ptr<CaptureRevalidator::GraphDemand> pendingDemand_;
+    uint64_t pendingDemandStart_{0};
+    uint64_t pendingDemandEnd_{0};
 
     void readaheadLoop();  // Entry point for read-ahead thread
 };
