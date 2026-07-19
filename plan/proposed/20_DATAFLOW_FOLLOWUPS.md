@@ -104,6 +104,11 @@ inputs change. Design in 19 § execution classes ("frozen pages standing in
 for a component" is the native currency). Needs: a per-component
 "frozen-in-place" flag + invalidation hookup + UI affordance (later).
 
+> Related: real-time ingress (live audio inputs, live plugin instruments) is
+> drafted separately in `21_REALTIME_DATAFLOW_INTEGRATION.md` (live lane +
+> capture bridge + the class-0 frontier contract); its P3/P4 depend on item 5
+> below and proposal 08.
+
 ## 5. VST / execution-class lanes (design ready, no consumer yet)
 
 The concurrency-degree knob (`∞ | N | 1 | 0`) and capacity-1 lanes with

@@ -100,9 +100,12 @@ plan/
     ├── 18_EXACT_POSITION_DOMAINS.md (executed — typed positions, exact maps)
     ├── 19_ASYNC_FREEZE_MODEL.md     (executed — demand-driven dataflow; keep
     │                                 its "Phase 2 REVISED" design current)
-    └── 20_DATAFLOW_FOLLOWUPS.md     (OPEN — preview lanes, pipelining,
-                                      retirements, housekeeping; start here
-                                      for the next engine work)
+    ├── 20_DATAFLOW_FOLLOWUPS.md     (OPEN — preview lanes, pipelining,
+    │                                 retirements, housekeeping; start here
+    │                                 for the next engine work)
+    └── 21_REALTIME_DATAFLOW_INTEGRATION.md (DRAFT — live inputs / live
+                                      plugin instruments: live lane +
+                                      capture bridge + frontier contract)
 docs/
 ├── PROJECT_OVERVIEW.md   # This document's source
 ├── ARCHITECTURE.md       # Module map (start here for code navigation)
