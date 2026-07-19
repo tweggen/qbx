@@ -677,6 +677,17 @@ goldens + module tests + layering):**
 6. Delete the sync recursion; `cursorMutex_` → must-succeed assert for one
    full gate cycle, then removed (Inv-3). Edit-path `getDurationBlocking()`
    reads stay permanently.
+   **DONE (re-scoped) 2026-07-19** (see STATE.md "dataflow stage 6"):
+   assert-first retirement — the dead Phase-4 freezing queue removed; the RT
+   never-freezes invariant ENFORCED (`twRtThreadGuard` + one-shot/assert in
+   freezePage); scheduler completeness measured (`graphStats()`, zero-miss/
+   zero-retry test assertions). `cursorMutex_` and the in-node legacy pull
+   deliberately STAY: background preview jobs still freeze outside the
+   scheduler (cursorMutex_ serializes them against graph nodes), and the
+   pull is the scheduler's by-design miss fallback. Both retire after
+   preview-lane conversion + sustained zero-miss metrics. The migration
+   (stages 1-6) is complete; forward work: preview lanes, freeze-in-place,
+   pipelining via node-result caching for non-caching components.
 
 **Prerequisites — DONE 2026-07-19** (see STATE.md entry "Phase 2
 prerequisites"): `SMARAGD_REVAL_WORKERS` re-added (0 = no revalidator; sweep

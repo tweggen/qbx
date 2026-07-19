@@ -5623,3 +5623,55 @@ clean; takes_group_broadcast 50/50 at workers=8; placement 10/10; crash
 repro 0/5. NOTE: no headless playback qxa exists — interactive playback
 (start/stop, seek, loop, edits during playback) should be verified by ear.
 Next: stage 6 — retire the sync recursion; cursorMutex_ assert-first.
+
+## Proposal 19 dataflow stage 6: assert-first retirement (2026-07-19)
+
+Final migration stage — retire what is dead, ENFORCE what should hold,
+measure what must hold before more is deleted, and record what stays.
+
+- **Retired: the Phase-4 "component freezing job" queue** (ComponentFreezingJob,
+  freezingQueue_, scheduleComponentFreezing, processComponentFreezingJob) —
+  zero callers remained; page pre-computation is the graph scheduler's job
+  now, with dedup, dependency ordering, and lifetime handled per node.
+  workerLoop simplifies to two sources (reval + graph).
+- **Enforced: the RT invariant.** `twRtThreadGuard` (tw_freeze_context.h):
+  the speaker's render callback marks its thread; `twComponent::freezePage`
+  entered on that thread reports once + debug-asserts + returns a defused
+  empty page instead of rendering. "The RT thread never freezes" is now a
+  guarantee, not a convention (the Phase-3 acceptance criterion).
+- **Measured: scheduler completeness.** `CaptureRevalidator::graphStats()`
+  {nodesExecuted, nodeRetries, missPages}; schedule_test asserts ZERO misses
+  and ZERO retries across all scheduled renders — the precondition for ever
+  deleting the legacy pull.
+- **Stays (recorded, with reasons):**
+  - `cursorMutex_`/`usesSerialCursor`: still load-bearing — background
+    PREVIEW reval jobs freeze components (freezePreviewPage) OUTSIDE the
+    scheduler and can overlap graph nodes; the mutex is what serializes
+    them. Retires only after preview-lane conversion (aspect lanes / pool
+    instances per the Phase 2 REVISED design).
+  - The legacy synchronous pull inside renders: it is the scheduler's
+    in-node fallback BY DESIGN (a miss renders correct content and is
+    recorded for re-planning); deleting it awaits sustained zero-miss
+    metrics plus preview-lane conversion.
+  - `getDurationBlocking()` edit-path reads: permanent (independent of the
+    freeze model; the stale try-lock class is an edit-path hazard).
+  - `pause()`/full quiesce: needed for the no-scheduler legacy path
+    (SMARAGD_REVAL_WORKERS=0); `pauseBackground()` is the scheduler-era form.
+
+Verification: goldens 11/11 bit-identical; module tests green (incl. the
+new zero-miss/zero-retry assertions); layering clean;
+takes_group_broadcast 50/50 at workers=8; placement 10/10; crash 0/5.
+Interactive playback verified by ear by the user (stage 5) — flawless.
+
+### The dataflow migration (stages 1-6) — summary
+
+The demand-driven dataflow of "Phase 2 REVISED" is now the production
+freeze model: consumers (offline render, playback readahead) declare
+demands; the scheduler expands structural plans into dependency-counted
+nodes executing on the shared worker pool; nodes render from bound,
+already-frozen input pages through the two consumption seams; nothing
+inside the graph ever waits; the RT thread is enforced read-only.
+Remaining forward work: preview lanes (aspect-separated state, unlocking
+cursorMutex_ retirement), freeze-in-place for capacity-limited components,
+and cross-page pipelining via node-result caching for non-caching
+components (twTrackMix).
