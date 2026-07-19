@@ -212,6 +212,10 @@ swap_complete:
             builtLoopStart_  = snap.startOffset;
             builtLoopLength_ = snap.loopLength;
         }
+
+        // The reader is part of the snapshot: keep the try-lock fallback
+        // current so a failed try_lock never serves the pre-swap chain (P19).
+        buildSnapshot_nolock();
     }
 }
 
@@ -683,6 +687,7 @@ void SCut::setStartOffset( offset_t off )
     {
         std::lock_guard<std::mutex> lock(mutex());
         setStartOffsetRaw( WarpedPos( (int64_t) off ) );
+        buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
 }
@@ -692,6 +697,7 @@ void SCut::setSrcStart( const Fraction &srcStart )
     {
         std::lock_guard<std::mutex> lock(mutex());
         srcStart_ = srcStart;
+        buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
 }
@@ -701,6 +707,7 @@ void SCut::setDuration( length_t dur )
     {
         std::lock_guard<std::mutex> lock(mutex());
         cutDuration_ = ClipLen( dur );
+        buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
     }
     invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
@@ -722,6 +729,7 @@ void SCut::setLoopLength( length_t l )
         std::lock_guard<std::mutex> lock(mutex());
         loopLength_ = WarpedLen( l );
         dur = cutDuration_.frames();
+        buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
     }
     invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
@@ -737,6 +745,7 @@ void SCut::setWindow( const Fraction &srcStart, ClipLen duration,
         cutDuration_ = duration;
         loopLength_  = loopLength;
         grainParams_.stretch = stretch;
+        buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
     }
     invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
@@ -784,12 +793,10 @@ void SCut::setGrainParams( const twGrainParams &p )
             Fraction k = p.stretch / oldStretch;
             cutDuration_ = ClipLen( ( Fraction( cutDuration_.frames() ) * k ).floorToInt() );
         }
-        // Manually construct snapshot without re-acquiring lock
-        snap.startOffset = getStartOffset();
-        snap.loopLength = loopLength_;
-        snap.cutDuration = cutDuration_;
-        snap.grainParams = grainParams_;
-        snap.reader = currentReader_;
+        // Build the snapshot under the held lock — identical fields to the old
+        // manual construction, and it refreshes lastGoodSnapshot_ so the
+        // try-lock fallback reflects this mutation (P19).
+        snap = buildSnapshot_nolock();
     }
 
     rebuildReader( snap );   // pre-build off the audio thread (caller is the UI thread)
@@ -889,6 +896,16 @@ SCut::SCut( SProject *parentProject, SLink &content )
     // notified to invalidate only affected aspects (Playback, Metadata), not the
     // entire arrangement.
     content_->getSObject().addDependentLink(content_);
+
+    // Initialize the try-lock fallback snapshot from the CONSTRUCTED state: a
+    // fresh cut's lastGoodSnapshot_ must never be the default-zeros struct
+    // (duration 0), or a getSnapshot() losing the try-lock to a background
+    // worker hands an edit-path consumer an UNBOUNDED clip window (P19, the
+    // takes_recording_placement doubling).
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        buildSnapshot_nolock();
+    }
 }
 
 SCut::SCut( SProject *parentProject, SObject &content )
@@ -917,6 +934,13 @@ SCut::SCut( SProject *parentProject, SObject &content )
     // notified to invalidate only affected aspects (Playback, Metadata), not the
     // entire arrangement.
     content_->getSObject().addDependentLink(content_);
+
+    // Initialize the try-lock fallback snapshot from the CONSTRUCTED state
+    // (see the SLink ctor for the rationale — never the default-zeros struct).
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        buildSnapshot_nolock();
+    }
 }
 
 int SCut::serializeSelfAttributes( QTextStream &o )
@@ -1034,6 +1058,14 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
             length_t oldSamples = crossfadeStr.toLongLong();
             grainParams_.crossfade = (length_t)( ( oldSamples * srate ) / 48000.0 + 0.5 );
         }
+    }
+
+    // Loaded fields were written directly above (load thread): refresh the
+    // try-lock fallback snapshot so it reflects the LOADED window, not the
+    // construction-time state (P19 — the fallback must never lag the model).
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        buildSnapshot_nolock();
     }
 
     // Pre-build the playback chain now (load thread) so a stretched or looping
