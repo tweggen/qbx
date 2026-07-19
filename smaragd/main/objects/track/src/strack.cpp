@@ -196,7 +196,9 @@ void STrack::trackChildWasMoved( offset_t newTime )
 {
     SLink *slink = (SLink *) (const SLink *) sender();
     if( slink && slink->getSObject().hasDuration() ) {
-        length_t duration = slink->getSObject().getDuration();
+        // Blocking read — a stale try-lock duration here would resize the clip
+        // window wrongly via updateClip (same class as the insert-path fix).
+        length_t duration = slink->getSObject().getDurationBlocking();
         twEditRange affected;
         for( int i=0; i<nBusses_; ++i ) {
             if( cpTrackMixers_[i] ) {
@@ -228,7 +230,12 @@ void STrack::trackChildWasAdded( SLink &child )
 
             // Insert the clip into all track mixers with a callback that gets the component
             offset_t startTime = child.getStartTime();
-            length_t duration = child.getSObject().getDuration();
+            // BLOCKING read (proposal 19): getDuration()'s try-lock snapshot can
+            // return a fresh cut's DEFAULT (0) when a revalidation worker holds
+            // the cut mutex (the just-set duration scheduled a Preview job).
+            // duration=0 inserts an UNBOUNDED clip that bleeds source past the
+            // clip end (takes_recording_placement doubling). Edit path — may block.
+            length_t duration = child.getSObject().getDurationBlocking();
             // Capture SLink by reference; callback will call getRootComponent() dynamically
             auto getComponentFn = [&child]() { return child.getRootComponent(); };
             // Inv-1: single resolver — component + slip-folded position from ONE
@@ -337,7 +344,8 @@ void STrack::setNBusses( int nBusses )
     for( SLink *lk : childLinks() ) {
         if( !lk || !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();
-        length_t duration = lk->getSObject().hasDuration() ? lk->getSObject().getDuration() : 0;
+        // Blocking read — same stale try-lock hazard as trackChildWasAdded.
+        length_t duration = lk->getSObject().hasDuration() ? lk->getSObject().getDurationBlocking() : 0;
         // Create a callback that returns the component dynamically
         auto getComponentFn = [lk]() { return lk->getRootComponent(); };
         // Inv-1: single resolver — component + slip-folded position from ONE

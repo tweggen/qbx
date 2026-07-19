@@ -204,6 +204,20 @@ public:
 
     virtual bool hasDuration() const;
     virtual length_t getDuration() const;
+
+    /**
+     * Blocking variant of getDuration() for EDIT-path reads (proposal 19
+     * Phase 2b, extended). SCut::getDuration() resolves through a try-lock
+     * snapshot: when a background revalidation worker happens to hold the cut's
+     * mutex, it returns the stale lastGoodSnapshot_ — on a freshly created cut
+     * that is a DEFAULT snapshot with cutDuration 0. An edit-path consumer that
+     * acts on that value bakes it in (e.g. STrack inserting a clip as
+     * duration=0 = UNBOUNDED, which then bleeds source material past the clip
+     * end — the takes_recording_placement doubling). Edit-path readers must use
+     * this blocking read; only the RT audio path keeps the try-lock fallback.
+     * Default: getDuration() (most objects read plain fields, no fallback).
+     */
+    virtual length_t getDurationBlocking() const { return getDuration(); }
     
     virtual bool hasPreview() const;
     virtual int getPreview( preview_t *dest,

@@ -177,7 +177,7 @@ public:
     // durationChanged emit that becomes twTrackMix::updateClip, that stale value
     // leaves clip windows wrong (the takes_group_broadcast flake). Edit-path
     // emitters must read the CURRENT duration. Not for the RT audio thread.
-    length_t getDurationBlocking() const;
+    length_t getDurationBlocking() const override;
 
     // Range-scoped invalidation (proposal 18 Phase 5): dirty ranges of our
     // CONTENT arrive in the SOURCE domain; map them through the cut window

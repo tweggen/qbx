@@ -116,7 +116,7 @@ public:
     length_t getDuration() const override;
     // Edit/signal-path duration (proposal 19 Phase 2b): blocking snapshot,
     // never the stale try-lock fallback. Used by durationChanged emitters.
-    length_t getDurationBlocking() const;
+    length_t getDurationBlocking() const override;
     bool hasPreview() const override;
     int getPreview( preview_t *dest, offset_t start, length_t length,
                     offset_t nProbes ) override;
