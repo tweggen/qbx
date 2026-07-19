@@ -642,10 +642,18 @@ goldens + module tests + layering):**
    full gate cycle, then removed (Inv-3). Edit-path `getDurationBlocking()`
    reads stay permanently.
 
-**Prerequisites (unchanged from the design review):** re-add the
-`SMARAGD_REVAL_WORKERS` knob (the sweep gates cannot currently run); kill the
-fresh-cut default-snapshot fallback; audit remaining edit-path
-`getDuration()`/`getSnapshot()` callers.
+**Prerequisites — DONE 2026-07-19** (see STATE.md entry "Phase 2
+prerequisites"): `SMARAGD_REVAL_WORKERS` re-added (0 = no revalidator; sweep
+is real again, verified by thread count), fresh-cut default-snapshot fallback
+eliminated (ctor init + refresh-on-mutation of `lastGoodSnapshot_` — try-lock
+failure now serves at worst a one-edit-stale REAL window), edit-path
+stale-read audit converted to blocking (split/resize/duplicate/add-take/
+place-recording/remove-asset actions; `buildCapture_`; `mapChildRangesToSelf`).
+Deliberately left try-lock: getTopMostSLinkAt, child sort comparator,
+getChildrenExtent, `STakeStack::getDuration` itself, `sstdmixerview.cpp`
+gesture handlers (audit when that file settles). Gate: 50/50 at each of
+workers {1,4,8,16}. Next: migration stage 1 (extract the explicit-inputs leaf
+renderer).
 
 **Open questions status:** OQ1 (deadlock) — resolved by construction. OQ2
 (back-pressure) — watermark horizon. OQ3 (aspect lanes) — pool instances where

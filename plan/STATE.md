@@ -5408,3 +5408,41 @@ contribution capture showing `clipStart=0 dur=0` in the failing render.
   lane with runs+pre-roll / 0 real-time-bound hardware = capture-only). See
   "Phase 2 REVISED" in plan/proposed/19_ASYNC_FREEZE_MODEL.md; it resolves
   that proposal's open questions 1-5.
+
+## Proposal 19 Phase 2 prerequisites: worker knob, snapshot-fallback hardening, edit-path audit (2026-07-19)
+
+The three items the Phase 2 REVISED design lists as "do before Inv-2":
+
+1. **`SMARAGD_REVAL_WORKERS` re-added** (`SProject` ctor): overrides the
+   revalidator worker count (clamped [1,64]); `0` disables background
+   revalidation entirely (no revalidator; every consumer null-checks). The
+   determinism sweep (`repeat_test.sh` arg 4) is REAL again — verified by
+   thread count (~11 vs ~26 threads at 1 vs 16) and a workers=0 pass.
+2. **Fresh-cut default-snapshot fallback eliminated.** `lastGoodSnapshot_` is
+   now (a) initialized from the CONSTRUCTED state in both SCut ctors, (b)
+   refreshed inside every locked window mutation (`setStartOffset`,
+   `setSrcStart`, `setDuration`, `setLoopLength`, `setWindow`,
+   `setGrainParams` — which now builds its snapshot via
+   `buildSnapshot_nolock()` instead of hand-rolling it), (c) refreshed after
+   the `rebuildReader` swap (the reader is part of the snapshot), and (d)
+   refreshed after the direct field writes in `readPostChildrenAttributes`.
+   A failed `try_lock` can now serve at worst a one-edit-stale REAL window —
+   never the default-zeros struct (the duration-0 → unbounded-clip class).
+3. **Edit-path stale-read audit.** Converted to blocking reads
+   (`getDurationBlocking` / `getSnapshotBlocking`): split (geometry + inverse),
+   resize (both inverses), duplicate (copied window), add-take (column
+   duration), place-recording (whole plan), remove-asset (inverse);
+   `SCut::buildCapture_` (capture extents), `SCut::mapChildRangesToSelf`
+   (invalidation scoping), the `readPostChildrenAttributes` pre-build.
+   **Deliberately left on the try-lock read** (now one-edit-stale at worst per
+   item 2): `STrack::getTopMostSLinkAt` + the child sort comparator +
+   `SObject::getChildrenExtent` (mixed paint/edit, broad blast radius),
+   `STakeStack::getDuration()` itself (the try-lock variant IS the RT-safe
+   API; its Blocking sibling exists), and all of `sstdmixerview.cpp`
+   (concurrent local edits in progress; gesture handlers to be audited when
+   that file settles).
+
+Verification: takes_group_broadcast **50/50 at each of workers {1,4,8,16}**
+(first genuine sweep since the knob was lost), takes_recording_placement
+20/20, module tests + layering green, qxa non-screenshot failures = the
+pre-existing save/load trio only.
