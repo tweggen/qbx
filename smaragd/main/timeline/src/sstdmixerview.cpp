@@ -974,13 +974,22 @@ void SMVActualView::beginRangeDrag( int x )
     if( x < 0 ) x = 0;
     offset_t t = smv_.alignTime( getTimeOf( x ) );
 
-    // If the press lands on an existing end, grab it for moving; otherwise
-    // start a brand-new range (this press fixes one end).
+    // If the press lands on an existing end, grab it for moving; on the body
+    // (between the ends) grab the whole selection; otherwise start a brand-new
+    // range (this press fixes one end). Use normalized bounds for the pixels so
+    // edge vs. body is consistent regardless of end ordering.
     if( rangeValid_ ) {
-        int xs = getXPosOfOffset( rangeStart_ );
-        int xe = getXPosOfOffset( rangeEnd_ );
+        int xs = getXPosOfOffset( getRangeStart() );
+        int xe = getXPosOfOffset( getRangeEnd() );
         if( qAbs( x - xs ) <= SMV_RANGE_GRAB_PIXEL ) { rangeDrag_ = RangeMoveStart; return; }
         if( qAbs( x - xe ) <= SMV_RANGE_GRAB_PIXEL ) { rangeDrag_ = RangeMoveEnd;   return; }
+        if( x > xs + SMV_RANGE_GRAB_PIXEL && x < xe - SMV_RANGE_GRAB_PIXEL ) {
+            rangeDrag_            = RangeMove;
+            rangeMovePressT_      = t;               // aligned press time
+            rangeMoveAnchorStart_ = getRangeStart();
+            rangeMoveAnchorEnd_   = getRangeEnd();
+            return;
+        }
     }
     rangeStart_ = rangeEnd_ = t;
     rangeValid_ = true;
@@ -992,6 +1001,17 @@ void SMVActualView::updateRangeDrag( int x )
 {
     if( x < 0 ) x = 0;
     offset_t t = smv_.alignTime( getTimeOf( x ) );
+    if( rangeDrag_ == RangeMove ) {
+        // Shift both ends by the drag delta, preserving length; clamp at 0.
+        // offset_t is unsigned, so compute the delta in signed 64-bit.
+        long long delta = (long long) t - (long long) rangeMovePressT_;
+        long long ns = (long long) rangeMoveAnchorStart_ + delta;
+        long long ne = (long long) rangeMoveAnchorEnd_   + delta;
+        if( ns < 0 ) { ne -= ns; ns = 0; }
+        rangeStart_ = (offset_t) ns; rangeEnd_ = (offset_t) ne;
+        update();
+        return;
+    }
     if( rangeDrag_ == RangeMoveStart ) rangeStart_ = t;
     else                               rangeEnd_   = t;   // RangeCreate or RangeMoveEnd
     update();
@@ -1539,6 +1559,25 @@ void SMVActualView::contextMenuEvent( QContextMenuEvent *ev )
     }
     updateLastClickVars( ev->pos() );
     qGlobalPopup_->popup( mapToGlobal( ev->pos() ) );
+}
+
+// A left double-click in the empty area below the last track lane creates a new
+// track — the timeline-canvas counterpart to the same gesture on the left
+// track-control column (see SStdMixerView::eventFilter). A double-click that
+// lands on an existing lane falls through to the base handler.
+void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
+{
+    if( ev->button() == Qt::LeftButton && smv_.getModel() ) {
+        int y = ev->pos().y() - SMV_TIME_RULER_HEIGHT;
+        if( y >= 0 ) {
+            int idx = ( y + upperLeftY_ ) / trackHeight_;
+            if( !smv_.rowAt( idx ) ) {         // below the last visible lane
+                smv_.ctAddTrackBelowLast();
+                return;
+            }
+        }
+    }
+    QWidget::mouseDoubleClickEvent( ev );
 }
 
 void SMVActualView::mousePressEvent( QMouseEvent *ev )

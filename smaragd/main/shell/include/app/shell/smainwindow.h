@@ -6,6 +6,7 @@
 #include <qmenubar.h>
 #include <QString>
 #include <QVariant>
+#include <QDoubleSpinBox>
 // #include <qpopupmenu.h>
 
 class SProject;
@@ -83,6 +84,8 @@ protected slots:
     // Track grouping toolbar -> act on the arranger's last-clicked track.
     void groupTrack();
     void ungroupTrack();
+    // Transport toolbar tempo box -> push the value to the current project.
+    void onTempoSpinChanged( double bpm );
 
     // Reflect a project property change on the matching palette button.
     void onProjectPropertyChanged( const QString &key, const QVariant &value );
@@ -140,7 +143,9 @@ private:
     QActionGroup *deviceGroup_;
 
     QAction *actStop_, *actPlay_, *actRecord_, *actGotoStart_;
+    QAction *actSaveAs_ = nullptr;      // File->Save as...; disabled with no project
     QToolBar *qTBTransport_;
+    QDoubleSpinBox *tempoSpin_ = nullptr;  // Transport tempo (BPM) box
     SGridToolbar *qTBPalette_;
     QToolBar *qTBTracks_;
     SRecordingProgressDialog *recordingProgressDialog_ = nullptr;

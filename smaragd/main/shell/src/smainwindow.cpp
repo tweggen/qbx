@@ -774,6 +774,19 @@ SMainWindow::SMainWindow()
     qTBTransport_->addAction( actPlay_ );
     qTBTransport_->addAction( actStop_ );
     qTBTransport_->addAction( actRecord_ );
+
+    // Tempo (BPM) box next to the transport controls. Disabled until a project
+    // is current; kept in sync both ways by syncPaletteToProject.
+    tempoSpin_ = new QDoubleSpinBox( this );
+    tempoSpin_->setDecimals( 3 );              // 3 digits after the decimal
+    tempoSpin_->setRange( 1.0, 9999.999 );     // up to 4 digits before the decimal
+    tempoSpin_->setKeyboardTracking( false );  // commit on Enter/focus-out
+    tempoSpin_->setToolTip( "Tempo (BPM)" );
+    tempoSpin_->setEnabled( false );           // enabled by syncPaletteToProject
+    qTBTransport_->addWidget( tempoSpin_ );
+    QObject::connect( tempoSpin_, SIGNAL( valueChanged(double) ),
+                      this, SLOT( onTempoSpinChanged(double) ) );
+
     addToolBar( Qt::TopToolBarArea, qTBTransport_ );
 
     QObject::connect( actPlay_, SIGNAL( triggered() ),
@@ -796,7 +809,7 @@ SMainWindow::SMainWindow()
     qRecentMenu_ = qFileMenu_->addMenu( "Open &Recent" );
     updateRecentMenu();
     qFileMenu_->addAction( "&Save", Qt::CTRL | Qt::Key_S, this, SLOT( fileSave() ) );
-    qFileMenu_->addAction( "Save &as...", Qt::CTRL | Qt::SHIFT | Qt::Key_S, this, SLOT( fileSaveAs() ) );
+    actSaveAs_ = qFileMenu_->addAction( "Save &as...", Qt::CTRL | Qt::SHIFT | Qt::Key_S, this, SLOT( fileSaveAs() ) );
     qFileMenu_->addSeparator();
     qFileMenu_->addAction( "&Render...", this, SLOT( onRenderTriggered() ) );
     qFileMenu_->addSeparator();
@@ -1451,6 +1464,9 @@ void SMainWindow::syncPaletteToProject( SProject *project )
     actGrid_->setEnabled( en );
     actMetronome_->setEnabled( en );
     actCycle_->setEnabled( en );
+    // "Save as..." and the tempo box only make sense with a project.
+    if( actSaveAs_ ) actSaveAs_->setEnabled( en );
+    if( tempoSpin_ ) tempoSpin_->setEnabled( en );
 
     if( !project ) return;
 
@@ -1459,6 +1475,17 @@ void SMainWindow::syncPaletteToProject( SProject *project )
     actGrid_->setChecked( project->prop( SProjectProps::GridVisible, true ).toBool() );
     actMetronome_->setChecked( project->prop( SProjectProps::Metronome, false ).toBool() );
     actCycle_->setChecked( project->prop( SProjectProps::Cycle, false ).toBool() );
+
+    // Seed the tempo box and keep it in sync with the project. blockSignals
+    // avoids the seed re-submitting to the project. The prior project (if any)
+    // was deleted by closeProject(), auto-removing its bpmTempoChanged link.
+    if( tempoSpin_ ) {
+        tempoSpin_->blockSignals( true );
+        tempoSpin_->setValue( project->getBPMTempo() );
+        tempoSpin_->blockSignals( false );
+        QObject::connect( project, SIGNAL( bpmTempoChanged(double) ),
+                          tempoSpin_, SLOT( setValue(double) ) );
+    }
 
     // The previous project (if any) was deleted by closeProject(), which
     // auto-removed its connections, so we only need to connect the new one.
@@ -1533,6 +1560,14 @@ void SMainWindow::ungroupTrack()
 {
     SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
     if( v ) v->ctUngroupTrack();
+}
+
+void SMainWindow::onTempoSpinChanged( double bpm )
+{
+    // Direct set (no undo action), matching the ruler "Set BPM" dialog. The
+    // resulting bpmTempoChanged updates the grid and echoes back to the box,
+    // but setValue to an unchanged value emits nothing, so there is no loop.
+    if( currentProject_ ) currentProject_->setBPMTempo( bpm );
 }
 
 void SMainWindow::undo()

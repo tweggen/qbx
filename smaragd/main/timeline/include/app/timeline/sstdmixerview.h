@@ -110,6 +110,7 @@ protected slots:
 protected:
     virtual void paintEvent( QPaintEvent * );
     virtual void mousePressEvent( QMouseEvent * );
+    virtual void mouseDoubleClickEvent( QMouseEvent * );
     virtual void mouseMoveEvent( QMouseEvent * );
     virtual void mouseReleaseEvent( QMouseEvent * );
     virtual void contextMenuEvent( QContextMenuEvent * );
@@ -139,7 +140,7 @@ private:
     bool wheelZoomToCursor_, wheelInvertZoom_;
 
     // --- time-range selection -------------------------------------------
-    enum RangeDrag { RangeNone, RangeCreate, RangeMoveStart, RangeMoveEnd };
+    enum RangeDrag { RangeNone, RangeCreate, RangeMoveStart, RangeMoveEnd, RangeMove };
     void beginRangeDrag( int x );    // mouse press in the ruler band
     void updateRangeDrag( int x );   // mouse move while dragging
     void endRangeDrag( int x );      // mouse release
@@ -177,6 +178,9 @@ private:
     bool rangeValid_;
     offset_t rangeStart_, rangeEnd_;   // the two ends (not necessarily ordered)
     int rangeDrag_;                    // RangeDrag
+    // RangeMove snapshot: press time and original bounds, so a body-drag shifts
+    // the whole selection by (now - press) while preserving its length.
+    offset_t rangeMovePressT_ = 0, rangeMoveAnchorStart_ = 0, rangeMoveAnchorEnd_ = 0;
     int lastClickTrackIdx_;
     STrack *lastClickTrack_;
     SLink *lastClickSLink_;
