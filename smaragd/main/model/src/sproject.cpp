@@ -7,6 +7,7 @@
 #include <QJsonObject>
 
 #include <cstdint>
+#include <cstdlib>
 
 using namespace std;
 
@@ -413,7 +414,20 @@ SProject::SProject()
 
     // Spawn worker thread pool: 8 threads for aggressive race condition testing.
     // In production, this can be dialed back to 2-4 (diminishing returns above that).
-    revalidator_ = std::make_unique<CaptureRevalidator>(pagePool_.get(), 8);
+    //
+    // SMARAGD_REVAL_WORKERS overrides the count (clamped to [1,64]) — the
+    // determinism gates sweep it (repeat_test.sh's 4th argument; proposal 19).
+    // "0" disables background revalidation entirely (no revalidator): the
+    // decisive is-it-a-worker-race diagnostic from the proposal-19 hunts.
+    int numWorkers = 8;
+    bool noReval = false;
+    if (const char *env = getenv("SMARAGD_REVAL_WORKERS")) {
+        int n = atoi(env);
+        if (n == 0)      noReval = true;
+        else if (n > 0)  numWorkers = n < 64 ? n : 64;
+    }
+    if (!noReval)
+        revalidator_ = std::make_unique<CaptureRevalidator>(pagePool_.get(), numWorkers);
 
 #if 0
     soRoot_ = new SStdMixer( this );
