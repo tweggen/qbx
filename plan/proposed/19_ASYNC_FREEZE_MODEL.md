@@ -162,6 +162,12 @@ state.
 
 ### 3. Component execution policy — the single-cursor answer
 
+> **REFINED (2026-07-19):** see "Component execution classes" in Phase 2
+> REVISED — the two classes below become the concurrency-degree knob
+> `∞ | N | 1 | 0` (pure / poolable / exclusive lane with runs+pre-roll /
+> real-time-bound capture-only), and the serial actor becomes the lane +
+> predecessor-edge form.
+
 Each component declares an execution class (new virtual, default parallel):
 
 - **Parallel / pure** (gain, `twTrackMix`/`twMixer` summing *given* input pages,
@@ -440,7 +446,18 @@ away.
   a per-component actor.
 
 **Remaining sub-steps (each independently buildable + gated; NOT flake-blocking):**
-- **Inv-1 — one structural-resolution snapshot per freeze.** `twView` currently
+- **Inv-1 — LANDED 2026-07-19** (see STATE.md entry of that date): `twResolvedClip`
+  + `twView::ResolveFn` replace the `mapPos()`/`getComponent()` pair;
+  `SCut::resolveClip` resolves under ONE `getSnapshotBlocking()`;
+  `STakeStack::resolveClip` reads `activeCut()` once. Same session also landed
+  `CaptureRevalidator::retireObject` (SCut-destruction UAF crash fix, with
+  `schedule_test`) and the `getDurationBlocking()` insert-path fix
+  (takes_recording_placement doubling — the a1e6011 stale try-lock class at the
+  STrack insert/move sites). CAUTION: the `SMARAGD_REVAL_WORKERS`/
+  `SMARAGD_NO_REVAL` env knobs no longer exist in the source (instrumentation
+  prototypes, since removed) — `repeat_test.sh`'s workers argument is currently
+  a no-op; re-add the knob before the next sweep-gated phase. Original spec:
+- **Inv-1 (spec) — one structural-resolution snapshot per freeze.** `twView` currently
   calls `mapPos()` (→ `SCut::mapTimelineToComponentPos`, which lazily builds the
   reader) and then `getComponent()` (→ `SCut::getRootComponent`, which returns
   the built reader iff `readerTried_` else the shared content component) as two
@@ -471,6 +488,176 @@ stays 100/100 across `SMARAGD_REVAL_WORKERS ∈ {1,2,4,8,16}`; offline-render
 golden WAVs bit-identical to the current output; full qxa **audio** asserts
 green; `python tools/check_layering.py` clean. Because the flake is already gone,
 these gates are regression gates, not the pass/fail of the fix.
+
+**Design review of Inv-2/Inv-3 (2026-07-19, after Inv-1 + the session's two
+bug fixes — amends the spec above):**
+- *Clip-window snapshot is the missing half of Inv-2.* `twTrackMix::freezePage`
+  today holds `mutex()` across the ENTIRE child recursion, which is what makes
+  the clip list consistent during a freeze. Unwinding the recursion removes that
+  accidental consistency: an Inv-2 freeze task must capture, at creation under
+  `mutex()`, ONE atomic snapshot of {overlapping clip windows, each clip's
+  `resolveClip` result, epoch} — the trackmix-level analogue of Inv-1. Without
+  it Inv-2 re-opens the edit/freeze race one level up.
+- *Parked tasks are a lifetime surface.* The 2026-07-19 SCut UAF crash (reval
+  queue's borrowed pointer + one-way `deleteLater`) is the proof-of-class.
+  Invariant: every task/dedup/continuation reference is owning (`shared_ptr`)
+  or covered by a destructor-time `retireObject`-style drain; unit-test the
+  "destroy component with parked dependents" path like `schedule_test` does.
+- *Parking must not occupy a worker* (else diamond fan-in deadlocks the pool at
+  pool width), and a task may not hold its component's `mutex()` while
+  requesting dependencies — the inversion must actually unwind the under-lock
+  recursion, not wrap it.
+- *Every caching node is serial-in-position* — `clip.previousPage` /
+  `page->internalState` chaining forces in-order page processing per node.
+  The actor model applies to mix nodes too; parallelism is across components
+  only, never within one.
+- *Open question 3 (preview vs playback lanes) is REQUIRED for Inv-2, not
+  optional:* `freezePreviewPage` restores/captures the SAME `internalState`
+  chain as full-rate freezes (twcomponent.cc:694/727), so interleaved aspects
+  on one actor corrupt each other's state chain. Split state per aspect, or
+  restore-from-snapshot on every cross-aspect switch.
+- *Dedup key vs range invalidation:* `{component,startPos,epoch}` assumes a
+  monotonic epoch, but prop-18 P5 edits invalidate page RANGES. A parked task
+  must re-verify all input pages are still valid atomically with publishing
+  (or invalidation must propagate to parked dependents) — else it can publish
+  stale-content-at-current-epoch, the exact #3(b) shape.
+- *Inv-3: retire by assert first.* Convert `cursorMutex_` to a
+  try_lock-must-succeed assert for a full gate cycle before deleting; keep the
+  `pause()` Guard as a no-op shim one phase longer. And the edit-path
+  `getDurationBlocking()` reads are PERMANENT, not interim — the class
+  re-occurred 2026-07-19 at the STrack insert sites (takes_recording_placement
+  doubling); Inv-2/3 restructure only the freeze side.
+- *Do BEFORE Inv-2 (more robustness per line):* (1) re-add the
+  `SMARAGD_REVAL_WORKERS` knob — it no longer exists, the sweep argument of
+  `repeat_test.sh` is a silent no-op, so the acceptance sweeps above cannot
+  currently run; (2) kill the fresh-cut default-snapshot fallback (initialize
+  `lastGoodSnapshot_` from ctor state, or block the first-ever `getSnapshot()`)
+  so the stale try-lock class cannot return duration-0 at all; (3) audit the
+  remaining edit-path `getDuration()`/`getSnapshot()` callers (e.g. the
+  `place-recording` column scan, splacements helpers).
+- *Staging:* 2i trackmix task-input snapshot (small, independently gated) →
+  2ii mixer/rewire/chain request+ready with park mechanics → 2iii offline
+  render as request+wait consumer → Inv-3 assert-then-delete.
+  **SUPERSEDED same day by the dataflow design below** (park/re-enqueue is
+  dropped entirely; stage 2i survives as the planner's structural snapshot).
+
+### Phase 2 REVISED (2026-07-19, user-approved): demand-driven dataflow — async pages only
+
+**Decision.** Drop the park/re-enqueue request/ready sketch. The goal (user):
+remove the *mixture* of synchronous recursive `freezePage()` and async frozen
+pages — async pages only, nothing inside the graph ever awaits a result.
+Parking is still synchronous thinking deferred (a task requests, suspends,
+resumes — carrying a continuation-lifetime surface just to simulate the old
+recursion). The clean model is a **dependency-counting dataflow scheduler** —
+"Ninja for pages":
+
+**Model.**
+- **Node = `(component, pageIndex, epoch)`** — the unit of work is "produce
+  this one page". Dependency edges are ordinary and uniform:
+  (a) the **input pages** its window overlaps, and (b) the **predecessor page**
+  `(component, pageIndex-1)`. The `previousPage`/`internalState` state chain
+  stops being a special actor concept — it is just another DAG edge, and
+  in-position order per component falls out of the graph.
+- **Nothing waits.** A node is either *ready* (all edges satisfied → priority
+  ready-queue) or pending counters. Workers pull ready nodes and run a
+  **non-recursive leaf renderer**: `freezePage_nolock` refactored to take an
+  explicit set of already-frozen input pages instead of pulling latches live.
+  Completion decrements dependents' counters; zero → ready-queue. No parked
+  continuations, no blocked workers → diamond-DAG deadlock impossible **by
+  construction**.
+- **Consumers never call freezePage — they declare demand.** Each consumer
+  owns a *watermark*: "root pages covering [t, t+horizon) at epoch E".
+  Playback readahead advances it with the playhead (RT keeps prop-16 stale
+  fallback); the **offline render** advances page-by-page and waits on a CV
+  for "root page k valid" — the only blocking in the system, at the very edge,
+  outside the graph (bit-exactness free: the render observes, never executes);
+  preview is the same at low priority.
+- **Planner.** A watermark expands into nodes by a *structural* walk (no
+  rendering): under each component's `mutex()` once, capture an immutable
+  per-node input plan — clip windows + `resolveClip` results (Inv-1) + epoch.
+  Renders never touch live model state; they read plans and pages. (This is
+  the design-review's "2i" snapshot, kept.)
+- **Edits.** Epoch/range invalidation as today (prop 18 P5). Stale nodes are
+  dropped at two checkpoints: on dequeue, and **verify-at-publish** (all input
+  pages still valid, atomically with the cache insert). No invalidation
+  propagation through parked tasks — none exist.
+- **Lifetime.** Nodes own `shared_ptr` to their component; component
+  destruction drops its planned/ready nodes and drains in-execution ones via
+  the `retireObject` mechanism (landed 88bb896).
+- **Back-pressure.** The watermark horizon bounds outstanding work (readahead
+  N pages, render 1-2, preview coarse) — answers open question 2 without an
+  eviction policy for in-flight work.
+
+**Component execution classes (resolves §3 and open question 4).** Each
+component declares `concurrency = ∞ | N | 1 | 0`:
+- **∞ — pure** (gain, rewire, mixing *given* input pages): stateless, NO
+  predecessor edge at all — parallel across positions.
+- **resumable stateful** (readers, grain, own DSP): predecessor edge; a broken
+  chain (seek, invalidation) repairs by reset+fast-forward or
+  `captureInternalState`/`restoreInternalState` (today's machinery).
+- **N — poolable plugin**: N independent *lanes*, each its own instance +
+  state. Preview gets its own instance from the pool → the preview-corrupts-
+  playback state-chain hazard disappears structurally for anything poolable
+  (resolves open question 3 for this class).
+- **1 — exclusive instance** (real VST): ONE physical cursor, state not
+  faithfully restorable (getState/setState is not sample-accurate for tails).
+  The planner emits **runs** (maximal contiguous demanded intervals), not
+  independent nodes; the component owns a capacity-1 **lane**; a node is ready
+  when (inputs frozen) AND (head of its lane's current run). Repositioning
+  between runs is an explicit protocol: reset (suspend/resume, all-notes-off)
+  + **pre-roll** (render-and-discard K frames, K = declared tail length).
+  Determinism comes from the protocol, not state capture: same inputs + reset
+  + same pre-roll ⇒ same output — and the offline render demands pages
+  sequentially from zero = ONE run, the plugin's native streaming case, zero
+  repositions. Scheduler is thrash-averse: finish the current run to its
+  demand horizon before switching; priority decides lane contention
+  (playback > preview; preview serves stale/coarse meanwhile).
+- **0 — real-time-bound** (physical hardware in the chain): cannot render
+  faster than real time, cannot rewind. No lane; its pages come ONLY from live
+  capture (playback / real-time bounce — the industry answer for external
+  gear), mapping onto the existing `twCapturingSource`/capture machinery. The
+  planner treats them as external inputs: demand cannot force production;
+  downstream goes prop-16 stale fallback until a capture pass exists.
+- **Freeze-in-place escape hatch:** chronic contention on a capacity-1/0
+  component → bounce its output to pages once and treat as pure until inputs
+  change; "frozen pages standing in for a component" is the system's native
+  currency, so this is nearly free.
+
+**Why this beats park/re-enqueue:** no parked-task lifetime surface (tasks
+exist only when runnable); deadlock-free by construction instead of by
+argument; serial-cursor sources need no special call model (predecessor edge /
+lane); the render becomes an observer, making bit-exactness trivial; the sync
+recursion is deleted outright rather than simulated.
+
+**Migration (each stage independently gated on the N=100 gate + bit-identical
+goldens + module tests + layering):**
+1. Extract the leaf renderer (explicit-inputs `freezePage_nolock` variant);
+   sync path temporarily feeds it — no behaviour change.
+2. Planner + per-node structural snapshot (reuses Inv-1 `resolveClip`).
+3. Dependency-counting scheduler inside `CaptureRevalidator` (it already has
+   the pool, priority queues, pause/drain, retireObject).
+4. Offline render → watermark consumer (bit-identical goldens gate).
+5. Readahead → watermark consumer; RT unchanged.
+6. Delete the sync recursion; `cursorMutex_` → must-succeed assert for one
+   full gate cycle, then removed (Inv-3). Edit-path `getDurationBlocking()`
+   reads stay permanently.
+
+**Prerequisites (unchanged from the design review):** re-add the
+`SMARAGD_REVAL_WORKERS` knob (the sweep gates cannot currently run); kill the
+fresh-cut default-snapshot fallback; audit remaining edit-path
+`getDuration()`/`getSnapshot()` callers.
+
+**Open questions status:** OQ1 (deadlock) — resolved by construction. OQ2
+(back-pressure) — watermark horizon. OQ3 (aspect lanes) — pool instances where
+available, else lane priority + separate page space/predecessor chain per
+aspect. OQ4 (VST pools) — the concurrency-degree knob. OQ5
+(`stalePredecessor`) — verify-at-publish makes "old page stays until atomically
+replaced" the natural form; keep prop-16 fallback for RT.
+
+The hard parts, named: the planner must enumerate child-page dependencies *per
+range* through the loop/grain maps (prop 18 gives exact maps; `twTrackMix`
+already enumerates overlapping clips per page — refactor, not new math), and
+interior-node demand dedup (the 2a dedup map already models the key).
 
 Three targeted fixes have now missed. Meta-conclusion: the incremental route is
 not converging; the shared-state path the render reads and a worker corrupts is
@@ -524,6 +711,11 @@ still yields the exact invariant Phase 2 must enforce, and we proceed to Phase 2
 with that spec.
 
 ### Phase 2 — Invert the mix graph to request/ready scheduling (THIS is the flake fix)
+
+> **SUPERSEDED (2026-07-19):** the flake was fixed on the edit path (a1e6011),
+> and the park/re-enqueue design below is replaced by "Phase 2 REVISED:
+> demand-driven dataflow" above. Kept verbatim for history; sub-step 2a
+> (`requestPage` dedup) landed and its dedup map carries over.
 
 **Why this fixes issue #3(b) when the targeted fixes could not.** Phase 1b
 pinned the flake to the render thread's *own recursive freeze* producing stale
@@ -676,6 +868,9 @@ bit-identical render golden + layering check; the collision tracker as a
 compiled-in assert during development.
 
 ## Open questions
+
+> **All five resolved by "Phase 2 REVISED: demand-driven dataflow"
+> (2026-07-19)** — see its "Open questions status" paragraph. Kept for history.
 
 1. **Deadlock/liveness of the task scheduler** under diamond DAGs and
    serial-actor back-pressure — needs an explicit ordering argument (the graph

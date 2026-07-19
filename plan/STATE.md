@@ -5321,3 +5321,90 @@ fallback).
   on one track; re-render reflects the move, the untouched clip's regions
   stay correct. Suite 27/27, timemap/fraction/sources/playback/plugins
   unit tests green, layering clean.
+
+## Proposal 19: Inv-1 single-resolution freeze + SCut UAF crash fix + stale-duration insert fix (2026-07-19)
+
+Three changes this session (the takes_group_broadcast flake itself was already
+fixed in a1e6011/48a38bd; see plan/proposed/19_ASYNC_FREEZE_MODEL.md):
+
+### Inv-1 — one structural resolution per freeze (request/ready sub-step 1)
+
+- New `twResolvedClip { component, mappedPos }` (tw/graph/twcomponent.h) and
+  `twView::ResolveFn` replacing `MapPosFn`: the freeze/seek path resolves the
+  component AND the timeline→component mapping in ONE call instead of the old
+  `mapPos()` + `getComponent()` pair that could straddle a concurrent lazy
+  reader build. `getComponentFn` stays for position-independent queries
+  (structure/teardown/live pull) so they never trigger the lazy build.
+- `SObject::resolveClip(off)` virtual (default: component + identity map);
+  `SCut::resolveClip` fuses getRootComponent + mapTimelineToComponentPos under
+  ONE `getSnapshotBlocking()`; `STakeStack::resolveClip` reads `activeCut()`
+  once (a take switch can no longer split component and mapping either).
+- Wiring: `twTrackMix::insertClip` takes the resolver; both STrack sites
+  (`trackChildWasAdded`, `setNBusses`) build one `resolveFn`; mix_test updated.
+
+### Crash fix — SCut destroyed while a revalidation job references it
+
+User-reported 5/5 crash (split a grain-backed cut, delete the second half):
+`CaptureRevalidator` worker → `SCut::buildCapture_` → `std::mutex::lock()`
+throws (locking a destroyed `captureBuildMutex_`) → terminate. The reval queue
+holds a BORROWED `IRevalidatable*`, and `removeRef()`'s `deleteLater()` is a
+one-way trip: a Preview job scheduled after the delete was posted cannot keep
+the object alive.
+
+- `CaptureRevalidator::retireObject(obj)`: drops every queued reval job for the
+  object and BLOCKS until no worker still processes one (per-object in-flight
+  map + idleCv_). Called FIRST in `~SCut`, while all members are intact.
+- Balanced the `revalAddRef()` on the `revalNeeded_nolock` early-out (that
+  return path leaked a ref, over-holding objects forever).
+- New `schedule_test` (tw303a/schedule/tests/, first test target for the
+  schedule module): proves retireObject drains in-flight, drops queued, no-ops
+  when idle. New `grain_split_delete_crash.qxa` covers the scenario headlessly
+  (the crash itself needs the interactive event loop to fire deleteLater; the
+  qxa documents + smoke-tests the sequence).
+
+### Stale try-lock duration at clip-insert (takes_recording_placement doubling)
+
+Same class as the a1e6011 flake, different site: `SPlaceClipAction` sets the
+gap cut's duration then parents the link; `setDuration`'s `invalidateCapture`
+schedules a Preview job, a worker grabs the cut's mutex, and
+`STrack::trackChildWasAdded`'s `getDuration()` try-lock read falls back to the
+fresh cut's DEFAULT snapshot → `insertClip(duration=0)` → an UNBOUNDED clip
+that bleeds source material past the clip end, coherently doubling the column
+region (RMS ×2, and the 0.3527 signature after select-take). Pre-existing
+(baseline ~13-70% fail depending on timing); pinned with a per-clip mix
+contribution capture showing `clipStart=0 dur=0` in the failing render.
+
+- `SObject::getDurationBlocking()` virtual (default = getDuration();
+  SCut/STakeStack overrides already existed from 48a38bd, now `override`).
+- Edit-path insert/move sites read it: `trackChildWasAdded`, `setNBusses`,
+  `trackChildWasMoved`. RT/paint paths keep the try-lock `getDuration()`.
+- `takes_recording_placement`: 0/20 → 20/20 deterministic.
+
+### Verification (all on the combined tree)
+
+- takes_group_broadcast N=100: 100/100 (default workers).
+- takes_recording_placement N=20: 20/20 (was ~30-87% flaky).
+- grain_split_delete_crash 15x: no crash.
+- Module tests green incl. new schedule_test; layering clean.
+- qxa suite: 24 pass; only pre-existing failures remain (3 save/load-project,
+  proven identical on the pre-session baseline, + environment-dependent
+  screenshot grabs).
+
+### Notes
+
+- `repeat_test.sh`'s `reval_workers` argument is DEAD: the
+  `SMARAGD_REVAL_WORKERS`/`SMARAGD_NO_REVAL` env knobs were instrumentation
+  prototypes and are no longer in the source. Worker-sweep claims in older
+  notes ran at the default count. Re-add the knob (SProject numWorkers) before
+  the next sweep-gated phase, or drop the argument.
+- Inv-2/Inv-3 (readiness-driven freeze, guard retirement) remain open; Inv-1
+  narrows the structural-read window but the freeze path still pulls live
+  state through `calcOutputTo`/`copyData`.
+- Same day, the Phase 2 design was REVISED (user-approved) from
+  park/re-enqueue request/ready to a **demand-driven dataflow scheduler**
+  ("Ninja for pages"): node = (component,pageIndex,epoch), state chain as a
+  predecessor DAG edge, demand watermarks instead of freeze calls, and a
+  per-component concurrency-degree knob (∞ pure / N pool / 1 exclusive VST
+  lane with runs+pre-roll / 0 real-time-bound hardware = capture-only). See
+  "Phase 2 REVISED" in plan/proposed/19_ASYNC_FREEZE_MODEL.md; it resolves
+  that proposal's open questions 1-5.
