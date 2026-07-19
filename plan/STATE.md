@@ -5446,3 +5446,32 @@ Verification: takes_group_broadcast **50/50 at each of workers {1,4,8,16}**
 (first genuine sweep since the knob was lost), takes_recording_placement
 20/20, module tests + layering green, qxa non-screenshot failures = the
 pre-existing save/load trio only.
+
+## Proposal 19 dataflow stage 1: the explicit-inputs leaf renderer (2026-07-19)
+
+First migration stage of the demand-driven dataflow (see "Phase 2 REVISED"
+in the proposal): the seam through which a freeze consumes its inputs is now
+explicit and injectable, with the legacy behaviour unchanged.
+
+- `tw/graph/tw_frozen_inputs.h`: `twFrozenInputs` — ready pages keyed by
+  (producer component, page start); one flat set can serve a whole nested
+  render. `twFrozenInputScope` installs it thread-scoped (nests like
+  FreezeContext). Trust contract: bound pages are NOT epoch-re-checked —
+  epoch validity is the scheduler's verify-at-publish job.
+- `twComponent::freezePageFromInputs(page, inputs, prev)` — the LEAF
+  RENDERER: classic freeze body under an installed input scope. Caller owns
+  page identity/publication (does not touch outputPages_) and serialization.
+- `twStreamingLatch::copyData` — THE seam: before the recursive
+  `freezePage()` pull, consult the active scope; a bound page is served with
+  no recursion. A wanted-but-unbound page is recorded in `inputs.misses`
+  (stage >1 turns this into "node not ready / re-plan") and falls through to
+  the legacy pull, so with no scope installed (every current caller)
+  behaviour is byte-identical.
+- mix_test seam suite: bound page served WITHOUT re-rendering the source,
+  byte-identical to the pull baseline, misses recorded, empty set falls back
+  to the legacy pull. (Control detail: both the track AND the source must be
+  epoch-staled, or the source's own page cache hides the pull signal.)
+
+Verification: module tests + layering green; takes_group_broadcast 50/50 at
+workers=8; takes_recording_placement 10/10; crash repro 0/5. Next: stage 2 —
+the planner + per-node structural snapshot.

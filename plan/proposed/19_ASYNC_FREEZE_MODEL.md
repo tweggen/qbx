@@ -633,6 +633,12 @@ recursion is deleted outright rather than simulated.
 goldens + module tests + layering):**
 1. Extract the leaf renderer (explicit-inputs `freezePage_nolock` variant);
    sync path temporarily feeds it — no behaviour change.
+   **DONE 2026-07-19** (see STATE.md "dataflow stage 1"): `twFrozenInputs` +
+   `twFrozenInputScope` (tw/graph/tw_frozen_inputs.h),
+   `twComponent::freezePageFromInputs`, and the seam in
+   `twStreamingLatch::copyData` (bound page → no recursion; miss → recorded +
+   legacy pull). mix_test seam suite proves bypass, byte-identity, and
+   fallback.
 2. Planner + per-node structural snapshot (reuses Inv-1 `resolveClip`).
 3. Dependency-counting scheduler inside `CaptureRevalidator` (it already has
    the pool, priority queues, pause/drain, retireObject).
