@@ -35,7 +35,8 @@ SApplyResult SRemoveAssetAction::apply( SProject *project )
         QList<int> containerPath = pathOf( root, &cut->getContent() );
         inverse = new SCreateAssetAction( containerPath,
                                           (offset_t) cut->getStartOffset().frames(),
-                                          cut->getDuration(), assetName_ );
+                                          cut->getDurationBlocking(),   // edit path (P19)
+                                          assetName_ );
     }
 
     project->unregisterAsset( assetName_ );

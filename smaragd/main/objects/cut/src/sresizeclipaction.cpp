@@ -77,7 +77,9 @@ SApplyResult SResizeClipAction::apply( SProject *project )
 
         offset_t oldStart  = link->getStartTime();
         Fraction oldAnchor = takeCut ? takeCut->getSrcStart() : Fraction(0);
-        length_t oldDur    = stack->getDuration();
+        // Blocking (P19): a stale oldDur would bake a wrong window into the
+        // inverse action (edit path, bounded block).
+        length_t oldDur    = stack->getDurationBlocking();
         length_t oldLoop   = takeCut ? takeCut->getLoopLength().frames() : 0;
         Fraction oldStretch = takeCut ? takeCut->getStretchExact() : Fraction(1);
 
@@ -102,7 +104,7 @@ SApplyResult SResizeClipAction::apply( SProject *project )
     // Capture the pre-mutation window for the inverse, then apply the new one.
     offset_t oldStart  = link->getStartTime();
     Fraction oldAnchor = cut->getSrcStart();
-    length_t oldDur    = cut->getDuration();
+    length_t oldDur    = cut->getDurationBlocking();   // edit path — never stale (P19)
     length_t oldLoop   = cut->getLoopLength().frames();
     Fraction oldStretch = cut->getStretchExact();
 

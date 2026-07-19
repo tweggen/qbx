@@ -35,7 +35,9 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     if( !wavLink || !wavLink->getSObject().hasDuration() ) {
         return {false, nullptr};
     }
-    const length_t waveDur = wavLink->getSObject().getDuration();
+    // Blocking reads throughout this planner (P19): the whole gap/take plan is
+    // derived from these durations; a stale try-lock value mis-plans it.
+    const length_t waveDur = wavLink->getSObject().getDurationBlocking();
     if( waveDur == 0 ) {
         return {false, nullptr};
     }
@@ -53,7 +55,7 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
         if( !lk || lk->getSObject().isPathContainer() ) continue;  // sub-track
         if( !lk->getSObject().hasDuration() ) continue;
         const offset_t s = lk->getStartTime();
-        const length_t d = lk->getSObject().getDuration();
+        const length_t d = lk->getSObject().getDurationBlocking();
         if( d == 0 || s + (offset_t)d <= recStart || s >= recEnd ) continue;
         if( s < recStart ) {
             // A column already running at the recording start is left alone

@@ -25,7 +25,9 @@ SLink *makeDuplicateClip( SProject *project, SObject &srcObj,
         // startOffset lives in the stretched output domain, so copying it without
         // the stretch would land the copy elsewhere in the source (and unstretched).
         copy->setGrainParamsRaw( s->getGrainParams() );
-        copy->setWindow( s->getSrcStart(), ClipLen( s->getDuration() ),
+        // Blocking duration read (P19): the copy's window must mirror the
+        // CURRENT source window, never the stale try-lock fallback.
+        copy->setWindow( s->getSrcStart(), ClipLen( s->getDurationBlocking() ),
                          s->getLoopLength(), s->getStretchExact() );
     } else {
         copy = new SCut( project, srcObj );             // wrap a raw clip whole

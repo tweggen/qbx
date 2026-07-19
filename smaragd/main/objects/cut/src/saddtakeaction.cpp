@@ -70,7 +70,9 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     gp.pitchCents = pitchCents_;
     takeCut->setGrainParamsRaw( gp );
     takeCut->setStartOffset( startOffset_ );
-    takeCut->setDuration( stack->getDuration() );
+    // Blocking (P19): the new take must adopt the column's CURRENT duration,
+    // never the stale try-lock fallback (edit path, bounded block).
+    takeCut->setDuration( stack->getDurationBlocking() );
 
     const int at = ( index_ >= 0 && index_ <= stack->nTakes() )
                        ? index_ : stack->nTakes();

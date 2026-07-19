@@ -257,7 +257,10 @@ void SCut::buildCapture_()
     }
 
     SObject &c = content_->getSObject();
-    SCutSnapshot snap = getSnapshot();
+    // Blocking: a capture built from a stale window would be stamped valid with
+    // wrong extents (same stale try-lock class; the worker holds no object lock
+    // here — dispatchRecomputation runs outside CS1 — so no self-deadlock).
+    SCutSnapshot snap = getSnapshotBlocking();
     tw303aEnvironment &env = *(SAppContext::get().get303aEnvironment());
 
     // Check if we need to build a capture:
@@ -648,7 +651,9 @@ QList<SObject::SDirtyRange> SCut::mapChildRangesToSelf(
     SLink *childLink, const QList<SDirtyRange> &childRanges )
 {
     Q_UNUSED( childLink );
-    SCutSnapshot snap = getSnapshot();
+    // Blocking: this maps EDIT dirty ranges — a stale stretch/window here
+    // mis-scopes invalidation (stale try-lock class; edit path, may block).
+    SCutSnapshot snap = getSnapshotBlocking();
     const Fraction stretch = snap.grainParams.stretch > Fraction(0)
                            ? snap.grainParams.stretch : Fraction(1);
     const int64_t dur = snap.cutDuration.frames();
@@ -1073,7 +1078,7 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     if( !grainParams_.isIdentity()
         || ( loopLength_ > WarpedLen(0)
           && loopLength_ < warpedFromClip(cutDuration_) ) )
-        rebuildReader( getSnapshot() );
+        rebuildReader( getSnapshotBlocking() );
 
     return 0;
 }

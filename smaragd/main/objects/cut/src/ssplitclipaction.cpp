@@ -55,7 +55,9 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     offset_t startTime = link->getStartTime();
     offset_t inObjOffset = splitTime_ - startTime;
     SObject &obj0 = link->getSObject();
-    length_t fullDur = obj0.getDuration();
+    // Blocking read (P19): split geometry must never come from the stale
+    // try-lock fallback (edit path, bounded block).
+    length_t fullDur = obj0.getDurationBlocking();
     if (inObjOffset <= 1 || inObjOffset >= (offset_t)fullDur - 1) {
         return {false, nullptr};        // split point outside the clip
     }
@@ -112,7 +114,7 @@ SApplyResult SSplitClipAction::apply(SProject *project)
         return {false, nullptr};
     }
     Fraction sc1Anchor = sc1->getSrcStart();
-    length_t origDur = sc1->getDuration();
+    length_t origDur = sc1->getDurationBlocking();   // edit path — never stale (P19)
 
     // Second part: a new cut over the same content, starting at the split point.
     // startOffset_ and cutDuration_ both live in the grain source's *output*
