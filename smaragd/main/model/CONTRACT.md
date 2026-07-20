@@ -26,6 +26,11 @@ registers its WAV loader from a static initializer).
 
 Threading: SObject follows THREADING.md rule 2 (mutex per object, snapshot
 reads, atomic currentPage_); the revalidator calls the reval* delegations.
+The reval pin (revalAddRef/revalRemoveRef) is a separate std::atomic —
+NEVER the Qt refcount, which is main-thread-only (asserted): routing pins
+through addRef()/removeRef() raced the non-atomic nRefs_ from the worker
+pool and a premature deleteLater() destroyed objects that live SLinks still
+referenced (the split-then-repaint vtable-garbage crash).
 
 Invariants:
 1. ~SLink must setParent(nullptr) BEFORE the vtable is torn down (childEvent
@@ -38,6 +43,18 @@ Invariants:
    pokes from views.
 5. durationChanged is emitted by the OBJECT; startTimeChanged by the LINK
    (CLIP_MODEL.md — sender types differ and it matters).
+6. An SLink is owned by exactly one container — its QObject parent; nothing
+   adopts a caller's link (SCut builds its OWN content link from the
+   SObject&; callers delete their temporary AFTER the cut exists). A parent
+   must never reach the SLink QObject constructor — both ctors attach via
+   setParent() as their last step, and SObject::childEvent qobject_casts
+   (a non-SLink child of an SObject is ignored, never type-confused into
+   childOrder_).
+7. addRef()/removeRef() are main-thread-only (asserted). removeRef()'s
+   deleteLater() is re-checked in SObject::event(): a re-referenced
+   (1→0→1) or reval-pinned object swallows the stale DeferredDelete (the
+   last unpin re-arms it via deletePending_), and ~SObject warns if it ever
+   runs with live references.
 
 How to test: full qxa suite; action_roundtrip_test for serialization
 adjacency.

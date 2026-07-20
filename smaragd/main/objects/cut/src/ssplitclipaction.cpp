@@ -98,11 +98,17 @@ SApplyResult SSplitClipAction::apply(SProject *project)
         return {true, inverse};
     }
 
-    // Ensure the clip is an SCut (wrap a raw link), replacing the link in place.
+    // Ensure the clip is an SCut (wrap a raw clip), replacing the link in place.
+    // The cut creates its OWN content link (+1 ref on obj0) — the old adopting
+    // ctor took `link` itself as content_, and the `delete link` below then
+    // left the cut's content_ dangling (use-after-free on the next
+    // getContent()). Delete the old placement link only AFTER the cut holds
+    // its ref, so obj0's refcount never touches zero (removeRef()'s
+    // deleteLater() cannot be rescinded).
     SLink *cutLink = link;
     if (strcmp(obj0.metaObject()->className(), "SCut") != 0) {
         SObject *parentObj = (SObject*)link->parent();
-        SCut *sc = new SCut((SProject*)obj0.parent(), *link);
+        SCut *sc = new SCut((SProject*)obj0.parent(), obj0);
         SLink *nlk = new SLink(*sc);
         nlk->setStartTime(startTime);
         delete link;

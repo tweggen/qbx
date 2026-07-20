@@ -17,9 +17,12 @@ class QTextStream;
  * loaded from files via SCut, or other SObjects) positioned at specific times
  * within a parent container (typically an STrack).
  *
- * IMPORTANT: Always construct with parent=NULL, then call setParent() after
- * construction is complete. This avoids triggering childEvent() during construction,
- * which could call virtual methods on an incompletely-initialized object.
+ * IMPORTANT: the parent must never reach the QObject constructor — that fires
+ * the parent's childEvent() while this object is still a plain QObject (its
+ * virtuals not callable; SObject::childEvent rejects such children). Both
+ * constructors therefore build with QObject(NULL) and attach via setParent()
+ * as their LAST step; external call sites may either pass the parent in or
+ * setParent() afterwards.
  */
 class SLink
     : public QObject 

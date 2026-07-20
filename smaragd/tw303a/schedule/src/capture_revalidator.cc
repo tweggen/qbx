@@ -198,10 +198,11 @@ void CaptureRevalidator::retireObject(IRevalidatable* object) {
     std::unique_lock<std::mutex> lock(queueLock_);
 
     // 1. Drop every queued reval job for this object. It is being destroyed, so
-    //    its reference count is moot — we intentionally do NOT revalRemoveRef()
-    //    the surviving jobs (that would re-enter removeRef()/deleteLater() on an
-    //    object already in its destructor). Rebuild the priority queue without
-    //    the retiring object's jobs; other objects' jobs and ordering survive.
+    //    its pin count is moot — we intentionally do NOT revalRemoveRef() the
+    //    dropped jobs (the last unpin re-arms a pending deleteLater(), which is
+    //    pointless noise on an object already in its destructor). Rebuild the
+    //    priority queue without the retiring object's jobs; other objects' jobs
+    //    and ordering survive.
     if (!revalidationQueue_.empty()) {
         std::priority_queue<CaptureRevalidationJob> kept;
         while (!revalidationQueue_.empty()) {

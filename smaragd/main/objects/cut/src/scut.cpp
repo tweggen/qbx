@@ -367,14 +367,9 @@ void SCut::buildCapture_()
         std::lock_guard<std::mutex> lock( mutex() );
         capture_ = newCapture;
     }
-
-    if( !captureConnected_ ) {
-        // Transparent invalidation: any applied action drops the snapshot so the
-        // next pull re-captures the edited arrangement.
-        QObject::connect( &getProject(), SIGNAL( arrangementChanged() ),
-                          this, SLOT( invalidateCapture() ) );
-        captureConnected_ = true;
-    }
+    // Arms onArrangementChanged() (the connect itself lives in the ctor: this
+    // function runs on the revalidator worker, where Qt calls are banned).
+    everHadCapture_.store( true );
 }
 
 void SCut::invalidateCapture()
@@ -870,49 +865,6 @@ SCut::~SCut()
     content_ = NULL;
 }
 
-SCut::SCut( SProject *parentProject, SLink &content )
-    : SObject( parentProject ),
-      srcStart_( 0 ),
-      loopLength_( 0 ),
-      inlineRenderer_( NULL ),
-      readerTried_( false )
-{
-    // Get revalidator from project (Phase 4, async capture model)
-    revalidator_ = (parentProject != nullptr) ? parentProject->getRevalidator() : nullptr;
-
-    content_ = &content;
-    content_->setParent(this);
-    /* was:
-    if( content_->parent() ) {
-        content_->parent()->removeChild( content_ );
-    }
-    insertChild( content_ );
-    */
-    if( content_->getSObject().hasDuration() ) {
-        cutDuration_ = ClipLen( content_->getSObject().getDuration() );
-    } else {
-        // Default to 0.5 seconds, calculated from project sample rate
-        int srate = (parentProject != nullptr) ? parentProject->getSRate() : 48000;
-        cutDuration_ = ClipLen( srate / 2 );
-    }
-
-    // Register as dependent of the content object (lazy invalidation, proposal 06).
-    // When the content's audio state changes (mute, solo, volume), this cut will be
-    // notified to invalidate only affected aspects (Playback, Metadata), not the
-    // entire arrangement.
-    content_->getSObject().addDependentLink(content_);
-
-    // Initialize the try-lock fallback snapshot from the CONSTRUCTED state: a
-    // fresh cut's lastGoodSnapshot_ must never be the default-zeros struct
-    // (duration 0), or a getSnapshot() losing the try-lock to a background
-    // worker hands an edit-path consumer an UNBOUNDED clip window (P19, the
-    // takes_recording_placement doubling).
-    {
-        std::lock_guard<std::mutex> lock(mutex());
-        buildSnapshot_nolock();
-    }
-}
-
 SCut::SCut( SProject *parentProject, SObject &content )
     : SObject( parentProject ),
       srcStart_( 0 ),
@@ -923,7 +875,11 @@ SCut::SCut( SProject *parentProject, SObject &content )
     // Get revalidator from project (Phase 4, async capture model)
     revalidator_ = (parentProject != nullptr) ? parentProject->getRevalidator() : nullptr;
 
-    content_ = new SLink( content, this );
+    // Own content link. Construct with parent=NULL, then setParent (slink.h
+    // rule): a parent passed into the ctor delivers ChildAdded — and our
+    // childEvent's gotChild() — while the SLink is still only a QObject.
+    content_ = new SLink( content, NULL );
+    content_->setParent( this );
     if( content_->getSObject().hasDuration() ) {
         cutDuration_ = ClipLen( content_->getSObject().getDuration() );
     } else {
@@ -946,6 +902,28 @@ SCut::SCut( SProject *parentProject, SObject &content )
         std::lock_guard<std::mutex> lock(mutex());
         buildSnapshot_nolock();
     }
+
+    // Transparent capture invalidation: any applied action drops the snapshot
+    // so the next pull re-captures the edited arrangement. Connected HERE (main
+    // thread) — it used to happen lazily inside buildCapture_(), which runs on
+    // the revalidator worker (THREADING.md Rule 1: no Qt off the main thread).
+    // The slot gates on everHadCapture_, preserving the lazy connect's
+    // semantics: plain sample cuts (no capture, ever) stay out of it.
+    if( parentProject ) {
+        QObject::connect( parentProject, SIGNAL( arrangementChanged() ),
+                          this, SLOT( onArrangementChanged() ) );
+    }
+}
+
+void SCut::onArrangementChanged()
+{
+    // Only a cut that ever materialized a capture (container-backed/grained)
+    // must re-capture after an applied action. Without this gate every cut
+    // dropped its pages and rescheduled Preview|Playback|Metadata on EVERY
+    // action — an invalidation storm that stalled offline renders (the
+    // workers=8 takes_group_broadcast hang).
+    if( !everHadCapture_.load() ) return;
+    invalidateCapture();
 }
 
 int SCut::serializeSelfAttributes( QTextStream &o )
@@ -1112,7 +1090,11 @@ SLink *SCut::instantiateFromDomElement(
     // Now read out the properties.
     cut->readPostChildrenAttributes( element );
 
-    return new SLink( *cut, parent );
+    // Construct with parent=NULL, then setParent (slink.h rule): the parent's
+    // childEvent must never see a half-constructed SLink.
+    SLink *cutLink = new SLink( *cut, NULL );
+    if( parent ) cutLink->setParent( parent );
+    return cutLink;
 }
 
 void SCut::queueWindowParamEvent( SCutWindowParamEventType type, double value )

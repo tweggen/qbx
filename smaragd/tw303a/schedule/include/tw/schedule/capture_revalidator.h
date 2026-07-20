@@ -208,12 +208,13 @@ public:
      *
      * The revalidation queue holds BORROWED IRevalidatable* pointers (unlike the
      * component-freezing queue, which holds shared_ptr and is lifetime-safe).
-     * The object's own reference count uses Qt deleteLater(), which is a one-way
-     * trip: once a delete is deferred, a later revalAddRef() from a freshly
-     * scheduled job cannot rescind it, so the object can be destroyed while a job
-     * that references it is still queued or in flight. A worker then dereferences
-     * freed memory (e.g. locks a destroyed captureBuildMutex_ inside
-     * SCut::buildCapture_ → std::mutex::lock() throws → terminate).
+     * revalAddRef()/revalRemoveRef() pins (thread-safe atomics on the object
+     * side) defer a REFCOUNT-driven deletion while a job is queued or in
+     * flight — but they cannot stop a DIRECT delete (Qt parent-child teardown,
+     * an explicit delete in an action), so the object can still be destroyed
+     * while a job that references it is queued or running. A worker then
+     * dereferences freed memory (e.g. locks a destroyed captureBuildMutex_
+     * inside SCut::buildCapture_ → std::mutex::lock() throws → terminate).
      *
      * Every enqueuing object MUST call this from the TOP of its destructor, while
      * it is still fully constructed: it drops all queued jobs for `object` and

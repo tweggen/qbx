@@ -34,7 +34,8 @@ SApplyResult SPlaceClipAction::apply( SProject *project )
         return {false, nullptr};
     }
 
-    SCut *cut = new SCut( project, *wavLink );
+    SCut *cut = new SCut( project, wavLink->getSObject() );
+    delete wavLink;   // temp link; the cut holds its own ref on the wave
     if( startOffset_ != 0 ) cut->setStartOffset( startOffset_ );
     if( duration_ > 0 ) cut->setDuration( duration_ );
 

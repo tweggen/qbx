@@ -42,8 +42,11 @@ SApplyResult SAddSampleAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    // Create a cut from the WAV link.
-    SCut *cut = new SCut(project, *wavLink);
+    // Create a cut over the WAV. The cut makes its own content link; the
+    // temporary from linkToFile() is deleted AFTER the cut exists, so the
+    // wave's refcount never touches zero in between.
+    SCut *cut = new SCut(project, wavLink->getSObject());
+    delete wavLink;
     if (!cut) {
         return {false, nullptr};
     }

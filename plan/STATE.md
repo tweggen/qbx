@@ -5684,3 +5684,65 @@ on zero-miss metrics, freeze-in-place, VST execution-class lanes, and the
 housekeeping list incl. the pre-existing save/load qxa trio and a headless
 playback test) is specced with per-item acceptance gates in
 `plan/proposed/20_DATAFLOW_FOLLOWUPS.md`.
+
+## Split-repaint crash: worker-side refcount race fixed + SLink ownership hardening (2026-07-20)
+
+User-reported SIGSEGV: new project → add track → insert sample → click →
+split (`s`) → first repaint dies in `STrackRendererInline::draw` at the
+`dynamic_cast` over the track's childLinks (an entry with a garbage
+vtable). Not reproducible headlessly (new `split_plain_screenshot.qxa`
+mirroring the repro incl. selection/locator/live playback: 75/75 across
+workers {1,8,16}) — pinned instead by a new thread-affinity assert:
+
+**Root cause.** `SObject::revalAddRef/revalRemoveRef` delegated the
+revalidator's keep-alive pin to the Qt refcount. Pins are taken on the
+main thread (scheduleRevalidation) but RELEASED on the worker pool
+(every job-exit path in `processRevalidationJob`), so the non-atomic
+`nRefs_` `++`/`--` raced main-thread addRef/removeRef; a lost update
+makes a later legitimate release hit zero early → `deleteLater()` → the
+object dies while live SLinks still reference it → vtable-garbage crash
+at the next paint. Timing-dependent (GUI yes, headless no). The
+schedule_test mock always implemented the pin as `std::atomic` — the
+contract expected thread safety; SObject's delegation violated it.
+
+**Fix (main/model/sobject.{h,cpp}).** The pin is now a separate
+`std::atomic<int> revalPins_`; a refcount-driven DeferredDelete is
+swallowed by `SObject::event()` while pinned or re-referenced (1→0→1
+resurrection is now safe), with `deletePending_` letting the last unpin
+re-arm it. addRef/removeRef/childEvent now Q_ASSERT main-thread
+affinity — this assert is what caught the race. ~SObject warns if it
+ever runs with live references (turns the next crash of this class into
+a named diagnostic at the bug's moment).
+
+**Ownership hardening (same bug family, found by audit).**
+- Removed the SLink-adopting `SCut(SProject*, SLink&)` ctor: split's
+  ensure-SCut wrap path and `SStdMixerView::ensureSCut` deleted the link
+  the cut had just adopted as content_ (use-after-free on the next
+  getContent()). All sites (ctInsertSample, add-sample, add-take,
+  place-clip, split wrap, ensureSCut) now use the SObject& ctor and
+  delete their temporary link AFTER the cut exists.
+- SObject::childEvent qobject_casts: non-SLink children of an SObject
+  are ignored instead of being type-confused into childOrder_; removal
+  compares by pointer value only and notifies only tracked links.
+- Both SLink ctors attach via setParent() as their LAST step (a parent
+  reaching the QObject ctor delivered childEvent on a half-constructed
+  link); loaders (SCut/SStdMixer instantiateFromDomElement) updated.
+- SCut's arrangementChanged→invalidateCapture connect moved from
+  buildCapture_ (ran on a worker — Rule 1 violation) into the ctor.
+- place-recording no longer leaks its planning-only wavLink.
+
+Docs: model CONTRACT.md invariants 6-7 + threading note;
+capture_revalidator.h retireObject contract updated (pins defer
+refcount deletion; direct deletes still require retireObject).
+Verification: full qxa suite green from tests/cases (the two UI-only
+cases were the only survivors before the fix — every sample-loading
+case died on the assert); layering clean.
+
+Addendum (same day): moving the arrangementChanged→invalidateCapture
+connect into the SCut ctor initially made EVERY cut re-capture on EVERY
+applied action (the old lazy connect only armed cuts that had actually
+built a capture) — an invalidation storm that deterministically stalled
+the takes_group_broadcast render at SMARAGD_REVAL_WORKERS=8. Restored the
+old semantics with an `everHadCapture_` gate in a dedicated
+`onArrangementChanged()` slot (flag set on the worker when buildCapture_
+publishes; the connect stays main-thread).

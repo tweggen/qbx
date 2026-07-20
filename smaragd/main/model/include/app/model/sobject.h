@@ -8,6 +8,7 @@
 #include <QDomElement>
 #include <QList>
 #include <QSet>
+#include <atomic>
 #include <mutex>
 #include <memory>
 #include "tw/pages/capture_page_pool.h"
@@ -284,8 +285,17 @@ public:
     // (as the revalidator's SObject* calls always did), while the recompute
     // hooks and getRootComponent() stay virtual per object type.
     std::mutex &revalMutex() const override { return mutex(); }
-    void revalAddRef() override { addRef(); }
-    void revalRemoveRef() override { removeRef(); }
+    // The revalidator pin is NOT the Qt refcount: pins are taken/released on
+    // WORKER threads (scheduleRevalidation re-queues and every job-exit path
+    // unpins on the worker), while addRef()/removeRef() are main-thread-only
+    // (non-atomic count, Qt signals, deleteLater). Routing pins through the
+    // refcount raced the ++/-- and could corrupt nRefs_ — a premature
+    // deleteLater() then destroyed an object that live SLinks still pointed
+    // at (the vtable-garbage paint crash). Pins are a separate atomic; while
+    // any pin is held a refcount-driven deletion is deferred (see event()),
+    // and the last unpin re-arms it.
+    void revalAddRef() override;
+    void revalRemoveRef() override;
     bool revalNeeded_nolock(uint32_t aspects) const override
         { return needsRevalidation_nolock(aspects); }
     std::shared_ptr<CapturePageData> revalGetNextPage_nolock() const override
@@ -538,6 +548,11 @@ protected:
 
     int getStraightPreview( preview_t *, offset_t, length_t, offset_t );
     virtual void childEvent( QChildEvent * );
+    // Swallows a pending DeferredDelete when the object was re-referenced
+    // after removeRef() hit zero (deleteLater() cannot be rescinded; without
+    // this, any 1->0->1 refcount transition destroys an object that live
+    // SLinks still point at — vtable-garbage crash at the next paint).
+    virtual bool event( QEvent * ) override;
 
     virtual int serializeSelfAttributes( QTextStream &o );
 
@@ -588,6 +603,11 @@ private:
     mutable std::mutex dependentsMutex_;
     QSet<SLink*> dependentLinks_;
     int nRefs_;
+    // Revalidator keep-alive pins (worker-thread safe — see revalAddRef()).
+    // deletePending_ records a refcount-driven deleteLater() that arrived
+    // while pinned, so the last unpin can re-arm it.
+    std::atomic<int> revalPins_{0};
+    std::atomic<bool> deletePending_{false};
     offset_t previewForLength_;
     offset_t nPreviewProbes_;
     preview_t *previewData_;

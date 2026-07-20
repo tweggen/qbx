@@ -32,13 +32,19 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     }
     QString mutablePath = filePath_;
     SLink *wavLink = project->linkToFile( mutablePath );
-    if( !wavLink || !wavLink->getSObject().hasDuration() ) {
+    if( !wavLink ) {
         return {false, nullptr};
     }
+    // The link is a planning temp only (the planned place-clip/add-take
+    // sub-actions create their own links); read the duration and release it —
+    // an unparented leftover link would pin the wave forever.
+    const bool hasDur = wavLink->getSObject().hasDuration();
     // Blocking reads throughout this planner (P19): the whole gap/take plan is
     // derived from these durations; a stale try-lock value mis-plans it.
-    const length_t waveDur = wavLink->getSObject().getDurationBlocking();
-    if( waveDur == 0 ) {
+    const length_t waveDur =
+        hasDur ? wavLink->getSObject().getDurationBlocking() : 0;
+    delete wavLink;
+    if( !hasDur || waveDur == 0 ) {
         return {false, nullptr};
     }
     const offset_t recStart = timePos_;

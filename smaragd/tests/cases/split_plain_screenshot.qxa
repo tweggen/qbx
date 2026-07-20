@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: painting the timeline right after splitting a PLAIN (non-grained,
+  sample-backed) cut must not crash. The GUI repro was: insert sample, click,
+  split ('s'), first repaint segfaults in STrackRendererInline::draw at the
+  dynamic_cast over the track's childLinks (a childOrder_ entry with a dead
+  vtable). The <screenshot> action drives SMVActualView::paintEvent ->
+  STrackRendererInline::draw, the exact crashing path; render_split_slip_*
+  never paint, and grain_split_delete_crash is grained + delete, so this path
+  was untested.
+-->
+<SActionScript version="1" name="split_plain_screenshot">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s plain sawtooth at position 480000 (10 s @ 48 kHz), matching the
+         GUI repro geometry (insert away from 0, split inside the clip). -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="480000"/>
+
+    <!-- First paint of the un-split clip (baseline; this worked in the GUI). -->
+    <screenshot filename="split_plain_pre.png" resolution="50%"/>
+
+    <!-- The GUI repro clicked inside the clip: that selects the clip's link
+         and places the global locator at the click position. -->
+    <set-selection clip="0,0"/>
+    <set-locator position="528000"/>
+
+    <!-- Live audio engine like the GUI session: playback readahead demands
+         pages around the locator, so the split's range invalidation triggers
+         concurrent worker re-freezes of exactly the edited pages. -->
+    <toggle-playback/>
+    <wait-playhead position="490000" timeoutMs="5000"/>
+
+    <!-- Split 1 s into the clip: head [480000,528000), tail [528000,672000). -->
+    <split-clip clip="0,0" splitTime="528000"/>
+
+    <!-- The crashing step: first repaint after the split. -->
+    <screenshot filename="split_plain_post.png" resolution="50%"/>
+
+    <!-- Paint again after the event loop settled (deferred deletes, queued
+         reval repaints) - catches a delayed-destruction variant. -->
+    <screenshot filename="split_plain_post2.png" resolution="50%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

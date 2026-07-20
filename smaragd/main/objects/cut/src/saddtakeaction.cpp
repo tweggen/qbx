@@ -64,7 +64,8 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     // slip and grain params. Grain params go in RAW — like split-clip, the
     // caller supplies final values (setGrainParams would preserve-span-
     // rescale offset/duration, which double-applies the factor here).
-    SCut *takeCut = new SCut( project, *wavLink );
+    SCut *takeCut = new SCut( project, wavLink->getSObject() );
+    delete wavLink;   // temp link; the cut holds its own ref on the wave
     twGrainParams gp = takeCut->getGrainParams();
     gp.stretch = stretch_;
     gp.pitchCents = pitchCents_;

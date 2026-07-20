@@ -6,6 +6,8 @@
 #include <qobject.h>
 #include <qtextstream.h>
 #include <QChildEvent>
+#include <QEvent>
+#include <QThread>
 
 #include "app/model/sobject.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/Metadata/Export bits
@@ -364,6 +366,12 @@ void SObject::moveChildToIndex( int fromIndex, int toIndex )
 
 void SObject::addRef()
 {
+    // nRefs_ is a plain int and add/removeRef emit signals: lifetime is
+    // main-thread-only by design (THREADING.md Rule 1). Workers must go
+    // through the IRevalidatable seams (revalAddRef/revalRemoveRef), never
+    // through refcounts.
+    Q_ASSERT( QThread::currentThread() == thread() );
+    deletePending_.store( false );   // a new reference rescinds a queued death
     if( ++nRefs_ == 1 ) {
         emit gotReferenced();
     }
@@ -372,6 +380,7 @@ void SObject::addRef()
 
 void SObject::removeRef()
 {
+    Q_ASSERT( QThread::currentThread() == thread() );
     if( nRefs_==0 ) {
         qWarning( "SObject::removeRef(): Called although reference count was zero.\n" );
         return;
@@ -381,8 +390,37 @@ void SObject::removeRef()
     }
     emit nRefsChanged();
     if( 0==nRefs_ ) {
-        // This will delete the object if the application reenters the main loop.
+        // This will delete the object if the application reenters the main
+        // loop. deleteLater() cannot be rescinded — SObject::event() swallows
+        // the deferred delete if the object gets re-referenced (or is pinned
+        // by the revalidator) before then; deletePending_ lets the last unpin
+        // re-arm it.
+        deletePending_.store( true );
         deleteLater();
+    }
+}
+
+// Revalidator keep-alive pins. Called from BOTH the main thread
+// (scheduleRevalidation on an edit) and the worker pool (re-queues and every
+// job-exit path) — hence a separate atomic, never the Qt refcount above:
+// racing the non-atomic nRefs_ corrupted it, and a premature deleteLater()
+// destroyed an object that live SLinks still referenced (the vtable-garbage
+// paint crash after a split).
+void SObject::revalAddRef()
+{
+    revalPins_.fetch_add( 1 );
+}
+
+void SObject::revalRemoveRef()
+{
+    if( revalPins_.fetch_sub( 1 ) == 1 ) {
+        // Last pin released. If a refcount-driven deletion arrived while we
+        // were pinned, event() swallowed it — re-arm it now. deleteLater() is
+        // thread-safe; event() re-checks everything on the object's thread,
+        // so a stale or duplicate post is harmless.
+        if( deletePending_.load() ) {
+            deleteLater();
+        }
     }
 }
 
@@ -496,20 +534,59 @@ bool SObject::isEmpty() const
 
 void SObject::childEvent( QChildEvent *ce )
 {
+    // The child tree is main-thread-only (THREADING.md); parentage changes off
+    // the main thread would race every unlocked childOrder_ iteration.
+    Q_ASSERT( QThread::currentThread() == thread() );
     QObject::childEvent( ce );
     // Keep childOrder_ membership in sync with QObject parentage. New children
     // append (order is then adjusted via moveChildToIndex); removed children
     // drop out. Mirror QObject's own list state: at ChildAdded the child is
     // already in children(); at ChildRemoved it is already gone.
     if( ce->added() ) {
-        SLink *lk = (SLink *) ce->child();
+        // Only SLinks are placements. The old blind (SLink*) cast put ANY
+        // QObject child into childOrder_, where every iterator dereferences
+        // it as a link (type-confusion crash). qobject_cast also rejects a
+        // constructed-with-parent SLink (still a plain QObject at ChildAdded
+        // time) — that is the slink.h construction rule, now enforced.
+        SLink *lk = qobject_cast<SLink *>( ce->child() );
+        if( !lk ) return;
         if( !childOrder_.contains( lk ) ) childOrder_.append( lk );
         gotChild( *lk );
     } else if( ce->removed() ) {
-        SLink *lk = (SLink *) ce->child();
-        childOrder_.removeOne( lk );
-        lostChild( *lk );
+        // The child may be mid-destruction — compare by pointer value only.
+        // (Dereferencing it as an SLink in lostChild() is safe only because
+        // ~SLink detaches while still fully typed; anything that was never in
+        // childOrder_ — foreign child or rule-violating link — is skipped.)
+        SLink *lk = static_cast<SLink *>( (QObject *)ce->child() );
+        if( childOrder_.removeOne( lk ) ) {
+            lostChild( *lk );
+        }
     }
+}
+
+// DeferredDelete is the model's GC tick (removeRef() -> deleteLater()). It
+// cannot be rescinded, so an object re-referenced after its refcount touched
+// zero would still be destroyed here — with live SLinks pointing at it.
+// Swallow the stale deletion instead; a later drop to zero posts a fresh one.
+bool SObject::event( QEvent *e )
+{
+    if( e->type() == QEvent::DeferredDelete ) {
+        if( nRefs_ > 0 ) {
+            // 1->0->1 resurrection: something re-linked this object after its
+            // refcount touched zero. Dropping the stale deletion here is what
+            // makes that pattern safe.
+            qWarning( "SObject::event(): '%s' resurrected after a queued "
+                      "deletion (refcount %d) — deferred delete ignored.",
+                      qPrintable( sName_ ), nRefs_ );
+            return true;
+        }
+        if( revalPins_.load() > 0 ) {
+            // A reval job still holds a borrowed pointer to us; deletePending_
+            // is set, so the last revalRemoveRef() re-arms the deletion.
+            return true;
+        }
+    }
+    return QObject::event( e );
 }
 
 void SObject::gotChild( SLink &newChild )
@@ -554,6 +631,17 @@ SObject::SObject( SProject *project )
 
 SObject::~SObject()
 {
+    // Diagnostic for the vtable-garbage-at-paint crash class: an SObject must
+    // never die while SLinks still reference it (each live link holds a ref;
+    // their ~SLink drops it before we can get here). If this fires, the NEXT
+    // dereference of such a link is a use-after-free — this warning names the
+    // culprit at the moment of the actual bug instead. (Project teardown
+    // deletes links before objects, so a clean shutdown stays silent.)
+    if( nRefs_ > 0 ) {
+        qWarning( "SObject::~SObject(): '%s' destroyed with %d live "
+                  "reference(s) — a referencing SLink now dangles!",
+                  qPrintable( sName_ ), nRefs_ );
+    }
 }
 
 SProject *SObject::getProjectSafe() const

@@ -96,8 +96,14 @@ class SCut
     Q_PROPERTY( double Stretch READ getStretch WRITE setStretch )
     Q_PROPERTY( double PitchCents READ getPitchCents WRITE setPitchCents )
 public:
+    // The cut always creates its OWN content link (+1 ref on the content).
+    // There is deliberately no SLink-adopting overload: adopting a caller's
+    // link inverted ownership (the caller kept a pointer it no longer owned
+    // and typically deleted it, dangling content_ — the split/ensureSCut
+    // wrap-path use-after-free). Callers holding a temporary link pass
+    // link->getSObject() and delete their link AFTER the cut exists, so the
+    // content's refcount never dips to zero in between.
     SCut( SProject *parentProject, SObject &content );
-    SCut( SProject *parentProject, SLink &content );
     virtual ~SCut();
 
     static SLink *instantiateFromDomElement( SProjectLoader &projectLoader, 
@@ -309,6 +315,12 @@ public slots:
     twRandomSource *ensureCapture() { return nullptr; }  // Stub for compilation
 
 private slots:
+    // arrangementChanged gate: only a cut that has ever materialized a capture
+    // (container-backed or grained) re-captures on an applied action. Plain
+    // sample cuts never did — dropping their pages + rescheduling three
+    // aspects for EVERY cut on EVERY action was an invalidation storm that
+    // stalled renders (the workers=8 takes_group_broadcast hang).
+    void onArrangementChanged();
 
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );
@@ -417,7 +429,9 @@ private:
     // Used temporarily until fully integrated with capture page pool.
     // TODO: Phase 4 future - replace entirely with two-page buffer model.
     std::shared_ptr<twCapturingSource> capture_;
-    bool captureConnected_ = false;   // connected to arrangementChanged once
+    // Set (never cleared) when buildCapture_ publishes a capture; gates
+    // onArrangementChanged(). Atomic: written on the reval worker.
+    std::atomic<bool> everHadCapture_{false};
     // Peak cache over the capture, for the waveform preview.
     // TODO: Phase 4 future - replace entirely with two-page buffer model.
     preview_t *capPeaks_ = nullptr;

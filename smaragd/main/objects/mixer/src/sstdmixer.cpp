@@ -453,7 +453,11 @@ SLink *SStdMixer::instantiateFromDomElement(
         childNode = childNode.nextSibling();
     }
                 
-    return new SLink( *mixer, parent );
+    // Construct with parent=NULL, then setParent (slink.h rule): the parent's
+    // childEvent must never see a half-constructed SLink.
+    SLink *mixerLink = new SLink( *mixer, NULL );
+    if( parent ) mixerLink->setParent( parent );
+    return mixerLink;
 }
 
 // Phase 5e: Page cache implementation

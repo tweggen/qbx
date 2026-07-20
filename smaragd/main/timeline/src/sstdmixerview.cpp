@@ -358,7 +358,12 @@ void SStdMixerView::ctInsertSample()
         qWarning() << QString("Unable to open file \"%1\".\n").arg(s);
         return;
     }
-    SCut *soCut = new SCut( SApplication::app().getCurrentProject(), *lk );
+    // The cut makes its own content link; the temporary from linkToFile() is
+    // ours to delete — AFTER the cut exists, so the wave's refcount never
+    // touches zero in between.
+    SCut *soCut = new SCut( SApplication::app().getCurrentProject(),
+                            lk->getSObject() );
+    delete lk;
     SLink *cutLink = new SLink( *soCut, NULL );
     cutLink->setStartTime( qContent_->getLastClickOffset() );
     cutLink->setParent(oldTrack); // was oldTrack->insertChild( cutLink );
@@ -2083,8 +2088,11 @@ void SStdMixerView::trackSliderMoved( int newValue )
  * is created. The new object is inserted at the same point
  * in the parent.
  *
- * Please note, the link pointer passed (though not invalid),
- * is used as link inside the new cut.
+ * The passed link is REPLACED (and deleted): the cut creates its own content
+ * link. The old adopting-ctor variant took `lk` as the cut's content_ and the
+ * `delete lk` below then left content_ dangling (use-after-free). The delete
+ * happens only after the cut holds its own ref, so the content's refcount
+ * never touches zero (removeRef()'s deleteLater() cannot be rescinded).
  */
 SLink *SStdMixerView::ensureSCut( SLink *lk )
 {
@@ -2096,9 +2104,9 @@ SLink *SStdMixerView::ensureSCut( SLink *lk )
     }
     qWarning( "Class name is %s and not SCut, so creating a new SCut object.\n",
               so->metaObject()->className() );
-    offset_t oldStart = lk->getStartTime();    
+    offset_t oldStart = lk->getStartTime();
     SObject *pso = (SObject *)lk->parent();
-    SCut *sc = new SCut( (SProject *)(so->parent()), *lk ); 
+    SCut *sc = new SCut( (SProject *)(so->parent()), *so );
     SLink *nlk = new SLink( *sc );
     nlk->setStartTime( oldStart );
     delete lk;

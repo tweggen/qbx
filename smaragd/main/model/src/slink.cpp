@@ -115,17 +115,31 @@ SLink::~SLink()
 }
 
 SLink::SLink( SObject &sobject, SObject *parent /*=0*/ )
-    : QObject( parent ),
+    : QObject( NULL ),
       startTime_( 0 ),
       object_( sobject )
 {
     object_.addRef();
+    // Attach only after construction (slink.h rule): a parent passed to the
+    // QObject ctor fires the parent's childEvent while this object is still a
+    // plain QObject — its virtuals are not callable and SObject::childEvent
+    // now rejects such children. Doing the setParent here, last, keeps the
+    // one-argument-with-parent call sites correct.
+    if( parent ) {
+        setParent( parent );
+    }
 }
 
 SLink::SLink( const SLink &other )
-    : QObject( other.parent() ),
+    : QObject( NULL ),
       startTime_( other.getStartTime() ),
       object_( other.getSObject() )
 {
     object_.addRef();
+    // Attach only after construction (slink.h rule): a parent passed to the
+    // QObject ctor fires the parent's childEvent while this object is still a
+    // plain QObject, and SObject::childEvent now rejects such children.
+    if( other.parent() ) {
+        setParent( other.parent() );
+    }
 }
