@@ -33,9 +33,11 @@ tw_module(core
         core/include/tw/core/twfraction.h
         core/include/tw/core/exc.h
         core/include/tw/core/twsyslog.h
+        core/include/tw/core/twlog.h
         core/include/tw/core/audio_frame.h
         core/include/tw/core/generation_promise.h
         core/src/generation_promise.cc
+        core/src/twlog.cc
         core/src/twconvert.cc
         core/src/twfraction.cpp
     DEPS Qt${QT_VERSION_MAJOR}::Core
@@ -360,6 +362,7 @@ tw_module_test(exact_arithmetic_test        core/tests/test_exact_arithmetic.cpp
 tw_module_test(serialization_roundtrip_test core/tests/test_serialization_roundtrip.cpp tw_core)
 tw_module_test(twfraction_test              core/tests/test_twfraction.cpp              tw_core)
 tw_module_test(timemap_test                 core/tests/test_timemap.cpp                 tw_core)
+tw_module_test(twlog_test                   core/tests/test_twlog.cpp                   tw_core)
 tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)

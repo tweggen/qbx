@@ -149,6 +149,32 @@ public:
 5. **Producers hold one mutex for O(1) work.** Contention at realistic rates
    (hundreds/s) is nil; the file writer and the UI both read through
    `snapshot()`, so there is no second queue to keep coherent.
+6. **No `thread_local` with a non-trivial destructor** — see §2.5.
+
+### 2.5 Toolchain constraint discovered during implementation
+
+The original design cached a per-thread format buffer in a
+`thread_local std::vector<char>`. That crashes: on MinGW-w64 GCC 13.1.0
+(x86_64-posix-seh, the Windows build compiler) a `thread_local` needing
+`__cxa_thread_atexit` — `std::string`, `std::vector`, any non-trivial
+destructor — corrupts the heap once roughly three or more threads touch it.
+Verified in isolation: an 8-thread program whose only shared state is a
+`thread_local std::vector<char>`, with no project code linked in, dies with
+STATUS_HEAP_CORRUPTION (0xc0000374) on 10 runs out of 10.
+
+Consequences, now implemented:
+
+- Message formatting uses a 1 KB **stack** buffer, with a plain function-local
+  `std::vector` fallback for the >1 KB case that no current call site reaches.
+  This is also *faster* than the original: one `vsnprintf` in the common case
+  instead of the measure-then-format pair.
+- The realtime path likewise formats into a stack array, so it no longer needs
+  a thread_local buffer at all.
+- Only POD thread_locals remain (`bool`, `uint32_t`, `const char *`).
+
+This constraint belongs to the whole codebase, not just the log sink; it is
+recorded in `tw303a/core/CONTRACT.md`. The existing thread_locals in
+`tw_freeze_context.h` (`bool isRt_`, `FreezeContext *`) are PODs and unaffected.
 
 ### 2.2 RT-thread path
 
