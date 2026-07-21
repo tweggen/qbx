@@ -31,9 +31,13 @@ Invariants:
    testkit may not include app/timeline. The window is never shown in test mode
    and the runner never opens the project through it, so the first drag builds
    the arranger widget on demand; later drags in the same script share it.
-   Limits: modifier gestures (Ctrl stretch, Alt slip) are not drivable — the
-   handlers read QGuiApplication::keyboardModifiers(), not the event — and the
-   drop is quantised to a pixel at the view's zoom, so assert on ranges.
+   Modifier gestures ARE drivable (`modifiers="alt"`, `"ctrl"`, `"shift"`, or a
+   "+"-joined combination): the handlers read ev->modifiers(), so a synthesized
+   event carries its own state. Body gestures (slip, duplicate, move) need
+   `edge="body"` — a press inside an edge band arms trim/extend instead, and a
+   clip too narrow to have a body clear of both bands is rejected.
+   Limit: the drop is quantised to a pixel at the view's zoom, so assert on
+   ranges rather than exact frame counts.
 
 How to test:
   cd smaragd/tests/cases

@@ -5,10 +5,11 @@
 #include <QDomElement>
 #include <QDebug>
 
-SDragClipEdgeAction::SDragClipEdgeAction( int track, int clip, bool grabEnd,
-                                          offset_t toTime, bool upperHalf )
-    : track_( track ), clip_( clip ), grabEnd_( grabEnd ),
-      toTime_( toTime ), upperHalf_( upperHalf )
+SDragClipEdgeAction::SDragClipEdgeAction( int track, int clip, int grabWhere,
+                                          offset_t toTime, bool upperHalf,
+                                          Qt::KeyboardModifiers mods )
+    : track_( track ), clip_( clip ), grabWhere_( grabWhere ),
+      toTime_( toTime ), upperHalf_( upperHalf ), mods_( mods )
 {
 }
 
@@ -25,7 +26,7 @@ SApplyResult SDragClipEdgeAction::apply( SProject * /*project*/ )
         qWarning() << "SDragClipEdgeAction: no main window";
         return {false, nullptr};
     }
-    if( !win->dragClipEdge( track_, clip_, grabEnd_, toTime_, upperHalf_ ) ) {
+    if( !win->dragClipEdge( track_, clip_, grabWhere_, toTime_, upperHalf_, mods_ ) ) {
         qWarning() << "SDragClipEdgeAction: no clip at track" << track_
                    << "index" << clip_;
         return {false, nullptr};
@@ -39,9 +40,16 @@ void SDragClipEdgeAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "track", track_ );
     elem.setAttribute( "clip", clip_ );
-    elem.setAttribute( "edge", grabEnd_ ? "end" : "start" );
+    elem.setAttribute( "edge", grabWhere_ == 1 ? "end"
+                             : grabWhere_ == 2 ? "body" : "start" );
     elem.setAttribute( "toTime", QString::number( (qint64) toTime_ ) );
     elem.setAttribute( "half", upperHalf_ ? "upper" : "lower" );
+
+    QStringList mods;
+    if( mods_ & Qt::ControlModifier ) mods << "ctrl";
+    if( mods_ & Qt::AltModifier )     mods << "alt";
+    if( mods_ & Qt::ShiftModifier )   mods << "shift";
+    if( !mods.isEmpty() ) elem.setAttribute( "modifiers", mods.join( "+" ) );
 }
 
 bool SDragClipEdgeAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -50,11 +58,13 @@ bool SDragClipEdgeAction::readXml( const QDomElement &elem, int /*version*/ )
     clip_  = elem.attribute( "clip", "0" ).toInt();
 
     QString edge = elem.attribute( "edge", "end" );
-    if( edge != "end" && edge != "start" ) {
+    if( edge == "end" )       grabWhere_ = 1;
+    else if( edge == "start") grabWhere_ = 0;
+    else if( edge == "body" ) grabWhere_ = 2;
+    else {
         qWarning() << "SDragClipEdgeAction::readXml: unknown edge:" << edge;
         return false;
     }
-    grabEnd_ = ( edge == "end" );
 
     QString half = elem.attribute( "half", "lower" );
     if( half != "lower" && half != "upper" ) {
@@ -62,6 +72,22 @@ bool SDragClipEdgeAction::readXml( const QDomElement &elem, int /*version*/ )
         return false;
     }
     upperHalf_ = ( half == "upper" );
+
+    mods_ = Qt::NoModifier;
+    const QString modStr = elem.attribute( "modifiers", "" ).trimmed();
+    if( !modStr.isEmpty() ) {
+        const QStringList parts = modStr.split( '+', Qt::SkipEmptyParts );
+        for( const QString &raw : parts ) {
+            const QString m = raw.trimmed().toLower();
+            if( m == "ctrl" )       mods_ |= Qt::ControlModifier;
+            else if( m == "alt" )   mods_ |= Qt::AltModifier;
+            else if( m == "shift" ) mods_ |= Qt::ShiftModifier;
+            else {
+                qWarning() << "SDragClipEdgeAction::readXml: unknown modifier:" << raw;
+                return false;
+            }
+        }
+    }
 
     bool ok = false;
     toTime_ = (offset_t) elem.attribute( "toTime", "0" ).toLongLong( &ok );

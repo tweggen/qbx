@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="slip_past_data">
+
+  <!-- Alt-dragging a clip's BODY slips the content under a fixed window. The
+       slip may now run NEGATIVE: the clip opens with silence and its data
+       starts later, mirroring the long-standing rule that lets the tail run
+       into silence past the end of the sample.
+
+       This is the first case to drive a MODIFIER gesture. It only became
+       testable once the handlers started reading ev->modifiers() instead of
+       QGuiApplication::keyboardModifiers() — a synthesized event carries its
+       modifiers on the event, never in the live keyboard state. It also needs
+       the body grab: a press inside an edge band arms trim/extend, never slip.
+
+       Fixture: 4 s ramped sawtooth, seconds at .067 / .176 / .291 / .405. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- A 4 s clip at 0, showing the sample from its start. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Alt-drag the BODY to the right by 2 s. Dragging right slides the
+         content later, so the slip goes to -2 s: the clip keeps its 0..4 s
+         window, opens with 2 s of silence, then plays the sample's first two
+         seconds (.067 then .176). -->
+    <drag-clip-edge track="0" clip="0" edge="body" toTime="192000"
+                    half="lower" modifiers="alt"/>
+
+    <render filename="slip_past_data.wav" format="wav" quality="10"/>
+
+    <!-- The head is now silence, where before the slip pin it was .067. -->
+    <assert-audio-energy filename="slip_past_data.wav"
+                         startFrame="4000" frameCount="80000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- ...and the sample's first second now lands in the clip's third. -->
+    <assert-audio-energy filename="slip_past_data.wav"
+                         startFrame="100000" frameCount="40000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="slip_past_data.wav"
+                         startFrame="148000" frameCount="40000"
+                         minRms="0.160" maxRms="0.195"/>
+
+    <!-- The clip window did not move: nothing past 4 s. -->
+    <assert-audio-energy filename="slip_past_data.wav"
+                         startFrame="196000" frameCount="40000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -35,8 +35,9 @@ public:
     // through its real mouse handlers. Lives here because the testkit module may
     // not include app/timeline (see tools/check_layering.py); shell may.
     // See SStdMixerView::dragClipEdge for the semantics and its limits.
-    bool dragClipEdge( int rowIdx, int clipIdx, bool grabEnd, offset_t dropTime,
-                       bool upperHalf );
+    // grabWhere: 0 = start edge, 1 = end edge, 2 = body (SStdMixerView::ClipGrab).
+    bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
+                       bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 
     // Startup: restore the saved window geometry and toolbar/dock layout.
     // Must be called only after the full UI exists (central widget included) —

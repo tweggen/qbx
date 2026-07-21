@@ -1390,7 +1390,7 @@ void SMVActualView::ctCreateAssetFromTrack()
 // (SplitH, Ctrl+border), loop (custom ↻, right-edge upper half), slip (SizeAll,
 // Alt+body), duplicate (DragCopy, Ctrl+body), move (OpenHand). Off any clip it
 // is the plain arrow. Read-only — does not touch the lastClick* drag state.
-void SMVActualView::updateHoverCursor( const QPoint &pos )
+void SMVActualView::updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers mods )
 {
     static QCursor *s_loopCursor = NULL;
     if( !s_loopCursor ) {
@@ -1431,7 +1431,6 @@ void SMVActualView::updateHoverCursor( const QPoint &pos )
                 upper = ( ( ( y + upperLeftY_ ) % trackHeight_ ) < trackHeight_/2 );
             }
             bool onBorder = onLeft || onRight;
-            Qt::KeyboardModifiers mods = QGuiApplication::keyboardModifiers();
             bool ctrl = mods & Qt::ControlModifier;
             bool alt  = mods & Qt::AltModifier;
             if( loopMarkerAt( pos, rowIdx, clip ) > 0 )
@@ -1466,7 +1465,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
 
     // No button held: this is a hover — just update the gesture cursor.
     if( !( ev->buttons() & Qt::LeftButton ) ) {
-        updateHoverCursor( ev->pos() );
+        updateHoverCursor( ev->pos(), ev->modifiers() );
         return;
     }
 
@@ -1893,7 +1892,13 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         // We know the track,  so now calculate the time.
         if( lastClickTrack_ ) {
             if( lastClickSLink_ ) {
-                Qt::KeyboardModifiers modifiers = QGuiApplication::keyboardModifiers();
+                // From the EVENT, not QGuiApplication::keyboardModifiers().
+                // The live-keyboard read was both less correct (it reports the
+                // state now, not when the button went down) and untestable:
+                // synthesized events carry their modifiers in the event, so the
+                // whole modifier family — Ctrl-stretch, Alt-slip, Ctrl-duplicate
+                // — was unreachable from drag-clip-edge.
+                Qt::KeyboardModifiers modifiers = ev->modifiers();
                 bool onBorder = lastClickedStart_ || lastClickedEnd_;
                 if( (modifiers & Qt::ControlModifier) && !onBorder
                     && lastClickLoopMarker_ == 0 ) {
@@ -2362,8 +2367,9 @@ void SStdMixerView::trackSliderMoved( int newValue )
 // Drive one clip-edge gesture through the arranger's real mouse handlers. See
 // the header for why this exists: every clip-edge clamp lives in the drag code,
 // and nothing else in the qxa suite can reach it.
-bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, bool grabEnd,
-                                  offset_t dropTime, bool upperHalf )
+bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
+                                  offset_t dropTime, bool upperHalf,
+                                  Qt::KeyboardModifiers mods )
 {
     const STrackRow *row = rowAt( rowIdx );
     if( !row || !row->track || !qContent_ ) return false;
@@ -2380,10 +2386,17 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, bool grabEnd,
 
     offset_t start = clip->getStartTime();
     length_t dur   = clip->getSObject().getDuration();
-    // Land inside the edge grab band: [startX, startX+LEFT) or [endX-RIGHT, endX).
-    int x0 = grabEnd
-             ? qContent_->getXPosOfOffset( start + (offset_t) dur ) - 1
-             : qContent_->getXPosOfOffset( start );
+    // Land inside the edge grab band: [startX, startX+LEFT) or [endX-RIGHT, endX);
+    // GrabBody lands at the clip's midpoint, clear of both bands, which is the
+    // only place the body gestures (slip / duplicate / move) can arm.
+    int sx = qContent_->getXPosOfOffset( start );
+    int ex = qContent_->getXPosOfOffset( start + (offset_t) dur );
+    int x0 = ( grabWhere == GrabEnd )  ? ex - 1
+           : ( grabWhere == GrabBody ) ? ( sx + ex ) / 2
+                                       : sx;
+    if( grabWhere == GrabBody && ( x0 < sx + SMV_LEFT_DRAG_PIXEL
+                                   || x0 >= ex - SMV_RIGHT_DRAG_PIXEL ) )
+        return false;   // clip too narrow to have a body clear of the edge bands
     int x1 = qContent_->getXPosOfOffset( dropTime );
     if( x0 < 0 || x1 < 0 ) return false;
 
@@ -2402,7 +2415,7 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, bool grabEnd,
                      Qt::MouseButton button, Qt::MouseButtons buttons ) {
         QPointF local( x, y );
         QMouseEvent ev( type, local, qContent_->mapToGlobal( QPointF( x, y ) ),
-                        button, buttons, Qt::NoModifier );
+                        button, buttons, mods );
         QApplication::sendEvent( qContent_, &ev );
     };
     send( QEvent::MouseButtonPress,   x0, Qt::LeftButton, Qt::LeftButton );

@@ -1596,8 +1596,9 @@ bool SMainWindow::eventFilter( QObject *watched, QEvent *event )
     return QMainWindow::eventFilter( watched, event );
 }
 
-bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, bool grabEnd,
-                                offset_t dropTime, bool upperHalf )
+bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
+                                offset_t dropTime, bool upperHalf,
+                                Qt::KeyboardModifiers mods )
 {
     SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
     if( !v ) {
@@ -1612,7 +1613,7 @@ bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, bool grabEnd,
         v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
         if( !v ) return false;
     }
-    return v->dragClipEdge( rowIdx, clipIdx, grabEnd, dropTime, upperHalf );
+    return v->dragClipEdge( rowIdx, clipIdx, grabWhere, dropTime, upperHalf, mods );
 }
 
 void SMainWindow::groupTrack()

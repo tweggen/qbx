@@ -227,7 +227,9 @@ private:
     // every existing repetition on the same timeline frame. Any other shift
     // moves the wrap point and rewrites the audio.
     bool clipDragIsLoopStart_ = false;
-    void updateHoverCursor( const QPoint &pos );   // telegraph the gesture on hover
+    // Telegraph the gesture on hover. Modifiers come from the event, matching
+    // what mousePressEvent will act on.
+    void updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers mods );
 
     // Ctrl-drag DUPLICATE: when armed, the dragged clips are live copies and the
     // release submits SDuplicateClipAction(s) instead of a move. Duplicates every
@@ -316,10 +318,14 @@ public:
     // loop-marker behaviour. `clipIdx` counts only real clips (nested track
     // lanes are skipped); `grabEnd` picks the right edge over the left;
     // `upperHalf` picks the loop half of the edge band over the extend half.
-    // Modifier gestures (Ctrl-stretch, Alt-slip) are NOT drivable this way —
-    // the handlers read the live keyboard via QGuiApplication::keyboardModifiers().
-    bool dragClipEdge( int rowIdx, int clipIdx, bool grabEnd, offset_t dropTime,
-                       bool upperHalf );
+    // `mods` are delivered ON THE EVENT, so modifier gestures (Ctrl-stretch,
+    // Alt-slip, Ctrl-duplicate) are drivable too — the handlers read
+    // ev->modifiers() rather than the live keyboard. `grabWhere` picks where the
+    // press lands: GrabBody is what the body gestures (slip, duplicate, move)
+    // need, since a press inside an edge band can never arm them.
+    enum ClipGrab { GrabStart = 0, GrabEnd = 1, GrabBody = 2 };
+    bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
+                       bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 
     offset_t alignTime( offset_t );
 
