@@ -191,6 +191,7 @@ private:
     offset_t lastClickSelStartOffset_;
     bool lastClickedStart_, lastClickedEnd_;
     bool lastClickedEndUpper_ = false;   // right edge band AND cursor in upper lane half
+    bool lastClickedStartUpper_ = false; // left edge band AND cursor in upper lane half
     length_t lastClickDuration_;
 
     // Loop-marker grab handles. loopMarkerAt() hit-tests the small boxes the cut
@@ -220,6 +221,12 @@ private:
     bool clipDragIsStretch_ = false;
     bool clipDragIsLoop_ = false;
     bool clipDragIsLoopMarker_ = false;   // grabbed a loop marker (re-tile)
+    // Left edge, upper half: extend/shrink the clip BACKWARDS in whole loop
+    // cycles. Whole cycles is not a UI nicety — twLoopMap sends clip-relative p
+    // to base + (p mod len), so only a shift that is a multiple of len leaves
+    // every existing repetition on the same timeline frame. Any other shift
+    // moves the wrap point and rewrites the audio.
+    bool clipDragIsLoopStart_ = false;
     void updateHoverCursor( const QPoint &pos );   // telegraph the gesture on hover
 
     // Ctrl-drag DUPLICATE: when armed, the dragged clips are live copies and the

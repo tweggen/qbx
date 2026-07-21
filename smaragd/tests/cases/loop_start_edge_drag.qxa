@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="loop_start_edge_drag">
+
+  <!-- Dragging a looping clip's START edge (upper half) grows it BACKWARDS in
+       whole loop cycles, and every repetition that already existed keeps
+       playing on the frame it played on before.
+
+       Whole cycles is forced by the model, not chosen for tidiness: twLoopMap
+       sends clip-relative p to base + (p mod len), so only a shift of k*len
+       leaves (p mod len) unchanged for every p. Any other shift moves the wrap
+       point and rewrites the audio, which is why this gesture snaps.
+
+       The fixture is a 4 s ramped sawtooth whose seconds have distinct RMS
+       (sec0 .067 / sec1 .176 / sec2 .291 / sec3 .405). With a 1 s loop segment
+       taken from the head of the sample, every repetition is sec0 -> .067, so a
+       phase slip would show up as the wrong level. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- Sample at 4 s, so there is room to grow backwards. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="192000"/>
+
+    <!-- Loop it: 2 s long from a 1 s segment (the sample's first second),
+         running 4 s .. 6 s on the timeline. -->
+    <resize-clip clip="0,0" startTime="192000" startOffset="0"
+                 duration="96000" loopLength="48000" stretch="1.0"/>
+
+    <!-- Drag the START edge (upper half) back towards 1 s. That is 3 cycles of
+         1 s, so the clip should snap to start at exactly 1 s and run 1 s .. 6 s. -->
+    <drag-clip-edge track="0" clip="0" edge="start" toTime="48000" half="upper"/>
+
+    <render filename="loop_start_edge_drag.wav" format="wav" quality="10"/>
+
+    <!-- Before the new start: still silence. -->
+    <assert-audio-energy filename="loop_start_edge_drag.wav"
+                         startFrame="0" frameCount="40000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- The three cycles added in FRONT of the original clip. Each is the
+         sample's first second, so each must read ~.067. A phase slip would put
+         a different second of the ramp here. -->
+    <assert-audio-energy filename="loop_start_edge_drag.wav"
+                         startFrame="52000" frameCount="40000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="loop_start_edge_drag.wav"
+                         startFrame="100000" frameCount="40000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="loop_start_edge_drag.wav"
+                         startFrame="148000" frameCount="40000"
+                         minRms="0.055" maxRms="0.080"/>
+
+    <!-- The two ORIGINAL repetitions, unmoved at 4 s and 5 s. -->
+    <assert-audio-energy filename="loop_start_edge_drag.wav"
+                         startFrame="196000" frameCount="40000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="loop_start_edge_drag.wav"
+                         startFrame="244000" frameCount="40000"
+                         minRms="0.055" maxRms="0.080"/>
+
+    <!-- Past the clip end at 6 s: silence. -->
+    <assert-audio-energy filename="loop_start_edge_drag.wav"
+                         startFrame="292000" frameCount="40000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -819,6 +819,7 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
 {
     lastClickedStart_ = lastClickedEnd_ = false;
     lastClickedEndUpper_ = false;
+    lastClickedStartUpper_ = false;
     lastClickLoopMarker_ = 0;
     lastClickPos_ = pos;
     int y = pos.y()-SMV_TIME_RULER_HEIGHT;
@@ -839,6 +840,10 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
                 if( lastClickPos_.x() >= startX
                     && lastClickPos_.x() < (startX+SMV_LEFT_DRAG_PIXEL) ) {
                     lastClickedStart_ = true;
+                    // Upper half of the lane → loop backwards; lower half → trim.
+                    // Mirrors the right edge.
+                    int laneY = ( y + upperLeftY_ ) % trackHeight_;
+                    lastClickedStartUpper_ = ( laneY < trackHeight_/2 );
                 }
                 if( lastClickSLink_->getSObject().hasDuration() ) {
                     length_t len = lastClickSLink_->getSObject().getDuration();
@@ -858,8 +863,10 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
             // extending the clip.
             lastClickLoopMarker_ =
                 loopMarkerAt( pos, lastClickTrackIdx_, lastClickSLink_ );
-            if( lastClickLoopMarker_ > 0 )
+            if( lastClickLoopMarker_ > 0 ) {
                 lastClickedStart_ = lastClickedEnd_ = lastClickedEndUpper_ = false;
+                lastClickedStartUpper_ = false;
+            }
         }
     } else {
         lastClickTrack_ = NULL;
@@ -946,7 +953,8 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
     // is one undo step (and the audio chain rebuilds exactly once, here).
     if( clipDragArmed_ && lastClickSLink_
         && ( lastClickedStart_ || lastClickedEnd_ || clipDragIsSlip_
-             || clipDragIsStretch_ || clipDragIsLoop_ || clipDragIsLoopMarker_ ) ) {
+             || clipDragIsStretch_ || clipDragIsLoop_ || clipDragIsLoopMarker_
+             || clipDragIsLoopStart_ ) ) {
         SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
         if( cut ) {
             offset_t newStart   = lastClickSLink_->getStartTime();
@@ -989,7 +997,7 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         }
         clipDragArmed_ = false;
         clipDragIsSlip_ = clipDragIsStretch_ = clipDragIsLoop_ = false;
-        clipDragIsLoopMarker_ = false;
+        clipDragIsLoopMarker_ = clipDragIsLoopStart_ = false;
         return;
     }
 
@@ -1430,6 +1438,7 @@ void SMVActualView::updateHoverCursor( const QPoint &pos )
                                        { shape = Qt::SizeHorCursor;    mode = "Loop length"; }
             else if( onBorder && ctrl ){ shape = Qt::SplitHCursor;     mode = "Time-stretch"; }
             else if( onRight && upper ){ custom = s_loopCursor;        mode = "Loop"; }
+            else if( onLeft && upper ) { custom = s_loopCursor;        mode = "Loop back (whole cycles)"; }
             else if( onLeft )          { shape = Qt::SizeHorCursor;    mode = "Trim start"; }
             else if( onRight )         { shape = Qt::SizeHorCursor;    mode = "Extend"; }
             else if( alt )             { shape = Qt::SizeAllCursor;    mode = "Slip"; }
@@ -1536,7 +1545,13 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 length_t d = (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
                            - (length_t) smv_.alignTime( (offset_t) getLastClickOffset() );
                 length_t newOff = (length_t) clipResizeOffset0_ - d;
-                if( newOff < 0 ) newOff = 0;
+                // The slip MAY go negative (proposal 23): the clip then opens
+                // with silence and its data starts later. Bounded so at least
+                // SMV_CUT_MIN_TIME of content stays inside the clip — the mirror
+                // of the maxOff rule below, which lets the tail run into silence.
+                length_t minOff = SMV_CUT_MIN_TIME - (length_t) lastClickDuration_;
+                if( minOff > 0 ) minOff = 0;
+                if( newOff < minOff ) newOff = minOff;
                 // Bound the window START (output domain) to near the content end,
                 // not content_end - window_len: a full-length clip (window ==
                 // content) would otherwise have zero slip room. Sliding further
@@ -1638,6 +1653,63 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 }
                 update( oldRect );
+                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+            } else if( clipDragIsLoopStart_ ) {
+                // Drag the LEFT edge's UPPER half: grow (or shrink) the clip
+                // backwards in WHOLE loop cycles, keeping every existing
+                // repetition on the frame it already plays on. Whole cycles is
+                // forced by the model, not a preference: twLoopMap maps
+                // clip-relative p to base + (p mod len), so a shift of k*len is
+                // the only one that leaves (p mod len) unchanged for every p —
+                // anything else moves the wrap point and rewrites the audio.
+                // The loop base is therefore left alone.
+                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
+                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                if( clipLoopSeg_ <= 0 ) {
+                    // Same lazy capture as the right-edge loop gesture: an
+                    // already-looping clip keeps its segment, a plain one starts
+                    // looping the cut it currently shows.
+                    length_t seg = clipLoopLen0_;
+                    if( seg <= 0 ) {
+                        length_t contentLen = cut->getContent().hasDuration()
+                                              ? (length_t) cut->getContent().getDuration() : -1;
+                        seg = lastClickDuration_;
+                        if( contentLen >= 0
+                            && seg > contentLen - (length_t) clipResizeOffset0_ )
+                            seg = contentLen - (length_t) clipResizeOffset0_;
+                    }
+                    if( seg < SMV_CUT_MIN_TIME ) seg = SMV_CUT_MIN_TIME;
+                    clipLoopSeg_ = seg;
+                }
+                offset_t end0 = clipDragStart0_ + (offset_t) lastClickDuration_;
+                // Whole cycles away from the ORIGINAL start, rounded to nearest.
+                length_t want = (length_t) clipDragStart0_
+                              - (length_t) getTimeOf( ev->pos().x() );
+                length_t k = ( want + ( want >= 0 ? clipLoopSeg_/2 : -clipLoopSeg_/2 ) )
+                             / clipLoopSeg_;
+                offset_t rStart = (offset_t)( (length_t) clipDragStart0_
+                                              - k * clipLoopSeg_ );
+                if( rStart < 0 ) rStart = 0;                     // no time before 0
+                length_t newDur = (length_t) end0 - (length_t) rStart;
+                if( newDur < SMV_CUT_MIN_TIME ) {
+                    rStart = end0 - (offset_t) clipLoopSeg_;
+                    if( rStart < 0 ) rStart = 0;
+                    newDur = (length_t) end0 - (length_t) rStart;
+                }
+                if( newDur >= SMV_CUT_MIN_TIME
+                    && ( rStart != lastClickSLink_->getStartTime()
+                         || newDur != cut->getDuration()
+                         || WarpedLen( clipLoopSeg_ ) != cut->getLoopLength() ) ) {
+                    QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+                    lastClickSLink_->setStartTime( rStart );
+                    cut->setLoopLengthRaw( WarpedLen( clipLoopSeg_ ) );
+                    cut->setDuration( newDur );
+                    cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
+                    cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
+                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
+                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    update( oldRect );
+                }
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( lastClickedStart_ ) {
                 // Drag the LEFT edge: move the clip start to the snapped mouse
@@ -1893,6 +1965,8 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     clipDragIsStretch_ = ( (modifiers & Qt::ControlModifier) && onBorder );
                     clipDragIsLoop_    = ( !(modifiers & Qt::ControlModifier)
                                            && lastClickedEnd_ && lastClickedEndUpper_ );
+                    clipDragIsLoopStart_ = ( !(modifiers & Qt::ControlModifier)
+                                             && lastClickedStart_ && lastClickedStartUpper_ );
                     clipLoopSeg_ = 0;   // captured lazily on the first loop move
                     clipDragTrack0_ = lastClickTrack_;
                     clipDragStart0_ = lastClickSLink_->getStartTime();

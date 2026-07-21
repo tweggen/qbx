@@ -5976,3 +5976,43 @@ audio_engine playback (playhead is genuinely >= 0); consistent today, but the
 type should migrate so it tells the truth. Page maps now admit negative keys:
 `std::map` ordering holds, but any future code assuming "0 is the lowest page"
 is wrong.
+
+---
+
+## Left-edge drags: loop backwards, slip past the data (2026-07-21)
+
+- **Status:** ✅ COMPLETE
+- **Scope:** arranger gestures unblocked by proposal 23
+- **Verified on:** Windows/MinGW (full qxa suite from tests/cases, layering clean)
+
+The left edge now mirrors the right: upper half loops, lower half trims.
+
+**Left edge, upper half — loop backwards in WHOLE CYCLES.** The clip grows (or
+shrinks) at the front by a multiple of the loop segment, and the loop base is
+left alone. Whole cycles is forced by the model, not a UI preference: twLoopMap
+sends clip-relative p to `base + (p mod len)`, so only a shift of k*len leaves
+`(p mod len)` unchanged for every p. Any other shift moves the wrap point and
+rewrites the audio that is already there — there is no base adjustment that
+fixes it, because the required correction is not constant across the segment.
+The gesture therefore snaps to the nearest whole cycle. Segment capture is the
+same lazy rule as the right-edge loop: an already-looping clip keeps its
+segment, a plain one starts looping the cut it currently shows.
+
+**Alt-body slip may now go negative.** The pin at 0 is gone, so sliding the
+content right opens the clip with silence and starts the data later — the mirror
+of the existing rule that lets the tail run into silence. Bounded so at least
+SMV_CUT_MIN_TIME of content stays inside the clip.
+
+New case `loop_start_edge_drag`: a 2 s clip of 1 s cycles at 4 s, start edge
+dragged back towards 1 s, snapping to exactly three cycles. Asserts the three
+new front repetitions AND the two original ones all read the sample's first
+second (~.067) — a phase slip would put a different second of the ramp there.
+Measured after: five identical cycles 1.0..6.0 s (each .0333 then .0882), the
+4.0 s boundary between new and original repetitions seamless.
+
+Known gap: the slip gesture itself is NOT covered by the suite. `drag-clip-edge`
+cannot drive modifier gestures — the handlers read
+`QGuiApplication::keyboardModifiers()` rather than the event — so Alt-slip has no
+scripted route. The capability it depends on (a negative source anchor) is
+covered by `clip_starts_before_data`; the gesture wiring is compile- and
+hand-verified only. Making modifiers drivable would close this.
