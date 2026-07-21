@@ -18,6 +18,7 @@ class QToolBar;
 class SRecordingProgressDialog;
 class SGridToolbar;
 class SExternFileList;
+class SLogView;
 
 class SMainWindow
     : public QMainWindow
@@ -175,6 +176,12 @@ private:
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
     SExternFileList *externFileList_;
+
+    // The log dock (proposal 24). Its objectName is what lets the existing
+    // saveState/restoreState persistence restore its visibility and placement,
+    // so it needs no settings key of its own.
+    QDockWidget *qDockLog_ = nullptr;
+    SLogView    *logView_  = nullptr;
 
     // Permanent mode indicator on the right of the status bar.
     QLabel *modeLabel_;

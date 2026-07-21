@@ -29,6 +29,7 @@
 #include "app/model/sproject.h"
 #include "app/shell/ssettings.h"
 #include "app/servicesui/srecordingprogress.h"
+#include "app/servicesui/slogview.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
@@ -869,6 +870,31 @@ SMainWindow::SMainWindow()
     externFileList_ = new SExternFileList( qDockExternFileList_, nullptr );
     qDockExternFileList_->setWidget( externFileList_ );
     addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
+
+    // The log dock (proposal 24). Hidden on a first run; from then on
+    // restoreState() honours whatever the user left it as, keyed by objectName.
+    // visibilityChanged drives the model's drain timer, so a closed log costs
+    // nothing at all.
+    qDockLog_ = new QDockWidget( tr( "Log" ), this );
+    qDockLog_->setObjectName( "dock_log" );
+    logView_ = new SLogView( qDockLog_ );
+    qDockLog_->setWidget( logView_ );
+    addDockWidget( Qt::BottomDockWidgetArea, qDockLog_ );
+    qDockLog_->hide();
+    connect( qDockLog_, &QDockWidget::visibilityChanged,
+             logView_, &SLogView::setLive );
+
+    // View menu — built here rather than in the menu block above because it
+    // needs the docks to exist for their toggleViewAction()s.
+    QMenu *viewMenu = new QMenu( tr( "&View" ), this );
+    QAction *actLog = qDockLog_->toggleViewAction();
+    actLog->setText( tr( "&Log" ) );
+    actLog->setShortcut( Qt::CTRL | Qt::SHIFT | Qt::Key_L );
+    viewMenu->addAction( actLog );
+    QAction *actFiles = qDockExternFileList_->toggleViewAction();
+    actFiles->setText( tr( "&Extern file list" ) );
+    viewMenu->addAction( actFiles );
+    menuBar()->insertMenu( qAudioMenu_->menuAction(), viewMenu );
 
     // NOTE: window geometry/state restore deliberately does NOT happen here.
     // The saved state describes a window that includes the project's central

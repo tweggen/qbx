@@ -203,11 +203,15 @@ set(APP_UI_FILES
     pluginui/src/splugineffectstrip.cpp
     pluginui/src/spluginparamereditor.cpp
     # --- app/servicesui
+    servicesui/include/app/servicesui/slogmodel.h
+    servicesui/include/app/servicesui/slogview.h
     servicesui/include/app/servicesui/soptions.h
     servicesui/include/app/servicesui/soptionsdialog.h
     servicesui/include/app/servicesui/srecordingprogress.h
     servicesui/include/app/servicesui/srenderdialog.h
     servicesui/include/app/servicesui/srenderprogress.h
+    servicesui/src/slogmodel.cpp
+    servicesui/src/slogview.cpp
     servicesui/src/soptions.cpp
     servicesui/src/soptionsdialog.cpp
     servicesui/src/srecordingprogress.cpp
