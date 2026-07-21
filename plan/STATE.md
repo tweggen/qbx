@@ -5746,3 +5746,80 @@ the takes_group_broadcast render at SMARAGD_REVAL_WORKERS=8. Restored the
 old semantics with an `everHadCapture_` gate in a dedicated
 `onArrangementChanged()` slot (flag set on the worker when buildCapture_
 publishes; the connect stays main-thread).
+
+---
+
+## Proposal 22: Clip pitch (cents) with +/- semitone nudging (2026-07-21)
+
+- **Status:** ✅ COMPLETE
+- **Scope:** per-clip transposition on the existing grain stage, no new DSP
+- **Verified on:** Windows/MinGW (full qxa suite from tests/cases, layering clean)
+
+The pitch axis already existed end to end in the engine — `twGrainParams::
+pitchCents`, the per-grain read rate in `twGrainSource`, `SCut` serialization —
+but was reachable only from a non-undoable QInputDialog. This wired it to a
+command and a gesture:
+
+- `set-pitch` action (clip / cents / take / broadcast). ABSOLUTE value, so undo
+  is exact under clamping; per-take on a stack (pitch is not a length op);
+  edit-group broadcast like `resize-clip`.
+- Arranger keys: `+`/`-` = ±1 semitone, `Shift` = ±10 cents (also `=`/numpad).
+  Acts on the selection, else the last-clicked clip, as ONE composite undo step
+  with a per-clip absolute target. Context menu + the exact-value dialog now go
+  through the same action.
+- `SCut::setGrainParams()` now invalidateCaptures like `setWindow()`: a grained
+  cut's capture bakes the grain params in and `buildCapture_()` early-returns
+  while one exists, so the waveform PREVIEW previously kept drawing the
+  pre-edit transform (audio was never affected — it grains the raw source).
+  Clamp centralised in `SCut::clampPitchCents` (±2400 cents).
+- Clip badge (`+2 st` / `+250 ct`), since a transposition moves no clip edge.
+- New `assert-audio-frequency` + `audio::estimateFundamental()` (autocorrelation,
+  FIRST strong peak + parabolic interpolation). The first-peak rule is
+  load-bearing: max-of-autocorrelation reported the +1200 cent render at its
+  original 440 Hz (octave error — the 2x lag peaked higher).
+
+New cases: `grain_pitch_octave_up` (f0 doubles, length unchanged),
+`grain_pitch_semitone_down`, `grain_pitch_with_stretch` (both axes at once),
+`grain_pitch_reset_roundtrip`.
+
+Known limits: fixed 2048/512 grain combs on large shifts and loses ~one grain
+of tail on up-shifts; `twGrainSource` still materialises the whole source per
+edit on the UI thread; the Shift (fine) bindings are ambiguous on a US layout
+where `+` is Shift+`=` (numpad bindings are not). See proposal 22 for detail.
+
+---
+
+## Loop markers: draggable re-tile handles + Remove loop (2026-07-21)
+
+- **Status:** ✅ COMPLETE
+- **Scope:** arranger UI only — no engine, model or serialization change
+- **Verified on:** Windows/MinGW (full qxa suite from tests/cases, layering clean)
+
+A looping clip drew a divider at each loop boundary, but the segment could only
+be changed by redoing the right-edge-upper-half gesture from scratch.
+
+- `SCutRendererInline` now draws a grab handle at the upper end of every boundary
+  divider: a small box one text line high, the visual weight of the small
+  per-clip numbers. Suppressed below `2*SCUT_LOOP_HANDLE_W` pixels per
+  repetition, so handles never pile up at low zoom.
+- The geometry lives in ONE shared helper, `scutLoopHandleRect()`, called both by
+  the renderer that draws the box and by `SMVActualView::loopMarkerAt()` that
+  hit-tests it — drawn box and grabbable box cannot drift apart. Its height comes
+  from a fixed 7pt application font, NOT from the painter's current font:
+  `drawRulerTicks()` sets a 7pt font and never restores it, so an ambient-font
+  handle would be drawn at one size and hit-tested at another.
+- Dragging boundary k re-tiles the clip so that boundary follows the pointer
+  (`segment = (t - clipStart)/k`); the clip DURATION is untouched, so the
+  repetition count is what moves. Clamped strictly below the duration so the clip
+  stays looping (`SCut::isLooping`) and at least one handle stays grabbable. A
+  handle outranks the edge bands and body gestures it overlaps.
+- Finalised through the existing `SResizeClipAction` revert-then-action path, so
+  it lands as one undo step like every other clip-edge gesture.
+- Clip context menu: "Remove loop", disabled on a non-looping clip. Clears the
+  loop segment and KEEPS the duration (content plays once, remainder silent), so
+  nothing else on the timeline shifts.
+
+Known limits: the ruler's leftover 7pt painter font is worked around here, not
+fixed — everything drawn after `drawRulerTicks()` still inherits it. The handles
+are not covered by the qxa suite (`--test-case` never shows the window and
+`screenshot` grabs the root window, not the arranger).

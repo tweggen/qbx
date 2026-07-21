@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Clip transposition, -700 cents (a fifth down).
+
+  440 Hz x 2^(-7/12) = ~293.7 Hz. Downward transposition exercises the other
+  side of the grain rate (r < 1: each grain reads FEWER input frames than it
+  writes, so the source is skipped through rather than overlapped).
+  The clip length is unchanged, as always for a pitch edit.
+-->
+<SActionScript version="1" name="grain_pitch_semitone_down">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s sawtooth (192000 frames) -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <set-pitch clip="0,0" cents="-700"/>
+
+    <render filename="grain_pitch_semitone_down.wav" format="wav" quality="10"/>
+
+    <!-- A fifth down: ~293.7 Hz (±3%) -->
+    <assert-audio-frequency filename="grain_pitch_semitone_down.wav"
+                            startFrame="48000" frameCount="24000"
+                            minHz="285" maxHz="303"/>
+
+    <!-- Length untouched: audio through 192000, silence after -->
+    <assert-audio-energy filename="grain_pitch_semitone_down.wav"
+                         startFrame="0" frameCount="192000"
+                         minRms="0.20" maxRms="0.32"/>
+    <assert-audio-energy filename="grain_pitch_semitone_down.wav"
+                         startFrame="192000" frameCount="24000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <assert-audio-peak filename="grain_pitch_semitone_down.wav" maxPeak="0.995"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

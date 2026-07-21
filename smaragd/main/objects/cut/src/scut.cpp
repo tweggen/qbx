@@ -799,6 +799,14 @@ void SCut::setGrainParams( const twGrainParams &p )
         snap = buildSnapshot_nolock();
     }
 
+    // A grained cut's capture BAKES the grain params in (buildCapture_ reads
+    // the whole clip through a twGrainSource built from them) and
+    // buildCapture_ early-returns while a capture exists — so without this, a
+    // stretch/pitch edit leaves the WAVEFORM PREVIEW drawing the previous
+    // transform forever (playback is unaffected: it builds its own grain over
+    // the raw source below). setWindow() invalidates for the same reason.
+    invalidateCapture();
+
     rebuildReader( snap );   // pre-build off the audio thread (caller is the UI thread)
     emit durationChanged( snap.cutDuration.frames() );
 }
@@ -822,7 +830,11 @@ void SCut::setPitchCents( double cents )
         std::lock_guard<std::mutex> lock(mutex());  // Read under lock
         p = grainParams_;  // Snapshot params
     }
-    p.pitchCents = cents;  // Modify copy outside lock
+    // Clamp outside the lock. Beyond ±2 octaves the fixed-grain transposition
+    // is no longer musically useful (and an extreme ratio makes each grain read
+    // a huge input span), so the same range the pitch dialog offers is the
+    // model's range too — every entry point clamps identically.
+    p.pitchCents = clampPitchCents( cents );
     setGrainParams( p );  // Pass modified copy
 }
 

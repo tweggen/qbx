@@ -2,8 +2,8 @@
 
 Purpose: the headless test harness — SActionScript (.qxa parsing),
 SActionRunner (submit actions, per-action rejection accounting,
-assertions), assert-audio-energy/peak, screenshot action, and the
-roundtrip test main.
+assertions), assert-audio-energy/peak/frequency, screenshot action, and
+the roundtrip test main.
 
 Public headers: app/testkit/*.h. Verb reference: docs/ACTIONS.md.
 
@@ -20,7 +20,8 @@ Invariants:
 3. Run from tests/cases/ so ../test_sawtooth.wav fixture paths resolve.
    The fixture is a 4 s ramped sawtooth: every source second has a unique
    RMS (sec0 .067 / sec1 .176 / sec2 .291 / sec3 .405) so wrong-offset bugs
-   are detectable by region RMS.
+   are detectable by region RMS, and it is strongly periodic at ~440 Hz so
+   assert-audio-frequency can measure a transposition on it.
 4. Exit code: 0 iff all actions applied as expected AND <assertions> pass.
 
 How to test:

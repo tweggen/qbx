@@ -106,6 +106,8 @@ protected slots:
     void ctCreateAssetFromTrack();
     // Track context menu: expand/collapse the clicked track's take lanes.
     void ctToggleTakeLanes();
+    // Clip context menu: clear the clicked clip's loop.
+    void ctRemoveLoop();
 
 protected:
     virtual void paintEvent( QPaintEvent * );
@@ -191,6 +193,15 @@ private:
     bool lastClickedEndUpper_ = false;   // right edge band AND cursor in upper lane half
     length_t lastClickDuration_;
 
+    // Loop-marker grab handles. loopMarkerAt() hit-tests the small boxes the cut
+    // renderer draws at the top of each loop boundary (scutLoopHandleRect() is
+    // shared with the drawing side) and returns the boundary index under `pos`,
+    // or 0 for none. Grabbing boundary k and dragging re-tiles the clip so that
+    // boundary follows the pointer: segment = (t - clipStart)/k. The clip's
+    // duration is NOT touched, so the repetition count changes as you drag.
+    int loopMarkerAt( const QPoint &pos, int rowIdx, SLink *clip ) const;
+    int lastClickLoopMarker_ = 0;   // boundary index under the last press (0=none)
+
     // Clip MOVE drag snapshot: captured at press so the move lands as one
     // undoable SMoveClipAction on release (the drag itself mutates live).
     bool     clipDragArmed_ = false;
@@ -208,6 +219,7 @@ private:
     bool clipDragIsSlip_ = false;
     bool clipDragIsStretch_ = false;
     bool clipDragIsLoop_ = false;
+    bool clipDragIsLoopMarker_ = false;   // grabbed a loop marker (re-tile)
     void updateHoverCursor( const QPoint &pos );   // telegraph the gesture on hover
 
     // Ctrl-drag DUPLICATE: when armed, the dragged clips are live copies and the
@@ -337,6 +349,12 @@ public slots:
     void ctRemoveSample();
     void ctDeleteSample();
     void ctSplitSample();
+    // Transpose the selected clips (or, with an empty selection, the
+    // last-clicked one) by a signed offset in CENTS. One undo step per press.
+    void ctPitchUp()       { nudgeClipPitch(  100.0 ); }
+    void ctPitchDown()     { nudgeClipPitch( -100.0 ); }
+    void ctPitchUpFine()   { nudgeClipPitch(   10.0 ); }
+    void ctPitchDownFine() { nudgeClipPitch(  -10.0 ); }
     void ctAddLink();
     void setTimeGridSpec( const STimeGridSpec & );    
     void setBPMTempo( double );
@@ -384,6 +402,12 @@ private slots:
     void tracksReordered();
 
 private:
+    // Transpose every target clip by `cents`, as ONE undoable step: each clip
+    // gets its OWN absolute target (its current pitch + cents), so clips that
+    // sat at different pitches stay different. Targets are the current
+    // selection, or the last-clicked clip when nothing is selected.
+    void nudgeClipPitch( double cents );
+
     // Symbolic constants for the screen layout.
     enum {
         GLROW_TOTAL_ZOOM = 3,
@@ -445,6 +469,10 @@ private:
     QAction *actInsertSample_;   // Ctrl+Return
     QAction *actSplit_;          // S
     QAction *actRemoveSample_;   // Delete
+    QAction *actPitchUp_;        // +   (one semitone)
+    QAction *actPitchDown_;      // -
+    QAction *actPitchUpFine_;    // Shift++ (10 cents)
+    QAction *actPitchDownFine_;  // Shift+-
 
     bool snapToTimeGrid_;
     STimeGridSpec timeGridSpec_;

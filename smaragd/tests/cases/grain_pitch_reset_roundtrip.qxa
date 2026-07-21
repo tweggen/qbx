@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Transpose, then transpose back to zero: the render must be at the ORIGINAL
+  pitch again.
+
+  What this gates is the reader rebuild — the second edit drops the grain
+  stage entirely (identity params), and the fast path in rebuildReader() must
+  notice the change in pitchCents rather than keep the +700 cent chain.
+  (The stale-capture question is a PREVIEW one, not an audio one: playback
+  builds its grain over the raw source, so no render assertion can see it.)
+-->
+<SActionScript version="1" name="grain_pitch_reset_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s sawtooth (192000 frames) at ~440 Hz -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <set-pitch clip="0,0" cents="700"/>
+    <set-pitch clip="0,0" cents="0"/>
+
+    <render filename="grain_pitch_reset_roundtrip.wav" format="wav" quality="10"/>
+
+    <!-- Back to the source pitch (±3%) -->
+    <assert-audio-frequency filename="grain_pitch_reset_roundtrip.wav"
+                            startFrame="48000" frameCount="24000"
+                            minHz="427" maxHz="453"/>
+
+    <assert-audio-energy filename="grain_pitch_reset_roundtrip.wav"
+                         startFrame="0" frameCount="192000"
+                         minRms="0.20" maxRms="0.32"/>
+    <assert-audio-energy filename="grain_pitch_reset_roundtrip.wav"
+                         startFrame="192000" frameCount="24000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

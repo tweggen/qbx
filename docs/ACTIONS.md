@@ -20,6 +20,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `add-to-selection` | SAddToSelectionAction | selection/src/saddtoselectionaction.cpp | `paths` = "" |
 | `add-track` | SAddTrackAction | objects/mixer/src/saddtrackaction.cpp | `index` = "-1" |
 | `assert-audio-energy` | SAssertAudioEnergyAction | testkit/src/sassertaudioenergyaction.cpp | `filename` = "", `minRms` = "0.01", `maxRms` = "0.95", `startFrame` = "0", `frameCount` = "-1", `channel` = "-1" |
+| `assert-audio-frequency` | SAssertAudioFrequencyAction | testkit/src/sassertaudiofrequencyaction.cpp | `filename` = "", `minHz` = "0", `maxHz` = "0", `startFrame` = "0", `frameCount` = "-1", `channel` = "-1" (autocorrelation f0 — the pitch gate) |
 | `assert-audio-peak` | SAssertAudioPeakAction | testkit/src/sassertaudiopeakaction.cpp | `filename` = "", `maxPeak` = "0.95", `startFrame` = "0", `frameCount` = "-1", `channel` = "-1" |
 | `clear-selection` | SClearSelectionAction | selection/src/sclearselectionaction.cpp | (none) |
 | `create-asset` | SCreateAssetAction | objects/mixer/src/screateassetaction.cpp | `container`, `startOffset` = "0", `duration` = "0", `assetName` |
@@ -53,6 +54,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `select-take` | SSelectTakeAction | objects/cut/src/sselecttakeaction.cpp | `clip`, `take` = "-1", `broadcast` = "1" (edit groups: same take index on every member) |
 | `screenshot` | SScreenshotAction | testkit/src/sscreenshotaction.cpp | `filename` = "", `resolution` = "100%" |
 | `set-edit-group` | SSetEditGroupAction | objects/track/src/seteditgroupaction.cpp | `trackPath`, `group` = "0" (0 = ungrouped) |
+| `set-pitch` | SSetPitchAction | objects/cut/src/ssetpitchaction.cpp | `clip`, `cents` = "0" (ABSOLUTE, clamped to ±2400), `take` = "-1" (stacks: which take is transposed; pitch is per-take), `broadcast` = "1" (edit groups) |
 | `set-property` | SSetPropertyAction | actions/src/ssetpropertyaction.cpp | `key`, `value` |
 | `set-selection` | SSetSelectionAction | selection/src/ssetselectionaction.cpp | `paths` = "" |
 | `set-track-volume` | SSetTrackVolumeAction | objects/track/src/ssettrackvolumeaction.cpp | `trackIndex` = "0", `volume` = "0" |

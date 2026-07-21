@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Clip transposition, +1200 cents (one octave up).
+
+  The fixture is a ~439 Hz ramped sawtooth, 4 s = 192000 frames. Transposing it
+  by an octave must:
+    (a) double the fundamental (~878 Hz) — the assertion that proves the pitch
+        actually reached the audio, which RMS/peak alone cannot show;
+    (b) leave the LENGTH untouched — pitch lives in the grain stage and never
+        moves a clip edge, so the render is still silent past frame 192000.
+-->
+<SActionScript version="1" name="grain_pitch_octave_up">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s sawtooth (192000 frames), no window edit at all -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <set-pitch clip="0,0" cents="1200"/>
+
+    <render filename="grain_pitch_octave_up.wav" format="wav" quality="10"/>
+
+    <!-- (a) One octave up: 439.x Hz -> ~878 Hz (±3%) -->
+    <assert-audio-frequency filename="grain_pitch_octave_up.wav"
+                            startFrame="48000" frameCount="24000"
+                            minHz="852" maxHz="905"/>
+
+    <!-- (b) Same length: the clip still ends at 192000 frames -->
+    <assert-audio-energy filename="grain_pitch_octave_up.wav"
+                         startFrame="0" frameCount="192000"
+                         minRms="0.20" maxRms="0.32"/>
+    <assert-audio-energy filename="grain_pitch_octave_up.wav"
+                         startFrame="192000" frameCount="24000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <assert-audio-peak filename="grain_pitch_octave_up.wav" maxPeak="0.995"/>
+
+    <screenshot filename="grain_pitch_octave_up_timeline.png" resolution="50%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

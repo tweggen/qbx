@@ -33,6 +33,7 @@
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
 #include "app/objects/cut/scut.h"
+#include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
 #include "app/shell/ssettings.h"
@@ -57,7 +58,10 @@
 #include "app/objects/cut/sremovesampleaction.h"
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/sselecttakeaction.h"
+#include "app/objects/cut/ssetpitchaction.h"
+#include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
+#include "app/model/splacements.h"
 #include "app/actions/sactionhistory.h"
 #include <QFrame>
 #include <QUndoStack>
@@ -452,10 +456,102 @@ void SStdMixerView::ctSplitSample()
     qContent_->update();
 }
 
+// Transpose the target clips by `cents`. Pitch lives in the grain stage, so
+// this changes only how the clip SOUNDS — its window, its length and every
+// position mapping stay exactly where they were.
+void SStdMixerView::nudgeClipPitch( double cents )
+{
+    SApplication &app = SApplication::app();
+    SProject *project = app.getCurrentProject();
+    if( !project ) return;
+
+    auto showStatus = [this]( const QString &msg ) {
+        if( QMainWindow *mw = qobject_cast<QMainWindow*>( window() ) )
+            mw->statusBar()->showMessage( msg, 4000 );
+    };
+
+    // Targets: the selection, or — when nothing is selected — the clip the
+    // user last clicked (what S / Delete already act on).
+    QList<QList<int>> paths = app.getCurrentSelectionPaths();
+    if( paths.isEmpty() ) {
+        STrack *track = qContent_->getLastClickTrack();
+        SLink  *link  = qContent_->getLastClickSLink();
+        if( track && link ) {
+            QList<int> p = strackpath::pathOf( model_, track );
+            p.append( track->indexOfChild( link ) );
+            paths.append( p );
+        }
+    }
+    if( paths.isEmpty() ) {
+        showStatus( "Select a clip first" );
+        return;
+    }
+
+    // Each clip gets its own ABSOLUTE target, so a nudge over a mixed
+    // selection preserves the intervals between the clips.
+    SObject *mixer = splacements::rootContainer( project );
+    SCompositeAction *composite = new SCompositeAction;
+    double lastCents = 0.0;
+    int nTargets = 0;
+    for( const QList<int> &p : paths ) {
+        SLink *lk = splacements::placementAt( mixer, p );
+        if( !lk ) continue;
+        SCut *cut = dynamic_cast<SCut*>( &lk->getSObject() );
+        if( !cut ) {
+            // A take stack transposes its ACTIVE take (pitch is per-take).
+            if( STakeStack *stack = dynamic_cast<STakeStack*>( &lk->getSObject() ) )
+                cut = stack->activeCut();
+        }
+        if( !cut ) continue;
+        double target = SCut::clampPitchCents( cut->getPitchCents() + cents );
+        // Already at the limit: nudging further would push an undo step that
+        // changes nothing.
+        if( target == cut->getPitchCents() ) continue;
+        lastCents = target;
+        composite->append( new SSetPitchAction( p, target ) );
+        ++nTargets;
+    }
+    if( nTargets == 0 ) {
+        delete composite;
+        showStatus( QString( "No clip to transpose (limit is +/-%1 cents)" )
+                        .arg( SCut::PITCH_CENTS_LIMIT ) );
+        return;
+    }
+
+    app.submitAction( composite );
+
+    QString msg = ( nTargets == 1 )
+        ? QString( "Clip pitch: %1%2 cents (%3%4 st)" )
+              .arg( lastCents > 0 ? "+" : "" ).arg( lastCents, 0, 'g', 6 )
+              .arg( lastCents > 0 ? "+" : "" ).arg( lastCents / 100.0, 0, 'g', 3 )
+        : QString( "Transposed %1 clips by %2%3 cents" )
+              .arg( nTargets ).arg( cents > 0 ? "+" : "" ).arg( cents );
+    showStatus( msg );
+    qContent_->update();
+}
+
 void SMVActualView::ctToggleTakeLanes()
 {
     if( lastClickTrack_ )
         smv_.toggleTrackTakesExpanded( lastClickTrack_ );
+}
+
+// Clip context menu: clear a looping clip's loop segment. The clip KEEPS its
+// duration — it plays its content once and falls silent for the remainder — so
+// nothing else on the timeline shifts. Undoable through the normal window
+// action, like every other clip-window edit.
+void SMVActualView::ctRemoveLoop()
+{
+    if( !lastClickTrack_ || !lastClickSLink_ ) return;
+    SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
+    if( !cut || !cut->isLooping() ) return;
+    QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+    clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+    SApplication::app().submitAction(
+        new SResizeClipAction( clipPath, lastClickSLink_->getStartTime(),
+                               cut->getSrcStart(), cut->getDuration(),
+                               0, cut->getStretchExact() ) );
+    update();
 }
 
 void SMVActualView::ctGlobalShow()
@@ -463,6 +559,16 @@ void SMVActualView::ctGlobalShow()
     qGlobalPopup_->clear();
     if( lastClickSLink_ ) {
         qGlobalPopup_->addAction( smv_.actSplit_ );
+        qGlobalPopup_->addAction( smv_.actPitchUp_ );
+        qGlobalPopup_->addAction( smv_.actPitchDown_ );
+        // Clearing a loop only makes sense on a looping clip; the item stays
+        // visible (but disabled) otherwise so the menu keeps a stable shape.
+        {
+            SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
+            QAction *aNoLoop = qGlobalPopup_->addAction(
+                "Remove &loop", this, SLOT( ctRemoveLoop() ) );
+            aNoLoop->setEnabled( cut && cut->isLooping() );
+        }
         qGlobalPopup_->addAction( "Add &link", &smv_, SLOT( ctAddLink() ) );
         qGlobalPopup_->addSeparator();
     }
@@ -674,10 +780,46 @@ offset_t SMVActualView::getTimeOf( int x ) const
     return (offset_t)a;
 }
 
+// Hit-test the loop-marker grab handles of one clip. Returns the boundary index
+// (1 = the first divider) whose handle is under `pos`, or 0 for none. The handle
+// geometry comes from scutLoopHandleRect(), the same helper the cut renderer
+// draws with, so the visible box and the grabbable box are one and the same.
+int SMVActualView::loopMarkerAt( const QPoint &pos, int rowIdx, SLink *clip ) const
+{
+    if( !clip || !clip->hasStartTime() ) return 0;
+    SCut *cut = dynamic_cast<SCut*>( &clip->getSObject() );
+    if( !cut || !cut->isLooping() ) return 0;
+    length_t seg = cut->getLoopLength().frames();
+    if( seg <= 0 ) return 0;
+    offset_t start = clip->getStartTime();
+
+    // Handles crowd into each other once a repetition is only a few pixels
+    // wide; the renderer stops drawing them there, so stop grabbing them too.
+    if( getXPosOfOffset( start + (offset_t) seg ) - getXPosOfOffset( start )
+        < 2*SCUT_LOOP_HANDLE_W )
+        return 0;
+
+    // Nearest boundary to the pointer, then confirm it is really inside that
+    // handle's box. Boundaries at or past the clip end have no divider drawn.
+    length_t rel = (length_t) getTimeOf( pos.x() ) - (length_t) start;
+    if( rel <= 0 ) return 0;
+    int k = (int)( ( rel + seg/2 ) / seg );
+    if( k < 1 || (length_t) k * seg >= (length_t) cut->getDuration() ) return 0;
+
+    // The clip's paint rect: the lane inset by one pixel (paintEvent), then by
+    // one more by the track renderer that frames each clip.
+    int laneTop = SMV_TIME_RULER_HEIGHT + rowIdx*trackHeight_ - (int) upperLeftY_;
+    QRect clipRect( 0, laneTop+2, width(), trackHeight_-4 );
+    int bx = getXPosOfOffset( start + (offset_t)( (length_t) k * seg ) );
+    QRect box = scutLoopHandleRect( clipRect, bx );
+    return ( !box.isNull() && box.contains( pos ) ) ? k : 0;
+}
+
 void SMVActualView::updateLastClickVars( const QPoint &pos )
 {
     lastClickedStart_ = lastClickedEnd_ = false;
     lastClickedEndUpper_ = false;
+    lastClickLoopMarker_ = 0;
     lastClickPos_ = pos;
     int y = pos.y()-SMV_TIME_RULER_HEIGHT;
     if( y<0 ) y = 0;
@@ -711,6 +853,13 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
                     }
                 }
             }
+            // A loop-marker handle wins over any edge band it overlaps, so a
+            // marker sitting near the clip end still re-tiles rather than
+            // extending the clip.
+            lastClickLoopMarker_ =
+                loopMarkerAt( pos, lastClickTrackIdx_, lastClickSLink_ );
+            if( lastClickLoopMarker_ > 0 )
+                lastClickedStart_ = lastClickedEnd_ = lastClickedEndUpper_ = false;
         }
     } else {
         lastClickTrack_ = NULL;
@@ -797,7 +946,7 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
     // is one undo step (and the audio chain rebuilds exactly once, here).
     if( clipDragArmed_ && lastClickSLink_
         && ( lastClickedStart_ || lastClickedEnd_ || clipDragIsSlip_
-             || clipDragIsStretch_ || clipDragIsLoop_ ) ) {
+             || clipDragIsStretch_ || clipDragIsLoop_ || clipDragIsLoopMarker_ ) ) {
         SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
         if( cut ) {
             offset_t newStart   = lastClickSLink_->getStartTime();
@@ -840,6 +989,7 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         }
         clipDragArmed_ = false;
         clipDragIsSlip_ = clipDragIsStretch_ = clipDragIsLoop_ = false;
+        clipDragIsLoopMarker_ = false;
         return;
     }
 
@@ -1276,7 +1426,9 @@ void SMVActualView::updateHoverCursor( const QPoint &pos )
             Qt::KeyboardModifiers mods = QGuiApplication::keyboardModifiers();
             bool ctrl = mods & Qt::ControlModifier;
             bool alt  = mods & Qt::AltModifier;
-            if( onBorder && ctrl )     { shape = Qt::SplitHCursor;     mode = "Time-stretch"; }
+            if( loopMarkerAt( pos, rowIdx, clip ) > 0 )
+                                       { shape = Qt::SizeHorCursor;    mode = "Loop length"; }
+            else if( onBorder && ctrl ){ shape = Qt::SplitHCursor;     mode = "Time-stretch"; }
             else if( onRight && upper ){ custom = s_loopCursor;        mode = "Loop"; }
             else if( onLeft )          { shape = Qt::SizeHorCursor;    mode = "Trim start"; }
             else if( onRight )         { shape = Qt::SizeHorCursor;    mode = "Extend"; }
@@ -1347,7 +1499,32 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
             // Live drags below mutate only the fields needed for visual feedback
             // (cheap, no audio rebuild); the release reverts to the snapshot and
             // re-applies the whole window through SResizeClipAction.
-            if( clipDragIsSlip_ ) {
+            if( clipDragIsLoopMarker_ ) {
+                // Drag a LOOP MARKER: re-tile the clip so the grabbed boundary
+                // k lands under the pointer — segment = (t - clipStart)/k. The
+                // clip's duration is untouched, so shortening the segment fits
+                // more repetitions into the same clip. Kept strictly below the
+                // duration so the clip stays looping (SCut::isLooping) and at
+                // least one marker remains to grab.
+                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
+                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                length_t span = (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
+                              - (length_t) clipDragStart0_;
+                length_t newSeg = span / lastClickLoopMarker_;
+                length_t maxSeg = (length_t) cut->getDuration() - SMV_CUT_MIN_TIME;
+                if( newSeg < SMV_CUT_MIN_TIME ) newSeg = SMV_CUT_MIN_TIME;
+                if( newSeg > maxSeg ) newSeg = maxSeg;
+                if( newSeg >= SMV_CUT_MIN_TIME
+                    && WarpedLen( newSeg ) != cut->getLoopLength() ) {
+                    QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+                    cut->setLoopLengthRaw( WarpedLen( newSeg ) );
+                    cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) newSeg );
+                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
+                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    update( oldRect );
+                }
+                update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
+            } else if( clipDragIsSlip_ ) {
                 // Alt-drag the BODY: slide the content under the clip (change the
                 // cut's start offset). Position and length stay put; dragging
                 // right reveals earlier content.
@@ -1638,7 +1815,8 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
             if( lastClickSLink_ ) {
                 Qt::KeyboardModifiers modifiers = QGuiApplication::keyboardModifiers();
                 bool onBorder = lastClickedStart_ || lastClickedEnd_;
-                if( (modifiers & Qt::ControlModifier) && !onBorder ) {
+                if( (modifiers & Qt::ControlModifier) && !onBorder
+                    && lastClickLoopMarker_ == 0 ) {
                     // Ctrl-click on a clip BODY: duplicate it and drag the live copy.
                     // (Ctrl on a border means time-stretch — handled below.)
                     // If the clicked clip is part of a multi-selection, the whole
@@ -1698,7 +1876,12 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     bool alt = modifiers & Qt::AltModifier;
                     clipDragArmed_ = true;
                     clipDragIsDuplicate_ = false;
-                    clipDragIsSlip_    = ( alt && !onBorder );
+                    // A loop marker sits on the clip body; grabbing one outranks
+                    // the body gestures (updateLastClickVars already cleared the
+                    // edge flags for it).
+                    clipDragIsLoopMarker_ = ( lastClickLoopMarker_ > 0 );
+                    clipDragIsSlip_    = ( alt && !onBorder
+                                           && !clipDragIsLoopMarker_ );
                     clipDragIsStretch_ = ( (modifiers & Qt::ControlModifier) && onBorder );
                     clipDragIsLoop_    = ( !(modifiers & Qt::ControlModifier)
                                            && lastClickedEnd_ && lastClickedEndUpper_ );
@@ -2662,6 +2845,11 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
 
     qGridLayout_ = new QGridLayout( this /* , 4, 5 */ );    
     qContent_ = new SMVActualView( this, *this );
+    // Clicking the arranger focuses it, which is what scopes the +/- pitch
+    // shortcuts below to this widget: a bare "+"/"-" as a WINDOW shortcut would
+    // be stolen from the tempo spin box and any other numeric field the moment
+    // the user typed one there.
+    qContent_->setFocusPolicy( Qt::ClickFocus );
     qScrollVert_ = new QScrollBar(
         /* 0, 0, 0, 1, 1, */
         Qt::Vertical, this );
@@ -2823,6 +3011,48 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     actRemoveSample_->setShortcuts( { Qt::Key_Delete, Qt::Key_Backspace } );
     QObject::connect( actRemoveSample_, SIGNAL( triggered() ), this, SLOT( ctRemoveSample() ) );
     addAction( actRemoveSample_ );
+
+    // Clip transposition (cents, realised in the grain stage — pitch never
+    // moves a clip edge). The keypad bindings are the layout-proof ones: on a
+    // US layout "+" IS Shift+"=", so the Shift variants of the main row are
+    // ambiguous there, while on a German layout (where "+" is unshifted) both
+    // rows work. Ctrl is deliberately avoided: Ctrl+drag is time-stretch.
+    auto addPitchAction = [&]( const QString &text, const QList<QKeySequence> &keys,
+                               const char *slot ) -> QAction* {
+        QAction *a = new QAction( text, this );
+        a->setShortcuts( keys );
+        // Scoped to the arranger (which takes click focus, see qContent_):
+        // "+"/"-" are ordinary characters, so a window-wide shortcut would
+        // hijack them from every text/number field in the main window.
+        a->setShortcutContext( Qt::WidgetWithChildrenShortcut );
+        QObject::connect( a, SIGNAL( triggered() ), this, slot );
+        addAction( a );
+        return a;
+    };
+    actPitchUp_ = addPitchAction(
+        "Pitch &up (semitone)",
+        { QKeySequence( Qt::Key_Plus ), QKeySequence( Qt::Key_Equal ),
+          QKeySequence( Qt::KeypadModifier | Qt::Key_Plus ) },
+        SLOT( ctPitchUp() ) );
+    actPitchDown_ = addPitchAction(
+        "Pitch &down (semitone)",
+        { QKeySequence( Qt::Key_Minus ),
+          QKeySequence( Qt::KeypadModifier | Qt::Key_Minus ) },
+        SLOT( ctPitchDown() ) );
+    actPitchUpFine_ = addPitchAction(
+        "Pitch up (10 cents)",
+        { QKeySequence( Qt::SHIFT | Qt::Key_Plus ),
+          QKeySequence( Qt::SHIFT | Qt::KeypadModifier | Qt::Key_Plus ) },
+        SLOT( ctPitchUpFine() ) );
+    actPitchDownFine_ = addPitchAction(
+        "Pitch down (10 cents)",
+        { QKeySequence( Qt::SHIFT | Qt::Key_Minus ),
+          QKeySequence( Qt::SHIFT | Qt::KeypadModifier | Qt::Key_Minus ) },
+        SLOT( ctPitchDownFine() ) );
+    actPitchUp_->setToolTip( "Transpose the selected clip(s) up one semitone "
+                             "(Shift: 10 cents; numpad +/- on any layout)" );
+    actPitchDown_->setToolTip( "Transpose the selected clip(s) down one semitone "
+                              "(Shift: 10 cents; numpad +/- on any layout)" );
 
     // Build the flattened tree + control column for whatever already resides in
     // the mixer (refreshTrackTree handles rows, controls and scroll range).

@@ -243,6 +243,16 @@ public:
     const twGrainParams &getGrainParams() const { return grainParams_; }
     void setGrainParams( const twGrainParams & );
 
+    // Transposition limit, in cents. ±2 octaves; setPitchCents() and the
+    // set-pitch action both clamp to it, so no entry point can store a value
+    // the others would refuse.
+    static constexpr double PITCH_CENTS_LIMIT = 2400.0;
+    static double clampPitchCents( double cents ) {
+        if( cents >  PITCH_CENTS_LIMIT ) return  PITCH_CENTS_LIMIT;
+        if( cents < -PITCH_CENTS_LIMIT ) return -PITCH_CENTS_LIMIT;
+        return cents;
+    }
+
 signals:
     // Emitted when window parameters change (slip, stretch, loop, trim, extend)
     // during a drag. Parent containers use this to invalidate their renders.

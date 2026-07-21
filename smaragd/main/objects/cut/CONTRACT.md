@@ -3,7 +3,7 @@
 Purpose: the clip window object. SCut (startOffset/duration/loopLength/grain
 window over any content, reader-chain ownership, container capture,
 snapshot-based audio access), its inline renderer, and the window actions:
-split-clip, unsplit-clip, resize-clip, duplicate-clip.
+split-clip, unsplit-clip, resize-clip, duplicate-clip, set-pitch.
 
 Public headers: app/objects/cut/*.h
 
@@ -30,13 +30,24 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
    relies on the second cut inheriting grain params RAW (setGrainParams
    would preserve-span-rescale the duration).
 5. Container-backed cuts capture via freezePage of the content root;
-   arrangementChanged drops the capture transparently.
+   arrangementChanged drops the capture transparently. A GRAINED cut's
+   capture bakes the grain params in, so every grain-param setter must
+   invalidateCapture() or the waveform preview keeps drawing the previous
+   transform (playback is unaffected - it grains the raw source).
+6. Pitch is stored in CENTS on twGrainParams, per clip and (on a stack)
+   PER TAKE - only length ops write through to all lanes. It is realised
+   in the grain stage (the read rate inside each grain) and is therefore
+   duration-invariant: a pitch edit changes no window value, no position
+   map and no clip edge. Every entry point clamps to
+   SCut::PITCH_CENTS_LIMIT (+/-2400).
 
 Self-registration (Phase 5): scut.cpp registers "SCut" with
 SProjectLoader from a static initializer.
 
 How to test: render_split_slip_offset.qxa (THE regression),
-render_sawtooth_clipped_section.qxa, grain_*.qxa.
+render_sawtooth_clipped_section.qxa, grain_*.qxa (the grain_pitch_*.qxa
+cases assert the rendered f0 via assert-audio-frequency - energy alone
+cannot see a transposition).
 
 Known debt: loop tiling of container captures deferred; FIXME bounds check
 in seekTo.
@@ -47,7 +58,7 @@ STakeStack (stakestack.h) is the column of parallel takes — see the "Take
 stacks" section of CLIP_MODEL.md for the model rules. Verbs: add-take
 (wraps a plain cut on first use), remove-take (collapses at 1 take),
 select-take; split-clip/resize-clip/unsplit are stack-aware (length ops
-write through to every take, slip targets one take via `take`).
+write through to every take, slip and pitch target one take via `take`).
 
 Notes:
 - The stack serves a private silent component while no take is active

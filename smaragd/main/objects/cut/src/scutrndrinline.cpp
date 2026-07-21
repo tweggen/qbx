@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <qpainter.h>
 #include <qobject.h>
+#include <QFontMetrics>
+#include <QGuiApplication>
 
 #include "app/model/slink.h"
 #include "app/objects/cut/scut.h"
@@ -44,6 +46,70 @@ private:
     double      segWpx_;
     length_t    segLen_;
 };
+
+// Below this many pixels per repetition the handles would collide with each
+// other, so they are neither drawn nor grabbable. The arranger asks the same
+// question before hit-testing (SMVActualView::loopMarkerAt).
+const int LOOP_HANDLE_MIN_SEG_PX = 2*SCUT_LOOP_HANDLE_W;
+}
+
+QRect scutLoopHandleRect( const QRect &clipRect, int x )
+{
+    // "One character high", in the same 7pt font the small per-clip numbers end
+    // up being drawn in. Taken from the application font, NOT from a painter, so
+    // the drawn box and the arranger's hit box are always the same size.
+    QFont f = QGuiApplication::font();
+    f.setPointSize( 7 );
+    int h = QFontMetrics( f ).height();
+    int maxH = clipRect.height() - 2;
+    if( h > maxH ) h = maxH;
+    if( h < 4 ) return QRect();                  // lane too short for a grip
+    return QRect( x - SCUT_LOOP_HANDLE_W/2, clipRect.y() + 1,
+                  SCUT_LOOP_HANDLE_W, h );
+}
+
+namespace {
+// Paint one loop-marker grab handle: a light box with two grip bars, hinting
+// that it drags horizontally.
+void drawLoopHandle( QPainter &p, const QRect &clipRect, int x )
+{
+    QRect box = scutLoopHandleRect( clipRect, x );
+    if( box.isNull() ) return;
+    p.fillRect( box, QColor( 225, 225, 205 ) );
+    p.setPen( QColor( 40, 40, 40 ) );
+    p.drawRect( box );
+    p.setPen( QColor( 90, 90, 90 ) );
+    for( int gx = box.center().x()-1; gx <= box.center().x()+1; gx += 2 )
+        p.drawLine( gx, box.y()+2, gx, box.bottom()-2 );
+}
+}
+
+namespace {
+// A transposed clip looks exactly like an untransposed one (pitch never moves
+// an edge), so it needs a written mark. Whole semitones read as "+2 st"; a
+// fine-nudged clip shows its cents.
+void drawPitchBadge( QPainter &p, const QRect &visibRect, double cents )
+{
+    if( cents == 0.0 ) return;
+    const double semis = cents / 100.0;
+    const bool   whole = ( cents == (double)(int) cents ) && ( (int) cents % 100 == 0 );
+    QString text = whole
+        ? QString( "%1%2 st" ).arg( semis > 0 ? "+" : "" ).arg( (int) semis )
+        : QString( "%1%2 ct" ).arg( cents > 0 ? "+" : "" ).arg( cents, 0, 'g', 4 );
+
+    QFontMetrics fm( p.font() );
+    QRect box = fm.boundingRect( text ).adjusted( -3, -1, 3, 1 );
+    box.moveTopLeft( visibRect.topLeft() + QPoint( 2, 2 ) );
+    if( !visibRect.contains( box ) ) return;   // clip too narrow for the badge
+
+    p.save();
+    p.setPen( Qt::NoPen );
+    p.setBrush( QColor( 20, 20, 30, 180 ) );
+    p.drawRect( box );
+    p.setPen( QColor( 255, 210, 120 ) );
+    p.drawText( box, Qt::AlignCenter, text );
+    p.restore();
+}
 }
 
 /**
@@ -80,6 +146,7 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
             p.setPen( QColor( 10, 10, 40 ) );
             p.drawText( visibRect, Qt::AlignBottom | Qt::AlignRight, cut.getSName() );
         }
+        drawPitchBadge( p, visibRect, cut.getPitchCents() );
         return;
     }
 
@@ -95,6 +162,7 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         InlineRenderContext myctx( cut, ctx, p, lk.getStartTime() );
         myctx.setVisibRect( visibRect );
         rndr->draw( lk, myctx );
+        drawPitchBadge( p, visibRect, cut.getPitchCents() );
         return;
     }
 
@@ -130,8 +198,13 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         if( ex < right ) {                              // loop boundary divider
             p.setPen( QColor( 70, 70, 70 ) );
             p.drawLine( (int) ex, visibRect.y(), (int) ex, visibRect.y() + visibRect.height() );
+            // Grab handle at the divider's upper end; drag it to re-tile the
+            // loop (SMVActualView::loopMarkerAt hit-tests the same box).
+            if( segWpx >= LOOP_HANDLE_MIN_SEG_PX )
+                drawLoopHandle( p, visibRect, (int) ex );
         }
     }
+    drawPitchBadge( p, visibRect, cut.getPitchCents() );
 }
 
 /**

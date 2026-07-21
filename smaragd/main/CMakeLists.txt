@@ -102,6 +102,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/saddtakeaction.h
     objects/cut/include/app/objects/cut/sremovetakeaction.h
     objects/cut/include/app/objects/cut/sselecttakeaction.h
+    objects/cut/include/app/objects/cut/ssetpitchaction.h
     objects/cut/include/app/objects/cut/splaceclipaction.h
     objects/cut/include/app/objects/cut/splacerecordingaction.h
     objects/cut/include/app/objects/cut/ssplitclipaction.h
@@ -118,6 +119,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/sremovetakeaction.cpp
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/sselecttakeaction.cpp
+    objects/cut/src/ssetpitchaction.cpp
     objects/cut/src/splaceclipaction.cpp
     objects/cut/src/splacerecordingaction.cpp
     objects/cut/src/ssplitclipaction.cpp
@@ -222,12 +224,14 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sactionrunner.h
     testkit/include/app/testkit/sactionscript.h
     testkit/include/app/testkit/sassertaudioenergyaction.h
+    testkit/include/app/testkit/sassertaudiofrequencyaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/stransporttestactions.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
     testkit/src/sassertaudioenergyaction.cpp
+    testkit/src/sassertaudiofrequencyaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/stransporttestactions.cpp

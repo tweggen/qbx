@@ -34,6 +34,7 @@
 #include "app/model/slink.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/cut/splacerecordingaction.h"
+#include "app/objects/cut/ssetpitchaction.h"
 #include "app/actions/sactionhistory.h"
 #include <QUndoStack>
 #include <QPair>
@@ -1254,7 +1255,9 @@ void SMainWindow::runSetClipStretch()
     statusBar()->showMessage( QString( "Clip stretch set to %1x" ).arg( s ), 4000 );
 }
 
-// MVP grain-playback trigger: set a pitch offset (cents) on the selected clip.
+// Set an exact pitch offset (cents) on the selected clip. The +/- keys in the
+// arranger nudge by a semitone; this is the type-an-exact-value form. Both go
+// through SSetPitchAction, so both are undoable and scriptable.
 void SMainWindow::runSetClipPitch()
 {
     SLink *sel = SApplication::app().getCurrentSelectedSLink();
@@ -1266,9 +1269,17 @@ void SMainWindow::runSetClipPitch()
     bool ok = false;
     double cents = QInputDialog::getDouble( this, "Clip Pitch Offset",
                                             "Pitch offset (cents, 1200 = +1 octave):",
-                                            cut->getPitchCents(), -2400.0, 2400.0, 1, &ok );
+                                            cut->getPitchCents(),
+                                            -SCut::PITCH_CENTS_LIMIT,
+                                            SCut::PITCH_CENTS_LIMIT, 1, &ok );
     if( !ok ) return;
-    cut->setPitchCents( cents );
+
+    QList<QList<int>> paths = SApplication::app().getCurrentSelectionPaths();
+    if( paths.isEmpty() ) {
+        statusBar()->showMessage( "Select a clip (SCut) first", 3000 );
+        return;
+    }
+    SApplication::app().submitAction( new SSetPitchAction( paths.first(), cents ) );
     statusBar()->showMessage( QString( "Clip pitch set to %1 cents" ).arg( cents ), 4000 );
 }
 

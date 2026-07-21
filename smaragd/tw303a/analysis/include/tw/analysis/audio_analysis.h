@@ -64,6 +64,29 @@ bool isEnergyInRange(const AcousticMetrics &metrics, double minRms, double maxRm
  */
 bool isPeakInRange(const AcousticMetrics &metrics, double maxPeak);
 
+/**
+ * Estimate the fundamental frequency (Hz) of a region by autocorrelation.
+ *
+ * The pitch gate for the grain transposition tests: RMS/peak cannot tell a
+ * transposed render from an untransposed one, but the detected f0 can. Works
+ * on a strongly periodic signal (the sawtooth fixture); it is not a
+ * general-purpose polyphonic pitch tracker.
+ *
+ * The region is mixed down (or a single channel taken), mean-removed, and
+ * correlated over lags corresponding to 40 Hz .. 4 kHz; the winning lag is
+ * refined by parabolic interpolation.
+ *
+ * @param filename     Path to WAV file
+ * @param startFrame   Starting frame index (0-based)
+ * @param frameCount   Number of frames to analyze (-1 = whole file)
+ * @param channelIndex Channel to analyze (-1 = all channels mixed)
+ * @param error        Output string for error messages
+ * @return Fundamental frequency in Hz, or 0.0 on error / no periodicity found
+ */
+double estimateFundamental(const std::string &filename,
+                           int64_t startFrame, int64_t frameCount,
+                           int channelIndex, std::string &error);
+
 }  // namespace audio
 
 #endif

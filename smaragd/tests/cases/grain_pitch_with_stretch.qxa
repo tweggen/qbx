@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Pitch and time are INDEPENDENT axes of the same grain stage: stretching
+  changes grain SPACING (output hop vs input hop), transposing changes the read
+  rate INSIDE each grain. Applying both at once must therefore double the
+  duration AND double the fundamental — neither leaking into the other.
+-->
+<SActionScript version="1" name="grain_pitch_with_stretch">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s sawtooth (192000 frames) -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- 2x stretch: 192000 x 2 = 384000 frames -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="384000" loopLength="0" stretch="2.0"/>
+
+    <!-- ...and an octave up on top of it -->
+    <set-pitch clip="0,0" cents="1200"/>
+
+    <render filename="grain_pitch_with_stretch.wav" format="wav" quality="10"/>
+
+    <!-- Pitch: still one octave up despite the stretch -->
+    <assert-audio-frequency filename="grain_pitch_with_stretch.wav"
+                            startFrame="96000" frameCount="24000"
+                            minHz="852" maxHz="905"/>
+
+    <!-- Time: the stretched length is untouched by the transposition -->
+    <assert-audio-energy filename="grain_pitch_with_stretch.wav"
+                         startFrame="0" frameCount="384000"
+                         minRms="0.20" maxRms="0.32"/>
+    <assert-audio-energy filename="grain_pitch_with_stretch.wav"
+                         startFrame="384000" frameCount="24000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <assert-audio-peak filename="grain_pitch_with_stretch.wav" maxPeak="0.995"/>
+
+    <screenshot filename="grain_pitch_with_stretch_timeline.png" resolution="50%"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

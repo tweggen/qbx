@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: a split clip's tail that is then time-stretched must play the
+  SAME source window the waveform preview shows. The cut window (startOffset,
+  cutDuration) lives in the grain OUTPUT (stretched) domain: the source
+  position is startOffset / stretch. The old playback code multiplied the
+  offset by the stretch factor a second time, so a slipped+stretched clip
+  played later material than displayed (and ran past the source end).
+
+  Fixture: test_sawtooth.wav is a 4 s sawtooth whose amplitude ramps 0 -> 0.8
+  (amplitude a(t) = 0.2 t, sawtooth RMS = a/sqrt(3)), so every source region
+  has a distinct RMS.
+
+  Arrangement: split at 2 s; the tail (source [2s,4s), startOffset 96000) is
+  stretched x1.5 with the UI's convention (offset and duration rescale with
+  the stretch: startOffset 144000, duration 144000). Timeline:
+    [0,2s)  head, source [0,2s) unstretched
+    [2,5s)  tail, source [2,4s) stretched to 3 s
+
+  Expected tail RMS (correct): out [2,3s) = src [2.000,2.667)s -> ~0.270
+                               out [3,4s) = src [2.667,3.333)s -> ~0.347
+                               out [4,5s) = src [3.333,4.000)s -> ~0.424
+  With the double-applied offset the tail reads src from 3 s and falls off
+  the end of the material: ~0.386 / ~0.31 / silence - the [2,3s) and [4,5s)
+  bands both fail.
+-->
+<SActionScript version="1" name="render_split_slip_stretch">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s ramped sawtooth at position 0 -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Split at 2 s: head [0,2s) stays clip 0,0; tail becomes clip 0,1
+         with startOffset = 96000 -->
+    <split-clip clip="0,0" splitTime="96000"/>
+
+    <!-- Stretch the tail x1.5, UI convention: source window invariant, so
+         startOffset and duration rescale with the stretch
+         (source start = 144000 / 1.5 = 96000 = 2 s) -->
+    <resize-clip clip="0,1" startTime="96000" startOffset="144000"
+                 duration="144000" loopLength="0" stretch="1.5"/>
+
+    <render filename="render_split_slip_stretch.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: head = source sec0 -->
+    <assert-audio-energy filename="render_split_slip_stretch.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- 1-2 s: head = source sec1 -->
+    <assert-audio-energy filename="render_split_slip_stretch.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 2-3 s: tail start = source [2.000,2.667)s, RMS ~0.270.
+         The stretch-double-apply bug reads source [3.0,3.667)s (~0.386)
+         and fails the max bound. -->
+    <assert-audio-energy filename="render_split_slip_stretch.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.22" maxRms="0.32"/>
+
+    <!-- 3-4 s: tail middle = source [2.667,3.333)s, RMS ~0.347 -->
+    <assert-audio-energy filename="render_split_slip_stretch.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.29" maxRms="0.40"/>
+
+    <!-- 4-5 s: tail end = source [3.333,4.000)s, RMS ~0.424.
+         The bug has run off the source end here: near-silence fails min. -->
+    <assert-audio-energy filename="render_split_slip_stretch.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.36" maxRms="0.48"/>
+
+    <!-- 5-6 s: past the stretched tail; silence -->
+    <assert-audio-energy filename="render_split_slip_stretch.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <assert-audio-peak filename="render_split_slip_stretch.wav" maxPeak="0.995"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
