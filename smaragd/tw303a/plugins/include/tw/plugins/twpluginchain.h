@@ -31,7 +31,7 @@ public:
     // Phase 6c: Freeze-page interface for non-blocking plugin chain processing
     // Threads frozen pages sequentially through plugin chain
     std::shared_ptr<twOutputPage> freezePage(
-        uint64_t startPos,
+        offset_t startPos,
         const sample_t *inputData,
         uint64_t inputOffset,
         length_t inputLength,
@@ -54,7 +54,7 @@ public:
     // Scoped invalidation (proposal 15): a chain has no page cache of its own,
     // but its inserts' pages bake in upstream audio — forward the bump to them.
     void bumpContentEpoch() override;
-    void invalidatePagesInRange(uint64_t start, uint64_t end) override;
+    void invalidatePagesInRange(offset_t start, offset_t end) override;
 
     virtual void reset() override;
 

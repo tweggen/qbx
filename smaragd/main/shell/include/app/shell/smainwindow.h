@@ -31,6 +31,13 @@ public:
     // any. Leaves an empty workspace when there is nothing to restore.
     void openMostRecent();
 
+    // TEST ENTRY POINT: forward a clip-edge drag to the arranger, which runs it
+    // through its real mouse handlers. Lives here because the testkit module may
+    // not include app/timeline (see tools/check_layering.py); shell may.
+    // See SStdMixerView::dragClipEdge for the semantics and its limits.
+    bool dragClipEdge( int rowIdx, int clipIdx, bool grabEnd, offset_t dropTime,
+                       bool upperHalf );
+
     // Startup: restore the saved window geometry and toolbar/dock layout.
     // Must be called only after the full UI exists (central widget included) —
     // QMainWindow::restoreState() applied to a window without its central

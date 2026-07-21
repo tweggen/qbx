@@ -51,7 +51,7 @@ public:
     virtual length_t calcOutputTo(IOVector& dest, idx_t outChannel) override;
 
     virtual std::shared_ptr<twOutputPage> freezePage(
-        uint64_t startPos,
+        offset_t startPos,
         const sample_t *inputData,
         uint64_t inputOffset,
         length_t inputLength,
@@ -60,7 +60,7 @@ public:
     ) override;
 
     virtual std::shared_ptr<twOutputPage> freezePreviewPage(
-        uint64_t startPos,
+        offset_t startPos,
         length_t length,
         int previewSampleRate,
         int fullSampleRate,

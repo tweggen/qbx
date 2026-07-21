@@ -19,10 +19,14 @@ class twView;
 // can stale only this range on the downstream chain. empty() means the
 // edit touched nothing audible.
 struct twEditRange {
-    uint64_t start = 0;
-    uint64_t end = 0;
+    // Signed since proposal 23: a range may start before zero (a clip anchored
+    // ahead of its data). The "reaches the end of time" sentinel is INT64_MAX,
+    // NOT UINT64_MAX — as unsigned that wrapped to -1 and compared BELOW every
+    // real position, so an unbounded range degenerated to empty().
+    offset_t start = 0;
+    offset_t end = 0;
     bool empty() const { return end <= start; }
-    void unite(uint64_t s, uint64_t e) {
+    void unite(offset_t s, offset_t e) {
         if (e <= s) return;
         if (empty()) { start = s; end = e; return; }
         if (s < start) start = s;
@@ -80,7 +84,7 @@ public:
     // {component, mappedPos} — captured under mutex() through the SAME
     // single-resolution path (twView::resolve) the render uses, so plan and
     // render cannot disagree (Inv-1 extended to the plan).
-    twPagePlan planPage(uint64_t pageStart) override;
+    twPagePlan planPage(offset_t pageStart) override;
 
     // Track intrinsic properties (gain, mute) — applied to all output
     void setTrackMute(bool muted);
@@ -105,7 +109,7 @@ public:
     // Phase 3: Page-based rendering — freeze track output to pages
     // Enables renderObjectInto replacement and unified page-based pipeline
     virtual std::shared_ptr<twOutputPage> freezePage(
-        uint64_t startPos,
+        offset_t startPos,
         const sample_t *inputData,
         uint64_t inputOffset,
         length_t inputLength,
@@ -115,7 +119,7 @@ public:
 
     // Phase 3: Preview rendering using freezePage at lower resolution
     virtual std::shared_ptr<twOutputPage> freezePreviewPage(
-        uint64_t startPos,
+        offset_t startPos,
         length_t length,
         int previewSampleRate,
         int fullSampleRate,
@@ -143,7 +147,7 @@ private:
     // These use the inherited mutex() from twComponent base class to avoid
     // introducing a second mutex which could cause deadlock.
     int seekTo_nolock(offset_t newOffset);
-    length_t freezePage_nolock(std::shared_ptr<twOutputPage> page, uint64_t startPos,
+    length_t freezePage_nolock(std::shared_ptr<twOutputPage> page, offset_t startPos,
                                length_t length, int sampleRate,
                                std::shared_ptr<twOutputPage> previousPage);
 

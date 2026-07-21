@@ -85,9 +85,9 @@ bool twTrackMix::isSeekable() const
 static twEditRange clipExtent(offset_t startTime, length_t duration)
 {
     twEditRange r;
-    r.start = (uint64_t) startTime;
-    r.end = duration > 0 ? (uint64_t) startTime + (uint64_t) duration
-                         : UINT64_MAX;
+    r.start = startTime;
+    r.end = duration > 0 ? startTime + (offset_t) duration
+                         : (offset_t) INT64_MAX;   // unbounded; see twEditRange
     return r;
 }
 
@@ -318,7 +318,7 @@ length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
 // Iterates clips that overlap [startPos, startPos+length), calls freezePage() on each
 // child component, and mixes frozen outputs at correct timeline positions.
 std::shared_ptr<twOutputPage> twTrackMix::freezePage(
-    uint64_t startPos,
+    offset_t startPos,
     const sample_t *inputData,
     uint64_t inputOffset,
     length_t inputLength,
@@ -341,14 +341,14 @@ std::shared_ptr<twOutputPage> twTrackMix::freezePage(
 // Proposal 19 dataflow stage 2 — planner override (see header doc). Mirrors
 // freezePage_nolock's clip-overlap walk EXACTLY (same clipEnd/childPos
 // arithmetic), but resolves structurally instead of rendering.
-twPagePlan twTrackMix::planPage( uint64_t pageStart )
+twPagePlan twTrackMix::planPage( offset_t pageStart )
 {
     twPagePlan plan;
     plan.component = shared_from_this();
     plan.pageStart = pageStart;
     plan.epoch     = contentEpochNow();
 
-    const uint64_t endPos = pageStart + twOutputPage::FRAME_CAPACITY;
+    const offset_t endPos = pageStart + twOutputPage::FRAME_CAPACITY;
 
     std::lock_guard<std::mutex> lock(mutex());
     for( const ClipEntry &clip : clips_ ) {
@@ -378,7 +378,7 @@ twPagePlan twTrackMix::planPage( uint64_t pageStart )
 // Caller must hold mutex()
 length_t twTrackMix::freezePage_nolock(
     std::shared_ptr<twOutputPage> page,
-    uint64_t startPos,
+    offset_t startPos,
     length_t length,
     int sampleRate,
     std::shared_ptr<twOutputPage> previousPage
@@ -392,7 +392,7 @@ length_t twTrackMix::freezePage_nolock(
     // Initialize output buffer to silence
     std::fill(page->samples.begin(), page->samples.begin() + length, 0.0f);
 
-    uint64_t endPos = startPos + length;
+    offset_t endPos = startPos + length;
 
     // Iterate through clips that overlap [startPos, endPos)
     for( ClipEntry &clip : clips_ ) {  // Non-const to update previousPage
@@ -472,7 +472,7 @@ length_t twTrackMix::freezePage_nolock(
 // Phase 3: Preview page freezing at lower resolution
 // Delegates to base class freezePreviewPage() which calls freezePage() at preview rate
 std::shared_ptr<twOutputPage> twTrackMix::freezePreviewPage(
-    uint64_t startPos,
+    offset_t startPos,
     length_t length,
     int previewSampleRate,
     int fullSampleRate,

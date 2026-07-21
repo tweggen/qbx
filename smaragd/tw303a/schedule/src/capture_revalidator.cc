@@ -236,7 +236,7 @@ bool CaptureRevalidator::GraphDemand::done() const {
 
 std::shared_ptr<CaptureRevalidator::GraphDemand>
 CaptureRevalidator::requestGraphPages(std::shared_ptr<twComponent> root,
-                                      uint64_t startPos, int nPages,
+                                      offset_t startPos, int nPages,
                                       int priority) {
     auto demand = std::make_shared<GraphDemand>();
     demand->priority_ = priority;
@@ -273,7 +273,7 @@ CaptureRevalidator::requestGraphPages(std::shared_ptr<twComponent> root,
 // expansionMutex_ declaration for the lock-order rationale).
 std::shared_ptr<CaptureRevalidator::PageNode>
 CaptureRevalidator::expandNode_(std::shared_ptr<twComponent> comp,
-                                uint64_t pageStart, int priority, int depth) {
+                                offset_t pageStart, int priority, int depth) {
     if (!comp || depth > 32) return nullptr;   // depth guard (cyclic graphs
                                                // are excluded by FreezeContext
                                                // at render; this guards the

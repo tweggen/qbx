@@ -57,9 +57,9 @@ struct twFrozenInputs {
                std::shared_ptr<twOutputPage> page );
 
     std::shared_ptr<twOutputPage> find( const twComponent *producer,
-                                        uint64_t pageStart ) const;
+                                        offset_t pageStart ) const;
 
-    void noteMiss( const twComponent *producer, uint64_t pageStart ) const {
+    void noteMiss( const twComponent *producer, offset_t pageStart ) const {
         misses.emplace_back( producer, pageStart );
     }
 };

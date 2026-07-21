@@ -101,6 +101,18 @@ length_t twGrainSource::read( offset_t srcOffset, sample_t *dest,
     if( ch < 0 ) ch = 0;
     if( ch >= channels_ ) ch = channels_ - 1;
 
+    // Leading silence for a read that starts before the material — same rule
+    // (and same latent out-of-bounds without it) as twSampleSource::read.
+    if( srcOffset < 0 ) {
+        length_t lead = (length_t)( -srcOffset );
+        if( lead > len ) lead = len;
+        memset( dest, 0, sizeof( sample_t ) * lead );
+        dest += lead;
+        len  -= lead;
+        srcOffset = 0;
+        if( len <= 0 ) return 0;
+    }
+
     length_t avail = 0;
     if( srcOffset < (offset_t) nFrames_ ) {
         avail = nFrames_ - (length_t) srcOffset;

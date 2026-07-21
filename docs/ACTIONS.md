@@ -27,6 +27,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `cycle-disable` | SCycleAction | actions/src/scycleaction.cpp | (none) |
 | `cycle-enable` | SCycleAction | actions/src/scycleaction.cpp | (none) |
 | `cycle-toggle` | SCycleAction | actions/src/scycleaction.cpp | (none) |
+| `drag-clip-edge` | SDragClipEdgeAction | testkit/src/sdragclipedgeaction.cpp | `track` = "0", `clip` = "0", `edge` = "end" (or "start"), `toTime`, `half` = "lower" (or "upper" = the loop half) — drives the REAL mouse handlers, the only way to test clip-edge gestures; no modifier gestures (the view reads the live keyboard), drop is pixel-quantised |
 | `duplicate-clip` | SDuplicateClipAction | objects/cut/src/sduplicateclipaction.cpp | `source`, `destTrack`, `startTime` = "0" |
 | `grid-disable` | SGridAction | actions/src/sgridaction.cpp | (none) |
 | `grid-enable` | SGridAction | actions/src/sgridaction.cpp | (none) |

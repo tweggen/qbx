@@ -61,7 +61,7 @@ length_t twView::calcOutputTo(IOVector& dest, idx_t outChannel)
 }
 
 std::shared_ptr<twOutputPage> twView::freezePage(
-    uint64_t startPos,
+    offset_t startPos,
     const sample_t *inputData,
     uint64_t inputOffset,
     length_t inputLength,
@@ -85,7 +85,7 @@ std::shared_ptr<twOutputPage> twView::freezePage(
 }
 
 std::shared_ptr<twOutputPage> twView::freezePreviewPage(
-    uint64_t startPos,
+    offset_t startPos,
     length_t length,
     int previewSampleRate,
     int fullSampleRate,

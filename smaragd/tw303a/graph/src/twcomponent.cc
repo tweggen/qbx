@@ -305,7 +305,7 @@ twComponent::twComponent( tw303aEnvironment &env0 )
 // Output Page Caching Implementation (Phase 1 - Component-Level Freezing)
 // ============================================================================
 
-std::shared_ptr<twOutputPage> twComponent::getPageIfExists(uint64_t startPos)
+std::shared_ptr<twOutputPage> twComponent::getPageIfExists(offset_t startPos)
 {
     // Truly lock-free lookup for audio thread (real-time constraint).
     // Attempts non-blocking lock; returns nullptr if can't acquire immediately.
@@ -329,7 +329,7 @@ std::shared_ptr<twOutputPage> twComponent::getPageIfExists(uint64_t startPos)
 }
 
 std::shared_ptr<twOutputPage> twComponent::getOrAllocatePage(
-    uint64_t startPos,
+    offset_t startPos,
     uint32_t aspectsMask
 )
 {
@@ -355,7 +355,7 @@ std::shared_ptr<twOutputPage> twComponent::getOrAllocatePage(
     return page;
 }
 
-void twComponent::releaseOldPages(uint64_t keepAfterPos)
+void twComponent::releaseOldPages(offset_t keepAfterPos)
 {
     std::lock_guard<std::mutex> lock(mutex());
 
@@ -370,8 +370,8 @@ void twComponent::releaseOldPages(uint64_t keepAfterPos)
 }
 
 std::vector<std::shared_ptr<twOutputPage>> twComponent::getPagesInRange(
-    uint64_t startPos,
-    uint64_t endPos
+    offset_t startPos,
+    offset_t endPos
 ) const
 {
     std::lock_guard<std::mutex> lock(mutex());
@@ -411,7 +411,7 @@ void twComponent::invalidateAllPages()
 }
 
 void twComponent::setPageAsFrozen(
-    uint64_t startPos,
+    offset_t startPos,
     std::shared_ptr<twOutputPage> page,
     uint32_t aspects
 )
@@ -438,13 +438,13 @@ void twComponent::setPageAsFrozen(
 // comment). The page's covered extent is taken as a FULL page from its
 // start position — conservative: a partially-filled page intersecting the
 // range only in its unfilled tail still goes stale, never the other way.
-void twComponent::invalidatePagesInRange(uint64_t start, uint64_t end)
+void twComponent::invalidatePagesInRange(offset_t start, offset_t end)
 {
     std::lock_guard<std::mutex> lock(mutex());
     invalidatePagesInRange_nolock(start, end);
 }
 
-void twComponent::invalidatePagesInRange_nolock(uint64_t start, uint64_t end)
+void twComponent::invalidatePagesInRange_nolock(offset_t start, offset_t end)
 {
     if (end <= start) return;
     const uint64_t before = contentEpoch_.fetch_add(1, std::memory_order_acq_rel);
@@ -465,7 +465,7 @@ void twComponent::invalidatePagesInRange_nolock(uint64_t start, uint64_t end)
 }
 
 std::shared_ptr<twOutputPage> twComponent::freezePage(
-    uint64_t startPos,
+    offset_t startPos,
     const sample_t *inputData,
     uint64_t inputOffset,
     length_t inputLength,
@@ -610,7 +610,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
 // freezePage(): identical result page, but concurrent requests for the same
 // (this,startPos,epoch) collapse to a single render.
 std::shared_ptr<twOutputPage> twComponent::requestPage(
-    uint64_t startPos,
+    offset_t startPos,
     const sample_t *inputData,
     uint64_t inputOffset,
     length_t inputLength,
@@ -702,7 +702,7 @@ length_t twComponent::freezePageFromInputs(
 // Proposal 19 dataflow stage 2 — planned render through the VIRTUAL freeze
 // path (see the declaration doc).
 std::shared_ptr<twOutputPage> twComponent::freezePageWithInputs(
-    uint64_t startPos,
+    offset_t startPos,
     const twFrozenInputs &inputs,
     std::shared_ptr<twOutputPage> previousPage
 )
@@ -717,7 +717,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePageWithInputs(
 // streaming input plug. copyData reads each producer at the consumer's own
 // timeline positions, so a render of [pageStart, +capacity) starting on the
 // page grid consumes exactly the producer's page at the same pageStart.
-twPagePlan twComponent::planPage( uint64_t pageStart )
+twPagePlan twComponent::planPage( offset_t pageStart )
 {
     twPagePlan plan;
     plan.component = shared_from_this();
@@ -770,7 +770,7 @@ length_t twComponent::freezePage_nolock(
     // operation), seekInputStreams() for its input-side latch readers.
     // Components that cannot seek (free-running sources) simply continue from
     // their restored/reset state.
-    const uint64_t startPos = page->startPosition;
+    const offset_t startPos = page->startPosition;
     // A predecessor from an older content epoch carries DSP state computed
     // against pre-edit audio; treat it as a discontinuity (reset) instead.
     const bool contiguous = previousPage
@@ -825,7 +825,7 @@ length_t twComponent::freezePage_nolock(
 // Renders component output at lower resolution for UI visualization (e.g., waveform display).
 // Non-blocking: returns previous page if new page not yet ready.
 std::shared_ptr<twOutputPage> twComponent::freezePreviewPage(
-    uint64_t startPos,
+    offset_t startPos,
     length_t length,
     int previewSampleRate,
     int fullSampleRate,

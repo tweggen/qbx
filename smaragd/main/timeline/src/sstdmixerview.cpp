@@ -1644,14 +1644,18 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // time, trimming the front (cut start offset shifts with it).
                 lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
                 SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
-                length_t maxLength = cut->getContent().hasDuration()
-                                     ? (length_t) cut->getContent().getDuration() : -1;
                 offset_t end0 = clipDragStart0_ + (offset_t) lastClickDuration_;  // fixed right edge
                 offset_t rStart = smv_.alignTime( getTimeOf( ev->pos().x() ) );
                 // Keep at least the minimum length.
                 if( (length_t) end0 - (length_t) rStart < SMV_CUT_MIN_TIME )
                     rStart = end0 - (offset_t) SMV_CUT_MIN_TIME;
-                // The cut's start offset can't go below 0.
+                // The cut's start offset still can't go below 0 — dragging the
+                // edge to BEFORE the data would need the engine to render
+                // leading silence, and it does not: a clip anchored 2 s ahead of
+                // its sample renders silence for 2.7 s and then jumps in
+                // mid-waveform, i.e. it silently drops the first ~0.7 s. Until
+                // the page/reader path handles a negative source anchor this
+                // pin stays.
                 length_t shift = (length_t) rStart - (length_t) clipDragStart0_;
                 if( (length_t) clipResizeOffset0_ + shift < 0 )
                     rStart = clipDragStart0_ - (offset_t) clipResizeOffset0_;
@@ -1659,8 +1663,13 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 shift = (length_t) rStart - (length_t) clipDragStart0_;
                 offset_t rCutStart = (offset_t)( (length_t) clipResizeOffset0_ + shift );
                 length_t rDur = (length_t) end0 - (length_t) rStart;
-                if( maxLength >= 0 && rDur > maxLength - (length_t) rCutStart )
-                    rDur = maxLength - (length_t) rCutStart;
+                // The duration is NOT clamped to the remaining content. This
+                // edge owns the clip's START; the right edge is fixed at end0.
+                // Clamping the length here dragged the far edge inward on any
+                // clip longer than its data — trim 1 s off the front of a looping
+                // 8 s clip and its end snapped from 8 s back to the 4 s of
+                // sample behind it. Over-length clips are legitimate (see the
+                // right-edge branch and "Remove loop").
                 if( rDur >= SMV_CUT_MIN_TIME ) {
                     QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                     cut->setStartOffset( rCutStart );
@@ -1675,17 +1684,19 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
             } else if( lastClickedEnd_ ) {
                 // Drag the RIGHT edge: set the duration to the snapped mouse time.
+                // NOT clamped to the content length. A clip longer than its data
+                // is a legitimate state, not an accident: a looping clip tiles
+                // its segment for as long as you drag, and a plain one simply
+                // runs into silence past the end of its sample — which is
+                // exactly what "Remove loop" leaves behind, so that clip has to
+                // survive a later extend too. The old clamp to
+                // (contentLen - startOffset) snapped both back to about the
+                // length of their data.
                 lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
                 SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
-                length_t maxLength = cut->getContent().hasDuration()
-                                     ? (length_t) cut->getContent().getDuration() : -1;
                 offset_t rEnd = smv_.alignTime( getTimeOf( ev->pos().x() ) );
                 length_t rDur = (length_t) rEnd - (length_t) clipDragStart0_;
                 if( rDur < SMV_CUT_MIN_TIME ) rDur = SMV_CUT_MIN_TIME;
-                if( maxLength >= 0 ) {
-                    length_t maxDur = maxLength - (length_t) clipResizeOffset0_;
-                    if( rDur > maxDur ) rDur = maxDur;
-                }
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 // Only rebuild if duration actually changed (not clamped to same value)
                 if( rDur != cut->getDuration() ) {
@@ -2277,6 +2288,58 @@ void SStdMixerView::trackSliderMoved( int newValue )
  * happens only after the cut holds its own ref, so the content's refcount
  * never touches zero (removeRef()'s deleteLater() cannot be rescinded).
  */
+// Drive one clip-edge gesture through the arranger's real mouse handlers. See
+// the header for why this exists: every clip-edge clamp lives in the drag code,
+// and nothing else in the qxa suite can reach it.
+bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, bool grabEnd,
+                                  offset_t dropTime, bool upperHalf )
+{
+    const STrackRow *row = rowAt( rowIdx );
+    if( !row || !row->track || !qContent_ ) return false;
+
+    // Nested tracks appear in a folder's child list but are lanes, not clips.
+    SLink *clip = NULL;
+    int n = 0;
+    for( SLink *lk : row->track->childLinks() ) {
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
+        if( n++ == clipIdx ) { clip = lk; break; }
+    }
+    if( !clip || !clip->hasStartTime() || !clip->getSObject().hasDuration() )
+        return false;
+
+    offset_t start = clip->getStartTime();
+    length_t dur   = clip->getSObject().getDuration();
+    // Land inside the edge grab band: [startX, startX+LEFT) or [endX-RIGHT, endX).
+    int x0 = grabEnd
+             ? qContent_->getXPosOfOffset( start + (offset_t) dur ) - 1
+             : qContent_->getXPosOfOffset( start );
+    int x1 = qContent_->getXPosOfOffset( dropTime );
+    if( x0 < 0 || x1 < 0 ) return false;
+
+    int th = getTrackHeight();
+    int laneTop = SMV_TIME_RULER_HEIGHT + rowIdx*th - (int) qContent_->getUpperLeftY();
+    int y = laneTop + ( upperHalf ? th/4 : (3*th)/4 );
+
+    // The drag auto-scrolls when the pointer leaves the canvas, which would move
+    // the time axis mid-gesture. The window is never shown in test mode, so grow
+    // the canvas until both ends are inside it and the drag stays a pure edit.
+    int needed = ( x0 > x1 ? x0 : x1 ) + 64;
+    if( qContent_->width() < needed )
+        qContent_->resize( needed, qContent_->height() > y+th ? qContent_->height() : y+th+64 );
+
+    auto send = [&]( QEvent::Type type, int x,
+                     Qt::MouseButton button, Qt::MouseButtons buttons ) {
+        QPointF local( x, y );
+        QMouseEvent ev( type, local, qContent_->mapToGlobal( QPointF( x, y ) ),
+                        button, buttons, Qt::NoModifier );
+        QApplication::sendEvent( qContent_, &ev );
+    };
+    send( QEvent::MouseButtonPress,   x0, Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseMove,          x1, Qt::NoButton,   Qt::LeftButton );
+    send( QEvent::MouseButtonRelease, x1, Qt::LeftButton, Qt::NoButton );
+    return true;
+}
+
 SLink *SStdMixerView::ensureSCut( SLink *lk )
 {
     if( !lk ) return NULL;

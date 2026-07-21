@@ -2,6 +2,7 @@
 #define PAGE_INTERFACE_H_
 
 #include <cstdint>
+#include "tw/core/twtypes.h"
 #include <mutex>
 #include <atomic>
 #include <chrono>
@@ -28,8 +29,8 @@ public:
     virtual std::mutex& getMutex() const = 0;
 
     // Time position: sample frame where this page's data begins
-    virtual uint64_t getStartPosition() const = 0;
-    virtual void setStartPosition(uint64_t pos) = 0;
+    virtual offset_t getStartPosition() const = 0;
+    virtual void setStartPosition(offset_t pos) = 0;
 
     // Validity: which aspects (Preview, Playback, Export, etc.) are computed
     virtual uint32_t getValidAspects() const = 0;

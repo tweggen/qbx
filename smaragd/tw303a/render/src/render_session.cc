@@ -181,7 +181,7 @@ void RenderSession::renderThreadMain() {
             // the range start plus what we've written so far — not just the
             // written count (that rendered the wrong region for ranges > 0).
             uint64_t currentPos = startOffsetSamples_ + samplesWrittenVal;
-            uint64_t pageStartPos = (currentPos / PAGE_SIZE) * PAGE_SIZE;
+            offset_t pageStartPos = (currentPos / PAGE_SIZE) * PAGE_SIZE;
 
             // Stage 4: wait for the scheduler to have this page frozen — a
             // single-page demand that dedups onto the in-flight full-range

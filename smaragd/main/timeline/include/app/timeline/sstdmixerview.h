@@ -302,6 +302,18 @@ public:
 
     SLink *ensureSCut( SLink * );
 
+    // TEST ENTRY POINT: drive a real clip-edge gesture through the arranger's
+    // own mouse handlers (press → move → release) as a user drag does. Every
+    // clip-edge clamp lives in mouseMoveEvent, which no action can otherwise
+    // reach, so the qxa suite has no other way to cover trim / extend / loop /
+    // loop-marker behaviour. `clipIdx` counts only real clips (nested track
+    // lanes are skipped); `grabEnd` picks the right edge over the left;
+    // `upperHalf` picks the loop half of the edge band over the extend half.
+    // Modifier gestures (Ctrl-stretch, Alt-slip) are NOT drivable this way —
+    // the handlers read the live keyboard via QGuiApplication::keyboardModifiers().
+    bool dragClipEdge( int rowIdx, int clipIdx, bool grabEnd, offset_t dropTime,
+                       bool upperHalf );
+
     offset_t alignTime( offset_t );
 
     int getTrackHeight() const;

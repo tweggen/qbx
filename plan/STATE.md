@@ -5823,3 +5823,107 @@ Known limits: the ruler's leftover 7pt painter font is worked around here, not
 fixed — everything drawn after `drawRulerTicks()` still inherits it. The handles
 are not covered by the qxa suite (`--test-case` never shows the window and
 `screenshot` grabs the root window, not the arranger).
+
+---
+
+## Clip-edge gestures become testable; extend past content fixed (2026-07-21)
+
+- **Status:** ✅ COMPLETE
+- **Scope:** arranger extend clamp + a testkit route into gesture code
+- **Verified on:** Windows/MinGW (full qxa suite from tests/cases, layering clean)
+
+Reported: extending a LOOPED clip snapped back to roughly one loop cycle.
+
+Root cause — `SMVActualView::mouseMoveEvent`, right-edge branch clamped the new
+duration to the remaining CONTENT length (`contentLen - startOffset`). For a
+looping clip that is meaningless (it tiles its segment; there is no content
+limit), and the clamp landed on a small multiple of the loop segment. Measured
+on the repro: a clip set to 8 s of 2 s tiles collapsed to 4 s — exactly the 4 s
+sample length, 2 cycles — and the render fell silent there.
+
+The clamp is gone entirely rather than made conditional on looping. A clip
+LONGER than its data is a legitimate state in its own right: "Remove loop"
+(previous entry) deliberately keeps the duration and lets the tail run into
+silence, so that clip must survive a later extend. The same argument applies to
+slip-past-data and to dragging a looped clip by its START boundary — both still
+clamp today, both are future work.
+
+The bug was invisible to the suite, so this also opened the door:
+
+- `drag-clip-edge` action drives a real gesture through the arranger's own
+  press → move → release handlers. It is the ONLY route to that code: every
+  clip-edge clamp lives in the drag path, while `resize-clip` writes the window
+  straight to the model — a resize-clip script passes while the gesture is
+  broken. (Confirmed: the new case fails before the fix, passes after.)
+- Routed through shell (`SMainWindow::dragClipEdge` → `SStdMixerView::
+  dragClipEdge`) because testkit may not include app/timeline. Test mode never
+  opens the project through the window, so the first drag builds the arranger
+  on demand; the canvas is widened so the drag's auto-scroll never fires.
+- Limits: modifier gestures (Ctrl stretch, Alt slip) are not drivable — the
+  handlers read `QGuiApplication::keyboardModifiers()` rather than the event —
+  and the drop is pixel-quantised at the view's zoom, so cases assert on ranges.
+
+New case: `extend_clip_past_content` — a looping clip and a plain
+already-over-length clip, both dragged out to ~16 s, asserting the render still
+carries signal at 12 s and 15 s.
+
+Note for future work: `qWarning()` output is invisible in this Windows/MinGW
+build, so action-level diagnostics do not reach the test log — the failures that
+matter must be expressed as assertions, not warnings.
+
+---
+
+## Left-edge trim keeps the far edge; negative source anchors diagnosed (2026-07-21)
+
+- **Status:** ✅ trim fix COMPLETE · ⛔ negative source anchor NOT fixed (root cause found, see below)
+- **Scope:** arranger left-edge clamp; tempo box focus; an engine diagnosis
+- **Verified on:** Windows/MinGW (full qxa suite from tests/cases, layering clean)
+
+**Left-edge trim.** The branch clamped the new duration to the content remaining
+from the new offset (`maxLength - rCutStart`). The left edge owns the clip START;
+the right edge is fixed at `end0`. On any clip longer than its data that clamp
+quietly dragged the FAR edge inward — trim 1 s off the front of an 8 s looping
+clip over a 4 s sample and its end snapped from 8 s back to 4 s. Clamp removed,
+same reasoning as the right edge. New case `trim_start_keeps_end` (verified: it
+FAILS with the clamp reinstated).
+
+**Negative source anchors stay pinned — and here is why.** Dragging the start
+edge BEFORE the data would need the engine to render leading silence. It cannot,
+and the reason is not in the readers:
+
+    twview.cc:84       r.component->freezePage( (uint64_t) r.mappedPos, ... )
+    twtrackmix.cc:373  plan.deps.push_back( twPageDep{ r.component,
+                                                       (uint64_t) r.mappedPos } )
+
+`mappedPos` is SIGNED. A clip anchored before its data resolves to a negative
+mapped position, and the `(uint64_t)` cast wraps it to ~1.8e19, so that page asks
+for audio at an absurd offset and comes back silent. Measured on a clip anchored
+2 s ahead of its sample (page = 65536 frames):
+
+  - page 1 covers timeline 65536..131072 -> maps to -30464 -> wraps -> ALL silent
+  - page 2 starts at 131072            -> maps to +35072 -> renders correctly
+
+i.e. silence to 2.73 s (not the expected 2.0 s), then entry mid-ramp at the level
+for source 0.73 s. Roughly the first 0.7 s of the sample is dropped. `SCut::
+resolveClip` itself is correct (probed: `off=0 -> mappedPos=-96000`); the loss is
+entirely at the unsigned cast. Confirmed by probes: NONE of
+`twSampleSource::read`, `twGrainSource::read` or `twSampleReader::seekTo` is ever
+reached with a negative — the wrap happens above them.
+
+Latent second bug, found while tracing: `twSampleSource::read` and
+`twGrainSource::read` are both OOB on a negative offset — `avail = nFrames_ -
+srcOffset` GROWS when srcOffset < 0, so nothing clamps and
+`data_.data() + ch*nFrames_ + srcOffset` points before the buffer, then memcpy.
+Unreachable today only because of the wrap above; reachable from `resize-clip`
+the moment the cast is fixed. Fix both together.
+
+Supporting clips that start before their data therefore needs a signed page
+position through the freeze path (freezePage/twPageDep take uint64_t) plus a
+partial-page fill at the data boundary. Deliberately not attempted here.
+
+**Tempo box** (unrelated): Return now commits and hands the keyboard back to
+whoever had it, so the next +/- or transport key does not vanish into the spin
+box. The previous focus is remembered via QApplication::focusChanged (a FocusIn
+event does not carry where focus came from); restore is deferred with a 0-timer
+so the box interprets the typed text on that keypress first, falling back to the
+arranger when the old widget is gone.

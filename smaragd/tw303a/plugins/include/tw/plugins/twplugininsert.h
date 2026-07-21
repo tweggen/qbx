@@ -34,7 +34,7 @@ public:
     // Phase 6c: Freeze-page interface for non-blocking plugin processing
     // Assumes pages arrive sequentially; detects and warns on non-sequential pages (seek case)
     std::shared_ptr<twOutputPage> freezePage(
-        uint64_t startPos,
+        offset_t startPos,
         const sample_t *inputData,
         uint64_t inputOffset,
         length_t inputLength,

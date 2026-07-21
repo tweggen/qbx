@@ -160,7 +160,7 @@ void twPluginInsert::reset_nolock()
 }
 
 std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
-    uint64_t startPos,
+    offset_t startPos,
     const sample_t *inputData,
     uint64_t inputOffset,
     length_t inputLength,

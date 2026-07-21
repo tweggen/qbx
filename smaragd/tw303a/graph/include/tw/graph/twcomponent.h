@@ -236,23 +236,23 @@ public:
     // Returns non-null shared_ptr; page may not be frozen yet (check validAspects).
     // Non-blocking: consumers can fall back to stale pages if not ready.
     std::shared_ptr<twOutputPage> getOrAllocatePage(
-        uint64_t startPos,
+        offset_t startPos,
         uint32_t aspectsMask = twAspectAll
     );
 
     // Lock-free page lookup (audio thread only).
     // Returns existing page if found, nullptr if not. Never allocates.
     // Safe for real-time threads because it uses only atomic reads.
-    std::shared_ptr<twOutputPage> getPageIfExists(uint64_t startPos);
+    std::shared_ptr<twOutputPage> getPageIfExists(offset_t startPos);
 
     // Release pages outside of a time retention window (memory management).
     // Frees pages whose [startPos, startPos+PAGE_SIZE) range ends before keepAfterPos.
-    void releaseOldPages(uint64_t keepAfterPos);
+    void releaseOldPages(offset_t keepAfterPos);
 
     // Get all cached pages in a time range (for iteration, cleanup, debugging).
     std::vector<std::shared_ptr<twOutputPage>> getPagesInRange(
-        uint64_t startPos,
-        uint64_t endPos
+        offset_t startPos,
+        offset_t endPos
     ) const;
 
     // Invalidate all cached pages (called when component parameters change).
@@ -287,11 +287,11 @@ public:
     // now are left alone: they stamp the epoch they read at entry and
     // simply re-freeze once more if they raced the edit. Virtual with the
     // same forwarding structure as bumpContentEpoch.
-    virtual void invalidatePagesInRange(uint64_t start, uint64_t end);
+    virtual void invalidatePagesInRange(offset_t start, offset_t end);
 
 protected:
     // Caller already holds mutex() (e.g. twTrackMix's clip mutators).
-    void invalidatePagesInRange_nolock(uint64_t start, uint64_t end);
+    void invalidatePagesInRange_nolock(offset_t start, offset_t end);
 
 public:
 
@@ -330,7 +330,7 @@ public:
     // Internal: mark a specific page as frozen and valid for given aspects.
     // Called by revalidator after successful freezing.
     void setPageAsFrozen(
-        uint64_t startPos,
+        offset_t startPos,
         std::shared_ptr<twOutputPage> page,
         uint32_t aspects = twAspectAll
     );
@@ -379,7 +379,7 @@ public:
     // Default: basic implementation that calls renderFrames().
     // Override in complex components for custom freezing logic.
     virtual std::shared_ptr<twOutputPage> freezePage(
-        uint64_t startPos,
+        offset_t startPos,
         const sample_t *inputData,
         uint64_t inputOffset,
         length_t inputLength,
@@ -404,7 +404,7 @@ public:
     // honoured. Phase 2b routes the recursive input pulls through here too, at
     // which point the freeze reads only already-ready input pages.
     std::shared_ptr<twOutputPage> requestPage(
-        uint64_t startPos,
+        offset_t startPos,
         const sample_t *inputData,
         uint64_t inputOffset,
         length_t inputLength,
@@ -443,7 +443,7 @@ public:
     // back to the legacy pull. Unlike freezePageFromInputs (the raw base-body
     // leaf), publication follows the component's own freezePage semantics.
     std::shared_ptr<twOutputPage> freezePageWithInputs(
-        uint64_t startPos,
+        offset_t startPos,
         const twFrozenInputs &inputs,
         std::shared_ptr<twOutputPage> previousPage = nullptr
     );
@@ -461,7 +461,7 @@ public:
     // (mixer/rewire/plugin-chain shape — copyData reads the producer at the
     // consumer's own timeline positions). Sources with no inputs plan empty.
     // twTrackMix overrides with its clip enumeration.
-    virtual twPagePlan planPage( uint64_t pageStart );
+    virtual twPagePlan planPage( offset_t pageStart );
 
     // Proposal 19 Phase 1 — single-cursor serialization policy.
     // freezePage() renders by MUTATING this component's instance state
@@ -483,7 +483,7 @@ public:
     // Returns previous page if new page not ready (fallback for non-blocking UI redraws).
     // Default: calls freezePage() with reduced sample rate.
     virtual std::shared_ptr<twOutputPage> freezePreviewPage(
-        uint64_t startPos,
+        offset_t startPos,
         length_t length,
         int previewSampleRate,  // Typically 1000 Hz for waveform visualization
         int fullSampleRate,     // Actual component sample rate for state consistency
@@ -535,7 +535,7 @@ private:
     std::mutex cursorMutex_;
 
     // Page cache: maps start position → frozen output page
-    std::map<uint64_t, std::shared_ptr<twOutputPage>> outputPages_;
+    std::map<offset_t, std::shared_ptr<twOutputPage>> outputPages_;
 
     // Proposal 19 Phase 2a — in-flight freeze dedup (see requestPage()).
     // At most one freeze task per startPos may be active; concurrent requesters
@@ -549,7 +549,7 @@ private:
         std::mutex m;                           // guards done/page for the CV
         std::condition_variable cv;
     };
-    std::map<uint64_t, std::shared_ptr<InFlightFreeze>> inflight_;
+    std::map<offset_t, std::shared_ptr<InFlightFreeze>> inflight_;
     std::mutex inflightMutex_;                   // guards inflight_ only
 
 private:

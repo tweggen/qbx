@@ -79,6 +79,21 @@ length_t twSampleSource::read( offset_t srcOffset, sample_t *dest,
     if( ch < 0 ) ch = 0;
     if( ch >= channels_ ) ch = channels_ - 1;   // mono plays on every channel
 
+    // A read may begin BEFORE the material (a clip anchored ahead of its data):
+    // those frames are silence. Without this the arithmetic below runs off the
+    // front — `avail = nFrames_ - srcOffset` GROWS for a negative offset, so
+    // nothing clamps and `data_ + ch*nFrames_ + srcOffset` points before the
+    // buffer. Emit the leading silence, then read the remainder from frame 0.
+    if( srcOffset < 0 ) {
+        length_t lead = (length_t)( -srcOffset );
+        if( lead > len ) lead = len;
+        memset( dest, 0, sizeof( sample_t ) * lead );
+        dest += lead;
+        len  -= lead;
+        srcOffset = 0;
+        if( len <= 0 ) return 0;
+    }
+
     length_t avail = 0;
     if( srcOffset < (offset_t) nFrames_ ) {
         avail = nFrames_ - (length_t) srcOffset;

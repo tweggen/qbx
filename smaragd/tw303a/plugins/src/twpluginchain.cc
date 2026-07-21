@@ -146,7 +146,7 @@ void twPluginChain::rebuildWiring()
 
 
 std::shared_ptr<twOutputPage> twPluginChain::freezePage(
-    uint64_t startPos,
+    offset_t startPos,
     const sample_t *inputData,
     uint64_t inputOffset,
     length_t inputLength,
@@ -222,7 +222,7 @@ void twPluginChain::bumpContentEpoch()
     }
 }
 
-void twPluginChain::invalidatePagesInRange(uint64_t start, uint64_t end)
+void twPluginChain::invalidatePagesInRange(offset_t start, offset_t end)
 {
     twComponent::invalidatePagesInRange(start, end);
 

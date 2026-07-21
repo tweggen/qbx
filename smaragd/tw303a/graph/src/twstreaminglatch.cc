@@ -96,8 +96,10 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 	std::shared_ptr<twOutputPage> held = std::atomic_load(&readerPrevPage);
 
 	while (written < maxLength) {
-		const uint64_t pos = (uint64_t)startOffset + (uint64_t)written;
-		const uint64_t pageStart = (pos / pageSize) * pageSize;
+		const offset_t pos = startOffset + (offset_t)written;
+		// FLOOR-aligned: this seam serves clips that may start before their
+		// data, so pos can be negative (proposal 23).
+		const offset_t pageStart = twFloorAlign( pos, (offset_t)pageSize );
 
 		// The held page must be frozen AND from the current content epoch —
 		// an edit (clip move/split/stretch, mute, rewiring) makes every page

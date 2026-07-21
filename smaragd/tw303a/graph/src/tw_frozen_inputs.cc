@@ -9,7 +9,7 @@ void twFrozenInputs::bind( const twComponent *producer,
 }
 
 std::shared_ptr<twOutputPage> twFrozenInputs::find( const twComponent *producer,
-                                                    uint64_t pageStart ) const
+                                                    offset_t pageStart ) const
 {
     // Linear scan: a node's input set is small (its inputs' pages for one page
     // span, possibly a bound subtree) — a map would cost more than it saves.

@@ -23,6 +23,17 @@ Invariants:
    are detectable by region RMS, and it is strongly periodic at ~440 Hz so
    assert-audio-frequency can measure a transposition on it.
 4. Exit code: 0 iff all actions applied as expected AND <assertions> pass.
+5. drag-clip-edge is the ONLY route to clip-edge gesture code. Every clamp and
+   snap of a trim / extend / loop / loop-marker drag lives in
+   SMVActualView::mouseMoveEvent; resize-clip writes the window straight to the
+   model and sails past all of it, so a resize-clip script can pass while the
+   gesture is broken. It goes out through shell (SMainWindow::dragClipEdge) —
+   testkit may not include app/timeline. The window is never shown in test mode
+   and the runner never opens the project through it, so the first drag builds
+   the arranger widget on demand; later drags in the same script share it.
+   Limits: modifier gestures (Ctrl stretch, Alt slip) are not drivable — the
+   handlers read QGuiApplication::keyboardModifiers(), not the event — and the
+   drop is quantised to a pixel at the view's zoom, so assert on ranges.
 
 How to test:
   cd smaragd/tests/cases

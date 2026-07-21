@@ -199,7 +199,7 @@ public:
      */
     std::shared_ptr<GraphDemand> requestGraphPages(
         std::shared_ptr<twComponent> root,
-        uint64_t startPos,
+        offset_t startPos,
         int nPages,
         int priority = 5);
 
@@ -290,7 +290,7 @@ private:
     //     noted) -----------------------------------------------------------
     struct PageNode {
         std::shared_ptr<twComponent> component;
-        uint64_t pageStart = 0;
+        offset_t pageStart = 0;
         int priority = 5;
         int pendingDeps = 0;                 // unresolved edges (inputs + pred)
         int attempts = 0;                    // verify-at-publish retries
@@ -312,7 +312,7 @@ private:
     std::mutex expansionMutex_;
 
     std::shared_ptr<PageNode> expandNode_(std::shared_ptr<twComponent> comp,
-                                          uint64_t pageStart, int priority,
+                                          offset_t pageStart, int priority,
                                           int depth);
     void processGraphNode(const std::shared_ptr<PageNode> &node);
     void completeGraphNode(const std::shared_ptr<PageNode> &node,

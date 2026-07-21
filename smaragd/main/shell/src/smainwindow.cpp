@@ -1596,6 +1596,25 @@ bool SMainWindow::eventFilter( QObject *watched, QEvent *event )
     return QMainWindow::eventFilter( watched, event );
 }
 
+bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, bool grabEnd,
+                                offset_t dropTime, bool upperHalf )
+{
+    SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
+    if( !v ) {
+        // Headless test mode never opens the project through the window —
+        // SActionRunner sets it straight on SApplication — so the arranger does
+        // not exist yet. Build it the same way openProject() does; later drags
+        // in the same script then share this one view (and its zoom/scroll).
+        SProject *proj = SApplication::app().getCurrentProject();
+        if( !proj || !proj->getRootComponent() ) return false;
+        projectRootWidget_ = proj->getRootComponent()->getDetailEditWidget( this );
+        setCentralWidget( projectRootWidget_ );
+        v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
+        if( !v ) return false;
+    }
+    return v->dragClipEdge( rowIdx, clipIdx, grabEnd, dropTime, upperHalf );
+}
+
 void SMainWindow::groupTrack()
 {
     SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );

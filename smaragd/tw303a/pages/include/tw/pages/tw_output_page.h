@@ -2,6 +2,7 @@
 #define _TW_OUTPUT_PAGE_H_
 
 #include <cstdint>
+#include "tw/core/twtypes.h"
 #include <vector>
 #include <memory>
 #include <atomic>
@@ -43,7 +44,7 @@ struct twOutputPage : public PageBase {
     static constexpr size_t FRAME_CAPACITY = PAGE_SIZE / sizeof(float);  // mono frames
 
     // Time range this page covers (in sample frames)
-    uint64_t startPosition;
+    offset_t startPosition;
 
     // Frozen audio samples for this range
     std::vector<float> samples;
@@ -99,8 +100,8 @@ struct twOutputPage : public PageBase {
 
     // PageBase interface implementation
     std::mutex& getMutex() const override { return pageMutex; }
-    uint64_t getStartPosition() const override { return startPosition; }
-    void setStartPosition(uint64_t pos) override { startPosition = pos; }
+    offset_t getStartPosition() const override { return startPosition; }
+    void setStartPosition(offset_t pos) override { startPosition = pos; }
     uint32_t getValidAspects() const override { return validAspects.load(); }
     void setValidAspects(uint32_t aspects) override { validAspects.store(aspects); }
     uint64_t getGeneration() const override { return generation.load(); }

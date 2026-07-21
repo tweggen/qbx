@@ -2,6 +2,7 @@
 #define CAPTURE_PAGE_POOL_H
 
 #include <cstdint>
+#include "tw/core/twtypes.h"
 #include <vector>
 #include <queue>
 #include <memory>
@@ -56,7 +57,7 @@ struct CapturePageData : public PageBase {
     // Metadata (kept in-struct for locality)
     uint32_t validAspects = 0;      // Bitmask: which aspects are computed in this page
     int generation = 0;             // Incremented on each revalidation (for staleness tracking)
-    uint64_t startPosition = 0;     // Time position where page begins
+    offset_t startPosition = 0;     // Time position where page begins
     std::any internalState;         // Internal state snapshot (for sequential components)
     std::chrono::steady_clock::time_point createdAt;  // Creation time for staleness tracking
 
@@ -67,8 +68,8 @@ struct CapturePageData : public PageBase {
 
     // PageBase interface implementation
     std::mutex& getMutex() const override { return pageMutex; }
-    uint64_t getStartPosition() const override { return startPosition; }
-    void setStartPosition(uint64_t pos) override { startPosition = pos; }
+    offset_t getStartPosition() const override { return startPosition; }
+    void setStartPosition(offset_t pos) override { startPosition = pos; }
     uint32_t getValidAspects() const override { return validAspects; }
     void setValidAspects(uint32_t aspects) override { validAspects = aspects; }
     uint64_t getGeneration() const override { return generation; }
