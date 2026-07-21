@@ -790,6 +790,16 @@ SMainWindow::SMainWindow()
     qTBTransport_->addWidget( tempoSpin_ );
     QObject::connect( tempoSpin_, SIGNAL( valueChanged(double) ),
                       this, SLOT( onTempoSpinChanged(double) ) );
+    // Return in the tempo box commits and then hands the keyboard back, so the
+    // next transport/arranger key does not disappear into the spin box. The
+    // "back" target is whoever had focus when the box took it — remembered here
+    // because a FocusIn event does not carry the widget it came from.
+    tempoSpin_->installEventFilter( this );
+    QObject::connect( qApp, &QApplication::focusChanged, this,
+                      [this]( QWidget *old, QWidget *now ) {
+                          if( now == tempoSpin_ && old != tempoSpin_ )
+                              tempoPrevFocus_ = old;
+                      } );
 
     addToolBar( Qt::TopToolBarArea, qTBTransport_ );
 
@@ -1562,6 +1572,28 @@ void SMainWindow::toggleMetronome()
 void SMainWindow::toggleCycle()
 {
     SApplication::app().submitAction( new SCycleAction( SToggleSettingAction::Toggle ) );
+}
+
+bool SMainWindow::eventFilter( QObject *watched, QEvent *event )
+{
+    if( watched == tempoSpin_ && event->type() == QEvent::KeyPress ) {
+        QKeyEvent *ke = static_cast<QKeyEvent*>( event );
+        if( ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter ) {
+            // Let the spin box interpret and commit the typed text first (it is
+            // keyboardTracking=false, so the value lands on this very key), then
+            // give the focus back. Deferred to the event loop for exactly that
+            // ordering — clearing focus inside the filter would commit through
+            // the focus-out path instead and swallow the keypress semantics.
+            QTimer::singleShot( 0, this, [this]() {
+                if( !tempoSpin_ ) return;
+                tempoSpin_->clearFocus();
+                QWidget *back = tempoPrevFocus_;
+                if( !back || !back->isVisible() ) back = projectRootWidget_;
+                if( back ) back->setFocus( Qt::OtherFocusReason );
+            } );
+        }
+    }
+    return QMainWindow::eventFilter( watched, event );
 }
 
 void SMainWindow::groupTrack()

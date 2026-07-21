@@ -7,6 +7,7 @@
 #include <QString>
 #include <QVariant>
 #include <QDoubleSpinBox>
+#include <QPointer>
 // #include <qpopupmenu.h>
 
 class SProject;
@@ -43,6 +44,9 @@ public:
 
 protected:
     void closeEvent( QCloseEvent *event ) override;
+    // Watches the tempo box so Return commits the value and then hands the
+    // keyboard back to whatever had it (see the ctor's focusChanged hook).
+    bool eventFilter( QObject *watched, QEvent *event ) override;
 
 protected slots:
     void nyi();
@@ -146,6 +150,9 @@ private:
     QAction *actSaveAs_ = nullptr;      // File->Save as...; disabled with no project
     QToolBar *qTBTransport_;
     QDoubleSpinBox *tempoSpin_ = nullptr;  // Transport tempo (BPM) box
+    // Who had the keyboard before the tempo box took it, so Return can give it
+    // back. Cleared implicitly — always re-checked for liveness before use.
+    QPointer<QWidget> tempoPrevFocus_;
     SGridToolbar *qTBPalette_;
     QToolBar *qTBTracks_;
     SRecordingProgressDialog *recordingProgressDialog_ = nullptr;
