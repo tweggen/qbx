@@ -41,9 +41,7 @@ enum class LogLevel {
 };
 
 // Longest message a non-blocking (realtime) producer may emit. Longer messages
-// from such a thread are truncated; ordinary threads are unbounded. Every ring
-// slot reserves this much, so an ordinary message up to this length also lands
-// without allocating.
+// from such a thread are truncated; ordinary threads are unbounded.
 inline constexpr size_t TW_LOG_RT_MAX = 256;
 
 struct LogRecord {

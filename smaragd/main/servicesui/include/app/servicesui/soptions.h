@@ -28,6 +28,16 @@ inline constexpr const char *ZoomToCursor   = "mouse/zoomToCursor";
 inline constexpr const char *InvertZoom     = "mouse/invertZoom";
 inline constexpr const char *AudioDeviceId  = "audio/deviceId";
 
+// Logging (proposal 24). LogConsole's default is the BUILD's default —
+// SMARAGD_LOG_CONSOLE_DEFAULT, on for Debug and off for Release — so a release
+// user opts in and a debug build keeps its console for free. The command line
+// (--log-console / --no-log-console / --log-level) and the SMARAGD_LOG_CONSOLE
+// / SMARAGD_LOG_LEVEL environment variables override these, in that order.
+inline constexpr const char *LogConsole     = "log/console";
+inline constexpr const char *LogLevel       = "log/level";      // "error".."trace"
+inline constexpr const char *LogCapacity    = "log/capacity";   // ring records
+inline constexpr const char *LogToFile      = "log/toFile";
+
 // Default value for a key (invalid QVariant if unknown). Scroll-first defaults.
 QVariant def( const QString &key );
 

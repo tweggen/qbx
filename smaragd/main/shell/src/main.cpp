@@ -8,12 +8,76 @@
 #include "app/testkit/sactionscript.h"
 #include "app/testkit/sactionrunner.h"
 #include "app/actions/sactionregistry.h"
+#include "app/shell/ssettings.h"
+#include "app/servicesui/soptions.h"
+#include "tw/core/twlog.h"
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
 
+// Route Qt's qDebug/qInfo/qWarning/qCritical/qFatal into the TwLog sink.
+//
+// This is not merely re-plumbing. Qt's DEFAULT handler on Windows/MinGW writes
+// to the Windows debug channel, not stderr, which is why these messages never
+// reached a redirected log while the engine's syslog() output did — a defect
+// recorded twice in plan/STATE.md, most recently as "qWarning() output is
+// invisible in this Windows/MinGW build, so action-level diagnostics do not
+// reach the test log". Installing this handler replaces that default outright,
+// so every Qt message now leaves through the same file descriptor as the rest.
+static void smaragdMessageHandler( QtMsgType type,
+                                   const QMessageLogContext &ctx,
+                                   const QString &msg )
+{
+    tw::LogLevel level;
+    switch( type ) {
+        case QtDebugMsg:    level = tw::LogLevel::Debug; break;
+        case QtInfoMsg:     level = tw::LogLevel::Info;  break;
+        case QtWarningMsg:  level = tw::LogLevel::Warn;  break;
+        case QtCriticalMsg:
+        case QtFatalMsg:
+        default:            level = tw::LogLevel::Error; break;
+    }
+
+    // Qt's category is "default" for a bare qDebug(); prefix ours so the dock's
+    // category filter separates Qt traffic from the engine's module categories.
+    const char *cat = "qt";
+    QByteArray catBuf;
+    if( ctx.category && *ctx.category && qstrcmp( ctx.category, "default" ) != 0 ) {
+        catBuf = QByteArray( "qt." ) + ctx.category;
+        cat = catBuf.constData();
+    }
+
+    tw::TwLog::instance().logStr( level, cat, ctx.file, ctx.line,
+                                  msg.toStdString() );
+
+    // qFatal() must still abort — but not before the record reaches the file.
+    if( type == QtFatalMsg ) {
+        tw::TwLog::instance().shutdown();
+        abort();
+    }
+}
+
+// Parse a level name; returns false if `s` names no level.
+static bool parseLogLevel( const QString &s, tw::LogLevel &out )
+{
+    const QString v = s.trimmed().toLower();
+    if( v == "error" || v == "err" )  { out = tw::LogLevel::Error; return true; }
+    if( v == "warn"  || v == "warning" ) { out = tw::LogLevel::Warn; return true; }
+    if( v == "info" )                 { out = tw::LogLevel::Info;  return true; }
+    if( v == "debug" )                { out = tw::LogLevel::Debug; return true; }
+    if( v == "trace" )                { out = tw::LogLevel::Trace; return true; }
+    return false;
+}
+
 int main( int argc, char *argv[] )
 {
+    // The log sink comes up FIRST, before QApplication, so nothing in startup is
+    // lost. The ring and the console tee are live immediately; the rotating file
+    // is attached further down, once the config directory is known.
+    qInstallMessageHandler( smaragdMessageHandler );
+    tw::TwLog::nameThread( "gui" );
+    tw::TwLog::instance().setConsole( SMARAGD_LOG_CONSOLE_DEFAULT ? true : false );
+
     // Phase 4: Detect headless test mode before QApplication init to set platform
     // (Only on Linux; macOS and Windows have native headless support or prefer native backends)
     bool headlessMode = false;
@@ -62,7 +126,69 @@ int main( int argc, char *argv[] )
         "Directory for test artifacts (screenshots, renders, etc.).",
         "path"
     ));
+    parser.addOption({"log-console",    "Tee the log to stderr."});
+    parser.addOption({"no-log-console", "Do not tee the log to stderr."});
+    parser.addOption({"log-level",
+        "Log threshold: error, warn, info, debug, trace.", "level"});
     parser.process(app);
+
+    // Resolve the log configuration, last wins:
+    //   compile default -> persisted option -> environment -> command line.
+    // The compile default was already applied above so that startup logging had
+    // somewhere to go; from here the user's preferences take over.
+    {
+        tw::TwLog &log = tw::TwLog::instance();
+        SSettings &settings = SSettings::instance();
+
+        bool wantConsole =
+            settings.value( SOpt::LogConsole, SOpt::def( SOpt::LogConsole ) ).toBool();
+
+        tw::LogLevel level = tw::LogLevel::Debug;
+        parseLogLevel( settings.value( SOpt::LogLevel,
+                                       SOpt::def( SOpt::LogLevel ) ).toString(), level );
+
+        if( const char *env = std::getenv( "SMARAGD_LOG_CONSOLE" ) )
+            wantConsole = ( env[0] == '1' || env[0] == 'y' || env[0] == 'Y' ||
+                            env[0] == 't' || env[0] == 'T' );
+        if( const char *env = std::getenv( "SMARAGD_LOG_LEVEL" ) )
+            parseLogLevel( QString::fromUtf8( env ), level );
+
+        if( parser.isSet( "log-console" ) )    wantConsole = true;
+        if( parser.isSet( "no-log-console" ) ) wantConsole = false;
+        if( parser.isSet( "log-level" ) ) {
+            if( !parseLogLevel( parser.value( "log-level" ), level ) ) {
+                std::cerr << "Unknown --log-level '"
+                          << parser.value( "log-level" ).toStdString()
+                          << "'; expected error|warn|info|debug|trace\n";
+                return 2;
+            }
+        }
+
+        const int cap = settings.value( SOpt::LogCapacity,
+                                        SOpt::def( SOpt::LogCapacity ) ).toInt();
+        log.setCapacity( cap > 0 ? (size_t)cap : 200000 );
+        log.setConsole( wantConsole );
+        log.setMinLevel( level );
+
+        // Phase two of init: the ring has been collecting since before
+        // QApplication; setFileSink starts from the oldest resident record, so
+        // everything logged before this point still reaches the file.
+        //
+        // Headless test runs deliberately get NO file sink. The suite is 38
+        // cases that would all append to the one smaragd.log in the user's
+        // config directory — polluting it, and racing each other over the file
+        // and its rotation the moment anyone runs `ctest -j`. Test diagnostics
+        // belong on the console, which --log-console still provides.
+        const bool headlessTest = parser.isSet( "test-case" );
+        if( !headlessTest &&
+            settings.value( SOpt::LogToFile, SOpt::def( SOpt::LogToFile ) ).toBool() )
+            log.setFileSink( settings.configDir().toStdString(),
+                             8u * 1024u * 1024u, 3 );
+
+        TW_LOGI( "ui.shell", "Smaragd starting; log level=%s console=%d dir=%s",
+                 tw::TwLog::levelName( level ), (int)wantConsole,
+                 settings.configDir().toUtf8().constData() );
+    }
 
     // --list-actions: output and exit before window creation
     if (parser.isSet("list-actions")) {
@@ -212,5 +338,9 @@ int main( int argc, char *argv[] )
     }
 
     app.exec();
+
+    // Flush and join the log's file writer before the process tears down.
+    TW_LOGI( "ui.shell", "Smaragd exiting" );
+    tw::TwLog::instance().shutdown();
     return 0;
 }

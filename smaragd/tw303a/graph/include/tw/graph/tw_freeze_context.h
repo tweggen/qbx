@@ -1,6 +1,8 @@
 #ifndef _TW_FREEZE_CONTEXT_H_
 #define _TW_FREEZE_CONTEXT_H_
 
+#include "tw/core/twlog.h"
+
 #include <memory>
 
 // Forward declarations to avoid circular includes
@@ -46,7 +48,19 @@ class twComponent;
  */
 class twRtThreadGuard {
 public:
-    static void markRtThread()   { isRt_ = true; }
+    // Marking the RT thread also marks it non-blocking for the log sink: a
+    // record from here try_locks and counts a drop rather than waiting on a
+    // worker (proposal 24 §2.2). Doing it HERE rather than at the speaker's
+    // callback keeps the two markers from drifting apart — which matters
+    // because this guard's own violation report is logged from this thread.
+    static void markRtThread()
+    {
+        if( !isRt_ ) {
+            isRt_ = true;
+            ::tw::TwLog::markNonBlocking();
+            ::tw::TwLog::nameThread( "audio-rt" );
+        }
+    }
     static bool onRtThread()     { return isRt_; }
 private:
     inline static thread_local bool isRt_ = false;

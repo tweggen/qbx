@@ -133,19 +133,24 @@ public:
 
 ### 2.1 Invariants
 
-1. **The ring never allocates in steady state.** `std::vector<LogRecord>` of
-   fixed capacity, slot = `seq % capacity`. Overwriting an old record `assign`s
-   into its existing `std::string` — the capacity is reused, never freed. Every
-   slot is `reserve(256)`d at construction.
+1. **The ring allocates at most once per slot, lazily.** `std::vector<LogRecord>`
+   of fixed capacity, slot = `seq % capacity`. A slot's `std::string` grows to
+   its own largest message and is reused thereafter — `assign`, never freed — so
+   steady-state logging does not allocate. Slots are deliberately *not*
+   pre-reserved: reserving `TW_LOG_RT_MAX` per slot would cost a 200k-record ring
+   ~64 MB the instant it is configured, logged or not. Lazy growth makes the cost
+   proportional to what is actually logged and reaches the same steady state.
 2. **`seq` is monotonic and never reused.** It is the reader's cursor and the
    only thing that makes "what have I not yet seen" answerable without holding a
    lock across the read.
 3. **One record is one line.** Messages containing `\n` are split at emit time.
    The table view is one row per record; nothing downstream has to re-wrap.
-4. **`markNonBlocking()` threads never block and never allocate.** They format
-   into a `thread_local char[256]` and take the slot with `try_lock`; on failure
-   they bump `dropped_` and return. Long messages from such a thread are
-   truncated with a `…` marker rather than growing the slot string.
+4. **`markNonBlocking()` threads never block.** They format into a stack
+   `char[TW_LOG_RT_MAX]` (truncating) and take the slot with `try_lock`; on
+   failure they bump `dropped_` and return. They may allocate the first time
+   they write a given ring slot — see invariant 1 — and never thereafter; in
+   practice the RT thread logs approximately never (the `twRtThreadGuard`
+   violation report is one-shot).
 5. **Producers hold one mutex for O(1) work.** Contention at realistic rates
    (hundreds/s) is nil; the file writer and the UI both read through
    `snapshot()`, so there is no second queue to keep coherent.

@@ -66,6 +66,10 @@ public:
     QByteArray windowState() const;
     void       setWindowState( const QByteArray &state );
 
+    // Directory holding smaragd.ini. Also where the rotating log file goes, so
+    // a user asked for "your config folder" finds both in one place.
+    QString configDir() const;
+
 signals:
     void changed( const QString &key );
 

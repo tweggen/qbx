@@ -10,6 +10,13 @@ QVariant SOpt::def( const QString &key )
     if( key == ZoomToCursor )   return true;
     if( key == InvertZoom )     return false;
     if( key == AudioDeviceId )  return QString();
+
+    // The console default is the build's, so a Debug build keeps its console
+    // without the user configuring anything and a Release build stays quiet.
+    if( key == LogConsole )     return SMARAGD_LOG_CONSOLE_DEFAULT ? true : false;
+    if( key == LogLevel )       return QStringLiteral( "debug" );
+    if( key == LogCapacity )    return 200000;
+    if( key == LogToFile )      return true;
     return QVariant();
 }
 

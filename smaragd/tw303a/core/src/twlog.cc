@@ -157,10 +157,14 @@ void TwLog::setCapacity( size_t records )
     std::lock_guard<std::mutex> lk( d_->mtx );
     d_->ring.clear();
     d_->ring.resize( records );
-    // Give every slot its steady-state buffer up front: overwriting a record
-    // later assign()s into this capacity and never allocates (invariant 1).
-    for( LogRecord &r : d_->ring ) r.text.reserve( TW_LOG_RT_MAX );
     d_->nextSeq = 0;
+
+    // Note: slots are NOT pre-reserved. Reserving TW_LOG_RT_MAX per slot would
+    // cost a 200k-record ring ~64 MB the moment it is configured, whether or not
+    // anything is ever logged. Letting each slot's string grow to its own
+    // largest message instead makes the cost proportional to what actually gets
+    // logged, and still reaches the same steady state: after a slot's first
+    // write, assign() reuses that capacity and never allocates again.
 }
 
 size_t TwLog::capacity() const

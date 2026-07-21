@@ -14,6 +14,11 @@ SSettings::SSettings()
 {
 }
 
+QString SSettings::configDir() const
+{
+    return QFileInfo( settings_.fileName() ).absolutePath();
+}
+
 QVariant SSettings::value( const QString &key, const QVariant &def ) const
 {
     return settings_.value( key, def );

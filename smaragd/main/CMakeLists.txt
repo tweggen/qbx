@@ -305,6 +305,26 @@ endif()
 option(SMARAGD_WIN_CONSOLE
     "Build the Windows binary against the CONSOLE subsystem (shows stderr)" ON)
 
+# SMARAGD_LOG_CONSOLE_DEFAULT (proposal 24): whether TwLog tees to stderr when
+# the user has expressed no preference. ORTHOGONAL to SMARAGD_WIN_CONSOLE, which
+# only decides whether Windows gives the process a console to write to. Defaults
+# to ON for a Debug build and OFF otherwise — "console by default in debug, by
+# option in release". The persisted SOpt::LogConsole, then SMARAGD_LOG_CONSOLE in
+# the environment, then --log-console/--no-log-console each override it.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR NOT CMAKE_BUILD_TYPE)
+    set(SMARAGD_LOG_CONSOLE_DEFAULT_INIT ON)
+else()
+    set(SMARAGD_LOG_CONSOLE_DEFAULT_INIT OFF)
+endif()
+option(SMARAGD_LOG_CONSOLE_DEFAULT
+    "Tee the log to stderr unless overridden (default: ON for Debug builds)"
+    ${SMARAGD_LOG_CONSOLE_DEFAULT_INIT})
+message(STATUS "Smaragd: log console default is ${SMARAGD_LOG_CONSOLE_DEFAULT}")
+
+# PUBLIC so the smaragd executable (main.cpp) inherits it along with app_ui.
+target_compile_definitions(app_ui PUBLIC
+    SMARAGD_LOG_CONSOLE_DEFAULT=$<BOOL:${SMARAGD_LOG_CONSOLE_DEFAULT}>)
+
 if(SMARAGD_WINDOWS AND NOT SMARAGD_WIN_CONSOLE)
     add_executable(smaragd WIN32 ${SMARAGD_MAIN_SOURCES})
 elseif(SMARAGD_MACOS)
