@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="trim_start_keeps_end">
+
+  <!-- Dragging a clip's START boundary moves that edge and nothing else. The
+       far edge is fixed; the drag may not pull it in.
+
+       Regression: the left-edge branch clamped the new duration to the content
+       remaining from the new offset (maxLength - rCutStart). On a clip longer
+       than its data that quietly dragged the RIGHT edge inward — trim 1 s off
+       the front of an 8 s looping clip over a 4 s sample and its end snapped
+       from 8 s back to 4 s. Driven through the real mouse handlers, since the
+       clamp lives in SMVActualView::mouseMoveEvent. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- test_sawtooth.wav is 192000 frames (4 s @ 48 kHz). -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Loop it: 8 s long, tiled from a 2 s segment - four times its data. -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="384000" loopLength="96000" stretch="1.0"/>
+
+    <!-- Trim 1 s off the FRONT. The clip must now run 1 s .. 8 s. -->
+    <drag-clip-edge track="0" clip="0" edge="start" toTime="48000" half="lower"/>
+
+    <render filename="trim_start_keeps_end.wav" format="wav" quality="10"/>
+
+    <!-- 7 s in: inside the clip only if its end stayed at 8 s. With the clamp
+         the clip ended at 4 s and this is silence. -->
+    <assert-audio-energy filename="trim_start_keeps_end.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.01" maxRms="0.95"/>
+
+    <!-- Still tiling just short of the 8 s end. -->
+    <assert-audio-energy filename="trim_start_keeps_end.wav"
+                         startFrame="360000" frameCount="24000"
+                         minRms="0.01" maxRms="0.95"/>
+
+    <!-- And the front really was trimmed: before 1 s there is nothing. -->
+    <assert-audio-energy filename="trim_start_keeps_end.wav"
+                         startFrame="0" frameCount="40000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

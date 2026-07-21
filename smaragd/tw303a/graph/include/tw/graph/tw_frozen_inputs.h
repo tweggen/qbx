@@ -1,6 +1,7 @@
 #ifndef _TW_FROZEN_INPUTS_H_
 #define _TW_FROZEN_INPUTS_H_
 
+#include "tw/core/twtypes.h"
 #include <cstdint>
 #include <memory>
 #include <utility>

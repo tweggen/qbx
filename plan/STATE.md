@@ -5927,3 +5927,52 @@ box. The previous focus is remembered via QApplication::focusChanged (a FocusIn
 event does not carry where focus came from); restore is deferred with a 0-timer
 so the box interprets the typed text on that keypress first, falling back to the
 arranger when the old widget is gone.
+
+---
+
+## Proposal 23: clips that start before their data (2026-07-21)
+
+- **Status:** ✅ COMPLETE
+- **Scope:** engine position type + page alignment; the left-edge pin comes out
+- **Verified on:** Windows/MinGW (full qxa suite from tests/cases, layering clean)
+
+**Corrects the previous entry.** That entry named
+`(uint64_t) r.mappedPos` in twview.cc:84 / twtrackmix.cc:373 as the root cause.
+It is not. `offset_t` — the engine's position type — was ITSELF unsigned
+(`typedef unsigned long long offset_t`), so the wrap already happened at the
+first cast inside `SCut::resolveClip`, and those two casts were no-ops on an
+already-unsigned type. The measurements in that entry stand; the attribution
+does not.
+
+Positions are signed now. What that took, and the traps found on the way:
+
+- `twFloorAlign()` in twtypes.h. Page alignment was `(pos/grain)*grain`, and C++
+  truncates toward zero — -30464 aligned to 0 instead of -65536, so the page
+  holding the silence-to-data seam was never the page rendered. Applied at the
+  streaming-latch seam and both audio-engine sites.
+- `twEditRange`'s unbounded sentinel moved UINT64_MAX -> INT64_MAX. Left alone it
+  becomes -1 once positions are signed — BELOW every real position — silently
+  collapsing an unbounded range to empty().
+- Position-carrying `uint64_t` -> `offset_t` across graph/mix/pages (startPos,
+  pageStart, startPosition, page-map keys, invalidatePagesInRange, twPageDep).
+  `inputOffset` stayed unsigned on purpose: it indexes a buffer, not a timeline.
+- Prerequisite (landed and suite-verified before the flip): the negative-offset
+  OOB reads in `twSampleSource::read` and `twGrainSource::read`. `avail =
+  nFrames_ - srcOffset` GROWS for a negative offset, so nothing clamped and the
+  pointer ran off the front of the buffer. Fixing the type without these would
+  have converted silence into a heap OOB read.
+
+Result on a clip anchored 2 s ahead of its data: content now begins exactly at
+2.0 s ramping from .0067 (the sawtooth's true first frame), with every second at
+its documented RMS — previously silence ran to 2.73 s and entered mid-ramp, ~0.7 s
+dropped. New case `clip_starts_before_data` drives the START edge past the data
+through the real mouse handlers; its minRms floor of .055 on the first content
+second is set to exclude the buggy .052, so it discriminates.
+
+The left-edge pin is gone; only the timeline start stays pinned at 0. Slip-past-
+data and start-boundary loop drags are unblocked in the engine — the gestures
+themselves are still to be written. ~100 `uint64_t` position sites remain in
+audio_engine playback (playhead is genuinely >= 0); consistent today, but the
+type should migrate so it tells the truth. Page maps now admit negative keys:
+`std::map` ordering holds, but any future code assuming "0 is the lowest page"
+is wrong.

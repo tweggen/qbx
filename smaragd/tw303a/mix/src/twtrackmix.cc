@@ -352,7 +352,7 @@ twPagePlan twTrackMix::planPage( offset_t pageStart )
 
     std::lock_guard<std::mutex> lock(mutex());
     for( const ClipEntry &clip : clips_ ) {
-        uint64_t clipEnd = clip.startTime;
+        offset_t clipEnd = clip.startTime;
         if( clip.duration > 0 ) {
             clipEnd += clip.duration;
         } else {
@@ -363,14 +363,17 @@ twPagePlan twTrackMix::planPage( offset_t pageStart )
         }
         if( !clip.view ) continue;
 
-        uint64_t childPos = (pageStart >= clip.startTime)
+        offset_t childPos = (pageStart >= clip.startTime)
                             ? (pageStart - clip.startTime)
                             : 0;
         // The SAME single resolution the render's view->freezePage performs
         // (Inv-1): component identity + mapped position from one snapshot.
-        twResolvedClip r = clip.view->resolve( (offset_t) childPos );
+        // mappedPos may be NEGATIVE (clip anchored before its data) and is
+        // carried as such — the old cast to unsigned wrapped it here, which is
+        // what made that page render silent (proposal 23).
+        twResolvedClip r = clip.view->resolve( childPos );
         if( !r.component ) continue;
-        plan.deps.push_back( twPageDep{ r.component, (uint64_t) r.mappedPos } );
+        plan.deps.push_back( twPageDep{ r.component, r.mappedPos } );
     }
     return plan;
 }
@@ -396,7 +399,7 @@ length_t twTrackMix::freezePage_nolock(
 
     // Iterate through clips that overlap [startPos, endPos)
     for( ClipEntry &clip : clips_ ) {  // Non-const to update previousPage
-        uint64_t clipEnd = clip.startTime;
+        offset_t clipEnd = clip.startTime;
         if( clip.duration > 0 ) {
             clipEnd += clip.duration;
         } else {
@@ -416,7 +419,7 @@ length_t twTrackMix::freezePage_nolock(
         }
 
         // Child position: what frame offset in the child corresponds to startPos?
-        uint64_t childPos = (startPos >= clip.startTime)
+        offset_t childPos = (startPos >= clip.startTime)
                             ? (startPos - clip.startTime)
                             : 0;
 
@@ -439,15 +442,15 @@ length_t twTrackMix::freezePage_nolock(
         clip.previousPage = childPage;
 
         // Mix child's frozen output into track output at correct timeline position
-        uint64_t destOffset = (clip.startTime >= startPos)
+        offset_t destOffset = (clip.startTime >= startPos)
                               ? (clip.startTime - startPos)
                               : 0;
 
         // Clamp to the clip's end: a frozen page always carries a full page of
         // source material, so without this the last page of a clip would bleed
         // audio past the clip boundary into the track sum.
-        uint64_t mixStart = startPos + destOffset;
-        uint64_t framesToMix = std::min<uint64_t>(childPage->validFrames,
+        offset_t mixStart = startPos + destOffset;
+        offset_t framesToMix = std::min<offset_t>((offset_t) childPage->validFrames,
                                                   clipEnd > mixStart ? clipEnd - mixStart : 0);
 
         // Type-safe mixing using IOVector (bounds-checked, zero-copy)

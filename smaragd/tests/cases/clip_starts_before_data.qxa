@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="clip_starts_before_data">
+
+  <!-- A clip may begin BEFORE its sample: the front runs as silence, then the
+       data plays from its very first frame. Dragging the start edge leftwards
+       past the data start is how a user gets there, so this drives the real
+       mouse handlers (drag-clip-edge), not the model API.
+
+       Two regressions guarded at once:
+
+       1. offset_t used to be UNSIGNED, so a clip anchored before its data
+          resolved to a negative position that wrapped to ~1.8e19 at the first
+          cast. Every page whose mapped start fell before the data came back
+          silent, so ~0.7 s of the sample was DROPPED and the audio entered
+          mid-waveform instead of at the ramp's start. (Proposal 23.)
+       2. Page alignment used (pos/grain)*grain, which truncates toward zero
+          rather than flooring, putting a negative position in the page ABOVE
+          the one containing it.
+
+       The fixture is a 4 s ramped sawtooth where every second has a distinct RMS
+       (sec0 .067 / sec1 .176 / sec2 .291 / sec3 .405), so a dropped or shifted
+       seam shows up as the wrong level in the wrong second. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- Place the 4 s sample 2 s into the timeline, so the start edge has room
+         to be dragged left past the beginning of its data. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000"/>
+
+    <!-- Drag the START edge from 2 s back to 0 s. The clip now runs 0..6 s:
+         2 s of leading silence, then the whole 4 s sample. -->
+    <drag-clip-edge track="0" clip="0" edge="start" toTime="0" half="lower"/>
+
+    <render filename="clip_starts_before_data.wav" format="wav" quality="10"/>
+
+    <!-- The lead-in is silent... -->
+    <assert-audio-energy filename="clip_starts_before_data.wav"
+                         startFrame="0" frameCount="88000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- ...and the sample then plays from frame 0, every second at its own level.
+         With the wrap, this second read ~.052 (the ramp entered late) and the
+         later seconds were shifted; with truncating alignment the whole page
+         was silent. -->
+    <assert-audio-energy filename="clip_starts_before_data.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="clip_starts_before_data.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.160" maxRms="0.195"/>
+    <assert-audio-energy filename="clip_starts_before_data.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.275" maxRms="0.310"/>
+    <assert-audio-energy filename="clip_starts_before_data.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.390" maxRms="0.420"/>
+
+    <!-- Past the end of the data: silence again. -->
+    <assert-audio-energy filename="clip_starts_before_data.wav"
+                         startFrame="292000" frameCount="40000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

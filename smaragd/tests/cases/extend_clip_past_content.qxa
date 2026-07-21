@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="extend_clip_past_content">
+
+  <!-- A clip may be LONGER than the sample behind it. Two ways to get there:
+         track 0 - a looping clip, which tiles its segment for as long as you
+                   drag; there is no content limit at all.
+         track 1 - a plain clip dragged past the end of its data, which simply
+                   runs into silence (this is also the state "Remove loop"
+                   leaves behind, so it must survive a later extend).
+       Both are driven through drag-clip-edge, i.e. the REAL mouse handlers:
+       the clamp this pins lives in SMVActualView::mouseMoveEvent and a
+       resize-clip action would sail straight past it.
+
+       Regression: the extend drag clamped the duration to the remaining
+       CONTENT length (contentLen - startOffset), so both clips snapped back to
+       about the length of their data - roughly one loop cycle for track 0. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Pixel-quantised drops; keep the grid out of it so the only rounding is
+         the view's zoom. -->
+    <snap-to-grid-disable/>
+
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- test_sawtooth.wav is 192000 frames (4 s @ 48 kHz). -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Track 0: make it loop - 8 s long, tiled from a 2 s segment. -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="384000" loopLength="96000" stretch="1.0"/>
+
+    <!-- Track 1: plain clip, already longer than its 4 s of data (6 s). -->
+    <resize-clip clip="1,0" startTime="0" startOffset="0"
+                 duration="288000" loopLength="0" stretch="1.0"/>
+
+    <!-- Now drag each right edge out to ~16 s. Lower half = extend, not loop. -->
+    <drag-clip-edge track="0" clip="0" edge="end" toTime="768000" half="lower"/>
+    <drag-clip-edge track="1" clip="0" edge="end" toTime="768000" half="lower"/>
+
+    <render filename="extend_past_content.wav" format="wav" quality="10"/>
+
+    <!-- 12 s in: well past both clips' old clamp (4 s of content) and past the
+         6 s the plain clip started at. The looping clip must still be tiling
+         here, so the mix has to carry real signal. With the clamp in place the
+         render is only ~4 s long and this region does not exist at all. -->
+    <assert-audio-energy filename="extend_past_content.wav"
+                         startFrame="576000" frameCount="48000"
+                         minRms="0.01" maxRms="0.95"/>
+
+    <!-- And still tiling right before the drop point (~15 s). -->
+    <assert-audio-energy filename="extend_past_content.wav"
+                         startFrame="720000" frameCount="24000"
+                         minRms="0.01" maxRms="0.95"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

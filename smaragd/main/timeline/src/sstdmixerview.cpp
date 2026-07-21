@@ -1649,16 +1649,13 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Keep at least the minimum length.
                 if( (length_t) end0 - (length_t) rStart < SMV_CUT_MIN_TIME )
                     rStart = end0 - (offset_t) SMV_CUT_MIN_TIME;
-                // The cut's start offset still can't go below 0 — dragging the
-                // edge to BEFORE the data would need the engine to render
-                // leading silence, and it does not: a clip anchored 2 s ahead of
-                // its sample renders silence for 2.7 s and then jumps in
-                // mid-waveform, i.e. it silently drops the first ~0.7 s. Until
-                // the page/reader path handles a negative source anchor this
-                // pin stays.
+                // The cut's start offset MAY go below zero: a clip can begin
+                // before its data and render leading silence (proposal 23 — page
+                // positions are signed now, so a negative source anchor no
+                // longer wraps to ~1.8e19 and blank the page). Only the TIMELINE
+                // start is pinned, since there is no time before zero.
+                if( rStart < 0 ) rStart = 0;
                 length_t shift = (length_t) rStart - (length_t) clipDragStart0_;
-                if( (length_t) clipResizeOffset0_ + shift < 0 )
-                    rStart = clipDragStart0_ - (offset_t) clipResizeOffset0_;
                 if( (offset_t) rStart > end0 ) rStart = clipDragStart0_;   // safety
                 shift = (length_t) rStart - (length_t) clipDragStart0_;
                 offset_t rCutStart = (offset_t)( (length_t) clipResizeOffset0_ + shift );

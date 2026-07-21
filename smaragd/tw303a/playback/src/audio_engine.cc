@@ -383,7 +383,7 @@ bool AudioEngine::pullStereoFrameFrozen(float& outL, float& outR) {
 void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     // Calculate which page this position belongs to
     uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
-    offset_t pageStartPos = (desiredPos / pageSize) * pageSize;
+    offset_t pageStartPos = twFloorAlign( desiredPos, (offset_t) pageSize );
 
     // DEBUG: Track readahead gap
     static int gapLogCounter = 0;
@@ -617,7 +617,7 @@ void AudioEngine::readaheadLoop() {
         if (!synthOutput_ || !readaheadRunning_.load(std::memory_order_relaxed)) continue;
 
         uint64_t currentPos = currentPos_.load(std::memory_order_relaxed);
-        offset_t pageStart = (currentPos / pageSize) * pageSize;
+        offset_t pageStart = twFloorAlign( (offset_t) currentPos, (offset_t) pageSize );
 
         // Detect a real playhead jump (transport seek or loop wrap): the playhead
         // moved backwards, or past everything we've frozen. During normal playback
