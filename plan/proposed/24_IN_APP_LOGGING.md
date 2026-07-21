@@ -1,6 +1,6 @@
 # Proposal 24 — In-application logging: one sink, a dockable log view
 
-Status: PROPOSED (2026-07-21)
+Status: PROPOSED (2026-07-21) — re-verified against `9e6e2c3` (2026-07-21)
 
 ## 1. Motivation
 
@@ -9,7 +9,7 @@ the console and nowhere else:
 
 | Channel | Sites | Where it goes today |
 |---|---|---|
-| `qDebug/qInfo/qWarning/qCritical` | 143 | Qt's default handler → stderr |
+| `qDebug/qInfo/qWarning/qCritical` | 144 | Qt's default handler — on Windows/MinGW the **Windows debug channel, not stderr** (see §1.1) |
 | `syslog(LOG_*, …)` via `tw/core/twsyslog.h` | 36 | `vfprintf(stderr)` on Windows; the **real** syslog on POSIX |
 | raw `fprintf(stderr, …)` | 104 (84 engine, 20 app) | stderr |
 
@@ -26,11 +26,40 @@ Four concrete costs:
    repaint UAF, `revalAddRef` atomicity), "which thread said this, and when
    relative to that other line" is the question the log cannot answer.
 
-The last entry in `plan/STATE.md` closes on exactly this, from the drag-clip-edge
-work: *"`qWarning()` output is invisible in this Windows/MinGW build, so
-action-level diagnostics do not reach the test log — the failures that matter
-must be expressed as assertions, not warnings."* Diagnostics that cannot be seen
-force every observation to become an assertion.
+`plan/STATE.md` records this pain **twice, months apart**, which is the clearest
+signal that it is structural rather than incidental:
+
+- `STATE.md:5870` (drag-clip-edge work) — *"`qWarning()` output is invisible in
+  this Windows/MinGW build, so action-level diagnostics do not reach the test
+  log — the failures that matter must be expressed as assertions, not
+  warnings."*
+- `STATE.md:2642` ("Diagnostic note (for next time)") — *"On Windows/MinGW,
+  `qWarning()`/`qDebug()` output does **not** reach the bash-redirected `stderr`
+  logfile (it routes to the Windows debug channel), so DnD probes via `qWarning`
+  were invisible. Engine logs show up because `twsyslog.h` uses
+  `fprintf(stderr,…)+fflush`. Use that same idiom (not `qWarning`) when adding
+  console diagnostics that must land in a redirected log."*
+
+Diagnostics that cannot be seen force every observation to become an assertion,
+and the standing workaround — "prefer `fprintf` over `qWarning`" — is precisely
+what grew the 104 raw call sites this proposal has to sweep back up.
+
+### 1.1 A note on why the Qt bridge is not merely cosmetic
+
+The second entry pins down the mechanism: Qt's **default** handler on
+Windows/MinGW routes to `OutputDebugString`, so `qWarning`/`qDebug` never reach
+a redirected `stderr` — which is why the engine's `syslog()` output appears in
+captured logs and the app's Qt output does not. `qInstallMessageHandler`
+*replaces* that default handler outright. Every Qt message therefore leaves
+through `TwLog`'s own `fwrite(stderr)` tee, on the same file descriptor as
+everything else, correctly interleaved. Installing the handler (§3) fixes a
+twice-recorded, years-old defect as a side effect, and retires the "use
+`fprintf`, not `qWarning`" advice that STATE.md currently gives.
+
+**This has a direct consequence for verification (§8.2): the console output
+after the change is a strict superset of the output before it.** 144 Qt call
+sites that were previously invisible on redirected stderr will start appearing
+there. A "nothing changed" diff is the *wrong* success criterion.
 
 **Goal.** One structured sink that every channel feeds; console output stays the
 default in Debug and becomes an option in Release; and a dockable log window that
@@ -164,7 +193,7 @@ vanishing into the journal. The `LOG_*` constants stay defined; no call site
 changes.
 
 **Qt.** `qInstallMessageHandler` as the very first statement of `main()`
-(`main/shell/src/main.cpp:16`), before `SApplication` construction — the headless
+(`main/shell/src/main.cpp:15`), before `SApplication` construction — the headless
 `-platform offscreen` argv rewrite above it must stay first in *source* order but
 emits nothing, so the handler still precedes any Qt message. Map
 `QtDebugMsg→Debug`, `QtInfoMsg→Info`, `QtWarningMsg→Warn`,
@@ -196,7 +225,7 @@ Heaviest files: `tw303a/devices/src/wasapi_backend.cc` (~20),
 
 ### 4.1 Explicitly out of scope
 
-- **`std::cout` in `main/shell/src/main.cpp:68–171`** — the TAP `PASS`/`FAIL`,
+- **`std::cout` in `main/shell/src/main.cpp:68–172`** — the TAP `PASS`/`FAIL`,
   `# Actions applied:`, `# Failures:`, `# Artifacts:` output that the qxa harness
   parses. Touching it breaks the test suite; it is program output, not logging.
 - Any `fprintf(stdout, …)` / bare `printf` that is program output rather than
@@ -299,10 +328,10 @@ Pause stops the drain timer but not the sink; resuming replays from the ring.
   `new QDockWidget(tr("Log"), this)`, `setObjectName("dock_log")`,
   `addDockWidget(Qt::BottomDockWidgetArea, …)`, hidden on first run. The
   objectName is what lets the **existing** `saveState`/`restoreState` persistence
-  (`SSettings::windowState`, `smainwindow.cpp:477`) restore its visibility and
+  (`SSettings::windowState`, `smainwindow.cpp:482`) restore its visibility and
   placement for free — no new settings key.
 - New top-level **`&View`** menu (there is none today) built next to the other
-  menus at `smainwindow.cpp:823`, holding `qDockLog_->toggleViewAction()` — Qt
+  menus at `smainwindow.cpp:841`, holding `qDockLog_->toggleViewAction()` — Qt
   supplies the checkable action — bound to **Ctrl+Shift+L**. Move
   `qDockExternFileList_->toggleViewAction()` in there as well.
 - Connect `QDockWidget::visibilityChanged` → `SLogView::setLive(bool)` so the
@@ -316,14 +345,17 @@ Pause stops the drain timer but not the sink; resuming replays from the ring.
 **New**
 
 - `tw303a/core/include/tw/core/twlog.h`, `tw303a/core/src/twlog.cc`
-- `tw303a/core/tests/twlog_test.cc`
+- `tw303a/core/tests/test_twlog.cpp` — the `core/tests/test_<name>.cpp` naming
+  the four existing core tests use
 - `main/servicesui/{include/app/servicesui,src}/slogmodel.{h,cpp}`
 - `main/servicesui/{include/app/servicesui,src}/slogview.{h,cpp}`
 - `tools/check_logging.py`
 
 **Modified**
 
-- `tw303a/CMakeLists.txt` (twlog in the `core` module, ~line 27);
+- `tw303a/CMakeLists.txt` — twlog sources in the `core` module (~line 27) **and**
+  `tw_module_test(twlog_test core/tests/test_twlog.cpp tw_core)` beside the other
+  four core tests (~line 359);
   `main/CMakeLists.txt` (servicesui sources ~205; `SMARAGD_LOG_CONSOLE_DEFAULT`
   beside `SMARAGD_WIN_CONSOLE` ~305)
 - `tw303a/core/include/tw/core/twsyslog.h` (shim → `TwLog`, all platforms)
@@ -348,14 +380,18 @@ Pause stops the drain timer but not the sink; resuming replays from the ring.
    `-DCMAKE_BUILD_TYPE=Release`; confirm the console default flips and that
    `SMARAGD_WIN_CONSOLE=OFF` + `--log-console` behaves sensibly (no console
    window, log still reaches the dock and file).
-2. **Console parity** — run `smaragd --log-console --log-level=debug` through a
-   startup + play + render sequence and diff against a pre-change run. Content
-   must be equivalent (gaining the `HH:MM:SS.mmm [W] cat ` prefix); nothing lost.
+2. **Console superset** — run `smaragd --log-console --log-level=debug` through a
+   startup + play + render sequence, redirect stderr to a file, and diff against
+   a pre-change run. The correct criterion is **superset, not equality** (§1.1):
+   every pre-change line must still be present (modulo the new
+   `HH:MM:SS.mmm [W] cat ` prefix), *plus* the Qt messages that previously went
+   to the Windows debug channel. Assert specifically that nothing is **lost** —
+   additions are the point of the change.
 3. **Regression suite — the one that matters most**, because the sweep touches
    testkit: run the qxa suite **from `smaragd/tests/cases/`** (fixtures are
    CWD-relative; running from `smaragd/` yields bogus failures). All cases green,
    TAP stdout byte-identical to before.
-4. **Unit test** `tw303a/core/tests/twlog_test.cc`:
+4. **Unit test** `tw303a/core/tests/test_twlog.cpp`:
    - fill past capacity → `firstSeq()` advances, `snapshot()` returns exactly the
      resident window, `droppedCount()` exact;
    - 8 threads × 100 000 records → every `seq` in `[firstSeq, nextSeq)` appears
@@ -366,12 +402,20 @@ Pause stops the drain timer but not the sink; resuming replays from the ring.
    PCM, not float32) must match: the sweep must not perturb the audio path.
    Sweep `SMARAGD_REVAL_WORKERS` over {1,4,8,16} with
    `tests/repeat_test.sh … takes_group_broadcast 50`.
-6. **UI scale test** — a `logstress` testkit action emitting 500 000 records,
-   then open the dock and screenshot. Assert (a) the app stays interactive,
-   (b) the per-tick drain stays under ~5 ms (instrument behind
-   `SMARAGD_LOG_DEBUG=1`), (c) scrolling to the top and jumping back to the
-   bottom is instantaneous, (d) applying a substring filter over the full ring
-   completes well under a second.
+6. **UI scale test** — a `logstress` testkit action emitting 500 000 records.
+   The assertions must be **numeric, not visual**: `SScreenshotAction` grabs the
+   root window (`screen->grabWindow(0)`, `sscreenshotaction.cpp:49`), i.e. the
+   whole desktop, so a screenshot cannot verify the dock's state — it is an
+   eyeball aid only, and `test-output/` is untracked as of `9e6e2c3`.
+   Instrument behind `SMARAGD_LOG_DEBUG=1` and assert, via a new
+   `assert-log-drain-under <ms>` testkit action: (a) the per-tick drain stays
+   under ~5 ms at steady state, (b) the worst single tick during the 500 k burst
+   stays bounded (the per-tick cap of §6.1 is what guarantees this — it is the
+   assertion that would actually catch a regression to an uncapped drain),
+   (c) a full-ring substring filter completes well under a second, (d) `rowCount`
+   settles at `min(500000, capacity)` with `droppedCount()` accounting for the
+   remainder. Manual pass afterwards for scroll feel (jump to top, jump to
+   bottom, drag the scrollbar).
 7. **File sink** — kill the app mid-run and confirm
    `%APPDATA%/Smaragd/smaragd.log` holds records up to the kill; confirm rotation
    at 8 MB and that exactly 3 backups are kept.
