@@ -23,6 +23,7 @@ public:
 
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
+#include "tw/core/twlog.h"
 #include <cstdio>
 
 SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
@@ -253,16 +254,16 @@ audio::RenderParams SRenderDialog::getRenderParams() const {
         bool rangeValid = project_->prop(SProjectProps::RangeValid, false).toBool();
         qulonglong rangeStart = project_->prop(SProjectProps::RangeStart, 0).toULongLong();
         qulonglong rangeEnd = project_->prop(SProjectProps::RangeEnd, 0).toULongLong();
-        fprintf(stderr, "[SRenderDialog] TimeSelection: RangeValid=%d, RangeStart=%llu samples, RangeEnd=%llu samples\n",
-                rangeValid, rangeStart, rangeEnd);
-        fprintf(stderr, "[SRenderDialog] Converted: startTimeSec=%.6f, endTimeSec=%.6f\n",
-                params.startTimeSec, params.endTimeSec);
+        TW_LOGD( "ui.services", "[SRenderDialog] TimeSelection: RangeValid=%d, RangeStart=%llu samples, RangeEnd=%llu samples",
+                rangeValid, rangeStart, rangeEnd );
+        TW_LOGD( "ui.services", "[SRenderDialog] Converted: startTimeSec=%.6f, endTimeSec=%.6f",
+                params.startTimeSec, params.endTimeSec );
     } else {
         params.extent = audio::RenderParams::Extent::EntireProject;
         params.startTimeSec = 0.0;
         params.endTimeSec = project_ ? project_->getDurationSeconds() : 60.0;
-        fprintf(stderr, "[SRenderDialog] EntireProject: startTimeSec=%.6f, endTimeSec=%.6f\n",
-                params.startTimeSec, params.endTimeSec);
+        TW_LOGD( "ui.services", "[SRenderDialog] EntireProject: startTimeSec=%.6f, endTimeSec=%.6f",
+                params.startTimeSec, params.endTimeSec );
     }
 
     // Output path

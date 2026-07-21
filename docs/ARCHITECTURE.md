@@ -57,6 +57,12 @@ only its own include dirs and links only the lower layers plus its declared
 engine modules — a cross-layer include (model→actions, core→objects,
 anything below the UI→shell) fails to compile. The core modules reach the
 application only through `app/model/sappcontext.h`.
+Diagnostics: every module logs through `TW_LOG*` (`tw/core/twlog.h`) or the
+`syslog()` shim, both of which land in the one `TwLog` ring that feeds the
+console tee, the rotating file, and the in-app log dock. Nothing writes to
+stderr/stdout directly — `python tools/check_logging.py` enforces that
+(proposal 24).
+
 `python tools/check_layering.py` guards the finer grain the build cannot:
 per-MODULE engine deps and the declared intra-layer edge set. Since the
 placement service (`app/model/splacements.h`) the object slices form a DAG
@@ -95,7 +101,8 @@ minimal.
 2. Recipe: read the module's CONTRACT.md → read the PUBLIC headers of its
    dependencies (not their src/) → run the tests it names → implement →
    green: `ctest` from smaragd/build/ (runs the module unit tests AND every
-   qxa case) plus `python tools/check_layering.py`.
+   qxa case) plus `python tools/check_layering.py` and
+   `python tools/check_logging.py`.
 3. Changing a public header or an invariant is its own, human-reviewed
    change — land it before dependent work.
 4. Update the module's CONTRACT.md "Known debt" when you add or retire debt;

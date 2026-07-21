@@ -12,6 +12,7 @@
 #include "tw/graph/twview.h"
 #include <vector>
 #include "tw/pages/io_vector.h"
+#include "tw/core/twlog.h"
 #include <vector>
 
 int twTrackMix::seekTo( offset_t newOffset )
@@ -40,7 +41,7 @@ int twTrackMix::seekTo_nolock( offset_t newOffset )
     // audio when the render/playback reaches them.
     for( const ClipEntry &clip : clips_ ) {
         if( !clip.view ) {
-            fprintf(stderr, "WARNING: twTrackMix::seekTo_nolock found null view\n");
+            TW_LOGW( "mix", "WARNING: twTrackMix::seekTo_nolock found null view" );
             continue;
         }
         offset_t startTime = clip.startTime;
@@ -96,7 +97,7 @@ twEditRange twTrackMix::insertClip(const void *key, offset_t startTime, length_t
                             std::function<twResolvedClip(offset_t)> resolveFn)
 {
     if( !getComponentFn ) {
-        fprintf(stderr, "ERROR: twTrackMix::insertClip received null callback!\n");
+        TW_LOGE( "mix", "ERROR: twTrackMix::insertClip received null callback!" );
         return {};
     }
     // Create a stable twView wrapper for this clip. Owned by shared_ptr so that
@@ -120,7 +121,7 @@ twEditRange twTrackMix::insertClip(const void *key, offset_t startTime, length_t
     // Phase 5 range scoping).
     twEditRange r = clipExtent(startTime, duration);
     invalidatePagesInRange_nolock(r.start, r.end);
-    fprintf(stderr, "twTrackMix: inserted clip at time %llu, now have %zu clips\n", startTime, clips_.size());
+    TW_LOGD( "mix", "twTrackMix: inserted clip at time %llu, now have %zu clips", startTime, clips_.size() );
     return r;
 }
 
@@ -164,7 +165,7 @@ twEditRange twTrackMix::removeClip(const void *key)
             // still correct (proposal 18 Phase 5 range scoping).
             invalidatePagesInRange_nolock(r.start, r.end);
         }
-        fprintf(stderr, "twTrackMix: removed %d clip(s), now have %zu clips\n", removed, clips_.size());
+        TW_LOGD( "mix", "twTrackMix: removed %d clip(s), now have %zu clips", removed, clips_.size() );
     }
     // lock released here; `doomed` destructs next with the mutex open.
     return r;
@@ -286,7 +287,7 @@ length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
         }
 
         if( !clip.view ) {
-            fprintf(stderr, "WARNING: twTrackMix::calcOutputTo found null view\n");
+            TW_LOGW( "mix", "WARNING: twTrackMix::calcOutputTo found null view" );
             continue;
         }
         twComponent &cp = *clip.view;
@@ -414,7 +415,7 @@ length_t twTrackMix::freezePage_nolock(
 
         // Freeze the child component's output for this range
         if( !clip.view ) {
-            fprintf(stderr, "WARNING: twTrackMix::freezePage_nolock found null view\n");
+            TW_LOGW( "mix", "WARNING: twTrackMix::freezePage_nolock found null view" );
             continue;
         }
 
@@ -509,7 +510,7 @@ void twTrackMix::restoreInternalState_nolock(const std::any& state)
         auto s = std::any_cast<const TrackInternalState&>(state);
         playOffset_.store(s.playOffset, std::memory_order_relaxed);
     } catch (const std::bad_any_cast&) {
-        fprintf(stderr, "twTrackMix::restoreInternalState: state format mismatch\n");
+        TW_LOGD( "mix", "twTrackMix::restoreInternalState: state format mismatch" );
     }
 }
 

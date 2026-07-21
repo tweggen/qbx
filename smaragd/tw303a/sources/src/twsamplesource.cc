@@ -7,6 +7,7 @@
 
 #include "tw/sources/twsamplesource.h"
 #include "tw/sources/twresampledsource.h"
+#include "tw/core/twlog.h"
 
 twSampleSource::twSampleSource( tw303aEnvironment &env, const QString &fileName )
     : env_( env ),
@@ -215,8 +216,8 @@ int twSampleSource::loadWav()
 
     file.close();
     loaded_ = true;
-    fprintf( stderr, "twSampleSource: loaded %lld frames (%lld bytes) resident.\n",
-             (long long) nFrames_, (long long) ( data_.size() * sizeof( sample_t ) ) );
+    TW_LOGI( "sources", "twSampleSource: loaded %lld frames (%lld bytes) resident.",
+             (long long) nFrames_, (long long) ( data_.size() * sizeof( sample_t ) )  );
     return 0;
 }
 

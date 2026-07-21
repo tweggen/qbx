@@ -2,6 +2,7 @@
 
 #include "tw/core/twconvert.h"
 #include "tw/core/twsyslog.h"
+#include "tw/core/twlog.h"
 
 // WIN32_LEAN_AND_MEAN / NOMINMAX are provided globally by the top-level
 // CMakeLists.txt — do not redefine here.
@@ -147,15 +148,15 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     // any failure below returns us to Closed via releaseDevice_(), so a
     // half-completed open can never leave a partially-set device behind.
     if (state_ == WasapiState::Open || state_ == WasapiState::Running) {
-        fprintf(stderr, "WASAPIBackend::openDevice: already open (state=%s)\n",
-                stateName(state_));
+        TW_LOGW( "devices", "WASAPIBackend::openDevice: already open (state=%s)",
+                stateName(state_) );
         return 0;
     }
     if (state_ != WasapiState::Closed) {
         // Only reachable if a transient state leaked, which the mutex prevents;
         // guard anyway so the contract is explicit.
-        fprintf(stderr, "WASAPIBackend::openDevice: unexpected state %s\n",
-                stateName(state_));
+        TW_LOGW( "devices", "WASAPIBackend::openDevice: unexpected state %s",
+                stateName(state_) );
         return -1;
     }
     state_ = WasapiState::Opening;
@@ -169,7 +170,7 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (SUCCEEDED(hr)) comInitialized_ = true;
     else if (hr != RPC_E_CHANGED_MODE && hr != S_FALSE) {
-        fprintf(stderr, "WASAPIBackend: CoInitializeEx failed: 0x%08lx\n", (unsigned long)hr);
+        TW_LOGE( "devices", "WASAPIBackend: CoInitializeEx failed: 0x%08lx", (unsigned long)hr );
         return fail();
     }
 
@@ -177,30 +178,30 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
                           CLSCTX_INPROC_SERVER, IID_IMMDeviceEnumerator_local,
                           reinterpret_cast<void **>(&enumerator_));
     if (FAILED(hr)) {
-        fprintf(stderr, "WASAPIBackend: CoCreateInstance(MMDeviceEnumerator) failed: 0x%08lx\n",
-                (unsigned long)hr);
+        TW_LOGE( "devices", "WASAPIBackend: CoCreateInstance(MMDeviceEnumerator) failed: 0x%08lx",
+                (unsigned long)hr );
         return fail();
     }
 
     if (deviceName.empty() || deviceName == "default") {
         hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
         if (FAILED(hr)) {
-            fprintf(stderr, "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx\n",
-                    (unsigned long)hr);
+            TW_LOGE( "devices", "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx",
+                    (unsigned long)hr );
             return fail();
         }
     } else {
         std::wstring wid = utf8ToWide(deviceName);
         hr = enumerator_->GetDevice(wid.c_str(), &device_);
         if (FAILED(hr)) {
-            fprintf(stderr,
+            TW_LOGE( "devices",
                     "WASAPIBackend: GetDevice for selected endpoint failed "
-                    "(0x%08lx); falling back to system default.\n",
-                    (unsigned long)hr);
+                    "(0x%08lx); falling back to system default.",
+                    (unsigned long)hr );
             hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
             if (FAILED(hr)) {
-                fprintf(stderr, "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx\n",
-                        (unsigned long)hr);
+                TW_LOGE( "devices", "WASAPIBackend: GetDefaultAudioEndpoint failed: 0x%08lx",
+                        (unsigned long)hr );
                 return fail();
             }
         }
@@ -209,15 +210,15 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     hr = device_->Activate(IID_IAudioClient_local, CLSCTX_INPROC_SERVER, nullptr,
                            reinterpret_cast<void **>(&audioClient_));
     if (FAILED(hr)) {
-        fprintf(stderr, "WASAPIBackend: IMMDevice::Activate(IAudioClient) failed: 0x%08lx\n",
-                (unsigned long)hr);
+        TW_LOGE( "devices", "WASAPIBackend: IMMDevice::Activate(IAudioClient) failed: 0x%08lx",
+                (unsigned long)hr );
         return fail();
     }
 
     WAVEFORMATEX *mixFormat = nullptr;
     hr = audioClient_->GetMixFormat(&mixFormat);
     if (FAILED(hr) || !mixFormat) {
-        fprintf(stderr, "WASAPIBackend: GetMixFormat failed: 0x%08lx\n", (unsigned long)hr);
+        TW_LOGE( "devices", "WASAPIBackend: GetMixFormat failed: 0x%08lx", (unsigned long)hr );
         return fail();
     }
 
@@ -226,10 +227,10 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     config_.channels   = mixFormat->nChannels;
 
     if (sampleFormat_ == WasapiSampleFormat::Unknown) {
-        fprintf(stderr,
+        TW_LOGD( "devices",
                 "WASAPIBackend: unsupported mix format (tag=0x%04x bits=%u) — "
-                "device wants something other than float32/int16/int32; bailing\n",
-                mixFormat->wFormatTag, mixFormat->wBitsPerSample);
+                "device wants something other than float32/int16/int32; bailing",
+                mixFormat->wFormatTag, mixFormat->wBitsPerSample );
         CoTaskMemFree(mixFormat);
         return fail();
     }
@@ -246,10 +247,10 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     // can't be honoured here — the speaker resampler bridges it. (Exclusive-mode
     // support for honouring preferredRate natively is future work; see prop 02.)
     if (preferredRate != 0 && preferredRate != config_.sampleRate) {
-        fprintf(stderr,
+        TW_LOGD( "devices",
                 "WASAPIBackend: requested %u Hz but shared-mode mix rate is %u Hz; "
-                "the speaker will resample.\n",
-                (unsigned) preferredRate, config_.sampleRate);
+                "the speaker will resample.",
+                (unsigned) preferredRate, config_.sampleRate );
     }
 
     hr = audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED,
@@ -257,19 +258,19 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
                                   kRequestedDurationHns, 0, mixFormat, nullptr);
     CoTaskMemFree(mixFormat);
     if (FAILED(hr)) {
-        fprintf(stderr, "WASAPIBackend: IAudioClient::Initialize failed: 0x%08lx\n",
-                (unsigned long)hr);
+        TW_LOGE( "devices", "WASAPIBackend: IAudioClient::Initialize failed: 0x%08lx",
+                (unsigned long)hr );
         return fail();
     }
 
     bufferReady_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!bufferReady_) {
-        fprintf(stderr, "WASAPIBackend: CreateEvent failed\n");
+        TW_LOGE( "devices", "WASAPIBackend: CreateEvent failed" );
         return fail();
     }
     hr = audioClient_->SetEventHandle(bufferReady_);
     if (FAILED(hr)) {
-        fprintf(stderr, "WASAPIBackend: SetEventHandle failed: 0x%08lx\n", (unsigned long)hr);
+        TW_LOGE( "devices", "WASAPIBackend: SetEventHandle failed: 0x%08lx", (unsigned long)hr );
         return fail();
     }
 
@@ -287,9 +288,9 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
         config_.outputLatencyFrames = static_cast<uint32_t>(
             (latencyHns * config_.sampleRate) / 10000000LL
         );
-        fprintf(stderr,
-                "WASAPIBackend: output latency %.2f ms (%u frames @ %u Hz)\n",
-                latencyHns / 10000.0, config_.outputLatencyFrames, config_.sampleRate);
+        TW_LOGD( "devices",
+                "WASAPIBackend: output latency %.2f ms (%u frames @ %u Hz)",
+                latencyHns / 10000.0, config_.outputLatencyFrames, config_.sampleRate );
     } else {
         config_.outputLatencyFrames = 0;
     }
@@ -297,8 +298,8 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     hr = audioClient_->GetService(IID_IAudioRenderClient_local,
                                   reinterpret_cast<void **>(&renderClient_));
     if (FAILED(hr)) {
-        fprintf(stderr, "WASAPIBackend: GetService(IAudioRenderClient) failed: 0x%08lx\n",
-                (unsigned long)hr);
+        TW_LOGE( "devices", "WASAPIBackend: GetService(IAudioRenderClient) failed: 0x%08lx",
+                (unsigned long)hr );
         return fail();
     }
 
@@ -309,14 +310,14 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
         case WasapiSampleFormat::Int32:   fmtName = "int32";   break;
         default: break;
     }
-    fprintf(stderr,
-            "WASAPIBackend: opened default endpoint, %u Hz, %u ch, %s, buffer=%u frames\n",
-            config_.sampleRate, config_.channels, fmtName, config_.bufferFrames);
+    TW_LOGI( "devices",
+            "WASAPIBackend: opened default endpoint, %u Hz, %u ch, %s, buffer=%u frames",
+            config_.sampleRate, config_.channels, fmtName, config_.bufferFrames );
 
-    fprintf(stderr,
+    TW_LOGD( "devices",
             "WASAPIBackend: device mix rate is %u Hz; twSpeaker resamples the "
-            "synth output to match.\n",
-            config_.sampleRate);
+            "synth output to match.",
+            config_.sampleRate );
 
     state_ = WasapiState::Open;
     return 0;
@@ -448,9 +449,9 @@ int WASAPIBackend::startOutputLocked_()
     // Caller holds stateMutex_.
     if (state_ == WasapiState::Running) return 0;
     if (state_ != WasapiState::Open) {
-        fprintf(stderr,
-                "WASAPIBackend::startOutput: device not open (state=%s)\n",
-                stateName(state_));
+        TW_LOGD( "devices",
+                "WASAPIBackend::startOutput: device not open (state=%s)",
+                stateName(state_) );
         return -1;
     }
     // Reap a previous audio thread that already exited but was never joined:
@@ -468,8 +469,8 @@ int WASAPIBackend::startOutputLocked_()
 
     HRESULT hr = audioClient_->Start();
     if (FAILED(hr)) {
-        fprintf(stderr, "WASAPIBackend: IAudioClient::Start failed: 0x%08lx\n",
-                (unsigned long)hr);
+        TW_LOGE( "devices", "WASAPIBackend: IAudioClient::Start failed: 0x%08lx",
+                (unsigned long)hr );
         state_ = WasapiState::Open;   // device still open, just not running
         return -1;
     }

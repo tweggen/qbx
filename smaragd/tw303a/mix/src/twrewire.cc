@@ -5,6 +5,7 @@
 #include "tw/mix/twrewire.h"
 #include <vector>
 #include "tw/pages/io_vector.h"
+#include "tw/core/twlog.h"
 #include <vector>
 
 const char *twRewire::getInputName( idx_t ) const
@@ -60,9 +61,9 @@ length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
         if( idx < 0 || idx >= nInputs_ || idx >= (idx_t)pInputPlugs_.size() || !pInputPlugs_[idx] ) {
             static int silenceCount = 0;
             if (++silenceCount % 100 == 1) {
-                fprintf(stderr, "twRewire::calcOutputTo() returning silence: idx=%d, nInputs=%d, pPlugs.size=%zu, plug=%s\n",
+                TW_LOGD( "mix", "twRewire::calcOutputTo() returning silence: idx=%d, nInputs=%d, pPlugs.size=%zu, plug=%s",
                     (int)idx, (int)nInputs_, pInputPlugs_.size(),
-                    (idx >= (idx_t)pInputPlugs_.size()) ? "OOB" : (!pInputPlugs_[idx] ? "null" : "valid"));
+                    (idx >= (idx_t)pInputPlugs_.size()) ? "OOB" : (!pInputPlugs_[idx] ? "null" : "valid") );
             }
             return dest.fillSilence(0, dest.length());
         }

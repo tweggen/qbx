@@ -7,6 +7,7 @@
 #include "tw/graph/twcomponent.h"
 #include "tw/schedule/capture_revalidator.h"   // Stage 4: watermark demands
 #include "tw/sources/twresampler.h"
+#include "tw/core/twlog.h"
 
 namespace audio {
 
@@ -127,15 +128,13 @@ void RenderSession::renderThreadMain() {
     bool success = true;
     std::string errorMsg;
 
-    fprintf(stderr, "[RenderSession] Starting render. Total samples: %zu, Sample rate: %u, Start offset: %zu\n",
-            totalSamples_, sampleRate_, startOffsetSamples_);
-    fflush(stderr);
+    TW_LOGI( "render", "[RenderSession] Starting render. Total samples: %zu, Sample rate: %u, Start offset: %zu",
+            totalSamples_, sampleRate_, startOffsetSamples_ );
 
     try {
-        fprintf(stderr, "[RenderSession] Starting unified render via AudioEngine + FileSink\n");
-        fprintf(stderr, "[RenderSession] Range: %.2f - %.2f seconds (%zu samples)\n",
-                params_.startTimeSec, params_.endTimeSec, totalSamples_);
-        fflush(stderr);
+        TW_LOGI( "render", "[RenderSession] Starting unified render via AudioEngine + FileSink" );
+        TW_LOGD( "render", "[RenderSession] Range: %.2f - %.2f seconds (%zu samples)",
+                params_.startTimeSec, params_.endTimeSec, totalSamples_ );
 
         // Phase 3: Sequential rendering via freezePage() (no seekTo)
         // Strategy: Use freezePage() to render sequentially, eliminating seekTo() state corruption
@@ -248,9 +247,8 @@ void RenderSession::renderThreadMain() {
 
             // Progress every ~50ms
             if (samplesWrittenVal % std::max(1u, sampleRate_ / 20) == 0) {
-                fprintf(stderr, "[RenderSession] Progress: %zu / %zu samples (sequential pages, no seekTo)\n",
-                        samplesWrittenVal, totalSamples_);
-                fflush(stderr);
+                TW_LOGD( "render", "[RenderSession] Progress: %zu / %zu samples (sequential pages, no seekTo)",
+                        samplesWrittenVal, totalSamples_ );
                 if (onProgress) {
                     onProgress(samplesWrittenVal, totalSamples_);
                 }
@@ -259,8 +257,7 @@ void RenderSession::renderThreadMain() {
             prevPage = frozenPage;
         }
 
-        fprintf(stderr, "[RenderSession] Render loop complete. Frames: %zu\n", samplesWrittenVal);
-        fflush(stderr);
+        TW_LOGD( "render", "[RenderSession] Render loop complete. Frames: %zu", samplesWrittenVal );
 
         // Flush any buffered frames (FileSink handles futures-based waiting)
         if (fileSink_) {
@@ -275,8 +272,7 @@ void RenderSession::renderThreadMain() {
     } catch (const std::exception &e) {
         success = false;
         errorMsg = std::string("Render error: ") + e.what();
-        fprintf(stderr, "[RenderSession] Exception: %s\n", errorMsg.c_str());
-        fflush(stderr);
+        TW_LOGD( "render", "[RenderSession] Exception: %s", errorMsg.c_str() );
     }
 
     // Close file and clean up
@@ -284,9 +280,8 @@ void RenderSession::renderThreadMain() {
         writer_->close();
     }
 
-    fprintf(stderr, "[RenderSession] Render complete. Success: %s\n",
-            success ? "true" : "false");
-    fflush(stderr);
+    TW_LOGD( "render", "[RenderSession] Render complete. Success: %s",
+            success ? "true" : "false" );
 
     // Emit completion callback BEFORE clearing running_: a consumer that polls
     // isRunning() (SRenderAction) must not observe completion until onComplete
@@ -294,8 +289,7 @@ void RenderSession::renderThreadMain() {
     // (e.g. resuming background revalidation) is still pending. (Proposal 19
     // Phase 2b: the render-quiesce resume lives in onComplete.)
     if (onComplete) {
-        fprintf(stderr, "[RenderSession] Calling onComplete callback\n");
-        fflush(stderr);
+        TW_LOGD( "render", "[RenderSession] Calling onComplete callback" );
         onComplete(success, errorMsg.c_str());
     }
 

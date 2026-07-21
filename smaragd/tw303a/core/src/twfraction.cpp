@@ -1,4 +1,5 @@
 #include "tw/core/twfraction.h"
+#include "tw/core/twlog.h"
 #include <sstream>
 #include <algorithm>
 #include <cctype>
@@ -203,8 +204,7 @@ Fraction parseFractionOrDouble(const std::string& str) {
         int64_t inum, iden;
         if (parseInt64Exact(numStr, inum) && parseInt64Exact(denStr, iden)) {
             if (iden == 0) {
-                std::cerr << "Fraction parser: division by zero in " << str
-                          << std::endl;
+                TW_LOGW( "core", "Fraction parser: division by zero in %s", str.c_str() );
                 return {0, 1};
             }
             return Fraction(inum, iden);
@@ -215,14 +215,12 @@ Fraction parseFractionOrDouble(const std::string& str) {
             double num = std::stod(numStr);
             double den = std::stod(denStr);
             if (den == 0) {
-                std::cerr << "Fraction parser: division by zero in " << str
-                          << std::endl;
+                TW_LOGW( "core", "Fraction parser: division by zero in %s", str.c_str() );
                 return {0, 1};
             }
             return doubleToFraction(num / den);
         } catch (const std::exception& e) {
-            std::cerr << "Fraction parser error parsing '" << str << "': "
-                      << e.what() << std::endl;
+            TW_LOGW( "core", "Fraction parser error parsing '%s': %s", str.c_str(), e.what() );
             return {0, 1};
         }
     }
@@ -236,8 +234,7 @@ Fraction parseFractionOrDouble(const std::string& str) {
         double value = std::stod(s);
         return doubleToFractionWithLookup(value);
     } catch (const std::exception& e) {
-        std::cerr << "Fraction parser: cannot parse '" << str << "': "
-                  << e.what() << std::endl;
+        TW_LOGW( "core", "Fraction parser: cannot parse '%s': %s", str.c_str(), e.what() );
         return {0, 1};
     }
 }

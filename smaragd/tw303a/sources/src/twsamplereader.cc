@@ -5,6 +5,7 @@
 #include "tw/sources/twsamplereader.h"
 #include "tw/sources/twrandomsource.h"
 #include "tw/pages/io_vector.h"
+#include "tw/core/twlog.h"
 
 // Defined here, where twSampleReader is a complete type.
 std::shared_ptr<twSampleReader> twRandomSource::acquireReader( tw303aEnvironment &env, offset_t initialOffset )
@@ -123,7 +124,7 @@ void twSampleReader::restoreInternalState(const std::any& state)
         pos_ = s.position;
     } catch (const std::bad_any_cast&) {
         // State format mismatch; log warning but don't crash
-        fprintf(stderr, "twSampleReader::restoreInternalState: state format mismatch, skipping restore\n");
+        TW_LOGW( "sources", "twSampleReader::restoreInternalState: state format mismatch, skipping restore" );
     }
 }
 

@@ -84,6 +84,7 @@
 #include "pix/playoff.xpm"
 #include "pix/playon.xpm"
 #include "pix/stopoff.xpm"
+#include "tw/core/twlog.h"
 
 using namespace std;
 
@@ -735,8 +736,7 @@ SMainWindow::SMainWindow()
       currentProject_( 0 ),
       projectRootWidget_( NULL )
 {
-    fprintf(stderr, "*** SMainWindow built on %s at %s ***\n", __DATE__, __TIME__);
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "*** SMainWindow built on %s at %s ***", __DATE__, __TIME__ );
 
     actPlay_ = new QAction( 
         QIcon( QPixmap( (const char **)playoff_xpm )),
@@ -953,12 +953,10 @@ void SMainWindow::audioDeviceSelected( QAction *a )
 
 void SMainWindow::runTestSequence()
 {
-    fprintf(stderr, "runTestSequence() CALLED\n");
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "runTestSequence() CALLED" );
 
     // Open file dialog to pick a WAV file.
-    fprintf(stderr, "  Opening file dialog...\n");
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "  Opening file dialog..." );
     QString lastDir = SSettings::instance().lastDir("sample", "");
     QFileDialog dialog(this, "Select a WAV file for the test sequence", lastDir, "WAV Files (*.wav);;All Files (*)");
     dialog.setOptions(QFileDialog::DontUseNativeDialog);
@@ -966,12 +964,10 @@ void SMainWindow::runTestSequence()
     if (dialog.exec() == QDialog::Accepted) {
         filePath = dialog.selectedFiles().first();
     }
-    fprintf(stderr, "  File dialog closed. filePath=%s\n", filePath.toStdString().c_str());
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "  File dialog closed. filePath=%s", filePath.toStdString().c_str() );
 
     if (filePath.isEmpty()) {
-        fprintf(stderr, "  User cancelled. Returning.\n");
-        fflush(stderr);
+        TW_LOGD( "ui.shell", "  User cancelled. Returning." );
         return;
     }
 
@@ -980,38 +976,31 @@ void SMainWindow::runTestSequence()
     SSettings::instance().setLastDir("sample", fileInfo.absolutePath());
 
     // Create a new project.
-    fprintf(stderr, "  Creating new project...\n");
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "  Creating new project..." );
     fileNew();
 
     if (!currentProject_) {
-        fprintf(stderr, "  ERROR: Failed to create new project!\n");
-        fflush(stderr);
+        TW_LOGE( "ui.shell", "  ERROR: Failed to create new project!" );
         QMessageBox::critical(this, "Error", "Failed to create new project");
         return;
     }
 
-    fprintf(stderr, "  Submitting actions...\n");
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "  Submitting actions..." );
     // Submit the test sequence actions.
     // 1. Add a track at index 0.
     SApplication::app().submitAction(new SAddTrackAction(0));
-    fprintf(stderr, "    Add track action submitted\n");
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "    Add track action submitted" );
 
     // 2. Add the sample to track 0 at time 0.
     SApplication::app().submitAction(new SAddSampleAction(0, filePath, 0));
-    fprintf(stderr, "    Add sample action submitted\n");
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "    Add sample action submitted" );
 
     // 3. Start playback.
     SApplication::app().submitAction(new STogglePlaybackAction(true));
-    fprintf(stderr, "    Toggle playback action submitted\n");
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "    Toggle playback action submitted" );
 
     statusBar()->showMessage("Test sequence started", 2000);
-    fprintf(stderr, "  Test sequence complete!\n");
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "  Test sequence complete!" );
 }
 
 // Phase 2b validation: fire a rapid burst of volume changes at track 0 and
@@ -1038,9 +1027,8 @@ void SMainWindow::runVolumeBurst()
     }
 
     int after = stack ? stack->count() : -1;
-    fprintf(stderr, "Volume burst: %d actions submitted; undo stack %d -> %d "
-                    "(expect +1 if merge worked)\n", steps, before, after);
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "Volume burst: %d actions submitted; undo stack %d -> %d "
+                    "(expect +1 if merge worked)", steps, before, after );
     statusBar()->showMessage(
         QString("Volume burst: %1 actions -> undo stack +%2 (expect +1)")
             .arg(steps).arg(after - before), 4000);
@@ -1110,8 +1098,7 @@ void SMainWindow::runSaveLoadTest()
         ? QString("Round-trip OK: %1 tracks saved and reloaded").arg(liveTracks)
         : QString("Round-trip FAILED: live=%1 reloaded=%2 (loaded=%3)")
               .arg(liveTracks).arg(probeTracks).arg(loaded ? "yes" : "no");
-    fprintf(stderr, "%s  [%s]\n", msg.toUtf8().constData(), tmpPath.toUtf8().constData());
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "%s  [%s]", msg.toUtf8().constData(), tmpPath.toUtf8().constData() );
     statusBar()->showMessage(msg, 5000);
 }
 
@@ -1185,10 +1172,9 @@ void SMainWindow::runGroupTrackTest()
         ? QString("Group test OK: tree built, round-tripped, undone")
         : QString("Group test FAILED: grouped=%1 roundtrip=%2 undone=%3")
               .arg(grouped).arg(nestedRoundTrips).arg(undone);
-    fprintf(stderr, "%s (top %d->%d->undo %d; probeTop=%d)\n",
+    TW_LOGD( "ui.shell", "%s (top %d->%d->undo %d; probeTop=%d)",
             msg.toUtf8().constData(), topBefore, topAfter,
-            mixer->getNTracks(), probeTop);
-    fflush(stderr);
+            mixer->getNTracks(), probeTop );
     statusBar()->showMessage(msg, 6000);
 }
 
@@ -1240,8 +1226,7 @@ void SMainWindow::runUndoRemoveTest()
         : QString("Undoable remove FAILED: top %1->%2->undo %3; child %4->%5; identity=%6")
               .arg(topAfterGroup).arg(topAfterRemove).arg(topAfterUndo)
               .arg(childCount).arg(restoredChildCount).arg(identitySame);
-    fprintf(stderr, "%s\n", msg.toUtf8().constData());
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "%s", msg.toUtf8().constData() );
     statusBar()->showMessage(msg, 6000);
 }
 
@@ -1383,8 +1368,7 @@ void SMainWindow::runReorderTrackTest()
         : QString("Reorder test FAILED: reordered=%1 roundtrip=%2 restored=%3 (%4->%5->%6)")
               .arg(reordered).arg(orderRoundTrips).arg(restored)
               .arg(before.left(3)).arg(moved.left(3)).arg(undone.left(3));
-    fprintf(stderr, "%s\n", msg.toUtf8().constData());
-    fflush(stderr);
+    TW_LOGD( "ui.shell", "%s", msg.toUtf8().constData() );
     statusBar()->showMessage(msg, 6000);
 }
 

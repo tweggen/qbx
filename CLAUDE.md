@@ -20,8 +20,10 @@ the action-verb reference is `docs/ACTIONS.md`.
   OBJECT library (`smaragd_app`) — the app is a single strongly-connected
   component until the Phase 6 interface work; OBJECT (not STATIC) is required
   because actions self-register via static initializers.
-- Before committing: `python tools/check_layering.py` (module boundaries) and
-  the qxa suite from `tests/cases/` must be green.
+- Before committing: `python tools/check_layering.py` (module boundaries),
+  `python tools/check_logging.py` (no direct stderr/stdout writes — everything
+  goes through `TW_LOG*` / `syslog()`, proposal 24) and the qxa suite from
+  `tests/cases/` must be green.
 - Key-file paths below predate the split; the classes are unchanged — find
   headers at `tw303a/<module>/include/tw/<module>/…` and
   `main/<module>/include/app/<module>/…`.

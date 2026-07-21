@@ -9,6 +9,7 @@
 #include "tw/mix/twmixer.h"
 #include <vector>
 #include "tw/pages/io_vector.h"
+#include "tw/core/twlog.h"
 #include <vector>
 
 const char *twMixer::getInputName( idx_t ) const
@@ -119,7 +120,7 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
     if (validChannels == 0) {
         static int emptyCount = 0;
         if (++emptyCount % 100 == 1) {
-            fprintf(stderr, "twMixer::calcOutputTo() has no valid input channels (snapshot size=%zu)\n", inputSnapshot.size());
+            TW_LOGD( "mix", "twMixer::calcOutputTo() has no valid input channels (snapshot size=%zu)", inputSnapshot.size() );
         }
     }
     return dest.copyFrom(IOVector::CreateFromBuffer(outputBuffer.data(), realRead), 0, realRead);
@@ -131,23 +132,23 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
 int twMixer::setInputLevel( idx_t i, double volume )
 {
     if( i>=mixerInputs_ ) {
-        fprintf( stderr, "Unable to set input level of %d>%d.\n",
-                 i, mixerInputs_ );
+        TW_LOGE( "mix", "Unable to set input level of %d>%d.",
+                 i, mixerInputs_  );
         return -1;
     }
     if( !inputProperties_ ) {
-        fprintf( stderr, "Unable to set input level of %d, no input properties "
-                 "allocated yet.\n",
-                 i );
+        TW_LOGE( "mix", "Unable to set input level of %d, no input properties "
+                 "allocated yet.",
+                 i  );
         return -1;
     }
     inputProperties_[i].volume_ = volume;
     inputProperties_[i].volumeFactor_ = 
         (sample_t) pow( 10., volume/20. );
     // FIXME: Set something to enable float/fixed calculation.
-    // fprintf( stderr, "Volume set to %f db, volume factor set to $%x.\n",
+    // TW_LOGD( "mix", "Volume set to %f db, volume factor set to $%x.",
     //         inputProperties_[i].volume_, 
-    //         inputProperties_[i].volumeFactor_ );
+    //         inputProperties_[i].volumeFactor_  );
     return 0;
 }
 

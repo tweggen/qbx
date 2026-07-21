@@ -2,6 +2,7 @@
 #include "tw/plugins/twplugin.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
+#include "tw/core/twlog.h"
 #include <cstring>
 #include <algorithm>
 
@@ -192,8 +193,8 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
 
 	// Detect non-sequential pages (seek case)
 	if (lastFrozenPos_ > 0 && startPos != lastFrozenPos_) {
-		fprintf(stderr, "[twPluginInsert] Non-sequential page request at %llu (expected %llu); "
-			"resetting plugin state\n", (unsigned long long)startPos, (unsigned long long)lastFrozenPos_);
+		TW_LOGD( "plugins", "[twPluginInsert] Non-sequential page request at %llu (expected %llu); "
+			"resetting plugin state", (unsigned long long)startPos, (unsigned long long)lastFrozenPos_ );
 		plugin_->reset();  // Reset to avoid state corruption
 		producedThisBlock_ = false;
 	}

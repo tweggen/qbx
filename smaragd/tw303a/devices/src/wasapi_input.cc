@@ -1,4 +1,5 @@
 #include "wasapi_input.h"
+#include "tw/core/twlog.h"
 
 #include <wrl.h>
 #include <comdef.h>
@@ -167,9 +168,9 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
         config_.inputLatencyFrames = static_cast<uint32_t>(
             (latencyHns * config_.sampleRate) / 10000000LL
         );
-        fprintf(stderr,
-                "WASAPIInput: input latency %.2f ms (%u frames @ %u Hz)\n",
-                latencyHns / 10000.0, config_.inputLatencyFrames, config_.sampleRate);
+        TW_LOGD( "devices",
+                "WASAPIInput: input latency %.2f ms (%u frames @ %u Hz)",
+                latencyHns / 10000.0, config_.inputLatencyFrames, config_.sampleRate );
     } else {
         config_.inputLatencyFrames = 0;
     }

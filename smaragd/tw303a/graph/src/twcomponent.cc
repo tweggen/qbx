@@ -15,6 +15,7 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/graph/tw_frozen_inputs.h"
 #include "tw/pages/io_vector.h"
+#include "tw/core/twlog.h"
 
 #define DEBUG_COMPONENT
 
@@ -142,14 +143,14 @@ void twComponent::allocPlugs()
 void twComponent::init()
 {
 #ifdef DEBUG_COMPONENT
-    fprintf( stderr, "twComponent::init(): entered." );
+    TW_LOGD( "graph", "twComponent::init(): entered."  );
 #endif
     
     allocPlugs();
     createOutputLatches();
     
 #ifdef DEBUG_COMPONENT
-    fprintf( stderr, "twComponent::init(): leaving." );
+    TW_LOGD( "graph", "twComponent::init(): leaving."  );
 #endif
 }
 
@@ -180,13 +181,13 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
 {
     // Guard: bounds check to prevent array overflow
     if( idx < 0 || idx >= getNInputs() ) {
-        fprintf(stderr, "twComponent::setInput(): idx=%d out of range [0, %d)\n", (int)idx, (int)getNInputs());
+        TW_LOGE( "graph", "twComponent::setInput(): idx=%d out of range [0, %d)", (int)idx, (int)getNInputs() );
         return;
     }
 
     // Guard: vector must be allocated
     if( idx >= (idx_t)pInputPlugs_.size() ) {
-        fprintf(stderr, "twComponent::setInput(): pInputPlugs_ not allocated\n");
+        TW_LOGD( "graph", "twComponent::setInput(): pInputPlugs_ not allocated" );
         return;
     }
 
@@ -200,7 +201,7 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
         auto parentLatch = &(oldPlug->getParentLatch());
         if(parentLatch==nullptr)
         {
-            fprintf(stderr, "twComponent::setInput(): pInputPlugs_[idx]->getParentLatch() == null\n");
+            TW_LOGD( "graph", "twComponent::setInput(): pInputPlugs_[idx]->getParentLatch() == null" );
             return;
         }
         oldPlug->getParentLatch().deleteOutput(oldPlug);
@@ -480,10 +481,10 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     if (twRtThreadGuard::onRtThread()) {
         static std::atomic<bool> reported{false};
         if (!reported.exchange(true)) {
-            fprintf(stderr, "ERROR: freezePage() entered on the RT audio thread "
+            TW_LOGE( "graph", "ERROR: freezePage() entered on the RT audio thread "
                             "(component=%p pos=%llu) — the RT path must only read "
-                            "ready pages. Returning empty page.\n",
-                    (void *)this, (unsigned long long)startPos);
+                            "ready pages. Returning empty page.",
+                    (void *)this, (unsigned long long)startPos );
         }
         assert(!"freezePage on RT audio thread");
         auto empty = std::make_shared<twOutputPage>();

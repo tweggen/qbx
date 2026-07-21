@@ -1,6 +1,7 @@
 #include "tw/graph/twview.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
+#include "tw/core/twlog.h"
 
 twView::twView(tw303aEnvironment &env, GetComponentFn getComponentFn,
                ResolveFn resolveFn)
@@ -31,7 +32,7 @@ std::shared_ptr<twComponent> twView::getComponent() const
     }
     std::shared_ptr<twComponent> comp = getComponentFn_();
     if (!comp) {
-        fprintf(stderr, "WARNING: twView::getComponent() returned nullptr\n");
+        TW_LOGW( "graph", "WARNING: twView::getComponent() returned nullptr" );
     }
     return comp;
 }

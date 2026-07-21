@@ -18,11 +18,10 @@
 #ifndef _EXC_H_
 #define _EXC_H_
 
-#ifdef _EXC_USE_IOSTREAM_
-# include <iostream.h>
-#else
-# include <stdio.h>
-#endif
+// _EXC_USE_IOSTREAM_ selected between <iostream.h> (the pre-standard header)
+// and stdio; it was never defined anywhere, so the iostream arm was dead and
+// would not have compiled. Diagnostics now go through the log sink.
+#include "tw/core/twlog.h"
 
 class excStandard {
 private:
@@ -34,12 +33,7 @@ public:
 		{ return errMsg; }
 	excStandard (const char *s)
 	{
-#ifdef _EXC_USE_IOSTREAM_
-		cerr << s << endl;
-
-#else
-		fprintf( stderr, "Exception: %s\n", s );
-#endif
+		TW_LOGE( "core", "Exception: %s", s );
 		errMsg = s;
 	}
 

@@ -1,5 +1,6 @@
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/pages/capture_page_pool.h"
+#include "tw/core/twlog.h"
 #include "tw/schedule/revalidatable.h"    // engine-side object contract (proposal 14, Phase 0)
 #include "tw/schedule/capture_aspects.h"  // Preview / Playback / Metadata / Export bits
 #include "tw/graph/twcomponent.h"  // For twComponent::freezePage() and freezePreviewPage()
@@ -496,9 +497,8 @@ uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint3
         // cut's offline capture). On failure the Preview aspect stays stale so
         // the next getCapture() retries once the source becomes available.
         if (!object->revalPrepPreview()) {
-            fprintf(stderr, "[PREVIEW] prep failed for obj=%p; preview stays stale for retry\n",
-                    (void*)object);
-            fflush(stderr);
+            TW_LOGE( "schedule", "[PREVIEW] prep failed for obj=%p; preview stays stale for retry",
+                    (void*)object );
             aspects &= ~Preview;
         }
     }
@@ -525,11 +525,10 @@ uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint3
             nullptr                  // No previous page (revalidator manages fallback)
         );
 
-        fprintf(stderr, "[PREVIEW] recompute obj=%p comp=%p -> %s validFrames=%u\n",
+        TW_LOGD( "schedule", "[PREVIEW] recompute obj=%p comp=%p -> %s validFrames=%u",
                 (void*)object, (void*)rootComp.get(),
                 frozenPage ? "page" : "NULL",
-                frozenPage ? frozenPage->validFrames : 0u);
-        fflush(stderr);
+                frozenPage ? frozenPage->validFrames : 0u );
 
         if( frozenPage && frozenPage->validFrames > 0 ) {
             // Copy frozen preview samples into CapturePageData

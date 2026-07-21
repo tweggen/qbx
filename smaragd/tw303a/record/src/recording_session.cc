@@ -2,6 +2,7 @@
 
 #include "tw/devices/audio_input.h"
 #include "tw/sinks/audio_file_writer.h"
+#include "tw/core/twlog.h"
 
 #include <chrono>
 #include <cmath>
@@ -11,16 +12,12 @@
 #include <sstream>
 #include <vector>
 
-// Diagnostic output to stderr, tagged with file + function, flushed immediately so
-// the last line before a crash/hang is never lost in a buffer. Mirrors the
-// rate-diagnostic style in twspeaker.cc startOutput() — used here to pin down the
-// "recorded take plays back too fast" bug (capture rate vs project rate).
-#define RECSESS_LOG( fmt, ... )                                                  \
-    do {                                                                         \
-        fprintf( stderr, "recording_session.cc:%s: " fmt "\n", __func__,         \
-                 ##__VA_ARGS__ );                                                \
-        fflush( stderr );                                                        \
-    } while( 0 )
+// Diagnostic output through the log sink under the "record" category, tagged
+// with the function. Mirrors the rate-diagnostic style in twspeaker.cc
+// startOutput() — used here to pin down the "recorded take plays back too fast"
+// bug (capture rate vs project rate).
+#define RECSESS_LOG( fmt, ... ) \
+    TW_LOGD( "record", "RecordingSession::%s: " fmt, __func__, ##__VA_ARGS__ )
 
 namespace audio {
 

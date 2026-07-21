@@ -5,6 +5,7 @@
 #include "tw/pages/io_vector.h"
 #include "tw/graph/twnegotiator.h"
 #include "tw/core/twsyslog.h"
+#include "tw/core/twlog.h"
 
 #include <algorithm>
 #include <cassert>
@@ -13,14 +14,12 @@
 #include <cstdio>
 #include <thread>
 
-// All diagnostic output in this file goes to stderr, tagged with the source file
-// and function so each line is self-locating and greppable. Flushed immediately
-// so the last message before a crash/hang is never lost in a buffer.
-#define TWSPK_LOG( fmt, ... )                                                   \
-    do {                                                                        \
-        fprintf( stderr, "twspeaker.cc:%s: " fmt "\n", __func__, ##__VA_ARGS__ ); \
-        fflush( stderr );                                                       \
-    } while( 0 )
+// All diagnostic output in this file goes through the log sink under the
+// "playback" category, tagged with the function so each line is self-locating
+// and greppable. TwLog flushes the console tee immediately, so the last message
+// before a crash/hang is still never lost in a buffer.
+#define TWSPK_LOG( fmt, ... ) \
+    TW_LOGD( "playback", "twSpeaker::%s: " fmt, __func__, ##__VA_ARGS__ )
 
 twSpeaker::twSpeaker(tw303aEnvironment &env0)
     : twComponent(env0),
