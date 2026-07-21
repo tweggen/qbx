@@ -78,6 +78,8 @@
 #include <QFont>
 #include <QKeySequence>
 
+#include "pix/recon.xpm"
+#include "pix/recoff.xpm"
 #include "pix/playoff.xpm"
 #include "pix/playon.xpm"
 #include "pix/stopoff.xpm"
@@ -585,7 +587,7 @@ void SMainWindow::onRecordTriggered()
         if( session ) {
             session->requestStop();
         }
-        actRecord_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
+        actRecord_->setIcon( QIcon( QPixmap( (const char **)recoff_xpm ) ) );
     } else {
         // Check if any tracks are armed (recursively — tracks nested in
         // folder tracks record too, proposal 17 phase 2)
@@ -629,7 +631,7 @@ void SMainWindow::onRecordTriggered()
         recordingLatencySyncOffset_ = 0;
 
         SApplication::app().startRecording( params );
-        actRecord_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
+        actRecord_->setIcon( QIcon( QPixmap( (const char **)recon_xpm ) ) );
 
         // Show recording progress dialog
         audio::RecordingSession *recSession = SApplication::app().recordingSession();
@@ -724,7 +726,7 @@ void SMainWindow::onRecordingCompleted()
         projectRootWidget_->update();
     }
 
-    actRecord_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
+    actRecord_->setIcon( QIcon( QPixmap( (const char **)recoff_xpm ) ) );
 }
 
 SMainWindow::SMainWindow()
@@ -756,7 +758,7 @@ SMainWindow::SMainWindow()
     actGotoStart_->setShortcut( Qt::Key_0 );
 
     actRecord_ = new QAction(
-        QIcon( QPixmap( (const char **)playoff_xpm )),
+        QIcon( QPixmap( (const char **)recoff_xpm )),
         "Record",
         this);
     // Set keyboard shortcuts: Ctrl-R (Windows/Linux), Cmd-R (macOS), and numpad *
@@ -782,6 +784,7 @@ SMainWindow::SMainWindow()
     tempoSpin_->setRange( 1.0, 9999.999 );     // up to 4 digits before the decimal
     tempoSpin_->setKeyboardTracking( false );  // commit on Enter/focus-out
     tempoSpin_->setToolTip( "Tempo (BPM)" );
+    tempoSpin_->setFocusPolicy(Qt::ClickFocus);
     tempoSpin_->setEnabled( false );           // enabled by syncPaletteToProject
     qTBTransport_->addWidget( tempoSpin_ );
     QObject::connect( tempoSpin_, SIGNAL( valueChanged(double) ),
