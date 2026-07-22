@@ -502,22 +502,35 @@ std::string TwLog::formatLine( const LogRecord &rec )
     return d->formatLineLocked( rec );
 }
 
-std::string TwLog::Impl::formatLineLocked( const LogRecord &rec ) const
+void TwLog::formatTimestamp( const LogRecord &rec, char *out, size_t cap )
 {
-    const int64_t wallMs = startWallMs + rec.tMonoUs / 1000 - localOffsetMs;
-    const char *cat = rec.catId < catNames.size() ? catNames[rec.catId].c_str() : "";
+    if( !out || cap == 0 ) return;
+    Impl *d = instance().d_;
+    // No lock: startWallMs and localOffsetMs are written once, in the
+    // constructor, before any other thread can observe this object.
+    const int64_t wallMs = d->startWallMs + rec.tMonoUs / 1000 - d->localOffsetMs;
 
     int64_t secOfDay = ( wallMs / 1000 ) % 86400;
     if( secOfDay < 0 ) secOfDay += 86400;
-    const int h  = static_cast<int>( secOfDay / 3600 );
-    const int m  = static_cast<int>( ( secOfDay / 60 ) % 60 );
-    const int s  = static_cast<int>( secOfDay % 60 );
     int ms = static_cast<int>( wallMs % 1000 );
     if( ms < 0 ) ms += 1000;
 
+    std::snprintf( out, cap, "%02d:%02d:%02d.%03d",
+                   static_cast<int>( secOfDay / 3600 ),
+                   static_cast<int>( ( secOfDay / 60 ) % 60 ),
+                   static_cast<int>( secOfDay % 60 ), ms );
+}
+
+std::string TwLog::Impl::formatLineLocked( const LogRecord &rec ) const
+{
+    const char *cat = rec.catId < catNames.size() ? catNames[rec.catId].c_str() : "";
+
+    char stamp[16];
+    TwLog::formatTimestamp( rec, stamp, sizeof stamp );
+
     char head[96];
-    std::snprintf( head, sizeof head, "%02d:%02d:%02d.%03d [%s] %-10s ",
-                   h, m, s, ms, TwLog::levelName( rec.level ), cat );
+    std::snprintf( head, sizeof head, "%s [%s] %-10s ",
+                   stamp, TwLog::levelName( rec.level ), cat );
 
     std::string out( head );
     out += rec.text;

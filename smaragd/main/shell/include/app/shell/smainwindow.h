@@ -40,6 +40,15 @@ public:
     bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
                        bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 
+    // Log dock control, for the log-stress test action (testkit may not include
+    // app/servicesui, so it reaches the dock through the shell — the same route
+    // drag-clip-edge uses to reach the arranger).
+    void setLogDockVisible( bool visible );
+    int  logViewBacklog() const;
+    int  logViewRows() const;
+    qint64 logViewWorstDrainMs() const;
+    void   logViewResetDrainStats();
+
     // Startup: restore the saved window geometry and toolbar/dock layout.
     // Must be called only after the full UI exists (central widget included) —
     // QMainWindow::restoreState() applied to a window without its central

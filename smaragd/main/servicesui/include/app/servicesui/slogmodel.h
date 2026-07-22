@@ -8,6 +8,7 @@
 
 #include "tw/core/twlog.h"
 
+#include <deque>
 #include <vector>
 
 // Table model over the TwLog ring (proposal 24 §6.1).
@@ -66,6 +67,13 @@ public:
     uint64_t droppedCount() const { return tw::TwLog::instance().droppedCount(); }
     int      backlog() const;     // records in the ring not yet drained
 
+    // Longest single drain tick since the last reset, in ms. This — not the
+    // duration of an event-loop pump — is the honest measure of what the dock
+    // costs the GUI thread: a pump also carries whatever else the app had
+    // queued (device latency probes at startup can alone take ~90 ms).
+    qint64 worstDrainMs() const { return worstDrainMs_; }
+    void   resetDrainStats() { worstDrainMs_ = 0; }
+
 signals:
     void rowsAppended();          // so the view can decide about auto-scroll
 
@@ -86,7 +94,12 @@ private:
     Row  makeRow( const tw::LogRecord &rec, const QString &cat ) const;
     void rescan();
 
-    std::vector<Row> rows_;
+    // A deque, NOT a vector. Both hot operations are O(1)/O(k) here and O(N) in
+    // a vector: eviction erases from the FRONT (a vector would move every
+    // remaining row), and growth to the 200k cap would make a vector
+    // periodically reallocate and move the lot. Either spike lands directly on
+    // the GUI thread.
+    std::deque<Row> rows_;
     uint64_t         cursor_ = 0;          // next ring seq we have not consumed
     QTimer           timer_;
 
@@ -94,12 +107,17 @@ private:
     QSet<QString> cats_;
     QString       text_;
 
-    // Bound on how many records one tick may absorb, so a burst can never stall
-    // the GUI thread; the remainder arrives on the next tick.
-    static constexpr int kDrainPerTick = 20000;
+    // One tick absorbs as much as fits in a TIME budget, not a fixed count. A
+    // count cannot be right across machines and message sizes — at 20 000
+    // records a tick this blocked the GUI thread for 105 ms on a burst. The
+    // remainder arrives on the next tick; the status line shows the backlog.
+    static constexpr int kDrainBudgetMs = 8;
+    static constexpr int kDrainChunk    = 2000;   // records per budget check
     // Bound on displayed rows. Beyond this the oldest are evicted in one
     // beginRemoveRows, mirroring the ring's own eviction.
     int viewCap_ = 200000;
+
+    qint64 worstDrainMs_ = 0;
 };
 
 #endif // SLOGMODEL_H

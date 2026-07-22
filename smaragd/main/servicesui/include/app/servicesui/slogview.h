@@ -30,6 +30,13 @@ public:
     // Wired to QDockWidget::visibilityChanged: a closed log drains nothing.
     void setLive( bool live );
 
+    // Records in the sink the view has not yet absorbed. Used by the
+    // log-stress test action to tell "caught up" from "still catching up".
+    int  backlog() const;
+    int  displayedRows() const;
+    qint64 worstDrainMs() const;
+    void   resetDrainStats();
+
 private slots:
     void onRowsAppended();
     void onTextFilterEdited();

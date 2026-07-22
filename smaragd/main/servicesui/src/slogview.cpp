@@ -153,6 +153,11 @@ void SLogView::setLive( bool live )
     else       { statusTimer_->stop();  categoryTimer_->stop(); }
 }
 
+int SLogView::backlog() const       { return model_->backlog(); }
+int SLogView::displayedRows() const { return model_->rowCount(); }
+qint64 SLogView::worstDrainMs() const  { return model_->worstDrainMs(); }
+void SLogView::resetDrainStats()       { model_->resetDrainStats(); }
+
 bool SLogView::atBottom() const
 {
     const QScrollBar *sb = table_->verticalScrollBar();

@@ -133,6 +133,13 @@ public:
     //   12:34:56.789 [WRN] devices  WASAPIBackend: …
     static std::string formatLine( const LogRecord &rec );
 
+    // Just the "12:34:56.789" head of a record, written into `out` (needs 13
+    // bytes). LOCK-FREE: it reads only the clock constants, which are fixed at
+    // construction. The log dock formats one of these per drained row, so this
+    // must not take the sink's mutex — doing so cost ~5 µs per row and turned a
+    // burst into a visible GUI stall.
+    static void formatTimestamp( const LogRecord &rec, char *out, size_t cap );
+
 private:
     TwLog();
     ~TwLog();

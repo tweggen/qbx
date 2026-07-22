@@ -2,6 +2,7 @@
 
 #include <QBrush>
 #include <QColor>
+#include <QElapsedTimer>
 #include <QStringList>
 
 #include <algorithm>
@@ -115,16 +116,15 @@ bool SLogModel::passes( const LogRecord &rec, const QString &cat ) const
 
 SLogModel::Row SLogModel::makeRow( const LogRecord &rec, const QString &cat ) const
 {
-    // TwLog::formatLine() renders the whole line; here the fields are wanted
-    // separately, so take the timestamp from the same arithmetic it uses by
-    // asking for the formatted line and splitting off its head. Cheaper and
-    // less duplicated than re-deriving the wall clock here.
-    const std::string line = TwLog::formatLine( rec );
-    QString time;
-    if( line.size() >= 12 ) time = QString::fromLatin1( line.data(), 12 );
+    // formatTimestamp is lock-free and writes only the 12-char head. The
+    // obvious alternative — calling TwLog::formatLine and slicing off its head
+    // — takes the sink's mutex and builds the whole line per row; at ~5 µs a
+    // row that turned a 20k-record batch into a 105 ms GUI stall.
+    char stamp[16];
+    TwLog::formatTimestamp( rec, stamp, sizeof stamp );
 
     Row row;
-    row.time     = time;
+    row.time     = QString::fromLatin1( stamp );
     row.level    = QString::fromLatin1( TwLog::levelName( rec.level ) );
     row.category = cat;
     row.thread   = QString::fromLatin1( TwLog::threadName( rec.threadId ) );
@@ -139,30 +139,45 @@ void SLogModel::drain()
 
     const uint64_t first = log.firstSeq();
     if( cursor_ < first ) cursor_ = first;      // the ring lapped past us
+    if( cursor_ >= log.nextSeq() ) return;
 
-    uint64_t to = log.nextSeq();
-    if( cursor_ >= to ) return;
-    if( to - cursor_ > static_cast<uint64_t>( kDrainPerTick ) )
-        to = cursor_ + kDrainPerTick;
+    // Absorb as much as fits in a TIME budget rather than a fixed record count.
+    // A count cannot be right on every machine and for every message size: at
+    // 20 000 records a tick this blocked the GUI thread for 105 ms on a burst,
+    // which a user feels as a hitch. A budget self-tunes, and the remainder
+    // simply arrives on the next tick (the status line shows the backlog).
+    QElapsedTimer budget;
+    budget.start();
 
     std::vector<LogRecord> batch;
-    log.snapshot( cursor_, to, batch );
-    if( batch.empty() ) { cursor_ = to; return; }
-    cursor_ = batch.back().seq + 1;
-
     std::vector<Row> keep;
-    keep.reserve( batch.size() );
-    for( const LogRecord &rec : batch ) {
-        const QString cat = QString::fromLatin1( TwLog::categoryName( rec.catId ) );
-        if( passes( rec, cat ) ) keep.push_back( makeRow( rec, cat ) );
+
+    while( budget.elapsed() < kDrainBudgetMs ) {
+        uint64_t to = log.nextSeq();
+        if( cursor_ >= to ) break;
+        if( to - cursor_ > static_cast<uint64_t>( kDrainChunk ) )
+            to = cursor_ + kDrainChunk;
+
+        log.snapshot( cursor_, to, batch );
+        if( batch.empty() ) { cursor_ = to; break; }
+        cursor_ = batch.back().seq + 1;
+
+        for( const LogRecord &rec : batch ) {
+            const QString cat = QString::fromLatin1( TwLog::categoryName( rec.catId ) );
+            if( passes( rec, cat ) ) keep.push_back( makeRow( rec, cat ) );
+        }
     }
     if( keep.empty() ) return;
+
+    const qint64 tGather = budget.elapsed();
 
     // ONE insert for the whole surviving batch, not one per record.
     const int at = static_cast<int>( rows_.size() );
     beginInsertRows( QModelIndex(), at, at + static_cast<int>( keep.size() ) - 1 );
     rows_.insert( rows_.end(), keep.begin(), keep.end() );
     endInsertRows();
+
+    const qint64 tInsert = budget.elapsed();
 
     // ...and ONE removal if we are over the cap.
     if( static_cast<int>( rows_.size() ) > viewCap_ ) {
@@ -172,7 +187,22 @@ void SLogModel::drain()
         endRemoveRows();
     }
 
+    const qint64 tEvict = budget.elapsed();
+
     emit rowsAppended();
+
+    const qint64 total = budget.elapsed();
+    if( total > worstDrainMs_ ) worstDrainMs_ = total;
+
+    if( total > 3 * kDrainBudgetMs ) {
+        TW_LOGD( "ui.services",
+                 "log drain overran: %lld ms for %d rows "
+                 "(gather %lld, insert %lld, evict %lld, scroll %lld)",
+                 (long long)total, (int)keep.size(),
+                 (long long)tGather, (long long)( tInsert - tGather ),
+                 (long long)( tEvict - tInsert ),
+                 (long long)( total - tEvict ) );
+    }
 }
 
 void SLogModel::rescan()

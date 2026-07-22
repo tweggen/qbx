@@ -231,6 +231,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudiofrequencyaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
+    testkit/include/app/testkit/slogstressaction.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/stransporttestactions.h
     testkit/src/sactionrunner.cpp
@@ -239,6 +240,7 @@ set(APP_UI_FILES
     testkit/src/sassertaudiofrequencyaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sdragclipedgeaction.cpp
+    testkit/src/slogstressaction.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/stransporttestactions.cpp
 )

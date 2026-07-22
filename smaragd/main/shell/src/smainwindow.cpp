@@ -910,6 +910,36 @@ SMainWindow::SMainWindow()
 // Build the status bar. The left area is used for transient showMessage()
 // notices (saves, test results, …); the permanent right area carries a mode
 // indicator that reflects the active editing gesture (slip, time-stretch, …).
+void SMainWindow::setLogDockVisible( bool visible )
+{
+    if( !qDockLog_ ) return;
+    qDockLog_->setVisible( visible );
+    // setVisible() emits visibilityChanged, which drives the drain timer — but
+    // only when the window itself is shown. In a headless test the dock is
+    // never "visible" to Qt, so tell the view directly.
+    if( logView_ ) logView_->setLive( visible );
+}
+
+int SMainWindow::logViewBacklog() const
+{
+    return logView_ ? logView_->backlog() : 0;
+}
+
+int SMainWindow::logViewRows() const
+{
+    return logView_ ? logView_->displayedRows() : 0;
+}
+
+qint64 SMainWindow::logViewWorstDrainMs() const
+{
+    return logView_ ? logView_->worstDrainMs() : 0;
+}
+
+void SMainWindow::logViewResetDrainStats()
+{
+    if( logView_ ) logView_->resetDrainStats();
+}
+
 void SMainWindow::buildStatusBar()
 {
     modeLabel_ = new QLabel( this );

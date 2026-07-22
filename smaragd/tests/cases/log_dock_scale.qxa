@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="log_dock_scale">
+
+  <!-- The log dock must display hundreds of thousands of lines without
+       massively impacting the application (proposal 24).
+
+       This is the numeric form of that requirement. log-stress opens the dock,
+       emits the burst, then pumps the event loop and TIMES EVERY PUMP. A drain
+       that blocks the GUI thread is exactly what a user feels as a frozen UI,
+       and it shows up here as a long single pump. The action fails if any one
+       pump exceeds maxStallMs, and separately if the view never catches up,
+       which would catch the opposite mistake: a drain throttled so hard it
+       never converges.
+
+       Not a screenshot assertion on purpose: SScreenshotAction grabs the root
+       window (the whole desktop), so it cannot show the dock's state at all.
+
+       The two properties under test are the per-tick drain cap in SLogModel
+       (a burst can never be absorbed in one go) and the fixed row height in
+       SLogView (layout cost independent of row count). Remove either and this
+       case fails. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- 300k records: comfortably past the "100000s of lines" requirement and
+         above the 200k default ring, so eviction is exercised too. -->
+    <log-stress count="300000" maxStallMs="50" timeoutMs="120000"/>
+  </actions>
+
+</SActionScript>
