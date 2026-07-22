@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="loop_asset_extend">
+
+  <!-- A cut that references a SECTION OF A TRACK (a container-backed "asset",
+       no random source of its own) must loop exactly like a cut that references
+       a wave directly: dragging its right edge's UPPER half tiles the captured
+       segment for as long as you drag. The wave-cut sibling is
+       extend_clip_past_content.qxa (track 0) — this is the container-backed
+       counterpart.
+
+       Behavioral lock for the container-backed loop AUDIO. A looping asset cut
+       renders its content into ONE linear capture and the twLoopReader tiles
+       [startOffset, startOffset+loopLength) out of it. The related preview bug
+       (the linear waveform drew a flat/zero tail past the content end, since
+       the preview did NOT tile) is a paint path this headless render cannot
+       observe; the AUDIO path was always correct and this test pins it so the
+       capture-sizing change (buildCapture_ now sizes the capture to the loop
+       window, not the extended duration) stays byte-for-byte equivalent — the
+       asserted RMS matches the fixture's per-second signature exactly.
+
+       Drives the REAL loop gesture (drag-clip-edge half="upper" ->
+       SMVActualView::mouseMoveEvent's clipDragIsLoop_ path — a resize-clip
+       would sail past it) and asserts the tiled region past the content end
+       carries the right signal, not silence. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Pixel-quantised drop; keep the grid out so the only rounding is zoom. -->
+    <snap-to-grid-disable/>
+
+    <!-- Track 0 (row 0): the SOURCE the asset windows.
+         Track 1 (row 1): where the "section of a track" cut is placed. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- test_sawtooth.wav is 192000 frames (4 s @ 48 kHz); each source second
+         has a distinct RMS (sec0 .067 / sec1 .176 / sec2 .291 / sec3 .405). -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Asset = a 2 s (96000 fr) section of track 0's live output. -->
+    <create-asset container="0" startOffset="0" duration="96000" assetName="Section"/>
+
+    <!-- Place that container-backed section cut on track 1 (its only clip). -->
+    <place-asset assetName="Section" trackPath="1" timePos="0"/>
+
+    <!-- Loop-extend it out to ~16 s via the upper-half end drag: the 2 s the
+         clip showed becomes the loop segment, tiled across the new length. -->
+    <drag-clip-edge track="1" clip="0" edge="end" toTime="768000" half="upper"/>
+
+    <render filename="loop_asset_extend.wav" format="wav" quality="10"/>
+
+    <!-- ~7 s in (frame 336000): far past the section's 2 s of content AND past
+         track 0's own 4 s clip, so ONLY the tiled asset carries signal here.
+         336000 lands on the sec1 (.176) half of a repetition. With the bug this
+         region is dead silence. -->
+    <assert-audio-energy filename="loop_asset_extend.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.05" maxRms="0.95"/>
+
+    <!-- And still tiling near the end (~12 s, frame 576000). -->
+    <assert-audio-energy filename="loop_asset_extend.wav"
+                         startFrame="576000" frameCount="48000"
+                         minRms="0.02" maxRms="0.95"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

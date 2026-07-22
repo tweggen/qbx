@@ -127,82 +127,90 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     SCut &cut = getCut();
     SObject &content = cut.getContent();
 
-    // Container-backed cut (a live asset over a track/mixer sub-arrangement): the
-    // content has no sample waveform renderer of its own, so draw a waveform of
-    // its RENDERED output, windowed by this cut. The InlineRenderContext folds
-    // the cut's startOffset into the time mapping, so the drawn region matches
-    // what plays. (Tier 1 pulls the render via getPreview; Tier 2 reads the
-    // capture — see SCut::getPreview.)
-    if( !content.getRandomSource() ) {
-        InlineRenderContext myctx( cut, ctx, p, lk.getStartTime() );
-        myctx.setVisibRect( visibRect );
-        // Preview the cut: SCut::getPreview reads the capture (shared with the
-        // audio render) in the container frame domain, which myctx supplies
-        // (it folds the cut's startOffset into the time mapping).
-        if( !drawObjectWaveform( cut, lk, myctx, QColor( 120, 200, 255 ) ) ) {
-            p.drawText( visibRect, Qt::AlignCenter, "Asset: (no preview)" );
-        }
-        if( !cut.getSName().isEmpty() ) {
-            p.setPen( QColor( 10, 10, 40 ) );
-            p.drawText( visibRect, Qt::AlignBottom | Qt::AlignRight, cut.getSName() );
-        }
-        drawPitchBadge( p, visibRect, cut.getPitchCents() );
-        return;
-    }
-
-    // Sample-backed cut: delegate to the content's own waveform renderer.
-    SObjectRenderer *rndr = content.getInlineRenderer();
-    if( !rndr ) {
+    // Container-backed cut (a live asset over a track/mixer sub-arrangement) has
+    // no sample waveform renderer of its own, so it draws a waveform of its
+    // RENDERED output (the capture shared with the audio render), windowed by
+    // this cut. A sample-backed cut delegates to the content's own renderer.
+    // Both fold the cut's startOffset into the time mapping (via the
+    // InlineRenderContext / LoopSegmentContext) so the drawn region matches what
+    // plays.
+    const bool container = !content.getRandomSource();
+    SObjectRenderer *rndr = container ? NULL : content.getInlineRenderer();
+    if( !container && !rndr ) {
         p.drawText( visibRect, Qt::AlignCenter, "SCut: No renderer." );
         return;
     }
+
+    // Draw one linear repetition of the cut into `segCtx`. A container cut pulls
+    // its rendered preview via SCut::getPreview (which reads the capture in the
+    // container frame domain that segCtx supplies); a sample cut delegates to the
+    // content renderer. Returns false only when a container cut has no preview
+    // yet, so the non-loop path can show a placeholder.
+    auto drawSeg = [&]( SRenderContext &segCtx ) -> bool {
+        if( container )
+            return drawObjectWaveform( cut, lk, segCtx, QColor( 120, 200, 255 ) );
+        rndr->draw( lk, segCtx );
+        return true;
+    };
 
     if( !cut.isLooping() ) {
         // Note, that this is my link but his object!!!
         InlineRenderContext myctx( cut, ctx, p, lk.getStartTime() );
         myctx.setVisibRect( visibRect );
-        rndr->draw( lk, myctx );
-        drawPitchBadge( p, visibRect, cut.getPitchCents() );
-        return;
+        if( !drawSeg( myctx ) )
+            p.drawText( visibRect, Qt::AlignCenter, "Asset: (no preview)" );
+    } else {
+        // Looping: tile the loop segment across the clip width. The wave renderer
+        // / getPreview each fetch one linear range per call, so tiling means
+        // repeated draws (rather than a wrapped getTimeOf), with a faint divider
+        // and grab handle at each loop boundary. Tiling is what makes the preview
+        // CONTINUE past the content end for BOTH cut kinds: a container cut's
+        // capture is zero past its natural length, so a single linear pass would
+        // otherwise draw a flat/zero tail — matching a wave-backed looped cut.
+        length_t segLen   = cut.getLoopLength().frames();
+
+        // Pixels-per-sample from two probe points of the parent (timeline) mapping.
+        int xa = visibRect.x();
+        int xb = visibRect.x() + visibRect.width();
+        if( xb <= xa ) xb = xa + 1;
+        double ta = (double) ctx.getTimeOf( xa );
+        double tb = (double) ctx.getTimeOf( xb );
+        double spp = ( tb - ta ) / (double)( xb - xa );     // timeline samples / pixel
+        if( spp <= 0.0 ) spp = 1.0;
+        double clipLeftX = (double) xa + ( (double) lk.getStartTime() - ta ) / spp;
+        double segWpx = (double) segLen / spp;
+        if( segWpx < 1.0 ) segWpx = 1.0;
+
+        int right = visibRect.x() + visibRect.width();
+        int k = 0;
+        if( clipLeftX < visibRect.x() )
+            k = (int)( ( visibRect.x() - clipLeftX ) / segWpx );
+        for( ; ; k++ ) {
+            double sx = clipLeftX + (double) k * segWpx;
+            if( sx >= right ) break;
+            double ex = sx + segWpx;
+            int isx = (int)( sx > visibRect.x() ? sx : visibRect.x() );
+            int iex = (int)( ex < right ? ex : right );
+            if( iex <= isx ) continue;
+            LoopSegmentContext lctx( p, lk.getStartTime(), cut.clipToSourceMap(),
+                                     sx, segWpx, segLen );
+            lctx.setVisibRect( QRect( isx, visibRect.y(), iex - isx, visibRect.height() ) );
+            drawSeg( lctx );
+            if( ex < right ) {                              // loop boundary divider
+                p.setPen( QColor( 70, 70, 70 ) );
+                p.drawLine( (int) ex, visibRect.y(), (int) ex, visibRect.y() + visibRect.height() );
+                // Grab handle at the divider's upper end; drag it to re-tile the
+                // loop (SMVActualView::loopMarkerAt hit-tests the same box).
+                if( segWpx >= LOOP_HANDLE_MIN_SEG_PX )
+                    drawLoopHandle( p, visibRect, (int) ex );
+            }
+        }
     }
 
-    length_t segLen   = cut.getLoopLength().frames();
-
-    // Pixels-per-sample from two probe points of the parent (timeline) mapping.
-    int xa = visibRect.x();
-    int xb = visibRect.x() + visibRect.width();
-    if( xb <= xa ) xb = xa + 1;
-    double ta = (double) ctx.getTimeOf( xa );
-    double tb = (double) ctx.getTimeOf( xb );
-    double spp = ( tb - ta ) / (double)( xb - xa );     // timeline samples / pixel
-    if( spp <= 0.0 ) spp = 1.0;
-    double clipLeftX = (double) xa + ( (double) lk.getStartTime() - ta ) / spp;
-    double segWpx = (double) segLen / spp;
-    if( segWpx < 1.0 ) segWpx = 1.0;
-
-    int right = visibRect.x() + visibRect.width();
-    int k = 0;
-    if( clipLeftX < visibRect.x() )
-        k = (int)( ( visibRect.x() - clipLeftX ) / segWpx );
-    for( ; ; k++ ) {
-        double sx = clipLeftX + (double) k * segWpx;
-        if( sx >= right ) break;
-        double ex = sx + segWpx;
-        int isx = (int)( sx > visibRect.x() ? sx : visibRect.x() );
-        int iex = (int)( ex < right ? ex : right );
-        if( iex <= isx ) continue;
-        LoopSegmentContext lctx( p, lk.getStartTime(), cut.clipToSourceMap(),
-                                 sx, segWpx, segLen );
-        lctx.setVisibRect( QRect( isx, visibRect.y(), iex - isx, visibRect.height() ) );
-        rndr->draw( lk, lctx );
-        if( ex < right ) {                              // loop boundary divider
-            p.setPen( QColor( 70, 70, 70 ) );
-            p.drawLine( (int) ex, visibRect.y(), (int) ex, visibRect.y() + visibRect.height() );
-            // Grab handle at the divider's upper end; drag it to re-tile the
-            // loop (SMVActualView::loopMarkerAt hit-tests the same box).
-            if( segWpx >= LOOP_HANDLE_MIN_SEG_PX )
-                drawLoopHandle( p, visibRect, (int) ex );
-        }
+    // Container cuts show their asset name (bottom-right).
+    if( container && !cut.getSName().isEmpty() ) {
+        p.setPen( QColor( 10, 10, 40 ) );
+        p.drawText( visibRect, Qt::AlignBottom | Qt::AlignRight, cut.getSName() );
     }
     drawPitchBadge( p, visibRect, cut.getPitchCents() );
 }

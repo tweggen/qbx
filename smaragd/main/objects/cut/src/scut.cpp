@@ -276,9 +276,17 @@ void SCut::buildCapture_()
         return;
     }
 
-    // The capture must cover the window's warped end (slip offset folded in).
-    WarpedPos windowEnd = warpedFromClip( ClipPos( snap.cutDuration.frames() ),
-                                          snap.startOffset );
+    // The capture must cover the window's warped end (slip offset folded in). A
+    // looping cut only needs its ONE linear loop segment captured — the loop
+    // reader wraps within [startOffset, startOffset+loopLength) and the preview
+    // tiles the same segment — so capturing the full (extended) duration would
+    // only zero-pad a huge tail that nothing reads (and that the linear preview
+    // used to draw as a flat/zero waveform past the content end).
+    bool looping = snap.loopLength > WarpedLen( 0 )
+                && snap.loopLength < warpedFromClip( snap.cutDuration );
+    length_t windowLen = looping ? snap.loopLength.frames()
+                                 : snap.cutDuration.frames();
+    WarpedPos windowEnd = warpedFromClip( ClipPos( windowLen ), snap.startOffset );
     length_t need = (length_t) windowEnd.frames();
     length_t dur  = (length_t) c.getDuration();
     length_t n = dur > need ? dur : need;
