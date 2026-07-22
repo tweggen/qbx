@@ -70,6 +70,7 @@ private:
 
     bool wantLive_ = false;              // what the dock asked for
     bool paused_   = false;              // what the user asked for
+    bool wasAtBottom_ = true;            // auto-scroll state; see onRowsAppended
 };
 
 #endif // SLOGVIEW_H

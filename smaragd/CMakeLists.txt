@@ -87,7 +87,10 @@ add_subdirectory(main)
 # Register every headless qxa case with CTest, so `ctest` (from build/) runs
 # the module unit tests AND the integration suite in one command. The cases
 # run from tests/cases/ so their ../test_sawtooth.wav fixture paths resolve.
-file(GLOB _QXA_CASES ${CMAKE_CURRENT_SOURCE_DIR}/tests/cases/*.qxa)
+# CONFIGURE_DEPENDS: without it this glob is evaluated once and cached, so a
+# newly added .qxa is silently NOT registered until someone re-runs cmake by
+# hand — and `ctest` then reports all-green while never having run the new case.
+file(GLOB _QXA_CASES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/cases/*.qxa)
 foreach(_case ${_QXA_CASES})
     get_filename_component(_name ${_case} NAME_WE)
     add_test(NAME qxa.${_name}

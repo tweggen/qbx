@@ -174,9 +174,13 @@ void SLogView::onRowsAppended()
 {
     // Follow the tail only when already parked at the bottom, so scrolling up
     // to read something pins the view instead of yanking it away.
-    static bool wasAtBottom = true;
-    if( wasAtBottom ) scrollToBottom();
-    wasAtBottom = atBottom();
+    //
+    // wasAtBottom_ is a MEMBER, not a function-local static: a static would be
+    // shared by every SLogView in the process, so a second one would inherit
+    // the first's scroll state. Only one log dock exists today, which is
+    // exactly why the bug would sit there unnoticed until it did not.
+    if( wasAtBottom_ ) scrollToBottom();
+    wasAtBottom_ = atBottom();
 }
 
 void SLogView::onTextFilterEdited()
