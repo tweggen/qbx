@@ -110,14 +110,14 @@ public:
     ~twSpeaker();
     twSpeaker(tw303aEnvironment &);
 
-    virtual void createOutputLatches(void);
+    virtual void createOutputLatches(void) override;
 
-    virtual const char *getInputName(idx_t)  const { return nullptr; }
-    virtual const char *getOutputName(idx_t) const { return nullptr; }
-    virtual idx_t getNInputs()  const { return 2; }
-    virtual idx_t getNOutputs() const { return 0; }
+    virtual const char *getInputName(idx_t)  const override { return nullptr; }
+    virtual const char *getOutputName(idx_t) const override { return nullptr; }
+    virtual idx_t getNInputs()  const override { return 2; }
+    virtual idx_t getNOutputs() const override { return 0; }
 
-    void setBufferSize(length_t) {}
+    void setBufferSize(length_t) override {}
 
     bool isPlaying();
 

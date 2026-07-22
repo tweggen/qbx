@@ -28,22 +28,22 @@ public:
     twWavInput( tw303aEnvironment &env, QString fileName );
     virtual ~twWavInput();
 
-    virtual void createOutputLatches();
+    virtual void createOutputLatches() override;
 
     virtual int setNOutputs( idx_t );
     virtual length_t getLength() const;
     virtual length_t setCacheSize( length_t );
     virtual length_t getCacheSize() const;
 
-    virtual bool isSeekable() const;
-    virtual int seekTo( offset_t );
+    virtual bool isSeekable() const override;
+    virtual int seekTo( offset_t ) override;
 
-    virtual const char *getInputName( idx_t ) const;
-    virtual const char *getOutputName( idx_t ) const;
-    virtual idx_t getNInputs() const;
-    virtual idx_t getNOutputs() const;
-    virtual void setBufferSize( length_t );
-    virtual void init();
+    virtual const char *getInputName( idx_t ) const override;
+    virtual const char *getOutputName( idx_t ) const override;
+    virtual idx_t getNInputs() const override;
+    virtual idx_t getNOutputs() const override;
+    virtual void setBufferSize( length_t ) override;
+    virtual void init() override;
 
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;

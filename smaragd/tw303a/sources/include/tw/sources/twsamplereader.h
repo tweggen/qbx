@@ -26,9 +26,9 @@ public:
 
     twRandomSource &getSource() const { return src_; }
 
-    virtual bool isSeekable() const;
-    virtual int seekTo( offset_t );
-    virtual offset_t tellPos() const;
+    virtual bool isSeekable() const override;
+    virtual int seekTo( offset_t ) override;
+    virtual offset_t tellPos() const override;
     virtual void reset() override;  // Reset position to start of sample
 
     // Single read cursor (pos_): freezes must be serialized (proposal 19 Ph1).
@@ -41,12 +41,12 @@ public:
     // Teardown protocol
     virtual void teardown() override;
 
-    virtual void createOutputLatches();
+    virtual void createOutputLatches() override;
 
-    virtual idx_t getNInputs() const;
-    virtual idx_t getNOutputs() const;
-    virtual const char *getInputName( idx_t ) const;
-    virtual const char *getOutputName( idx_t ) const;
+    virtual idx_t getNInputs() const override;
+    virtual idx_t getNOutputs() const override;
+    virtual const char *getInputName( idx_t ) const override;
+    virtual const char *getOutputName( idx_t ) const override;
 
     // Internal state snapshot for sequential rendering resumption
     virtual std::any captureInternalState() const override;

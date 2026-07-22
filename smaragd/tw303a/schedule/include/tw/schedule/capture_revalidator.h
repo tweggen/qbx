@@ -20,7 +20,7 @@
 class CapturePagePool;
 class IRevalidatable;
 class twComponent;
-class twOutputPage;
+struct twOutputPage;
 
 /**
  * Revalidation job: request to recompute specific capture aspects for a revalidatable object.

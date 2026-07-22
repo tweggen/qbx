@@ -47,19 +47,19 @@ public:
     static SApplication &app();
 
     std::shared_ptr<twSpeaker> getSpeaker() const;
-    tw303aEnvironment *get303aEnvironment() const;
+    tw303aEnvironment *get303aEnvironment() const override;
 
     SLink *getCurrentSelectedSLink() const;
     bool isSelectionEmpty() const;
-    bool isSLinkSelected( SLink * ) const;
+    bool isSLinkSelected( SLink * ) const override;
     const SSelectionList &getSelectionList() const;
 
     // Path-based selection methods (for action-backed operations)
-    void setSelectionFromPaths(const QList<QList<int>> &paths);
-    void addSelectionFromPaths(const QList<QList<int>> &paths);
-    void removeSelectionFromPaths(const QList<QList<int>> &paths);
-    void toggleSelectionFromPaths(const QList<QList<int>> &paths);
-    QList<QList<int>> getCurrentSelectionPaths() const;
+    void setSelectionFromPaths(const QList<QList<int>> &paths) override;
+    void addSelectionFromPaths(const QList<QList<int>> &paths) override;
+    void removeSelectionFromPaths(const QList<QList<int>> &paths) override;
+    void toggleSelectionFromPaths(const QList<QList<int>> &paths) override;
+    QList<QList<int>> getCurrentSelectionPaths() const override;
 
     // SLink-based selection action submission (convenience for UI)
     void submitSetSelectionAction(SLink *link);
@@ -67,13 +67,13 @@ public:
     void submitToggleSelectionAction(SLink *link);
     void submitClearSelectionAction();
 
-    SProject *getCurrentProject() const;
+    SProject *getCurrentProject() const override;
     void setCurrentProject( SProject * );
     // Re-fetch the project root component's first output and connect it to
     // the speaker. Call this when the synth graph has changed (tracks
     // added, busses inserted, etc.) so that playback uses the current
     // wiring rather than the snapshot taken at project-creation time.
-    void rewireSpeaker();
+    void rewireSpeaker() override;
     offset_t getGlobalLocatorPos() const;
     // Store the playback position from the REALTIME AUDIO THREAD. This only does
     // an atomic store — it must NOT emit any Qt signal or otherwise touch QObject
@@ -83,7 +83,7 @@ public:
     // UI playhead is instead driven by a main-thread QTimer (see pumpLocator()).
     void setGlobalLocatorPosRealtime( offset_t );
     bool isPlaying() const;
-    bool isRenderingActive() const;
+    bool isRenderingActive() const override;
     bool isRecordingActive() const;
     // Locator position captured when the current recording began. The view uses
     // it (with the live locator) to draw the growing in-progress capture region.
@@ -92,7 +92,7 @@ public:
     void submitAction(SAction *action);
 
     audio::RenderSession *renderSession() const;
-    void startRender(const audio::RenderParams &params);
+    void startRender(const audio::RenderParams &params) override;
 
     audio::RecordingSession *recordingSession() const;
     void startRecording(const audio::RecordingParams &params);
@@ -112,8 +112,8 @@ public:
 
     // Test output directory for artifacts (screenshots, renders, etc.)
     void setTestOutputDir(const QString &path);
-    QString testOutputDir() const;
-    bool ensureOutputDirExists() const;
+    QString testOutputDir() const override;
+    bool ensureOutputDirExists() const override;
 
     // App-wide status/mode line shown in the main window's status bar. Views
     // push the active (or hover-telegraphed) gesture here; the main window

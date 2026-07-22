@@ -6,7 +6,7 @@ class SObject;
 
 /**
  * Detail-editor factory (proposal 14, Phase 6): model objects must not
- * construct their view widgets (that coupled objects/* to timeline/pluginui).
+ * construct their view widgets (that coupled objects/ to timeline/pluginui).
  * A UI module registers a factory for an object class name from a static
  * initializer; SObject::getDetailEditWidget implementations look it up.
  * Same OBJECT-library no-TU-elision constraint as every other registry.

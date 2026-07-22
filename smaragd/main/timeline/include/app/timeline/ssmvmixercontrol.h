@@ -23,7 +23,7 @@ public:
     SSMVMixerControl(
         QWidget *parent, SStdMixerView &, STrack & );
     virtual ~SSMVMixerControl();
-    virtual QSize sizeHint() const;
+    virtual QSize sizeHint() const override;
 
     // The track this control drives (used to re-match controls to tracks after
     // a reorder).

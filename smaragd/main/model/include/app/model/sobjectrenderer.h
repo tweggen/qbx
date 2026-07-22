@@ -31,7 +31,6 @@ protected:
 private:
     QPainter &painter_;
     QRect visibRect_;
-    offset_t nsPerPixel_;
 };
 
 

@@ -29,19 +29,19 @@ public:
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
 
-    void createOutputLatches( void );
+    void createOutputLatches( void ) override;
 
-    void init( void );
+    void init( void ) override;
     int setNInputs( idx_t );
     int setInputLevel( idx_t, double );
-    virtual int seekTo( offset_t offset );
-    virtual idx_t getNInputs() const { return mixerInputs_; }
-    virtual idx_t getNOutputs() const { return 1; }
-    virtual const char *getInputName( idx_t ) const;
-    virtual const char *getOutputName( idx_t ) const;
+    virtual int seekTo( offset_t offset ) override;
+    virtual idx_t getNInputs() const override { return mixerInputs_; }
+    virtual idx_t getNOutputs() const override { return 1; }
+    virtual const char *getInputName( idx_t ) const override;
+    virtual const char *getOutputName( idx_t ) const override;
     
     twMixer( tw303aEnvironment &env, idx_t inputs );
-    void setBufferSize( length_t newSize );
+    void setBufferSize( length_t newSize ) override;
 };
 
 #endif

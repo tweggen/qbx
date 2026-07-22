@@ -130,7 +130,6 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     // so the reader chain can be constructed properly. This ensures looped playback
     // of group cuts works correctly (bug b: cycle mode playback).
     bool needCapture = !rs;  // Only container-backed cuts need capture building
-    bool grainAlreadyApplied = false;
     if( needCapture ) {
         buildCapture_();
         if( capture_ ) {

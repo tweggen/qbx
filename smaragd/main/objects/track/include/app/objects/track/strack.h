@@ -59,7 +59,7 @@ public:
 					     QDomElement &element, 
 					     SObject *parent );
 
-    virtual std::shared_ptr<twComponent> getRootComponent();
+    virtual std::shared_ptr<twComponent> getRootComponent() override;
 
     // A *seekable* component rendering this track's summed output, for snapshot
     // capture (asset previews / proposal 07). Unlike getRootComponent() (the
@@ -69,21 +69,21 @@ public:
     // unbuilt.
     std::shared_ptr<twComponent> getCaptureComponent() const;
 
-    virtual int readPreChildrenAttributes( QDomElement &element );
+    virtual int readPreChildrenAttributes( QDomElement &element ) override;
 
-    virtual QWidget *getDetailEditWidget( QWidget *parent );
-    virtual QWidget *getInlineEditWidget( QWidget *parent );
-    virtual SObjectRenderer *getInlineRenderer();
+    virtual QWidget *getDetailEditWidget( QWidget *parent ) override;
+    virtual QWidget *getInlineEditWidget( QWidget *parent ) override;
+    virtual SObjectRenderer *getInlineRenderer() override;
     
     virtual SLink *getTopMostSLinkAt( offset_t ) const;
     int getNBusses() const { return nBusses_; }
     SPluginChain *getPluginChain() const { return cpPluginChain_; }
-    virtual int seekTo( offset_t ofs );
+    virtual int seekTo( offset_t ofs ) override;
 
     // Path search may descend into track lanes (see SObject::isPathContainer).
     virtual bool isPathContainer() const override { return true; }
-    virtual bool hasDuration() const;
-    virtual length_t getDuration() const;
+    virtual bool hasDuration() const override;
+    virtual length_t getDuration() const override;
 
     // Scoped invalidation (proposal 15): stale this track's engine chain
     // (mixers, plugin chains + inserts, rewire). Ancestors are handled by
@@ -120,7 +120,7 @@ private:
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;
 
-    virtual int serializeSelfAttributes( QTextStream &o );
+    virtual int serializeSelfAttributes( QTextStream &o ) override;
     
 private slots:    
     void trackChildWasAdded( SLink & );

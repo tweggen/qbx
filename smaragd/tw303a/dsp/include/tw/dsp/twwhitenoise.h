@@ -20,14 +20,14 @@ protected:
     sample_t *freqBuffer;
     
 public:
-    void createOutputLatches( void );
+    void createOutputLatches( void ) override;
 
-    virtual void init( void );
-    virtual const char *getInputName( idx_t ) const { return 0; }
-    virtual const char *getOutputName( idx_t ) const { return 0; }
+    virtual void init( void ) override;
+    virtual const char *getInputName( idx_t ) const override { return 0; }
+    virtual const char *getOutputName( idx_t ) const override { return 0; }
     twWhiteNoise( tw303aEnvironment & );
     
-    void setBufferSize( length_t newSize );
+    void setBufferSize( length_t newSize ) override;
 };
 
 #endif

@@ -23,10 +23,10 @@ public:
     virtual ~SPluginChain();
 
     // SObject interface
-    virtual std::shared_ptr<twComponent> getRootComponent();
-    virtual QWidget *getDetailEditWidget( QWidget *parent = nullptr );
-    virtual QWidget *getInlineEditWidget( QWidget *parent = nullptr );
-    virtual SObjectRenderer *getInlineRenderer();
+    virtual std::shared_ptr<twComponent> getRootComponent() override;
+    virtual QWidget *getDetailEditWidget( QWidget *parent = nullptr ) override;
+    virtual QWidget *getInlineEditWidget( QWidget *parent = nullptr ) override;
+    virtual SObjectRenderer *getInlineRenderer() override;
 
     // Serialization
     static SLink *instantiateFromDomElement( SProjectLoader &projectLoader,

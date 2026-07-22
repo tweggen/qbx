@@ -23,14 +23,14 @@ protected:
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
 public:
-    void createOutputLatches( void );
+    void createOutputLatches( void ) override;
     
-    virtual void init( void );
+    virtual void init( void ) override;
     
-    virtual idx_t getNInputs() const { return 0; }
-    virtual idx_t getNOutputs() const { return 1; }
-    virtual const char *getInputName( idx_t ) const { return 0; }
-    virtual const char *getOutputName( idx_t ) const { return "White noise output."; }
+    virtual idx_t getNInputs() const override { return 0; }
+    virtual idx_t getNOutputs() const override { return 1; }
+    virtual const char *getInputName( idx_t ) const override { return 0; }
+    virtual const char *getOutputName( idx_t ) const override { return "White noise output."; }
     
     twConstant( tw303aEnvironment &env, sample_t constant );
 };

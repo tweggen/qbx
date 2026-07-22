@@ -121,18 +121,18 @@ public:
     // post-edit reader. NOT for the RT audio thread (use getSnapshot() there).
     SCutSnapshot getSnapshotBlocking() const;
 
-    virtual std::shared_ptr<twComponent> getRootComponent();
-    virtual QWidget *getDetailEditWidget( QWidget *parent );
-    virtual QWidget *getInlineEditWidget( QWidget *parent );
-    virtual SObjectRenderer *getInlineRenderer();    
+    virtual std::shared_ptr<twComponent> getRootComponent() override;
+    virtual QWidget *getDetailEditWidget( QWidget *parent ) override;
+    virtual QWidget *getInlineEditWidget( QWidget *parent ) override;
+    virtual SObjectRenderer *getInlineRenderer() override;    
 
-    virtual int readPostChildrenAttributes( QDomElement &element );
+    virtual int readPostChildrenAttributes( QDomElement &element ) override;
     
-    virtual int seekTo( offset_t );
+    virtual int seekTo( offset_t ) override;
     // Fold the slip offset (grain-stretched when a grain stage is active) into
     // a clip-relative position, so tracks can seek/freeze our reader directly.
     // A looping reader is already cut-relative and maps identically.
-    virtual offset_t mapTimelineToComponentPos( offset_t off );
+    virtual offset_t mapTimelineToComponentPos( offset_t off ) override;
     // Inv-1: resolve component + mapped position from ONE snapshot (never two
     // straddling getSnapshotBlocking() reads that a lazy reader build can split).
     virtual twResolvedClip resolveClip( offset_t off ) override;
@@ -174,8 +174,8 @@ public:
     }
     void setDurationRaw( ClipLen d ) { cutDuration_ = d; }
     void setGrainParamsRaw( const twGrainParams &p ) { grainParams_ = p; }
-    virtual bool hasDuration() const { return true; }
-    virtual length_t getDuration() const;
+    virtual bool hasDuration() const override { return true; }
+    virtual length_t getDuration() const override;
     // Proposal 19 Phase 2b: blocking-snapshot duration for the EDIT/signal path.
     // getDuration() uses getSnapshot()'s try-lock → stale lastGoodSnapshot_
     // fallback (correct for the RT audio thread), which under background-worker
@@ -198,7 +198,7 @@ public:
     // cuts have no capture here and fall back to the base preview. Tier 2 of the
     // asset-preview work.
     virtual int getPreview( preview_t *dest, offset_t start, length_t length,
-                            offset_t nProbes );
+                            offset_t nProbes ) override;
 
     // Set the whole clip window at once (slip offset, timeline duration, loop
     // segment length, grain stretch) and rebuild the playback chain exactly
@@ -262,7 +262,7 @@ public slots:
     virtual void setLoopStart( offset_t );
     virtual void setLoopLength( length_t );
     virtual void setStartOffset( offset_t );
-    virtual void setDuration( length_t );
+    virtual void setDuration( length_t ) override;
     void setStretch( double );
     void setPitchCents( double );
 
@@ -333,7 +333,7 @@ private slots:
     void onArrangementChanged();
 
 protected:
-    virtual int serializeSelfAttributes( QTextStream &o );
+    virtual int serializeSelfAttributes( QTextStream &o ) override;
 
 private:
     // Check if revalidation is needed for specific aspects. _nolock: caller must hold mutex().

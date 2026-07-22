@@ -91,17 +91,17 @@ public:
     void setTrackGain(double gainDb);
 
 public:
-    virtual void setBufferSize( length_t );
+    virtual void setBufferSize( length_t ) override;
 
 public:
-    virtual bool isSeekable() const;
-    virtual int seekTo( offset_t );
-    virtual void createOutputLatches();
+    virtual bool isSeekable() const override;
+    virtual int seekTo( offset_t ) override;
+    virtual void createOutputLatches() override;
 
-    virtual idx_t getNInputs() const;
-    virtual idx_t getNOutputs() const;
-    virtual const char *getInputName( idx_t ) const;
-    virtual const char *getOutputName( idx_t ) const;
+    virtual idx_t getNInputs() const override;
+    virtual idx_t getNOutputs() const override;
+    virtual const char *getInputName( idx_t ) const override;
+    virtual const char *getOutputName( idx_t ) const override;
 
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;

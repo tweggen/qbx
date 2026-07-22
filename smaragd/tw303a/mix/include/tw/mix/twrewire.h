@@ -21,21 +21,21 @@ public:
     twRewire( tw303aEnvironment &env );
     virtual ~twRewire();
 
-    virtual twLatchOutput *linkOutput( idx_t idx );
-    virtual void allocPlugs();
-    virtual void init();
-    virtual void createOutputLatches();
+    virtual twLatchOutput *linkOutput( idx_t idx ) override;
+    virtual void allocPlugs() override;
+    virtual void init() override;
+    virtual void createOutputLatches() override;
 
     virtual int setNPlugs( idx_t );
 
-    virtual idx_t getNInputs() const;
-    virtual idx_t getNOutputs() const;
-    virtual const char *getInputName( idx_t ) const;
-    virtual const char *getOutputName( idx_t ) const;
+    virtual idx_t getNInputs() const override;
+    virtual idx_t getNOutputs() const override;
+    virtual const char *getInputName( idx_t ) const override;
+    virtual const char *getOutputName( idx_t ) const override;
 
-    virtual int seekTo( offset_t offset );
+    virtual int seekTo( offset_t offset ) override;
 
-    virtual void setBufferSize( length_t ) {};
+    virtual void setBufferSize( length_t ) override {};
 
 protected:
     // Phase 3: IOVector-based interface (type-safe, page-backed)

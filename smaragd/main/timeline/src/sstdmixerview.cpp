@@ -2163,7 +2163,7 @@ void SStdMixerView::rebuildControlColumn()
     // Use the requested trackControlWidth_ instead of the holder's actual width
     int w = trackControlWidth_;
     qWarning( "rebuildControlColumn: holder width=%d, control width=%d, rows=%d",
-              qTrackControlBoxHolder_->width(), w, rows_.size() );
+              qTrackControlBoxHolder_->width(), w, int( rows_.size() ) );
     for( int i=0; i<rows_.size(); ++i ) {
         const STrackRow &row = rows_.at( i );
         // Take-lane rows carry no channel strip; the vertical position of the
@@ -3189,12 +3189,12 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     actPitchUpFine_ = addPitchAction(
         "Pitch up (10 cents)",
         { QKeySequence( Qt::SHIFT | Qt::Key_Plus ),
-          QKeySequence( Qt::SHIFT | Qt::KeypadModifier | Qt::Key_Plus ) },
+          QKeySequence( Qt::ShiftModifier | Qt::KeypadModifier | Qt::Key_Plus ) },
         SLOT( ctPitchUpFine() ) );
     actPitchDownFine_ = addPitchAction(
         "Pitch down (10 cents)",
         { QKeySequence( Qt::SHIFT | Qt::Key_Minus ),
-          QKeySequence( Qt::SHIFT | Qt::KeypadModifier | Qt::Key_Minus ) },
+          QKeySequence( Qt::ShiftModifier | Qt::KeypadModifier | Qt::Key_Minus ) },
         SLOT( ctPitchDownFine() ) );
     actPitchUp_->setToolTip( "Transpose the selected clip(s) up one semitone "
                              "(Shift: 10 cents; numpad +/- on any layout)" );
@@ -3297,9 +3297,10 @@ void SStdMixerView::mousePressEvent( QMouseEvent *event )
     // Check if clicking on the divider (resize handle)
     int dividerX = trackControlWidth_;
     if( event->button() == Qt::LeftButton &&
-        event->x() >= dividerX - 5 && event->x() <= dividerX + 5 ) {
+        event->position().toPoint().x() >= dividerX - 5 &&
+        event->position().toPoint().x() <= dividerX + 5 ) {
         trackHeaderDragActive_ = true;
-        trackHeaderDragStartX_ = event->x();
+        trackHeaderDragStartX_ = event->position().toPoint().x();
         trackHeaderDragStartWidth_ = trackControlWidth_;
         event->accept();
         return;
@@ -3310,7 +3311,7 @@ void SStdMixerView::mousePressEvent( QMouseEvent *event )
 void SStdMixerView::mouseMoveEvent( QMouseEvent *event )
 {
     if( trackHeaderDragActive_ ) {
-        int delta = event->x() - trackHeaderDragStartX_;
+        int delta = event->position().toPoint().x() - trackHeaderDragStartX_;
         int newWidth = trackHeaderDragStartWidth_ + delta;
         setTrackControlWidth( newWidth );
         event->accept();

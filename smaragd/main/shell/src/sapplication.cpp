@@ -246,8 +246,8 @@ SApplication::SApplication( int &argc, char **argv )
       currentSelectedSLink_( NULL ),
       globalLocatorPos_( 0 ),
       isPlaying_( false ),
-      currentProject_( NULL ),
       renderSession_( nullptr ),
+      currentProject_( NULL ),
       recordingSession_( nullptr )
 {
     setOrganizationName( "Smaragd" );

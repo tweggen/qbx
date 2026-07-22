@@ -547,7 +547,7 @@ protected:
     length_t getAllChildsDuration() const;
 
     int getStraightPreview( preview_t *, offset_t, length_t, offset_t );
-    virtual void childEvent( QChildEvent * );
+    virtual void childEvent( QChildEvent * ) override;
     // Swallows a pending DeferredDelete when the object was re-referenced
     // after removeRef() hit zero (deleteLater() cannot be rescinded; without
     // this, any 1->0->1 refcount transition destroys an object that live

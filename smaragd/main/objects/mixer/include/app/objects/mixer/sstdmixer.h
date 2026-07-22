@@ -39,11 +39,11 @@ public:
 					     SObject *parent );
 
     /// For SObject
-    virtual std::shared_ptr<twComponent> getRootComponent();
+    virtual std::shared_ptr<twComponent> getRootComponent() override;
 
-    virtual QWidget *getDetailEditWidget( QWidget *parent );
-    virtual QWidget *getInlineEditWidget( QWidget *parent );
-    virtual SObjectRenderer *getInlineRenderer();
+    virtual QWidget *getDetailEditWidget( QWidget *parent ) override;
+    virtual QWidget *getInlineEditWidget( QWidget *parent ) override;
+    virtual SObjectRenderer *getInlineRenderer() override;
     
     virtual int getNTracks() const;
     // The mixer holds lanes; path search and the placement service treat it
@@ -53,10 +53,10 @@ public:
     virtual SObject *activeLane() const override;
     virtual SLink *getTrackAt( int idx );
 
-    virtual int seekTo( offset_t );
+    virtual int seekTo( offset_t ) override;
 
-    virtual length_t getDuration() const;
-    virtual bool hasDuration() const;
+    virtual length_t getDuration() const override;
+    virtual bool hasDuration() const override;
 
     // Track selection for the detail panel
     STrack *getSelectedTrack() const { return selectedTrack_; }
