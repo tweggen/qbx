@@ -454,8 +454,8 @@ void twComponent::invalidatePagesInRange_nolock(offset_t start, offset_t end)
         auto &page = kv.second;
         if (!page) continue;
         if (page->validAspects == 0) continue;   // placeholder mid-render
-        const uint64_t pStart = page->startPosition;
-        const uint64_t pEnd = pStart + twOutputPage::FRAME_CAPACITY;
+        const offset_t pStart = page->startPosition;
+        const offset_t pEnd = pStart + twOutputPage::FRAME_CAPACITY;
         const bool intersects = pStart < end && start < pEnd;
         if (!intersects && page->contentEpoch.load() == before) {
             page->contentEpoch.store(now);       // untouched AND current: re-bless

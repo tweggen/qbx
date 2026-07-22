@@ -1,6 +1,7 @@
 #ifndef _TW_PAGE_PLAN_H_
 #define _TW_PAGE_PLAN_H_
 
+#include "tw/core/twtypes.h"
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -32,12 +33,12 @@ class twComponent;
  */
 struct twPageDep {
     std::shared_ptr<twComponent> producer;
-    uint64_t                     pageStart;
+    offset_t                     pageStart;
 };
 
 struct twPagePlan {
     std::shared_ptr<twComponent> component;
-    uint64_t                     pageStart = 0;
+    offset_t                     pageStart = 0;
     uint64_t                     epoch     = 0;   // component epoch at plan time
     std::vector<twPageDep>       deps;
 };

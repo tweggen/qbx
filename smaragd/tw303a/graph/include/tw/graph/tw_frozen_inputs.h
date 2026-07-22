@@ -44,7 +44,7 @@ struct twOutputPage;
 struct twFrozenInputs {
     struct Entry {
         const twComponent            *producer;
-        uint64_t                      pageStart;
+        offset_t                      pageStart;
         std::shared_ptr<twOutputPage> page;
     };
 
@@ -52,7 +52,7 @@ struct twFrozenInputs {
 
     // Deps copyData wanted but did not find (stage >1 turns these into
     // re-plan triggers). Mutable: recorded through the const active scope.
-    mutable std::vector<std::pair<const twComponent *, uint64_t>> misses;
+    mutable std::vector<std::pair<const twComponent *, offset_t>> misses;
 
     void bind( const twComponent *producer,
                std::shared_ptr<twOutputPage> page );
