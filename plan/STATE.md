@@ -6052,3 +6052,85 @@ action grabs the root window, not the app window). Two such desktop captures had
 already reached the remote. Added to .gitignore and removed from the index with
 `git rm --cached`; the files stay on disk. This replaces a manual "restore the
 PNGs before committing" step that would eventually have been forgotten.
+
+## Proposal 24: in-application logging with a dockable log view (2026-07-22)
+
+Executed proposal 24 end to end. Every diagnostic in the tree now lands in one
+structured sink: `tw/core/twlog.h`'s `TwLog`, feeding a console tee, a rotating
+file, and a dockable log window. `tools/check_logging.py` went from **101**
+direct stderr/stdout writes to **0** and now guards the boundary.
+
+**Why it mattered.** The three channels (143 Qt sites, 36 `syslog()`, 104 raw
+`fprintf`) all ended at the console and nowhere else; nothing survived a crash;
+no record carried a level, a module or a thread. STATE.md itself recorded the
+consequence twice — §2642's "on Windows/MinGW, `qWarning()`/`qDebug()` output
+does not reach the bash-redirected stderr logfile … use `fprintf(stderr,…)`
+instead", and §5870's "action-level diagnostics do not reach the test log, so
+the failures that matter must be expressed as assertions". That standing advice
+is exactly what grew the 104 raw call sites. `qInstallMessageHandler` replaces
+Qt's default handler outright, so those messages now leave through the same
+descriptor as everything else — the advice is retired, and console output after
+this change is a strict *superset* of before, not an equivalent.
+
+**Landed.** The sink (fixed-capacity ring, monotonic never-reused `seq` so
+readers hold a cursor, one record per line, rotating file writer draining
+through the same `snapshot()` the UI uses); the `twsyslog.h` shim rewritten to
+forward on *all* platforms, so the POSIX half stops vanishing into the journal;
+console policy layered compile-default → `SOpt::LogConsole` → env → CLI; the
+sweep; `SLogModel`/`SLogView` and the dock with a new View menu (Ctrl+Shift+L);
+a Log page in the options dialog.
+
+**Four things found while building it, each worth remembering:**
+
+1. **MinGW-w64 GCC 13.1.0 cannot do `thread_local` with a non-trivial
+   destructor.** The first draft cached a per-thread format buffer in a
+   `thread_local std::vector<char>`; that corrupts the heap once ~3+ threads log
+   (`STATUS_HEAP_CORRUPTION`, 0xc0000374). Confirmed against the *toolchain*,
+   not our code: an 8-thread program whose only shared state is such a
+   thread_local, nothing of ours linked in, dies 10 runs out of 10. Formatting
+   now uses a stack buffer with a function-local heap fallback; only POD
+   thread_locals remain. Recorded in `tw303a/core/CONTRACT.md` as a
+   codebase-wide rule — this will bite anyone who adds one.
+
+2. **The eager per-slot `reserve()` cost ~64 MB.** A 200k-record ring paid for
+   `TW_LOG_RT_MAX` per slot the instant it was configured, logged to or not.
+   Slots now grow lazily; memory tracks what is actually logged, and the steady
+   state is identical. The RT guarantee weakened honestly from "never allocates"
+   to "never blocks; may allocate once per slot on first write".
+
+3. **The dock's first honest measurement was a 105 ms GUI stall per tick.**
+   Two causes: `makeRow()` called `TwLog::formatLine()` per row just to slice
+   off its timestamp, taking the sink's mutex each time (~5 µs/row); and the
+   drain absorbed a fixed 20 000 records per tick. Fixed with a lock-free
+   `formatTimestamp()` and a *time* budget (8 ms) instead of a count — no fixed
+   count is right across machines and message sizes. Now 300k records absorb
+   with a worst tick of 10 ms.
+
+4. **`log_dock_scale.qxa` had to be fixed twice before it measured anything.**
+   It first *passed while doing nothing* — at `--log-level=info` every `TW_LOGD`
+   in the burst was gated at the call site, so the ring never grew; it now
+   forces the level and asserts the records arrived. It then *failed for the
+   wrong reason*, asserting on a whole event-loop pump, which carries everything
+   else queued — the startup device-latency probe alone is ~90 ms. Proven by
+   running the same case with 200 records: same ~90 ms pump, no log traffic. It
+   now asserts on the drain tick and reports the pump as context. Verified it
+   can fail: removing the drain budget takes it to 188 ms.
+
+**Unplanned improvement.** `audio_engine.cc` has six diagnostics (`[STALL]`,
+`[SILENCE]`, `[AUDIO] …`) that run *inside the RT audio callback*. They were
+`fprintf` + `fflush` — locking and potentially allocating on the realtime
+thread, precisely what this codebase has a rule against. Because
+`twRtThreadGuard::markRtThread()` now also marks the thread non-blocking for the
+sink, those six became try_lock-with-drop automatically.
+
+**Verified.** Full 50-test ctest suite green (plus the two new cases);
+`check_layering.py` and `check_logging.py` clean; `twlog_test` 33 assertions,
+12/12 clean repeats; render determinism re-confirmed after the sweep — the same
+case under `SMARAGD_REVAL_WORKERS` ∈ {1,4,8,16} is byte-identical.
+
+**Deliberately not done** (proposal §9): third-party output (libsndfile, ALSA,
+Qt platform plugins) still bypasses the sink — catching it needs an fd-2 pipe
+tee and the records would carry no level or category. Per-category level
+thresholds are a filter-side addition the record shape already supports. An
+`assert-log-contains` qxa verb is now cheap and would directly answer the
+STATE.md note that started this.

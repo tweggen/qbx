@@ -1,6 +1,6 @@
 # Proposal 24 — In-application logging: one sink, a dockable log view
 
-Status: PROPOSED (2026-07-21) — re-verified against `9e6e2c3` (2026-07-21)
+Status: EXECUTED (2026-07-22) — re-verified against `9e6e2c3` (2026-07-21)
 
 ## 1. Motivation
 

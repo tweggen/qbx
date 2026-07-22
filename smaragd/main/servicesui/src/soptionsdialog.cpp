@@ -5,6 +5,7 @@
 #include "tw/playback/twspeaker.h"
 #include "tw/devices/audio_backend.h"
 #include "tw/devices/audio_input.h"
+#include "tw/core/twlog.h"
 
 #include <QTreeWidget>
 #include <QStackedWidget>
@@ -16,6 +17,7 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSpinBox>
 
 // A combo populated with every wheel action; the enum value is the item data.
 static QComboBox *makeWheelActionCombo()
@@ -43,10 +45,12 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
     tree_->setFixedWidth( 160 );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Mouse navigation" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Audio" ) ) );
+    tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Log" ) ) );
 
     stack_ = new QStackedWidget;
     stack_->addWidget( buildMousePage() );   // index 0
     stack_->addWidget( buildAudioPage() );   // index 1
+    stack_->addWidget( buildLogPage() );     // index 2
 
     QObject::connect( tree_, &QTreeWidget::currentItemChanged,
                       this, [this]( QTreeWidgetItem *cur, QTreeWidgetItem * ) {
@@ -279,6 +283,96 @@ void SOptionsDialog::apply()
 {
     applyMousePage();
     applyAudioPage();
+    applyLogPage();
+}
+
+// ---------------------------------------------------------------- Log page
+
+QWidget *SOptionsDialog::buildLogPage()
+{
+    QWidget *page = new QWidget;
+    QFormLayout *form = new QFormLayout( page );
+
+    logConsole_ = new QCheckBox( "Also write the log to the console (stderr)" );
+    logConsole_->setToolTip(
+        "Defaults to on for a debug build and off for a release build. "
+        "--log-console / --no-log-console on the command line, and the "
+        "SMARAGD_LOG_CONSOLE environment variable, override this." );
+    form->addRow( logConsole_ );
+
+    logLevel_ = new QComboBox;
+    logLevel_->addItem( "Errors only", "error" );
+    logLevel_->addItem( "Warnings",    "warn" );
+    logLevel_->addItem( "Info",        "info" );
+    logLevel_->addItem( "Debug",       "debug" );
+    logLevel_->addItem( "Trace",       "trace" );
+    logLevel_->setToolTip( "Records below this level are discarded at the call "
+                           "site, so a lower setting also costs less." );
+    form->addRow( "Level:", logLevel_ );
+
+    logCapacity_ = new QSpinBox;
+    logCapacity_->setRange( 1000, 5000000 );
+    logCapacity_->setSingleStep( 10000 );
+    logCapacity_->setGroupSeparatorShown( true );
+    logCapacity_->setToolTip(
+        "How many records the in-memory buffer keeps for the log window. "
+        "Memory is only used as records are actually written. Changing this "
+        "clears the buffer." );
+    form->addRow( "Buffer (records):", logCapacity_ );
+
+    logToFile_ = new QCheckBox( "Write a rotating log file" );
+    logToFile_->setToolTip( "smaragd.log next to smaragd.ini, rotated at 8 MB, "
+                            "3 backups kept. Takes effect on restart." );
+    form->addRow( logToFile_ );
+
+    logPathLabel_ = new QLabel;
+    logPathLabel_->setTextInteractionFlags( Qt::TextSelectableByMouse );
+    form->addRow( "Folder:", logPathLabel_ );
+
+    loadLogPage();
+    return page;
+}
+
+void SOptionsDialog::loadLogPage()
+{
+    SSettings &s = SSettings::instance();
+    logConsole_->setChecked(
+        s.value( SOpt::LogConsole, SOpt::def( SOpt::LogConsole ) ).toBool() );
+    selectByData( logLevel_,
+        s.value( SOpt::LogLevel, SOpt::def( SOpt::LogLevel ) ).toString() );
+    logCapacity_->setValue(
+        s.value( SOpt::LogCapacity, SOpt::def( SOpt::LogCapacity ) ).toInt() );
+    logToFile_->setChecked(
+        s.value( SOpt::LogToFile, SOpt::def( SOpt::LogToFile ) ).toBool() );
+    logPathLabel_->setText( s.configDir() );
+}
+
+void SOptionsDialog::applyLogPage()
+{
+    SSettings &s = SSettings::instance();
+    const bool    console = logConsole_->isChecked();
+    const QString level   = logLevel_->currentData().toString();
+    const int     cap     = logCapacity_->value();
+
+    s.setValue( SOpt::LogConsole,  console );
+    s.setValue( SOpt::LogLevel,    level );
+    s.setValue( SOpt::LogCapacity, cap );
+    s.setValue( SOpt::LogToFile,   logToFile_->isChecked() );
+
+    // Console and level are live — a user turning on Trace to chase something
+    // should not have to restart to see it. The file sink is not, because
+    // starting or stopping its writer mid-session is not worth the complexity
+    // for a setting nobody changes twice.
+    tw::TwLog &log = tw::TwLog::instance();
+    log.setConsole( console );
+    if     ( level == "error" ) log.setMinLevel( tw::LogLevel::Error );
+    else if( level == "warn"  ) log.setMinLevel( tw::LogLevel::Warn );
+    else if( level == "info"  ) log.setMinLevel( tw::LogLevel::Info );
+    else if( level == "trace" ) log.setMinLevel( tw::LogLevel::Trace );
+    else                        log.setMinLevel( tw::LogLevel::Debug );
+
+    // Resizing the ring discards it, so only do it on an actual change.
+    if( static_cast<int>( log.capacity() ) != cap ) log.setCapacity( cap );
 }
 
 void SOptionsDialog::accept()
