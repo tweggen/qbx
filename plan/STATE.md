@@ -6227,3 +6227,92 @@ before trusting the commit.
 into its `nRefs` attributes. Worth confirming the loader recomputes refcounts
 from the links rather than trusting the attribute, or such a project reproduces
 the survivor path even with this fix.
+
+## Mute moves from the track to the mixer channel (2026-07-23)
+
+**Bug.** An asset on the 4th track of `test4_2.qxp`, windowing the 1st track,
+drew a zero line and played silence. Its window was correct — cut
+`3044958547552` has `srcStart='626080'`, `cutDuration='500864'`, exactly the
+saved range, and its content link points at the 1st track. The container simply
+carried `muted='true'`.
+
+**Root cause.** Mute was baked into a track's own rendered output:
+`STrack::onTrackMuteChanged` → `twTrackMix::setTrackMute` → `trackMuted_` →
+`twTrackMix::freezePage`/`calcOutputTo` multiplied the whole page by `0.0`.
+`SCut::buildCapture_` freezes the container's component directly, so an asset
+over a muted track captured digital silence — a correctly-sized, all-zero
+capture, hence a flat peak envelope (the zero line) rather than the
+"no preview" placeholder.
+
+Mute and solo already disagreed about this: solo is enforced by the summing
+parent (`SStdMixer::reconnectTracksToMixer` nulls the muted/non-soloed input
+plug) and therefore never silenced an asset. `STrack::getCaptureComponent()`,
+documented as the asset-capture seam, was dead code.
+
+**Fix (architectural, user's call).** Mute is a property of the mixer CHANNEL,
+never of the track — enforced wherever a parent sums a child:
+
+- `twTrackMix` applies only `trackGainDb_` to its own output; `trackMuted_` is
+  gone. A muted track still renders its material, so a capture of it is real.
+- `ClipEntry` gains a `muted` flag plus `setClipMuted(key, bool)`, skipped in
+  `planPage` (so the scheduler demands no pages nothing consumes) and in both
+  mixing loops. This is the FOLDER-track path: a nested track is an ordinary
+  clip entry in its parent's mix, so the mixer's null-the-plug trick can't
+  reach it.
+- `STrack` now observes its child TRACKS' `mutedChanged` and mutes the
+  corresponding clip entry, seeding from the child's current state so a track
+  reparented in while already muted lands silent.
+- `SStdMixer` is unchanged — it was already the reference implementation.
+
+Gain deliberately stays with the track, so an asset keeps the container's
+fader (+15.98 dB in `test4_2.qxp`).
+
+**Second bug, found on the way.** `twMixer::setNInputs_nolock` ignored shrink
+requests outright ("FIXME: decrease the actual number of channels connected").
+After a reparent the root mixer kept its old `mixerInputs_` with the moved
+track's latch still wired in the dropped tail, while
+`reconnectTracksToMixer` rewires only `[0, nTracks)` — so a track moved into a
+folder was summed TWICE, at double amplitude, clipping on loud material. It hid
+behind the old track-level mute (which killed both copies at once) and only
+surfaced when muting the folder removed just one of them. Shrinking now drops
+the surplus plugs; the grown tail of `inputProperties_` is also zeroed, since
+`realloc` left it uninitialised.
+
+**Verified.** `test4_2.qxp`'s asset region renders RMS 0.147 where it was 0.
+Four new qxa cases: `asset_over_muted_container` (the report; fails before the
+fix with silence), `mute_silences_track` (top-level mute now rests solely on
+the nulled input plug — nothing pinned that path before),
+`mute_nested_track` (folder path), `folder_track_sums_once` (the double-sum),
+`mute_survives_reload` (mute now depends on the mixer being told, so the
+save/load path needed pinning), `mute_invalidates_cache` (the staleness below).
+`set-track-mute` gained an optional `trackPath` — a mixer index cannot name a
+nested track, so the folder cases were previously inexpressible. Full ctest
+green; `check_layering.py` / `check_logging.py` clean.
+
+**Third bug: the mute went stale in the caches.** Enforcing mute by nulling an
+input plug only changes what FUTURE freezes produce — pages already frozen at
+the mixer/rewire still contained the track, so muting mid-session left it
+audible until those pages aged out (reported as "I hear the muted track").
+Mute used to get the invalidation for free, via the `invalidateRenderPath()` in
+`STrack::onTrackMuteChanged` that this change had emptied out. It now lives in
+`SStdMixer::trackMuteSoloChanged()`, next to the rewiring it belongs to. SOLO
+has always come through that same slot with NO invalidation, so it carried the
+identical staleness — this fixes both. A cold render freezes everything fresh
+and cannot catch this: `mute_invalidates_cache` renders once to bake the
+un-muted timeline into the caches, mutes, renders again, and also checks that
+un-muting comes back rather than serving a cached silence.
+
+`STrack::getCaptureComponent()` is DELETED. It returned `cpTrackMixers_[0]`,
+which sits upstream of the plugin chain and covers bus 0 only, so capturing an
+asset through it would have dropped the track's insert plugins and every bus
+above 0 — and contradicted keeping gain on the track. Its stated rationale
+(the rewire "can't seek to zero") described the pull-based capture that
+proposal 19 replaced with position-authoritative `freezePage`.
+
+**Follow-ups.** `SCut::buildCapture_` calls `c.seekTo(0)`, and `STrack::seekTo`
+reaches only `cpTrackMixers_` — not the plugin chains or the rewire. A stateful
+insert (delay/reverb tail) could therefore bleed playback state into the start
+of an offline capture. Moot while the registry holds only `twpassthrough`, but
+real. Nested-track SOLO remains unimplemented — only `SStdMixer` evaluates
+solo — but is now expressible the same way as nested mute.
+

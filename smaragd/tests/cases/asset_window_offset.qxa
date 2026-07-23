@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: an asset windowing a track from a NON-ZERO offset must play the
+  material at that offset, not from the container's start.
+
+  Reported as: select a track holding a recording, set the ruler range to a few
+  bars starting partway in, "Create asset from range", place the asset on
+  another track — the placement starts at a different position inside the
+  container, and its preview goes empty shortly after.
+
+  loop_asset_extend.qxa is the only other container-backed asset case and it
+  windows from startOffset="0", so the whole non-zero asset-window path — the
+  capture's frame domain vs. the reader's start seek — was uncovered.
+
+  Fixture: test_sawtooth.wav is a 4 s sawtooth whose amplitude ramps 0 -> 0.8,
+  so every source second has a unique RMS:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+  The asset windows [2 s, 4 s) of track 0, so its two seconds MUST read sec2
+  then sec3. An asset that restarts the container from 0 shows sec0/sec1 and
+  fails; an empty capture shows silence and fails the same assertions.
+-->
+<SActionScript version="1" name="asset_window_offset">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0: the source the asset windows. Track 1: where it is placed. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Asset = track 0's live output over [96000, 192000) = source sec2+sec3.
+         The non-zero startOffset is the whole point of this case. -->
+    <create-asset container="0" startOffset="96000" duration="96000"
+                  assetName="Section"/>
+
+    <!-- Placed at 4 s, i.e. PAST track 0's own clip, so the rendered region
+         4-6 s carries the asset alone and no summing can mask a wrong offset. -->
+    <place-asset assetName="Section" trackPath="1" timePos="192000"/>
+
+    <render filename="asset_window_offset.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: track 0's own clip, source sec0. Guards the baseline. -->
+    <assert-audio-energy filename="asset_window_offset.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- 4-5 s: the asset's FIRST second = container 2-3 s = source sec2.
+         Restart-from-zero yields ~0.067 here; an empty capture yields 0. -->
+    <assert-audio-energy filename="asset_window_offset.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <!-- 5-6 s: the asset's second second = container 3-4 s = source sec3. -->
+    <assert-audio-energy filename="asset_window_offset.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- 6-7 s: past the asset's 2 s window; silence (catches a capture that
+         over-runs its window, and page bleed). -->
+    <assert-audio-energy filename="asset_window_offset.wav"
+                         startFrame="288000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

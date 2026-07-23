@@ -209,13 +209,24 @@ twEditRange twTrackMix::updateClip(const void *key, offset_t newStartTime, lengt
     return r;
 }
 
-void twTrackMix::setTrackMute(bool muted)
+twEditRange twTrackMix::setClipMuted(const void *key, bool muted)
 {
-    std::lock_guard<std::mutex> lock(mutex());
-    if( trackMuted_ != muted ) {
-        trackMuted_ = muted;
-        bumpContentEpoch();  // Mute is baked into frozen pages
+    twEditRange r;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        for( ClipEntry &clip : clips_ ) {
+            if( clip.key != key ) continue;
+            if( clip.muted == muted ) break;      // no change, no invalidation
+            clip.muted = muted;
+            // Only this entry's extent changed: its material either vanished
+            // from the track sum or reappeared in it (proposal 18 Phase 5
+            // range scoping, same as removeClip/insertClip).
+            r = clipExtent(clip.startTime, clip.duration);
+            invalidatePagesInRange_nolock(r.start, r.end);
+            break;
+        }
     }
+    return r;
 }
 
 void twTrackMix::setTrackGain(double gainDb)
@@ -264,6 +275,7 @@ length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
 
     // Iterate through clips and mix their output
     for( const ClipEntry &clip : clips_ ) {
+        if( clip.muted ) continue;      // channel mute: not summed (setClipMuted)
         offset_t startTime = clip.startTime;
         if( startTime>=endInterval ) continue;
         offset_t endTime = startTime;
@@ -304,8 +316,11 @@ length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
         }
     }
 
-    // Apply track gain and mute
-    double factor = trackMuted_ ? 0.0 : pow( 10., trackGainDb_/20. );
+    // Apply track gain. NOT mute: mute belongs to the channel, so it is applied
+    // by whoever sums THIS track (the mixer nulls our input plug; a folder track
+    // skips our clip entry), never to our own output — otherwise a capture of
+    // this track (an asset window) would be silence. See setClipMuted().
+    double factor = pow( 10., trackGainDb_/20. );
     if( factor != 1.0 ) {
         for( offset_t i=0; i<(offset_t)dest.length(); i++ ) {
             buffer.data()[i] *= (sample_t) factor;
@@ -363,6 +378,9 @@ twPagePlan twTrackMix::planPage( offset_t pageStart )
             continue;              // no overlap with this page
         }
         if( !clip.view ) continue;
+        // Channel mute: not summed, so do not make the scheduler demand pages
+        // nothing will consume (setClipMuted).
+        if( clip.muted ) continue;
 
         offset_t childPos = (pageStart >= clip.startTime)
                             ? (pageStart - clip.startTime)
@@ -418,6 +436,9 @@ length_t twTrackMix::freezePage_nolock(
             TW_LOGW( "mix", "WARNING: twTrackMix::freezePage_nolock found null view" );
             continue;
         }
+        // Channel mute: not summed into this track (setClipMuted). Matches the
+        // planPage skip, so plan and render agree on the deps.
+        if( clip.muted ) continue;
 
         // Child position: what frame offset in the child corresponds to startPos?
         offset_t childPos = (startPos >= clip.startTime)
@@ -460,8 +481,8 @@ length_t twTrackMix::freezePage_nolock(
         outputVec.mixFrom(childVec, destOffset, (length_t) framesToMix);
     }
 
-    // Apply track gain and mute (same as calcOutputTo_nolock)
-    double factor = trackMuted_ ? 0.0 : pow( 10., trackGainDb_/20. );
+    // Apply track gain, not mute (same as calcOutputTo_nolock — see there).
+    double factor = pow( 10., trackGainDb_/20. );
     if( factor != 1.0 ) {
         for( size_t i = 0; i < length && i < page->samples.size(); ++i ) {
             page->samples[i] *= (sample_t) factor;
@@ -528,7 +549,6 @@ twTrackMix::~twTrackMix()
 twTrackMix::twTrackMix( tw303aEnvironment &env )
     : twComponent( env ),
       playOffset_( 0 ),
-      trackMuted_( false ),
       trackGainDb_( 0.0 )
 {
 }

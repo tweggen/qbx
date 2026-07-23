@@ -61,14 +61,6 @@ public:
 
     virtual std::shared_ptr<twComponent> getRootComponent() override;
 
-    // A *seekable* component rendering this track's summed output, for snapshot
-    // capture (asset previews / proposal 07). Unlike getRootComponent() (the
-    // output rewire, whose streaming latches carry playback state and can't seek
-    // to zero), the per-bus twTrackMix seeks cleanly and re-seeks its children
-    // each buffer. Bus 0 is the output for the common single-bus track. NULL if
-    // unbuilt.
-    std::shared_ptr<twComponent> getCaptureComponent() const;
-
     virtual int readPreChildrenAttributes( QDomElement &element ) override;
 
     virtual QWidget *getDetailEditWidget( QWidget *parent ) override;
@@ -98,6 +90,8 @@ public slots:
     void onPluginSlotRemoved( int index, SPluginSlot &slot );
     void onPluginSlotsReordered();
     void onTrackMuteChanged( bool muted );
+    // A child track (folder lane) changed its mute; we are its summing parent.
+    void childTrackMuteChanged( bool muted );
     void onTrackVolumeChanged( double gainDb );
 
 signals:

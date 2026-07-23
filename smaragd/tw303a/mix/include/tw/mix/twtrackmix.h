@@ -45,6 +45,10 @@ struct ClipEntry {
                                 // async preview/freeze job that still references
                                 // it after the clip is removed (see teardown)
     std::shared_ptr<twOutputPage> previousPage;  // State snapshot for resumption
+    bool         muted{ false };   // This entry is not summed into the track.
+                                // Mute is a property of the CHANNEL, i.e. of the
+                                // parent that sums a child — never of the child's
+                                // own output (see setClipMuted).
 };
 
 // State snapshot for page boundary continuity
@@ -86,8 +90,24 @@ public:
     // render cannot disagree (Inv-1 extended to the plan).
     twPagePlan planPage(offset_t pageStart) override;
 
-    // Track intrinsic properties (gain, mute) — applied to all output
-    void setTrackMute(bool muted);
+    // Mute one summed entry. Mute belongs to the mixer CHANNEL, not to the
+    // track: it is enforced where a parent sums a child and never baked into
+    // the child's own rendered output. That is what lets an asset window a
+    // muted track and still capture its material (SCut::buildCapture_ freezes
+    // the track's component directly — nobody is summing it there), and it
+    // makes mute agree with solo, which SStdMixer has always enforced
+    // parent-side by nulling the muted input plug.
+    //
+    // A muted entry is skipped in planPage() too, so the scheduler never
+    // demands pages that nothing will consume.
+    //
+    // The top-level mixer nulls its input plug instead (twMixer::calcOutputTo
+    // skips null plugs), so this path exists for FOLDER tracks, which sum their
+    // lanes here as ordinary clip entries.
+    twEditRange setClipMuted(const void *key, bool muted);
+
+    // Track intrinsic gain — applied to all output. Unlike mute this IS a
+    // property of the track's own output, so a capture of the track includes it.
     void setTrackGain(double gainDb);
 
 public:
@@ -153,7 +173,6 @@ private:
 
     std::vector<ClipEntry> clips_;            // Timeline entries (sorted by startTime)
     std::atomic<offset_t> playOffset_{ 0 };   // Atomic: protects race between UI seek and audio render
-    bool trackMuted_{ false };                 // Track mute state
     double trackGainDb_{ 0.0 };                // Track gain in dB
 
 };

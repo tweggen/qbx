@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Behavioural lock: muting a track NESTED in a folder track silences it.
+
+  This is the case that constrains where mute may live. A nested track is not
+  summed by SStdMixer — STrack::trackChildWasAdded registers it as an ordinary
+  ClipEntry in the PARENT track's twTrackMix, exactly like a clip. So the
+  mixer's null-the-input trick does not reach it, and when mute stops being
+  baked into a track's own output the parent must skip the muted entry itself.
+  Without that, moving mute to the mixer channel would silently un-mute every
+  nested track.
+
+  Layout: track 1 is reparented into track 0, which becomes a folder. The
+  nested track's material is muted; the folder's own clip stays audible so the
+  case cannot pass by rendering nothing.
+-->
+<SActionScript version="1" name="mute_nested_track">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Folder's own clip at 4 s; the child's clip at the origin. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="192000"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Track 1 becomes a lane inside track 0. -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+
+    <!-- Mute the nested track. Must be addressed by PATH: after reparenting it
+         is no longer a mixer child, so no trackIndex names it. -->
+    <set-track-mute trackPath="0,1" muted="1"/>
+
+    <render filename="mute_nested_track.wav" format="wav" quality="10"/>
+
+    <!-- 0-4 s: only the nested track had material here; it is muted. -->
+    <assert-audio-energy filename="mute_nested_track.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="mute_nested_track.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <!-- 4-8 s: the folder track's own clip, still audible. -->
+    <assert-audio-energy filename="mute_nested_track.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="mute_nested_track.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+</SActionScript>

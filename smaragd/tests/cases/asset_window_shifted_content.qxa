@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: an asset windowing a track whose CONTENT DOES NOT START AT 0.
+
+  Same gesture as asset_window_offset.qxa, but the container track's clip sits
+  at 2 s instead of at the timeline origin — the real-world shape, where a
+  recording lands wherever the transport was and the ruler range is set a few
+  bars into it. Every existing container-backed asset case (loop_asset_extend,
+  asset_window_offset) has the container's clip at 0, so the leading-silence
+  region of the container capture was never exercised.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramps 0 -> 0.8, so every source
+  second has a unique RMS: sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405.
+
+  Layout: clip at container 2 s, so container time t carries source (t - 2 s).
+  The asset windows container [3 s, 5 s) = source sec1 + sec2.
+-->
+<SActionScript version="1" name="asset_window_shifted_content">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- The container's clip starts at 2 s, NOT at the origin. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000"/>
+
+    <!-- Window container [144000, 240000) = the clip's own sec1 and sec2. -->
+    <create-asset container="0" startOffset="144000" duration="96000"
+                  assetName="Shifted"/>
+
+    <!-- Placed at 8 s, well past the container clip's end (2 s + 4 s = 6 s),
+         so 8-10 s carries the asset alone. -->
+    <place-asset assetName="Shifted" trackPath="1" timePos="384000"/>
+
+    <render filename="asset_window_shifted.wav" format="wav" quality="10"/>
+
+    <!-- 2-3 s: the container clip's own first second, source sec0. Baseline. -->
+    <assert-audio-energy filename="asset_window_shifted.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- 8-9 s: the asset's first second = container 3-4 s = source sec1.
+         A capture that stops at the container's leading silence renders this
+         as digital black and fails here. -->
+    <assert-audio-energy filename="asset_window_shifted.wav"
+                         startFrame="384000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 9-10 s: the asset's second second = container 4-5 s = source sec2. -->
+    <assert-audio-energy filename="asset_window_shifted.wav"
+                         startFrame="432000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <!-- 10-11 s: past the asset's window; silence. -->
+    <assert-audio-energy filename="asset_window_shifted.wav"
+                         startFrame="480000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

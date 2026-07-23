@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: a muted track is still muted after save + reload.
+
+  Mute is enforced by the summing parent now (SStdMixer nulls the muted track's
+  input plug), not baked into the track's own output. That makes mute depend on
+  the mixer actually being TOLD — on load, on insert, on reorder. The old
+  track-level trackMuted_ was belt-and-braces and hid any ordering gap, so this
+  path was never pinned. If the loader ever attaches tracks without going
+  through SStdMixer::insertTrack()/reconnectTracksToMixer(), every muted track
+  in a reloaded project comes back audible.
+-->
+<SActionScript version="1" name="mute_survives_reload">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="192000"/>
+
+    <set-track-mute trackIndex="0" muted="1"/>
+
+    <!-- Round-trip through the loader, then render the RELOADED project. -->
+    <save-project path="../../build/test-output/mute_survives_reload/roundtrip.qxp"/>
+    <load-project path="../../build/test-output/mute_survives_reload/roundtrip.qxp"/>
+
+    <render filename="mute_survives_reload.wav" format="wav" quality="10"/>
+
+    <!-- 0-4 s: the muted track. Must still be silent after the reload. -->
+    <assert-audio-energy filename="mute_survives_reload.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="mute_survives_reload.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <!-- 4-8 s: the audible track, so the case cannot pass on an empty render. -->
+    <assert-audio-energy filename="mute_survives_reload.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="mute_survives_reload.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+</SActionScript>

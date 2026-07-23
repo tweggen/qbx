@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: a track moved into a folder track is summed ONCE.
+
+  twMixer::setNInputs_nolock used to ignore shrink requests outright ("FIXME:
+  decrease the actual number of channels connected"), so after a reparent the
+  root mixer kept mixerInputs_ at its old value with the moved track's output
+  latch still wired into the dropped tail. SStdMixer::reconnectTracksToMixer
+  rewires only channels [0, nTracks), so that stale plug went on summing the
+  track straight into the mix alongside its new folder parent — the track was
+  audible twice, at roughly double amplitude, clipping on loud material.
+
+  Found while covering nested-track mute: muting the folder only removed one of
+  the two copies, which is what exposed the second path.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramps 0 -> 0.8, unique RMS per
+  source second: sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405. Doubling
+  reads ~0.133 at sec0; at sec3 it clips rather than reaching ~0.811, which is
+  why the assertions below are tight on BOTH sides.
+-->
+<SActionScript version="1" name="folder_track_sums_once">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Only the nested track carries material, so anything above the
+         single-copy level can only be a duplicate summing path. -->
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+
+    <render filename="folder_track_sums_once.wav" format="wav" quality="10"/>
+
+    <!-- sec0: one copy ~0.067, two copies ~0.133. -->
+    <assert-audio-energy filename="folder_track_sums_once.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- sec1 and sec2: the ramp continues, still single-copy. -->
+    <assert-audio-energy filename="folder_track_sums_once.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="folder_track_sums_once.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <!-- sec3: the loudest second. Doubling clips here and read ~0.72. -->
+    <assert-audio-energy filename="folder_track_sums_once.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+</SActionScript>

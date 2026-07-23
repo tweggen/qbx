@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: an asset windowing a MUTED track must still play.
+
+  Reported against test4_2.qxp: an asset on the 4th track windowing the 1st
+  track drew a zero line and sounded empty. The asset's window was correct
+  (srcStart/cutDuration matched the selected range exactly) — the container
+  track was muted, and mute used to be multiplied into the track's own rendered
+  pages (twTrackMix's trackMuted_ factor), which is what SCut::buildCapture_
+  copies into the asset capture. The asset therefore captured digital silence.
+
+  Mute is a property of the MIXER CHANNEL, not of the track: it is enforced
+  where a parent sums a child (SStdMixer nulls the input; a folder track skips
+  the clip entry), never inside the child's own output. So a muted track still
+  RENDERS its material — nobody sums it — and an asset windowing it captures
+  that material. This also makes mute agree with solo, which was already
+  enforced parent-side and therefore never silenced an asset.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramps 0 -> 0.8, so every source
+  second has a unique RMS: sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405.
+-->
+<SActionScript version="1" name="asset_over_muted_container">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Window track 0 over [96000, 192000) = source sec2 + sec3. -->
+    <create-asset container="0" startOffset="96000" duration="96000"
+                  assetName="Section"/>
+
+    <!-- Mute the source track — the exact gesture that broke the asset. -->
+    <set-track-mute trackIndex="0" muted="1"/>
+
+    <!-- Place at 4 s, past track 0's material, so the region is the asset alone. -->
+    <place-asset assetName="Section" trackPath="1" timePos="192000"/>
+
+    <render filename="asset_over_muted.wav" format="wav" quality="10"/>
+
+    <!-- 0-4 s: track 0 is muted, so its own material must be silent. This is
+         the half of the contract that must NOT regress. -->
+    <assert-audio-energy filename="asset_over_muted.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="asset_over_muted.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <!-- 4-5 s: the asset's first second = container 2-3 s = source sec2.
+         Before the fix this was digital silence. -->
+    <assert-audio-energy filename="asset_over_muted.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <!-- 5-6 s: the asset's second second = container 3-4 s = source sec3. -->
+    <assert-audio-energy filename="asset_over_muted.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- 6-7 s: past the asset window; silence. -->
+    <assert-audio-energy filename="asset_over_muted.wav"
+                         startFrame="288000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

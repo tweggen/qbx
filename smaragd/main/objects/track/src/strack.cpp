@@ -85,13 +85,6 @@ std::shared_ptr<twComponent> STrack::getRootComponent()
     return std::static_pointer_cast<twComponent>(cpRewire_);
 }
 
-std::shared_ptr<twComponent> STrack::getCaptureComponent() const
-{
-    if( nBusses_ > 0 && cpTrackMixers_[0] )
-        return std::static_pointer_cast<twComponent>(cpTrackMixers_[0]);
-    return std::shared_ptr<twComponent>();
-}
-
 int STrack::seekTo( offset_t ofs )
 {
     for( int i=0; i<nBusses_; i++ ) {
@@ -249,6 +242,25 @@ void STrack::trackChildWasAdded( SLink &child )
                     twEditRange r = cpTrackMixers_[i]->insertClip(
                         &child, startTime, duration, getComponentFn, resolveFn);
                     affected.unite(r.start, r.end);
+                }
+            }
+
+            // We are the summing parent for a child TRACK (a folder lane), so
+            // its mute is ours to enforce — a nested track is not a mixer child,
+            // so SStdMixer's null-the-input-plug path never sees it. Seed the
+            // entry from the child's CURRENT state: a track that is already
+            // muted when it is reparented in must land silent.
+            if( STrack *childTrack = dynamic_cast<STrack*>( &child.getSObject() ) ) {
+                QObject::connect( childTrack, SIGNAL( mutedChanged( bool ) ),
+                                  this, SLOT( childTrackMuteChanged( bool ) ) );
+                if( childTrack->isMuted() ) {
+                    for( int i=0; i<nBusses_; ++i ) {
+                        if( cpTrackMixers_[i] ) {
+                            twEditRange r =
+                                cpTrackMixers_[i]->setClipMuted( &child, true );
+                            affected.unite(r.start, r.end);
+                        }
+                    }
                 }
             }
             // Only the new clip's extent changed (proposal 18 Phase 5).
@@ -561,17 +573,43 @@ void STrack::onPluginSlotsReordered()
     }
 }
 
-// Phase 5e: Page cache implementation
-void STrack::onTrackMuteChanged( bool muted )
+// Mute belongs to the mixer CHANNEL, not to the track: it is enforced by
+// whoever sums this track, never inside our own output. So this deliberately
+// does NOT touch our own twTrackMixes — our rendered pages stay valid and keep
+// carrying our material, which is what lets an asset window a muted track
+// (SCut::buildCapture_ freezes our component directly; nobody sums it there).
+//
+// The two summing parents both react on their own:
+//   - SStdMixer   -> trackMuteSoloChanged() -> reconnectTracksToMixer(), which
+//                    nulls our input plug (and already did this for solo).
+//   - STrack      -> childTrackMuteChanged() below, which mutes our clip entry.
+void STrack::onTrackMuteChanged( bool /*muted*/ )
 {
-    // Forward mute change to all track mixers
-    for( int i=0; i<nBusses_; ++i ) {
-        if( cpTrackMixers_[i] ) {
-            cpTrackMixers_[i]->setTrackMute(muted);
+}
+
+// A child TRACK of ours (a folder lane) changed its mute. We are the summing
+// parent here, so we enforce it — the root mixer's null-the-input-plug trick
+// cannot reach a nested track.
+void STrack::childTrackMuteChanged( bool muted )
+{
+    SObject *child = dynamic_cast<SObject*>( sender() );
+    if( !child ) return;
+
+    // Find OUR link to that child; the clip entries are keyed by SLink.
+    for( SLink *lk : childLinks() ) {
+        if( !lk || &lk->getSObject() != child ) continue;
+        twEditRange affected;
+        for( int i=0; i<nBusses_; ++i ) {
+            if( cpTrackMixers_[i] ) {
+                twEditRange r = cpTrackMixers_[i]->setClipMuted( lk, muted );
+                affected.unite( r.start, r.end );
+            }
         }
+        // Only the lane's own extent gained or lost material.
+        invalidateRenderPathRange( (offset_t) affected.start,
+                                   (offset_t) affected.end );
+        break;
     }
-    // Mute is baked into frozen pages downstream of the track mixer
-    invalidateRenderPath();
 }
 
 void STrack::onTrackVolumeChanged( double gainDb )

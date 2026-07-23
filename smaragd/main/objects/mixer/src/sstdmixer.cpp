@@ -215,6 +215,17 @@ bool SStdMixer::anyTrackSoloed() const
 void SStdMixer::trackMuteSoloChanged()
 {
     reconnectTracksToMixer();
+    // Rewiring only changes what FUTURE freezes produce. Pages already frozen
+    // here (and downstream at the rewire) still contain the track, so playback
+    // readahead and the next render would go on serving it — you mute a track
+    // and keep hearing it until those pages age out. Drop them.
+    //
+    // Mute used to get this for free: it was baked into the track's own output,
+    // and STrack::onTrackMuteChanged called invalidateRenderPath(). Now that
+    // mute is a channel property enforced here, the invalidation belongs here
+    // too. SOLO has always come through this slot with no invalidation at all,
+    // so it carried the same staleness — this fixes both.
+    invalidateRenderPath();
 }
 
 // Slots.

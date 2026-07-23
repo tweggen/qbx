@@ -172,13 +172,17 @@ int twMixer::setNInputs( idx_t n )
 int twMixer::setNInputs_nolock( idx_t n )
 {
     if( n<=0 ) return -2;
-    if( n<=mixerInputs_ ) {
-        // FIXME: Decrease the actual number of channels
-        // connected, but don't fool around
-        // in the data structures.
-        return 0;
-    }
+    if( n==mixerInputs_ ) return 0;
 
+    const idx_t oldN = mixerInputs_;
+
+    // Shrinking MUST drop the surplus plugs (this is the old "FIXME: decrease
+    // the actual number of channels connected" here). Keeping them wired made a
+    // reparented track audible TWICE: SStdMixer::reconnectTracksToMixer rewires
+    // only channels [0, nTracks), so a track moved into a folder kept its stale
+    // plug in the dropped tail and went on summing straight into the mix
+    // alongside its new parent. Safe under the caller's lock — calcOutputTo
+    // snapshots pInputPlugs_ under the same mutex.
     // Resize vector (shared_ptr destructs old elements automatically)
     pInputPlugs_.resize(n);
 
@@ -187,6 +191,12 @@ int twMixer::setNInputs_nolock( idx_t n )
         inputProperties_ = (InputProperties *) ::calloc( n, sizeof( InputProperties ) );
     } else {
         inputProperties_ = (InputProperties *) ::realloc( inputProperties_, n*sizeof( InputProperties ) );
+        // realloc leaves a GROWN tail uninitialised; a stale volumeFactor_ there
+        // would scale a channel by garbage before its first setInputLevel().
+        if( inputProperties_ && n > oldN ) {
+            ::memset( inputProperties_ + oldN, 0,
+                      ( n - oldN ) * sizeof( InputProperties ) );
+        }
     }
     mixerInputs_ = n;
     return 0;

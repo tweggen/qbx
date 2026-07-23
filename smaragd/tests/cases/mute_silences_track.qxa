@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Behavioural lock: muting a top-level track silences it in the render.
+
+  Trivial-sounding, and that is the point. Mute used to be enforced TWICE — the
+  mixer nulled the muted track's input AND twTrackMix multiplied its own output
+  by zero. Moving mute to the mixer channel (so an asset can window a muted
+  track, see asset_over_muted_container.qxa) removes the second enforcement,
+  leaving the nulled mixer input as the only thing that mutes a top-level
+  track. Nothing pinned that path before; this case does.
+
+  Track 1 stays audible so the render is not trivially silent everywhere — a
+  test that passes because nothing was rendered at all would prove nothing.
+-->
+<SActionScript version="1" name="mute_silences_track">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Track 0: muted, at the origin. Track 1: audible, 4 s later. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="192000"/>
+
+    <set-track-mute trackIndex="0" muted="1"/>
+
+    <render filename="mute_silences_track.wav" format="wav" quality="10"/>
+
+    <!-- 0-4 s: the muted track's material. Must be digital silence throughout,
+         including the loud tail (sec3 ~0.405) that would be unmissable. -->
+    <assert-audio-energy filename="mute_silences_track.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="mute_silences_track.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <!-- 4-8 s: the audible track, proving the render actually produced audio. -->
+    <assert-audio-energy filename="mute_silences_track.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="mute_silences_track.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

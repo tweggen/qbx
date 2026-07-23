@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: muting a track must drop the already-frozen pages that still
+  contain it.
+
+  Mute is enforced by the summing parent now (SStdMixer nulls the muted track's
+  input plug). Nulling a plug changes what FUTURE freezes produce — it does
+  nothing to pages already frozen and cached at the mixer/rewire. The old
+  track-level trackMuted_ hid this: it zeroed the track's own output and called
+  invalidateRenderPath(), so every cached page upstream went stale too.
+
+  Symptom without the invalidation: you mute a track mid-session and keep
+  hearing it, because playback readahead and the render both serve pages frozen
+  before the mute. A plain render-then-assert cannot catch it — a cold render
+  freezes everything fresh and looks correct. The FIRST render below bakes the
+  un-muted timeline into the caches on purpose; the mute comes after it.
+
+  Fixture: test_sawtooth.wav, 4 s, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+-->
+<SActionScript version="1" name="mute_invalidates_cache">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="192000"/>
+
+    <!-- FIRST render: bakes the UN-MUTED timeline into every page cache. -->
+    <render filename="mute_cache_pre.wav" format="wav" quality="10"/>
+
+    <!-- Sanity: both tracks audible before the mute. -->
+    <assert-audio-energy filename="mute_cache_pre.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="mute_cache_pre.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- THE EDIT: mute track 0, whose audio is already sitting in the caches. -->
+    <set-track-mute trackIndex="0" muted="1"/>
+
+    <render filename="mute_cache_post.wav" format="wav" quality="10"/>
+
+    <!-- 0-4 s: must now be silent. Serving the pre-mute cached pages fails
+         here with the un-muted sec0/sec3 levels. -->
+    <assert-audio-energy filename="mute_cache_post.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="mute_cache_post.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <!-- 4-8 s: track 1 untouched, so the second render is not simply empty. -->
+    <assert-audio-energy filename="mute_cache_post.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="mute_cache_post.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- And un-muting must bring it back, not leave a cached silence behind. -->
+    <set-track-mute trackIndex="0" muted="0"/>
+
+    <render filename="mute_cache_unmuted.wav" format="wav" quality="10"/>
+
+    <assert-audio-energy filename="mute_cache_unmuted.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="mute_cache_unmuted.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+</SActionScript>
