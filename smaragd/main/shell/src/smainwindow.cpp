@@ -424,6 +424,18 @@ void SMainWindow::closeProject()
         stopPlaying();
     }
     SApplication::app().setCurrentProject( NULL );
+
+    // Drop the undo history BEFORE the project dies. Commands on the stack hold
+    // raw pointers into the project's object graph and some hold a refcount pin
+    // (SRemoveTrackAction::heldTrack_); the history is owned by SApplication, so
+    // it outlives the project and its destructors would otherwise call
+    // removeRef() on freed objects. Clearing here releases every pin while the
+    // objects are still alive, which also lets the project's refcount cascade
+    // reach them instead of hard-deleting them out from under live SLinks.
+    if( SActionHistory *history = SApplication::app().actionHistory() ) {
+        history->undoStack()->clear();
+    }
+
     destroyDocksToolbars();
     // Detach (not delete) projectRootWidget_ from the main window so it doesn't
     // interfere with project destruction. The project may have created children

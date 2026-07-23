@@ -64,16 +64,16 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
         }
     }
 
-    // Pin the asset to keep it alive during undo/redo cycles.
-    assetBody->addRef();
+    // No pin is taken here. registerAsset() already holds one reference for the
+    // registry — that is what keeps an asset alive across an undo that removes
+    // its last placement (SRemoveAssetPlacementAction relies on exactly that).
+    // A second, never-released addRef() here leaked one reference per placement,
+    // so the body outlived the project's teardown cascade and ~SProject deleted
+    // it with live SLinks still pointing at it.
 
     // Create a new link to the asset. IMPORTANT: construct with NULL parent,
     // then setParent after construction to avoid triggering childEvent during init.
     SLink *assetLink = new SLink(*assetBody, NULL);
-    if (!assetLink) {
-        assetBody->removeRef();
-        return {false, nullptr};
-    }
 
     // Set the start time.
     assetLink->setStartTime(timePos_);
@@ -84,7 +84,7 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
     // Find the newly created asset placement in the track's children to get its index.
     int clipIdx = track->indexOfChild(assetLink);
     if (clipIdx < 0) {
-        assetBody->removeRef();
+        delete assetLink;          // never landed; drop it (and its reference)
         return {false, nullptr};
     }
 

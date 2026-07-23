@@ -30,10 +30,10 @@ void SExternFileList::externFileRemoved( const QString fileName )
 {
     SExternFileItem *oldEFI = itemDict_.take( fileName );
     if( !oldEFI ) {
-        qWarning() << QString( "SExternFileList::externFileAdded(): Invoked although file was "
+        qWarning() << QString( "SExternFileList::externFileRemoved(): Invoked although file was "
                   "not found. \"%1\".\n" ).arg( fileName );
         return;
-    }    
+    }
     QObject::disconnect( &(oldEFI->getExternFile()), SIGNAL( nRefsChanged() ), 
                       this, SLOT( externFileRefChanged() ) );
     delete oldEFI;
@@ -87,10 +87,10 @@ void SExternFileList::externFileRefChanged()
     QString fileName = snd->getFileName();
     SExternFileItem *oldEFI = itemDict_.value( fileName );
     if( !oldEFI ) {
-        qWarning() << QString( "SExternFileList::externFileAdded(): Invoked although file was "
+        qWarning() << QString( "SExternFileList::externFileRefChanged(): Invoked although file was "
                   "not found. \"%1\".\n" ).arg( fileName );
         return;
-    }    
+    }
     {
         QString s;
         s.setNum( snd->getNReferences(), 10 );
@@ -174,6 +174,23 @@ void SExternFileList::disconnectSignals()
 {
     if( project_ ) {
         QObject::disconnect( project_, nullptr, this, nullptr );
+    }
+
+    // The per-row nRefsChanged connections are made per SExternFile/asset body
+    // in externFileAdded()/assetAdded(), NOT via project_, so the disconnect
+    // above does not reach them. Dropping the project without dropping these
+    // left every file still emitting into a list whose itemDict_ had just been
+    // cleared: during project teardown each ~SLink's removeRef() then landed in
+    // externFileRefChanged(), which logged "file not found" and dereferenced an
+    // object that was already being destroyed.
+    for( auto it = itemDict_.constBegin(); it != itemDict_.constEnd(); ++it ) {
+        if( !it.value() ) continue;
+        QObject::disconnect( &(it.value()->getExternFile()), SIGNAL( nRefsChanged() ),
+                             this, SLOT( externFileRefChanged() ) );
+    }
+    for( auto it = assetNameByBody_.constBegin(); it != assetNameByBody_.constEnd(); ++it ) {
+        QObject::disconnect( it.key(), SIGNAL( nRefsChanged() ),
+                             this, SLOT( assetRefChanged() ) );
     }
 }
 

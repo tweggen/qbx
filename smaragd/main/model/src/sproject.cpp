@@ -353,6 +353,20 @@ SProject::~SProject()
 
     DTOR_DEL( soRoot_ );   // drop the root reference (parent==NULL, not a child)
 
+    // Release the pins registerAsset() took. They are the PROJECT's own
+    // references: held here they make every asset body — and its whole
+    // subtree — look permanently referenced, so the cascade below skips it and
+    // the survivor pass has to hard-delete it while live SLinks still point at
+    // it. Drop them first and the normal cascade collects assets like anything
+    // else. (No assetRemoved signal: the views are already detached by now.)
+    {
+        const QList<SObject*> bodies = assetDict_.values();
+        assetDict_.clear();
+        for( SObject *body : bodies ) {
+            if( body ) body->removeRef();
+        }
+    }
+
     // Tear down the object graph here, in the destructor body, while our members
     // (externFileDict_, ...) are still alive — child destructors call back into
     // the project (e.g. SPlainWave deregisters itself from externFileDict_).
@@ -384,12 +398,53 @@ SProject::~SProject()
         }
     }
 
-    // Safety net for any survivors (reference cycles / links leaked elsewhere):
-    // delete them outright so we don't leak. Normally this list is empty.
-    const QObjectList survivors = children();
-    for( QObject *kid : survivors ) {
-        delete kid;
+    // Survivors: objects the cascade could not reach because something outside
+    // the project still references them (an undo-stack action's pin is the
+    // usual case) or because they form a cycle. Normally this list is empty.
+    //
+    // Deleting them outright — what this used to do — is what produced the
+    // "destroyed with N live reference(s)" crash: every SLink still pointing at
+    // the freed object dangled, and the next ~SLink ran removeRef() on freed
+    // memory. So delete referrers BEFORE referents: repeatedly take the
+    // survivors that no other survivor links to. That order guarantees each
+    // object dies only once nothing inside the project can still reach it.
+    QList<SObject*> remaining;
+    for( QObject *kid : children() ) {
+        if( SObject *so = dynamic_cast<SObject*>( kid ) ) remaining.append( so );
     }
+    while( !remaining.isEmpty() ) {
+        QHash<SObject*,int> inDegree;
+        for( SObject *so : remaining ) inDegree.insert( so, 0 );
+        for( SObject *so : remaining ) {
+            for( SLink *lk : so->childLinks() ) {
+                if( !lk ) continue;
+                auto it = inDegree.find( &lk->getSObject() );
+                if( it != inDegree.end() ) ++it.value();
+            }
+        }
+        QList<SObject*> batch;
+        for( SObject *so : remaining ) {
+            if( inDegree.value( so )==0 ) batch.append( so );
+        }
+        if( batch.isEmpty() ) {
+            // A cycle among the survivors: no safe order exists. Take the whole
+            // rest — the per-object warnings below still name what dangled.
+            batch = remaining;
+        }
+        for( SObject *so : batch ) {
+            if( so->getNReferences() > 0 ) {
+                qWarning( "SProject::~SProject(): '%s' outlived the refcount "
+                          "cascade with %d reference(s) held outside the "
+                          "project.",
+                          qPrintable( so->getSName() ), so->getNReferences() );
+            }
+            so->setParent( nullptr );
+            delete so;
+            remaining.removeOne( so );
+        }
+    }
+
+    // Non-SObject children (DSP components and friends) are Qt's to clean up.
 }
 
 void SProject::markAsPartialLoad()
