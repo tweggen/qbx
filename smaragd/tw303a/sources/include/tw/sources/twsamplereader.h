@@ -2,6 +2,9 @@
 #ifndef _TWSAMPLEREADER_H_
 #define _TWSAMPLEREADER_H_
 
+#include <memory>
+#include <vector>
+
 #include "tw/graph/twcomponent.h"
 
 class twRandomSource;
@@ -25,6 +28,18 @@ public:
     virtual ~twSampleReader();
 
     twRandomSource &getSource() const { return src_; }
+
+    // Anchor an upstream object src_ refers into (grain source, capture
+    // snapshot). src_ is a raw reference, and a scheduler PageNode holds ONLY
+    // this reader's shared_ptr — so the reader must transitively own
+    // everything src_ can reach, or a reader swap (SCut::rebuildReader churn
+    // during a drag) / ~SCut frees the grain/capture while a queued freeze
+    // still renders through it. Call before publishing the reader; not
+    // thread-safe afterwards.
+    void retainUpstream( std::shared_ptr<const void> p )
+    {
+        if( p ) upstreamRefs_.push_back( std::move( p ) );
+    }
 
     virtual bool isSeekable() const override;
     virtual int seekTo( offset_t ) override;
@@ -66,6 +81,9 @@ private:
 
     twRandomSource &src_;
     offset_t pos_;
+
+    // Lifetime anchors for the chain behind src_ (see retainUpstream()).
+    std::vector<std::shared_ptr<const void> > upstreamRefs_;
 };
 
 #endif

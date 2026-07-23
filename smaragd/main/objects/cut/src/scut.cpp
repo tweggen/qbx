@@ -123,6 +123,7 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     // (audio thread continues using currentReader_ during this entire process)
     std::shared_ptr<twSampleReader> newReader;
     std::shared_ptr<twGrainSource> newGrain;
+    std::shared_ptr<twCapturingSource> captureLocal;
     bool newLooping = false;
 
     twRandomSource *rs = content_->getSObject().getRandomSource();
@@ -132,8 +133,15 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
     bool needCapture = !rs;  // Only container-backed cuts need capture building
     if( needCapture ) {
         buildCapture_();
-        if( capture_ ) {
-            rs = capture_.get();
+        {
+            // Pin the capture we build the chain over: capture_ is published
+            // and reset under mutex(), and a concurrent invalidateCapture()
+            // must not free it between here and the reader construction below.
+            std::lock_guard<std::mutex> lock( mutex() );
+            captureLocal = capture_;
+        }
+        if( captureLocal ) {
+            rs = captureLocal.get();
         } else {
             // Container-backed capture build failed: no fallback
             goto swap_complete;
@@ -172,6 +180,14 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
             newReader = view->acquireReader( env, snap.startOffset.frames() );
             newLooping = false;
         }
+
+        // The scheduler's PageNode holds ONLY the reader component; src_ is a
+        // raw reference into newGrain/captureLocal. Anchor the whole upstream
+        // chain in the reader itself so a later reader swap (drag churn
+        // overwriting oldReader_) or ~SCut can never free the grain/capture
+        // while a queued freeze still renders through this reader.
+        newReader->retainUpstream( newGrain );
+        newReader->retainUpstream( captureLocal );
     }
 
 swap_complete:

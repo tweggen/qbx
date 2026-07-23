@@ -6134,3 +6134,33 @@ tee and the records would carry no level or category. Per-category level
 thresholds are a filter-side addition the record shape already supports. An
 `assert-log-contains` qxa verb is now cheap and would directly answer the
 STATE.md note that started this.
+
+## Reader keepalive: freeze-vs-reader-swap use-after-free fixed (2026-07-23)
+
+**Crash.** Dragging/trimming clips during playback segfaulted a revalidator
+worker at `twSampleReader::calcOutputTo` (`src_.read`, twsamplereader.cc:71),
+with two sibling workers mid-`SCut::buildCapture_` — the edit-churn signature.
+
+**Root cause: the reader component is not lifetime-safe by construction.**
+The scheduler's `PageNode` owns only `shared_ptr<twComponent>` (the reader),
+per the "components are lifetime-safe" contract — but `twSampleReader::src_`
+is a raw `twRandomSource&` into a `twGrainSource`/`twCapturingSource` whose
+only owners are SCut's reader-state slots. Two `rebuildReader()` swaps during
+a drag turn over `oldReader_`, destroying the grain/capture while a queued
+graph node still holds the old reader and renders through it. `~SCut` had the
+same hole (resets all slots + `capture_` while a node can hold the reader).
+
+**Fix (order-independent, no latch).** The chain now owns itself:
+`twSampleReader::retainUpstream(shared_ptr<const void>)` anchors upstream
+objects in the reader (covers `twLoopReader` by inheritance); set before
+publication, immutable after. `SCut::rebuildReader()` anchors `newGrain` and
+the capture. The capture is also now pinned into a local `shared_ptr` under
+`mutex()` before use (it was read unlocked at the `rs = capture_.get()` site —
+a concurrent `invalidateCapture()` could free it mid-build; same fix for free).
+Any interleaving of swaps, invalidation, and deletion is now safe as long as
+anything holds the reader — which is exactly what PageNode guarantees.
+
+**Verified.** Full 39-case qxa suite green; `check_layering.py` /
+`check_logging.py` clean; flake gate (`repeat_test.sh`, 25x,
+`SMARAGD_REVAL_WORKERS=16`) on `grain_split_delete_crash`,
+`takes_group_broadcast`, `loop_start_edge_drag`: all deterministic.
