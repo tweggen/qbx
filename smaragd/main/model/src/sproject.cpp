@@ -299,6 +299,15 @@ bool SProject::hasAsset( const QString &name ) const
     return assetDict_.contains( name );
 }
 
+QString SProject::assetNameOf( const SObject *body ) const
+{
+    if( !body ) return QString();
+    for( auto it = assetDict_.constBegin(); it != assetDict_.constEnd(); ++it ) {
+        if( it.value() == body ) return it.key();
+    }
+    return QString();
+}
+
 QList<QString> SProject::assetNames() const
 {
     return assetDict_.keys();

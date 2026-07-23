@@ -6316,3 +6316,98 @@ of an offline capture. Moot while the registry holds only `twpassthrough`, but
 real. Nested-track SOLO remains unimplemented — only `SStdMixer` evaluates
 solo — but is now expressible the same way as nested mute.
 
+## Delete-a-clip undo: restores the clip, not a default one (2026-07-23)
+
+**Bug.** Deleting a plainwave clip and undoing popped "Unable to load file."
+and left the clip deleted.
+
+**Root cause, two defects — the first hid the second.**
+
+1. `SStdMixerView::ctRemoveSample()` passed an EMPTY file path on purpose
+   ("SCut wrapping a file link; file path not easily extractable, so leave
+   empty. The SRemoveSampleAction inverse will restore based on track/clip
+   index and time"). It cannot: the inverse is
+   `SAddSampleAction(trackIndex_, filePath_, timePos_)`, so undo called
+   `linkToFile("")` → the extern-file factory → `SPlainWave::setWave("")` →
+   `wasLoaded()` false → modal dialog, `apply()` false, no undo at all. The
+   comment was wrong about extractability too — `SRemoveTakeAction` already
+   does `dynamic_cast<SExternFile*>( &cut->getContent() )->getFileName()`.
+2. Fixing only the path would have traded a loud failure for a silent one:
+   `SAddSampleAction::apply()` built a DEFAULT cut over the whole wave and
+   nothing else, so undoing the deletion of an edited clip would have returned
+   a full-length unedited clip at the right position — no slip anchor, trim,
+   loop, stretch or pitch, and no dialog to notice.
+
+**Fix.** `SRemoveSampleAction::apply()` now reads the path AND the full window
+off the clip before deleting it (the caller's `filePath_` is only a hint), and
+hands them to the inverse. `SAddSampleAction` gained a windowed form that
+restores via the established clone idiom from `SDuplicateClipAction`:
+`setGrainParamsRaw()` first, then ONE `setWindow()` — `setPitchCents()` /
+`setGrainParams()` preserve-span-rescale and would move the very window being
+restored. Window attributes serialize only in the windowed form, so the
+`<add-sample/>` verb and every existing .qxa are untouched. A clip that is not
+file-backed (an asset placement) now reports NO inverse, marking the step
+non-undoable rather than failing loudly at undo time.
+
+**Testkit.** `<undo count="n"/>` and `<redo count="n"/>` drive the real
+`SActionHistory`. The undo system had NO coverage whatsoever, which is how a
+delete-undo that never applied got shipped; an inverse that refuses to apply
+looked identical to a working undo from outside.
+
+**Verified.** `delete_clip_undo_restores` deletes a split TAIL (srcStart
+96000), undoes, and asserts source sec2+sec3 return. It discriminates both
+defects: #1 leaves the span silent, #2 fills it with sec0/sec1 from a
+whole-wave cut. Confirmed failing on the pre-fix build (with the real
+"unable to load file" warning) and passing after; redo re-removes. Full ctest
+green.
+
+**Follow-up.** Deleting an ASSET placement is now explicitly non-undoable — the
+right inverse is a re-place of the asset, not `add-sample`. Worth a dedicated
+inverse.
+
+## Delete an asset placement / asset copy: undoable (2026-07-23)
+
+Follow-up to the delete-clip undo fix, which left deleting a container-backed
+clip (an asset) explicitly non-undoable.
+
+**Two container-backed clips, two inverses.**
+- A placement of a registered asset links the BODY itself (SPlaceAssetAction
+  does `new SLink(*assetBody)`), so the clip IS the asset. Undo must RE-PLACE
+  it — rebuilding a lookalike restores the audio but breaks identity, so later
+  edits stop tracking the asset. `SStdMixerView::ctRemoveSample()` now detects
+  this via the new `SProject::assetNameOf(body)` reverse lookup and routes to
+  `SRemoveAssetPlacementAction` (inverse `SPlaceAssetAction`).
+- A COPY of an asset (duplicate, re-pitch) is a fresh SCut over the same
+  container, unregistered. Undo rebuilds the cut over that container with the
+  full window — new `SRestoreContainerClipAction` (objects/cut), addressing the
+  container by index path (`strackpath::pathOf`) so it holds no raw tree
+  pointer and needs no mixer types. `SRemoveSampleAction` produces it for any
+  container-backed clip, using the same `setGrainParamsRaw()`-then-`setWindow()`
+  clone idiom.
+
+**Layering.** `objects/cut` may not depend on `objects/mixer`
+(check_layering.py). The placement-vs-copy dispatch therefore lives in the
+timeline layer (which sees both slices), not in the removal action.
+`SRestoreContainerClipAction` returns no inverse of its own: redo re-applies the
+FORWARD deletion (SActionUndoCommand), so the restore never needs one.
+
+**Testkit.** `SRemoveAssetPlacementAction` was live-only and unregistered — the
+asset-body deletion path was unreachable from a script. Now serialized and
+registered as `remove-asset-placement`.
+
+**Verified.** `asset_placement_undo_restores` (body: re-place) and
+`asset_copy_undo_restores` (copy: rebuild) pass; `delete_clip_undo_restores`
+still passes; check_layering / check_logging clean.
+
+**Follow-ups found, both pre-existing and out of scope.**
+- Duplicating a container-backed asset MIS-RENDERS: the copy played RMS ~0.234
+  then silence where the identical placement plays sec2 (~0.291) then sec3
+  (~0.405). A SDuplicateClipAction / container-capture bug, not an undo one —
+  the undo restores the copy faithfully to whatever state it has, so
+  `asset_copy_undo_restores` asserts the ROUND TRIP (audible → silent →
+  audible), not absolute levels.
+- `asset_window_shifted_content` intermittently HANGS (not fails): an
+  occasional teardown/render deadlock in the container-backed async-freeze path
+  that leaves the process unkillable (survives taskkill /F, holds the exe until
+  reboot). Passed 3/3 on retry. Consistent with this codebase's
+  join-on-teardown history; wants its own investigation.

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: deleting a COPY of an asset placement and undoing puts it back,
+  in whatever state it had.
+
+  Copying an asset placement does not make another placement of the asset —
+  SDuplicateClipAction mints a NEW SCut sharing the same content container.
+  Nothing in the asset registry points at that copy, so its inverse cannot be
+  "re-place the asset"; undo has to rebuild the cut over the same container.
+  That is SRestoreContainerClipAction, produced by SRemoveSampleAction. Before,
+  this clip was neither file-backed nor registered, so its removal reported no
+  inverse at all and the deletion was simply not undoable.
+
+  This asserts the ROUND TRIP, not absolute levels: the copy is audible before
+  the delete, silent after, and audible again after undo, matching its
+  pre-delete energy. It deliberately does NOT assert the copy plays a specific
+  source second — duplicating a container-backed asset currently mis-renders
+  its window (it does not reproduce the placement it was copied from; tracked
+  separately), and this case must not depend on that being correct. What it
+  pins is that undo faithfully restores whatever the copy was.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramps 0 -> 0.8.
+-->
+<SActionScript version="1" name="asset_copy_undo_restores">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <create-asset container="0" startOffset="96000" duration="96000"
+                  assetName="Section"/>
+    <place-asset assetName="Section" trackPath="1" timePos="192000"/>
+
+    <!-- Copy onto track 2 at 8 s. The copy is a fresh SCut over the same
+         container — NOT a registered asset, so its deletion routes to
+         SRemoveSampleAction / SRestoreContainerClipAction. -->
+    <duplicate-clip source="1,0" destTrack="2" startTime="384000"/>
+
+    <render filename="assetcopy_pre.wav" format="wav" quality="10"/>
+    <!-- The copy's first second is audible (its exact level is not the point;
+         a wide band tolerates the duplicate-window mis-render). -->
+    <assert-audio-energy filename="assetcopy_pre.wav"
+                         startFrame="384000" frameCount="48000"
+                         minRms="0.05" maxRms="0.95"/>
+
+    <!-- Delete the COPY (track 2, its only clip). -->
+    <remove-sample trackIndex="2" clipIndex="0" timePos="384000"/>
+
+    <render filename="assetcopy_deleted.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="assetcopy_deleted.wav"
+                         startFrame="384000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <undo count="1"/>
+
+    <render filename="assetcopy_restored.wav" format="wav" quality="10"/>
+
+    <!-- The copy is back and audible again. Before the fix this span stayed
+         silent — the removal had no inverse to apply. -->
+    <assert-audio-energy filename="assetcopy_restored.wav"
+                         startFrame="384000" frameCount="48000"
+                         minRms="0.05" maxRms="0.95"/>
+
+    <!-- The original placement on track 1 is untouched (sec2, ~0.291). -->
+    <assert-audio-energy filename="assetcopy_restored.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

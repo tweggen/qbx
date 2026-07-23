@@ -5,6 +5,8 @@
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/model/slink.h"
+#include "app/actions/sactionregistry.h"
+#include "tw/core/twfraction.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -54,13 +56,31 @@ SApplyResult SRemoveAssetPlacementAction::apply(SProject *project)
     return {true, inverse};
 }
 
-void SRemoveAssetPlacementAction::writeXml(QDomElement &/*elem*/) const
+// No longer live-only: the timeline routes deletion of an asset PLACEMENT here
+// (the clip is the registered body, so undo must re-place it rather than
+// rebuild a lookalike), and that path needs to be drivable from a test script.
+void SRemoveAssetPlacementAction::writeXml(QDomElement &elem) const
 {
-    // Live-only action — never serialized. Intentionally empty.
+    elem.setAttribute("assetName", assetName_);
+    elem.setAttribute("trackPath", pathToString(trackPath_));
+    elem.setAttribute("clipIdx", clipIdx_);
+    elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
 }
 
-bool SRemoveAssetPlacementAction::readXml(const QDomElement &/*elem*/, int /*version*/)
+bool SRemoveAssetPlacementAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    // Live-only action — never deserialized.
-    return false;
+    assetName_ = elem.attribute("assetName", "");
+    trackPath_ = stringToPath(elem.attribute("trackPath"));
+    clipIdx_ = elem.attribute("clipIdx", "0").toInt();
+    Fraction frac = parseFractionOrDouble(elem.attribute("timePos", "0").toStdString());
+    timePos_ = ( frac.denominator == 1 ) ? (offset_t) frac.numerator
+                                         : (offset_t) frac.toDouble();
+    return true;
 }
+
+static const bool s_reg_removeassetplacement = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("remove-asset-placement"),
+        []{ return new SRemoveAssetPlacementAction; }
+    ), true
+);

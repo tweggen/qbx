@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: deleting a clip and undoing restores THAT clip.
+
+  Two defects met here, and the first hid the second.
+
+  1) SStdMixerView::ctRemoveSample() deliberately passed an EMPTY file path
+     ("file path not easily extractable, so leave empty" — it is, see
+     SRemoveTakeAction). Undo therefore ran SAddSampleAction with filePath "",
+     which asked linkToFile("") for a file that cannot exist: a modal "Unable
+     to load file.", apply() returning false, and no undo at all.
+
+  2) With the path fixed, undo still would not have restored the CLIP —
+     SAddSampleAction built a default cut over the whole wave, dropping the
+     slip anchor, trim, loop, stretch and pitch. A full-length unedited clip
+     would have come back silently, with no dialog to notice.
+
+  The clip deleted below is a split TAIL, so its window is emphatically not the
+  default: srcStart = 96000 into the source. Restoring a whole-wave cut at the
+  same position replays source sec0/sec1 where sec2/sec3 belong, which the
+  assertions catch.
+
+  The undo system had NO coverage at all before this case; <undo/> and <redo/>
+  are new testkit verbs driving the real SActionHistory.
+
+  Fixture: test_sawtooth.wav, 4 s, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+-->
+<SActionScript version="1" name="delete_clip_undo_restores">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Split at 2 s: head [0,2s) = clip 0, tail [2s,4s) = clip 1 with
+         srcStart = 96000. The tail is what gets deleted and restored. -->
+    <split-clip clip="0,0" splitTime="96000"/>
+
+    <!-- Baseline: head is sec0+sec1, tail is sec2+sec3. -->
+    <render filename="undo_pre.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="undo_pre.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="undo_pre.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="undo_pre.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- Delete the TAIL (clip index 1 on track 0). -->
+    <remove-sample trackIndex="0" clipIndex="1" timePos="96000"/>
+
+    <render filename="undo_deleted.wav" format="wav" quality="10"/>
+    <!-- Head survives... -->
+    <assert-audio-energy filename="undo_deleted.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <!-- ...and the tail's span is now silent. -->
+    <assert-audio-energy filename="undo_deleted.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <undo count="1"/>
+
+    <render filename="undo_restored.wav" format="wav" quality="10"/>
+
+    <!-- The tail must come back with its ORIGINAL window. Defect 1 leaves this
+         span silent (undo never applied); defect 2 fills it with source sec0
+         (~0.067) and sec1 (~0.176) from a whole-wave cut. Only a faithful
+         restore gives sec2 then sec3. -->
+    <assert-audio-energy filename="undo_restored.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="undo_restored.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- The head is untouched by the round trip. -->
+    <assert-audio-energy filename="undo_restored.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- And redo removes it again, so the inverse-of-the-inverse holds. -->
+    <redo count="1"/>
+
+    <render filename="undo_redone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="undo_redone.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

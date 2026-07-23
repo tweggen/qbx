@@ -112,6 +112,12 @@ public:
     SObject *asset( const QString &name ) const;
     bool hasAsset( const QString &name ) const;
     QList<QString> assetNames() const;
+    // Reverse lookup: the registered name of an asset BODY, or empty when the
+    // object is not a registered asset. A placement links the body itself
+    // (SPlaceAssetAction), so this is how a deletion tells "this clip IS the
+    // asset" (undo re-places it, keeping identity) from "this clip is a copy
+    // that merely windows the same container" (undo rebuilds a cut).
+    QString assetNameOf( const SObject *body ) const;
 
     // Fire arrangementChanged(). Called from the action chokepoint after every
     // applied action so cached renders (asset captures) invalidate transparently

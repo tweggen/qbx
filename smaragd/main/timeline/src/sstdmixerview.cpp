@@ -33,6 +33,7 @@
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
 #include "app/objects/cut/scut.h"
+#include "app/model/sexternfile.h"
 #include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
@@ -61,6 +62,7 @@
 #include "app/objects/cut/ssetpitchaction.h"
 #include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
+#include "app/objects/mixer/sremoveassetplacementaction.h"
 #include "app/model/splacements.h"
 #include "app/actions/sactionhistory.h"
 #include <QFrame>
@@ -416,18 +418,40 @@ void SStdMixerView::ctRemoveSample()
     int clipIdx = oldTrack->indexOfChild(oldLink);
     if( clipIdx < 0 ) return;
 
-    // Extract file path from the sample (empty if not available; the inverse action
-    // can reconstruct from position info alone for undo/redo)
+    // The clip's source file. Passing "" here (on the theory that the inverse
+    // could rebuild from track/clip index and time alone) is what made undo pop
+    // "Unable to load file." and then do nothing: the inverse asked
+    // linkToFile("") for a file that cannot exist. SRemoveSampleAction re-reads
+    // this off the clip anyway, but a correct value keeps the SERIALIZED action
+    // meaningful too.
     QString filePath;
-    SObject &obj = oldLink->getSObject();
-    if( dynamic_cast<SCut*>(&obj) ) {
-        // SCut wrapping a file link; file path not easily extractable, so leave empty
-        // The SRemoveSampleAction inverse will restore based on track/clip index and time
-        filePath = "";
+    if( SCut *cut = dynamic_cast<SCut*>( &oldLink->getSObject() ) ) {
+        if( SExternFile *xf = dynamic_cast<SExternFile*>( &cut->getContent() ) )
+            filePath = xf->getFileName();
     }
 
     offset_t timePos = oldLink->getStartTime();
+
+    // A placement of a registered asset BODY is its own kind of removal: the
+    // clip IS the asset (SPlaceAssetAction links the body itself), so undo must
+    // RE-PLACE it rather than rebuild a lookalike, or the restored clip would no
+    // longer be the asset and edits to it would stop tracking. That inverse is
+    // SRemoveAssetPlacementAction -> SPlaceAssetAction.
+    //
+    // Copies of an asset (duplicated, re-pitched) are NOT registered and fall
+    // through to SRemoveSampleAction, which rebuilds the cut over the same
+    // container (SRestoreContainerClipAction).
+    const QString assetName = project->assetNameOf( &oldLink->getSObject() );
+
     qContent_->resetLastClickSLink();
+
+    if( !assetName.isEmpty() ) {
+        QList<int> trackPath = strackpath::pathOf( root, oldTrack );
+        SApplication::app().submitAction(
+            new SRemoveAssetPlacementAction( assetName, trackPath, clipIdx, timePos )
+        );
+        return;
+    }
 
     // Submit the removal action (proper undo/redo support)
     SApplication::app().submitAction(

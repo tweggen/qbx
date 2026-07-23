@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: deleting an asset PLACEMENT and undoing puts it back.
+
+  A placement links the registered asset BODY itself (SPlaceAssetAction does
+  `new SLink(*assetBody)`), so the clip on the lane IS the asset. Deleting it
+  used to go through SRemoveSampleAction like any other clip, which could only
+  offer an add-sample inverse — and an asset has no file path, so undo reported
+  nothing to do. The timeline now routes this case to
+  SRemoveAssetPlacementAction, whose inverse re-places the body; rebuilding a
+  lookalike cut would restore audio but silently break the identity, so edits
+  to the restored clip would no longer track the asset.
+
+  <remove-asset-placement/> is newly registered so this path is drivable from a
+  script at all; it was live-only before, reachable only as SPlaceAssetAction's
+  inverse.
+
+  Fixture: test_sawtooth.wav, 4 s, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+-->
+<SActionScript version="1" name="asset_placement_undo_restores">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Asset over track 0's [96000,192000) = source sec2 + sec3. -->
+    <create-asset container="0" startOffset="96000" duration="96000"
+                  assetName="Section"/>
+
+    <!-- Placed at 4 s on track 1, past track 0's own material. -->
+    <place-asset assetName="Section" trackPath="1" timePos="192000"/>
+
+    <render filename="assetundo_pre.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="assetundo_pre.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="assetundo_pre.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <remove-asset-placement assetName="Section" trackPath="1" clipIdx="0"
+                            timePos="192000"/>
+
+    <render filename="assetundo_deleted.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="assetundo_deleted.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <undo count="1"/>
+
+    <render filename="assetundo_restored.wav" format="wav" quality="10"/>
+
+    <!-- The placement is back, windowing the same span of track 0. -->
+    <assert-audio-energy filename="assetundo_restored.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="assetundo_restored.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- Track 0's own material is untouched by the round trip. -->
+    <assert-audio-energy filename="assetundo_restored.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
