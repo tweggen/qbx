@@ -6164,3 +6164,66 @@ anything holds the reader — which is exactly what PageNode guarantees.
 `check_logging.py` clean; flake gate (`repeat_test.sh`, 25x,
 `SMARAGD_REVAL_WORKERS=16`) on `grain_split_delete_crash`,
 `takes_group_broadcast`, `loop_start_edge_drag`: all deterministic.
+
+## Project-close segfault: leaked refs made ~SProject dangle SLinks (2026-07-23)
+
+**Crash.** Closing a project — in the report, saving from the "Unsaved Changes"
+prompt on exit — logged
+
+```
+SExternFileList::externFileAdded(): Invoked although file was not found. "…_(untitled).wav"
+SObject::~SObject(): '(untitled)' destroyed with 4 live reference(s) — a referencing SLink now dangles!
+```
+
+and then segfaulted.
+
+**Root cause: a leaked reference turns the teardown cascade into a hard
+delete.** `SPlaceAssetAction::apply()` took an `assetBody->addRef()` it never
+released — one leaked reference per asset placement. The saved `.qxp` names it
+directly: comparing each object's serialized `nRefs` against the actual number
+of `<SLink>`s pointing at it gives `SCut nRefs=2 links=0` and `SCut nRefs=3
+links=1`. `~SProject`'s cascade only deletes objects whose refcount reached
+zero, so those bodies never qualified and fell through to the survivor pass,
+which deleted them outright regardless of refcount. Every SLink still pointing
+at the freed object dangled; the next `~SLink`'s `object_.removeRef()` ran on
+freed memory. The refcount pin was never needed in the first place —
+`registerAsset()` already holds the reference that keeps an asset alive across
+an undo removing its last placement, which `SRemoveAssetPlacementAction`
+documents.
+
+Two independent lifetime bugs of the same shape sat behind it:
+
+- **The undo history outlives the project.** `SActionHistory` is owned by
+  `SApplication`, and `SRemoveTrackAction::heldTrack_` holds a raw pointer plus
+  a refcount pin, so its destructor called `removeRef()` on a freed track after
+  `closeProject()` deleted the project.
+- **`SExternFileList` leaked its per-row connections.** `nRefsChanged` is
+  connected per `SExternFile`, not via `project_`, so `disconnectSignals()`
+  never reached those; `setProject(nullptr)` cleared `itemDict_` and left every
+  file still emitting into it. During teardown each dying link landed in
+  `externFileRefChanged()`, which logged "file was not found" and called
+  `getFileName()` on an object already under destruction — the first warning
+  above.
+
+**Fix (order-independent).** Drop the unbalanced pin in `SPlaceAssetAction`
+(and delete, not leak, the link on the `clipIdx < 0` path). `~SProject` now
+releases the `registerAsset()` pins before the cascade — held, they hide every
+asset subtree from it — and the survivor pass deletes **referrers before
+referents**, repeatedly taking the survivors that no other survivor links to,
+instead of deleting blindly. That order makes teardown safe whatever still
+holds an outside reference, rather than depending on every pin holder being
+well-behaved. Survivors are logged with their refcount, so the next leak of
+this shape names itself. `closeProject()` clears the undo stack before deleting
+the project. `SExternFileList::disconnectSignals()` drops the per-file and
+per-asset connections; two copy-pasted warning strings that both claimed to be
+`externFileAdded()` now name their own function.
+
+**Verified.** Compiles clean; `check_layering.py` / `check_logging.py` clean.
+The qxa suite has NOT been run against this change — the crashed process still
+held `bin/smaragd.exe` under gdb, so the binary could not be relinked. Run it
+before trusting the commit.
+
+**Follow-up.** The reproducing `test4.qxp` still has the leaked counts baked
+into its `nRefs` attributes. Worth confirming the loader recomputes refcounts
+from the links rather than trusting the attribute, or such a project reproduces
+the survivor path even with this fix.
