@@ -272,8 +272,10 @@ tw_module(sidecar
         sidecar/include/tw/sidecar/twqaf.h
         sidecar/include/tw/sidecar/twsidecarstore.h
         sidecar/include/tw/sidecar/twaspects.h
+        sidecar/include/tw/sidecar/twanalyzers.h
         sidecar/src/twqaf.cc
         sidecar/src/twsidecarstore.cc
+        sidecar/src/twanalyzers.cc
     DEPS tw_core)
 
 # --- Audio file format libraries (sinks only) -----------------------------------
@@ -415,5 +417,6 @@ tw_module_test(sources_test                 sources/tests/sources_test.cc       
 tw_module_test(mix_test                     mix/tests/mix_test.cc                       tw_mix)
 tw_module_test(schedule_test                schedule/tests/schedule_test.cc             tw_schedule tw_pages)
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)
+tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc             tw_sidecar)
 tw_module_test(playback_test                playback/tests/playback_test.cc             tw_playback)
 tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)

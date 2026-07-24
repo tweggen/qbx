@@ -289,6 +289,21 @@ public:
     // same forwarding structure as bumpContentEpoch.
     virtual void invalidatePagesInRange(offset_t start, offset_t end);
 
+    // Proposal 27 M1 — the readiness gate. While false, freezePage() produces
+    // an explicit SILENT page (validFrames 0, buffer zeroed) instead of
+    // rendering: valid and current, so consumers never block, but NOT a
+    // latch — whoever flips this back to true must also invalidate the
+    // component's pages (bumpContentEpoch()/invalidatePagesInRange()), after
+    // which the silent pages read stale and re-freeze with real audio.
+    // Convergence is purely epoch-driven and order-independent. Settable from
+    // any thread; read lock-free in the freeze path. Default: ready.
+    void setRenderReady(bool ready) {
+        renderReady_.store(ready, std::memory_order_release);
+    }
+    bool isRenderReady() const {
+        return renderReady_.load(std::memory_order_acquire);
+    }
+
 protected:
     // Caller already holds mutex() (e.g. twTrackMix's clip mutators).
     void invalidatePagesInRange_nolock(offset_t start, offset_t end);
@@ -521,6 +536,9 @@ protected:
     // Per-component content epoch (see contentEpochNow()/bumpContentEpoch()).
     // Starts at 1 so a default-constructed page (contentEpoch 0) is stale.
     std::atomic<uint64_t> contentEpoch_{1};
+
+    // Readiness gate (see setRenderReady()); true = render normally.
+    std::atomic<bool> renderReady_{true};
 
 private:
     mutable std::mutex stateMutex_;

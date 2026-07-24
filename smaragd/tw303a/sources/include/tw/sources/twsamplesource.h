@@ -41,6 +41,15 @@ public:
     // load pass; null iff the load failed.
     twContentHash contentHash() const { return contentHash_; }
 
+    // Direct read-only view of one channel's resident source-rate samples
+    // (proposal 27 M1: analysis jobs read in place instead of copying the
+    // whole buffer). Immutable after load; lock-free from any thread. Null
+    // if not loaded or channel out of range.
+    const sample_t *channelData( idx_t channel ) const {
+        if( !loaded_ || channel < 0 || channel >= channels_ ) return nullptr;
+        return data_.data() + (size_t) channel * nFrames_;
+    }
+
     // twRandomSource
     virtual length_t read( offset_t srcOffset, sample_t *dest,
                            length_t len, idx_t channel ) const;

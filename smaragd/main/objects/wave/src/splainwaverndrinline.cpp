@@ -1,5 +1,6 @@
 
 #include <qpainter.h>
+#include <QFontMetrics>
 
 #include "tw/graph/tw303aenv.h"
 #include "tw/graph/twcomponent.h"
@@ -9,6 +10,31 @@
 #include "app/objects/wave/splainwave.h"
 #include "app/objects/wave/splainwaverndrinline.h"
 #include "app/objects/wave/swaveformdraw.h"
+
+namespace {
+// Proposal 27 M1: a corner "analyzing…" badge, shown while this wave's
+// background sidecar analysis (onsets, loudness) is queued or running. Cloned
+// from SCutRendererInline::drawPitchBadge — QFontMetrics-sized box anchored
+// top-left (+2,+2), self-contained here, bails when the clip is too narrow to
+// hold it. Amber text over a translucent dark rounded fill.
+void drawAnalyzingBadge( QPainter &p, const QRect &visibRect )
+{
+    const QString text = QStringLiteral( "analyzing…" );
+
+    QFontMetrics fm( p.font() );
+    QRect box = fm.boundingRect( text ).adjusted( -3, -1, 3, 1 );
+    box.moveTopLeft( visibRect.topLeft() + QPoint( 2, 2 ) );
+    if( !visibRect.contains( box ) ) return;   // clip too narrow for the badge
+
+    p.save();
+    p.setPen( Qt::NoPen );
+    p.setBrush( QColor( 20, 20, 30, 180 ) );
+    p.drawRoundedRect( box, 3, 3 );
+    p.setPen( QColor( 255, 200, 60 ) );
+    p.drawText( box, Qt::AlignCenter, text );
+    p.restore();
+}
+}
 
 void SPlainWaveRendererInline::draw( SLink &lk, SRenderContext &ctx )
 {
@@ -23,4 +49,7 @@ void SPlainWaveRendererInline::draw( SLink &lk, SRenderContext &ctx )
     }
     p.setPen( QColor( 10, 10, 40 ) );
     p.drawText( r, Qt::AlignBottom|Qt::AlignRight, getPlainWave().getFileName() );
+
+    if( getPlainWave().isAnalyzing() )
+        drawAnalyzingBadge( p, r );
 }

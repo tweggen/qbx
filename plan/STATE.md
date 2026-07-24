@@ -6605,3 +6605,82 @@ open, still tracked, still out of scope here.
 synchronously on the UI thread at first paint (exactly where the old compute
 ran — no new stall, but no background either). M1's background-job +
 readiness protocol takes over that scheduling; the store API needs no change.
+
+---
+
+## Proposal 27 M1: background analysis jobs + readiness protocol + per-time aspects (2026-07-24)
+
+**What landed** (M1 of proposal 27 v2, driven by `27_ORCHESTRATION.md`).
+
+- **Analysis lane** — third lane in `CaptureRevalidator`
+  (`scheduleAnalysisJob(std::function, priority=4)`): FIFO of self-owning
+  closures (shared_ptr captures, Lane-B lifetime rule — no borrowed pointers,
+  no retireObject involvement), arbitrated reval > analysis > graph on ties,
+  counted into activeJobs_ AND activeBackgroundJobs_ so `pauseBackground()`
+  drains it exactly like reval work (offline renders stay exact); queued jobs
+  dropped at shutdown (derived data regenerates).
+- **Readiness gate** — `twComponent::setRenderReady(bool)` (atomic, default
+  ready): a gated component's `freezePage` produces an explicit SILENT page
+  (buffer zeroed, validFrames 0, stamped valid+current) — consumers never
+  block, and there is NO latch: convergence is purely epoch-driven. The
+  scheduler path (`freezePageWithInputs`) routes through the gated
+  `freezePage`; the only `freezePage_nolock` bypass caller is a unit test.
+- **`SCut::setRenderGateReady(bool)`** — persistent gate that survives lazy
+  reader rebuilds (applied at build time); flips the gate FIRST then
+  invalidates BOTH the reader component directly (its pages are keyed by
+  source positions — the track-level walk never reaches them; recon finding)
+  AND the clip's timeline ranges via `invalidateRenderPathRange`. Symmetric
+  on both flips (gating silences already-frozen real pages too).
+  Order-independent by construction: either side of the race converges.
+- **`SPlainWave::enqueueAnalysis()`** — on `setWave` (load + import):
+  version-aware skip when sidecars already validate (a bare exists() check
+  would pin stale aspectVersions forever), params derived from the SOURCE
+  rate, PCM read in place via new `twSampleSource::channelData()` (zero
+  copy), completion clears a shared_ptr'd atomic badge flag and marshals
+  `notifyCaptureRevalidated` via the sanctioned queued-invoke bridge.
+  No-ops with a null revalidator (SMARAGD_REVAL_WORKERS=0) or disabled store.
+- **Aspects** — `onsets` (spectral-flux STFT 1024/256, median-adaptive
+  threshold, ~30 ms min separation; uint64 source-frame records) and
+  `loudness` (10 ms-hop RMS envelope, float32 records), both over SOURCE-rate
+  PCM (stable across project rates), implemented as pure deterministic buffer
+  functions (`tw/sidecar/twanalyzers.h/.cc`, in-file radix-2 FFT — pffft
+  arrives M3). Oracle-tested: FFT bit-exact vs naive DFT; click train → 5/5
+  onsets 1:1 paired; RMS within 0.9% on known signals; serialize() bytes
+  pinned. Known property (documented in twaspects.h): material ending at a
+  non-zero level carries a real boundary onset within ~fftSize of the end.
+- **UI badge** — amber "analyzing…" corner badge on wave clips
+  (drawPitchBadge pattern clone), lock-free `isAnalyzing()` read at paint;
+  cleared via the existing `captureRevalidated()` → `update()` path.
+- **Testkit verbs** — `sidecar-root` (hermetic per-case store), `wait-analysis`
+  (drains queue AND per-wave flags), `set-render-gate` (clip-path addressed),
+  `assert-sidecar` (recordCount bands via twQafReader). Two qxa cases:
+  `sidecar_import_analysis` (onsets recordCount 81 → band 79..83; loudness
+  exactly 400 = ceil(192000/480)), `render_gate_convergence` (gate OFF render
+  RMS exactly 0, gate ON 0.2666 — one process, no restart).
+
+**Verified.**
+- `render_gate_convergence` **50/50 deterministic at workers {1,4,8,16}**;
+  `sidecar_import_analysis` **50/50 at workers {1,8}** (repeat_test.sh).
+- Module tests green incl. new `analyzers_test`; full ctest 63/65;
+  `check_layering.py` (DEPS + APP_DEPS/APP_ENG grants for testkit) and
+  `check_logging.py` clean.
+
+**The 2/65, diagnosed — pre-existing teardown segfault, NOT M1.**
+`qxa.asset_over_muted_container` and `qxa.asset_window_shifted_content`
+failed one suite run each; both pass standalone. Investigation of the former
+(new to the flake list): the failure is a **segfault during process teardown
+strictly AFTER "PASS" is printed** — all asserts green, artifacts written.
+Controlled rates: pre-M1 baseline binary (M0 commit 5e331bc, fresh worktree
+build) **2/25**; M1 with analysis jobs forced cold every run **3/25**; M1
+with the sidecar store off (zero M1 background work) **2/25** —
+indistinguishable, and the sibling case's teardown deadlock was documented
+2026-07-23, before M0. Classification: the known container-asset teardown
+family, segfault manifestation; predates proposals 27 M0/M1. A 15-iteration
+gdb hunt caught no crash (debugger timing suppresses the race — consistent
+with a teardown scheduling race). Still open, tracked as its own
+investigation; note `repeat_test.sh` by design measures the PASS line and is
+immune to post-PASS teardown crashes.
+
+**For M4/M5:** `SCut::setRenderGateReady` is the exact seam real
+spectral-aspect readiness wires into; the test verb exercises the identical
+code path the production feature will use.

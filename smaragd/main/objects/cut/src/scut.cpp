@@ -82,6 +82,29 @@ void SCut::ensureReader()
 // thread) so the one-time grain materialisation never lands in a realtime audio
 // block. Builds into nextReader_ completely, then swaps atomically
 // (Unix page cache model: audio thread always sees a complete, valid state).
+void SCut::setRenderGateReady( bool ready )
+{
+    renderGateReady_.store( ready, std::memory_order_release );
+    std::shared_ptr<twSampleReader> reader;
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        reader = currentReader_.reader;
+    }
+    // Order matters for convergence: flip the gate FIRST, invalidate SECOND.
+    // A freeze racing the flip either sees the new gate (renders the new
+    // truth) or renders the old truth into a page the invalidation below
+    // immediately makes stale — both orders converge, no latch.
+    if( reader ) {
+        reader->setRenderReady( ready );
+        // The reader's pages are keyed by its own source positions; the
+        // track-level walk below never reaches them (SCut forwards no engine
+        // epoch), so bump the reader directly. Symmetric on both flips:
+        // gating must silence already-frozen real pages too.
+        reader->bumpContentEpoch();
+    }
+    invalidateRenderPathRange( 0, (offset_t) getDuration() );
+}
+
 void SCut::rebuildReader( const SCutSnapshot &snap )
 {
     readerTried_ = true;
@@ -188,6 +211,12 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
         // while a queued freeze still renders through this reader.
         newReader->retainUpstream( newGrain );
         newReader->retainUpstream( captureLocal );
+
+        // Proposal 27 M1: a rebuilt reader inherits the readiness gate —
+        // readers are minted lazily, so a gate set before the first build
+        // would otherwise be silently lost.
+        newReader->setRenderReady(
+            renderGateReady_.load( std::memory_order_acquire ) );
     }
 
 swap_complete:

@@ -115,6 +115,16 @@ public:
     // always complete & valid. Safe to call from audio thread.
     SCutSnapshot getSnapshot() const;
 
+    // Proposal 27 M1 readiness protocol: gate/ungate this clip's audio render.
+    // While gated the clip's reader freezes SILENT pages (twComponent
+    // readiness gate); flipping in EITHER direction invalidates the reader's
+    // source-position-keyed pages (the track-level walk does not reach them)
+    // plus every timeline range this clip covers, so playback/render converge
+    // without restart — order-independent, epoch-driven, no latch. The flag
+    // survives reader rebuilds (readers are minted lazily). M1 callers: the
+    // set-render-gate test verb; M5 wires real spectral-aspect readiness here.
+    void setRenderGateReady( bool ready );
+
     // Proposal 19 Phase 2b: blocking snapshot for the freeze/resolution path —
     // always returns the CURRENT reader (never the try-lock lastGoodSnapshot_
     // fallback), so a freeze that observes the post-edit epoch also observes the
@@ -413,6 +423,10 @@ private:
     SCutRendererInline *inlineRenderer_;
     // Atomic: ensureReader() reads it outside mutex() (Phase 2b).
     std::atomic<bool> readerTried_;
+
+    // Proposal 27 M1: desired readiness of this clip's reader (see
+    // setRenderGateReady()); applied to every newly built reader.
+    std::atomic<bool> renderGateReady_{true};
 
     // DOUBLE-BUFFER READER STATE (Unix page cache model)
     // currentReader_: always valid & complete, read by audio thread

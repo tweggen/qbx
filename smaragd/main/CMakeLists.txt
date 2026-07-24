@@ -235,6 +235,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sdragclipedgeaction.h
     testkit/include/app/testkit/slogstressaction.h
     testkit/include/app/testkit/sscreenshotaction.h
+    testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/stransporttestactions.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
@@ -244,6 +245,7 @@ set(APP_UI_FILES
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/slogstressaction.cpp
     testkit/src/sscreenshotaction.cpp
+    testkit/src/ssidecartestactions.cpp
     testkit/src/stransporttestactions.cpp
 )
 

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 27 M1 convergence gate: the SCut render-gate readiness hook.
+
+  A gated (not-ready) clip freezes SILENT pages; flipping the gate either way
+  invalidates and converges without a restart. This case renders the SAME
+  project twice from one process: gate OFF -> silence, gate ON -> real audio.
+
+  Fixture: ../test_sawtooth.wav (4 s ramped sawtooth, 192000 frames). The whole
+  clip's RMS is ~0.27 (per-second RMS 0.067 / 0.176 / 0.291 / 0.405 combined).
+-->
+<SActionScript version="1" name="render_gate_convergence">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Gate CLOSED: the clip must freeze silence. -->
+    <set-render-gate clip="0,0" ready="false"/>
+    <render filename="gate_off.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="gate_off.wav"
+                         startFrame="0" frameCount="192000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <!-- Gate OPEN: same project, no restart — audio converges. -->
+    <set-render-gate clip="0,0" ready="true"/>
+    <render filename="gate_on.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="gate_on.wav"
+                         startFrame="0" frameCount="192000"
+                         minRms="0.20" maxRms="0.32"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

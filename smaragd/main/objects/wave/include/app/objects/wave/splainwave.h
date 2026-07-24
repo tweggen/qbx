@@ -2,6 +2,9 @@
 #ifndef _SPLAINWAVE_H
 #define _SPLAINWAVE_H
 
+#include <atomic>
+#include <memory>
+
 #include "app/model/sobject.h"
 #include "app/model/sexternfile.h"
 
@@ -58,6 +61,14 @@ public:
 			    offset_t start, length_t length,
 			    offset_t nProbes );
 
+    // Proposal 27 M1: true while a background analysis job for this wave's
+    // content is queued or running. Lock-free (paint-time badge read). The
+    // flag is shared with the job closure via shared_ptr, so a wave deleted
+    // mid-job leaves the closure a valid flag to clear.
+    bool isAnalyzing() const {
+        return analyzing_ && analyzing_->load( std::memory_order_acquire );
+    }
+
 
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );
@@ -73,9 +84,16 @@ protected:
                               offset_t skip, offset_t forLength ) override;
 
 private:
+    // Proposal 27 M1: enqueue background sidecar analysis (onsets, loudness)
+    // for this wave's content on the project's worker pool. No-ops when the
+    // revalidator is disabled, the store is disabled, or the sidecars already
+    // validate. Called from setWave() (load + import).
+    void enqueueAnalysis();
+
     std::shared_ptr<twWavInput> cpWave_;
     QString fileName_;
     SPlainWaveRendererInline *inlineRenderer_;
+    std::shared_ptr<std::atomic<bool>> analyzing_;
 };
 
 #endif

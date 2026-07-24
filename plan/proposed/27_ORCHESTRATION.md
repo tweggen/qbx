@@ -248,7 +248,7 @@ orchestrator stops after M5 and reports.
 | Milestone | Status | Closed on | Commit | Notes |
 |---|---|---|---|---|
 | M0 substrate + QAF | ✅ done | 2026-07-24 | (this commit) | Module named `sidecar` not `analysis` (name collision with test-metrics module); in-tree MurmurHash3 x64-128 instead of vendored xxhash; aspect id `preview.peaks` not `preview.mips` (existing preview is single-resolution). Gates: sidecar_test green incl. golden pin; ctest 64/65 (the 1 = pre-existing documented asset_window_shifted_content flake, passed on rerun, out of scope); layering+logging clean. See STATE.md 2026-07-24 M0 entry. |
-| M1 jobs + readiness + per-time aspects | ☐ not started | | | |
+| M1 jobs + readiness + per-time aspects | ✅ done | 2026-07-24 | (this commit) | Analysis lane in CaptureRevalidator; twComponent readiness gate (epoch-driven, no latch); SCut::setRenderGateReady; onsets+loudness analyzers (oracle-tested); badge; 4 testkit verbs + 2 qxa cases. Gates: convergence 50/50 × workers {1,4,8,16}; import 50/50 × {1,8}; suite 63/65 — the 2 are the PRE-EXISTING container teardown-segfault family, proven by pre-M1-binary A/B (2/25 baseline vs 2-3/25 M1), crash strictly after PASS; tracked separately. See STATE.md 2026-07-24 M1 entry. |
 | M2 warp.pcm load fix | ☐ not started | | | |
 | M3 vocoder core + harness | ☐ not started | | | |
 | M4 random access + stft.if | ☐ not started | | | |

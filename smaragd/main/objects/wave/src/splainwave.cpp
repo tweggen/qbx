@@ -9,10 +9,13 @@
 #include "app/model/sappcontext.h"
 #include "app/model/sproject.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
+#include "tw/schedule/capture_revalidator.h"
 #include "tw/graph/twcomponent.h"
+#include "tw/sidecar/twanalyzers.h"
 #include "tw/sidecar/twaspects.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/sources/twrandomsource.h"
+#include "tw/sources/twsamplesource.h"
 #include "tw/sources/twwavinput.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/objects/wave/splainwaverndrinline.h"
@@ -191,7 +194,108 @@ int SPlainWave::setWave( const QString fileName )
     // Add myselves tob the list of extern objects.
     qWarning() << "Filename here is" << fileName_;
     SAppContext::get().getCurrentProject()->addExternObject( *this );
+    enqueueAnalysis();
     return 0;
+}
+
+void SPlainWave::enqueueAnalysis()
+{
+    SProject *project = qobject_cast<SProject *>( parent() );
+    if( !project ) return;
+    CaptureRevalidator *reval = project->getRevalidator();
+    if( !reval ) return;                        // SMARAGD_REVAL_WORKERS=0
+    if( !twSidecarStore::instance().enabled() ) return;
+    twSampleSource *src = cpWave_ ? cpWave_->sampleSource() : nullptr;
+    if( !src ) return;
+    const twContentHash content = src->contentHash();
+    if( content.isNull() ) return;
+
+    // Params are derived from the SOURCE rate (results must be stable across
+    // project rates — twaspects.h).
+    const uint32_t rate = (uint32_t) src->sampleRate();
+    twOnsetParams op;
+    op.minSeparationFrames = rate * 3 / 100;    // ~30 ms
+    twLoudnessParams lp;
+    lp.hopFrames = rate / 100;                  // 10 ms
+    lp.winFrames = lp.hopFrames * 2;
+
+    std::vector<uint8_t> opBlob, lpBlob;
+    op.serialize( opBlob );
+    lp.serialize( lpBlob );
+    const uint64_t opHash =
+        twSidecarStore::hashParams( opBlob.data(), opBlob.size() );
+    const uint64_t lpHash =
+        twSidecarStore::hashParams( lpBlob.data(), lpBlob.size() );
+
+    // Skip when both aspects already VALIDATE (version-aware — a bare
+    // exists() check would keep files with an outdated aspectVersion forever).
+    const bool haveOnsets = twSidecarStore::instance().load(
+        content, twAspect::Onsets, twAspect::OnsetsVersion, opHash ) != nullptr;
+    const bool haveLoudness = twSidecarStore::instance().load(
+        content, twAspect::Loudness, twAspect::LoudnessVersion, lpHash ) != nullptr;
+    if( haveOnsets && haveLoudness ) return;
+
+    if( !analyzing_ )
+        analyzing_ = std::make_shared<std::atomic<bool>>( false );
+    analyzing_->store( true, std::memory_order_release );
+
+    // The closure OWNS everything it touches (analysis-lane lifetime rule):
+    // the wav input (and through it the sample source) via shared_ptr, and
+    // the badge flag via shared_ptr. `project` is safe to pass to the queued
+    // invokeMethod: the revalidator is owned by SProject and joins its
+    // workers before the project dies (the sanctioned revalCompleted bridge).
+    std::shared_ptr<twWavInput> wav = cpWave_;
+    std::shared_ptr<std::atomic<bool>> flag = analyzing_;
+    reval->scheduleAnalysisJob(
+        [wav, flag, project, content, op, lp, opBlob, lpBlob,
+         haveOnsets, haveLoudness, rate]() {
+            twSampleSource *s = wav->sampleSource();
+            if( s ) {
+                const uint32_t nCh = (uint32_t) s->channels();
+                const uint64_t n   = (uint64_t) s->length();
+                std::vector<const float *> chans( nCh );
+                for( uint32_t c = 0; c < nCh; c++ )
+                    chans[c] = s->channelData( (idx_t) c );
+
+                twQafInfo qi;
+                qi.contentHash  = content;
+                qi.sourceRate   = rate;
+                qi.channels     = nCh;
+                qi.sourceFrames = n;
+
+                if( !haveOnsets ) {
+                    std::vector<uint64_t> onsets =
+                        twDetectOnsets( chans.data(), nCh, n, op );
+                    qi.aspectId      = twAspect::Onsets;
+                    qi.aspectVersion = twAspect::OnsetsVersion;
+                    qi.recordStride  = sizeof( uint64_t );
+                    qi.recordCount   = (uint64_t) onsets.size();
+                    qi.hopFrames     = op.hop;
+                    qi.params        = opBlob;
+                    twSidecarStore::instance().store(
+                        qi, onsets.data(),
+                        (uint64_t) onsets.size() * sizeof( uint64_t ) );
+                }
+                if( !haveLoudness ) {
+                    std::vector<float> rms =
+                        twComputeLoudness( chans.data(), nCh, n, lp );
+                    qi.aspectId      = twAspect::Loudness;
+                    qi.aspectVersion = twAspect::LoudnessVersion;
+                    qi.recordStride  = sizeof( float );
+                    qi.recordCount   = (uint64_t) rms.size();
+                    qi.hopFrames     = lp.hopFrames;
+                    qi.params        = lpBlob;
+                    twSidecarStore::instance().store(
+                        qi, rms.data(),
+                        (uint64_t) rms.size() * sizeof( float ) );
+                }
+            }
+            flag->store( false, std::memory_order_release );
+            // Queued to the UI thread: badge repaint via the existing
+            // captureRevalidated() -> update() connection.
+            QMetaObject::invokeMethod( project, "notifyCaptureRevalidated",
+                                       Qt::QueuedConnection );
+        } );
 }
 
 SPlainWave::~SPlainWave()

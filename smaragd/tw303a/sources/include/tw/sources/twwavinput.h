@@ -59,6 +59,12 @@ public:
     // null when nothing is loaded.
     twContentHash contentHash() const;
 
+    // The SOURCE-RATE resident sample data (proposal 27 M1: analysis jobs
+    // must read native-rate PCM so results are stable across project rates).
+    // Owned by this input; callers needing lifetime beyond it hold the
+    // twWavInput shared_ptr itself. Null when nothing is loaded.
+    twSampleSource *sampleSource() const { return loaded_ ? source_ : nullptr; }
+
     virtual void reset() override;
 
     // Single file cursor (pos_): freezes must be serialized (proposal 19 Ph1).

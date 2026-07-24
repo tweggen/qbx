@@ -2,6 +2,8 @@
 #define CAPTURE_REVALIDATOR_H
 
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <queue>
 #include <vector>
 #include <thread>
@@ -107,6 +109,23 @@ public:
     // retired — zero callers remained; page pre-computation is the graph
     // scheduler's job now, with dedup, dependency ordering, and lifetime
     // handled per node. See requestGraphPages().)
+
+    /**
+     * Proposal 27 M1 — the ANALYSIS lane: generic background jobs (import-time
+     * sidecar generation: onsets, loudness, later spectral analysis). FIFO
+     * within the lane; priority is arbitrated against the other two lanes at
+     * dequeue. Analysis jobs are BACKGROUND work: gated and drained by
+     * pauseBackground() exactly like reval jobs, so an offline render never
+     * races them ("offline renders stay exact").
+     *
+     * Lifetime rule: the closure must OWN everything it touches (shared_ptr
+     * captures — the Lane-B style). The revalidator never sees a borrowed
+     * object pointer on this lane, so retireObject() is not involved. Queued
+     * jobs are dropped at shutdown (derived data regenerates on next run);
+     * worker→UI completion notification must use the queued
+     * QMetaObject::invokeMethod bridge, never a direct signal emission.
+     */
+    void scheduleAnalysisJob(std::function<void()> fn, int priority = 4);
 
     /**
      * Graceful shutdown: wait for workers to finish and join.
@@ -259,6 +278,15 @@ private:
     mutable std::mutex queueLock_;
     std::priority_queue<CaptureRevalidationJob> revalidationQueue_;     // object jobs
     std::condition_variable queueNotEmpty_;
+
+    // Analysis lane (proposal 27 M1): FIFO of self-owning closures. Guarded by
+    // queueLock_; masked by backgroundPaused_; counted in activeJobs_ AND
+    // activeBackgroundJobs_ (never in activeRevalObjects_ — no borrowed ptrs).
+    struct AnalysisJob {
+        std::function<void()> fn;
+        int priority = 4;
+    };
+    std::deque<AnalysisJob> analysisQueue_;
 
     // Stage 6 stats (atomics: read via graphStats() without queueLock_).
     std::atomic<uint64_t> statNodesExecuted_{0};

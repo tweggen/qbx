@@ -592,13 +592,22 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
 
     // Step 3: Render the page (OUTSIDE mutex to allow recursive calls)
     // This is the lengthy operation that must not hold the lock
-    page->validFrames = freezePage_nolock(
-        page,
-        inputData,
-        inputOffset,
-        inputLength,
-        previousPage
-    );
+    if (!renderReady_.load(std::memory_order_acquire)) {
+        // Proposal 27 M1 readiness gate: required derived data is not
+        // available yet — freeze an explicit silent page. It is stamped
+        // valid+current below like any render, so nothing blocks; readiness
+        // arrival bumps the epoch and it re-freezes with real audio.
+        std::fill(page->samples.begin(), page->samples.end(), 0.0f);
+        page->validFrames = 0;
+    } else {
+        page->validFrames = freezePage_nolock(
+            page,
+            inputData,
+            inputOffset,
+            inputLength,
+            previousPage
+        );
+    }
 
     // Step 4: Mark page as frozen and valid under lock
     // A page is "valid" if it has been frozen (rendering attempted), even if validFrames == 0.

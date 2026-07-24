@@ -94,8 +94,10 @@ APP_DEPS = {
     'shell':          {'actions', 'model', 'objects/cut', 'objects/mixer',
                        'objects/track', 'objects/wave', 'persistence',
                        'selection', 'servicesui', 'testkit', 'timeline'},
-    'testkit':        {'actions', 'model', 'objects/mixer', 'objects/track',
-                       'shell'},
+    # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:
+    # set-render-gate addresses an SCut, wait-analysis reads SPlainWave.
+    'testkit':        {'actions', 'model', 'objects/cut', 'objects/mixer',
+                       'objects/track', 'objects/wave', 'shell'},
 }
 
 # Which engine modules each app module may include (tw/<mod>/... paths).
@@ -122,7 +124,10 @@ APP_ENG = {
     # app-global sidecar store root at startup.
     'shell':          _ENG_BASE | {'devices', 'dsp', 'playback', 'record',
                                    'render', 'schedule', 'sidecar'},
-    'testkit':        _ENG_BASE | {'analysis'},
+    # testkit + sidecar + schedule since proposal 27 M1 test verbs:
+    # assert-sidecar reads twQafReader/twSidecarStore, wait-analysis polls the
+    # revalidator's jobsQueued().
+    'testkit':        _ENG_BASE | {'analysis', 'schedule', 'sidecar'},
 }
 
 def main():

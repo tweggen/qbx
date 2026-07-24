@@ -37,10 +37,25 @@ void CaptureRevalidator::scheduleRevalidation(IRevalidatable* object, uint32_t a
     queueNotEmpty_.notify_one();
 }
 
+void CaptureRevalidator::scheduleAnalysisJob(std::function<void()> fn, int priority) {
+    if (!fn) return;
+    {
+        std::lock_guard<std::mutex> lock(queueLock_);
+        if (shutdown_) return;
+        analysisQueue_.push_back({std::move(fn), priority});
+    }
+    queueNotEmpty_.notify_one();
+}
+
 void CaptureRevalidator::shutdown() {
     {
         std::lock_guard<std::mutex> lock(queueLock_);
         shutdown_ = true;
+
+        // Drop queued analysis jobs — derived data regenerates on next run.
+        // Clearing releases the closures' shared_ptr captures here, under the
+        // lock, before workers are joined.
+        analysisQueue_.clear();
 
         // Abort pending graph demands so no consumer stays blocked in wait();
         // in-flight nodes finish on their own (their demand refs are on the
@@ -68,7 +83,7 @@ void CaptureRevalidator::shutdown() {
 
 size_t CaptureRevalidator::jobsQueued() const {
     std::lock_guard<std::mutex> lock(queueLock_);
-    return revalidationQueue_.size() + graphReady_.size();
+    return revalidationQueue_.size() + graphReady_.size() + analysisQueue_.size();
 }
 
 CaptureRevalidator::GraphStats CaptureRevalidator::graphStats() const {
@@ -83,46 +98,59 @@ void CaptureRevalidator::workerLoop() {
     while (true) {
         CaptureRevalidationJob revalJob;
         std::shared_ptr<PageNode> graphNode;
+        AnalysisJob analysisJob;
         bool haveReval = false;
+        bool haveAnalysis = false;
 
         {
             std::unique_lock<std::mutex> lock(queueLock_);
             // Wait for work — but not while paused (an offline render owns the
             // graph then; see pause()). While only BACKGROUND work is paused
             // (pauseBackground(), a scheduler-driven render in progress),
-            // graph nodes still count as work. Still wake for shutdown.
+            // graph nodes still count as work; reval AND analysis are both
+            // background lanes and stay masked. Still wake for shutdown.
             queueNotEmpty_.wait(lock, [this]() {
                 return shutdown_ ||
                     (!paused_ &&
-                     ((!backgroundPaused_ && !revalidationQueue_.empty())
+                     ((!backgroundPaused_ &&
+                       (!revalidationQueue_.empty() || !analysisQueue_.empty()))
                       || !graphReady_.empty()));
             });
 
             // If shutting down and all queues empty, exit
-            if (shutdown_ && revalidationQueue_.empty() && graphReady_.empty()) {
+            if (shutdown_ && revalidationQueue_.empty() && graphReady_.empty()
+                && analysisQueue_.empty()) {
                 break;
             }
 
             // Paused (woke only for a shutdown check) or nothing to do: loop.
             const bool backgroundAvailable =
-                !backgroundPaused_ && !revalidationQueue_.empty();
+                !backgroundPaused_ &&
+                (!revalidationQueue_.empty() || !analysisQueue_.empty());
             if (paused_ || (!backgroundAvailable && graphReady_.empty())) {
                 continue;
             }
 
-            // Dequeue the higher-priority job of the two sources.
-            // Ties: reval first (the most UI-critical). Background (reval)
-            // is masked while backgroundPaused_.
+            // Dequeue the highest-priority head of the three lanes.
+            // Ties: reval > analysis > graph (reval is the most UI-critical;
+            // analysis is bulk background). Both background lanes are masked
+            // while backgroundPaused_.
             const int INT_NONE = -2147483647;
             const int rp = (backgroundPaused_ || revalidationQueue_.empty())
                             ? INT_NONE : revalidationQueue_.top().priority;
+            const int ap = (backgroundPaused_ || analysisQueue_.empty())
+                            ? INT_NONE : analysisQueue_.front().priority;
             const int gp = graphReady_.empty() ? INT_NONE
                             : graphReady_.front()->priority;
 
-            if (rp != INT_NONE && rp >= gp) {
+            if (rp != INT_NONE && rp >= ap && rp >= gp) {
                 revalJob = revalidationQueue_.top();
                 revalidationQueue_.pop();
                 haveReval = true;
+            } else if (ap != INT_NONE && ap >= gp) {
+                analysisJob = std::move(analysisQueue_.front());
+                analysisQueue_.pop_front();
+                haveAnalysis = true;
             } else if (gp != INT_NONE) {
                 graphNode = graphReady_.front();
                 graphReady_.pop_front();
@@ -130,26 +158,29 @@ void CaptureRevalidator::workerLoop() {
 
             // Mark in-flight under the lock so pause() can drain reliably;
             // background jobs also count separately for pauseBackground().
-            if (haveReval || graphNode) ++activeJobs_;
-            if (haveReval) ++activeBackgroundJobs_;
+            if (haveReval || haveAnalysis || graphNode) ++activeJobs_;
+            if (haveReval || haveAnalysis) ++activeBackgroundJobs_;
             // Record the specific object so retireObject() can block on just it
-            // (the reval queue holds borrowed IRevalidatable*; graph nodes hold
-            // shared_ptr and are already lifetime-safe).
+            // (the reval queue holds borrowed IRevalidatable*; graph nodes and
+            // analysis closures hold shared_ptr and are lifetime-safe).
             if (haveReval && revalJob.object) ++activeRevalObjects_[revalJob.object];
         }
 
         // Process outside the lock.
         if (haveReval) {
             processRevalidationJob(revalJob);
+        } else if (haveAnalysis) {
+            analysisJob.fn();
+            analysisJob.fn = nullptr;   // release captures before the drain wake
         } else if (graphNode) {
             processGraphNode(graphNode);
         }
 
-        if (haveReval || graphNode) {
+        if (haveReval || haveAnalysis || graphNode) {
             {
                 std::lock_guard<std::mutex> lock(queueLock_);
                 --activeJobs_;
-                if (haveReval) --activeBackgroundJobs_;
+                if (haveReval || haveAnalysis) --activeBackgroundJobs_;
                 if (haveReval && revalJob.object) {
                     auto it = activeRevalObjects_.find(revalJob.object);
                     if (it != activeRevalObjects_.end() && --it->second <= 0)
