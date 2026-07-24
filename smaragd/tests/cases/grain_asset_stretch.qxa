@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression (proposal 26, user report): a time-STRETCHED clip on a track must
+  produce audible output BOTH directly AND through an ASSET that captures that
+  track. The Rubber Band integration was first driven with a single whole-clip
+  process() call; a stretch whose output exceeds Rubber Band's initial output
+  ring (here 384000 > 262144 frames) overflowed it and DROPPED samples during
+  load — the stretched signal on the source track, and the indirect assets
+  built on it, came out wrong. Feeding Rubber Band in bounded blocks fixes it;
+  this case guards both the direct and the asset-captured path.
+
+  Track 0: 4 s sawtooth stretched x2 -> 8 s (384000 frames) of stretched output.
+  Rubber Band is loudness-preserving, so the overall RMS stays ~0.267 (the
+  source's), and the silence-after guards prove the stretch didn't drop out.
+  Asset: captures track 0's whole 8 s stretched output, placed on track 1 past
+  track 0 so it renders alone (no summing can mask a missing signal).
+-->
+<SActionScript version="1" name="grain_asset_stretch">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0: the stretched source. Track 1: where the asset is placed. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Stretch track 0's clip x2: 192000 -> 384000 frames of stretched output -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="384000" loopLength="0" stretch="2.0"/>
+
+    <!-- Asset = track 0's stretched live output over its full 8 s. -->
+    <create-asset container="0" startOffset="0" duration="384000"
+                  assetName="Stretched"/>
+
+    <!-- Placed at 10 s (480000), PAST track 0's own 8 s clip, so the asset
+         region renders alone. -->
+    <place-asset assetName="Stretched" trackPath="1" timePos="480000"/>
+
+    <render filename="grain_asset_stretch.wav" format="wav" quality="10"/>
+
+    <!-- Track 0 DIRECT: the stretched signal is present (the bug rendered it
+         missing). Loudness preserved -> overall RMS ~0.267. -->
+    <assert-audio-energy filename="grain_asset_stretch.wav"
+                         startFrame="0" frameCount="384000"
+                         minRms="0.20" maxRms="0.34"/>
+
+    <!-- Gap 8-10 s: nothing on either track. -->
+    <assert-audio-energy filename="grain_asset_stretch.wav"
+                         startFrame="384000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Asset INDIRECT: the same stretched signal, captured and replayed on
+         track 1. This is the "indirect assets created on it" path. -->
+    <assert-audio-energy filename="grain_asset_stretch.wav"
+                         startFrame="480000" frameCount="384000"
+                         minRms="0.20" maxRms="0.34"/>
+
+    <!-- Past the asset (18 s+): silence. -->
+    <assert-audio-energy filename="grain_asset_stretch.wav"
+                         startFrame="864000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

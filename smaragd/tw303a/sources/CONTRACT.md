@@ -18,6 +18,24 @@ The twRandomSource contract:
 - acquireReader(env, initialOffset) mints an INDEPENDENT cursor — cuts must
   never share twWavInput's single cursor (proposal 07).
 
+twGrainSource backend (proposal 26): the time-stretch / pitch-shift core is
+Rubber Band Library (R3 engine), run in OFFLINE mode — the whole warp is
+materialised once in the ctor, read() stays a memcpy. Selected by the
+TW_HAVE_RUBBERBAND compile define (link discovered in tw303a/CMakeLists.txt);
+when absent the file falls back to the legacy overlap-add. Rubber Band is fed in
+BOUNDED blocks (kBlock=4096) with the output drained after each block: a single
+whole-clip process() overflows its output ring and drops samples on any stretch
+whose output exceeds ~262144 frames (noisy stderr + a wrong/missing warp).
+setMaxProcessSize / setDebugLevel(0) complete that (pre-sized buffers, no library
+stderr). The output is clamped/zero-padded to the EXACT nFrames_ =
+floor(inLen*stretch) (invariant 3 below). NO output gain is applied: Rubber Band
+is loudness-preserving, so a stretch/pitch keeps the source RMS (an earlier
+peak-scaling anti-clip was removed — one Gibbs transient dimmed the whole clip).
+Rubber Band is GPL, so the whole app is GPL. On x64-windows it is built with
+Rubber Band's builtin FFT via the repo's vcpkg overlay port
+(smaragd/vcpkg-overlays/rubberband) — the upstream port's sleef FFT fails under
+MinGW.
+
 Invariants:
 1. twSampleReader::seekTo is ABSOLUTE in the source domain; the acquire-time
    offset is an initial position, not a base (MapPosFn adds slip offsets —

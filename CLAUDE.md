@@ -279,6 +279,16 @@ Files written as WAV (PCM, lossless) in project directory:
 - **libsndfile** — WAV export (all platforms)
 - **libvorbis / libvorbisenc** — OGG Vorbis export (all platforms)
 
+### Time-stretch / pitch-shift (Required — proposal 26)
+- **Rubber Band Library** (v4.0, **GPL v2+**) — the `twGrainSource` backend for
+  clip time-stretch and pitch-shift (R3 engine, offline mode). **Linking it makes
+  the whole app GPL** — this is a deliberate, accepted licensing decision.
+  Windows: vcpkg `rubberband:x64-mingw-dynamic` via the repo overlay port
+  (`smaragd/vcpkg-overlays/rubberband`, builtin FFT — upstream's sleef FFT fails
+  under MinGW); auto-installed by `build.sh`/`rebuild.sh`. macOS: `brew install
+  rubberband` (Accelerate/vDSP). Linux: `apt install librubberband-dev`. If
+  absent, `twGrainSource` degrades to the legacy overlap-add (build warns).
+
 ### Platform-Specific Audio Backends
 - **Windows:** WASAPI (SDK: ole32, mmdevapi, avrt, …); MinGW 13.1
 - **Linux:** ALSA (libasound)

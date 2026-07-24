@@ -36,7 +36,10 @@
                          startFrame="192000" frameCount="24000"
                          minRms="0.0" maxRms="0.005"/>
 
-    <assert-audio-peak filename="grain_pitch_octave_up.wav" maxPeak="0.995"/>
+    <!-- Full-scale allowed (proposal 26): Rubber Band preserves RMS but can
+         overshoot hot transients to full-scale (Gibbs); the 0.8-peak sawtooth
+         reaches it. Real material with headroom stays below. -->
+    <assert-audio-peak filename="grain_pitch_octave_up.wav" maxPeak="1.0"/>
 
     <screenshot filename="grain_pitch_octave_up_timeline.png" resolution="50%"/>
   </actions>

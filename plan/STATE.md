@@ -6472,3 +6472,65 @@ so it is pre-existing shutdown debt (same family as the
 change. Standalone the case passes 3/3. `test4_2.qxp` full-project render
 byte-identical before/after the fix (`cmp`); check_layering / check_logging
 clean.
+
+---
+
+## Proposal 26: Rubber Band replaces the overlap-add time-stretch (2026-07-24)
+
+**Motivation (user report).** A dull single-note hummed voice, time-stretched,
+warbled badly — the classic fixed-hop overlap-add amplitude modulation: grains
+read from input positions spaced by a non-integer multiple of the pitch period
+partially cancel in each crossfade. `twGrainSource`'s `wsum` normalisation
+corrects *window gain*, never *phase cancellation*, so windowing can't fix it.
+
+**Change.** `twGrainSource`'s synthesis core is now **Rubber Band Library v4.0**
+(R3 / `OptionEngineFiner`, offline mode, `OptionThreadingNever` for determinism),
+a phase vocoder — no OLA warble. Only the ctor's fill loop changed; the two
+`scut.cpp` call sites, the public header, and all position/domain math are
+untouched. The whole warp is still materialised once; `read()` stays a memcpy.
+The legacy OLA is kept verbatim under `#else` (`TW_HAVE_RUBBERBAND`) as a
+dependency-free fallback. **Rubber Band is GPL → Smaragd is now GPL** (accepted
+with the requester).
+
+- **Exact length preserved.** Rubber Band's output count is approximate; it is
+  clamped / zero-padded to the exact `nFrames_ = floor(inLen*stretch)` (proposal
+  18 render-boundary length), so the WarpedLen cut-window domain is unchanged.
+- **Formants at the default** (scale with pitch, no preservation) — preservation
+  de-energised general material (octave-up sawtooth → 0.52× RMS); dropped at the
+  requester's call. A per-clip formant toggle is possible later.
+- **Block-fed driving.** Rubber Band is fed in bounded 4096-frame blocks with
+  the output drained after each. A single whole-clip `process()` overflows its
+  output ring on any stretch >~262144 output frames, dropping samples (noisy
+  stderr + a corrupt/missing warp) — the cause of a user-reported **missing
+  stretched signal** (direct and asset-captured) on project load.
+  `setMaxProcessSize` + `setDebugLevel(0)` finish it (pre-sized buffers, no
+  library stderr — logging policy).
+- **No output gain — loudness preserving.** A stretch/pitch keeps the source
+  RMS (measured: 2× → 0.266, ½× → 0.262, octave-up → 0.264 vs source ~0.267 —
+  the mathematically expected behaviour). An earlier global peak-scaling
+  "anti-clip" was tried and **removed**: one Gibbs transient (~1.2) dimmed the
+  whole clip ~1.7 dB (0.266 → 0.219), breaking loudness invariance. Rubber
+  Band's higher instantaneous peak at equal RMS is physically correct; the
+  format conversion clamps any rare overshoot on near-full-scale material.
+
+**Build.** Discovery is `find_library`/pkg-config (Rubber Band ships no CMake
+config). A checked-in **vcpkg overlay port**
+(`smaragd/vcpkg-overlays/rubberband`) forces the builtin FFT on x64-windows
+(upstream's `sleef` FFT won't build under MinGW); `_env.sh ensure_render_deps`
+installs it via `--overlay-ports`. macOS = brew (Accelerate/vDSP), Linux = apt.
+
+**Re-rendering the test samples.** Grain qxa cases assert on physically-grounded
+tolerances (RMS / peak / frequency), not golden bytes. Because Rubber Band is
+loudness-preserving, **every original OLA-calibrated RMS band still holds** — no
+RMS recalibration was needed. The only test change: nine sawtooth cases now peak
+at full-scale (Gibbs, RMS preserved), so their `maxPeak` was relaxed 0.995 → 1.0.
+New regression `grain_asset_stretch.qxa` guards the stretch-through-asset path
+(the missing-signal report): direct + asset-captured stretched output both 0.266.
+
+**Verified.** 14/14 grain + stretch cases (incl. the new asset case) green;
+11/11 asset/container/edit cases; 12/12 module unit tests + sources_test green;
+frequency assertions *more* accurate (octave-up 879.76 Hz, fifth-down 293.78 Hz);
+silence-after-clip bands exactly 0 (length clamp holds); `grain_loop_stretch`
+8/8 deterministic at `SMARAGD_REVAL_WORKERS ∈ {1,8}`; RMS identical to the last
+digit across runs; Rubber Band stderr chatter eliminated; non-grain byte-exact
+renders unaffected. Full `qxa.*` ctest sweep run as the closing gate.
