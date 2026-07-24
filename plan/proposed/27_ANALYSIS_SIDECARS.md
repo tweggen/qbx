@@ -239,13 +239,23 @@ before the vocoder lands, and a still-useful zero-DSP top layer after.
 Each independently shippable; suite + `check_layering.py` + `check_logging.py`
 green at every gate.
 
-**M0 — Substrate + QAF format.**
-New engine module `tw303a/analysis/` (`tw_analysis`, depends on core only; DAG
-entry in the layering checker). QAF reader/writer, aspect registry, cache dir,
-size-capped LRU eviction (map-aware on Windows), XXH3-128 folded into the
-`SExternFile` decode. Prove it by **migrating `previewData_`** onto aspect
-`preview.mips`, behavior-preserving (and resolve in passing whether the known
-`SPlainWave` UI/audio-thread race note is disturbed — it must not be).
+**M0 — Substrate + QAF format.** *(EXECUTED 2026-07-24 — see STATE.md; three
+deviations found and taken during implementation: the module is
+`tw303a/sidecar/` (`tw_sidecar`) because `tw303a/analysis/` already exists as
+the qxa acoustic-metrics test instrument; the hash is in-tree MurmurHash3
+x64-128 instead of vendored xxhash (no third-party vendor dir exists, all deps
+come via vcpkg, and a cache key doesn't warrant a new external dep — verified
+against an independent reference, golden-pinned in sidecar_test); the aspect
+id is `preview.peaks` not `preview.mips` since the existing preview is a
+single-resolution peak array, not a mip pyramid.)*
+Original scope: new engine module depending on core only; DAG entry in the
+layering checker. QAF reader/writer, aspect registry, cache dir, size-capped
+LRU eviction (map-aware on Windows), content hash folded into the
+`SExternFile` decode. Prove it by **migrating `previewData_`** onto the
+preview aspect, behavior-preserving (and resolve in passing whether the known
+`SPlainWave` UI/audio-thread race note is disturbed — it must not be; resolved:
+hooks run UI-thread-only inside straightCalcPreviewData, and a sidecar hit
+skips the racy fallback reads entirely).
 *Gate:* previews pixel/byte-identical; substrate unit tests (round-trip,
 version orphaning, eviction under live map); no engine behavior change.
 

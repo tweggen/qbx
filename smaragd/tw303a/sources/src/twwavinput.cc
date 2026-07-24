@@ -85,6 +85,13 @@ twRandomSource *twWavInput::getSource() const
     return source_ ? source_->viewAtRate( env.getSRate() ) : NULL;
 }
 
+twContentHash twWavInput::contentHash() const
+{
+    // Always the SOURCE-rate digest (from the decode pass), never a digest of
+    // a resampled view — the key must be stable across project rates.
+    return source_ ? source_->contentHash() : twContentHash();
+}
+
 /**
  * Serve audio by random-reading the resident source at the current play
  * position. This is the shared/back-compat cursor; it does not auto-advance,

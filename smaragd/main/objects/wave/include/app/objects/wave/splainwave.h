@@ -62,6 +62,16 @@ public:
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );
 
+    // Proposal 27 (M0): persist/restore the straight preview via the sidecar
+    // store, keyed by the decoded content hash + project rate. UI thread only
+    // (called from straightCalcPreviewData) — same affinity previewData_
+    // always had, so the cpWave_->file_ race note above is untouched; a
+    // sidecar hit actually AVOIDS the racy fallback reads entirely.
+    bool fetchPreviewSidecar( preview_t *dest, offset_t nProbes,
+                              offset_t skip, offset_t forLength ) override;
+    void storePreviewSidecar( const preview_t *data, offset_t nProbes,
+                              offset_t skip, offset_t forLength ) override;
+
 private:
     std::shared_ptr<twWavInput> cpWave_;
     QString fileName_;

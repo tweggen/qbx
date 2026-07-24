@@ -2,6 +2,7 @@
 #ifndef _TWWAVINPUT_H
 #define _TWWAVINPUT_H
 
+#include "tw/core/twcontenthash.h"
 #include "tw/graph/twcomponent.h"
 
 class tw303aEnvironment;
@@ -53,6 +54,10 @@ public:
     // The immutable, shared sample data behind this input. Consumers use this to
     // mint independent readers (twRandomSource::acquireReader).
     twRandomSource *getSource() const;
+
+    // Content digest of the decoded sample data (proposal 27 sidecar key);
+    // null when nothing is loaded.
+    twContentHash contentHash() const;
 
     virtual void reset() override;
 

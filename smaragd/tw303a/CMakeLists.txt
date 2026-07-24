@@ -36,6 +36,8 @@ tw_module(core
         core/include/tw/core/twlog.h
         core/include/tw/core/audio_frame.h
         core/include/tw/core/generation_promise.h
+        core/include/tw/core/twcontenthash.h
+        core/src/twcontenthash.cc
         core/src/generation_promise.cc
         core/src/twlog.cc
         core/src/twconvert.cc
@@ -264,6 +266,16 @@ tw_module(analysis
     DEPS tw_core
 )
 
+# --- sidecar: derived-data QAF container + LRU store (proposal 27) --------------
+tw_module(sidecar
+    SOURCES
+        sidecar/include/tw/sidecar/twqaf.h
+        sidecar/include/tw/sidecar/twsidecarstore.h
+        sidecar/include/tw/sidecar/twaspects.h
+        sidecar/src/twqaf.cc
+        sidecar/src/twsidecarstore.cc
+    DEPS tw_core)
+
 # --- Audio file format libraries (sinks only) -----------------------------------
 # On Windows these come from vcpkg (CMake config packages); on macOS/Linux the
 # system libraries ship .pc files, so pkg-config is the discovery path.
@@ -374,6 +386,7 @@ add_library(tw303a INTERFACE)
 target_link_libraries(tw303a INTERFACE
     tw_core tw_pages tw_graph tw_sources tw_dsp tw_mix tw_plugins
     tw_devices tw_sinks tw_playback tw_render tw_record tw_schedule tw_analysis
+    tw_sidecar
 )
 # Legacy include strings ("twcomponent.h", "audio/audio_backend.h", …) resolve
 # through forwarding headers; new code uses "tw/<module>/<header>.h" directly.
@@ -401,5 +414,6 @@ target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
 tw_module_test(sources_test                 sources/tests/sources_test.cc               tw_sources)
 tw_module_test(mix_test                     mix/tests/mix_test.cc                       tw_mix)
 tw_module_test(schedule_test                schedule/tests/schedule_test.cc             tw_schedule tw_pages)
+tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)
 tw_module_test(playback_test                playback/tests/playback_test.cc             tw_playback)
 tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)

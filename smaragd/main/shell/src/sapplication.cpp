@@ -2,8 +2,10 @@
 
 #include <QTimer>
 #include <QDir>
+#include <QStandardPaths>
 
 #include "tw/graph/tw303aenv.h"
+#include "tw/sidecar/twsidecarstore.h"
 #include "tw/playback/twspeaker.h"
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/dsp/twwhitenoise.h"
@@ -272,6 +274,18 @@ SApplication::SApplication( int &argc, char **argv )
     // Restore the audio output device chosen in a previous session.
     QString devId = SSettings::instance().audioDeviceId();
     if( !devId.isEmpty() ) t3Speaker_->setOutputDevice( devId.toStdString() );
+
+    // Proposal 27: app-global derived-data sidecar store (content-addressed,
+    // safe to delete wholesale). SMARAGD_SIDECAR_DIR=off disables it,
+    // =<path> relocates it; default is the per-user cache location.
+    QByteArray sidecarDir = qgetenv( "SMARAGD_SIDECAR_DIR" );
+    if( sidecarDir != "off" ) {
+        QString root = sidecarDir.isEmpty()
+            ? QStandardPaths::writableLocation( QStandardPaths::CacheLocation )
+                  + "/sidecars"
+            : QString::fromLocal8Bit( sidecarDir );
+        twSidecarStore::instance().setRoot( root.toStdString() );
+    }
 }
 
 SApplication::~SApplication()

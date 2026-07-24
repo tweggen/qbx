@@ -43,6 +43,7 @@ DEPS = {
     'record':   ['core', 'devices', 'sinks', 'sources'],
     'schedule': ['core', 'pages', 'graph'],
     'analysis': ['core'],
+    'sidecar':  ['core'],
 }
 
 APP_HEADERS = re.compile(
@@ -103,7 +104,9 @@ _ENG_BASE = {'core', 'graph'}
 APP_ENG = {
     'model':          _ENG_BASE | {'pages', 'schedule', 'sources'},
     'objects/cut':    _ENG_BASE | {'pages', 'schedule', 'sources'},
-    'objects/wave':   _ENG_BASE | {'pages', 'schedule', 'sources'},
+    # objects/wave + sidecar since proposal 27 M0: SPlainWave persists its
+    # straight preview through the derived-data sidecar store.
+    'objects/wave':   _ENG_BASE | {'pages', 'schedule', 'sources', 'sidecar'},
     'objects/track':  _ENG_BASE | {'mix', 'plugins', 'schedule'},
     'objects/mixer':  _ENG_BASE | {'mix', 'schedule'},
     'actions':        _ENG_BASE | {'render'},
@@ -115,8 +118,10 @@ APP_ENG = {
     # shell + schedule since proposal 19 stage 4: startRender wires the
     # project's CaptureRevalidator (page scheduler) into the RenderSession
     # and quiesces background aspects around a scheduler-driven render.
+    # shell + sidecar since proposal 27 M0: SApplication configures the
+    # app-global sidecar store root at startup.
     'shell':          _ENG_BASE | {'devices', 'dsp', 'playback', 'record',
-                                   'render', 'schedule'},
+                                   'render', 'schedule', 'sidecar'},
     'testkit':        _ENG_BASE | {'analysis'},
 }
 

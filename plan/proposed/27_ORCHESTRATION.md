@@ -247,7 +247,7 @@ orchestrator stops after M5 and reports.
 
 | Milestone | Status | Closed on | Commit | Notes |
 |---|---|---|---|---|
-| M0 substrate + QAF | ☐ not started | | | |
+| M0 substrate + QAF | ✅ done | 2026-07-24 | (this commit) | Module named `sidecar` not `analysis` (name collision with test-metrics module); in-tree MurmurHash3 x64-128 instead of vendored xxhash; aspect id `preview.peaks` not `preview.mips` (existing preview is single-resolution). Gates: sidecar_test green incl. golden pin; ctest 64/65 (the 1 = pre-existing documented asset_window_shifted_content flake, passed on rerun, out of scope); layering+logging clean. See STATE.md 2026-07-24 M0 entry. |
 | M1 jobs + readiness + per-time aspects | ☐ not started | | | |
 | M2 warp.pcm load fix | ☐ not started | | | |
 | M3 vocoder core + harness | ☐ not started | | | |

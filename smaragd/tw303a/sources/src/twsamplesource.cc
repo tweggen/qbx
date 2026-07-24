@@ -215,9 +215,14 @@ int twSampleSource::loadWav()
     }
 
     file.close();
+    // Content digest over the decoded PCM exactly as assembled — source rate,
+    // all channels, planar — so identical material keys identical sidecars
+    // regardless of filename/mtime/project (proposal 27).
+    contentHash_ = twHashBuffer( data_.data(), data_.size() * sizeof( sample_t ) );
     loaded_ = true;
-    TW_LOGI( "sources", "twSampleSource: loaded %lld frames (%lld bytes) resident.",
-             (long long) nFrames_, (long long) ( data_.size() * sizeof( sample_t ) )  );
+    TW_LOGI( "sources", "twSampleSource: loaded %lld frames (%lld bytes) resident, content %s.",
+             (long long) nFrames_, (long long) ( data_.size() * sizeof( sample_t ) ),
+             contentHash_.toHex().c_str() );
     return 0;
 }
 

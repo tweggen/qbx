@@ -6534,3 +6534,74 @@ silence-after-clip bands exactly 0 (length clamp holds); `grain_loop_stretch`
 8/8 deterministic at `SMARAGD_REVAL_WORKERS ∈ {1,8}`; RMS identical to the last
 digit across runs; Rubber Band stderr chatter eliminated; non-grain byte-exact
 renders unaffected. Full `qxa.*` ctest sweep run as the closing gate.
+
+---
+
+## Proposal 27 M0: sidecar substrate + QAF format + preview migration (2026-07-24)
+
+**What landed** (proposal 27 v2 milestone M0, driven by `27_ORCHESTRATION.md`).
+A derived-data sidecar substrate: new engine module `tw303a/sidecar/`
+(`tw_sidecar`, deps core only) with the QAF container (144-byte CRC-protected
+little-endian header, atomic tmp+rename writes, validate-or-absent reads —
+`twqaf.h` offset table is normative) and `twSidecarStore` (app-global,
+content-addressed `<hh>/<hash>.<aspect>.<paramshash>.qaf`, size-capped
+LRU-by-mtime eviction that SKIPS undeletable/open files and retries next pass;
+total identity match on load: aspect id + aspect version + content hash +
+params hash; aspectVersion mismatch deletes on sight). `twContentHash` +
+in-tree MurmurHash3 x64-128 in tw/core, folded into `twSampleSource::loadWav()`
+over the assembled source-rate planar PCM — one pass, no new I/O; accessor
+chain `twSampleSource::contentHash()` / `twWavInput::contentHash()`.
+`SObject::straightCalcPreviewData()` gained default-no-op
+`fetch/storePreviewSidecar()` virtuals; `SPlainWave` overrides them with the
+`preview.peaks` aspect (params = {projectRate LE}; adoption only on EXACT
+geometry match: stride/count/hop/forLength). `SApplication` sets the store
+root at startup (per-user cache dir; `SMARAGD_SIDECAR_DIR=<path>|off`).
+
+**Deviations from the proposal text** (recorded per orchestration §0.1):
+- Module is `tw303a/sidecar/`, NOT `tw303a/analysis/` — recon found
+  `tw_analysis` already exists as the qxa acoustic-metrics test instrument;
+  mixing a production substrate into the test instrument would muddy both
+  contracts. Proposal text updated.
+- Hash is in-tree MurmurHash3 x64-128 (public domain, ~100 lines), not
+  vendored xxhash — the repo has no third-party vendor dir and all deps come
+  via vcpkg; a new external dep for a cache key wasn't warranted. Verified
+  bit-exact against an independent reference implementation; golden digest
+  pinned in `sidecar_test` (an accidental algorithm change would silently
+  orphan every sidecar on disk).
+- Aspect id is `preview.peaks`, not `preview.mips` — recon showed the
+  existing preview is a single-resolution 8-bit min/max array (no mip
+  pyramid); the honest name won.
+
+**Behavior-preservation argument (the M0 gate).** Base-class hooks are
+default-no-op → every non-SPlainWave object (containers included) is
+byte-identical by construction. For SPlainWave: volume is NOT baked into
+stored preview bytes (generation reads the raw random source against fixed
+SAMPLE_NORM_* bounds; draw applies volumeDbSnapshot at paint) so the payload
+is purely content+rate-derived; a fetch only adopts a payload whose full
+geometry matches what the fill loop would produce for identical content
+(hash-keyed) — any mismatch recomputes. A sidecar hit additionally AVOIDS the
+documented `cpWave_->file_` UI/audio race window (skips the racy fallback
+reads); both hooks run UI-thread-only inside straightCalcPreviewData, the
+exact affinity previewData_ always had — splainwave.h race note undisturbed.
+
+**Verified.** `sidecar_test` green (QAF round-trip; corruption/truncation/
+version-patch rejection; store lifecycle incl. version-orphan deletion;
+eviction incl. Windows open-handle skip-and-retry-later; pathFor spelling;
+MurmurHash3 golden pin `4767e836363c3de4c6ff91a77dce60db` cross-checked
+against an independent reference). Full ctest: 64/65 green (65 tests incl.
+the new 13th module test); `check_layering.py` (with new DEPS entry
+'sidecar' and APP_ENG grants for objects/wave + shell) and
+`check_logging.py` clean. Every qxa case exercises the new decode-time hash
+(all WAV loads route through it) — no behavior change observed anywhere.
+
+**The 1/65:** `qxa.asset_window_shifted_content` — the KNOWN pre-existing
+intermittent container-teardown flake documented 2026-07-23 (day before M0),
+"wants its own investigation"; passed on immediate rerun; M0 touches no
+render/scheduler path. Deliberately NOT provoked with a repeat gate: its
+documented failure mode leaves an unkillable process until reboot. Still
+open, still tracked, still out of scope here.
+
+**M0 note for M1:** preview sidecar generation/consult currently runs
+synchronously on the UI thread at first paint (exactly where the old compute
+ran — no new stall, but no background either). M1's background-job +
+readiness protocol takes over that scheduling; the store API needs no change.

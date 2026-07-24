@@ -8,6 +8,7 @@
 #include <map>
 #include <qstring.h>
 
+#include "tw/core/twcontenthash.h"
 #include "tw/sources/twrandomsource.h"
 
 class tw303aEnvironment;
@@ -34,6 +35,11 @@ public:
 
     bool wasLoaded() const { return loaded_; }
     QString fileName() const { return fileName_; }
+
+    // Digest of the decoded source-rate PCM (all channels, planar Float32) —
+    // the derived-data cache key (proposal 27). Computed once inside the
+    // load pass; null iff the load failed.
+    twContentHash contentHash() const { return contentHash_; }
 
     // twRandomSource
     virtual length_t read( offset_t srcOffset, sample_t *dest,
@@ -73,6 +79,7 @@ private:
     int      rate_;
     int      bits_;
     length_t nFrames_;
+    twContentHash contentHash_;
     std::vector<sample_t> data_;   // planar Float32, size channels_ * nFrames_
 
     // Dictionary of resampled views, keyed by target rate.

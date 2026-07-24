@@ -277,7 +277,7 @@ target_include_directories(app_objects PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/track/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/mixer/include
 )
-target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins)
+target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins tw_sidecar)
 
 # Layer 4 — the UI and the shell (the only layer that may see everything).
 add_library(app_ui OBJECT ${APP_UI_FILES})

@@ -10,6 +10,9 @@
 #include "app/model/sproject.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
 #include "tw/graph/twcomponent.h"
+#include "tw/sidecar/twaspects.h"
+#include "tw/sidecar/twsidecarstore.h"
+#include "tw/sources/twrandomsource.h"
 #include "tw/sources/twwavinput.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/objects/wave/splainwaverndrinline.h"
@@ -56,6 +59,69 @@ int SPlainWave::getPreview( preview_t *dest,
     return getStraightPreview(dest, start, length, nProbes);
 }
 
+
+namespace {
+
+// Canonical preview.peaks params blob: { uint32 projectRate }, little-endian
+// (tw/sidecar/twaspects.h). The preview is computed over the project-rate
+// view, so its bytes are rate-dependent; the rate is therefore key material.
+void previewParams( uint32_t rate, std::vector<uint8_t> &out )
+{
+    out.resize( 4 );
+    out[0] = (uint8_t)( rate & 0xff );
+    out[1] = (uint8_t)( ( rate >> 8 ) & 0xff );
+    out[2] = (uint8_t)( ( rate >> 16 ) & 0xff );
+    out[3] = (uint8_t)( ( rate >> 24 ) & 0xff );
+}
+
+} // namespace
+
+bool SPlainWave::fetchPreviewSidecar( preview_t *dest, offset_t nProbes,
+                                      offset_t skip, offset_t forLength )
+{
+    if( !cpWave_ ) return false;
+    twContentHash content = cpWave_->contentHash();
+    twRandomSource *src = cpWave_->getSource();
+    if( content.isNull() || !src ) return false;
+    std::vector<uint8_t> params;
+    previewParams( (uint32_t) src->sampleRate(), params );
+    auto reader = twSidecarStore::instance().load(
+        content, twAspect::PreviewPeaks, twAspect::PreviewPeaksVersion,
+        twSidecarStore::hashParams( params.data(), params.size() ) );
+    if( !reader ) return false;
+    // Adoption cross-check: only exact geometry is a hit — anything else
+    // (duration drift, changed probe layout) recomputes and re-stores.
+    const twQafInfo &qi = reader->info();
+    if( qi.recordStride  != sizeof( preview_t )
+        || qi.recordCount  != (uint64_t) nProbes
+        || qi.hopFrames    != (uint64_t) skip
+        || qi.sourceFrames != (uint64_t) forLength ) return false;
+    return reader->readRecords( dest, 0, (uint64_t) nProbes );
+}
+
+void SPlainWave::storePreviewSidecar( const preview_t *data, offset_t nProbes,
+                                      offset_t skip, offset_t forLength )
+{
+    if( !cpWave_ ) return;
+    twContentHash content = cpWave_->contentHash();
+    twRandomSource *src = cpWave_->getSource();
+    if( content.isNull() || !src ) return;
+    twQafInfo qi;
+    qi.aspectId      = twAspect::PreviewPeaks;
+    qi.aspectVersion = twAspect::PreviewPeaksVersion;
+    qi.contentHash   = content;
+    // For this aspect all geometry is expressed at the PROJECT rate (the rate
+    // the preview was computed at) — see twaspects.h.
+    qi.sourceRate    = (uint32_t) src->sampleRate();
+    qi.channels      = 1;   // straight preview folds channel 0 only
+    qi.sourceFrames  = (uint64_t) forLength;
+    qi.recordStride  = sizeof( preview_t );
+    qi.recordCount   = (uint64_t) nProbes;
+    qi.hopFrames     = (uint64_t) skip;
+    previewParams( qi.sourceRate, qi.params );
+    twSidecarStore::instance().store( qi, data,
+                                      (uint64_t) nProbes * sizeof( preview_t ) );
+}
 
 QString SPlainWave::getFileName() const
 {

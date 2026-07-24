@@ -585,6 +585,18 @@ protected:
     // Updated by revalidator when pages are swapped and marked complete.
     uint32_t validAspects_ = 0;
 
+    // Proposal 27 (M0): straight-preview sidecar hooks. An object backed by
+    // content-hashable material (SPlainWave) overrides these to persist and
+    // restore the straight preview across sessions. The geometry is passed
+    // explicitly so this base class stays free of any sidecar dependency.
+    // Both run on the UI thread, inside straightCalcPreviewData(), i.e. with
+    // exactly the thread affinity previewData_ already has. Defaults: no
+    // sidecar (fetch misses, store no-ops) — behavior identical to before.
+    virtual bool fetchPreviewSidecar( preview_t *dest, offset_t nProbes,
+                                      offset_t skip, offset_t forLength );
+    virtual void storePreviewSidecar( const preview_t *data, offset_t nProbes,
+                                      offset_t skip, offset_t forLength );
+
 private:
 
     void gotChild( SLink & );

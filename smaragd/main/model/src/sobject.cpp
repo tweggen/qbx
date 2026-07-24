@@ -238,6 +238,12 @@ int SObject::straightCalcPreviewData()
               "nPreviewProbes_ = %d, previewSkip_ = %d.\n",
               (int)sizeof( preview_t ), (int)nPreviewProbes_,
               (int)nPreviewProbes_, (int)previewSkip_ );
+    // Proposal 27: a persisted sidecar with matching geometry satisfies the
+    // fill outright — same bytes this loop would compute, minus the reads.
+    if( fetchPreviewSidecar( previewData_, nPreviewProbes_,
+                             previewSkip_, previewForLength_ ) ) {
+        return 0;
+    }
     sample_t *buffer = (sample_t *) alloca( previewSkip_ * sizeof( sample_t ) );
     // If this object exposes random-access sample data, read it statelessly:
     // that touches no play cursor and needs no lock, so preview rendering on the
@@ -275,7 +281,19 @@ int SObject::straightCalcPreviewData()
             previewData_[i/previewSkip_].max = (char) max;
         }
     }
+    storePreviewSidecar( previewData_, nPreviewProbes_,
+                         previewSkip_, previewForLength_ );
     return 0;
+}
+
+bool SObject::fetchPreviewSidecar( preview_t *, offset_t, offset_t, offset_t )
+{
+    // Default: no sidecar backing — compute as always.
+    return false;
+}
+
+void SObject::storePreviewSidecar( const preview_t *, offset_t, offset_t, offset_t )
+{
 }
 
 int SObject::getStraightPreview( preview_t *dest,
