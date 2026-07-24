@@ -518,8 +518,21 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     // two threads can never race this component's instance cursor. Held across
     // the recursive upstream freeze; the DAG guarantees ancestor-before-
     // descendant order, so it cannot deadlock (see cursorMutex_ declaration).
+    //
+    // A component with streaming INPUTS is single-cursor too, whatever its own
+    // state: the input-side read position (twLatchOutput::offset) is one shared
+    // field per plug, written by seekInputStreams() and advanced by
+    // readStreamingData(). Two unserialized freezes of the same consumer at
+    // different pages could interleave seek/read on that cursor, freezing a
+    // page whose input was read at the OTHER freeze's position — a coherent
+    // page displaced by a whole page multiple, cached as current-epoch and then
+    // replayed identically by playback and render (test4_2.qxp: a track's loop
+    // restarting mid-bar, its content exactly one page early). Reached via
+    // overlapping scheduler demands (readahead chain restart across a playhead
+    // jump; an edit invalidating pages behind an in-flight demand). The mix
+    // regression test freezes two pages of one rewire concurrently to pin this.
     std::unique_lock<std::mutex> cursorLock;
-    if (usesSerialCursor()) {
+    if (usesSerialCursor() || getNInputs() > 0) {
         cursorLock = std::unique_lock<std::mutex>(cursorMutex_);
     }
 

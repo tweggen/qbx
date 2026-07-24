@@ -9,8 +9,10 @@
 #include "tw/graph/tw_frozen_inputs.h"
 #include "tw/pages/io_vector.h"
 
+#include <atomic>
 #include <cstdio>
 #include <memory>
+#include <thread>
 
 static int failures = 0;
 #define CHECK(cond, msg)                                                    \
@@ -46,6 +48,15 @@ public:
     idx_t getNOutputs() const override { return 1; }
     const char *getInputName(idx_t) const override { return nullptr; }
     const char *getOutputName(idx_t) const override { return "ramp"; }
+};
+
+// Like twSampleReader, a ramp whose single pos cursor makes its freezes
+// serialize. The concurrency regression below needs every component EXCEPT
+// the latch consumer under test to be race-free by construction.
+class SerialRampComponent : public RampComponent {
+public:
+    using RampComponent::RampComponent;
+    bool usesSerialCursor() const override { return true; }
 };
 
 int main()
@@ -395,6 +406,74 @@ int main()
         for (size_t i = 0; i < (size_t)FULL; ++i)
             if (planPage0->samples[i] != baseT->samples[i]) { sameT = false; break; }
         CHECK(sameT, "plan-driven render is byte-identical to the pull baseline");
+    }
+
+    // ------------------------------------------------------------------
+    // Regression (2026-07, test4_2.qxp "track three restarts its loop
+    // mid-bar"): freezePage() of a latch-consuming component (root twMixer,
+    // twRewire, …) was not serialized — usesSerialCursor() is false for
+    // "pure" nodes — yet the input-side read position (twLatchOutput::offset)
+    // is ONE shared field per plug, written by seekInputStreams() and
+    // advanced by readStreamingData(). Two concurrent freezes of the SAME
+    // consumer at DIFFERENT pages could interleave seek/read on that cursor,
+    // so a page froze with its input stream read at the OTHER freeze's
+    // position: a coherent page whose content is displaced by a whole page
+    // multiple, then cached as current-epoch and replayed deterministically
+    // by both playback and render. Trigger in the wild: overlapping
+    // scheduler demands (readahead chain restart across a playhead jump, or
+    // an edit invalidating pages behind an in-flight demand).
+    //
+    // The producers here are race-free by construction (trackmix serializes
+    // under its own mutex, the ramp is a serial-cursor component), so any
+    // displaced content must come from the rewire's shared input cursor.
+    {
+        auto trackC = std::make_shared<twTrackMix>(env);
+        trackC->init();
+        auto compC2 = std::make_shared<SerialRampComponent>(env);
+        compC2->init();
+        const int keyC2 = 0;
+        const uint64_t CAP = twOutputPage::FRAME_CAPACITY;
+        // One clip at 0 spanning four pages, identity mapping: the track
+        // page at P carries val(P + i), so a displaced page is detectable.
+        trackC->insertClip(&keyC2, 0, (length_t)(4 * CAP),
+                           [compC2]() -> std::shared_ptr<twComponent> { return compC2; });
+
+        auto rewC = std::make_shared<twRewire>(env);
+        rewC->init();
+        rewC->setNPlugs(1);
+        rewC->setInput(0, trackC->linkOutput(0));
+
+        const length_t FULL = (length_t)CAP;
+        int displaced = 0;
+        for (int round = 0; round < 200 && !displaced; ++round) {
+            rewC->bumpContentEpoch();   // stale both pages: both freezes render
+            std::atomic<bool> go{false};
+            std::atomic<int> bad{0};
+            auto freezeAt = [&](offset_t pos) {
+                while (!go.load(std::memory_order_acquire)) { }
+                auto p = rewC->freezePage(pos, nullptr, 0, FULL,
+                                          env.getSRate(), nullptr);
+                if (!p || p->validAspects == 0 || p->validFrames != FULL) {
+                    ++bad;
+                    return;
+                }
+                const size_t probes[] = { 0, 1234, (size_t)FULL - 1 };
+                for (size_t k : probes) {
+                    if (p->samples[k] != val((long long)pos + (long long)k)) {
+                        ++bad;
+                        break;
+                    }
+                }
+            };
+            std::thread t1(freezeAt, (offset_t)0);
+            std::thread t2(freezeAt, (offset_t)CAP);
+            go.store(true, std::memory_order_release);
+            t1.join();
+            t2.join();
+            displaced = bad.load();
+        }
+        CHECK(displaced == 0,
+              "concurrent freezes of one latch consumer never displace content");
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall mix tests passed\n",

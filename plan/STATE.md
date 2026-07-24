@@ -6411,3 +6411,64 @@ still passes; check_layering / check_logging clean.
   that leaves the process unkillable (survives taskkill /F, holds the exe until
   reboot). Passed 3/3 on retry. Consistent with this codebase's
   join-on-teardown history; wants its own investigation.
+
+---
+
+## Concurrent-freeze input-cursor race: a track's loop restarts mid-bar (2026-07-24)
+
+**Bug (user report, `test4_2.qxp`).** Track 3 — a one-bar loop
+(`loopLength=125216`, stretch `125216/103939`) starting at bar 4 — played AND
+rendered wrong in a live session: the loop restarted "from quite precisely the
+2+", repeatedly. A fresh headless render of the same project was byte-perfect,
+so the session's PAGE CACHE was poisoned, not the deterministic path.
+
+**Forensics.** Cross-correlating the user's captured WAV against a clean
+render decomposed it exactly: the tail is BIT-IDENTICAL to the clean render of
+the marked range, while a 2-bar stretch carries only track 3 displaced by
++59680 frames ≡ **−65536 (one page) modulo the 125216 loop** — every other
+track correct in the same frames. Content one page early at a bar start lands
+1.9 beats into the loop, which a musician hears as "restarts at the 2+".
+
+**Root cause.** `twComponent::freezePage()` serialized only
+`usesSerialCursor()` components (readers, wav inputs). "Pure" latch consumers
+— the root `twMixer`, `twRewire`, `twPipe`, `twMoog`, `twResampler` — stayed
+parallel, yet their input-side read position (`twLatchOutput::offset`) is ONE
+shared field per plug, written by `seekInputStreams()` and advanced by
+`readStreamingData()`. Two freezes of the SAME consumer at DIFFERENT pages
+could interleave (`A.seek(P1)`, `B.seek(P2)`, `A.read` → reads at P2): the
+page freezes with its input stream read at the other freeze's position — a
+coherent page displaced by a whole page multiple. `copyData` itself is
+position-consistent, so the displaced page looks valid, gets stamped with the
+current epoch, and is then replayed identically by playback AND render until
+some edit happens to invalidate it. The mixer reads its input plugs
+sequentially, so a mid-freeze clobber displaces only the plugs read after it —
+one track wrong, the rest of the page correct, exactly as captured.
+
+Trigger in the wild: overlapping scheduler demands — the readahead restarts
+its chain across a playhead jump (seek / cycle wrap) while a previous demand
+is still in flight, or an edit (e.g. the new mute invalidation, 2026-07-23)
+stales pages behind an in-flight demand mid-playback. Cross-demand nodes for
+the same component have no predecessor edges, so both render concurrently.
+
+**Fix.** `freezePage()` now takes `cursorMutex_` for any component with
+streaming inputs (`usesSerialCursor() || getNInputs() > 0`). Same DAG
+ancestor-before-descendant argument as the existing serial-cursor lock, so no
+new deadlock class; cross-track / cross-component parallelism is untouched,
+and same-component pages were already meant to be position-ordered (the
+predecessor edge) — this closes the cross-demand hole that ordering cannot
+see.
+
+**Regression test.** `mix_test.cc`: a rewire over a serialized trackmix/ramp
+chain; 200 rounds of two threads freezing pages 0 and 1 concurrently, every
+page's content checked against its own position. Reliably FAILS pre-fix
+(first round), passes post-fix (5/5 runs).
+
+**Verified.** `ctest` suite 62/63 with the fix; the one failure
+(`qxa.grain_loop_stretch` under `-j 4`) prints PASS with every assertion OK
+and then exits nonzero — a sporadic post-PASS teardown crash under parallel
+load, reproduced at the SAME frequency (~1 in 5 batches) with the fix stashed,
+so it is pre-existing shutdown debt (same family as the
+`asset_window_shifted_content` teardown hang noted 2026-07-23), not this
+change. Standalone the case passes 3/3. `test4_2.qxp` full-project render
+byte-identical before/after the fix (`cmp`); check_layering / check_logging
+clean.
