@@ -221,6 +221,12 @@ authoritative if they ever diverge.
 ### M6 — deliberately out of scope
 Warp markers, f0, formants each get their own proposal when reached. The
 orchestrator stops after M5 and reports.
+**Reached 2026-07-25: planned as `28_WARP_MARKERS.md`** (milestones W0–W5 —
+marker-grade onsets v3, user warp maps on the M5 time-map engine, marker UI,
+f0 aspect, opt-in formants, conditional SIMD/PGHI reserve). Execution reuses
+this plan's discipline; open questions (marker domain: frames vs beats;
+proposal-25 ordering; window-edge semantics) are flagged for the requester
+before W1.
 
 ## 4. Failure & flake protocol
 
