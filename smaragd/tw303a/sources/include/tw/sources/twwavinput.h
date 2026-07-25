@@ -2,6 +2,8 @@
 #ifndef _TWWAVINPUT_H
 #define _TWWAVINPUT_H
 
+#include <memory>
+
 #include "tw/core/twcontenthash.h"
 #include "tw/graph/twcomponent.h"
 
@@ -63,7 +65,7 @@ public:
     // must read native-rate PCM so results are stable across project rates).
     // Owned by this input; callers needing lifetime beyond it hold the
     // twWavInput shared_ptr itself. Null when nothing is loaded.
-    twSampleSource *sampleSource() const { return loaded_ ? source_ : nullptr; }
+    twSampleSource *sampleSource() const { return loaded_ ? source_.get() : nullptr; }
 
     virtual void reset() override;
 
@@ -80,7 +82,9 @@ private:
     // Helper: do reset work outside lock (caller must hold mutex)
     void reset_nolock();
 
-    twSampleSource *source_;
+    // shared_ptr since proposal 27 M5: the streaming grain path
+    // co-owns the sample data via twRandomSource::sharedRef().
+    std::shared_ptr<twSampleSource> source_;
     bool            loaded_;
     offset_t        playOffset_;
     QString         fileName_;

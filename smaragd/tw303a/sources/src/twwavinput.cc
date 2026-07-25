@@ -131,7 +131,7 @@ void twWavInput::setBufferSize( length_t )
 
 twWavInput::twWavInput( tw303aEnvironment &env, QString fileName )
     : twComponent( env ),
-      source_( NULL ),
+      source_(),
       loaded_( false ),
       playOffset_( 0 ),
       fileName_( fileName )
@@ -139,12 +139,11 @@ twWavInput::twWavInput( tw303aEnvironment &env, QString fileName )
     if( fileName.isEmpty() ) {
         return;
     }
-    source_ = new twSampleSource( env, fileName_ );
+    source_ = std::make_shared<twSampleSource>( env, fileName_ );
     if( !source_->wasLoaded() ) {
         qWarning( "twWavInput: failed to load \"%s\".\n",
                   (const char *) fileName_.toUtf8().constData() );
-        delete source_;
-        source_ = NULL;
+        source_.reset();
         return;
     }
     loaded_ = true;
@@ -157,8 +156,7 @@ twWavInput::twWavInput( tw303aEnvironment &env, QString fileName )
 twWavInput::~twWavInput()
 {
     if( source_ ) {
-        delete source_;
-        source_ = NULL;
+        source_.reset();
     }
 }
 

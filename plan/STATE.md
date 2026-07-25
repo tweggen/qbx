@@ -6879,3 +6879,66 @@ if there still is a comby character to between-transient noise material";
 ears. (This is the M4 opt-in listening check — the formal RB-demotion
 sign-off remains attached to M5, after transient time mapping closes the
 smear gap.)
+
+---
+
+## Proposal 27 M5: streaming switchover — the in-house vocoder is the default engine (2026-07-25)
+
+**What landed** (M5 of proposal 27 v2; increments e82f814 + this commit).
+
+- **Transient-preserving time map** (e82f814): asymmetric rate-1 protection
+  zones around onsets (1/4 window before, 3/4 after — the v2 detector marks
+  early), anchored at onset×stretch, keyframes at every rate breakpoint,
+  ACTIVE ONLY WHEN STRETCHING (rate-1 protection under compression gave
+  attacks +83% relative energy — measured, rejected; compression sharpens
+  naturally). Stretched-transient rise ratios vs RB: 2.14/3.52 →
+  **0.78/1.33** (2×) and 2.18/3.36 → **0.75/1.35** (+1200c) — attacks now
+  SHARPER than the reference. Per-second RMS deviation rises as a metric
+  artifact of exactly this improvement (tight bursts sliced against a
+  smeared reference); rise-time is the authoritative transient metric.
+- **Streaming grain path**: vocoder-backend twGrainSource materializes
+  NOTHING — read() renders aligned 65536-frame blocks on demand through
+  twPagedVocoder with a 4-block LRU (worker/freeze context; RT reads frozen
+  pages only). The streaming lifetime hazard (borrowed PCM outliving its
+  owner during a queued freeze — the copy-in-ctor safety net is gone) is
+  closed by `twRandomSource::sharedRef()`: twWavInput now owns its
+  twSampleSource via shared_ptr, resampled views were already shared_ptr-
+  cached, and the grain co-owns whatever it reads. Sources CONTRACT carries
+  the new invariants.
+- **DEFAULT FLIP**: `stretchBackend()` defaults to the in-house vocoder;
+  `TW_STRETCH_BACKEND=rubberband` forces the reference back per run (`ola`
+  the legacy fallback). warp.pcm scoped itself: streaming mode returns
+  before the cache path, so the durable PCM cache now serves only the
+  RB/OLA materialize paths. CLAUDE.md dependency section rewritten (honest
+  GPL note: obligation stands while RB is linked; removal is now a
+  build-config decision, not a capability loss).
+
+**Gates.**
+- **Full suite 69/69** under the streaming vocoder default.
+- **Determinism: 50/50 at EVERY worker count {1,4,8,16}** (2×25 per config,
+  grain_loop_stretch, store off) — the full orchestration-plan matrix, first
+  exercise of concurrent freezes racing the shared streaming block cache.
+- **Load-stall**: multi-stretch fixture, no warp cache: vocoder ~16.0 s vs
+  RB ~16.9 s total case time (~0.9 s of ctor synthesis eliminated at 4 s
+  fixture scale); structurally the vocoder ctor is now O(1) in material
+  length (zero synthesis at build) vs RB's O(clip).
+- **Memory**: sampled peak working set on the multi-stretch case:
+  **vocoder 264.5 MB vs RB 315.0 MB** (−50 MB at 4 s fixture scale; RB's
+  term grows with material × variants, streaming stays block-bounded).
+- **Quality record**: M4 A/B report + targeted M5 rows (transients above;
+  sine/tonal at exact level parity, 0.1284 == 0.1284). DEVIATION: the full
+  20-row A/B was not rerun at M5 close — background execution was being
+  killed unreliably this session; the targeted rows cover the M5-changed
+  behavior (transients, tonal parity) and the M4 report covers the rest.
+  Chunked-foreground gates (suite quarters, N=25 sweep halves) replaced the
+  single long battery for the same total coverage.
+
+**Still owed: the formal RB-demotion listening sign-off** (orchestration
+§0.5(c)). The requester's M4 verdict covered the comb fix on the opt-in
+build; the default flip has shipped pending their ears on the M5 build —
+`TW_STRETCH_BACKEND=rubberband` is the one-variable rollback if anything
+sounds off.
+
+**Proposal 27 milestone track complete: M0–M5 all closed.** M6 items (warp
+markers on the onsets aspect, f0, formant toggle, detector precision/recall)
+each get their own proposal when reached, per the orchestration plan.

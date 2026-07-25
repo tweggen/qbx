@@ -19,7 +19,8 @@
  * the pitch/speed error of playing an off-rate sample, not to be mastering-grade.
  */
 class twResampledSource
-    : public twRandomSource
+    : public twRandomSource,
+      public std::enable_shared_from_this<twResampledSource>
 {
 public:
     twResampledSource( const twRandomSource &src, int targetRate );
@@ -35,6 +36,20 @@ public:
     // Forward the underlying material's digest (captured at construction —
     // the resample is a derived view, not new content; proposal 27).
     virtual twContentHash contentHash() const { return contentHash_; }
+
+    // Resident-planar view + co-ownership handle for the M5 streaming grain
+    // (this class is always shared_ptr-owned via the viewAtRate cache).
+    virtual const sample_t *channelData( idx_t channel ) const override {
+        if( channel < 0 || channel >= channels_ || nFrames_ <= 0 ) return nullptr;
+        return data_.data() + (size_t) channel * nFrames_;
+    }
+    virtual std::shared_ptr<const twRandomSource> sharedRef() const override {
+        try {
+            return shared_from_this();
+        } catch( const std::bad_weak_ptr & ) {
+            return nullptr;
+        }
+    }
 
 private:
     int      targetRate_;

@@ -42,7 +42,13 @@ on-sight deletion), mtime touch on hit, and that `evictIfNeeded` drops
 oldest-mtime `*.qaf` files past the cap while skipping locked ones.
 
 Known debt:
-- The aspect registry (twaspects.h) is constants-only until M1; there is no
-  generator registration yet (that arrives with the background-job work).
+- The aspect registry (twaspects.h) now carries the shipped aspects:
+  preview.peaks v1, onsets v2 (NORMALIZED spectral flux — v1's absolute flux
+  fired spurious onsets on steady loud material; v1 files orphan on sight),
+  loudness v1, and warp.pcm v2 (params blob gained an onsetsHash so warps
+  built before/after the onsets sidecar occupy different keys). The `stft.if`
+  spectral aspect proposed for the vocoder was DROPPED by design: the paged
+  vocoder's analysis is incremental (a lazy windowed FFT over resident PCM
+  beats reading persisted spectra), so it needs no analysis sidecar.
 - The variable-stride seek-table path is unimplemented: writers always emit
   seekTableOffset = 0 and no aspect uses a variable stride yet.

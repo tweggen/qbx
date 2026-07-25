@@ -27,7 +27,8 @@ class twResampledSource;
  * supported); other bit depths fail to load.
  */
 class twSampleSource
-    : public twRandomSource
+    : public twRandomSource,
+      public std::enable_shared_from_this<twSampleSource>
 {
 public:
     twSampleSource( tw303aEnvironment &env, const QString &fileName );
@@ -45,9 +46,18 @@ public:
     // (proposal 27 M1: analysis jobs read in place instead of copying the
     // whole buffer). Immutable after load; lock-free from any thread. Null
     // if not loaded or channel out of range.
-    const sample_t *channelData( idx_t channel ) const {
+    virtual const sample_t *channelData( idx_t channel ) const override {
         if( !loaded_ || channel < 0 || channel >= channels_ ) return nullptr;
         return data_.data() + (size_t) channel * nFrames_;
+    }
+
+    // Valid only when this instance is shared_ptr-owned (twWavInput does).
+    virtual std::shared_ptr<const twRandomSource> sharedRef() const override {
+        try {
+            return shared_from_this();
+        } catch( const std::bad_weak_ptr & ) {
+            return nullptr;   // raw-owned instance: streaming consumers must copy
+        }
     }
 
     // twRandomSource

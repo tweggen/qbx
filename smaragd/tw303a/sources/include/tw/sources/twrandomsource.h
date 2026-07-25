@@ -60,6 +60,24 @@ public:
     virtual twContentHash contentHash() const { return twContentHash(); }
 
     /**
+     * Direct read-only view of one channel's resident planar samples, or
+     * null when the source is not resident-planar (proposal 27 M5: the
+     * streaming grain path reads in place instead of copying whole clips).
+     * Immutable after construction; lock-free from any thread.
+     */
+    virtual const sample_t *channelData( idx_t /*channel*/ ) const { return nullptr; }
+
+    /**
+     * A shared reference that keeps this source's DATA alive, or null when
+     * the source is not shared_ptr-managed. A consumer that BORROWS
+     * channelData() pointers beyond its constructor (the M5 streaming grain)
+     * MUST hold this handle — the source's owning object (a clip's content)
+     * can be deleted while a queued freeze still renders through the reader
+     * chain, and the copy-in-ctor safety net is gone in streaming mode.
+     */
+    virtual std::shared_ptr<const twRandomSource> sharedRef() const { return nullptr; }
+
+    /**
      * Mint an independent cursor over this data at the specified initial offset.
      * The cursor starts at `initialOffset` into the source material (default: 0).
      *

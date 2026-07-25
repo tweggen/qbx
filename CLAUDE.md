@@ -57,6 +57,12 @@ the action-verb reference is `docs/ACTIONS.md`.
 ### Testing knobs & determinism gates
 - `SMARAGD_REVAL_WORKERS=<n>` overrides the revalidation/scheduler worker count
   (clamped [1,64]); `0` disables the revalidator entirely (legacy pull paths).
+- `TW_STRETCH_BACKEND=vocoder|rubberband|ola` picks the time-stretch backend for
+  the run (default `vocoder`; `rubberband` only if Rubber Band was linked). Read
+  once per process, so the choice is deterministic within a run.
+- `SMARAGD_SIDECAR_DIR=<path>` relocates the derived-data (QAF) sidecar cache;
+  `SMARAGD_SIDECAR_DIR=off` disables it — the store then misses/no-ops and the
+  engine result is unchanged, only slower (sidecars alter latency, never output).
 - `smaragd/tests/repeat_test.sh <bin> <case.qxa> [N] [workers]` — the flake gate
   (e.g. `takes_group_broadcast` N=50..100, swept over workers {1,4,8,16}).
 - Render exactness is gated by **byte-level `cmp` of the rendered WAVs** across
@@ -279,15 +285,31 @@ Files written as WAV (PCM, lossless) in project directory:
 - **libsndfile** — WAV export (all platforms)
 - **libvorbis / libvorbisenc** — OGG Vorbis export (all platforms)
 
-### Time-stretch / pitch-shift (Required — proposal 26)
-- **Rubber Band Library** (v4.0, **GPL v2+**) — the `twGrainSource` backend for
-  clip time-stretch and pitch-shift (R3 engine, offline mode). **Linking it makes
-  the whole app GPL** — this is a deliberate, accepted licensing decision.
-  Windows: vcpkg `rubberband:x64-mingw-dynamic` via the repo overlay port
-  (`smaragd/vcpkg-overlays/rubberband`, builtin FFT — upstream's sleef FFT fails
-  under MinGW); auto-installed by `build.sh`/`rebuild.sh`. macOS: `brew install
-  rubberband` (Accelerate/vDSP). Linux: `apt install librubberband-dev`. If
-  absent, `twGrainSource` degrades to the legacy overlap-add (build warns).
+### Time-stretch / pitch-shift (proposal 27 M5 — in-house default)
+- **`twPagedVocoder`** (`tw/sources/twpagedvocoder.h`) — the DEFAULT
+  `twGrainSource` backend since proposal 27 M5. An in-house phase vocoder:
+  identity phase-locking with prominence gating (the noisy-material comb/metallic
+  fix), keyframed phase re-anchoring on a fixed grid ∪ source onsets (transient
+  preservation), a transient-preserving time map, and streaming block renders —
+  memory is O(pages), not O(clip × variants), and nothing is materialized at
+  load. No third-party dependency: analysis is incremental (a lazy windowed FFT
+  over resident PCM), so it needs no spectral sidecar. This is the path all
+  file-backed clips take unless overridden.
+- **Rubber Band Library** (v4.0, **GPL v2+**) — now the OPTIONAL reference /
+  escape-hatch backend, selected per run with `TW_STRETCH_BACKEND=rubberband`
+  (R3 engine, offline mode). The build still discovers it exactly as before and
+  degrades gracefully if absent; Windows: vcpkg `rubberband:x64-mingw-dynamic`
+  via the repo overlay port (`smaragd/vcpkg-overlays/rubberband`, builtin FFT —
+  upstream's sleef FFT fails under MinGW), auto-installed by
+  `build.sh`/`rebuild.sh`; macOS: `brew install rubberband` (Accelerate/vDSP);
+  Linux: `apt install librubberband-dev`. If Rubber Band is unavailable the
+  legacy overlap-add stands in (`TW_STRETCH_BACKEND=ola`).
+- **Licensing, honestly:** while Rubber Band is still linked into shipped
+  binaries the **GPL v2+ obligation stands** — the app remains GPL today.
+  What M5 changed is that Rubber Band is no longer load-bearing: dropping it is
+  now a build-config decision, not a loss of the time-stretch capability, so the
+  relicensing freedom is there to exercise whenever the reference backend is
+  cut.
 
 ### Platform-Specific Audio Backends
 - **Windows:** WASAPI (SDK: ole32, mmdevapi, avrt, …); MinGW 13.1

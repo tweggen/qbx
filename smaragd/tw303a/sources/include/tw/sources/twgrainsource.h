@@ -2,6 +2,7 @@
 #ifndef _TWGRAINSOURCE_H_
 #define _TWGRAINSOURCE_H_
 
+#include <memory>
 #include <vector>
 
 #include "tw/sources/twrandomsource.h"
@@ -40,7 +41,14 @@ private:
     idx_t    channels_;
     length_t nFrames_;
     bool     reproducible_;
-    std::vector<sample_t> data_;   // planar Float32, size channels_ * nFrames_
+    std::vector<sample_t> data_;   // planar Float32 (materialized modes only)
+
+    // Proposal 27 M5 streaming mode: non-null = NO resident warp; read()
+    // renders aligned output blocks on demand through the paged vocoder and
+    // keeps a small LRU of them (memory O(blocks), not O(clip)). Definition
+    // and threading contract in twgrainsource.cc.
+    struct StreamState;
+    std::unique_ptr<StreamState> stream_;
 };
 
 #endif

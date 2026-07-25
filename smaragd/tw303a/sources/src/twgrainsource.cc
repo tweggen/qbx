@@ -2,7 +2,10 @@
 #include <math.h>
 #include <string.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <vector>
 
 #include <cstdlib>
@@ -37,23 +40,23 @@
 
 namespace {
 
-// Proposal 27 M3 — runtime synthesis-backend selection. Default is Rubber
-// Band when built in (the shipping path, byte-exact vs pre-M3); the in-house
-// vocoder is opt-in via TW_STRETCH_BACKEND=vocoder while it matures toward
-// the M5 switchover. Read once per process (deterministic within a run).
+// Proposal 27 M5 — runtime synthesis-backend selection. THE IN-HOUSE VOCODER
+// IS THE DEFAULT since the M5 switchover (streaming, O(blocks) memory,
+// transient-preserving; quality gates + requester listening sign-off in
+// STATE.md). Rubber Band remains compiled in as the reference/escape hatch:
+// TW_STRETCH_BACKEND=rubberband forces it back per run. Read once per
+// process (deterministic within a run).
 enum { kBackendRubberBand = 1, kBackendOla = 2, kBackendVocoder = 3 };
 
 int stretchBackend()
 {
     static const int backend = []() {
         const char *e = ::getenv( "TW_STRETCH_BACKEND" );
-        if( e && ::strcmp( e, "vocoder" ) == 0 ) return (int) kBackendVocoder;
 #if TW_HAVE_RUBBERBAND
         if( e && ::strcmp( e, "rubberband" ) == 0 ) return (int) kBackendRubberBand;
-        return (int) kBackendRubberBand;
-#else
-        return (int) kBackendOla;
 #endif
+        if( e && ::strcmp( e, "ola" ) == 0 ) return (int) kBackendOla;
+        return (int) kBackendVocoder;   // M5 default
     }();
     return backend;
 }
@@ -95,6 +98,30 @@ void warpParamsBlob( int rate, idx_t channels, const Fraction &stretchFrac,
 
 } // namespace
 
+// M5 streaming state — see the threading note at readInto's definition.
+struct twGrainSource::StreamState {
+    std::shared_ptr<const twRandomSource> srcRef;   // co-owns the source PCM
+    std::vector<const float *>            chans;    // borrowed planar views
+    std::unique_ptr<twPagedVocoder>       voc;
+
+    static constexpr uint64_t kBlock     = 65536;   // output frames per block
+    static constexpr size_t   kMaxBlocks = 4;
+
+    struct Block {
+        uint64_t           start = (uint64_t) -1;
+        std::vector<float> data;                    // planar channels × len
+        uint64_t           lru = 0;
+    };
+
+    std::mutex         m;
+    std::vector<Block> blocks;
+    uint64_t           lruTick  = 0;
+    uint32_t           channels = 0;
+    uint64_t           outLen   = 0;
+
+    void readInto( sample_t *dest, uint64_t start, uint64_t n, uint32_t ch );
+};
+
 twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p )
     : rate_( src.sampleRate() ),
       channels_( src.channels() ),
@@ -118,8 +145,6 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         nFrames_ = 0;
         return;
     }
-
-    data_.assign( (size_t) channels_ * nFrames_, 0.0f );
 
     // --- Proposal 27 M2: durable warp cache -------------------------------
     // If the source is content-addressable and the store holds this exact
@@ -155,6 +180,46 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
             }
         }
     }
+
+    // --- Proposal 27 M5: STREAMING mode ------------------------------------
+    // Vocoder backend over a resident-planar, shared_ptr-owned source: no
+    // materialized warp at all. The vocoder renders aligned output blocks on
+    // demand inside read() (worker/freeze context — the RT thread reads
+    // frozen pages, never this object), and a small LRU keeps recent blocks.
+    // Memory is O(blocks), not O(clip × variants) — the Reaper-scale
+    // property proposal 27 exists for. The shared handle co-owns the PCM, so
+    // clip-content teardown during a queued freeze cannot dangle us (the
+    // materialize paths were safe by copying; streaming must own instead).
+    if( stretchBackend() == kBackendVocoder ) {
+        std::shared_ptr<const twRandomSource> ref = src.sharedRef();
+        bool planar = ( ref != nullptr );
+        for( idx_t c = 0; planar && c < channels_; ++c )
+            planar = ( src.channelData( c ) != nullptr );
+        if( planar ) {
+            stream_.reset( new StreamState() );
+            stream_->srcRef   = ref;
+            stream_->channels = (uint32_t) channels_;
+            stream_->outLen   = (uint64_t) nFrames_;
+            stream_->chans.resize( (size_t) channels_ );
+            for( idx_t c = 0; c < channels_; ++c )
+                stream_->chans[(size_t) c] = src.channelData( c );
+            twPagedVocoder::Config vc;
+            vc.fftSize     = 2048;
+            vc.analysisHop = 512;
+            vc.rate        = rate_;
+            vc.channels    = (uint32_t) channels_;
+            stream_->voc.reset( new twPagedVocoder(
+                stream_->chans.data(), (uint64_t) inLen, vc, stretch, r,
+                onsetPos.empty() ? nullptr : onsetPos.data(),
+                onsetPos.size() ) );
+            TW_LOGD( "sources",
+                     "twGrainSource: streaming warp (%lld out frames, no residency)",
+                     (long long) nFrames_ );
+            return;   // no data_, no warp.pcm — pages render on demand
+        }
+    }
+
+    data_.assign( (size_t) channels_ * nFrames_, 0.0f );
 
     std::vector<uint8_t> warpParams;
     uint64_t warpParamsHash = 0;
@@ -407,11 +472,61 @@ length_t twGrainSource::read( offset_t srcOffset, sample_t *dest,
     if( n < 0 ) n = 0;
 
     if( n > 0 ) {
-        const sample_t *src = data_.data() + (size_t) ch * nFrames_ + srcOffset;
-        memcpy( dest, src, sizeof( sample_t ) * n );
+        if( stream_ ) {
+            stream_->readInto( dest, (uint64_t) srcOffset, (uint64_t) n,
+                               (uint32_t) ch );
+        } else {
+            const sample_t *src = data_.data() + (size_t) ch * nFrames_ + srcOffset;
+            memcpy( dest, src, sizeof( sample_t ) * n );
+        }
     }
     if( n < len ) {
         memset( dest + n, 0, sizeof( sample_t ) * ( len - n ) );
     }
     return n;
+}
+
+// ---------------------------------------------------------------------------
+// M5 streaming state: aligned-block LRU over on-demand vocoder renders.
+// Thread-safe (freeze workers race on shared grains); NEVER called on the RT
+// thread — RT reads frozen pages only (proposal 16/19 architecture).
+// ---------------------------------------------------------------------------
+void twGrainSource::StreamState::readInto( sample_t *dest, uint64_t start,
+                                           uint64_t n, uint32_t ch )
+{
+    std::lock_guard<std::mutex> lock( m );
+    uint64_t pos = start;
+    while( pos < start + n ) {
+        const uint64_t bStart = ( pos / kBlock ) * kBlock;
+        const uint64_t bLen   = std::min( kBlock, outLen - bStart );
+
+        Block *blk = nullptr;
+        for( Block &b : blocks )
+            if( b.start == bStart ) { blk = &b; break; }
+        if( !blk ) {
+            if( blocks.size() >= kMaxBlocks ) {
+                // Evict the least-recently-used block.
+                size_t victim = 0;
+                for( size_t i = 1; i < blocks.size(); i++ )
+                    if( blocks[i].lru < blocks[victim].lru ) victim = i;
+                blocks[victim] = Block();
+                blk = &blocks[victim];
+            } else {
+                blocks.emplace_back();
+                blk = &blocks.back();
+            }
+            blk->start = bStart;
+            blk->data.assign( (size_t) channels * bLen, 0.0f );
+            voc->render( bStart, bLen, blk->data.data() );
+        }
+        blk->lru = ++lruTick;
+
+        const uint64_t off   = pos - bStart;
+        const uint64_t avail = bLen - off;
+        const uint64_t take  = std::min( avail, start + n - pos );
+        memcpy( dest + ( pos - start ),
+                blk->data.data() + (size_t) ch * bLen + off,
+                sizeof( sample_t ) * (size_t) take );
+        pos += take;
+    }
 }
