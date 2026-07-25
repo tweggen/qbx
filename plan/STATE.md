@@ -7189,3 +7189,47 @@ defects; all fixed, gated, and pushed (`8200aed`, `adfe5b4`).
   toggle "Preserve formants" on a transposed vocal clip and listen. The
   centroid metric says formants hold; whether it sounds RIGHT is theirs to
   judge. (PGHI remains the W5 tripwire if quality disappoints.)
+
+## 2026-07-25 — Proposal 28 W5 EXECUTED: measured DSP optimization (the SIMD tripwire)
+
+Measurement-driven per the W5 charter; `warp_bench` (new, NOT a gate) is the
+instrument — 30 s stereo @ 48 kHz on the dev machine:
+
+| scenario            | before | after | speedup |
+|---------------------|-------:|------:|--------:|
+| stretch 1.2×        | 677 ms | 655 ms | ~1×  (already 46× RT) |
+| stretch+pitch       | 4786 ms | 1239 ms | **3.9×** (6.3→24× RT) |
+| stretch+pitch+fmt   | 5116 ms | 1569 ms | 3.3× |
+| one page (drag proxy)| 199 ms | 70 ms | **2.8×** |
+| f0 (YIN)            | 2391 ms | 983 ms | **2.4×** (30× RT) |
+| onsets (flux)       | 305 ms | 298 ms | — |
+
+What changed (and the determinism accounting for each):
+
+- **Build flags:** `-O3 -ffp-contract=off` on tw_sources + tw_sidecar.
+  Without fast-math GCC does not reassociate FP reductions, so this is
+  bit-identical to -O2 — PROVEN by byte-cmp of a reference render across
+  the flag change. `-ffp-contract=off` forbids FMA fusion so x86-64
+  (baseline: none) and aarch64 (everywhere) produce the same bytes.
+- **Pitch stage** (the measured 4.1 s of the 4.8 s pass): the per-TAP libm
+  `sin()` replaced by per-instance integer-offset sin/cos tables + TWO libm
+  calls per output SAMPLE (angle addition — mathematically the same sinc);
+  the 32-tap reduction now runs in FOUR fixed lanes combined
+  (l0+l2)+(l1+l3) — the normative order, platform-identical and
+  vectorizable. Bytes differ from pre-W5 in last-ulp rounding →
+  **WarpPcmVersion 4→5** (stale caches orphan; cached-vs-computed can
+  never diverge).
+- **YIN:** four-lane reductions (same normative-order rule → **F0Version
+  1→2**), a pointer fast path for interior hops (no per-sample bounds
+  check; identical arithmetic), and the mono fold stored as
+  float-rounded-then-widened DOUBLES so the difference loop reads aligned
+  doubles with no per-element conversion — that is what actually let the
+  vectorizer in (1709→983 ms of the 2.4× total).
+
+Deliberately NOT done (measured-need discipline): explicit intrinsics, FFT
+butterfly SIMD (stretch-only is 46× RT — not a pain point), pffft. The
+bench stays in-tree; re-run it before any future round.
+
+Gates: vocoder_test (partition property + W4 formant metrics unchanged to
+printed precision), analyzers_test, twwarpmap_test, full 56-case qxa
+suite, layering/logging, 3-run byte-identical render cmp — all green.

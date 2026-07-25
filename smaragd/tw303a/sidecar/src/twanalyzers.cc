@@ -365,16 +365,19 @@ std::vector<float> twComputeF0( const float *const *chans, uint32_t nCh,
         return {};
 
     // 1. Mono fold (mean across channels), matching the other analyzers.
-    std::vector<float> mono( (size_t) nFrames );
+    // Values are ROUNDED TO FLOAT (the v1/v2 semantic) but stored widened to
+    // double, so the hot difference loop reads aligned doubles with no
+    // per-element conversion — that is what lets the compiler vectorize it.
+    std::vector<double> mono( (size_t) nFrames );
     for( uint64_t i = 0; i < nFrames; i++ ) {
         double acc = 0.0;
         for( uint32_t c = 0; c < nCh; c++ )
             acc += (double) chans[c][(size_t) i];
-        mono[(size_t) i] = (float)( acc / (double) nCh );
+        mono[(size_t) i] = (double) (float)( acc / (double) nCh );
     }
     // Zero-pad view: samples at/past nFrames read as 0.
     auto at = [&]( uint64_t i ) -> double {
-        return i < nFrames ? (double) mono[(size_t) i] : 0.0;
+        return i < nFrames ? mono[(size_t) i] : 0.0;
     };
 
     const uint64_t count = ( nFrames + hop - 1 ) / hop;   // ceil
@@ -384,25 +387,65 @@ std::vector<float> twComputeF0( const float *const *chans, uint32_t nCh,
     for( uint64_t k = 0; k < count; k++ ) {
         const uint64_t t = k * hop;
 
-        // 6. Energy gate first: silence never pitches.
-        double e = 0.0;
-        for( uint32_t j = 0; j < W; j++ ) {
-            const double v = at( t + j );
-            e += v * v;
+        // 6. Energy gate first: silence never pitches. (v2: all reductions
+        // in this function run in FOUR fixed lanes, combined
+        // (l0+l2)+(l1+l3) — the normative order, identical on every
+        // platform and open to vectorization.)
+        double e0 = 0.0, e1 = 0.0, e2 = 0.0, e3 = 0.0;
+        for( uint32_t j = 0; j + 4 <= W; j += 4 ) {
+            const double v0 = at( t + j ),     v1 = at( t + j + 1 );
+            const double v2 = at( t + j + 2 ), v3 = at( t + j + 3 );
+            e0 += v0 * v0; e1 += v1 * v1; e2 += v2 * v2; e3 += v3 * v3;
         }
+        for( uint32_t j = W & ~3u; j < W; j++ ) {
+            const double v = at( t + j );
+            e0 += v * v;
+        }
+        const double e = ( e0 + e2 ) + ( e1 + e3 );
         if( std::sqrt( e / (double) W ) < 1e-4 )
             continue;                                     // unvoiced
 
         // 2 + 3. Difference function with running cumulative-mean
-        // normalization.
+        // normalization. Interior hops take the pointer fast path (no
+        // per-sample bounds check — bit-identical arithmetic); tail hops
+        // fall back to the zero-padded view.
         dp[0] = 1.0;
         double cum = 0.0;
+        const bool interior =
+            t + (uint64_t) W + (uint64_t) tauMax <= nFrames;
+        const double *base = mono.data() + (size_t) t;
         for( uint32_t tau = 1; tau <= tauMax; tau++ ) {
-            double d = 0.0;
-            for( uint32_t j = 0; j < W; j++ ) {
-                const double diff = at( t + j ) - at( t + j + tau );
-                d += diff * diff;
+            double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
+            if( interior ) {
+                const double *a = base;
+                const double *b = base + tau;
+                for( uint32_t j = 0; j + 4 <= W; j += 4 ) {
+                    const double f0 = a[j]     - b[j];
+                    const double f1 = a[j + 1] - b[j + 1];
+                    const double f2 = a[j + 2] - b[j + 2];
+                    const double f3 = a[j + 3] - b[j + 3];
+                    d0 += f0 * f0; d1 += f1 * f1;
+                    d2 += f2 * f2; d3 += f3 * f3;
+                }
+                for( uint32_t j = W & ~3u; j < W; j++ ) {
+                    const double f = a[j] - b[j];
+                    d0 += f * f;
+                }
+            } else {
+                for( uint32_t j = 0; j + 4 <= W; j += 4 ) {
+                    const double f0 = at( t + j )     - at( t + j + tau );
+                    const double f1 = at( t + j + 1 ) - at( t + j + 1 + tau );
+                    const double f2 = at( t + j + 2 ) - at( t + j + 2 + tau );
+                    const double f3 = at( t + j + 3 ) - at( t + j + 3 + tau );
+                    d0 += f0 * f0; d1 += f1 * f1;
+                    d2 += f2 * f2; d3 += f3 * f3;
+                }
+                for( uint32_t j = W & ~3u; j < W; j++ ) {
+                    const double f = at( t + j ) - at( t + j + tau );
+                    d0 += f * f;
+                }
             }
+            const double d = ( d0 + d2 ) + ( d1 + d3 );
             cum += d;
             dp[tau] = ( cum > 0.0 ) ? d * (double) tau / cum : 1.0;
         }

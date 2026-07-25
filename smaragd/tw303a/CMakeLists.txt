@@ -110,6 +110,7 @@ tw_module(sources
     DEPS tw_core tw_pages tw_graph tw_sidecar
 )
 
+
 # --- Rubber Band time-stretch / pitch-shift backend (sources only) ------------
 # Proposal 26: twGrainSource's synthesis core. Rubber Band ships a pkg-config
 # file but NO CMake config package, so discovery differs from the CONFIG-based
@@ -410,6 +411,18 @@ target_link_libraries(tw303a INTERFACE
     tw_devices tw_sinks tw_playback tw_render tw_record tw_schedule tw_analysis
     tw_sidecar
 )
+
+# --- DSP optimization flags (proposal 28 W5) ----------------------------------
+# The vocoder and the analyzers are the measured hot paths (warp_bench).
+# -O3 enables auto-vectorization of the element-wise loops; without
+# -ffast-math GCC will not reassociate FP reductions, so results stay
+# bit-identical to -O2. -ffp-contract=off forbids FMA fusion so x86-64
+# (baseline: no FMA) and aarch64 (FMA everywhere) produce the SAME bytes —
+# the cross-platform determinism the render byte-cmp gates assume.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(tw_sources PRIVATE -O3 -ffp-contract=off)
+    target_compile_options(tw_sidecar PRIVATE -O3 -ffp-contract=off)
+endif()
 # Legacy include strings ("twcomponent.h", "audio/audio_backend.h", …) resolve
 # through forwarding headers; new code uses "tw/<module>/<header>.h" directly.
 target_include_directories(tw303a INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
@@ -436,6 +449,9 @@ tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc 
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
 tw_module_test(sources_test                 sources/tests/sources_test.cc               tw_sources)
 tw_module_test(vocoder_test                 sources/tests/vocoder_test.cc               tw_sources)
+# NOT a gate: timing benchmark for the W5 SIMD work (run manually).
+add_executable(warp_bench sources/tests/warp_bench.cc)
+target_link_libraries(warp_bench PRIVATE tw_sources tw_sidecar)
 tw_module_test(mix_test                     mix/tests/mix_test.cc                       tw_mix)
 tw_module_test(schedule_test                schedule/tests/schedule_test.cc             tw_schedule tw_pages)
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)

@@ -116,7 +116,10 @@ constexpr uint32_t    LoudnessVersion = 1;
  * uint32 winFrames, float32 fminHz, float32 fmaxHz, float32 threshold.
  */
 constexpr const char *F0        = "f0";
-constexpr uint32_t    F0Version = 1;
+constexpr uint32_t    F0Version = 2;
+// v2 (W5): all reductions run in FOUR fixed lanes combined (l0+l2)+(l1+l3)
+// — the normative accumulation order (platform-identical, vectorizable).
+// Values differ from v1 only in last-ulp rounding; v1 orphans on sight.
 
 /**
  * "warp.pcm" — the finished time-stretch/pitch-shift output (proposal 27 M2):
@@ -150,7 +153,9 @@ constexpr uint32_t    F0Version = 1;
  * uint8 preserveFormants (v4: the W4 opt-in flag).
  */
 constexpr const char *WarpPcm        = "warp.pcm";
-constexpr uint32_t    WarpPcmVersion = 4;   // v4: + uint8 preserveFormants
+constexpr uint32_t    WarpPcmVersion = 5;   // v5: W5 pitch-stage rewrite
+// (integer-offset sinc tables + four-lane tap reduction) — same params,
+// different bytes, so v4 caches must orphan. v4: + uint8 preserveFormants
 // (W4 opt-in — changes output bytes whenever the pitch stage runs). v3
 // added uint64 anchorsHash (W1 warp-marker fingerprint; 0 = no anchors);
 // v2 added onsetsHash.

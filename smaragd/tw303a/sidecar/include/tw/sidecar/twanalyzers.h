@@ -122,8 +122,9 @@ std::vector<float> twComputeLoudness( const float *const *chans, uint32_t nCh,
  *     must not produce spurious pitches).
  *
  * Result: one float32 per hop, size = ceil(nFrames / hopFrames);
- * 0 = unvoiced. All accumulation in double; the scan order is fixed, so
- * the result is bit-deterministic for identical input.
+ * 0 = unvoiced. All accumulation in double; reductions run in FOUR fixed
+ * lanes combined (l0+l2)+(l1+l3) (aspect v2 — the normative order, chosen
+ * so scalar and SIMD builds agree bit-exactly on every platform).
  * hopFrames, winFrames must be > 0 and fminHz < fmaxHz (both > 0), with
  * rate > 0; violations return an empty result.
  */

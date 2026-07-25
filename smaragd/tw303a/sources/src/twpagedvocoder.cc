@@ -127,6 +127,15 @@ struct twPagedVocoder::Impl {
     static constexpr double kBeta     = 8.0;
     std::vector<double>     kaiserLut;         // u in [0,1], linear interp
 
+    // W5: per-instance sinc tables — sin/cos of (pi*cutoff*n) for the
+    // integer tap offsets n in [-kSincTaps, kSincTaps]. With these,
+    // sin(pi*cutoff*(frac+n)) = sf*cosTab[n] + cf*sinTab[n] needs only TWO
+    // libm calls per OUTPUT SAMPLE instead of one per TAP — the measured
+    // dominant cost of the pitch stage (warp_bench: 4.1 s of a 4.8 s
+    // stretch+pitch pass on 30 s stereo was this loop).
+    std::vector<double> sincSinTab, sincCosTab;   // index n + kSincTaps
+    double              sincCutoff = 1.0;
+
     // ---- scratch reused across frames (allocation-free inner loop) -------
     std::vector<double> fr, fi;
     std::vector<double> synPhase, zRe, zIm, mag, medScratch;
@@ -285,6 +294,20 @@ struct twPagedVocoder::Impl {
         for( size_t i = 0; i < kaiserLut.size(); i++ ) {
             const double u = (double) i / ( kaiserLut.size() - 1 );
             kaiserLut[i] = besselI0( kBeta * std::sqrt( 1.0 - u * u ) ) / i0b;
+        }
+
+        // W5: the pitch stage's integer-offset sin/cos tables (see the
+        // member comment). cutoff is a pure function of pitchRatio, so the
+        // tables are per-instance constants.
+        if( pitchRatio != 1.0 ) {
+            sincCutoff = 0.95 * std::min( 1.0, 1.0 / pitchRatio );
+            sincSinTab.resize( 2 * kSincTaps + 1 );
+            sincCosTab.resize( 2 * kSincTaps + 1 );
+            for( int n = -kSincTaps; n <= kSincTaps; n++ ) {
+                const double a = kPi * sincCutoff * (double) n;
+                sincSinTab[(size_t)( n + kSincTaps )] = std::sin( a );
+                sincCosTab[(size_t)( n + kSincTaps )] = std::cos( a );
+            }
         }
 
         fr.resize( N ); fi.resize( N );
@@ -645,28 +668,44 @@ struct twPagedVocoder::Impl {
         std::vector<double> tmp( (size_t) cfg.channels * sLen, 0.0 );
         renderStretched( (uint64_t) s0, (uint64_t) s1, tmp.data() );
 
-        const double cutoff = 0.95 * std::min( 1.0, 1.0 / ratio );
+        // W5 rewrite: sin(pi*cutoff*(frac+n)) via the integer-offset tables —
+        // TWO libm calls per output sample (was one per tap; the measured
+        // dominant cost). The tap reduction runs in FOUR fixed lanes summed
+        // in a fixed order: that is the normative accumulation (identical on
+        // every platform and open to vectorization). Bytes differ from the
+        // pre-W5 per-tap-libm formulation — WarpPcmVersion 5.
         for( uint32_t c = 0; c < cfg.channels; c++ ) {
             const double *t = tmp.data() + (size_t) c * sLen;
             float *d = dst + (size_t) c * len;
             for( uint64_t i = 0; i < len; i++ ) {
                 const double srcPos = (double) ( outStart + i ) * ratio;
                 const int64_t k0 = (int64_t) std::floor( srcPos );
-                double acc = 0.0, wsum = 0.0;
-                for( int64_t k = k0 - kSincTaps + 1; k <= k0 + kSincTaps; k++ ) {
-                    const double tt = srcPos - (double) k;
+                const double frac = srcPos - (double) k0;        // [0, 1)
+                const double af = kPi * sincCutoff * frac;
+                const double sf = std::sin( af );
+                const double cf = std::cos( af );
+                double acc[4] = { 0.0, 0.0, 0.0, 0.0 };
+                double wsm[4] = { 0.0, 0.0, 0.0, 0.0 };
+                for( int j = 0; j < 2 * kSincTaps; j++ ) {
+                    const int64_t k = k0 - kSincTaps + 1 + (int64_t) j;
+                    const int     n = (int) ( k0 - k );          // 15 .. -16
+                    const double tt = frac + (double) n;         // srcPos - k
                     const double u = std::fabs( tt ) / (double) kSincTaps;
                     if( u >= 1.0 ) continue;
-                    const double sx = kPi * cutoff * tt;
+                    const double s = sf * sincCosTab[(size_t)( n + kSincTaps )]
+                                   + cf * sincSinTab[(size_t)( n + kSincTaps )];
+                    const double sx = kPi * sincCutoff * tt;
                     const double sinc = ( std::fabs( sx ) < 1e-12 )
-                        ? 1.0 : std::sin( sx ) / sx;
-                    const double w = cutoff * sinc * kaiser( u );
+                        ? 1.0 : s / sx;
+                    const double w = sincCutoff * sinc * kaiser( u );
                     const double v = ( k >= s0 && k < s1 )
                         ? t[(size_t) ( k - s0 )] : 0.0;
-                    acc  += v * w;
-                    wsum += w;
+                    acc[j & 3] += v * w;
+                    wsm[j & 3] += w;
                 }
-                d[i] = ( std::fabs( wsum ) > 1e-9 ) ? (float) ( acc / wsum ) : 0.0f;
+                const double a  = ( acc[0] + acc[2] ) + ( acc[1] + acc[3] );
+                const double ws = ( wsm[0] + wsm[2] ) + ( wsm[1] + wsm[3] );
+                d[i] = ( std::fabs( ws ) > 1e-9 ) ? (float) ( a / ws ) : 0.0f;
             }
         }
     }
