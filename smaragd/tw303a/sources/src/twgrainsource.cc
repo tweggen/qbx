@@ -165,15 +165,24 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         auto onsetReader = twSidecarStore::instance().loadAny(
             warpContent, twAspect::Onsets, twAspect::OnsetsVersion );
         if( onsetReader && onsetReader->info().recordCount > 0
-            && onsetReader->info().sourceRate > 0 ) {
+            && onsetReader->info().sourceRate > 0
+            && onsetReader->info().recordStride == 12 ) {
+            // v3 records: packed 12-byte {u64 pos, f32 salience} LE. The
+            // vocoder's keyframes take EVERY entry (salience is the marker
+            // UI's filter, not ours — dense keyframes are cheap and the
+            // min-gap defense bounds them).
             const uint64_t n = onsetReader->info().recordCount;
-            std::vector<uint64_t> raw( (size_t) n );
+            std::vector<uint8_t> raw( (size_t) n * 12 );
             if( onsetReader->readRecords( raw.data(), 0, n ) ) {
                 const double scale =
                     (double) rate_ / (double) onsetReader->info().sourceRate;
                 onsetPos.reserve( (size_t) n );
-                for( uint64_t v : raw )
-                    onsetPos.push_back( (uint64_t) std::llround( v * scale ) );
+                for( uint64_t i = 0; i < n; i++ ) {
+                    uint64_t pos = 0;
+                    for( int b = 7; b >= 0; b-- )
+                        pos = ( pos << 8 ) | raw[(size_t) i * 12 + b];
+                    onsetPos.push_back( (uint64_t) std::llround( pos * scale ) );
+                }
                 onsetsHash = twHashBuffer(
                     onsetPos.data(),
                     onsetPos.size() * sizeof( uint64_t ) ).lo;

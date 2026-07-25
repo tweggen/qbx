@@ -59,9 +59,25 @@ struct twOnsetParams {
     void serialize( std::vector<uint8_t> &out ) const;
 };
 
-std::vector<uint64_t> twDetectOnsets( const float *const *chans, uint32_t nCh,
-                                      uint64_t nFrames,
-                                      const twOnsetParams &params );
+/**
+ * One detected onset (aspect "onsets" v3): position in SOURCE frames plus a
+ * SALIENCE — the normalized-flux value that triggered the detection. Two
+ * consumer tiers (proposal 28 W0): the vocoder's keyframes take every
+ * entry (dense-but-cheap, M5 behavior); the marker UI shows only entries
+ * whose salience clears its display threshold.
+ */
+struct twOnset {
+    uint64_t pos      = 0;
+    float    salience = 0.0f;
+
+    bool operator==( const twOnset &o ) const {
+        return pos == o.pos && salience == o.salience;
+    }
+};
+
+std::vector<twOnset> twDetectOnsets( const float *const *chans, uint32_t nCh,
+                                     uint64_t nFrames,
+                                     const twOnsetParams &params );
 
 /**
  * RMS envelope (aspect "loudness" v1). rms[k] over the window starting at

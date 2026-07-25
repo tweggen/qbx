@@ -152,7 +152,7 @@ void twLoudnessParams::serialize( std::vector<uint8_t> &out ) const
 // twDetectOnsets — spectral-flux onset detection (aspect "onsets" v1). The
 // steps below follow twanalyzers.h exactly.
 // ---------------------------------------------------------------------------
-std::vector<uint64_t> twDetectOnsets( const float *const *chans, uint32_t nCh,
+std::vector<twOnset> twDetectOnsets( const float *const *chans, uint32_t nCh,
                                       uint64_t nFrames,
                                       const twOnsetParams &params )
 {
@@ -255,7 +255,8 @@ std::vector<uint64_t> twDetectOnsets( const float *const *chans, uint32_t nCh,
 
     // 5 + 6. Local-maximum peak picking, then ascending minimum-separation scan.
     // First and last frame are never candidates (they lack a neighbour).
-    std::vector<uint64_t> out;
+    // v3: every detection carries its normalized flux as SALIENCE.
+    std::vector<twOnset> out;
     bool     haveLast = false;
     uint64_t lastPos  = 0;
     for( uint64_t k = 1; k + 1 < K; k++ ) {
@@ -267,7 +268,7 @@ std::vector<uint64_t> twDetectOnsets( const float *const *chans, uint32_t nCh,
             const uint64_t pos = k * hop;
             if( !haveLast
                 || ( pos - lastPos ) >= (uint64_t)params.minSeparationFrames ) {
-                out.push_back( pos );
+                out.push_back( { pos, (float) f } );
                 lastPos  = pos;
                 haveLast = true;
             }

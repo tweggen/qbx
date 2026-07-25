@@ -68,11 +68,14 @@ constexpr uint32_t    PreviewPeaksVersion = 1;
  * uint32 minSeparationFrames. Changing any default mints a new key.
  */
 constexpr const char *Onsets        = "onsets";
-constexpr uint32_t    OnsetsVersion = 2;   // v2: NORMALIZED spectral flux —
-// v1's absolute flux fired ~29 spurious onsets/second on steady loud
-// material (quantization noise cleared the absolute floor), which M4's
-// onset keyframes amplified into audible level collapse. v1 files orphan
-// on sight and regenerate.
+constexpr uint32_t    OnsetsVersion = 3;
+// v3 (proposal 28 W0): record is PACKED 12-byte { uint64 pos, float32
+// salience } LE, stride 12 — salience is the normalized flux at detection.
+// Two consumer tiers: vocoder keyframes take every record; the marker UI
+// filters by salience. v2 (normalized flux + energy gate; fixed v1's ~29
+// spurious fires/second on steady loud material that M4's keyframes
+// amplified into level collapse) kept u64-only records. Older versions
+// orphan on sight and regenerate.
 
 /**
  * "loudness" — RMS envelope (proposal 27 M1), for normalization/auto-gain

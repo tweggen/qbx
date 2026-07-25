@@ -1,5 +1,6 @@
 
 #include <stdio.h>
+#include <cstring>
 
 #include <qobject.h>
 #include <qwidget.h>
@@ -264,17 +265,29 @@ void SPlainWave::enqueueAnalysis()
                 qi.sourceFrames = n;
 
                 if( !haveOnsets ) {
-                    std::vector<uint64_t> onsets =
+                    std::vector<twOnset> onsets =
                         twDetectOnsets( chans.data(), nCh, n, op );
+                    // v3 records are PACKED 12-byte {u64 pos, f32 salience}
+                    // LE — never the in-memory struct (padding is not a
+                    // serialization format).
+                    std::vector<uint8_t> payload;
+                    payload.reserve( onsets.size() * 12 );
+                    for( const twOnset &o : onsets ) {
+                        for( int b = 0; b < 8; b++ )
+                            payload.push_back( (uint8_t)( o.pos >> ( 8 * b ) ) );
+                        uint32_t sb;
+                        memcpy( &sb, &o.salience, 4 );
+                        for( int b = 0; b < 4; b++ )
+                            payload.push_back( (uint8_t)( sb >> ( 8 * b ) ) );
+                    }
                     qi.aspectId      = twAspect::Onsets;
                     qi.aspectVersion = twAspect::OnsetsVersion;
-                    qi.recordStride  = sizeof( uint64_t );
+                    qi.recordStride  = 12;
                     qi.recordCount   = (uint64_t) onsets.size();
                     qi.hopFrames     = op.hop;
                     qi.params        = opBlob;
                     twSidecarStore::instance().store(
-                        qi, onsets.data(),
-                        (uint64_t) onsets.size() * sizeof( uint64_t ) );
+                        qi, payload.data(), (uint64_t) payload.size() );
                 }
                 if( !haveLoudness ) {
                     std::vector<float> rms =

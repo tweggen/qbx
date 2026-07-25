@@ -126,7 +126,7 @@ static void section_b_onsets() {
     twOnsetParams p;                    // defaults (fftSize 1024, hop 256, ...)
     p.minSeparationFrames = 1440;
 
-    std::vector<uint64_t> onsets = twDetectOnsets( chans, 1, nFrames, p );
+    std::vector<twOnset> onsets = twDetectOnsets( chans, 1, nFrames, p );
 
     CHECK( onsets.size() == 5, "click train yields exactly 5 onsets" );
 
@@ -142,7 +142,7 @@ static void section_b_onsets() {
         for ( size_t j = 0; j < onsets.size(); ++j ) {
             if ( matched[j] )
                 continue;
-            uint64_t a = onsets[j], b = clicks[i];
+            uint64_t a = onsets[j].pos, b = clicks[i];
             uint64_t d = ( a > b ) ? ( a - b ) : ( b - a );
             if ( d <= tol ) {
                 hit = (int)j;
@@ -152,9 +152,10 @@ static void section_b_onsets() {
         CHECK( hit >= 0, "each click matched by an onset within +/-768" );
         if ( hit >= 0 ) {
             matched[hit] = true;
-            long long off = (long long)onsets[hit] - (long long)clicks[i];
+            long long off = (long long)onsets[hit].pos - (long long)clicks[i];
             std::cout << "  click " << clicks[i] << " -> onset "
-                      << onsets[hit] << " (offset " << off << ")\n";
+                      << onsets[hit].pos << " (salience "
+                      << onsets[hit].salience << ", offset " << off << ")\n";
         }
     }
 
@@ -163,7 +164,7 @@ static void section_b_onsets() {
         std::vector<float> z( 96000, 0.0f );
         const float       *zc[1] = { z.data() };
         twOnsetParams      sp;
-        std::vector<uint64_t> r = twDetectOnsets( zc, 1, z.size(), sp );
+        std::vector<twOnset> r = twDetectOnsets( zc, 1, z.size(), sp );
         CHECK( r.empty(), "pure silence -> 0 onsets" );
     }
 
@@ -179,11 +180,11 @@ static void section_b_onsets() {
         std::vector<float> dc( 96000, 0.5f );
         const float       *dcc[1] = { dc.data() };
         twOnsetParams      dp;
-        std::vector<uint64_t> r = twDetectOnsets( dcc, 1, dc.size(), dp );
+        std::vector<twOnset> r = twDetectOnsets( dcc, 1, dc.size(), dp );
         const uint64_t interiorEnd = dc.size() - dp.fftSize;   // last full frame start
         int inInterior = 0;
-        for ( uint64_t o : r )
-            if ( o < interiorEnd )
+        for ( const twOnset &o : r )
+            if ( o.pos < interiorEnd )
                 ++inInterior;
         std::cout << "  DC: " << r.size() << " onset(s), " << inInterior
                   << " in interior (expect 0; boundary edge at frames >= "
@@ -342,8 +343,8 @@ static void section_d_determinism() {
 
     twOnsetParams op;
     op.minSeparationFrames = 1440;
-    std::vector<uint64_t> o1 = twDetectOnsets( chans, 1, nFrames, op );
-    std::vector<uint64_t> o2 = twDetectOnsets( chans, 1, nFrames, op );
+    std::vector<twOnset> o1 = twDetectOnsets( chans, 1, nFrames, op );
+    std::vector<twOnset> o2 = twDetectOnsets( chans, 1, nFrames, op );
     CHECK( o1 == o2, "twDetectOnsets deterministic (identical twice)" );
 
     std::vector<float> s( (size_t)48000 );
