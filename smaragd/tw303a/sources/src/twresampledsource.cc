@@ -7,6 +7,7 @@
 
 twResampledSource::twResampledSource( const twRandomSource &src, int targetRate )
     : targetRate_( targetRate ),
+      contentHash_( src.contentHash() ),
       channels_( src.channels() ),
       nFrames_( 0 )
 {

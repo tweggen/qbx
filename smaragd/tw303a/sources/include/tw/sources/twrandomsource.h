@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include "tw/core/twcontenthash.h"
 #include "tw/graph/twcomponent.h"   // sample_t, length_t, offset_t, idx_t
 
 class tw303aEnvironment;
@@ -47,6 +48,16 @@ public:
      */
     virtual bool isReproducible() const = 0;
     bool isBounded() const { return length() >= 0; }
+
+    /**
+     * Digest of the STABLE content behind this view, or null when the view is
+     * not content-addressable (a container capture, live material). Derived
+     * views over hashable content forward the underlying digest — the view's
+     * own transform (target rate, warp params) is key MATERIAL for a derived-
+     * data cache, never part of the content identity (proposal 27). Null ⇒
+     * consumers must not cache derived data by content.
+     */
+    virtual twContentHash contentHash() const { return twContentHash(); }
 
     /**
      * Mint an independent cursor over this data at the specified initial offset.

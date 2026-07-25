@@ -2,10 +2,15 @@
 #include <math.h>
 #include <string.h>
 
+#include <cstdint>
+#include <vector>
+
+#include "tw/core/twlog.h"
+#include "tw/sidecar/twaspects.h"
+#include "tw/sidecar/twsidecarstore.h"
 #include "tw/sources/twgrainsource.h"
 
 #if TW_HAVE_RUBBERBAND
-#include <vector>
 #include <rubberband/RubberBandStretcher.h>
 #endif
 
@@ -26,6 +31,45 @@
 // rounding rule the cut window (WarpedLen domain) depends on. Rubber Band's
 // own output count is only approximate, so its drained output is clamped /
 // zero-padded to exactly nFrames_ before it lands in data_.
+
+namespace {
+
+// Proposal 27 M2 — the warp.pcm cache key params (canonical LE blob; field
+// order is normative, see twaspects.h). Everything that affects the output
+// BYTES is in here: the synthesis backend, the rate/channel geometry, the
+// EXACT stretch fraction as clamped by the ctor, the pitch, and the OLA
+// engine knobs (vestigial under Rubber Band, but a duplicate entry is
+// harmless where a wrong hit would not be).
+void warpParamsBlob( int rate, idx_t channels, const Fraction &stretchFrac,
+                     double pitchCents, length_t grainSize, length_t crossfade,
+                     std::vector<uint8_t> &out )
+{
+#if TW_HAVE_RUBBERBAND
+    const uint8_t backend = 1;   // Rubber Band R3 offline
+#else
+    const uint8_t backend = 2;   // legacy overlap-add
+#endif
+    out.clear();
+    out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 );
+    auto put32 = [&]( uint32_t v ) {
+        for( int i = 0; i < 4; i++ ) out.push_back( (uint8_t)( v >> ( 8 * i ) ) );
+    };
+    auto put64 = [&]( uint64_t v ) {
+        for( int i = 0; i < 8; i++ ) out.push_back( (uint8_t)( v >> ( 8 * i ) ) );
+    };
+    out.push_back( backend );
+    put32( (uint32_t) rate );
+    put32( (uint32_t) channels );
+    put64( (uint64_t) stretchFrac.numerator );
+    put64( (uint64_t) stretchFrac.denominator );
+    uint64_t centsBits;
+    memcpy( &centsBits, &pitchCents, sizeof( centsBits ) );
+    put64( centsBits );
+    put32( (uint32_t) grainSize );
+    put32( (uint32_t) crossfade );
+}
+
+} // namespace
 
 twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p )
     : rate_( src.sampleRate() ),
@@ -52,6 +96,42 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     }
 
     data_.assign( (size_t) channels_ * nFrames_, 0.0f );
+
+    // --- Proposal 27 M2: durable warp cache -------------------------------
+    // If the source is content-addressable and the store holds this exact
+    // warp (same content, backend, geometry, exact stretch, pitch), load the
+    // finished PCM and skip synthesis entirely — the load-stall fix. This is
+    // strictly a byte cache: synthesis below is deterministic, so a stored
+    // warp and a recomputed warp are identical (the M2 cmp gate).
+    const twContentHash warpContent = src.contentHash();
+    std::vector<uint8_t> warpParams;
+    uint64_t warpParamsHash = 0;
+    const bool warpCacheable = !warpContent.isNull()
+                            && src.isReproducible()
+                            && twSidecarStore::instance().enabled();
+    if( warpCacheable ) {
+        warpParamsBlob( rate_, channels_, stretchFrac, p.pitchCents,
+                        p.grainSize, p.crossfade, warpParams );
+        warpParamsHash = twSidecarStore::hashParams( warpParams.data(),
+                                                     warpParams.size() );
+        auto reader = twSidecarStore::instance().load(
+            warpContent, twAspect::WarpPcm, twAspect::WarpPcmVersion,
+            warpParamsHash );
+        if( reader ) {
+            const twQafInfo &qi = reader->info();
+            if( qi.sourceRate == (uint32_t) rate_
+                && qi.channels == (uint32_t) channels_
+                && qi.sourceFrames == (uint64_t) nFrames_
+                && qi.payloadLen == (uint64_t) data_.size() * sizeof( sample_t )
+                && reader->readPayload( data_.data(), 0, qi.payloadLen ) ) {
+                TW_LOGD( "sources", "twGrainSource: warp.pcm hit (%lld frames)",
+                         (long long) nFrames_ );
+                return;   // finished warp adopted; no synthesis
+            }
+            // Geometry mismatch or short read: fall through and recompute
+            // (the fresh store below overwrites the bad entry).
+        }
+    }
 
 #if TW_HAVE_RUBBERBAND
     // --- Rubber Band offline (proposal 26) -----------------------------------
@@ -192,6 +272,24 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         }
     }
 #endif
+
+    // Proposal 27 M2: persist the freshly synthesized warp for the next load.
+    // A failed store just means the next session recomputes — never fatal.
+    if( warpCacheable ) {
+        twQafInfo qi;
+        qi.aspectId      = twAspect::WarpPcm;
+        qi.aspectVersion = twAspect::WarpPcmVersion;
+        qi.contentHash   = warpContent;
+        qi.sourceRate    = (uint32_t) rate_;
+        qi.channels      = (uint32_t) channels_;
+        qi.sourceFrames  = (uint64_t) nFrames_;    // OUTPUT frames (exact length)
+        qi.recordStride  = sizeof( sample_t );
+        qi.recordCount   = (uint64_t) data_.size();
+        qi.hopFrames     = 0;
+        qi.params        = warpParams;
+        twSidecarStore::instance().store(
+            qi, data_.data(), (uint64_t) data_.size() * sizeof( sample_t ) );
+    }
 }
 
 twGrainSource::~twGrainSource()

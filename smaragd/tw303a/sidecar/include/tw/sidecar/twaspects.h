@@ -85,6 +85,35 @@ constexpr uint32_t    OnsetsVersion = 1;
 constexpr const char *Loudness        = "loudness";
 constexpr uint32_t    LoudnessVersion = 1;
 
+/**
+ * "warp.pcm" — the finished time-stretch/pitch-shift output (proposal 27 M2):
+ * a durable copy of twGrainSource's materialized warp, so a project load at
+ * SAVED settings is a file read instead of a full Rubber Band analysis+
+ * resynthesis (the load-stall fix). Strictly a cache of bytes the engine
+ * would compute identically — the M2 gate is byte-identical renders hot vs
+ * cold vs store-off. Superseded as the primary path by M5's paged
+ * resynthesis, after which it remains a valid zero-DSP top layer.
+ *
+ * Payload: the warped signal, planar Float32, channel-major
+ * (channel c, frame f at payload[c*outFrames + f]). recordStride = 4
+ * (one float), recordCount = channels × outFrames, hopFrames = 0.
+ * Header sourceRate = the WARP's rate (the project-rate view the grain
+ * stage consumed); sourceFrames = OUTPUT frames — exactly the proposal-18
+ * render-boundary length floor(inLen × stretch), used as the adoption
+ * cross-check.
+ *
+ * Params blob v1 (LE, in order): uint8 backend (1 = Rubber Band R3 offline,
+ * 2 = legacy overlap-add — their bytes differ, so the backend is key
+ * material; a Rubber Band library upgrade that changes output bytes must
+ * bump WarpPcmVersion), uint32 rate, uint32 channels, int64 stretch
+ * numerator, int64 stretch denominator (the exact Fraction, clamped as the
+ * ctor clamps it), float64 pitchCents (IEEE bits), uint32 grainSize,
+ * uint32 crossfade (vestigial on the RB path but kept in the key — worst
+ * case a duplicate cache entry, never a wrong hit).
+ */
+constexpr const char *WarpPcm        = "warp.pcm";
+constexpr uint32_t    WarpPcmVersion = 1;
+
 } // namespace twAspect
 
 #endif

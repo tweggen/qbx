@@ -28,7 +28,9 @@ DEPS = {
     'core':     [],
     'pages':    ['core'],
     'graph':    ['core', 'pages'],
-    'sources':  ['core', 'pages', 'graph'],
+    # sources → sidecar since proposal 27 M2: twGrainSource caches its
+    # finished warp (warp.pcm) in the derived-data store.
+    'sources':  ['core', 'pages', 'graph', 'sidecar'],
     'dsp':      ['core', 'graph'],
     'mix':      ['core', 'pages', 'graph'],
     'plugins':  ['core', 'graph'],

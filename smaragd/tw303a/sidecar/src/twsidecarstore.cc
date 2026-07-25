@@ -11,8 +11,17 @@ namespace fs = std::filesystem;
 
 twSidecarStore &twSidecarStore::instance()
 {
-    static twSidecarStore s;
-    return s;
+    // IMMORTAL singleton (never destroyed): revalidator workers may touch the
+    // store arbitrarily late in process life, and a function-local static by
+    // value is destroyed during static destruction while such a worker can
+    // still be running — the M2 teardown segfault (worker read a destroyed
+    // root_ path inside buildPath). Leaking one small object at exit is the
+    // standard and safe answer; the OS reclaims it. Orderly teardown (joining
+    // workers before exit) is ALSO enforced at the app layer, but the store
+    // must not be the thing that crashes when some future caller gets that
+    // ordering wrong.
+    static twSidecarStore *s = new twSidecarStore();
+    return *s;
 }
 
 void twSidecarStore::setRoot( const std::string &utf8Path )

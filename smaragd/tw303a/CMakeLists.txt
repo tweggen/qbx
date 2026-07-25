@@ -103,7 +103,7 @@ tw_module(sources
         sources/src/twgrainsource.cc
         sources/src/twwavinput.cc
         sources/src/twwav.cc
-    DEPS tw_core tw_pages tw_graph
+    DEPS tw_core tw_pages tw_graph tw_sidecar
 )
 
 # --- Rubber Band time-stretch / pitch-shift backend (sources only) ------------

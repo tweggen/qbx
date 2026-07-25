@@ -32,8 +32,13 @@ public:
     virtual int      sampleRate() const { return targetRate_; }
     virtual bool     isReproducible() const { return true; }
 
+    // Forward the underlying material's digest (captured at construction —
+    // the resample is a derived view, not new content; proposal 27).
+    virtual twContentHash contentHash() const { return contentHash_; }
+
 private:
     int      targetRate_;
+    twContentHash contentHash_;
     idx_t    channels_;
     length_t nFrames_;
     std::vector<sample_t> data_;   // planar Float32, size channels_ * nFrames_

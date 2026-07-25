@@ -6684,3 +6684,67 @@ immune to post-PASS teardown crashes.
 **For M4/M5:** `SCut::setRenderGateReady` is the exact seam real
 spectral-aspect readiness wires into; the test verb exercises the identical
 code path the production feature will use.
+
+---
+
+## Proposal 27 M2: durable warp.pcm cache (load-stall fix) + the teardown-crash family, root-caused and fixed (2026-07-25)
+
+**What landed** (M2 of proposal 27 v2, driven by `27_ORCHESTRATION.md`).
+
+- **`twRandomSource::contentHash()`** virtual (null = not content-addressable
+  → never cache); `twSampleSource` returns its decode digest,
+  `twResampledSource` forwards the digest captured at construction. Container
+  captures stay null — exactly the M2 cacheability scope.
+- **`warp.pcm` aspect** — a durable copy of `twGrainSource`'s materialized
+  warp. Ctor: compute exact geometry → try the store (validate rate /
+  channels / exact output frames / payload size) → on hit adopt the finished
+  PCM and SKIP Rubber Band; on miss synthesize as before and persist. Key
+  params (canonical LE blob, normative in twaspects.h): backend tag (RB R3
+  vs legacy OLA produce different bytes), rate, channels, EXACT stretch
+  numerator/denominator (never the double), pitchCents IEEE bits, grainSize/
+  crossfade. Works identically for both synthesis backends. DAG: sources →
+  sidecar (build + checker).
+
+**Gates (all green).**
+- **Byte-identity (release gate):** rendered WAVs byte-identical (`cmp`)
+  across store-off / cold / hot on `grain_multiple_stretch_factors` and
+  `grain_pitch_with_stretch` — the cache is transparent to the byte level.
+- **Grain suite 13/13 cold AND hot; full ctest 68/68 (100%).**
+- **Determinism:** `grain_loop_stretch` 20/20 on the hot path, workers 8.
+- **Load numbers (fixture-scale, medians of 5):**
+  `grain_multiple_stretch_factors` cold 13366 ms → hot 12400 ms
+  (**966 ms synthesis saved**); `grain_time_stretch_2x` 12970 → 12354 ms
+  (**616 ms**). Fixture clips are seconds long; the saving scales with
+  material length and clip count — this is the "project opens, then grinds"
+  tax being paid once per content instead of every session.
+- **In-session dedup observed (bonus, correct):** a COLD run logs warp.pcm
+  hits after the first ctor — several clips sharing content+params warp once
+  per session even with a cold store (13 hits in the multi-stretch case's
+  single cold run).
+
+**The teardown-crash family: root-caused and FIXED.** M2's store access made
+the long-standing intermittent "segfault after PASS" (STATE 2026-07-23 /
+2026-07-24 M1 entry) DETERMINISTIC on warp-writing cases — and therefore
+catchable. gdb: a revalidator worker inside a post-render [PREVIEW] recompute
+called `twSidecarStore::load → buildPath` with a DESTROYED `root_` path —
+static destruction had run while workers were alive. Why workers outlived
+main(): **`SActionRunner::run` leaked its SProject**, so the revalidator (8
+std::threads) was never destroyed in any headless run; whatever engine static
+a straggler worker touched during static destruction crashed — the sidecar
+store deterministically, logging/pools before M2 intermittently. Two-layer
+fix:
+1. `twSidecarStore::instance()` is now an IMMORTAL heap singleton (standard
+   use-after-static-destruction defense; the store can never again be the
+   crashing object even if some future caller gets ordering wrong).
+2. `SActionRunner::run` performs ORDERLY teardown: detach project from the
+   app, pump queued worker→UI invokes, `delete project` — revalidator dtor
+   joins every worker before return, same as production File→Close.
+**Confirmed:** the two historical crashers, exit-code-strict, 25/25 clean
+each (`asset_over_muted_container` was 2-3/25 failures across M0/M1/M2
+binaries before the fix; `asset_window_shifted_content` documented since
+2026-07-23). Full suite 68/68 — first 100% sweep of this effort.
+
+**Cache size note:** the two measured cases wrote 3.4 MB / 5.9 MB of
+warp.pcm per content×params — the 2 GiB default cap with LRU eviction is
+generous headroom; real-project pressure arrives with long material and
+should be revisited at M5 (where warp.pcm demotes to an optional layer).

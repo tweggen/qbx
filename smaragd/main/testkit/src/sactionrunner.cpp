@@ -116,6 +116,22 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
     // Note: unexpected rejections already set passed=false per-action above;
     // expectReject'd rejections count in actionsRejected but are not failures.
     result.passed = result.passed && (result.assertionsFailed == 0);
+
+    // Step 6: ORDERLY teardown (proposal 27 M2 root-cause fix). The project
+    // was leaked here, so its CaptureRevalidator workers outlived main() and
+    // ran into static destruction — any engine static they touched in that
+    // window (the sidecar store deterministically; logging/pools before it,
+    // intermittently: the long-standing "teardown segfault after PASS" family)
+    // was already destroyed. Deleting the project joins every worker before
+    // return, exactly like the production File→Close path. Detach it from the
+    // app first so nothing dangles at the app layer, and pump once so queued
+    // worker→UI invokes (notifyCaptureRevalidated) deliver to a live object
+    // instead of being purged mid-flight.
+    app.setCurrentProject(nullptr);
+    app.rewireSpeaker();
+    QCoreApplication::processEvents();
+    delete project;
+
     return result;
 }
 
