@@ -6810,3 +6810,72 @@ stays opt-in behind the flag through M4).
 **For M4:** the transient-smear number (3.73×) is the primary quality
 target; keyframed random access is the primary structural target; pffft +
 SIMD dispatch the primary performance target.
+
+---
+
+## Proposal 27 M4: keyframed random access + the onset-detector regression, found and fixed (2026-07-25)
+
+**What landed** (M4 of proposal 27 v2; implementation commit fa5dfbf, this
+commit closes).
+
+- **twPagedVocoder rewritten as an instance API** with lazy per-frame
+  analysis and **keyframed phase resets** (fixed grid every 64 synthesis
+  frames ∪ onset-aligned from the M1 aspect, minimum-gap enforced): random
+  access with bounded pre-roll. **The M4 property gate holds: paged output
+  is BIT-IDENTICAL to whole-signal output for any partition — even
+  rendering every window with a fresh instance** (vocoder_test, 4
+  transforms × 2 random partitions + determinism + onset-sensitivity).
+- **Prominence-gated identity locking** (the reported comb/metallic-on-noise
+  fix): bins lock only under peaks ≥4× the frame median; noise-floor bins
+  free-run, keeping stochastic phase incoherent. Needs the requester's ears
+  for the final verdict.
+- **Analysis sidecar DROPPED** (recorded deviation): this vocoder's analysis
+  is incremental — a ~50 µs lazy windowed FFT over resident PCM beats
+  reading persisted spectra, and M5 therefore needs NO spectral
+  readiness-gating at all (the M1 protocol stays for other uses).
+- **Performance**: the repo had built at -O0 its entire life; default is now
+  RelWithDebInfo with NDEBUG stripped (safety asserts stay armed). Vocoder
+  DSP ~9× faster from optimization alone; plus algorithmic wins (atan2 once
+  per analysis frame, twiddle-table FFT, Kaiser LUT, allocation-free
+  loops). pffft/SIMD not needed at current speeds (deviation from the
+  brief; revisit only if M5 streaming budgets demand it).
+
+**The regression the gates caught — and the fix.** The A/B rerun showed
+steady tonal material COLLAPSING −30% RMS under the vocoder with sidecars
+on. Bisect: the vocoder core was clean (−0.7% from grid keyframes); the
+trigger was the M1 onset detector firing **115 "onsets" on a 4 s pure
+sine** (~29/s: absolute flux, quantization noise clearing the 1e-4 floor)
+— M4's keyframes then reset phase every ~2 synthesis frames → OLA
+cancellation. Three-layer fix: **onsets v2 = NORMALIZED flux** (relative
+spectral change) **+ 1%-of-peak energy gate** (quiet crescendos are not
+onsets) **+ 0.1 floor** (beat-bumps are not attacks), and a
+**minimum keyframe gap (OLA span) in the vocoder** as permanent defense.
+OnsetsVersion 2 orphans v1 files; warp.pcm params v2 carries an onsets
+fingerprint so availability can never alias cached bytes; the store gained
+params-agnostic loadAny.
+
+**Gates (final battery, all green).** vocoder_test property gate;
+analyzers/sidecar module tests; **full suite 69/69**; grain 13/13 under
+the vocoder with sidecars off AND on; determinism 25/25 × workers {1,8};
+A/B v2 report at `plan/reports/27_M4_AB_REPORT.md`. Headline vs M3/M4v1:
+sine rows **−0.03…−0.60% RMS (was −30.25% at the worst), frequency
+≤0.19% dev (was 3.28%)** — tonal parity with Rubber Band restored;
+collapse case verified at exact level parity (0.1284 vs 0.1284).
+Voice/saw rows at RB parity. **Transients unchanged (rise ≤4.34× max)**:
+phase resets alone do not beat smear — the residual mechanism is
+magnitude-frame repetition under stretch; the literature-correct cure is
+transient-preserving TIME MAPPING (attacks map 1:1, stretch stolen from
+steady regions), explicitly scheduled for M5.
+
+**Fixture re-pin (justified).** `sidecar_import_analysis` onsets band
+79..83 → 45..55: the old count WAS the v1 bug; the fixture is a continuous
+crescendo — a pathological onset input — so the band pins determinism, not
+musical truth (detector precision/recall is M6 warp-marker scope).
+
+**Requester listening verdict (2026-07-25, post-fix build):** the
+comb-filteriness is "so much better that I couldn't tell (without A/Bing)
+if there still is a comby character to between-transient noise material";
+**no combiness on transients**. The prominence-gating fix is confirmed by
+ears. (This is the M4 opt-in listening check — the formal RB-demotion
+sign-off remains attached to M5, after transient time mapping closes the
+smear gap.)
