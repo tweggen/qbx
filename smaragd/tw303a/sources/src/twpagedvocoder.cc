@@ -163,10 +163,91 @@ struct twPagedVocoder::Impl {
         chRe.assign( aFrames * cfg.channels * nBins, 0.0f );
         chIm.assign( aFrames * cfg.channels * nBins, 0.0f );
 
-        // Keyframe set: the fixed grid ∪ onset-aligned frames. Onset
-        // positions arrive in the INPUT domain (already at this vocoder's
-        // rate); an onset at input sample p lands at synthesis frame
-        // round(p·S/Hs) — resetting there re-anchors the attack.
+        // --- Time map assembly (W1 generalized) ----------------------------
+        // BASE map: user breakpoints (proposal 28 warp anchors, delivered in
+        // the internal stretched domain) or the trivial uniform-S two-point
+        // map. Then TRANSIENT protection zones (M5) are inserted strictly
+        // inside base segments — a user anchor is authoritative, protection
+        // never moves one — and only where the segment's LOCAL slope exceeds
+        // 1 (rate-1 protection under compression gave attacks +83% relative
+        // energy; compression sharpens transients naturally). Zones stay
+        // asymmetric (1/4 window before, 3/4 after — the v2 detector marks
+        // early). Everything remains window-independent: the map is a pure
+        // function of (userMap, onsets, S), so paged ≡ whole holds.
+        std::vector<double> baseOut( 1, 0.0 ), baseIn( 1, 0.0 );
+        if( !cfg.userMap.empty() ) {
+            for( const auto &p : cfg.userMap ) {
+                if( p.first > baseOut.back() && p.second > baseIn.back() ) {
+                    baseOut.push_back( p.first );
+                    baseIn.push_back( p.second );
+                }
+            }
+            const size_t nb = baseOut.size();
+            if( nb >= 2 && baseIn.back() < (double) inLen ) {
+                const double slope = ( baseOut[nb-1] - baseOut[nb-2] )
+                                   / ( baseIn[nb-1] - baseIn[nb-2] );
+                baseOut.push_back( baseOut.back()
+                                   + ( (double) inLen - baseIn.back() ) * slope );
+                baseIn.push_back( (double) inLen );
+            }
+            // The user map dictates the mapped length.
+            Ls = std::max<uint64_t>( 1, (uint64_t) std::llround( baseOut.back() ) );
+        } else {
+            baseOut.push_back( (double) Ls );
+            baseIn.push_back( (double) inLen );
+        }
+        nSyn = ( Ls + Hs - 1 ) / Hs + 1;
+
+        mapOut.push_back( 0.0 );
+        mapIn.push_back( 0.0 );
+        {
+            const double P = (double) N;   // protection width, input samples
+            size_t seg = 0;
+            double lastOut = 0.0, lastIn = 0.0;
+            for( size_t i = 0; i < nOnsets; i++ ) {
+                const double o = (double) onsets[i];
+                if( o <= 0.0 || o >= (double) inLen ) continue;
+                // Advance into the base segment containing o, emitting the
+                // base breakpoints we cross (user anchors land in the map
+                // verbatim).
+                while( seg + 2 < baseOut.size() && o >= baseIn[seg + 1] ) {
+                    mapOut.push_back( baseOut[seg + 1] );
+                    mapIn.push_back( baseIn[seg + 1] );
+                    lastOut = baseOut[seg + 1];
+                    lastIn  = baseIn[seg + 1];
+                    seg++;
+                }
+                const double segInA  = baseIn[seg],  segInB  = baseIn[seg + 1];
+                const double segOutA = baseOut[seg], segOutB = baseOut[seg + 1];
+                const double slope = ( segOutB - segOutA ) / ( segInB - segInA );
+                if( slope <= 1.0 ) continue;   // local compression: no zone
+                const double oOut = segOutA + ( o - segInA ) * slope;
+                double zInA  = o - P * 0.25,    zInB  = o + P * 0.75;
+                double zOutA = oOut - P * 0.25, zOutB = oOut + P * 0.75;
+                const double lift = std::max(
+                    { lastIn - zInA + 1.0, lastOut - zOutA + 1.0,
+                      segInA - zInA + 1.0, segOutA - zOutA + 1.0, 0.0 } );
+                zInA += lift;
+                zOutA += lift;
+                if( zInA >= zInB || zOutA >= zOutB ) continue;   // swallowed
+                if( zInB >= segInB - 1.0 || zOutB >= segOutB - 1.0 ) continue;
+                mapOut.push_back( zOutA ); mapIn.push_back( zInA );
+                mapOut.push_back( zOutB ); mapIn.push_back( zInB );
+                lastOut = zOutB;
+                lastIn  = zInB;
+            }
+            // Emit the remaining base breakpoints (and always the terminal).
+            for( size_t j = seg + 1; j < baseOut.size(); j++ ) {
+                if( baseOut[j] > mapOut.back() && baseIn[j] > mapIn.back() ) {
+                    mapOut.push_back( baseOut[j] );
+                    mapIn.push_back( baseIn[j] );
+                }
+            }
+        }
+
+        // Keyframe set: fixed grid ∪ onset frames ∪ every map breakpoint
+        // (phase re-anchors exactly where a rate switches), min-gap spaced
+        // (M4 defense: resets denser than the OLA span are destructive).
         keys.push_back( 0 );
         const uint32_t K = cfg.keyframeInterval ? cfg.keyframeInterval : 64;
         for( uint64_t k = K; k < nSyn; k += K ) keys.push_back( k );
@@ -175,67 +256,6 @@ struct twPagedVocoder::Impl {
                 (uint64_t) std::llround( (double) onsets[i] * S / Hs );
             if( k < nSyn ) keys.push_back( k );
         }
-        std::sort( keys.begin(), keys.end() );
-        keys.erase( std::unique( keys.begin(), keys.end() ), keys.end() );
-
-        // Defense in depth (M4): keyframes closer together than the OLA
-        // overlap span are guaranteed-destructive — every crossfade region
-        // would carry a reset discontinuity — whatever upstream produced
-        // them (the v1 onset detector overfired on steady material). Keep
-        // the first of any cluster; the fixed grid is far coarser than this.
-        const uint64_t minGap = N / Hs;   // overlap depth (4 at 2048/512)
-        std::vector<uint64_t> spaced;
-        spaced.reserve( keys.size() );
-        for( uint64_t k : keys )
-            if( spaced.empty() || k - spaced.back() >= minGap )
-                spaced.push_back( k );
-        keys.swap( spaced );
-
-        // --- Transient-preserving time map ---------------------------------
-        // Active only when STRETCHING (S > 1): under compression, rate-1
-        // protection makes attacks carry disproportionate energy vs the
-        // shortened surroundings (+83% RMS measured on the transients
-        // corpus) and the semantics are murky anyway — compression already
-        // sharpens transients naturally. Stretching is where smear lives,
-        // and there the map cuts rise-time ratios from ~2-4x to ~0.6-1.3x.
-        mapOut.push_back( 0.0 );
-        mapIn.push_back( 0.0 );
-        if( S > 1.0 ) {
-            const double P = (double) N;   // protection width, input samples
-            double lastOut = 0.0, lastIn = 0.0;
-            for( size_t i = 0; i < nOnsets; i++ ) {
-                const double o = (double) onsets[i];
-                if( o <= 0.0 || o >= (double) inLen ) continue;
-                // ASYMMETRIC zone: the v2 detector marks onsets up to a
-                // window EARLY (the earliest frame touching the attack wins
-                // the normalized-flux race), so the attack body lies AFTER
-                // the detected position — protect 1/4 window before, 3/4
-                // after, or the burst tail falls outside the rate-1 zone and
-                // smears (measured: outlier pairs at 3-4x with symmetric
-                // zones, gone with asymmetric).
-                double zInA  = o - P * 0.25, zInB  = o + P * 0.75;
-                double zOutA = o * S - P * 0.25, zOutB = o * S + P * 0.75;
-                // Monotonicity in BOTH domains: shift the zone start past the
-                // previous segment end (shrinking the leading half) — never
-                // let either domain step backwards.
-                const double lift = std::max(
-                    { lastIn - zInA + 1.0, lastOut - zOutA + 1.0, 0.0 } );
-                zInA += lift;
-                zOutA += lift;
-                if( zInA >= zInB || zOutA >= zOutB ) continue;   // swallowed
-                if( zInB >= (double) inLen || zOutB >= (double) Ls ) continue;
-                mapOut.push_back( zOutA ); mapIn.push_back( zInA );
-                mapOut.push_back( zOutB ); mapIn.push_back( zInB );
-                lastOut = zOutB;
-                lastIn  = zInB;
-            }
-        }
-        mapOut.push_back( (double) Ls );
-        mapIn.push_back( (double) inLen );
-
-        // Phase re-anchors exactly where the map's rate switches: every
-        // interior breakpoint (zone edge) becomes a keyframe, so no OLA
-        // crossfade straddles a rate change with stale phase state.
         for( size_t j = 1; j + 1 < mapOut.size(); j++ ) {
             const uint64_t k = (uint64_t) std::llround( mapOut[j] / Hs );
             if( k < nSyn ) keys.push_back( k );
@@ -243,11 +263,11 @@ struct twPagedVocoder::Impl {
         std::sort( keys.begin(), keys.end() );
         keys.erase( std::unique( keys.begin(), keys.end() ), keys.end() );
         {
-            const uint64_t minGap2 = N / Hs;
+            const uint64_t minGap = N / Hs;   // overlap depth (4 at 2048/512)
             std::vector<uint64_t> spaced;
             spaced.reserve( keys.size() );
             for( uint64_t k : keys )
-                if( spaced.empty() || k - spaced.back() >= minGap2 )
+                if( spaced.empty() || k - spaced.back() >= minGap )
                     spaced.push_back( k );
             keys.swap( spaced );
         }
@@ -489,8 +509,9 @@ struct twPagedVocoder::Impl {
     {
         if( len == 0 || inLen == 0 || cfg.channels == 0 ) return;
 
-        if( stretch == 1.0 && pitchRatio == 1.0 ) {
-            // Identity: copy through exactly.
+        if( stretch == 1.0 && pitchRatio == 1.0 && cfg.userMap.empty() ) {
+            // Identity: copy through exactly. (A user warp map is NEVER an
+            // identity, whatever the scalar params say — W1.)
             for( uint32_t c = 0; c < cfg.channels; c++ ) {
                 float *d = dst + (size_t) c * len;
                 for( uint64_t i = 0; i < len; i++ ) {

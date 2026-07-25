@@ -160,6 +160,75 @@ int main()
         }
     }
 
+    // --- W1: USER WARP MAP — the partition property must hold under
+    // piecewise maps too (fresh instance per window, random partition), and
+    // user anchors must actually reshape time.
+    {
+        twPagedVocoder::Config mc = cfg;
+        // Internal-domain breakpoints (out, in): first half stretched 2x,
+        // then compressed to 0.75x, final slope extends.
+        mc.userMap = { { 96000.0, 48000.0 }, { 132000.0, 96000.0 } };
+        const uint64_t outLen = 96000 + 36000 + 36000;   // spans + extension
+        std::vector<float> whole( (size_t) 2 * outLen, 0.0f );
+        twPagedVocoder::warpOffline( chans, inLen, whole.data(), outLen, cfg,
+                                     1.0, 1.0, onsets, nOnsets );
+        // (baseline above is the identity map — must differ from mapped)
+        std::vector<float> mapped( (size_t) 2 * outLen, 0.0f );
+        {
+            twPagedVocoder v( chans, inLen, mc, 1.0, 1.0, onsets, nOnsets );
+            v.render( 0, outLen, mapped.data() );
+        }
+        CHECK( std::memcmp( whole.data(), mapped.data(),
+                            whole.size() * sizeof( float ) ) != 0,
+               "user map reshapes the output" );
+
+        // Partition property under the user map, fresh instances.
+        std::vector<float> paged( (size_t) 2 * outLen, 0.0f );
+        const std::vector<uint64_t> cuts = makeCuts( outLen, 0xC0FFEE01 );
+        for( size_t i = 0; i + 1 < cuts.size(); i++ ) {
+            const uint64_t a = cuts[i], b = cuts[i + 1];
+            const uint64_t len = b - a;
+            twPagedVocoder v( chans, inLen, mc, 1.0, 1.0, onsets, nOnsets );
+            std::vector<float> w( (size_t) 2 * len, 0.0f );
+            v.render( a, len, w.data() );
+            for( uint32_t c = 0; c < 2; c++ )
+                std::memcpy( paged.data() + (size_t) c * outLen + a,
+                             w.data() + (size_t) c * len,
+                             (size_t) len * sizeof( float ) );
+        }
+        CHECK( std::memcmp( mapped.data(), paged.data(),
+                            mapped.size() * sizeof( float ) ) == 0,
+               "user-map paged (fresh instances) == whole render" );
+
+        // Map + pitch compose (partition property again, coarser check).
+        {
+            const uint64_t pOut = outLen;
+            std::vector<float> a1( (size_t) 2 * pOut, 0.0f );
+            std::vector<float> a2( (size_t) 2 * pOut, 0.0f );
+            twPagedVocoder v1( chans, inLen, mc, 1.0, 1.259921, onsets,
+                               nOnsets );
+            v1.render( 0, pOut, a1.data() );
+            twPagedVocoder v2( chans, inLen, mc, 1.0, 1.259921, onsets,
+                               nOnsets );
+            const uint64_t half = pOut / 2;
+            std::vector<float> w1( (size_t) 2 * half, 0.0f );
+            std::vector<float> w2( (size_t) 2 * ( pOut - half ), 0.0f );
+            v2.render( 0, half, w1.data() );
+            v2.render( half, pOut - half, w2.data() );
+            for( uint32_t c = 0; c < 2; c++ ) {
+                std::memcpy( a2.data() + (size_t) c * pOut,
+                             w1.data() + (size_t) c * half,
+                             (size_t) half * sizeof( float ) );
+                std::memcpy( a2.data() + (size_t) c * pOut + half,
+                             w2.data() + (size_t) c * ( pOut - half ),
+                             (size_t) ( pOut - half ) * sizeof( float ) );
+            }
+            CHECK( std::memcmp( a1.data(), a2.data(),
+                                a1.size() * sizeof( float ) ) == 0,
+                   "user map + pitch: split render == whole render" );
+        }
+    }
+
     // Onset-set sensitivity: different keyframes → (almost surely)
     // different bytes, proving onsets actually participate.
     {

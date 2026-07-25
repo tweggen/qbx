@@ -83,16 +83,22 @@ SApplyResult SResizeClipAction::apply( SProject *project )
         length_t oldLoop   = takeCut ? takeCut->getLoopLength().frames() : 0;
         Fraction oldStretch = takeCut ? takeCut->getStretchExact() : Fraction(1);
 
+        std::vector<twWarpAnchor> oldAnchors =
+            takeCut ? takeCut->getGrainParams().warpAnchors
+                    : std::vector<twWarpAnchor>();
+
         link->setStartTime( startTime_ );
         stack->applyWindowAll( duration_, loopLength_, stretch_ );
         if( takeCut ) {
             takeCut->setWindow( srcStart_, ClipLen( duration_ ),
                                 WarpedLen( loopLength_ ), stretch_ );
+            if( setAnchors_ ) takeCut->setWarpAnchors( anchors_ );
         }
 
-        SAction *inverse = new SResizeClipAction( clipPath_, oldStart, oldAnchor,
-                                                  oldDur, oldLoop, oldStretch,
-                                                  take_ );
+        SResizeClipAction *inverse = new SResizeClipAction(
+            clipPath_, oldStart, oldAnchor, oldDur, oldLoop, oldStretch,
+            take_ );
+        if( setAnchors_ ) inverse->setWarpAnchors( oldAnchors );
         return {true, inverse};
     }
 
@@ -108,12 +114,16 @@ SApplyResult SResizeClipAction::apply( SProject *project )
     length_t oldLoop   = cut->getLoopLength().frames();
     Fraction oldStretch = cut->getStretchExact();
 
+    std::vector<twWarpAnchor> oldAnchors = cut->getGrainParams().warpAnchors;
+
     link->setStartTime( startTime_ );
     cut->setWindow( srcStart_, ClipLen( duration_ ),
                     WarpedLen( loopLength_ ), stretch_ );
+    if( setAnchors_ ) cut->setWarpAnchors( anchors_ );
 
-    SAction *inverse = new SResizeClipAction( clipPath_, oldStart, oldAnchor, oldDur,
-                                              oldLoop, oldStretch );
+    SResizeClipAction *inverse = new SResizeClipAction(
+        clipPath_, oldStart, oldAnchor, oldDur, oldLoop, oldStretch );
+    if( setAnchors_ ) inverse->setWarpAnchors( oldAnchors );
     return {true, inverse};
 }
 
@@ -127,6 +137,12 @@ void SResizeClipAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "stretch", QString::fromStdString( stretch_.toString() ) );
     elem.setAttribute( "take", take_ );
     elem.setAttribute( "broadcast", broadcast_ ? 1 : 0 );
+    if( setAnchors_ ) {
+        QStringList toks;
+        for( const twWarpAnchor &a : anchors_ )
+            toks << QString( "%1:%2" ).arg( a.src ).arg( a.warped );
+        elem.setAttribute( "warpAnchors", toks.join( "|" ) );
+    }
 }
 
 bool SResizeClipAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -148,6 +164,20 @@ bool SResizeClipAction::readXml( const QDomElement &elem, int /*version*/ )
     }
     take_        = elem.attribute( "take", "-1" ).toInt();
     broadcast_   = elem.attribute( "broadcast", "1" ).toInt() != 0;
+    // W1: attribute PRESENT (even empty) = replace the anchor list.
+    if( elem.hasAttribute( "warpAnchors" ) ) {
+        std::vector<twWarpAnchor> parsed;
+        for( const QString &tok : elem.attribute( "warpAnchors" )
+                 .split( "|", Qt::SkipEmptyParts ) ) {
+            const QStringList kv = tok.split( ":" );
+            if( kv.size() != 2 ) continue;
+            bool okS = false, okW = false;
+            const qint64 sv = kv[0].toLongLong( &okS );
+            const qint64 wv = kv[1].toLongLong( &okW );
+            if( okS && okW ) parsed.push_back( { (int64_t) sv, (int64_t) wv } );
+        }
+        setWarpAnchors( twWarpMap::sanitize( parsed ) );
+    }
     return true;
 }
 

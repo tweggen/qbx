@@ -1563,7 +1563,6 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
                 length_t contentLen = cut->getContent().hasDuration()
                                       ? (length_t) cut->getContent().getDuration() : -1;
-                double st = cut->getStretch(); if( st <= 0 ) st = 1.0;
                 length_t d = (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
                            - (length_t) smv_.alignTime( (offset_t) getLastClickOffset() );
                 length_t newOff = (length_t) clipResizeOffset0_ - d;
@@ -1579,7 +1578,11 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // content) would otherwise have zero slip room. Sliding further
                 // simply lets the tail run into silence, which is a valid slip.
                 if( contentLen >= 0 ) {
-                    length_t maxOff = (length_t)( (double) contentLen * st )
+                    // W1: content end mapped through the warp map (equals
+                    // contentLen*stretch when no anchors exist).
+                    length_t maxOff = (length_t) cut->sourceToWarpedExact(
+                                          Fraction( (int64_t) contentLen ) )
+                                          .floorToInt()
                                     - (length_t) SMV_CUT_MIN_TIME;
                     if( maxOff < 0 ) maxOff = 0;
                     if( newOff > maxOff ) newOff = maxOff;

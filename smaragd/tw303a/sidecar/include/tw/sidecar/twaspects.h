@@ -122,7 +122,8 @@ constexpr uint32_t    LoudnessVersion = 1;
  * exists occupy different keys — availability never aliases bytes).
  */
 constexpr const char *WarpPcm        = "warp.pcm";
-constexpr uint32_t    WarpPcmVersion = 2;   // v2: params blob gained onsetsHash
+constexpr uint32_t    WarpPcmVersion = 3;   // v3: + uint64 anchorsHash (W1
+// warp-marker fingerprint; 0 = no anchors). v2 added onsetsHash.
 
 } // namespace twAspect
 

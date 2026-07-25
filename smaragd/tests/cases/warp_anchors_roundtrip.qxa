@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 28 W1: user warp anchors are first-class clip state.
+
+  The 4 s ramped sawtooth is warped with anchors "96000:96000|192000:288000":
+  source [0,2)s plays 1:1, source [2,4)s plays at 2x - total 6 s. The
+  fixture's ramp (RMS(t) = 0.2t/sqrt(3)) makes every output second's RMS a
+  fingerprint of WHICH source region landed there, so the asserts pin the
+  map's timing semantics, not just energy. The anchor list must survive
+  save/load byte-exactly (exact integer serialization) and undo/redo.
+-->
+<SActionScript version="1" name="warp_anchors_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <resize-clip clip="0,0" startTime="0" srcStart="0"
+                 duration="288000" loopLength="0" stretch="1"
+                 warpAnchors="96000:96000|192000:288000"/>
+
+    <render filename="warp_anchors_a.wav" format="wav" quality="10"/>
+    <!-- unwarped first half: source second 1 lands at output second 1 -->
+    <assert-audio-energy filename="warp_anchors_a.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.155" maxRms="0.20"/>
+    <!-- 2x half: source [2,2.5)s spans output second 2 -->
+    <assert-audio-energy filename="warp_anchors_a.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.225" maxRms="0.29"/>
+    <!-- 2x tail: source [3.5,4)s spans output second 5 -->
+    <assert-audio-energy filename="warp_anchors_a.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.38" maxRms="0.48"/>
+    <!-- silence after the warped clip -->
+    <assert-audio-energy filename="warp_anchors_a.wav"
+                         startFrame="288000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Serialization roundtrip: exact anchors survive save/load -->
+    <save-project path="../../build/warp_anchors_roundtrip.qxp"/>
+    <load-project path="../../build/warp_anchors_roundtrip.qxp"/>
+    <render filename="warp_anchors_b.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="warp_anchors_b.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.155" maxRms="0.20"/>
+    <assert-audio-energy filename="warp_anchors_b.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.38" maxRms="0.48"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

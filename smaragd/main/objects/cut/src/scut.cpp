@@ -132,7 +132,10 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
                 || ( builtGrain_.stretch    == snap.grainParams.stretch
                   && builtGrain_.pitchCents == snap.grainParams.pitchCents
                   && builtGrain_.grainSize  == snap.grainParams.grainSize
-                  && builtGrain_.crossfade  == snap.grainParams.crossfade );
+                  && builtGrain_.crossfade  == snap.grainParams.crossfade
+                  // W1: a warp-anchor edit MUST mint a new reader — without
+                  // this term the fast path silently kept the stale chain.
+                  && builtGrain_.warpAnchors == snap.grainParams.warpAnchors );
             bool sameLoop = !needLoop
                 || ( builtLoopStart_ == snap.startOffset
                   && builtLoopLength_ == snap.loopLength );
@@ -701,8 +704,11 @@ QList<SObject::SDirtyRange> SCut::mapChildRangesToSelf(
     // Blocking: this maps EDIT dirty ranges — a stale stretch/window here
     // mis-scopes invalidation (stale try-lock class; edit path, may block).
     SCutSnapshot snap = getSnapshotBlocking();
-    const Fraction stretch = snap.grainParams.stretch > Fraction(0)
-                           ? snap.grainParams.stretch : Fraction(1);
+    // W1: the piecewise warp map replaces the scalar StretchMap here — same
+    // conservative floor/ceil edge rule, exact evaluation.
+    const twWarpMap wm( snap.grainParams.warpAnchors,
+                        snap.grainParams.stretch > Fraction(0)
+                            ? snap.grainParams.stretch : Fraction(1) );
     const int64_t dur = snap.cutDuration.frames();
     const bool looping = snap.loopLength > WarpedLen(0)
                       && snap.loopLength < warpedFromClip(snap.cutDuration);
@@ -710,8 +716,8 @@ QList<SObject::SDirtyRange> SCut::mapChildRangesToSelf(
     QList<SDirtyRange> out;
     for( const SDirtyRange &r : childRanges ) {
         if( r.end <= r.start ) continue;
-        Fraction wStart = Fraction( (int64_t) r.start ) * stretch;
-        Fraction wEnd   = Fraction( (int64_t) r.end ) * stretch;
+        Fraction wStart = wm.srcToWarped( Fraction( (int64_t) r.start ) );
+        Fraction wEnd   = wm.srcToWarped( Fraction( (int64_t) r.end ) );
         if( looping ) {
             twLoopMap loop( Fraction( snap.startOffset.frames() ),
                             Fraction( snap.loopLength.frames() ) );
@@ -802,6 +808,20 @@ void SCut::setWindow( const Fraction &srcStart, ClipLen duration,
     invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
     emit durationChanged( duration.frames() );
+}
+
+// W1: set the user warp-anchor list (sanitized on entry) and rebuild.
+// Mirrors setWindow's publish/invalidate discipline; the anchor term in
+// rebuildReader's fast-path comparison guarantees a fresh chain.
+void SCut::setWarpAnchors( const std::vector<twWarpAnchor> &anchors )
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        grainParams_.warpAnchors = twWarpMap::sanitize( anchors );
+        buildSnapshot_nolock();
+    }
+    invalidateCapture();
+    emit durationChanged( getDurationBlocking() );
 }
 
 WarpedPos SCut::getLoopStart() const
@@ -1004,6 +1024,16 @@ int SCut::serializeSelfAttributes( QTextStream &o )
       << " stretch='" << QString::fromStdString( grainParams_.stretch.toString() ) << "'"
       << " pitchCents='" << grainParams_.pitchCents << "'";
 
+    // W1: warp anchors — exact integer pairs "src:warped|...", written only
+    // when present (old builds ignore the unknown attribute; a no-anchor
+    // file is byte-identical to pre-W1 output).
+    if( !grainParams_.warpAnchors.empty() ) {
+        QStringList toks;
+        for( const twWarpAnchor &a : grainParams_.warpAnchors )
+            toks << QString( "%1:%2" ).arg( a.src ).arg( a.warped );
+        o << " warpAnchors='" << toks.join( "|" ) << "'";
+    }
+
     // Grain parameters stored as time (milliseconds) for rate independence.
     // Default 48kHz: 2048 frames ≈ 42.67 ms, 512 frames ≈ 10.67 ms
     int srate = 48000;  // default fallback
@@ -1030,6 +1060,27 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     // decimals recover once via lookup/continued fractions.
     grainParams_.stretch = parseFractionOrDouble(
         element.attribute( "stretch", "1" ).toStdString() );
+
+    // W1: warp anchors ("src:warped|..."), sanitized on entry — the
+    // deserializer never trusts monotonicity from disk.
+    grainParams_.warpAnchors.clear();
+    {
+        const QString anchorsStr = element.attribute( "warpAnchors" );
+        if( !anchorsStr.isEmpty() ) {
+            std::vector<twWarpAnchor> parsed;
+            for( const QString &tok :
+                 anchorsStr.split( "|", Qt::SkipEmptyParts ) ) {
+                const QStringList kv = tok.split( ":" );
+                if( kv.size() != 2 ) continue;
+                bool okS = false, okW = false;
+                const qint64 sv = kv[0].toLongLong( &okS );
+                const qint64 wv = kv[1].toLongLong( &okW );
+                if( okS && okW )
+                    parsed.push_back( { (int64_t) sv, (int64_t) wv } );
+            }
+            grainParams_.warpAnchors = twWarpMap::sanitize( parsed );
+        }
+    }
 
     QString data = element.attribute( "srcStart" );
     if( !data.isEmpty() ) {

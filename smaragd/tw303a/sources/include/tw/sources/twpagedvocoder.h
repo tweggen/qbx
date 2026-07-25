@@ -58,6 +58,15 @@ public:
         uint32_t channels         = 1;
         uint32_t keyframeInterval = 64;    // synthesis frames per fixed keyframe
         double   peakProminence   = 4.0;   // peak vs frame-median magnitude (~12 dB)
+
+        // Proposal 28 W1: optional USER base map — breakpoints in the
+        // INTERNAL stretched domain as (out, in) pairs, strictly increasing
+        // in both coordinates, origin (0,0) implicit; the final segment's
+        // slope extends to the end of the input. Empty = uniform stretch S.
+        // Transient protection zones are inserted strictly INSIDE base
+        // segments (a user anchor is authoritative — protection never moves
+        // one), and only where the segment's local slope exceeds 1.
+        std::vector<std::pair<double, double>> userMap;   // (out, in)
     };
 
     twPagedVocoder( const float *const *src, uint64_t inLen,

@@ -76,10 +76,11 @@ SApplyResult SSplitClipAction::apply(SProject *project)
             c2->setGrainParamsRaw(c1->getGrainParams());
             // Tail anchor = head anchor + split offset mapped to source:
             // exact rational, no floor (proposal 18 Phase 3).
-            c2->setSrcStartRaw( c1->getSrcStart()
-                + ( c1->getStretchExact() > Fraction(0)
-                        ? Fraction( (int64_t)inObjOffset ) / c1->getStretchExact()
-                        : Fraction( (int64_t)inObjOffset ) ) );
+            // W1: exact rational, no floor, through the WARP MAP (piecewise
+            // when anchors exist; identical to the old /stretch otherwise).
+            c2->setSrcStartRaw( c1->warpedToSourceExact(
+                c1->sourceToWarpedExact( c1->getSrcStart() )
+                + Fraction( (int64_t)inObjOffset ) ) );
             c2->setDuration(fullDur - inObjOffset);
             stack2->insertTake(*c2);
         }
@@ -133,10 +134,10 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     // reader with these params in place.
     SCut *sc2 = new SCut(project, sc1->getContent());
     sc2->setGrainParamsRaw(sc1->getGrainParams());
-    sc2->setSrcStartRaw( sc1Anchor
-        + ( sc1->getStretchExact() > Fraction(0)
-                ? Fraction( (int64_t)inObjOffset ) / sc1->getStretchExact()
-                : Fraction( (int64_t)inObjOffset ) ) );
+    // W1: exact rational, no floor, through the WARP MAP (see above).
+    sc2->setSrcStartRaw( sc1->warpedToSourceExact(
+        sc1->sourceToWarpedExact( sc1Anchor )
+        + Fraction( (int64_t)inObjOffset ) ) );
     sc2->setDuration(origDur - inObjOffset);
     sc1->setDuration(inObjOffset);
     SLink *sl2 = new SLink(*sc2, NULL);

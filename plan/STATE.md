@@ -6984,3 +6984,57 @@ material shows it (sub-hop analysis would be the lever).
 soft-attack table shows recall collapsing above ~0.5 (0.875 → 0.25) while
 precision holds at 1.0 throughout — the UI threshold, if ever exposed,
 should range 0.1–0.5.
+
+---
+
+## Proposal 28 W1: user warp maps — warp markers are first-class clip state (2026-07-25)
+
+**What landed** (the invasive M6 milestone: the domain seams).
+
+- **`twWarpMap`** (tw/core) — THE source↔warped conversion authority:
+  piecewise-linear through exact integer anchors (implicit origin, final-
+  segment slope extension), exact Fraction evaluation both directions,
+  deterministic sanitize (longest strictly-increasing-in-both chain). The
+  no-anchor path is BIT-IDENTICAL to the historic `pos × stretch`
+  expressions — pinned by twwarpmap_test against the literal old formulas.
+- **`twGrainParams::warpAnchors`** — sanitized exact pairs; anchors break
+  isIdentity() and FORCE the vocoder backend (piecewise maps are a vocoder
+  capability; the RB escape hatch governs scalar clips only). warp.pcm
+  params v3 adds the anchors fingerprint.
+- **Vocoder**: Config.userMap (internal-domain breakpoints); base map =
+  user anchors, transient protection zones inserted strictly INSIDE user
+  segments where the LOCAL slope exceeds 1 — an anchor is authoritative,
+  protection never moves one. Identity short-circuit fixed to respect maps.
+  vocoder_test extended: paged ≡ whole BIT-EXACT under user maps (random
+  partitions, fresh instances) and under map+pitch composition.
+- **The ten conversion sites** (recon-enumerated) made map-aware:
+  getStartOffset / setStartOffsetRaw (derived anchor, exact inverse),
+  clipToSource (new map-aware clip→source shared by BOTH preview contexts —
+  the affine clipToSourceMap stays for the scalar path), mapChildRangesToSelf
+  (range-scoped invalidation folds the piecewise map, conservative
+  floor/ceil edges kept), split-action tail anchors (exact, no floor,
+  through the map), the slip-drag content clamp, nFrames_ (map end,
+  floor rule), rebuildReader's fast path (the recon gotcha: without an
+  anchors term it silently kept stale readers — now compared).
+- **Serialization**: `warpAnchors='src:warped|…'` exact integer pairs
+  (house delimited idiom), written only when present (no-anchor files
+  byte-identical to pre-W1); parse sanitizes on entry. resize-clip gained
+  an optional warpAnchors attribute with full inverse/undo fidelity.
+
+**Gates (all green).** twwarpmap_test (exactness, roundtrip, sanitize);
+vocoder_test incl. the new user-map partition property; full suite 70/70
+(chunked); warp_anchors_roundtrip.qxa — the new gate case: anchors
+"96000:96000|192000:288000" over the ramped fixture produce the analytic
+RMS staircase (unwarped seconds match the fixture exactly; the 2× half
+interpolates the ramp with loudness preserved: 0.258/0.316/0.373/0.430),
+survive save/load exactly, and undo/redo restores and reapplies the list
+(12/12 deterministic at workers {1,8}); grain_loop_stretch regression
+25/25; layering/logging clean.
+
+**Footgun found and recorded:** running `./build.sh` from `smaragd/`
+instead of the repo root silently builds NOTHING (no error, no output) —
+a diagnosis detour this milestone. Candidate for a guard in the script.
+
+**W2 is unblocked**: the engine, serialization and undo surfaces for warp
+markers exist; W2 is "only" the editing UI (ticks, drag, snap) on top of
+verbs that already exist in action form.

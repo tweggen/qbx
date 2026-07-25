@@ -1,8 +1,11 @@
 #ifndef SRESIZECLIPACTION_H
 #define SRESIZECLIPACTION_H
 
+#include <vector>
+
 #include "app/actions/saction.h"
 #include "tw/core/twfraction.h"
+#include "tw/core/twwarpmap.h"
 #include "tw/graph/tw303aenv.h"
 #include <QList>
 
@@ -23,6 +26,13 @@ public:
                        length_t loopLength = 0, const Fraction &stretch = Fraction(1),
                        int take = -1, bool broadcast = true );
 
+    // W1: opt-in warp-anchor payload — when set, apply() also replaces the
+    // clip's warp-anchor list (empty = clear). Absent = anchors untouched.
+    void setWarpAnchors( const std::vector<twWarpAnchor> &a ) {
+        setAnchors_ = true;
+        anchors_    = a;
+    }
+
     QString name() const override { return QStringLiteral("resize-clip"); }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
@@ -40,6 +50,9 @@ private:
     // synced by EXPLICIT take index (decision 3), so a stack anchor resolves
     // its take before fanning out.
     bool       broadcast_   = true;
+    // W1 warp anchors (see setWarpAnchors()).
+    bool                      setAnchors_ = false;
+    std::vector<twWarpAnchor> anchors_;
 };
 
 #endif // SRESIZECLIPACTION_H

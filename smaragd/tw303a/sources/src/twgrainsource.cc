@@ -67,13 +67,14 @@ int stretchBackend()
 // rate/channel geometry, the EXACT stretch fraction as clamped by the ctor,
 // the pitch, and the OLA engine knobs (vestigial under Rubber Band, but a
 // duplicate entry is harmless where a wrong hit would not be).
-void warpParamsBlob( int rate, idx_t channels, const Fraction &stretchFrac,
-                     double pitchCents, length_t grainSize, length_t crossfade,
-                     uint64_t onsetsHash, std::vector<uint8_t> &out )
+void warpParamsBlob( uint8_t backend, int rate, idx_t channels,
+                     const Fraction &stretchFrac, double pitchCents,
+                     length_t grainSize, length_t crossfade,
+                     uint64_t onsetsHash, uint64_t anchorsHash,
+                     std::vector<uint8_t> &out )
 {
-    const uint8_t backend = (uint8_t) stretchBackend();
     out.clear();
-    out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 + 8 );
+    out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 + 8 + 8 );
     auto put32 = [&]( uint32_t v ) {
         for( int i = 0; i < 4; i++ ) out.push_back( (uint8_t)( v >> ( 8 * i ) ) );
     };
@@ -94,6 +95,9 @@ void warpParamsBlob( int rate, idx_t channels, const Fraction &stretchFrac,
     // A warp built before the onsets sidecar existed and one built after
     // occupy DIFFERENT cache keys — availability can never alias bytes.
     put64( onsetsHash );
+    // W1: fingerprint of the exact user warp anchors (0 = none) — a warp
+    // with markers can never alias one without.
+    put64( anchorsHash );
 }
 
 } // namespace
@@ -140,7 +144,16 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     if( stretch < 1e-6 ) stretch = 1e-6;
     double   r       = pow( 2.0, p.pitchCents / 1200.0 );   // pitch ratio
 
-    nFrames_ = (length_t) ( Fraction( inLen ) * stretchFrac ).floorToInt();
+    // Proposal 28 W1: THE conversion authority. No anchors -> pure scalar,
+    // bit-identical to the historic floor(inLen*stretch) (twwarpmap_test
+    // pins this); anchors -> piecewise map, total length from the map.
+    const twWarpMap warpMap( p.warpAnchors, stretchFrac );
+    nFrames_ = (length_t) warpMap.srcToWarpedFloor( inLen );
+    // Anchors are a VOCODER capability: their presence forces that backend
+    // regardless of TW_STRETCH_BACKEND (the RB escape hatch governs scalar
+    // clips only — documented in CLAUDE.md).
+    const int backend = p.warpAnchors.empty() ? stretchBackend()
+                                              : (int) kBackendVocoder;
     if( nFrames_ <= 0 ) {
         nFrames_ = 0;
         return;
@@ -161,7 +174,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     // material below, so availability can never alias cached bytes.
     std::vector<uint64_t> onsetPos;
     uint64_t onsetsHash = 0;
-    if( stretchBackend() == kBackendVocoder && !warpContent.isNull() ) {
+    if( backend == kBackendVocoder && !warpContent.isNull() ) {
         auto onsetReader = twSidecarStore::instance().loadAny(
             warpContent, twAspect::Onsets, twAspect::OnsetsVersion );
         if( onsetReader && onsetReader->info().recordCount > 0
@@ -190,6 +203,20 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         }
     }
 
+    // W1: the vocoder's base map in the INTERNAL stretched domain —
+    // (warped_i * pitchRatio, src_i) per anchor. Empty = uniform stretch.
+    std::vector<std::pair<double, double>> userMapInternal;
+    uint64_t anchorsHash = 0;
+    if( !p.warpAnchors.empty() ) {
+        userMapInternal.reserve( p.warpAnchors.size() );
+        for( const twWarpAnchor &a : p.warpAnchors )
+            userMapInternal.push_back(
+                { (double) a.warped * r, (double) a.src } );
+        anchorsHash = twHashBuffer(
+            p.warpAnchors.data(),
+            p.warpAnchors.size() * sizeof( twWarpAnchor ) ).lo;
+    }
+
     // --- Proposal 27 M5: STREAMING mode ------------------------------------
     // Vocoder backend over a resident-planar, shared_ptr-owned source: no
     // materialized warp at all. The vocoder renders aligned output blocks on
@@ -199,7 +226,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     // property proposal 27 exists for. The shared handle co-owns the PCM, so
     // clip-content teardown during a queued freeze cannot dangle us (the
     // materialize paths were safe by copying; streaming must own instead).
-    if( stretchBackend() == kBackendVocoder ) {
+    if( backend == kBackendVocoder ) {
         std::shared_ptr<const twRandomSource> ref = src.sharedRef();
         bool planar = ( ref != nullptr );
         for( idx_t c = 0; planar && c < channels_; ++c )
@@ -217,6 +244,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
             vc.analysisHop = 512;
             vc.rate        = rate_;
             vc.channels    = (uint32_t) channels_;
+            vc.userMap     = userMapInternal;
             stream_->voc.reset( new twPagedVocoder(
                 stream_->chans.data(), (uint64_t) inLen, vc, stretch, r,
                 onsetPos.empty() ? nullptr : onsetPos.data(),
@@ -236,8 +264,9 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
                             && src.isReproducible()
                             && twSidecarStore::instance().enabled();
     if( warpCacheable ) {
-        warpParamsBlob( rate_, channels_, stretchFrac, p.pitchCents,
-                        p.grainSize, p.crossfade, onsetsHash, warpParams );
+        warpParamsBlob( (uint8_t) backend, rate_, channels_, stretchFrac,
+                        p.pitchCents, p.grainSize, p.crossfade, onsetsHash,
+                        anchorsHash, warpParams );
         warpParamsHash = twSidecarStore::hashParams( warpParams.data(),
                                                      warpParams.size() );
         auto reader = twSidecarStore::instance().load(
@@ -259,7 +288,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         }
     }
 
-    if( stretchBackend() == kBackendVocoder ) {
+    if( backend == kBackendVocoder ) {
         // --- In-house phase vocoder (proposal 27 M3, opt-in) -----------------
         // Offline whole-signal mode; identity phase-locking, cross-channel
         // rotation, exact-outLen contract identical to the paths below. data_
@@ -277,6 +306,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         vc.analysisHop = 512;
         vc.rate        = rate_;
         vc.channels    = (uint32_t) channels_;
+        vc.userMap     = userMapInternal;
         twPagedVocoder::warpOffline( inPtr.data(), (uint64_t) inLen,
                                      data_.data(), (uint64_t) nFrames_,
                                      vc, stretch, r,

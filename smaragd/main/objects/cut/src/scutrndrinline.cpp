@@ -24,10 +24,10 @@ namespace {
 class LoopSegmentContext : public SRenderContext {
 public:
     LoopSegmentContext( QPainter &p, offset_t clipStart,
-                        const twAffineMap &clipToSource,
+                        const SCut &cut,
                         double segLeftX, double segWpx, length_t segLen )
         : SRenderContext( p ), clipStart_( clipStart ),
-          clipToSource_( clipToSource ),
+          cut_( cut ),
           segLeftX_( segLeftX ), segWpx_( segWpx ), segLen_( segLen ) {}
     virtual offset_t getTimeOf( int x ) const {
         double rel = ( (double) x - segLeftX_ ) * (double) segLen_ / segWpx_;
@@ -36,12 +36,13 @@ public:
         // clip->source map (the one playback derives its window from,
         // proposal 18 Phase 4) yields the source sample the waveform is
         // read from. Pixels quantize rel; the map itself is exact.
-        return clipStart_ + (offset_t) clipToSource_
-                   .map( Fraction( (int64_t) rel ) ).floorToInt();
+        // W1: map-aware conversion (piecewise when warp anchors exist).
+        return clipStart_ + (offset_t) cut_
+                   .clipToSource( Fraction( (int64_t) rel ) ).floorToInt();
     }
 private:
     offset_t    clipStart_;
-    twAffineMap clipToSource_;
+    const SCut &cut_;
     double      segLeftX_;
     double      segWpx_;
     length_t    segLen_;
@@ -192,7 +193,7 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
             int isx = (int)( sx > visibRect.x() ? sx : visibRect.x() );
             int iex = (int)( ex < right ? ex : right );
             if( iex <= isx ) continue;
-            LoopSegmentContext lctx( p, lk.getStartTime(), cut.clipToSourceMap(),
+            LoopSegmentContext lctx( p, lk.getStartTime(), cut,
                                      sx, segWpx, segLen );
             lctx.setVisibRect( QRect( isx, visibRect.y(), iex - isx, visibRect.height() ) );
             drawSeg( lctx );
@@ -230,8 +231,9 @@ offset_t SCutRendererInline::InlineRenderContext::getTimeOf( int x ) const
     // time again, so we add it back here.)
     int64_t rel = (int64_t) parentRC_.getTimeOf( x ) - (int64_t) clipStart_;
     if( rel < 0 ) rel = 0;
-    return clipStart_ + (offset_t) cut_.clipToSourceMap()
-               .map( Fraction( rel ) ).floorToInt();
+    // W1: map-aware conversion (piecewise when warp anchors exist).
+    return clipStart_ + (offset_t) cut_
+               .clipToSource( Fraction( rel ) ).floorToInt();
 }
 
 SCutRendererInline::InlineRenderContext::~InlineRenderContext()

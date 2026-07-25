@@ -37,7 +37,9 @@ tw_module(core
         core/include/tw/core/audio_frame.h
         core/include/tw/core/generation_promise.h
         core/include/tw/core/twcontenthash.h
+        core/include/tw/core/twwarpmap.h
         core/src/twcontenthash.cc
+        core/src/twwarpmap.cc
         core/src/generation_promise.cc
         core/src/twlog.cc
         core/src/twconvert.cc
@@ -426,6 +428,7 @@ endfunction()
 tw_module_test(exact_arithmetic_test        core/tests/test_exact_arithmetic.cpp        tw_core)
 tw_module_test(serialization_roundtrip_test core/tests/test_serialization_roundtrip.cpp tw_core)
 tw_module_test(twfraction_test              core/tests/test_twfraction.cpp              tw_core)
+tw_module_test(twwarpmap_test               core/tests/test_twwarpmap.cpp               tw_core)
 tw_module_test(timemap_test                 core/tests/test_timemap.cpp                 tw_core)
 tw_module_test(twlog_test                   core/tests/test_twlog.cpp                   tw_core)
 tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)

@@ -154,8 +154,25 @@ public:
     // never drift it. The warped-domain offset is DERIVED exactly and
     // floored once here — the render-boundary rounding rule.
     const Fraction &getSrcStart() const { return srcStart_; }
+
+    // Proposal 28 W1: THE source<->warped conversion authority for this clip.
+    // No anchors -> pure scalar stretch (bit-identical to the historic
+    // expressions); anchors -> the user's piecewise warp map. Built on
+    // demand from grainParams_ so no cached copy can go stale.
+    twWarpMap warpMap() const {
+        return twWarpMap( grainParams_.warpAnchors,
+                          grainParams_.stretch > Fraction(0)
+                              ? grainParams_.stretch : Fraction(1) );
+    }
+    Fraction sourceToWarpedExact( const Fraction &src ) const {
+        return warpMap().srcToWarped( src );
+    }
+    Fraction warpedToSourceExact( const Fraction &warped ) const {
+        return warpMap().warpedToSrc( warped );
+    }
+
     WarpedPos getStartOffset() const {
-        return WarpedPos( ( srcStart_ * grainParams_.stretch ).floorToInt() );
+        return WarpedPos( warpMap().srcToWarped( srcStart_ ).floorToInt() );
     }
     // Length of the segment that repeats when this cut is longer than it (the
     // "previously visible cut" captured by the right-upper edge loop gesture).
@@ -178,9 +195,7 @@ public:
     // Warped-domain setter (gestures/actions that measured in the warped
     // domain): converts EXACTLY via the current stretch.
     void setStartOffsetRaw( WarpedPos o ) {
-        srcStart_ = grainParams_.stretch > Fraction(0)
-                  ? Fraction( o.frames() ) / grainParams_.stretch
-                  : Fraction( o.frames() );
+        srcStart_ = warpMap().warpedToSrc( Fraction( o.frames() ) );
     }
     void setDurationRaw( ClipLen d ) { cutDuration_ = d; }
     void setGrainParamsRaw( const twGrainParams &p ) { grainParams_ = p; }
@@ -221,6 +236,10 @@ public:
     // the warped setStartOffset slot).
     void setSrcStart( const Fraction &srcStart );
 
+    // W1: replace the user warp-anchor list (sanitized; empty clears).
+    // Undoable via SResizeClipAction's warpAnchors attribute.
+    void setWarpAnchors( const std::vector<twWarpAnchor> &anchors );
+
     // Shared time maps (proposal 18 Phase 4). BOTH the audio path and the
     // waveform preview consume these - there is no second implementation
     // of the clip's position mapping to disagree with.
@@ -229,10 +248,19 @@ public:
     // source = srcStart + rel/stretch, exact. (For a looping clip this maps
     // a position WITHIN one repetition - the tiling itself is the reader's
     // twLoopMap.)
+    // SCALAR-ONLY affine form — valid iff no warp anchors exist (asserting
+    // callers migrated to clipToSource(); kept for the no-anchor fast path).
     twAffineMap clipToSourceMap() const {
         Fraction st = grainParams_.stretch > Fraction(0) ? grainParams_.stretch
                                                          : Fraction(1);
         return twAffineMap( Fraction(1) / st, srcStart_ );
+    }
+    // Map-aware clip->source (W1): `rel` is the clip-relative warped-domain
+    // distance from the window start; result is the SOURCE position. Equals
+    // clipToSourceMap().map(rel) exactly when no anchors exist.
+    Fraction clipToSource( const Fraction &rel ) const {
+        const twWarpMap wm = warpMap();
+        return wm.warpedToSrc( wm.srcToWarped( srcStart_ ) + rel );
     }
     // clipToReaderMap: clip-relative position -> the reader's own domain
     // (what SCut::resolveClip folds via twView). A looping reader is cut-relative
