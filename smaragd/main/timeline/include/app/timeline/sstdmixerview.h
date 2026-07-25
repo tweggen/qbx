@@ -111,6 +111,9 @@ protected slots:
     void ctToggleTakeLanes();
     // Clip context menu: clear the clicked clip's loop.
     void ctRemoveLoop();
+    // W4: toggle formant preservation on the clicked clip (per-take on
+    // stacks, same rule as pitch).
+    void ctToggleFormantPreserve();
 
 protected:
     virtual void paintEvent( QPaintEvent * );

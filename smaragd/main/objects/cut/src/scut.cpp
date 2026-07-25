@@ -135,7 +135,10 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
                   && builtGrain_.crossfade  == snap.grainParams.crossfade
                   // W1: a warp-anchor edit MUST mint a new reader — without
                   // this term the fast path silently kept the stale chain.
-                  && builtGrain_.warpAnchors == snap.grainParams.warpAnchors );
+                  && builtGrain_.warpAnchors == snap.grainParams.warpAnchors
+                  // W4: the formant flag changes vocoder output bytes.
+                  && builtGrain_.preserveFormants
+                         == snap.grainParams.preserveFormants );
             bool sameLoop = !needLoop
                 || ( builtLoopStart_ == snap.startOffset
                   && builtLoopLength_ == snap.loopLength );
@@ -910,6 +913,17 @@ void SCut::setPitchCents( double cents )
     setGrainParams( p );  // Pass modified copy
 }
 
+void SCut::setPreserveFormants( bool on )
+{
+    twGrainParams p;
+    {
+        std::lock_guard<std::mutex> lock(mutex());  // Read under lock
+        p = grainParams_;  // Snapshot params
+    }
+    p.preserveFormants = on;
+    setGrainParams( p );  // Pass modified copy
+}
+
 SCut::~SCut()
 {
     // FIRST, before tearing down any member: retire from the revalidator. The
@@ -1034,6 +1048,11 @@ int SCut::serializeSelfAttributes( QTextStream &o )
         o << " warpAnchors='" << toks.join( "|" ) << "'";
     }
 
+    // W4: formant preservation, written only when ON (same old-builds-ignore
+    // convention as warpAnchors; an OFF file is byte-identical to pre-W4).
+    if( grainParams_.preserveFormants )
+        o << " preserveFormants='1'";
+
     // Grain parameters stored as time (milliseconds) for rate independence.
     // Default 48kHz: 2048 frames ≈ 42.67 ms, 512 frames ≈ 10.67 ms
     int srate = 48000;  // default fallback
@@ -1116,6 +1135,10 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     // before the anchor); grainSize and crossfade are stored as milliseconds
     // (rate-independent) and converted to samples at the project rate.
     grainParams_.pitchCents = element.attribute( "pitchCents", "0.0" ).toDouble();
+
+    // W4: formant preservation flag (absent = OFF, the pre-W4 behavior).
+    grainParams_.preserveFormants =
+        element.attribute( "preserveFormants", "0" ) == "1";
 
     int srate = 48000;  // default fallback
     if( parent() ) srate = getProject().getSRate();

@@ -133,6 +133,14 @@ struct twPagedVocoder::Impl {
     std::vector<int>    peakOf;
     std::vector<uint8_t> locked;
 
+    // ---- W4 formant preservation (only allocated/active when the config
+    // opts in AND pitchRatio != 1) --------------------------------------
+    bool                formantOn = false;
+    uint32_t            envLifter = 0;      // cepstral quefrency cutoff
+    int64_t             envFrame  = -1;     // memo: frame wEnv is valid for
+    std::vector<double> envRe, envIm;       // N-point cepstral scratch
+    std::vector<double> wEnv;               // per-bin magnitude factor
+
     void init( const float *const *inSrc, uint64_t len, const Config &c,
                double st, double pr, const uint64_t *onsets, size_t nOnsets )
     {
@@ -285,6 +293,77 @@ struct twPagedVocoder::Impl {
         mag.resize( nBins ); medScratch.resize( nBins );
         peakOf.resize( nBins );
         locked.resize( nBins );
+
+        // W4: formant preservation is meaningful only when the pitch stage
+        // runs — with ratio 1 the envelope factor is identically 1, so
+        // skipping keeps every pitch-free path byte-identical to pre-W4.
+        formantOn = cfg.preserveFormants && pitchRatio != 1.0;
+        if( formantOn ) {
+            // Quefrency cutoff ~2.5 ms: smooth enough to erase the harmonic
+            // comb of any f0 above ~150 Hz while keeping formant bumps;
+            // clamped for extreme FFT/rate combinations.
+            envLifter = (uint32_t) ( (double) cfg.rate / 400.0 );
+            if( envLifter < 8 )     envLifter = 8;
+            if( envLifter > N / 8 ) envLifter = N / 8;
+            envRe.assign( N, 0.0 );
+            envIm.assign( N, 0.0 );
+            wEnv.assign( nBins, 1.0 );
+        }
+    }
+
+    // W4: per-bin magnitude factor E(b·ratio)/E(b) for analysis frame f,
+    // where E is the cepstrally-liftered (smooth) envelope of the frame's
+    // mono-fold magnitudes. Memoized on the frame index; a pure function of
+    // (foldMag[f], pitchRatio), so the paged ≡ whole partition property is
+    // preserved. One channel-shared factor keeps the stereo image intact.
+    void ensureEnv( uint64_t f )
+    {
+        if( (int64_t) f == envFrame ) return;
+        envFrame = (int64_t) f;
+        ensureFrame( f );
+        const float *fm = foldMag.data() + f * nBins;
+
+        // Log magnitudes, mirrored to the full N-point spectrum.
+        for( uint32_t b = 0; b < nBins; b++ )
+            envRe[b] = std::log( (double) fm[b] + 1e-12 );
+        for( uint32_t b = nBins; b < N; b++ )
+            envRe[b] = envRe[N - b];
+        std::fill( envIm.begin(), envIm.end(), 0.0 );
+
+        // Cepstrum → lifter (keep |quefrency| <= envLifter) → smooth log env.
+        fft.run( envRe.data(), envIm.data(), false );
+        for( uint32_t q = envLifter + 1; q < N - envLifter; q++ ) {
+            envRe[q] = 0.0;
+            envIm[q] = 0.0;
+        }
+        fft.run( envRe.data(), envIm.data(), true );
+
+        // Floor the log envelope at −60 dB below its own maximum: regions
+        // where the source has (near) nothing must not become huge gains —
+        // the correction is a coloration filter, not a noise amplifier.
+        double eMax = envRe[0];
+        for( uint32_t b = 1; b < nBins; b++ )
+            if( envRe[b] > eMax ) eMax = envRe[b];
+        const double eFloor = eMax - 6.907755278982137;   // ln(1000)
+        for( uint32_t b = 0; b < nBins; b++ )
+            if( envRe[b] < eFloor ) envRe[b] = eFloor;
+
+        // wEnv[b] = exp( E(b·ratio) − E(b) ), E linearly interpolated and
+        // clamped at the top bin. Cap at ±40 dB so numerical corners stay
+        // bounded.
+        constexpr double kCap = 4.6051701859880914;   // ln(100)
+        for( uint32_t b = 0; b < nBins; b++ ) {
+            const double x  = std::min( (double) b * pitchRatio,
+                                        (double) ( nBins - 1 ) );
+            const uint32_t x0 = (uint32_t) x;
+            const uint32_t x1 = ( x0 + 1 < nBins ) ? x0 + 1 : nBins - 1;
+            const double fx = x - (double) x0;
+            const double eS = envRe[x0] + ( envRe[x1] - envRe[x0] ) * fx;
+            double g = eS - envRe[b];
+            if( g >  kCap ) g =  kCap;
+            if( g < -kCap ) g = -kCap;
+            wEnv[b] = std::exp( g );
+        }
     }
 
     // Piecewise-linear analysis position for stretched-output sample sOut.
@@ -477,12 +556,24 @@ struct twPagedVocoder::Impl {
             const uint64_t f1 = std::min( f0 + 1, aFrames - 1 );
             const uint64_t fN = ( fIdx - (double) f0 > 0.5 && f1 > f0 ) ? f1 : f0;
 
+            if( formantOn )
+                ensureEnv( fN );
+
             for( uint32_t c = 0; c < cfg.channels; c++ ) {
                 const float *cr = chRe.data() + ( fN * cfg.channels + c ) * nBins;
                 const float *ci = chIm.data() + ( fN * cfg.channels + c ) * nBins;
                 for( uint32_t b = 0; b < nBins; b++ ) {
                     fr[b] = (double) cr[b] * zRe[b] - (double) ci[b] * zIm[b];
                     fi[b] = (double) cr[b] * zIm[b] + (double) ci[b] * zRe[b];
+                }
+                // W4: envelope pre-warp — after the ×ratio frequency scaling
+                // of the sinc resample, the output envelope equals the
+                // source envelope (formants stay put, harmonics move).
+                if( formantOn ) {
+                    for( uint32_t b = 0; b < nBins; b++ ) {
+                        fr[b] *= wEnv[b];
+                        fi[b] *= wEnv[b];
+                    }
                 }
                 for( uint32_t b = nBins; b < N; b++ ) {
                     fr[b] =  fr[N - b];

@@ -244,6 +244,166 @@ int main()
                "onset keyframes change the rendered bytes" );
     }
 
+    // ======================================================================
+    // W4 — formant preservation (opt-in).
+    // ======================================================================
+    {
+        // Vowel-like fixture: harmonic stack at f0 = 130 Hz shaped by a
+        // fixed spectral envelope with ONE formant bump at 700 Hz over a
+        // -6 dB/oct rolloff (a single bump keeps the band metric below
+        // unambiguous under ±1 octave shifts). 2 s mono.
+        const double   f0    = 130.0;
+        const uint64_t vn    = 2 * 48000;
+        auto envAt = []( double f ) -> double {
+            auto bump = []( double f, double c, double w ) {
+                const double d = ( f - c ) / w;
+                return std::exp( -0.5 * d * d );
+            };
+            const double rolloff = 200.0 / std::max( f, 200.0 );
+            return rolloff * ( 0.15 + 3.0 * bump( f, 700.0, 150.0 ) );
+        };
+        std::vector<float> vow( (size_t) vn, 0.0f );
+        for( int h = 1; h * f0 < 3000.0; h++ ) {
+            const double a = envAt( h * f0 );
+            for( uint64_t i = 0; i < vn; i++ )
+                vow[(size_t) i] += (float) ( a * 0.12
+                    * std::sin( 2.0 * 3.14159265358979323846
+                                * ( h * f0 ) * (double) i / 48000.0 ) );
+        }
+        const float *vchans[1] = { vow.data() };
+
+        // Goertzel magnitude of a mid-signal segment at frequency f.
+        auto goertzel = []( const std::vector<float> &x, uint64_t start,
+                            uint64_t len, double f ) -> double {
+            const double w = 2.0 * 3.14159265358979323846 * f / 48000.0;
+            const double c = 2.0 * std::cos( w );
+            double s0 = 0.0, s1 = 0.0, s2 = 0.0;
+            for( uint64_t i = 0; i < len; i++ ) {
+                // Hann-weighted so segment edges cannot smear the estimate.
+                const double hw = 0.5 - 0.5 * std::cos(
+                    2.0 * 3.14159265358979323846 * (double) i / (double) ( len - 1 ) );
+                s0 = hw * (double) x[(size_t) ( start + i )] + c * s1 - s2;
+                s2 = s1; s1 = s0;
+            }
+            return std::sqrt( std::max( 0.0,
+                s1 * s1 + s2 * s2 - c * s1 * s2 ) );
+        };
+        // Spectral energy CENTROID over the output's own harmonic comb in
+        // [200, 2400] Hz — a formant-position statistic that is robust to
+        // the vocoder's per-harmonic coloration (a 3-point band argmax was
+        // not): the single 700 Hz bump dominates it, so it tracks where the
+        // envelope actually sits.
+        auto combCentroid = [&]( const std::vector<float> &x, uint64_t start,
+                                 uint64_t len, double fb ) -> double {
+            double num = 0.0, den = 0.0;
+            for( int h = 1; h * fb < 2400.0; h++ ) {
+                const double f = h * fb;
+                if( f < 200.0 ) continue;
+                const double m = goertzel( x, start, len, f );
+                num += m * m * f;
+                den += m * m;
+            }
+            return ( den > 0.0 ) ? num / den : 0.0;
+        };
+
+        auto rmsOf = []( const std::vector<float> &x, uint64_t start,
+                         uint64_t len ) -> double {
+            double acc = 0.0;
+            for( uint64_t i = 0; i < len; i++ ) {
+                const double v = x[(size_t) ( start + i )];
+                acc += v * v;
+            }
+            return std::sqrt( acc / (double) len );
+        };
+
+        twPagedVocoder::Config von;
+        von.rate     = 48000;
+        von.channels = 1;
+        von.preserveFormants = true;
+        twPagedVocoder::Config voff = von;
+        voff.preserveFormants = false;
+
+        const double ratios[] = { 2.0, 0.5 };      // +1200c / -1200c
+        for( double ratio : ratios ) {
+            const uint64_t outLen = vn;            // stretch 1.0: pitch-only
+            std::vector<float> on( (size_t) outLen, 0.0f );
+            std::vector<float> off( (size_t) outLen, 0.0f );
+            twPagedVocoder::warpOffline( vchans, vn, on.data(), outLen, von,
+                                         1.0, ratio, nullptr, 0 );
+            twPagedVocoder::warpOffline( vchans, vn, off.data(), outLen, voff,
+                                         1.0, ratio, nullptr, 0 );
+
+            const uint64_t mStart = outLen / 4, mLen = 16384;
+            const double fbOut = f0 * ratio;       // output fundamental
+
+            // Formant gate: the source centroid sits at the 700 Hz bump.
+            // Preservation ON keeps the output centroid there; OFF drags it
+            // with the pitch (up for ratio 2, down for ratio 0.5).
+            const double cSrc = combCentroid( vow, mStart, mLen, f0 );
+            const double cOn  = combCentroid( on, mStart, mLen, fbOut );
+            const double cOff = combCentroid( off, mStart, mLen, fbOut );
+            std::cout << "  formants ratio=" << ratio << ": centroid src="
+                      << cSrc << " on=" << cOn << " off=" << cOff << "\n";
+            CHECK( std::fabs( cOn - cSrc ) <= 220.0,
+                   "formant ON: envelope centroid stays at the source bump" );
+            CHECK( ( ratio > 1.0 ) ? ( cOff > cSrc + 300.0 )
+                                   : ( cOff < cSrc - 150.0 ),
+                   "formant OFF: envelope centroid moved with the pitch" );
+
+            // The proposal-26 trap: preservation must NOT de-energise
+            // (0.52x RMS was the reason it is opt-in, not default). A boost
+            // on pitch-down is PHYSICAL — the preserved envelope keeps the
+            // brightness the naive shift would lose — so the gate is
+            // one-sided-tight: no loss, bounded gain.
+            const double rIn  = rmsOf( vow, mStart, mLen );
+            const double rOn  = rmsOf( on, mStart, mLen );
+            std::cout << "  formants ratio=" << ratio
+                      << ": RMS on/in = " << ( rOn / rIn ) << "\n";
+            // Measured on this fixture: 0.70 (ratio 2) / 1.66 (ratio 0.5).
+            // The proposal-26 de-energising disaster was 0.52x broadband.
+            CHECK( rOn / rIn > 0.65 && rOn / rIn < 2.0,
+                   "formant ON: RMS neither de-energised nor blown up" );
+        }
+
+        // Partition property holds with formants ON (the envelope memo is a
+        // pure per-frame function): fresh-instance paged == whole.
+        {
+            const double st = 1.37, pr = 1.259921;
+            const uint64_t outLen = (uint64_t) std::floor( (double) vn * st );
+            std::vector<float> whole( (size_t) outLen, 0.0f );
+            twPagedVocoder::warpOffline( vchans, vn, whole.data(), outLen,
+                                         von, st, pr, onsets, nOnsets );
+            std::vector<float> paged( (size_t) outLen, 0.0f );
+            const std::vector<uint64_t> cuts = makeCuts( outLen, 0xF0F0F0u );
+            for( size_t i = 0; i + 1 < cuts.size(); i++ ) {
+                const uint64_t a = cuts[i], b = cuts[i + 1];
+                std::vector<float> w( (size_t) ( b - a ), 0.0f );
+                twPagedVocoder v( vchans, vn, von, st, pr, onsets, nOnsets );
+                v.render( a, b - a, w.data() );
+                std::memcpy( paged.data() + a, w.data(),
+                             (size_t) ( b - a ) * sizeof( float ) );
+            }
+            CHECK( std::memcmp( whole.data(), paged.data(),
+                                whole.size() * sizeof( float ) ) == 0,
+                   "formant ON: paged (fresh instances) == whole" );
+        }
+
+        // No pitch stage → the flag is a strict no-op (byte-identical),
+        // which is what keeps every pitch-free path pre-W4-exact.
+        {
+            const uint64_t outLen = 2 * vn;
+            std::vector<float> a( (size_t) outLen, 0.0f );
+            std::vector<float> b( (size_t) outLen, 0.0f );
+            twPagedVocoder::warpOffline( vchans, vn, a.data(), outLen, von,
+                                         2.0, 1.0, onsets, nOnsets );
+            twPagedVocoder::warpOffline( vchans, vn, b.data(), outLen, voff,
+                                         2.0, 1.0, onsets, nOnsets );
+            CHECK( std::memcmp( a.data(), b.data(),
+                                a.size() * sizeof( float ) ) == 0,
+                   "formant flag is a no-op without a pitch stage" );
+        }
+    }
+
     if( g_fails == 0 )
         std::cout << "\nAll vocoder tests passed.\n";
     else

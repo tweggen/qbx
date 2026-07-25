@@ -145,11 +145,15 @@ constexpr uint32_t    F0Version = 1;
  * the key — worst case a duplicate cache entry, never a wrong hit),
  * uint64 onsetsHash (M4: fingerprint of the onset keyframe positions the
  * vocoder baked in; 0 = none. Warps built before/after the onsets sidecar
- * exists occupy different keys — availability never aliases bytes).
+ * exists occupy different keys — availability never aliases bytes),
+ * uint64 anchorsHash (v3: W1 warp-marker fingerprint; 0 = none),
+ * uint8 preserveFormants (v4: the W4 opt-in flag).
  */
 constexpr const char *WarpPcm        = "warp.pcm";
-constexpr uint32_t    WarpPcmVersion = 3;   // v3: + uint64 anchorsHash (W1
-// warp-marker fingerprint; 0 = no anchors). v2 added onsetsHash.
+constexpr uint32_t    WarpPcmVersion = 4;   // v4: + uint8 preserveFormants
+// (W4 opt-in — changes output bytes whenever the pitch stage runs). v3
+// added uint64 anchorsHash (W1 warp-marker fingerprint; 0 = no anchors);
+// v2 added onsetsHash.
 
 } // namespace twAspect
 

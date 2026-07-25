@@ -104,6 +104,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/sremovetakeaction.h
     objects/cut/include/app/objects/cut/sselecttakeaction.h
     objects/cut/include/app/objects/cut/ssetpitchaction.h
+    objects/cut/include/app/objects/cut/ssetformantpreserveaction.h
     objects/cut/include/app/objects/cut/splaceclipaction.h
     objects/cut/include/app/objects/cut/splacerecordingaction.h
     objects/cut/include/app/objects/cut/ssplitclipaction.h
@@ -123,6 +124,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/sselecttakeaction.cpp
     objects/cut/src/ssetpitchaction.cpp
+    objects/cut/src/ssetformantpreserveaction.cpp
     objects/cut/src/splaceclipaction.cpp
     objects/cut/src/splacerecordingaction.cpp
     objects/cut/src/ssplitclipaction.cpp

@@ -7156,3 +7156,36 @@ defects; all fixed, gated, and pushed (`8200aed`, `adfe5b4`).
   bytes. `sidecar_import_analysis.qxa` extended: f0 sidecar exists with
   exactly 400 records on the 4 s fixture. Consumers (key detection,
   pitch-correct) arrive in later milestones by design.
+
+## 2026-07-25 — Proposal 28 W4 EXECUTED: per-clip formant preservation (opt-in)
+
+- **Engine** (`twPagedVocoder`): when `Config.preserveFormants` is ON and the
+  pitch stage runs, each synthesis frame's mono-fold magnitudes yield a
+  cepstrally-liftered envelope (quefrency cutoff ~2.5 ms, floored at −60 dB
+  below its own max so silent regions never become gains, correction capped
+  ±40 dB); every synthesis bin scales by E(b·ratio)/E(b) so the sinc
+  resample lands the output envelope on the source envelope — formants stay,
+  harmonics move. Pure per-frame function ⇒ the paged ≡ whole partition
+  property holds (gated). `pitchRatio == 1` ⇒ strict no-op, so every
+  pitch-free path and the OFF path are byte-identical to pre-W4 (gated:
+  byte-cmp in vocoder_test + full render suite).
+- **Plumbing:** `twGrainParams.preserveFormants` (default OFF) → vocoder
+  config on both the streaming and materialized paths; warp.pcm params blob
+  +uint8 flag (WarpPcmVersion 3→4 — caches re-key); SCut rebuild fast path
+  compares the flag; serialized `preserveFormants='1'` only when ON
+  (old-builds-ignore convention).
+- **Action/UI:** `set-formant-preserve` (absolute value, per-take on stacks,
+  edit-group broadcast — the set-pitch pattern), clip context menu gets a
+  checkable "Preserve formants" reflecting the clicked clip.
+- **Gates:** vocoder_test W4 section — single-formant vowel fixture
+  (f0 130 Hz, 700 Hz bump over −6 dB/oct): comb-energy CENTROID stays at the
+  bump with ON (706/670 vs src 658) and moves with the pitch OFF (1333 up /
+  337 down) under ±1200c; the proposal-26 de-energising trap (measured
+  0.70×/1.66× vs the 0.52× disaster; gate 0.65..2.0 — pitch-down boost is
+  physical: preserved envelope keeps brightness); formants-ON partition
+  property; flag-no-op byte-cmp. Full 56-case qxa suite, layering, logging
+  green.
+- **Awaiting the requester's ears:** vocal material is the point of W4 —
+  toggle "Preserve formants" on a transposed vocal clip and listen. The
+  centroid metric says formants hold; whether it sounds RIGHT is theirs to
+  judge. (PGHI remains the W5 tripwire if quality disappoints.)

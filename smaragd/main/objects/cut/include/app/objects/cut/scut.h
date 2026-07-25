@@ -278,6 +278,9 @@ public:
     const Fraction &getStretchExact() const { return grainParams_.stretch; }
     double getStretch() const { return grainParams_.stretch.approxDouble(); }
     double getPitchCents() const { return grainParams_.pitchCents; }
+    // W4: opt-in formant preservation for the vocoder pitch stage.
+    bool getPreserveFormants() const { return grainParams_.preserveFormants; }
+    void setPreserveFormants( bool on );
     const twGrainParams &getGrainParams() const { return grainParams_; }
     void setGrainParams( const twGrainParams & );
 

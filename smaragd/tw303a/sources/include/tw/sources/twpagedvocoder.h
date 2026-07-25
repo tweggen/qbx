@@ -61,12 +61,24 @@ public:
 
         // Proposal 28 W1: optional USER base map — breakpoints in the
         // INTERNAL stretched domain as (out, in) pairs, strictly increasing
-        // in both coordinates, origin (0,0) implicit; the final segment's
-        // slope extends to the end of the input. Empty = uniform stretch S.
+        // in both coordinates, origin (0,0) implicit; the tail resumes the
+        // base rate S to the end of the input. Empty = uniform stretch S.
         // Transient protection zones are inserted strictly INSIDE base
         // segments (a user anchor is authoritative — protection never moves
         // one), and only where the segment's local slope exceeds 1.
         std::vector<std::pair<double, double>> userMap;   // (out, in)
+
+        // Proposal 28 W4: OPT-IN formant preservation for the pitch stage.
+        // Per synthesis frame, the cepstrally-liftered spectral envelope E of
+        // the mono-fold magnitudes is estimated and every synthesis bin b is
+        // scaled by E(b·pitchRatio)/E(b), so after the sinc resample the
+        // output envelope matches the source envelope (formants stay put
+        // while the harmonics move). Default OFF — the proposal-26
+        // measurement stands: preservation colours general material; this is
+        // for vocal/formant-bearing clips. A no-op when pitchRatio == 1, so
+        // the OFF path and all pitch-free paths are byte-identical to
+        // pre-W4 output.
+        bool preserveFormants = false;
     };
 
     twPagedVocoder( const float *const *src, uint64_t inLen,

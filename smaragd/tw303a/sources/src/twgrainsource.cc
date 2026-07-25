@@ -71,10 +71,11 @@ void warpParamsBlob( uint8_t backend, int rate, idx_t channels,
                      const Fraction &stretchFrac, double pitchCents,
                      length_t grainSize, length_t crossfade,
                      uint64_t onsetsHash, uint64_t anchorsHash,
+                     bool preserveFormants,
                      std::vector<uint8_t> &out )
 {
     out.clear();
-    out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 + 8 + 8 );
+    out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 + 8 + 8 + 1 );
     auto put32 = [&]( uint32_t v ) {
         for( int i = 0; i < 4; i++ ) out.push_back( (uint8_t)( v >> ( 8 * i ) ) );
     };
@@ -98,6 +99,9 @@ void warpParamsBlob( uint8_t backend, int rate, idx_t channels,
     // W1: fingerprint of the exact user warp anchors (0 = none) — a warp
     // with markers can never alias one without.
     put64( anchorsHash );
+    // W4: the formant-preservation flag changes output bytes whenever the
+    // pitch stage runs, so it is key material (v4 of the blob).
+    out.push_back( preserveFormants ? 1 : 0 );
 }
 
 } // namespace
@@ -245,6 +249,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
             vc.rate        = rate_;
             vc.channels    = (uint32_t) channels_;
             vc.userMap     = userMapInternal;
+            vc.preserveFormants = p.preserveFormants;   // W4 opt-in
             stream_->voc.reset( new twPagedVocoder(
                 stream_->chans.data(), (uint64_t) inLen, vc, stretch, r,
                 onsetPos.empty() ? nullptr : onsetPos.data(),
@@ -266,7 +271,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     if( warpCacheable ) {
         warpParamsBlob( (uint8_t) backend, rate_, channels_, stretchFrac,
                         p.pitchCents, p.grainSize, p.crossfade, onsetsHash,
-                        anchorsHash, warpParams );
+                        anchorsHash, p.preserveFormants, warpParams );
         warpParamsHash = twSidecarStore::hashParams( warpParams.data(),
                                                      warpParams.size() );
         auto reader = twSidecarStore::instance().load(
@@ -307,6 +312,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         vc.rate        = rate_;
         vc.channels    = (uint32_t) channels_;
         vc.userMap     = userMapInternal;
+        vc.preserveFormants = p.preserveFormants;   // W4 opt-in
         twPagedVocoder::warpOffline( inPtr.data(), (uint64_t) inLen,
                                      data_.data(), (uint64_t) nFrames_,
                                      vc, stretch, r,

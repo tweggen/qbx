@@ -36,6 +36,13 @@ struct twGrainParams
     // are a vocoder capability, not a Rubber Band one.
     std::vector<twWarpAnchor> warpAnchors;
 
+    // Proposal 28 W4: opt-in formant preservation for the vocoder's pitch
+    // stage. Default OFF (the proposal-26 measurement: preservation colours
+    // and de-energises general material); a per-clip choice for vocal /
+    // formant-bearing content. Ignored by the non-vocoder backends and a
+    // strict no-op when pitchCents == 0.
+    bool preserveFormants = false;
+
     // True when the transform is a no-op, so callers can skip the grain stage
     // entirely (passthrough) and pay nothing for an unstretched clip.
     bool isIdentity() const {

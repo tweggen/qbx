@@ -60,6 +60,7 @@
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/sselecttakeaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
+#include "app/objects/cut/ssetformantpreserveaction.h"
 #include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/objects/mixer/sremoveassetplacementaction.h"
@@ -578,6 +579,27 @@ void SMVActualView::ctRemoveLoop()
     update();
 }
 
+// Clip context menu: toggle formant preservation (proposal 28 W4) — the
+// opt-in for vocal material, realised in the vocoder's pitch stage. Default
+// OFF; audible only when the clip is transposed. Per-take on stacks.
+void SMVActualView::ctToggleFormantPreserve()
+{
+    if( !lastClickTrack_ || !lastClickSLink_ ) return;
+    SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
+    if( !cut ) {
+        if( STakeStack *stack =
+                dynamic_cast<STakeStack*>( &lastClickSLink_->getSObject() ) )
+            cut = stack->activeCut();
+    }
+    if( !cut ) return;
+    QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+    clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+    SApplication::app().submitAction(
+        new SSetFormantPreserveAction( clipPath,
+                                       !cut->getPreserveFormants() ) );
+    update();
+}
+
 void SMVActualView::ctGlobalShow()
 {
     qGlobalPopup_->clear();
@@ -592,6 +614,22 @@ void SMVActualView::ctGlobalShow()
             QAction *aNoLoop = qGlobalPopup_->addAction(
                 "Remove &loop", this, SLOT( ctRemoveLoop() ) );
             aNoLoop->setEnabled( cut && cut->isLooping() );
+        }
+        // W4: formant preservation toggle — checked state reflects the
+        // clicked clip (active take on a stack).
+        {
+            SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
+            if( !cut ) {
+                if( STakeStack *stack = dynamic_cast<STakeStack*>(
+                        &lastClickSLink_->getSObject() ) )
+                    cut = stack->activeCut();
+            }
+            QAction *aFmt = qGlobalPopup_->addAction(
+                "Preserve &formants", this,
+                SLOT( ctToggleFormantPreserve() ) );
+            aFmt->setCheckable( true );
+            aFmt->setChecked( cut && cut->getPreserveFormants() );
+            aFmt->setEnabled( cut != nullptr );
         }
         qGlobalPopup_->addAction( "Add &link", &smv_, SLOT( ctAddLink() ) );
         qGlobalPopup_->addSeparator();
