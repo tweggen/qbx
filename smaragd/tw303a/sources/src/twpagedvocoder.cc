@@ -111,6 +111,17 @@ struct twPagedVocoder::Impl {
     // Sorted unique keyframe synthesis-frame indices (always contains 0).
     std::vector<uint64_t> keys;
 
+    // Transient-preserving time map (M5): piecewise-linear OUTPUT→INPUT
+    // analysis-position map. Around each onset the map runs at RATE 1 (no
+    // stretch), so an attack keeps its exact waveform evolution instead of
+    // being spread across repeated analysis frames — the smear fix phase
+    // resets alone could not deliver. Zone anchors sit at o·S, so musical
+    // timing is untouched; the steady spans between zones absorb the global
+    // stretch. Strictly increasing in both domains by construction, built
+    // once in init() from (onsets, S) — window-independent, so the paged ≡
+    // whole partition property is preserved.
+    std::vector<double> mapOut, mapIn;
+
     // Kaiser window LUT for the pitch resampler.
     static constexpr int    kSincTaps = 16;    // per side
     static constexpr double kBeta     = 8.0;
@@ -180,6 +191,67 @@ struct twPagedVocoder::Impl {
                 spaced.push_back( k );
         keys.swap( spaced );
 
+        // --- Transient-preserving time map ---------------------------------
+        // Active only when STRETCHING (S > 1): under compression, rate-1
+        // protection makes attacks carry disproportionate energy vs the
+        // shortened surroundings (+83% RMS measured on the transients
+        // corpus) and the semantics are murky anyway — compression already
+        // sharpens transients naturally. Stretching is where smear lives,
+        // and there the map cuts rise-time ratios from ~2-4x to ~0.6-1.3x.
+        mapOut.push_back( 0.0 );
+        mapIn.push_back( 0.0 );
+        if( S > 1.0 ) {
+            const double P = (double) N;   // protection width, input samples
+            double lastOut = 0.0, lastIn = 0.0;
+            for( size_t i = 0; i < nOnsets; i++ ) {
+                const double o = (double) onsets[i];
+                if( o <= 0.0 || o >= (double) inLen ) continue;
+                // ASYMMETRIC zone: the v2 detector marks onsets up to a
+                // window EARLY (the earliest frame touching the attack wins
+                // the normalized-flux race), so the attack body lies AFTER
+                // the detected position — protect 1/4 window before, 3/4
+                // after, or the burst tail falls outside the rate-1 zone and
+                // smears (measured: outlier pairs at 3-4x with symmetric
+                // zones, gone with asymmetric).
+                double zInA  = o - P * 0.25, zInB  = o + P * 0.75;
+                double zOutA = o * S - P * 0.25, zOutB = o * S + P * 0.75;
+                // Monotonicity in BOTH domains: shift the zone start past the
+                // previous segment end (shrinking the leading half) — never
+                // let either domain step backwards.
+                const double lift = std::max(
+                    { lastIn - zInA + 1.0, lastOut - zOutA + 1.0, 0.0 } );
+                zInA += lift;
+                zOutA += lift;
+                if( zInA >= zInB || zOutA >= zOutB ) continue;   // swallowed
+                if( zInB >= (double) inLen || zOutB >= (double) Ls ) continue;
+                mapOut.push_back( zOutA ); mapIn.push_back( zInA );
+                mapOut.push_back( zOutB ); mapIn.push_back( zInB );
+                lastOut = zOutB;
+                lastIn  = zInB;
+            }
+        }
+        mapOut.push_back( (double) Ls );
+        mapIn.push_back( (double) inLen );
+
+        // Phase re-anchors exactly where the map's rate switches: every
+        // interior breakpoint (zone edge) becomes a keyframe, so no OLA
+        // crossfade straddles a rate change with stale phase state.
+        for( size_t j = 1; j + 1 < mapOut.size(); j++ ) {
+            const uint64_t k = (uint64_t) std::llround( mapOut[j] / Hs );
+            if( k < nSyn ) keys.push_back( k );
+        }
+        std::sort( keys.begin(), keys.end() );
+        keys.erase( std::unique( keys.begin(), keys.end() ), keys.end() );
+        {
+            const uint64_t minGap2 = N / Hs;
+            std::vector<uint64_t> spaced;
+            spaced.reserve( keys.size() );
+            for( uint64_t k : keys )
+                if( spaced.empty() || k - spaced.back() >= minGap2 )
+                    spaced.push_back( k );
+            keys.swap( spaced );
+        }
+
         kaiserLut.resize( 4097 );
         const double i0b = besselI0( kBeta );
         for( size_t i = 0; i < kaiserLut.size(); i++ ) {
@@ -193,6 +265,19 @@ struct twPagedVocoder::Impl {
         mag.resize( nBins ); medScratch.resize( nBins );
         peakOf.resize( nBins );
         locked.resize( nBins );
+    }
+
+    // Piecewise-linear analysis position for stretched-output sample sOut.
+    double mapAt( double sOut ) const
+    {
+        const size_t hi = (size_t) ( std::upper_bound( mapOut.begin(),
+                                                       mapOut.end(), sOut )
+                                     - mapOut.begin() );
+        if( hi == 0 ) return mapIn.front();
+        if( hi >= mapOut.size() ) return mapIn.back();
+        const size_t lo = hi - 1;
+        const double t = ( sOut - mapOut[lo] ) / ( mapOut[hi] - mapOut[lo] );
+        return mapIn[lo] + t * ( mapIn[hi] - mapIn[lo] );
     }
 
     double kaiser( double u ) const
@@ -249,7 +334,7 @@ struct twPagedVocoder::Impl {
     // ascending order starting from a keyframe.
     void stepFrame( uint64_t k )
     {
-        const double  aPos = (double) k * Hs / S;
+        const double  aPos = mapAt( (double) k * Hs );
         const double  fIdx = aPos / Ha;
         uint64_t f0 = (uint64_t) fIdx;
         if( f0 >= aFrames ) f0 = aFrames - 1;
@@ -365,7 +450,7 @@ struct twPagedVocoder::Impl {
                 if( p < (int64_t) s0 || p >= (int64_t) s1 ) continue;
                 norm[(size_t) ( p - (int64_t) s0 )] += win[j] * win[j];
             }
-            const double aPos = (double) k * Hs / S;
+            const double aPos = mapAt( (double) k * Hs );
             const double fIdx = aPos / Ha;
             uint64_t f0 = (uint64_t) fIdx;
             if( f0 >= aFrames ) f0 = aFrames - 1;
