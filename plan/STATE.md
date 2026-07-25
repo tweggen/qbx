@@ -6942,3 +6942,14 @@ sounds off.
 **Proposal 27 milestone track complete: M0–M5 all closed.** M6 items (warp
 markers on the onsets aspect, f0, formant toggle, detector precision/recall)
 each get their own proposal when reached, per the orchestration plan.
+
+**M5 formal listening sign-off (requester, 2026-07-25): "flawless."** The
+RB-demotion sign-off owed by the M5 close is granted — the in-house vocoder
+is the confirmed default on real material. Proposal 27 M0–M5: fully closed,
+nothing owed.
+
+**Proposal 28 (M6) decisions taken with the requester (2026-07-25):** go as
+proposed — W1 marker destinations are warped-domain FRAMES (beat-native
+becomes its own proposal when a tempo map exists); proposal 25 stays frozen
+until W1 ships; markers clamp to the content window with twLoopMap tiling
+the warped result. W0 begins.
