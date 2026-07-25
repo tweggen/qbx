@@ -68,7 +68,11 @@ constexpr uint32_t    PreviewPeaksVersion = 1;
  * uint32 minSeparationFrames. Changing any default mints a new key.
  */
 constexpr const char *Onsets        = "onsets";
-constexpr uint32_t    OnsetsVersion = 1;
+constexpr uint32_t    OnsetsVersion = 2;   // v2: NORMALIZED spectral flux —
+// v1's absolute flux fired ~29 spurious onsets/second on steady loud
+// material (quantization noise cleared the absolute floor), which M4's
+// onset keyframes amplified into audible level collapse. v1 files orphan
+// on sight and regenerate.
 
 /**
  * "loudness" — RMS envelope (proposal 27 M1), for normalization/auto-gain
@@ -102,17 +106,20 @@ constexpr uint32_t    LoudnessVersion = 1;
  * render-boundary length floor(inLen × stretch), used as the adoption
  * cross-check.
  *
- * Params blob v1 (LE, in order): uint8 backend (1 = Rubber Band R3 offline,
- * 2 = legacy overlap-add — their bytes differ, so the backend is key
- * material; a Rubber Band library upgrade that changes output bytes must
- * bump WarpPcmVersion), uint32 rate, uint32 channels, int64 stretch
- * numerator, int64 stretch denominator (the exact Fraction, clamped as the
- * ctor clamps it), float64 pitchCents (IEEE bits), uint32 grainSize,
- * uint32 crossfade (vestigial on the RB path but kept in the key — worst
- * case a duplicate cache entry, never a wrong hit).
+ * Params blob v2 (LE, in order): uint8 backend (1 = Rubber Band R3 offline,
+ * 2 = legacy overlap-add, 3 = in-house vocoder — their bytes differ, so the
+ * backend is key material; a Rubber Band library upgrade that changes
+ * output bytes must bump WarpPcmVersion), uint32 rate, uint32 channels,
+ * int64 stretch numerator, int64 stretch denominator (the exact Fraction,
+ * clamped as the ctor clamps it), float64 pitchCents (IEEE bits),
+ * uint32 grainSize, uint32 crossfade (vestigial on the RB path but kept in
+ * the key — worst case a duplicate cache entry, never a wrong hit),
+ * uint64 onsetsHash (M4: fingerprint of the onset keyframe positions the
+ * vocoder baked in; 0 = none. Warps built before/after the onsets sidecar
+ * exists occupy different keys — availability never aliases bytes).
  */
 constexpr const char *WarpPcm        = "warp.pcm";
-constexpr uint32_t    WarpPcmVersion = 1;
+constexpr uint32_t    WarpPcmVersion = 2;   // v2: params blob gained onsetsHash
 
 } // namespace twAspect
 

@@ -181,6 +181,7 @@ std::vector<uint64_t> twDetectOnsets( const float *const *chans, uint32_t nCh,
 
     // 2 + 3. STFT magnitudes per frame, spectral flux against the predecessor.
     std::vector<double> flux( (size_t)K, 0.0 );
+    std::vector<double> frameTot( (size_t)K, 0.0 );
     std::vector<float>  prevMag, curMag;
     for( uint64_t k = 0; k < K; k++ ) {
         const uint64_t t   = k * hop;                 // guaranteed < nFrames
@@ -193,15 +194,38 @@ std::vector<uint64_t> twDetectOnsets( const float *const *chans, uint32_t nCh,
             flux[0] = 0.0;                            // flux[0] = 0 by definition
         } else {
             double f = 0.0;
+            double tot = 0.0;
             for( size_t b = 0; b < curMag.size(); b++ ) {
                 const double d = (double)curMag[b] - (double)prevMag[b];
                 if( d > 0.0 )
                     f += d;                           // positive differences only
+                tot += (double)curMag[b];
             }
-            flux[(size_t)k] = f;
+            // v2: NORMALIZED flux — RELATIVE spectral change. v1 summed raw
+            // magnitude differences, so on steady loud material the
+            // quantization-noise flux cleared the absolute floor and the
+            // detector fired ~29 times/second on a pure sine — which the M4
+            // onset keyframes then turned into level-collapsing phase resets.
+            // Normalizing by the frame's total magnitude makes "no change"
+            // read as ~0 regardless of level; a true attack reads O(1).
+            flux[(size_t)k] = ( tot > 1e-12 ) ? f / tot : 0.0;
         }
+        frameTot[(size_t)k] = 0.0;
+        for( size_t b = 0; b < curMag.size(); b++ )
+            frameTot[(size_t)k] += (double)curMag[b];
         prevMag.swap( curMag );
     }
+
+    // v2 energy gate: a frame may host an onset only if it carries at least
+    // 1% of the file's PEAK frame magnitude. Normalized flux alone explodes
+    // on quiet crescendos (a near-silent signal doubling per hop is a huge
+    // RELATIVE change but no perceptual onset); the gate confines detection
+    // to audibly-present material. Loud-steady stays suppressed by the
+    // normalization; true attacks pass both tests.
+    double peakTot = 0.0;
+    for( uint64_t k = 0; k < K; k++ )
+        if( frameTot[(size_t)k] > peakTot ) peakTot = frameTot[(size_t)k];
+    const double energyGate = 0.01 * peakTot;
 
     // 4. Median-adaptive threshold over the clamped window [k-W, k+W].
     const uint32_t      W = params.medianHalfWidth;
@@ -237,6 +261,7 @@ std::vector<uint64_t> twDetectOnsets( const float *const *chans, uint32_t nCh,
     for( uint64_t k = 1; k + 1 < K; k++ ) {
         const double f = flux[(size_t)k];
         if( f > thr[(size_t)k]
+            && frameTot[(size_t)k] >= energyGate
             && f >= flux[(size_t)( k - 1 )]
             && f >  flux[(size_t)( k + 1 )] ) {
             const uint64_t pos = k * hop;

@@ -72,6 +72,15 @@ public:
                                        uint32_t aspectVersion,
                                        uint64_t paramsHash );
 
+    // Params-AGNOSTIC variant lookup (proposal 27 M4): consumers that do not
+    // know the producer's params — e.g. the vocoder reading "onsets" written
+    // by the import job — take whichever params-variant exists. Validates
+    // aspect id + version + content hash like load(); when several variants
+    // exist the lexicographically smallest file name wins (deterministic).
+    std::unique_ptr<twQafReader> loadAny( const twContentHash &content,
+                                          const std::string &aspectId,
+                                          uint32_t aspectVersion );
+
     // Atomic write + size-cap enforcement. info must carry the full identity
     // (contentHash, aspectId, aspectVersion, params); the file name's params
     // hash is computed from info.params. Returns false on write failure

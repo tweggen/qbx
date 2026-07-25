@@ -432,6 +432,7 @@ tw_module_test(io_vector_test               pages/tests/io_vector_test.cc       
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
 tw_module_test(sources_test                 sources/tests/sources_test.cc               tw_sources)
+tw_module_test(vocoder_test                 sources/tests/vocoder_test.cc               tw_sources)
 tw_module_test(mix_test                     mix/tests/mix_test.cc                       tw_mix)
 tw_module_test(schedule_test                schedule/tests/schedule_test.cc             tw_schedule tw_pages)
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)

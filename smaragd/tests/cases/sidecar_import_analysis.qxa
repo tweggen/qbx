@@ -26,7 +26,11 @@
     <!-- onsets: a spectral-flux transient count for the ramped sawtooth.
          Observed 81 onsets; pinned as a band of +/-2 (79..83). -->
     <assert-sidecar aspect="onsets" expectExists="true"
-                    minRecords="79" maxRecords="83"/>
+                    minRecords="45" maxRecords="55"/>
+    <!-- Onsets v2 band (was 79..83 under v1): normalized flux + energy gate
+         + 0.1 floor yields 49 on this fixture. The fixture is a continuous
+         crescendo - a pathological onset input; the band pins detector
+         DETERMINISM, not musical truth (warp-marker semantics are M6). -->
 
     <!-- loudness: RMS envelope, exact recordCount = ceil(sourceFrames/hop)
          = ceil(192000 / (48000/100)) = ceil(192000/480) = 400. -->

@@ -27,11 +27,18 @@
  *     [t, t+fftSize) is zero-padded past the end. Hann window
  *     w[j] = 0.5 - 0.5*cos(2*pi*j/(fftSize-1)), magnitudes for bins
  *     b in [0, fftSize/2].
- *  3. flux[k] = sum_b max(0, mag_k[b] - mag_{k-1}[b]); flux[0] = 0.
+ *  3. flux[k] = sum_b max(0, mag_k[b] - mag_{k-1}[b]) / sum_b mag_k[b]
+ *     (NORMALIZED positive flux — relative spectral change; v2. Steady
+ *     material reads ~0 at any level; a true attack reads O(1)); flux[0]=0,
+ *     and a frame with total magnitude <= 1e-12 reads 0.
  *  4. thr[k] = thresholdFactor * median(flux over [k-W, k+W], window clamped
- *     at the edges) + thresholdFloor, W = medianHalfWidth.
- *  5. Candidates: flux[k] > thr[k] AND flux[k] >= flux[k-1] AND
- *     flux[k] > flux[k+1] (first/last frame are never candidates).
+ *     at the edges) + thresholdFloor, W = medianHalfWidth. thresholdFloor is
+ *     in NORMALIZED flux units since v2.
+ *  5. Candidates: flux[k] > thr[k] AND the frame's total magnitude is at
+ *     least 1% of the file's PEAK frame magnitude (the v2 energy gate —
+ *     relative flux explodes on quiet crescendos, which are not onsets)
+ *     AND flux[k] >= flux[k-1] AND flux[k] > flux[k+1] (first/last frame
+ *     are never candidates).
  *  6. Ascending scan: drop any candidate closer than minSeparationFrames to
  *     the last KEPT onset. Position = k*hop (source frames).
  *
@@ -42,7 +49,9 @@ struct twOnsetParams {
     uint32_t fftSize             = 1024;
     uint32_t hop                 = 256;
     float    thresholdFactor     = 1.5f;
-    float    thresholdFloor      = 1.0e-4f;
+    float    thresholdFloor      = 0.1f;    // normalized-flux units (v2): a true
+    // attack is an O(1) relative spectral change; hop-vs-period beating on
+    // steady or swelling tonal material stays in the few-percent range.
     uint32_t medianHalfWidth     = 8;
     uint32_t minSeparationFrames = 0;   // caller: ~30 ms at the source rate
 

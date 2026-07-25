@@ -66,11 +66,11 @@ int stretchBackend()
 // duplicate entry is harmless where a wrong hit would not be).
 void warpParamsBlob( int rate, idx_t channels, const Fraction &stretchFrac,
                      double pitchCents, length_t grainSize, length_t crossfade,
-                     std::vector<uint8_t> &out )
+                     uint64_t onsetsHash, std::vector<uint8_t> &out )
 {
     const uint8_t backend = (uint8_t) stretchBackend();
     out.clear();
-    out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 );
+    out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 + 8 );
     auto put32 = [&]( uint32_t v ) {
         for( int i = 0; i < 4; i++ ) out.push_back( (uint8_t)( v >> ( 8 * i ) ) );
     };
@@ -87,6 +87,10 @@ void warpParamsBlob( int rate, idx_t channels, const Fraction &stretchFrac,
     put64( centsBits );
     put32( (uint32_t) grainSize );
     put32( (uint32_t) crossfade );
+    // M4: fingerprint of the onset keyframes baked into the warp (0 = none).
+    // A warp built before the onsets sidecar existed and one built after
+    // occupy DIFFERENT cache keys — availability can never alias bytes.
+    put64( onsetsHash );
 }
 
 } // namespace
@@ -124,6 +128,34 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     // strictly a byte cache: synthesis below is deterministic, so a stored
     // warp and a recomputed warp are identical (the M2 cmp gate).
     const twContentHash warpContent = src.contentHash();
+
+    // M4: onset keyframes for the vocoder backend — read the M1 "onsets"
+    // aspect (params-agnostic: the import job chose the detector params) and
+    // map source-rate positions into this warp's input rate. Absence is
+    // fine (fixed keyframe grid only); the onsets fingerprint is key
+    // material below, so availability can never alias cached bytes.
+    std::vector<uint64_t> onsetPos;
+    uint64_t onsetsHash = 0;
+    if( stretchBackend() == kBackendVocoder && !warpContent.isNull() ) {
+        auto onsetReader = twSidecarStore::instance().loadAny(
+            warpContent, twAspect::Onsets, twAspect::OnsetsVersion );
+        if( onsetReader && onsetReader->info().recordCount > 0
+            && onsetReader->info().sourceRate > 0 ) {
+            const uint64_t n = onsetReader->info().recordCount;
+            std::vector<uint64_t> raw( (size_t) n );
+            if( onsetReader->readRecords( raw.data(), 0, n ) ) {
+                const double scale =
+                    (double) rate_ / (double) onsetReader->info().sourceRate;
+                onsetPos.reserve( (size_t) n );
+                for( uint64_t v : raw )
+                    onsetPos.push_back( (uint64_t) std::llround( v * scale ) );
+                onsetsHash = twHashBuffer(
+                    onsetPos.data(),
+                    onsetPos.size() * sizeof( uint64_t ) ).lo;
+            }
+        }
+    }
+
     std::vector<uint8_t> warpParams;
     uint64_t warpParamsHash = 0;
     const bool warpCacheable = !warpContent.isNull()
@@ -131,7 +163,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
                             && twSidecarStore::instance().enabled();
     if( warpCacheable ) {
         warpParamsBlob( rate_, channels_, stretchFrac, p.pitchCents,
-                        p.grainSize, p.crossfade, warpParams );
+                        p.grainSize, p.crossfade, onsetsHash, warpParams );
         warpParamsHash = twSidecarStore::hashParams( warpParams.data(),
                                                      warpParams.size() );
         auto reader = twSidecarStore::instance().load(
@@ -173,7 +205,9 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         vc.channels    = (uint32_t) channels_;
         twPagedVocoder::warpOffline( inPtr.data(), (uint64_t) inLen,
                                      data_.data(), (uint64_t) nFrames_,
-                                     vc, stretch, r );
+                                     vc, stretch, r,
+                                     onsetPos.empty() ? nullptr : onsetPos.data(),
+                                     onsetPos.size() );
     } else {
 #if TW_HAVE_RUBBERBAND
     // --- Rubber Band offline (proposal 26) -----------------------------------

@@ -6,7 +6,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+    # Optimized-with-asserts is the DEFAULT (proposal 27 M4). The project shipped
+    # at -O0 for its whole life, which made the DSP paths (vocoder, resampler,
+    # Rubber Band driving loops) 10-20x slower than the same code at -O2 — the
+    # reported "minutes to warp a minute of audio". RelWithDebInfo here is
+    # customized below: -O2 -g WITHOUT -DNDEBUG, because the engine's safety
+    # nets (twRtThreadGuard, teardown asserts) must stay armed in every build
+    # developers and tests actually run. Explicit -DCMAKE_BUILD_TYPE=Debug
+    # still gives the classic -O0 debugging build.
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
+if(NOT MSVC)
+    # Keep asserts in optimized builds (strip NDEBUG from the standard flags).
+    string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+    string(REPLACE "-DNDEBUG" "" CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO}")
 endif()
 
 # Ensure Debug builds include full source line information for LLDB/GDB

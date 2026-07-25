@@ -3,111 +3,26 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <vector>
 
-// The in-house phase vocoder (proposal 27 M3). See the header for the
-// algorithm overview. Everything here is double-precision, fixed-order,
-// single-threaded — determinism is a gate. The FFT is a plain iterative
-// radix-2 (adequate for the offline builder; pffft/SIMD arrive with M4's
-// random-access work where per-page throughput matters).
+// The in-house phase vocoder — M3 core, M4 keyframed random access,
+// prominence-gated locking and LUT/table performance work. See the header
+// for the algorithm contract. Everything is double-precision math over
+// float-stored analysis, fixed evaluation order, single-threaded.
 
 namespace {
 
 constexpr double kPi    = 3.14159265358979323846;
 constexpr double kTwoPi = 6.28318530717958647692;
 
-// ---------------------------------------------------------------------------
-// Iterative radix-2 complex FFT, in-place, double precision.
-// ---------------------------------------------------------------------------
-void fftInPlace( std::vector<double> &re, std::vector<double> &im, bool inverse )
-{
-    const size_t n = re.size();
-    // Bit-reversal permutation.
-    for( size_t i = 1, j = 0; i < n; i++ ) {
-        size_t bit = n >> 1;
-        for( ; j & bit; bit >>= 1 ) j ^= bit;
-        j ^= bit;
-        if( i < j ) {
-            std::swap( re[i], re[j] );
-            std::swap( im[i], im[j] );
-        }
-    }
-    for( size_t len = 2; len <= n; len <<= 1 ) {
-        const double ang = ( inverse ? kTwoPi : -kTwoPi ) / (double) len;
-        const double wr = std::cos( ang ), wi = std::sin( ang );
-        for( size_t i = 0; i < n; i += len ) {
-            double cr = 1.0, ci = 0.0;
-            for( size_t k = 0; k < len / 2; k++ ) {
-                const size_t a = i + k, b = i + k + len / 2;
-                const double tr = re[b] * cr - im[b] * ci;
-                const double ti = re[b] * ci + im[b] * cr;
-                re[b] = re[a] - tr;  im[b] = im[a] - ti;
-                re[a] += tr;         im[a] += ti;
-                const double ncr = cr * wr - ci * wi;
-                ci = cr * wi + ci * wr;
-                cr = ncr;
-            }
-        }
-    }
-    if( inverse ) {
-        const double s = 1.0 / (double) n;
-        for( size_t i = 0; i < n; i++ ) { re[i] *= s; im[i] *= s; }
-    }
-}
-
 inline double princarg( double p )
 {
-    // Wrap to (-pi, pi].
     p = std::fmod( p + kPi, kTwoPi );
     if( p <= 0.0 ) p += kTwoPi;
     return p - kPi;
 }
 
-// ---------------------------------------------------------------------------
-// STFT analysis of one channel: complex frames at fixed hop, Hann window,
-// frames zero-padded past either end of the material.
-// ---------------------------------------------------------------------------
-struct Stft {
-    uint32_t n      = 0;   // fftSize
-    uint32_t hop    = 0;
-    uint32_t nBins  = 0;   // n/2 + 1
-    uint64_t frames = 0;
-    // Frame-major: frame f, bin b at [f*nBins + b].
-    std::vector<double> re, im;
-};
-
-void analyze( const float *x, uint64_t len, uint32_t n, uint32_t hop,
-              const std::vector<double> &win, Stft &out )
-{
-    out.n     = n;
-    out.hop   = hop;
-    out.nBins = n / 2 + 1;
-    out.frames = len ? ( ( len + hop - 1 ) / hop + 1 ) : 1;
-    out.re.assign( out.frames * out.nBins, 0.0 );
-    out.im.assign( out.frames * out.nBins, 0.0 );
-
-    std::vector<double> fr( n ), fi( n );
-    for( uint64_t f = 0; f < out.frames; f++ ) {
-        const int64_t start = (int64_t) f * hop - (int64_t) n / 2;
-        for( uint32_t j = 0; j < n; j++ ) {
-            const int64_t p = start + (int64_t) j;
-            const double v = ( p >= 0 && p < (int64_t) len ) ? (double) x[p] : 0.0;
-            fr[j] = v * win[j];
-            fi[j] = 0.0;
-        }
-        fftInPlace( fr, fi, false );
-        double *dre = out.re.data() + f * out.nBins;
-        double *dim = out.im.data() + f * out.nBins;
-        for( uint32_t b = 0; b < out.nBins; b++ ) { dre[b] = fr[b]; dim[b] = fi[b]; }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Kaiser-windowed sinc resampler (pitch stage). ratio > 1 shortens/pitches up.
-// ---------------------------------------------------------------------------
 double besselI0( double x )
 {
-    // Series expansion; converges fast for the beta range used here.
     double sum = 1.0, term = 1.0;
     for( int k = 1; k < 32; k++ ) {
         term *= ( x / ( 2.0 * k ) ) * ( x / ( 2.0 * k ) );
@@ -117,157 +32,276 @@ double besselI0( double x )
     return sum;
 }
 
-void resampleSinc( const std::vector<double> &in, double ratio,
-                   std::vector<double> &out, uint64_t outLen )
-{
-    out.assign( outLen, 0.0 );
-    if( in.empty() ) return;
-    const int    taps   = 16;               // per side
-    const double beta   = 8.0;
-    const double i0b    = besselI0( beta );
-    const double cutoff = 0.95 * std::min( 1.0, 1.0 / ratio );
-    for( uint64_t i = 0; i < outLen; i++ ) {
-        const double srcPos = (double) i * ratio;
-        const int64_t k0 = (int64_t) std::floor( srcPos );
-        double acc = 0.0, wsum = 0.0;
-        for( int64_t k = k0 - taps + 1; k <= k0 + taps; k++ ) {
-            const double t = srcPos - (double) k;          // |t| <= taps
-            const double u = t / (double) taps;            // [-1, 1]
-            if( u <= -1.0 || u >= 1.0 ) continue;
-            const double kaiser = besselI0( beta * std::sqrt( 1.0 - u * u ) ) / i0b;
-            const double sx = kPi * cutoff * t;
-            const double sinc = ( std::fabs( sx ) < 1e-12 ) ? 1.0
-                                                            : std::sin( sx ) / sx;
-            const double w = cutoff * sinc * kaiser;
-            const double v = ( k >= 0 && k < (int64_t) in.size() ) ? in[k] : 0.0;
-            acc  += v * w;
-            wsum += w;
-        }
-        // Normalize by the window sum so pass-band gain stays unity even at
-        // the clip edges where taps fall outside the material.
-        out[i] = ( std::fabs( wsum ) > 1e-9 ) ? acc / wsum : 0.0;
+// Precomputed-table iterative radix-2 complex FFT (one size per instance).
+struct FftPlan {
+    uint32_t              n = 0;
+    std::vector<uint32_t> rev;
+    std::vector<double>   twRe, twIm;   // per stage, concatenated
+
+    void init( uint32_t size )
+    {
+        n = size;
+        rev.resize( n );
+        rev[0] = 0;
+        for( uint32_t i = 1; i < n; i++ )
+            rev[i] = ( rev[i >> 1] >> 1 ) | ( ( i & 1 ) ? ( n >> 1 ) : 0 );
+        twRe.clear(); twIm.clear();
+        for( uint32_t len = 2; len <= n; len <<= 1 )
+            for( uint32_t k = 0; k < len / 2; k++ ) {
+                const double a = -kTwoPi * k / len;
+                twRe.push_back( std::cos( a ) );
+                twIm.push_back( std::sin( a ) );
+            }
     }
-}
+
+    // inverse=false: forward. inverse=true: conjugate-symmetric inverse with
+    // 1/n normalization.
+    void run( double *re, double *im, bool inverse ) const
+    {
+        for( uint32_t i = 0; i < n; i++ ) {
+            const uint32_t j = rev[i];
+            if( i < j ) { std::swap( re[i], re[j] ); std::swap( im[i], im[j] ); }
+        }
+        size_t tw = 0;
+        for( uint32_t len = 2; len <= n; len <<= 1 ) {
+            for( uint32_t i = 0; i < n; i += len ) {
+                for( uint32_t k = 0; k < len / 2; k++ ) {
+                    const double cr = twRe[tw + k];
+                    const double ci = inverse ? -twIm[tw + k] : twIm[tw + k];
+                    const uint32_t a = i + k, b = i + k + len / 2;
+                    const double tr = re[b] * cr - im[b] * ci;
+                    const double ti = re[b] * ci + im[b] * cr;
+                    re[b] = re[a] - tr;  im[b] = im[a] - ti;
+                    re[a] += tr;         im[a] += ti;
+                }
+            }
+            tw += len / 2;
+        }
+        if( inverse ) {
+            const double s = 1.0 / (double) n;
+            for( uint32_t i = 0; i < n; i++ ) { re[i] *= s; im[i] *= s; }
+        }
+    }
+};
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// The offline warp.
-// ---------------------------------------------------------------------------
-void twPagedVocoder::warpOffline( const float *const *in, uint64_t inLen,
-                                  float *out, uint64_t outLen,
-                                  const Config &cfg,
-                                  double stretch, double pitchRatio )
-{
-    if( !out || outLen == 0 ) return;
-    std::memset( out, 0, sizeof( float ) * (size_t) cfg.channels * outLen );
-    if( !in || inLen == 0 || cfg.channels == 0 ) return;
-    if( stretch <= 0.0 ) stretch = 1e-6;
-    if( pitchRatio <= 0.0 ) pitchRatio = 1.0;
+// ===========================================================================
+// Impl
+// ===========================================================================
+struct twPagedVocoder::Impl {
+    Config   cfg;
+    std::vector<const float *> src;   // borrowed channel pointers
+    uint64_t inLen = 0;
+    double   stretch = 1.0, pitchRatio = 1.0, S = 1.0;
+    uint64_t Ls = 0;                  // stretched-domain length
+    uint32_t N = 0, Ha = 0, Hs = 0, nBins = 0;
+    uint64_t aFrames = 0;             // analysis frame count
+    uint64_t nSyn = 0;                // synthesis frame count over Ls
 
-    const uint32_t N  = cfg.fftSize;
-    const uint32_t Ha = cfg.analysisHop;
-    const uint32_t Hs = Ha;                       // fixed synthesis hop
-    const uint32_t nBins = N / 2 + 1;
-    const double   S  = stretch * pitchRatio;     // internal time-stretch
-    const uint64_t Ls = std::max<uint64_t>( 1, (uint64_t) std::llround( (double) inLen * S ) );
+    FftPlan             fft;
+    std::vector<double> win;
 
-    // Identity short-circuit: no stretch, no pitch — copy through exactly.
-    if( stretch == 1.0 && pitchRatio == 1.0 ) {
-        const uint64_t nCopy = std::min( inLen, outLen );
-        for( uint32_t c = 0; c < cfg.channels; c++ )
-            for( uint64_t i = 0; i < nCopy; i++ )
-                out[(size_t) c * outLen + i] = in[c][i];
-        return;
+    // Lazy analysis cache (float storage): fold magnitude+phase, per-channel
+    // complex spectra. haveFrame_ guards per-frame computation.
+    std::vector<uint8_t> haveFrame;
+    std::vector<float>   foldMag, foldPhase;
+    std::vector<float>   chRe, chIm;
+
+    // Sorted unique keyframe synthesis-frame indices (always contains 0).
+    std::vector<uint64_t> keys;
+
+    // Kaiser window LUT for the pitch resampler.
+    static constexpr int    kSincTaps = 16;    // per side
+    static constexpr double kBeta     = 8.0;
+    std::vector<double>     kaiserLut;         // u in [0,1], linear interp
+
+    // ---- scratch reused across frames (allocation-free inner loop) -------
+    std::vector<double> fr, fi;
+    std::vector<double> synPhase, zRe, zIm, mag, medScratch;
+    std::vector<int>    peakOf;
+    std::vector<uint8_t> locked;
+
+    void init( const float *const *inSrc, uint64_t len, const Config &c,
+               double st, double pr, const uint64_t *onsets, size_t nOnsets )
+    {
+        cfg = c;
+        inLen = len;
+        stretch = ( st > 0.0 ) ? st : 1e-6;
+        pitchRatio = ( pr > 0.0 ) ? pr : 1.0;
+        S  = stretch * pitchRatio;
+        N  = cfg.fftSize;
+        Ha = cfg.analysisHop;
+        Hs = Ha;
+        nBins = N / 2 + 1;
+        Ls = std::max<uint64_t>( 1, (uint64_t) std::llround( (double) inLen * S ) );
+
+        src.assign( inSrc, inSrc + cfg.channels );
+
+        fft.init( N );
+        win.resize( N );
+        for( uint32_t j = 0; j < N; j++ )
+            win[j] = 0.5 - 0.5 * std::cos( kTwoPi * j / ( N - 1 ) );
+
+        aFrames = inLen ? ( ( inLen + Ha - 1 ) / Ha + 1 ) : 1;
+        nSyn    = ( Ls + Hs - 1 ) / Hs + 1;
+
+        haveFrame.assign( aFrames, 0 );
+        foldMag.assign( aFrames * nBins, 0.0f );
+        foldPhase.assign( aFrames * nBins, 0.0f );
+        chRe.assign( aFrames * cfg.channels * nBins, 0.0f );
+        chIm.assign( aFrames * cfg.channels * nBins, 0.0f );
+
+        // Keyframe set: the fixed grid ∪ onset-aligned frames. Onset
+        // positions arrive in the INPUT domain (already at this vocoder's
+        // rate); an onset at input sample p lands at synthesis frame
+        // round(p·S/Hs) — resetting there re-anchors the attack.
+        keys.push_back( 0 );
+        const uint32_t K = cfg.keyframeInterval ? cfg.keyframeInterval : 64;
+        for( uint64_t k = K; k < nSyn; k += K ) keys.push_back( k );
+        for( size_t i = 0; i < nOnsets; i++ ) {
+            const uint64_t k =
+                (uint64_t) std::llround( (double) onsets[i] * S / Hs );
+            if( k < nSyn ) keys.push_back( k );
+        }
+        std::sort( keys.begin(), keys.end() );
+        keys.erase( std::unique( keys.begin(), keys.end() ), keys.end() );
+
+        // Defense in depth (M4): keyframes closer together than the OLA
+        // overlap span are guaranteed-destructive — every crossfade region
+        // would carry a reset discontinuity — whatever upstream produced
+        // them (the v1 onset detector overfired on steady material). Keep
+        // the first of any cluster; the fixed grid is far coarser than this.
+        const uint64_t minGap = N / Hs;   // overlap depth (4 at 2048/512)
+        std::vector<uint64_t> spaced;
+        spaced.reserve( keys.size() );
+        for( uint64_t k : keys )
+            if( spaced.empty() || k - spaced.back() >= minGap )
+                spaced.push_back( k );
+        keys.swap( spaced );
+
+        kaiserLut.resize( 4097 );
+        const double i0b = besselI0( kBeta );
+        for( size_t i = 0; i < kaiserLut.size(); i++ ) {
+            const double u = (double) i / ( kaiserLut.size() - 1 );
+            kaiserLut[i] = besselI0( kBeta * std::sqrt( 1.0 - u * u ) ) / i0b;
+        }
+
+        fr.resize( N ); fi.resize( N );
+        synPhase.assign( nBins, 0.0 );
+        zRe.resize( nBins ); zIm.resize( nBins );
+        mag.resize( nBins ); medScratch.resize( nBins );
+        peakOf.resize( nBins );
+        locked.resize( nBins );
     }
 
-    std::vector<double> win( N );
-    for( uint32_t j = 0; j < N; j++ )
-        win[j] = 0.5 - 0.5 * std::cos( kTwoPi * j / ( N - 1 ) );
-
-    // --- Analysis: every channel + the mono fold -------------------------
-    std::vector<Stft> chan( cfg.channels );
-    std::vector<float> mono( (size_t) inLen );
-    for( uint64_t i = 0; i < inLen; i++ ) {
-        double m = 0.0;
-        for( uint32_t c = 0; c < cfg.channels; c++ ) m += in[c][i];
-        mono[i] = (float) ( m / cfg.channels );
+    double kaiser( double u ) const
+    {
+        // u in [0,1]; linear interpolation over the LUT (deterministic).
+        const double x = u * ( kaiserLut.size() - 1 );
+        const size_t i = (size_t) x;
+        if( i + 1 >= kaiserLut.size() ) return kaiserLut.back();
+        const double f = x - (double) i;
+        return kaiserLut[i] + ( kaiserLut[i + 1] - kaiserLut[i] ) * f;
     }
-    Stft fold;
-    analyze( mono.data(), inLen, N, Ha, win, fold );
-    for( uint32_t c = 0; c < cfg.channels; c++ )
-        analyze( in[c], inLen, N, Ha, win, chan[c] );
 
-    const uint64_t nSyn = ( Ls + Hs - 1 ) / Hs + 1;
+    // Compute (once) the analysis of frame f: fold mag/phase + per-channel
+    // complex spectra. atan2 happens HERE, once per frame per bin — never in
+    // the synthesis loop (the M3 performance sin).
+    void ensureFrame( uint64_t f )
+    {
+        if( haveFrame[f] ) return;
+        const int64_t start = (int64_t) f * Ha - (int64_t) N / 2;
 
-    // --- Synthesis state --------------------------------------------------
-    // Accumulated synthesis phase per bin (mono fold), and the per-frame
-    // rotation Z[b] applied to every channel.
-    std::vector<double> synPhase( nBins, 0.0 );
-    std::vector<double> zRe( nBins ), zIm( nBins );
-    std::vector<double> mag( nBins );
-    std::vector<int>    peakOf( nBins );
-
-    // Stretched-domain accumulators per channel + window-square normalizer.
-    std::vector<std::vector<double>> acc( cfg.channels,
-                                          std::vector<double>( (size_t) Ls + N, 0.0 ) );
-    std::vector<double> norm( (size_t) Ls + N, 0.0 );
-
-    std::vector<double> fr( N ), fi( N );
-
-    const double binFreq = kTwoPi / (double) N;   // Ω_b factor: b * binFreq rad/sample
-
-    for( uint64_t k = 0; k < nSyn; k++ ) {
-        // Fractional analysis position for this synthesis frame.
-        const double aPos   = (double) k * Hs / S;          // input samples
-        const double fIdx   = aPos / Ha;                    // fractional frame
-        uint64_t f0 = (uint64_t) std::floor( fIdx );
-        if( f0 >= fold.frames ) f0 = fold.frames - 1;
-        uint64_t f1 = std::min( f0 + 1, fold.frames - 1 );
-        const uint64_t fN = ( fIdx - (double) f0 > 0.5 && f1 > f0 ) ? f1 : f0; // nearest
-
-        const double *nr = fold.re.data() + fN * nBins;
-        const double *ni = fold.im.data() + fN * nBins;
-
-        for( uint32_t b = 0; b < nBins; b++ )
-            mag[b] = std::hypot( nr[b], ni[b] );
-
-        if( k == 0 ) {
-            // Phase reset at the start: copy analysis phases verbatim.
-            for( uint32_t b = 0; b < nBins; b++ )
-                synPhase[b] = std::atan2( ni[b], nr[b] );
-        } else {
-            // Instantaneous frequency between f0 and f1 of the fold.
-            const double *r0 = fold.re.data() + f0 * nBins;
-            const double *i0 = fold.im.data() + f0 * nBins;
-            const double *r1 = fold.re.data() + f1 * nBins;
-            const double *i1 = fold.im.data() + f1 * nBins;
+        // Channels first (also feeds the fold accumulation).
+        std::vector<double> foldR( N, 0.0 ), foldI( N, 0.0 );
+        for( uint32_t c = 0; c < cfg.channels; c++ ) {
+            for( uint32_t j = 0; j < N; j++ ) {
+                const int64_t p = start + (int64_t) j;
+                const double v =
+                    ( p >= 0 && p < (int64_t) inLen ) ? (double) src[c][p] : 0.0;
+                fr[j] = v * win[j];
+                fi[j] = 0.0;
+            }
+            for( uint32_t j = 0; j < N; j++ ) foldR[j] += fr[j];
+            fft.run( fr.data(), fi.data(), false );
+            float *dre = chRe.data() + ( f * cfg.channels + c ) * nBins;
+            float *dim = chIm.data() + ( f * cfg.channels + c ) * nBins;
             for( uint32_t b = 0; b < nBins; b++ ) {
-                const double p0 = std::atan2( i0[b], r0[b] );
-                const double p1 = std::atan2( i1[b], r1[b] );
+                dre[b] = (float) fr[b];
+                dim[b] = (float) fi[b];
+            }
+        }
+        const double inv = 1.0 / cfg.channels;
+        for( uint32_t j = 0; j < N; j++ ) { fr[j] = foldR[j] * inv; fi[j] = 0.0; }
+        fft.run( fr.data(), fi.data(), false );
+        float *fm = foldMag.data()   + f * nBins;
+        float *fp = foldPhase.data() + f * nBins;
+        for( uint32_t b = 0; b < nBins; b++ ) {
+            fm[b] = (float) std::hypot( fr[b], fi[b] );
+            fp[b] = (float) std::atan2( fi[b], fr[b] );
+        }
+        haveFrame[f] = 1;
+    }
+
+    // Advance the lock/phase state to synthesis frame k and produce the
+    // rotation field zRe/zIm for it. Caller guarantees frames are visited in
+    // ascending order starting from a keyframe.
+    void stepFrame( uint64_t k )
+    {
+        const double  aPos = (double) k * Hs / S;
+        const double  fIdx = aPos / Ha;
+        uint64_t f0 = (uint64_t) fIdx;
+        if( f0 >= aFrames ) f0 = aFrames - 1;
+        const uint64_t f1 = std::min( f0 + 1, aFrames - 1 );
+        const uint64_t fN = ( fIdx - (double) f0 > 0.5 && f1 > f0 ) ? f1 : f0;
+        ensureFrame( f0 );
+        ensureFrame( f1 );
+        ensureFrame( fN );
+
+        const float *nm = foldMag.data()   + fN * nBins;
+        const float *np = foldPhase.data() + fN * nBins;
+
+        const bool isKey = std::binary_search( keys.begin(), keys.end(), k );
+
+        if( isKey ) {
+            // Keyframe: reset the whole phase state to the analysis truth.
+            for( uint32_t b = 0; b < nBins; b++ ) synPhase[b] = np[b];
+        } else {
+            const float *p0 = foldPhase.data() + f0 * nBins;
+            const float *p1 = foldPhase.data() + f1 * nBins;
+            const double binFreq = kTwoPi / (double) N;
+            for( uint32_t b = 0; b < nBins; b++ ) {
                 const double omegaB = (double) b * binFreq;
-                double dev;
-                if( f1 > f0 ) {
-                    dev = princarg( p1 - p0 - omegaB * Ha ) / (double) Ha;
-                } else {
-                    dev = 0.0;   // clamped at the end: pure bin frequency
-                }
+                const double dev = ( f1 > f0 )
+                    ? princarg( (double) p1[b] - (double) p0[b] - omegaB * Ha )
+                          / (double) Ha
+                    : 0.0;
                 synPhase[b] += ( omegaB + dev ) * (double) Hs;
             }
         }
 
-        // Peak picking on the nearest-frame magnitudes (2-neighbor test),
-        // then region assignment: every bin belongs to the closest peak.
-        int lastPeak = -1;
-        for( uint32_t b = 0; b < nBins; b++ ) peakOf[b] = -1;
+        for( uint32_t b = 0; b < nBins; b++ ) mag[b] = nm[b];
+
+        // Frame median magnitude — the prominence yardstick.
+        std::copy( mag.begin(), mag.end(), medScratch.begin() );
+        std::nth_element( medScratch.begin(),
+                          medScratch.begin() + nBins / 2, medScratch.end() );
+        const double median = medScratch[nBins / 2];
+        const double promThreshold = cfg.peakProminence * median;
+
+        // PROMINENT peaks only (M4): spurious noise-floor maxima must not
+        // impose phase structure — that was the comb/metallic coloration on
+        // stochastic material. Bins below the median free-run regardless.
         std::vector<int> peaks;
         for( uint32_t b = 2; b + 2 < nBins; b++ ) {
             const double m = mag[b];
-            if( m > mag[b-1] && m > mag[b-2] && m >= mag[b+1] && m >= mag[b+2] )
+            if( m > mag[b-1] && m > mag[b-2] && m >= mag[b+1] && m >= mag[b+2]
+                && m >= promThreshold && m > 0.0 )
                 peaks.push_back( (int) b );
         }
         if( peaks.empty() ) {
-            for( uint32_t b = 0; b < nBins; b++ ) peakOf[b] = (int) b; // self-locked
+            for( uint32_t b = 0; b < nBins; b++ ) { peakOf[b] = (int) b; locked[b] = 0; }
         } else {
             size_t pi = 0;
             for( uint32_t b = 0; b < nBins; b++ ) {
@@ -275,78 +309,200 @@ void twPagedVocoder::warpOffline( const float *const *in, uint64_t inLen,
                        && std::abs( (int) b - peaks[pi+1] )
                           <= std::abs( (int) b - peaks[pi] ) ) pi++;
                 peakOf[b] = peaks[pi];
+                locked[b] = ( mag[b] >= median ) ? 1 : 0;
             }
-            (void) lastPeak;
         }
 
-        // Identity phase locking: peak bins carry the accumulated phase;
-        // non-peak bins keep their analysis offset relative to their peak.
-        // The per-bin ROTATION Z[b] = e^{i(φ_out[b] − φ_a[b])} is what gets
-        // applied to every channel (cross-channel coherence).
         for( uint32_t b = 0; b < nBins; b++ ) {
-            const int p = peakOf[b];
-            const double phiA  = std::atan2( ni[b], nr[b] );
-            const double phiAp = std::atan2( ni[p], nr[p] );
-            const double phiOut = ( (int) b == p )
-                ? synPhase[b]
-                : synPhase[p] + ( phiA - phiAp );
+            const double phiA = np[b];
+            double phiOut;
+            if( locked[b] && peakOf[b] != (int) b ) {
+                const int p = peakOf[b];
+                phiOut = synPhase[p] + ( phiA - (double) np[p] );
+            } else {
+                phiOut = synPhase[b];   // peak bins and free-running bins
+            }
             const double rot = phiOut - phiA;
             zRe[b] = std::cos( rot );
             zIm[b] = std::sin( rot );
-            // EVERY bin records the phase it actually output — when peak
-            // roles change hands between frames, the new peak's accumulated
-            // state is then continuous with what was heard, not with a
-            // never-output shadow accumulation.
-            synPhase[b] = phiOut;
+            synPhase[b] = phiOut;   // continuous state across role changes
         }
+    }
 
-        // Per channel: rotate the channel spectrum, iFFT, overlap-add.
-        const uint64_t outPos = k * Hs;
-        for( uint32_t c = 0; c < cfg.channels; c++ ) {
-            const double *cr = chan[c].re.data() + fN * nBins;
-            const double *ci = chan[c].im.data() + fN * nBins;
-            for( uint32_t b = 0; b < nBins; b++ ) {
-                fr[b] = cr[b] * zRe[b] - ci[b] * zIm[b];
-                fi[b] = cr[b] * zIm[b] + ci[b] * zRe[b];
-            }
-            // Hermitian mirror for the real iFFT.
-            for( uint32_t b = nBins; b < N; b++ ) {
-                fr[b] =  fr[N - b];
-                fi[b] = -fi[N - b];
-            }
-            fftInPlace( fr, fi, true );
-            std::vector<double> &A = acc[c];
+    // Render the STRETCHED-domain window [s0, s1) into dst (planar,
+    // per-channel stride = s1-s0). dst must be zeroed. Bit-exact under
+    // partition: identical frame set, phase state and accumulation order for
+    // any window covering a given output sample.
+    void renderStretched( uint64_t s0, uint64_t s1, double *dst )
+    {
+        if( s1 <= s0 ) return;
+        const uint64_t len = s1 - s0;
+        const int64_t half = (int64_t) N / 2;
+
+        // Frames whose window [k·Hs − N/2, k·Hs + N/2) intersects [s0, s1).
+        int64_t kMin = ( (int64_t) s0 - half + (int64_t) Hs ) / (int64_t) Hs - 1;
+        if( kMin < 0 ) kMin = 0;
+        while( (int64_t) kMin * Hs + half <= (int64_t) s0 ) kMin++;
+        int64_t kMax = ( (int64_t) s1 + half ) / (int64_t) Hs;
+        if( kMax >= (int64_t) nSyn ) kMax = (int64_t) nSyn - 1;
+
+        if( kMax < kMin ) return;
+
+        // Pre-roll from the governing keyframe (phase state only, no OLA).
+        auto it = std::upper_bound( keys.begin(), keys.end(), (uint64_t) kMin );
+        const uint64_t kf = ( it == keys.begin() ) ? 0 : *( it - 1 );
+
+        std::vector<double> norm( len, 0.0 );
+
+        for( uint64_t k = kf; k <= (uint64_t) kMax; k++ ) {
+            stepFrame( k );
+            if( (int64_t) k < kMin ) continue;   // pre-roll only
+
+            const int64_t base = (int64_t) k * Hs - half;
+            // Window-square normalization contribution.
             for( uint32_t j = 0; j < N; j++ ) {
-                const int64_t p = (int64_t) outPos + (int64_t) j - (int64_t) N / 2;
-                if( p < 0 || p >= (int64_t) ( Ls + N ) ) continue;
-                A[(size_t) p] += fr[j] * win[j];
+                const int64_t p = base + (int64_t) j;
+                if( p < (int64_t) s0 || p >= (int64_t) s1 ) continue;
+                norm[(size_t) ( p - (int64_t) s0 )] += win[j] * win[j];
+            }
+            const double aPos = (double) k * Hs / S;
+            const double fIdx = aPos / Ha;
+            uint64_t f0 = (uint64_t) fIdx;
+            if( f0 >= aFrames ) f0 = aFrames - 1;
+            const uint64_t f1 = std::min( f0 + 1, aFrames - 1 );
+            const uint64_t fN = ( fIdx - (double) f0 > 0.5 && f1 > f0 ) ? f1 : f0;
+
+            for( uint32_t c = 0; c < cfg.channels; c++ ) {
+                const float *cr = chRe.data() + ( fN * cfg.channels + c ) * nBins;
+                const float *ci = chIm.data() + ( fN * cfg.channels + c ) * nBins;
+                for( uint32_t b = 0; b < nBins; b++ ) {
+                    fr[b] = (double) cr[b] * zRe[b] - (double) ci[b] * zIm[b];
+                    fi[b] = (double) cr[b] * zIm[b] + (double) ci[b] * zRe[b];
+                }
+                for( uint32_t b = nBins; b < N; b++ ) {
+                    fr[b] =  fr[N - b];
+                    fi[b] = -fi[N - b];
+                }
+                fft.run( fr.data(), fi.data(), true );
+                double *d = dst + (size_t) c * len;
+                for( uint32_t j = 0; j < N; j++ ) {
+                    const int64_t p = base + (int64_t) j;
+                    if( p < (int64_t) s0 || p >= (int64_t) s1 ) continue;
+                    d[(size_t) ( p - (int64_t) s0 )] += fr[j] * win[j];
+                }
             }
         }
-        for( uint32_t j = 0; j < N; j++ ) {
-            const int64_t p = (int64_t) outPos + (int64_t) j - (int64_t) N / 2;
-            if( p < 0 || p >= (int64_t) ( Ls + N ) ) continue;
-            norm[(size_t) p] += win[j] * win[j];
+
+        for( uint32_t c = 0; c < cfg.channels; c++ ) {
+            double *d = dst + (size_t) c * len;
+            for( uint64_t i = 0; i < len; i++ )
+                d[i] = ( norm[(size_t) i] > 1e-9 ) ? d[i] / norm[(size_t) i] : 0.0;
         }
     }
 
-    // --- Normalize, resample for pitch, land exactly outLen ---------------
-    std::vector<double> stretched( (size_t) Ls );
-    for( uint32_t c = 0; c < cfg.channels; c++ ) {
-        std::vector<double> &A = acc[c];
-        for( uint64_t i = 0; i < Ls; i++ )
-            stretched[(size_t) i] = ( norm[(size_t) i] > 1e-9 )
-                ? A[(size_t) i] / norm[(size_t) i] : 0.0;
+    void render( uint64_t outStart, uint64_t len, float *dst )
+    {
+        if( len == 0 || inLen == 0 || cfg.channels == 0 ) return;
 
-        float *dst = out + (size_t) c * outLen;
+        if( stretch == 1.0 && pitchRatio == 1.0 ) {
+            // Identity: copy through exactly.
+            for( uint32_t c = 0; c < cfg.channels; c++ ) {
+                float *d = dst + (size_t) c * len;
+                for( uint64_t i = 0; i < len; i++ ) {
+                    const uint64_t p = outStart + i;
+                    d[i] = ( p < inLen ) ? src[c][p] : 0.0f;
+                }
+            }
+            return;
+        }
+
         if( pitchRatio == 1.0 ) {
-            const uint64_t nCopy = std::min( Ls, outLen );
-            for( uint64_t i = 0; i < nCopy; i++ )
-                dst[i] = (float) stretched[(size_t) i];
-        } else {
-            std::vector<double> shifted;
-            resampleSinc( stretched, pitchRatio, shifted, outLen );
-            for( uint64_t i = 0; i < outLen; i++ )
-                dst[i] = (float) shifted[(size_t) i];
+            const uint64_t s0 = std::min( outStart, Ls );
+            const uint64_t s1 = std::min( outStart + len, Ls );
+            if( s1 <= s0 ) return;
+            std::vector<double> tmp( (size_t) cfg.channels * ( s1 - s0 ), 0.0 );
+            renderStretched( s0, s1, tmp.data() );
+            for( uint32_t c = 0; c < cfg.channels; c++ ) {
+                float *d = dst + (size_t) c * len;
+                const double *t = tmp.data() + (size_t) c * ( s1 - s0 );
+                for( uint64_t i = 0; i < s1 - s0; i++ )
+                    d[( s0 - outStart ) + i] = (float) t[i];
+            }
+            return;
+        }
+
+        // Pitch stage: output frame i reads stretched positions
+        // (outStart+i)·ratio ± taps. Render exactly that stretched window,
+        // then sinc-interpolate per output frame — each output sample
+        // depends only on its bounded neighborhood, so partitions agree.
+        const double ratio = pitchRatio;
+        const double first = (double) outStart * ratio;
+        const double last  = (double) ( outStart + len - 1 ) * ratio;
+        int64_t s0 = (int64_t) std::floor( first ) - kSincTaps;
+        int64_t s1 = (int64_t) std::floor( last ) + kSincTaps + 2;
+        if( s0 < 0 ) s0 = 0;
+        if( s1 > (int64_t) Ls ) s1 = (int64_t) Ls;
+        if( s1 <= s0 ) return;
+        const uint64_t sLen = (uint64_t) ( s1 - s0 );
+
+        std::vector<double> tmp( (size_t) cfg.channels * sLen, 0.0 );
+        renderStretched( (uint64_t) s0, (uint64_t) s1, tmp.data() );
+
+        const double cutoff = 0.95 * std::min( 1.0, 1.0 / ratio );
+        for( uint32_t c = 0; c < cfg.channels; c++ ) {
+            const double *t = tmp.data() + (size_t) c * sLen;
+            float *d = dst + (size_t) c * len;
+            for( uint64_t i = 0; i < len; i++ ) {
+                const double srcPos = (double) ( outStart + i ) * ratio;
+                const int64_t k0 = (int64_t) std::floor( srcPos );
+                double acc = 0.0, wsum = 0.0;
+                for( int64_t k = k0 - kSincTaps + 1; k <= k0 + kSincTaps; k++ ) {
+                    const double tt = srcPos - (double) k;
+                    const double u = std::fabs( tt ) / (double) kSincTaps;
+                    if( u >= 1.0 ) continue;
+                    const double sx = kPi * cutoff * tt;
+                    const double sinc = ( std::fabs( sx ) < 1e-12 )
+                        ? 1.0 : std::sin( sx ) / sx;
+                    const double w = cutoff * sinc * kaiser( u );
+                    const double v = ( k >= s0 && k < s1 )
+                        ? t[(size_t) ( k - s0 )] : 0.0;
+                    acc  += v * w;
+                    wsum += w;
+                }
+                d[i] = ( std::fabs( wsum ) > 1e-9 ) ? (float) ( acc / wsum ) : 0.0f;
+            }
         }
     }
+};
+
+// ===========================================================================
+// Public surface
+// ===========================================================================
+twPagedVocoder::twPagedVocoder( const float *const *src, uint64_t inLen,
+                                const Config &cfg, double stretch,
+                                double pitchRatio, const uint64_t *onsets,
+                                size_t nOnsets )
+    : impl_( new Impl )
+{
+    impl_->init( src, inLen, cfg, stretch, pitchRatio, onsets, nOnsets );
+}
+
+twPagedVocoder::~twPagedVocoder() = default;
+
+void twPagedVocoder::render( uint64_t outStart, uint64_t len, float *dst )
+{
+    impl_->render( outStart, len, dst );
+}
+
+void twPagedVocoder::warpOffline( const float *const *in, uint64_t inLen,
+                                  float *out, uint64_t outLen,
+                                  const Config &cfg, double stretch,
+                                  double pitchRatio, const uint64_t *onsets,
+                                  size_t nOnsets )
+{
+    if( !out || outLen == 0 ) return;
+    std::memset( out, 0, sizeof( float ) * (size_t) cfg.channels * outLen );
+    if( !in || inLen == 0 || cfg.channels == 0 ) return;
+    twPagedVocoder v( in, inLen, cfg, stretch, pitchRatio, onsets, nOnsets );
+    v.render( 0, outLen, out );
 }

@@ -71,8 +71,10 @@ write_qxa() {
         echo '<SActionScript version="1" name="ab_warp">'
         echo '  <setup project="new"/>'
         echo '  <actions>'
+        echo '    <sidecar-root/>'
         echo '    <add-track index="-1"/>'
         echo "    <add-sample trackIndex=\"0\" filePath=\"$wav\" timePos=\"0\"/>"
+        echo '    <wait-analysis timeoutMs="20000"/>'
         if [ -n "$stretch" ]; then
             echo "    <resize-clip clip=\"0,0\" startTime=\"0\" startOffset=\"0\" duration=\"$duration\" loopLength=\"0\" stretch=\"$stretch\"/>"
         fi
@@ -94,7 +96,11 @@ render_with() {
     local qxa="$1" backend="$2" tag="$3"
     local odir="$WORK/out_$tag"
     rm -rf "$odir"; mkdir -p "$odir"
-    TW_STRETCH_BACKEND="$backend" SMARAGD_SIDECAR_DIR=off \
+    # M4: sidecars live in the per-render output dir (hermetic, cold each
+    # run) so the import job's ONSETS aspect exists before the render — the
+    # vocoder's onset keyframes (transient preservation) are active, which is
+    # the honest A/B of the M4 fix. warp.pcm stays cold per run (fresh dir).
+    TW_STRETCH_BACKEND="$backend" \
         "$SMARAGD" --test-case "$qxa" --test-output-dir "$odir" >/dev/null 2>&1
     if [ -f "$odir/out.wav" ]; then echo "$odir/out.wav"; else echo ""; fi
 }
@@ -107,7 +113,8 @@ render_with() {
     echo "- Reference backend: \`TW_STRETCH_BACKEND=rubberband\`"
     echo "- Candidate backend: \`TW_STRETCH_BACKEND=vocoder\`"
     echo "- Corpus: deterministic 16-bit PCM stereo 48 kHz, 4.0 s each (warp_ab --gen)"
-    echo "- Sidecars disabled (\`SMARAGD_SIDECAR_DIR=off\`)"
+    echo "- Sidecars: per-render hermetic dir (onsets aspect active — vocoder"
+    echo "  onset keyframes engaged; warp.pcm cold per run)"
     echo ""
     echo "Status legend: **identical** = candidate bytes == reference (vocoder not"
     echo "yet distinct; plumbing validated, all metrics must be ~0) · **A/B** = the"

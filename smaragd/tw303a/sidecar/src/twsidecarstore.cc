@@ -205,6 +205,48 @@ std::unique_ptr<twQafReader> twSidecarStore::load( const twContentHash &content,
     return reader;
 }
 
+std::unique_ptr<twQafReader> twSidecarStore::loadAny( const twContentHash &content,
+                                                      const std::string &aspectId,
+                                                      uint32_t aspectVersion )
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    if( !enabled_ )
+        return nullptr;
+
+    const std::string hex = content.toHex();
+    const fs::path shard = root_ / hex.substr( 0, 2 );
+    const std::string prefix = hex + ".";
+    const std::string needle = "." + aspectId + ".";
+
+    std::vector<fs::path> candidates;
+    std::error_code ec;
+    for( fs::directory_iterator it( shard, ec ), end; it != end;
+         it.increment( ec ) ) {
+        if( ec ) break;
+        std::error_code e2;
+        if( !it->is_regular_file( e2 ) || e2 ) continue;
+        const std::string fn = it->path().filename().string();
+        if( fn.rfind( prefix, 0 ) != 0 ) continue;
+        if( fn.find( needle ) == std::string::npos ) continue;
+        if( fn.size() < 4 || fn.substr( fn.size() - 4 ) != ".qaf" ) continue;
+        candidates.push_back( it->path() );
+    }
+    std::sort( candidates.begin(), candidates.end() );
+
+    for( const fs::path &p : candidates ) {
+        auto reader = std::make_unique<twQafReader>();
+        if( !reader->open( p ) ) continue;
+        const twQafInfo &info = reader->info();
+        if( info.aspectId != aspectId ) continue;
+        if( info.aspectVersion != aspectVersion ) continue;
+        if( info.contentHash != content ) continue;
+        std::error_code te;
+        fs::last_write_time( p, fs::file_time_type::clock::now(), te );
+        return reader;
+    }
+    return nullptr;
+}
+
 bool twSidecarStore::store( const twQafInfo &info, const void *payload,
                             uint64_t payloadLen )
 {
