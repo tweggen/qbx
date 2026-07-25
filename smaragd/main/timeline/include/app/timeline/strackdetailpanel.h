@@ -8,10 +8,12 @@ class SPluginEffectStrip;
 class QVBoxLayout;
 class QSlider;
 class QLabel;
-class QPushButton;
 
-// Track detail panel: shows plugin grid and large volume control
-// Lives in the bottom half of the mixer view, expandable/collapsible
+// Track detail panel: shows plugin grid and large volume control.
+// Lives in the main window's "Track Detail" dock (left area, below the extern
+// file list) — it carries no title row or collapse button of its own, because
+// the dock's title bar already names it and the View menu / its close button
+// already show and hide it.
 class STrackDetailPanel : public QWidget {
     Q_OBJECT
 public:
@@ -21,31 +23,16 @@ public:
     // Set the track to display (nullptr hides content)
     void setTrack(STrack *track);
 
-    // Collapse/expand state
-    bool isExpanded() const { return expanded_; }
-    void setExpanded(bool expanded);
-
-    // Persist state
-    void saveState();
-    void loadState();
-
     // Size constraint (50% of screen, max 450px)
     QSize sizeHint() const override;
     int heightForWidth(int w) const override;
 
-protected:
-    void paintEvent(QPaintEvent *event) override;
-    void mousePressEvent(QMouseEvent *event) override;
-
 private:
     void rebuildUI();
-    void updateCollapsedState();
 
     STrack *currentTrack_ = nullptr;
-    bool expanded_ = true;
 
     // UI components
-    QPushButton *expandCollapseBtn_;
     QWidget *contentWidget_;
     QVBoxLayout *contentLayout_;
     SPluginEffectStrip *pluginStrip_;

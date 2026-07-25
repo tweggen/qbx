@@ -1,14 +1,10 @@
 #include "app/timeline/strackdetailpanel.h"
 #include "app/objects/track/strack.h"
 #include "app/pluginui/splugineffectstrip.h"
-#include "app/shell/ssettings.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSlider>
 #include <QLabel>
-#include <QPushButton>
-#include <QPainter>
-#include <QMouseEvent>
 #include <QGuiApplication>
 #include <QScreen>
 
@@ -21,22 +17,8 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // Header with collapse/expand button
-    QHBoxLayout *headerLayout = new QHBoxLayout();
-    headerLayout->setContentsMargins(8, 4, 8, 4);
-    expandCollapseBtn_ = new QPushButton("▾");
-    expandCollapseBtn_->setMaximumWidth(24);
-    expandCollapseBtn_->setMaximumHeight(20);
-    headerLayout->addWidget(new QLabel("Track Detail"));
-    headerLayout->addStretch();
-    headerLayout->addWidget(expandCollapseBtn_);
-
-    QWidget *headerWidget = new QWidget();
-    headerWidget->setLayout(headerLayout);
-    headerWidget->setStyleSheet("QWidget { background-color: #1a1a1a; border-bottom: 1px solid #444; }");
-    mainLayout->addWidget(headerWidget);
-
-    // Content widget (collapsible)
+    // No title row of our own: the dock's title bar carries the name, and its
+    // close button (plus View -> Track detail) is the show/hide control.
     contentWidget_ = new QWidget();
     contentWidget_->setMinimumHeight(100);  // Ensure content area has minimum size
     contentLayout_ = new QVBoxLayout(contentWidget_);
@@ -67,12 +49,8 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
 
     mainLayout->addWidget(contentWidget_, 1);  // Stretch factor 1 to use available space
 
-    connect(expandCollapseBtn_, &QPushButton::clicked, this, [this]() {
-        setExpanded(!expanded_);
-    });
-
-    // Load saved state
-    loadState();
+    // Nothing to show until a track is selected.
+    contentWidget_->setVisible(false);
 }
 
 STrackDetailPanel::~STrackDetailPanel() = default;
@@ -81,28 +59,6 @@ void STrackDetailPanel::setTrack(STrack *track)
 {
     currentTrack_ = track;
     rebuildUI();
-}
-
-void STrackDetailPanel::setExpanded(bool expanded)
-{
-    if (expanded_ != expanded) {
-        expanded_ = expanded;
-        updateCollapsedState();
-        saveState();
-    }
-}
-
-void STrackDetailPanel::saveState()
-{
-    SSettings &settings = SSettings::instance();
-    settings.setValue("TrackDetailPanel/Expanded", expanded_);
-}
-
-void STrackDetailPanel::loadState()
-{
-    SSettings &settings = SSettings::instance();
-    expanded_ = settings.value("TrackDetailPanel/Expanded", true).toBool();
-    updateCollapsedState();
 }
 
 void STrackDetailPanel::rebuildUI()
@@ -126,43 +82,15 @@ void STrackDetailPanel::rebuildUI()
         volumeSlider_->blockSignals(false);
         volumeLabel_->setText(QString::asprintf("%+.1f dB", volume));
 
-        contentWidget_->setVisible(expanded_);
+        contentWidget_->setVisible(true);
     } else {
         contentWidget_->setVisible(false);
     }
 }
 
-void STrackDetailPanel::updateCollapsedState()
+// Preferred height: 50% of screen height, but never more than 450px.
+static int preferredPanelHeight()
 {
-    expandCollapseBtn_->setText(expanded_ ? "▾" : "▸");
-    if (contentWidget_) {
-        contentWidget_->setVisible(expanded_);
-    }
-    // Notify layout manager that our size has changed
-    updateGeometry();
-}
-
-QSize STrackDetailPanel::sizeHint() const
-{
-    if (!expanded_) {
-        // When collapsed, only report header height
-        return QSize(400, 28);  // Header height + margins/borders
-    }
-    // When expanded: 50% of screen height, but max 450px
-    int screenHeight = 600;  // Default fallback
-    if (QGuiApplication::primaryScreen()) {
-        screenHeight = QGuiApplication::primaryScreen()->geometry().height();
-    }
-    int maxHeight = qMin(screenHeight / 2, 450);
-    return QSize(400, maxHeight);
-}
-
-int STrackDetailPanel::heightForWidth(int w) const
-{
-    if (!expanded_) {
-        return 28;  // Header height only
-    }
-    // Return constrained height when expanded
     int screenHeight = 600;  // Default fallback
     if (QGuiApplication::primaryScreen()) {
         screenHeight = QGuiApplication::primaryScreen()->geometry().height();
@@ -170,12 +98,12 @@ int STrackDetailPanel::heightForWidth(int w) const
     return qMin(screenHeight / 2, 450);
 }
 
-void STrackDetailPanel::paintEvent(QPaintEvent *event)
+QSize STrackDetailPanel::sizeHint() const
 {
-    QWidget::paintEvent(event);
+    return QSize(400, preferredPanelHeight());
 }
 
-void STrackDetailPanel::mousePressEvent(QMouseEvent *event)
+int STrackDetailPanel::heightForWidth(int w) const
 {
-    QWidget::mousePressEvent(event);
+    return preferredPanelHeight();
 }
