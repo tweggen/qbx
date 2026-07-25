@@ -54,6 +54,7 @@
 
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/timeline/sstdmixerview.h"
+#include "app/timeline/strackdetailpanel.h"
 #include "app/objects/track/strack.h"
 #include "app/servicesui/soptionsdialog.h"
 
@@ -102,6 +103,37 @@ void SMainWindow::destroyDocksToolbars()
     if( externFileList_ ) {
         externFileList_->setProject( nullptr );
     }
+    // Drop the detail panel's view of the (about to die) project's tracks.
+    detachTrackDetail();
+}
+
+void SMainWindow::attachTrackDetail()
+{
+    if( !trackDetailPanel_ ) return;
+
+    // One mixer at a time: drop whatever we were following first.
+    QObject::disconnect( trackDetailConn_ );
+
+    SStdMixer *mixer = currentProject_
+        ? qobject_cast<SStdMixer*>( currentProject_->getRootComponent() )
+        : nullptr;
+    if( !mixer ) {
+        trackDetailPanel_->setTrack( nullptr );
+        return;
+    }
+
+    trackDetailConn_ = connect( mixer, &SStdMixer::selectedTrackChanged,
+                                trackDetailPanel_, &STrackDetailPanel::setTrack );
+    trackDetailPanel_->setTrack( mixer->getSelectedTrack() );
+}
+
+void SMainWindow::detachTrackDetail()
+{
+    QObject::disconnect( trackDetailConn_ );
+    trackDetailConn_ = QMetaObject::Connection();
+    // Release the STrack pointer (and its plugin strip) BEFORE the project is
+    // deleted — the panel holds a raw pointer into the project's object graph.
+    if( trackDetailPanel_ ) trackDetailPanel_->setTrack( nullptr );
 }
 
 void SMainWindow::createDocksToolbars()
@@ -231,6 +263,7 @@ void SMainWindow::fileNew()
     setCentralWidget( projectRootWidget_ );
     projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
+    attachTrackDetail();
 
     currentFilePath_.clear();   // fresh project is untitled until saved
     updateWindowTitle();
@@ -302,6 +335,7 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     setCentralWidget( projectRootWidget_ );
     projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
+    attachTrackDetail();
 
     currentFilePath_ = fileName;   // remember where we loaded from
     updateWindowTitle();
@@ -883,6 +917,17 @@ SMainWindow::SMainWindow()
     qDockExternFileList_->setWidget( externFileList_ );
     addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
 
+    // The track detail panel, docked directly BELOW the extern file list in the
+    // same left area. It used to be a child of the arranger's track-control
+    // column; as a dock it is persistent (project-independent) and the user can
+    // move, float or close it. attachTrackDetail() wires it to a project's mixer.
+    qDockTrackDetail_ = new QDockWidget( tr( "Track Detail" ), this );
+    qDockTrackDetail_->setObjectName( "dock_track_detail" );
+    trackDetailPanel_ = new STrackDetailPanel( qDockTrackDetail_ );
+    qDockTrackDetail_->setWidget( trackDetailPanel_ );
+    addDockWidget( Qt::LeftDockWidgetArea, qDockTrackDetail_ );
+    splitDockWidget( qDockExternFileList_, qDockTrackDetail_, Qt::Vertical );
+
     // The log dock (proposal 24). Hidden on a first run; from then on
     // restoreState() honours whatever the user left it as, keyed by objectName.
     // visibilityChanged drives the model's drain timer, so a closed log costs
@@ -906,6 +951,9 @@ SMainWindow::SMainWindow()
     QAction *actFiles = qDockExternFileList_->toggleViewAction();
     actFiles->setText( tr( "&Extern file list" ) );
     viewMenu->addAction( actFiles );
+    QAction *actDetail = qDockTrackDetail_->toggleViewAction();
+    actDetail->setText( tr( "&Track detail" ) );
+    viewMenu->addAction( actDetail );
     menuBar()->insertMenu( qAudioMenu_->menuAction(), viewMenu );
 
     // NOTE: window geometry/state restore deliberately does NOT happen here.

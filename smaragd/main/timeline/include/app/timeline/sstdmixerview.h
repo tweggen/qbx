@@ -514,9 +514,6 @@ private:
     void rebuildRows();
     void rebuildControlColumn();
 
-    // Track detail panel (Phase 2 UI)
-    class STrackDetailPanel *qTrackDetailPanel_;
-
 public:
     // Track header resizing (Phase 3 UI)
     static constexpr int TRACK_CTRL_WIDTH_MINIMAL = 120;

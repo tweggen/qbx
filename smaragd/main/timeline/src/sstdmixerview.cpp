@@ -26,7 +26,6 @@
 #include "app/shell/smainwindow.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/timeline/sstdmixerview.h"
-#include "app/timeline/strackdetailpanel.h"
 #include "app/timeline/strackheaderresizer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sobjectrenderer.h"
@@ -3066,9 +3065,9 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     // Double-clicking the blank area below the track heads adds a new track.
     qTrackControlBoxHolder_->installEventFilter( this );
 
-    // Create a vertical layout for the track control holder:
-    // - Top: track controls (scrollable, expandable)
-    // - Bottom: track detail panel (fixed height)
+    // Vertical layout for the track control holder. It carries the track
+    // controls alone; the track detail panel used to sit below them and now
+    // lives in its own dock on the main window.
     QVBoxLayout *trackHolderLayout = new QVBoxLayout( qTrackControlBoxHolder_ );
     trackHolderLayout->setContentsMargins( 0, 0, 0, 0 );
     trackHolderLayout->setSpacing( 0 );
@@ -3083,7 +3082,7 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
         );
 
     qTrackControlBox_ = new QWidget();
-    trackHolderLayout->addWidget( qTrackControlBox_, 2 );  // Stretch factor 2 = gets 2/3 of space
+    trackHolderLayout->addWidget( qTrackControlBox_, 1 );  // sole occupant: takes the column
 
     // Track-reorder drag state + the insertion-line indicator (hidden until a
     // drag is in progress).
@@ -3241,20 +3240,12 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     qGridLayout_->addWidget(resizer, 0, 0, 4, 1, Qt::AlignRight);
     qGridLayout_->setColumnMinimumWidth(0, 8);  // Divider width
 
-    // Create the track detail panel and add it to the track holder layout (below track controls)
-    qTrackDetailPanel_ = new STrackDetailPanel(this);
-    // Get the track holder layout that was created earlier and add detail panel to it
-    if( QVBoxLayout *layout = qobject_cast<QVBoxLayout*>(qTrackControlBoxHolder_->layout()) ) {
-        layout->addWidget(qTrackDetailPanel_, 1);  // Stretch factor 1 = gets 1/3 of space
-    }
-
-    // Connect mixer's track selection to detail panel and timeline repaint
-    connect(model_, &SStdMixer::selectedTrackChanged,
-            qTrackDetailPanel_, &STrackDetailPanel::setTrack);
+    // The track detail panel is NOT ours: it lives in a dock of the main window
+    // (below the extern file list) and follows this mixer's selection from
+    // there — see SMainWindow::attachTrackDetail(). All we still care about is
+    // repainting the lanes when the selection highlight moves.
     connect(model_, &SStdMixer::selectedTrackChanged,
             qContent_, QOverload<>::of(&QWidget::update));
-    // Initialize detail panel with current selection (nullptr at startup)
-    qTrackDetailPanel_->setTrack(model_->getSelectedTrack());
 }
 
 void SStdMixerView::setTrackControlWidth( int width )

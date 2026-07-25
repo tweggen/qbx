@@ -19,6 +19,7 @@ class SRecordingProgressDialog;
 class SGridToolbar;
 class SExternFileList;
 class SLogView;
+class STrackDetailPanel;
 
 class SMainWindow
     : public QMainWindow
@@ -125,6 +126,12 @@ private:
 
     void createDocksToolbars();
     void destroyDocksToolbars();
+    // Point the track-detail dock at the current project's mixer selection (or
+    // clear it when there is no project). The dock is persistent and outlives
+    // every project, so the mixer connection is (re)made on each open/new and
+    // dropped again before the project dies.
+    void attachTrackDetail();
+    void detachTrackDetail();
     // Enable + sync the palette buttons to a project's properties (or disable
     // them when project == NULL), and connect to its propertyChanged signal.
     void syncPaletteToProject( SProject *project );
@@ -185,6 +192,13 @@ private:
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
     SExternFileList *externFileList_;
+
+    // Track detail dock, docked below the extern file list in the left area.
+    // Like the file list it is persistent and project-independent; its content
+    // follows the current mixer's selected track via trackDetailConn_.
+    QDockWidget       *qDockTrackDetail_  = nullptr;
+    STrackDetailPanel *trackDetailPanel_  = nullptr;
+    QMetaObject::Connection trackDetailConn_;
 
     // The log dock (proposal 24). Its objectName is what lets the existing
     // saveState/restoreState persistence restore its visibility and placement,
