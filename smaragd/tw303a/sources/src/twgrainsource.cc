@@ -5,10 +5,13 @@
 #include <cstdint>
 #include <vector>
 
+#include <cstdlib>
+
 #include "tw/core/twlog.h"
 #include "tw/sidecar/twaspects.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/sources/twgrainsource.h"
+#include "tw/sources/twpagedvocoder.h"
 
 #if TW_HAVE_RUBBERBAND
 #include <rubberband/RubberBandStretcher.h>
@@ -34,21 +37,38 @@
 
 namespace {
 
+// Proposal 27 M3 — runtime synthesis-backend selection. Default is Rubber
+// Band when built in (the shipping path, byte-exact vs pre-M3); the in-house
+// vocoder is opt-in via TW_STRETCH_BACKEND=vocoder while it matures toward
+// the M5 switchover. Read once per process (deterministic within a run).
+enum { kBackendRubberBand = 1, kBackendOla = 2, kBackendVocoder = 3 };
+
+int stretchBackend()
+{
+    static const int backend = []() {
+        const char *e = ::getenv( "TW_STRETCH_BACKEND" );
+        if( e && ::strcmp( e, "vocoder" ) == 0 ) return (int) kBackendVocoder;
+#if TW_HAVE_RUBBERBAND
+        if( e && ::strcmp( e, "rubberband" ) == 0 ) return (int) kBackendRubberBand;
+        return (int) kBackendRubberBand;
+#else
+        return (int) kBackendOla;
+#endif
+    }();
+    return backend;
+}
+
 // Proposal 27 M2 — the warp.pcm cache key params (canonical LE blob; field
 // order is normative, see twaspects.h). Everything that affects the output
-// BYTES is in here: the synthesis backend, the rate/channel geometry, the
-// EXACT stretch fraction as clamped by the ctor, the pitch, and the OLA
-// engine knobs (vestigial under Rubber Band, but a duplicate entry is
-// harmless where a wrong hit would not be).
+// BYTES is in here: the synthesis backend (RUNTIME-selected since M3), the
+// rate/channel geometry, the EXACT stretch fraction as clamped by the ctor,
+// the pitch, and the OLA engine knobs (vestigial under Rubber Band, but a
+// duplicate entry is harmless where a wrong hit would not be).
 void warpParamsBlob( int rate, idx_t channels, const Fraction &stretchFrac,
                      double pitchCents, length_t grainSize, length_t crossfade,
                      std::vector<uint8_t> &out )
 {
-#if TW_HAVE_RUBBERBAND
-    const uint8_t backend = 1;   // Rubber Band R3 offline
-#else
-    const uint8_t backend = 2;   // legacy overlap-add
-#endif
+    const uint8_t backend = (uint8_t) stretchBackend();
     out.clear();
     out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 );
     auto put32 = [&]( uint32_t v ) {
@@ -133,6 +153,28 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         }
     }
 
+    if( stretchBackend() == kBackendVocoder ) {
+        // --- In-house phase vocoder (proposal 27 M3, opt-in) -----------------
+        // Offline whole-signal mode; identity phase-locking, cross-channel
+        // rotation, exact-outLen contract identical to the paths below. data_
+        // is planar channels_ × nFrames_ contiguous — exactly warpOffline's
+        // output layout.
+        std::vector<std::vector<float>> inCh( (size_t) channels_ );
+        std::vector<const float*>       inPtr( (size_t) channels_ );
+        for( idx_t c = 0; c < channels_; ++c ) {
+            inCh[(size_t) c].resize( (size_t) inLen );
+            src.read( 0, inCh[(size_t) c].data(), inLen, c );
+            inPtr[(size_t) c] = inCh[(size_t) c].data();
+        }
+        twPagedVocoder::Config vc;
+        vc.fftSize     = 2048;
+        vc.analysisHop = 512;
+        vc.rate        = rate_;
+        vc.channels    = (uint32_t) channels_;
+        twPagedVocoder::warpOffline( inPtr.data(), (uint64_t) inLen,
+                                     data_.data(), (uint64_t) nFrames_,
+                                     vc, stretch, r );
+    } else {
 #if TW_HAVE_RUBBERBAND
     // --- Rubber Band offline (proposal 26) -----------------------------------
     // stretch is out/in duration → timeRatio; the pitch ratio r → pitchScale.
@@ -272,6 +314,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         }
     }
 #endif
+    }   // backend dispatch (vocoder vs Rubber Band / legacy OLA)
 
     // Proposal 27 M2: persist the freshly synthesized warp for the next load.
     // A failed store just means the next session recomputes — never fatal.

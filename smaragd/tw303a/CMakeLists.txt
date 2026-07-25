@@ -92,6 +92,7 @@ tw_module(sources
         sources/include/tw/sources/twloopreader.h
         sources/include/tw/sources/twgrainsource.h
         sources/include/tw/sources/twgrainparams.h
+        sources/include/tw/sources/twpagedvocoder.h
         sources/include/tw/sources/twwavinput.h
         sources/include/tw/sources/twwav.h
         sources/src/twsamplesource.cc
@@ -101,6 +102,7 @@ tw_module(sources
         sources/src/twcapturingsource.cc
         sources/src/twloopreader.cc
         sources/src/twgrainsource.cc
+        sources/src/twpagedvocoder.cc
         sources/src/twwavinput.cc
         sources/src/twwav.cc
     DEPS tw_core tw_pages tw_graph tw_sidecar
@@ -305,6 +307,22 @@ else()
     target_link_libraries(tw_analysis PRIVATE PkgConfig::SNDFILE)
 endif()
 message(STATUS "tw_sinks: audio file I/O libraries found (libsndfile, libvorbis)")
+
+# --- warp_ab: standalone A/B time-stretch quality harness (proposal 27 M3) -------
+# NOT shipped. An offline developer tool that scores a candidate stretch/pitch
+# backend (the paged vocoder) against the Rubber Band reference over a synthetic
+# corpus. Self-contained DSP (own FFT/onset/envelope), double precision,
+# deterministic. Lives under analysis/tools/ so check_logging exempts its metric
+# table output (tools/ is an ALLOW_DIR). Links tw_analysis (WAV-metric reuse /
+# cross-check) plus libsndfile directly for raw-sample loading and corpus
+# writing.
+add_executable(warp_ab analysis/tools/warp_ab.cc)
+target_link_libraries(warp_ab PRIVATE tw_analysis)
+if(SMARAGD_WINDOWS)
+    target_link_libraries(warp_ab PRIVATE SndFile::sndfile)
+else()
+    target_link_libraries(warp_ab PRIVATE PkgConfig::SNDFILE)
+endif()
 
 # --- Platform audio backends (devices only) --------------------------------------
 if(SMARAGD_LINUX AND ENABLE_ALSA)

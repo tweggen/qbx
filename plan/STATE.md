@@ -6748,3 +6748,65 @@ binaries before the fix; `asset_window_shifted_content` documented since
 warp.pcm per content×params — the 2 GiB default cap with LRU eviction is
 generous headroom; real-project pressure arrives with long material and
 should be revisited at M5 (where warp.pcm demotes to an optional layer).
+
+---
+
+## Proposal 27 M3: in-house phase vocoder (offline, flagged) + A/B quality harness (2026-07-25)
+
+**What landed** (M3 of proposal 27 v2, driven by `27_ORCHESTRATION.md`).
+
+- **`twPagedVocoder`** (`tw/sources/twpagedvocoder.h/.cc`) — the in-house
+  phase-vocoder stretch/pitch engine, offline whole-signal mode: Hann STFT
+  (2048/512), fixed synthesis hop with fractional analysis positions,
+  IF-based phase propagation, **identity phase-locking** (Laroche/Dolson;
+  phase state kept continuous across peak hand-offs), **cross-channel
+  coherence** via one rotation field computed from the mono fold and applied
+  to every channel, pitch via a 32-tap Kaiser-sinc resample of the stretched
+  signal. Exact-outLen contract identical to the RB path (caller computes
+  floor(inLen×stretch) rationally). Double precision, single-threaded,
+  deterministic. In-tree radix-2 FFT — pffft/SIMD deliberately deferred to
+  M4 where per-page throughput matters (recorded deviation from the brief).
+- **Runtime backend dispatch**: `TW_STRETCH_BACKEND=vocoder` opts in;
+  default remains Rubber Band (byte-exact gate below). The warp.pcm cache
+  key's backend byte is now RUNTIME-selected — cached warps can never cross
+  backends.
+- **A/B harness** — `tw303a/analysis/tools/warp_ab.cc` (metrics CLI +
+  deterministic corpus generator + self-tests) and `tests/ab_warp.sh`
+  (driver: 4 corpus files × 5 transforms × both backends → markdown
+  report). Metrics: RMS overall/per-second, dominant frequency, transient
+  rise-time ratio with onset pairing, modulation-spectrum warble,
+  octave-band spectral balance. Every metric PROVEN able to catch its
+  failure mode by self-test (synthetic AM → warble +160 dB flagged;
+  smeared onsets → ratio 8.1 detected; half amplitude → −50% RMS; identical
+  files → all-zero deltas).
+
+**Gates (all green).**
+- **Grain suite 13/13 under the vocoder backend** — incl. every pitch-
+  accuracy case (±3% frequency asserts: octave up 0.000% dev, semitone
+  down, pitch+stretch, roundtrip).
+- **Full ctest 68/68 under the vocoder backend** (stronger than the brief —
+  every asset/container/edit path exercised on the new engine).
+- **Determinism**: grain_loop_stretch 25/25 at workers {1,8}, vocoder.
+- **Default-path byte-exactness**: default renders cmp-identical to the
+  pre-M3 baseline WAVs (RB untouched).
+- **A/B report committed**: `plan/reports/27_M3_AB_REPORT.md`. Summary —
+  tonal corpora (saw/sine/voice-like): RMS within ~2%, dominant frequency
+  exact, **zero measurable warble** (the OLA artifact class that motivated
+  proposal 26 — absent, matching RB). Quantified regressions, per the M3
+  contract (parity NOT required at this milestone): **transient smear up to
+  3.73× rise-time ratio** on the transients corpus (worst on pitch −700c,
+  with per-second RMS deviations up to ~40% there) — the textbook pure-PV
+  weakness; M4's onset-aligned keyframe re-anchoring (the onsets aspect
+  from M1 exists precisely for this) is the designed fix. Pure-tone
+  spectral-balance deltas are dominated by near-silent-band dB artifacts,
+  not audible error.
+
+**Listening judgment: NOT self-certified.** Per orchestration §0.5(c), the
+report quantifies; ears decide. The corpus renders for both backends are
+reproducible via `tests/ab_warp.sh`; the requester should listen before the
+M5 switchover decision (no decision needed to keep working — the vocoder
+stays opt-in behind the flag through M4).
+
+**For M4:** the transient-smear number (3.73×) is the primary quality
+target; keyframed random access is the primary structural target; pffft +
+SIMD dispatch the primary performance target.
