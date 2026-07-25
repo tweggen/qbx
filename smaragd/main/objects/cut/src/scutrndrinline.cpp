@@ -130,15 +130,54 @@ constexpr float kUiSalience = 0.3f;
 // positions run through the clip's EXACT warp map (piecewise when anchors
 // exist, scalar otherwise). Positions map linearly clipDuration -> width; a
 // non-positive duration skips everything.
-void drawWarpMarkers( QPainter &p, const QRect &visibRect, SCut &cut )
+void drawWarpMarkers( QPainter &p, const QRect &visibRect, SRenderContext &ctx,
+                      SLink &lk, SCut &cut )
 {
     const int64_t clipDuration = (int64_t) cut.getDuration();
-    if( clipDuration <= 0 ) return;
+    if( clipDuration <= 0 || visibRect.width() <= 0 ) return;
     const int64_t startOff = cut.getStartOffset().frames();
-    const int64_t w        = (int64_t) visibRect.width();
 
-    auto relToX = [&]( int64_t rel ) -> int {
-        return visibRect.x() + (int)( rel * w / clipDuration );
+    // VIRTUAL-axis mapping (the requester-reported bug: mapping against the
+    // clipped visibRect froze tick spacing once a clip outgrew the viewport).
+    // Probe the parent mapping for samples-per-pixel, derive the clip's
+    // virtual left edge, and clip-test each glyph against visibRect instead.
+    int xa = visibRect.x();
+    int xb = visibRect.x() + visibRect.width();
+    if( xb <= xa ) xb = xa + 1;
+    const double ta = (double) ctx.getTimeOf( xa );
+    const double tb = (double) ctx.getTimeOf( xb );
+    double spp = ( tb - ta ) / (double)( xb - xa );
+    if( spp <= 0.0 ) spp = 1.0;
+    const double clipLeftX = (double) xa
+                           + ( (double) lk.getStartTime() - ta ) / spp;
+    const int left  = visibRect.x();
+    const int right = visibRect.x() + visibRect.width() - 1;
+
+    // Loop tiling: a glyph at clip-relative rel repeats at rel + k*segLen,
+    // matching the waveform tiles. The DISPLAYED extent of the clip is
+    // visibRect (the timeline sizes it from the link; the waveform painter
+    // likewise just fills vr) — cut.getDuration() is the CUT's length, which
+    // can exceed the displayed window, so pixel bounds, not duration, must
+    // terminate the tiling. NB the callback must not be named `emit`: that is
+    // a Qt keyword macro expanding to nothing, which silently turns the
+    // invocation into a discarded-value statement.
+    const bool    looping = cut.isLooping();
+    const int64_t segLen  = looping ? cut.getLoopLength().frames()
+                                    : clipDuration;
+    const double  segWpx  = (double) segLen / spp;
+
+    auto eachTileX = [&]( int64_t rel, auto &&putGlyph ) {
+        if( rel < 0 || rel >= segLen ) return;
+        double x = clipLeftX + (double) rel / spp;
+        if( looping && segWpx > 0.0 && x < (double) left ) {
+            // Skip whole repetitions scrolled/clipped off to the left.
+            const double k = std::ceil( ( (double) left - x ) / segWpx );
+            x += k * segWpx;
+        }
+        for( ; x <= (double) right; x += segWpx ) {
+            if( x >= (double) left ) putGlyph( (int) x );
+            if( !looping ) break;
+        }
     };
 
     // --- onset ticks: only for sample-backed SPlainWave content ---
@@ -148,21 +187,16 @@ void drawWarpMarkers( QPainter &p, const QRect &visibRect, SCut &cut )
         if( ui && !ui->onsets.empty() && ui->sourceRate > 0 && proj ) {
             const double projRate = (double) proj->getSRate();
             const double srcRate  = (double) ui->sourceRate;
-            // A looping clip draws ticks in the FIRST repetition only: the
-            // warp map addresses one repetition of source; later tiles would
-            // need a modular remap the paint path deliberately does not do.
-            const int64_t firstRepEnd = cut.isLooping()
-                ? cut.getLoopLength().frames() : clipDuration;
-            const QColor amber( 255, 200, 60, 180 );
+            const QColor amber( 255, 200, 60, 200 );
             for( const twOnset &o : ui->onsets ) {
                 if( o.salience < kUiSalience ) continue;
                 const int64_t projPos = (int64_t) std::llround(
                     (double) o.pos * projRate / srcRate );
                 const int64_t warped =
                     cut.sourceToWarpedExact( Fraction( projPos ) ).floorToInt();
-                const int64_t rel = warped - startOff;
-                if( rel < 0 || rel >= firstRepEnd ) continue;
-                p.fillRect( relToX( rel ), visibRect.y(), 1, 4, amber );
+                eachTileX( warped - startOff, [&]( int x ) {
+                    p.fillRect( x - 1, visibRect.y(), 2, 5, amber );
+                } );
             }
         }
     }
@@ -171,21 +205,18 @@ void drawWarpMarkers( QPainter &p, const QRect &visibRect, SCut &cut )
     const std::vector<twWarpAnchor> &anchors = cut.getGrainParams().warpAnchors;
     if( !anchors.empty() ) {
         p.save();
+        const QColor cyan( 80, 200, 255 );
         for( const twWarpAnchor &a : anchors ) {
-            const int64_t rel = a.warped - startOff;
-            if( rel < 0 || rel >= clipDuration ) continue;
-            const int x = relToX( rel );
-            p.setPen( QColor( 80, 200, 255, 150 ) );      // translucent guide
-            p.drawLine( x, visibRect.y(),
-                        x, visibRect.y() + visibRect.height() );
-            p.setPen( Qt::NoPen );
-            p.setBrush( QColor( 80, 200, 255 ) );         // opaque handle
-            const QPoint tri[3] = {
-                QPoint( x - 3, visibRect.y() ),
-                QPoint( x + 3, visibRect.y() ),
-                QPoint( x,     visibRect.y() + 5 )
-            };
-            p.drawPolygon( tri, 3 );
+            eachTileX( a.warped - startOff, [&]( int x ) {
+                p.setPen( QColor( 80, 200, 255, 150 ) );   // translucent guide
+                p.drawLine( x, visibRect.y(),
+                            x, visibRect.y() + visibRect.height() );
+                // 5x7 handle box, black outline, cyan fill (requester spec —
+                // the bare triangle was too hard to spot).
+                p.setPen( QColor( 0, 0, 0 ) );
+                p.setBrush( cyan );
+                p.drawRect( x - 2, visibRect.y(), 4, 6 );   // 5x7 incl. pen
+            } );
         }
         p.restore();
     }
@@ -288,7 +319,7 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     }
 
     // Onset ticks + user warp-marker handles over the waveform (proposal 28 W2).
-    drawWarpMarkers( p, visibRect, cut );
+    drawWarpMarkers( p, visibRect, ctx, lk, cut );
 
     // Container cuts show their asset name (bottom-right).
     if( container && !cut.getSName().isEmpty() ) {

@@ -1891,11 +1891,28 @@ bool SMVActualView::tryBeginMarkerDrag( QMouseEvent *ev )
     if( dur <= 0 || vr.width() <= 0 ) return false;
     const int64_t startOff = cut->getStartOffset().frames();
 
+    // Sample-domain hit test on the VIRTUAL axis (same fix as the renderer:
+    // pixel math against the clipped visibRect broke for clips wider than
+    // the viewport). Tolerance = hit pixels converted to samples; looping
+    // clips fold the click into the first repetition.
+    const double t0 = (double) getTimeOf( vr.x() );
+    const double t1 = (double) getTimeOf( vr.x() + vr.width() );
+    double spp = ( t1 - t0 ) / (double) vr.width();
+    if( spp <= 0.0 ) spp = 1.0;
+    int64_t clickRel = (int64_t) getTimeOf( ev->pos().x() )
+                     - (int64_t) lastClickSLink_->getStartTime();
+    if( clickRel < 0 || clickRel >= (int64_t) dur ) return false;
+    const bool    looping = cut->isLooping();
+    const int64_t segLen  = looping ? cut->getLoopLength().frames()
+                                    : (int64_t) dur;
+    if( looping && segLen > 0 ) clickRel %= segLen;
+    const int64_t tolSamples =
+        (int64_t)( (double) kMarkerHitPx * spp ) + 1;
+
     for( const twWarpAnchor &a : anchors ) {
         const int64_t rel = a.warped - startOff;
-        if( rel < 0 || rel >= (int64_t) dur ) continue;
-        const int x = vr.x() + (int)( (double) rel * vr.width() / dur );
-        if( std::abs( ev->pos().x() - x ) > kMarkerHitPx ) continue;
+        if( rel < 0 || rel >= segLen ) continue;
+        if( std::llabs( clickRel - rel ) > tolSamples ) continue;
 
         QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
         path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
@@ -1922,9 +1939,14 @@ void SMVActualView::updateMarkerDrag( QMouseEvent *ev )
 
     // Timeline position under the cursor, grid-snapped, made clip-relative,
     // then into the warped domain via the PRE-drag window (the drag itself
-    // must not move its own reference frame).
-    const int64_t clipRel = (int64_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
-                          - (int64_t) lastClickSLink_->getStartTime();
+    // must not move its own reference frame). Looping clips fold the cursor
+    // into the first repetition — same domain rule as add and hit-test.
+    int64_t clipRel = (int64_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
+                    - (int64_t) lastClickSLink_->getStartTime();
+    if( cut->isLooping() ) {
+        const int64_t segLen = cut->getLoopLength().frames();
+        if( segLen > 0 && clipRel >= 0 ) clipRel %= segLen;
+    }
     int64_t newWarped = clipRel + markerDragPreStartOffset_;
 
     // Clamp strictly between the neighbors (monotonicity by construction).
@@ -1977,10 +1999,17 @@ bool SMVActualView::tryAddMarkerAt( QMouseEvent *ev )
     if( !vr.isValid() || ev->pos().y() < vr.y()
         || ev->pos().y() >= vr.y() + kMarkerStripPx ) return false;
 
-    const int64_t clipRel = (int64_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
-                          - (int64_t) lastClickSLink_->getStartTime();
+    int64_t clipRel = (int64_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
+                    - (int64_t) lastClickSLink_->getStartTime();
     const length_t dur = cut->getDurationBlocking();
     if( clipRel < 0 || clipRel >= (int64_t) dur ) return false;
+    // Looping clip: fold the click into the FIRST repetition — anchors live in
+    // the loop segment's warped domain (the renderer tiles them back out; an
+    // unfolded position lands past segLen, which is undrawable and inaudible).
+    if( cut->isLooping() ) {
+        const int64_t segLen = cut->getLoopLength().frames();
+        if( segLen > 0 ) clipRel %= segLen;
+    }
     const int64_t warped = clipRel + cut->getStartOffset().frames();
     // Identity add: the anchor pins the CURRENT mapping at this position, so
     // adding it changes nothing audibly until the user drags it.

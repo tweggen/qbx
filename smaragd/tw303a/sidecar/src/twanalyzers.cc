@@ -256,6 +256,13 @@ std::vector<twOnset> twDetectOnsets( const float *const *chans, uint32_t nCh,
     // 5 + 6. Local-maximum peak picking, then ascending minimum-separation scan.
     // First and last frame are never candidates (they lack a neighbour).
     // v3: every detection carries its normalized flux as SALIENCE.
+    // v4: the reported position is ATTACK-CENTERED. Flux at frame k measures
+    // the transient ENTERING window [k*hop, k*hop+n) from its tail, so the
+    // frame start k*hop leads the perceptual attack by ~(n - hop/2) — measured
+    // -896 +/- 64 on the click corpus at the 1024/256 defaults, a visible
+    // ~19 ms bias between UI ticks and the drawn waveform. Adding n - hop/2
+    // centers the estimate on the attack (residual is hop quantization).
+    const uint64_t attackLead = (uint64_t) n - hop / 2;
     std::vector<twOnset> out;
     bool     haveLast = false;
     uint64_t lastPos  = 0;
@@ -265,7 +272,8 @@ std::vector<twOnset> twDetectOnsets( const float *const *chans, uint32_t nCh,
             && frameTot[(size_t)k] >= energyGate
             && f >= flux[(size_t)( k - 1 )]
             && f >  flux[(size_t)( k + 1 )] ) {
-            const uint64_t pos = k * hop;
+            uint64_t pos = k * hop + attackLead;
+            if( pos >= nFrames ) pos = nFrames - 1;
             if( !haveLast
                 || ( pos - lastPos ) >= (uint64_t)params.minSeparationFrames ) {
                 out.push_back( { pos, (float) f } );

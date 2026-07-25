@@ -68,8 +68,12 @@ constexpr uint32_t    PreviewPeaksVersion = 1;
  * uint32 minSeparationFrames. Changing any default mints a new key.
  */
 constexpr const char *Onsets        = "onsets";
-constexpr uint32_t    OnsetsVersion = 3;
-// v3 (proposal 28 W0): record is PACKED 12-byte { uint64 pos, float32
+constexpr uint32_t    OnsetsVersion = 4;
+// v4 (proposal 28 W2 follow-up): positions are ATTACK-CENTERED — k*hop +
+// (fftSize - hop/2), clamped to the source end. v3 reported the flux frame
+// START, which leads the perceptual attack by ~fftSize - hop/2 (-896 frames
+// at the 1024/256 defaults, a visible ~19 ms tick-vs-waveform bias). Record
+// layout is unchanged from v3: PACKED 12-byte { uint64 pos, float32
 // salience } LE, stride 12 — salience is the normalized flux at detection.
 // Two consumer tiers: vocoder keyframes take every record; the marker UI
 // filters by salience. v2 (normalized flux + energy gate; fixed v1's ~29

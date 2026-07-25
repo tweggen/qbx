@@ -136,10 +136,9 @@ static void section_b_onsets() {
     CHECK( onsets.size() == 5, "click train yields exactly 5 onsets" );
 
     // 1:1 pairing: each click matched by exactly one onset within
-    // +/-fftSize: a click influences every frame whose window contains it,
-    // so a detection may sit up to one window span from the click. v2's
-    // normalized flux favors the EARLIEST such frame (smallest total
-    // magnitude), typically ~fftSize-hop early — inside this bound.
+    // +/-fftSize. v4 attack-centering (k*hop + fftSize - hop/2) puts the
+    // reported position ~on the click itself; the residual is the hop
+    // quantization of the peak-picked frame (|offset| <= ~hop/2).
     const uint64_t tol = p.fftSize;               // 1024
     std::vector<bool> matched( onsets.size(), false );
     for ( int i = 0; i < nClicks; ++i ) {

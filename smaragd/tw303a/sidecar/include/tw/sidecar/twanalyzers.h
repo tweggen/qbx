@@ -40,7 +40,10 @@
  *     AND flux[k] >= flux[k-1] AND flux[k] > flux[k+1] (first/last frame
  *     are never candidates).
  *  6. Ascending scan: drop any candidate closer than minSeparationFrames to
- *     the last KEPT onset. Position = k*hop (source frames).
+ *     the last KEPT onset. Position = k*hop + (fftSize - hop/2), clamped to
+ *     nFrames-1 (source frames; v4 attack-centering — the flux frame START
+ *     leads the perceptual attack by ~fftSize - hop/2 because the transient
+ *     enters the analysis window from its tail).
  *
  * fftSize must be a power of two (>= 64); hop must be > 0 and <= fftSize.
  * Violations return an empty result.
