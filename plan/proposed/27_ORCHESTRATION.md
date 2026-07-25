@@ -259,3 +259,14 @@ before W1.
 | M3 vocoder core + harness | ✅ done | 2026-07-25 | (this commit) | twPagedVocoder offline (identity phase-locking, cross-channel rotation, Kaiser-sinc pitch) behind TW_STRETCH_BACKEND=vocoder; RB default byte-exact vs baseline. Grain 13/13 AND full suite 68/68 under vocoder; determinism 25/25 × {1,8}. A/B report committed (plan/reports/27_M3_AB_REPORT.md): tonal ≈ RB (zero warble, exact pitch, RMS ~2%); quantified regression: transient smear ≤3.73× — M4's onset-keyframe target. pffft deferred to M4 (deviation). Listening judgment deferred to requester per §0.5(c). |
 | M4 random access + stft.if | ✅ done | 2026-07-25 | fa5dfbf + close | Property gate: paged ≡ whole BIT-EXACT, any partition, fresh-instance-per-window. Prominence gating fixed the comb-on-noise artifact — CONFIRMED BY REQUESTER'S EARS. stft sidecar DROPPED (incremental analysis beats persisted spectra; M5 needs no spectral readiness gate). Found+fixed on the way: -O0 builds since forever (now RelWithDebInfo, asserts armed, ~9× DSP) and onset-detector v1 overfiring (115 onsets on a pure sine → −30% collapse; v2 = normalized flux + energy gate + min keyframe gap → exact parity restored). Suite 69/69; A/B v2 in plan/reports/. Transient smear unchanged — time-mapping scheduled M5. |
 | M5 streaming switchover | ✅ done | 2026-07-25 | e82f814 + close | Transient time map (stretched attacks SHARPER than RB: rise 0.78/1.33); streaming grain (O(blocks) memory, sharedRef lifetime seam); VOCODER IS THE DEFAULT (TW_STRETCH_BACKEND=rubberband = escape hatch; warp.pcm scoped to materialize paths). Suite 69/69; determinism 50/50 × {1,4,8,16}; memory −50 MB @ fixture scale; ctor O(1) in material length. Docs + GPL note updated. OWED: formal RB-demotion listening sign-off from requester. M0–M5 complete. |
+
+## 6b. Proposal 28 (M6) progress tracker
+
+| Milestone | Status | Closed on | Notes |
+|---|---|---|---|
+| W0 marker-grade onsets v3 | ✅ done | 2026-07-25 | Salience records (a4ee840) + ground-truth harness. All six gates green WITHOUT detector iteration — M4's v2 fix was already marker-grade (clicks F1 0.933, drums 1.000, soft R 0.875/P 1.000, traps 0). Known: 1/8 isolated-impulse hop-grid miss recorded. |
+| W1 user warp maps (engine seam) | ☐ not started | | Decisions locked: frames (not beats); proposal 25 frozen until W1 ships; clamp+tile at window edges. |
+| W2 marker UI | ☐ not started | | |
+| W3 f0 aspect | ☐ not started | | |
+| W4 formant toggle (opt-in) | ☐ not started | | |
+| W5 conditional reserve | — | | Tripwires only (SIMD/pffft, PGHI). |

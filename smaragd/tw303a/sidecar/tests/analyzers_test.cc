@@ -12,13 +12,18 @@
 //   c. Loudness RMS envelope (constant, two-level, stereo fold).
 //   d. Determinism (run twice, compare).
 //   e. serialize() exact LE byte sequences.
+//   f. Marker-grade ground truth (proposal 28 W0): a labeled synthetic corpus
+//      with precision/recall/F1 scoring and the W0 detector-quality gates.
 
 #include "tw/sidecar/twanalyzers.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 // The analyzers' internal FFT, exposed for the oracle test only (see the note
@@ -421,6 +426,325 @@ static void section_e_serialize() {
 }
 
 // ===========================================================================
+// Section f — marker-grade ground truth (proposal 28 W0)
+// ===========================================================================
+//
+// A labeled synthetic corpus (all generated in-code, 48 kHz mono float,
+// deterministic via the Lcg above) with a ground-truth onset list per item,
+// plus generic precision/recall/F1 scoring evaluated across a sweep of salience
+// thresholds. The W0 detector-quality gates are CHECK()ed at the UI salience
+// threshold (kUiSalience). Failing gates are EXPECTED against the v2-carryover
+// detector: the orchestrator iterates the detector until the gates go green.
+// The tables print unconditionally so failures stay informative.
+//
+// Corpus-design judgment calls (documented for the orchestrator):
+//  * A short raised-cosine FADE-OUT is applied to the final kFadeFrames of
+//    every signal. It removes the buffer-end truncation edge that section b
+//    documents (zero-padding a non-silent tail frame spreads a truncated Hann
+//    window across all bins, which spectral flux legitimately reads as a
+//    positive edge). A fade-out is a monotonic amplitude DECREASE, so it
+//    produces no positive spectral flux and introduces no onset; the v2 energy
+//    gate additionally drops the near-silent tail frames. No true onset lies in
+//    the fade region (all are >10 k frames from the end). This keeps the traps'
+//    "zero onsets" property from being contaminated by a non-musical artifact.
+//  * "soft" is monophonic legato: at each note start the amplitude re-ramps
+//    0 -> 0.5 over 15 ms while the frequency switches. The preceding note fills
+//    right up to the boundary at 0.5, so the only positive-flux cue is the soft
+//    15 ms ramp plus the pitch change — a genuine recall challenge for a
+//    positive-flux detector (the amplitude STEP down at the boundary is a
+//    decrease and contributes no flux).
+
+static const float    kUiSalience = 0.3f;   // orchestrator may tune this
+static const uint64_t kTolerance  = 1024;   // match tolerance, source frames
+static const uint32_t kRate       = 48000;
+static const uint32_t kFadeFrames = 2048;   // raised-cosine tail fade
+
+// Greedy nearest-neighbour pairing. Each ground-truth and each detection is
+// used at most once; pairs are consumed in ascending distance order (ties
+// broken by truth then detection index, so the pairing is deterministic).
+struct Score {
+    int    det = 0, tp = 0, fp = 0, fn = 0;
+    double prec = 0.0, rec = 0.0, f1 = 0.0;
+};
+
+static Score scoreAt( const std::vector<twOnset> &all,
+                      const std::vector<uint64_t> &truth, float thr,
+                      uint64_t tol ) {
+    std::vector<uint64_t> det;
+    for ( const twOnset &o : all )
+        if ( o.salience >= thr )
+            det.push_back( o.pos );
+
+    struct Pair {
+        uint64_t d;
+        int      ti, di;
+    };
+    std::vector<Pair> pairs;
+    for ( size_t ti = 0; ti < truth.size(); ++ti )
+        for ( size_t di = 0; di < det.size(); ++di ) {
+            uint64_t a  = truth[ti], b = det[di];
+            uint64_t dd = ( a > b ) ? ( a - b ) : ( b - a );
+            if ( dd <= tol )
+                pairs.push_back( { dd, (int)ti, (int)di } );
+        }
+    std::sort( pairs.begin(), pairs.end(), []( const Pair &x, const Pair &y ) {
+        if ( x.d != y.d )
+            return x.d < y.d;
+        if ( x.ti != y.ti )
+            return x.ti < y.ti;
+        return x.di < y.di;
+    } );
+
+    std::vector<bool> tu( truth.size(), false ), du( det.size(), false );
+    int               tp = 0;
+    for ( const Pair &p : pairs )
+        if ( !tu[p.ti] && !du[p.di] ) {
+            tu[p.ti] = du[p.di] = true;
+            ++tp;
+        }
+
+    Score s;
+    s.det  = (int)det.size();
+    s.tp   = tp;
+    s.fn   = (int)truth.size() - tp;
+    s.fp   = (int)det.size() - tp;
+    s.prec = ( s.tp + s.fp ) > 0 ? (double)s.tp / ( s.tp + s.fp ) : 1.0;
+    s.rec  = ( s.tp + s.fn ) > 0 ? (double)s.tp / ( s.tp + s.fn ) : 1.0;
+    s.f1   = ( s.prec + s.rec ) > 0.0
+               ? 2.0 * s.prec * s.rec / ( s.prec + s.rec )
+               : 0.0;
+    return s;
+}
+
+// The salience sweep printed per corpus item.
+static const float kSweep[]  = { 0.0f, 0.1f, 0.2f, 0.3f, 0.5f, 0.8f };
+static const int   kNSweep    = (int)( sizeof( kSweep ) / sizeof( kSweep[0] ) );
+
+static void printTable( const std::string &name,
+                        const std::vector<twOnset> &all,
+                        const std::vector<uint64_t> &truth, uint64_t tol ) {
+    std::cout << "-- " << name << " (" << truth.size() << " true onset(s), "
+              << all.size() << " raw detections) --\n";
+    std::cout << "    thr  det   TP   FP   FN      P      R     F1\n";
+    std::cout << std::fixed;
+    for ( int i = 0; i < kNSweep; ++i ) {
+        Score s = scoreAt( all, truth, kSweep[i], tol );
+        std::cout << "   " << std::setprecision( 2 ) << std::setw( 4 )
+                  << kSweep[i] << std::setw( 5 ) << s.det << std::setw( 5 )
+                  << s.tp << std::setw( 5 ) << s.fp << std::setw( 5 ) << s.fn
+                  << "  " << std::setprecision( 3 ) << std::setw( 5 ) << s.prec
+                  << "  " << std::setw( 5 ) << s.rec << "  " << std::setw( 5 )
+                  << s.f1 << "\n";
+    }
+    std::cout.unsetf( std::ios::fixed );
+}
+
+static void section_f_ground_truth() {
+    std::cout << "== Section f: marker-grade ground truth (proposal 28 W0) ==\n";
+
+    const uint64_t nFrames = 480000;   // 10 s @ 48 kHz
+
+    // Raised-cosine tail fade (1 -> 0 over the final kFadeFrames): a monotone
+    // decrease, so no positive spectral flux -> no spurious onset.
+    auto fadeTail = []( std::vector<float> &v ) {
+        const size_t n = v.size();
+        const size_t f = ( kFadeFrames < n ) ? kFadeFrames : n;
+        for ( size_t j = 0; j < f; ++j ) {
+            double g = 0.5 * ( 1.0 + std::cos( kPi * (double)j / (double)f ) );
+            v[n - f + j] = (float)( v[n - f + j] * g );
+        }
+    };
+
+    // Detection params: realistic UI defaults (the orchestrator tunes the
+    // DETECTOR, not the harness). Identical across every corpus item for a fair
+    // comparison. 30 ms min separation at 48 kHz.
+    twOnsetParams p;
+    p.minSeparationFrames = 1440;
+
+    // -------------------------------------------------------------------------
+    // (1) clicks: unit impulses in silence, >= 60 ms apart (irregular). 8.
+    // -------------------------------------------------------------------------
+    std::vector<uint64_t> clickTruth = { 30000,  71000,  138000, 195000,
+                                         268000, 322000, 383000, 430000 };
+    std::vector<twOnset>  clicksDet;
+    {
+        std::vector<float> sig( (size_t)nFrames, 0.0f );
+        for ( uint64_t c : clickTruth )
+            sig[(size_t)c] = 1.0f;
+        fadeTail( sig );
+        const float *ch[1] = { sig.data() };
+        clicksDet          = twDetectOnsets( ch, 1, nFrames, p );
+    }
+
+    // -------------------------------------------------------------------------
+    // (2) drums: 5 ms noise burst + 40 ms exp-decay 180 Hz thump per hit, over
+    //     a continuous 0.15 triangle-ish 330 Hz bed. 10 hits, amplitude 0.2..0.8
+    //     The realistic case.
+    // -------------------------------------------------------------------------
+    std::vector<uint64_t> drumTruth = { 30000,  78000,  132000, 180000, 235000,
+                                        288000, 340000, 392000, 430000, 465000 };
+    const float           drumAmp[] = { 0.8f, 0.4f, 0.6f, 0.3f, 0.7f,
+                                        0.5f, 0.35f, 0.65f, 0.25f, 0.55f };
+    std::vector<twOnset>  drumsDet;
+    {
+        std::vector<float> sig( (size_t)nFrames, 0.0f );
+        // Triangle-ish bed: odd harmonics of 330 Hz, coeffs 1/k^2 with the
+        // alternating triangle-wave signs, scaled to a ~0.15 peak.
+        const double f0    = 330.0;
+        const int    hk[]  = { 1, 3, 5, 7 };
+        const double hs[]  = { 1.0, -1.0 / 9.0, 1.0 / 25.0, -1.0 / 49.0 };
+        double       hnorm = 0.0;
+        for ( double c : hs )
+            hnorm += std::fabs( c );
+        for ( uint64_t i = 0; i < nFrames; ++i ) {
+            double s = 0.0;
+            for ( int h = 0; h < 4; ++h )
+                s += hs[h] * std::sin( 2.0 * kPi * f0 * hk[h] * (double)i
+                                       / (double)kRate );
+            sig[(size_t)i] = (float)( 0.15 * s / hnorm );
+        }
+        // Hits.
+        Lcg noise( 0x0D12BA5Eu );
+        for ( int i = 0; i < 10; ++i ) {
+            uint64_t     pos  = drumTruth[i];
+            const double A    = drumAmp[i];
+            const uint64_t nB = 240;    // 5 ms noise burst
+            const uint64_t nT = 1920;   // 40 ms thump
+            for ( uint64_t j = 0; j < nB && pos + j < nFrames; ++j )
+                sig[(size_t)( pos + j )] += (float)( A * noise.next() );
+            for ( uint64_t j = 0; j < nT && pos + j < nFrames; ++j ) {
+                double env  = std::exp( -(double)j / 480.0 );   // ~10 ms tau
+                double body = std::sin( 2.0 * kPi * 180.0 * (double)j
+                                        / (double)kRate );
+                sig[(size_t)( pos + j )] += (float)( A * env * body );
+            }
+        }
+        fadeTail( sig );
+        const float *ch[1] = { sig.data() };
+        drumsDet           = twDetectOnsets( ch, 1, nFrames, p );
+    }
+
+    // -------------------------------------------------------------------------
+    // (3) soft: monophonic legato. Per-note frequency from a fixed table; at
+    //     each note start the amplitude re-ramps 0 -> 0.5 over 15 ms; the
+    //     previous note sustains to the boundary (no gap). 8 notes. Recall case.
+    // -------------------------------------------------------------------------
+    std::vector<uint64_t> softTruth = { 20000,  80000,  145000, 200000,
+                                        265000, 330000, 388000, 445000 };
+    const double          softFreq[] = { 261.63, 293.66, 329.63, 349.23,
+                                         392.00, 440.00, 493.88, 523.25 };
+    std::vector<twOnset>  softDet;
+    {
+        std::vector<float> sig( (size_t)nFrames, 0.0f );
+        const double rampFrames = 720.0;   // 15 ms
+        for ( int i = 0; i < 8; ++i ) {
+            uint64_t start = softTruth[i];
+            uint64_t end   = ( i + 1 < 8 ) ? softTruth[i + 1] : nFrames;
+            for ( uint64_t t = start; t < end; ++t ) {
+                double rel = (double)( t - start );
+                double amp = 0.5 * std::min( 1.0, rel / rampFrames );
+                double ph  = 2.0 * kPi * softFreq[i] * rel / (double)kRate;
+                sig[(size_t)t] = (float)( amp * std::sin( ph ) );
+            }
+        }
+        fadeTail( sig );
+        const float *ch[1] = { sig.data() };
+        softDet            = twDetectOnsets( ch, 1, nFrames, p );
+    }
+
+    // -------------------------------------------------------------------------
+    // (4) crescendo trap: one continuous 220 Hz saw-ish tone (6 harmonics)
+    //     ramping 0.0 -> 0.6 over the whole duration. ZERO true onsets.
+    // -------------------------------------------------------------------------
+    std::vector<uint64_t> emptyTruth;
+    std::vector<twOnset>  crescDet;
+    {
+        std::vector<float> sig( (size_t)nFrames, 0.0f );
+        double             snorm = 0.0;
+        for ( int k = 1; k <= 6; ++k )
+            snorm += 1.0 / k;
+        for ( uint64_t i = 0; i < nFrames; ++i ) {
+            double s = 0.0;
+            for ( int k = 1; k <= 6; ++k )
+                s += ( 1.0 / k ) * std::sin( 2.0 * kPi * 220.0 * k * (double)i
+                                             / (double)kRate );
+            double env = 0.6 * (double)i / (double)( nFrames - 1 );
+            sig[(size_t)i] = (float)( env * s / snorm );
+        }
+        fadeTail( sig );
+        const float *ch[1] = { sig.data() };
+        crescDet           = twDetectOnsets( ch, 1, nFrames, p );
+    }
+
+    // -------------------------------------------------------------------------
+    // (5) steady trap: constant 0.5-amplitude 440 Hz sine. ZERO true onsets.
+    // -------------------------------------------------------------------------
+    std::vector<twOnset> steadyDet;
+    {
+        std::vector<float> sig( (size_t)nFrames, 0.0f );
+        for ( uint64_t i = 0; i < nFrames; ++i )
+            sig[(size_t)i] =
+                (float)( 0.5 * std::sin( 2.0 * kPi * 440.0 * (double)i
+                                         / (double)kRate ) );
+        fadeTail( sig );
+        const float *ch[1] = { sig.data() };
+        steadyDet          = twDetectOnsets( ch, 1, nFrames, p );
+    }
+
+    // -------------------------------------------------------------------------
+    // Tables (print unconditionally).
+    // -------------------------------------------------------------------------
+    std::cout << "\n  [salience sweep — P/R/F1 per threshold]\n\n";
+    printTable( "clicks", clicksDet, clickTruth, kTolerance );
+    printTable( "drums", drumsDet, drumTruth, kTolerance );
+    printTable( "soft", softDet, softTruth, kTolerance );
+    printTable( "crescendo trap", crescDet, emptyTruth, kTolerance );
+    printTable( "steady trap", steadyDet, emptyTruth, kTolerance );
+
+    std::cout << "\n  [trap detection counts by salience threshold]\n";
+    std::cout << std::fixed << std::setprecision( 2 );
+    for ( int i = 0; i < kNSweep; ++i ) {
+        int nc = scoreAt( crescDet, emptyTruth, kSweep[i], kTolerance ).det;
+        int ns = scoreAt( steadyDet, emptyTruth, kSweep[i], kTolerance ).det;
+        std::cout << "    thr " << std::setw( 4 ) << kSweep[i]
+                  << " : crescendo " << std::setw( 3 ) << nc << ",  steady "
+                  << std::setw( 3 ) << ns << "\n";
+    }
+    std::cout.unsetf( std::ios::fixed );
+
+    // -------------------------------------------------------------------------
+    // W0 GATES — evaluated at kUiSalience. Failures here are EXPECTED against
+    // the v2-carryover detector; the orchestrator iterates the detector until
+    // they go green. Marked "W0 GATE" so they are distinguishable from any
+    // regression in sections a-e.
+    // -------------------------------------------------------------------------
+    Score gClicks = scoreAt( clicksDet, clickTruth, kUiSalience, kTolerance );
+    Score gDrums  = scoreAt( drumsDet, drumTruth, kUiSalience, kTolerance );
+    Score gSoft   = scoreAt( softDet, softTruth, kUiSalience, kTolerance );
+    Score gCresc  = scoreAt( crescDet, emptyTruth, kUiSalience, kTolerance );
+    Score gSteady = scoreAt( steadyDet, emptyTruth, kUiSalience, kTolerance );
+
+    std::cout << "\n  [W0 gates @ kUiSalience=" << kUiSalience << "]\n";
+    std::cout << std::fixed << std::setprecision( 3 );
+    std::cout << "    clicks  F1=" << gClicks.f1 << " (need >=0.9)\n";
+    std::cout << "    drums   F1=" << gDrums.f1 << " (need >=0.9)\n";
+    std::cout << "    soft    R=" << gSoft.rec << " (need >=0.75)  P="
+              << gSoft.prec << " (need >=0.9)\n";
+    std::cout << "    cresc   det=" << gCresc.det << " (need 0)\n";
+    std::cout << "    steady  det=" << gSteady.det << " (need 0)\n";
+    std::cout.unsetf( std::ios::fixed );
+
+    CHECK( gClicks.f1 >= 0.9, "W0 GATE: clicks F1 >= 0.9 @ kUiSalience" );
+    CHECK( gDrums.f1 >= 0.9, "W0 GATE: drums F1 >= 0.9 @ kUiSalience" );
+    CHECK( gSoft.rec >= 0.75, "W0 GATE: soft recall >= 0.75 @ kUiSalience" );
+    CHECK( gSoft.prec >= 0.9, "W0 GATE: soft precision >= 0.9 @ kUiSalience" );
+    CHECK( gCresc.det == 0,
+           "W0 GATE: crescendo trap has 0 detections above kUiSalience" );
+    CHECK( gSteady.det == 0,
+           "W0 GATE: steady trap has 0 detections above kUiSalience" );
+}
+
+// ===========================================================================
 // main
 // ===========================================================================
 int main() {
@@ -431,6 +755,7 @@ int main() {
     section_c_loudness();
     section_d_determinism();
     section_e_serialize();
+    section_f_ground_truth();
 
     if ( g_fails == 0 )
         std::cout << "\nAll analyzers tests passed.\n";

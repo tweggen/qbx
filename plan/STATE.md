@@ -6953,3 +6953,34 @@ proposed — W1 marker destinations are warped-domain FRAMES (beat-native
 becomes its own proposal when a tempo map exists); proposal 25 stays frozen
 until W1 ships; markers clamp to the content window with twLoopMap tiling
 the warped result. W0 begins.
+
+---
+
+## Proposal 28 W0: marker-grade onset detection — gates already green (2026-07-25)
+
+**What landed.** Onsets aspect v3 (commit a4ee840): records are packed
+12-byte { u64 pos, f32 salience } LE, salience = the normalized flux at
+detection; two consumer tiers (vocoder keyframes take everything — M5
+behavior verified byte-unchanged; the W2 marker UI filters by salience).
+OnsetsVersion 3 orphans v2 files. Ground-truth harness (analyzers_test
+section f): five labeled deterministic corpora — clicks, drum-hits over a
+tonal bed, soft legato attacks, and the two zero-onset traps (crescendo,
+steady tone) — scored by greedy pairing (±1024 frames) across a salience
+sweep, with the W0 gates as CHECKs at kUiSalience = 0.3.
+
+**Result: no detector iteration was needed.** The v2 detector (M4's
+normalized flux + 1%-of-peak energy gate + 0.1 floor — built to stop the
+keyframe level collapse) already clears every marker-grade gate:
+clicks F1 0.933, drums F1 1.000, soft recall 0.875 at precision 1.000,
+ZERO trap detections at every threshold. The emergency fix was also the
+quality fix.
+
+**Known v2 characteristic (recorded, not chased):** 1 of 8 identical
+isolated unit impulses missed — phase-vs-hop-grid alignment sensitivity on
+single-sample clicks; F1 gates clear regardless. Revisit only if real
+material shows it (sub-hop analysis would be the lever).
+
+**Salience-threshold guidance for W2:** 0.3 is the gated UI default; the
+soft-attack table shows recall collapsing above ~0.5 (0.875 → 0.25) while
+precision holds at 1.0 throughout — the UI threshold, if ever exposed,
+should range 0.1–0.5.
