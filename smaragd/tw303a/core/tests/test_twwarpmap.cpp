@@ -63,10 +63,12 @@ int main()
         CHECK( m.srcToWarped( Fraction( 72000 ) ) == Fraction( 108000 ),
                "interior segment interpolates exactly" );
 
-        // Beyond the last anchor: final slope (2x) continues.
+        // Beyond the last anchor the BASE stretch (1x here) resumes — NOT
+        // the final segment's 2x. Editing localization depends on this:
+        // material after the last marker rides rigidly with it.
         CHECK( m.srcToWarped( Fraction( 144000 + 1000 ) )
-                   == Fraction( 216000 + 2000 ),
-               "slope extension beyond last anchor" );
+                   == Fraction( 216000 + 1000 ),
+               "base-stretch extension beyond last anchor" );
 
         // Exact roundtrip everywhere, incl. non-integer rationals and the
         // extension regions.
@@ -88,13 +90,13 @@ int main()
         }
     }
 
-    // --- Single anchor: origin slope continues -----------------------------
+    // --- Single anchor: base stretch resumes past it -----------------------
     {
-        std::vector<twWarpAnchor> a = { { 100, 300 } };   // 3x
+        std::vector<twWarpAnchor> a = { { 100, 300 } };   // 3x up to here
         twWarpMap m( a, Fraction( 1 ) );
-        CHECK( m.srcToWarped( Fraction( 200 ) ) == Fraction( 600 ),
-               "single anchor: origin slope extends" );
-        CHECK( m.warpedToSrc( Fraction( 750 ) ) == Fraction( 250 ),
+        CHECK( m.srcToWarped( Fraction( 200 ) ) == Fraction( 400 ),
+               "single anchor: base stretch extends" );
+        CHECK( m.warpedToSrc( Fraction( 750 ) ) == Fraction( 550 ),
                "single anchor: inverse in extension" );
     }
 

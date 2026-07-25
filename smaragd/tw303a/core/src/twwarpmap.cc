@@ -75,13 +75,16 @@ Fraction twWarpMap::srcToWarped( const Fraction &src ) const
 
     const size_t k = segmentForSrc( src );
     const size_t nPts = anchors_.size() + 1;
-    // Segment slope: interior segments use their two points; the LAST
-    // segment (k == nPts-1) continues the slope of the final anchored
-    // segment (or the scalar stretch when only the origin precedes it —
-    // impossible here since anchors_ is non-empty: the final anchored
-    // segment is (pt_{n-1}, pt_n)).
-    size_t a = k, b = k + 1;
-    if( b >= nPts ) { a = nPts - 2; b = nPts - 1; }
+    // Beyond the LAST anchor the map resumes the BASE stretch (not the final
+    // segment's slope): a marker drag then only reshapes the span between its
+    // neighbors — material after the last marker rides rigidly with it
+    // instead of being re-stretched by an interior edit.
+    if( k + 1 >= nPts ) {
+        const int64_t sL = ptSrc( anchors_, nPts - 1 );
+        const int64_t wL = ptWarped( anchors_, nPts - 1 );
+        return Fraction( wL ) + ( src - Fraction( sL ) ) * stretch_;
+    }
+    const size_t a = k, b = k + 1;
     const int64_t sA = ptSrc( anchors_, a ),  sB = ptSrc( anchors_, b );
     const int64_t wA = ptWarped( anchors_, a ), wB = ptWarped( anchors_, b );
     // warped = wA + (src − sA) · (wB − wA)/(sB − sA), all exact.
@@ -99,8 +102,13 @@ Fraction twWarpMap::warpedToSrc( const Fraction &warped ) const
 
     const size_t k = segmentForWarped( warped );
     const size_t nPts = anchors_.size() + 1;
-    size_t a = k, b = k + 1;
-    if( b >= nPts ) { a = nPts - 2; b = nPts - 1; }
+    // Mirror of srcToWarped: base-stretch extension beyond the last anchor.
+    if( k + 1 >= nPts ) {
+        const int64_t sL = ptSrc( anchors_, nPts - 1 );
+        const int64_t wL = ptWarped( anchors_, nPts - 1 );
+        return Fraction( sL ) + ( warped - Fraction( wL ) ) / stretch_;
+    }
+    const size_t a = k, b = k + 1;
     const int64_t sA = ptSrc( anchors_, a ),  sB = ptSrc( anchors_, b );
     const int64_t wA = ptWarped( anchors_, a ), wB = ptWarped( anchors_, b );
     return Fraction( sA )

@@ -19,9 +19,12 @@
  *  - The map passes through the implicit origin (0,0) and every anchor
  *    (src_i, warped_i), strictly increasing in BOTH coordinates.
  *  - Between points: linear interpolation (exact Fractions).
- *  - Beyond the LAST anchor: the final segment's slope continues (with no
- *    anchors: the scalar stretch everywhere — bit-identical to the historic
+ *  - Beyond the LAST anchor: the BASE stretch resumes (with no anchors: the
+ *    scalar stretch everywhere — bit-identical to the historic
  *    `pos × stretch` expressions, which the no-anchor gate depends on).
+ *    Editing localization depends on this: a marker drag reshapes only the
+ *    span between its neighbors, and material after the last marker rides
+ *    rigidly with it instead of being re-stretched by interior edits.
  *  - Before 0: the first segment's slope continues (negative positions only
  *    arise transiently in lead-in math; both directions stay monotone).
  *

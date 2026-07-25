@@ -182,12 +182,12 @@ struct twPagedVocoder::Impl {
                     baseIn.push_back( p.second );
                 }
             }
-            const size_t nb = baseOut.size();
-            if( nb >= 2 && baseIn.back() < (double) inLen ) {
-                const double slope = ( baseOut[nb-1] - baseOut[nb-2] )
-                                   / ( baseIn[nb-1] - baseIn[nb-2] );
+            if( baseIn.back() < (double) inLen ) {
+                // Tail resumes the BASE rate S — the exact mirror of
+                // twWarpMap's base-stretch extension (editing localization:
+                // interior marker drags must not re-stretch the tail).
                 baseOut.push_back( baseOut.back()
-                                   + ( (double) inLen - baseIn.back() ) * slope );
+                                   + ( (double) inLen - baseIn.back() ) * S );
                 baseIn.push_back( (double) inLen );
             }
             // The user map dictates the mapped length.

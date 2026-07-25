@@ -1875,6 +1875,30 @@ void SMVActualView::contextMenuEvent( QContextMenuEvent *ev )
 static constexpr int kMarkerStripPx = 10;
 static constexpr int kMarkerHitPx   = 5;
 
+// W2.1: the window pin. A clip's startOffset is srcToWarped(srcStart) —
+// MAP-DEPENDENT — so without an anchor at/below the clip start, every marker
+// drag re-slopes the segment under srcStart and the whole displayed window
+// slips (preview moves against the drag, other markers' screen positions
+// shift, the dragged handle lags the mouse). Planting an identity anchor at
+// the clip start pins the window; it is a normal visible marker (draggable,
+// deletable) and audibly a no-op until moved. Returns true if a pin was
+// submitted (the caller must re-read the anchor list).
+static bool ensureStartPin( SCut *cut, SStdMixerView &smv,
+                            STrack *track, SLink *link )
+{
+    const int64_t s0 = cut->getSrcStart().floorToInt();
+    if( s0 <= 0 ) return false;                    // the origin already pins
+    for( const twWarpAnchor &a : cut->getGrainParams().warpAnchors )
+        if( a.src <= s0 ) return false;            // pinned at/below start
+    const int64_t w0 = cut->getStartOffset().frames();
+    if( w0 <= 0 ) return false;
+    QList<int> path = strackpath::pathOf( smv.getModel(), track );
+    path.append( track->indexOfChild( link ) );
+    SApplication::app().submitAction(
+        new SAddWarpMarkerAction( path, s0, w0 ) );
+    return true;
+}
+
 bool SMVActualView::tryBeginMarkerDrag( QMouseEvent *ev )
 {
     if( !lastClickSLink_ || !lastClickTrack_ ) return false;
@@ -1922,10 +1946,15 @@ bool SMVActualView::tryBeginMarkerDrag( QMouseEvent *ev )
                 new SDeleteWarpMarkerAction( path, a.src ) );
             return true;
         }
+        // Pin the window before arming: without it the drag itself would
+        // move startOffset and the whole clip display would slip.
+        if( ensureStartPin( cut, smv_, lastClickTrack_, lastClickSLink_ ) )
+            markerDragPre_ = cut->getGrainParams().warpAnchors;
+        else
+            markerDragPre_ = anchors;
         markerDragArmed_ = true;
         markerDragSrc_   = a.src;
-        markerDragPre_   = anchors;
-        markerDragPreStartOffset_ = startOff;
+        markerDragPreStartOffset_ = cut->getStartOffset().frames();
         return true;
     }
     return false;
@@ -2016,6 +2045,10 @@ bool SMVActualView::tryAddMarkerAt( QMouseEvent *ev )
     const int64_t src =
         cut->warpedToSourceExact( Fraction( warped ) ).floorToInt();
     if( src <= 0 ) return false;
+
+    // First marker on this clip: pin the window start first (see
+    // ensureStartPin) so later drags cannot slip the displayed window.
+    ensureStartPin( cut, smv_, lastClickTrack_, lastClickSLink_ );
 
     QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
     path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
