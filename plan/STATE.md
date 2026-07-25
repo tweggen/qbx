@@ -7084,3 +7084,75 @@ session's run_all_tests.sh held the exe lock during this milestone; W2 was
 built via object-library targets until it cleared. 2-3 of that session's
 case runs were killed by mistake during diagnosis (its log will show
 spurious failures ~14:47-14:49).
+
+## 2026-07-25 — W2 hands-on hardening: paint, attack-centered onsets (v4), drag locality
+
+The requester's first hands-on session with warp markers surfaced four
+defects; all fixed, gated, and pushed (`8200aed`, `adfe5b4`).
+
+- **Markers invisible (the `emit` trap).** The W2 paint rewrite named the
+  glyph-tiling callback parameter `emit` — Qt's keyword macro expands to
+  NOTHING, so `auto &&emit` declared an unnamed parameter and every
+  `emit(x);` compiled to a discarded-value statement. No error; the only
+  tell is `-Wunused-value` buried in build noise, and the never-invoked
+  generic lambda's body is never instantiated (its string literals don't
+  even reach the .obj, which mimics stale-build symptoms). Renamed
+  `putGlyph`; comment left at the site. HOUSE RULE: no identifier in
+  Qt-linked TUs may be named `emit`/`signals`/`slots`/`foreach`.
+- **Glyph tiling was duration-bound, now pixel-bound.** `cut.getDuration()`
+  can exceed the displayed window (the timeline sizes clip rects from the
+  link; the waveform painter just fills visibRect) — ticks now tile across
+  visibRect pixels, which also makes them repeat per loop tile and keeps
+  spacing correct past viewport clamps (both of the requester's original
+  visual complaints).
+- **Onset ticks sat ~19 ms early — attack-centered positions ("onsets" v4).**
+  The detector stamped the flux frame START; a transient enters the Hann
+  window from its tail, so the report led the perceptual attack by
+  fftSize − hop/2 (measured −896 ± 64 on the click corpus; the W0 ±1024
+  match tolerance had hidden the bias). v4 adds the correction (clamped at
+  the source end): click-corpus offsets now 0 ± 64; W0 gates hold (drums
+  F1 = 1.000, traps 0). Sidecars orphan/regenerate; warp caches re-key
+  through onsetsHash.
+- **Looping clips: add/drag/hit-test fold into the first repetition.** A
+  double-click in repetition k stored the raw position — past segLen:
+  undrawable, inaudible, "nothing happened". All three gesture paths now
+  share the renderer's fold-into-first-repetition domain rule.
+- **Marker drags are local (the drumloop bug).** Two causes: (1) twWarpMap
+  extended past the last anchor with the final SEGMENT's slope, so interior
+  drags re-stretched the tail — extension now resumes the BASE stretch
+  (twPagedVocoder's mirrored base map changed identically; the no-anchor
+  bit-exactness gate is untouched). (2) startOffset = srcToWarped(srcStart)
+  is map-dependent, so dragging any marker re-sloped the segment under the
+  clip start and slipped the whole displayed window — the preview moving
+  AGAINST the drag, other markers' screen positions shifting, the handle
+  lagging the mouse. The gesture layer now plants an identity START PIN
+  anchor at the clip start before the first add (and before a drag arms on
+  a pin-less clip, healing pre-fix clips). Dragging the pin itself moves
+  the window origin — that is now the one gesture that means "slip".
+- Gates across the set: analyzers_test, twwarpmap_test (extension
+  expectations updated), vocoder_test, full 56-case qxa suite, layering,
+  logging. Requester confirms ticks align with transients and click+drag
+  works.
+
+## 2026-07-25 — Proposal 28 W3 EXECUTED: "f0" aspect v1 (YIN)
+
+- `twComputeF0` (tw/sidecar/twanalyzers): YIN — difference function over a
+  fixed integration window, cumulative-mean normalization, absolute-
+  threshold first-dip pick with local-minimum descent, parabolic
+  refinement, RMS energy gate (1e-4). Double accumulation, fixed scan
+  order — bit-deterministic. Params {rate, hop, win, fmin 60, fmax 1000,
+  threshold 0.15}; caller uses hop = rate/100 (loudness-aligned), win =
+  rate/30.
+- Aspect `"f0"` v1 (twaspects.h): float32 LE per hop, 0 = unvoiced,
+  recordCount = ceil(sourceFrames/hop); params blob v1 documented.
+  Generated in the SAME import job as onsets/loudness (splainwave
+  enqueueAnalysis), per-aspect validation so existing sidecars are not
+  recomputed.
+- **Gates:** analyzers_test section g — 220 Hz oracle (≥90 % voiced,
+  95 % within 1 %), the OCTAVE TRAP (weak fundamental + strong 2nd/3rd
+  harmonics: ≥90 % at the true 110 Hz, ≤5 % octave errors), vibrato
+  tracking (span + mean), silence all-unvoiced, LCG noise ≤20 % voiced,
+  run-twice bit-determinism, dual-mono fold identity, serialize() LE
+  bytes. `sidecar_import_analysis.qxa` extended: f0 sidecar exists with
+  exactly 400 records on the 4 s fixture. Consumers (key detection,
+  pitch-correct) arrive in later milestones by design.

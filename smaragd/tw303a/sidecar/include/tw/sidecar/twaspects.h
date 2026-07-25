@@ -97,6 +97,28 @@ constexpr const char *Loudness        = "loudness";
 constexpr uint32_t    LoudnessVersion = 1;
 
 /**
+ * "f0" — per-hop fundamental estimate (proposal 28 W3), the prerequisite
+ * metadata for key detection / pitch-correct consumers (none wired yet; the
+ * aspect ships ahead of them on the M0 substrate).
+ *
+ * Computed over the SOURCE-rate decoded PCM, all channels folded to a mono
+ * mean before analysis. Estimator: YIN — difference function over a fixed
+ * integration window, cumulative-mean normalization, absolute-threshold
+ * first-dip pick with local-minimum descent, parabolic refinement, RMS
+ * energy gate — see twanalyzers.h for the normative algorithm.
+ *
+ * Record: float32 LE = f0 in Hz for the window starting at record index ×
+ * hopFrames; 0 = UNVOICED. recordStride = 4, recordCount =
+ * ceil(sourceFrames / hopFrames), hopFrames = the analysis hop. Header
+ * geometry = the analyzed source's native geometry.
+ *
+ * Params blob v1 (LE, in order): uint32 rate, uint32 hopFrames,
+ * uint32 winFrames, float32 fminHz, float32 fmaxHz, float32 threshold.
+ */
+constexpr const char *F0        = "f0";
+constexpr uint32_t    F0Version = 1;
+
+/**
  * "warp.pcm" — the finished time-stretch/pitch-shift output (proposal 27 M2):
  * a durable copy of twGrainSource's materialized warp, so a project load at
  * SAVED settings is a file read instead of a full Rubber Band analysis+

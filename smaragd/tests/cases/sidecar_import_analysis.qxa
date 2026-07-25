@@ -36,6 +36,11 @@
          = ceil(192000 / (48000/100)) = ceil(192000/480) = 400. -->
     <assert-sidecar aspect="loudness" expectExists="true"
                     minRecords="400" maxRecords="400"/>
+
+    <!-- f0 (proposal 28 W3): per-hop fundamental, same 10 ms hop as
+         loudness, so the record count is the same exact 400. -->
+    <assert-sidecar aspect="f0" expectExists="true"
+                    minRecords="400" maxRecords="400"/>
   </actions>
 
   <assertions>

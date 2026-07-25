@@ -325,3 +325,115 @@ std::vector<float> twComputeLoudness( const float *const *chans, uint32_t nCh,
 
     return out;
 }
+
+// ---------------------------------------------------------------------------
+// twF0Params::serialize — LE params blob (twaspects.h v1 order):
+//   uint32 rate, uint32 hopFrames, uint32 winFrames,
+//   float32 fminHz, float32 fmaxHz, float32 threshold.
+// ---------------------------------------------------------------------------
+void twF0Params::serialize( std::vector<uint8_t> &out ) const
+{
+    out.clear();
+    putU32( out, rate );
+    putU32( out, hopFrames );
+    putU32( out, winFrames );
+    putF32( out, fminHz );
+    putF32( out, fmaxHz );
+    putF32( out, threshold );
+}
+
+// ---------------------------------------------------------------------------
+// twComputeF0 — YIN fundamental estimate (aspect "f0" v1, proposal 28 W3).
+// The steps below follow twanalyzers.h exactly. Everything accumulates in
+// double with a fixed scan order — bit-deterministic for identical input.
+// ---------------------------------------------------------------------------
+std::vector<float> twComputeF0( const float *const *chans, uint32_t nCh,
+                                uint64_t nFrames, const twF0Params &params )
+{
+    const uint32_t hop = params.hopFrames;
+    const uint32_t W   = params.winFrames;
+    if( hop == 0 || W == 0 || params.rate == 0
+        || !( params.fminHz > 0.0f ) || !( params.fmaxHz > params.fminHz )
+        || nCh == 0 || nFrames == 0 )
+        return {};
+
+    const uint32_t tauMin = (uint32_t) std::max(
+        2.0, std::ceil( (double) params.rate / (double) params.fmaxHz ) );
+    const uint32_t tauMax = (uint32_t) std::floor(
+        (double) params.rate / (double) params.fminHz );
+    if( tauMax <= tauMin )
+        return {};
+
+    // 1. Mono fold (mean across channels), matching the other analyzers.
+    std::vector<float> mono( (size_t) nFrames );
+    for( uint64_t i = 0; i < nFrames; i++ ) {
+        double acc = 0.0;
+        for( uint32_t c = 0; c < nCh; c++ )
+            acc += (double) chans[c][(size_t) i];
+        mono[(size_t) i] = (float)( acc / (double) nCh );
+    }
+    // Zero-pad view: samples at/past nFrames read as 0.
+    auto at = [&]( uint64_t i ) -> double {
+        return i < nFrames ? (double) mono[(size_t) i] : 0.0;
+    };
+
+    const uint64_t count = ( nFrames + hop - 1 ) / hop;   // ceil
+    std::vector<float>  out( (size_t) count, 0.0f );
+    std::vector<double> dp( (size_t) tauMax + 1, 0.0 );   // CMND per frame
+
+    for( uint64_t k = 0; k < count; k++ ) {
+        const uint64_t t = k * hop;
+
+        // 6. Energy gate first: silence never pitches.
+        double e = 0.0;
+        for( uint32_t j = 0; j < W; j++ ) {
+            const double v = at( t + j );
+            e += v * v;
+        }
+        if( std::sqrt( e / (double) W ) < 1e-4 )
+            continue;                                     // unvoiced
+
+        // 2 + 3. Difference function with running cumulative-mean
+        // normalization.
+        dp[0] = 1.0;
+        double cum = 0.0;
+        for( uint32_t tau = 1; tau <= tauMax; tau++ ) {
+            double d = 0.0;
+            for( uint32_t j = 0; j < W; j++ ) {
+                const double diff = at( t + j ) - at( t + j + tau );
+                d += diff * diff;
+            }
+            cum += d;
+            dp[tau] = ( cum > 0.0 ) ? d * (double) tau / cum : 1.0;
+        }
+
+        // 4. First dip under threshold, descended to its local minimum.
+        uint32_t pick = 0;
+        for( uint32_t tau = tauMin; tau <= tauMax; tau++ ) {
+            if( dp[tau] < (double) params.threshold ) {
+                while( tau + 1 <= tauMax && dp[tau + 1] < dp[tau] )
+                    tau++;
+                pick = tau;
+                break;
+            }
+        }
+        if( pick == 0 )
+            continue;                                     // unvoiced
+
+        // 5. Parabolic refinement on d' around the pick (clamped +/-1).
+        double tauR = (double) pick;
+        if( pick > tauMin && pick < tauMax ) {
+            const double a = dp[pick - 1], b = dp[pick], c = dp[pick + 1];
+            const double denom = a - 2.0 * b + c;
+            if( denom > 1e-12 ) {
+                double delta = 0.5 * ( a - c ) / denom;
+                if( delta > 1.0 ) delta = 1.0;
+                if( delta < -1.0 ) delta = -1.0;
+                tauR += delta;
+            }
+        }
+        out[(size_t) k] = (float)( (double) params.rate / tauR );
+    }
+
+    return out;
+}

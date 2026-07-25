@@ -746,6 +746,152 @@ static void section_f_ground_truth() {
 // ===========================================================================
 // main
 // ===========================================================================
+// ---------------------------------------------------------------------------
+// Section g: f0 estimation (proposal 28 W3) — oracle tones, the octave trap,
+// vibrato tracking, silence/noise voicing, determinism.
+// ---------------------------------------------------------------------------
+static twF0Params f0DefaultParams() {
+    twF0Params p;
+    p.rate      = 48000;
+    p.hopFrames = 480;      // 10 ms — the import-job choice
+    p.winFrames = 1600;     // rate/30
+    return p;
+}
+
+// Voiced records only, excluding `edge` hops at each end (window tails read
+// zero-pad, so boundary hops are legitimately unvoiced/off).
+static std::vector<float> voicedInterior( const std::vector<float> &f0,
+                                          size_t edge ) {
+    std::vector<float> v;
+    for ( size_t i = edge; i + edge < f0.size(); ++i )
+        if ( f0[i] > 0.0f ) v.push_back( f0[i] );
+    return v;
+}
+
+static void section_g_f0() {
+    std::cout << "== Section g: f0 ==\n";
+    const uint32_t rate = 48000;
+    const uint64_t n    = 2 * rate;             // 2 s
+    twF0Params p = f0DefaultParams();
+
+    // (1) Pure 220 Hz sine: interior fully voiced, within 1 %.
+    {
+        std::vector<float> sig( (size_t)n );
+        for ( uint64_t i = 0; i < n; i++ )
+            sig[(size_t)i] = 0.5f * (float)std::sin( 2.0 * kPi * 220.0 * i / rate );
+        const float *ch[1] = { sig.data() };
+        std::vector<float> f0 = twComputeF0( ch, 1, n, p );
+        CHECK( f0.size() == ( n + p.hopFrames - 1 ) / p.hopFrames,
+               "f0 record count = ceil(n/hop)" );
+        std::vector<float> v = voicedInterior( f0, 8 );
+        CHECK( v.size() >= ( f0.size() - 16 ) * 9 / 10,
+               "sine 220: >=90% of interior voiced" );
+        int within = 0;
+        for ( float f : v ) if ( std::fabs( f - 220.0f ) <= 2.2f ) within++;
+        CHECK( v.empty() || within >= (int)( v.size() * 95 / 100 ),
+               "sine 220: 95% of voiced estimates within 1%" );
+    }
+
+    // (2) Octave trap: 110 Hz sawtooth-like harmonic stack with a WEAK
+    // fundamental and strong 2nd/3rd harmonics — naive spectral peak picking
+    // says 220/330; the period is 1/110. Classic halving/doubling gate.
+    {
+        std::vector<float> sig( (size_t)n );
+        for ( uint64_t i = 0; i < n; i++ ) {
+            const double t = (double)i / rate;
+            sig[(size_t)i] = (float)( 0.10 * std::sin( 2.0 * kPi * 110.0 * t )
+                                    + 0.40 * std::sin( 2.0 * kPi * 220.0 * t )
+                                    + 0.30 * std::sin( 2.0 * kPi * 330.0 * t ) );
+        }
+        const float *ch[1] = { sig.data() };
+        std::vector<float> f0 = twComputeF0( ch, 1, n, p );
+        std::vector<float> v = voicedInterior( f0, 8 );
+        int at110 = 0, at220 = 0;
+        for ( float f : v ) {
+            if ( std::fabs( f - 110.0f ) <= 2.0f ) at110++;
+            if ( std::fabs( f - 220.0f ) <= 2.0f ) at220++;
+        }
+        CHECK( !v.empty() && at110 >= (int)( v.size() * 9 / 10 ),
+               "octave trap: >=90% at the true 110 Hz" );
+        CHECK( at220 <= (int)( v.size() / 20 ),
+               "octave trap: octave error <=5%" );
+    }
+
+    // (3) Vibrato: 440 Hz +/- 20 Hz at 5 Hz — estimates track the modulation
+    // (span reaches near both extremes; mean stays at the carrier).
+    {
+        std::vector<float> sig( (size_t)n );
+        double phase = 0.0;
+        for ( uint64_t i = 0; i < n; i++ ) {
+            const double t = (double)i / rate;
+            const double f = 440.0 + 20.0 * std::sin( 2.0 * kPi * 5.0 * t );
+            phase += 2.0 * kPi * f / rate;
+            sig[(size_t)i] = 0.5f * (float)std::sin( phase );
+        }
+        const float *ch[1] = { sig.data() };
+        std::vector<float> f0 = twComputeF0( ch, 1, n, p );
+        std::vector<float> v = voicedInterior( f0, 8 );
+        CHECK( !v.empty(), "vibrato: voiced" );
+        float lo = 1e9f, hi = 0.0f; double mean = 0.0;
+        for ( float f : v ) { lo = std::min( lo, f ); hi = std::max( hi, f ); mean += f; }
+        mean /= (double)v.size();
+        CHECK( lo <= 428.0f && hi >= 452.0f,
+               "vibrato: span tracks the modulation (integration-window smoothing allowed)" );
+        CHECK( std::fabs( mean - 440.0 ) <= 8.8,
+               "vibrato: mean within 2% of the carrier" );
+    }
+
+    // (4) Silence -> all unvoiced; deterministic LCG noise -> mostly unvoiced.
+    {
+        std::vector<float> z( (size_t)n, 0.0f );
+        const float *zc[1] = { z.data() };
+        std::vector<float> f0 = twComputeF0( zc, 1, n, p );
+        bool anyVoiced = false;
+        for ( float f : f0 ) if ( f > 0.0f ) anyVoiced = true;
+        CHECK( !anyVoiced, "silence: all unvoiced" );
+
+        uint32_t lcg = 0x12345678u;
+        std::vector<float> nz( (size_t)n );
+        for ( uint64_t i = 0; i < n; i++ ) {
+            lcg = lcg * 1664525u + 1013904223u;
+            nz[(size_t)i] = ( (float)( lcg >> 8 ) / (float)( 1u << 24 ) - 0.5f ) * 0.8f;
+        }
+        const float *nc[1] = { nz.data() };
+        std::vector<float> nf = twComputeF0( nc, 1, n, p );
+        size_t voiced = 0;
+        for ( float f : nf ) if ( f > 0.0f ) voiced++;
+        CHECK( voiced <= nf.size() / 5, "white noise: <=20% voiced" );
+    }
+
+    // (5) Determinism: identical input -> bit-identical output; and the
+    // stereo fold equals the mono of the folded signal by construction
+    // (same channel copied twice folds to itself).
+    {
+        std::vector<float> sig( (size_t)n );
+        for ( uint64_t i = 0; i < n; i++ )
+            sig[(size_t)i] = 0.4f * (float)std::sin( 2.0 * kPi * 330.0 * i / rate );
+        const float *ch1[1] = { sig.data() };
+        const float *ch2[2] = { sig.data(), sig.data() };
+        std::vector<float> a = twComputeF0( ch1, 1, n, p );
+        std::vector<float> b = twComputeF0( ch1, 1, n, p );
+        std::vector<float> c = twComputeF0( ch2, 2, n, p );
+        CHECK( a == b, "f0 deterministic (run twice, bit-identical)" );
+        CHECK( a == c, "f0 dual-mono fold equals mono" );
+    }
+
+    // (6) serialize(): exact LE byte order (twaspects.h v1).
+    {
+        twF0Params sp;
+        sp.rate = 48000; sp.hopFrames = 480; sp.winFrames = 1600;
+        std::vector<uint8_t> blob;
+        sp.serialize( blob );
+        CHECK( blob.size() == 24, "f0 params blob is 24 bytes" );
+        CHECK( blob[0] == 0x80 && blob[1] == 0xBB && blob[2] == 0x00,
+               "f0 blob rate LE" );
+        CHECK( blob[4] == 0xE0 && blob[5] == 0x01, "f0 blob hop LE" );
+    }
+}
+
 int main() {
     std::cout << "analyzers_test starting\n";
 
@@ -755,6 +901,7 @@ int main() {
     section_d_determinism();
     section_e_serialize();
     section_f_ground_truth();
+    section_g_f0();
 
     if ( g_fails == 0 )
         std::cout << "\nAll analyzers tests passed.\n";

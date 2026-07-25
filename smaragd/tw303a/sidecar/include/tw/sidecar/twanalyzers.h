@@ -101,4 +101,45 @@ std::vector<float> twComputeLoudness( const float *const *chans, uint32_t nCh,
                                       uint64_t nFrames,
                                       const twLoudnessParams &params );
 
+/**
+ * Per-hop fundamental estimate (aspect "f0" v1, proposal 28 W3). Normative
+ * algorithm — changing any step bumps twAspect::F0Version:
+ *
+ *  1. mono[i] = mean over channels of chans[c][i] (as the other analyzers).
+ *  2. For each hop k at t = k*hopFrames, the YIN difference function over
+ *     the integration window W = winFrames:
+ *       d(tau) = sum_{j=0}^{W-1} (mono[t+j] - mono[t+j+tau])^2,
+ *     tau in [1, tauMax], tauMax = floor(rate/fminHz), samples past nFrames
+ *     read as 0 (zero-pad).
+ *  3. Cumulative-mean-normalized difference:
+ *       d'(1..tau) = d(tau) * tau / sum_{j=1}^{tau} d(j),  d'(0) = 1.
+ *  4. Pick the FIRST tau in [tauMin, tauMax], tauMin = ceil(rate/fmaxHz),
+ *     with d'(tau) < threshold, then descend while d'(tau+1) < d'(tau)
+ *     (local minimum). If none dips below threshold: UNVOICED.
+ *  5. Parabolic interpolation of d' around the picked tau (clamped to
+ *     +/-1); f0 = rate / tauRefined.
+ *  6. Energy gate: a window whose RMS is below 1e-4 is UNVOICED (silence
+ *     must not produce spurious pitches).
+ *
+ * Result: one float32 per hop, size = ceil(nFrames / hopFrames);
+ * 0 = unvoiced. All accumulation in double; the scan order is fixed, so
+ * the result is bit-deterministic for identical input.
+ * hopFrames, winFrames must be > 0 and fminHz < fmaxHz (both > 0), with
+ * rate > 0; violations return an empty result.
+ */
+struct twF0Params {
+    uint32_t rate      = 0;      // source rate the estimate runs at
+    uint32_t hopFrames = 0;      // caller: sourceRate/100 (10 ms)
+    uint32_t winFrames = 0;      // caller: sourceRate/30 (~33 ms, >= 2/fmin)
+    float    fminHz    = 60.0f;
+    float    fmaxHz    = 1000.0f;
+    float    threshold = 0.15f;  // CMND absolute threshold (YIN classic)
+
+    // Canonical LE params blob for QAF keying (twaspects.h field order).
+    void serialize( std::vector<uint8_t> &out ) const;
+};
+
+std::vector<float> twComputeF0( const float *const *chans, uint32_t nCh,
+                                uint64_t nFrames, const twF0Params &params );
+
 #endif

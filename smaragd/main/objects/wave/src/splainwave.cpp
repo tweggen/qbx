@@ -219,22 +219,31 @@ void SPlainWave::enqueueAnalysis()
     twLoudnessParams lp;
     lp.hopFrames = rate / 100;                  // 10 ms
     lp.winFrames = lp.hopFrames * 2;
+    twF0Params fp;
+    fp.rate      = rate;
+    fp.hopFrames = rate / 100;                  // 10 ms (loudness-aligned)
+    fp.winFrames = rate / 30;                   // ~33 ms >= 2 periods of fmin
 
-    std::vector<uint8_t> opBlob, lpBlob;
+    std::vector<uint8_t> opBlob, lpBlob, fpBlob;
     op.serialize( opBlob );
     lp.serialize( lpBlob );
+    fp.serialize( fpBlob );
     const uint64_t opHash =
         twSidecarStore::hashParams( opBlob.data(), opBlob.size() );
     const uint64_t lpHash =
         twSidecarStore::hashParams( lpBlob.data(), lpBlob.size() );
+    const uint64_t fpHash =
+        twSidecarStore::hashParams( fpBlob.data(), fpBlob.size() );
 
-    // Skip when both aspects already VALIDATE (version-aware — a bare
+    // Skip when all aspects already VALIDATE (version-aware — a bare
     // exists() check would keep files with an outdated aspectVersion forever).
     const bool haveOnsets = twSidecarStore::instance().load(
         content, twAspect::Onsets, twAspect::OnsetsVersion, opHash ) != nullptr;
     const bool haveLoudness = twSidecarStore::instance().load(
         content, twAspect::Loudness, twAspect::LoudnessVersion, lpHash ) != nullptr;
-    if( haveOnsets && haveLoudness ) return;
+    const bool haveF0 = twSidecarStore::instance().load(
+        content, twAspect::F0, twAspect::F0Version, fpHash ) != nullptr;
+    if( haveOnsets && haveLoudness && haveF0 ) return;
 
     if( !analyzing_ )
         analyzing_ = std::make_shared<std::atomic<bool>>( false );
@@ -252,8 +261,8 @@ void SPlainWave::enqueueAnalysis()
     // rule as the analyzing_ flag).
     std::shared_ptr<UiOnsetsSlot> uiSlot = uiOnsets_;
     reval->scheduleAnalysisJob(
-        [wav, flag, uiSlot, project, content, op, lp, opBlob, lpBlob,
-         haveOnsets, haveLoudness, rate]() {
+        [wav, flag, uiSlot, project, content, op, lp, fp, opBlob, lpBlob,
+         fpBlob, haveOnsets, haveLoudness, haveF0, rate]() {
             twSampleSource *s = wav->sampleSource();
             if( s ) {
                 const uint32_t nCh = (uint32_t) s->channels();
@@ -305,6 +314,19 @@ void SPlainWave::enqueueAnalysis()
                     twSidecarStore::instance().store(
                         qi, rms.data(),
                         (uint64_t) rms.size() * sizeof( float ) );
+                }
+                if( !haveF0 ) {
+                    std::vector<float> f0 =
+                        twComputeF0( chans.data(), nCh, n, fp );
+                    qi.aspectId      = twAspect::F0;
+                    qi.aspectVersion = twAspect::F0Version;
+                    qi.recordStride  = sizeof( float );
+                    qi.recordCount   = (uint64_t) f0.size();
+                    qi.hopFrames     = fp.hopFrames;
+                    qi.params        = fpBlob;
+                    twSidecarStore::instance().store(
+                        qi, f0.data(),
+                        (uint64_t) f0.size() * sizeof( float ) );
                 }
             }
             flag->store( false, std::memory_order_release );
