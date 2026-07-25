@@ -7038,3 +7038,49 @@ a diagnosis detour this milestone. Candidate for a guard in the script.
 **W2 is unblocked**: the engine, serialization and undo surfaces for warp
 markers exist; W2 is "only" the editing UI (ticks, drag, snap) on top of
 verbs that already exist in action form.
+
+---
+
+## Proposal 28 W2: the marker UI — warping becomes touchable (2026-07-25)
+
+**What landed.**
+- **Marker actions** (`add-warp-marker` / `move-warp-marker` /
+  `delete-warp-marker`, objects/cut): undoable with exact inverses
+  (add↔delete, move↔move-back); monotonicity violations are REJECTED with a
+  logged reason — never silently repaired (the sanitize-equality gate).
+- **Gestures** (mixer view): the top 10 px of a clip is the marker strip.
+  Press near a handle arms a drag (Ctrl-click deletes); moves mutate live
+  through SCut::setWarpAnchors with neighbor-clamping so monotonicity cannot
+  break mid-drag; release follows the house revert-then-action pattern so
+  the single submitted SMoveWarpMarkerAction captures the true pre-drag
+  value for undo. Double-click adds an identity anchor (pins the current
+  mapping; audible only once dragged), grid-snapped via alignTime.
+- **Painting** (clip renderer): onset ticks (salience ≥ 0.3, the W0-gated UI
+  threshold) in amber at the top edge — source-rate positions rescaled and
+  mapped through the warp map — and cyan full-height guides + handle
+  triangles per anchor. Backed by a lock-free lazy onset cache on SPlainWave
+  (atomic shared_ptr; analysis-job completion invalidates it; a miss caches
+  empty so paints never re-hit the store).
+- **assert-warp-anchor** testkit verb (existence/value/count).
+
+**Gates (all green).** `warp_marker_actions.qxa` — the content-timing gate:
+builds the W1 map MARKER-BY-MARKER (renders byte-equivalent to the W1
+staircase), moves an anchor (192000: 288000→240000) and asserts the
+steepened second half (measured 0.267/0.345/0.419, silence from sec 5 —
+band pinned 0.38..0.46) plus silence relocation, deletes with count assert,
+proves the monotonicity REJECTION via expectReject, and verify-undo.
+12/12 deterministic at workers 8. Full suite **71/71**; layering/logging
+clean.
+
+**Needs the requester's hands (not ears this time):** the visual layer —
+tick/handle rendering, drag feel, add/delete gestures — is untestable
+headless. The underlying actions are gate-proven; the pixels and the feel
+await a session in the app. Onset-SNAP for marker drags (pulling to the
+amber ticks) is deliberately deferred until after that first hands-on
+feedback — grid snap is active.
+
+**Session-coordination note:** a concurrently running sibling Claude
+session's run_all_tests.sh held the exe lock during this milestone; W2 was
+built via object-library targets until it cleared. 2-3 of that session's
+case runs were killed by mistake during diagnosis (its log will show
+spurious failures ~14:47-14:49).

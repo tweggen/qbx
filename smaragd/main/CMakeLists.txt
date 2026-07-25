@@ -110,6 +110,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/stakehelpers.h
     objects/cut/include/app/objects/cut/stakestack.h
     objects/cut/include/app/objects/cut/sunsplitclipaction.h
+    objects/cut/include/app/objects/cut/swarpmarkeractions.h
     objects/cut/src/saddsampleaction.cpp
     objects/cut/src/saddtakeaction.cpp
     objects/cut/src/scut.cpp
@@ -128,6 +129,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/stakehelpers.cpp
     objects/cut/src/stakestack.cpp
     objects/cut/src/sunsplitclipaction.cpp
+    objects/cut/src/swarpmarkeractions.cpp
     # --- app/objects/wave
     objects/wave/include/app/objects/wave/splainwave.h
     objects/wave/include/app/objects/wave/splainwaverndrinline.h

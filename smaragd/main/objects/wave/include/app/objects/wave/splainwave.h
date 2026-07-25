@@ -4,9 +4,11 @@
 
 #include <atomic>
 #include <memory>
+#include <vector>
 
 #include "app/model/sobject.h"
 #include "app/model/sexternfile.h"
+#include "tw/sidecar/twanalyzers.h"   // twOnset (objects/wave has the sidecar grant)
 
 class twComponent;
 class twRandomSource;
@@ -69,6 +71,21 @@ public:
         return analyzing_ && analyzing_->load( std::memory_order_acquire );
     }
 
+    // Proposal 28 W2: onset marks for the clip painter. SOURCE-rate onset
+    // positions (twOnset.pos) plus the sidecar's sourceRate, so the renderer
+    // can rescale to project rate. Read lock-free at paint time (atomic
+    // shared_ptr load), mirroring the isAnalyzing() badge-read pattern.
+    struct UiOnsets {
+        std::vector<twOnset> onsets;
+        uint32_t             sourceRate = 0;   // rate the positions are in
+    };
+    // Lazily populated on the FIRST call from this wave's "onsets" sidecar
+    // (UI thread only). A MISS caches an EMPTY vector so paint never re-hits
+    // the store; the analysis job clears the cache on completion so the next
+    // paint reloads fresh results. Returns null only before construction has
+    // finished wiring the slot (defensive).
+    std::shared_ptr<const UiOnsets> onsetsForUi() const;
+
 
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );
@@ -94,6 +111,16 @@ private:
     QString fileName_;
     SPlainWaveRendererInline *inlineRenderer_;
     std::shared_ptr<std::atomic<bool>> analyzing_;
+
+    // W2 UI onset cache. The SLOT is heap-allocated and shared with the
+    // analysis-job closure by shared_ptr (analysis-lane lifetime rule: a wave
+    // deleted mid-job leaves the closure a valid slot to clear). The pointer
+    // inside is swapped with std::atomic_load/store, so onsetsForUi() (UI
+    // thread) and the job's completion clear never tear.
+    struct UiOnsetsSlot {
+        std::shared_ptr<const UiOnsets> ptr;   // via std::atomic_load/store
+    };
+    std::shared_ptr<UiOnsetsSlot> uiOnsets_;
 };
 
 #endif

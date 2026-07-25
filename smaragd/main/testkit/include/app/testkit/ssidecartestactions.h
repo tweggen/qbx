@@ -32,6 +32,14 @@
 //       succeeds and (when given, -1 = don't check) its record count lies in
 //       [minRecords, maxRecords]. Fails if expectExists and none is found.
 //
+//   <assert-warp-anchor clip="0,0" src="96000" warped="96000" count="2"/>
+//       Resolves the SCut at clip (same addressing as set-render-gate) and
+//       asserts its user warp-anchor list (proposal 28 W1/W2). When `count`
+//       is given (>=0) the anchor count must match. When `src` is present an
+//       anchor with that source position must EXIST; `warped` (>=0) then also
+//       pins its warped value (-1 = existence only). `src` absent = count-only
+//       check. Fails if the clip is missing / not an SCut / any check fails.
+//
 // All are transient/test-support actions: not undoable themselves.
 
 class SSidecarRootAction : public SAction {
@@ -88,6 +96,23 @@ private:
     int64_t minRecords_ = -1;
     int64_t maxRecords_ = -1;
     bool expectExists_ = true;
+};
+
+class SAssertWarpAnchorAction : public SAction {
+public:
+    SAssertWarpAnchorAction() = default;
+
+    QString name() const override { return QStringLiteral("assert-warp-anchor"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QList<int> clipPath_;
+    bool       hasSrc_ = false;   // src attribute present -> check existence/value
+    int64_t    src_    = 0;       // source-domain anchor position
+    int64_t    warped_ = -1;      // -1 = existence only (don't pin the value)
+    int64_t    count_  = -1;      // -1 = don't check the anchor count
 };
 
 #endif // SSIDECARTESTACTIONS_H

@@ -280,3 +280,79 @@ static const bool s_reg_assert_sidecar = (
         []{ return new SAssertSidecarAction; }
     ), true
 );
+
+// ------------------------------------------------------------ assert-warp-anchor
+
+SApplyResult SAssertWarpAnchorAction::apply(SProject *project)
+{
+    if (!project || clipPath_.isEmpty()) {
+        qWarning() << "assert-warp-anchor: no project or empty clip path";
+        return {false, nullptr};
+    }
+
+    SObject *mixer = splacements::rootContainer(project);
+    SLink *link = splacements::placementAt(mixer, clipPath_);
+    if (!link) {
+        qWarning() << "assert-warp-anchor: no clip at path" << pathToString(clipPath_);
+        return {false, nullptr};
+    }
+    SCut *cut = dynamic_cast<SCut*>(&link->getSObject());
+    if (!cut) {
+        qWarning() << "assert-warp-anchor: target is not an SCut at path"
+                   << pathToString(clipPath_);
+        return {false, nullptr};
+    }
+
+    const std::vector<twWarpAnchor> &anchors = cut->getGrainParams().warpAnchors;
+
+    if (count_ >= 0 && (int64_t)anchors.size() != count_) {
+        qWarning() << "assert-warp-anchor: anchor count" << (qulonglong)anchors.size()
+                   << "!= expected" << (qlonglong)count_;
+        return {false, nullptr};
+    }
+
+    if (hasSrc_) {
+        const twWarpAnchor *found = nullptr;
+        for (const twWarpAnchor &a : anchors)
+            if (a.src == src_) { found = &a; break; }
+        if (!found) {
+            qWarning() << "assert-warp-anchor: no anchor at src" << (qlonglong)src_;
+            return {false, nullptr};
+        }
+        if (warped_ >= 0 && found->warped != warped_) {
+            qWarning() << "assert-warp-anchor: anchor src" << (qlonglong)src_
+                       << "warped" << (qlonglong)found->warped
+                       << "!= expected" << (qlonglong)warped_;
+            return {false, nullptr};
+        }
+    }
+
+    qDebug() << "assert-warp-anchor: clip" << pathToString(clipPath_)
+             << "OK (" << (qulonglong)anchors.size() << "anchors)";
+    return {true, nullptr};
+}
+
+void SAssertWarpAnchorAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("clip", pathToString(clipPath_));
+    if (hasSrc_) elem.setAttribute("src", QString::number(src_));
+    elem.setAttribute("warped", QString::number(warped_));
+    elem.setAttribute("count", QString::number(count_));
+}
+
+bool SAssertWarpAnchorAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    clipPath_ = stringToPath(elem.attribute("clip"));
+    hasSrc_   = elem.hasAttribute("src");
+    src_      = elem.attribute("src", "0").toLongLong();
+    warped_   = elem.attribute("warped", "-1").toLongLong();
+    count_    = elem.attribute("count", "-1").toLongLong();
+    return true;
+}
+
+static const bool s_reg_assert_warp_anchor = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-warp-anchor"),
+        []{ return new SAssertWarpAnchorAction; }
+    ), true
+);

@@ -266,7 +266,7 @@ before W1.
 |---|---|---|---|
 | W0 marker-grade onsets v3 | ✅ done | 2026-07-25 | Salience records (a4ee840) + ground-truth harness. All six gates green WITHOUT detector iteration — M4's v2 fix was already marker-grade (clicks F1 0.933, drums 1.000, soft R 0.875/P 1.000, traps 0). Known: 1/8 isolated-impulse hop-grid miss recorded. |
 | W1 user warp maps (engine seam) | ✅ done | 2026-07-25 | twWarpMap authority (no-anchor path bit-identical, pinned); anchors in twGrainParams force vocoder; per-segment transient zones respect user anchors; ten conversion sites map-aware incl. the rebuildReader fast-path gotcha; exact serialization + undoable resize-clip attr. Gates: suite 70/70, paged≡whole under user maps, roundtrip case with analytic RMS staircase 12/12 × {1,8}. Proposal 25 now unfrozen (composes cleanly post-W1). |
-| W2 marker UI | ☐ not started | | |
+| W2 marker UI | ✅ done | 2026-07-25 | Actions (reject-not-repair monotonicity), strip gestures (revert-then-action undo), onset ticks + handles painting, lock-free onset cache, assert-warp-anchor verb. Gate case builds the W1 map marker-by-marker, moves/deletes/rejects, verify-undo; 12/12 × w8; suite 71/71. Visual feel awaits requester hands-on; onset-snap deferred until then. |
 | W3 f0 aspect | ☐ not started | | |
 | W4 formant toggle (opt-in) | ☐ not started | | |
 | W5 conditional reserve | — | | Tripwires only (SIMD/pffft, PGHI). |

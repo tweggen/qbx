@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 28 W2: warp MARKERS built one gesture at a time (the W1 case built
+  the same map with a single resize-clip warpAnchors blob; this one exercises
+  the add/move/delete verbs + assert-warp-anchor and re-pins the SAME content
+  timing, so a regression in the marker verbs shows as wrong musical placement).
+
+  The 4 s ramped sawtooth (RMS(t) = 0.2t/sqrt(3)) is stretched to a 6 s clip
+  (duration 288000). Building anchors "96000:96000|192000:288000": source
+  [0,2)s plays 1:1, source [2,4)s plays at 2x. Because the ramp makes each
+  output second's RMS a fingerprint of WHICH source region landed there, the
+  energy bands (identical to warp_anchors_roundtrip.qxa) pin the map's timing.
+-->
+<SActionScript version="1" name="warp_marker_actions">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Stretch the clip window to 6 s (no anchors yet: 1:1 read past the
+         content end). The markers below re-time the interior. -->
+    <resize-clip clip="0,0" startTime="0" srcStart="0"
+                 duration="288000" loopLength="0" stretch="1"/>
+
+    <!-- Build the W1 roundtrip map marker-by-marker. -->
+    <add-warp-marker clip="0,0" src="96000" warped="96000"/>
+    <add-warp-marker clip="0,0" src="192000" warped="288000"/>
+    <assert-warp-anchor clip="0,0" src="96000" warped="96000" count="2"/>
+    <assert-warp-anchor clip="0,0" src="192000" warped="288000"/>
+
+    <render filename="warp_marker_a.wav" format="wav" quality="10"/>
+    <!-- unwarped first half: source second 1 lands at output second 1 -->
+    <assert-audio-energy filename="warp_marker_a.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.155" maxRms="0.20"/>
+    <!-- 2x half: source [2,2.5)s spans output second 2 -->
+    <assert-audio-energy filename="warp_marker_a.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.225" maxRms="0.29"/>
+    <!-- 2x tail: source [3.5,4)s spans output second 5 -->
+    <assert-audio-energy filename="warp_marker_a.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.38" maxRms="0.48"/>
+    <!-- silence after the warped clip -->
+    <assert-audio-energy filename="warp_marker_a.wav"
+                         startFrame="288000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Move the second marker: 192000 now lands at 240000 (2x -> 1.5x for
+         source [2,4)s). Output is a 5 s span of audio; [5,6)s reads past the
+         content end and goes silent. -->
+    <move-warp-marker clip="0,0" src="192000" newWarped="240000"/>
+    <assert-warp-anchor clip="0,0" src="192000" warped="240000"/>
+
+    <render filename="warp_marker_b.wav" format="wav" quality="10"/>
+    <!-- 1.5x interior: output second 4 reads source [3.33,4.0)s (wide band;
+         the orchestrator pins it after the first run) -->
+    <assert-audio-energy filename="warp_marker_b.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.38" maxRms="0.46"/>
+    <!-- past the content end: silence from output second 5 on -->
+    <assert-audio-energy filename="warp_marker_b.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Delete the first marker; only (192000:240000) remains. -->
+    <delete-warp-marker clip="0,0" src="96000"/>
+    <assert-warp-anchor clip="0,0" count="1"/>
+
+    <!-- Adding (96000:300000) breaks monotonicity vs (192000:240000)
+         (src increases but warped decreases) and MUST be rejected. -->
+    <add-warp-marker clip="0,0" src="96000" warped="300000"
+                     expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

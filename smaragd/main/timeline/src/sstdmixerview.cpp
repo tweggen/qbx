@@ -32,6 +32,7 @@
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
 #include "app/objects/cut/scut.h"
+#include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
 #include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
 #include "app/model/sproject.h"
@@ -934,6 +935,12 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         return;
     }
 
+    // W2: finalize a warp-marker drag (revert + one undoable action).
+    if( markerDragArmed_ ) {
+        finishMarkerDrag();
+        return;
+    }
+
     // Finalize a clip DUPLICATE (Ctrl-drag): the dragged clips are live copies.
     // Drop the previews and submit an undoable SDuplicateClipAction per copy that
     // re-creates it at its final (snapped) position. Several copies land as one
@@ -1486,6 +1493,12 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
         return;
     }
 
+    // W2: an armed warp-marker drag consumes the move.
+    if( markerDragArmed_ && ( ev->buttons() & Qt::LeftButton ) ) {
+        updateMarkerDrag( ev );
+        return;
+    }
+
     // No button held: this is a hover — just update the gesture cursor.
     if( !( ev->buttons() & Qt::LeftButton ) ) {
         updateHoverCursor( ev->pos(), ev->modifiers() );
@@ -1852,8 +1865,143 @@ void SMVActualView::contextMenuEvent( QContextMenuEvent *ev )
 // track — the timeline-canvas counterpart to the same gesture on the left
 // track-control column (see SStdMixerView::eventFilter). A double-click that
 // lands on an existing lane falls through to the base handler.
+
+// ---------------------------------------------------------------------------
+// W2 (proposal 28): warp-marker gestures. The marker STRIP is the top pixels
+// of a clip rect; handles live at each anchor's warped position. Drag mutates
+// live through SCut::setWarpAnchors; release reverts to the press snapshot
+// and submits ONE undoable SMoveWarpMarkerAction (house revert-then-action).
+// ---------------------------------------------------------------------------
+static constexpr int kMarkerStripPx = 10;
+static constexpr int kMarkerHitPx   = 5;
+
+bool SMVActualView::tryBeginMarkerDrag( QMouseEvent *ev )
+{
+    if( !lastClickSLink_ || !lastClickTrack_ ) return false;
+    SCut *cut = dynamic_cast<SCut *>( &lastClickSLink_->getSObject() );
+    if( !cut ) return false;
+    const std::vector<twWarpAnchor> anchors = cut->getGrainParams().warpAnchors;
+    if( anchors.empty() ) return false;
+
+    const QRect vr = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+    if( !vr.isValid() || ev->pos().y() < vr.y()
+        || ev->pos().y() >= vr.y() + kMarkerStripPx ) return false;
+
+    const length_t dur = cut->getDurationBlocking();
+    if( dur <= 0 || vr.width() <= 0 ) return false;
+    const int64_t startOff = cut->getStartOffset().frames();
+
+    for( const twWarpAnchor &a : anchors ) {
+        const int64_t rel = a.warped - startOff;
+        if( rel < 0 || rel >= (int64_t) dur ) continue;
+        const int x = vr.x() + (int)( (double) rel * vr.width() / dur );
+        if( std::abs( ev->pos().x() - x ) > kMarkerHitPx ) continue;
+
+        QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+        path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+        if( ev->modifiers() & Qt::ControlModifier ) {
+            // Ctrl-click a handle: delete the marker (undoable).
+            SApplication::app().submitAction(
+                new SDeleteWarpMarkerAction( path, a.src ) );
+            return true;
+        }
+        markerDragArmed_ = true;
+        markerDragSrc_   = a.src;
+        markerDragPre_   = anchors;
+        markerDragPreStartOffset_ = startOff;
+        return true;
+    }
+    return false;
+}
+
+void SMVActualView::updateMarkerDrag( QMouseEvent *ev )
+{
+    if( !lastClickSLink_ ) return;
+    SCut *cut = dynamic_cast<SCut *>( &lastClickSLink_->getSObject() );
+    if( !cut ) return;
+
+    // Timeline position under the cursor, grid-snapped, made clip-relative,
+    // then into the warped domain via the PRE-drag window (the drag itself
+    // must not move its own reference frame).
+    const int64_t clipRel = (int64_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
+                          - (int64_t) lastClickSLink_->getStartTime();
+    int64_t newWarped = clipRel + markerDragPreStartOffset_;
+
+    // Clamp strictly between the neighbors (monotonicity by construction).
+    int64_t lo = 0, hi = INT64_MAX;
+    for( const twWarpAnchor &a : markerDragPre_ ) {
+        if( a.src < markerDragSrc_ && a.warped + 1 > lo ) lo = a.warped + 1;
+        if( a.src > markerDragSrc_ && a.warped - 1 < hi ) hi = a.warped - 1;
+    }
+    if( lo > hi ) return;
+    if( newWarped < lo ) newWarped = lo;
+    if( newWarped > hi ) newWarped = hi;
+
+    std::vector<twWarpAnchor> edited = markerDragPre_;
+    for( twWarpAnchor &a : edited )
+        if( a.src == markerDragSrc_ ) { a.warped = newWarped; break; }
+    cut->setWarpAnchors( edited );
+    update();
+}
+
+void SMVActualView::finishMarkerDrag()
+{
+    markerDragArmed_ = false;
+    if( !lastClickSLink_ || !lastClickTrack_ ) return;
+    SCut *cut = dynamic_cast<SCut *>( &lastClickSLink_->getSObject() );
+    if( !cut ) return;
+
+    // Read the final dragged position, revert to the press snapshot, then
+    // submit the ONE undoable action that re-applies it (its inverse then
+    // captures the true pre-drag value).
+    int64_t finalWarped = -1;
+    for( const twWarpAnchor &a : cut->getGrainParams().warpAnchors )
+        if( a.src == markerDragSrc_ ) { finalWarped = a.warped; break; }
+    cut->setWarpAnchors( markerDragPre_ );
+    if( finalWarped < 0 ) return;
+
+    QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+    path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+    SApplication::app().submitAction(
+        new SMoveWarpMarkerAction( path, markerDragSrc_, finalWarped ) );
+    update();
+}
+
+bool SMVActualView::tryAddMarkerAt( QMouseEvent *ev )
+{
+    updateLastClickVars( ev->pos() );
+    if( !lastClickSLink_ || !lastClickTrack_ ) return false;
+    SCut *cut = dynamic_cast<SCut *>( &lastClickSLink_->getSObject() );
+    if( !cut ) return false;
+    const QRect vr = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+    if( !vr.isValid() || ev->pos().y() < vr.y()
+        || ev->pos().y() >= vr.y() + kMarkerStripPx ) return false;
+
+    const int64_t clipRel = (int64_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
+                          - (int64_t) lastClickSLink_->getStartTime();
+    const length_t dur = cut->getDurationBlocking();
+    if( clipRel < 0 || clipRel >= (int64_t) dur ) return false;
+    const int64_t warped = clipRel + cut->getStartOffset().frames();
+    // Identity add: the anchor pins the CURRENT mapping at this position, so
+    // adding it changes nothing audibly until the user drags it.
+    const int64_t src =
+        cut->warpedToSourceExact( Fraction( warped ) ).floorToInt();
+    if( src <= 0 ) return false;
+
+    QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+    path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+    SApplication::app().submitAction(
+        new SAddWarpMarkerAction( path, src, warped ) );
+    update();
+    return true;
+}
+
 void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
 {
+    // W2: double-click in a clip's marker strip adds a warp marker.
+    if( ev->button() == Qt::LeftButton && smv_.getModel()
+        && tryAddMarkerAt( ev ) )
+        return;
     if( ev->button() == Qt::LeftButton && smv_.getModel() ) {
         int y = ev->pos().y() - SMV_TIME_RULER_HEIGHT;
         if( y >= 0 ) {
@@ -1925,6 +2073,11 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                 // whole modifier family — Ctrl-stretch, Alt-slip, Ctrl-duplicate
                 // — was unreachable from drag-clip-edge.
                 Qt::KeyboardModifiers modifiers = ev->modifiers();
+                // W2: the marker strip outranks every clip-body gesture.
+                if( tryBeginMarkerDrag( ev ) ) {
+                    update();
+                    return;
+                }
                 bool onBorder = lastClickedStart_ || lastClickedEnd_;
                 if( (modifiers & Qt::ControlModifier) && !onBorder
                     && lastClickLoopMarker_ == 0 ) {

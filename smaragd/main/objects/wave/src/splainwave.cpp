@@ -247,8 +247,12 @@ void SPlainWave::enqueueAnalysis()
     // workers before the project dies (the sanctioned revalCompleted bridge).
     std::shared_ptr<twWavInput> wav = cpWave_;
     std::shared_ptr<std::atomic<bool>> flag = analyzing_;
+    // Share the UI onset-cache slot so the job can invalidate it on completion
+    // (a wave deleted mid-job leaves the closure a valid slot — same lifetime
+    // rule as the analyzing_ flag).
+    std::shared_ptr<UiOnsetsSlot> uiSlot = uiOnsets_;
     reval->scheduleAnalysisJob(
-        [wav, flag, project, content, op, lp, opBlob, lpBlob,
+        [wav, flag, uiSlot, project, content, op, lp, opBlob, lpBlob,
          haveOnsets, haveLoudness, rate]() {
             twSampleSource *s = wav->sampleSource();
             if( s ) {
@@ -304,6 +308,12 @@ void SPlainWave::enqueueAnalysis()
                 }
             }
             flag->store( false, std::memory_order_release );
+            // Invalidate the UI onset cache so the next paint reloads the
+            // freshly written results (null = "not loaded"; onsetsForUi()
+            // re-reads the sidecar on the next call).
+            if( uiSlot )
+                std::atomic_store( &uiSlot->ptr,
+                                   std::shared_ptr<const UiOnsets>() );
             // Queued to the UI thread: badge repaint via the existing
             // captureRevalidated() -> update() connection.
             QMetaObject::invokeMethod( project, "notifyCaptureRevalidated",
@@ -325,11 +335,59 @@ SPlainWave::~SPlainWave()
     }
 }
 
-SPlainWave::SPlainWave( SProject *project ) 
+SPlainWave::SPlainWave( SProject *project )
     : SExternFile( project ),
       fileName_( "" ),
-      inlineRenderer_( NULL )
-{    
+      inlineRenderer_( NULL ),
+      uiOnsets_( std::make_shared<UiOnsetsSlot>() )
+{
+}
+
+std::shared_ptr<const SPlainWave::UiOnsets> SPlainWave::onsetsForUi() const
+{
+    if( !uiOnsets_ ) return nullptr;            // pre-ctor defensive
+    if( auto cached = std::atomic_load( &uiOnsets_->ptr ) )
+        return cached;                          // hit (possibly an empty vector)
+
+    // First call (or post-analysis invalidation): read the "onsets" sidecar
+    // ONCE. A miss caches an empty result so paint never re-hits the store.
+    // Params-agnostic (loadAny): the import job chose the detector params.
+    auto fresh = std::make_shared<UiOnsets>();
+    if( cpWave_ ) {
+        const twContentHash content = cpWave_->contentHash();
+        if( !content.isNull() ) {
+            auto reader = twSidecarStore::instance().loadAny(
+                content, twAspect::Onsets, twAspect::OnsetsVersion );
+            if( reader && reader->info().recordStride == 12
+                && reader->info().recordCount > 0 ) {
+                const uint64_t n = reader->info().recordCount;
+                std::vector<uint8_t> raw( (size_t) n * 12 );
+                if( reader->readRecords( raw.data(), 0, n ) ) {
+                    fresh->sourceRate = reader->info().sourceRate;
+                    fresh->onsets.reserve( (size_t) n );
+                    // v3 record: PACKED 12-byte { u64 pos, f32 salience } LE —
+                    // the same layout the analysis job writes and the vocoder
+                    // parses (twgrainsource.cc).
+                    for( uint64_t i = 0; i < n; i++ ) {
+                        const uint8_t *r = raw.data() + (size_t) i * 12;
+                        uint64_t pos = 0;
+                        for( int b = 7; b >= 0; b-- )
+                            pos = ( pos << 8 ) | r[b];
+                        uint32_t sb = 0;
+                        for( int b = 3; b >= 0; b-- )
+                            sb = ( sb << 8 ) | r[8 + b];
+                        twOnset o;
+                        o.pos = pos;
+                        memcpy( &o.salience, &sb, 4 );
+                        fresh->onsets.push_back( o );
+                    }
+                }
+            }
+        }
+    }
+    std::shared_ptr<const UiOnsets> published = std::move( fresh );
+    std::atomic_store( &uiOnsets_->ptr, published );
+    return published;
 }
 
 SLink *SPlainWave::instantiateFromDomElement( 

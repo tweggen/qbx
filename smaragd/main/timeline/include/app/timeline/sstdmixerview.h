@@ -3,7 +3,10 @@
 #define _SSTDMIXERVIEW_H
 
 #include <qwidget.h>
+#include <vector>
+
 #include "tw/core/twfraction.h"
+#include "tw/core/twwarpmap.h"
 #include "app/model/sobjectrenderer.h"
 //#include <qptrvector.h>
 #include <qtoolbutton.h>
@@ -220,6 +223,19 @@ private:
     bool clipDragIsSlip_ = false;
     bool clipDragIsStretch_ = false;
     bool clipDragIsLoop_ = false;
+    // W2 warp-marker drag (proposal 28): armed by a press in the marker
+    // strip (top pixels of a clip) near a handle; the drag mutates live via
+    // SCut::setWarpAnchors, release reverts to the press snapshot and
+    // submits one undoable SMoveWarpMarkerAction (the house revert-then-
+    // action pattern).
+    bool                      markerDragArmed_ = false;
+    int64_t                   markerDragSrc_   = 0;
+    int64_t                   markerDragPreStartOffset_ = 0;
+    std::vector<twWarpAnchor> markerDragPre_;
+    bool tryBeginMarkerDrag( QMouseEvent *ev );
+    void updateMarkerDrag( QMouseEvent *ev );
+    void finishMarkerDrag();
+    bool tryAddMarkerAt( QMouseEvent *ev );
     bool clipDragIsLoopMarker_ = false;   // grabbed a loop marker (re-tile)
     // Left edge, upper half: extend/shrink the clip BACKWARDS in whole loop
     // cycles. Whole cycles is not a UI nicety — twLoopMap sends clip-relative p

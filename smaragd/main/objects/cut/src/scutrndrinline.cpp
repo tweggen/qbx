@@ -1,13 +1,16 @@
 
 #include <stdio.h>
+#include <cmath>
 #include <qpainter.h>
 #include <qobject.h>
 #include <QFontMetrics>
 #include <QGuiApplication>
 
 #include "app/model/slink.h"
+#include "app/model/sproject.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/scutrndrinline.h"
+#include "app/objects/wave/splainwave.h"
 #include "app/objects/wave/swaveformdraw.h"
 
 namespace {
@@ -113,6 +116,82 @@ void drawPitchBadge( QPainter &p, const QRect &visibRect, double cents )
 }
 }
 
+namespace {
+// Salience floor for painting onset ticks. The W0 ground-truth harness
+// (analyzers_test) tunes the v3 detector so that AT THIS THRESHOLD the
+// strong-attack corpus clears F >= 0.9 while steady tone and the crescendo
+// trap fire ZERO UI-tier marks — see proposal 28 §W0. The vocoder's
+// keyframes ignore salience (they take every onset); this filter is the
+// marker UI's alone.
+constexpr float kUiSalience = 0.3f;
+
+// Overlay the salience-filtered onset ticks (amber, top edge) and the user
+// warp-marker handles (cyan guide line + downward triangle) on a clip. All
+// positions run through the clip's EXACT warp map (piecewise when anchors
+// exist, scalar otherwise). Positions map linearly clipDuration -> width; a
+// non-positive duration skips everything.
+void drawWarpMarkers( QPainter &p, const QRect &visibRect, SCut &cut )
+{
+    const int64_t clipDuration = (int64_t) cut.getDuration();
+    if( clipDuration <= 0 ) return;
+    const int64_t startOff = cut.getStartOffset().frames();
+    const int64_t w        = (int64_t) visibRect.width();
+
+    auto relToX = [&]( int64_t rel ) -> int {
+        return visibRect.x() + (int)( rel * w / clipDuration );
+    };
+
+    // --- onset ticks: only for sample-backed SPlainWave content ---
+    if( SPlainWave *pw = dynamic_cast<SPlainWave *>( &cut.getContent() ) ) {
+        std::shared_ptr<const SPlainWave::UiOnsets> ui = pw->onsetsForUi();
+        SProject *proj = cut.getProjectSafe();
+        if( ui && !ui->onsets.empty() && ui->sourceRate > 0 && proj ) {
+            const double projRate = (double) proj->getSRate();
+            const double srcRate  = (double) ui->sourceRate;
+            // A looping clip draws ticks in the FIRST repetition only: the
+            // warp map addresses one repetition of source; later tiles would
+            // need a modular remap the paint path deliberately does not do.
+            const int64_t firstRepEnd = cut.isLooping()
+                ? cut.getLoopLength().frames() : clipDuration;
+            const QColor amber( 255, 200, 60, 180 );
+            for( const twOnset &o : ui->onsets ) {
+                if( o.salience < kUiSalience ) continue;
+                const int64_t projPos = (int64_t) std::llround(
+                    (double) o.pos * projRate / srcRate );
+                const int64_t warped =
+                    cut.sourceToWarpedExact( Fraction( projPos ) ).floorToInt();
+                const int64_t rel = warped - startOff;
+                if( rel < 0 || rel >= firstRepEnd ) continue;
+                p.fillRect( relToX( rel ), visibRect.y(), 1, 4, amber );
+            }
+        }
+    }
+
+    // --- user warp-marker handles (any content kind) ---
+    const std::vector<twWarpAnchor> &anchors = cut.getGrainParams().warpAnchors;
+    if( !anchors.empty() ) {
+        p.save();
+        for( const twWarpAnchor &a : anchors ) {
+            const int64_t rel = a.warped - startOff;
+            if( rel < 0 || rel >= clipDuration ) continue;
+            const int x = relToX( rel );
+            p.setPen( QColor( 80, 200, 255, 150 ) );      // translucent guide
+            p.drawLine( x, visibRect.y(),
+                        x, visibRect.y() + visibRect.height() );
+            p.setPen( Qt::NoPen );
+            p.setBrush( QColor( 80, 200, 255 ) );         // opaque handle
+            const QPoint tri[3] = {
+                QPoint( x - 3, visibRect.y() ),
+                QPoint( x + 3, visibRect.y() ),
+                QPoint( x,     visibRect.y() + 5 )
+            };
+            p.drawPolygon( tri, 3 );
+        }
+        p.restore();
+    }
+}
+}
+
 /**
  * The actual cut renderer function.
  * Non-looping cuts draw their content once. A looping cut tiles its loop segment
@@ -207,6 +286,9 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
             }
         }
     }
+
+    // Onset ticks + user warp-marker handles over the waveform (proposal 28 W2).
+    drawWarpMarkers( p, visibRect, cut );
 
     // Container cuts show their asset name (bottom-right).
     if( container && !cut.getSName().isEmpty() ) {
