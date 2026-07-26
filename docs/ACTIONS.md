@@ -32,7 +32,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `grid-disable` | SGridAction | actions/src/sgridaction.cpp | (none) |
 | `grid-enable` | SGridAction | actions/src/sgridaction.cpp | (none) |
 | `grid-toggle` | SGridAction | actions/src/sgridaction.cpp | (none) |
-| `insert-plugin` | SInsertPluginAction | objects/track/src/sinsertpluginaction.cpp | `trackPath`, `slotIndex` = "0", `format`, `uid`, `name`, `vendor`, `nIn` = "0", `nOut` = "0" |
+| `insert-plugin` | SInsertPluginAction | objects/track/src/sinsertpluginaction.cpp | `trackPath`, `slotIndex` = "0", `format`, `uid`, `name`, `vendor`, `path` = "", `nIn` = "0", `nOut` = "0" |
 | `load-project` | SLoadProjectAction | persistence/src/sloadprojectaction.cpp | `path` = "" |
 | `metronome-disable` | SMetronomeAction | actions/src/smetronomeaction.cpp | (none) |
 | `metronome-enable` | SMetronomeAction | actions/src/smetronomeaction.cpp | (none) |
@@ -44,7 +44,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `place-recording` | SPlaceRecordingAction | objects/cut/src/splacerecordingaction.cpp | `trackPath`, `filePath`, `timePos` = "0" (plans takes for covered columns + plain cuts for gaps; one atomic composite) |
 | `remove-asset` | SRemoveAssetAction | objects/mixer/src/sremoveassetaction.cpp | `assetName` |
 | `remove-from-selection` | SRemoveFromSelectionAction | selection/src/sremovefromselectionaction.cpp | `paths` = "" |
-| `remove-plugin` | SRemovePluginAction | objects/track/src/sremovepluginaction.cpp | `trackPath`, `slotIndex` = "0", `format`, `uid`, `name`, `vendor`, `nIn` = "0", `nOut` = "0" |
+| `remove-plugin` | SRemovePluginAction | objects/track/src/sremovepluginaction.cpp | `trackPath`, `slotIndex` = "0", `format`, `uid`, `name`, `vendor`, `path` = "", `nIn` = "0", `nOut` = "0" |
 | `remove-sample` | SRemoveSampleAction | objects/cut/src/sremovesampleaction.cpp | `trackIndex` = "0", `clipIndex` = "0", `filePath` = "", `timePos` = "0" |
 | `remove-take` | SRemoveTakeAction | objects/cut/src/sremovetakeaction.cpp | `clip`, `take` = "0", `thenActivate` = "-2" |
 | `remove-track` | SRemoveTrackAction | objects/mixer/src/sremovetrackaction.cpp | `index` = "0" |

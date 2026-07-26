@@ -34,6 +34,14 @@ private:
     QString uid_;
     QString pluginName_;
     QString vendor_;
+    // The module file. Without it a format="clap" descriptor cannot be
+    // instantiated at all — the registry loads the DSO by path — so an action
+    // script (and undo of a remove) had no way to name a real plugin. A
+    // RELATIVE path resolves against the project's sample base dir (the .qxa's
+    // own directory) and then against the application directory, which is what
+    // lets a test case reference the in-repo twtestclap fixture without knowing
+    // the build layout.
+    QString path_;
     uint16_t nIn_, nOut_;
 };
 

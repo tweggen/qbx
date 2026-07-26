@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_stereo_chain">
+
+  <!-- Proposal 08 M3: a 2-in/2-out plugin in the signal path of a stereo track.
+       This is the headless gate for the two defects M3 closed:
+
+         * twPluginInsert::freezePage used to write INTERLEAVED stereo into a
+           page the engine reads as MONO (twOutputPage is one mono channel);
+         * a 2-in plugin only ever got bus audio on input 0 and SILENCE on
+           input 1, because STrack built one twPluginChain per bus with
+           nBusses == 1 and twPluginChain::rebuildWiring() only wired
+           port < nBusses_.
+
+       The plugin is the in-repo CLAP fixture's second entry point,
+       tw.test.clap.stereoskew (2 in / 2 out). Its DEFAULT behaviour — all a qxa
+       script can reach, since setting a parameter or restoring a state chunk is
+       M5/M4 work — is deliberately CROSS-CHANNEL:
+
+           out[0] = in[0] * 0.5 + in[1]
+           out[1] = in[1] * 0.5
+
+       A track feeds both buses the same mono material, so a correct chain puts
+       channel 0 at 1.5x the unprocessed level. The three outcomes are far apart:
+
+           1.5x  correct  (both buses wired, plugin in the path)
+           1.0x  the plugin is not in the signal path at all
+           0.5x  input 1 is silent  <- the pre-M3 bug
+
+       NOTE on channel 1. The offline render still collapses the graph's buses to
+       ONE mono page and duplicates it (tw303a/render/src/render_session.cc:
+       "bufR[i] = sample;  // Duplicate to stereo (temporary; proper
+       multi-channel TBD)"), and playback does the same. So bus 1's audio cannot
+       reach a file today and the file's two channels are equal BY CONSTRUCTION —
+       which is why the cross-channel term above exists, and why the channel-1
+       band below is wide. When the sink becomes genuinely multi-channel, tighten
+       channel 1 to [0.030, 0.037] (0.5x) and channel 0 stays as it is. That
+       distinctness IS gated today, at engine level, by plugins_test's
+       "the two buses are genuinely different audio".
+
+       path="twtestclap.clap" is relative: SInsertPluginAction resolves it
+       against this .qxa's directory first and then against the application
+       directory, and the build copies the fixture next to the binary — so it
+       works whatever the build directory is called. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="/mixer/0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <render filename="plugin_stereo_chain.wav" format="wav" quality="10"/>
+
+    <!-- The load-bearing assertion. Unprocessed, this second of the sawtooth
+         renders at RMS ~0.0667; through the fixture it must be ~0.1000. The band
+         excludes both 0.0667 (no plugin) and 0.0333 (silent input 1). -->
+    <assert-audio-energy filename="plugin_stereo_chain.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- Channel 1 must carry real audio, whether it is bus 1 (0.5x, once the
+         sink is multi-channel) or today's duplicate of bus 0 (1.5x). -->
+    <assert-audio-energy filename="plugin_stereo_chain.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="1" minRms="0.028" maxRms="0.110"/>
+
+    <!-- A quiet stretch late in the sawtooth, to prove the relation holds across
+         pages (a 65536-frame page boundary falls inside the clip, so this also
+         exercises the processor's page-continuity bookkeeping). -->
+    <assert-audio-energy filename="plugin_stereo_chain.wav"
+                         startFrame="144000" frameCount="48000"
+                         channel="0" minRms="0.001" maxRms="0.900"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

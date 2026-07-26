@@ -2,13 +2,22 @@
 
 Purpose: the plugin ABI (twPlugin: prepare/process/reset, params, state
 blobs), descriptors, the registry, the SCANNER (search paths, on-disk cache,
-out-of-process probe), the format backends, and the hosting chain components
-(twPluginChain, twPluginInsert). twPassThrough is the built-in test plugin (a
-bit-crusher); twClapPlugin is the CLAP backend (proposal 08 M1); the scanner is
-proposal 08 M2.
+out-of-process probe), the format backends, and the hosting components
+(twPluginChain, twPluginSlotProcessor, twPluginInsert). twPassThrough is the
+built-in test plugin (a bit-crusher); twClapPlugin is the CLAP backend
+(proposal 08 M1); the scanner is proposal 08 M2; the processor/tap split is
+proposal 08 M3.
+
+Shape of a slot (proposal 08 M3). ONE twPluginSlotProcessor per slot (plain
+C++, not a twComponent) owns the twPlugin instance(s), the bypass flag, the
+prepare() state, the block chunking, the channel-mismatch mapping and a small
+(startPos, len, stamp) -> all-bus page cache. Around it sit N twPluginInsert
+TAPS, one per track bus, each strictly 1 in / 1 out. The taps are what the
+graph sees; channel coherence is what the processor provides. STrack builds one
+twPluginChain per bus, and each chain holds that bus's taps in slot order.
 
 Public headers: twplugin.h, twplugindescriptor.h, twpluginsearchpaths.h,
-twpluginchain.h, twplugininsert.h.
+twpluginchain.h, twplugininsert.h, twpluginslotproc.h.
 
 Depends on: tw/core, tw/graph. Forbidden: app headers, devices/sinks.
 
@@ -35,19 +44,22 @@ Invariants:
    the same shape as the ALSA/WASAPI/CoreAudio source lists.
 5. The host declares the block size, and honours it. Pages are
    twOutputPage::FRAME_CAPACITY (65536) frames, which no real plugin accepts
-   in one call. twPluginInsert::kChunkFrames (4096) is what prepare() promises
-   and what freezePage()/calcOutputTo() actually hand to process(), advancing
-   through the same de-interleaved scratch so plugin DSP state carries across
-   chunks exactly as it would across callbacks in a live host.
+   in one call. twPluginSlotProcessor::kChunkFrames (4096, re-exported as
+   twPluginInsert::kChunkFrames) is what prepare() promises and what the
+   processor's render actually hands to process(), advancing through the same
+   de-interleaved scratch so plugin DSP state carries across chunks exactly as
+   it would across callbacks in a live host.
 6. Preview freezes do not touch the plugin. freezePreviewPage() renders the
    graph at a REDUCED rate (1 kHz) for a waveform envelope; honouring that in
    twPluginInsert would re-prepare() — for CLAP, re-activate and reallocate —
    on every redraw, from a revalidator worker, possibly while playback renders
    the same instance. A freeze whose sampleRate differs from env.getSRate() is
-   therefore treated as a preview and copies input to output. The
-   authoritative path always passes env.getSRate()
+   therefore treated as a preview: the tap forwards its upstream page and never
+   reaches the processor. The authoritative path always passes env.getSRate()
    (twComponent::freezePageWithInputs), which is what makes that comparison
-   exact rather than a heuristic.
+   exact rather than a heuristic. The preview page is deliberately NOT entered
+   into the component's outputPages_ either -- it is at the wrong rate for any
+   other consumer.
 7. CLAP parameter edits never call the plugin from the editing thread.
    twClapPlugin::setParam() updates a host-side mirror (what getParam() reads)
    and pushes into a lock-free single-producer ring that process() drains into
@@ -100,6 +112,52 @@ Invariants:
    and is EXPECTED to die on bad input. Observed, not theoretical: the M2
    verification pass raised three of these boxes on the user's desktop.
 
+13. A TAP NEVER HOLDS ITS OWN COMPONENT MUTEX ACROSS THE SHARED RENDER, and
+   pullUpstreamPage() takes it only to SNAPSHOT the producer. The first tap to
+   ask for a page renders every bus while holding the PROCESSOR mutex, and it
+   gathers the other buses through its sibling taps' pullUpstreamPage(). If a
+   tap held its own mutex() across pageFor() -- or if pullUpstreamPage() kept it
+   while calling into the producer -- then bus 0 (processor mutex held, wanting
+   bus 1's mutex) would deadlock against bus 1 (its own mutex held, wanting the
+   processor mutex). So: snapshot the producer shared_ptr under a brief lock,
+   RELEASE it, then requestPage(); and do the shared render from renderFrames(),
+   which twComponent::freezePage_nolock calls with no component lock held. Lock
+   order is always downstream slot -> upstream slot, which is acyclic because
+   the chain is. This is exactly the failure class this repo has hit before (the
+   input-cursor freeze race, the split-repaint vtable crash), which is why
+   plugins_test freezes two taps of one slot CONCURRENTLY -- 120 rounds, with a
+   forced re-render each round -- under a 60-second watchdog that aborts loudly
+   instead of hanging the suite.
+14. Page pulls go through requestPage(), never raw freezePage(), and taps
+   inherit the base planPage(). requestPage() is the proposal-19 Phase 2a dedup
+   front door: two drivers (revalidation worker, playback readahead, offline
+   render) demanding the same producer page collapse to one render. The base
+   planPage() gives each tap exactly one grid-aligned dep -- its own bus's
+   producer -- which is what the scheduler binds; the OTHER buses are gathered
+   inside the render and recorded as plan misses that fall back to the legacy
+   pull (correct, just not pre-scheduled). A tap must not override planPage() to
+   paper over that.
+15. Anything that changes what process() would produce must move the cache key
+   AND stale the taps' pages. twPluginSlotProcessor::bumpParamEpoch() does both
+   (bypass and state-chunk changes route through it), because there are TWO
+   caches in front of a plugin edit: the processor's all-bus page cache and each
+   tap's twComponent page cache. Its key is paramEpoch_ plus the SUM of every
+   tap's contentEpochNow(); both counters are monotonic, so the sum is too and
+   cannot alias -- and including the taps' epochs is what makes an UPSTREAM edit
+   (a clip moved) miss the processor cache as well. The app still owns the
+   downstream path (SObject::invalidateRenderPath()).
+16. The channel-mismatch mapping is derived ONCE, from the plugin's OWN
+   reported layout, and never guessed per page. setBusCount() instantiates one
+   plugin first and reads ioLayout() from it, because a descriptor from a stale
+   project file or an out-of-date scan cache may disagree. N->N is Direct (one
+   instance); 1->1 on N buses is DualMono (N instances -- which is why the
+   processor takes an instantiation FACTORY, not one instance); 2->2 on one bus
+   is MonoFold (feed both inputs, average the outputs); anything else is
+   Unsupported -- the slot loads TRANSPARENT and logs ONCE per slot, never once
+   per page. twPluginSlotState { Active, Missing, Unsupported } is declared with
+   all three values from M3 so that M4 adds persistence to an existing type; M3
+   itself produces Active, Unsupported, and Missing when instantiation fails.
+
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears
 it), cache reload in a fresh registry instance, refusal of a cache from another
@@ -110,7 +168,12 @@ to be installed. A module that HANGS (the Timeout record) has no cheap fixture;
 it shares the probe's kill path and is covered by the manual pass.
 
 Also `ctest -R plugins_test` — the built-in plugin's descriptor /
-param / state surface, plus the real CLAP path (module load, factory,
+param / state surface; the M3 channel-mismatch table (Direct / DualMono with
+its instance count / MonoFold's average / Unsupported staying transparent);
+real audio through a two-bus slot (each bus carrying ITS OWN upstream, the two
+buses genuinely different, bypass and parameter edits audible on the next
+freeze, a preview freeze not re-preparing the plugin); the concurrent two-tap
+deadlock gate of invariant 13; plus the real CLAP path (module load, factory,
 activate, process, the parameter-event round trip, the state frame's version
 tolerance, and 65536-frame pages arriving at the plugin as 4096-frame blocks).
 That last one runs against `tests/twtestclap.c`, an in-repo 2-in/2-out CLAP
@@ -119,10 +182,22 @@ handed more frames than the host declared, and in "report block size" mode
 writes the frame count it saw into its output — so a host chunking regression
 fails loudly instead of silently. `tools/clap_probe.cc` (target `clap_probe`,
 not a gate) loads a real third-party .clap with the production loader and
-prints the factory contents. Also qxa.render_sawtooth_with_effects (chain in
+prints the factory contents. Also qxa.plugin_stereo_chain (a 2-in/2-out CLAP in a
+stereo track's signal path, gated on the cross-channel level relation),
+qxa.plugin_remove_and_undo (removing a slot really does take the plugin OUT of
+the audio, and undo puts it back) and qxa.render_sawtooth_with_effects (chain in
 the signal path); the plugin browser lists exactly the registry contents.
 
 Known debt:
+- THE SINK IS STILL MONO, and that is not M3's doing. The graph carries N buses
+  correctly end to end, but both output stages collapse to one page and
+  duplicate it: RenderSession ("bufR[i] = sample;  // Duplicate to stereo
+  (temporary; proper multi-channel TBD)") and AudioEngine's page pull. Bus 1's
+  audio therefore cannot reach a file or a device yet, so proposal 08's "hear it
+  in stereo" is blocked by tw_render / tw_playback, NOT by the plugin layer.
+  plugin_stereo_chain.qxa works around it with a fixture whose channel 0 depends
+  on channel 1's INPUT, which is enough to prove input 1 is wired; per-bus
+  DISTINCTNESS is gated at engine level in plugins_test instead.
 - Only CLAP is scanned. `formatForFile()` in twpluginsearchpaths.cc maps
   `*.clap` and nothing else ON PURPOSE: a `.vst3` found before M6 lands would
   be probed, fail, and be cached as a permanent failure that M6 would then have
@@ -137,14 +212,23 @@ Known debt:
 - The Timeout record is written by a code path no automated test reaches: it
   needs a module that hangs inside clap_entry.init(), which no in-repo fixture
   provides.
-- The multi-bus signal path is still broken as recorded in
-  `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`: twPluginChain wires only
-  `port < nBusses_`, so a 2-in plugin on a 1-bus chain sees silence on input
-  1, and twPluginInsert::freezePage writes INTERLEAVED stereo into a page the
-  engine reads as mono. M3 replaces the insert with a per-bus tap over a
-  shared twPluginSlotProcessor.
-- Parameter and bypass changes do not invalidate pages, so an edit is
-  inaudible until something else stales the cache (M3).
+- The processor keeps only twPluginSlotProcessor::kCacheEntries (2) rendered
+  pages. That covers what it exists for -- every tap of the slot asking for the
+  SAME page -- plus one slot of slack. Two demands for DIFFERENT pages
+  alternating will thrash it and, because the plugin is stateful, reset the
+  plugin on every position discontinuity. Correct, just slow.
+- twPluginChain::calcOutputTo() holds pluginsMutex_ across the whole pull. Safe
+  ONLY because the realtime audio callback never renders (twRtThreadGuard); if
+  that ever changes it becomes a priority inversion on the audio thread. The
+  comment at the lock says so.
+- twPluginInsert::renderFrames() learns its page position from seekTo(), which
+  twComponent::freezePage_nolock calls immediately before it, inside the
+  component's cursorMutex_. Exact, but a side channel: renderFrames' signature
+  carries no position.
+- A tap always reports a full page of valid frames, exactly as the pre-M3
+  insert did. The chain is not the length authority (the render session and the
+  project duration are), and a plugin may legitimately produce tail past its
+  input -- but it does mean a chain never signals "ran dry".
 - CLAP's [main-thread] annotation on activate() is honoured for the common
   case (twPluginInsert prepares in its constructor, which runs on the UI
   thread) but not for a later project sample-rate change, which re-prepares

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_remove_and_undo">
+
+  <!-- Regression, found while verifying proposal 08 M3: remove-plugin used to
+       change the MODEL and leave the AUDIO untouched.
+
+       SPluginChain::childEvent read the removed slot's index with
+       `children().indexOf(child)`. Qt delivers ChildRemoved AFTER the child is
+       already out of children(), so that is always -1 — the guarded branch never
+       ran, slotRemoved was never emitted, STrack::onPluginSlotRemoved never
+       called twPluginChain::removePlugin, and the slot's per-bus taps stayed
+       wired into the DSP chain forever. A render after a removal came out
+       byte-identical to the processed one, and undo then compounded it.
+
+       The fixture is the same cross-channel CLAP plugin as
+       plugin_stereo_chain.qxa: 1.5x with the plugin in the path, 1.0x without.
+       Three renders, so the transitions are what is being asserted, not one
+       absolute level:
+
+         with plugin   RMS ~0.1000  (band 0.090 .. 0.110)
+         removed       RMS ~0.0667  (band 0.060 .. 0.073)   <- the bug
+         undone        RMS ~0.1000  (band 0.090 .. 0.110)
+
+       The "removed" render also gates the page invalidation: the slot removal
+       must stale the chain's cached pages, or the second render serves the first
+       one's audio. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="/mixer/0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <render filename="plugin_rm_with.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="plugin_rm_with.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+
+    <render filename="plugin_rm_without.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="plugin_rm_without.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.073"/>
+
+    <undo count="1"/>
+
+    <render filename="plugin_rm_undone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="plugin_rm_undone.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

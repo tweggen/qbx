@@ -7523,3 +7523,138 @@ interleaved-stereo-into-a-mono-page bug and page invalidation on param/bypass
 (M3 — a real stereo plugin still sounds wrong, as expected); `SPluginSlot`
 serialization and the missing-plugin placeholder (M4); the parameter editor and
 the three missing actions (M5); VST3 (M6); macOS (M7).
+
+## 2026-07-26 — Proposal 08 M3 EXECUTED: the stereo-coherent signal path (processor + per-bus taps)
+
+`plan/todo/08_PLUGIN_HOSTING_EXECUTION.md` M3. Closes the two signal-path
+defects that made a real stereo plugin sound wrong, and the invalidation gap
+that made a bypass or parameter edit inaudible.
+
+**Why a split at all.** The frozen-page model is one MONO page per component
+(`twComponent::freezePage_nolock` renders `idx = 0` only), so N parallel mono
+wires must be N parallel component instances. A stereo-linked plugin, though,
+has to see all its channels in ONE `process()` call. Those two facts cannot both
+live in one component — which is why the old `twPluginInsert::freezePage`
+interleaved L/R into a page the engine then read as mono, and why `STrack`
+building one `twPluginChain` per bus with `nBusses = 1` left a 2-in plugin's
+second input wired to nothing (`rebuildWiring` only ever touched
+`port < nBusses_`). So a slot is now:
+
+- **`twPluginSlotProcessor`** (new, `plugins/{include/tw/plugins,src}/twpluginslotproc.{h,cc}`)
+  — plain C++, deliberately not a `twComponent`. Owns the `twPlugin`
+  instance(s), the bypass flag, `prepare()`, the 4096-frame chunking, the
+  channel-mismatch mapping, and a two-entry `(startPos, len, stamp)` all-bus
+  page cache. The first tap to ask renders every bus; the rest hit the cache.
+- **`twPluginInsert`** — now strictly a 1-in/1-out **bus tap** holding
+  `shared_ptr<twPluginSlotProcessor>` + `busIndex_`. It overrides `freezePage`
+  only to keep the preview bypass (CONTRACT 6) and then DELEGATES to
+  `twComponent::freezePage`, so it inherits the page cache, the epoch stamping,
+  the RT-thread guard, the stale-predecessor fallback and the readiness gate —
+  none of which the hand-rolled M1 override had. The render itself is
+  `renderFrames()`, which the base calls with no component lock held.
+- **`twPluginChain`** — no longer threads pages through the list by hand (its
+  loop also mis-used the `previousPage` argument as "the input page", conflating
+  a temporal predecessor with an upstream producer). Each tap is wired to its
+  predecessor, so the chain asks the LAST tap through `requestPage()` and the
+  whole chain walks itself. Every path now snapshots `plugins_` and releases
+  `pluginsMutex_` before pulling.
+
+**Channel-mismatch policy** (proposal 08 §Layer 3), derived once from the
+plugin's OWN `ioLayout()` — not from a descriptor a stale project or an
+out-of-date scan cache may disagree with: `N→N` Direct (one instance); `1→1` on
+N buses DualMono (N instances — which is why the processor takes an
+instantiation FACTORY, not one instance); `2→2` on one bus MonoFold (feed both
+inputs, average the outputs); anything else `Unsupported` — transparent, logged
+ONCE per slot. `enum class twPluginSlotState { Active, Missing, Unsupported }`
+lands now with all three values so M4 adds persistence to an existing type.
+
+**Two hard invariants, written into `plugins/CONTRACT.md` as 13 and 14, and
+tested.** (13) A tap never holds its own component mutex across the shared
+render, and `pullUpstreamPage()` takes it only to snapshot the producer before
+releasing and calling `requestPage()`. Otherwise bus 0 — processor mutex held,
+gathering bus 1 — deadlocks against bus 1's own freeze waiting for that same
+processor mutex. This is the failure class of the input-cursor freeze race and
+the split-repaint vtable crash, so `plugins_test` freezes two taps of one slot
+CONCURRENTLY, 120 rounds with a forced re-render each round, under a 60-second
+watchdog that aborts loudly instead of hanging the suite. (14) Pulls go through
+`requestPage()`, never raw `freezePage()`, and taps inherit the base
+`planPage()` so the scheduler binds their single upstream dep.
+
+**Invalidation** (CONTRACT 15). There are TWO caches in front of a plugin edit,
+so `bumpParamEpoch()` moves both: the processor's cache key and every tap's
+`contentEpoch`. The key is `paramEpoch_` plus the SUM of the taps' content
+epochs — both monotonic, so the sum is too and cannot alias, and including the
+taps is what makes an UPSTREAM edit miss the processor cache as well.
+`SPluginSlot::setBypass`/`restoreState`/`notifyPluginEdited` route through it and
+then `invalidateRenderPath()`. The bypass/param ACTIONS remain M5's.
+
+**App side.** `SPluginSlot` now owns one processor plus a tap per bus (it used
+to instantiate a separate plugin per bus, which cannot host a stereo-linked
+plugin at all), resolves `(format, uid)` through `findByUid` so a scanned record
+supplies the module path and the real channel counts, and exposes
+`setBusCount`/`getSlotState`/`getSlotMode`/`getEffectiveDescriptor`.
+`STrack::setNBusses` tells every existing slot the final bus count BEFORE any
+tap is built (the count is what selects the mapping) and populates newly created
+chains with each slot's tap in slot order. `insert-plugin` and `remove-plugin`
+gained a `path` attribute: without the module path a `format="clap"` descriptor
+cannot be instantiated at all, so neither an action script nor undo-of-a-remove
+could name a real plugin. A relative path resolves against the `.qxa`'s own
+directory and then against the application directory, and the build now drops
+`twtestclap.clap` next to the binary — so a case works whatever the build
+directory is called.
+
+**A finding that is NOT M3's to fix: the sink is still mono.** The graph carries
+N buses correctly end to end, but both output stages collapse to one page and
+duplicate it — `RenderSession` (`bufR[i] = sample;  // Duplicate to stereo
+(temporary; proper multi-channel TBD)`) and `AudioEngine`'s page pull. Bus 1's
+audio cannot reach a file or a device yet, so proposal 08's "hear it in stereo"
+is blocked by `tw_render`/`tw_playback`, not by the plugin layer, and a rendered
+WAV's two channels are equal BY CONSTRUCTION. `plugin_stereo_chain.qxa`
+therefore uses a fixture whose channel 0 depends on channel 1's INPUT
+(`out[0] = in[0]*0.5 + in[1]`, `out[1] = in[1]*0.5`), which puts the render at
+1.5x when both buses are wired, 1.0x with no plugin, and 0.5x with the pre-M3
+silent input 1 — three bands an RMS assertion can tell apart. Per-bus
+DISTINCTNESS is gated at engine level in `plugins_test` instead. The fixture's
+second entry point `tw.test.clap.stereoskew` exists because a qxa script cannot
+set a parameter or restore a state chunk before M5/M4: only DEFAULT behaviour is
+reachable headlessly.
+
+**Gates:** `check_layering.py` and `check_logging.py` clean; build clean with no
+new warnings from the changed files; `plugins_test` green (66 checks — the
+channel table, real audio through a two-bus slot, chunking observed at the
+plugin, bypass/param edits audible on the next freeze, the preview bypass, and
+the concurrent two-tap deadlock gate); `plugins_scan_test` green;
+`ctest -E qxa` 17/17; the new `qxa.plugin_stereo_chain` and
+`qxa.plugin_remove_and_undo` green plus
+`render_sawtooth_with_effects`, `render_sawtooth_minimal` and
+`mute_invalidates_cache`; the rendered 16-bit PCM WAV byte-identical across two
+runs at each of `SMARAGD_REVAL_WORKERS` ∈ {1,4,8,16} (8 renders, one `cmp`
+class); and the flake gate `repeat_test.sh plugin_stereo_chain.qxa 50` —
+50/50 at each of workers 1, 8, 4 and 16 (200 runs), re-confirmed 50/50 at
+workers 1 and 8 after the remove-plugin fix relinked the binary.
+
+Built in a separate `smaragd/build-m3/` (gitignored by `build-*/`) because the
+developer had `smaragd.exe` open with a project, which makes the link into
+`build/bin/` fail — no process was touched.
+
+**A defect found by M3's own verification, and fixed here.** `remove-plugin`
+changed the model and left the AUDIO untouched. `SPluginChain::childEvent` read
+the removed slot's index with `children().indexOf(child)`, but Qt delivers
+ChildRemoved AFTER the child is already out of `children()` — so that is always
+-1, the guarded branch never ran, `slotRemoved` was never emitted,
+`STrack::onPluginSlotRemoved` never called `twPluginChain::removePlugin`, and the
+slot's per-bus taps stayed wired into the DSP chain forever. A render after a
+removal came out identical to the processed one. It now takes the index from
+`SObject::indexOfChild()` BEFORE the base implementation drops the link from
+`childOrder_` (dereferencing the link there is safe because `~SLink` detaches
+while still fully typed). Pre-existing, from the original phase-1/2 plugin work
+— not from M0-M2 — and gated by the new `plugin_remove_and_undo.qxa`
+(with plugin 1.5x -> removed 1.0x -> undone 1.5x), which also gates the page
+invalidation on a slot removal.
+
+**Out of scope and untouched:** `SPluginSlot`/`STrack` serialization,
+`SProjectLoader::deferResolve`, `createNullPlugin`, persisting
+`twPluginSlotState` and the missing-plugin placeholder (M4); the parameter
+editor, missing/unsupported slot rendering and `SSetPluginBypassAction` /
+`SReorderPluginAction` / `SSetPluginParamAction` (M5); VST3 (M6); macOS (M7).
+The multi-channel sink above is nobody's milestone yet and should become one.

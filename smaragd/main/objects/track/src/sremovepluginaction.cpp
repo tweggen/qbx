@@ -45,12 +45,16 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    // Save the descriptor for the inverse action
-    const auto &desc = slot->getDescriptor();
+    // Save the descriptor for the inverse action. The EFFECTIVE descriptor is
+    // the one to keep: it carries the module path (and the plugin's real channel
+    // counts) that the registry resolved, which is what the inverse needs to
+    // load the plugin again.
+    const auto &desc = slot->getEffectiveDescriptor();
     format_ = QString::fromStdString(desc.format);
     uid_ = QString::fromStdString(desc.uid);
     pluginName_ = QString::fromStdString(desc.name);
     vendor_ = QString::fromStdString(desc.vendor);
+    path_ = QString::fromStdString(desc.path);
     nIn_ = desc.io.audioInputs;
     nOut_ = desc.io.audioOutputs;
 
@@ -66,6 +70,7 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
     desc_inv.uid = uid_.toStdString();
     desc_inv.name = pluginName_.toStdString();
     desc_inv.vendor = vendor_.toStdString();
+    desc_inv.path = path_.toStdString();
     desc_inv.io = {nIn_, nOut_};
 
     SAction *inverse = new SInsertPluginAction(trackPath_, slotIndex_, desc_inv);
@@ -81,6 +86,7 @@ void SRemovePluginAction::writeXml(QDomElement &elem) const
     elem.setAttribute("uid", uid_);
     elem.setAttribute("name", pluginName_);
     elem.setAttribute("vendor", vendor_);
+    elem.setAttribute("path", path_);
     elem.setAttribute("nIn", nIn_);
     elem.setAttribute("nOut", nOut_);
 }
@@ -93,6 +99,7 @@ bool SRemovePluginAction::readXml(const QDomElement &elem, int /*version*/)
     uid_ = elem.attribute("uid");
     pluginName_ = elem.attribute("name");
     vendor_ = elem.attribute("vendor");
+    path_ = elem.attribute("path");
     nIn_ = elem.attribute("nIn", "0").toUInt();
     nOut_ = elem.attribute("nOut", "0").toUInt();
     return true;

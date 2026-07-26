@@ -8,7 +8,10 @@
 #include "app/objects/track/strackpath.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "app/actions/sactionregistry.h"
+#include <QCoreApplication>
+#include <QDir>
 #include <QDomElement>
+#include <QFileInfo>
 #include <QString>
 
 SInsertPluginAction::SInsertPluginAction(
@@ -22,9 +25,39 @@ SInsertPluginAction::SInsertPluginAction(
       uid_(QString::fromStdString(descriptor.uid)),
       pluginName_(QString::fromStdString(descriptor.name)),
       vendor_(QString::fromStdString(descriptor.vendor)),
+      path_(QString::fromStdString(descriptor.path)),
       nIn_(descriptor.io.audioInputs),
       nOut_(descriptor.io.audioOutputs)
 {
+}
+
+// Resolve the module path an action script (or an undo record) named.
+//
+// Absolute paths are taken as given. A relative one is tried against the
+// project's sample base dir (the .qxa's own directory — the same convention
+// SProject::linkToFile uses for sample fixtures) and then against the
+// application directory, which is where the build drops the in-repo twtestclap
+// fixture. Unresolvable paths are passed through unchanged so the registry gets
+// to log the real failure.
+static QString resolvePluginModulePath(SProject *project, const QString &path)
+{
+    if (path.isEmpty()) return path;
+    QFileInfo fi(path);
+    if (fi.isAbsolute()) return QDir::cleanPath(path);
+
+    if (project) {
+        const QString base = project->sampleBaseDir();
+        if (!base.isEmpty()) {
+            const QString cand = QDir::cleanPath(QDir(base).filePath(path));
+            if (QFileInfo::exists(cand)) return cand;
+        }
+    }
+
+    const QString appCand =
+        QDir::cleanPath(QDir(QCoreApplication::applicationDirPath()).filePath(path));
+    if (QFileInfo::exists(appCand)) return appCand;
+
+    return path;
 }
 
 SApplyResult SInsertPluginAction::apply(SProject *project)
@@ -54,6 +87,7 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     desc.uid = uid_.toStdString();
     desc.name = pluginName_.toStdString();
     desc.vendor = vendor_.toStdString();
+    desc.path = resolvePluginModulePath(project, path_).toStdString();
     desc.io = {nIn_, nOut_};
 
     // Create the slot
@@ -74,6 +108,13 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
         chain->moveChildToIndex(landingIndex, actualIndex);
     }
 
+    // The slot may only need one bus, but STrack builds one chain per bus and
+    // the channel-mismatch mapping (proposal 08 §Layer 3) is chosen from the bus
+    // count — so the slot has to learn it before any tap is built. The
+    // slotInserted signal above already did this for the normal path; doing it
+    // again is idempotent and covers a track whose bus count grew.
+    slot->setBusCount(track->getNBusses());
+
     // Create inverse action
     SAction *inverse = new SRemovePluginAction(trackPath_, actualIndex);
 
@@ -88,6 +129,7 @@ void SInsertPluginAction::writeXml(QDomElement &elem) const
     elem.setAttribute("uid", uid_);
     elem.setAttribute("name", pluginName_);
     elem.setAttribute("vendor", vendor_);
+    elem.setAttribute("path", path_);
     elem.setAttribute("nIn", nIn_);
     elem.setAttribute("nOut", nOut_);
 }
@@ -100,6 +142,7 @@ bool SInsertPluginAction::readXml(const QDomElement &elem, int /*version*/)
     uid_ = elem.attribute("uid");
     pluginName_ = elem.attribute("name");
     vendor_ = elem.attribute("vendor");
+    path_ = elem.attribute("path");
     nIn_ = elem.attribute("nIn", "0").toUInt();
     nOut_ = elem.attribute("nOut", "0").toUInt();
     return true;

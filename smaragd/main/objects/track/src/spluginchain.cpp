@@ -21,37 +21,44 @@ SPluginChain::SPluginChain( SProject *project )
 void SPluginChain::childEvent( QChildEvent *event )
 {
     if( event->type() == QEvent::ChildAdded ) {
-        // Find the index of the newly added child before parent processes it
-        QObject *child = event->child();
-        int index = children().indexOf( child );
-        if( index >= 0 ) {
-            SLink *link = dynamic_cast<SLink *>( child );
-            if( link ) {
-                SPluginSlot *slot = dynamic_cast<SPluginSlot *>( &link->getSObject() );
-                if( slot ) {
-                    // Cache the slot before parent's childEvent runs
-                    SObject::childEvent( event );
-                    emit slotInserted( index, *slot );
-                    return;
-                }
+        // The base implementation is what registers the link in childOrder_, so
+        // run it first and then read the index from there — childOrder_ is the
+        // authority on slot order (getSlotAt() reads it), not QObject::children().
+        SObject::childEvent( event );
+        SLink *link = qobject_cast<SLink *>( event->child() );
+        if( link ) {
+            if( SPluginSlot *slot = dynamic_cast<SPluginSlot *>( &link->getSObject() ) ) {
+                const int index = indexOfChild( link );
+                if( index >= 0 ) emit slotInserted( index, *slot );
             }
         }
-    } else if( event->type() == QEvent::ChildRemoved ) {
-        // Extract child info BEFORE parent's childEvent deletes it
-        QObject *child = event->child();
-        int index = children().indexOf( child );
-        if( index >= 0 ) {
-            SLink *link = dynamic_cast<SLink *>( child );
-            if( link ) {
-                SPluginSlot *slot = dynamic_cast<SPluginSlot *>( &link->getSObject() );
-                if( slot ) {
-                    // Let parent process removal first
-                    SObject::childEvent( event );
-                    emit slotRemoved( index, *slot );
-                    return;
-                }
-            }
-        }
+        return;
+    }
+
+    if( event->type() == QEvent::ChildRemoved ) {
+        // The index MUST be taken BEFORE the base implementation drops the link
+        // from childOrder_ — and it cannot come from children(), because Qt has
+        // ALREADY removed the child by the time ChildRemoved is delivered.
+        //
+        // That was a real, silent bug: the old code did
+        // `children().indexOf(child)`, which is therefore ALWAYS -1 here, so
+        // slotRemoved was NEVER emitted. STrack::onPluginSlotRemoved never ran,
+        // the removed slot's per-bus taps stayed wired into every twPluginChain,
+        // and remove-plugin changed the model while leaving the audio completely
+        // untouched (verified by rendering after a removal: byte-for-byte the
+        // processed result). Undo then compounded it.
+        //
+        // Dereferencing the link here is safe because ~SLink calls
+        // setParent(nullptr) while it is still a fully-typed, live SLink — see
+        // the comment in slink.cpp.
+        SLink *link = static_cast<SLink *>( (QObject *)event->child() );
+        const int index = indexOfChild( link );
+        SPluginSlot *slot = ( index >= 0 )
+            ? dynamic_cast<SPluginSlot *>( &link->getSObject() )
+            : nullptr;
+        SObject::childEvent( event );
+        if( slot ) emit slotRemoved( index, *slot );
+        return;
     }
 
     // Default: call parent for other event types

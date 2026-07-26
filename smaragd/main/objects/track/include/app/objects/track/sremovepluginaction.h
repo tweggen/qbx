@@ -25,6 +25,9 @@ private:
     QString uid_;
     QString pluginName_;
     QString vendor_;
+    // The module file, carried so the inverse (re-insert) can actually load the
+    // plugin again — see SInsertPluginAction::path_.
+    QString path_;
     uint16_t nIn_, nOut_;
 };
 

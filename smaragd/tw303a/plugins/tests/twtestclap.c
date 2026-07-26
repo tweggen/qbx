@@ -25,6 +25,30 @@
  * Deliberate strictness: if process() is ever handed more frames than the
  * host promised at activate(), the plugin returns CLAP_PROCESS_ERROR instead of
  * overrunning. A host-side chunking regression therefore fails loudly.
+ *
+ * The module exports a SECOND plugin, added for proposal 08 M3:
+ *   tw.test.clap.stereoskew  "Smaragd Test Stereo Skew"
+ *
+ * Same params, same ports, but a DEFAULT behaviour that is deliberately both
+ * channel-asymmetric AND cross-channel:
+ *
+ *   out[0] = in[0] * 0.5 * gain  +  in[1] * 1.0 * gain
+ *   out[c] = in[c] * 0.5 * gain                          (c >= 1)
+ *
+ * Two properties are being bought here, and both matter because a qxa action
+ * script cannot set a parameter or restore a state chunk before M5 — only
+ * DEFAULT behaviour is reachable from a headless render:
+ *
+ *  - out[0] depends on in[1]. Feed it two identical mono buses (which is what a
+ *    track does) and channel 0 comes out at 1.5x. If input 1 were SILENT — the
+ *    pre-M3 bug, where a chain built with nBusses == 1 wired only port 0 — it
+ *    would come out at 0.5x, and with no plugin at all at 1.0x. Three bands far
+ *    enough apart for an RMS assertion to tell them apart. This is what makes
+ *    the silent-right-input bug visible even though the offline render still
+ *    collapses the graph's buses to one mono page (RenderSession's
+ *    "bufR[i] = sample; // proper multi-channel TBD").
+ *  - out[1] != out[0], so once the sink really is multi-channel the same
+ *    fixture proves the per-bus taps carry distinct audio.
  */
 
 #include <clap/clap.h>
@@ -32,12 +56,26 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TW_TESTCLAP_ID "tw.test.clap.gain"
+#define TW_TESTCLAP_ID      "tw.test.clap.gain"
+#define TW_TESTCLAP_SKEW_ID "tw.test.clap.stereoskew"
 
 static const char *const s_features[] = { CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
                                          CLAP_PLUGIN_FEATURE_UTILITY,
                                          CLAP_PLUGIN_FEATURE_STEREO,
                                          NULL };
+
+static const clap_plugin_descriptor_t s_desc_skew = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_SKEW_ID,
+   .name         = "Smaragd Test Stereo Skew",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: gain with every channel above the first at -6 dB",
+   .features     = s_features,
+};
 
 static const clap_plugin_descriptor_t s_desc = {
    .clap_version = CLAP_VERSION_INIT,
@@ -60,6 +98,7 @@ typedef struct {
    double   report;
    uint32_t maxFrames;
    int      active;
+   int      skew;      /* 1 = attenuate channels above the first by 0.5 */
 } tw_testclap_t;
 
 /* ---------------------------------------------------------------- params */
@@ -331,11 +370,24 @@ static clap_process_status tc_process( const clap_plugin_t *p, const clap_proces
          continue;
       }
       const float *in = ( c < ib->channel_count ) ? ib->data32[c] : NULL;
-      if( in ) {
+      if( !in ) {
+         memset( o, 0, (size_t)n * sizeof( float ) );
+         continue;
+      }
+      if( !self->skew ) {
          for( uint32_t i = 0; i < n; ++i )
             o[i] = in[i] * g;
+         continue;
+      }
+      /* The cross-channel term (see the header comment): channel 0 mixes in
+       * HALF of itself plus ALL of channel 1, every other channel is halved. */
+      if( c == 0 && ib->channel_count > 1 && ib->data32[1] ) {
+         const float *in1 = ib->data32[1];
+         for( uint32_t i = 0; i < n; ++i )
+            o[i] = ( in[i] * 0.5f + in1[i] ) * g;
       } else {
-         memset( o, 0, (size_t)n * sizeof( float ) );
+         for( uint32_t i = 0; i < n; ++i )
+            o[i] = in[i] * 0.5f * g;
       }
    }
    return CLAP_PROCESS_CONTINUE;
@@ -361,14 +413,16 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 1;
+   return 2;
 }
 
 static const clap_plugin_descriptor_t *
 tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
 {
    (void)f;
-   return index == 0 ? &s_desc : NULL;
+   if( index == 0 ) return &s_desc;
+   if( index == 1 ) return &s_desc_skew;
+   return NULL;
 }
 
 static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
@@ -376,8 +430,13 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
                                                const char                 *id )
 {
    (void)f;
-   if( !id || strcmp( id, TW_TESTCLAP_ID ) )
+   if( !id )
       return NULL;
+
+   int skew = 0;
+   if( !strcmp( id, TW_TESTCLAP_ID ) )           skew = 0;
+   else if( !strcmp( id, TW_TESTCLAP_SKEW_ID ) ) skew = 1;
+   else                                          return NULL;
 
    tw_testclap_t *self = (tw_testclap_t *)calloc( 1, sizeof( tw_testclap_t ) );
    if( !self )
@@ -388,8 +447,9 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    self->report    = 0.0;
    self->maxFrames = 0;
    self->active    = 0;
+   self->skew      = skew;
 
-   self->base.desc            = &s_desc;
+   self->base.desc            = skew ? &s_desc_skew : &s_desc;
    self->base.plugin_data     = self;
    self->base.init            = tc_init;
    self->base.destroy         = tc_destroy;

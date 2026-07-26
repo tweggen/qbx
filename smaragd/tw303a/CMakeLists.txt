@@ -152,9 +152,11 @@ tw_module(plugins
         plugins/include/tw/plugins/twplugindescriptor.h
         plugins/include/tw/plugins/twpluginchain.h
         plugins/include/tw/plugins/twplugininsert.h
+        plugins/include/tw/plugins/twpluginslotproc.h
         plugins/include/tw/plugins/twpluginsearchpaths.h
         plugins/src/twpluginchain.cc
         plugins/src/twplugininsert.cc
+        plugins/src/twpluginslotproc.cc
         plugins/src/twpassthrough.cc
         plugins/src/twpluginregistry.cc
         plugins/src/twpluginscancache.h
@@ -227,6 +229,18 @@ if(EXISTS ${TW_CLAP_DIR}/include/clap/clap.h)
         C_STANDARD 11
         AUTOMOC OFF
     )
+    # ALSO drop it next to the app binary (proposal 08 M3). A qxa action script
+    # names the module with a RELATIVE path, and SInsertPluginAction resolves a
+    # relative path against the .qxa's directory and then against
+    # QCoreApplication::applicationDirPath() — so "twtestclap.clap" reaches the
+    # fixture whatever the build directory is called, which a path like
+    # ../../build/lib/twtestclap.clap would not.
+    add_custom_command(TARGET twtestclap POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:twtestclap>
+                ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/twtestclap.clap
+        COMMENT "Copying the twtestclap fixture next to the app binary (qxa cases)")
 else()
     message(WARNING "tw_plugins: third_party/clap not checked out; CLAP plugin hosting DISABLED. Run 'git submodule update --init --recursive' (or ./build.sh, which does it).")
 endif()

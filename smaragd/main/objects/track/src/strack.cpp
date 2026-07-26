@@ -319,8 +319,8 @@ void STrack::setNBusses( int nBusses )
         }
     }
     // Grow plugin chain array: keep existing chains, create new ones for added buses.
+    int oldChainCount = (int)cpPluginChains_.size();
     {
-        int oldChainCount = (int)cpPluginChains_.size();
         cpPluginChains_.resize(nBusses);
 
         // Create new plugin chain components for added buses only
@@ -349,6 +349,35 @@ void STrack::setNBusses( int nBusses )
         // (possibly new) input latch after setInput changed pInputPlugs[0].
         cpPluginChains_[i]->rebuildWiring();
         cpRewire_->setInput( i, cpPluginChains_[i]->linkOutput( 0 ) );
+    }
+
+    // Populate the NEWLY created chains with the existing slots' taps
+    // (proposal 08 M3).
+    //
+    // This is the other half of the "a 2-in/2-out plugin gets silence on input
+    // 1" fix. Before M3 each bus got its OWN plugin instance and a chain built
+    // with nBusses_ == 1, whose rebuildWiring() could only ever wire port 0 —
+    // so a stereo plugin's second input was never connected to anything. Now a
+    // slot owns ONE processor and one 1-in/1-out TAP per bus, so a new bus needs
+    // its own tap in its own chain, in slot order, and the processor gathers all
+    // of them coherently. Slots also have to learn the final bus count BEFORE
+    // any tap is built, because the count is what selects the channel-mismatch
+    // mapping (direct / dual-mono / mono-fold / unsupported).
+    if( cpPluginChain_ ) {
+        const int nSlots = cpPluginChain_->getSlotCount();
+        for( int s = 0; s < nSlots; ++s ) {
+            if( SPluginSlot *slot = cpPluginChain_->getSlotAt( s ) )
+                slot->setBusCount( nBusses );
+        }
+        for( int i = oldChainCount; i < nBusses; ++i ) {
+            if( !cpPluginChains_[i] ) continue;
+            for( int s = 0; s < nSlots; ++s ) {
+                SPluginSlot *slot = cpPluginChain_->getSlotAt( s );
+                if( !slot ) continue;
+                if( auto tap = slot->getInsertForBus( i ) )
+                    cpPluginChains_[i]->addPlugin( tap );
+            }
+        }
     }
 
     // Populate clip list in all track mixers with existing children (initial sync).
@@ -524,7 +553,12 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
     // Pre-allocate inserts for all buses to ensure they're fully initialized
     // before the audio thread accesses them
     if( nBusses_ > 0 ) {
-        // First, ensure all inserts exist and are fully initialized
+        // Tell the slot the bus count FIRST: it is what selects the
+        // channel-mismatch mapping (proposal 08 §Layer 3), so deriving it once
+        // here avoids re-instantiating the plugin per bus as the taps appear.
+        slot.setBusCount( nBusses_ );
+
+        // Then ensure all taps exist and are fully initialized
         for( int i = 0; i < nBusses_; ++i ) {
             std::shared_ptr<audio::twPluginInsert> insert = slot.getInsertForBus(i);
             if( !insert ) {
