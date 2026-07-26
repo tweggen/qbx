@@ -92,14 +92,23 @@ namespace {
 // A transposed clip looks exactly like an untransposed one (pitch never moves
 // an edge), so it needs a written mark. Whole semitones read as "+2 st"; a
 // fine-nudged clip shows its cents.
-void drawPitchBadge( QPainter &p, const QRect &visibRect, double cents )
+void drawPitchBadge( QPainter &p, const QRect &visibRect, double cents,
+                     bool preserveFormants )
 {
+    // W4 follow-up: the formant flag is part of the badge ("+12 st F") so the
+    // armed state is VISIBLE on the clip — a requester listening session
+    // reported "no difference", and without an indicator there is no way to
+    // tell a disengaged toggle from an ineffective DSP. Preservation without
+    // a transposition is inaudible by design, so the badge only shows when a
+    // pitch is set.
     if( cents == 0.0 ) return;
     const double semis = cents / 100.0;
     const bool   whole = ( cents == (double)(int) cents ) && ( (int) cents % 100 == 0 );
     QString text = whole
         ? QString( "%1%2 st" ).arg( semis > 0 ? "+" : "" ).arg( (int) semis )
         : QString( "%1%2 ct" ).arg( cents > 0 ? "+" : "" ).arg( cents, 0, 'g', 4 );
+    if( preserveFormants )
+        text += QStringLiteral( " F" );
 
     QFontMetrics fm( p.font() );
     QRect box = fm.boundingRect( text ).adjusted( -3, -1, 3, 1 );
@@ -326,7 +335,8 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         p.setPen( QColor( 10, 10, 40 ) );
         p.drawText( visibRect, Qt::AlignBottom | Qt::AlignRight, cut.getSName() );
     }
-    drawPitchBadge( p, visibRect, cut.getPitchCents() );
+    drawPitchBadge( p, visibRect, cut.getPitchCents(),
+                    cut.getPreserveFormants() );
 }
 
 /**

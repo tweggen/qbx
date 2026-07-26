@@ -325,15 +325,19 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     // OptionThreadingNever keeps the offline pass single-threaded so the warp
     // is deterministic (the qxa flake gate and the byte-exact render cmp both
     // depend on that). OptionEngineFiner selects the R3 (higher quality) engine.
-    // Formants are left at the default (they scale with pitch — no formant
-    // preservation): preservation is a source-filter/vocal assumption that
-    // colours and de-energises general material, so it is not a good global
-    // default. A per-clip formant toggle can wire it back in for voice later.
+    // Formants scale with pitch by DEFAULT (preservation is a source-filter/
+    // vocal assumption that colours and de-energises general material); the
+    // W4 per-clip opt-in wires OptionFormantPreserved back in for voice, so
+    // the flag behaves the same whichever backend a session runs
+    // (TW_STRETCH_BACKEND=rubberband must not silently ignore it — that hole
+    // is exactly how a "no audible difference" report happens).
     const size_t kBlock = 4096;   // input frames fed per process() call
     using RB = RubberBand::RubberBandStretcher;
     RB::Options opts = RB::OptionProcessOffline
                      | RB::OptionEngineFiner
                      | RB::OptionThreadingNever;
+    if( p.preserveFormants )
+        opts |= RB::OptionFormantPreserved;
     RB rb( (size_t) rate_, (size_t) channels_, opts,
            /*timeRatio*/ stretch, /*pitchScale*/ r );
     rb.setDebugLevel( 0 );                 // no direct-stderr chatter (logging policy)
