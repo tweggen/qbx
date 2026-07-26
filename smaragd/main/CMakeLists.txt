@@ -416,6 +416,10 @@ endif()
 # this the exe silently fails to start after a clean build.
 if(SMARAGD_WINDOWS AND DEFINED VCPKG_INSTALLED_DIR)
     file(GLOB _VCPKG_RUNTIME_DLLS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*.dll")
+    # Rubber Band was removed 2026-07-26 (GPL relicensing) — its DLL may
+    # still sit in the shared vcpkg install for other projects, but it must
+    # not be deployed next to a binary that no longer links it.
+    list(FILTER _VCPKG_RUNTIME_DLLS EXCLUDE REGEX "rubberband")
     if(_VCPKG_RUNTIME_DLLS)
         add_custom_command(TARGET smaragd POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_VCPKG_RUNTIME_DLLS} "$<TARGET_FILE_DIR:smaragd>"

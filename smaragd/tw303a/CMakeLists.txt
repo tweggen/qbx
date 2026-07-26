@@ -111,38 +111,6 @@ tw_module(sources
 )
 
 
-# --- Rubber Band time-stretch / pitch-shift backend (sources only) ------------
-# Proposal 26: twGrainSource's synthesis core. Rubber Band ships a pkg-config
-# file but NO CMake config package, so discovery differs from the CONFIG-based
-# audio-file libs below: find_path/find_library on Windows (the vcpkg install
-# tree is on CMAKE_PREFIX_PATH via the toolchain), pkg-config on macOS/Linux
-# (brew/apt ship rubberband.pc). When present, TW_HAVE_RUBBERBAND selects the
-# Rubber Band path in twgrainsource.cc; otherwise it degrades to the legacy
-# overlap-add fallback compiled into the same file.
-set(_tw_rubberband_found FALSE)
-if(SMARAGD_WINDOWS)
-    find_path(RUBBERBAND_INCLUDE_DIR rubberband/RubberBandStretcher.h)
-    find_library(RUBBERBAND_LIBRARY NAMES rubberband)
-    if(RUBBERBAND_INCLUDE_DIR AND RUBBERBAND_LIBRARY)
-        target_include_directories(tw_sources PRIVATE ${RUBBERBAND_INCLUDE_DIR})
-        target_link_libraries(tw_sources PRIVATE ${RUBBERBAND_LIBRARY})
-        set(_tw_rubberband_found TRUE)
-    endif()
-else()
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(RUBBERBAND IMPORTED_TARGET rubberband)
-    if(RUBBERBAND_FOUND)
-        target_link_libraries(tw_sources PRIVATE PkgConfig::RUBBERBAND)
-        set(_tw_rubberband_found TRUE)
-    endif()
-endif()
-if(_tw_rubberband_found)
-    target_compile_definitions(tw_sources PRIVATE TW_HAVE_RUBBERBAND=1)
-    message(STATUS "tw_sources: Rubber Band time-stretch backend ENABLED (proposal 26)")
-else()
-    message(WARNING "tw_sources: Rubber Band not found; grain synthesis falls back to the legacy overlap-add (audible warble on tonal material). Install rubberband (vcpkg / brew / apt).")
-endif()
-
 # --- E5 dsp: unit generators and filters -------------------------------------
 tw_module(dsp
     SOURCES

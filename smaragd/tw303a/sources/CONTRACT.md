@@ -26,24 +26,16 @@ output blocks (kBlock=65536) on demand through the vocoder, cached in a small
 mutex-guarded LRU (see StreamState). Memory is O(concurrent blocks), not
 O(clip × variants) — the Reaper-scale property proposal 27 exists for. The
 backend is RUNTIME-selected by stretchBackend() (TW_STRETCH_BACKEND, read once
-per process): `vocoder` (default), `rubberband`, or `ola`.
+per process): `vocoder` (default) or `ola`.
 
-Rubber Band (proposal 26) is now the OPTIONAL reference / escape-hatch backend
-(TW_STRETCH_BACKEND=rubberband), still gated by the TW_HAVE_RUBBERBAND compile
-define (link discovered in tw303a/CMakeLists.txt). Its path MATERIALISES the
-whole warp once in the ctor (read() a memcpy). It is fed in BOUNDED blocks
-(kBlock=4096) with the output drained after each block: a single whole-clip
-process() overflows its output ring and drops samples on any stretch whose output
-exceeds ~262144 frames (noisy stderr + a wrong/missing warp). setMaxProcessSize /
-setDebugLevel(0) complete that (pre-sized buffers, no library stderr). NO output
-gain is applied: Rubber Band is loudness-preserving, so a stretch/pitch keeps the
-source RMS (an earlier peak-scaling anti-clip was removed — one Gibbs transient
-dimmed the whole clip). On x64-windows it is built with Rubber Band's builtin FFT
-via the repo's vcpkg overlay port (smaragd/vcpkg-overlays/rubberband) — the
-upstream port's sleef FFT fails under MinGW. Rubber Band is GPL, so while it is
-linked the whole app is GPL; since M5 it is no longer load-bearing (dropping it
-is a build-config decision, not a capability loss). `ola` is the legacy
-overlap-add, the fallback when Rubber Band is absent.
+Rubber Band (proposal 26) was REMOVED 2026-07-26 on the requester's decision:
+the in-house vocoder had been load-bearing since M5, and dropping the
+GPL-licensed dependency exercises the relicensing freedom proposal 26
+recorded. The warp.pcm params-blob backend byte 1 stays RESERVED for the
+retired path (never reuse it — historical cache keys must not alias).
+`ola` is the legacy fixed-hop overlap-add (proposal 06), kept as a
+dependency-free reference; audible warble on tonal material, not a quality
+path.
 
 Every backend clamps/zero-pads output to the EXACT nFrames_ =
 floor(inLen*stretch) (invariant 3 below). The proposal-27 M2 `warp.pcm` sidecar

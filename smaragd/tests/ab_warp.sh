@@ -2,7 +2,7 @@
 # ab_warp.sh — proposal 27 M3 A/B time-stretch/pitch quality driver.
 #
 # For every corpus WAV x transform, renders the placed clip twice — once with
-# TW_STRETCH_BACKEND=rubberband (the reference) and once with
+# TW_STRETCH_BACKEND=ola (the legacy reference; Rubber Band was removed 2026-07-26) and once with
 # TW_STRETCH_BACKEND=vocoder (the candidate paged vocoder, written concurrently)
 # — then scores the pair with warp_ab and appends a Markdown summary table.
 #
@@ -110,7 +110,7 @@ render_with() {
     echo "# A/B time-stretch / pitch quality report"
     echo ""
     echo "- Generated: $(date -u '+%Y-%m-%d %H:%M:%SZ')"
-    echo "- Reference backend: \`TW_STRETCH_BACKEND=rubberband\`"
+    echo "- Reference backend: \`TW_STRETCH_BACKEND=ola\`"
     echo "- Candidate backend: \`TW_STRETCH_BACKEND=vocoder\`"
     echo "- Corpus: deterministic 16-bit PCM stereo 48 kHz, 4.0 s each (warp_ab --gen)"
     echo "- Sidecars: per-render hermetic dir (onsets aspect active — vocoder"
@@ -142,7 +142,7 @@ for wav in "${CORPUS[@]}"; do
         qxa="$WORK/corpus/ab_${wav%.wav}.qxa"
         write_qxa "$qxa" "$wav" "$stretch" "$duration" "$cents"
 
-        ref_wav="$(render_with "$qxa" rubberband ref)"
+        ref_wav="$(render_with "$qxa" ola ref)"
         cand_wav="$(render_with "$qxa" vocoder cand)"
 
         if [ -z "$ref_wav" ]; then

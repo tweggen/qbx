@@ -57,9 +57,9 @@ the action-verb reference is `docs/ACTIONS.md`.
 ### Testing knobs & determinism gates
 - `SMARAGD_REVAL_WORKERS=<n>` overrides the revalidation/scheduler worker count
   (clamped [1,64]); `0` disables the revalidator entirely (legacy pull paths).
-- `TW_STRETCH_BACKEND=vocoder|rubberband|ola` picks the time-stretch backend for
-  the run (default `vocoder`; `rubberband` only if Rubber Band was linked). Read
-  once per process, so the choice is deterministic within a run.
+- `TW_STRETCH_BACKEND=vocoder|ola` picks the time-stretch backend for the run
+  (default `vocoder`; `ola` is the legacy overlap-add reference). Read once
+  per process, so the choice is deterministic within a run.
 - `SMARAGD_SIDECAR_DIR=<path>` relocates the derived-data (QAF) sidecar cache;
   `SMARAGD_SIDECAR_DIR=off` disables it — the store then misses/no-ops and the
   engine result is unchanged, only slower (sidecars alter latency, never output).
@@ -295,21 +295,13 @@ Files written as WAV (PCM, lossless) in project directory:
   load. No third-party dependency: analysis is incremental (a lazy windowed FFT
   over resident PCM), so it needs no spectral sidecar. This is the path all
   file-backed clips take unless overridden.
-- **Rubber Band Library** (v4.0, **GPL v2+**) — now the OPTIONAL reference /
-  escape-hatch backend, selected per run with `TW_STRETCH_BACKEND=rubberband`
-  (R3 engine, offline mode). The build still discovers it exactly as before and
-  degrades gracefully if absent; Windows: vcpkg `rubberband:x64-mingw-dynamic`
-  via the repo overlay port (`smaragd/vcpkg-overlays/rubberband`, builtin FFT —
-  upstream's sleef FFT fails under MinGW), auto-installed by
-  `build.sh`/`rebuild.sh`; macOS: `brew install rubberband` (Accelerate/vDSP);
-  Linux: `apt install librubberband-dev`. If Rubber Band is unavailable the
-  legacy overlap-add stands in (`TW_STRETCH_BACKEND=ola`).
-- **Licensing, honestly:** while Rubber Band is still linked into shipped
-  binaries the **GPL v2+ obligation stands** — the app remains GPL today.
-  What M5 changed is that Rubber Band is no longer load-bearing: dropping it is
-  now a build-config decision, not a loss of the time-stretch capability, so the
-  relicensing freedom is there to exercise whenever the reference backend is
-  cut.
+- **Rubber Band Library — REMOVED 2026-07-26** (requester decision). It had
+  been the optional reference backend since M5; the vocoder was already
+  load-bearing, so removal cost no capability. **The GPL v2+ obligation it
+  carried is lifted** — no GPL-licensed code is linked anymore. The
+  `warp.pcm` params-blob backend byte `1` stays reserved for the retired
+  path (historical cache keys must never alias). The legacy overlap-add
+  (`TW_STRETCH_BACKEND=ola`) remains the dependency-free reference.
 
 ### Platform-Specific Audio Backends
 - **Windows:** WASAPI (SDK: ole32, mmdevapi, avrt, …); MinGW 13.1

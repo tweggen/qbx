@@ -7233,3 +7233,29 @@ bench stays in-tree; re-run it before any future round.
 Gates: vocoder_test (partition property + W4 formant metrics unchanged to
 printed precision), analyzers_test, twwarpmap_test, full 56-case qxa
 suite, layering/logging, 3-run byte-identical render cmp — all green.
+
+## 2026-07-26 — W4 CLOSED (requester sign-off) + Rubber Band REMOVED
+
+**W4 listening gate: PASSED.** The initial report ("no difference" on a male
+vocal down an octave) triggered an end-to-end audit: a headless probe proved
+the whole chain works (set-formant-preserve → render differs by 0.76× RMS,
+difference energy −1 dB below signal — unmistakable), the RB escape hatch
+got OptionFormantPreserved wired so no backend silently ignores the flag,
+and the pitch badge now shows the armed state ("-12 st F"). On retest the
+requester confirms: "working beautifully". Marker drags also confirmed
+perfect. Proposal 28 is COMPLETE with all verdicts in.
+
+**Rubber Band removed entirely (requester decision).** The vocoder had been
+load-bearing since M5; removal cost no capability and LIFTS THE GPL v2+
+OBLIGATION — no GPL code is linked anymore. Scope: the RB synthesis path in
+twgrainsource.cc (the ola fallback is now the unconditional else — which
+also fixes TW_STRETCH_BACKEND=ola having been shadowed by RB when compiled
+in), the CMake discovery block, the vcpkg overlay port, the _env.sh
+auto-install, ab_warp.sh (reference backend now ola), CLAUDE.md, the
+sources CONTRACT.md, and the DLL deploy glob (librubberband is filtered
+out; the exe imports verified clean via objdump). The warp.pcm params-blob
+backend byte 1 is RESERVED forever for the retired path — historical cache
+keys must never alias a future backend.
+
+Gates: vocoder_test, analyzers_test, full 56-case qxa suite, layering,
+logging — all green on the RB-free build.

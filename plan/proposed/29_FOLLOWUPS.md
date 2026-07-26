@@ -91,11 +91,10 @@ Deliberately not done, with their triggers:
 
 ## 6. Housekeeping (do opportunistically, none urgent)
 
-- **Rubber Band licensing decision (proposal 26 note):** since M5 the
-  vocoder is the default and RB is an escape hatch (`TW_STRETCH_BACKEND=
-  rubberband`). While RB stays linked the app remains GPL v2+. Dropping it
-  is now a build-config decision — exercise whenever the relicensing
-  freedom is wanted; keep `ola` as the no-dependency fallback.
+- **Rubber Band licensing decision — EXECUTED 2026-07-26:** removed
+  entirely on the requester's decision (code, CMake discovery, vcpkg
+  overlay, docs). GPL obligation lifted; `ola` remains the dependency-free
+  reference; warp.pcm backend byte 1 reserved for the retired path.
 - **`save-project` does not create parent directories** — qxa cases with
   relative save paths depend on the harness convention `--test-output-dir
   build/test-output/<case>` (bit us 2026-07-25: `mute_survives_reload`

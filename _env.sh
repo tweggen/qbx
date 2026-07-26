@@ -164,32 +164,25 @@ detect_vcpkg() {
     return 1
 }
 
-# Ensure the render/synthesis deps (libsndfile/libvorbis, which pulls libogg,
-# plus rubberband for grain time-stretch — proposal 26) exist in the vcpkg
-# install, installing them via vcpkg if missing. Windows only. Requires the
-# MinGW toolchain already on PATH (call setup_toolchain first) so the mingw
-# triplet builds against Qt's g++. The install only runs when the libs are
-# absent, so it's a one-time bootstrap cost, not a per-build hit.
-#
-# rubberband is installed through the repo's overlay port
-# (smaragd/vcpkg-overlays/rubberband) which forces Rubber Band's builtin FFT on
-# x64-windows: the upstream port selects `sleef`, which fails to build under
-# MinGW.
+# Ensure the render deps (libsndfile/libvorbis, which pulls libogg) exist in
+# the vcpkg install, installing them via vcpkg if missing. Windows only.
+# Requires the MinGW toolchain already on PATH (call setup_toolchain first) so
+# the mingw triplet builds against Qt's g++. The install only runs when the
+# libs are absent, so it's a one-time bootstrap cost, not a per-build hit.
+# (Rubber Band was removed 2026-07-26 — the in-house vocoder is the synthesis
+# engine; no vcpkg overlay needed anymore.)
 ensure_render_deps() {
     [ "$PLATFORM" = "windows" ] || return 0
     detect_vcpkg || { echo "Note: vcpkg not found; skipping render-dep install."; return 0; }
 
-    # libsndfile/libvorbis ship CMake config packages (keyed off *Config.cmake);
-    # rubberband ships only a pkg-config file, so check its header instead.
+    # libsndfile/libvorbis ship CMake config packages (keyed off *Config.cmake).
     local sharedir="$VCPKG_DIR/installed/$VCPKG_TRIPLET/share"
-    local incdir="$VCPKG_DIR/installed/$VCPKG_TRIPLET/include"
     if [ -f "$sharedir/SndFile/SndFileConfig.cmake" ] && \
-       [ -f "$sharedir/Vorbis/VorbisConfig.cmake" ] && \
-       [ -f "$incdir/rubberband/RubberBandStretcher.h" ]; then
+       [ -f "$sharedir/Vorbis/VorbisConfig.cmake" ]; then
         return 0   # already installed
     fi
 
-    echo "Render/synthesis deps (libsndfile/libvorbis/rubberband) missing for $VCPKG_TRIPLET."
+    echo "Render deps (libsndfile/libvorbis) missing for $VCPKG_TRIPLET."
     echo "Installing via vcpkg from $VCPKG_DIR (this can take several minutes)..."
 
     # Bootstrap vcpkg.exe if it isn't built yet.
@@ -211,9 +204,8 @@ ensure_render_deps() {
     # Pinning host == target lets it build everything with Qt's g++ (on PATH).
     "$vcpkg_exe" install \
         --triplet "$VCPKG_TRIPLET" --host-triplet "$VCPKG_TRIPLET" \
-        --overlay-ports="$PROJECT_DIR/vcpkg-overlays" \
-        libsndfile libvorbis rubberband || {
-        echo "Warning: vcpkg install failed; configure may fail to find render/synthesis deps."
+        libsndfile libvorbis || {
+        echo "Warning: vcpkg install failed; configure may fail to find render deps."
         return 0
     }
     echo "Render/synthesis deps installed."
