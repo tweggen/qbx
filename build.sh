@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/_env.sh"
 
 detect_platform
 set_bin_path
+ensure_submodules
 
 # Change to project directory
 cd "$PROJECT_DIR"

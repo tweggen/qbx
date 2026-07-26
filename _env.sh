@@ -136,6 +136,53 @@ setup_toolchain() {
     command -v ninja &>/dev/null || echo "Warning: 'ninja' not found on PATH."
 }
 
+# Check out the git submodules under smaragd/third_party/ if they are missing.
+#
+# The plugin SDKs (CLAP, VST3 interfaces — proposal 08) are header-only vendored
+# dependencies with no package-manager path on ANY platform, so a clone made
+# without --recurse-submodules would silently configure without plugin hosting.
+# The sentinel is a real header, not the directory: an uninitialised submodule
+# leaves an empty directory behind, which "[ -d ]" would happily accept.
+#
+# Called from BOTH build.sh and rebuild.sh on purpose: build.sh deliberately
+# skips ensure_render_deps, so a dependency hook placed only in rebuild.sh would
+# never run on the common incremental path.
+ensure_submodules() {
+    local sentinel="$SCRIPT_DIR/smaragd/third_party/clap/include/clap/clap.h"
+    [ -f "$sentinel" ] && return 0
+
+    if [ ! -d "$SCRIPT_DIR/.git" ] && [ ! -f "$SCRIPT_DIR/.git" ]; then
+        echo "Warning: $SCRIPT_DIR is not a git checkout; cannot fetch third_party submodules."
+        echo "         Plugin hosting (CLAP/VST3) will be disabled in this build."
+        return 0
+    fi
+    if ! command -v git &>/dev/null; then
+        echo "Warning: 'git' not found on PATH; cannot fetch third_party submodules."
+        echo "         Plugin hosting (CLAP/VST3) will be disabled in this build."
+        return 0
+    fi
+
+    echo "Third-party submodules missing; running 'git submodule update --init --recursive'..."
+    ( cd "$SCRIPT_DIR" && git submodule update --init --recursive ) || {
+        echo "Warning: submodule checkout failed (offline?)."
+        echo "         Plugin hosting (CLAP/VST3) will be disabled in this build."
+        return 0
+    }
+
+    if [ -f "$sentinel" ]; then
+        echo "Third-party submodules ready."
+        # The SDK discovery lives in tw303a/CMakeLists.txt, and CMake only
+        # re-runs when one of its inputs changes. Submodule content appearing is
+        # invisible to that dependency graph, so on the incremental path
+        # (build.sh, existing build/) TW_HAVE_CLAP would stay off until the next
+        # unrelated CMake edit. Touching the file that does the discovery makes
+        # Ninja reconfigure exactly once.
+        touch "$SCRIPT_DIR/smaragd/tw303a/CMakeLists.txt" 2>/dev/null || true
+    else
+        echo "Warning: submodule checkout reported success but $sentinel is still absent."
+    fi
+}
+
 # Locate a vcpkg install (Windows). On success sets globals VCPKG_DIR (the root)
 # and VCPKG_TRIPLET, and returns 0. Returns 1 if none found. Quiet — callers report.
 detect_vcpkg() {

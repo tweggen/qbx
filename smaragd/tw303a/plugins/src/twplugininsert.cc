@@ -3,6 +3,7 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
 #include "tw/core/twlog.h"
+#include <cstdint>
 #include <cstring>
 #include <algorithm>
 
@@ -16,14 +17,65 @@ twPluginInsert::twPluginInsert( tw303aEnvironment &env, std::unique_ptr<twPlugin
     outScratch_.resize( io.audioOutputs );
 
     for( auto &buf : inScratch_ )
-        buf.resize( 4096 );
+        buf.resize( kChunkFrames );
     for( auto &buf : outScratch_ )
-        buf.resize( 4096 );
+        buf.resize( kChunkFrames );
+
+    inPtrs_.resize( io.audioInputs );
+    outPtrs_.resize( io.audioOutputs );
+
+    // Prepare eagerly, on the thread that constructs the insert.
+    //
+    // Nothing in the repo called twPlugin::prepare() before proposal 08 M1, so no
+    // plugin ever learned the sample rate or the block size it had to survive.
+    // Doing it here — rather than lazily on the first freeze — matters beyond
+    // tidiness: for CLAP, prepare() maps onto clap_plugin::activate(), which the
+    // format marks [main-thread]. Inserts are constructed from the UI thread
+    // (insert-plugin action, project load), so the common case now activates
+    // where the format says it must. ensurePrepared_nolock() still re-prepares if
+    // the project sample rate changes later, which is a genuine main-thread event
+    // too, only observed from whichever thread renders next.
+    ensurePrepared_nolock( env.getSRate() );
 
     // allocPlugs() and createOutputLatches() are called by init()
 }
 
 twPluginInsert::~twPluginInsert() = default;
+
+// Caller must hold mutex() (the constructor is single-threaded by definition).
+void twPluginInsert::ensurePrepared_nolock( int sampleRate )
+{
+    if( !plugin_ || sampleRate <= 0 || sampleRate == preparedRate_ )
+        return;
+
+    plugin_->prepare( (std::uint32_t)sampleRate, (std::uint32_t)kChunkFrames );
+    preparedRate_ = sampleRate;
+}
+
+// Caller must hold mutex().
+void twPluginInsert::processChunked_nolock( length_t len )
+{
+    if( !plugin_ || len <= 0 )
+        return;
+
+    const idx_t nIn  = getNInputs();
+    const idx_t nOut = getNOutputs();
+    if( (idx_t)inPtrs_.size()  != nIn )  inPtrs_.resize( nIn );
+    if( (idx_t)outPtrs_.size() != nOut ) outPtrs_.resize( nOut );
+
+    // A page is 65536 frames; the plugin was activated for kChunkFrames. Walk the
+    // page in chunks, advancing into the same de-interleaved scratch so the
+    // plugin's own DSP state carries across chunk boundaries exactly as it would
+    // across callbacks in a live host.
+    for( length_t off = 0; off < len; off += kChunkFrames ) {
+        const length_t n = std::min<length_t>( kChunkFrames, len - off );
+        for( idx_t c = 0; c < nIn; ++c )
+            inPtrs_[c] = inScratch_[c].data() + off;
+        for( idx_t c = 0; c < nOut; ++c )
+            outPtrs_[c] = outScratch_[c].data() + off;
+        plugin_->process( inPtrs_.data(), outPtrs_.data(), (std::uint32_t)n );
+    }
+}
 
 // Caller must hold mutex(). Scratch buffers start at 4096 frames but freezePage
 // is called with full pages (twOutputPage::FRAME_CAPACITY = 65536 frames);
@@ -70,6 +122,8 @@ length_t twPluginInsert::calcOutputTo( IOVector& dest, idx_t port )
     ensureScratchCapacity( dest.length() );
 
     if( !producedThisBlock_ ) {
+        ensurePrepared_nolock( env.getSRate() );
+
         // Pull every input bus into de-interleaved scratch (one mono wire each).
         for( idx_t c = 0; c < getNInputs(); ++c )
             pullInput( c, inScratch_[c].data(), dest.length() );
@@ -78,15 +132,7 @@ length_t twPluginInsert::calcOutputTo( IOVector& dest, idx_t port )
         if( bypass_ ) {
             copyChannels( inScratch_, outScratch_, getNInputs(), dest.length() );
         } else {
-            // Prepare scratch buffers with input data pointers.
-            std::vector<const float *> inPtrs( getNInputs() );
-            std::vector<float *> outPtrs( getNOutputs() );
-            for( idx_t c = 0; c < getNInputs(); ++c )
-                inPtrs[c] = inScratch_[c].data();
-            for( idx_t c = 0; c < getNOutputs(); ++c )
-                outPtrs[c] = outScratch_[c].data();
-
-            plugin_->process( inPtrs.data(), outPtrs.data(), dest.length() );
+            processChunked_nolock( dest.length() );
         }
         producedThisBlock_ = true;
     }
@@ -191,8 +237,22 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
 		pageSize_ = twOutputPage::FRAME_CAPACITY;
 	}
 
+	// Preview freezes bypass the plugin entirely.
+	//
+	// twComponent::freezePreviewPage() renders the same graph at a REDUCED rate
+	// (1 kHz today) purely to get a waveform envelope. Honouring that rate here
+	// would call prepare() -> activate() on every waveform redraw, which resets
+	// the plugin's DSP state and — for CLAP — reallocates its buffers, on a
+	// revalidator worker, while playback may be rendering the same instance at
+	// the project rate. The envelope does not need the effect, so a preview
+	// freeze copies input to output and leaves the plugin untouched. The
+	// authoritative freeze path always passes env.getSRate()
+	// (twComponent::freezePageWithInputs), which is what makes this comparison a
+	// reliable "this is not a real render" signal rather than a heuristic.
+	const bool previewFreeze = ( sampleRate > 0 && sampleRate != env.getSRate() );
+
 	// Detect non-sequential pages (seek case)
-	if (lastFrozenPos_ > 0 && startPos != lastFrozenPos_) {
+	if (!previewFreeze && lastFrozenPos_ > 0 && startPos != lastFrozenPos_) {
 		TW_LOGD( "plugins", "[twPluginInsert] Non-sequential page request at %llu (expected %llu); "
 			"resetting plugin state", (unsigned long long)startPos, (unsigned long long)lastFrozenPos_ );
 		plugin_->reset();  // Reset to avoid state corruption
@@ -226,22 +286,14 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
 		}
 	}
 
-	// Process plugin on de-interleaved buffers
-	if (!bypass_) {
-		// Prepare pointer arrays for plugin
-		std::vector<const float *> inPtrs(getNInputs());
-		std::vector<float *> outPtrs(getNOutputs());
-		for (idx_t c = 0; c < getNInputs(); ++c) {
-			inPtrs[c] = inScratch_[c].data();
-		}
-		for (idx_t c = 0; c < getNOutputs(); ++c) {
-			outPtrs[c] = outScratch_[c].data();
-		}
-
-		// Process plugin (stateful; state carries to next page if sequential)
-		plugin_->process(inPtrs.data(), outPtrs.data(), inputLength);
+	// Process plugin on de-interleaved buffers, chunked to the block size the
+	// plugin was activated for (stateful; state carries to the next page when
+	// pages arrive sequentially, and across chunks within one page).
+	if (!bypass_ && !previewFreeze) {
+		ensurePrepared_nolock( sampleRate );
+		processChunked_nolock( inputLength );
 	} else {
-		// Bypass: copy inputs to outputs
+		// Bypass (explicit, or a preview envelope): copy inputs to outputs.
 		copyChannels(inScratch_, outScratch_, getNInputs(), inputLength);
 	}
 
@@ -268,8 +320,11 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
 		outputPage->setValidAspects(twAspectPlayback);
 	}
 
-	// Update position tracker
-	lastFrozenPos_ = startPos + inputLength;
+	// Update position tracker. Preview freezes are excluded: they always render
+	// from 0 at a different length, so letting them write here would make the
+	// next real page look like a seek and needlessly reset the plugin.
+	if (!previewFreeze)
+		lastFrozenPos_ = startPos + inputLength;
 
 	return outputPage;
 }

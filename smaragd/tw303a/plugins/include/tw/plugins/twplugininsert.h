@@ -17,6 +17,13 @@ class twPlugin;
 // then serves results from cache.
 class twPluginInsert : public twComponent {
 public:
+    // The block size the host promises never to exceed. Pages are
+    // twOutputPage::FRAME_CAPACITY (65536) frames, which no real plugin accepts
+    // in one call — VST3 and CLAP both size their internal buffers from the value
+    // the host declares at activation time. So the host declares 4096 through
+    // twPlugin::prepare() and freezePage()/calcOutputTo() chunk to it.
+    static constexpr length_t kChunkFrames = 4096;
+
     twPluginInsert( tw303aEnvironment &env, std::unique_ptr<twPlugin> plugin );
     ~twPluginInsert();
 
@@ -61,9 +68,27 @@ private:
     void setBypass_nolock( bool bypass );
     void reset_nolock();
 
+    // Tell the plugin the sample rate and max block it must work at. Idempotent:
+    // only the first call and an actual rate change reach the plugin, because
+    // twPlugin::prepare() maps onto activate()/setupProcessing(), which allocate
+    // and reset DSP state. Caller must hold mutex().
+    void ensurePrepared_nolock( int sampleRate );
+
+    // Run the plugin over [0, len) of the scratch buffers in kChunkFrames-sized
+    // chunks. Caller must hold mutex().
+    void processChunked_nolock( length_t len );
+
     std::unique_ptr<twPlugin> plugin_;
     bool bypass_ = false;
     bool producedThisBlock_ = false;
+
+    // Sample rate last passed to plugin_->prepare(); 0 = never prepared.
+    int preparedRate_ = 0;
+
+    // Pointer arrays handed to twPlugin::process(). Members, not locals, so the
+    // per-chunk loop allocates nothing (CONTRACT invariant 2).
+    std::vector<const sample_t *> inPtrs_;
+    std::vector<sample_t *>       outPtrs_;
 
     // Phase 6c: Track frozen page position for sequential page detection
     // If pages arrive non-sequentially (seek case), reset plugin to avoid state corruption

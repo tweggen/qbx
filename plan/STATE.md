@@ -7322,3 +7322,89 @@ the row geometry inverts at both lane edges) — verified to FAIL when one
 suite, layering, logging — green. New testkit actions `set-lane-view` /
 `assert-lane-alignment`, routed through SMainWindow (testkit may not include
 app/timeline). Contract updated: `main/timeline/CONTRACT.md` invariants 5-7.
+
+## 2026-07-26 — Proposal 08 M0+M1 EXECUTED: submodule convention + the CLAP backend
+
+Execution plan: `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`. This entry covers
+M0 and M1 only; the scanner/cache/Options page (M2), the per-bus tap (M3),
+serialization (M4), UI+actions (M5) and VST3 (M6) are untouched.
+
+**M0 — the repo's first submodules.** There was no `.gitmodules` and no
+`third_party/` before this. `smaragd/third_party/clap` (free-audio/clap 1.2.10,
+MIT, header-only) and `smaragd/third_party/vst3_pluginterfaces` (added now, used
+from M6 — the convention lands once). Placement outside `tw303a/` and `main/` is
+deliberate: `tools/check_layering.py` and `tools/check_logging.py` walk exactly
+those two trees, and SDK sources would trip the logging checker on `printf(`.
+New `ensure_submodules()` in `_env.sh`, called from **both** `build.sh` and
+`rebuild.sh` — `build.sh` deliberately skips `ensure_render_deps`, so a hook
+only in `rebuild.sh` would never run on the common path. Its sentinel is a real
+header, not the directory (an uninitialised submodule leaves an empty dir), and
+after a successful fetch it touches `tw303a/CMakeLists.txt`: submodule content
+appearing is invisible to CMake's dependency graph, so without that the
+incremental path would configure with CLAP still off.
+
+**M1 — CLAP backend.** `plugins/src/twclapmodule.{h,cc}` (LoadLibraryExW with
+LOAD_WITH_ALTERED_SEARCH_PATH / dlopen, macOS bundle path resolved to
+`Contents/MacOS/<basename>`, `clap_entry` resolved, init/deinit matched,
+modules **interned by path** so several instances share one DSO's init pair) and
+`plugins/src/twclapplugin.cc` (`twClapPlugin : audio::twPlugin` over
+clap.audio-ports / clap.params / clap.state / clap.latency / clap.gui, minimal
+clap_host whose request_* callbacks only record flags — nothing calls back into
+the graph). `twPluginRegistry::instantiate()` gained a `format == "clap"` branch,
+symbol-referenced, and now logs-and-refuses an unknown format instead of
+returning a bare nullptr.
+
+Three prerequisites landed with it, all recorded as invariants in
+`plugins/CONTRACT.md`:
+- **`prepare()` is actually called.** Nothing in the repo called it before, so no
+  plugin ever learned its sample rate or block size. `twPluginInsert` prepares in
+  its constructor (the UI thread — which is where CLAP says activate() belongs)
+  and re-prepares only on a genuine rate change.
+- **Pages are chunked.** `twPluginInsert::kChunkFrames` = 4096 is what prepare()
+  promises and what process() gets, walked through the same de-interleaved
+  scratch so DSP state carries across chunks. A 65536-frame page used to be
+  handed to the plugin whole.
+- **Preview freezes bypass the plugin.** `freezePreviewPage` passes 1 kHz;
+  honouring it would re-activate and reset the plugin on every waveform redraw.
+  A freeze whose sampleRate differs from `env.getSRate()` is a preview.
+
+**`setParam()` never touches the plugin.** It updates a host-side mirror (what
+`getParam()` reads) and pushes into a lock-free SPSC ring drained into
+`clap_process::in_events`; `params->flush()` is used only while the plugin is
+inactive, decided under the same mutex that guards activation. Ring overflow
+raises a resync flag instead of dropping: the next drain re-sends every parameter
+from the mirror, which is exact because parameters are last-value-wins.
+
+**State blobs** are wrapped in our own 8-byte frame ('TWCP', u16 version, u16
+reserved) with the plugin's opaque chunk as the payload — CONTRACT invariant 3.
+A future version is refused, not guessed at.
+
+**Test fixture, not a third-party install.** `plugins/tests/twtestclap.c` is a
+real 2-in/2-out CLAP module built from this repo as `twtestclap.clap` (a MODULE
+library, written in C so the DLL has no libstdc++/libgcc import and loads
+wherever ctest runs it). Its absolute path reaches `plugins_test` as a generator
+expression. It returns `CLAP_PROCESS_ERROR` if handed more frames than the host
+declared, and in "report block size" mode writes the frame count it saw into its
+output — which is how the chunking assertion reads the block size the plugin
+*actually* observed. Later milestones get a headless stereo plugin for qxa render
+cases for free. `plugins/tools/clap_probe.cc` (target `clap_probe`, not a gate,
+`tools/` is exempt from check_logging) is the M0 spike: it loads a real .clap
+with the production loader and prints the factory contents.
+
+**CMake.** Discovery follows the retired `TW_HAVE_RUBBERBAND` block's shape:
+existence check → `target_sources`/`target_include_directories(... PRIVATE)` →
+`target_compile_definitions(... PRIVATE TW_HAVE_CLAP=1)` → STATUS or WARNING.
+PRIVATE is load-bearing and now CONTRACT invariant 4: the backend's header lives
+in `plugins/src/`, and no public `tw/plugins/*.h` may change shape with
+TW_HAVE_CLAP, or consumers get ODR/ABI skew. A build without the submodule
+compiles, warns, and skips the CLAP half of `plugins_test`.
+
+**Gates:** `check_layering.py` and `check_logging.py` clean; `./build.sh` clean
+with no new warnings; `ctest -R plugins_test` green (25 checks, including the
+real CLAP load path); all 16 non-qxa module tests green;
+qxa.render_sawtooth_with_effects PASS (the chain in the signal path, exercising
+the new prepare/chunking code). No CLAP plugin is installed on the development
+machine (`%COMMONPROGRAMFILES%\CLAP`, `%LOCALAPPDATA%\Programs\Common\CLAP` and
+`CLAP_PATH` are all absent), so `clap_probe` was verified against the in-repo
+fixture only — validation against a third-party plugin (Surge XT / Vital / u-he)
+is still pending and belongs with the M2 manual pass.

@@ -1,6 +1,16 @@
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/plugins/twplugin.h"
+#include "tw/core/twlog.h"
 #include <memory>
+
+#ifdef TW_HAVE_CLAP
+// PRIVATE header of the CLAP backend. The TW_HAVE_CLAP define and the clap
+// include directory are both PRIVATE to tw_plugins (see tw303a/CMakeLists.txt),
+// so this #ifdef can only ever appear in a .cc inside this module — never in a
+// public tw/plugins/*.h, where it would give other modules a different view of
+// the same declarations.
+#include "twclapmodule.h"
+#endif
 
 namespace audio {
 
@@ -18,7 +28,9 @@ twPluginRegistry &pluginRegistry()
 void twPluginRegistry::rescan()
 {
     // For now, hardcode the PassThrough plugin as the only available plugin.
-    // Future: scan CLAP directories, load descriptors from cache, etc.
+    // The CLAP *backend* landed in proposal 08 M1 (instantiate() below knows the
+    // format); the scanner that populates this list from disk — search paths,
+    // mtime cache, out-of-process probe — is M2.
     plugins_.clear();
 
     twPluginDescriptor passThrough;
@@ -47,6 +59,23 @@ std::unique_ptr<twPlugin> twPluginRegistry::instantiate( const twPluginDescripto
     if( desc.uid == "tw.passthrough" ) {
         return createPassThroughPlugin();
     }
+
+    if( desc.format == "clap" ) {
+#ifdef TW_HAVE_CLAP
+        // Symbol-referenced discovery (CONTRACT invariant 1): the registry names
+        // the backend factory directly, so nothing depends on static-init
+        // self-registration surviving static-library linking.
+        return createClapPlugin( desc.path, desc.uid );
+#else
+        TW_LOGE( "plugins", "[registry] cannot instantiate CLAP plugin '%s': this build "
+                 "has no CLAP support (the third_party/clap submodule was missing at "
+                 "configure time)", desc.uid.c_str() );
+        return nullptr;
+#endif
+    }
+
+    TW_LOGW( "plugins", "[registry] no backend for plugin format '%s' (uid '%s')",
+             desc.format.c_str(), desc.uid.c_str() );
     return nullptr;
 }
 
