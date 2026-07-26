@@ -1,0 +1,141 @@
+#include "app/testkit/spluginuitestactions.h"
+
+#include "app/actions/sactionregistry.h"
+#include "app/model/slink.h"
+#include "app/model/sproject.h"
+#include "app/objects/mixer/sstdmixer.h"
+#include "app/objects/track/strack.h"
+#include "app/pluginui/splugineffectstrip.h"
+
+#include <QDebug>
+#include <QDomElement>
+#include <memory>
+
+namespace {
+
+STrack *trackAt( SProject *project, int index )
+{
+    if( !project ) return nullptr;
+    SStdMixer *mixer = dynamic_cast<SStdMixer *>( project->getRootComponent() );
+    if( !mixer ) return nullptr;
+    if( index < 0 || index >= mixer->getNTracks() ) return nullptr;
+    SLink *link = mixer->getTrackAt( index );
+    return link ? dynamic_cast<STrack *>( &link->getSObject() ) : nullptr;
+}
+
+// A strip built for the assertion and thrown away. Parentless and never shown,
+// so no native window is created; its constructor runs the real rebuildUI(),
+// which is the thing under test.
+std::unique_ptr<SPluginEffectStrip> makeStrip( SProject *project, int trackIndex )
+{
+    STrack *track = trackAt( project, trackIndex );
+    if( !track ) return nullptr;
+    return std::make_unique<SPluginEffectStrip>( track, nullptr );
+}
+
+}  // namespace
+
+SApplyResult SAssertPluginStripAction::apply( SProject *project )
+{
+    auto strip = makeStrip( project, trackIndex_ );
+    if( !strip ) {
+        qWarning() << "assert-plugin-strip: no track" << trackIndex_;
+        return { false, nullptr };
+    }
+
+    if( slotCount_ >= 0 && strip->slotRowCount() != slotCount_ ) {
+        qWarning() << "assert-plugin-strip FAILED: strip rendered"
+                   << strip->slotRowCount() << "rows, expected" << slotCount_;
+        return { false, nullptr };
+    }
+
+    if( slotIndex_ >= 0 && ( !contains_.isEmpty() || !absent_.isEmpty() ) ) {
+        const QString desc = strip->describeSlot( slotIndex_ );
+        if( desc.isEmpty() ) {
+            qWarning() << "assert-plugin-strip FAILED: no row" << slotIndex_;
+            return { false, nullptr };
+        }
+        if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+            qWarning() << "assert-plugin-strip FAILED: row" << slotIndex_
+                       << "does not contain" << contains_ << "; it is" << desc;
+            return { false, nullptr };
+        }
+        if( !absent_.isEmpty() && desc.contains( absent_ ) ) {
+            qWarning() << "assert-plugin-strip FAILED: row" << slotIndex_
+                       << "unexpectedly contains" << absent_ << "; it is" << desc;
+            return { false, nullptr };
+        }
+    }
+
+    return { true, nullptr };   // an assertion has nothing to undo
+}
+
+void SAssertPluginStripAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackIndex", trackIndex_ );
+    elem.setAttribute( "slotCount", slotCount_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "contains", contains_ );
+    elem.setAttribute( "absent", absent_ );
+}
+
+bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
+    slotCount_  = elem.attribute( "slotCount", "-1" ).toInt();
+    slotIndex_  = elem.attribute( "slotIndex", "-1" ).toInt();
+    contains_   = elem.attribute( "contains" );
+    absent_     = elem.attribute( "absent" );
+    return true;
+}
+
+SApplyResult SPluginEditorSetParamAction::apply( SProject *project )
+{
+    auto strip = makeStrip( project, trackIndex_ );
+    if( !strip ) {
+        qWarning() << "plugin-editor-set-param: no track" << trackIndex_;
+        return { false, nullptr };
+    }
+
+    // editorSetParam() opens (unshown) the very editor a double-click opens and
+    // moves the slider, which submits a set-plugin-param action of its own. That
+    // nested action is what lands on the undo stack — this verb is not undoable
+    // itself, so `<undo count="1"/>` after it undoes the parameter edit.
+    if( !strip->editorSetParam( slotIndex_, paramId_, value_ ) ) {
+        qWarning() << "plugin-editor-set-param FAILED: slot" << slotIndex_
+                   << "has no editable parameter id" << paramId_;
+        return { false, nullptr };
+    }
+
+    return { true, nullptr };
+}
+
+void SPluginEditorSetParamAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackIndex", trackIndex_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "paramId", (qulonglong) paramId_ );
+    elem.setAttribute( "value", QString::number( value_, 'g', 17 ) );
+}
+
+bool SPluginEditorSetParamAction::readXml( const QDomElement &elem,
+                                          int /*version*/ )
+{
+    trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
+    slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
+    paramId_    = (std::uint32_t) elem.attribute( "paramId", "0" ).toUInt();
+    value_      = elem.attribute( "value", "0" ).toDouble();
+    return true;
+}
+
+static const bool s_reg_assertpluginstrip =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-plugin-strip" ),
+          [] { return new SAssertPluginStripAction; } ),
+      true );
+
+static const bool s_reg_plugineditorsetparam =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "plugin-editor-set-param" ),
+          [] { return new SPluginEditorSetParamAction; } ),
+      true );

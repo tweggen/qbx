@@ -110,10 +110,34 @@ signals:
     // The slot was re-instantiated (reloadPlugin()): its state/mode may have
     // changed and any editor showing its parameters is stale. M5 listens.
     void pluginReloaded();
+    // A parameter (or a whole state chunk) changed underneath an open editor —
+    // emitted by notifyPluginEdited() and restoreState(). SPluginParamEditor
+    // re-reads its sliders from the plugin on this, which is what makes UNDO of
+    // a set-plugin-param visible in an editor that is already on screen (the
+    // action mutates the plugin, not the widget).
+    void paramsChanged();
+    // "What I produce changed; stale the pages ABOVE me." The owning STrack
+    // listens (STrack::onPluginSlotAudioInvalidated).
+    //
+    // A slot cannot do this itself, and proposal 08 M3 assumed it could.
+    // SObject::invalidateRenderPath() walks DOWN from the project root through
+    // childLinks() looking for `this` and bumps the render-chain epoch of every
+    // container that contains it — but a track's SPluginChain is deliberately
+    // NOT an SLink child of the track (STrack's constructor: "we do NOT call
+    // setParent(this)"), so the walk never reaches a slot, nothing is found,
+    // and NOTHING is invalidated. That is why a bypass toggle and a parameter
+    // edit were still inaudible after M3: the slot's own tap pages were staled,
+    // the twPluginChain / twTrackMix / mixer pages above them were not, and the
+    // render served the audio it had already produced.
+    void audioInvalidated();
 
 private:
     // Materialize the processor (once) and grow the tap vector to nBuses.
     void ensureBuses( int nBuses ) const;
+    // bumpContentEpoch-style invalidation for everything above this slot: emits
+    // audioInvalidated() AND calls SObject::invalidateRenderPath(), which is a
+    // no-op today but stays correct if the chain is ever linked into the tree.
+    void invalidateAbove();
     // (Re-)resolve effective_ from the registry; falls back to descriptor_ with
     // its module path resolved.
     void resolveEffective();

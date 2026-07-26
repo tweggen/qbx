@@ -3,15 +3,20 @@
 #include "app/objects/track/spluginslot.h"
 #include "app/objects/track/strack.h"
 #include "app/pluginui/spluginbrowserdialog.h"
+#include "app/pluginui/spluginparamereditor.h"
 #include "app/shell/sapplication.h"
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/model/slink.h"
 #include "app/objects/track/sinsertpluginaction.h"
 #include "app/objects/track/sremovepluginaction.h"
+#include "app/objects/track/sreorderpluginaction.h"
+#include "app/objects/track/ssetpluginbypassaction.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QCheckBox>
+#include <QDialog>
+#include <QEvent>
 #include <QPushButton>
 #include <QLabel>
 #include <QScrollArea>
@@ -19,6 +24,76 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QCursor>
+#include <QTimer>
+
+namespace {
+
+const char *stateName( audio::twPluginSlotState s )
+{
+    switch( s ) {
+        case audio::twPluginSlotState::Active:      return "Active";
+        case audio::twPluginSlotState::Missing:     return "Missing";
+        case audio::twPluginSlotState::Unsupported: return "Unsupported";
+    }
+    return "Active";
+}
+
+const char *modeName( audio::twPluginSlotMode m )
+{
+    switch( m ) {
+        case audio::twPluginSlotMode::Transparent: return "Transparent";
+        case audio::twPluginSlotMode::Direct:      return "Direct";
+        case audio::twPluginSlotMode::DualMono:    return "DualMono";
+        case audio::twPluginSlotMode::MonoFold:    return "MonoFold";
+    }
+    return "Transparent";
+}
+
+// The label a row shows. ALWAYS the descriptor the PROJECT FILE carried
+// (getDescriptor()), never the resolved one: for a Missing plugin the resolved
+// descriptor is the placeholder's, and the whole point of the greyed row is to
+// tell the user WHICH plugin is missing (CONTRACT invariant 4).
+QString storedName( SPluginSlot *slot )
+{
+    QString name = QString::fromStdString( slot->getDescriptor().name );
+    if( name.isEmpty() ) name = slot->getSName();
+    if( name.isEmpty() ) name = QString::fromStdString( slot->getDescriptor().uid );
+    return name;
+}
+
+QString reasonTooltip( SPluginSlot *slot )
+{
+    const audio::twPluginDescriptor &d = slot->getDescriptor();
+    const QString ident = QStringLiteral( "%1 / %2" )
+                              .arg( QString::fromStdString( d.format ),
+                                    QString::fromStdString( d.uid ) );
+    switch( slot->getSlotState() ) {
+        case audio::twPluginSlotState::Missing:
+            return SPluginEffectStrip::tr(
+                       "Plugin not installed: %1\n"
+                       "Vendor: %2\nStored module path: %3\n"
+                       "The slot is transparent and its saved settings are kept "
+                       "unchanged. Install the plugin, rescan, then press Reload." )
+                .arg( ident, QString::fromStdString( d.vendor ),
+                      QString::fromStdString( d.path ) );
+        case audio::twPluginSlotState::Unsupported:
+            return SPluginEffectStrip::tr(
+                       "Unsupported channel layout: %1 declares %2 in / %3 out, "
+                       "which has no defined mapping onto this track's buses.\n"
+                       "The slot is transparent and its saved settings are kept "
+                       "unchanged." )
+                .arg( ident )
+                .arg( d.io.audioInputs )
+                .arg( d.io.audioOutputs );
+        case audio::twPluginSlotState::Active:
+            break;
+    }
+    return SPluginEffectStrip::tr( "%1\nVendor: %2\nChannel mapping: %3" )
+        .arg( ident, QString::fromStdString( d.vendor ),
+              QString::fromLatin1( modeName( slot->getSlotMode() ) ) );
+}
+
+}  // namespace
 
 SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
     : QWidget(parent), track_(track)
@@ -59,6 +134,10 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
     if (pluginChain_) {
         connect(pluginChain_, &SPluginChain::slotInserted, this, &SPluginEffectStrip::onPluginSlotInserted);
         connect(pluginChain_, &SPluginChain::slotRemoved, this, &SPluginEffectStrip::onPluginSlotRemoved);
+        // Reordering used to leave the strip showing the OLD order until
+        // something else rebuilt it — the signal existed and nobody listened.
+        connect(pluginChain_, &SPluginChain::slotsReordered, this,
+                &SPluginEffectStrip::onPluginSlotsReordered);
     }
 
     // Initial build
@@ -66,6 +145,23 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
 }
 
 SPluginEffectStrip::~SPluginEffectStrip() = default;
+
+QString SPluginEffectStrip::trackPathString() const
+{
+    SProject *project = SApplication::app().getCurrentProject();
+    if (!project) return QString();
+
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(project->getRootComponent());
+    if (!mixer) return QString();
+
+    for (int i = 0; i < mixer->getNTracks(); ++i) {
+        SLink *link = mixer->getTrackAt(i);
+        if (link && &link->getSObject() == track_) {
+            return QString::number(i);
+        }
+    }
+    return QString();
+}
 
 void SPluginEffectStrip::rebuildUI()
 {
@@ -87,6 +183,9 @@ void SPluginEffectStrip::rebuildUI()
         SPluginSlot *slot = pluginChain_->getSlotAt(i);
         if (!slot) continue;
 
+        const audio::twPluginSlotState state = slot->getSlotState();
+        const bool active = ( state == audio::twPluginSlotState::Active );
+
         // Create a container widget for drag support
         QWidget *container = new QWidget();
         container->setStyleSheet("QWidget { border: 1px solid #ccc; border-radius: 2px; padding: 4px; }");
@@ -95,14 +194,50 @@ void SPluginEffectStrip::rebuildUI()
         QHBoxLayout *rowLayout = new QHBoxLayout(container);
         rowLayout->setContentsMargins(0, 0, 0, 0);
 
-        // Plugin name
-        QLabel *nameLabel = new QLabel(slot->getSName());
+        // Plugin name — the STORED one, so a missing plugin is identifiable.
+        QString labelText = storedName(slot);
+        if (state == audio::twPluginSlotState::Missing) {
+            labelText += tr(" (missing)");
+        } else if (state == audio::twPluginSlotState::Unsupported) {
+            labelText += tr(" (unsupported)");
+        }
+        QLabel *nameLabel = new QLabel(labelText);
+        if (!active) {
+            // Greyed, and greyed VISIBLY: setEnabled(false) alone is easy to miss
+            // against the row's own stylesheet, so the colour is explicit.
+            nameLabel->setEnabled(false);
+            nameLabel->setStyleSheet("QLabel { color: #888888; border: none; }");
+        }
         rowLayout->addWidget(nameLabel);
 
-        // Bypass checkbox
+        const QString tooltip = reasonTooltip(slot);
+        container->setToolTip(tooltip);
+        nameLabel->setToolTip(tooltip);
+
+        // Bypass checkbox. Disabled on a non-Active slot: the placeholder is
+        // already transparent, so the control would promise something it cannot
+        // do. The stored flag is untouched and re-serialized as it was.
         QCheckBox *bypassCheckbox = new QCheckBox("Bypass");
         bypassCheckbox->setChecked(slot->getBypass());
+        bypassCheckbox->setEnabled(active);
+        bypassCheckbox->setToolTip(tooltip);
         rowLayout->addWidget(bypassCheckbox);
+
+        // Edit (parameters). Double-clicking the row does the same thing; the
+        // button exists because a double-click is not discoverable.
+        QPushButton *editBtn = new QPushButton(tr("Edit"));
+        editBtn->setMaximumWidth(70);
+        editBtn->setEnabled(active);
+        rowLayout->addWidget(editBtn);
+
+        // Reload, only where it means something.
+        QPushButton *reloadBtn = nullptr;
+        if (!active) {
+            reloadBtn = new QPushButton(tr("Reload"));
+            reloadBtn->setMaximumWidth(80);
+            reloadBtn->setToolTip(tooltip);
+            rowLayout->addWidget(reloadBtn);
+        }
 
         // Remove button
         QPushButton *removeBtn = new QPushButton("Remove");
@@ -114,10 +249,14 @@ void SPluginEffectStrip::rebuildUI()
         // Store widget pointers with index
         PluginWidget pw;
         pw.slotIndex = i;
+        pw.slot = slot;
         pw.nameLabel = nameLabel;
         pw.bypassCheckbox = bypassCheckbox;
+        pw.editBtn = editBtn;
+        pw.reloadBtn = reloadBtn;
         pw.removeBtn = removeBtn;
         pw.container = container;
+        pw.tooltip = tooltip;
         pluginWidgets_.push_back(pw);
 
         // Connect signals
@@ -126,9 +265,136 @@ void SPluginEffectStrip::rebuildUI()
                 [this, slotIndex](bool checked) { onPluginBypassToggled(slotIndex, checked); });
         connect(removeBtn, &QPushButton::clicked, this,
                 [this, slotIndex]() { onRemovePluginClicked(slotIndex); });
+        connect(editBtn, &QPushButton::clicked, this,
+                [this, slotIndex]() { openParamEditor(slotIndex); });
+        if (reloadBtn) {
+            connect(reloadBtn, &QPushButton::clicked, this,
+                    [this, slotIndex]() { onReloadPluginClicked(slotIndex); });
+        }
+
+        // Keep the checkbox honest when the flag moves in the MODEL (an undo of
+        // set-plugin-bypass, a loaded project). Signals are blocked so syncing
+        // the widget never submits another action.
+        connect(slot, &SPluginSlot::bypassChanged, bypassCheckbox,
+                [bypassCheckbox](bool b) {
+                    if (bypassCheckbox->isChecked() == b) return;
+                    const bool was = bypassCheckbox->blockSignals(true);
+                    bypassCheckbox->setChecked(b);
+                    bypassCheckbox->blockSignals(was);
+                });
+
+        // A reload can flip Missing -> Active, which changes the label, the
+        // tooltip and which buttons exist. Deferred, because this fires from
+        // inside the Reload button's own click handler. The CONTEXT is the
+        // container, not `this`: the container dies with each rebuild, so the
+        // connection dies with it — with `this` as context these would pile up
+        // one per rebuild for the lifetime of the strip.
+        connect(slot, &SPluginSlot::pluginReloaded, container, [this]() {
+            QTimer::singleShot(0, this, [this]() { rebuildUI(); });
+        });
+
+        // An editor window already open on this slot must learn its NEW index:
+        // reorder-plugin moves the slot without touching the dialog, and a stale
+        // index would send the next parameter edit to a different plugin.
+        if (QDialog *dlg = editors_.value(slot).data()) {
+            if (SPluginParamEditor *ed =
+                    dlg->findChild<SPluginParamEditor *>(QStringLiteral("paramEditor"))) {
+                ed->setSlotIndex(i);
+            }
+        }
+
+        // Double-click anywhere on the row opens the editor.
+        container->installEventFilter(this);
+        nameLabel->installEventFilter(this);
     }
 
     pluginsLayout_->addStretch();
+}
+
+QString SPluginEffectStrip::describeSlot(int slotIndex) const
+{
+    if (slotIndex < 0 || slotIndex >= (int) pluginWidgets_.size()) {
+        return QString();
+    }
+    const PluginWidget &pw = pluginWidgets_[slotIndex];
+    if (!pw.slot) return QString();
+    return QStringLiteral(
+               "name=%1|state=%2|mode=%3|bypass=%4|nameEnabled=%5|bypassEnabled=%6"
+               "|editEnabled=%7|reload=%8|tooltip=%9")
+        .arg(pw.nameLabel->text(),
+             QString::fromLatin1(stateName(pw.slot->getSlotState())),
+             QString::fromLatin1(modeName(pw.slot->getSlotMode())))
+        .arg(pw.slot->getBypass() ? 1 : 0)
+        .arg(pw.nameLabel->isEnabled() ? 1 : 0)
+        .arg(pw.bypassCheckbox->isEnabled() ? 1 : 0)
+        .arg(pw.editBtn->isEnabled() ? 1 : 0)
+        .arg(pw.reloadBtn ? 1 : 0)
+        .arg(pw.tooltip);
+}
+
+bool SPluginEffectStrip::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        for (size_t i = 0; i < pluginWidgets_.size(); ++i) {
+            if (pluginWidgets_[i].container == watched ||
+                pluginWidgets_[i].nameLabel == watched) {
+                openParamEditor((int) i);
+                return true;
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+SPluginParamEditor *SPluginEffectStrip::ensureParamEditor(int slotIndex,
+                                                         bool showWindow)
+{
+    if (!pluginChain_) return nullptr;
+    SPluginSlot *slot = pluginChain_->getSlotAt(slotIndex);
+    if (!slot) return nullptr;
+
+    const QString trackPath = trackPathString();
+    if (trackPath.isEmpty()) return nullptr;
+
+    QDialog *dlg = editors_.value(slot).data();
+    if (!dlg) {
+        dlg = new QDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->setWindowTitle(storedName(slot));
+        dlg->resize(420, 320);
+        QVBoxLayout *lay = new QVBoxLayout(dlg);
+        lay->setContentsMargins(4, 4, 4, 4);
+        SPluginParamEditor *editor =
+            new SPluginParamEditor(slot, trackPath, slotIndex, dlg);
+        editor->setObjectName(QStringLiteral("paramEditor"));
+        lay->addWidget(editor);
+        editors_.insert(slot, dlg);
+
+        // The slot outliving its editor is the normal case; the reverse is not.
+        // remove-plugin deletes the slot, so close the window with it rather than
+        // leaving a dialog holding a dangling model pointer.
+        connect(slot, &QObject::destroyed, dlg, &QDialog::close);
+    }
+
+    if (showWindow) {
+        dlg->show();
+        dlg->raise();
+    }
+    return dlg->findChild<SPluginParamEditor *>(QStringLiteral("paramEditor"));
+}
+
+void SPluginEffectStrip::openParamEditor(int slotIndex)
+{
+    ensureParamEditor(slotIndex, /*showWindow=*/true);
+}
+
+bool SPluginEffectStrip::editorSetParam(int slotIndex, std::uint32_t paramId,
+                                       double value)
+{
+    // showWindow = false on purpose: see the header. A qxa run on Windows uses
+    // the real platform plugin, and a test must not put a window on screen.
+    SPluginParamEditor *editor = ensureParamEditor(slotIndex, /*showWindow=*/false);
+    return editor && editor->setParamFromUi(paramId, value);
 }
 
 void SPluginEffectStrip::onAddPluginClicked()
@@ -137,27 +403,9 @@ void SPluginEffectStrip::onAddPluginClicked()
     if (browser.exec() == QDialog::Accepted) {
         const auto *descriptor = browser.selectedPlugin();
         if (descriptor) {
-            // Find track index in the mixer
-            SProject *project = SApplication::app().getCurrentProject();
-            if (!project) return;
-
-            SObject *root = project->getRootComponent();
-            SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
-            if (!mixer) return;
-
-            int trackIdx = -1;
-            for (int i = 0; i < mixer->getNTracks(); ++i) {
-                SLink *link = mixer->getTrackAt(i);
-                if (link && &link->getSObject() == track_) {
-                    trackIdx = i;
-                    break;
-                }
-            }
-            if (trackIdx < 0) return;
-
-            // Create path and action
-            QString trackPath = QString("%1").arg(trackIdx);
-            int slotIndex = pluginChain_->getSlotCount();
+            const QString trackPath = trackPathString();
+            if (trackPath.isEmpty()) return;
+            int slotIndex = pluginChain_ ? pluginChain_->getSlotCount() : 0;
             SApplication::app().submitAction(
                 new SInsertPluginAction(trackPath, slotIndex, *descriptor));
         }
@@ -166,35 +414,33 @@ void SPluginEffectStrip::onAddPluginClicked()
 
 void SPluginEffectStrip::onRemovePluginClicked(int slotIndex)
 {
-    // Find track index in the mixer
-    SProject *project = SApplication::app().getCurrentProject();
-    if (!project) return;
-
-    SObject *root = project->getRootComponent();
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
-    if (!mixer) return;
-
-    int trackIdx = -1;
-    for (int i = 0; i < mixer->getNTracks(); ++i) {
-        SLink *link = mixer->getTrackAt(i);
-        if (link && &link->getSObject() == track_) {
-            trackIdx = i;
-            break;
-        }
-    }
-    if (trackIdx < 0) return;
-
-    // Create path and action
-    QString trackPath = QString("%1").arg(trackIdx);
+    const QString trackPath = trackPathString();
+    if (trackPath.isEmpty()) return;
     SApplication::app().submitAction(new SRemovePluginAction(trackPath, slotIndex));
 }
 
 void SPluginEffectStrip::onPluginBypassToggled(int slotIndex, bool bypassed)
 {
+    // Through the ACTION (proposal 08 M5). This used to be a direct
+    // slot->setBypass(), which is the CONTRACT invariant 3 violation: the toggle
+    // was not undoable and did not appear in a saved action script.
+    const QString trackPath = trackPathString();
+    if (trackPath.isEmpty()) return;
+    SApplication::app().submitAction(
+        new SSetPluginBypassAction(trackPath, slotIndex, bypassed));
+}
+
+void SPluginEffectStrip::onReloadPluginClicked(int slotIndex)
+{
+    if (!pluginChain_) return;
     SPluginSlot *slot = pluginChain_->getSlotAt(slotIndex);
-    if (slot) {
-        slot->setBypass(bypassed);
-    }
+    if (!slot) return;
+    // Deliberately NOT an action. reloadPlugin() re-resolves the descriptor
+    // against the registry and re-instantiates in place; it mutates no document
+    // state (the descriptor and the state chunk are untouched, and a re-save
+    // produces the same bytes), so there is nothing to undo. It is UI-thread
+    // only, which is exactly where a button click is.
+    slot->reloadPlugin();
 }
 
 void SPluginEffectStrip::onPluginSlotInserted(int index, SPluginSlot &slot)
@@ -203,6 +449,11 @@ void SPluginEffectStrip::onPluginSlotInserted(int index, SPluginSlot &slot)
 }
 
 void SPluginEffectStrip::onPluginSlotRemoved(int index, SPluginSlot &slot)
+{
+    rebuildUI();
+}
+
+void SPluginEffectStrip::onPluginSlotsReordered()
 {
     rebuildUI();
 }
@@ -241,25 +492,12 @@ void SPluginEffectStrip::dropEvent(QDropEvent *event)
     }
 
     if (targetIndex >= 0 && targetIndex != dragSourceIndex_) {
-        // Submit reorder action
-        SProject *project = SApplication::app().getCurrentProject();
-        if (!project) return;
-
-        SObject *root = project->getRootComponent();
-        SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
-        if (!mixer) return;
-
-        int trackIdx = -1;
-        for (int i = 0; i < mixer->getNTracks(); ++i) {
-            SLink *link = mixer->getTrackAt(i);
-            if (link && &link->getSObject() == track_) {
-                trackIdx = i;
-                break;
-            }
-        }
-
-        if (trackIdx >= 0 && pluginChain_) {
-            pluginChain_->reorderSlot(dragSourceIndex_, targetIndex);
+        // Through the ACTION. This used to call pluginChain_->reorderSlot()
+        // directly — a model mutation with no undo entry (CONTRACT invariant 3).
+        const QString trackPath = trackPathString();
+        if (!trackPath.isEmpty()) {
+            SApplication::app().submitAction(
+                new SReorderPluginAction(trackPath, dragSourceIndex_, targetIndex));
         }
     }
 

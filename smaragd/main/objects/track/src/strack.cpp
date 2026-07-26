@@ -508,6 +508,14 @@ void STrack::adoptPluginChain( SPluginChain *chain )
     for( int s = 0; s < nSlots; ++s ) {
         SPluginSlot *slot = chain->getSlotAt( s );
         if( !slot ) continue;
+        // The loaded slots never emitted slotInserted at anyone, so the
+        // audioInvalidated wiring onPluginSlotInserted normally makes has to be
+        // made here too — otherwise a bypass or parameter edit on a LOADED
+        // project would be inaudible while the same edit on a freshly inserted
+        // plugin worked.
+        QObject::connect( slot, SIGNAL( audioInvalidated() ),
+                          this, SLOT( onPluginSlotAudioInvalidated() ),
+                          Qt::UniqueConnection );
         slot->setBusCount( nBusses_ );
     }
     for( int i = 0; i < nBusses_; ++i ) {
@@ -659,6 +667,14 @@ SLink *STrack::instantiateFromDomElement(
 
 void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
 {
+    // BEFORE the bus guard, and UniqueConnection because a track whose bus count
+    // grows re-runs this path: the slot has no way to invalidate the pages above
+    // itself (proposal 08 M5 — see SPluginSlot::audioInvalidated()), so this
+    // connection is what makes a bypass toggle and a parameter edit audible.
+    QObject::connect( &slot, SIGNAL( audioInvalidated() ),
+                      this, SLOT( onPluginSlotAudioInvalidated() ),
+                      Qt::UniqueConnection );
+
     // Sync the model change to all DSP plugin chains
     // Pre-allocate inserts for all buses to ensure they're fully initialized
     // before the audio thread accesses them
@@ -702,6 +718,14 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
         }
         invalidateRenderPath();
     }
+}
+
+void STrack::onPluginSlotAudioInvalidated()
+{
+    // Exactly what the insert/remove/reorder handlers do: bumpRenderChainEpoch()
+    // on us (every bus's twTrackMix + twPluginChain + the rewire) and on every
+    // container above us, via the root's walk.
+    invalidateRenderPath();
 }
 
 void STrack::onPluginSlotsReordered()

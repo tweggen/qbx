@@ -143,9 +143,13 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/sinsertpluginaction.h
     objects/track/include/app/objects/track/seteditgroupaction.h
     objects/track/include/app/objects/track/smoveclipaction.h
+    objects/track/include/app/objects/track/spluginactionsupport.h
     objects/track/include/app/objects/track/spluginchain.h
     objects/track/include/app/objects/track/spluginslot.h
     objects/track/include/app/objects/track/sremovepluginaction.h
+    objects/track/include/app/objects/track/sreorderpluginaction.h
+    objects/track/include/app/objects/track/ssetpluginbypassaction.h
+    objects/track/include/app/objects/track/ssetpluginparamaction.h
     objects/track/include/app/objects/track/ssettrackvolumeaction.h
     objects/track/include/app/objects/track/strack.h
     objects/track/include/app/objects/track/strackcolormodifier.h
@@ -158,6 +162,9 @@ set(APP_OBJECTS_FILES
     objects/track/src/spluginchain.cpp
     objects/track/src/spluginslot.cpp
     objects/track/src/sremovepluginaction.cpp
+    objects/track/src/sreorderpluginaction.cpp
+    objects/track/src/ssetpluginbypassaction.cpp
+    objects/track/src/ssetpluginparamaction.cpp
     objects/track/src/ssettrackvolumeaction.cpp
     objects/track/src/strack.cpp
     objects/track/src/strackcolormodifier.cpp
@@ -240,6 +247,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sdragclipedgeaction.h
     testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
+    testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/stransporttestactions.h
@@ -252,6 +260,7 @@ set(APP_UI_FILES
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
+    testkit/src/spluginuitestactions.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
     testkit/src/stransporttestactions.cpp
@@ -466,3 +475,11 @@ target_link_libraries(action_roundtrip_test
     PRIVATE
         app_ui app_objects app_core app_model
 )
+
+# It was BUILT but never registered, so `ctest` never ran it: three milestones
+# of new action verbs went in without the round-trip audit ever gating anything
+# (proposal 08 M5). It needs a QApplication for the widget-owning verbs' static
+# registrars, and offscreen so it never touches a display.
+add_test(NAME action_roundtrip_test COMMAND action_roundtrip_test)
+set_tests_properties(action_roundtrip_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

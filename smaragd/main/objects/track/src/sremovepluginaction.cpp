@@ -9,8 +9,11 @@
 #include "app/objects/track/strackpath.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "app/actions/sactionregistry.h"
+#include <QByteArray>
 #include <QDomElement>
 #include <QString>
+#include <cstdint>
+#include <vector>
 
 SRemovePluginAction::SRemovePluginAction(const QString &trackPath, int slotIndex)
     : trackPath_(trackPath), slotIndex_(slotIndex),
@@ -58,6 +61,22 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
     nIn_ = desc.io.audioInputs;
     nOut_ = desc.io.audioOutputs;
 
+    // Capture the plugin STATE too, or the inverse re-inserts a slot at plugin
+    // defaults and the undo is only half an undo. saveState() pulls a fresh blob
+    // from the live plugin when the slot is Active and hands back the stored blob
+    // verbatim otherwise — which is what keeps a Missing plugin's patch intact
+    // across remove/undo on a machine that does not have the plugin installed.
+    {
+        std::vector<std::uint8_t> blob;
+        slot->saveState(blob);
+        if (!blob.empty()) {
+            const QByteArray raw((const char *) blob.data(), (int) blob.size());
+            state_ = QString::fromLatin1(raw.toBase64());
+        } else {
+            state_.clear();
+        }
+    }
+
     // Remove the slot (SLink will be deleted, which deletes the SPluginSlot)
     SLink *link = chain->childAt(slotIndex_);
     if (link) {
@@ -73,7 +92,8 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
     desc_inv.path = path_.toStdString();
     desc_inv.io = {nIn_, nOut_};
 
-    SAction *inverse = new SInsertPluginAction(trackPath_, slotIndex_, desc_inv);
+    SAction *inverse = new SInsertPluginAction(trackPath_, slotIndex_, desc_inv,
+                                               state_);
 
     return {true, inverse};
 }
@@ -89,6 +109,11 @@ void SRemovePluginAction::writeXml(QDomElement &elem) const
     elem.setAttribute("path", path_);
     elem.setAttribute("nIn", nIn_);
     elem.setAttribute("nOut", nOut_);
+    // Optional, and only ever non-empty on an action that has already been
+    // applied — a hand-written <remove-plugin> in a .qxa carries none.
+    if (!state_.isEmpty()) {
+        elem.setAttribute("state", state_);
+    }
 }
 
 bool SRemovePluginAction::readXml(const QDomElement &elem, int /*version*/)
@@ -102,6 +127,7 @@ bool SRemovePluginAction::readXml(const QDomElement &elem, int /*version*/)
     path_ = elem.attribute("path");
     nIn_ = elem.attribute("nIn", "0").toUInt();
     nOut_ = elem.attribute("nOut", "0").toUInt();
+    state_ = elem.attribute("state");
     return true;
 }
 

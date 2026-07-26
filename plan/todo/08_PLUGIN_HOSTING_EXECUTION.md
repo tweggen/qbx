@@ -5,6 +5,16 @@ Execution plan for `plan/proposed/08_PLUGIN_HOSTING.md`. That document holds the
 the channel-mismatch table, the settled decisions). This document holds *what is actually built,
 what is broken, and the milestone order to close it out*.
 
+> **Execution status (2026-07-26): M0, M1, M2, M3, M4 and M5 are DONE; M6 (VST3) and
+> M7 (macOS bring-up) are OPEN.** Every §Confirmed problems item below is closed, with
+> two carry-overs recorded where they landed: the MONO SINK (`RenderSession` /
+> `AudioEngine` collapse the graph's buses to one page and duplicate it) is a
+> tw_render / tw_playback gap, not a plugin-layer one, and is nobody's milestone; and
+> the FX strip's drag-to-reorder GESTURE cannot fire (`dragSourceIndex_` is never
+> assigned; `startDragFromPlugin()` was declared and never defined) — the
+> `reorder-plugin` action behind it exists and is tested. Per-milestone detail is in
+> `plan/STATE.md`.
+
 ## Context
 
 Proposal 08's phases 1, 2 and most of 4 were built and then stalled. The engine has
@@ -86,7 +96,7 @@ Everything else follows proposal 08 unchanged.
 
 ---
 
-## M0 — De-risk + third-party wiring
+## M0 — De-risk + third-party wiring — **DONE** (2026-07-26, commit defaf42)
 
 Establishes the repo's first submodule convention (there is none today: no `.gitmodules`, no
 `third_party/`, no `FetchContent`).
@@ -106,7 +116,7 @@ Establishes the repo's first submodule convention (there is none today: no `.git
   `<module>/tools/` is the established home for dev tools (cf. `analysis/tools/warp_ab.cc`) and is
   exempt from `check_logging.py`.
 
-## M1 — CLAP backend (`twPlugin` implementation)
+## M1 — CLAP backend (`twPlugin` implementation) — **DONE** (2026-07-26, commit defaf42)
 
 New files in `smaragd/tw303a/plugins/`:
 
@@ -148,7 +158,7 @@ Also in M1, because they are prerequisites for hearing anything correct:
   rate; honouring it would re-`prepare()` (and reset) the plugin on every waveform redraw.
   Preview only needs envelope shape.
 
-## M2 — Scanner, cache, search paths, rescan (AC 1)
+## M2 — Scanner, cache, search paths, rescan (AC 1) — **DONE** (2026-07-26, commits a84bfae + 0295b6d)
 
 **Engine** — `smaragd/tw303a/plugins/`:
 
@@ -194,7 +204,7 @@ Also in M1, because they are prerequisites for hearing anything correct:
   `'shell': … | {'plugins'}`. This is the hand-maintained mirror of the CMake DAG — **two-place
   edit** (also `smaragd/tw303a/CMakeLists.txt` if module DEPS change).
 
-## M3 — Stereo-coherent signal path (AC 3)
+## M3 — Stereo-coherent signal path (AC 3) — **DONE** (2026-07-26, commit 25f74e8)
 
 The frozen-page model is **one mono page per component** (`twComponent::freezePage_nolock` renders
 `idx = 0` only). Parallel mono wires are therefore modelled as parallel *component instances* —
@@ -231,7 +241,7 @@ edits are inaudible because cached pages are served. And `twPluginChain::calcOut
 `pluginsMutex_` — safe only because the RT callback never renders (`twRtThreadGuard`); leave a
 comment saying so.
 
-## M4 — Serialization + missing-plugin placeholder (AC 4, AC 5)
+## M4 — Serialization + missing-plugin placeholder (AC 4, AC 5) — **DONE** (2026-07-26, commit 5a7cfc5)
 
 - `SPluginSlot::serializeSelfAttributes`: **call `SObject::serializeSelfAttributes(o)` first**
   (this is what emits `id=`; without it the whole project load aborts), then `bypassed`,
@@ -258,7 +268,7 @@ comment saying so.
 - After a rescan that finds a previously-missing plugin, the slot can be re-instantiated (state
   chunk re-applied) — surfaced as a per-slot "Reload" affordance in M5.
 
-## M5 — UI + undo (AC 2, remaining proposal-08 actions)
+## M5 — UI + undo (AC 2, remaining proposal-08 actions) — **DONE** (2026-07-26)
 
 - Wire `SPluginParamEditor` (built, currently never constructed) into `SPluginEffectStrip`:
   double-click a slot opens it. The strip is already mounted from
@@ -271,7 +281,7 @@ comment saying so.
   `SSetPluginParamAction` coalescing by `(slot, paramId)` like the fader merge.
   Check that `SRemovePluginAction`'s inverse carries the state chunk.
 
-## M6 — VST3 backend (proves proposal 08 AC 4)
+## M6 — VST3 backend (proves proposal 08 AC 4) — **OPEN**
 
 Should touch **only** `smaragd/tw303a/plugins/` — no changes to the processor/tap, model, actions
 or UI. If it does, that is the finding.
@@ -300,7 +310,7 @@ or UI. If it does, that is the finding.
   has one calling convention — MSVC-built plugins are loadable from a MinGW host (Ardour does
   exactly this). A spike is still the gate before writing the wrapper.
 
-## M7 — macOS bring-up
+## M7 — macOS bring-up — **OPEN**
 
 Written cross-platform throughout; this milestone is verification plus the mac-only bits.
 

@@ -58,6 +58,31 @@
          keeps a project portable between machines. -->
     <assert-file-contains path="../../build/plugin_slot_resave.qxp"
                           text="path='twtestclap.clap'"/>
+
+    <!-- Proposal 08 M5: an edit on a LOADED slot must be audible too.
+         A loaded chain's slots never emitted slotInserted at anyone — STrack
+         picks the chain up in SProjectLoader::deferResolve and wires the DSP
+         itself (adoptPluginChain) — so the audioInvalidated -> STrack
+         connection that makes bypass and parameter edits reach the render has to
+         be made THERE as well as in onPluginSlotInserted. Wiring only the insert
+         path would have left edits audible on a freshly added plugin and
+         completely silent on a loaded one, which is the harder bug to notice.
+
+         Bypass takes the loaded 3x (1.5 x gain 2.0) slot down to unprocessed
+         1.0x, and the undo puts it back. -->
+    <set-plugin-bypass trackPath="0" slotIndex="0" bypassed="true"/>
+
+    <render filename="plugin_slot_loaded_bypassed.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="plugin_slot_loaded_bypassed.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.073"/>
+
+    <undo count="1"/>
+
+    <render filename="plugin_slot_loaded_unbypassed.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="plugin_slot_loaded_unbypassed.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.185" maxRms="0.215"/>
   </actions>
 
   <assertions>

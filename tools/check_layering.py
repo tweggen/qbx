@@ -98,8 +98,14 @@ APP_DEPS = {
                        'selection', 'servicesui', 'testkit', 'timeline'},
     # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:
     # set-render-gate addresses an SCut, wait-analysis reads SPlainWave.
+    # testkit + pluginui since proposal 08 M5: assert-plugin-strip and
+    # plugin-editor-set-param build the REAL SPluginEffectStrip /
+    # SPluginParamEditor off screen, which is the only automated coverage a
+    # milestone made almost entirely of widgets can have. Same shape as the
+    # existing testkit -> shell edge (drag-clip-edge, assert-lane-alignment):
+    # a test verb reaching the widget it is testing.
     'testkit':        {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'shell'},
+                       'objects/track', 'objects/wave', 'pluginui', 'shell'},
 }
 
 # Which engine modules each app module may include (tw/<mod>/... paths).

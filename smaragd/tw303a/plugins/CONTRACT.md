@@ -146,7 +146,16 @@ Invariants:
    tap's contentEpochNow(); both counters are monotonic, so the sum is too and
    cannot alias -- and including the taps' epochs is what makes an UPSTREAM edit
    (a clip moved) miss the processor cache as well. The app still owns the
-   downstream path (SObject::invalidateRenderPath()).
+   downstream path — and proposal 08 M5 found that it was NOT actually doing it:
+   SObject::invalidateRenderPath() called from an SPluginSlot is a no-op, because
+   it walks DOWN from the project root through childLinks() looking for `this`
+   and an SPluginChain is deliberately not an SLink child of its track. So a
+   bypass or parameter edit staled both caches here and still rendered
+   byte-identical audio, because the twPluginChain / twTrackMix / mixer pages
+   above the taps were untouched. The app side now routes it through
+   SPluginSlot::audioInvalidated() -> STrack::onPluginSlotAudioInvalidated() ->
+   invalidateRenderPath() on the TRACK (main/pluginui/CONTRACT.md invariant 6,
+   gated by qxa.plugin_bypass_and_param).
 16. The channel-mismatch mapping is derived ONCE, from the plugin's OWN
    reported layout, and never guessed per page. setBusCount() instantiates one
    plugin first and reads ioLayout() from it, because a descriptor from a stale

@@ -8,13 +8,17 @@
 #include "app/objects/track/strackpath.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "app/actions/sactionregistry.h"
+#include <QByteArray>
 #include <QDomElement>
 #include <QString>
+#include <cstdint>
+#include <vector>
 
 SInsertPluginAction::SInsertPluginAction(
     const QString &trackPath,
     int slotIndex,
-    const audio::twPluginDescriptor &descriptor
+    const audio::twPluginDescriptor &descriptor,
+    const QString &stateBase64
 )
     : trackPath_(trackPath),
       slotIndex_(slotIndex),
@@ -24,7 +28,8 @@ SInsertPluginAction::SInsertPluginAction(
       vendor_(QString::fromStdString(descriptor.vendor)),
       path_(QString::fromStdString(descriptor.path)),
       nIn_(descriptor.io.audioInputs),
-      nOut_(descriptor.io.audioOutputs)
+      nOut_(descriptor.io.audioOutputs),
+      state_(stateBase64)
 {
 }
 
@@ -67,6 +72,18 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     SPluginSlot *slot = new SPluginSlot(project, desc);
     slot->setSName(pluginName_);
 
+    // The state chunk goes in BEFORE the link is parented. setParent() is what
+    // fires slotInserted -> STrack::onPluginSlotInserted -> setBusCount(), which
+    // is the moment the plugin instances are created; restoreState() on a slot
+    // with no processor yet stores the blob, and ensureBuses() replays it onto
+    // every instance as they appear. That is exactly the project-load ordering,
+    // so undo-of-a-removal and a file load take the same path.
+    if (!state_.isEmpty()) {
+        const QByteArray decoded = QByteArray::fromBase64(state_.toLatin1());
+        std::vector<std::uint8_t> blob(decoded.begin(), decoded.end());
+        slot->restoreState(blob);
+    }
+
     // Add to chain
     // IMPORTANT: SLink must be constructed with parent=NULL, then setParent() called after.
     // This avoids triggering childEvent() during construction on an incompletely-initialized object.
@@ -105,6 +122,11 @@ void SInsertPluginAction::writeXml(QDomElement &elem) const
     elem.setAttribute("path", path_);
     elem.setAttribute("nIn", nIn_);
     elem.setAttribute("nOut", nOut_);
+    // Optional: omitted (not written empty) so every pre-M5 action script and
+    // every hand-written .qxa stays byte-identical when re-serialized.
+    if (!state_.isEmpty()) {
+        elem.setAttribute("state", state_);
+    }
 }
 
 bool SInsertPluginAction::readXml(const QDomElement &elem, int /*version*/)
@@ -118,6 +140,7 @@ bool SInsertPluginAction::readXml(const QDomElement &elem, int /*version*/)
     path_ = elem.attribute("path");
     nIn_ = elem.attribute("nIn", "0").toUInt();
     nOut_ = elem.attribute("nOut", "0").toUInt();
+    state_ = elem.attribute("state");
     return true;
 }
 

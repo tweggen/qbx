@@ -7801,3 +7801,169 @@ slot RENDERING in the FX strip, and `SSetPluginBypassAction` /
 undone removal comes back with default parameters — M5 owns that check and it is
 now the only known hole in the slot's state story. The mono sink recorded under
 M3 is still nobody's milestone.
+
+## 2026-07-26 — Proposal 08 M5 EXECUTED: the plugin UI, and every plugin edit is now an action
+
+M5 closes `main/pluginui/CONTRACT.md` invariant 3. Before it, two of the five
+plugin mutations were not actions at all: the FX strip's Bypass checkbox called
+`SPluginSlot::setBypass()` and its drop handler called
+`SPluginChain::reorderSlot()` straight from the widget, and the parameter editor
+called `twPlugin::setParam()` straight from a slider. None of the three was
+undoable or scriptable. All five now go through the action system:
+`insert-plugin`, `remove-plugin`, `reorder-plugin`, `set-plugin-bypass`,
+`set-plugin-param` — documented in `docs/ACTIONS.md`.
+
+**The defect this milestone actually found.** M3 recorded "parameter and bypass
+changes must invalidate pages" and implemented `SPluginSlot::setBypass()` /
+`notifyPluginEdited()` calling `SObject::invalidateRenderPath()`. That call is a
+**no-op for a plugin slot**, and nothing had ever tested it:
+`invalidateRenderPath()` walks DOWN from the project root through `childLinks()`
+looking for `this`, and a track's `SPluginChain` is deliberately not an `SLink`
+child of the track (`STrack`'s constructor says so in as many words), so the walk
+never reaches a slot, `contains` is false everywhere and NOTHING is invalidated.
+The observable consequence, measured on the first run of the new qxa case: a
+bypass toggle and a gain change from 1.0 to 2.0 both rendered **0.099975 —
+byte-for-byte the unedited audio**, five renders in a row. The slot's own tap
+pages were staled correctly (`twPluginSlotProcessor::bumpParamEpoch()` does its
+half); the `twPluginChain` / `twTrackMix` / mixer pages above them were not, so
+the render served what it already had. Insert/remove/reorder never hit this
+because `STrack::onPluginSlot{Inserted,Removed,Reordered}` invalidate from the
+TRACK.
+
+The fix follows that working shape: `SPluginSlot` gained an `audioInvalidated()`
+signal, emitted by `setBypass()`, `notifyPluginEdited()` and `reloadPlugin()`;
+`STrack::onPluginSlotAudioInvalidated()` answers it with
+`invalidateRenderPath()` on itself. The connection is made in
+`onPluginSlotInserted()` (before the bus guard, `Qt::UniqueConnection` because a
+growing bus count re-runs it) AND in `adoptPluginChain()` — a loaded project's
+slots never emit `slotInserted` at anyone, so wiring only the first place would
+have made edits audible on a freshly inserted plugin and silent on a loaded one.
+This is now `pluginui/CONTRACT.md` invariant 6.
+
+**`SRemovePluginAction`'s inverse now carries the state chunk.** M4 left this as
+an explicitly-known hole: the inverse was built from the descriptor alone, which
+says nothing about parameter values, so undoing a removal re-instantiated the
+plugin at its factory defaults — the slot came back, the sound did not. Nothing
+caught it because `plugin_remove_and_undo` only ever exercised a slot at DEFAULT
+gain, where "restored" and "reset" are the same number. `apply()` now captures
+`slot->saveState()` (fresh from the live plugin when Active, the stored blob
+verbatim otherwise, so a Missing plugin's patch survives remove/undo on a machine
+that does not have it) and hands it to `SInsertPluginAction` as a new optional
+base64 `state` attribute. The re-insert replays it through `restoreState()`
+BEFORE the link is parented — which is the project-load ordering, so undo and a
+file load take the same path.
+
+**The three new actions**, on the `sinsertpluginaction.cpp` template, with a
+shared `spluginactionsupport.h` so the "parse the track path → chain → slot" rule
+exists once instead of five times:
+
+- `set-plugin-bypass` (`trackPath`, `slotIndex`, `bypassed`) — ABSOLUTE, not a
+  toggle, because a toggle applied twice by a repeated undo lands on the wrong
+  value.
+- `reorder-plugin` (`trackPath`, `fromIndex`, `toIndex`) — validates BOTH ends
+  against the chain, because `moveChildToIndex()` silently clamps and silently
+  returns on an out-of-range source, so an unchecked action would report success
+  having moved nothing and its inverse would then move something that never
+  moved. The inverse is the reverse move, not a swap (`QList::move`).
+- `set-plugin-param` (`trackPath`, `slotIndex`, `paramId`, `value`) — validates
+  the id against the plugin's own list and clamps to its declared range (every
+  backend's `setParam()` accepts an unknown id as a no-op, so an unvalidated
+  action would report success and a level assertion would then fail for a reason
+  nowhere near the truth); broadcasts to EVERY instance (dual-mono has N, and
+  they must not drift); calls `notifyPluginEdited()`; refuses on a
+  Missing/Unsupported slot, whose authority on settings is the stored blob.
+  Coalesces by `(trackPath, slotIndex, paramId)` the way `set-track-volume` does,
+  so a slider drag is one undo entry — `SActionUndoCommand::id()` hashes
+  `mergeKey()` and `QUndoStack::push()` does the merging, keeping the older
+  action's inverse and absorbing the newer value.
+
+**The UI.** `SPluginParamEditor` had been written and was **never constructed
+anywhere** — no call site at all. It is now bound to the MODEL (`SPluginSlot` +
+the `trackPath`/`slotIndex` that address it) instead of a bare `twPlugin`, so a
+slider submits an action; it re-reads its sliders on the new
+`SPluginSlot::paramsChanged()` (which is what makes an UNDO visible in an editor
+already on screen — the action mutates the plugin, not the widget) and rebuilds
+them on `pluginReloaded()`, because a reloaded plugin may expose a different
+parameter list. `SPluginEffectStrip` opens it on a row double-click and on a new
+per-row Edit button (a double-click is not discoverable), one window per slot,
+closed on the slot's `destroyed()`. Missing/Unsupported rows render greyed with
+the name the PROJECT FILE carried — never the placeholder's — plus `(missing)` /
+`(unsupported)`, a tooltip naming the format, uid, vendor and stored module path
+and saying the settings are kept, a disabled Bypass and Edit, and a **Reload**
+button wired straight to `SPluginSlot::reloadPlugin()`. Reload is deliberately
+NOT an action: it re-resolves and re-instantiates in place and mutates no
+document state (a re-save produces the same bytes), so there is nothing to undo,
+and it is UI-thread-only, which is exactly where a button click is. The strip
+also now listens to `slotsReordered` — the signal existed and nobody listened, so
+a reorder left the strip showing the old order — and it re-points every open
+editor at its slot's NEW index on a rebuild, because `reorder-plugin` moves a slot
+without touching the dialog and an editor holding the old index would aim its next
+parameter edit at a different plugin (`pluginui/CONTRACT.md` invariant 7).
+
+**Testing a milestone made of widgets.** Two new testkit verbs build the REAL
+widgets off screen and never show a window (a qxa run on Windows uses the real
+platform plugin; a test must not put a dialog on the developer's screen or steal
+focus): `assert-plugin-strip` matches `SPluginEffectStrip::describeSlot()`, a
+compact rendering of the row as the widget actually built it, and
+`plugin-editor-set-param` drives the editor's slider along exactly the path a
+drag takes, so the resulting `set-plugin-param` is what the render measures. No
+OS input is synthesized anywhere. This needed one new declared app edge,
+`testkit → pluginui` in `tools/check_layering.py` — the same shape as the
+existing `testkit → shell` edge that `drag-clip-edge` and
+`assert-lane-alignment` use.
+
+**`action_roundtrip_test` was built but never registered with CTest**, so three
+milestones of new verbs went in with the round-trip audit gating nothing — and it
+was RED: `assert-audio-energy`, `assert-audio-peak`, `assert-file-contains` and
+`assert-sidecar` all correctly REJECT their own default XML, because a filename /
+path / aspect is mandatory, so testing the default instance tested nothing for
+them. It now carries a table of representative fixtures (loaded before the round
+trip, so the fields are real values), additionally asserts that every attribute a
+fixture declares SURVIVES `readXml`+`writeXml` — write→read→write cannot catch a
+field `readXml` never reads, which is exactly the shape of the remove-plugin bug
+above — and fails on a stale fixture naming an unregistered verb. Registered with
+`add_test` and `QT_QPA_PLATFORM=offscreen`, so `ctest -E qxa` is now 18/18.
+
+**Gates.** `check_layering.py` and `check_logging.py` clean; build clean with no
+new warnings from the changed files (the only warnings are the pre-existing
+`calcOutputTo` deprecation, one per TU, confirmed by touching two untouched
+files); `ctest -E qxa` 18/18; `ctest -R "plugins_test|plugins_scan_test"` green;
+`action_roundtrip_test` green over 74 verbs, 12 of them from fixtures; three new
+qxa cases green — `plugin_bypass_and_param` (0.0999 → 0.19995 on gain 2.0 →
+0.0999 undone → 0.06665 bypassed → 0.0999 undone, plus an unknown `paramId`
+rejected), `plugin_remove_restores_param` (0.19995 → 0.06665 removed → 0.19995
+undone, and the re-saved project still carries the gain-2.0 `'TWCP'` blob) and
+`plugin_ui_strip_and_editor` (Active row editable and `mode=Direct`, the editor's
+slider audible at 0.19995 and undoable, the Missing row greyed with its reason
+tooltip and Reload, an editor edit on it refused, reorder through the action and
+back); `plugin_slot_roundtrip` EXTENDED with a bypass on the LOADED slot
+(0.19995 -> 0.06665 -> 0.19995), which is the only thing that gates the
+`adoptPluginChain()` half of the wiring above; no regressions in
+`plugin_stereo_chain`, `plugin_remove_and_undo`, `plugin_missing_placeholder` or
+`render_sawtooth_with_effects`; and the rendered 16-bit PCM WAVs of all four
+cases byte-identical (`cmp`) across a repeat run and across
+`SMARAGD_REVAL_WORKERS` in {1,4,8,16} — 90 renders, all against the final
+binary.
+
+Built in the existing `smaragd/build-m3/` (gitignored by `build-*/`) because the
+developer still had `smaragd.exe` open with a project, which makes the link into
+`build/bin/` fail. No process was touched.
+
+**Still manual, and listed for the user's pass:** that the strip and the editor
+LOOK right at all (nothing in this repo can look at a window, and no screenshot
+was taken); the double-click gesture itself; the drag-to-reorder gesture; the
+browser dialog; the Options -> Plugins page against a real third-party CLAP; and
+the install -> rescan -> Reload -> hear-it loop end to end.
+
+**Found and NOT fixed** (pre-existing, outside M5's scope, now recorded in
+`pluginui/CONTRACT.md`): drag-to-reorder cannot fire. `dragSourceIndex_` is only
+ever read and reset — `startDragFromPlugin()` was declared and never defined, and
+no `mousePressEvent` starts a `QDrag` — so `dropEvent` returns immediately. The
+`reorder-plugin` action behind it is tested and works; only the gesture that
+would reach it is missing.
+
+**Out of scope and untouched:** VST3 (M6), macOS bring-up (M7), native
+`clap_plugin_gui` / `IPlugView` embedding (a deliberate proposal-08 deferral —
+generic sliders only, on a fixed 1000-tick normalization, with CLAP's
+`value_to_text` still unused), and the mono sink recorded under M3, which is
+still nobody's milestone.

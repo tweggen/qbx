@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_ui_strip_and_editor">
+
+  <!-- Proposal 08 M5, the UI half. M5 is almost entirely widget work and nothing
+       in this repo can look at a window, so the two verbs used here build the
+       REAL widgets off screen (never shown — a qxa run on Windows uses the real
+       platform plugin, and a test must not put a dialog on the user's screen)
+       and assert on what they rendered and what they submitted:
+
+         assert-plugin-strip       builds SPluginEffectStrip for a track and
+                                   matches SPluginEffectStrip::describeSlot()
+         plugin-editor-set-param   opens the SPluginParamEditor a double-click
+                                   opens and moves its slider
+
+       What is being gated:
+
+       1. An Active slot renders as an editable row: the name is NOT greyed, the
+          bypass checkbox and the Edit button are live, and no Reload button
+          exists (there is nothing to reload).
+
+       2. The parameter editor was BUILT in 2026 and never constructed anywhere
+          in the app — it had no call site at all. Driving its slider must reach
+          the plugin, and audibly: the editor submits a set-plugin-param action,
+          which is what broadcasts to every instance and stales the caches. The
+          render is the proof; the widget path is what produced it. gain 2.0 on
+          tw.test.clap.stereoskew (out[0] = in[0]*0.5*gain + in[1]*gain, both
+          buses fed the same mono material) takes channel 0 from 0.1000 to
+          0.2000 over the first second of ../test_sawtooth.wav.
+
+       3. The nested action is a real undo entry, so an undo puts the level back.
+
+       4. A MISSING slot renders greyed, names the plugin THE PROJECT FILE asked
+          for (not the placeholder that stood in for it), carries a tooltip
+          saying why, and offers Reload. That is the M5 affordance for AC 5.
+          Note the row still reads name=Nonexistent Reverb (missing): the label
+          comes from getDescriptor(), never getEffectiveDescriptor() — the whole
+          point of the greyed row is to say WHICH plugin is missing. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- 1. The Active row. -->
+    <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
+                         contains="name=Smaragd Test Stereo Skew|state=Active"/>
+    <assert-plugin-strip trackIndex="0" slotIndex="0"
+                         contains="nameEnabled=1|bypassEnabled=1|editEnabled=1|reload=0"/>
+    <!-- Direct is the 2->2-plugin-on-2-buses mapping; Transparent here would
+         mean the plugin is not really in the path. -->
+    <assert-plugin-strip trackIndex="0" slotIndex="0" contains="mode=Direct"/>
+
+    <!-- 2. Drive the editor's slider. -->
+    <plugin-editor-set-param trackIndex="0" slotIndex="0" paramId="0" value="2.0"/>
+
+    <render filename="pui_editor_gain2.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pui_editor_gain2.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.185" maxRms="0.215"/>
+
+    <!-- 3. The editor's edit is a normal undo entry. -->
+    <undo count="1"/>
+
+    <render filename="pui_editor_undone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pui_editor_undone.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- 4. A missing plugin's row. The second slot names a plugin nobody ships,
+         so the registry cannot resolve it and the slot stands at Missing. -->
+    <insert-plugin trackPath="0" slotIndex="1"
+                   format="clap" uid="tw.nobody.ships.this.plugin"
+                   name="Nonexistent Reverb" vendor="Acme"
+                   path="nosuchmodule.clap" nIn="2" nOut="2"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="1"
+                         contains="name=Nonexistent Reverb (missing)|state=Missing"/>
+    <!-- Greyed and non-editable, but reloadable. -->
+    <assert-plugin-strip trackIndex="0" slotIndex="1"
+                         contains="nameEnabled=0|bypassEnabled=0|editEnabled=0|reload=1"/>
+    <!-- The tooltip has to say WHY, and name the module the project asked for. -->
+    <assert-plugin-strip trackIndex="0" slotIndex="1"
+                         contains="Plugin not installed: clap / tw.nobody.ships.this.plugin"/>
+    <assert-plugin-strip trackIndex="0" slotIndex="1"
+                         contains="Stored module path: nosuchmodule.clap"/>
+
+    <!-- A missing slot has no parameters, so the editor refuses rather than
+         pretending: an accepted edit here would be lost, and the authority on a
+         Missing slot's settings is its stored state chunk. -->
+    <plugin-editor-set-param trackIndex="0" slotIndex="1" paramId="0" value="1.0"
+                             expectReject="true"/>
+
+    <!-- And the missing slot is transparent, so the audible level is still the
+         Active slot's 1.0 gain. -->
+    <render filename="pui_with_missing.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pui_with_missing.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- 5. Reorder goes through the action now (it used to call
+         SPluginChain::reorderSlot() straight from the drop handler). Moving the
+         transparent missing slot in front of the active one must keep the level,
+         and must not lose either row. -->
+    <reorder-plugin trackPath="0" fromIndex="1" toIndex="0"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="0"
+                         contains="state=Missing"/>
+    <assert-plugin-strip trackIndex="0" slotIndex="1" contains="state=Active"/>
+
+    <render filename="pui_reordered.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pui_reordered.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <undo count="1"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="0"
+                         contains="state=Active"/>
+    <assert-plugin-strip trackIndex="0" slotIndex="1" contains="state=Missing"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

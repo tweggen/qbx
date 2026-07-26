@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_remove_restores_param">
+
+  <!-- Proposal 08 M5: undoing a plugin REMOVAL must bring the plugin back with
+       the settings it had, not with factory defaults.
+
+       This is a real defect M4 recorded and M5 fixed. SRemovePluginAction built
+       its inverse from the descriptor alone — format, uid, name, vendor, path,
+       I/O — and the descriptor says nothing about parameter values. The opaque
+       state chunk was never captured, so an undone removal re-instantiated the
+       plugin at its defaults: the slot came back, the sound did not. Nothing
+       caught it, because plugin_remove_and_undo only ever exercised a slot at
+       DEFAULT gain, where "restored" and "reset" are the same number.
+
+       So this case deliberately moves the plugin OFF its default first. The
+       fixture is tw.test.clap.stereoskew, out[0] = in[0]*0.5*gain + in[1]*gain,
+       both buses fed the same mono material, gain (param id 0) default 1:
+
+           0.0667   no plugin in the path
+           0.1000   plugin back at its DEFAULT gain 1.0   <- the bug
+           0.2000   plugin back at the gain the user set  <- asserted
+
+       The three levels are what makes this a real gate rather than a
+       "did anything come back" check. The state chunk travels as the inverse
+       action's base64 `state` attribute, and the re-insert replays it through
+       SPluginSlot::restoreState() BEFORE the taps exist — the same ordering the
+       project-load path uses. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- Move the plugin off its default, so "restored" and "reset" differ. -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="2.0"/>
+
+    <render filename="prp_edited.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="prp_edited.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.185" maxRms="0.215"/>
+
+    <remove-plugin trackPath="0" slotIndex="0"/>
+
+    <render filename="prp_removed.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="prp_removed.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.073"/>
+
+    <undo count="1"/>
+
+    <!-- The load-bearing assertion: 0.2000, not 0.1000. -->
+    <render filename="prp_undone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="prp_undone.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.185" maxRms="0.215"/>
+
+    <!-- And the restored state is really the PLUGIN's, not bytes the app is
+         echoing: saving pulls a fresh blob from the live instance
+         (SPluginSlot::saveState()), so gain = 2.0 has to be in the file. The
+         blob is our 8-byte 'TWCP' frame plus the fixture's two little-endian
+         doubles (gain 2.0, report 0.0). -->
+    <save-project path="../../build/plugin_remove_restores_param.qxp"/>
+    <assert-file-contains path="../../build/plugin_remove_restores_param.qxp"
+                          text="VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

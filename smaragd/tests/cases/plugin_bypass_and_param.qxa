@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_bypass_and_param">
+
+  <!-- Proposal 08 M5: a bypass toggle and a parameter edit each CHANGE THE
+       RENDERED OUTPUT, and each undoes exactly.
+
+       Both mutations were outside the action system before this milestone
+       (app/pluginui/CONTRACT.md invariant 3): the strip's checkbox called
+       SPluginSlot::setBypass() and the parameter editor called
+       twPlugin::setParam() straight from the slider. So there was nothing to
+       script, nothing to undo — and in the parameter case nothing AUDIBLE
+       either, because setParam() alone leaves two caches in front of the plugin
+       untouched (the slot processor's all-bus page cache and each per-bus tap's
+       frozen pages). What makes the edit reach a render is the second call,
+       SPluginSlot::notifyPluginEdited(), which SSetPluginParamAction makes.
+
+       The fixture is the in-repo CLAP plugin tw.test.clap.stereoskew (2 in /
+       2 out), whose DSP is
+
+           out[0] = in[0] * 0.5 * gain  +  in[1] * 1.0 * gain
+
+       and whose "Gain" parameter is id 0, range 0..4, default 1. A track feeds
+       both buses the same mono material, so channel 0 comes out at 1.5 x gain
+       times the unprocessed level, and the first second of ../test_sawtooth.wav
+       renders unprocessed at RMS ~0.0667. Four levels, far apart:
+
+           0.0667   no plugin in the path, or bypassed
+           0.1000   plugin active, gain 1.0 (the default)
+           0.2000   plugin active, gain 2.0
+           0.0333   input 1 silent  (the pre-M3 bug; excluded by every band)
+
+       Only the FIRST second is measured: at 3x the later, louder seconds of the
+       ramped sawtooth would clip and the level relation would stop being linear.
+
+       Renders are the whole gate here. If page invalidation did not fire, the
+       second render would serve the first render's cached audio and the RMS
+       would not move at all. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- trackPath is the project-wide index path from the root mixer
+         (app/model/sobjectpath.h): "0" is the first track. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <render filename="pbp_base.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pbp_base.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- 1. A parameter edit must be audible. -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="2.0"/>
+
+    <render filename="pbp_gain2.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pbp_gain2.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.185" maxRms="0.215"/>
+
+    <!-- 2. ...and must undo. The inverse carries (slot, paramId, oldValue), so
+         this has to land back on gain 1.0 and not merely stop moving. -->
+    <undo count="1"/>
+
+    <render filename="pbp_gain_undone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pbp_gain_undone.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- 3. An unknown parameter id must be REFUSED, not silently accepted as a
+         no-op by the backend's setParam(). Otherwise a typo in a script would
+         look like a passing test. -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="99" value="1.0"
+                      expectReject="true"/>
+
+    <!-- 4. A bypass toggle must be audible: back to unprocessed 1.0x. -->
+    <set-plugin-bypass trackPath="0" slotIndex="0" bypassed="true"/>
+
+    <render filename="pbp_bypassed.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pbp_bypassed.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.073"/>
+
+    <!-- 5. ...and must undo. -->
+    <undo count="1"/>
+
+    <render filename="pbp_bypass_undone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pbp_bypass_undone.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

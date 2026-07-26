@@ -187,7 +187,7 @@ bool SPluginSlot::reloadPlugin()
     }
     // setFactory() already staled the processor cache and every tap's pages; the
     // path DOWNSTREAM of the slot is the app's to invalidate.
-    invalidateRenderPath();
+    invalidateAbove();
     emit pluginReloaded();
     return getSlotState() == audio::twPluginSlotState::Active;
 }
@@ -205,7 +205,13 @@ std::shared_ptr<twComponent> SPluginSlot::getRootComponent()
 
 QWidget *SPluginSlot::getDetailEditWidget( QWidget *parent )
 {
-    // TODO: parameter editor widget (proposal 08 M5)
+    // Deliberately null. The generic parameter editor is SPluginParamEditor in
+    // app/pluginui, and objects/track may not reach the UI layer (this module is
+    // in app_objects; pluginui is app_ui). The FX strip owns the editor and
+    // opens it on a double-click — see splugineffectstrip.cpp — which also keeps
+    // the trackPath/slotIndex the parameter action needs in the one place that
+    // actually knows them.
+    (void) parent;
     return nullptr;
 }
 
@@ -355,7 +361,7 @@ void SPluginSlot::setBypass( bool bypass )
         // which also stales the taps' frozen pages (without which the toggle
         // would be inaudible — the cached page would be served unchanged).
         if( proc_ ) proc_->setBypass( bypass );
-        invalidateRenderPath();
+        invalidateAbove();
         emit bypassChanged( bypass );
     }
 }
@@ -363,7 +369,20 @@ void SPluginSlot::setBypass( bool bypass )
 void SPluginSlot::notifyPluginEdited()
 {
     if( proc_ ) proc_->bumpParamEpoch();
+    invalidateAbove();
+    emit paramsChanged();
+}
+
+// Stale everything ABOVE this slot. See the audioInvalidated() comment in the
+// header for why SObject::invalidateRenderPath() cannot do this on its own: the
+// chain is not an SLink child of the track, so the root-down walk never finds a
+// slot. It is still called, because it is correct and free, and because a future
+// model change that DOES link the chain into the tree would make it the right
+// answer; the signal is what actually reaches the track today.
+void SPluginSlot::invalidateAbove()
+{
     invalidateRenderPath();
+    emit audioInvalidated();
 }
 
 void SPluginSlot::saveState( std::vector<std::uint8_t> &state )
@@ -396,4 +415,5 @@ void SPluginSlot::restoreState( const std::vector<std::uint8_t> &state )
     // A state chunk changes what process() produces, so the cached pages have to
     // go with it.
     proc_->bumpParamEpoch();
+    emit paramsChanged();
 }

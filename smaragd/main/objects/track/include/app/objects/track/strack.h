@@ -95,6 +95,12 @@ public slots:
     void onPluginSlotInserted( int index, SPluginSlot &slot );
     void onPluginSlotRemoved( int index, SPluginSlot &slot );
     void onPluginSlotsReordered();
+    // One of our slots changed what it produces (bypass, a parameter, a reload).
+    // The slot cannot invalidate the path above itself — the chain is not an
+    // SLink child of ours, so SObject::invalidateRenderPath()'s root-down walk
+    // never reaches it — so it says so and WE invalidate from here, exactly as
+    // onPluginSlotInserted/Removed/Reordered already do.
+    void onPluginSlotAudioInvalidated();
     void onTrackMuteChanged( bool muted );
     // A child track (folder lane) changed its mute; we are its summing parent.
     void childTrackMuteChanged( bool muted );
