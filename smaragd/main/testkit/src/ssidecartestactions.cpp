@@ -263,11 +263,11 @@ void SAssertSidecarAction::writeXml(QDomElement &elem) const
 
 bool SAssertSidecarAction::readXml(const QDomElement &elem, int /*version*/)
 {
+    // A missing aspect is reported by apply() (which already guards it), not
+    // here: readXml failing makes the action undeserializable, which breaks
+    // the round-trip audit (it feeds every action a DEFAULT instance through
+    // write→read→write).
     aspect_ = elem.attribute("aspect", "");
-    if (aspect_.isEmpty()) {
-        qWarning() << "assert-sidecar::readXml: missing aspect";
-        return false;
-    }
     minRecords_ = elem.attribute("minRecords", "-1").toLongLong();
     maxRecords_ = elem.attribute("maxRecords", "-1").toLongLong();
     expectExists_ = elem.attribute("expectExists", "true") == "true";

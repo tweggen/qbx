@@ -17,6 +17,11 @@ SAssertAudioEnergyAction::SAssertAudioEnergyAction(const QString &filename,
 
 SApplyResult SAssertAudioEnergyAction::apply(SProject * /*project*/)
 {
+    if (filename_.isEmpty()) {
+        qWarning() << "SAssertAudioEnergyAction: no filename given";
+        return {false, nullptr};
+    }
+
     // Construct full path to the audio file
     SApplication &app = SApplication::app();
     QString outputDir = app.testOutputDir();
@@ -80,11 +85,10 @@ void SAssertAudioEnergyAction::writeXml(QDomElement &elem) const
 
 bool SAssertAudioEnergyAction::readXml(const QDomElement &elem, int /*version*/)
 {
+    // A missing filename is reported by apply(), not here: readXml failing
+    // makes the action undeserializable, which breaks the round-trip audit
+    // (it feeds every action a DEFAULT instance through write→read→write).
     filename_ = elem.attribute("filename", "");
-    if (filename_.isEmpty()) {
-        qWarning() << "SAssertAudioEnergyAction::readXml: missing filename";
-        return false;
-    }
 
     bool ok1, ok2, ok3, ok4, ok5;
     minRms_ = elem.attribute("minRms", "0.01").toDouble(&ok1);

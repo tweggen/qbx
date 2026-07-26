@@ -16,6 +16,11 @@ SAssertAudioPeakAction::SAssertAudioPeakAction(const QString &filename, double m
 
 SApplyResult SAssertAudioPeakAction::apply(SProject * /*project*/)
 {
+    if (filename_.isEmpty()) {
+        qWarning() << "SAssertAudioPeakAction: no filename given";
+        return {false, nullptr};
+    }
+
     // Construct full path to the audio file
     SApplication &app = SApplication::app();
     QString outputDir = app.testOutputDir();
@@ -78,11 +83,10 @@ void SAssertAudioPeakAction::writeXml(QDomElement &elem) const
 
 bool SAssertAudioPeakAction::readXml(const QDomElement &elem, int /*version*/)
 {
+    // A missing filename is reported by apply(), not here: readXml failing
+    // makes the action undeserializable, which breaks the round-trip audit
+    // (it feeds every action a DEFAULT instance through write→read→write).
     filename_ = elem.attribute("filename", "");
-    if (filename_.isEmpty()) {
-        qWarning() << "SAssertAudioPeakAction::readXml: missing filename";
-        return false;
-    }
 
     bool ok1, ok2, ok3, ok4;
     maxPeak_ = elem.attribute("maxPeak", "0.95").toDouble(&ok1);
