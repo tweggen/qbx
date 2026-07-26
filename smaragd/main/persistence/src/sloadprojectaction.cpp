@@ -28,7 +28,16 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
     project->disableInvalidation();
 
     if (loader.createObjects(*project) != 0) {
-        project->enableInvalidation();  // Re-enable even on error
+        // A failed load leaves a HALF-BUILT object graph that the caller is
+        // about to discard (SMainWindow::openProjectFile marks it partial and
+        // deleteLater()s it). Resuming background revalidation on it first
+        // handed the worker pool raw pointers into objects that ~QObject was
+        // about to free — the observed symptom was a crash on the SECOND open
+        // attempt, with the first attempt's last log line a preview recompute.
+        // pauseRevalidation() blocks until in-flight jobs drain, so quiesce
+        // BEFORE balancing the suppression counter.
+        project->pauseRevalidation();
+        project->enableInvalidation();  // keep the counter balanced even on error
         return {false, nullptr};
     }
 

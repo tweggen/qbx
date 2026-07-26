@@ -73,6 +73,14 @@ int SProjectLoader::createObjects( SProject &project )
             // All elements processed; we should be done.
             break;
         }
+        // Did this pass consume ANY element? Every element is either
+        // instantiated or skipped, and both remove it from the document, so a
+        // pass that consumes nothing can only repeat itself forever: the
+        // elements that are left reference objects the file does not contain,
+        // and no amount of rescanning will conjure them up. Without this the
+        // loop below spins at ~3M passes/minute writing a warning per pass —
+        // observed on a real project as an unbounded log and a hung load.
+        bool progress = false;
         do {
             QDomElement e = n.toElement(); // try to convert the node to an element.
             
@@ -110,9 +118,40 @@ int SProjectLoader::createObjects( SProject &project )
                 // Read the id.
                 QString id = e.attribute( "id" );
                 if( id.isNull() ) {
-                    qWarning( "File is corrupt, sproject child has no \"id\"." );
-                    // FIXME: Delete all SObjects.
-                    return -1;
+                    // SKIP the element; do NOT abort the project.
+                    //
+                    // References are resolved by id (<SLink objectId='...'>), so
+                    // an element without one cannot be the target of any link:
+                    // nothing else in the file can reach it, and dropping it
+                    // costs exactly this one object. Aborting cost the user
+                    // their whole project.
+                    //
+                    // This is not hypothetical. Every build before proposal 08
+                    // M4 wrote <SPluginSlot> without calling
+                    // SObject::serializeSelfAttributes(), so every project ever
+                    // saved with a plugin on a track carries an id-less slot and
+                    // was permanently unopenable — by the build that wrote it as
+                    // much as by any later one.
+                    //
+                    // The node must be REMOVED from the DOM, like the success
+                    // path below: the outer while(true) rescans until the
+                    // document has no children left, so an element that is
+                    // neither instantiated nor removed spins forever.
+                    const QString uid = e.attribute( "uid" );
+                    qWarning() << QString( "Project child of type \"%1\"%2 has no "
+                                           "\"id\" and was SKIPPED (written by a "
+                                           "build that did not serialize it "
+                                           "completely). The rest of the project "
+                                           "loads; re-add that object by hand." )
+                                      .arg( tagName,
+                                            uid.isEmpty()
+                                                ? QString()
+                                                : QString( " (uid \"%1\")" ).arg( uid ) );
+                    QDomNode nodeToDelete = n;
+                    n = n.nextSibling();
+                    docElem.removeChild( nodeToDelete );
+                    progress = true;
+                    continue;
                 }
                 SLink *object;
                 object = objectDict_.value( id );
@@ -135,10 +174,45 @@ int SProjectLoader::createObjects( SProject &project )
                 QDomNode nodeToDelete = n;
                 n = n.nextSibling();
                 docElem.removeChild( nodeToDelete );
+                progress = true;
             } else { // Not all children known.
                 n = n.nextSibling();
             } // All Children known
         } while( !n.isNull() );
+
+        if( !progress ) {
+            // Nothing left is resolvable. Name what dangles — the id in the
+            // warning is the object the file expected to exist — then drop the
+            // survivors so the rest of the project (already instantiated above)
+            // survives. Dropping beats both alternatives: spinning forever, and
+            // discarding a whole project over one lost reference.
+            QDomNode leftover = docElem.firstChild();
+            while( !leftover.isNull() ) {
+                QDomElement le = leftover.toElement();
+                QDomNode next = leftover.nextSibling();
+                if( !le.isNull() ) {
+                    QStringList missing;
+                    for( QDomNode c = le.firstChild(); !c.isNull();
+                         c = c.nextSibling() ) {
+                        if( c.isElement() && c.nodeName() == "SLink" ) {
+                            const QString oid =
+                                c.toElement().attribute( "objectId" );
+                            if( !objectDict_.value( oid ) ) missing << oid;
+                        }
+                    }
+                    qWarning() << QString( "Project child of type \"%1\" (id \"%2\") "
+                                           "references object(s) [%3] that the file "
+                                           "does not contain; DROPPED so the rest of "
+                                           "the project can load." )
+                                      .arg( le.tagName(),
+                                            le.attribute( "id" ),
+                                            missing.join( ", " ) );
+                }
+                docElem.removeChild( leftover );
+                leftover = next;
+            }
+            break;
+        }
     }
 
     // NOTE: readPostChildrenAttributes is already called in instantiateFromDomElement

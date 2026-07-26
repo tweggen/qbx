@@ -7967,3 +7967,46 @@ would reach it is missing.
 generic sliders only, on a fixed 1000-tick normalization, with CLAP's
 `value_to_text` still unused), and the mono sink recorded under M3, which is
 still nobody's milestone.
+
+## 2026-07-26 — Legacy project recovery: pre-M4 files could not be opened by anything
+
+Reported against a real user project (`test4/test4_2.qxp`, 16 tracks, 22 cuts,
+one Castello Reverb CLAP): the up-to-date build refused to open it, and crashed
+on the second attempt. Three defects, two of them pre-existing and one exposed
+by fixing the first.
+
+1. **The whole project was discarded over one id-less child.**
+   `SProjectLoader::createObjects()` answered a child with no `id=` with
+   "File is corrupt" and `return -1`. Combined with the M4 writer bug
+   (`SPluginSlot::serializeSelfAttributes` not calling the base, so no `id=`
+   was ever emitted), **every project saved with a plugin on a track before M4
+   was unopenable by the very build that wrote it.** An element with no id
+   cannot be the target of any `<SLink objectId>`, so it is now skipped with a
+   warning naming its type and uid.
+
+2. **The instantiation loop could not terminate.** The outer `while(true)`
+   rescans until the document is empty, so an element whose `<SLink objectId>`
+   names an object the file does not contain is never consumed. Exposed the
+   moment defect 1 stopped aborting: the user's file has exactly that (a
+   `<SPluginChain>` linking to the slot's would-be id), and the load span
+   ~3M passes/minute, 900 MB of log and 2.4 GB RSS before it was killed. A pass
+   that consumes nothing now names each unresolvable element and its dangling
+   target, drops them, and ends the loop.
+
+3. **The crash on the second attempt.** The failure path called
+   `enableInvalidation()` on the half-built graph that `openProjectFile` then
+   marks partial and `deleteLater()`s — handing the worker pool raw pointers
+   into objects `~QObject` was about to free (the first attempt's last log line
+   was a preview recompute). `SLoadProjectAction` now calls
+   `pauseRevalidation()` — which drains in-flight jobs — before balancing the
+   counter, and `~SProject`'s `isPartialLoad_` early return does the same.
+
+Gated by `legacy_project_recovery.qxa` (both of defect 1's and 2's shapes in one
+fixture, asserting the rest of the project survives byte-for-byte in audio
+terms) with a CTest `TIMEOUT`, because a regression of defect 2 hangs rather
+than fails. Verified on the user's actual file: loads in ~5 s with two warnings,
+and loads twice in one session without incident.
+
+**Not recoverable:** the plugin's PLACEMENT in pre-M4 files. The track -> chain
+reference was not serialized either, so a recovered slot would rejoin a chain no
+track owns. The user re-adds the plugin once; everything else comes back.
