@@ -78,8 +78,9 @@ static const int DRAG_THRESHOLD = 4;
 
 QSize SSMVMixerControl::sizeHint() const
 {
-    // Return current width to allow expansion, not fixed size
-    return QSize( width(), smv_.getTrackHeight() );
+    // The view places this head at its lane's geometry (setGeometry), so the
+    // hint only has to be non-binding: report what we already are.
+    return QSize( width(), height() > 0 ? height() : smv_.getTrackHeight() );
 }
 
 /**
@@ -298,10 +299,6 @@ void SSMVMixerControl::mouseMoveEvent( QMouseEvent *ev )
 
 void SSMVMixerControl::resizeEvent( QResizeEvent *ev )
 {
-    qWarning( "SSMVMixerControl::resizeEvent: old size=%dx%d, new size=%dx%d, geometry=%dx%d+%d+%d",
-              ev->oldSize().width(), ev->oldSize().height(),
-              ev->size().width(), ev->size().height(),
-              geometry().width(), geometry().height(), geometry().x(), geometry().y() );
     QWidget::resizeEvent( ev );
     updateLayout();
 }
@@ -510,42 +507,47 @@ SSMVMixerControl::SSMVMixerControl(
     qGroup_->setToolTip( "Edit group: lock this track (and its subtree) together" );
     qGroup_->setStyleSheet( "QPushButton:checked { background:#40a060; color:white; }" );
 
-    // Mute over Solo over Arm in a column.
-    QVBoxLayout *muteSoloCol = new QVBoxLayout();
-    muteSoloCol->setContentsMargins( 0, 0, 0, 0 );
-    muteSoloCol->setSpacing( 2 );
-    muteSoloCol->addWidget( qMute_, 0, Qt::AlignTop );
-    muteSoloCol->addWidget( qSolo_, 0, Qt::AlignTop );
-    muteSoloCol->addWidget( qArm_, 0, Qt::AlignTop );
-    muteSoloCol->addWidget( qTakes_, 0, Qt::AlignTop );
-    muteSoloCol->addWidget( qGroup_, 0, Qt::AlignTop );
-    muteSoloCol->addStretch( 1 );
+    // Mute over Solo over Arm in a column. QBoxLayout (not QVBoxLayout) so the
+    // compact density can lay the same buttons out in a row.
+    qBtnCol_ = new QBoxLayout( QBoxLayout::TopToBottom );
+    qBtnCol_->setContentsMargins( 0, 0, 0, 0 );
+    qBtnCol_->setSpacing( 2 );
+    qBtnCol_->addWidget( qMute_, 0, Qt::AlignTop );
+    qBtnCol_->addWidget( qSolo_, 0, Qt::AlignTop );
+    qBtnCol_->addWidget( qArm_, 0, Qt::AlignTop );
+    qBtnCol_->addWidget( qTakes_, 0, Qt::AlignTop );
+    qBtnCol_->addWidget( qGroup_, 0, Qt::AlignTop );
+    qBtnCol_->addStretch( 1 );
 
     // Fader with its dB readout directly beneath it, both centred so they line
     // up as one column.
-    QVBoxLayout *faderCol = new QVBoxLayout();
-    faderCol->setContentsMargins( 0, 0, 0, 0 );
-    faderCol->setSpacing( 1 );
-    faderCol->addWidget( qVolume_, 1, Qt::AlignHCenter );
-    faderCol->addWidget( qVolLabel_, 0, Qt::AlignHCenter );
+    qFaderCol_ = new QBoxLayout( QBoxLayout::TopToBottom );
+    qFaderCol_->setContentsMargins( 0, 0, 0, 0 );
+    qFaderCol_->setSpacing( 1 );
+    qFaderCol_->addWidget( qVolume_, 1, Qt::AlignHCenter );
+    qFaderCol_->addWidget( qVolLabel_, 0, Qt::AlignHCenter );
 
     // Mute/Solo column, then the fader column; a trailing stretch keeps the
     // group left-aligned.
-    QHBoxLayout *stripRow = new QHBoxLayout();
-    stripRow->setContentsMargins( 0, 0, 0, 0 );
-    stripRow->setSpacing( 4 );
-    stripRow->addLayout( muteSoloCol );
-    stripRow->addLayout( faderCol );
-    stripRow->addStretch( 1 );
+    qStripRow_ = new QBoxLayout( QBoxLayout::LeftToRight );
+    qStripRow_->setContentsMargins( 0, 0, 0, 0 );
+    qStripRow_->setSpacing( 4 );
+    qStripRow_->addLayout( qBtnCol_ );
+    qStripRow_->addLayout( qFaderCol_ );
+    qStripRow_->addStretch( 1 );
 
-    // Allow horizontal expansion instead of fixed width
-    // Set minimum width to default, but allow resizing beyond it
-    setMinimumSize( SMV_TRACK_CTRL_WIDTH, smv_.getTrackHeight() );
-    setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Fixed );
+    // The head is placed by the view at exactly its lane's size (which can be
+    // small, and differs from lane to lane), so it must be free to take that
+    // size: a minimum width only, and a layout that never pushes a minimum
+    // height back onto the widget. updateLayout() hides what does not fit.
+    setMinimumWidth( SMV_TRACK_CTRL_WIDTH );
+    setMinimumHeight( 0 );
+    setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Ignored );
 
     qLayout_->addWidget( qTrkLabel_, 0, 0, Qt::AlignTop );
-    qLayout_->addLayout( stripRow,   1, 0 );
+    qLayout_->addLayout( qStripRow_, 1, 0 );
     qLayout_->setRowStretch( 1, 1 );
+    qLayout_->setSizeConstraint( QLayout::SetNoConstraint );
 
     // Seed widgets from the current track state.
     setSliderSilently( tk_.getVolume() );
@@ -588,6 +590,10 @@ SSMVMixerControl::SSMVMixerControl(
         // Check if this track is currently selected
         onSelectedTrackChanged( mixer->getSelectedTrack() );
     }
+
+    // Seed the density from the size we start at, in case the first geometry
+    // the view hands us happens to match the default one (no resize event).
+    updateLayout();
 }
 
 void SSMVMixerControl::showChannelMenu()
@@ -693,31 +699,73 @@ void SSMVMixerControl::onSelectedTrackChanged( STrack *track )
     }
 }
 
+SSMVMixerControl::Density SSMVMixerControl::densityFor( int h ) const
+{
+    if( h >= DENSITY_FULL_MIN_H )    return Density::Full;
+    if( h >= DENSITY_COMPACT_MIN_H ) return Density::Compact;
+    return Density::Tiny;
+}
+
+// The head is sized to its lane, and lanes are individually sized — so the
+// strip reshapes itself to whatever it is given rather than overflowing its
+// widget (which Qt would simply clip, the "squashed head" symptom).
+void SSMVMixerControl::applyDensity( Density d )
+{
+    const int btn = ( d == Density::Full ) ? 20 : 16;
+    for( QPushButton *b : { qMute_, qSolo_, qArm_, qTakes_, qGroup_ } )
+        b->setFixedSize( btn, btn );
+
+    switch( d ) {
+    case Density::Full:
+        // Buttons in a column beside a tall fader with its dB readout.
+        qBtnCol_->setDirection( QBoxLayout::TopToBottom );
+        qStripRow_->setDirection( QBoxLayout::LeftToRight );
+        qMute_->show(); qSolo_->show();
+        qArm_->show(); qTakes_->show(); qGroup_->show();
+        qVolume_->show();
+        qVolLabel_->show();
+        break;
+    case Density::Compact:
+        // One row of small buttons above a horizontal fader; the dB readout
+        // only survives while there is room for a second row.
+        qBtnCol_->setDirection( QBoxLayout::LeftToRight );
+        qStripRow_->setDirection( QBoxLayout::TopToBottom );
+        qMute_->show(); qSolo_->show();
+        qArm_->show(); qTakes_->show(); qGroup_->show();
+        qVolume_->show();
+        qVolLabel_->setVisible( height() >= 84 );
+        break;
+    case Density::Tiny:
+        // Barely a lane: the name, and Mute/Solo beside it while a single
+        // button row still fits under it. Hiding beats clipping — a
+        // half-drawn fader reads as a rendering bug.
+        qBtnCol_->setDirection( QBoxLayout::LeftToRight );
+        qStripRow_->setDirection( QBoxLayout::TopToBottom );
+        qArm_->hide(); qTakes_->hide(); qGroup_->hide();
+        qMute_->setVisible( height() >= 38 );
+        qSolo_->setVisible( height() >= 38 );
+        qVolume_->hide();
+        qVolLabel_->hide();
+        break;
+    }
+
+    // The fader lies down whenever it is short of vertical room (or the column
+    // is wide enough to make a horizontal fader the nicer shape).
+    const bool horizontalFader = wideMode_ || ( d != Density::Full );
+    qVolume_->setOrientation( horizontalFader ? Qt::Horizontal : Qt::Vertical );
+    qVolume_->setMinimumHeight( horizontalFader ? 16 : 40 );
+    qVolume_->setMaximumHeight( horizontalFader ? 20 : QWIDGETSIZE_MAX );
+
+    // In Tiny the name is the whole strip; keep it off the grip and readable.
+    qTrkLabel_->setVisible( height() >= 14 );
+}
+
 void SSMVMixerControl::updateLayout()
 {
-    // Check if we should switch to wide mode (width > ~130% of minimal width)
-    bool shouldBeWide = width() > WIDE_MODE_THRESHOLD;
-    qWarning( "SSMVMixerControl::updateLayout: width=%d, threshold=%d, shouldBeWide=%s (current mode=%s)",
-              width(), WIDE_MODE_THRESHOLD, shouldBeWide ? "true" : "false",
-              wideMode_ ? "wide" : "narrow" );
-
-    if( shouldBeWide == wideMode_ ) {
-        return;  // No change needed
-    }
-
-    wideMode_ = shouldBeWide;
-    qWarning( "  -> switching to %s mode", wideMode_ ? "WIDE" : "NARROW" );
-
-    if( wideMode_ ) {
-        // Wide mode: horizontal layout for track name and volume
-        // For now, keep the layout functional - future enhancement can reorganize controls
-        qVolume_->setOrientation( Qt::Horizontal );
-        qVolume_->setMinimumHeight( 20 );
-        qVolume_->setMaximumHeight( 20 );
-    } else {
-        // Narrow mode: vertical layout (current default)
-        qVolume_->setOrientation( Qt::Vertical );
-        qVolume_->setMinimumHeight( 60 );
-        qVolume_->setMaximumHeight( QWIDGETSIZE_MAX );
-    }
+    // Applied on every resize, not only on a mode flip: some rules (the dB
+    // readout) depend on the height *within* a density. Every setter below
+    // no-ops when the value is unchanged, so this stays cheap during a drag.
+    wideMode_ = width() > WIDE_MODE_THRESHOLD;
+    density_  = densityFor( height() );
+    applyDensity( density_ );
 }

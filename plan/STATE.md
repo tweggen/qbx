@@ -7259,3 +7259,66 @@ keys must never alias a future backend.
 
 Gates: vocoder_test, analyzers_test, full 56-case qxa suite, layering,
 logging — all green on the RB-free build.
+
+## 2026-07-26 — Arranger lane geometry: heads glued to lanes, per-lane heights
+
+Two reported UI defects (screenshots): the track heads in the control column
+did not line up with the timeline lanes, and the Track Detail dock left a
+stale black rectangle. Diagnosis + design: `plan/proposed/30_TRACK_HEAD_LAYOUT.md`
+(§A/§B root cause, §E what shipped).
+
+**Root cause (heads):** THREE rival formulas placed the heads, none matching
+the painter's `SMV_TIME_RULER_HEIGHT + i*trackHeight_ - upperLeftY_` —
+`rebuildControlColumn` (ruler offset once), `setTrackHeight` (no ruler offset,
+and indexed by CONTROL index, which skips take-lane rows), and
+`setUpperLeft`/`setTopOffset` (ruler offset twice, via a `move()` on the
+box). On top of that `qTrackControlBox_` is layout-managed, so every manual
+move/resize of it — the only place the scroll offset lived — was silently
+reverted by the next layout activation (window resize, dock toggle,
+`invalidate()` from setTrackControlWidth). Hence "misaligned, intermittently".
+
+**What shipped (the requester asked it hold for individually-sized tracks and
+several lanes per track, so the assumption was replaced, not centralised):**
+- `STrackRow` owns its `height` + `isSubLane()`; `SStdMixerView` keeps
+  `rowTop_` prefix sums. `rowTop()/rowHeight()/rowAtLaneY()/laneGroupHeight()/
+  visibleRowCountFrom()` are the only row↔pixel mapping; `laneTop()/
+  laneHeight()/rowAtViewY()` are their view-space face and
+  `controlYOfRow()/rowAtControlY()` the column-space one — the SAME
+  functions, which is what glues heads to lanes. ~20 `row*trackHeight` sites
+  converted (paint, ruler grid, hit-tests, hover, drop, drag, repaint rects).
+- Per-track height as a FACTOR of the base height (`setTrackHeightScale`,
+  0.25..4.0, UI-only state beside collapsed_/takesExpanded_) so vertical zoom
+  still scales everything uniformly. "Lane height ▸ Small/Normal/Large/Extra
+  large" in the track context menu. Sub-lanes: `SUB_LANE_SCALE` (1.0 today).
+- Scroll anchor is `topRow_`, `upperLeftY_ = rowTop(topRow_)` — a running
+  sum, re-derived after anything that changes a height.
+- The box is a fixed viewport (all 7 manual move/resize calls deleted); its
+  Resize event re-places the heads. Heads span their lane GROUP, so a track
+  with take lanes gets one strip over all of them.
+- `SSMVMixerControl` lost its construction-time minimum height and got a
+  height-driven density (Full / Compact / Tiny): buttons flip to a row, the
+  fader lies down, and what does not fit is HIDDEN, never clipped — the
+  "squashed head" in the screenshot was plain overflow at trackHeight 100 vs
+  a ~130 px strip.
+- Fixed in passing: `getSLinkVisibRect` had no scroll term (wrong repaint
+  band during a scrolled drag); a double-click on a head propagated up and
+  spawned a track; `setColumnMinimumWidth(0,8)` clobbered the divider column
+  width restored one line earlier.
+
+**Root cause (dock):** `STrackDetailPanel` and `STrackHeaderResizer` are
+plain QWidget subclasses styled with `setStyleSheet("QWidget {…}")` and no
+paintEvent. Qt only paints a sheet background for a subclass that draws
+PE_Widget itself, while DECLARING one suppresses the palette fill — so the
+area was never written and kept whatever was in the backing store. Both now
+paint (panel: WA_StyledBackground + PE_Widget, class-scoped selector;
+divider: direct fillRect). The panel also stopped reserving 450 px when
+empty (placeholder + honest sizeHint) — that reservation was most of the
+dead area.
+
+**Gates:** new `lane_alignment.qxa` (zoom, scroll, per-track heights, take
+lanes, and combinations; asserts every head sits exactly on its lane and that
+the row geometry inverts at both lane edges) — verified to FAIL when one
+`layoutControlColumn()` call is removed, so it has teeth. Full 57-case qxa
+suite, layering, logging — green. New testkit actions `set-lane-view` /
+`assert-lane-alignment`, routed through SMainWindow (testkit may not include
+app/timeline). Contract updated: `main/timeline/CONTRACT.md` invariants 5-7.

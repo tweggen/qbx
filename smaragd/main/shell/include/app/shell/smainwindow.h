@@ -4,6 +4,7 @@
 
 #include <qmainwindow.h>
 #include <qmenubar.h>
+#include "tw/graph/tw303aenv.h"   // offset_t (used in the signatures below)
 #include <QString>
 #include <QVariant>
 #include <QDoubleSpinBox>
@@ -40,6 +41,18 @@ public:
     // grabWhere: 0 = start edge, 1 = end edge, 2 = body (SStdMixerView::ClipGrab).
     bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
                        bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
+
+    // TEST ENTRY POINT: arranger lane geometry — move the view (zoom / scroll /
+    // per-track lane height / take lanes), then check that the track heads
+    // still sit exactly on their lanes. Same routing reason as dragClipEdge:
+    // testkit may not include app/timeline, shell may.
+    // Any argument may be left at its "no change" value (-1 / 0).
+    bool arrangerSetLaneView( int laneScaleRow, double laneScale,
+                              int toggleTakesRow, int baseTrackHeight,
+                              int topRow );
+    // "" when aligned, else a description of the first mismatch. A null
+    // QString with no arranger at all is reported as an error by the caller.
+    QString arrangerLaneAlignment();
 
     // Log dock control, for the log-stress test action (testkit may not include
     // app/servicesui, so it reaches the dock through the shell — the same route
@@ -117,6 +130,9 @@ protected slots:
     void onStatusModeChanged( const QString &mode );
 
 private:
+    // The arranger for the current project, creating it if the headless test
+    // path has not gone through openProject(). NULL when there is no project.
+    class SStdMixerView *ensureArranger_();
     // Build the status bar and its permanent widgets (mode indicator, …).
     void buildStatusBar();
     void newProject();
