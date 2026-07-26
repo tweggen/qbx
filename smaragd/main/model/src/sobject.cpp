@@ -94,11 +94,19 @@ void SObject::setEditGroup( int id )
 
 void SObject::setSName( const QString &n )
 {
-    QString newName;
-    if( n=="" ) newName = "(untitled)";
-    if( newName==sName_ ) return;
-    sName_ = newName;
-    emit sNameChanged( newName );
+    // Stored VERBATIM, empty included. The old body was
+    //     QString newName;
+    //     if( n=="" ) newName = "(untitled)";
+    // — the non-empty branch was simply missing, so every real name (generated
+    // track names, asset names, plugin names) was silently stored as "", and
+    // only the empty input produced a value. Two reasons the substitution is
+    // gone rather than repaired: every reader already spells "unnamed" as
+    // getSName().isEmpty() (e.g. SCutRendererInline), and set-clip-name's undo
+    // must restore the previous name EXACTLY — mapping "" to "(untitled)" makes
+    // clearing a name unundoable.
+    if( n==sName_ ) return;
+    sName_ = n;
+    emit sNameChanged( n );
 }
 
 int SObject::serializeSelfAttributes( QTextStream &o )
@@ -124,6 +132,18 @@ int SObject::serializeSelfAttributes( QTextStream &o )
     o << " delay='" << getDelay() << "'";
     if( editGroup_ != 0 )
         o << " editGroup='" << editGroup_ << "'";
+    // Written only when the object carries a name the USER chose. Every
+    // SObject is constructed with DEFAULT_SNAME, so serializing unconditionally
+    // would stamp a meaningless sName on every object in every project file;
+    // skipping the placeholder keeps untouched projects byte-unchanged. The
+    // value is user-typed (proposal 31's clip name), so unlike the raw
+    // `filename` attribute it must be escaped — including the apostrophe, which
+    // delimits the attribute.
+    if( !sName_.isEmpty() && sName_ != QLatin1String( DEFAULT_SNAME ) )
+        o << " sName='"
+          << sName_.toHtmlEscaped().replace( QLatin1Char('\''),
+                                             QLatin1String("&apos;") )
+          << "'";
     return 0;
 }
 
@@ -166,6 +186,13 @@ int SObject::readPreChildrenAttributes( QDomElement &element )
     data = element.attribute( "delay", "0.0" );
     setDelay( data.toDouble() );
     setEditGroup( element.attribute( "editGroup", "0" ).toInt() );
+    // Absent on projects saved before proposal 31, and absent for unnamed
+    // objects. Only assign when there is something to assign: setSName("")
+    // means "(untitled)", which would turn every unnamed object into a named
+    // one on the next save.
+    data = element.attribute( "sName" );
+    if( !data.isEmpty() )
+        setSName( data );
     return 0;
 }
 
@@ -636,7 +663,7 @@ SObject::SObject( SProject *project )
       volume_( 0.0 ),
       pan_( 0.0 ),
       delay_( 0.0 ),
-      sName_( "(untitled)" )
+      sName_( DEFAULT_SNAME )
 {
     // We neither want to remember  previews if we have changed our duration
     // (Although we could reimplement it for that special case)

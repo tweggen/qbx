@@ -335,7 +335,12 @@ public:
     double getDelay() const
         { return delay_; }
     QString getSName() const
-        { return sName_; }    
+        { return sName_; }
+    // Every SObject is born with this name (see the ctor), so it is a display
+    // PLACEHOLDER that happens to live in storage — not something the user
+    // chose. serializeSelfAttributes() therefore skips it, or every object in
+    // every project file would carry a meaningless sName attribute.
+    static constexpr const char *DEFAULT_SNAME = "(untitled)";
 
 public slots:
     void setSolo( bool );

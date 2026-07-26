@@ -103,6 +103,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/saddtakeaction.h
     objects/cut/include/app/objects/cut/sremovetakeaction.h
     objects/cut/include/app/objects/cut/sselecttakeaction.h
+    objects/cut/include/app/objects/cut/ssetclipnameaction.h
     objects/cut/include/app/objects/cut/ssetpitchaction.h
     objects/cut/include/app/objects/cut/ssetformantpreserveaction.h
     objects/cut/include/app/objects/cut/splaceclipaction.h
@@ -123,6 +124,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/sremovetakeaction.cpp
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/sselecttakeaction.cpp
+    objects/cut/src/ssetclipnameaction.cpp
     objects/cut/src/ssetpitchaction.cpp
     objects/cut/src/ssetformantpreserveaction.cpp
     objects/cut/src/splaceclipaction.cpp
@@ -187,6 +189,7 @@ set(APP_OBJECTS_FILES
 
 set(APP_UI_FILES
     # --- app/timeline
+    timeline/include/app/timeline/sclippropertiespanel.h
     timeline/include/app/timeline/sgridtoolbar.h
     timeline/include/app/timeline/sobjecttreeview.h
     timeline/include/app/timeline/ssmvmixercontrol.h
@@ -194,6 +197,7 @@ set(APP_UI_FILES
     timeline/include/app/timeline/strackdetailpanel.h
     timeline/include/app/timeline/strackheaderresizer.h
     timeline/include/app/timeline/szoomscrollbar.h
+    timeline/src/sclippropertiespanel.cpp
     timeline/src/sgridtoolbar.cpp
     timeline/src/sobjecttreeview.cpp
     timeline/src/ssmvmixercontrol.cpp

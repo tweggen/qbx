@@ -17,6 +17,8 @@ QVariant SOpt::def( const QString &key )
     if( key == LogLevel )       return QStringLiteral( "debug" );
     if( key == LogCapacity )    return 200000;
     if( key == LogToFile )      return true;
+
+    if( key == ShortcutClipProperties ) return QStringLiteral( "F2" );
     return QVariant();
 }
 

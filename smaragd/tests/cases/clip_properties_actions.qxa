@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Per-clip PROPERTY verbs and their persistence: set-clip-name,
+  set-formant-preserve and set-pitch applied to one placement.
+
+  What this pins:
+    (a) all three verbs APPLY (a rejected action fails the run), so the
+        take-resolution helper each of them shares still finds a plain,
+        non-stacked placement — the regression that would appear first if
+        splacements::placementAt or the SCut dynamic_cast drifted;
+    (b) the pitch actually reaches the audio: the ~439 Hz ramped sawtooth
+        fixture transposed +1200 cents reads back at ~878 Hz. RMS alone
+        cannot show that, and formant preservation must NOT move f0 — it
+        holds the spectral ENVELOPE while the harmonics move, so an f0
+        assertion is exactly the guard against the two stages being
+        confused for one another;
+    (c) the properties survive a save/load round trip: the same assertions
+        are re-run on a render taken AFTER the project was written to disk
+        and read back, so serialization loss shows up as a changed f0 or a
+        changed length, not as a silent default;
+    (d) pitch and the property verbs never move a clip EDGE — the render is
+        still 4 s of audio (192000 frames) and silent afterwards.
+
+  Note there is deliberately no assert verb for the name or the formant
+  flag; those are covered by "applied without rejection" plus verify-undo
+  (which drives every inverse, including the old-name / old-flag ones).
+-->
+<SActionScript version="1" name="clip_properties_actions">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s sawtooth (192000 frames), no window edit at all -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <set-clip-name clip="0,0" name="Lead Sawtooth"/>
+    <set-formant-preserve clip="0,0" on="1"/>
+    <set-pitch clip="0,0" cents="1200"/>
+
+    <render filename="clip_properties_a.wav" format="wav" quality="10"/>
+
+    <!-- One octave up: 439.x Hz -> ~878 Hz (±3%) -->
+    <assert-audio-frequency filename="clip_properties_a.wav"
+                            startFrame="48000" frameCount="24000"
+                            minHz="852" maxHz="905"/>
+    <!-- Same length: the clip still ends at 192000 frames -->
+    <assert-audio-energy filename="clip_properties_a.wav"
+                         startFrame="192000" frameCount="24000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Serialization roundtrip: the clip properties survive save/load -->
+    <save-project path="../../build/clip_properties_actions.qxp"/>
+    <load-project path="../../build/clip_properties_actions.qxp"/>
+
+    <render filename="clip_properties_b.wav" format="wav" quality="10"/>
+
+    <assert-audio-frequency filename="clip_properties_b.wav"
+                            startFrame="48000" frameCount="24000"
+                            minHz="852" maxHz="905"/>
+    <assert-audio-energy filename="clip_properties_b.wav"
+                         startFrame="192000" frameCount="24000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

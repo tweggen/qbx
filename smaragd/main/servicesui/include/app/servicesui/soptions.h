@@ -38,6 +38,13 @@ inline constexpr const char *LogLevel       = "log/level";      // "error".."tra
 inline constexpr const char *LogCapacity    = "log/capacity";   // ring records
 inline constexpr const char *LogToFile      = "log/toFile";
 
+// Keyboard shortcuts (proposal 31). There is no keybinding UI: the sequence is
+// read once at startup through SSettings, so the default below is a DEFAULT
+// rather than a constant, rebindable by editing smaragd.ini. Parsed with
+// QKeySequence::fromString, so an unparseable value simply leaves the action
+// unbound rather than crashing.
+inline constexpr const char *ShortcutClipProperties = "ui/shortcuts/clipProperties";
+
 // Default value for a key (invalid QVariant if unknown). Scroll-first defaults.
 QVariant def( const QString &key );
 

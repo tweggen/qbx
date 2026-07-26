@@ -20,6 +20,7 @@ class SGridToolbar;
 class SExternFileList;
 class SLogView;
 class STrackDetailPanel;
+class SClipPropertiesPanel;
 
 class SMainWindow
     : public QMainWindow
@@ -61,6 +62,12 @@ public:
     // Post a transient hint to the status bar (auto-dismisses after durationMs).
     void postHint( const QString &text, int durationMs = 5000 );
 
+    // Show + raise + focus the clip properties dock (proposal 31). Bound to F2
+    // by default and reached from the clip context menu. Public because the
+    // arranger's context menu calls it. Toggles closed when it already has
+    // focus, so the binding round-trips.
+    void showClipProperties();
+
 protected:
     void closeEvent( QCloseEvent *event ) override;
     // Watches the tempo box so Return commits the value and then hands the
@@ -93,8 +100,6 @@ protected slots:
     void runReorderTrackTest();
     void runGroupPersist();
     void runUndoRemoveTest();
-    void runSetClipStretch();
-    void runSetClipPitch();
     void undo();
     void redo();
     void showOptionsDialog();
@@ -132,6 +137,11 @@ private:
     // dropped again before the project dies.
     void attachTrackDetail();
     void detachTrackDetail();
+    // Same lifecycle for the clip properties dock (proposal 31): it follows the
+    // SELECTION, and every selection change is an action, so it refreshes off
+    // the project's arrangementChanged rather than a signal of its own.
+    void attachClipProperties();
+    void detachClipProperties();
     // Enable + sync the palette buttons to a project's properties (or disable
     // them when project == NULL), and connect to its propertyChanged signal.
     void syncPaletteToProject( SProject *project );
@@ -205,6 +215,15 @@ private:
     // so it needs no settings key of its own.
     QDockWidget *qDockLog_ = nullptr;
     SLogView    *logView_  = nullptr;
+
+    // Clip properties dock (proposal 31). One window for the whole app; the
+    // objectName is what carries its docked/floating placement across sessions
+    // through the existing saveState/restoreState round trip, so it needs no
+    // settings key of its own either.
+    QDockWidget          *qDockClipProps_ = nullptr;
+    SClipPropertiesPanel *clipPropsPanel_ = nullptr;
+    QMetaObject::Connection clipPropsConn_;
+    QAction *actClipProps_ = nullptr;   // the F2 (default) binding
 
     // Permanent mode indicator on the right of the status bar.
     QLabel *modeLabel_;

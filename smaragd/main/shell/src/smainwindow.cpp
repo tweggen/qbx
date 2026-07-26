@@ -30,6 +30,7 @@
 #include "app/shell/ssettings.h"
 #include "app/servicesui/srecordingprogress.h"
 #include "app/servicesui/slogview.h"
+#include "app/servicesui/soptions.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
@@ -54,6 +55,7 @@
 
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/timeline/sstdmixerview.h"
+#include "app/timeline/sclippropertiespanel.h"
 #include "app/timeline/strackdetailpanel.h"
 #include "app/objects/track/strack.h"
 #include "app/servicesui/soptionsdialog.h"
@@ -105,6 +107,7 @@ void SMainWindow::destroyDocksToolbars()
     }
     // Drop the detail panel's view of the (about to die) project's tracks.
     detachTrackDetail();
+    detachClipProperties();
 }
 
 void SMainWindow::attachTrackDetail()
@@ -134,6 +137,58 @@ void SMainWindow::detachTrackDetail()
     // Release the STrack pointer (and its plugin strip) BEFORE the project is
     // deleted — the panel holds a raw pointer into the project's object graph.
     if( trackDetailPanel_ ) trackDetailPanel_->setTrack( nullptr );
+}
+
+void SMainWindow::attachClipProperties()
+{
+    if( !clipPropsPanel_ ) return;
+
+    QObject::disconnect( clipPropsConn_ );
+
+    if( !currentProject_ ) {
+        clipPropsPanel_->refresh();     // resolves to "no clip selected"
+        return;
+    }
+
+    // The panel follows the SELECTION, but selection changes are themselves
+    // actions, so they already end in notifyArrangementChanged() — the same
+    // signal the arranger repaints on. Piggy-backing on it means no new signal
+    // and no polling, and it picks up edge drags, undo and .qxa scripts too.
+    clipPropsConn_ = connect( currentProject_, &SProject::arrangementChanged,
+                              clipPropsPanel_,
+                              &SClipPropertiesPanel::refresh );
+    clipPropsPanel_->refresh();
+}
+
+void SMainWindow::detachClipProperties()
+{
+    QObject::disconnect( clipPropsConn_ );
+    clipPropsConn_ = QMetaObject::Connection();
+    // Drop every SLink/SCut the panel resolved BEFORE the project dies. The
+    // panel caches no pointers between refreshes, so an empty refresh is all
+    // that is needed — but it must happen while the graph is still alive.
+    if( clipPropsPanel_ ) clipPropsPanel_->refresh();
+}
+
+void SMainWindow::showClipProperties()
+{
+    if( !qDockClipProps_ ) return;
+
+    // Round-trip the binding: if it is already up AND focused, F2 closes it.
+    // "Focused" rather than merely visible, so F2 from the arranger always
+    // brings the panel forward instead of hiding a panel the user is watching.
+    if( qDockClipProps_->isVisible() && clipPropsPanel_
+        && clipPropsPanel_->isAncestorOf( QApplication::focusWidget() ) ) {
+        qDockClipProps_->hide();
+        return;
+    }
+
+    qDockClipProps_->show();
+    qDockClipProps_->raise();       // pulls it out of a tab group
+    if( clipPropsPanel_ ) {
+        clipPropsPanel_->refresh();
+        clipPropsPanel_->focusFirstField();
+    }
 }
 
 void SMainWindow::createDocksToolbars()
@@ -264,6 +319,7 @@ void SMainWindow::fileNew()
     projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
+    attachClipProperties();
 
     currentFilePath_.clear();   // fresh project is untitled until saved
     updateWindowTitle();
@@ -336,6 +392,7 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
+    attachClipProperties();
 
     currentFilePath_ = fileName;   // remember where we loaded from
     updateWindowTitle();
@@ -902,9 +959,11 @@ SMainWindow::SMainWindow()
     qTestMenu_->addAction( "Re&order Track Test (exact slot)", this, SLOT( runReorderTrackTest() ) );
     qTestMenu_->addAction( "&Nest Track 1 Under 0 (persist)", this, SLOT( runGroupPersist() ) );
     qTestMenu_->addAction( "Undoable Remo&ve Test (subtree)", this, SLOT( runUndoRemoveTest() ) );
-    qTestMenu_->addSeparator();
-    qTestMenu_->addAction( "Set Clip &Stretch... (selected)", this, SLOT( runSetClipStretch() ) );
-    qTestMenu_->addAction( "Set Clip &Pitch... (selected)", this, SLOT( runSetClipPitch() ) );
+    // The "Set Clip Stretch/Pitch..." prompts that used to live here are gone
+    // (proposal 31): the clip properties panel is the numeric-entry surface,
+    // and it edits the whole selection through undoable actions. The stretch
+    // prompt in particular wrote cut->setStretch() directly — the last
+    // per-clip property mutation in the app that bypassed SAction.
     menuBar()->addMenu( qTestMenu_ );
 
     buildStatusBar();
@@ -941,6 +1000,19 @@ SMainWindow::SMainWindow()
     connect( qDockLog_, &QDockWidget::visibilityChanged,
              logView_, &SLogView::setLive );
 
+    // The clip properties dock (proposal 31) — ONE window for the whole app.
+    // Like the log dock it is hidden on a first run and its objectName is what
+    // makes restoreState() bring back whatever the user left it as (docked
+    // area, floating, floating geometry, visibility), so it needs no settings
+    // key. Created HERE, in the ctor, because restoreWindowLayout() runs later
+    // and can only restore docks that already exist.
+    qDockClipProps_ = new QDockWidget( tr( "Clip Properties" ), this );
+    qDockClipProps_->setObjectName( "dock_clip_properties" );
+    clipPropsPanel_ = new SClipPropertiesPanel( qDockClipProps_ );
+    qDockClipProps_->setWidget( clipPropsPanel_ );
+    addDockWidget( Qt::RightDockWidgetArea, qDockClipProps_ );
+    qDockClipProps_->hide();
+
     // View menu — built here rather than in the menu block above because it
     // needs the docks to exist for their toggleViewAction()s.
     QMenu *viewMenu = new QMenu( tr( "&View" ), this );
@@ -954,7 +1026,26 @@ SMainWindow::SMainWindow()
     QAction *actDetail = qDockTrackDetail_->toggleViewAction();
     actDetail->setText( tr( "&Track detail" ) );
     viewMenu->addAction( actDetail );
+    // The toggle carries NO shortcut: F2 is a separate action below, because it
+    // must show+raise+focus rather than blind-toggle a dock that may be buried
+    // in a tab group.
+    QAction *actProps = qDockClipProps_->toggleViewAction();
+    actProps->setText( tr( "Clip &properties" ) );
+    viewMenu->addAction( actProps );
     menuBar()->insertMenu( qAudioMenu_->menuAction(), viewMenu );
+
+    // F2 (default) opens the clip properties panel. There is no keybinding UI,
+    // so the sequence is read once from SSettings — making it a DEFAULT rather
+    // than a constant. An unparseable string yields a null QKeySequence, which
+    // simply leaves the action unbound (menu item still works).
+    actClipProps_ = new QAction( tr( "Clip properties" ), this );
+    actClipProps_->setShortcut( QKeySequence::fromString(
+        SSettings::instance()
+            .value( SOpt::ShortcutClipProperties,
+                    SOpt::def( SOpt::ShortcutClipProperties ) ).toString() ) );
+    connect( actClipProps_, &QAction::triggered,
+             this, &SMainWindow::showClipProperties );
+    addAction( actClipProps_ );   // window-wide, no menu home (cf. actGotoStart_)
 
     // NOTE: window geometry/state restore deliberately does NOT happen here.
     // The saved state describes a window that includes the project's central
@@ -1344,54 +1435,6 @@ void SMainWindow::runUndoRemoveTest()
               .arg(childCount).arg(restoredChildCount).arg(identitySame);
     TW_LOGD( "ui.shell", "%s", msg.toUtf8().constData() );
     statusBar()->showMessage(msg, 6000);
-}
-
-// MVP grain-playback trigger (proposal 06): set a time-stretch factor on the
-// currently selected clip. Set it while playback is stopped (rebuild is not yet
-// realtime-safe), then play.
-void SMainWindow::runSetClipStretch()
-{
-    SLink *sel = SApplication::app().getCurrentSelectedSLink();
-    SCut *cut = sel ? dynamic_cast<SCut*>( &sel->getSObject() ) : nullptr;
-    if( !cut ) {
-        statusBar()->showMessage( "Select a clip (SCut) first", 3000 );
-        return;
-    }
-    bool ok = false;
-    double s = QInputDialog::getDouble( this, "Clip Time-Stretch",
-                                        "Stretch factor (>1 = longer/slower):",
-                                        cut->getStretch(), 0.1, 10.0, 3, &ok );
-    if( !ok ) return;
-    cut->setStretch( s );
-    statusBar()->showMessage( QString( "Clip stretch set to %1x" ).arg( s ), 4000 );
-}
-
-// Set an exact pitch offset (cents) on the selected clip. The +/- keys in the
-// arranger nudge by a semitone; this is the type-an-exact-value form. Both go
-// through SSetPitchAction, so both are undoable and scriptable.
-void SMainWindow::runSetClipPitch()
-{
-    SLink *sel = SApplication::app().getCurrentSelectedSLink();
-    SCut *cut = sel ? dynamic_cast<SCut*>( &sel->getSObject() ) : nullptr;
-    if( !cut ) {
-        statusBar()->showMessage( "Select a clip (SCut) first", 3000 );
-        return;
-    }
-    bool ok = false;
-    double cents = QInputDialog::getDouble( this, "Clip Pitch Offset",
-                                            "Pitch offset (cents, 1200 = +1 octave):",
-                                            cut->getPitchCents(),
-                                            -SCut::PITCH_CENTS_LIMIT,
-                                            SCut::PITCH_CENTS_LIMIT, 1, &ok );
-    if( !ok ) return;
-
-    QList<QList<int>> paths = SApplication::app().getCurrentSelectionPaths();
-    if( paths.isEmpty() ) {
-        statusBar()->showMessage( "Select a clip (SCut) first", 3000 );
-        return;
-    }
-    SApplication::app().submitAction( new SSetPitchAction( paths.first(), cents ) );
-    statusBar()->showMessage( QString( "Clip pitch set to %1 cents" ).arg( cents ), 4000 );
 }
 
 // Create a persistent nesting so the indented arranger is visible (the Group

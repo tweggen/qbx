@@ -54,7 +54,9 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `save-project` | SSaveProjectAction | persistence/src/ssaveprojectaction.cpp | `path` = "" |
 | `select-take` | SSelectTakeAction | objects/cut/src/sselecttakeaction.cpp | `clip`, `take` = "-1", `broadcast` = "1" (edit groups: same take index on every member) |
 | `screenshot` | SScreenshotAction | testkit/src/sscreenshotaction.cpp | `filename` = "", `resolution` = "100%" |
+| `set-clip-name` | SSetClipNameAction | objects/cut/src/ssetclipnameaction.cpp | `clip`, `name` = "" (ABSOLUTE; the SObject SName drawn on the clip body), `take` = "-1" (stacks: which take is renamed; the name is per-take), `broadcast` = "1" (edit groups) |
 | `set-edit-group` | SSetEditGroupAction | objects/track/src/seteditgroupaction.cpp | `trackPath`, `group` = "0" (0 = ungrouped) |
+| `set-formant-preserve` | SSetFormantPreserveAction | objects/cut/src/ssetformantpreserveaction.cpp | `clip`, `on` = "0" (ABSOLUTE; keeps the spectral envelope fixed while the vocoder's pitch stage moves the harmonics), `take` = "-1" (stacks: which take is flagged; the flag is per-take), `broadcast` = "1" (edit groups) |
 | `set-pitch` | SSetPitchAction | objects/cut/src/ssetpitchaction.cpp | `clip`, `cents` = "0" (ABSOLUTE, clamped to ±2400), `take` = "-1" (stacks: which take is transposed; pitch is per-take), `broadcast` = "1" (edit groups) |
 | `set-property` | SSetPropertyAction | actions/src/ssetpropertyaction.cpp | `key`, `value` |
 | `set-selection` | SSetSelectionAction | selection/src/ssetselectionaction.cpp | `paths` = "" |

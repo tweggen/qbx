@@ -60,7 +60,6 @@
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/sselecttakeaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
-#include "app/objects/cut/ssetformantpreserveaction.h"
 #include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/objects/mixer/sremoveassetplacementaction.h"
@@ -561,76 +560,34 @@ void SMVActualView::ctToggleTakeLanes()
         smv_.toggleTrackTakesExpanded( lastClickTrack_ );
 }
 
-// Clip context menu: clear a looping clip's loop segment. The clip KEEPS its
-// duration — it plays its content once and falls silent for the remainder — so
-// nothing else on the timeline shifts. Undoable through the normal window
-// action, like every other clip-window edit.
-void SMVActualView::ctRemoveLoop()
+// Clip context menu: open the clip properties panel (proposal 31). The panel
+// edits the SELECTION, not the clicked clip, so a right-click on a clip that is
+// not part of the current selection selects it first — otherwise the menu would
+// appear to act on one clip while the panel showed another.
+void SMVActualView::ctShowClipProperties()
 {
-    if( !lastClickTrack_ || !lastClickSLink_ ) return;
-    SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
-    if( !cut || !cut->isLooping() ) return;
-    QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
-    clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
-    SApplication::app().submitAction(
-        new SResizeClipAction( clipPath, lastClickSLink_->getStartTime(),
-                               cut->getSrcStart(), cut->getDuration(),
-                               0, cut->getStretchExact() ) );
-    update();
-}
-
-// Clip context menu: toggle formant preservation (proposal 28 W4) — the
-// opt-in for vocal material, realised in the vocoder's pitch stage. Default
-// OFF; audible only when the clip is transposed. Per-take on stacks.
-void SMVActualView::ctToggleFormantPreserve()
-{
-    if( !lastClickTrack_ || !lastClickSLink_ ) return;
-    SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
-    if( !cut ) {
-        if( STakeStack *stack =
-                dynamic_cast<STakeStack*>( &lastClickSLink_->getSObject() ) )
-            cut = stack->activeCut();
+    if( lastClickSLink_
+        && !SApplication::app().isSLinkSelected( lastClickSLink_ ) ) {
+        SApplication::app().submitSetSelectionAction( lastClickSLink_ );
     }
-    if( !cut ) return;
-    QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
-    clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
-    SApplication::app().submitAction(
-        new SSetFormantPreserveAction( clipPath,
-                                       !cut->getPreserveFormants() ) );
-    update();
+    SMainWindow *mw = dynamic_cast<SMainWindow*>( QApplication::activeWindow() );
+    if( mw ) mw->showClipProperties();
 }
 
 void SMVActualView::ctGlobalShow()
 {
     qGlobalPopup_->clear();
     if( lastClickSLink_ ) {
+        // Proposal 31: the per-clip PROPERTIES (pitch, loop, formants) used to
+        // live here as individual items. They now live in the clip properties
+        // panel, which edits the whole selection rather than just the clicked
+        // clip. What stays here is structural: split and link.
+        // The pitch actions themselves are untouched — they are registered on
+        // the view with addAction() (see the ctor), so +/- keep transposing.
+        qGlobalPopup_->addAction( "Clip &properties...", this,
+                                  SLOT( ctShowClipProperties() ) );
+        qGlobalPopup_->addSeparator();
         qGlobalPopup_->addAction( smv_.actSplit_ );
-        qGlobalPopup_->addAction( smv_.actPitchUp_ );
-        qGlobalPopup_->addAction( smv_.actPitchDown_ );
-        // Clearing a loop only makes sense on a looping clip; the item stays
-        // visible (but disabled) otherwise so the menu keeps a stable shape.
-        {
-            SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
-            QAction *aNoLoop = qGlobalPopup_->addAction(
-                "Remove &loop", this, SLOT( ctRemoveLoop() ) );
-            aNoLoop->setEnabled( cut && cut->isLooping() );
-        }
-        // W4: formant preservation toggle — checked state reflects the
-        // clicked clip (active take on a stack).
-        {
-            SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
-            if( !cut ) {
-                if( STakeStack *stack = dynamic_cast<STakeStack*>(
-                        &lastClickSLink_->getSObject() ) )
-                    cut = stack->activeCut();
-            }
-            QAction *aFmt = qGlobalPopup_->addAction(
-                "Preserve &formants", this,
-                SLOT( ctToggleFormantPreserve() ) );
-            aFmt->setCheckable( true );
-            aFmt->setChecked( cut && cut->getPreserveFormants() );
-            aFmt->setEnabled( cut != nullptr );
-        }
         qGlobalPopup_->addAction( "Add &link", &smv_, SLOT( ctAddLink() ) );
         qGlobalPopup_->addSeparator();
     }

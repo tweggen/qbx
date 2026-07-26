@@ -7259,3 +7259,84 @@ keys must never alias a future backend.
 
 Gates: vocoder_test, analyzers_test, full 56-case qxa suite, layering,
 logging — all green on the RB-free build.
+
+## 2026-07-26 — Proposal 31 EXECUTED: clip properties panel
+
+One dockable **Clip Properties** panel is now the single place to inspect and
+edit the selected clip(s). Opened with **F2** (default; the sequence is read
+from `SOpt::ShortcutClipProperties`, so it is rebindable in smaragd.ini) or via
+**Clip properties…** in the clip context menu.
+
+**What moved out of the menus.** The clip section of `ctGlobalShow` is now just
+*Clip properties… / Split object / Add link*: the pitch entries, the Remove-loop
+block and the Preserve-formants block are gone, along with the
+`ctRemoveLoop()` / `ctToggleFormantPreserve()` slots. `actPitchUp_`/`actPitchDown_`
+themselves are untouched — they are registered on the view with `addAction()`,
+so `+`/`-` keep transposing the selection; removing an item from a popup does
+not unbind its shortcut. The Test menu's "Set Clip Stretch/Pitch..."
+`QInputDialog` prompts and their slots are deleted, which removes the app's LAST
+per-clip property write that bypassed `SAction` (`runSetClipStretch` called
+`cut->setStretch()` directly — not undoable, not scriptable).
+
+**The dock.** `objectName = "dock_clip_properties"`, created in the ctor (before
+`restoreWindowLayout()`, which can only restore docks that already exist),
+right area, hidden on a first run. Docked-vs-floating placement therefore rides
+the EXISTING `ui/windowState` `saveState()`/`restoreState()` round trip — no new
+settings key. A state blob from an older build simply has no entry for it, so
+the ctor defaults win once.
+
+**Selection following, with no new signal.** Selection changes are themselves
+actions, so they already end in `notifyArrangementChanged()`; the panel hangs
+`refresh()` off `SProject::arrangementChanged` (attach/detach mirrors
+`attachTrackDetail`). That also picks up edge drags, undo and .qxa scripts for
+free. The panel NEVER caches an `SLink*` — it re-resolves
+`getCurrentSelectionPaths()` every refresh, so a link destroyed since the last
+one drops out instead of dangling.
+
+**Multi-select is absolute-set, blank when mixed.** Name and Start time are
+identity, not shared quantities, so they are greyed out for >1 clip; everything
+else writes to every selected clip as ONE `SCompositeAction`, i.e. one undo
+step, with no-op children filtered out (a rejected apply fails the headless
+runner). Fields commit on `editingFinished`/`clicked` only, behind a
+"the user actually touched this widget" gate — `QAbstractSpinBox::focusOutEvent`
+re-interprets text before emitting, so tabbing through a blanked mixed field
+would otherwise commit a value nobody typed.
+
+**Two latent bugs found and fixed on the way** (the panel's Name field is a
+no-op without them):
+
+- `SObject::setSName()` was broken. The body read
+  `QString newName; if( n=="" ) newName = "(untitled)";` — the non-empty branch
+  was missing, so EVERY call stored `""`. Generated track names
+  (`SAddTrackAction`), asset names (`SCreateAssetAction`) and plugin names
+  (`SPluginSlot`) were all silently discarded. It now stores VERBATIM: every
+  reader already spells "unnamed" as `getSName().isEmpty()`, and mapping `""`
+  to `"(untitled)"` would make CLEARING a name unundoable.
+- `sName` was never serialized. `SObject::serializeSelfAttributes` now writes it
+  (only when non-empty, so untouched projects gain no attribute and their bytes
+  are unchanged) with `&apos;` escaping — unlike the raw `filename` attribute,
+  this value is user-typed. Read back in `readPreChildrenAttributes`, and only
+  when present.
+
+Consequence worth knowing: asset names now actually reach
+`SCutRendererInline`'s clip-body text, and armed-track ids in the recording
+params are no longer all empty strings. Both were dead before.
+
+New action `set-clip-name` (a structural copy of `set-formant-preserve`:
+shared take-resolution helper, edit-group broadcast into a composite, old-value
+inverse). `docs/ACTIONS.md` gains its row plus the previously-UNDOCUMENTED
+`set-formant-preserve` row (the table jumped `select-take` → `screenshot`).
+
+Gates: full 57-case qxa suite green (including the new
+`clip_properties_actions.qxa`, which also closes the missing coverage for
+`set-formant-preserve`); layering clean; logging OK; renders byte-identical to
+HEAD — 11 WAVs across 6 cases `cmp`-equal against a HEAD build made in the same
+worktree, plus run-to-run determinism confirmed.
+
+Deliberately NOT done: per-clip GAIN. `SObject` stores and serializes
+`volume`/`pan`/`delay` on every `SCut`, but nothing consumes them at clip level
+(`twTrackMix` reads volume from the TRACK), so a slider here would be a control
+that does nothing. It needs a gain stage in the clip's reader chain, a
+`set-clip-gain` action and a qxa energy test — its own proposal. The panel's
+shared commit helper is shaped so a relative-mode field drops in without
+restructuring.

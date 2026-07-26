@@ -2,7 +2,8 @@
 
 Purpose: the arrangement UI — SStdMixerView (the timeline canvas: lanes,
 clips, drag gestures, playhead), tree view, zoom scrollbar, grid toolbar,
-track header/detail widgets, mixer control strip.
+track header/detail widgets, mixer control strip, and SClipPropertiesPanel
+(the numeric/textual face of the clip window; the dock lives in the shell).
 
 Public headers: app/timeline/*.h
 
@@ -21,8 +22,18 @@ Invariants:
    cancelled.
 4. All timeline math is frames at project rate; pixel↔frame conversion is
    owned by the view's zoom state.
+5. Widgets that follow the SELECTION never cache an SLink*: they re-resolve
+   SApplication::getCurrentSelectionPaths() on every refresh, because any
+   action can destroy a selected link. They refresh off
+   SProject::arrangementChanged (selection changes are actions, so they
+   already emit it) — there is deliberately no selectionChanged signal.
+6. A selection-following widget that also EDITS must survive being refreshed
+   by its own commit: re-entrancy flag, blocked signals on every programmatic
+   write, commits on editingFinished/clicked only (never valueChanged), and
+   no setFocus() from the refresh path. See SClipPropertiesPanel.
 
 How to test: test_track_column_expansion.qxa, test_track_width_dragging.qxa,
+clip_properties_actions.qxa (the property verbs the panel submits),
 screenshot actions in the render cases.
 
 Known debt: sstdmixerview is the largest file in the app and knows every

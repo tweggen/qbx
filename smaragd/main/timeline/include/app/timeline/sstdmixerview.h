@@ -109,11 +109,9 @@ protected slots:
     void ctCreateAssetFromTrack();
     // Track context menu: expand/collapse the clicked track's take lanes.
     void ctToggleTakeLanes();
-    // Clip context menu: clear the clicked clip's loop.
-    void ctRemoveLoop();
-    // W4: toggle formant preservation on the clicked clip (per-take on
-    // stacks, same rule as pitch).
-    void ctToggleFormantPreserve();
+    // Clip context menu: open the clip properties panel on the selection
+    // (proposal 31 — replaces the individual loop/formant/pitch items).
+    void ctShowClipProperties();
 
 protected:
     virtual void paintEvent( QPaintEvent * );
