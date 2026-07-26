@@ -25,7 +25,7 @@ class twPluginInsert;
 // second, competing one.
 enum class twPluginSlotState {
     Active = 0,     // a real plugin instance is processing
-    Missing,        // the descriptor did not resolve (M4 owns this)
+    Missing,        // the descriptor did not resolve; createNullPlugin() stands in
     Unsupported     // resolved, but its channel layout has no defined mapping
 };
 
@@ -94,6 +94,13 @@ public:
     // channel-mismatch policy, re-instantiates, and prepare()s. Idempotent.
     void setBusCount( idx_t nBuses );
     idx_t busCount() const;
+
+    // Replace the instantiation factory and re-derive everything (proposal 08
+    // M4). This is how a slot whose plugin was MISSING becomes Active after a
+    // rescan found it: the taps and the twPluginChains they sit in are left
+    // completely alone, because they only ever reference this processor. The
+    // caller re-applies its stored state chunk afterwards.
+    void setFactory( Factory factory );
 
     // Register the per-bus tap. Held WEAKLY: taps own the processor, so a
     // strong ref here would be a cycle. The taps are also how the processor

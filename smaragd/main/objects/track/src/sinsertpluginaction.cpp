@@ -8,10 +8,7 @@
 #include "app/objects/track/strackpath.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "app/actions/sactionregistry.h"
-#include <QCoreApplication>
-#include <QDir>
 #include <QDomElement>
-#include <QFileInfo>
 #include <QString>
 
 SInsertPluginAction::SInsertPluginAction(
@@ -31,35 +28,8 @@ SInsertPluginAction::SInsertPluginAction(
 {
 }
 
-// Resolve the module path an action script (or an undo record) named.
-//
-// Absolute paths are taken as given. A relative one is tried against the
-// project's sample base dir (the .qxa's own directory — the same convention
-// SProject::linkToFile uses for sample fixtures) and then against the
-// application directory, which is where the build drops the in-repo twtestclap
-// fixture. Unresolvable paths are passed through unchanged so the registry gets
-// to log the real failure.
-static QString resolvePluginModulePath(SProject *project, const QString &path)
-{
-    if (path.isEmpty()) return path;
-    QFileInfo fi(path);
-    if (fi.isAbsolute()) return QDir::cleanPath(path);
-
-    if (project) {
-        const QString base = project->sampleBaseDir();
-        if (!base.isEmpty()) {
-            const QString cand = QDir::cleanPath(QDir(base).filePath(path));
-            if (QFileInfo::exists(cand)) return cand;
-        }
-    }
-
-    const QString appCand =
-        QDir::cleanPath(QDir(QCoreApplication::applicationDirPath()).filePath(path));
-    if (QFileInfo::exists(appCand)) return appCand;
-
-    return path;
-}
-
+// Module-path resolution lives on SPluginSlot (M4): the LOAD path needs exactly
+// the same rule, and a second copy here is how the two would drift.
 SApplyResult SInsertPluginAction::apply(SProject *project)
 {
     if (!project) {
@@ -87,7 +57,10 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     desc.uid = uid_.toStdString();
     desc.name = pluginName_.toStdString();
     desc.vendor = vendor_.toStdString();
-    desc.path = resolvePluginModulePath(project, path_).toStdString();
+    // The path is stored AS THE CALLER GAVE IT (typically relative, e.g. the
+    // in-repo "twtestclap.clap"): the slot resolves it for instantiation but
+    // serializes the raw form, which is what keeps a saved project portable.
+    desc.path = path_.toStdString();
     desc.io = {nIn_, nOut_};
 
     // Create the slot

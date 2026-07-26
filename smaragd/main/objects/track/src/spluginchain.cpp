@@ -67,12 +67,14 @@ void SPluginChain::childEvent( QChildEvent *event )
 
 SPluginChain::~SPluginChain() = default;
 
+// Must NOT throw (proposal 08 M4). It used to, unconditionally: getChainComponent()
+// was a TODO stub returning a member nothing ever assigned, so every call — and
+// SLink::getRootComponent() reaches this for any link to a chain — was a
+// std::runtime_error out of the model layer. A chain that no track has adopted
+// yet legitimately has no component; null says so.
 std::shared_ptr<twComponent> SPluginChain::getRootComponent()
 {
-    std::shared_ptr<twComponent> comp = getChainComponent();
-    if( comp ) return comp;
-    // TODO: build chain component from current slots
-    throw std::runtime_error( "SPluginChain: no chain component available" );
+    return getChainComponent();
 }
 
 QWidget *SPluginChain::getDetailEditWidget( QWidget *parent )
@@ -107,9 +109,9 @@ void SPluginChain::reorderSlot( int fromIndex, int toIndex )
 
 std::shared_ptr<twComponent> SPluginChain::getChainComponent()
 {
-    // TODO: Build or rebuild the chain component from current slots.
-    // For now, return nullptr (will be implemented with proper wiring).
-    return chainComponent_;
+    // The owning STrack installs the provider (setComponentProvider) and hands
+    // out bus 0's twPluginChain. Null before adoption, never a throw.
+    return componentProvider_ ? componentProvider_() : nullptr;
 }
 
 SLink *SPluginChain::instantiateFromDomElement(

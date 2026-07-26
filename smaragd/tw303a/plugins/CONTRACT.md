@@ -6,7 +6,8 @@ out-of-process probe), the format backends, and the hosting components
 (twPluginChain, twPluginSlotProcessor, twPluginInsert). twPassThrough is the
 built-in test plugin (a bit-crusher); twClapPlugin is the CLAP backend
 (proposal 08 M1); the scanner is proposal 08 M2; the processor/tap split is
-proposal 08 M3.
+proposal 08 M3; twNullPlugin (createNullPlugin) is the missing-plugin
+placeholder of proposal 08 M4.
 
 Shape of a slot (proposal 08 M3). ONE twPluginSlotProcessor per slot (plain
 C++, not a twComponent) owns the twPlugin instance(s), the bypass flag, the
@@ -157,6 +158,29 @@ Invariants:
    per page. twPluginSlotState { Active, Missing, Unsupported } is declared with
    all three values from M3 so that M4 adds persistence to an existing type; M3
    itself produces Active, Unsupported, and Missing when instantiation fails.
+17. A SLOT WITH NO PLUGIN STILL HAS ITS DESCRIPTOR'S GRAPH SHAPE (M4). When the
+   factory produces nothing, rebuild_nolock() substitutes
+   createNullPlugin( declaredIo_ ) instead of leaving instances_ empty, so the
+   channel mapping, the instance count and the prepare() bookkeeping are the ones
+   the real plugin will get once it is installed — installing it later changes
+   only what process() computes, never the wiring. The slot reports Missing, and
+   Missing WINS over Unsupported (a substituted placeholder's layout is whatever
+   a possibly-stale project file claimed, so "the plugin is not here" is both the
+   cause and the actionable report). Two consequences: a PARTIAL dual-mono chain
+   is no longer reachable (the old path cleared every instance and silenced whole
+   buses), and the placeholder's own state chunk is EMPTY — so nothing may read
+   state from a non-Active slot. SPluginSlot::saveState() enforces that; reading
+   it would overwrite the absent plugin's settings with nothing, i.e. a user
+   would lose their patch by opening the project on a machine without the plugin
+   and saving it.
+18. RE-RESOLUTION IS setFactory(), NOT A NEW PROCESSOR (M4). A slot's identity in
+   the graph IS its twPluginSlotProcessor: the taps hold it by shared_ptr and
+   every twPluginChain holds the taps. So a rescan that finally found the plugin
+   hands the SAME processor a new factory, which re-runs exactly what
+   setBusCount() derives and stales both caches through bumpParamEpoch_nolock().
+   Swapping the processor instead would mean re-wiring every chain of every bus,
+   from the UI, for what is not a structural change. The caller re-applies its
+   stored state chunk afterwards (SPluginSlot::reloadPlugin).
 
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears
@@ -169,7 +193,12 @@ it shares the probe's kill path and is covered by the manual pass.
 
 Also `ctest -R plugins_test` — the built-in plugin's descriptor /
 param / state surface; the M3 channel-mismatch table (Direct / DualMono with
-its instance count / MonoFold's average / Unsupported staying transparent);
+its instance count / MonoFold's average / Unsupported staying transparent); the
+M4 missing-placeholder and reload path (a null factory keeping the DECLARED
+mapping and staying bit-transparent, setFactory() turning the slot Active in
+place with the taps untouched, a parameter applied after the reload being
+audible, losing the plugin again falling back, and Missing winning over
+Unsupported);
 real audio through a two-bus slot (each bus carrying ITS OWN upstream, the two
 buses genuinely different, bypass and parameter edits audible on the next
 freeze, a preview freeze not re-preparing the plugin); the concurrent two-tap
@@ -185,8 +214,13 @@ not a gate) loads a real third-party .clap with the production loader and
 prints the factory contents. Also qxa.plugin_stereo_chain (a 2-in/2-out CLAP in a
 stereo track's signal path, gated on the cross-channel level relation),
 qxa.plugin_remove_and_undo (removing a slot really does take the plugin OUT of
-the audio, and undo puts it back) and qxa.render_sawtooth_with_effects (chain in
-the signal path); the plugin browser lists exactly the registry contents.
+the audio, and undo puts it back), qxa.plugin_slot_roundtrip (M4: a SAVED slot
+comes back into the signal path with its state chunk applied — 1.5x gain 2.0 =
+3x, which discriminates "not in the path" 1.0x from "state ignored" 1.5x),
+qxa.plugin_missing_placeholder (M4: an unknown uid loads, sounds transparent, and
+re-saves its descriptor and state chunk verbatim) and
+qxa.render_sawtooth_with_effects (chain in the signal path); the plugin browser
+lists exactly the registry contents.
 
 Known debt:
 - THE SINK IS STILL MONO, and that is not M3's doing. The graph carries N buses

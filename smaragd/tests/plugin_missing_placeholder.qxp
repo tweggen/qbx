@@ -1,0 +1,23 @@
+<SProject fileName='' rootId='root1' bpmTempo='120' sampleRate='48000' posFactor='1/48000' candidateRates='44100,48000,88200,96000' properties='{"cycle":false,"gridVisible":true,"metronome":false,"rangeEnd":0,"rangeStart":0,"rangeValid":false,"rulerMode":"bars","snapToGrid":true}'>
+<SStdMixer id='root1' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='track1' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+<STrack nBusses='2' pluginChainId='chain1' id='track1' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='cut1' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='chain1' nRefs='1' hasDuration='1' durationSec='4.16667e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='slot1' hasStartTime='1' startTime='0'>
+</SLink>
+</SPluginChain>
+<SPlainWave filename='../test_sawtooth.wav' id='wave1' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+</SPlainWave>
+<SCut srcStart='0' startOffset='0' cutDuration='192000' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='cut1' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='wave1' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SPluginSlot id='slot1' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' bypassed='false' format='clap' uid='tw.nobody.ships.this.plugin' name='Nonexistent Reverb' vendor='Acme &amp; Co &lt;Audio&gt;' path='nosuchmodule.clap' nIn='2' nOut='2' isInstrument='false'>
+<state encoding='base64'>U01BUkFHRC1NNC1TVEFURS1WRVJCQVRJTQ==</state>
+</SPluginSlot>
+</SProject>

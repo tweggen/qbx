@@ -3,6 +3,8 @@
 
 #include <QDomDocument>
 #include <QHash>
+#include <QList>
+#include <functional>
 #include "app/model/slink.h"
 
 class SProject;
@@ -32,12 +34,35 @@ public:
 
     SProject &getProject() { return project_; }
 
+    /**
+     * Queue work to run once EVERY object exists (proposal 08 M4).
+     *
+     * The instantiation loop only guarantees resolution for references written
+     * as <SLink objectId='…'> CHILDREN: it defers an element until each of those
+     * ids is in the dictionary. A reference carried by a plain ATTRIBUTE —
+     * STrack's pluginChainId, say — is invisible to that ordering, so an object
+     * that reads one during its own construction may look it up before it has
+     * been built. Registering a resolver here instead moves that lookup to the
+     * end of createObjects(), when the dictionary is complete but the loader
+     * (and therefore the dictionary and the temporary handle SLinks) is still
+     * alive.
+     *
+     * Resolvers run once, in registration order, on the loading (UI) thread.
+     * Anything a resolver keeps must take its own reference: ~SProjectLoader
+     * deletes the handle links right afterwards.
+     */
+    void deferResolve( std::function<void()> resolver );
+
 protected:
 private:
+    // Drains deferredResolvers_ (in order, clearing as it goes).
+    void runDeferredResolvers();
+
     // Accessor for the process-wide type registry (function-local static
     // avoids the static-initialization-order fiasco with the registrants).
     static QHash<QString, instantiateFromDomElement_f> &sObjectRegistry();
     SObjectDictionary objectDict_;
+    QList<std::function<void()> > deferredResolvers_;
     SProject &project_;
     QString name_;
     QDomDocument dom_;

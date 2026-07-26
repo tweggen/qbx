@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_missing_placeholder">
+
+  <!-- Proposal 08 M4 (AC 5): a project that names a plugin THIS MACHINE DOES NOT
+       HAVE must still open, must sound like the plugin is not there, and must
+       save back the plugin's identity and its settings untouched.
+
+       The fixture ../plugin_missing_placeholder.qxp is hand-written and
+       deliberately unresolvable: format="clap", uid="tw.nobody.ships.this.plugin",
+       path="nosuchmodule.clap". Its <state> chunk is not any plugin's real blob
+       (it decodes to the ASCII "SMARAGD-M4-STATE-VERBATIM") — the point being
+       that the app never parses it, only carries it.
+
+       What each assertion is actually gating:
+
+       * The load SUCCEEDS at all. Before M4 it could not: SPluginSlot did not
+         call SObject::serializeSelfAttributes, so no `id=` was written, and
+         SProjectLoader::createObjects answers a missing id with `return -1` —
+         aborting the WHOLE project load, not just the slot. And there was no
+         registerSObjectClass("SPluginSlot"), so even with an id the loader
+         warned "Unable to instantiate object of type SPluginSlot" and aborted.
+         A failed load-project action fails this case.
+
+       * The audio is TRANSPARENT. The unresolved slot runs
+         createNullPlugin(declared I/O) — a placeholder with the descriptor's own
+         2-in/2-out layout, so the channel mapping, the instance count and the
+         prepare() bookkeeping are the ones the real plugin will get once it is
+         installed, and process() is an exact copy. The bands below are the
+         UNPROCESSED sawtooth's (compare plugin_remove_and_undo.qxa's "removed"
+         render, 0.060 .. 0.073 for the first second).
+
+       * The re-save reproduces the descriptor AND the state chunk unchanged. A
+         Missing slot keeps descriptor_ and savedState_ verbatim: saveState()
+         refuses to read a non-Active slot, because the placeholder's own state
+         chunk is EMPTY and reading it would silently destroy the user's patch
+         the moment they opened the project on a machine without the plugin.
+         The vendor check also gates the attribute escaping — the stored vendor
+         really is `Acme & Co <Audio>`, and an unescaped `&` would produce a
+         project file that no longer parses. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../plugin_missing_placeholder.qxp"/>
+
+    <render filename="plugin_missing_placeholder.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s of the sawtooth, unprocessed level: the placeholder is a copy. -->
+    <assert-audio-energy filename="plugin_missing_placeholder.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.073"/>
+
+    <!-- 1-2 s, ~0.18 unprocessed. A placeholder that attenuated, amplified or
+         silenced its bus fails here as well as above. -->
+    <assert-audio-energy filename="plugin_missing_placeholder.wav"
+                         startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.15" maxRms="0.21"/>
+
+    <save-project path="../../build/plugin_missing_resave.qxp"/>
+
+    <!-- The plugin's identity survived a save on a machine without it. -->
+    <assert-file-contains path="../../build/plugin_missing_resave.qxp"
+                          text="uid='tw.nobody.ships.this.plugin'"/>
+    <assert-file-contains path="../../build/plugin_missing_resave.qxp"
+                          text="path='nosuchmodule.clap'"/>
+    <assert-file-contains path="../../build/plugin_missing_resave.qxp"
+                          text="name='Nonexistent Reverb'"/>
+    <assert-file-contains path="../../build/plugin_missing_resave.qxp"
+                          text="vendor='Acme &amp;amp; Co &amp;lt;Audio&amp;gt;'"/>
+
+    <!-- And so did the opaque state chunk, byte for byte. -->
+    <assert-file-contains path="../../build/plugin_missing_resave.qxp"
+                          text="U01BUkFHRC1NNC1TVEFURS1WRVJCQVRJTQ=="/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

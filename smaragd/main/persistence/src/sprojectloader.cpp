@@ -156,7 +156,31 @@ int SProjectLoader::createObjects( SProject &project )
             project_.setRootComponent( &rootLink->getSObject() );
         }
     }
+
+    // LAST: attribute-carried references (proposal 08 M4). See deferResolve().
+    // After setRootComponent, so a resolver that stales the render path walks a
+    // fully wired tree; before ~SProjectLoader, so the dictionary and its handle
+    // links are still alive.
+    runDeferredResolvers();
+
     return 0;
+}
+
+void SProjectLoader::deferResolve( std::function<void()> resolver )
+{
+    if( resolver ) deferredResolvers_.append( std::move( resolver ) );
+}
+
+void SProjectLoader::runDeferredResolvers()
+{
+    // Taken by value and cleared first: a resolver is allowed to register
+    // another one (it would simply not run in this pass), and must never be able
+    // to invalidate the list being iterated.
+    QList<std::function<void()> > pending;
+    pending.swap( deferredResolvers_ );
+    for( const std::function<void()> &fn : pending ) {
+        if( fn ) fn();
+    }
 }
 
 SProjectLoader::SProjectLoader( SProject &project, const QString &name )

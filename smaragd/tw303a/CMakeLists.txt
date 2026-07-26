@@ -158,6 +158,7 @@ tw_module(plugins
         plugins/src/twplugininsert.cc
         plugins/src/twpluginslotproc.cc
         plugins/src/twpassthrough.cc
+        plugins/src/twnullplugin.cc
         plugins/src/twpluginregistry.cc
         plugins/src/twpluginscancache.h
         plugins/src/twpluginscancache.cc

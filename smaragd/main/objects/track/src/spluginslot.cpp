@@ -1,29 +1,49 @@
 #include "app/objects/track/spluginslot.h"
 #include "app/model/sproject.h"
+#include "app/model/slink.h"
 #include "app/model/sappcontext.h"
+#include "app/persistence/sprojectloader.h"
 #include "tw/plugins/twplugin.h"
 #include "tw/plugins/twplugininsert.h"
 #include "tw/plugins/twpluginslotproc.h"
 #include "tw/plugins/twplugindescriptor.h"
-#include <QDomElement>
-#include <QTextStream>
 #include <QByteArray>
+#include <QCoreApplication>
+#include <QDir>
+#include <QDomElement>
+#include <QFileInfo>
+#include <QTextStream>
+
+namespace {
+
+// The project file writes attributes in SINGLE quotes and the rest of the model
+// escapes nothing at all — which is fine for numbers, and a corrupt file the
+// moment a plugin is called "Bob's & Co <EQ>". Escape exactly the characters
+// that would break the attribute or the markup; the value round-trips through
+// QDomElement::attribute() on the way back in.
+QString attrEscape( const QString &s )
+{
+    QString out = s;
+    out.replace( '&', "&amp;" );
+    out.replace( '<', "&lt;" );
+    out.replace( '>', "&gt;" );
+    out.replace( '\'', "&apos;" );
+    return out;
+}
+
+QString attrEscape( const std::string &s )
+{
+    return attrEscape( QString::fromStdString( s ) );
+}
+
+}  // namespace
 
 SPluginSlot::SPluginSlot( SProject *project, const audio::twPluginDescriptor &desc )
     : SObject( project ), descriptor_( desc ), effective_( desc )
 {
     setSName( QString::fromStdString( desc.name ) );
 
-    // Resolve (format, uid) against the registry: a scanned record carries the
-    // module PATH and the plugin's REAL channel counts (the scanner instantiated
-    // it to read them), both of which a hand-built or older-project descriptor
-    // may be missing or wrong about. Falls back to what we were given, which is
-    // what keeps a headless run without a scan working.
-    audio::twPluginDescriptor resolved;
-    if( audio::pluginRegistry().findByUid( descriptor_.format, descriptor_.uid,
-                                          resolved ) ) {
-        effective_ = resolved;
-    }
+    resolveEffective();
 
     // The processor and its taps are created on demand (setBusCount / the first
     // getInsertForBus), because the bus count is what decides the
@@ -32,6 +52,61 @@ SPluginSlot::SPluginSlot( SProject *project, const audio::twPluginDescriptor &de
 
 SPluginSlot::~SPluginSlot() = default;
 
+// Resolve (format, uid) against the registry: a scanned record carries the
+// module PATH and the plugin's REAL channel counts (the scanner instantiated it
+// to read them), both of which a hand-built or older-project descriptor may be
+// missing or wrong about. Falls back to what we were given — with its module
+// path resolved — which is what keeps a headless run without a scan working.
+//
+// descriptor_ itself is NEVER rewritten here. It is what the project file said
+// and what the project file will say again (proposal 08 M4): resolving a
+// relative path into it would turn a portable project into a machine-specific
+// one on the first save.
+void SPluginSlot::resolveEffective()
+{
+    audio::twPluginDescriptor resolved;
+    if( audio::pluginRegistry().findByUid( descriptor_.format, descriptor_.uid,
+                                          resolved ) ) {
+        effective_ = resolved;
+        return;
+    }
+    effective_ = descriptor_;
+    effective_.path = resolveModulePath( getProjectSafe(),
+                                         QString::fromStdString( descriptor_.path ) )
+                          .toStdString();
+}
+
+QString SPluginSlot::resolveModulePath( SProject *project, const QString &path )
+{
+    if( path.isEmpty() ) return path;
+    QFileInfo fi( path );
+    if( fi.isAbsolute() ) return QDir::cleanPath( path );
+
+    if( project ) {
+        const QString base = project->sampleBaseDir();
+        if( !base.isEmpty() ) {
+            const QString cand = QDir::cleanPath( QDir( base ).filePath( path ) );
+            if( QFileInfo::exists( cand ) ) return cand;
+        }
+    }
+
+    const QString appCand = QDir::cleanPath(
+        QDir( QCoreApplication::applicationDirPath() ).filePath( path ) );
+    if( QFileInfo::exists( appCand ) ) return appCand;
+
+    return path;
+}
+
+audio::twPluginSlotProcessor::Factory SPluginSlot::makeFactory() const
+{
+    // A FACTORY, not one instance: the dual-mono mapping (a 1->1 plugin on N
+    // buses) needs one instance per bus, and instantiate() returns a fresh one
+    // per call. The descriptor is captured BY VALUE so the factory stays valid
+    // across a reloadPlugin() that replaces effective_.
+    audio::twPluginDescriptor eff = effective_;
+    return [eff]() { return audio::pluginRegistry().instantiate( eff ); };
+}
+
 void SPluginSlot::ensureBuses( int nBuses ) const
 {
     if( nBuses <= 0 ) return;
@@ -39,14 +114,8 @@ void SPluginSlot::ensureBuses( int nBuses ) const
     SPluginSlot *self = const_cast<SPluginSlot *>( this );
 
     if( !self->proc_ ) {
-        // A FACTORY, not one instance: the dual-mono mapping (a 1->1 plugin on
-        // N buses) needs one instance per bus, and instantiate() returns a fresh
-        // one per call.
-        audio::twPluginDescriptor eff = effective_;
         self->proc_ = std::make_shared<audio::twPluginSlotProcessor>(
-            *SAppContext::get().get303aEnvironment(),
-            [eff]() { return audio::pluginRegistry().instantiate( eff ); },
-            eff.io );
+            *SAppContext::get().get303aEnvironment(), makeFactory(), effective_.io );
     }
 
     if( nBuses > self->busCount_ ) {
@@ -96,6 +165,33 @@ audio::twPluginSlotMode SPluginSlot::getSlotMode() const
     return proc_ ? proc_->mode() : audio::twPluginSlotMode::Transparent;
 }
 
+bool SPluginSlot::reloadPlugin()
+{
+    // Re-ask the registry: a rescan since the project was loaded may have found
+    // the module. Then hand the processor a new factory — deliberately NOT a new
+    // processor, because the taps and every twPluginChain holding them reference
+    // this one, and swapping it would mean re-wiring the whole DSP chain.
+    resolveEffective();
+    if( !proc_ ) {
+        // Nothing was ever materialized (no bus count yet): the next
+        // ensureBuses() will build from the freshly resolved descriptor.
+        emit pluginReloaded();
+        return false;
+    }
+
+    proc_->setFactory( makeFactory() );
+    proc_->setBypass( bypass_ );
+    if( !savedState_.empty() ) {
+        for( audio::twPlugin *p : proc_->plugins() )
+            if( p ) p->loadState( savedState_ );
+    }
+    // setFactory() already staled the processor cache and every tap's pages; the
+    // path DOWNSTREAM of the slot is the app's to invalidate.
+    invalidateRenderPath();
+    emit pluginReloaded();
+    return getSlotState() == audio::twPluginSlotState::Active;
+}
+
 std::shared_ptr<twComponent> SPluginSlot::getRootComponent()
 {
     auto tap = getInsertForBus(0);
@@ -103,7 +199,7 @@ std::shared_ptr<twComponent> SPluginSlot::getRootComponent()
         return std::static_pointer_cast<twComponent>(tap);
     }
     // Fallback (shouldn't happen - the tap exists even for a missing plugin;
-    // the processor simply loads transparent).
+    // the processor simply runs the transparent placeholder).
     throw std::runtime_error( "SPluginSlot: no plugin insert available" );
 }
 
@@ -123,8 +219,12 @@ SObjectRenderer *SPluginSlot::getInlineRenderer()
     return nullptr;
 }
 
+// --- serialization -----------------------------------------------------------
+
 int SPluginSlot::readPreChildrenAttributes( QDomElement &element )
 {
+    SObject::readPreChildrenAttributes( element );
+
     if( element.hasAttribute( "bypassed" ) )
         bypass_ = element.attribute( "bypassed" ) == "true";
 
@@ -137,22 +237,115 @@ int SPluginSlot::readPreChildrenAttributes( QDomElement &element )
         std::copy( decoded.begin(), decoded.end(), savedState_.begin() );
 
         // Restore state to every instance the slot already has (dual-mono has N).
+        // On the load path there is none yet — the blob is kept and replayed by
+        // ensureBuses() once STrack declares the bus count.
         restoreState( savedState_ );
     }
 
     return 0;
 }
 
+// The wire schema of a slot (proposal 08 §Layer 6). SObject::serializeSelfAttributes
+// FIRST and unconditionally: it is what emits id=, and without it
+// SProjectLoader::createObjects hits `if( id.isNull() ) … return -1` and the
+// WHOLE project load aborts — not just this slot.
+//
+//   <SPluginSlot id='…' … bypassed='false' format='clap' uid='…' name='…'
+//                vendor='…' path='…' nIn='2' nOut='2' isInstrument='false'>
+//     <state encoding='base64'>…</state>
+//   </SPluginSlot>
+//
+// descriptor_ is what is written, never effective_: the stored descriptor is
+// exactly what the project file said, so a project stays portable (a relative
+// module path is not silently absolutized) and a MISSING plugin's identity
+// survives a save on a machine that does not have it.
 int SPluginSlot::serializeSelfAttributes( QTextStream &o )
 {
+    SObject::serializeSelfAttributes( o );
     o << " bypassed='" << (bypass_ ? "true" : "false") << "'";
-    o << " format='" << QString::fromStdString( descriptor_.format ) << "'";
-    o << " uid='" << QString::fromStdString( descriptor_.uid ) << "'";
-    o << " vendor='" << QString::fromStdString( descriptor_.vendor ) << "'";
+    o << " format='" << attrEscape( descriptor_.format ) << "'";
+    o << " uid='" << attrEscape( descriptor_.uid ) << "'";
+    o << " name='" << attrEscape( descriptor_.name ) << "'";
+    o << " vendor='" << attrEscape( descriptor_.vendor ) << "'";
+    o << " path='" << attrEscape( descriptor_.path ) << "'";
     o << " nIn='" << descriptor_.io.audioInputs << "'";
     o << " nOut='" << descriptor_.io.audioOutputs << "'";
+    o << " isInstrument='" << (descriptor_.isInstrument ? "true" : "false") << "'";
     return 0;
 }
+
+// SObject::serialize() only writes attributes and SLink children, so the state
+// chunk needs this override. It replaces the DOM-based serializeStateChunk()
+// that M4 deleted: that function had ZERO callers, because the write path is
+// QTextStream-based — which is what made the base64 restore in
+// readPreChildrenAttributes dead code and slots un-round-trippable.
+//
+// The blob is pulled FRESH from the live plugin at save time (saveState()), so a
+// parameter the user moved is in the file even though nothing told the slot
+// about it. Output is deterministic: base64 of the same bytes, no timestamps, no
+// pointer values beyond the id= the base class already writes.
+int SPluginSlot::serialize( QTextStream &o )
+{
+    const char *cls = metaObject()->className();
+
+    o << "<" << cls;
+    int res = serializeSelfAttributes( o );
+    if( res < 0 ) return res;
+    o << ">\n";
+
+    std::vector<std::uint8_t> state;
+    saveState( state );
+    if( !state.empty() ) {
+        const QByteArray raw( (const char *) state.data(), (int) state.size() );
+        o << "<state encoding='base64'>" << QString::fromLatin1( raw.toBase64() )
+          << "</state>\n";
+    }
+
+    // A slot has no SLink children today; keep the base class's shape so it
+    // stays correct if one is ever added (a side-chain source, say).
+    for( SLink *lk : childLinks() ) {
+        int r = lk->serialize( o );
+        if( r < 0 ) break;
+    }
+
+    o << "</" << cls << ">\n";
+    return 0;
+}
+
+// Modelled on STakeStack::instantiateFromDomElement (objects/cut). Rebuilds the
+// descriptor from the attributes and lets the constructor resolve it against the
+// registry by (format, uid).
+SLink *SPluginSlot::instantiateFromDomElement(
+    SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
+{
+    (void) parent;
+
+    audio::twPluginDescriptor desc;
+    desc.format = element.attribute( "format" ).toStdString();
+    desc.uid    = element.attribute( "uid" ).toStdString();
+    desc.name   = element.attribute( "name" ).toStdString();
+    desc.vendor = element.attribute( "vendor" ).toStdString();
+    desc.path   = element.attribute( "path" ).toStdString();
+    desc.io.audioInputs  =
+        (std::uint16_t) element.attribute( "nIn",  "0" ).toUInt();
+    desc.io.audioOutputs =
+        (std::uint16_t) element.attribute( "nOut", "0" ).toUInt();
+    desc.isInstrument = element.attribute( "isInstrument", "false" ) == "true";
+
+    SPluginSlot *slot = new SPluginSlot( &projectLoader.getProject(), desc );
+    slot->readPreChildrenAttributes( element );
+    slot->readPostChildrenAttributes( element );
+    return new SLink( *slot );
+}
+
+// Self-registration with the project loader (proposal 14, Phase 5): the
+// persistence module names no concrete types; each slice registers its own
+// element name. Relies on the app being an OBJECT library (no TU elision).
+static const bool s_registered_spluginslot =
+    ( SProjectLoader::registerSObjectClass( "SPluginSlot",
+          SPluginSlot::instantiateFromDomElement ), true );
+
+// --- runtime control ---------------------------------------------------------
 
 void SPluginSlot::setBypass( bool bypass )
 {
@@ -178,7 +371,13 @@ void SPluginSlot::saveState( std::vector<std::uint8_t> &state )
     // Bus 0's instance is the representative: in every supported mapping except
     // dual-mono there is only one, and dual-mono instances are kept in lockstep
     // by restoreState()/notifyPluginEdited().
-    if( proc_ ) {
+    //
+    // ONLY when the slot is Active. A Missing slot runs createNullPlugin()'s
+    // placeholder, whose state chunk is empty — reading it would overwrite the
+    // absent plugin's settings with nothing, i.e. a user would lose their patch
+    // by opening the project on a machine where the plugin is not installed and
+    // saving it. Unsupported is treated the same way for the same reason.
+    if( proc_ && getSlotState() == audio::twPluginSlotState::Active ) {
         if( audio::twPlugin *p = proc_->plugin() ) {
             state = p->saveState();
             savedState_ = state;
@@ -197,22 +396,4 @@ void SPluginSlot::restoreState( const std::vector<std::uint8_t> &state )
     // A state chunk changes what process() produces, so the cached pages have to
     // go with it.
     proc_->bumpParamEpoch();
-}
-
-void SPluginSlot::serializeStateChunk( QDomElement &parentElem, QDomDocument &doc )
-{
-    // Save current state from the plugin
-    std::vector<std::uint8_t> state;
-    saveState( state );
-
-    if( !savedState_.empty() ) {
-        QDomElement stateElem = doc.createElement( "state" );
-        stateElem.setAttribute( "encoding", "base64" );
-
-        QByteArray data( (const char*)savedState_.data(), (int)savedState_.size() );
-        QString encoded = QString::fromLatin1( data.toBase64() );
-        stateElem.appendChild( doc.createTextNode( encoded ) );
-
-        parentElem.appendChild( stateElem );
-    }
 }

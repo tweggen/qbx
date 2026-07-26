@@ -23,7 +23,20 @@ Invariants:
 3. Positions serialize as Fractions (exact); durations in frames at the
    PROJECT's sampleRate attribute; legacy files default 44.1 kHz.
 4. Loaded projects must re-serialize byte-equivalently modulo volatile
-   attributes (serialization_roundtrip_test guards the Fraction layer).
+   attributes (serialization_roundtrip_test guards the Fraction layer and the
+   base64 state-chunk layer; plugin_slot_roundtrip.qxa /
+   plugin_missing_placeholder.qxa guard a whole plugin slot, state chunk
+   included).
+5. A reference carried by a plain ATTRIBUTE is resolved by
+   deferResolve(), never inline (proposal 08 M4). The instantiation loop only
+   defers an element until each of its <SLink objectId> CHILDREN is in the
+   dictionary; an attribute reference (STrack's pluginChainId) is invisible to
+   that ordering, so reading one during construction may find nothing.
+   deferResolve() queues a resolver that createObjects() runs after
+   setRootComponent and before ~SProjectLoader — dictionary complete, handle
+   links still alive. Resolvers run once, in order, on the loading thread;
+   anything a resolver keeps must take its own reference, because those handle
+   links are deleted immediately afterwards.
 
 How to test: load-project + save-project qxa actions; the test4 user
 project is the realistic corpus.

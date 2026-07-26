@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_slot_roundtrip">
+
+  <!-- Proposal 08 M4 (AC 4): a saved plugin slot comes back INTO THE SIGNAL PATH
+       with its parameter state applied — proved by the rendered level, not by
+       reading code.
+
+       ../plugin_slot_roundtrip.qxp is a hand-written project holding the in-repo
+       CLAP fixture tw.test.clap.stereoskew (2 in / 2 out) on a stereo track, and
+       a <state> chunk that sets its "Gain" parameter to 2.0 (the blob is our
+       8-byte 'TWCP' frame followed by the plugin's two little-endian doubles,
+       gain = 2.0 and report = 0.0).
+
+       The fixture's DSP is out[0] = in[0] * 0.5 * gain + in[1] * 1.0 * gain, and
+       the track feeds both buses the same mono material, so channel 0 comes out
+       at 1.5 * gain times the unprocessed level. That makes the first second of
+       the sawtooth a THREE-WAY discriminator:
+
+           0.0667   the loaded slot never reached the DSP at all
+           0.1000   the slot is in the path but its state chunk was ignored
+           0.2000   correct: 1.5 x gain 2.0                     <- asserted
+
+       Each of those failures is a real defect this milestone closed. The middle
+       one is why the state chunk mattered: before M4 the base64 restore in
+       readPreChildrenAttributes was dead code, because the only serializer that
+       ever wrote a <state> element was a DOM-based function with zero callers.
+       The first one is the deferred chain adoption: STrack writes
+       pluginChainId='…' and picks its chain up in SProjectLoader::deferResolve,
+       because a plain attribute is invisible to the loader's <SLink>-based
+       ordering — and a loaded chain's slots have never emitted slotInserted at
+       anyone, so the track rebuilds the per-bus DSP chains itself.
+
+       Only the first second is asserted: at 3x, later seconds of the ramped
+       sawtooth would clip and the level relation would stop being linear. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../plugin_slot_roundtrip.qxp"/>
+
+    <render filename="plugin_slot_roundtrip.wav" format="wav" quality="10"/>
+
+    <assert-audio-energy filename="plugin_slot_roundtrip.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.185" maxRms="0.215"/>
+
+    <!-- Re-saving must reproduce the state chunk exactly. The blob is pulled
+         FRESH from the live plugin here (saveState()), so this also proves the
+         plugin really did load gain = 2.0 rather than the app merely echoing the
+         bytes it read. -->
+    <save-project path="../../build/plugin_slot_resave.qxp"/>
+    <assert-file-contains path="../../build/plugin_slot_resave.qxp"
+                          text="VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA"/>
+    <assert-file-contains path="../../build/plugin_slot_resave.qxp"
+                          text="uid='tw.test.clap.stereoskew'"/>
+    <!-- The module path stays RELATIVE across the round trip: the slot resolves
+         it for instantiation but serializes descriptor_ verbatim, which is what
+         keeps a project portable between machines. -->
+    <assert-file-contains path="../../build/plugin_slot_resave.qxp"
+                          text="path='twtestclap.clap'"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

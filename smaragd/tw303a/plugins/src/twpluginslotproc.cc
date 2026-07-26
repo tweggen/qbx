@@ -33,6 +33,22 @@ void twPluginSlotProcessor::setBusCount( idx_t nBuses )
     rebuild_nolock();
 }
 
+// Re-resolution after a rescan (proposal 08 M4). The taps hold this processor by
+// shared_ptr and the DSP chains hold the taps, so a slot whose plugin appeared
+// on disk must NOT be rebuilt by swapping the processor — that would mean
+// re-wiring every twPluginChain. Handing it a new factory instead re-runs
+// exactly the derivation setBusCount() does, keeps the graph untouched, and
+// stales both caches through rebuild_nolock()'s bumpParamEpoch_nolock().
+void twPluginSlotProcessor::setFactory( Factory factory )
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    factory_ = std::move( factory );
+    // Reset the once-per-slot log gate: the new factory may map differently, and
+    // that verdict is worth one line again.
+    loggedUnsupported_ = false;
+    rebuild_nolock();
+}
+
 idx_t twPluginSlotProcessor::busCount() const
 {
     std::lock_guard<std::mutex> lock( mutex_ );
@@ -118,21 +134,33 @@ void twPluginSlotProcessor::rebuild_nolock()
     std::fill( cache_.begin(), cache_.end(), std::shared_ptr<const Output>{} );
     bumpParamEpoch_nolock();
 
-    if( nBuses_ <= 0 || !factory_ ) return;
+    if( nBuses_ <= 0 ) return;
+
+    // No backend, no module, or a refused descriptor: SUBSTITUTE the placeholder
+    // (proposal 08 M4) rather than leaving the slot instance-less. The
+    // placeholder reports the descriptor's DECLARED layout, so the mapping, the
+    // instance count and the prepare() bookkeeping are the ones the real plugin
+    // will get once it is installed — the slot is transparent, but it is not a
+    // differently-shaped graph. `substituted` is what turns into the persisted
+    // Missing state below.
+    bool substituted = false;
+    auto makeInstance = [this, &substituted]() -> std::unique_ptr<twPlugin> {
+        std::unique_ptr<twPlugin> p = factory_ ? factory_() : nullptr;
+        if( !p ) {
+            p = createNullPlugin( declaredIo_ );
+            substituted = true;
+        }
+        return p;
+    };
 
     // One instance is created FIRST so the mapping is decided against the
     // plugin's own reported layout, not against a descriptor that a stale
     // project file or an out-of-date scan cache may disagree with.
-    std::unique_ptr<twPlugin> first = factory_();
-    if( !first ) {
-        // No backend, no module, or a refused descriptor. The slot stays in the
-        // graph and stays transparent — M4 turns this into a persisted
-        // missing-plugin placeholder with the descriptor's declared I/O.
-        state_ = twPluginSlotState::Missing;
+    std::unique_ptr<twPlugin> first = makeInstance();
+    if( substituted ) {
         TW_LOGW( "plugins", "[slot] could not instantiate the plugin (declared %u in / "
-                 "%u out); the slot loads transparent",
+                 "%u out); the slot runs the transparent placeholder and is MISSING",
                  (unsigned)declaredIo_.audioInputs, (unsigned)declaredIo_.audioOutputs );
-        return;
     }
 
     const twPluginIoLayout io = first->ioLayout();
@@ -151,18 +179,11 @@ void twPluginSlotProcessor::rebuild_nolock()
         mode_ = twPluginSlotMode::DualMono;
         instances_.push_back( std::move( first ) );
         for( idx_t b = 1; b < nBuses_; ++b ) {
-            std::unique_ptr<twPlugin> extra = factory_();
-            if( !extra ) {
-                // A partial dual-mono chain would silence some buses; refuse it.
-                TW_LOGW( "plugins", "[slot] dual-mono needs %d instances but the factory "
-                         "produced only %d; the slot loads transparent",
-                         (int)nBuses_, (int)instances_.size() );
-                instances_.clear();
-                mode_  = twPluginSlotMode::Transparent;
-                state_ = twPluginSlotState::Missing;
-                return;
-            }
-            instances_.push_back( std::move( extra ) );
+            // makeInstance() never returns null (it falls back to the
+            // placeholder), so a PARTIAL dual-mono chain — which used to silence
+            // whole buses — is no longer reachable. A factory that produces one
+            // real instance and then fails marks the whole slot Missing.
+            instances_.push_back( makeInstance() );
         }
     } else if( nIn == 2 && nOut == 2 && nBuses_ == 1 ) {
         // A stereo plugin on a mono wire: feed the one input to both plugin
@@ -173,7 +194,12 @@ void twPluginSlotProcessor::rebuild_nolock()
         // >2 channels, or asymmetric in != out: no auto-mix. Until a routing
         // matrix exists, guessing would be worse than being transparent.
         mode_  = twPluginSlotMode::Transparent;
-        state_ = twPluginSlotState::Unsupported;
+        // Missing WINS over Unsupported: a substituted placeholder's layout is
+        // whatever the saved descriptor claimed, so "the plugin is not here" is
+        // both the cause and the actionable report — and it is what M5's Reload
+        // affordance keys on.
+        state_ = substituted ? twPluginSlotState::Missing
+                             : twPluginSlotState::Unsupported;
         if( !loggedUnsupported_ ) {
             loggedUnsupported_ = true;
             TW_LOGW( "plugins", "[slot] no defined mapping for a %d-in / %d-out plugin on "
@@ -182,6 +208,8 @@ void twPluginSlotProcessor::rebuild_nolock()
         }
         return;
     }
+
+    if( substituted ) state_ = twPluginSlotState::Missing;
 
     // prepare() is reached from setBusCount(), i.e. from the UI thread — which
     // is where CLAP says activate() belongs.

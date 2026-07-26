@@ -14,6 +14,7 @@ class twPluginSlotProcessor;
 }  // namespace audio
 
 class SApplication;
+class SProjectLoader;
 
 /**
  * A model object wrapping one plugin insert in a track's effect chain.
@@ -25,6 +26,11 @@ class SApplication;
  * TAP per bus. The taps are 1-in/1-out components, which is what the engine's
  * one-mono-page-per-component model requires; channel coherence lives in the
  * processor, not in the components.
+ *
+ * Since proposal 08 M4 a slot round-trips through the project file: see
+ * serializeSelfAttributes() for the schema and instantiateFromDomElement() for
+ * the load side. A slot whose plugin is not installed keeps its descriptor and
+ * its state chunk VERBATIM and re-serializes them unchanged.
  */
 class SPluginSlot : public SObject {
     Q_OBJECT
@@ -40,6 +46,19 @@ public:
 
     virtual int readPreChildrenAttributes( QDomElement &element );
     virtual int serializeSelfAttributes( QTextStream &o );
+    // Overridden to emit the <state encoding='base64'> child element (the base
+    // class only writes attributes and SLink children).
+    virtual int serialize( QTextStream &o );
+
+    static SLink *instantiateFromDomElement( SProjectLoader &projectLoader,
+                                             QDomElement &element,
+                                             SObject *parent );
+
+    // Resolve a module path the way both the load path and insert-plugin do:
+    // absolute as given, relative against the project's sample base dir (the
+    // .qxa/.qxp directory) and then the application directory. An unresolvable
+    // path is returned unchanged so the registry logs the real failure.
+    static QString resolveModulePath( SProject *project, const QString &path );
 
     // Plugin access (bus 0 for backward compatibility)
     std::shared_ptr<audio::twPluginInsert> getInsert() const { return getInsertForBus(0); }
@@ -60,14 +79,26 @@ public:
 
     const std::shared_ptr<audio::twPluginSlotProcessor> &getProcessor() const { return proc_; }
 
+    // Re-resolve (format, uid) against the registry and re-instantiate, then
+    // re-apply the stored state chunk (proposal 08 M4). This is what a rescan
+    // that finally found the plugin needs: the DSP graph is untouched (the taps
+    // keep the same processor), only what process() computes changes. Returns
+    // true when the slot is Active afterwards. Safe to call on an Active slot —
+    // it then just rebuilds from the same descriptor. UI thread only (it
+    // reaches twPlugin::prepare()); M5 owns the per-slot "Reload" affordance.
+    bool reloadPlugin();
+
     // Bypass control
     void setBypass( bool bypass );
     bool getBypass() const { return bypass_; }
 
-    // State persistence
+    // State persistence. saveState() reads the LIVE plugin only when the slot is
+    // Active; for a Missing/Unsupported slot it hands back the stored blob
+    // verbatim, which is what keeps a user's settings across opening the project
+    // on a machine where the plugin is not installed.
     void saveState( std::vector<std::uint8_t> &state );
     void restoreState( const std::vector<std::uint8_t> &state );
-    void serializeStateChunk( QDomElement &parentElem, QDomDocument &doc );
+    const std::vector<std::uint8_t> &getSavedState() const { return savedState_; }
 
     // A parameter (or anything else that changes what process() produces) was
     // edited from outside. Stales every cached page of this slot AND the render
@@ -76,12 +107,19 @@ public:
 
 signals:
     void bypassChanged( bool );
+    // The slot was re-instantiated (reloadPlugin()): its state/mode may have
+    // changed and any editor showing its parameters is stale. M5 listens.
+    void pluginReloaded();
 
 private:
     // Materialize the processor (once) and grow the tap vector to nBuses.
     void ensureBuses( int nBuses ) const;
+    // (Re-)resolve effective_ from the registry; falls back to descriptor_ with
+    // its module path resolved.
+    void resolveEffective();
+    audio::twPluginSlotProcessor::Factory makeFactory() const;
 
-    audio::twPluginDescriptor descriptor_;   // as stored / as given
+    audio::twPluginDescriptor descriptor_;   // as stored / as given (VERBATIM)
     audio::twPluginDescriptor effective_;    // as resolved against the registry
 
     std::shared_ptr<audio::twPluginSlotProcessor>          proc_;

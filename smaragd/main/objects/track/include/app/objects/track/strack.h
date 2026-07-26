@@ -70,6 +70,12 @@ public:
     virtual SLink *getTopMostSLinkAt( offset_t ) const;
     int getNBusses() const { return nBusses_; }
     SPluginChain *getPluginChain() const { return cpPluginChain_; }
+
+    // Adopt a plugin chain loaded from a project file (proposal 08 M4): drop the
+    // empty one the constructor made, take over the loaded one, reconnect its
+    // signals and rebuild the per-bus DSP chains from its slots. Called from the
+    // loader's deferred-resolve pass, never during normal editing.
+    void adoptPluginChain( SPluginChain *chain );
     virtual int seekTo( offset_t ofs ) override;
 
     // Path search may descend into track lanes (see SObject::isPathContainer).
@@ -101,6 +107,9 @@ protected:
     
 private:
     void checkDurationChanged();
+    // Wire a chain to this track: signals, our reference, the DSP component
+    // provider. Used by the constructor and by adoptPluginChain().
+    void connectPluginChain( SPluginChain *chain );
 
     SStartTimeList startTimeList_;
     SEndTimeList endTimeList_;
@@ -109,6 +118,16 @@ private:
     std::vector<std::shared_ptr<twTrackMix> > cpTrackMixers_;
     std::shared_ptr<twRewire> cpRewire_;
     SPluginChain *cpPluginChain_;  // Model object for effects inserts
+    // Our REFERENCE to that chain, not a child link (a chain is not an SLink
+    // child of a track — SObject::childEvent only accepts SLinks, and a chain in
+    // childLinks() would be treated as a clip). It exists because an SObject
+    // whose reference count reaches zero deleteLater()s itself: the loader's
+    // temporary handle link is dropped in ~SProjectLoader, so without a
+    // reference of our own an adopted chain would be destroyed moments after we
+    // took it. Holding one for the constructor-made chain too keeps the
+    // refcount — a serialized attribute — identical between a new and a loaded
+    // project. Deleted by ~STrack.
+    SLink *cpPluginChainRef_ = nullptr;
     std::vector<std::shared_ptr<twPluginChain> > cpPluginChains_;  // DSP components (one per bus)
     
     mutable length_t lastDuration_;

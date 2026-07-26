@@ -317,6 +317,129 @@ static int testChannelPolicy()
 }
 
 // ---------------------------------------------------------------------------
+// M4: the missing-plugin placeholder, and becoming Active again after a rescan.
+//
+// Both halves of what proposal 08 AC 5 promises, at the level the app cannot
+// reach: a slot whose factory produces NOTHING must still have the graph shape
+// its DESCRIPTOR declared (so installing the plugin later changes only what
+// process() computes), and setFactory() must be able to turn it Active in place
+// — the taps and the twPluginChains holding them are never rebuilt, because a
+// slot's identity in the graph is its processor.
+static int testMissingAndReload()
+{
+    std::cout << "=== M4 missing placeholder + reload ===" << std::endl;
+
+    tw303aEnvironment env;
+    env.setSRate( 48000 );
+    const int rate = env.getSRate();
+
+    // The factory the app installs: it returns null exactly while the plugin is
+    // "not installed", which is what twPluginRegistry::instantiate() does for an
+    // unknown uid or a module that is not on disk.
+    std::atomic<bool> installed{ false };
+    std::atomic<int>  live{ 0 };
+    auto factory = [&installed, &live]() -> std::unique_ptr<twPlugin> {
+        if( !installed.load() ) return nullptr;
+        return std::make_unique<MockPlugin>( 2, 2, &live );
+    };
+
+    auto proc = std::make_shared<twPluginSlotProcessor>(
+        env, factory, twPluginIoLayout{ 2, 2 } );   // the DECLARED layout
+    proc->setBusCount( 2 );
+
+    std::vector<std::shared_ptr<TestSource>>     sources;
+    std::vector<std::shared_ptr<twPluginInsert>> taps;
+    for( int b = 0; b < 2; ++b ) {
+        auto src = std::make_shared<TestSource>( env, (float)( b + 1 ) );
+        src->init();
+        auto tap = std::make_shared<twPluginInsert>( env, proc, (idx_t)b );
+        tap->init();
+        tap->setInput( 0, src->linkOutput( 0 ) );
+        sources.push_back( std::move( src ) );
+        taps.push_back( std::move( tap ) );
+    }
+
+    check( proc->state() == twPluginSlotState::Missing,
+           "a factory that produces nothing leaves the slot MISSING" );
+    check( proc->mode() == twPluginSlotMode::Direct,
+           "...but the mapping is still Direct, derived from the DECLARED 2-in/2-out "
+           "(so a reload does not change the graph's shape)" );
+    check( live.load() == 0, "...and no real plugin instance exists" );
+    {
+        auto p0 = freezeTap( taps[0], 0, rate );
+        auto p1 = freezeTap( taps[1], 0, rate );
+        check( p0 && nearly( p0->samples[9], sources[0]->value( 9 ), 1e-6 ) &&
+                   p1 && nearly( p1->samples[9], sources[1]->value( 9 ), 1e-6 ),
+               "...the placeholder is bit-transparent on every bus" );
+    }
+
+    // The rescan found it. Same processor, new factory.
+    installed.store( true );
+    proc->setFactory( [&installed, &live]() -> std::unique_ptr<twPlugin> {
+        if( !installed.load() ) return nullptr;
+        return std::make_unique<MockPlugin>( 2, 2, &live );
+    } );
+
+    check( proc->state() == twPluginSlotState::Active,
+           "setFactory() turns a MISSING slot Active without touching the taps" );
+    check( live.load() == 1, "...with exactly one real instance for Direct" );
+    {
+        // MockPlugin scales channel c by gain * (c + 1) — so bus 1 at 2x is the
+        // proof the taps still reach the SAME processor after the swap.
+        auto p0 = freezeTap( taps[0], 0, rate );
+        auto p1 = freezeTap( taps[1], 0, rate );
+        check( p0 && nearly( p0->samples[9], sources[0]->value( 9 ) * 1.0f, 1e-6 ),
+               "...bus 0 is now processed" );
+        check( p1 && nearly( p1->samples[9], sources[1]->value( 9 ) * 2.0f, 1e-5 ),
+               "...bus 1 too, through the same taps as before" );
+    }
+
+    // A state chunk re-applied after the reload has to be audible, which is what
+    // makes "the settings survived the plugin being missing" true rather than
+    // merely stored. (The app does exactly this in SPluginSlot::reloadPlugin.)
+    for( twPlugin *p : proc->plugins() ) p->setParam( 0, 4.0 );
+    proc->bumpParamEpoch();
+    {
+        auto p0 = freezeTap( taps[0], 0, rate );
+        check( p0 && nearly( p0->samples[9], sources[0]->value( 9 ) * 4.0f, 1e-5 ),
+               "...and a parameter applied after the reload is audible" );
+    }
+
+    // Going the other way: the plugin disappeared under us (a rescan that lost
+    // it). The slot must fall BACK to the placeholder, not keep a dangling
+    // instance or go silent.
+    installed.store( false );
+    proc->setFactory( [&installed, &live]() -> std::unique_ptr<twPlugin> {
+        if( !installed.load() ) return nullptr;
+        return std::make_unique<MockPlugin>( 2, 2, &live );
+    } );
+    check( proc->state() == twPluginSlotState::Missing,
+           "losing the plugin again returns the slot to MISSING" );
+    check( live.load() == 0, "...and releases the real instance" );
+    {
+        auto p0 = freezeTap( taps[0], 0, rate );
+        check( p0 && nearly( p0->samples[9], sources[0]->value( 9 ), 1e-6 ),
+               "...transparent once more" );
+    }
+
+    // A declared layout with no mapping AND no plugin: MISSING wins over
+    // Unsupported, because "the plugin is not here" is the actionable report.
+    {
+        auto p = std::make_shared<twPluginSlotProcessor>(
+            env, []() -> std::unique_ptr<twPlugin> { return nullptr; },
+            twPluginIoLayout{ 3, 3 } );
+        p->setBusCount( 2 );
+        check( p->state() == twPluginSlotState::Missing,
+               "an unmappable DECLARED layout with no plugin reports MISSING, not "
+               "Unsupported" );
+        check( p->mode() == twPluginSlotMode::Transparent,
+               "...and stays transparent" );
+    }
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // M3: real audio through a slot. This is what the pre-M3 code could not do —
 // twPluginInsert::freezePage wrote INTERLEAVED stereo into a page the engine
 // reads as mono, and a 2-in plugin's second input was never wired at all.
@@ -636,6 +759,7 @@ int testPluginInsert()
 {
     testBuiltinPlugin();
     testChannelPolicy();
+    testMissingAndReload();
     testChainAudio();
     testConcurrentTapFreeze();
 #ifdef TW_TESTCLAP_PATH

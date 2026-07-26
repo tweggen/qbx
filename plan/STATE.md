@@ -7658,3 +7658,146 @@ invalidation on a slot removal.
 editor, missing/unsupported slot rendering and `SSetPluginBypassAction` /
 `SReorderPluginAction` / `SSetPluginParamAction` (M5); VST3 (M6); macOS (M7).
 The multi-channel sink above is nobody's milestone yet and should become one.
+
+## 2026-07-26 — Proposal 08 M4 EXECUTED: slots round-trip, and a missing plugin no longer costs the user their patch
+
+Plugin slots persist (AC 4) and a plugin that is not installed keeps the project
+valid and its settings intact (AC 5). The defect list this closes is
+`plan/todo/08_PLUGIN_HOSTING_EXECUTION.md` § "Slots do not round-trip", all seven
+rows.
+
+**The wire schema.** `SPluginSlot::serializeSelfAttributes` now calls
+`SObject::serializeSelfAttributes( o )` FIRST — that is what emits `id=`, and
+without it `SProjectLoader::createObjects` hits `if( id.isNull() ) … return -1`
+and aborts the WHOLE project load, not merely the slot. Then `bypassed`,
+`format`, `uid`, `name`, `vendor`, `path`, `nIn`, `nOut`, `isInstrument`, with
+`&`, `<`, `>` and `'` escaped (the model escapes nothing anywhere else, which is
+fine for numbers and corrupts the file the moment a plugin is called "Bob's & Co
+<EQ>"). The state chunk is a child element, which needed an override of
+`serialize( QTextStream& )`: the dead `serializeStateChunk( QDomElement&,
+QDomDocument& )` is deleted, because the write path is `QTextStream`-based via
+`SObject::serialize` — which is exactly what made the base64 restore in
+`readPreChildrenAttributes` dead code and slots un-round-trippable.
+
+```
+<SPluginSlot id='…' nRefs='…' … volume='0' pan='0' delay='0' bypassed='false'
+             format='clap' uid='tw.test.clap.stereoskew' name='…' vendor='…'
+             path='twtestclap.clap' nIn='2' nOut='2' isInstrument='false'>
+<state encoding='base64'>VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA</state>
+</SPluginSlot>
+```
+
+What is written is `descriptor_`, VERBATIM — never `effective_`. `effective_`
+carries the module path the registry resolved (absolute), and serializing it
+would silently absolutize a relative path and make the project machine-specific
+on its first save. Path resolution therefore moved OUT of
+`SInsertPluginAction::apply` into `SPluginSlot::resolveModulePath` (one copy, used
+by both the insert action and the load path), the action now stores the path as
+the caller gave it, and the slot resolves only for instantiation. A project saved
+with `path='twtestclap.clap'` re-saves as `path='twtestclap.clap'`.
+
+**`STrack` ↔ chain, adopted LATE.** `STrack` writes `pluginChainId='<ptr>'`.
+Before M4 it wrote no reference at all, its constructor always made a fresh empty
+chain, and a loaded `<SPluginChain>` (with all its slots) was orphaned —
+`~SProjectLoader` dropped the handle, refcount hit 0, `deleteLater()`. The
+reference cannot be an `<SLink>` child (`SObject::childEvent` treats every child
+link as a clip placement) and therefore cannot use the loader's dependency
+ordering, which only defers an element until each `<SLink objectId>` CHILD is in
+the dictionary. So the loader grew a small general hook —
+`SProjectLoader::deferResolve( std::function<void()> )`, drained at the end of
+`createObjects()` after `setRootComponent` and before `~SProjectLoader` — and
+`STrack::instantiateFromDomElement` registers a resolver that calls
+`adoptPluginChain()`. That drops the constructor's chain, reconnects
+`slotInserted`/`slotRemoved`/`slotsReordered`, and rebuilds the DSP itself,
+because a loaded chain's slots emitted `slotInserted` while the chain had no
+owner: bus count on every slot FIRST (it selects the channel-mismatch mapping),
+then one tap per bus appended to that bus's `twPluginChain` in slot order.
+
+`STrack` now also holds an `SLink` REFERENCE to its chain — in BOTH paths, not
+just the adopted one. Two reasons: an `SObject` whose refcount reaches zero
+`deleteLater()`s itself, so an adopted chain would die with the loader's handle
+link; and holding one in both paths keeps `nRefs` (a serialized attribute)
+identical between a new and a loaded project, which is what lets a
+save/load/save comparison be byte-equivalent at all. Dropping the old reference
+is also what retires the empty chain.
+
+`SPluginChain::getChainComponent()` / `getRootComponent()` stopped throwing. The
+former was a TODO stub returning a member nothing ever assigned, so the latter
+was an unconditional `std::runtime_error` out of the model layer for any caller —
+`SLink::getRootComponent()` reaches it. The owning track now installs a component
+provider (bus 0's `twPluginChain`); an unadopted chain answers null, honestly.
+
+**Missing plugins.** `createNullPlugin( const twPluginIoLayout& )` is new in
+`tw_plugins` (`plugins/src/twnullplugin.cc`), and `twPluginSlotProcessor` now
+SUBSTITUTES it when the factory produces nothing instead of leaving
+`instances_` empty. The point is the DECLARED layout: the mapping, the instance
+count and the `prepare()` bookkeeping become the ones the real plugin will get
+once it is installed, so installing it later changes only what `process()`
+computes, never the wiring. `Missing` wins over `Unsupported` (a substituted
+placeholder's layout is whatever a possibly-stale file claimed, so "the plugin is
+not here" is both the cause and the actionable report). A side effect worth
+having: a PARTIAL dual-mono chain is no longer reachable — the old path cleared
+every instance and silenced whole buses.
+
+The placeholder's own state chunk is EMPTY, which makes reading state from a
+non-Active slot destructive: it would overwrite the absent plugin's settings with
+nothing, so a user would lose their patch simply by opening the project on a
+machine without the plugin and saving it. `SPluginSlot::saveState()` therefore
+reads the live plugin ONLY when the slot is Active and otherwise hands back the
+stored blob verbatim. Both are now CONTRACT invariants 17 and 18.
+
+**Reload after a rescan** is `SPluginSlot::reloadPlugin()` on top of
+`twPluginSlotProcessor::setFactory()`. A slot's identity in the graph IS its
+processor — the taps hold it by `shared_ptr` and every `twPluginChain` holds the
+taps — so re-resolution hands the SAME processor a new factory rather than
+building a new one, and the DSP graph is never re-wired for what is not a
+structural change. The stored state chunk is re-applied afterwards and
+`pluginReloaded()` is emitted for M5's editor. The per-slot Reload affordance is
+M5's; the model side is done.
+
+**Gates.** `check_layering.py` and `check_logging.py` clean; build clean with no
+new warnings from the changed files; `serialization_roundtrip_test` green,
+extended with the state-chunk layer (a real `'TWCP'`-framed CLAP blob and its
+known base64 text, all 256 byte values surviving byte-exactly, encoding
+determinism, an empty blob staying empty, 100 round trips without drift);
+`plugins_test` green (14 new checks for the placeholder and the reload path);
+`plugins_scan_test` green; `ctest -E qxa` 17/17; new `qxa.plugin_slot_roundtrip`
+and `qxa.plugin_missing_placeholder` green, together with `plugin_stereo_chain`,
+`plugin_remove_and_undo`, `render_sawtooth_with_effects`, `load_project_render`,
+`takes_serialize_roundtrip`, `mute_survives_reload`, `exact_stretch_roundtrip`,
+`warp_anchors_roundtrip`, `delete_clip_undo_restores`, `folder_track_sums_once`
+and `mute_nested_track` (13 cases — every persistence round-trip case in the
+suite); the rendered 16-bit PCM WAVs byte-identical across two runs at each of
+`SMARAGD_REVAL_WORKERS` ∈ {1,4,8,16} for both new cases (16 renders, `cmp`
+against the workers-1 reference); and the `<SPluginSlot>` element of each fixture
+compared to its re-save with only `id`/`nRefs` normalized — byte-equal, state
+chunk and escaped vendor included.
+
+`qxa.plugin_slot_roundtrip` is the real round-trip proof, and it is a level
+assertion rather than a structural one. Its fixture's `<state>` chunk sets the
+CLAP test plugin's Gain to 2.0, and the fixture's DSP is
+`out[0] = in[0]*0.5*gain + in[1]*1.0*gain` on two identical mono buses, so the
+first second of the sawtooth discriminates three failures that were all real:
+0.0667 (the loaded slot never reached the DSP), 0.1000 (in the path, state chunk
+ignored), 0.2000 (correct — 1.5 × gain 2.0). Measured 0.19995.
+`qxa.plugin_missing_placeholder` loads a hand-written project naming
+`uid='tw.nobody.ships.this.plugin'` with a state chunk that decodes to the ASCII
+"SMARAGD-M4-STATE-VERBATIM", and asserts the unprocessed levels plus the exact
+re-serialization of descriptor, escaped vendor and blob. Both fixtures are
+committed next to `load_fixture.qxp`.
+
+One new testkit action, `assert-file-contains` (path + text, `absent="true"`
+inverts): a rendered WAV cannot show that a saved project still carries a
+descriptor and an opaque blob, and that is the whole of AC 5.
+
+Built in the existing `smaragd/build-m3/` (gitignored by `build-*/`) because the
+developer still had `smaragd.exe` open with a project, which makes the link into
+`build/bin/` fail. No process was touched.
+
+**Out of scope and untouched:** the parameter editor wiring, missing/unsupported
+slot RENDERING in the FX strip, and `SSetPluginBypassAction` /
+`SReorderPluginAction` / `SSetPluginParamAction` (M5); VST3 (M6); macOS (M7).
+`SRemovePluginAction`'s inverse still does not carry the state chunk, so an
+undone removal comes back with default parameters — M5 owns that check and it is
+now the only known hole in the slot's state story. The mono sink recorded under
+M3 is still nobody's milestone.

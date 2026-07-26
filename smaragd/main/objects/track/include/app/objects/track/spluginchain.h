@@ -3,6 +3,8 @@
 
 #include "app/model/sobject.h"
 
+#include <functional>
+
 class twComponent;
 class SPluginSlot;
 class SProjectLoader;
@@ -40,6 +42,22 @@ public:
     // Reorder slots
     void reorderSlot( int fromIndex, int toIndex );
 
+    // Where the DSP component for this chain comes from (proposal 08 M4).
+    //
+    // A chain owns NO component of its own: STrack builds one twPluginChain per
+    // BUS (the frozen-page model is one mono page per component), and this model
+    // object is the ordered container in front of all of them. So the owning
+    // track installs a provider that hands out bus 0's component, and
+    // getRootComponent() answers with it instead of throwing — which is what it
+    // used to do UNCONDITIONALLY, because getChainComponent() was a TODO stub
+    // returning a member nothing ever assigned. An unowned chain (one loaded
+    // from a file before its track adopts it) answers null, which is honest.
+    using ComponentProvider = std::function<std::shared_ptr<twComponent>()>;
+    void setComponentProvider( ComponentProvider provider )
+    {
+        componentProvider_ = std::move( provider );
+    }
+
 signals:
     void slotInserted( int index, SPluginSlot &slot );
     void slotRemoved( int index, SPluginSlot &slot );
@@ -50,7 +68,7 @@ protected:
 
 private:
     std::shared_ptr<twComponent> getChainComponent();
-    std::shared_ptr<twComponent> chainComponent_;
+    ComponentProvider componentProvider_;
 };
 
 #endif

@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include <stdlib.h>
+#include <cstdint>
 #include <vector>
 
 #include <qobject.h>
@@ -28,6 +29,19 @@ using namespace std;
 int STrack::serializeSelfAttributes( QTextStream &o )
 {
     o << " nBusses='" << getNBusses() << "'";
+    // Which <SPluginChain> is OURS (proposal 08 M4). Every SObject is a child of
+    // the project and is serialized from there, so a chain lands in the file
+    // whether or not anyone claims it; before M4 nothing did, and a loaded chain
+    // (with all its slots) was orphaned — the constructor's fresh empty chain won
+    // and ~SProjectLoader dropped the loaded one to refcount 0.
+    //
+    // A plain attribute, not an <SLink> child: SObject::childEvent treats every
+    // child link as a clip placement, and the loader's dependency ordering is
+    // built on child links — which is exactly why the load side has to defer
+    // (see instantiateFromDomElement).
+    if( cpPluginChain_ )
+        o << " pluginChainId='"
+          << reinterpret_cast<std::uintptr_t>( (SObject *) cpPluginChain_ ) << "'";
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -419,14 +433,7 @@ STrack::STrack( SProject *project )
     // plugin chain as a Qt child would cause an invalid cast in childEvent().
     // Instead, we manage the chain's lifetime manually via the destructor.
     cpPluginChain_ = new SPluginChain( project );
-
-    // Connect plugin chain model changes to DSP layer synchronization.
-    QObject::connect( cpPluginChain_, SIGNAL( slotInserted( int, SPluginSlot & ) ),
-                      this, SLOT( onPluginSlotInserted( int, SPluginSlot & ) ) );
-    QObject::connect( cpPluginChain_, SIGNAL( slotRemoved( int, SPluginSlot & ) ),
-                      this, SLOT( onPluginSlotRemoved( int, SPluginSlot & ) ) );
-    QObject::connect( cpPluginChain_, SIGNAL( slotsReordered() ),
-                      this, SLOT( onPluginSlotsReordered() ) );
+    connectPluginChain( cpPluginChain_ );
 
     // Add a listener for added child objects.
     // We want to become noticed, if it is new.
@@ -446,9 +453,82 @@ STrack::STrack( SProject *project )
     setNBusses( 2 );
 }
 
+// Signals + the reference + the component provider, in one place so the
+// constructor path and the adoption path cannot drift apart (a chain wired by
+// only one of them is a chain whose slots never reach the DSP).
+void STrack::connectPluginChain( SPluginChain *chain )
+{
+    if( !chain ) return;
+
+    QObject::connect( chain, SIGNAL( slotInserted( int, SPluginSlot & ) ),
+                      this, SLOT( onPluginSlotInserted( int, SPluginSlot & ) ) );
+    QObject::connect( chain, SIGNAL( slotRemoved( int, SPluginSlot & ) ),
+                      this, SLOT( onPluginSlotRemoved( int, SPluginSlot & ) ) );
+    QObject::connect( chain, SIGNAL( slotsReordered() ),
+                      this, SLOT( onPluginSlotsReordered() ) );
+
+    // Bus 0's DSP chain answers SPluginChain::getRootComponent(). Captured by
+    // `this` and read lazily, so it follows a later setNBusses().
+    chain->setComponentProvider( [this]() -> std::shared_ptr<twComponent> {
+        if( cpPluginChains_.empty() || !cpPluginChains_[0] ) return nullptr;
+        return std::static_pointer_cast<twComponent>( cpPluginChains_[0] );
+    } );
+
+    // See the member's declaration: without a reference of our own, an adopted
+    // chain dies with the loader's temporary handle link.
+    cpPluginChainRef_ = new SLink( *chain, nullptr );
+}
+
+// Proposal 08 M4: take over a chain that came out of a project file.
+void STrack::adoptPluginChain( SPluginChain *chain )
+{
+    if( !chain || chain == cpPluginChain_ ) return;
+
+    SPluginChain *old = cpPluginChain_;
+    if( old ) {
+        QObject::disconnect( old, nullptr, this, nullptr );
+        old->setComponentProvider( nullptr );
+    }
+    // Dropping our reference is what retires the constructor's empty chain: its
+    // refcount reaches zero and SObject::removeRef() posts the deleteLater. It
+    // must go BEFORE the new link is made, or a save between the two would write
+    // both chains and the track would name only one.
+    delete cpPluginChainRef_;
+    cpPluginChainRef_ = nullptr;
+
+    cpPluginChain_ = chain;
+    connectPluginChain( chain );
+
+    // The loaded slots have never been near the DSP: their SLinks were parented
+    // to the chain while it had no owner, so slotInserted was emitted into
+    // nothing. Do here exactly what onPluginSlotInserted does, for every slot in
+    // order — bus count FIRST (it selects the channel-mismatch mapping), then one
+    // tap per bus appended to that bus's twPluginChain in slot order.
+    const int nSlots = chain->getSlotCount();
+    for( int s = 0; s < nSlots; ++s ) {
+        SPluginSlot *slot = chain->getSlotAt( s );
+        if( !slot ) continue;
+        slot->setBusCount( nBusses_ );
+    }
+    for( int i = 0; i < nBusses_; ++i ) {
+        if( !cpPluginChains_[i] ) continue;
+        for( int s = 0; s < nSlots; ++s ) {
+            SPluginSlot *slot = chain->getSlotAt( s );
+            if( !slot ) continue;
+            if( auto tap = slot->getInsertForBus( i ) )
+                cpPluginChains_[i]->addPlugin( tap );
+        }
+    }
+    invalidateRenderPath();
+}
+
 STrack::~STrack()
 {
     DTOR_DEL( inlineRenderer_ );
+    // Our reference to the plugin chain (see the member's declaration). The chain
+    // object itself is a Qt child of the project and is destroyed with it.
+    delete cpPluginChainRef_;
+    cpPluginChainRef_ = nullptr;
     // NOTE: cpPluginChain_ is a Qt child of the project, so it will be deleted
     // automatically by Qt's parent-child cleanup. Do NOT manually delete it here
     // to avoid double-delete crashes during project destruction.
@@ -544,6 +624,36 @@ SLink *STrack::instantiateFromDomElement(
         childNode = childNode.nextSibling();
     }
     track->readPostChildrenAttributes( element );
+
+    // Adopt our serialized plugin chain — DEFERRED (proposal 08 M4).
+    //
+    // It cannot happen here, and it cannot happen in readPostChildrenAttributes
+    // either: pluginChainId is a plain attribute, so the loader's dependency
+    // ordering (which only looks at <SLink objectId> children) gives no guarantee
+    // that the <SPluginChain> element has been instantiated by the time this
+    // track is built — with the chain listed after the track in the file, it
+    // certainly has not. deferResolve runs the lookup at the end of
+    // createObjects(), when the dictionary is complete.
+    const QString chainId = element.attribute( "pluginChainId" );
+    if( !chainId.isEmpty() ) {
+        SProjectLoader *loader = &projectLoader;
+        projectLoader.deferResolve( [loader, track, chainId]() {
+            SLink *chainLink = loader->getObjectDictionary().value( chainId );
+            if( !chainLink ) {
+                qWarning() << "STrack: plugin chain" << chainId
+                           << "not found in the project; keeping the empty one";
+                return;
+            }
+            SPluginChain *chain =
+                dynamic_cast<SPluginChain *>( &chainLink->getSObject() );
+            if( !chain ) {
+                qWarning() << "STrack: object" << chainId << "is not an SPluginChain";
+                return;
+            }
+            track->adoptPluginChain( chain );
+        } );
+    }
+
     return new SLink( *track );
 }
 

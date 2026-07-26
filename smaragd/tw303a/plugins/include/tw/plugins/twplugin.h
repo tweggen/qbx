@@ -2,6 +2,7 @@
 #define _TWPLUGIN_H_
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,24 @@ public:
     virtual bool supportsNativeEditor() const { return false; }
     virtual bool acceptsNotes()         const { return false; } // future: instruments
 };
+
+// The PLACEHOLDER a slot runs when its real plugin could not be instantiated
+// (proposal 08 M4): an inert pass-through reporting the DECLARED layout of the
+// descriptor that was saved with the project — NOT the layout of nothing.
+//
+// Reporting the declared I/O is the whole point. twPluginSlotProcessor derives
+// the channel-mismatch mapping from the instance's own ioLayout(), so a slot
+// with no instance at all would fall back to Transparent and the graph would
+// have a different shape than it will have once the plugin is installed. With
+// the placeholder the mapping, the instance count and the prepare() bookkeeping
+// are exactly what the real plugin will get, so a reload changes only what
+// process() computes.
+//
+// It has no parameters and its state chunk is empty: a Missing slot's authority
+// on state is the app's stored blob, which must survive verbatim (a user must
+// not lose their settings by opening a project on a machine without the
+// plugin). SPluginSlot::saveState() therefore never reads a non-Active slot.
+std::unique_ptr<twPlugin> createNullPlugin( const twPluginIoLayout &io );
 
 }  // namespace audio
 
