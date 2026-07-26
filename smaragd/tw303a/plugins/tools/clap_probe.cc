@@ -23,6 +23,10 @@
 #include <string>
 #include <vector>
 
+#if defined( _WIN32 )
+#include <windows.h>
+#endif
+
 namespace {
 
 int probeOne( const std::string &path )
@@ -83,6 +87,14 @@ int probeOne( const std::string &path )
 
 int main( int argc, char **argv )
 {
+#if defined( _WIN32 )
+    // Never answer a malformed module with a modal dialog — see the same call in
+    // tools/plugin_probe.cc. A spike run over a directory of unknown files must
+    // stay unattended.
+    SetErrorMode( SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+                  | SEM_NOOPENFILEERRORBOX );
+#endif
+
     if( argc < 2 ) {
         std::printf( "usage: %s <plugin.clap> [more.clap ...]\n",
                      argc > 0 ? argv[0] : "clap_probe" );

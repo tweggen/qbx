@@ -87,6 +87,18 @@ Invariants:
    self-deadlocks. Only the failure path reaches it, which is why it survived
    M1 untouched — the M2 scanner is the first code that deliberately hands the
    loader files which are not plugins.
+12. A scan NEVER puts a dialog on screen. Windows answers a truncated or
+   wrong-architecture DLL with a MODAL "Bad Image" box (0xc000012f) from inside
+   LoadLibrary, and a crash inside clap_entry->init with the Windows Error
+   Reporting box — both from a process nobody is looking at, and both blocking
+   until someone clicks OK (in the probe, until the registry's timeout kills
+   it). twClapModule::load() therefore wraps LoadLibraryExW in
+   SetThreadErrorMode( SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX ) —
+   per-thread, so a background scan cannot disturb the host app's error mode —
+   and both probe executables call SetErrorMode( … | SEM_NOGPFAULTERRORBOX )
+   process-wide in main(), since a probe process exists only to load one module
+   and is EXPECTED to die on bad input. Observed, not theoretical: the M2
+   verification pass raised three of these boxes on the user's desktop.
 
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears

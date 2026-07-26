@@ -95,7 +95,23 @@ bool twClapModule::load( const std::string &path )
     // LOAD_WITH_ALTERED_SEARCH_PATH makes the module's own directory the first
     // stop for its dependent DLLs, which is how plugin vendors ship helper libs.
     // It requires an absolute path (the caller's contract).
+    //
+    // SEM_FAILCRITICALERRORS for the duration of the load: a truncated, wrong-
+    // architecture or otherwise malformed DLL makes the loader raise a MODAL
+    // "Ungültiges Bild / Bad Image" message box (status 0xc000012f), which no
+    // scan may ever do — one bad file in a plugin directory would otherwise
+    // block the scan on a dialog nobody is watching (in the probe process,
+    // until the registry's timeout kills it). Per-THREAD, not per-process, so a
+    // concurrent scan cannot disturb the host app's own error-mode state.
+    DWORD prevErrMode = 0;
+    const BOOL errModeSet = SetThreadErrorMode(
+        SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, &prevErrMode );
+
     HMODULE h = LoadLibraryExW( wide.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH );
+
+    if( errModeSet )
+        SetThreadErrorMode( prevErrMode, nullptr );
+
     if( !h ) {
         TW_LOGE( "plugins", "[clap] LoadLibraryExW failed for '%s' (error %lu)",
                  path.c_str(), (unsigned long)GetLastError() );

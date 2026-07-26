@@ -35,8 +35,33 @@
 #include <string>
 #include <vector>
 
+#if defined( _WIN32 )
+#include <windows.h>
+#endif
+
+namespace {
+
+// This process is EXPECTED to die on bad input — that is its purpose. Windows
+// must therefore never answer a bad module with a modal dialog: the loader's
+// "Bad Image" box (0xc000012f) for a truncated or wrong-architecture DLL, and
+// the Windows Error Reporting box when a plugin crashes inside clap_entry->init.
+// Either one turns a cheap failed/timeout cache record into a message box in the
+// user's face, plus a probe that hangs until the registry's timeout fires.
+// Process-wide is right here: this whole process exists only to load one module.
+void silenceOsFaultDialogs()
+{
+#if defined( _WIN32 )
+    SetErrorMode( SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+                  | SEM_NOOPENFILEERRORBOX );
+#endif
+}
+
+} // namespace
+
 int main( int argc, char **argv )
 {
+    silenceOsFaultDialogs();
+
     if( argc != 2 ) {
         std::fprintf( stderr, "usage: %s <module-path>\n",
                       argc > 0 ? argv[0] : "smaragd_pluginprobe" );
