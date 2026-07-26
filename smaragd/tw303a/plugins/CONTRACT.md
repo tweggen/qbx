@@ -1,13 +1,14 @@
 # tw/plugins — CONTRACT
 
 Purpose: the plugin ABI (twPlugin: prepare/process/reset, params, state
-blobs), descriptors, the registry, the format backends, and the hosting
-chain components (twPluginChain, twPluginInsert). twPassThrough is the
-built-in test plugin (a bit-crusher); twClapPlugin is the CLAP backend
-(proposal 08 M1).
+blobs), descriptors, the registry, the SCANNER (search paths, on-disk cache,
+out-of-process probe), the format backends, and the hosting chain components
+(twPluginChain, twPluginInsert). twPassThrough is the built-in test plugin (a
+bit-crusher); twClapPlugin is the CLAP backend (proposal 08 M1); the scanner is
+proposal 08 M2.
 
-Public headers: twplugin.h, twplugindescriptor.h, twpluginchain.h,
-twplugininsert.h.
+Public headers: twplugin.h, twplugindescriptor.h, twpluginsearchpaths.h,
+twpluginchain.h, twplugininsert.h.
 
 Depends on: tw/core, tw/graph. Forbidden: app headers, devices/sinks.
 
@@ -56,8 +57,47 @@ Invariants:
    CLAP permits only in that state. Ring overflow raises a resync flag and the
    next drain re-sends every parameter from the mirror; parameters are
    last-value-wins, so that is always a correct substitute for a backlog.
+8. The registry is thread-safe and its results are handed out BY VALUE.
+   plugins() and scanStats() return copies under a mutex because a scan runs on
+   a worker thread and REPLACES the descriptor list wholesale; a const& into
+   plugins_ was a data race the moment M2 landed. rescan() itself never holds
+   that mutex while probing — it snapshots the configuration, works on locals,
+   and swaps the result in at the end — so the UI stays answerable during a scan.
+9. The scan cache remembers FAILURES, and only rescan( force ) clears them.
+   A module is re-probed only when path + sizeBytes + mtimeMs + scannerVersion
+   differ; a status of failed or timeout is a cache HIT that yields no plugin.
+   Otherwise one crashing or hanging plugin costs a probe (or a timeout) on
+   every launch, forever. kScannerVersion is part of the key, so any change to
+   what the scanner derives invalidates every record including the failures.
+   The cache is <configDir>/plugincache.json, NOT twSidecarStore: that store
+   keys on a content hash of audio PCM and caps itself with an LRU, which would
+   silently evict the plugin table.
+10. Crash isolation is the probe EXECUTABLE, and the app supplies its path.
+   setProbeExecutable() is what turns "load foreign code in our address space"
+   into "load it in a child process we can bury". The registry does not go
+   looking for it — the app knows where it is (next to the exe on Windows,
+   inside Contents/MacOS on macOS), and a registry that cannot find its own
+   probe would be untestable headlessly. When no probe is configured, or it
+   cannot be STARTED (as opposed to failing on a plugin), the scan falls back
+   in-process and logs a warning: still correct for a corrupt file, but with no
+   protection against a plugin that crashes while being instantiated.
+11. twClapModule::open() must not destroy a failed module under the intern
+   mutex. ~twClapModule takes that same non-recursive mutex to un-intern
+   itself, so releasing the half-built module inside the critical section
+   self-deadlocks. Only the failure path reaches it, which is why it survived
+   M1 untouched — the M2 scanner is the first code that deliberately hands the
+   loader files which are not plugins.
 
-How to test: `ctest -R plugins_test` — the built-in plugin's descriptor /
+How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
+invalidate-on-mtime, the stickiness of a failed record (and that force clears
+it), cache reload in a fresh registry instance, refusal of a cache from another
+scannerVersion, findByUid, rescanAsync + waitForScan, and the same verdicts
+through the out-of-process probe. Its "real module" is the twtestclap.clap
+fixture and its "bad module" is a file of garbage named *.clap, so nothing has
+to be installed. A module that HANGS (the Timeout record) has no cheap fixture;
+it shares the probe's kill path and is covered by the manual pass.
+
+Also `ctest -R plugins_test` — the built-in plugin's descriptor /
 param / state surface, plus the real CLAP path (module load, factory,
 activate, process, the parameter-event round trip, the state frame's version
 tolerance, and 65536-frame pages arriving at the plugin as 4096-frame blocks).
@@ -71,10 +111,20 @@ prints the factory contents. Also qxa.render_sawtooth_with_effects (chain in
 the signal path); the plugin browser lists exactly the registry contents.
 
 Known debt:
-- The registry still hardcodes the built-in plugin: there is no scanner, no
-  search paths, no cache and no out-of-process probe (proposal 08 M2). CLAP
-  descriptors have to be built by hand today; `clapModuleDescriptors(path)`
-  in the backend's private header is the seam M2's scanner and probe will use.
+- Only CLAP is scanned. `formatForFile()` in twpluginsearchpaths.cc maps
+  `*.clap` and nothing else ON PURPOSE: a `.vst3` found before M6 lands would
+  be probed, fail, and be cached as a permanent failure that M6 would then have
+  to force-clear. `twPluginSearchPaths::defaults("vst3")` already returns the
+  right directories, so M6 adds one line to the extension table.
+- The scan is all-or-nothing per run: there is no incremental "this directory
+  changed" trigger and no filesystem watcher, so picking up a plugin installed
+  while the app is running needs the Options page's Rescan (or a restart).
+- Probing is serial. One module at a time, each a process launch; a machine
+  with hundreds of plugins pays for that once (the cache absorbs it afterwards),
+  but the first launch is slower than it has to be.
+- The Timeout record is written by a code path no automated test reaches: it
+  needs a module that hangs inside clap_entry.init(), which no in-repo fixture
+  provides.
 - The multi-bus signal path is still broken as recorded in
   `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`: twPluginChain wires only
   `port < nBusses_`, so a 2-in plugin on a 1-bus chain sees silence on input

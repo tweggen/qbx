@@ -7408,3 +7408,118 @@ machine (`%COMMONPROGRAMFILES%\CLAP`, `%LOCALAPPDATA%\Programs\Common\CLAP` and
 `CLAP_PATH` are all absent), so `clap_probe` was verified against the in-repo
 fixture only — validation against a third-party plugin (Surge XT / Vital / u-he)
 is still pending and belongs with the M2 manual pass.
+
+## 2026-07-26 — Proposal 08 M2 EXECUTED: the scanner, the cache, and crash isolation
+
+`plan/todo/08_PLUGIN_HOSTING_EXECUTION.md` M2 (AC 1). The registry stopped being
+a hardcoded list: it now scans directories, caches what it learned, and probes
+plugins in a child process so a bad one cannot take the app down. The execution
+plan itself is committed here too — it is the shared spec across the M0..M7
+agents and belongs in history.
+
+**The registry grew an API, and `plugins()` stopped returning a reference.**
+`setSearchPaths` / `setCachePath` / `setProbeExecutable` / `setProbeTimeoutMs` /
+`setScanProgress` / `rescan(bool force)` / `rescanAsync` / `isScanning` /
+`waitForScan` / `scanStats` / `findByUid`, all guarded by a mutex. `plugins()`
+and `scanStats()` return BY VALUE (CONTRACT invariant 8): a worker thread
+replaces the descriptor list wholesale, so a `const&` into it was a data race
+from the moment a scan could run. `rescan()` deliberately holds that mutex
+only to snapshot the configuration and to swap the finished result in — probing
+loads foreign code and spawns processes, and the UI has to stay answerable
+throughout.
+
+**Cache: remembered failures are the point.** `<configDir>/plugincache.json`
+(QJson; `tw_core` already links Qt Core and the scan path is not realtime), one
+record per module keyed on `path + sizeBytes + mtimeMs + scannerVersion`. A
+`failed`/`timeout` record is a cache HIT that yields no plugin, so one crashing
+module costs one probe ever instead of one per launch; `rescan(force)` is the
+only thing that clears them, and that is what the Options page's "Rescan now"
+sends. Written through `QSaveFile` (temp + rename) so a crash mid-write leaves
+the previous table intact rather than a truncated one the next launch would
+discard wholesale. Deliberately NOT `twSidecarStore`: its key is a content hash
+of audio PCM and its LRU cap would silently evict the table — "the second launch
+is slow again, sometimes".
+
+**Crash isolation is a separate executable, and the APP supplies its path.**
+`plugins/tools/plugin_probe.cc` → `smaragd_pluginprobe`: one module per run,
+descriptor JSON to stdout, diagnostics to stderr through `TW_LOG*` so they can
+never corrupt the JSON. The registry drives it with `QProcess` + a timeout and
+turns a non-zero exit, a crash (`exitStatus() != NormalExit`) or a timeout into
+the corresponding cache record. `setProbeExecutable` is the app's job on purpose
+(CONTRACT invariant 10) — the registry stays headlessly testable, and only the
+app knows the path is next to the exe on Windows and inside `Contents/MacOS` in
+a macOS bundle (POST_BUILD copy added, ordered BEFORE the `codesign --deep`
+step, or the sealed resources would go stale). A probe that cannot be *started*
+— as opposed to failing on a plugin — falls back to in-process scanning for the
+rest of the run, once, with a warning: still correct for a corrupt file, but
+without isolation.
+
+**A worker QThread, not a std::thread.** `rescanAsync` uses `QThread::create`
+because the scan legitimately needs QProcess and QJson, and because this repo's
+recorded invariant is that a raw std::thread adopted by Qt deadlocks the
+teardown join. The engine never emits a Qt signal from it either: the app polls
+`isScanning()` from a 200 ms main-thread `QTimer` and emits
+`SApplication::pluginScanFinished` from *there*.
+
+**Search paths.** New public `twpluginsearchpaths.h`: `twPluginSearchPaths::
+defaults(format)` (Windows `%CommonProgramFiles%\CLAP` +
+`%LOCALAPPDATA%\Programs\Common\CLAP`, macOS `/Library/Audio/Plug-Ins/CLAP` and
+the `~` sibling, Linux `~/.clap` + `/usr/{,local/}lib/clap`, plus `CLAP_PATH` /
+`VST3_PATH` split on the platform separator) and `enumeratePluginModules(dirs)`,
+which walks recursively (depth-bounded at 8, symlink-loop-guarded, output sorted
+and de-duplicated so a scan is deterministic and an overlapping pair of search
+paths does not probe the same file twice). A *directory* named `*.clap` is
+treated as one macOS bundle and stat'ed through `Contents/MacOS/<basename>`, so
+touching the wrapper does not invalidate the cache. `formatForFile()` maps
+`*.clap` and nothing else on purpose: a `.vst3` probed before M6 lands would be
+cached as a permanent failure M6 would then have to force-clear.
+
+**A real M1 bug fell out of the first corrupt module.** `twClapModule::open()`
+destroyed the failed module *while holding* the non-recursive intern mutex that
+`~twClapModule` also takes to un-intern itself — a self-deadlock. It survived
+M1 because only the failure path reaches it, and the M2 scanner is the first
+code in the repo that deliberately hands the loader files which are not plugins.
+Now CONTRACT invariant 11.
+
+**App side.** `SOpt::PluginSearchPaths` / `PluginScanOnStartup`, with
+`SOpt::def()`'s first platform-conditional default — and it does not restate the
+per-OS locations, it calls `twPluginSearchPaths::defaults("clap")`, so the
+scanner and the options page cannot disagree. `SSettings` distinguishes "never
+configured" (→ defaults) from "the user removed every entry" (→ search nowhere)
+via `contains()`. A new **Plugins** page in `SOptionsDialog` (tree item and
+stack page added in matching order — the mapping is by top-level index and
+nothing else): directory list with Add… / Remove / Defaults, a
+scan-on-startup checkbox, a live "Rescan now" (like the Log page's live
+`setConsole`), and a status label driven by a 400 ms poll. `SApplication`
+pushes paths + cache path + probe path at startup, scans in the background, and
+joins the worker first thing in its destructor. `SPluginBrowserDialog` became a
+QTreeWidget with Name / Format / Vendor / I/O columns, filters across all
+columns, repopulates on `pluginScanFinished` (it used to snapshot `plugins()`
+once at construction, which showed an empty browser during the startup scan),
+and resolves its selection through `findByUid` rather than by name — a real
+scanner can legitimately find the same name twice.
+
+**Gates:** `check_layering.py` (with `servicesui` and `shell` gaining
+`plugins`) and `check_logging.py` clean; `./build.sh` clean with no new warnings;
+new `plugins_scan_test` green (43 checks: cache miss/hit, invalidate-on-mtime,
+failed-record stickiness, force clearing it, cache reload in a fresh registry,
+refusal of a foreign `scannerVersion`, `findByUid`, `rescanAsync`, and the same
+verdicts through the probe); `ctest -E qxa` 17/17 (was 16/16 + the new test).
+Crash isolation verified end-to-end against the running app: a search path
+containing a corrupt `.clap` gave `2 module(s) found, 2 probed, 1 failed` on the
+first launch and `0 probed, 1 cached, 1 skipped` on the second, with the app
+alive both times.
+
+**Not verified, and not claimed:** the GUI interaction pass (open Edit →
+Options → Plugins, add a directory, press Rescan now, watch the label). The
+page compiles and every connection is compile-time checked new-style, but this
+machine's antivirus blocks input-injection scripting, the sandboxed shell cannot
+take foreground, and the developer was working at the machine — so it was left
+alone rather than faked. Together with the third-party CLAP validation still
+owed from M1, that is the M2 manual pass.
+
+**Out of scope and untouched:** the per-bus tap and `twPluginSlotProcessor`, the
+interleaved-stereo-into-a-mono-page bug and page invalidation on param/bypass
+(M3 — a real stereo plugin still sounds wrong, as expected); `SPluginSlot`
+serialization and the missing-plugin placeholder (M4); the parameter editor and
+the three missing actions (M5); VST3 (M6); macOS (M7).

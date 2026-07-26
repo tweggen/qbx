@@ -38,6 +38,15 @@ inline constexpr const char *LogLevel       = "log/level";      // "error".."tra
 inline constexpr const char *LogCapacity    = "log/capacity";   // ring records
 inline constexpr const char *LogToFile      = "log/toFile";
 
+// Plugin hosting (proposal 08 M2). PluginSearchPaths is a QStringList of
+// directories, scanned recursively; its default is the FIRST platform-dependent
+// default in this table and comes from the engine
+// (audio::twPluginSearchPaths::defaults), so the standard per-OS locations are
+// stated once. PluginScanOnStartup makes the app scan changed modules in the
+// background at launch; the cache makes that cheap after the first run.
+inline constexpr const char *PluginSearchPaths   = "plugins/searchPaths";
+inline constexpr const char *PluginScanOnStartup = "plugins/scanOnStartup";
+
 // Default value for a key (invalid QVariant if unknown). Scroll-first defaults.
 QVariant def( const QString &key );
 

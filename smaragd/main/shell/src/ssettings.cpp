@@ -1,4 +1,5 @@
 #include "app/shell/ssettings.h"
+#include "app/servicesui/soptions.h"
 
 #include <QFileInfo>
 
@@ -122,6 +123,32 @@ void SSettings::removeRecentProject( const QString &path )
         }
     }
     if( changed ) setValue( kRecentKey, list );
+}
+
+QStringList SSettings::pluginSearchPaths() const
+{
+    // A user who removes every entry means "search nowhere"; that is stored as
+    // an empty (but present) list, which QSettings round-trips distinctly from
+    // "never configured".
+    if( !settings_.contains( SOpt::PluginSearchPaths ) )
+        return SOpt::def( SOpt::PluginSearchPaths ).toStringList();
+    return value( SOpt::PluginSearchPaths ).toStringList();
+}
+
+void SSettings::setPluginSearchPaths( const QStringList &dirs )
+{
+    setValue( SOpt::PluginSearchPaths, dirs );
+}
+
+bool SSettings::pluginScanOnStartup() const
+{
+    return value( SOpt::PluginScanOnStartup,
+                  SOpt::def( SOpt::PluginScanOnStartup ) ).toBool();
+}
+
+void SSettings::setPluginScanOnStartup( bool on )
+{
+    setValue( SOpt::PluginScanOnStartup, on );
 }
 
 QByteArray SSettings::windowGeometry() const

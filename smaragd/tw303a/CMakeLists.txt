@@ -152,10 +152,14 @@ tw_module(plugins
         plugins/include/tw/plugins/twplugindescriptor.h
         plugins/include/tw/plugins/twpluginchain.h
         plugins/include/tw/plugins/twplugininsert.h
+        plugins/include/tw/plugins/twpluginsearchpaths.h
         plugins/src/twpluginchain.cc
         plugins/src/twplugininsert.cc
         plugins/src/twpassthrough.cc
         plugins/src/twpluginregistry.cc
+        plugins/src/twpluginscancache.h
+        plugins/src/twpluginscancache.cc
+        plugins/src/twpluginsearchpaths.cc
     DEPS tw_core tw_graph
 )
 
@@ -196,6 +200,19 @@ if(EXISTS ${TW_CLAP_DIR}/include/clap/clap.h)
         ${TW_CLAP_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src
     )
+
+    # SHIPPED, and the reason plugin scanning cannot take the app down (proposal
+    # 08 M2 / §Decisions 2): the out-of-process probe. One module per run, JSON
+    # to stdout, so a plugin that crashes or hangs while being instantiated
+    # kills THIS process and becomes a cached failed/timeout record. Same
+    # PRIVATE clap includes + plugins/src as clap_probe, for the same reason.
+    add_executable(smaragd_pluginprobe plugins/tools/plugin_probe.cc)
+    target_link_libraries(smaragd_pluginprobe PRIVATE tw_plugins)
+    target_include_directories(smaragd_pluginprobe PRIVATE
+        ${TW_CLAP_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src
+    )
+    set_target_properties(smaragd_pluginprobe PROPERTIES AUTOMOC OFF)
 
     # Build-time test fixture: a real 2-in/2-out CLAP module built from this
     # repo, so plugins_test can exercise the actual load path without anyone
@@ -478,6 +495,22 @@ if(TARGET twtestclap)
     add_dependencies(plugins_test twtestclap)
     target_compile_definitions(plugins_test PRIVATE
         TW_TESTCLAP_PATH="$<TARGET_FILE:twtestclap>")
+endif()
+# The scanner/cache gate (proposal 08 M2): cache hit / miss / invalidate-on-mtime,
+# the stickiness of a failed record, and the out-of-process probe. It needs
+# plugins/src on its include path for the cache's private header, and both the
+# fixture module and the probe executable built first.
+tw_module_test(plugins_scan_test             plugins/tests/scan_test.cc                  tw_plugins)
+target_include_directories(plugins_scan_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src)
+if(TARGET twtestclap)
+    add_dependencies(plugins_scan_test twtestclap)
+    target_compile_definitions(plugins_scan_test PRIVATE
+        TW_TESTCLAP_PATH="$<TARGET_FILE:twtestclap>")
+endif()
+if(TARGET smaragd_pluginprobe)
+    add_dependencies(plugins_scan_test smaragd_pluginprobe)
+    target_compile_definitions(plugins_scan_test PRIVATE
+        TW_PLUGINPROBE_PATH="$<TARGET_FILE:smaragd_pluginprobe>")
 endif()
 tw_module_test(sources_test                 sources/tests/sources_test.cc               tw_sources)
 tw_module_test(vocoder_test                 sources/tests/vocoder_test.cc               tw_sources)

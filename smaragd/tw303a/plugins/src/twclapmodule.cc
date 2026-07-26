@@ -184,21 +184,34 @@ std::shared_ptr<twClapModule> twClapModule::open( const std::string &path )
     if( path.empty() )
         return nullptr;
 
-    std::lock_guard<std::mutex> lock( moduleMutex() );
+    // make_shared is not usable: the constructor is private.
+    std::shared_ptr<twClapModule> mod;
+    bool                          loaded = false;
 
-    auto it = moduleTable().find( path );
-    if( it != moduleTable().end() ) {
-        if( std::shared_ptr<twClapModule> live = it->second.lock() )
-            return live;
-        moduleTable().erase( it );
+    {
+        std::lock_guard<std::mutex> lock( moduleMutex() );
+
+        auto it = moduleTable().find( path );
+        if( it != moduleTable().end() ) {
+            if( std::shared_ptr<twClapModule> live = it->second.lock() )
+                return live;   // a COPY leaves the scope; nothing is destroyed
+            moduleTable().erase( it );
+        }
+
+        mod.reset( new twClapModule() );
+        loaded = mod->load( path );
+        if( loaded )
+            moduleTable()[path] = mod;
     }
 
-    // make_shared is not usable: the constructor is private.
-    std::shared_ptr<twClapModule> mod( new twClapModule() );
-    if( !mod->load( path ) )
-        return nullptr;
-
-    moduleTable()[path] = mod;
+    // A FAILED load must release `mod` with the table mutex RELEASED:
+    // ~twClapModule takes that same NON-RECURSIVE mutex to un-intern itself, so
+    // destroying the half-built module inside the critical section deadlocks the
+    // caller against itself. Only the failure path can reach it, which is why it
+    // stayed invisible until the M2 scanner met its first corrupt module — the
+    // first code in the repo that deliberately loads files that are not plugins.
+    if( !loaded )
+        mod.reset();
     return mod;
 }
 

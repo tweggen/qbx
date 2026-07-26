@@ -12,12 +12,19 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFileDialog>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStringList>
+#include <QTimer>
+
+#include "tw/plugins/twpluginsearchpaths.h"
 
 // A combo populated with every wheel action; the enum value is the item data.
 static QComboBox *makeWheelActionCombo()
@@ -43,14 +50,18 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
     tree_ = new QTreeWidget;
     tree_->setHeaderHidden( true );
     tree_->setFixedWidth( 160 );
+    // The tree item order and the stack order must MATCH: currentItemChanged
+    // maps by top-level index, nothing else.
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Mouse navigation" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Audio" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Log" ) ) );
+    tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Plugins" ) ) );
 
     stack_ = new QStackedWidget;
     stack_->addWidget( buildMousePage() );   // index 0
     stack_->addWidget( buildAudioPage() );   // index 1
     stack_->addWidget( buildLogPage() );     // index 2
+    stack_->addWidget( buildPluginsPage() ); // index 3
 
     QObject::connect( tree_, &QTreeWidget::currentItemChanged,
                       this, [this]( QTreeWidgetItem *cur, QTreeWidgetItem * ) {
@@ -284,6 +295,7 @@ void SOptionsDialog::apply()
     applyMousePage();
     applyAudioPage();
     applyLogPage();
+    applyPluginsPage();
 }
 
 // ---------------------------------------------------------------- Log page
@@ -373,6 +385,153 @@ void SOptionsDialog::applyLogPage()
 
     // Resizing the ring discards it, so only do it on an actual change.
     if( static_cast<int>( log.capacity() ) != cap ) log.setCapacity( cap );
+}
+
+// ------------------------------------------------------------ Plugins page
+// Proposal 08 M2, AC 1: the search-path list is editable and persisted, the
+// scan is cached between startups, and a rescan can be triggered from here.
+
+QWidget *SOptionsDialog::buildPluginsPage()
+{
+    QWidget     *page = new QWidget;
+    QVBoxLayout *v    = new QVBoxLayout( page );
+
+    v->addWidget( new QLabel( "Directories searched for plugins (CLAP), "
+                              "including sub-directories:" ) );
+
+    pluginDirs_ = new QListWidget;
+    pluginDirs_->setSelectionMode( QAbstractItemView::ExtendedSelection );
+    pluginDirs_->setAlternatingRowColors( true );
+    pluginDirs_->setToolTip( "A directory that does not exist is skipped, not an "
+                             "error — it stays in the list so a plugin installed "
+                             "later is found without re-adding it." );
+    v->addWidget( pluginDirs_, 1 );
+
+    QPushButton *addBtn = new QPushButton( "Add…" );
+    pluginRemoveBtn_    = new QPushButton( "Remove" );
+    QPushButton *defBtn = new QPushButton( "Defaults" );
+    defBtn->setToolTip( "Restore this platform's standard plugin locations." );
+
+    QHBoxLayout *btns = new QHBoxLayout;
+    btns->addWidget( addBtn );
+    btns->addWidget( pluginRemoveBtn_ );
+    btns->addWidget( defBtn );
+    btns->addStretch();
+    v->addLayout( btns );
+
+    pluginScanOnStartup_ = new QCheckBox( "Scan for plugins at startup" );
+    pluginScanOnStartup_->setToolTip(
+        "The result is cached in plugincache.json next to smaragd.ini, keyed on "
+        "each module's path, size and modification time — so only plugins that "
+        "actually changed are loaded again." );
+    v->addWidget( pluginScanOnStartup_ );
+
+    pluginRescanBtn_ = new QPushButton( "Rescan now" );
+    pluginRescanBtn_->setToolTip(
+        "Applies the list above and re-probes EVERY module, including ones whose "
+        "previous probe crashed or timed out (those are otherwise remembered and "
+        "skipped, so one bad plugin does not slow down every launch)." );
+    pluginStatusLabel_ = new QLabel;
+    pluginStatusLabel_->setWordWrap( true );
+
+    QHBoxLayout *row = new QHBoxLayout;
+    row->addWidget( pluginRescanBtn_ );
+    row->addWidget( pluginStatusLabel_, 1 );
+    v->addLayout( row );
+
+    QObject::connect( addBtn, &QPushButton::clicked,
+                      this, &SOptionsDialog::addPluginDir );
+    QObject::connect( pluginRemoveBtn_, &QPushButton::clicked,
+                      this, &SOptionsDialog::removePluginDirs );
+    QObject::connect( defBtn, &QPushButton::clicked,
+                      this, &SOptionsDialog::resetPluginDirsToDefaults );
+    QObject::connect( pluginRescanBtn_, &QPushButton::clicked,
+                      this, &SOptionsDialog::rescanPluginsNow );
+    QObject::connect( &SApplication::app(), &SApplication::pluginScanFinished,
+                      this, &SOptionsDialog::updatePluginScanStatus );
+
+    // The engine's scanner runs on a worker thread and deliberately does NOT
+    // emit Qt signals, so the live progress line is a main-thread poll. It is
+    // also what shows a scan already running when this dialog opens.
+    pluginStatusTimer_ = new QTimer( this );
+    pluginStatusTimer_->setInterval( 400 );
+    QObject::connect( pluginStatusTimer_, &QTimer::timeout,
+                      this, &SOptionsDialog::updatePluginScanStatus );
+    pluginStatusTimer_->start();
+
+    loadPluginsPage();
+    return page;
+}
+
+void SOptionsDialog::loadPluginsPage()
+{
+    SSettings &s = SSettings::instance();
+    pluginDirs_->clear();
+    pluginDirs_->addItems( s.pluginSearchPaths() );
+    pluginScanOnStartup_->setChecked( s.pluginScanOnStartup() );
+    updatePluginScanStatus();
+}
+
+void SOptionsDialog::applyPluginsPage()
+{
+    QStringList dirs;
+    for( int i = 0; i < pluginDirs_->count(); ++i )
+        dirs << pluginDirs_->item( i )->text();
+
+    SSettings &s = SSettings::instance();
+    s.setPluginSearchPaths( dirs );
+    s.setPluginScanOnStartup( pluginScanOnStartup_->isChecked() );
+
+    // Live: the registry follows the list immediately, so the next scan (from
+    // "Rescan now" or the next launch) uses it without a restart.
+    SApplication::app().pushPluginSearchPaths();
+}
+
+void SOptionsDialog::addPluginDir()
+{
+    SSettings &s = SSettings::instance();
+    const QString start = s.lastDir( "plugins" );
+    const QString dir = QFileDialog::getExistingDirectory(
+        this, "Add a plugin directory", start );
+    if( dir.isEmpty() ) return;
+
+    s.setLastDir( "plugins", dir );
+
+    const QString clean = QDir::cleanPath( dir );
+    // Case-insensitively de-duplicated: on Windows the same folder reached two
+    // ways would otherwise be scanned twice.
+    if( !pluginDirs_->findItems( clean, Qt::MatchFixedString ).isEmpty() ) return;
+    pluginDirs_->addItem( clean );
+}
+
+void SOptionsDialog::removePluginDirs()
+{
+    const QList<QListWidgetItem *> sel = pluginDirs_->selectedItems();
+    for( QListWidgetItem *it : sel ) delete it;
+}
+
+void SOptionsDialog::resetPluginDirsToDefaults()
+{
+    pluginDirs_->clear();
+    for( const std::string &d : audio::twPluginSearchPaths::defaults( "clap" ) )
+        pluginDirs_->addItem( QString::fromStdString( d ) );
+}
+
+void SOptionsDialog::rescanPluginsNow()
+{
+    applyPluginsPage();
+    // force = true: this is the user explicitly saying "try again", which is the
+    // only thing that clears a remembered failed/timeout record.
+    SApplication::app().rescanPlugins( true );
+    pluginStatusLabel_->setText( "Scanning…" );
+    pluginStatusTimer_->start();
+}
+
+void SOptionsDialog::updatePluginScanStatus()
+{
+    SApplication &app = SApplication::app();
+    pluginStatusLabel_->setText( app.pluginScanStatusText() );
+    pluginRescanBtn_->setEnabled( !app.isPluginScanActive() );
 }
 
 void SOptionsDialog::accept()

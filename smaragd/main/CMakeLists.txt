@@ -346,6 +346,20 @@ if(SMARAGD_WINDOWS AND NOT SMARAGD_WIN_CONSOLE)
 elseif(SMARAGD_MACOS)
     add_executable(smaragd MACOSX_BUNDLE ${SMARAGD_MAIN_SOURCES})
 
+    # The out-of-process plugin probe has to live INSIDE the bundle: the app
+    # locates it as applicationDirPath()/smaragd_pluginprobe, which on macOS is
+    # Contents/MacOS. Added BEFORE the codesign command below on purpose —
+    # POST_BUILD steps run in the order they are declared, and dropping a file
+    # into the bundle after --deep --sign would leave the sealed resources stale.
+    if(TARGET smaragd_pluginprobe)
+        add_custom_command(TARGET smaragd POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:smaragd_pluginprobe>"
+                    "$<TARGET_BUNDLE_DIR:smaragd>/Contents/MacOS/"
+            COMMENT "Copying smaragd_pluginprobe into the app bundle"
+        )
+    endif()
+
     # Code-sign app with microphone entitlements after building
     add_custom_command(TARGET smaragd POST_BUILD
         COMMAND codesign --force --deep --sign -
@@ -370,6 +384,14 @@ target_link_libraries(smaragd
     PRIVATE
         app_ui app_objects app_core app_model
 )
+
+# Not a link dependency — a SEPARATE executable the app spawns at scan time
+# (proposal 08 M2). Declared so building just the `smaragd` target still produces
+# it; without it the app silently falls back to in-process probing, i.e. loses
+# its crash isolation, which is the kind of regression nobody notices.
+if(TARGET smaragd_pluginprobe)
+    add_dependencies(smaragd smaragd_pluginprobe)
+endif()
 
 # Auto-deploy Qt runtime DLLs / plugins next to smaragd.exe on Windows
 # (and the .app bundle on macOS) so the binary launches without a manual
