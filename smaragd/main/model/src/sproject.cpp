@@ -357,6 +357,14 @@ SProject::~SProject()
     // the normal cleanup since accessing the partially-constructed objects
     // could crash. Qt's parent-child mechanism will still clean them up.
     if( isPartialLoad_ ) {
+        // Quiesce FIRST. Returning early hands the object graph to ~QObject,
+        // which frees the children in its own order while the revalidator's
+        // workers may still hold raw pointers into them. pauseRevalidation()
+        // blocks until in-flight jobs drain, so after this line no worker is
+        // inside an object that is about to be deleted. (The revalidator itself
+        // is a member and outlives this body — it dies after the destructor
+        // returns, before ~QObject runs.)
+        pauseRevalidation();
         return;
     }
 

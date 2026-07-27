@@ -1,101 +1,198 @@
 #include "app/pluginui/spluginparamereditor.h"
+
+#include "app/objects/track/spluginslot.h"
+#include "app/objects/track/ssetpluginparamaction.h"
+#include "app/shell/sapplication.h"
 #include "tw/plugins/twplugin.h"
-#include <QVBoxLayout>
+#include "tw/plugins/twpluginslotproc.h"
+
 #include <QHBoxLayout>
-#include <QSlider>
 #include <QLabel>
+#include <QSlider>
+#include <QVBoxLayout>
 #include <QWidget>
 
-SPluginParamEditor::SPluginParamEditor(audio::twPlugin *plugin, QWidget *parent)
-    : QScrollArea(parent), plugin_(plugin)
+namespace {
+
+// The slider is an integer control, so every parameter is normalized onto a
+// fixed tick count. 1000 ticks is 0.1% of the declared range — enough for a
+// generic editor, and the ONLY place the quantisation lives (setParamFromUi()
+// converts back through the same two helpers, so a scripted edit and a dragged
+// edit land on identical values).
+constexpr int kTicks = 1000;
+
+int valueToTicks( const audio::twPluginParamInfo &info, double v )
 {
-    setWidgetResizable(true);
+    const double span = info.maxValue - info.minValue;
+    if( span <= 0.0 ) return 0;
+    double n = ( v - info.minValue ) / span;
+    if( n < 0.0 ) n = 0.0;
+    if( n > 1.0 ) n = 1.0;
+    return (int) ( n * kTicks + 0.5 );
+}
+
+double ticksToValue( const audio::twPluginParamInfo &info, int ticks )
+{
+    const double span = info.maxValue - info.minValue;
+    return info.minValue + ( ticks / (double) kTicks ) * span;
+}
+
+}  // namespace
+
+SPluginParamEditor::SPluginParamEditor( SPluginSlot *slot,
+                                        const QString &trackPath, int slotIndex,
+                                        QWidget *parent )
+    : QScrollArea( parent ), slot_( slot ), trackPath_( trackPath ),
+      slotIndex_( slotIndex )
+{
+    setWidgetResizable( true );
     buildUI();
+
+    if( slot_ ) {
+        connect( slot_, &SPluginSlot::paramsChanged,
+                 this, &SPluginParamEditor::onParamsChanged );
+        connect( slot_, &SPluginSlot::pluginReloaded,
+                 this, &SPluginParamEditor::onPluginReloaded );
+    }
+}
+
+audio::twPlugin *SPluginParamEditor::livePlugin() const
+{
+    if( !slot_ ) return nullptr;
+    const auto &proc = slot_->getProcessor();
+    // Bus 0's instance is the representative; a parameter edit is broadcast to
+    // every instance by the action, so reading one is enough.
+    return proc ? proc->plugin() : nullptr;
+}
+
+QString SPluginParamEditor::formatValue( const audio::twPluginParamInfo &info,
+                                        double v )
+{
+    return info.isStepped ? QString::number( (int) ( v + 0.5 ) )
+                          : QString::number( v, 'f', 3 );
 }
 
 void SPluginParamEditor::buildUI()
 {
-    if (!plugin_) {
+    params_.clear();
+
+    QWidget *container = new QWidget();
+    QVBoxLayout *mainLayout = new QVBoxLayout( container );
+
+    audio::twPlugin *plugin = livePlugin();
+    if( !plugin ) {
+        // A Missing/Unsupported slot (or one whose bus count was never declared)
+        // legitimately has no parameters. Say so instead of showing an empty
+        // scroll area the user cannot interpret.
+        QLabel *empty = new QLabel(
+            QObject::tr( "This plugin exposes no parameters." ) );
+        empty->setEnabled( false );
+        mainLayout->addWidget( empty );
+        mainLayout->addStretch();
+        setWidget( container );
         return;
     }
 
-    QWidget *container = new QWidget();
-    QVBoxLayout *mainLayout = new QVBoxLayout(container);
+    const std::size_t paramCount = plugin->paramCount();
+    params_.reserve( paramCount );
 
-    const size_t paramCount = plugin_->paramCount();
-    params_.reserve(paramCount);
+    for( std::size_t i = 0; i < paramCount; ++i ) {
+        const audio::twPluginParamInfo info = plugin->paramInfo( i );
 
-    for (size_t i = 0; i < paramCount; ++i) {
-        const auto info = plugin_->paramInfo(i);
-
-        // Param row: label + slider + value label
         QHBoxLayout *paramLayout = new QHBoxLayout();
 
-        // Parameter name label (30% width)
-        QLabel *nameLabel = new QLabel(QString::fromStdString(info.name));
-        nameLabel->setMinimumWidth(120);
-        paramLayout->addWidget(nameLabel);
+        QLabel *nameLabel = new QLabel( QString::fromStdString( info.name ) );
+        nameLabel->setMinimumWidth( 120 );
+        paramLayout->addWidget( nameLabel );
 
-        // Slider (60% width)
-        QSlider *slider = new QSlider(Qt::Horizontal);
-        slider->setMinimum(0);
-        slider->setMaximum(1000);  // 0.1% precision
-        double normalized = (plugin_->getParam(info.id) - info.minValue) /
-                           (info.maxValue - info.minValue);
-        slider->setValue((int)(normalized * 1000));
-        paramLayout->addWidget(slider);
+        QSlider *slider = new QSlider( Qt::Horizontal );
+        slider->setMinimum( 0 );
+        slider->setMaximum( kTicks );
+        slider->setValue( valueToTicks( info, plugin->getParam( info.id ) ) );
+        paramLayout->addWidget( slider );
 
-        // Value label (10% width)
         QLabel *valueLabel = new QLabel();
-        valueLabel->setMinimumWidth(60);
-        valueLabel->setAlignment(Qt::AlignRight);
-        paramLayout->addWidget(valueLabel);
+        valueLabel->setMinimumWidth( 70 );
+        valueLabel->setAlignment( Qt::AlignRight );
+        valueLabel->setText( formatValue( info, plugin->getParam( info.id ) ) );
+        paramLayout->addWidget( valueLabel );
 
-        // Store in our list
         ParamWidget pw;
-        pw.info = info;
-        pw.slider = slider;
+        pw.info       = info;
+        pw.slider     = slider;
         pw.valueLabel = valueLabel;
-        params_.push_back(pw);
+        params_.push_back( pw );
 
-        // Connect slider to value update
-        int paramIndex = (int)i;
-        connect(slider, &QSlider::valueChanged, this, [this, paramIndex]() {
-            onParamSliderChanged(paramIndex);
-        });
+        // Connect AFTER the initial setValue above, so building the UI never
+        // submits an action for a value nobody moved.
+        const int paramIndex = (int) i;
+        connect( slider, &QSlider::valueChanged, this,
+                 [this, paramIndex]() { onParamSliderChanged( paramIndex ); } );
 
-        // Update display label
-        onParamSliderChanged(paramIndex);
-
-        mainLayout->addLayout(paramLayout);
+        mainLayout->addLayout( paramLayout );
     }
 
     mainLayout->addStretch();
-    setWidget(container);
+    setWidget( container );
 }
 
-void SPluginParamEditor::onParamSliderChanged(int sliderIndex)
+void SPluginParamEditor::onParamSliderChanged( int sliderIndex )
 {
-    if (sliderIndex < 0 || sliderIndex >= (int)params_.size() || !plugin_) {
-        return;
-    }
+    if( applyingExternal_ ) return;
+    if( sliderIndex < 0 || sliderIndex >= (int) params_.size() ) return;
 
     ParamWidget &pw = params_[sliderIndex];
-    const auto &info = pw.info;
+    const audio::twPluginParamInfo &info = pw.info;
+    const double value = ticksToValue( info, pw.slider->value() );
 
-    // Convert slider value (0-1000) to parameter value (min-max)
-    double normalized = pw.slider->value() / 1000.0;
-    double value = info.minValue + normalized * (info.maxValue - info.minValue);
+    pw.valueLabel->setText( formatValue( info, value ) );
 
-    // Set the parameter
-    plugin_->setParam(info.id, value);
+    // THE action, not twPlugin::setParam(). The action broadcasts to every
+    // instance, stales the slot's cached pages (without which the edit is
+    // inaudible) and lands one coalesced entry on the undo stack per drag.
+    SApplication::app().submitAction(
+        new SSetPluginParamAction( trackPath_, slotIndex_, info.id, value ) );
+}
 
-    // Update display label with current value
-    QString displayText;
-    if (info.isStepped) {
-        displayText = QString::number((int)value);
-    } else {
-        displayText = QString::number(value, 'f', 2);
+void SPluginParamEditor::onParamsChanged()
+{
+    audio::twPlugin *plugin = livePlugin();
+    if( !plugin ) return;
+
+    // Re-read, do not rebuild: the parameter LIST is unchanged, only the values
+    // moved (an undo, a restored state chunk, an automation write). Rebuilding
+    // here would also destroy the slider the user is still dragging.
+    applyingExternal_ = true;
+    for( ParamWidget &pw : params_ ) {
+        const double v = plugin->getParam( pw.info.id );
+        pw.slider->setValue( valueToTicks( pw.info, v ) );
+        pw.valueLabel->setText( formatValue( pw.info, v ) );
     }
-    pw.valueLabel->setText(displayText);
+    applyingExternal_ = false;
+}
+
+void SPluginParamEditor::onPluginReloaded()
+{
+    // A reload may have produced a DIFFERENT plugin (a Missing slot that became
+    // Active, or a newer version of the same one), so the parameter list itself
+    // has to be rebuilt — CONTRACT invariant 5.
+    buildUI();
+}
+
+bool SPluginParamEditor::setParamFromUi( std::uint32_t paramId, double value )
+{
+    for( std::size_t i = 0; i < params_.size(); ++i ) {
+        if( params_[i].info.id != paramId ) continue;
+        QSlider *slider = params_[i].slider;
+        const int ticks = valueToTicks( params_[i].info, value );
+        if( slider->value() == ticks ) {
+            // setValue() would not emit valueChanged, and the point of this seam
+            // is to run the handler. Call it the way the signal would.
+            onParamSliderChanged( (int) i );
+        } else {
+            slider->setValue( ticks );
+        }
+        return true;
+    }
+    return false;
 }

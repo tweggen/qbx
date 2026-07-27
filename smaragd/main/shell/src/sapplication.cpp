@@ -2,9 +2,13 @@
 
 #include <QTimer>
 #include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 
 #include "tw/graph/tw303aenv.h"
+#include "tw/core/twlog.h"
+#include "tw/plugins/twplugindescriptor.h"
+#include "tw/plugins/twpluginsearchpaths.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/playback/twspeaker.h"
 #include "tw/schedule/capture_revalidator.h"
@@ -16,6 +20,7 @@
 #include "app/shell/sapplication.h"
 #include "app/model/sproject.h"
 #include "app/shell/ssettings.h"
+#include "app/servicesui/soptions.h"
 #include "app/actions/sactionhistory.h"
 #include "app/actions/saction.h"
 #include "app/selection/sselectionmanager.h"
@@ -237,6 +242,103 @@ void SApplication::setSpeakerMaxVal( sample_t /*maxVal*/ )
     // FIXME: insert for VU.
 }
 
+// ---------------------------------------------- plugin discovery (08 M2) ----
+
+void SApplication::initPluginRegistry()
+{
+    audio::twPluginRegistry &reg = audio::pluginRegistry();
+    SSettings               &s   = SSettings::instance();
+
+    // The cache lives next to smaragd.ini, not in the sidecar store: the
+    // sidecar store keys on a content hash of audio PCM and caps itself with an
+    // LRU, which would silently evict the plugin table.
+    reg.setCachePath(
+        QDir( s.configDir() ).filePath( "plugincache.json" ).toStdString() );
+
+    // The APP supplies the probe path, so the registry stays dumb and headlessly
+    // testable — and on macOS the executable lives inside the .app bundle next
+    // to the main binary, which only the app can know.
+    const QString probe = QDir( applicationDirPath() ).filePath(
+#ifdef Q_OS_WIN
+        QStringLiteral( "smaragd_pluginprobe.exe" )
+#else
+        QStringLiteral( "smaragd_pluginprobe" )
+#endif
+    );
+    if( QFileInfo::exists( probe ) ) {
+        reg.setProbeExecutable( probe.toStdString() );
+    } else {
+        // Not fatal: the registry falls back to probing in-process. That is
+        // still safe against a corrupt file, but a plugin that crashes while
+        // being instantiated would then take the app with it.
+        TW_LOGW( "plugins", "[app] no plugin probe executable at '%s'; plugin "
+                 "scanning will run IN-PROCESS, without crash isolation",
+                 probe.toUtf8().constData() );
+    }
+
+    pushPluginSearchPaths();
+
+    pluginScanTimer_ = new QTimer( this );
+    pluginScanTimer_->setInterval( 200 );
+    connect( pluginScanTimer_, &QTimer::timeout, this, &SApplication::pumpPluginScan );
+
+    if( s.pluginScanOnStartup() ) rescanPlugins( false );
+}
+
+void SApplication::pushPluginSearchPaths()
+{
+    std::vector<std::string> dirs;
+    for( const QString &d : SSettings::instance().pluginSearchPaths() ) {
+        const QString t = d.trimmed();
+        if( !t.isEmpty() ) dirs.push_back( t.toStdString() );
+    }
+    audio::pluginRegistry().setSearchPaths( std::move( dirs ) );
+}
+
+void SApplication::rescanPlugins( bool force )
+{
+    // Re-read the list first: the options dialog may have just changed it.
+    pushPluginSearchPaths();
+    if( audio::pluginRegistry().rescanAsync( force ) && pluginScanTimer_ )
+        pluginScanTimer_->start();
+}
+
+bool SApplication::isPluginScanActive() const
+{
+    return audio::pluginRegistry().isScanning();
+}
+
+void SApplication::pumpPluginScan()
+{
+    if( audio::pluginRegistry().isScanning() ) return;
+    if( pluginScanTimer_ ) pluginScanTimer_->stop();
+    // Emitted from the main thread, which is the whole point of this poll.
+    emit pluginScanFinished();
+}
+
+QString SApplication::pluginScanStatusText() const
+{
+    audio::twPluginRegistry  &reg = audio::pluginRegistry();
+    const audio::twPluginScanStats st = reg.scanStats();
+
+    if( reg.isScanning() ) {
+        return QString( "Scanning %1 module(s)…" ).arg( st.modulesFound );
+    }
+    if( st.modulesFound == 0 && st.pluginsFound == 0 ) {
+        return QString( "%1 plugin(s); no plugin modules found in the "
+                        "directories above." )
+            .arg( (int) reg.plugins().size() );
+    }
+    QString txt = QString( "%1 plugin(s) from %2 module(s) — %3 probed, %4 cached" )
+        .arg( st.pluginsFound ).arg( st.modulesFound )
+        .arg( st.modulesProbed ).arg( st.modulesCached );
+    if( st.modulesSkipped > 0 )
+        txt += QString( ", %1 skipped (previously failed)" ).arg( st.modulesSkipped );
+    if( st.modulesFailed > 0 )
+        txt += QString( ", %1 failed" ).arg( st.modulesFailed );
+    return txt;
+}
+
 offset_t SApplication::getGlobalLocatorPos() const
 {
     return globalLocatorPos_.load( std::memory_order_relaxed );
@@ -286,10 +388,17 @@ SApplication::SApplication( int &argc, char **argv )
             : QString::fromLocal8Bit( sidecarDir );
         twSidecarStore::instance().setRoot( root.toStdString() );
     }
+
+    // Proposal 08 M2: plugin discovery. Last, because it may start a background
+    // scan and everything above it must already be in place.
+    initPluginRegistry();
 }
 
 SApplication::~SApplication()
 {
+    // Join the scan worker BEFORE anything else goes away: it holds a QProcess
+    // and writes the cache, and the registry outlives us (it is a static).
+    audio::pluginRegistry().waitForScan();
     DTOR_DEL( actionHistory_ );
     t3Speaker_.reset();
     DTOR_DEL( t3Env_ );

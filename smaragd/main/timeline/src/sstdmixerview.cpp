@@ -92,34 +92,31 @@ void SMVActualView::setTrackHeight( int h )
 {
     if( h<6 ) h = 6;
     trackHeight_ = h;
-    QVector<SSMVMixerControl*> &controls = *smv_.controlArray_;
-    for( int t=0; t<controls.size(); t++ ) {
-        SSMVMixerControl *mc = controls.at( t );
-        if( !mc ) continue;
-        mc->move( 0, getTrackHeight()*t );
-        mc->setFixedSize( SMV_TRACK_CTRL_WIDTH, getTrackHeight() );
-        mc->resize( SMV_TRACK_CTRL_WIDTH, getTrackHeight() );
-    }
-//    update();
+    // The base height feeds every lane's height (through its track's scale),
+    // so the row geometry — and with it the scroll offset, which is a running
+    // sum, not a multiple — has to be rebuilt before anything is placed.
+    smv_.rebuildRowGeometry();
+    upperLeftY_ = smv_.rowTop( (int) topRow_ );
+    smv_.layoutControlColumn();
     smv_.viewResized();
     update();
     // FIXME: Emit signal?
 }
 
+// Clamp a requested top row into range. Empty view -> 0.
+static idx_t clampTopRow( idx_t topOffset, int nRows )
+{
+    if( nRows<=0 ) return 0;
+    if( topOffset<0 ) return 0;
+    if( topOffset>=nRows ) return nRows-1;
+    return topOffset;
+}
+
 void SMVActualView::setUpperLeft( offset_t leftOffset, idx_t topOffset )
 {
-    int nTracks = smv_.rowCount();
-    if( !nTracks ) {
-        topOffset = 0;
-    } else {
-        if( topOffset<0 ) {
-            topOffset = 0;
-        } else if( topOffset>= nTracks ) {
-            topOffset = nTracks - 1;
-        }
-    }
-    upperLeftY_ = topOffset*trackHeight_;
-    smv_.qTrackControlBox_->move( 0, -upperLeftY_+SMV_TIME_RULER_HEIGHT );
+    topRow_ = clampTopRow( topOffset, smv_.rowCount() );
+    upperLeftY_ = smv_.rowTop( (int) topRow_ );
+    smv_.layoutControlColumn();
     setLeftOffset( leftOffset );
     // FIXME: Blitting
     // FIXME: Signal
@@ -143,21 +140,43 @@ void SMVActualView::setLeftOffset( offset_t leftOffset )
 
 void SMVActualView::setTopOffset( idx_t topOffset )
 {
-    int nTracks = smv_.rowCount();
-    if( !nTracks ) {
-        topOffset = 0;
-    } else {
-        if( topOffset<0 ) {
-            topOffset = 0;
-        } else if( topOffset>= nTracks ) {
-            topOffset = nTracks - 1;
-        }
-    }
-    upperLeftY_ = topOffset*trackHeight_;
-    smv_.qTrackControlBox_->move( 0, -upperLeftY_+SMV_TIME_RULER_HEIGHT );
+    topRow_ = clampTopRow( topOffset, smv_.rowCount() );
+    upperLeftY_ = smv_.rowTop( (int) topRow_ );
+    smv_.layoutControlColumn();
     // FIXME: Blitting
-    // FIXME: Signal    
+    // FIXME: Signal
     update();
+}
+
+// --- lane geometry ------------------------------------------------------
+// Everything positional in the canvas goes through these three. They are the
+// view-space face of SStdMixerView's row geometry: ruler band added, vertical
+// scroll subtracted. The control column applies the very same offsets (see
+// SStdMixerView::controlYOfRow), which is what keeps heads and lanes glued
+// together no matter what changed the geometry.
+
+int SMVActualView::laneTop( int row ) const
+{
+    return SMV_TIME_RULER_HEIGHT + smv_.rowTop( row ) - (int) upperLeftY_;
+}
+
+int SMVActualView::laneHeight( int row ) const
+{
+    return smv_.rowHeight( row );
+}
+
+int SMVActualView::lanesBottom() const
+{
+    return SMV_TIME_RULER_HEIGHT + smv_.totalRowsHeight() - (int) upperLeftY_;
+}
+
+int SMVActualView::rowAtViewY( int y ) const
+{
+    // A press in the ruler band belongs to the topmost visible lane — the
+    // behaviour every click handler has always had (they clamped y to 0).
+    int laneY = y - SMV_TIME_RULER_HEIGHT;
+    if( laneY < 0 ) laneY = 0;
+    return smv_.rowAtLaneY( laneY + (int) upperLeftY_ );
 }
 
 int SMVActualView::getXPosOfOffset( offset_t off ) const
@@ -236,23 +255,29 @@ void SMVActualView::paintEvent( QPaintEvent * )
 
     // OK, we have tracks (lanes of the flattened tree).
     int nTracks = smv_.rowCount();
-    int firstTrack = (upperLeftY_ + trackHeight_-1) / trackHeight_;
+    // First lane touching the viewport. With variable heights this is a
+    // lookup, not a division — and it is the lane *containing* the scroll
+    // offset, so a partially scrolled lane still paints.
+    int firstTrack = smv_.rowAtLaneY( (int) upperLeftY_ );
+    if( firstTrack < 0 ) firstTrack = nTracks;
     for( int i=firstTrack; i<nTracks; i++ ) {
         const STrackRow *row = smv_.rowAt( i );
         if( !row ) continue;
-        int laneTop = SMV_TIME_RULER_HEIGHT+i*trackHeight_-upperLeftY_;
+        int top = laneTop( i );
+        if( top >= myRect.height() ) break;    // rest is below the viewport
+        int lh = laneHeight( i );
         // All lanes start at x=0 (full width) — the hierarchy is shown by the
         // indented control strips, not the timeline, so editing keeps full width.
         p.setPen( QColor( 96, 96, 96 ) );
         ctx.setVisibRect(
-            QRect( 0, laneTop+1, myRect.width(), trackHeight_-2 ) );
-        p.drawLine( 0, laneTop, myRect.bottomRight().x(), laneTop );
-        p.drawLine( 0, laneTop+trackHeight_-1,
-                    myRect.bottomRight().x(), laneTop+trackHeight_-1 );
-        if( row->takeRow >= 0 ) {
+            QRect( 0, top+1, myRect.width(), lh-2 ) );
+        p.drawLine( 0, top, myRect.bottomRight().x(), top );
+        p.drawLine( 0, top+lh-1,
+                    myRect.bottomRight().x(), top+lh-1 );
+        if( row->isSubLane() ) {
             // A take lane: take k of every stack on the track (phase 3).
             drawTakeLane( p, *row, i,
-                          QRect( 0, laneTop+1, myRect.width(), trackHeight_-2 ) );
+                          QRect( 0, top+1, myRect.width(), lh-2 ) );
         } else {
             // Draw the track's clips.
             row->track->getInlineRenderer()->draw( *row->link, ctx );
@@ -268,10 +293,11 @@ void SMVActualView::paintEvent( QPaintEvent * )
         int xe = getXPosOfOffset( SApplication::app().getGlobalLocatorPos() );
         if( xe > xs ) {
             for( int i=firstTrack; i<nTracks; i++ ) {
+                int top = laneTop( i );
+                if( top >= myRect.height() ) break;
                 const STrackRow *row = smv_.rowAt( i );
                 if( !row || !row->track || !row->track->isArmedForRecording() ) continue;
-                int laneTop = SMV_TIME_RULER_HEIGHT+i*trackHeight_-upperLeftY_;
-                p.fillRect( QRect( xs, laneTop+1, xe-xs, trackHeight_-2 ),
+                p.fillRect( QRect( xs, top+1, xe-xs, laneHeight( i )-2 ),
                             QColor( 220, 40, 40, 70 ) );
             }
         }
@@ -306,11 +332,11 @@ void SMVActualView::paintEvent( QPaintEvent * )
             // (The old code only set the light pen *after* the first bar line, so
             // the first few lines were wrongly drawn in the bar colour.)
             p.setPen( emph ? QColor( 96, 96, 96 ) : QColor( 160, 160, 160 ) );
-            p.drawLine( x, SMV_TIME_RULER_HEIGHT, x, SMV_TIME_RULER_HEIGHT+nTracks*trackHeight_-upperLeftY_ );
+            p.drawLine( x, SMV_TIME_RULER_HEIGHT, x, lanesBottom() );
             a += tgs.getTimeGridWidth();
         }
     }
-    int tmp = (SMV_TIME_RULER_HEIGHT+nTracks*trackHeight_-upperLeftY_);
+    int tmp = lanesBottom();
     if( myRect.height()>tmp ) {        
         p.fillRect( QRect( 0, tmp, myRect.width(), myRect.height()-tmp+1 ), QColor( 0, 0, 0 ) );
     }
@@ -605,6 +631,38 @@ void SMVActualView::ctGlobalShow()
             smv_.isTrackTakesExpanded( lastClickTrack_ )
                 ? "Hide take lanes" : "Show take lanes",
             this, SLOT( ctToggleTakeLanes() ) );
+        // Per-track lane height, as a factor of the base (zoomed) height, so
+        // one track can be tall for detailed editing while its neighbours stay
+        // small. Vertical zoom keeps scaling all of them together.
+        //
+        // Built once and kept: qGlobalPopup_->clear() drops the submenu's
+        // action but not the submenu, and the handlers read lastClickTrack_ at
+        // trigger time, so there is nothing to rewire per right-click.
+        if( !qLaneHeightMenu_ ) {
+            qLaneHeightMenu_ = new QMenu( "Lane &height", qGlobalPopup_ );
+            const struct { const char *label; double scale; } presets[] = {
+                { "&Small",  0.5 }, { "&Normal", 1.0 },
+                { "&Large",  1.5 }, { "&Extra large", 2.5 },
+            };
+            for( const auto &p : presets ) {
+                QAction *a = qLaneHeightMenu_->addAction( p.label );
+                a->setCheckable( true );
+                a->setData( p.scale );
+                QObject::connect( a, &QAction::triggered, this,
+                                  [this, a]() {
+                                      if( lastClickTrack_ )
+                                          smv_.setTrackHeightScale(
+                                              lastClickTrack_,
+                                              a->data().toDouble() );
+                                  } );
+            }
+        }
+        {
+            const double cur = smv_.trackHeightScale( lastClickTrack_ );
+            for( QAction *a : qLaneHeightMenu_->actions() )
+                a->setChecked( qFuzzyCompare( cur, a->data().toDouble() ) );
+        }
+        qGlobalPopup_->addMenu( qLaneHeightMenu_ );
         qGlobalPopup_->addSeparator();
         qGlobalPopup_->addAction( "Indent track (nest under above)", &smv_, SLOT( ctIndentTrack() ) );
         qGlobalPopup_->addAction( "Outdent track", &smv_, SLOT( ctOutdentTrack() ) );
@@ -674,13 +732,23 @@ void SStdMixerView::ctAddTrackBelowLast()
 }
 
 // Catch double-clicks in the blank area of the track-control column (below the
-// last track head) and turn them into a new-track gesture.
+// last track head) and turn them into a new-track gesture — and keep the heads
+// glued to the lanes when the column is resized.
 bool SStdMixerView::eventFilter( QObject *watched, QEvent *event )
 {
-    if( watched == qTrackControlBoxHolder_
+    if( watched == qTrackControlBox_ && event->type() == QEvent::Resize ) {
+        // The layout just (re)sized the viewport: re-place the heads inside it.
+        layoutControlColumn();
+        return false;      // let the widget see its own resize too
+    }
+    if( ( watched == qTrackControlBoxHolder_ || watched == qTrackControlBox_ )
         && event->type() == QEvent::MouseButtonDblClick ) {
         QMouseEvent *me = static_cast<QMouseEvent*>( event );
-        if( me->button() == Qt::LeftButton ) {
+        // Only the blank area below the last head adds a track. A double click
+        // that landed on a head propagates up to here (heads do not consume
+        // it), and must not spawn a track.
+        if( me->button() == Qt::LeftButton
+            && !rowAt( rowAtControlY( (int) me->position().y() ) ) ) {
             ctAddTrackBelowLast();
             return true;   // consumed
         }
@@ -827,8 +895,7 @@ int SMVActualView::loopMarkerAt( const QPoint &pos, int rowIdx, SLink *clip ) co
 
     // The clip's paint rect: the lane inset by one pixel (paintEvent), then by
     // one more by the track renderer that frames each clip.
-    int laneTop = SMV_TIME_RULER_HEIGHT + rowIdx*trackHeight_ - (int) upperLeftY_;
-    QRect clipRect( 0, laneTop+2, width(), trackHeight_-4 );
+    QRect clipRect( 0, laneTop( rowIdx )+2, width(), laneHeight( rowIdx )-4 );
     int bx = getXPosOfOffset( start + (offset_t)( (length_t) k * seg ) );
     QRect box = scutLoopHandleRect( clipRect, bx );
     return ( !box.isNull() && box.contains( pos ) ) ? k : 0;
@@ -841,9 +908,13 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
     lastClickedStartUpper_ = false;
     lastClickLoopMarker_ = 0;
     lastClickPos_ = pos;
-    int y = pos.y()-SMV_TIME_RULER_HEIGHT;
-    if( y<0 ) y = 0;
-    lastClickTrackIdx_ = (y+upperLeftY_)/trackHeight_;
+    lastClickTrackIdx_ = rowAtViewY( pos.y() );
+    // Y within the clicked lane (its own height, not a global one), used by
+    // the upper/lower-half edge gestures below.
+    const int laneY = ( lastClickTrackIdx_ >= 0 )
+                    ? pos.y() - laneTop( (int) lastClickTrackIdx_ ) : 0;
+    const int laneH = ( lastClickTrackIdx_ >= 0 )
+                    ? laneHeight( (int) lastClickTrackIdx_ ) : 1;
     lastClickOffset_ = getTimeOf( pos.x() );
     const STrackRow *row = smv_.rowAt( lastClickTrackIdx_ );
     SLink *tlk = row ? row->link : NULL;
@@ -861,8 +932,7 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
                     lastClickedStart_ = true;
                     // Upper half of the lane → loop backwards; lower half → trim.
                     // Mirrors the right edge.
-                    int laneY = ( y + upperLeftY_ ) % trackHeight_;
-                    lastClickedStartUpper_ = ( laneY < trackHeight_/2 );
+                    lastClickedStartUpper_ = ( laneY < laneH/2 );
                 }
                 if( lastClickSLink_->getSObject().hasDuration() ) {
                     length_t len = lastClickSLink_->getSObject().getDuration();
@@ -872,8 +942,7 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
                         && lastClickPos_.x() >= (endX-SMV_RIGHT_DRAG_PIXEL) ) {
                         lastClickedEnd_ = true;
                         // Upper half of the lane → loop; lower half → extend.
-                        int laneY = ( y + upperLeftY_ ) % trackHeight_;
-                        lastClickedEndUpper_ = ( laneY < trackHeight_/2 );
+                        lastClickedEndUpper_ = ( laneY < laneH/2 );
                     }
                 }
             }
@@ -1117,7 +1186,10 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
 
 QRect SMVActualView::getSLinkVisibRect( int trackIdx, const SLink &lk )
 {
-    QRect r( 0, SMV_TIME_RULER_HEIGHT+trackIdx*trackHeight_, rect().width(), trackHeight_ );
+    // Repaint rects are view space: the lane's own top and height, scroll
+    // included (it was missing here, so a scrolled drag repainted the wrong
+    // band).
+    QRect r( 0, laneTop( trackIdx ), rect().width(), laneHeight( trackIdx ) );
     if( !lk.hasStartTime() ) {
         return r;
     }
@@ -1438,8 +1510,7 @@ void SMVActualView::updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers 
     QString mode;   // status-bar label; empty = idle
 
     if( pos.y() >= SMV_TIME_RULER_HEIGHT ) {
-        int y = pos.y() - SMV_TIME_RULER_HEIGHT;
-        int rowIdx = ( y + upperLeftY_ ) / trackHeight_;
+        int rowIdx = rowAtViewY( pos.y() );
         const STrackRow *row = smv_.rowAt( rowIdx );
         STrack *track = row ? row->track : NULL;
         SLink *clip = track ? track->getTopMostSLinkAt( getTimeOf( pos.x() ) ) : NULL;
@@ -1453,7 +1524,7 @@ void SMVActualView::updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers 
                 length_t len = clip->getSObject().getDuration();
                 int endX = getXPosOfOffset( st + (offset_t) len );
                 onRight = ( pos.x() < endX && pos.x() >= endX - SMV_RIGHT_DRAG_PIXEL );
-                upper = ( ( ( y + upperLeftY_ ) % trackHeight_ ) < trackHeight_/2 );
+                upper = ( pos.y() - laneTop( rowIdx ) < laneHeight( rowIdx )/2 );
             }
             bool onBorder = onLeft || onRight;
             bool ctrl = mods & Qt::ControlModifier;
@@ -1521,7 +1592,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
     }
 
     // Ge the current track.
-    int newTrackIdx = (ev->pos().y()+upperLeftY_-SMV_TIME_RULER_HEIGHT)/trackHeight_;
+    int newTrackIdx = rowAtViewY( ev->pos().y() );
     const STrackRow *newRow = smv_.rowAt( newTrackIdx );
     STrack *newTrack = newRow ? newRow->track : NULL;
     if( newTrack && newTrack == lastClickTrack_ ) newTrack = NULL;
@@ -2060,13 +2131,10 @@ void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
         && tryAddMarkerAt( ev ) )
         return;
     if( ev->button() == Qt::LeftButton && smv_.getModel() ) {
-        int y = ev->pos().y() - SMV_TIME_RULER_HEIGHT;
-        if( y >= 0 ) {
-            int idx = ( y + upperLeftY_ ) / trackHeight_;
-            if( !smv_.rowAt( idx ) ) {         // below the last visible lane
-                smv_.ctAddTrackBelowLast();
-                return;
-            }
+        if( ev->pos().y() >= SMV_TIME_RULER_HEIGHT
+            && !smv_.rowAt( rowAtViewY( ev->pos().y() ) ) ) {
+            smv_.ctAddTrackBelowLast();        // below the last visible lane
+            return;
         }
     }
     QWidget::mouseDoubleClickEvent( ev );
@@ -2349,6 +2417,11 @@ void SStdMixerView::onArrangementChangedRows()
     if( rows_.size() != before ) {
         rebuildControlColumn();
         nTracksChanged();
+        qContent_->setTopOffset( qContent_->getTopRow() );
+    } else {
+        // Same lane count, but a take could have moved between tracks — the
+        // heads are cheap to re-place and must not be left behind.
+        layoutControlColumn();
     }
     qContent_->update();
 }
@@ -2357,6 +2430,137 @@ void SStdMixerView::rebuildRows()
 {
     rows_.clear();
     if( model_ ) appendRowsFor( model_, 0 );
+    rebuildRowGeometry();
+}
+
+// --- row geometry -------------------------------------------------------
+// Lane heights are per-row and must be treated as arbitrary: a track carries
+// its own height scale, and one track can own several lanes (take lanes
+// today, automation lanes later). The only supported way from a row index to
+// a pixel is rowTop()/rowHeight(); the only way back is rowAtLaneY().
+
+double SStdMixerView::trackHeightScale( const STrack *t ) const
+{
+    return t ? trackScale_.value( t, 1.0 ) : 1.0;
+}
+
+void SStdMixerView::setTrackHeightScale( STrack *t, double scale )
+{
+    if( !t ) return;
+    scale = qBound( LANE_SCALE_MIN, scale, LANE_SCALE_MAX );
+    if( qFuzzyCompare( trackHeightScale( t ), scale ) ) return;
+    if( qFuzzyCompare( scale, 1.0 ) ) trackScale_.remove( t );
+    else                              trackScale_.insert( t, scale );
+    // Heights changed under the scroll anchor: re-derive the geometry, then
+    // re-anchor the scroll on the same row and replace the heads.
+    rebuildRowGeometry();
+    qContent_->setTopOffset( qContent_->getTopRow() );
+    recalcPageStep();
+    layoutControlColumn();
+    qContent_->update();
+}
+
+// Height of one lane. A sub-lane may be scaled differently from the track
+// lane it hangs off — today it matches (SUB_LANE_SCALE = 1.0), and changing
+// that is a one-line edit because nothing else assumes the two are equal.
+int SStdMixerView::rowHeightOf( const STrackRow &row ) const
+{
+    static const double SUB_LANE_SCALE = 1.0;
+    double s = trackHeightScale( row.track );
+    if( row.isSubLane() ) s *= SUB_LANE_SCALE;
+    int h = (int) ( getTrackHeight() * s + 0.5 );
+    return qMax( 6, h );      // same floor as SMVActualView::setTrackHeight
+}
+
+void SStdMixerView::rebuildRowGeometry()
+{
+    rowTop_.resize( rows_.size()+1 );
+    int y = 0;
+    for( int i=0; i<rows_.size(); ++i ) {
+        rowTop_[i] = y;
+        rows_[i].height = rowHeightOf( rows_.at( i ) );
+        y += rows_.at( i ).height;
+    }
+    rowTop_[rows_.size()] = y;          // total height, one call away
+}
+
+int SStdMixerView::rowTop( int row ) const
+{
+    if( rowTop_.isEmpty() ) return 0;
+    if( row < 0 ) return 0;
+    if( row >= rowTop_.size() ) return rowTop_.last();
+    return rowTop_.at( row );
+}
+
+int SStdMixerView::rowHeight( int row ) const
+{
+    if( row < 0 || row >= rows_.size() ) return getTrackHeight();
+    return rows_.at( row ).height;
+}
+
+int SStdMixerView::rowAtLaneY( int y ) const
+{
+    if( y < 0 || rows_.isEmpty() || y >= totalRowsHeight() ) return -1;
+    // Binary search over the prefix sums: the row whose span contains y.
+    int lo = 0, hi = rows_.size()-1;
+    while( lo < hi ) {
+        int mid = (lo+hi+1)/2;
+        if( rowTop( mid ) <= y ) lo = mid; else hi = mid-1;
+    }
+    return lo;
+}
+
+int SStdMixerView::visibleRowCountFrom( int firstRow ) const
+{
+    int avail = qContent_->height() - SMV_TIME_RULER_HEIGHT;
+    int n = 0;
+    for( int i=qMax( 0, firstRow ); i<rows_.size() && avail>0; ++i ) {
+        avail -= rowHeight( i );
+        ++n;
+    }
+    return qMax( 1, n );
+}
+
+// The lane group of a track lane: the lane itself plus every sub-lane hanging
+// off it. One head covers the whole group, so a track that owns several lanes
+// gets one strip spanning all of them instead of a strip and a gap.
+int SStdMixerView::laneGroupHeight( int row ) const
+{
+    if( row < 0 || row >= rows_.size() ) return getTrackHeight();
+    int h = rowHeight( row );
+    for( int i=row+1; i<rows_.size(); ++i ) {
+        if( !rows_.at( i ).isSubLane() || rows_.at( i ).track != rows_.at( row ).track )
+            break;
+        h += rowHeight( i );
+    }
+    return h;
+}
+
+// The control column shares the canvas' vertical origin — same ruler band,
+// same scroll offset — which is exactly why the heads track the lanes.
+int SStdMixerView::controlYOfRow( int row ) const
+{
+    return qContent_->laneTop( row );
+}
+
+int SStdMixerView::rowAtControlY( int y ) const
+{
+    return qContent_->rowAtViewY( y );
+}
+
+// THE place head geometry is decided. The box itself never moves (its layout
+// owns it); the heads inside carry the scroll and are clipped by it.
+void SStdMixerView::layoutControlColumn()
+{
+    if( !qTrackControlBox_ || !controlArray_ ) return;
+    const int w = trackControlWidth_;
+    for( int c=0; c<controlArray_->size(); ++c ) {
+        SSMVMixerControl *mc = controlArray_->at( c );
+        if( !mc ) continue;
+        const int row = ( c < controlRow_.size() ) ? controlRow_.at( c ) : c;
+        mc->setGeometry( 0, controlYOfRow( row ), w, laneGroupHeight( row ) );
+    }
+    if( dropIndicator_ ) dropIndicator_->raise();
 }
 
 const STrackRow *SStdMixerView::rowAt( int i ) const
@@ -2395,26 +2599,22 @@ void SStdMixerView::rebuildControlColumn()
         if( mc ) { mc->hide(); mc->deleteLater(); }
     }
     controlArray_->clear();
-    int h = getTrackHeight();
-    // Use the requested trackControlWidth_ instead of the holder's actual width
-    int w = trackControlWidth_;
-    qWarning( "rebuildControlColumn: holder width=%d, control width=%d, rows=%d",
-              qTrackControlBoxHolder_->width(), w, int( rows_.size() ) );
+    controlRow_.clear();
     for( int i=0; i<rows_.size(); ++i ) {
         const STrackRow &row = rows_.at( i );
-        // Take-lane rows carry no channel strip; the vertical position of the
-        // FOLLOWING controls still advances with the row index i.
-        if( row.takeRow >= 0 ) continue;
+        // Sub-lanes (take lanes, later automation) carry no channel strip of
+        // their own — the track's head spans them (laneGroupHeight). So the
+        // controls are NOT index-parallel with rows_: remember each head's row.
+        if( row.isSubLane() ) continue;
         SSMVMixerControl *mc = new SSMVMixerControl( qTrackControlBox_, *this, *row.track );
         mc->setTreeInfo( row.depth, row.hasChildren, row.collapsed );
-        mc->move( 0, SMV_TIME_RULER_HEIGHT + h*i );
-        mc->resize( w, h );
         mc->show();
         controlArray_->append( mc );
+        controlRow_.append( i );
     }
-    qTrackControlBox_->resize( w, SMV_TIME_RULER_HEIGHT + h*rows_.size() );
-    // Ensure qTrackControlBox_ also fills parent width
-    qTrackControlBox_->move( 0, 0 );
+    // The box is a viewport owned by the holder's layout — never moved or
+    // resized here. Only the heads inside it are placed.
+    layoutControlColumn();
 }
 
 // Single entry point for any structural change (add/remove/reorder/group/fold):
@@ -2424,6 +2624,9 @@ void SStdMixerView::refreshTrackTree()
     rebuildRows();
     rebuildControlColumn();
     nTracksChanged();
+    // Rows moved under the scroll anchor: re-derive the pixel offset from the
+    // (clamped) top row, which also re-places the heads.
+    qContent_->setTopOffset( qContent_->getTopRow() );
     qContent_->update();
 }
 
@@ -2433,15 +2636,14 @@ void SStdMixerView::addMixerControl( int, STrack & )    { refreshTrackTree(); }
 void SStdMixerView::removeMixerControl( int, STrack & ) { refreshTrackTree(); }
 void SStdMixerView::tracksReordered()                   { refreshTrackTree(); }
 
-// Map a Y in the control-column to an insertion gap 0..n among the visible lanes.
+// Map a Y in the control-column to an insertion gap 0..n among the visible
+// lanes: the number of lanes whose midpoint the pointer is past.
 int SStdMixerView::insertSlotAt( int y ) const
 {
-    int h = getTrackHeight();
-    if( h<=0 ) return 0;
-    int n = rowCount();
-    int slot = (y + h/2) / h;
-    if( slot<0 ) slot = 0;
-    if( slot>n ) slot = n;
+    int slot = 0;
+    for( int i=0; i<rows_.size(); ++i ) {
+        if( y > controlYOfRow( i ) + rowHeight( i )/2 ) ++slot;
+    }
     return slot;
 }
 
@@ -2454,22 +2656,20 @@ void SStdMixerView::beginTrackDrag( SSMVMixerControl *control )
 void SStdMixerView::resolveDrop( int y, STrack **onto, int *topSlot ) const
 {
     *onto = NULL;
-    int h = getTrackHeight();
     int n = rowCount();
-    if( h>0 ) {
-        int r = y / h;
-        if( r>=0 && r<n ) {
-            int within = y - r*h;
-            const STrackRow *row = rowAt( r );
-            // Over the middle half of a lane -> nest onto that track.
-            if( row && within > h/4 && within < (3*h)/4 ) *onto = row->track;
-        }
+    int r = rowAtControlY( y );
+    if( r>=0 && r<n ) {
+        int h = rowHeight( r );
+        int within = y - controlYOfRow( r );
+        const STrackRow *row = rowAt( r );
+        // Over the middle half of a lane -> nest onto that track.
+        if( row && within > h/4 && within < (3*h)/4 ) *onto = row->track;
     }
     // Insertion gap among top-level lanes = how many sit above the drop.
     int slot = 0;
     for( int i=0; i<n; ++i ) {
         if( rowAt( i )->depth != 0 ) continue;
-        if( y > i*h + h/2 ) ++slot;
+        if( y > controlYOfRow( i ) + rowHeight( i )/2 ) ++slot;
     }
     *topSlot = slot;
 }
@@ -2479,18 +2679,18 @@ void SStdMixerView::updateTrackDrag( int yInControlBox )
     if( !dragControl_ || !dropIndicator_ ) return;
     STrack *onto = NULL; int slot = 0;
     resolveDrop( yInControlBox, &onto, &slot );
-    int h = getTrackHeight();
     if( onto && onto != &dragControl_->getTrack() ) {
-        // Nest: outline the whole target lane.
+        // Nest: outline the whole target lane group.
         int r = rowIndexOfTrack( onto );
         dropIndicator_->setStyleSheet( "border:2px solid #2080ff; background:transparent;" );
-        dropIndicator_->setGeometry( 0, r*h, SMV_TRACK_CTRL_WIDTH, h );
+        dropIndicator_->setGeometry( 0, controlYOfRow( r ), trackControlWidth_,
+                                     laneGroupHeight( r ) );
     } else {
         // Between: a thin insertion line at the nearest lane boundary.
         dropIndicator_->setStyleSheet( "background:#2080ff; border:none;" );
-        int yLine = insertSlotAt( yInControlBox )*h;
+        int yLine = controlYOfRow( insertSlotAt( yInControlBox ) );
         if( yLine>0 ) yLine -= 1;
-        dropIndicator_->setGeometry( 0, yLine, SMV_TRACK_CTRL_WIDTH, 3 );
+        dropIndicator_->setGeometry( 0, yLine, trackControlWidth_, 3 );
     }
     dropIndicator_->show();
     dropIndicator_->raise();
@@ -2636,8 +2836,8 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     int x1 = qContent_->getXPosOfOffset( dropTime );
     if( x0 < 0 || x1 < 0 ) return false;
 
-    int th = getTrackHeight();
-    int laneTop = SMV_TIME_RULER_HEIGHT + rowIdx*th - (int) qContent_->getUpperLeftY();
+    int th = rowHeight( rowIdx );
+    int laneTop = qContent_->laneTop( rowIdx );
     int y = laneTop + ( upperHalf ? th/4 : (3*th)/4 );
 
     // The drag auto-scrolls when the pointer leaves the canvas, which would move
@@ -2658,6 +2858,74 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     send( QEvent::MouseMove,          x1, Qt::NoButton,   Qt::LeftButton );
     send( QEvent::MouseButtonRelease, x1, Qt::LeftButton, Qt::NoButton );
     return true;
+}
+
+// --- test entry points for the lane geometry ----------------------------
+
+void SStdMixerView::tkSetBaseTrackHeight( int h )
+{
+    qContent_->setTrackHeight( h );
+}
+
+void SStdMixerView::tkSetTopRow( int row )
+{
+    qContent_->setTopOffset( row );
+}
+
+QString SStdMixerView::tkCheckLaneAlignment() const
+{
+    // 1. The row model itself: heights present, prefix sums consistent, and
+    //    the y -> row lookup inverting the row -> y one at both lane edges.
+    int running = 0;
+    for( int i=0; i<rows_.size(); ++i ) {
+        const int h = rows_.at( i ).height;
+        if( h <= 0 )
+            return QString( "row %1: height %2 not set" ).arg( i ).arg( h );
+        if( rowTop( i ) != running )
+            return QString( "row %1: rowTop %2, expected %3 (sum of heights)" )
+                       .arg( i ).arg( rowTop( i ) ).arg( running );
+        if( rowAtLaneY( running ) != i )
+            return QString( "row %1: rowAtLaneY(top=%2) = %3" )
+                       .arg( i ).arg( running ).arg( rowAtLaneY( running ) );
+        if( rowAtLaneY( running + h - 1 ) != i )
+            return QString( "row %1: rowAtLaneY(bottom=%2) = %3" )
+                       .arg( i ).arg( running + h - 1 )
+                       .arg( rowAtLaneY( running + h - 1 ) );
+        running += h;
+    }
+    if( totalRowsHeight() != running )
+        return QString( "total height %1, expected %2" )
+                   .arg( totalRowsHeight() ).arg( running );
+
+    // 2. The heads: one per non-sub-lane row, in row order, each sitting
+    //    exactly on the lane the canvas paints for it.
+    int c = 0;
+    for( int i=0; i<rows_.size(); ++i ) {
+        if( rows_.at( i ).isSubLane() ) continue;
+        if( c >= controlArray_->size() )
+            return QString( "row %1: no head (only %2 heads for %3 rows)" )
+                       .arg( i ).arg( controlArray_->size() ).arg( rows_.size() );
+        if( controlRow_.value( c, -1 ) != i )
+            return QString( "head %1: bound to row %2, expected %3" )
+                       .arg( c ).arg( controlRow_.value( c, -1 ) ).arg( i );
+        SSMVMixerControl *mc = controlArray_->at( c );
+        if( !mc ) return QString( "head %1: null" ).arg( c );
+        const QRect g = mc->geometry();
+        const QRect want( 0, qContent_->laneTop( i ), trackControlWidth_,
+                          laneGroupHeight( i ) );
+        if( g != want )
+            return QString( "head %1 (row %2): geometry %3,%4 %5x%6, "
+                            "lane is %7,%8 %9x%10" )
+                       .arg( c ).arg( i )
+                       .arg( g.x() ).arg( g.y() ).arg( g.width() ).arg( g.height() )
+                       .arg( want.x() ).arg( want.y() )
+                       .arg( want.width() ).arg( want.height() );
+        ++c;
+    }
+    if( c != controlArray_->size() )
+        return QString( "%1 heads for %2 track lanes" )
+                   .arg( controlArray_->size() ).arg( c );
+    return QString();
 }
 
 SLink *SStdMixerView::ensureSCut( SLink *lk )
@@ -2684,7 +2952,6 @@ void SStdMixerView::recalcPageStep()
 {
     // qContent_ was resized. Recalc scrollbars.
     int w = qContent_->width();
-    int h = qContent_->height();
     // Calc new pageStep.
     int srate = model_ ? model_->getProject().getSRate() : 48000;
     double dw = w;
@@ -2700,9 +2967,11 @@ void SStdMixerView::recalcPageStep()
     qScrollHoriz_->setPageStep( ps );
     qScrollHoriz_->setSingleStep( (ps/10)+1 );
     qScrollHoriz_->setMaximum( qMax( 0, (int)HSliderRange - ps ) );
-    h /= qContent_->getTrackHeight();
-    qScrollVert_->setPageStep( h );
-    qScrollVert_->setMaximum( rowCount()-h );
+    // Vertical scrolling stays row-granular, but with variable lane heights
+    // "how many rows fit" depends on which rows are on screen.
+    int vis = visibleRowCountFrom( (int) qContent_->getTopRow() );
+    qScrollVert_->setPageStep( vis );
+    qScrollVert_->setMaximum( qMax( 0, rowCount()-vis ) );
 }
 
 void SStdMixerView::viewResized()
@@ -2745,15 +3014,15 @@ void SStdMixerView::zoomOutHor()
     qContent_->setSecondWidth( secWidth );
 }
 
+// Vertical zoom scales the BASE height; per-track scales ride on top of it, so
+// relative lane sizes survive zooming. setTrackHeight() rebuilds the row
+// geometry and replaces the heads — nothing to do here beyond asking.
 void SStdMixerView::zoomInVert()
 {
     // FIXME: Range checking.
     int h = qContent_->getTrackHeight();
     // FIXME: Configure this
-    h = (h*3)/2;
-    qContent_->setTrackHeight( h );
-    int w = qTrackControlBoxHolder_->width();
-    qTrackControlBox_->resize( w, getTrackHeight()*rowCount() );
+    qContent_->setTrackHeight( (h*3)/2 );
 }
 
 void SStdMixerView::zoomOutVert()
@@ -2761,10 +3030,7 @@ void SStdMixerView::zoomOutVert()
     // FIXME: Range checking.
     int h = qContent_->getTrackHeight();
     // FIXME: Configure this
-    h = (h*2)/3;
-    qContent_->setTrackHeight( h );
-    int w = qTrackControlBoxHolder_->width();
-    qTrackControlBox_->resize( w, getTrackHeight()*rowCount() );
+    qContent_->setTrackHeight( (h*2)/3 );
 }
 
 void SStdMixerView::setBPMTempo( double bpmTempo )
@@ -2940,9 +3206,10 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // Accept drag-drop from the resource list (assets and external files).
     setAcceptDrops(true);
 
-    trackHeight_ = 100;
+    trackHeight_ = 100;      // BASE lane height; per-track scales ride on it
     secondWidth_ = 30.;
     upperLeftX_ = upperLeftY_ = 0;
+    topRow_ = 0;
 
     QObject::connect( smv_.model_, SIGNAL( trackInserted( int, STrack & ) ),
                       SLOT( update() ) );
@@ -3088,10 +3355,7 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
         if( wheelInvertZoom_ ) in = !in;
         int h = in ? (trackHeight_ * 3) / 2 : (trackHeight_ * 2) / 3;
         if( h < 6 ) h = 6;
-        setTrackHeight( h );
-        int w = smv_.qTrackControlBoxHolder_->width();
-        smv_.qTrackControlBox_->resize( w,
-                                        getTrackHeight() * smv_.rowCount() );
+        setTrackHeight( h );   // rebuilds the row geometry + the head column
         break;
     }
 
@@ -3140,7 +3404,7 @@ void SMVActualView::dropEvent(QDropEvent *e)
 
     // Compute drop position (time + track).
     offset_t timePos = smv_.alignTime(getTimeOf((int)e->position().x()));
-    int rowIdx = (int)((e->position().y() + upperLeftY_ - SMV_TIME_RULER_HEIGHT) / trackHeight_);
+    int rowIdx = rowAtViewY( (int) e->position().y() );
 
     // Get the target track from the row.
     const STrackRow *row = smv_.rowAt(rowIdx);
@@ -3294,7 +3558,13 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
         1  /* colSpan */
         );
 
+    // The box is a plain VIEWPORT: the layout keeps it at the holder's full
+    // rect, it clips, and the heads inside carry the vertical scroll (see
+    // layoutControlColumn). It must never be moved/resized by hand — the next
+    // layout activation would silently undo that and unstick the heads from
+    // the lanes. Its resize is where the heads get re-placed.
     qTrackControlBox_ = new QWidget();
+    qTrackControlBox_->installEventFilter( this );
     trackHolderLayout->addWidget( qTrackControlBox_, 1 );  // sole occupant: takes the column
 
     // Track-reorder drag state + the insertion-line indicator (hidden until a
@@ -3445,13 +3715,15 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
         update();
     }
 
-    // Load saved track control width
-    loadTrackControlWidth();
-
-    // Create draggable divider between track header and content
+    // Create the draggable divider between track header and content BEFORE
+    // restoring the saved width: setTrackControlWidth() sizes the grid column
+    // to width + divider, and a setColumnMinimumWidth() afterwards would
+    // clobber it.
     STrackHeaderResizer *resizer = new STrackHeaderResizer(this, this);
     qGridLayout_->addWidget(resizer, 0, 0, 4, 1, Qt::AlignRight);
-    qGridLayout_->setColumnMinimumWidth(0, 8);  // Divider width
+
+    // Load saved track control width
+    loadTrackControlWidth();
 
     // The track detail panel is NOT ours: it lives in a dock of the main window
     // (below the extern file list) and follows this mixer's selection from
@@ -3469,31 +3741,31 @@ void SStdMixerView::setTrackControlWidth( int width )
     if( width > TRACK_CTRL_WIDTH_STANDARD ) width = TRACK_CTRL_WIDTH_STANDARD;
     qWarning( "  -> clamped to: %d", width );
 
-    if( trackControlWidth_ != width ) {
-        trackControlWidth_ = width;
+    const bool changed = ( trackControlWidth_ != width );
+    trackControlWidth_ = width;
 
-        // Constrain the holder to exactly this width (min = max = width)
-        qTrackControlBoxHolder_->setMinimumWidth( width );
-        qTrackControlBoxHolder_->setMaximumWidth( width );
-
-        // Also constrain the grid column to match
-        if( qGridLayout_ ) {
-            qGridLayout_->setColumnStretch( 0, 0 );
-            int totalWidth = width + 8;  // +8 for divider
-            qGridLayout_->setColumnMinimumWidth( 0, totalWidth );
-        }
-
-        // Rebuild individual track controls to match new width
-        rebuildControlColumn();
-
-        // Trigger layout recalculation
-        saveTrackControlWidth();
-        if( qGridLayout_ ) {
-            qGridLayout_->invalidate();
-        }
-        updateGeometry();
-        update();
+    // Applied unconditionally (all idempotent): the very first call comes from
+    // loadTrackControlWidth() and usually restores the width we already hold,
+    // and the column constraints still have to be established then.
+    qTrackControlBoxHolder_->setMinimumWidth( width );
+    qTrackControlBoxHolder_->setMaximumWidth( width );
+    if( qGridLayout_ ) {
+        qGridLayout_->setColumnStretch( 0, 0 );
+        qGridLayout_->setColumnMinimumWidth( 0, width + 8 );   // +8 for divider
     }
+
+    // Re-place (not re-create) the heads at the new width.
+    layoutControlColumn();
+
+    if( !changed ) return;
+
+    // Trigger layout recalculation
+    saveTrackControlWidth();
+    if( qGridLayout_ ) {
+        qGridLayout_->invalidate();
+    }
+    updateGeometry();
+    update();
 }
 
 void SStdMixerView::saveTrackControlWidth()

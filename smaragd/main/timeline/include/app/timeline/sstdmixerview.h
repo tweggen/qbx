@@ -12,6 +12,7 @@
 #include <qtoolbutton.h>
 #include <QVector>
 #include <QSet>
+#include <QHash>
 #include <QList>
 
 class SStdMixer;
@@ -44,6 +45,11 @@ class SSMVMixerControl;
 #define SMV_TRACK_CTRL_WIDTH 120
 
 // One visible lane in the flattened depth-first walk of the track tree.
+//
+// A lane is NOT assumed to be the same height as its neighbours: `height` is
+// per-row (a track may carry its own height scale, and sub-lanes may be sized
+// differently from the track lane they hang off). Never compute a lane's y as
+// `row * trackHeight` — ask SStdMixerView::rowTop() / SMVActualView::laneTop().
 struct STrackRow {
     STrack  *track;        // the track shown on this lane
     SLink   *link;         // the SLink wrapping it in its parent (timeline pos)
@@ -53,7 +59,16 @@ struct STrackRow {
     bool     collapsed;    // children hidden
     // Take lanes (proposal 17 phase 3): -1 = the track's normal (composite)
     // lane; k >= 0 = the row showing take k of every take stack on the track.
+    // Any row with takeRow >= 0 is a SUB-LANE: it hangs off the track lane
+    // above it, carries no channel strip of its own, and is covered by that
+    // track's head. Automation lanes will join it under the same rule.
     int      takeRow = -1;
+    // This lane's pixel height, filled by rebuildRows(). 0 until then.
+    int      height = 0;
+
+    // A sub-lane belongs to the track lane above it rather than standing on
+    // its own (no head, not a reorder target of its own).
+    bool isSubLane() const { return takeRow >= 0; }
 };
 
 class SMVActualView 
@@ -65,7 +80,26 @@ public:
     virtual ~SMVActualView();
 
     double getSecondWidth() const { return secondWidth_; }
+    // The BASE lane height — what vertical zoom scales. It is the height of a
+    // lane whose track sits at scale 1.0; it is NOT the height of any given
+    // lane. Use laneHeight()/laneTop() for anything positional.
     int getTrackHeight() const { return trackHeight_; }
+
+    // --- lane geometry: the one mapping between rows and pixels ----------
+    // laneTop() is view-space (ruler band added, vertical scroll subtracted);
+    // it is the formula every hit-test, repaint rect and the control column
+    // derive from, so they cannot drift apart.
+    int laneTop( int row ) const;
+    int laneHeight( int row ) const;
+    // Row under a view-space y, or -1 when the point is past the last lane.
+    // A y inside the ruler band maps to the topmost visible lane (what the
+    // click handlers have always done).
+    int rowAtViewY( int y ) const;
+    // Total pixel height of all lanes, below which the canvas is empty.
+    int lanesBottom() const;
+    idx_t getTopRow() const { return topRow_; }
+    // ---------------------------------------------------------------------
+
     offset_t getUpperLeftX() const { return (offset_t) upperLeftX_; }
     offset_t getUpperLeftY() const { return (offset_t) upperLeftY_; }
     offset_t getTimeOf( int x ) const;
@@ -173,12 +207,20 @@ private:
     };
 
     int upperLeftX_;
+    // Vertical scroll, in pixels, derived from topRow_: scrolling is still
+    // row-granular, but with variable lane heights the pixel offset is the
+    // running sum up to topRow_, not a multiplication. Keep the two in sync
+    // through setTopOffset()/setUpperLeft() only.
     idx_t upperLeftY_;
+    idx_t topRow_ = 0;
     offset_t upperLeftOffset_;
 
     int trackHeight_;
     double secondWidth_;
     QMenu *qGlobalPopup_;
+    // "Lane height" submenu of the track context menu, built on first use and
+    // kept (qGlobalPopup_->clear() would otherwise leak one per right-click).
+    QMenu *qLaneHeightMenu_ = nullptr;
     QMenu *qRangePopup_;
     QAction *qRangeActClear_;
     bool rangeValid_;
@@ -344,8 +386,20 @@ public:
     bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
                        bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 
+    // TEST ENTRY POINTS for the lane geometry. The heads are placed by
+    // layoutControlColumn() while the lanes are drawn by the canvas; nothing
+    // else can prove the two agree, and they only ever disagreed *after* some
+    // event moved one of them — hence the knobs to move things first.
+    void tkSetBaseTrackHeight( int h );      // vertical zoom, absolute
+    void tkSetTopRow( int row );             // vertical scroll, in lanes
+    // "" when every head sits exactly on its lane (same top, same height as
+    // the painter uses, full column width), otherwise the first mismatch.
+    QString tkCheckLaneAlignment() const;
+
     offset_t alignTime( offset_t );
 
+    // The BASE lane height (vertical zoom scales this). Individual lanes may
+    // differ — see rowHeight().
     int getTrackHeight() const;
 
     // --- flattened track-tree (depth-first) the arranger draws -----------
@@ -355,6 +409,29 @@ public:
     // now indexes these rows.
     int rowCount() const { return rows_.size(); }
     const STrackRow *rowAt( int i ) const;
+
+    // --- lane geometry (column space; add the ruler / subtract the scroll
+    // via SMVActualView::laneTop() to reach view space) -------------------
+    // rowTop( rowCount() ) is the total height, so the two are one call.
+    // Heights are per-row: a track can be taller than its neighbours and a
+    // track can own several lanes. Nothing may assume `row * trackHeight`.
+    int rowTop( int row ) const;
+    int rowHeight( int row ) const;
+    int totalRowsHeight() const { return rowTop( rows_.size() ); }
+    // How many lanes fit in the canvas starting at `firstRow` (>= 1). The
+    // vertical scrollbar is row-granular, so its page step depends on which
+    // rows are on screen once heights differ.
+    int visibleRowCountFrom( int firstRow ) const;
+    // Row containing column-space y, or -1 past the last lane.
+    int rowAtLaneY( int y ) const;
+
+    // Per-track lane height, as a factor of the base height (UI-only state,
+    // like the fold and take-lane sets). Relative to the base so that
+    // vertical zoom keeps working uniformly. 1.0 = the plain lane height.
+    static constexpr double LANE_SCALE_MIN = 0.25;
+    static constexpr double LANE_SCALE_MAX = 4.0;
+    double trackHeightScale( const STrack * ) const;
+    void setTrackHeightScale( STrack *, double scale );
     int rowIndexOfTrack( const STrack * ) const;
     bool isTrackCollapsed( STrack *t ) const { return collapsed_.contains( t ); }
     void toggleTrackCollapsed( STrack * );
@@ -520,18 +597,46 @@ private:
     STimeGridSpec timeGridSpec_;
     SSnapSpec *currentSnapSpec_;
 
+    // qTrackControlBox_ is a fixed VIEWPORT: the holder's layout owns its
+    // geometry and it never moves. The heads inside it carry the scroll
+    // offset (see layoutControlColumn) and are clipped by it. Moving the box
+    // instead would be silently undone by the next layout activation.
     QWidget *qTrackControlBoxHolder_;
     QWidget *qTrackControlBox_;
     QVector<SSMVMixerControl*> *controlArray_;
+    // Row index of controlArray_[i]. Sub-lane rows carry no head, so the two
+    // vectors are NOT index-parallel with rows_ — never assume they are.
+    QVector<int> controlRow_;
 
     // Flattened track tree + per-track fold state (UI-only).
     QVector<STrackRow> rows_;
+    // Prefix sums of the row heights: rowTop_[i] is the top of row i in
+    // column space, rowTop_[rowCount()] the total. Rebuilt with rows_ and
+    // whenever the base height or a per-track scale changes.
+    QVector<int> rowTop_;
     QSet<STrack*> collapsed_;
     QSet<STrack*> takesExpanded_;   // tracks showing their take lanes
+    QHash<const STrack*, double> trackScale_;   // per-track lane height factor
     void rebuildRows();
+    void rebuildRowGeometry();      // recompute row heights + rowTop_
+    int  rowHeightOf( const STrackRow & ) const;
     void rebuildControlColumn();
 
 public:
+    // Place every head at its lane: y = laneTop(row), height = the lane group
+    // (the track lane plus any sub-lanes hanging off it). THE single place
+    // head geometry is decided — call it after anything that moves a lane.
+    void layoutControlColumn();
+    // Column-space y of a row's top / the row under a column-space y. The
+    // control column shares the canvas' vertical origin, so these are
+    // laneTop()/rowAtViewY() by another name; the drag code speaks this space.
+    int controlYOfRow( int row ) const;
+    int rowAtControlY( int y ) const;
+    // Height of the head for the track lane at `row`: that lane plus every
+    // sub-lane attached to it, so a track owning several lanes gets one head
+    // spanning all of them.
+    int laneGroupHeight( int row ) const;
+
     // Track header resizing (Phase 3 UI)
     static constexpr int TRACK_CTRL_WIDTH_MINIMAL = 120;
     static constexpr int TRACK_CTRL_WIDTH_STANDARD = 450;

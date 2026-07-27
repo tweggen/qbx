@@ -1,5 +1,44 @@
 # Concept: Plugin Hosting — Effect Inserts on Tracks (CLAP first; VST3 / AU / LV2 / in‑house later)
 
+> **Status: M0–M5 EXECUTED 2026‑07‑26 — M6 (VST3) and M7 (macOS bring‑up) remain OPEN.**
+>
+> Added after execution; the `Status: OPEN` note and the §Implementation status table
+> below are the PRE‑EXECUTION snapshot and are kept as written. What is live now:
+>
+> | Milestone | State | What landed |
+> |---|---|---|
+> | M0 | done | First git submodules (`smaragd/third_party/{clap,vst3_pluginterfaces}`), `ensure_submodules()` in `_env.sh` called from both build scripts, the `clap_probe` spike. |
+> | M1 | done | The CLAP backend (`twclapmodule`, `twclapplugin`), `prepare()` actually called, 4096‑frame chunking, preview freezes bypassing the plugin, `TW_HAVE_CLAP` PRIVATE, the in‑repo `twtestclap.clap` fixture. |
+> | M2 | done | Scanner, `<configDir>/plugincache.json` with sticky `failed`/`timeout` records, per‑platform search paths, out‑of‑process `smaragd_pluginprobe`, the Options → Plugins page, no OS dialog during a scan. |
+> | M3 | done | One `twPluginSlotProcessor` + N per‑bus `twPluginInsert` taps; the interleave bug and the silent‑input‑1 bug deleted; the channel‑mismatch table; the two‑tap deadlock invariant. |
+> | M4 | done | Slots round‑trip (`id=` + `instantiateFromDomElement` + `<state>` on the QTextStream path), `STrack`↔chain via `pluginChainId` and `SProjectLoader::deferResolve`, `createNullPlugin()` placeholder, `reloadPlugin()`. |
+> | M5 | done | The parameter editor wired in (it had never been constructed anywhere), greyed Missing/Unsupported rows with reason tooltip + Reload/Remove, and the last three actions — `set-plugin-bypass`, `reorder-plugin`, `set-plugin-param` (coalescing). `remove-plugin`'s inverse now carries the state chunk. |
+> | M6 | OPEN | VST3 backend. Should touch only `smaragd/tw303a/plugins/`. |
+> | M7 | OPEN | macOS bring‑up: bundle loading, entitlements, probe in the bundle. |
+>
+> Defect 4 of §Defects found in the built code was only HALF fixed by M3 and is
+> fully closed by M5: `SObject::invalidateRenderPath()` is a no‑op for a plugin
+> slot (the chain is not an `SLink` child of its track, so the root‑down walk never
+> reaches a slot), so bypass and parameter edits still rendered byte‑identical
+> audio after M3. The slot now emits `audioInvalidated()` and `STrack` invalidates.
+>
+> Per‑milestone detail is in `plan/STATE.md`; the milestone plan is
+> `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`; the invariants are in
+> `smaragd/tw303a/plugins/CONTRACT.md` and `smaragd/main/pluginui/CONTRACT.md`.
+
+
+> **Status: OPEN — execution plan in `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`.**
+>
+> Phases 1, 2 and most of 4 are built; phase 3 is partial; **no plugin format backend exists at
+> all** — `twPluginRegistry::rescan()` hardcodes the built-in `tw.passthrough` bit-crusher, and
+> neither CLAP nor VST3 is referenced anywhere in the build system. See §Implementation status
+> below for what is built, and §Defects found in the built code for what has to be repaired
+> before the remaining phases make sense.
+>
+> Paths in this document predate proposal 14 (modularization) in places; the current locations
+> are `smaragd/tw303a/plugins/include/tw/plugins/…` and `smaragd/tw303a/plugins/src/…` for the
+> engine, `smaragd/main/objects/track/` and `smaragd/main/pluginui/` for the app.
+
 ## Objective
 
 Give Smaragd real audio processing on tracks by hosting third‑party (and in‑house)
@@ -56,7 +95,7 @@ Three properties of the current code make this tractable rather than a rewrite:
    a `createAudioBackend()` factory, *hosted* by the `twSpeaker` component. The
    plugin layer is the same shape one level up: a plain `twPlugin` backend hosted
    by a `twPluginInsert` component. Same idiom, same file layout
-   (`tw303a/src/plugins/` ↔ `tw303a/src/audio/`).
+   (`tw303a/plugins/src/` ↔ `tw303a/devices/src/`, post proposal 14).
 
 ## Design
 
@@ -98,7 +137,8 @@ inside).
 ### Layer 1 — `twPlugin`: the host‑facing interface (plain C++, no Qt)
 
 ```cpp
-// tw303a/include/plugins/twplugin.h  — deliberately narrow, host-facing.
+// tw303a/plugins/include/tw/plugins/twplugin.h  — deliberately narrow, host-facing.
+// (namespace audio; built as shown below and unchanged since.)
 struct twPluginIoLayout {
     std::uint16_t audioInputs  = 0;   // channel counts (mono wires)
     std::uint16_t audioOutputs = 0;
@@ -168,9 +208,9 @@ public:
 std::unique_ptr<twPlugin> createPlugin( const twPluginDescriptor & ); // factory
 ```
 
-Backends live in `tw303a/src/plugins/` (`clap_plugin.cc`, `vst3_plugin.cc`, …) and
+Backends live in `tw303a/plugins/src/` (`twclapplugin.cc`, `twvst3plugin.cc`, …) and
 are wired into CMake exactly like the audio backends. The registry caches metadata
-to an INI/JSON file (the `ssettings` pattern) so launches don't re‑scan.
+to `<configDir>/plugincache.json` (the `ssettings` pattern) so launches don't re‑scan.
 
 ### Layer 3 — `twPluginInsert`: the host `twComponent`
 
@@ -321,6 +361,50 @@ slots maps to `SReorderPlugin`.
 8. **Instrument plugins** — gated on a future MIDI/note proposal; reuses the host
    via the `acceptsNotes()` capability + a note‑input extension.
 
+## Implementation status (2026‑07‑26)
+
+| Phase | State | Notes |
+|-------|-------|-------|
+| 1 — PoC (`twPlugin`, registry, `twPluginInsert`) | **built, no real format** | Only `twPassThrough` (a 2→2 bit‑crusher) exists. `createPlugin()` was never added; the factory is `twPluginRegistry::instantiate()`. |
+| 2 — Track insert chain | **built, defective** | `SPluginSlot` + `SPluginChain` + `twPluginChain`; `STrack` wires `twTrackMix[bus] → twPluginChain[bus] → twRewire[bus]`. Channel‑mismatch policy unimplemented — see defects. |
+| 3 — Undo + serialization + scanner/cache | **partial** | 2 of 5 actions (`insert-plugin`, `remove-plugin`). No scanner, no cache, no search paths, no sandbox. Slot serialization is broken — see defects. |
+| 4 — UI | **mostly built** | `SPluginEffectStrip` (mounted from `strackdetailpanel.cpp:118`), `SPluginBrowserDialog`, `SPluginParamEditor` — the editor is built but never constructed by anything. |
+| 5 — Native editor windows | not started | |
+| 6 — More formats | not started | No CLAP/VST3/AU/LV2 dependency exists in the build. |
+| 7 — Sends / aux | not started | |
+| 8 — Instruments | not started | |
+
+Tests today: `ctest -R plugins_test` (registry/instantiate/param‑count/state round‑trip; it does
+**not** exercise audio), `tests/cases/plugin_effect_chain_playback.qxa` (no‑crash), and
+`smaragd/tests/cases/render_sawtooth_with_effects.qxa`.
+
+## Defects found in the built code
+
+These must be repaired before the remaining phases are meaningful. Detail and file/line
+references are in `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`.
+
+1. **The signal path is broken for anything but a mono passthrough.** `STrack` builds one
+   `twPluginChain` per bus with `nBusses=1`, so a 2‑in/2‑out plugin receives bus audio on input 0
+   and *silence* on input 1; `twPluginInsert::freezePage` then writes **interleaved** stereo into
+   a page the rest of the engine reads as **mono** (`FRAME_CAPACITY = PAGE_SIZE/sizeof(float)`,
+   and `twComponent::freezePage_nolock` renders `idx = 0` only). Invisible today only because the
+   built‑in test plugin defaults to a 0.0 dry/wet mix.
+2. **`twPlugin::prepare()` is never called anywhere in the repo**, and there is no chunking to a
+   plugin's max block size — pages are 65536 frames.
+3. **A project containing a plugin slot cannot be loaded.** `SPluginSlot::serializeSelfAttributes`
+   never calls the base, so no `id=` attribute is written and `SProjectLoader::createObjects`
+   aborts the entire load. There is also no `instantiateFromDomElement` / `registerSObjectClass`,
+   `serializeStateChunk()` is dead DOM code on a `QTextStream` write path, `STrack` writes no
+   reference to its chain (so a loaded chain is orphaned and deleted), and
+   `SPluginChain::getRootComponent()` unconditionally throws.
+4. **Parameter and bypass edits are inaudible** — they never bump the content epoch, so the
+   cached page is served unchanged. They also bypass the action model
+   (`main/pluginui/CONTRACT.md` invariant 3): `SReorderPlugin`, `SSetPluginBypass` and
+   `SSetPluginParam` do not exist.
+5. **`twPluginChain::freezePage` recursively pulls upstream itself** and only ever reads
+   `pInputPlugs_[0]`, bypassing the proposal‑19 `planPage` / `freezePageWithInputs` /
+   `requestPage` machinery.
+
 ## Decisions (settled) and remaining open items
 
 **Settled:**
@@ -347,12 +431,49 @@ slots maps to `SReorderPlugin`.
    stereo track; average‑downmix for 2→2 on a mono track); anything wider is
    explicit routing, never auto‑mixed. Full table in §Design / Layer 3.
 
-**Still open:**
+*Added 2026‑07‑26, when the execution plan was written:*
 
-- **Scanner sandbox transport.** Process spawn + pipe/shared‑mem protocol for the
-  out‑of‑process scan (phase 3 detail).
-- **CLAP module discovery paths.** Standard CLAP search paths per platform + a
-  user‑configurable extra‑paths setting (`ssettings`).
+6. **Stereo‑coherent processing.** One plugin instance per slot processes **all** buses together,
+   via a shared `twPluginSlotProcessor` (plain C++, owns the `twPlugin`, the block chunking and a
+   per‑page all‑channel cache) plus one `twPluginInsert` **tap** component per bus (1 in / 1 out).
+   This supersedes the built per‑bus‑instance wiring, which cannot host a stereo‑linked plugin.
+   It keeps the engine's "one mono page per component" invariant intact — parallel mono wires stay
+   parallel component instances — and it is where the channel‑mismatch table of §Layer 3 lives.
+   Hard invariant: a tap's `pullUpstreamPage()` must **not** take the tap's own component mutex
+   (snapshot the producer under a brief lock, release, then `requestPage()`), or bus 0 gathering
+   bus 1 deadlocks against bus 1's own freeze.
+7. **Generic parameter editor only in the first delivery.** Reuse `SPluginParamEditor`; native
+   `IPlugView` / `clap_plugin_gui` embedding stays phase 5, unchanged.
+8. **VST3 SDK sourcing: `vst3_pluginterfaces` as a git submodule** under `smaragd/third_party/`,
+   compiling only its handful of `.cpp` files, with our own module loader and host classes
+   (`IHostApplication`, `IComponentHandler`, `IPlugInterfaceSupport`, a memory `IBStream`).
+   Deliberately **not** `add_subdirectory` on the full SDK: its CMake assumes MSVC/Xcode and calls
+   `enable_language(OBJCXX)`, which would migrate `.mm` out of `CMAKE_CXX_SOURCE_FILE_EXTENSIONS`
+   and change how `devices/src/coreaudio_input.mm` compiles project‑wide. `smaragd/third_party/`
+   sits outside the trees walked by `tools/check_layering.py` and `tools/check_logging.py`. The
+   app is already GPL, so the SDK's GPLv3 arm is usable. CLAP is vendored the same way
+   (`free-audio/clap`, MIT, header‑only) — this establishes the repo's first submodule convention,
+   with an `ensure_submodules()` hook called from **both** `build.sh` and `rebuild.sh` (`build.sh`
+   skips `ensure_render_deps`, so a hook placed only there would never run on the common path).
+
+**Previously open, now closed:**
+
+- **Scanner sandbox transport** → a dedicated `smaragd_pluginprobe` executable
+  (`plugins/tools/plugin_probe.cc`, links `tw_plugins`) that loads one module, writes descriptor
+  JSON to stdout and exits. The registry drives it via `QProcess` with a timeout; a crash or hang
+  becomes a `failed`/`timeout` record in the scan cache rather than a dead app, and such records
+  are remembered and skipped on later launches unless a forced rescan clears them. The **app**
+  supplies the probe path, so the registry stays headlessly testable; on macOS the probe is copied
+  into `Contents/MacOS/`.
+- **Module discovery paths** → `twPluginSearchPaths::defaults(format)`:
+  Windows `%CommonProgramFiles%\CLAP` and `%LOCALAPPDATA%\Programs\Common\CLAP` (plus the `VST3`
+  siblings), macOS `/Library/Audio/Plug-Ins/CLAP` and `~/Library/Audio/Plug-Ins/CLAP` (plus
+  `…/VST3`), and the `CLAP_PATH` / `VST3_PATH` environment variables. Overridden and extended by a
+  user‑editable `plugins/searchPaths` `QStringList` in `SSettings`, surfaced as a new "Plugins"
+  page in `SOptionsDialog` with Add/Remove and a live "Rescan now" button. The scan cache is
+  `<configDir>/plugincache.json`, keyed per module on `path + size + mtime + scannerVersion`.
+  (The QAF sidecar store is deliberately *not* used: its key is a content hash of audio PCM and
+  its LRU size cap would silently evict the table.)
 
 ## Acceptance criteria
 
@@ -363,7 +484,7 @@ slots maps to `SReorderPlugin`.
    preserved); a project referencing an uninstalled plugin round‑trips via a
    placeholder without data loss.
 4. Adding a second plugin format requires only a new backend in
-   `tw303a/src/plugins/` — no changes to `twPluginInsert`, the model, actions, or
+   `tw303a/plugins/src/` — no changes to `twPluginInsert`, the model, actions, or
    UI.
 5. No audio‑thread allocation or locking on the `process()` path; scan/instantiate
    never run on the audio thread.

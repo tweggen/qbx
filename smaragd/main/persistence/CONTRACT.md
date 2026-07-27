@@ -23,10 +23,56 @@ Invariants:
 3. Positions serialize as Fractions (exact); durations in frames at the
    PROJECT's sampleRate attribute; legacy files default 44.1 kHz.
 4. Loaded projects must re-serialize byte-equivalently modulo volatile
-   attributes (serialization_roundtrip_test guards the Fraction layer).
+   attributes (serialization_roundtrip_test guards the Fraction layer and the
+   base64 state-chunk layer; plugin_slot_roundtrip.qxa /
+   plugin_missing_placeholder.qxa guard a whole plugin slot, state chunk
+   included).
+5. A reference carried by a plain ATTRIBUTE is resolved by
+   deferResolve(), never inline (proposal 08 M4). The instantiation loop only
+   defers an element until each of its <SLink objectId> CHILDREN is in the
+   dictionary; an attribute reference (STrack's pluginChainId) is invisible to
+   that ordering, so reading one during construction may find nothing.
+   deferResolve() queues a resolver that createObjects() runs after
+   setRootComponent and before ~SProjectLoader — dictionary complete, handle
+   links still alive. Resolvers run once, in order, on the loading thread;
+   anything a resolver keeps must take its own reference, because those handle
+   links are deleted immediately afterwards.
+
+6. ONE BAD ELEMENT MUST NEVER COST THE WHOLE PROJECT, and the instantiation
+   loop must always terminate. Two failure modes, both hit by a real user file:
+   (a) a child with no id= was answered with "File is corrupt" and a return
+   -1, which discarded EVERYTHING. Nothing can reference an object with no id
+   (references are <SLink objectId>), so such an element is now skipped, and
+   it costs exactly itself. This mattered because every build before proposal
+   08 M4 wrote <SPluginSlot> without an id, making its own files unopenable.
+   (b) The loop rescans the document until it has no children left, so an
+   element whose <SLink objectId> names an object the file does not contain
+   can never be consumed and spun forever — measured at ~3M passes/minute with
+   an unbounded log and RSS. Every pass now tracks whether it consumed
+   anything; a pass that consumes nothing names each unresolvable element and
+   its dangling target, drops them, and ends the loop. Both recoveries WARN
+   with the type and identity of what was lost — silent data loss would be
+   worse than the abort they replace.
+7. A FAILED load must not resume background work on the graph it abandons.
+   createObjects() returning non-zero leaves a half-built object graph that
+   the caller discards (SMainWindow::openProjectFile marks it partial and
+   deleteLater()s it). SLoadProjectAction therefore calls pauseRevalidation()
+   — which blocks until in-flight worker jobs drain — BEFORE balancing the
+   invalidation counter, and ~SProject's isPartialLoad_ early return does the
+   same before handing the children to ~QObject. Without it the worker pool
+   held raw pointers into objects that were being freed; the symptom was a
+   crash on the SECOND open attempt, the first attempt's last log line being a
+   preview recompute.
 
 How to test: load-project + save-project qxa actions; the test4 user
-project is the realistic corpus.
+project is the realistic corpus. legacy_project_recovery.qxa carries both
+of invariant 6's defects in one fixture (an id-less <SPluginSlot> and a
+chain linking to an id that exists nowhere) and asserts the rest of the
+project survives intact; it has a CTest TIMEOUT because a regression of 6(b)
+HANGS rather than fails.
 
 Known debt: an unknown element name in a project file warns and yields a
 null link (unchanged legacy behavior) — consider a hard load error.
+Pre-M4 projects cannot have their plugin PLACEMENT recovered: the track ->
+chain reference was not serialized either, so a recovered slot would rejoin
+a chain no track owns. Such slots are dropped and must be re-added by hand.

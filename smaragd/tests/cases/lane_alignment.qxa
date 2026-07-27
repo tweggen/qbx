@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The track heads must sit exactly on their lanes — same top, same height —
+  after ANY change to the vertical geometry. They used to be placed by a
+  different formula than the one the canvas paints with (three of them, in
+  fact: one per call site), so they came unstuck on the first scroll or
+  vertical zoom, and skewed by a whole lane per expanded take lane.
+
+  The lane model is deliberately exercised where it is NOT uniform:
+    - per-track lane heights (one track tall, another short),
+    - a track owning several lanes (its take lanes),
+    - and both of those combined with scroll and zoom.
+  Nothing here may assume "lane y = row * trackHeight".
+-->
+<SActionScript version="1" name="lane_alignment">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Baseline: four equal lanes, unscrolled. -->
+    <assert-lane-alignment/>
+
+    <!-- Vertical zoom out, then in. -->
+    <set-lane-view trackHeight="60"/>
+    <assert-lane-alignment/>
+    <set-lane-view trackHeight="140"/>
+    <assert-lane-alignment/>
+
+    <!-- Vertical scroll: the heads carry the offset, the lanes are repainted
+         with it — this is where they used to part company. -->
+    <set-lane-view topRow="2"/>
+    <assert-lane-alignment/>
+    <set-lane-view topRow="0"/>
+    <assert-lane-alignment/>
+
+    <!-- Individually sized lanes: tall track above a short one. -->
+    <set-lane-view laneScaleRow="0" laneScale="2.5"/>
+    <assert-lane-alignment/>
+    <set-lane-view laneScaleRow="2" laneScale="0.5"/>
+    <assert-lane-alignment/>
+
+    <!-- Zoom and scroll again, now that the lanes have different heights:
+         the scroll offset is a running sum, not a multiplication. -->
+    <set-lane-view trackHeight="90"/>
+    <assert-lane-alignment/>
+    <set-lane-view topRow="3"/>
+    <assert-lane-alignment/>
+    <set-lane-view topRow="1"/>
+    <assert-lane-alignment/>
+
+    <!-- Several lanes for one track: its take lanes. They carry no head of
+         their own — the track's head spans the whole group, and every head
+         below has to shift by the sub-lanes' heights, not by a lane count. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <set-lane-view toggleTakesRow="0"/>
+    <assert-lane-alignment/>
+    <set-lane-view topRow="2"/>
+    <assert-lane-alignment/>
+    <set-lane-view trackHeight="50"/>
+    <assert-lane-alignment/>
+
+    <!-- ...and back to a plain view. -->
+    <set-lane-view toggleTakesRow="0"/>
+    <set-lane-view topRow="0" trackHeight="100"/>
+    <assert-lane-alignment/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="4"/>
+  </assertions>
+
+</SActionScript>

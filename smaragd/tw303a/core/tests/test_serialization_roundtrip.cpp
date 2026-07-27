@@ -1,5 +1,7 @@
 #include "tw/core/twfraction.h"
+#include <QByteArray>
 #include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <iomanip>
 #include <cmath>
@@ -365,6 +367,84 @@ void testMixedOperations(TestRunner& runner) {
 }
 
 // ============================================================================
+// Plugin Slot State Chunks (proposal 08 M4)
+// ============================================================================
+//
+// A plugin slot serializes its opaque state blob as
+// <state encoding='base64'>…</state> and reads it back with
+// QByteArray::fromBase64 (main/objects/track/src/spluginslot.cpp). This is the
+// layer of that round trip a tw_core test can reach — the app-level one (a slot
+// in a real project file, saved, loaded and re-saved) is gated by the qxa cases
+// plugin_slot_roundtrip and plugin_missing_placeholder, which assert the exact
+// base64 text survives a load/save cycle.
+//
+// The properties that matter here: BYTE-exactness for blobs that are not text
+// (embedded NULs, high bytes — what every real plugin produces), and
+// DETERMINISM, because serialization_roundtrip_test's job is byte-equivalent
+// output and a project file that differed run to run would break every
+// save/compare gate downstream.
+
+static std::vector<std::uint8_t> stateBlobRoundtrip( const std::vector<std::uint8_t> &in,
+                                                    QByteArray &encodedOut )
+{
+    const QByteArray raw( (const char *) in.data(), (int) in.size() );
+    encodedOut = raw.toBase64();
+    const QByteArray back = QByteArray::fromBase64( encodedOut );
+    return std::vector<std::uint8_t>( back.begin(), back.end() );
+}
+
+void testPluginStateChunkRoundtrip(TestRunner& runner)
+{
+    std::cout << "\n--- Plugin Slot State Chunks ---" << std::endl;
+
+    // 1. The real thing: a CLAP state blob as the twtestclap fixture produces it
+    //    — our 8-byte 'TWCP' frame (magic, u16 version, u16 reserved) followed by
+    //    the plugin's own payload, here two little-endian doubles (gain 2.0,
+    //    report 0.0). This is the exact blob the qxa fixture carries.
+    std::vector<std::uint8_t> clapBlob = {
+        'T','W','C','P', 0x01,0x00, 0x00,0x00,
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x40,
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+    };
+    QByteArray enc1;
+    runner.assertTrue("CLAP-framed state blob: byte-exact roundtrip",
+                      stateBlobRoundtrip( clapBlob, enc1 ) == clapBlob);
+    runner.assertTrue("CLAP-framed state blob: known base64 text",
+                      enc1 == QByteArray("VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA"));
+
+    // 2. A blob that is deliberately NOT text: every byte value, NULs included.
+    //    A slot that treated its state as a string would truncate at the first
+    //    NUL and lose the user's patch.
+    std::vector<std::uint8_t> binaryBlob;
+    for( int i = 0; i < 256; ++i ) binaryBlob.push_back( (std::uint8_t) i );
+    QByteArray enc2;
+    runner.assertTrue("Binary state blob (all 256 byte values): byte-exact roundtrip",
+                      stateBlobRoundtrip( binaryBlob, enc2 ) == binaryBlob);
+
+    // 3. Determinism: the same blob must encode identically every time, or a
+    //    re-save of an unchanged project would differ from the original.
+    QByteArray again;
+    stateBlobRoundtrip( binaryBlob, again );
+    runner.assertTrue("State blob encoding is deterministic", again == enc2);
+
+    // 4. An empty blob encodes to nothing — which is what makes the slot omit the
+    //    <state> element entirely rather than writing an empty one.
+    QByteArray enc3;
+    std::vector<std::uint8_t> empty;
+    runner.assertTrue("Empty state blob stays empty",
+                      stateBlobRoundtrip( empty, enc3 ).empty() && enc3.isEmpty());
+
+    // 5. Repeated round trips do not drift (a slot's blob is re-encoded on every
+    //    save, and re-decoded on every load, for the life of the project).
+    std::vector<std::uint8_t> current = clapBlob;
+    for( int i = 0; i < 100; ++i ) {
+        QByteArray tmp;
+        current = stateBlobRoundtrip( current, tmp );
+    }
+    runner.assertTrue("State blob survives 100 roundtrips", current == clapBlob);
+}
+
+// ============================================================================
 // Main Test Suite
 // ============================================================================
 
@@ -392,6 +472,9 @@ int main() {
 
     // Mixed operations
     testMixedOperations(runner);
+
+    // Plugin slot state chunks (proposal 08 M4)
+    testPluginStateChunkRoundtrip(runner);
 
     runner.printSummary();
 

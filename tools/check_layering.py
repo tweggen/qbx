@@ -98,8 +98,14 @@ APP_DEPS = {
                        'selection', 'servicesui', 'testkit', 'timeline'},
     # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:
     # set-render-gate addresses an SCut, wait-analysis reads SPlainWave.
+    # testkit + pluginui since proposal 08 M5: assert-plugin-strip and
+    # plugin-editor-set-param build the REAL SPluginEffectStrip /
+    # SPluginParamEditor off screen, which is the only automated coverage a
+    # milestone made almost entirely of widgets can have. Same shape as the
+    # existing testkit -> shell edge (drag-clip-edge, assert-lane-alignment):
+    # a test verb reaching the widget it is testing.
     'testkit':        {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'shell'},
+                       'objects/track', 'objects/wave', 'pluginui', 'shell'},
 }
 
 # Which engine modules each app module may include (tw/<mod>/... paths).
@@ -118,14 +124,21 @@ APP_ENG = {
     'selection':      _ENG_BASE,
     'timeline':       _ENG_BASE | {'devices', 'playback', 'sources'},
     'pluginui':       _ENG_BASE | {'plugins'},
-    'servicesui':     _ENG_BASE | {'devices', 'playback', 'record', 'render'},
+    # servicesui + plugins since proposal 08 M2: the Options dialog's Plugins
+    # page edits the scanner's search paths, and SOpt::def() takes the
+    # per-platform defaults from twPluginSearchPaths rather than restating them.
+    'servicesui':     _ENG_BASE | {'devices', 'playback', 'plugins', 'record',
+                                   'render'},
     # shell + schedule since proposal 19 stage 4: startRender wires the
     # project's CaptureRevalidator (page scheduler) into the RenderSession
     # and quiesces background aspects around a scheduler-driven render.
     # shell + sidecar since proposal 27 M0: SApplication configures the
     # app-global sidecar store root at startup.
-    'shell':          _ENG_BASE | {'devices', 'dsp', 'playback', 'record',
-                                   'render', 'schedule', 'sidecar'},
+    # shell + plugins since proposal 08 M2: SApplication configures the plugin
+    # registry at startup (search paths, cache path, probe executable) and polls
+    # the background scan from a main-thread timer.
+    'shell':          _ENG_BASE | {'devices', 'dsp', 'playback', 'plugins',
+                                   'record', 'render', 'schedule', 'sidecar'},
     # testkit + sidecar + schedule since proposal 27 M1 test verbs:
     # assert-sidecar reads twQafReader/twSidecarStore, wait-analysis polls the
     # revalidator's jobsQueued().

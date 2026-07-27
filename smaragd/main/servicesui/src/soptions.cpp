@@ -1,5 +1,9 @@
 #include "app/servicesui/soptions.h"
 
+#include "tw/plugins/twpluginsearchpaths.h"
+
+#include <QStringList>
+
 QVariant SOpt::def( const QString &key )
 {
     // Pan (no Cmd) vs. Zoom (with Cmd); Vertical (no Shift) vs. Horiz (with Shift)
@@ -19,6 +23,18 @@ QVariant SOpt::def( const QString &key )
     if( key == LogToFile )      return true;
 
     if( key == ShortcutClipProperties ) return QStringLiteral( "F2" );
+
+    // The only platform-dependent default in this table, and deliberately not
+    // spelled out here: the per-OS plugin locations belong to the engine's
+    // twPluginSearchPaths, so the scanner and the options page can never
+    // disagree about where plugins live.
+    if( key == PluginSearchPaths ) {
+        QStringList dirs;
+        for( const std::string &d : audio::twPluginSearchPaths::defaults( "clap" ) )
+            dirs << QString::fromStdString( d );
+        return dirs;
+    }
+    if( key == PluginScanOnStartup ) return true;
     return QVariant();
 }
 

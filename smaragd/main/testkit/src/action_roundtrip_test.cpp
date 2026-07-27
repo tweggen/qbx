@@ -4,10 +4,120 @@
 #include <QDomDocument>
 #include <QString>
 #include <QStringList>
+#include <cmath>
 #include <iostream>
 
-// Test that each action can round-trip through XML:
-// create → writeXml → readXml → writeXml, verify identical
+// Audit every registered action for XML round-trip correctness:
+//   create → readXml(fixture) → writeXml → readXml → writeXml, verify identical.
+//
+// Two things changed in proposal 08 M5, because this binary was built but never
+// registered with CTest — so it had never gated anything, and it was RED:
+//
+//  1. FIXTURES. A default-constructed action is not necessarily a VALID one:
+//     assert-audio-energy, assert-audio-peak, assert-file-contains and
+//     assert-sidecar all (correctly) reject their own default XML, because a
+//     filename / path / aspect is mandatory. Testing the default instance
+//     therefore tested nothing for them and reported four failures. A verb with
+//     a fixture below is loaded from it first, so the round trip runs over
+//     REPRESENTATIVE field values instead of zeroes.
+//  2. Fixture attributes must SURVIVE. write→read→write cannot catch a field
+//     that readXml never reads (it is absent from both sides and compares
+//     equal) — which is exactly the shape of the bug M5 fixed in
+//     remove-plugin's inverse. So every attribute a fixture declares is also
+//     checked against what writeXml produced.
+
+namespace {
+
+struct Fixture {
+    const char *verb;
+    const char *xml;
+};
+
+// One representative element per verb that needs non-default values. Optional
+// attributes that are only written when non-default (an `absent='false'` say)
+// must NOT appear here — they would legitimately not come back.
+const Fixture kFixtures[] = {
+    // --- verbs whose readXml validates required attributes -------------------
+    { "assert-audio-energy",
+      "<assert-audio-energy filename='r.wav' minRms='0.09' maxRms='0.11'"
+      " startFrame='48000' frameCount='96000' channel='1'/>" },
+    { "assert-audio-peak",
+      "<assert-audio-peak filename='r.wav' maxPeak='0.5' startFrame='1024'"
+      " frameCount='2048' channel='0'/>" },
+    // No startFrame: these writers omit their default-valued optional
+    // attributes, and a fixture must only declare what comes back.
+    { "assert-audio-frequency",
+      "<assert-audio-frequency filename='r.wav' minHz='430' maxHz='450'"
+      " frameCount='48000' channel='0'/>" },
+    { "assert-file-contains",
+      "<assert-file-contains path='p.qxp' text='uid=&apos;x&apos;'"
+      " absent='true'/>" },
+    { "assert-sidecar",
+      "<assert-sidecar aspect='onsets' minRecords='1' maxRecords='4'"
+      " expectExists='true'/>" },
+
+    // --- the five plugin verbs (proposal 08) --------------------------------
+    // insert-plugin/remove-plugin carry the opaque plugin STATE chunk since M5:
+    // the base64 below is the 'TWCP' frame the CLAP backend writes.
+    { "insert-plugin",
+      "<insert-plugin trackPath='0' slotIndex='1' format='clap'"
+      " uid='tw.test.clap.stereoskew' name='Skew' vendor='Smaragd'"
+      " path='twtestclap.clap' nIn='2' nOut='2'"
+      " state='VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA'/>" },
+    { "remove-plugin",
+      "<remove-plugin trackPath='0' slotIndex='1' format='clap'"
+      " uid='tw.test.clap.stereoskew' name='Skew' vendor='Smaragd'"
+      " path='twtestclap.clap' nIn='2' nOut='2'"
+      " state='VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA'/>" },
+    { "set-plugin-bypass",
+      "<set-plugin-bypass trackPath='0' slotIndex='2' bypassed='true'/>" },
+    { "reorder-plugin",
+      "<reorder-plugin trackPath='0' fromIndex='2' toIndex='0'/>" },
+    { "set-plugin-param",
+      "<set-plugin-param trackPath='0' slotIndex='1' paramId='7'"
+      " value='2.5'/>" },
+
+    // --- the M5 plugin-UI verbs --------------------------------------------
+    { "assert-plugin-strip",
+      "<assert-plugin-strip trackIndex='0' slotCount='2' slotIndex='1'"
+      " contains='state=Missing' absent='reload=0'/>" },
+    { "plugin-editor-set-param",
+      "<plugin-editor-set-param trackIndex='0' slotIndex='0' paramId='1'"
+      " value='0.25'/>" },
+};
+
+const char *fixtureFor(const QString &verb)
+{
+    for (const Fixture &f : kFixtures) {
+        if (verb == QLatin1String(f.verb)) return f.xml;
+    }
+    return nullptr;
+}
+
+// Two attribute values are equivalent if they are the same string, or the same
+// number. Writers normalize ("0.09" is written back as "0.090000"), and that is
+// not a round-trip defect.
+bool attrEquivalent(const QString &a, const QString &b)
+{
+    if (a == b) return true;
+    bool okA = false, okB = false;
+    const double da = a.toDouble(&okA);
+    const double db = b.toDouble(&okB);
+    return okA && okB && std::fabs(da - db) <= 1e-12 * (1.0 + std::fabs(da));
+}
+
+void writeTo(SAction *action, QDomDocument &doc, QDomElement &elem)
+{
+    elem = doc.createElement(action->name());
+    if (action->formatVersion() != 1) {
+        elem.setAttribute("version", action->formatVersion());
+    }
+    action->writeXml(elem);
+    doc.appendChild(elem);
+}
+
+}  // namespace
+
 bool testActionRoundTrip(const QString &actionName, QString &error)
 {
     SActionRegistry &registry = SActionRegistry::instance();
@@ -19,14 +129,58 @@ bool testActionRoundTrip(const QString &actionName, QString &error)
         return false;
     }
 
-    // Serialize to XML (action 1).
-    QDomDocument doc1;
-    QDomElement elem1 = doc1.createElement(action1->name());
-    if (action1->formatVersion() != 1) {
-        elem1.setAttribute("version", action1->formatVersion());
+    // Load the representative fixture, when there is one.
+    QDomDocument fixtureDoc;
+    QDomElement fixtureElem;
+    if (const char *xml = fixtureFor(actionName)) {
+        const QDomDocument::ParseResult parsed =
+            fixtureDoc.setContent(QString::fromLatin1(xml));
+        if (!parsed) {
+            error = QString("Fixture for %1 is not well-formed XML at %2:%3: %4")
+                        .arg(actionName)
+                        .arg(parsed.errorLine)
+                        .arg(parsed.errorColumn)
+                        .arg(parsed.errorMessage);
+            delete action1;
+            return false;
+        }
+        fixtureElem = fixtureDoc.documentElement();
+        if (!action1->readXml(fixtureElem, action1->formatVersion())) {
+            error = QString("%1 rejected its own fixture").arg(actionName);
+            delete action1;
+            return false;
+        }
     }
-    action1->writeXml(elem1);
-    doc1.appendChild(elem1);
+
+    // Serialize (action 1).
+    QDomDocument doc1;
+    QDomElement elem1;
+    writeTo(action1, doc1, elem1);
+
+    // Every attribute the fixture declared must have survived readXml+writeXml.
+    if (!fixtureElem.isNull()) {
+        const QDomNamedNodeMap attrs = fixtureElem.attributes();
+        for (int i = 0; i < attrs.count(); ++i) {
+            const QDomNode node = attrs.item(i);
+            const QString key = node.nodeName();
+            const QString want = node.nodeValue();
+            if (!elem1.hasAttribute(key)) {
+                error = QString("%1: attribute '%2' from the fixture is not "
+                                "written back at all (readXml ignores it?)")
+                            .arg(actionName, key);
+                delete action1;
+                return false;
+            }
+            const QString got = elem1.attribute(key);
+            if (!attrEquivalent(want, got)) {
+                error = QString("%1: attribute '%2' round-tripped as '%3', "
+                                "expected '%4'")
+                            .arg(actionName, key, got, want);
+                delete action1;
+                return false;
+            }
+        }
+    }
 
     // Deserialize to a new action (action 2).
     SAction *action2 = registry.createFromXml(elem1);
@@ -38,21 +192,11 @@ bool testActionRoundTrip(const QString &actionName, QString &error)
 
     // Serialize action 2 to XML.
     QDomDocument doc2;
-    QDomElement elem2 = doc2.createElement(action2->name());
-    if (action2->formatVersion() != 1) {
-        elem2.setAttribute("version", action2->formatVersion());
-    }
-    action2->writeXml(elem2);
-    doc2.appendChild(elem2);
+    QDomElement elem2;
+    writeTo(action2, doc2, elem2);
 
-    // Compare the two XML fragments (as text).
-    // Convert both to strings for comparison.
-    QString xml1 = elem1.toElement().toDocument().toString();
-    QString xml2 = elem2.toElement().toDocument().toString();
-
-    // Simpler approach: compare the XML as text after normalizing.
-    QString xml1Str = doc1.toString();
-    QString xml2Str = doc2.toString();
+    const QString xml1Str = doc1.toString();
+    const QString xml2Str = doc2.toString();
 
     delete action1;
     delete action2;
@@ -77,13 +221,23 @@ int main()
 
     QStringList failures;
 
+    // A fixture for a verb nobody registers is a stale fixture: it silently
+    // stops testing anything, which is how this file rotted the first time.
+    for (const Fixture &f : kFixtures) {
+        if (!names.contains(QLatin1String(f.verb))) {
+            failures.append(QString("Stale fixture: no registered verb '%1'")
+                                .arg(QLatin1String(f.verb)));
+        }
+    }
+
     for (const QString &name : names) {
         QString error;
         if (!testActionRoundTrip(name, error)) {
             failures.append(error);
             std::cout << "FAIL: " << name.toStdString() << "\n";
         } else {
-            std::cout << "PASS: " << name.toStdString() << "\n";
+            std::cout << "PASS: " << name.toStdString()
+                      << (fixtureFor(name) ? "  (fixture)" : "") << "\n";
         }
     }
 

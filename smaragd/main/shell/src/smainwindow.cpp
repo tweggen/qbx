@@ -1739,24 +1739,56 @@ bool SMainWindow::eventFilter( QObject *watched, QEvent *event )
     return QMainWindow::eventFilter( watched, event );
 }
 
+// Headless test mode never opens the project through the window —
+// SActionRunner sets it straight on SApplication — so the arranger does not
+// exist yet. Build it the same way openProject() does; later test entry points
+// in the same script then share this one view (and its zoom/scroll).
+SStdMixerView *SMainWindow::ensureArranger_()
+{
+    SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
+    if( v ) return v;
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj || !proj->getRootComponent() ) return NULL;
+    projectRootWidget_ = proj->getRootComponent()->getDetailEditWidget( this );
+    setCentralWidget( projectRootWidget_ );
+    return dynamic_cast<SStdMixerView*>( projectRootWidget_ );
+}
+
 bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
                                 offset_t dropTime, bool upperHalf,
                                 Qt::KeyboardModifiers mods )
 {
-    SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
-    if( !v ) {
-        // Headless test mode never opens the project through the window —
-        // SActionRunner sets it straight on SApplication — so the arranger does
-        // not exist yet. Build it the same way openProject() does; later drags
-        // in the same script then share this one view (and its zoom/scroll).
-        SProject *proj = SApplication::app().getCurrentProject();
-        if( !proj || !proj->getRootComponent() ) return false;
-        projectRootWidget_ = proj->getRootComponent()->getDetailEditWidget( this );
-        setCentralWidget( projectRootWidget_ );
-        v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
-        if( !v ) return false;
-    }
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
     return v->dragClipEdge( rowIdx, clipIdx, grabWhere, dropTime, upperHalf, mods );
+}
+
+bool SMainWindow::arrangerSetLaneView( int laneScaleRow, double laneScale,
+                                       int toggleTakesRow, int baseTrackHeight,
+                                       int topRow )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    if( toggleTakesRow >= 0 ) {
+        const STrackRow *r = v->rowAt( toggleTakesRow );
+        if( !r || !r->track ) return false;
+        v->toggleTrackTakesExpanded( r->track );
+    }
+    if( laneScaleRow >= 0 && laneScale > 0.0 ) {
+        const STrackRow *r = v->rowAt( laneScaleRow );
+        if( !r || !r->track ) return false;
+        v->setTrackHeightScale( r->track, laneScale );
+    }
+    if( baseTrackHeight > 0 ) v->tkSetBaseTrackHeight( baseTrackHeight );
+    if( topRow >= 0 )         v->tkSetTopRow( topRow );
+    return true;
+}
+
+QString SMainWindow::arrangerLaneAlignment()
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return QStringLiteral( "no arranger view" );
+    return v->tkCheckLaneAlignment();
 }
 
 void SMainWindow::groupTrack()

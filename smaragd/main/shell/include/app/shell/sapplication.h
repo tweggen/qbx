@@ -115,6 +115,17 @@ public:
     QString testOutputDir() const override;
     bool ensureOutputDirExists() const override;
 
+    // --- plugin discovery (proposal 08 M2) ---------------------------------
+    // Push the persisted search paths into the engine registry. Called at
+    // startup and whenever the options dialog changes the list.
+    void pushPluginSearchPaths();
+    // Start a background scan (the registry owns the worker thread). force
+    // re-probes modules whose previous probe failed or timed out.
+    void rescanPlugins( bool force );
+    bool isPluginScanActive() const;
+    // "N plugins, M modules scanned (K cached, S skipped)" for the options page.
+    QString pluginScanStatusText() const;
+
     // App-wide status/mode line shown in the main window's status bar. Views
     // push the active (or hover-telegraphed) gesture here; the main window
     // reflects it. Empty string means "no special mode" (idle).
@@ -123,6 +134,11 @@ public:
 signals:
     void globalLocatorMoved( offset_t newPos, offset_t oldPos );
     void statusModeChanged( const QString &mode );
+    // Emitted from the MAIN thread once a background plugin scan has finished
+    // (see pumpPluginScan). The scan thread must never emit this itself: a Qt
+    // signal from a worker thread makes Qt adopt it, and the adopted thread's
+    // TLS cleanup deadlocks the teardown join.
+    void pluginScanFinished();
 
 public slots:
     // Set the status/mode line. Emits statusModeChanged only when it changes.
@@ -141,8 +157,13 @@ private slots:
     // globalLocatorMoved so the playhead repaints. Driven by locatorTimer_ while
     // playing.
     void pumpLocator();
+    // Main-thread poll of the engine's plugin scanner: when it goes idle, stop
+    // the timer and emit pluginScanFinished from HERE, the main thread.
+    void pumpPluginScan();
 
 private:
+    void initPluginRegistry();
+
     static SApplication *singleton_;
     SSelectionList *selectionList_;
     tw303aEnvironment *t3Env_;
@@ -160,6 +181,7 @@ private:
     offset_t lastShownLocator_ = 0;   // last position the UI emitted (main thread only)
     offset_t recordingStartFrame_ = 0; // locator at record start (for the live region)
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
+    QTimer *pluginScanTimer_ = nullptr;  // polls the background plugin scan
     bool isPlaying_;
     SProject *currentProject_;
     QString statusMode_;

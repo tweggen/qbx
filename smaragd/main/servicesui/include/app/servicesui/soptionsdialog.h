@@ -8,11 +8,17 @@ class QStackedWidget;
 class QComboBox;
 class QCheckBox;
 class QLabel;
+class QListWidget;
+class QPushButton;
 class QSpinBox;
+class QTimer;
 
 // Per-user preferences dialog: a category tree on the left, one option page per
 // category on the right (QStackedWidget), with OK / Cancel / Apply. Reads from
-// and writes to SSettings. Categories: Mouse navigation, Audio, Log.
+// and writes to SSettings. Categories: Mouse navigation, Audio, Log, Plugins.
+//
+// The tree item and the stack page for a category MUST be added in the same
+// order: the mapping is by top-level index, nothing else.
 class SOptionsDialog : public QDialog
 {
     Q_OBJECT
@@ -27,12 +33,21 @@ private:
     QWidget *buildMousePage();
     QWidget *buildAudioPage();
     QWidget *buildLogPage();
+    QWidget *buildPluginsPage();
     void loadMousePage();
     void loadAudioPage();
     void loadLogPage();
+    void loadPluginsPage();
     void applyMousePage();
     void applyAudioPage();
     void applyLogPage();
+    void applyPluginsPage();
+    // Plugins page helpers.
+    void addPluginDir();
+    void removePluginDirs();
+    void resetPluginDirsToDefaults();
+    void rescanPluginsNow();
+    void updatePluginScanStatus();
 
     QTreeWidget    *tree_;
     QStackedWidget *stack_;
@@ -59,6 +74,17 @@ private:
     QSpinBox  *logCapacity_;
     QCheckBox *logToFile_;
     QLabel    *logPathLabel_;
+
+    // Plugins page (proposal 08 M2). "Rescan now" is a LIVE action, like the
+    // log page's setConsole: it applies the directory list and kicks off a
+    // background scan without waiting for OK. pluginStatusTimer_ polls the
+    // engine scanner — the scan thread must not emit Qt signals.
+    QListWidget *pluginDirs_;
+    QPushButton *pluginRemoveBtn_;
+    QPushButton *pluginRescanBtn_;
+    QCheckBox   *pluginScanOnStartup_;
+    QLabel      *pluginStatusLabel_;
+    QTimer      *pluginStatusTimer_;
 };
 
 #endif // SOPTIONSDIALOG_H

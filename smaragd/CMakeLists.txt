@@ -114,6 +114,14 @@ foreach(_case ${_QXA_CASES})
     )
 endforeach()
 
+# legacy_project_recovery guards a loader bug whose symptom is a HANG, not a
+# failure (an element that can never resolve made createObjects() rescan
+# forever). Without a timeout a regression would keep ctest running until
+# someone noticed, so bound it: the case itself takes a couple of seconds.
+if(TEST qxa.legacy_project_recovery)
+    set_tests_properties(qxa.legacy_project_recovery PROPERTIES TIMEOUT 300)
+endif()
+
 message(STATUS "smaragd: ALSA=${ENABLE_ALSA} PipeWire=${ENABLE_PIPEWIRE} "
                "PulseAudio=${ENABLE_PULSEAUDIO} JACK=${ENABLE_JACK} "
                "WASAPI=${ENABLE_WASAPI} CoreAudio=${ENABLE_COREAUDIO}")

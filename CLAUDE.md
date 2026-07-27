@@ -274,6 +274,111 @@ Files written as WAV (PCM, lossless) in project directory:
 4. **Multi-input:** One WAV per input device; multiple inputs with separate files not yet supported.
 5. **Latency control:** Fixed at device default; no user-facing buffer sizing.
 
+## Plugin Hosting (proposal 08 — M0..M5 executed 2026-07-26)
+
+CLAP audio-effect plugins are scanned, inserted per track, heard in the signal
+path, saved with the project, and kept as a reloadable placeholder when the
+plugin is not installed. **Design:** `plan/proposed/08_PLUGIN_HOSTING.md`;
+**what was built and in what order:** `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`;
+**the invariants that matter:** `smaragd/tw303a/plugins/CONTRACT.md` (18 of them)
+and `smaragd/main/pluginui/CONTRACT.md`. VST3 (M6) and macOS bring-up (M7) are
+open.
+
+### Layers
+
+| Piece | Where | What it is |
+|---|---|---|
+| ABI | `tw/plugins/twplugin.h` | `twPlugin`: `prepare`/`process`/`reset`, params, opaque state blob. Format-agnostic and deliberately narrow. |
+| CLAP backend | `plugins/src/twclapmodule.{h,cc}`, `twclapplugin.cc` | DSO load (`LoadLibraryExW` / `dlopen`, macOS bundles → `Contents/MacOS/<base>`), `clap_entry`, modules interned by path. Maps audio-ports / params / state / latency / gui. |
+| Scanner + cache | `plugins/src/twpluginregistry.cc`, `twpluginsearchpaths.cc`, `twpluginscancache.cc` | Search paths, `plugincache.json`, mtime/size/version keying, sticky `failed`/`timeout` records, background scan. |
+| Crash isolation | `plugins/tools/plugin_probe.cc` → `smaragd_pluginprobe` | One module per child process, driven by `QProcess` with a timeout. A crash becomes a cache record, not a dead app. |
+| Slot DSP | `plugins/include/tw/plugins/twpluginslotproc.h` + `src/twplugininsert.cc` | **One processor + N per-bus taps.** See below. |
+| Placeholder | `plugins/src/twnullplugin.cc` (`createNullPlugin`) | Inert pass-through with the *declared* I/O of a missing plugin, so the graph shape is already the one the real plugin will get. |
+| Model | `main/objects/track/spluginchain.cpp`, `spluginslot.cpp` | `SPluginChain` (ordered container) + `SPluginSlot` (descriptor, state chunk, bypass, `reloadPlugin()`). |
+| Actions | `main/objects/track/s{insert,remove,reorder}plugin*.cpp`, `ssetplugin{bypass,param}action.cpp` | `insert-plugin`, `remove-plugin`, `reorder-plugin`, `set-plugin-bypass`, `set-plugin-param` — see `docs/ACTIONS.md`. |
+| UI | `main/pluginui/` | Browser dialog, FX strip (mounted from `main/timeline/src/strackdetailpanel.cpp`), generic parameter editor. |
+| Options | `main/servicesui/src/soptionsdialog.cpp` | The Plugins page: directory list, Rescan now, scan status. |
+
+### The processor / tap split (why a slot is not one component)
+
+The frozen-page model is **one mono page per component**
+(`twComponent::freezePage_nolock` renders `idx = 0` only), so N parallel mono
+wires are N parallel component *instances* — which is why `STrack` builds one
+`twTrackMix` and one `twPluginChain` **per bus**. But a stereo-linked plugin has
+to see all its channels in one `process()` call, which no single mono component
+can express. Hence: one `twPluginSlotProcessor` per slot (plain C++, not a
+`twComponent`) owning the plugin instance(s), the bypass flag, the block
+chunking (4096 frames out of a 65536-frame page), the channel-mismatch mapping
+and a small all-bus page cache; plus one `twPluginInsert` **tap** per bus, each
+strictly 1-in/1-out. The first tap to ask renders every bus; the rest hit the
+cache. Channel-mismatch mapping is derived once from the plugin's *own* reported
+layout: `N→N` Direct, `1→1` on N buses DualMono (N instances — hence a *factory*,
+not one instance), `2→2` on one bus MonoFold, anything else `Unsupported` and
+transparent.
+
+**Two caches sit in front of a plugin edit**, and a third thing above it: the
+processor's all-bus cache, each tap's frozen pages, and the components
+downstream. A parameter write must be followed by
+`SPluginSlot::notifyPluginEdited()`, and a bypass must go through
+`SPluginSlot::setBypass()`; both emit `SPluginSlot::audioInvalidated()`, which
+the owning `STrack` turns into `invalidateRenderPath()`. The slot cannot do that
+last step itself — an `SPluginChain` is deliberately *not* an `SLink` child of
+its track, so `SObject::invalidateRenderPath()`'s root-down walk never reaches a
+slot. Skip any of the three and the edit is completely inaudible.
+
+### Serialization
+
+```xml
+<SPluginSlot id='…' bypassed='false' format='clap' uid='…' name='…' vendor='…'
+             path='…' nIn='2' nOut='2' isInstrument='false'>
+  <state encoding='base64'>…</state>
+</SPluginSlot>
+```
+
+`descriptor_` is written verbatim — never the registry-resolved one — so a
+relative module path stays relative and a project stays portable, and a plugin
+missing on *this* machine keeps its identity across a save. The state chunk is
+pulled **fresh from the live plugin** at save time, and is *never* written for a
+non-Active slot (the placeholder's chunk is empty; writing it would destroy the
+user's patch). `STrack` references its chain with `pluginChainId='…'` and adopts
+it in `SProjectLoader::deferResolve`, because a plain attribute is invisible to
+the loader's `<SLink>`-based ordering. CLAP state blobs are wrapped in our own
+8-byte frame (`'TWCP'`, u16 version, u16 reserved); a newer version is refused,
+not guessed at.
+
+### Knobs
+
+| Knob | Effect |
+|---|---|
+| `TW_HAVE_CLAP` (CMake, **PRIVATE** to `tw_plugins`) | Set when `smaragd/third_party/clap/include/clap/clap.h` exists (a git submodule, fetched by `ensure_submodules()` in `_env.sh`). Without it the build compiles, warns, and skips the CLAP half of `plugins_test`. It must never enter a public `tw/plugins/*.h` — that would be ODR/ABI skew. |
+| `<configDir>/plugincache.json` | The scan cache (next to `smaragd.ini`). One record per module: path, size, mtime, scanner version, `ok`/`failed`/`timeout`, and the descriptors found. Delete it, or use Rescan with *force*, to clear sticky failures. |
+| `smaragd_pluginprobe[.exe]` | The out-of-process probe; the **app** supplies its path (next to the exe; inside `Contents/MacOS` on macOS). Absent ⇒ the scan falls back in-process and logs a warning — safe against a corrupt file, not against a plugin that crashes on instantiation. |
+| `plugins/searchPaths`, `plugins/scanOnStartup` (`SOpt`) | Edited on Edit → Options → Plugins. Defaults from `twPluginSearchPaths::defaults(format)`: Windows `%CommonProgramFiles%\CLAP` + `%LOCALAPPDATA%\Programs\Common\CLAP` + `CLAP_PATH`; macOS `/Library/Audio/Plug-Ins/CLAP` + `~/Library/…`. |
+| `clap_probe` (target, not a gate) | `plugins/tools/clap_probe.cc` — loads a real third-party `.clap` with the production loader and prints the factory contents. |
+
+Only `*.clap` is scanned on purpose: a `.vst3` found before M6 would be probed,
+fail, and be cached as a permanent failure that M6 would have to force-clear.
+
+### Testing without installing anything
+
+`plugins/tests/twtestclap.c` is a real 2-in/2-out CLAP module built from this
+repo as `twtestclap.clap` and copied next to the binary. Two entry points:
+`tw.test.clap.gain` (`out = in * gain`, plus a "report block size" mode that
+writes the frame count it actually saw) and `tw.test.clap.stereoskew`
+(`out[0] = in[0]*0.5*gain + in[1]*gain`, `out[c>=1] = in[c]*0.5*gain`) — the
+cross-channel term is what makes a silent second input visible in a mono render.
+Gates: `ctest -R "plugins_test|plugins_scan_test"` and the qxa cases
+`plugin_stereo_chain`, `plugin_remove_and_undo`, `plugin_slot_roundtrip`,
+`plugin_missing_placeholder`, `plugin_bypass_and_param`,
+`plugin_remove_restores_param`, `plugin_ui_strip_and_editor`,
+`render_sawtooth_with_effects`.
+
+**Known gap that is not the plugin layer's:** the audio sink is still mono.
+`RenderSession` and `AudioEngine` collapse the graph's buses to one page and
+duplicate it, so bus 1 cannot reach a file or a device — a rendered WAV's two
+channels are equal *by construction*. Never write a qxa assertion of the form
+`L != R`; use a cross-channel fixture or an RMS discriminator.
+
 ## Dependencies
 
 ### Core

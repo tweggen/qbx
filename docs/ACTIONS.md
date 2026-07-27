@@ -22,6 +22,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `assert-audio-energy` | SAssertAudioEnergyAction | testkit/src/sassertaudioenergyaction.cpp | `filename` = "", `minRms` = "0.01", `maxRms` = "0.95", `startFrame` = "0", `frameCount` = "-1", `channel` = "-1" |
 | `assert-audio-frequency` | SAssertAudioFrequencyAction | testkit/src/sassertaudiofrequencyaction.cpp | `filename` = "", `minHz` = "0", `maxHz` = "0", `startFrame` = "0", `frameCount` = "-1", `channel` = "-1" (autocorrelation f0 — the pitch gate) |
 | `assert-audio-peak` | SAssertAudioPeakAction | testkit/src/sassertaudiopeakaction.cpp | `filename` = "", `maxPeak` = "0.95", `startFrame` = "0", `frameCount` = "-1", `channel` = "-1" |
+| `assert-plugin-strip` | SAssertPluginStripAction | testkit/src/spluginuitestactions.cpp | `trackIndex` = "0", `slotCount` = "-1" (rows the FX strip rendered), `slotIndex` = "-1", `contains` = "", `absent` = "" — builds the REAL `SPluginEffectStrip` off screen and matches `describeSlot(slotIndex)`, which reads `name=…|state=…|mode=…|bypass=…|nameEnabled=…|bypassEnabled=…|editEnabled=…|reload=…|tooltip=…` |
 | `clear-selection` | SClearSelectionAction | selection/src/sclearselectionaction.cpp | (none) |
 | `create-asset` | SCreateAssetAction | objects/mixer/src/screateassetaction.cpp | `container`, `startOffset` = "0", `duration` = "0", `assetName` |
 | `cycle-disable` | SCycleAction | actions/src/scycleaction.cpp | (none) |
@@ -32,7 +33,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `grid-disable` | SGridAction | actions/src/sgridaction.cpp | (none) |
 | `grid-enable` | SGridAction | actions/src/sgridaction.cpp | (none) |
 | `grid-toggle` | SGridAction | actions/src/sgridaction.cpp | (none) |
-| `insert-plugin` | SInsertPluginAction | objects/track/src/sinsertpluginaction.cpp | `trackPath`, `slotIndex` = "0", `format`, `uid`, `name`, `vendor`, `nIn` = "0", `nOut` = "0" |
+| `insert-plugin` | SInsertPluginAction | objects/track/src/sinsertpluginaction.cpp | `trackPath`, `slotIndex` = "0", `format`, `uid`, `name`, `vendor`, `path` = "", `nIn` = "0", `nOut` = "0", `state` = "" (base64 plugin state chunk, written only when non-empty; this is what makes remove-plugin's inverse restore the user's parameters) |
 | `load-project` | SLoadProjectAction | persistence/src/sloadprojectaction.cpp | `path` = "" |
 | `metronome-disable` | SMetronomeAction | actions/src/smetronomeaction.cpp | (none) |
 | `metronome-enable` | SMetronomeAction | actions/src/smetronomeaction.cpp | (none) |
@@ -42,13 +43,15 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `place-asset` | SPlaceAssetAction | objects/mixer/src/splaceassetaction.cpp | `assetName` = "", `trackPath` = "", `timePos` = "0" |
 | `place-clip` | SPlaceClipAction | objects/cut/src/splaceclipaction.cpp | `trackPath`, `filePath`, `timePos` = "0", `startOffset` = "0", `duration` = "0" (0 = full wave) |
 | `place-recording` | SPlaceRecordingAction | objects/cut/src/splacerecordingaction.cpp | `trackPath`, `filePath`, `timePos` = "0" (plans takes for covered columns + plain cuts for gaps; one atomic composite) |
+| `plugin-editor-set-param` | SPluginEditorSetParamAction | testkit/src/spluginuitestactions.cpp | `trackIndex` = "0", `slotIndex` = "0", `paramId` = "0", `value` = "0" — drives the `SPluginParamEditor` slider a double-click opens (never shown), so the resulting `set-plugin-param` is what lands on the undo stack |
 | `remove-asset` | SRemoveAssetAction | objects/mixer/src/sremoveassetaction.cpp | `assetName` |
 | `remove-from-selection` | SRemoveFromSelectionAction | selection/src/sremovefromselectionaction.cpp | `paths` = "" |
-| `remove-plugin` | SRemovePluginAction | objects/track/src/sremovepluginaction.cpp | `trackPath`, `slotIndex` = "0", `format`, `uid`, `name`, `vendor`, `nIn` = "0", `nOut` = "0" |
+| `remove-plugin` | SRemovePluginAction | objects/track/src/sremovepluginaction.cpp | `trackPath`, `slotIndex` = "0", `format`, `uid`, `name`, `vendor`, `path` = "", `nIn` = "0", `nOut` = "0", `state` = "" (captured in `apply()` from the live plugin and handed to the inverse; a hand-written element carries none) |
 | `remove-sample` | SRemoveSampleAction | objects/cut/src/sremovesampleaction.cpp | `trackIndex` = "0", `clipIndex` = "0", `filePath` = "", `timePos` = "0" |
 | `remove-take` | SRemoveTakeAction | objects/cut/src/sremovetakeaction.cpp | `clip`, `take` = "0", `thenActivate` = "-2" |
 | `remove-track` | SRemoveTrackAction | objects/mixer/src/sremovetrackaction.cpp | `index` = "0" |
 | `render` | SRenderAction | actions/src/srenderaction.cpp | `filename` = "", `format` = "wav", `quality` = "10" |
+| `reorder-plugin` | SReorderPluginAction | objects/track/src/sreorderpluginaction.cpp | `trackPath`, `fromIndex` = "0", `toIndex` = "0" (both validated against the chain; the inverse is the reverse move, not a swap) |
 | `reparent-track` | SReparentTrackAction | objects/mixer/src/sreparenttrackaction.cpp | `source`, `destParent`, `destIndex` = "-1" |
 | `resize-clip` | SResizeClipAction | objects/cut/src/sresizeclipaction.cpp | `clip`, `startTime` = "0", `startOffset` = "0", `duration` = "0", `loopLength` = "0", `stretch` = "1.0", `take` = "-1" (stacks: which take the slip targets), `broadcast` = "1" (edit groups) |
 | `save-project` | SSaveProjectAction | persistence/src/ssaveprojectaction.cpp | `path` = "" |
@@ -58,6 +61,8 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `set-edit-group` | SSetEditGroupAction | objects/track/src/seteditgroupaction.cpp | `trackPath`, `group` = "0" (0 = ungrouped) |
 | `set-formant-preserve` | SSetFormantPreserveAction | objects/cut/src/ssetformantpreserveaction.cpp | `clip`, `on` = "0" (ABSOLUTE; keeps the spectral envelope fixed while the vocoder's pitch stage moves the harmonics), `take` = "-1" (stacks: which take is flagged; the flag is per-take), `broadcast` = "1" (edit groups) |
 | `set-pitch` | SSetPitchAction | objects/cut/src/ssetpitchaction.cpp | `clip`, `cents` = "0" (ABSOLUTE, clamped to ±2400), `take` = "-1" (stacks: which take is transposed; pitch is per-take), `broadcast` = "1" (edit groups) |
+| `set-plugin-bypass` | SSetPluginBypassAction | objects/track/src/ssetpluginbypassaction.cpp | `trackPath`, `slotIndex` = "0", `bypassed` = "false" (ABSOLUTE, not a toggle) |
+| `set-plugin-param` | SSetPluginParamAction | objects/track/src/ssetpluginparamaction.cpp | `trackPath`, `slotIndex` = "0", `paramId` = "0", `value` = "0" (ABSOLUTE, clamped to the plugin's declared range; an unknown `paramId` is REJECTED; coalesces by (trackPath, slotIndex, paramId) so one slider drag is one undo entry; refused on a Missing/Unsupported slot) |
 | `set-property` | SSetPropertyAction | actions/src/ssetpropertyaction.cpp | `key`, `value` |
 | `set-selection` | SSetSelectionAction | selection/src/ssetselectionaction.cpp | `paths` = "" |
 | `set-track-volume` | SSetTrackVolumeAction | objects/track/src/ssettrackvolumeaction.cpp | `trackIndex` = "0", `volume` = "0" |

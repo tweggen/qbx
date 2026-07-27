@@ -8,12 +8,18 @@
 // every TU including this header (e.g. the moc jumbo file).
 #include "tw/plugins/twplugindescriptor.h"
 
+class QLabel;
 class QLineEdit;
-class QListWidget;
-class QListWidgetItem;
+class QTreeWidget;
+class QTreeWidgetItem;
 
 // Modal dialog for browsing and selecting a plugin to insert.
-// User can search by name and double-click to select.
+//
+// A tree rather than a list since proposal 08 M2: with a real scanner there can
+// be plugins of several formats with the same name, so the format is a column
+// and the selection is resolved by (format, uid), never by name. The list
+// repopulates when a background scan finishes — it used to snapshot the registry
+// once at construction, which showed an empty browser during the startup scan.
 class SPluginBrowserDialog : public QDialog {
     Q_OBJECT
 public:
@@ -24,14 +30,18 @@ public:
 
 protected slots:
     void onSearchTextChanged(const QString &text);
-    void onPluginDoubleClicked(QListWidgetItem *item);
+    void onPluginActivated(QTreeWidgetItem *item, int column);
+    // A background scan finished: refresh, keeping the filter and the selection.
+    void onPluginScanFinished();
 
 private:
     void populatePlugins();
     void filterPlugins(const QString &searchText);
+    void takeSelection();          // resolve the current row into selectedDescriptor_
 
-    QLineEdit *searchEdit_;
-    QListWidget *pluginList_;
+    QLineEdit   *searchEdit_;
+    QTreeWidget *pluginList_;
+    QLabel      *statusLabel_;
     std::unique_ptr<audio::twPluginDescriptor> selectedDescriptor_;
 };
 

@@ -7,6 +7,7 @@
 
 class SStdMixer;
 class QGridLayout;
+class QBoxLayout;
 class STrack;
 class SStdMixerView;
 class SLink;
@@ -87,10 +88,23 @@ private:
     // fader drag and the double-click-to-reset path.
     void applyVolume_( double dB );
 
-    // Responsive layout management
+    // Responsive layout management. The strip has to fit whatever lane height
+    // it is given — lanes are individually sized and vertical zoom runs down to
+    // a few pixels — so the layout adapts to BOTH dimensions. Anything that
+    // does not fit is hidden, never clipped.
     void updateLayout();
     static constexpr int WIDE_MODE_THRESHOLD = 156;  // ~130% of minimal width (120px)
     bool wideMode_ = false;
+    // Vertical density, by available height:
+    //   Full    — name + M/S/R/T/G column + vertical fader + dB readout
+    //   Compact — name + one row of small buttons + horizontal fader
+    //   Tiny    — name only (plus M/S if they still fit)
+    enum class Density { Full, Compact, Tiny };
+    static constexpr int DENSITY_FULL_MIN_H    = 132;
+    static constexpr int DENSITY_COMPACT_MIN_H = 46;
+    Density density_ = Density::Full;
+    Density densityFor( int h ) const;
+    void applyDensity( Density );
 
     // Tree presentation state (see setTreeInfo).
     int depth_ = 0;
@@ -109,6 +123,11 @@ private:
     SStdMixerView &smv_;
     STrack &tk_;
     QGridLayout *qLayout_;
+    // Kept as QBoxLayouts (not QV/QHBoxLayout) so the density modes can flip
+    // their direction instead of rebuilding the strip.
+    QBoxLayout *qBtnCol_;    // M / S / R / T / G
+    QBoxLayout *qFaderCol_;  // fader + dB readout
+    QBoxLayout *qStripRow_;  // buttons next to (or above) the fader
     QSlider *qVolume_;
     QLabel *qVolLabel_;
     QLineEdit *qTrkLabel_;

@@ -7,11 +7,22 @@
 #include <QLabel>
 #include <QGuiApplication>
 #include <QScreen>
+#include <QPainter>
+#include <QStyle>
+#include <QStyleOption>
 
 STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     : QWidget(parent)
 {
-    setStyleSheet("QWidget { background-color: #2a2a2a; border-top: 1px solid #555; }");
+    // A QWidget subclass does NOT paint a style-sheet background on its own —
+    // and declaring one suppresses the default palette fill, so without the
+    // paintEvent below the panel's area is never written and keeps whatever
+    // was last in the backing store (the stale black rectangle in the dock).
+    // The selector is scoped to this class as well: an unqualified `QWidget`
+    // rule cascades the background AND the border onto every child.
+    setAttribute(Qt::WA_StyledBackground, true);
+    setStyleSheet("STrackDetailPanel { background-color: #2a2a2a; "
+                  "border-top: 1px solid #555; }");
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
@@ -34,6 +45,13 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     pluginContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     contentLayout_->addWidget(pluginContainer, 1);  // Gets extra space
 
+    // Shown instead of the content when no track is selected, so the panel is
+    // never a large blank area (and the dock can shrink to it).
+    placeholder_ = new QLabel(tr("No track selected"), this);
+    placeholder_->setAlignment(Qt::AlignCenter);
+    placeholder_->setEnabled(false);
+    mainLayout->addWidget(placeholder_);
+
     // Volume section
     QHBoxLayout *volLayout = new QHBoxLayout();
     volLayout->addWidget(new QLabel("Volume:"));
@@ -51,6 +69,16 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
 
     // Nothing to show until a track is selected.
     contentWidget_->setVisible(false);
+}
+
+// Required for the style sheet above to reach the screen: QWidget subclasses
+// have to draw PE_Widget themselves.
+void STrackDetailPanel::paintEvent(QPaintEvent *)
+{
+    QStyleOption opt;
+    opt.initFrom(this);
+    QPainter p(this);
+    style()->drawPrimitive(QStyle::PE_Widget, &opt, &p, this);
 }
 
 STrackDetailPanel::~STrackDetailPanel() = default;
@@ -83,9 +111,12 @@ void STrackDetailPanel::rebuildUI()
         volumeLabel_->setText(QString::asprintf("%+.1f dB", volume));
 
         contentWidget_->setVisible(true);
+        placeholder_->setVisible(false);
     } else {
         contentWidget_->setVisible(false);
+        placeholder_->setVisible(true);
     }
+    updateGeometry();   // the empty panel asks for far less room than a full one
 }
 
 // Preferred height: 50% of screen height, but never more than 450px.
@@ -100,10 +131,9 @@ static int preferredPanelHeight()
 
 QSize STrackDetailPanel::sizeHint() const
 {
+    // With no track there is nothing to show, so do not reserve half the
+    // screen for it — that empty reservation was most of the dead area in the
+    // dock.
+    if (!currentTrack_) return QSize(400, placeholder_->sizeHint().height() + 16);
     return QSize(400, preferredPanelHeight());
-}
-
-int STrackDetailPanel::heightForWidth(int w) const
-{
-    return preferredPanelHeight();
 }

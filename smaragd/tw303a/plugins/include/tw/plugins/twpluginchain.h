@@ -51,6 +51,10 @@ public:
     // Rebuild the wiring (call after modifications)
     void rebuildWiring();
 
+    // Snapshot the ordered insert list. Public so callers can inspect the chain
+    // without holding pluginsMutex_ across their own work.
+    std::vector<std::shared_ptr<twComponent> > snapshotPlugins() const;
+
     // Scoped invalidation (proposal 15): a chain has no page cache of its own,
     // but its inserts' pages bake in upstream audio — forward the bump to them.
     void bumpContentEpoch() override;
@@ -62,6 +66,9 @@ public:
     virtual void teardown() override;
     virtual void onDependencyTeardown(std::shared_ptr<twComponent> dep) override;
 private:
+    // Caller must hold pluginsMutex_.
+    void rebuildWiring_nolock();
+
     idx_t nBusses_;
     mutable std::mutex pluginsMutex_;  // protects plugins_ vector from concurrent access
     std::vector<std::shared_ptr<twComponent> > plugins_;  // not owned; managed by SPluginSlot

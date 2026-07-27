@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression for a project written by a PRE-proposal-08-M4 build, which is the
+  shape of every project that ever had a plugin on a track before M4 landed.
+  Reproduced from a real user file (test4_2.qxp) that no build could open.
+
+  The fixture carries both legacy defects at once, deliberately:
+
+   1. <SPluginSlot> with NO id=. Before M4, SPluginSlot::serializeSelfAttributes
+      never called SObject::serializeSelfAttributes, which is what emits id=.
+      The loader answered any id-less child with "File is corrupt" and aborted
+      the WHOLE project — so the build that wrote such a file could not read it
+      back either. The slot is now SKIPPED (nothing can reference an object with
+      no id, so it costs exactly that one object) and the project loads.
+
+   2. <SPluginChain> whose <SLink objectId=...> names an object the file does
+      not contain — in the real file, the id the slot would have had. The
+      loader's outer while(true) rescans until the document is empty, so an
+      element that can never resolve made it spin forever: ~3M passes/minute,
+      a 900 MB log, an unbounded RSS and a hung load. A pass that consumes
+      nothing now reports the dangling reference and drops the element.
+
+  The assertions are the point: the REST of the project must survive both
+  recoveries intact. Same audio expectations as load_project_render.qxa, which
+  loads the identical project without the two legacy defects — so a recovery
+  that quietly ate the cut, the track or the wave fails here.
+
+  If this case ever HANGS rather than fails, defect 2 has regressed: that is
+  what the CTest timeout is for.
+-->
+<SActionScript version="1" name="legacy_project_recovery">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../legacy_idless_slot.qxp"/>
+
+    <render filename="legacy_project_recovery.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: cut plays source sec1 (slip offset via the loaded startOffset) -->
+    <assert-audio-energy filename="legacy_project_recovery.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 1-2 s: source sec2 -->
+    <assert-audio-energy filename="legacy_project_recovery.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <!-- past the 2 s cut: silence -->
+    <assert-audio-energy filename="legacy_project_recovery.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

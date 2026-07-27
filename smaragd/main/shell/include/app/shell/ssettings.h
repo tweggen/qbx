@@ -58,6 +58,15 @@ public:
     void        addRecentProject( const QString &path );
     void        removeRecentProject( const QString &path );
 
+    // Directories scanned for plugin modules, recursively (proposal 08 M2).
+    // Falls back to SOpt::def( SOpt::PluginSearchPaths ), i.e. the engine's
+    // per-platform defaults, so a user who never opened the options dialog
+    // still gets the standard locations.
+    QStringList pluginSearchPaths() const;
+    void        setPluginSearchPaths( const QStringList &dirs );
+    bool        pluginScanOnStartup() const;
+    void        setPluginScanOnStartup( bool on );
+
     // Main window geometry (size and position, binary format).
     QByteArray windowGeometry() const;
     void       setWindowGeometry( const QByteArray &geometry );

@@ -8,13 +8,17 @@
 #include "app/objects/track/strackpath.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "app/actions/sactionregistry.h"
+#include <QByteArray>
 #include <QDomElement>
 #include <QString>
+#include <cstdint>
+#include <vector>
 
 SInsertPluginAction::SInsertPluginAction(
     const QString &trackPath,
     int slotIndex,
-    const audio::twPluginDescriptor &descriptor
+    const audio::twPluginDescriptor &descriptor,
+    const QString &stateBase64
 )
     : trackPath_(trackPath),
       slotIndex_(slotIndex),
@@ -22,11 +26,15 @@ SInsertPluginAction::SInsertPluginAction(
       uid_(QString::fromStdString(descriptor.uid)),
       pluginName_(QString::fromStdString(descriptor.name)),
       vendor_(QString::fromStdString(descriptor.vendor)),
+      path_(QString::fromStdString(descriptor.path)),
       nIn_(descriptor.io.audioInputs),
-      nOut_(descriptor.io.audioOutputs)
+      nOut_(descriptor.io.audioOutputs),
+      state_(stateBase64)
 {
 }
 
+// Module-path resolution lives on SPluginSlot (M4): the LOAD path needs exactly
+// the same rule, and a second copy here is how the two would drift.
 SApplyResult SInsertPluginAction::apply(SProject *project)
 {
     if (!project) {
@@ -54,11 +62,27 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     desc.uid = uid_.toStdString();
     desc.name = pluginName_.toStdString();
     desc.vendor = vendor_.toStdString();
+    // The path is stored AS THE CALLER GAVE IT (typically relative, e.g. the
+    // in-repo "twtestclap.clap"): the slot resolves it for instantiation but
+    // serializes the raw form, which is what keeps a saved project portable.
+    desc.path = path_.toStdString();
     desc.io = {nIn_, nOut_};
 
     // Create the slot
     SPluginSlot *slot = new SPluginSlot(project, desc);
     slot->setSName(pluginName_);
+
+    // The state chunk goes in BEFORE the link is parented. setParent() is what
+    // fires slotInserted -> STrack::onPluginSlotInserted -> setBusCount(), which
+    // is the moment the plugin instances are created; restoreState() on a slot
+    // with no processor yet stores the blob, and ensureBuses() replays it onto
+    // every instance as they appear. That is exactly the project-load ordering,
+    // so undo-of-a-removal and a file load take the same path.
+    if (!state_.isEmpty()) {
+        const QByteArray decoded = QByteArray::fromBase64(state_.toLatin1());
+        std::vector<std::uint8_t> blob(decoded.begin(), decoded.end());
+        slot->restoreState(blob);
+    }
 
     // Add to chain
     // IMPORTANT: SLink must be constructed with parent=NULL, then setParent() called after.
@@ -74,6 +98,13 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
         chain->moveChildToIndex(landingIndex, actualIndex);
     }
 
+    // The slot may only need one bus, but STrack builds one chain per bus and
+    // the channel-mismatch mapping (proposal 08 §Layer 3) is chosen from the bus
+    // count — so the slot has to learn it before any tap is built. The
+    // slotInserted signal above already did this for the normal path; doing it
+    // again is idempotent and covers a track whose bus count grew.
+    slot->setBusCount(track->getNBusses());
+
     // Create inverse action
     SAction *inverse = new SRemovePluginAction(trackPath_, actualIndex);
 
@@ -88,8 +119,14 @@ void SInsertPluginAction::writeXml(QDomElement &elem) const
     elem.setAttribute("uid", uid_);
     elem.setAttribute("name", pluginName_);
     elem.setAttribute("vendor", vendor_);
+    elem.setAttribute("path", path_);
     elem.setAttribute("nIn", nIn_);
     elem.setAttribute("nOut", nOut_);
+    // Optional: omitted (not written empty) so every pre-M5 action script and
+    // every hand-written .qxa stays byte-identical when re-serialized.
+    if (!state_.isEmpty()) {
+        elem.setAttribute("state", state_);
+    }
 }
 
 bool SInsertPluginAction::readXml(const QDomElement &elem, int /*version*/)
@@ -100,8 +137,10 @@ bool SInsertPluginAction::readXml(const QDomElement &elem, int /*version*/)
     uid_ = elem.attribute("uid");
     pluginName_ = elem.attribute("name");
     vendor_ = elem.attribute("vendor");
+    path_ = elem.attribute("path");
     nIn_ = elem.attribute("nIn", "0").toUInt();
     nOut_ = elem.attribute("nOut", "0").toUInt();
+    state_ = elem.attribute("state");
     return true;
 }
 

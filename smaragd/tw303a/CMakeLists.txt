@@ -152,12 +152,99 @@ tw_module(plugins
         plugins/include/tw/plugins/twplugindescriptor.h
         plugins/include/tw/plugins/twpluginchain.h
         plugins/include/tw/plugins/twplugininsert.h
+        plugins/include/tw/plugins/twpluginslotproc.h
+        plugins/include/tw/plugins/twpluginsearchpaths.h
         plugins/src/twpluginchain.cc
         plugins/src/twplugininsert.cc
+        plugins/src/twpluginslotproc.cc
         plugins/src/twpassthrough.cc
+        plugins/src/twnullplugin.cc
         plugins/src/twpluginregistry.cc
+        plugins/src/twpluginscancache.h
+        plugins/src/twpluginscancache.cc
+        plugins/src/twpluginsearchpaths.cc
     DEPS tw_core tw_graph
 )
+
+# --- CLAP plugin backend (plugins only) ---------------------------------------
+# Proposal 08 M1. CLAP is MIT, header-only and one C ABI on every platform, so
+# discovery is simply "is the submodule checked out?" — there is no library to
+# find, no pkg-config file, and nothing to install (_env.sh's ensure_submodules
+# fetches it from both build.sh and rebuild.sh). Follows the shape of the
+# TW_HAVE_RUBBERBAND block this file used to carry: discover, then PRIVATE
+# include dirs + a PRIVATE compile definition, then STATUS or WARNING.
+#
+# PRIVATE is load-bearing. The clap headers and TW_HAVE_CLAP must stay invisible
+# to every other target: a public tw/plugins/*.h whose declarations changed with
+# TW_HAVE_CLAP would give tw_plugins and its consumers different views of the
+# same types (ODR/ABI skew). That is why the backend's own header lives in
+# plugins/src/, not plugins/include/.
+set(TW_CLAP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/clap)
+if(EXISTS ${TW_CLAP_DIR}/include/clap/clap.h)
+    target_sources(tw_plugins PRIVATE
+        plugins/src/twclapmodule.h
+        plugins/src/twclapmodule.cc
+        plugins/src/twclapplugin.cc
+    )
+    target_include_directories(tw_plugins PRIVATE ${TW_CLAP_DIR}/include)
+    target_compile_definitions(tw_plugins PRIVATE TW_HAVE_CLAP=1)
+    if(SMARAGD_LINUX)
+        target_link_libraries(tw_plugins PRIVATE dl)
+    endif()
+    message(STATUS "tw_plugins: CLAP backend ENABLED (proposal 08 M1)")
+
+    # De-risking spike, NOT shipped and NOT a test gate: loads one .clap with the
+    # production loader and prints the factory contents. Under plugins/tools/ so
+    # check_logging.py exempts its table (tools/ is an ALLOW_DIR); it needs the
+    # same PRIVATE clap includes because it uses the backend's private header.
+    add_executable(clap_probe plugins/tools/clap_probe.cc)
+    target_link_libraries(clap_probe PRIVATE tw_plugins)
+    target_include_directories(clap_probe PRIVATE
+        ${TW_CLAP_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src
+    )
+
+    # SHIPPED, and the reason plugin scanning cannot take the app down (proposal
+    # 08 M2 / §Decisions 2): the out-of-process probe. One module per run, JSON
+    # to stdout, so a plugin that crashes or hangs while being instantiated
+    # kills THIS process and becomes a cached failed/timeout record. Same
+    # PRIVATE clap includes + plugins/src as clap_probe, for the same reason.
+    add_executable(smaragd_pluginprobe plugins/tools/plugin_probe.cc)
+    target_link_libraries(smaragd_pluginprobe PRIVATE tw_plugins)
+    target_include_directories(smaragd_pluginprobe PRIVATE
+        ${TW_CLAP_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src
+    )
+    set_target_properties(smaragd_pluginprobe PROPERTIES AUTOMOC OFF)
+
+    # Build-time test fixture: a real 2-in/2-out CLAP module built from this
+    # repo, so plugins_test can exercise the actual load path without anyone
+    # installing a third-party plugin. Written in C so the .clap has no
+    # libstdc++/libgcc import and loads wherever ctest runs it. Later milestones
+    # reuse it as the headless stereo plugin for qxa render cases.
+    add_library(twtestclap MODULE plugins/tests/twtestclap.c)
+    target_include_directories(twtestclap PRIVATE ${TW_CLAP_DIR}/include)
+    set_target_properties(twtestclap PROPERTIES
+        PREFIX ""
+        SUFFIX ".clap"
+        C_STANDARD 11
+        AUTOMOC OFF
+    )
+    # ALSO drop it next to the app binary (proposal 08 M3). A qxa action script
+    # names the module with a RELATIVE path, and SInsertPluginAction resolves a
+    # relative path against the .qxa's directory and then against
+    # QCoreApplication::applicationDirPath() — so "twtestclap.clap" reaches the
+    # fixture whatever the build directory is called, which a path like
+    # ../../build/lib/twtestclap.clap would not.
+    add_custom_command(TARGET twtestclap POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:twtestclap>
+                ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/twtestclap.clap
+        COMMENT "Copying the twtestclap fixture next to the app binary (qxa cases)")
+else()
+    message(WARNING "tw_plugins: third_party/clap not checked out; CLAP plugin hosting DISABLED. Run 'git submodule update --init --recursive' (or ./build.sh, which does it).")
+endif()
 
 # --- E8 devices: platform audio I/O (backends + inputs) ----------------------
 tw_module(devices
@@ -415,6 +502,31 @@ tw_module_test(twlog_test                   core/tests/test_twlog.cpp           
 tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
+if(TARGET twtestclap)
+    # The fixture's absolute path, resolved by the generator so it is correct for
+    # whatever output layout the platform picks. Its presence is also what makes
+    # the CLAP half of plugins_test compile at all — the test #ifdefs on it, so a
+    # build without the submodule skips those checks instead of failing to build.
+    add_dependencies(plugins_test twtestclap)
+    target_compile_definitions(plugins_test PRIVATE
+        TW_TESTCLAP_PATH="$<TARGET_FILE:twtestclap>")
+endif()
+# The scanner/cache gate (proposal 08 M2): cache hit / miss / invalidate-on-mtime,
+# the stickiness of a failed record, and the out-of-process probe. It needs
+# plugins/src on its include path for the cache's private header, and both the
+# fixture module and the probe executable built first.
+tw_module_test(plugins_scan_test             plugins/tests/scan_test.cc                  tw_plugins)
+target_include_directories(plugins_scan_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src)
+if(TARGET twtestclap)
+    add_dependencies(plugins_scan_test twtestclap)
+    target_compile_definitions(plugins_scan_test PRIVATE
+        TW_TESTCLAP_PATH="$<TARGET_FILE:twtestclap>")
+endif()
+if(TARGET smaragd_pluginprobe)
+    add_dependencies(plugins_scan_test smaragd_pluginprobe)
+    target_compile_definitions(plugins_scan_test PRIVATE
+        TW_PLUGINPROBE_PATH="$<TARGET_FILE:smaragd_pluginprobe>")
+endif()
 tw_module_test(sources_test                 sources/tests/sources_test.cc               tw_sources)
 tw_module_test(vocoder_test                 sources/tests/vocoder_test.cc               tw_sources)
 # NOT a gate: timing benchmark for the W5 SIMD work (run manually).

@@ -7340,3 +7340,754 @@ that does nothing. It needs a gain stage in the clip's reader chain, a
 `set-clip-gain` action and a qxa energy test — its own proposal. The panel's
 shared commit helper is shaped so a relative-mode field drops in without
 restructuring.
+
+## 2026-07-26 — Arranger lane geometry: heads glued to lanes, per-lane heights
+
+Two reported UI defects (screenshots): the track heads in the control column
+did not line up with the timeline lanes, and the Track Detail dock left a
+stale black rectangle. Diagnosis + design: `plan/proposed/30_TRACK_HEAD_LAYOUT.md`
+(§A/§B root cause, §E what shipped).
+
+**Root cause (heads):** THREE rival formulas placed the heads, none matching
+the painter's `SMV_TIME_RULER_HEIGHT + i*trackHeight_ - upperLeftY_` —
+`rebuildControlColumn` (ruler offset once), `setTrackHeight` (no ruler offset,
+and indexed by CONTROL index, which skips take-lane rows), and
+`setUpperLeft`/`setTopOffset` (ruler offset twice, via a `move()` on the
+box). On top of that `qTrackControlBox_` is layout-managed, so every manual
+move/resize of it — the only place the scroll offset lived — was silently
+reverted by the next layout activation (window resize, dock toggle,
+`invalidate()` from setTrackControlWidth). Hence "misaligned, intermittently".
+
+**What shipped (the requester asked it hold for individually-sized tracks and
+several lanes per track, so the assumption was replaced, not centralised):**
+- `STrackRow` owns its `height` + `isSubLane()`; `SStdMixerView` keeps
+  `rowTop_` prefix sums. `rowTop()/rowHeight()/rowAtLaneY()/laneGroupHeight()/
+  visibleRowCountFrom()` are the only row↔pixel mapping; `laneTop()/
+  laneHeight()/rowAtViewY()` are their view-space face and
+  `controlYOfRow()/rowAtControlY()` the column-space one — the SAME
+  functions, which is what glues heads to lanes. ~20 `row*trackHeight` sites
+  converted (paint, ruler grid, hit-tests, hover, drop, drag, repaint rects).
+- Per-track height as a FACTOR of the base height (`setTrackHeightScale`,
+  0.25..4.0, UI-only state beside collapsed_/takesExpanded_) so vertical zoom
+  still scales everything uniformly. "Lane height ▸ Small/Normal/Large/Extra
+  large" in the track context menu. Sub-lanes: `SUB_LANE_SCALE` (1.0 today).
+- Scroll anchor is `topRow_`, `upperLeftY_ = rowTop(topRow_)` — a running
+  sum, re-derived after anything that changes a height.
+- The box is a fixed viewport (all 7 manual move/resize calls deleted); its
+  Resize event re-places the heads. Heads span their lane GROUP, so a track
+  with take lanes gets one strip over all of them.
+- `SSMVMixerControl` lost its construction-time minimum height and got a
+  height-driven density (Full / Compact / Tiny): buttons flip to a row, the
+  fader lies down, and what does not fit is HIDDEN, never clipped — the
+  "squashed head" in the screenshot was plain overflow at trackHeight 100 vs
+  a ~130 px strip.
+- Fixed in passing: `getSLinkVisibRect` had no scroll term (wrong repaint
+  band during a scrolled drag); a double-click on a head propagated up and
+  spawned a track; `setColumnMinimumWidth(0,8)` clobbered the divider column
+  width restored one line earlier.
+
+**Root cause (dock):** `STrackDetailPanel` and `STrackHeaderResizer` are
+plain QWidget subclasses styled with `setStyleSheet("QWidget {…}")` and no
+paintEvent. Qt only paints a sheet background for a subclass that draws
+PE_Widget itself, while DECLARING one suppresses the palette fill — so the
+area was never written and kept whatever was in the backing store. Both now
+paint (panel: WA_StyledBackground + PE_Widget, class-scoped selector;
+divider: direct fillRect). The panel also stopped reserving 450 px when
+empty (placeholder + honest sizeHint) — that reservation was most of the
+dead area.
+
+**Gates:** new `lane_alignment.qxa` (zoom, scroll, per-track heights, take
+lanes, and combinations; asserts every head sits exactly on its lane and that
+the row geometry inverts at both lane edges) — verified to FAIL when one
+`layoutControlColumn()` call is removed, so it has teeth. Full 57-case qxa
+suite, layering, logging — green. New testkit actions `set-lane-view` /
+`assert-lane-alignment`, routed through SMainWindow (testkit may not include
+app/timeline). Contract updated: `main/timeline/CONTRACT.md` invariants 5-7.
+
+## 2026-07-26 — Proposal 08 M0+M1 EXECUTED: submodule convention + the CLAP backend
+
+Execution plan: `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`. This entry covers
+M0 and M1 only; the scanner/cache/Options page (M2), the per-bus tap (M3),
+serialization (M4), UI+actions (M5) and VST3 (M6) are untouched.
+
+**M0 — the repo's first submodules.** There was no `.gitmodules` and no
+`third_party/` before this. `smaragd/third_party/clap` (free-audio/clap 1.2.10,
+MIT, header-only) and `smaragd/third_party/vst3_pluginterfaces` (added now, used
+from M6 — the convention lands once). Placement outside `tw303a/` and `main/` is
+deliberate: `tools/check_layering.py` and `tools/check_logging.py` walk exactly
+those two trees, and SDK sources would trip the logging checker on `printf(`.
+New `ensure_submodules()` in `_env.sh`, called from **both** `build.sh` and
+`rebuild.sh` — `build.sh` deliberately skips `ensure_render_deps`, so a hook
+only in `rebuild.sh` would never run on the common path. Its sentinel is a real
+header, not the directory (an uninitialised submodule leaves an empty dir), and
+after a successful fetch it touches `tw303a/CMakeLists.txt`: submodule content
+appearing is invisible to CMake's dependency graph, so without that the
+incremental path would configure with CLAP still off.
+
+**M1 — CLAP backend.** `plugins/src/twclapmodule.{h,cc}` (LoadLibraryExW with
+LOAD_WITH_ALTERED_SEARCH_PATH / dlopen, macOS bundle path resolved to
+`Contents/MacOS/<basename>`, `clap_entry` resolved, init/deinit matched,
+modules **interned by path** so several instances share one DSO's init pair) and
+`plugins/src/twclapplugin.cc` (`twClapPlugin : audio::twPlugin` over
+clap.audio-ports / clap.params / clap.state / clap.latency / clap.gui, minimal
+clap_host whose request_* callbacks only record flags — nothing calls back into
+the graph). `twPluginRegistry::instantiate()` gained a `format == "clap"` branch,
+symbol-referenced, and now logs-and-refuses an unknown format instead of
+returning a bare nullptr.
+
+Three prerequisites landed with it, all recorded as invariants in
+`plugins/CONTRACT.md`:
+- **`prepare()` is actually called.** Nothing in the repo called it before, so no
+  plugin ever learned its sample rate or block size. `twPluginInsert` prepares in
+  its constructor (the UI thread — which is where CLAP says activate() belongs)
+  and re-prepares only on a genuine rate change.
+- **Pages are chunked.** `twPluginInsert::kChunkFrames` = 4096 is what prepare()
+  promises and what process() gets, walked through the same de-interleaved
+  scratch so DSP state carries across chunks. A 65536-frame page used to be
+  handed to the plugin whole.
+- **Preview freezes bypass the plugin.** `freezePreviewPage` passes 1 kHz;
+  honouring it would re-activate and reset the plugin on every waveform redraw.
+  A freeze whose sampleRate differs from `env.getSRate()` is a preview.
+
+**`setParam()` never touches the plugin.** It updates a host-side mirror (what
+`getParam()` reads) and pushes into a lock-free SPSC ring drained into
+`clap_process::in_events`; `params->flush()` is used only while the plugin is
+inactive, decided under the same mutex that guards activation. Ring overflow
+raises a resync flag instead of dropping: the next drain re-sends every parameter
+from the mirror, which is exact because parameters are last-value-wins.
+
+**State blobs** are wrapped in our own 8-byte frame ('TWCP', u16 version, u16
+reserved) with the plugin's opaque chunk as the payload — CONTRACT invariant 3.
+A future version is refused, not guessed at.
+
+**Test fixture, not a third-party install.** `plugins/tests/twtestclap.c` is a
+real 2-in/2-out CLAP module built from this repo as `twtestclap.clap` (a MODULE
+library, written in C so the DLL has no libstdc++/libgcc import and loads
+wherever ctest runs it). Its absolute path reaches `plugins_test` as a generator
+expression. It returns `CLAP_PROCESS_ERROR` if handed more frames than the host
+declared, and in "report block size" mode writes the frame count it saw into its
+output — which is how the chunking assertion reads the block size the plugin
+*actually* observed. Later milestones get a headless stereo plugin for qxa render
+cases for free. `plugins/tools/clap_probe.cc` (target `clap_probe`, not a gate,
+`tools/` is exempt from check_logging) is the M0 spike: it loads a real .clap
+with the production loader and prints the factory contents.
+
+**CMake.** Discovery follows the retired `TW_HAVE_RUBBERBAND` block's shape:
+existence check → `target_sources`/`target_include_directories(... PRIVATE)` →
+`target_compile_definitions(... PRIVATE TW_HAVE_CLAP=1)` → STATUS or WARNING.
+PRIVATE is load-bearing and now CONTRACT invariant 4: the backend's header lives
+in `plugins/src/`, and no public `tw/plugins/*.h` may change shape with
+TW_HAVE_CLAP, or consumers get ODR/ABI skew. A build without the submodule
+compiles, warns, and skips the CLAP half of `plugins_test`.
+
+**Gates:** `check_layering.py` and `check_logging.py` clean; `./build.sh` clean
+with no new warnings; `ctest -R plugins_test` green (25 checks, including the
+real CLAP load path); all 16 non-qxa module tests green;
+qxa.render_sawtooth_with_effects PASS (the chain in the signal path, exercising
+the new prepare/chunking code). No CLAP plugin is installed on the development
+machine (`%COMMONPROGRAMFILES%\CLAP`, `%LOCALAPPDATA%\Programs\Common\CLAP` and
+`CLAP_PATH` are all absent), so `clap_probe` was verified against the in-repo
+fixture only — validation against a third-party plugin (Surge XT / Vital / u-he)
+is still pending and belongs with the M2 manual pass.
+
+## 2026-07-26 — Proposal 08 M2 EXECUTED: the scanner, the cache, and crash isolation
+
+`plan/todo/08_PLUGIN_HOSTING_EXECUTION.md` M2 (AC 1). The registry stopped being
+a hardcoded list: it now scans directories, caches what it learned, and probes
+plugins in a child process so a bad one cannot take the app down. The execution
+plan itself is committed here too — it is the shared spec across the M0..M7
+agents and belongs in history.
+
+**The registry grew an API, and `plugins()` stopped returning a reference.**
+`setSearchPaths` / `setCachePath` / `setProbeExecutable` / `setProbeTimeoutMs` /
+`setScanProgress` / `rescan(bool force)` / `rescanAsync` / `isScanning` /
+`waitForScan` / `scanStats` / `findByUid`, all guarded by a mutex. `plugins()`
+and `scanStats()` return BY VALUE (CONTRACT invariant 8): a worker thread
+replaces the descriptor list wholesale, so a `const&` into it was a data race
+from the moment a scan could run. `rescan()` deliberately holds that mutex
+only to snapshot the configuration and to swap the finished result in — probing
+loads foreign code and spawns processes, and the UI has to stay answerable
+throughout.
+
+**Cache: remembered failures are the point.** `<configDir>/plugincache.json`
+(QJson; `tw_core` already links Qt Core and the scan path is not realtime), one
+record per module keyed on `path + sizeBytes + mtimeMs + scannerVersion`. A
+`failed`/`timeout` record is a cache HIT that yields no plugin, so one crashing
+module costs one probe ever instead of one per launch; `rescan(force)` is the
+only thing that clears them, and that is what the Options page's "Rescan now"
+sends. Written through `QSaveFile` (temp + rename) so a crash mid-write leaves
+the previous table intact rather than a truncated one the next launch would
+discard wholesale. Deliberately NOT `twSidecarStore`: its key is a content hash
+of audio PCM and its LRU cap would silently evict the table — "the second launch
+is slow again, sometimes".
+
+**Crash isolation is a separate executable, and the APP supplies its path.**
+`plugins/tools/plugin_probe.cc` → `smaragd_pluginprobe`: one module per run,
+descriptor JSON to stdout, diagnostics to stderr through `TW_LOG*` so they can
+never corrupt the JSON. The registry drives it with `QProcess` + a timeout and
+turns a non-zero exit, a crash (`exitStatus() != NormalExit`) or a timeout into
+the corresponding cache record. `setProbeExecutable` is the app's job on purpose
+(CONTRACT invariant 10) — the registry stays headlessly testable, and only the
+app knows the path is next to the exe on Windows and inside `Contents/MacOS` in
+a macOS bundle (POST_BUILD copy added, ordered BEFORE the `codesign --deep`
+step, or the sealed resources would go stale). A probe that cannot be *started*
+— as opposed to failing on a plugin — falls back to in-process scanning for the
+rest of the run, once, with a warning: still correct for a corrupt file, but
+without isolation.
+
+**A worker QThread, not a std::thread.** `rescanAsync` uses `QThread::create`
+because the scan legitimately needs QProcess and QJson, and because this repo's
+recorded invariant is that a raw std::thread adopted by Qt deadlocks the
+teardown join. The engine never emits a Qt signal from it either: the app polls
+`isScanning()` from a 200 ms main-thread `QTimer` and emits
+`SApplication::pluginScanFinished` from *there*.
+
+**Search paths.** New public `twpluginsearchpaths.h`: `twPluginSearchPaths::
+defaults(format)` (Windows `%CommonProgramFiles%\CLAP` +
+`%LOCALAPPDATA%\Programs\Common\CLAP`, macOS `/Library/Audio/Plug-Ins/CLAP` and
+the `~` sibling, Linux `~/.clap` + `/usr/{,local/}lib/clap`, plus `CLAP_PATH` /
+`VST3_PATH` split on the platform separator) and `enumeratePluginModules(dirs)`,
+which walks recursively (depth-bounded at 8, symlink-loop-guarded, output sorted
+and de-duplicated so a scan is deterministic and an overlapping pair of search
+paths does not probe the same file twice). A *directory* named `*.clap` is
+treated as one macOS bundle and stat'ed through `Contents/MacOS/<basename>`, so
+touching the wrapper does not invalidate the cache. `formatForFile()` maps
+`*.clap` and nothing else on purpose: a `.vst3` probed before M6 lands would be
+cached as a permanent failure M6 would then have to force-clear.
+
+**A real M1 bug fell out of the first corrupt module.** `twClapModule::open()`
+destroyed the failed module *while holding* the non-recursive intern mutex that
+`~twClapModule` also takes to un-intern itself — a self-deadlock. It survived
+M1 because only the failure path reaches it, and the M2 scanner is the first
+code in the repo that deliberately hands the loader files which are not plugins.
+Now CONTRACT invariant 11.
+
+**App side.** `SOpt::PluginSearchPaths` / `PluginScanOnStartup`, with
+`SOpt::def()`'s first platform-conditional default — and it does not restate the
+per-OS locations, it calls `twPluginSearchPaths::defaults("clap")`, so the
+scanner and the options page cannot disagree. `SSettings` distinguishes "never
+configured" (→ defaults) from "the user removed every entry" (→ search nowhere)
+via `contains()`. A new **Plugins** page in `SOptionsDialog` (tree item and
+stack page added in matching order — the mapping is by top-level index and
+nothing else): directory list with Add… / Remove / Defaults, a
+scan-on-startup checkbox, a live "Rescan now" (like the Log page's live
+`setConsole`), and a status label driven by a 400 ms poll. `SApplication`
+pushes paths + cache path + probe path at startup, scans in the background, and
+joins the worker first thing in its destructor. `SPluginBrowserDialog` became a
+QTreeWidget with Name / Format / Vendor / I/O columns, filters across all
+columns, repopulates on `pluginScanFinished` (it used to snapshot `plugins()`
+once at construction, which showed an empty browser during the startup scan),
+and resolves its selection through `findByUid` rather than by name — a real
+scanner can legitimately find the same name twice.
+
+**Gates:** `check_layering.py` (with `servicesui` and `shell` gaining
+`plugins`) and `check_logging.py` clean; `./build.sh` clean with no new warnings;
+new `plugins_scan_test` green (43 checks: cache miss/hit, invalidate-on-mtime,
+failed-record stickiness, force clearing it, cache reload in a fresh registry,
+refusal of a foreign `scannerVersion`, `findByUid`, `rescanAsync`, and the same
+verdicts through the probe); `ctest -E qxa` 17/17 (was 16/16 + the new test).
+Crash isolation verified end-to-end against the running app: a search path
+containing a corrupt `.clap` gave `2 module(s) found, 2 probed, 1 failed` on the
+first launch and `0 probed, 1 cached, 1 skipped` on the second, with the app
+alive both times.
+
+**Not verified, and not claimed:** the GUI interaction pass (open Edit →
+Options → Plugins, add a directory, press Rescan now, watch the label). The
+page compiles and every connection is compile-time checked new-style, but this
+machine's antivirus blocks input-injection scripting, the sandboxed shell cannot
+take foreground, and the developer was working at the machine — so it was left
+alone rather than faked. Together with the third-party CLAP validation still
+owed from M1, that is the M2 manual pass.
+
+**Out of scope and untouched:** the per-bus tap and `twPluginSlotProcessor`, the
+interleaved-stereo-into-a-mono-page bug and page invalidation on param/bypass
+(M3 — a real stereo plugin still sounds wrong, as expected); `SPluginSlot`
+serialization and the missing-plugin placeholder (M4); the parameter editor and
+the three missing actions (M5); VST3 (M6); macOS (M7).
+
+## 2026-07-26 — Proposal 08 M3 EXECUTED: the stereo-coherent signal path (processor + per-bus taps)
+
+`plan/todo/08_PLUGIN_HOSTING_EXECUTION.md` M3. Closes the two signal-path
+defects that made a real stereo plugin sound wrong, and the invalidation gap
+that made a bypass or parameter edit inaudible.
+
+**Why a split at all.** The frozen-page model is one MONO page per component
+(`twComponent::freezePage_nolock` renders `idx = 0` only), so N parallel mono
+wires must be N parallel component instances. A stereo-linked plugin, though,
+has to see all its channels in ONE `process()` call. Those two facts cannot both
+live in one component — which is why the old `twPluginInsert::freezePage`
+interleaved L/R into a page the engine then read as mono, and why `STrack`
+building one `twPluginChain` per bus with `nBusses = 1` left a 2-in plugin's
+second input wired to nothing (`rebuildWiring` only ever touched
+`port < nBusses_`). So a slot is now:
+
+- **`twPluginSlotProcessor`** (new, `plugins/{include/tw/plugins,src}/twpluginslotproc.{h,cc}`)
+  — plain C++, deliberately not a `twComponent`. Owns the `twPlugin`
+  instance(s), the bypass flag, `prepare()`, the 4096-frame chunking, the
+  channel-mismatch mapping, and a two-entry `(startPos, len, stamp)` all-bus
+  page cache. The first tap to ask renders every bus; the rest hit the cache.
+- **`twPluginInsert`** — now strictly a 1-in/1-out **bus tap** holding
+  `shared_ptr<twPluginSlotProcessor>` + `busIndex_`. It overrides `freezePage`
+  only to keep the preview bypass (CONTRACT 6) and then DELEGATES to
+  `twComponent::freezePage`, so it inherits the page cache, the epoch stamping,
+  the RT-thread guard, the stale-predecessor fallback and the readiness gate —
+  none of which the hand-rolled M1 override had. The render itself is
+  `renderFrames()`, which the base calls with no component lock held.
+- **`twPluginChain`** — no longer threads pages through the list by hand (its
+  loop also mis-used the `previousPage` argument as "the input page", conflating
+  a temporal predecessor with an upstream producer). Each tap is wired to its
+  predecessor, so the chain asks the LAST tap through `requestPage()` and the
+  whole chain walks itself. Every path now snapshots `plugins_` and releases
+  `pluginsMutex_` before pulling.
+
+**Channel-mismatch policy** (proposal 08 §Layer 3), derived once from the
+plugin's OWN `ioLayout()` — not from a descriptor a stale project or an
+out-of-date scan cache may disagree with: `N→N` Direct (one instance); `1→1` on
+N buses DualMono (N instances — which is why the processor takes an
+instantiation FACTORY, not one instance); `2→2` on one bus MonoFold (feed both
+inputs, average the outputs); anything else `Unsupported` — transparent, logged
+ONCE per slot. `enum class twPluginSlotState { Active, Missing, Unsupported }`
+lands now with all three values so M4 adds persistence to an existing type.
+
+**Two hard invariants, written into `plugins/CONTRACT.md` as 13 and 14, and
+tested.** (13) A tap never holds its own component mutex across the shared
+render, and `pullUpstreamPage()` takes it only to snapshot the producer before
+releasing and calling `requestPage()`. Otherwise bus 0 — processor mutex held,
+gathering bus 1 — deadlocks against bus 1's own freeze waiting for that same
+processor mutex. This is the failure class of the input-cursor freeze race and
+the split-repaint vtable crash, so `plugins_test` freezes two taps of one slot
+CONCURRENTLY, 120 rounds with a forced re-render each round, under a 60-second
+watchdog that aborts loudly instead of hanging the suite. (14) Pulls go through
+`requestPage()`, never raw `freezePage()`, and taps inherit the base
+`planPage()` so the scheduler binds their single upstream dep.
+
+**Invalidation** (CONTRACT 15). There are TWO caches in front of a plugin edit,
+so `bumpParamEpoch()` moves both: the processor's cache key and every tap's
+`contentEpoch`. The key is `paramEpoch_` plus the SUM of the taps' content
+epochs — both monotonic, so the sum is too and cannot alias, and including the
+taps is what makes an UPSTREAM edit miss the processor cache as well.
+`SPluginSlot::setBypass`/`restoreState`/`notifyPluginEdited` route through it and
+then `invalidateRenderPath()`. The bypass/param ACTIONS remain M5's.
+
+**App side.** `SPluginSlot` now owns one processor plus a tap per bus (it used
+to instantiate a separate plugin per bus, which cannot host a stereo-linked
+plugin at all), resolves `(format, uid)` through `findByUid` so a scanned record
+supplies the module path and the real channel counts, and exposes
+`setBusCount`/`getSlotState`/`getSlotMode`/`getEffectiveDescriptor`.
+`STrack::setNBusses` tells every existing slot the final bus count BEFORE any
+tap is built (the count is what selects the mapping) and populates newly created
+chains with each slot's tap in slot order. `insert-plugin` and `remove-plugin`
+gained a `path` attribute: without the module path a `format="clap"` descriptor
+cannot be instantiated at all, so neither an action script nor undo-of-a-remove
+could name a real plugin. A relative path resolves against the `.qxa`'s own
+directory and then against the application directory, and the build now drops
+`twtestclap.clap` next to the binary — so a case works whatever the build
+directory is called.
+
+**A finding that is NOT M3's to fix: the sink is still mono.** The graph carries
+N buses correctly end to end, but both output stages collapse to one page and
+duplicate it — `RenderSession` (`bufR[i] = sample;  // Duplicate to stereo
+(temporary; proper multi-channel TBD)`) and `AudioEngine`'s page pull. Bus 1's
+audio cannot reach a file or a device yet, so proposal 08's "hear it in stereo"
+is blocked by `tw_render`/`tw_playback`, not by the plugin layer, and a rendered
+WAV's two channels are equal BY CONSTRUCTION. `plugin_stereo_chain.qxa`
+therefore uses a fixture whose channel 0 depends on channel 1's INPUT
+(`out[0] = in[0]*0.5 + in[1]`, `out[1] = in[1]*0.5`), which puts the render at
+1.5x when both buses are wired, 1.0x with no plugin, and 0.5x with the pre-M3
+silent input 1 — three bands an RMS assertion can tell apart. Per-bus
+DISTINCTNESS is gated at engine level in `plugins_test` instead. The fixture's
+second entry point `tw.test.clap.stereoskew` exists because a qxa script cannot
+set a parameter or restore a state chunk before M5/M4: only DEFAULT behaviour is
+reachable headlessly.
+
+**Gates:** `check_layering.py` and `check_logging.py` clean; build clean with no
+new warnings from the changed files; `plugins_test` green (66 checks — the
+channel table, real audio through a two-bus slot, chunking observed at the
+plugin, bypass/param edits audible on the next freeze, the preview bypass, and
+the concurrent two-tap deadlock gate); `plugins_scan_test` green;
+`ctest -E qxa` 17/17; the new `qxa.plugin_stereo_chain` and
+`qxa.plugin_remove_and_undo` green plus
+`render_sawtooth_with_effects`, `render_sawtooth_minimal` and
+`mute_invalidates_cache`; the rendered 16-bit PCM WAV byte-identical across two
+runs at each of `SMARAGD_REVAL_WORKERS` ∈ {1,4,8,16} (8 renders, one `cmp`
+class); and the flake gate `repeat_test.sh plugin_stereo_chain.qxa 50` —
+50/50 at each of workers 1, 8, 4 and 16 (200 runs), re-confirmed 50/50 at
+workers 1 and 8 after the remove-plugin fix relinked the binary.
+
+Built in a separate `smaragd/build-m3/` (gitignored by `build-*/`) because the
+developer had `smaragd.exe` open with a project, which makes the link into
+`build/bin/` fail — no process was touched.
+
+**A defect found by M3's own verification, and fixed here.** `remove-plugin`
+changed the model and left the AUDIO untouched. `SPluginChain::childEvent` read
+the removed slot's index with `children().indexOf(child)`, but Qt delivers
+ChildRemoved AFTER the child is already out of `children()` — so that is always
+-1, the guarded branch never ran, `slotRemoved` was never emitted,
+`STrack::onPluginSlotRemoved` never called `twPluginChain::removePlugin`, and the
+slot's per-bus taps stayed wired into the DSP chain forever. A render after a
+removal came out identical to the processed one. It now takes the index from
+`SObject::indexOfChild()` BEFORE the base implementation drops the link from
+`childOrder_` (dereferencing the link there is safe because `~SLink` detaches
+while still fully typed). Pre-existing, from the original phase-1/2 plugin work
+— not from M0-M2 — and gated by the new `plugin_remove_and_undo.qxa`
+(with plugin 1.5x -> removed 1.0x -> undone 1.5x), which also gates the page
+invalidation on a slot removal.
+
+**Out of scope and untouched:** `SPluginSlot`/`STrack` serialization,
+`SProjectLoader::deferResolve`, `createNullPlugin`, persisting
+`twPluginSlotState` and the missing-plugin placeholder (M4); the parameter
+editor, missing/unsupported slot rendering and `SSetPluginBypassAction` /
+`SReorderPluginAction` / `SSetPluginParamAction` (M5); VST3 (M6); macOS (M7).
+The multi-channel sink above is nobody's milestone yet and should become one.
+
+## 2026-07-26 — Proposal 08 M4 EXECUTED: slots round-trip, and a missing plugin no longer costs the user their patch
+
+Plugin slots persist (AC 4) and a plugin that is not installed keeps the project
+valid and its settings intact (AC 5). The defect list this closes is
+`plan/todo/08_PLUGIN_HOSTING_EXECUTION.md` § "Slots do not round-trip", all seven
+rows.
+
+**The wire schema.** `SPluginSlot::serializeSelfAttributes` now calls
+`SObject::serializeSelfAttributes( o )` FIRST — that is what emits `id=`, and
+without it `SProjectLoader::createObjects` hits `if( id.isNull() ) … return -1`
+and aborts the WHOLE project load, not merely the slot. Then `bypassed`,
+`format`, `uid`, `name`, `vendor`, `path`, `nIn`, `nOut`, `isInstrument`, with
+`&`, `<`, `>` and `'` escaped (the model escapes nothing anywhere else, which is
+fine for numbers and corrupts the file the moment a plugin is called "Bob's & Co
+<EQ>"). The state chunk is a child element, which needed an override of
+`serialize( QTextStream& )`: the dead `serializeStateChunk( QDomElement&,
+QDomDocument& )` is deleted, because the write path is `QTextStream`-based via
+`SObject::serialize` — which is exactly what made the base64 restore in
+`readPreChildrenAttributes` dead code and slots un-round-trippable.
+
+```
+<SPluginSlot id='…' nRefs='…' … volume='0' pan='0' delay='0' bypassed='false'
+             format='clap' uid='tw.test.clap.stereoskew' name='…' vendor='…'
+             path='twtestclap.clap' nIn='2' nOut='2' isInstrument='false'>
+<state encoding='base64'>VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA</state>
+</SPluginSlot>
+```
+
+What is written is `descriptor_`, VERBATIM — never `effective_`. `effective_`
+carries the module path the registry resolved (absolute), and serializing it
+would silently absolutize a relative path and make the project machine-specific
+on its first save. Path resolution therefore moved OUT of
+`SInsertPluginAction::apply` into `SPluginSlot::resolveModulePath` (one copy, used
+by both the insert action and the load path), the action now stores the path as
+the caller gave it, and the slot resolves only for instantiation. A project saved
+with `path='twtestclap.clap'` re-saves as `path='twtestclap.clap'`.
+
+**`STrack` ↔ chain, adopted LATE.** `STrack` writes `pluginChainId='<ptr>'`.
+Before M4 it wrote no reference at all, its constructor always made a fresh empty
+chain, and a loaded `<SPluginChain>` (with all its slots) was orphaned —
+`~SProjectLoader` dropped the handle, refcount hit 0, `deleteLater()`. The
+reference cannot be an `<SLink>` child (`SObject::childEvent` treats every child
+link as a clip placement) and therefore cannot use the loader's dependency
+ordering, which only defers an element until each `<SLink objectId>` CHILD is in
+the dictionary. So the loader grew a small general hook —
+`SProjectLoader::deferResolve( std::function<void()> )`, drained at the end of
+`createObjects()` after `setRootComponent` and before `~SProjectLoader` — and
+`STrack::instantiateFromDomElement` registers a resolver that calls
+`adoptPluginChain()`. That drops the constructor's chain, reconnects
+`slotInserted`/`slotRemoved`/`slotsReordered`, and rebuilds the DSP itself,
+because a loaded chain's slots emitted `slotInserted` while the chain had no
+owner: bus count on every slot FIRST (it selects the channel-mismatch mapping),
+then one tap per bus appended to that bus's `twPluginChain` in slot order.
+
+`STrack` now also holds an `SLink` REFERENCE to its chain — in BOTH paths, not
+just the adopted one. Two reasons: an `SObject` whose refcount reaches zero
+`deleteLater()`s itself, so an adopted chain would die with the loader's handle
+link; and holding one in both paths keeps `nRefs` (a serialized attribute)
+identical between a new and a loaded project, which is what lets a
+save/load/save comparison be byte-equivalent at all. Dropping the old reference
+is also what retires the empty chain.
+
+`SPluginChain::getChainComponent()` / `getRootComponent()` stopped throwing. The
+former was a TODO stub returning a member nothing ever assigned, so the latter
+was an unconditional `std::runtime_error` out of the model layer for any caller —
+`SLink::getRootComponent()` reaches it. The owning track now installs a component
+provider (bus 0's `twPluginChain`); an unadopted chain answers null, honestly.
+
+**Missing plugins.** `createNullPlugin( const twPluginIoLayout& )` is new in
+`tw_plugins` (`plugins/src/twnullplugin.cc`), and `twPluginSlotProcessor` now
+SUBSTITUTES it when the factory produces nothing instead of leaving
+`instances_` empty. The point is the DECLARED layout: the mapping, the instance
+count and the `prepare()` bookkeeping become the ones the real plugin will get
+once it is installed, so installing it later changes only what `process()`
+computes, never the wiring. `Missing` wins over `Unsupported` (a substituted
+placeholder's layout is whatever a possibly-stale file claimed, so "the plugin is
+not here" is both the cause and the actionable report). A side effect worth
+having: a PARTIAL dual-mono chain is no longer reachable — the old path cleared
+every instance and silenced whole buses.
+
+The placeholder's own state chunk is EMPTY, which makes reading state from a
+non-Active slot destructive: it would overwrite the absent plugin's settings with
+nothing, so a user would lose their patch simply by opening the project on a
+machine without the plugin and saving it. `SPluginSlot::saveState()` therefore
+reads the live plugin ONLY when the slot is Active and otherwise hands back the
+stored blob verbatim. Both are now CONTRACT invariants 17 and 18.
+
+**Reload after a rescan** is `SPluginSlot::reloadPlugin()` on top of
+`twPluginSlotProcessor::setFactory()`. A slot's identity in the graph IS its
+processor — the taps hold it by `shared_ptr` and every `twPluginChain` holds the
+taps — so re-resolution hands the SAME processor a new factory rather than
+building a new one, and the DSP graph is never re-wired for what is not a
+structural change. The stored state chunk is re-applied afterwards and
+`pluginReloaded()` is emitted for M5's editor. The per-slot Reload affordance is
+M5's; the model side is done.
+
+**Gates.** `check_layering.py` and `check_logging.py` clean; build clean with no
+new warnings from the changed files; `serialization_roundtrip_test` green,
+extended with the state-chunk layer (a real `'TWCP'`-framed CLAP blob and its
+known base64 text, all 256 byte values surviving byte-exactly, encoding
+determinism, an empty blob staying empty, 100 round trips without drift);
+`plugins_test` green (14 new checks for the placeholder and the reload path);
+`plugins_scan_test` green; `ctest -E qxa` 17/17; new `qxa.plugin_slot_roundtrip`
+and `qxa.plugin_missing_placeholder` green, together with `plugin_stereo_chain`,
+`plugin_remove_and_undo`, `render_sawtooth_with_effects`, `load_project_render`,
+`takes_serialize_roundtrip`, `mute_survives_reload`, `exact_stretch_roundtrip`,
+`warp_anchors_roundtrip`, `delete_clip_undo_restores`, `folder_track_sums_once`
+and `mute_nested_track` (13 cases — every persistence round-trip case in the
+suite); the rendered 16-bit PCM WAVs byte-identical across two runs at each of
+`SMARAGD_REVAL_WORKERS` ∈ {1,4,8,16} for both new cases (16 renders, `cmp`
+against the workers-1 reference); and the `<SPluginSlot>` element of each fixture
+compared to its re-save with only `id`/`nRefs` normalized — byte-equal, state
+chunk and escaped vendor included.
+
+`qxa.plugin_slot_roundtrip` is the real round-trip proof, and it is a level
+assertion rather than a structural one. Its fixture's `<state>` chunk sets the
+CLAP test plugin's Gain to 2.0, and the fixture's DSP is
+`out[0] = in[0]*0.5*gain + in[1]*1.0*gain` on two identical mono buses, so the
+first second of the sawtooth discriminates three failures that were all real:
+0.0667 (the loaded slot never reached the DSP), 0.1000 (in the path, state chunk
+ignored), 0.2000 (correct — 1.5 × gain 2.0). Measured 0.19995.
+`qxa.plugin_missing_placeholder` loads a hand-written project naming
+`uid='tw.nobody.ships.this.plugin'` with a state chunk that decodes to the ASCII
+"SMARAGD-M4-STATE-VERBATIM", and asserts the unprocessed levels plus the exact
+re-serialization of descriptor, escaped vendor and blob. Both fixtures are
+committed next to `load_fixture.qxp`.
+
+One new testkit action, `assert-file-contains` (path + text, `absent="true"`
+inverts): a rendered WAV cannot show that a saved project still carries a
+descriptor and an opaque blob, and that is the whole of AC 5.
+
+Built in the existing `smaragd/build-m3/` (gitignored by `build-*/`) because the
+developer still had `smaragd.exe` open with a project, which makes the link into
+`build/bin/` fail. No process was touched.
+
+**Out of scope and untouched:** the parameter editor wiring, missing/unsupported
+slot RENDERING in the FX strip, and `SSetPluginBypassAction` /
+`SReorderPluginAction` / `SSetPluginParamAction` (M5); VST3 (M6); macOS (M7).
+`SRemovePluginAction`'s inverse still does not carry the state chunk, so an
+undone removal comes back with default parameters — M5 owns that check and it is
+now the only known hole in the slot's state story. The mono sink recorded under
+M3 is still nobody's milestone.
+
+## 2026-07-26 — Proposal 08 M5 EXECUTED: the plugin UI, and every plugin edit is now an action
+
+M5 closes `main/pluginui/CONTRACT.md` invariant 3. Before it, two of the five
+plugin mutations were not actions at all: the FX strip's Bypass checkbox called
+`SPluginSlot::setBypass()` and its drop handler called
+`SPluginChain::reorderSlot()` straight from the widget, and the parameter editor
+called `twPlugin::setParam()` straight from a slider. None of the three was
+undoable or scriptable. All five now go through the action system:
+`insert-plugin`, `remove-plugin`, `reorder-plugin`, `set-plugin-bypass`,
+`set-plugin-param` — documented in `docs/ACTIONS.md`.
+
+**The defect this milestone actually found.** M3 recorded "parameter and bypass
+changes must invalidate pages" and implemented `SPluginSlot::setBypass()` /
+`notifyPluginEdited()` calling `SObject::invalidateRenderPath()`. That call is a
+**no-op for a plugin slot**, and nothing had ever tested it:
+`invalidateRenderPath()` walks DOWN from the project root through `childLinks()`
+looking for `this`, and a track's `SPluginChain` is deliberately not an `SLink`
+child of the track (`STrack`'s constructor says so in as many words), so the walk
+never reaches a slot, `contains` is false everywhere and NOTHING is invalidated.
+The observable consequence, measured on the first run of the new qxa case: a
+bypass toggle and a gain change from 1.0 to 2.0 both rendered **0.099975 —
+byte-for-byte the unedited audio**, five renders in a row. The slot's own tap
+pages were staled correctly (`twPluginSlotProcessor::bumpParamEpoch()` does its
+half); the `twPluginChain` / `twTrackMix` / mixer pages above them were not, so
+the render served what it already had. Insert/remove/reorder never hit this
+because `STrack::onPluginSlot{Inserted,Removed,Reordered}` invalidate from the
+TRACK.
+
+The fix follows that working shape: `SPluginSlot` gained an `audioInvalidated()`
+signal, emitted by `setBypass()`, `notifyPluginEdited()` and `reloadPlugin()`;
+`STrack::onPluginSlotAudioInvalidated()` answers it with
+`invalidateRenderPath()` on itself. The connection is made in
+`onPluginSlotInserted()` (before the bus guard, `Qt::UniqueConnection` because a
+growing bus count re-runs it) AND in `adoptPluginChain()` — a loaded project's
+slots never emit `slotInserted` at anyone, so wiring only the first place would
+have made edits audible on a freshly inserted plugin and silent on a loaded one.
+This is now `pluginui/CONTRACT.md` invariant 6.
+
+**`SRemovePluginAction`'s inverse now carries the state chunk.** M4 left this as
+an explicitly-known hole: the inverse was built from the descriptor alone, which
+says nothing about parameter values, so undoing a removal re-instantiated the
+plugin at its factory defaults — the slot came back, the sound did not. Nothing
+caught it because `plugin_remove_and_undo` only ever exercised a slot at DEFAULT
+gain, where "restored" and "reset" are the same number. `apply()` now captures
+`slot->saveState()` (fresh from the live plugin when Active, the stored blob
+verbatim otherwise, so a Missing plugin's patch survives remove/undo on a machine
+that does not have it) and hands it to `SInsertPluginAction` as a new optional
+base64 `state` attribute. The re-insert replays it through `restoreState()`
+BEFORE the link is parented — which is the project-load ordering, so undo and a
+file load take the same path.
+
+**The three new actions**, on the `sinsertpluginaction.cpp` template, with a
+shared `spluginactionsupport.h` so the "parse the track path → chain → slot" rule
+exists once instead of five times:
+
+- `set-plugin-bypass` (`trackPath`, `slotIndex`, `bypassed`) — ABSOLUTE, not a
+  toggle, because a toggle applied twice by a repeated undo lands on the wrong
+  value.
+- `reorder-plugin` (`trackPath`, `fromIndex`, `toIndex`) — validates BOTH ends
+  against the chain, because `moveChildToIndex()` silently clamps and silently
+  returns on an out-of-range source, so an unchecked action would report success
+  having moved nothing and its inverse would then move something that never
+  moved. The inverse is the reverse move, not a swap (`QList::move`).
+- `set-plugin-param` (`trackPath`, `slotIndex`, `paramId`, `value`) — validates
+  the id against the plugin's own list and clamps to its declared range (every
+  backend's `setParam()` accepts an unknown id as a no-op, so an unvalidated
+  action would report success and a level assertion would then fail for a reason
+  nowhere near the truth); broadcasts to EVERY instance (dual-mono has N, and
+  they must not drift); calls `notifyPluginEdited()`; refuses on a
+  Missing/Unsupported slot, whose authority on settings is the stored blob.
+  Coalesces by `(trackPath, slotIndex, paramId)` the way `set-track-volume` does,
+  so a slider drag is one undo entry — `SActionUndoCommand::id()` hashes
+  `mergeKey()` and `QUndoStack::push()` does the merging, keeping the older
+  action's inverse and absorbing the newer value.
+
+**The UI.** `SPluginParamEditor` had been written and was **never constructed
+anywhere** — no call site at all. It is now bound to the MODEL (`SPluginSlot` +
+the `trackPath`/`slotIndex` that address it) instead of a bare `twPlugin`, so a
+slider submits an action; it re-reads its sliders on the new
+`SPluginSlot::paramsChanged()` (which is what makes an UNDO visible in an editor
+already on screen — the action mutates the plugin, not the widget) and rebuilds
+them on `pluginReloaded()`, because a reloaded plugin may expose a different
+parameter list. `SPluginEffectStrip` opens it on a row double-click and on a new
+per-row Edit button (a double-click is not discoverable), one window per slot,
+closed on the slot's `destroyed()`. Missing/Unsupported rows render greyed with
+the name the PROJECT FILE carried — never the placeholder's — plus `(missing)` /
+`(unsupported)`, a tooltip naming the format, uid, vendor and stored module path
+and saying the settings are kept, a disabled Bypass and Edit, and a **Reload**
+button wired straight to `SPluginSlot::reloadPlugin()`. Reload is deliberately
+NOT an action: it re-resolves and re-instantiates in place and mutates no
+document state (a re-save produces the same bytes), so there is nothing to undo,
+and it is UI-thread-only, which is exactly where a button click is. The strip
+also now listens to `slotsReordered` — the signal existed and nobody listened, so
+a reorder left the strip showing the old order — and it re-points every open
+editor at its slot's NEW index on a rebuild, because `reorder-plugin` moves a slot
+without touching the dialog and an editor holding the old index would aim its next
+parameter edit at a different plugin (`pluginui/CONTRACT.md` invariant 7).
+
+**Testing a milestone made of widgets.** Two new testkit verbs build the REAL
+widgets off screen and never show a window (a qxa run on Windows uses the real
+platform plugin; a test must not put a dialog on the developer's screen or steal
+focus): `assert-plugin-strip` matches `SPluginEffectStrip::describeSlot()`, a
+compact rendering of the row as the widget actually built it, and
+`plugin-editor-set-param` drives the editor's slider along exactly the path a
+drag takes, so the resulting `set-plugin-param` is what the render measures. No
+OS input is synthesized anywhere. This needed one new declared app edge,
+`testkit → pluginui` in `tools/check_layering.py` — the same shape as the
+existing `testkit → shell` edge that `drag-clip-edge` and
+`assert-lane-alignment` use.
+
+**`action_roundtrip_test` was built but never registered with CTest**, so three
+milestones of new verbs went in with the round-trip audit gating nothing — and it
+was RED: `assert-audio-energy`, `assert-audio-peak`, `assert-file-contains` and
+`assert-sidecar` all correctly REJECT their own default XML, because a filename /
+path / aspect is mandatory, so testing the default instance tested nothing for
+them. It now carries a table of representative fixtures (loaded before the round
+trip, so the fields are real values), additionally asserts that every attribute a
+fixture declares SURVIVES `readXml`+`writeXml` — write→read→write cannot catch a
+field `readXml` never reads, which is exactly the shape of the remove-plugin bug
+above — and fails on a stale fixture naming an unregistered verb. Registered with
+`add_test` and `QT_QPA_PLATFORM=offscreen`, so `ctest -E qxa` is now 18/18.
+
+**Gates.** `check_layering.py` and `check_logging.py` clean; build clean with no
+new warnings from the changed files (the only warnings are the pre-existing
+`calcOutputTo` deprecation, one per TU, confirmed by touching two untouched
+files); `ctest -E qxa` 18/18; `ctest -R "plugins_test|plugins_scan_test"` green;
+`action_roundtrip_test` green over 74 verbs, 12 of them from fixtures; three new
+qxa cases green — `plugin_bypass_and_param` (0.0999 → 0.19995 on gain 2.0 →
+0.0999 undone → 0.06665 bypassed → 0.0999 undone, plus an unknown `paramId`
+rejected), `plugin_remove_restores_param` (0.19995 → 0.06665 removed → 0.19995
+undone, and the re-saved project still carries the gain-2.0 `'TWCP'` blob) and
+`plugin_ui_strip_and_editor` (Active row editable and `mode=Direct`, the editor's
+slider audible at 0.19995 and undoable, the Missing row greyed with its reason
+tooltip and Reload, an editor edit on it refused, reorder through the action and
+back); `plugin_slot_roundtrip` EXTENDED with a bypass on the LOADED slot
+(0.19995 -> 0.06665 -> 0.19995), which is the only thing that gates the
+`adoptPluginChain()` half of the wiring above; no regressions in
+`plugin_stereo_chain`, `plugin_remove_and_undo`, `plugin_missing_placeholder` or
+`render_sawtooth_with_effects`; and the rendered 16-bit PCM WAVs of all four
+cases byte-identical (`cmp`) across a repeat run and across
+`SMARAGD_REVAL_WORKERS` in {1,4,8,16} — 90 renders, all against the final
+binary.
+
+Built in the existing `smaragd/build-m3/` (gitignored by `build-*/`) because the
+developer still had `smaragd.exe` open with a project, which makes the link into
+`build/bin/` fail. No process was touched.
+
+**Still manual, and listed for the user's pass:** that the strip and the editor
+LOOK right at all (nothing in this repo can look at a window, and no screenshot
+was taken); the double-click gesture itself; the drag-to-reorder gesture; the
+browser dialog; the Options -> Plugins page against a real third-party CLAP; and
+the install -> rescan -> Reload -> hear-it loop end to end.
+
+**Found and NOT fixed** (pre-existing, outside M5's scope, now recorded in
+`pluginui/CONTRACT.md`): drag-to-reorder cannot fire. `dragSourceIndex_` is only
+ever read and reset — `startDragFromPlugin()` was declared and never defined, and
+no `mousePressEvent` starts a `QDrag` — so `dropEvent` returns immediately. The
+`reorder-plugin` action behind it is tested and works; only the gesture that
+would reach it is missing.
+
+**Out of scope and untouched:** VST3 (M6), macOS bring-up (M7), native
+`clap_plugin_gui` / `IPlugView` embedding (a deliberate proposal-08 deferral —
+generic sliders only, on a fixed 1000-tick normalization, with CLAP's
+`value_to_text` still unused), and the mono sink recorded under M3, which is
+still nobody's milestone.
+
+## 2026-07-26 — Legacy project recovery: pre-M4 files could not be opened by anything
+
+Reported against a real user project (`test4/test4_2.qxp`, 16 tracks, 22 cuts,
+one Castello Reverb CLAP): the up-to-date build refused to open it, and crashed
+on the second attempt. Three defects, two of them pre-existing and one exposed
+by fixing the first.
+
+1. **The whole project was discarded over one id-less child.**
+   `SProjectLoader::createObjects()` answered a child with no `id=` with
+   "File is corrupt" and `return -1`. Combined with the M4 writer bug
+   (`SPluginSlot::serializeSelfAttributes` not calling the base, so no `id=`
+   was ever emitted), **every project saved with a plugin on a track before M4
+   was unopenable by the very build that wrote it.** An element with no id
+   cannot be the target of any `<SLink objectId>`, so it is now skipped with a
+   warning naming its type and uid.
+
+2. **The instantiation loop could not terminate.** The outer `while(true)`
+   rescans until the document is empty, so an element whose `<SLink objectId>`
+   names an object the file does not contain is never consumed. Exposed the
+   moment defect 1 stopped aborting: the user's file has exactly that (a
+   `<SPluginChain>` linking to the slot's would-be id), and the load span
+   ~3M passes/minute, 900 MB of log and 2.4 GB RSS before it was killed. A pass
+   that consumes nothing now names each unresolvable element and its dangling
+   target, drops them, and ends the loop.
+
+3. **The crash on the second attempt.** The failure path called
+   `enableInvalidation()` on the half-built graph that `openProjectFile` then
+   marks partial and `deleteLater()`s — handing the worker pool raw pointers
+   into objects `~QObject` was about to free (the first attempt's last log line
+   was a preview recompute). `SLoadProjectAction` now calls
+   `pauseRevalidation()` — which drains in-flight jobs — before balancing the
+   counter, and `~SProject`'s `isPartialLoad_` early return does the same.
+
+Gated by `legacy_project_recovery.qxa` (both of defect 1's and 2's shapes in one
+fixture, asserting the rest of the project survives byte-for-byte in audio
+terms) with a CTest `TIMEOUT`, because a regression of defect 2 hangs rather
+than fails. Verified on the user's actual file: loads in ~5 s with two warnings,
+and loads twice in one session without incident.
+
+**Not recoverable:** the plugin's PLACEMENT in pre-M4 files. The track -> chain
+reference was not serialized either, so a recovered slot would rejoin a chain no
+track owns. The user re-adds the plugin once; everything else comes back.

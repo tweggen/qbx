@@ -12,6 +12,7 @@ public:
     STrackHeaderResizer(SStdMixerView *mixerView, QWidget *parent = nullptr);
 
 protected:
+    void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
@@ -21,6 +22,7 @@ protected:
 private:
     SStdMixerView *mixerView_;
     bool dragging_ = false;
+    bool hovered_ = false;
 };
 
 #endif

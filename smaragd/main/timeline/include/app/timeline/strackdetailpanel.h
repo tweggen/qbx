@@ -23,9 +23,12 @@ public:
     // Set the track to display (nullptr hides content)
     void setTrack(STrack *track);
 
-    // Size constraint (50% of screen, max 450px)
+    // Size constraint (50% of screen, max 450px; small when empty)
     QSize sizeHint() const override;
-    int heightForWidth(int w) const override;
+
+protected:
+    // A QWidget subclass must draw its own style-sheet background.
+    void paintEvent(QPaintEvent *) override;
 
 private:
     void rebuildUI();
@@ -38,6 +41,7 @@ private:
     SPluginEffectStrip *pluginStrip_;
     QSlider *volumeSlider_;
     QLabel *volumeLabel_;
+    QLabel *placeholder_;   // shown instead of the content when no track is set
 };
 
 #endif

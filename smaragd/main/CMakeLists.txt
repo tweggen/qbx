@@ -145,9 +145,13 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/sinsertpluginaction.h
     objects/track/include/app/objects/track/seteditgroupaction.h
     objects/track/include/app/objects/track/smoveclipaction.h
+    objects/track/include/app/objects/track/spluginactionsupport.h
     objects/track/include/app/objects/track/spluginchain.h
     objects/track/include/app/objects/track/spluginslot.h
     objects/track/include/app/objects/track/sremovepluginaction.h
+    objects/track/include/app/objects/track/sreorderpluginaction.h
+    objects/track/include/app/objects/track/ssetpluginbypassaction.h
+    objects/track/include/app/objects/track/ssetpluginparamaction.h
     objects/track/include/app/objects/track/ssettrackvolumeaction.h
     objects/track/include/app/objects/track/strack.h
     objects/track/include/app/objects/track/strackcolormodifier.h
@@ -160,6 +164,9 @@ set(APP_OBJECTS_FILES
     objects/track/src/spluginchain.cpp
     objects/track/src/spluginslot.cpp
     objects/track/src/sremovepluginaction.cpp
+    objects/track/src/sreorderpluginaction.cpp
+    objects/track/src/ssetpluginbypassaction.cpp
+    objects/track/src/ssetpluginparamaction.cpp
     objects/track/src/ssettrackvolumeaction.cpp
     objects/track/src/strack.cpp
     objects/track/src/strackcolormodifier.cpp
@@ -240,8 +247,11 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudioenergyaction.h
     testkit/include/app/testkit/sassertaudiofrequencyaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
+    testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
+    testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
+    testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/stransporttestactions.h
@@ -250,8 +260,11 @@ set(APP_UI_FILES
     testkit/src/sassertaudioenergyaction.cpp
     testkit/src/sassertaudiofrequencyaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
+    testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sdragclipedgeaction.cpp
+    testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
+    testkit/src/spluginuitestactions.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
     testkit/src/stransporttestactions.cpp
@@ -348,6 +361,20 @@ if(SMARAGD_WINDOWS AND NOT SMARAGD_WIN_CONSOLE)
 elseif(SMARAGD_MACOS)
     add_executable(smaragd MACOSX_BUNDLE ${SMARAGD_MAIN_SOURCES})
 
+    # The out-of-process plugin probe has to live INSIDE the bundle: the app
+    # locates it as applicationDirPath()/smaragd_pluginprobe, which on macOS is
+    # Contents/MacOS. Added BEFORE the codesign command below on purpose —
+    # POST_BUILD steps run in the order they are declared, and dropping a file
+    # into the bundle after --deep --sign would leave the sealed resources stale.
+    if(TARGET smaragd_pluginprobe)
+        add_custom_command(TARGET smaragd POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:smaragd_pluginprobe>"
+                    "$<TARGET_BUNDLE_DIR:smaragd>/Contents/MacOS/"
+            COMMENT "Copying smaragd_pluginprobe into the app bundle"
+        )
+    endif()
+
     # Code-sign app with microphone entitlements after building
     add_custom_command(TARGET smaragd POST_BUILD
         COMMAND codesign --force --deep --sign -
@@ -372,6 +399,14 @@ target_link_libraries(smaragd
     PRIVATE
         app_ui app_objects app_core app_model
 )
+
+# Not a link dependency — a SEPARATE executable the app spawns at scan time
+# (proposal 08 M2). Declared so building just the `smaragd` target still produces
+# it; without it the app silently falls back to in-process probing, i.e. loses
+# its crash isolation, which is the kind of regression nobody notices.
+if(TARGET smaragd_pluginprobe)
+    add_dependencies(smaragd smaragd_pluginprobe)
+endif()
 
 # Auto-deploy Qt runtime DLLs / plugins next to smaragd.exe on Windows
 # (and the .app bundle on macOS) so the binary launches without a manual
@@ -444,3 +479,11 @@ target_link_libraries(action_roundtrip_test
     PRIVATE
         app_ui app_objects app_core app_model
 )
+
+# It was BUILT but never registered, so `ctest` never ran it: three milestones
+# of new action verbs went in without the round-trip audit ever gating anything
+# (proposal 08 M5). It needs a QApplication for the widget-owning verbs' static
+# registrars, and offscreen so it never touches a display.
+add_test(NAME action_roundtrip_test COMMAND action_roundtrip_test)
+set_tests_properties(action_roundtrip_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
