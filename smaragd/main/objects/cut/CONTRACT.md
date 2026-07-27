@@ -41,6 +41,23 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
    map and no clip edge. Every entry point clamps to
    SCut::PITCH_CENTS_LIMIT (+/-2400).
 
+Gesture-driven quantities are clamped BEFORE they size an allocation.
+cutDuration goes NEGATIVE mid-drag (right edge dragged past the left one) and
+a far slip inflates windowEnd; buildCapture_() runs on a REVALIDATOR WORKER,
+where a std::length_error out of buf.resize((size_t) negative) is
+std::terminate, not a failed edit. need/dur/wantFrames/toRead are floored at
+0 and the container capture is capped at the content's own duration (a window
+past the source end reads silence anyway). Test: stress_edge_negdur.qxa.
+
+capture_ is read through SCut::captureSnapshot(), never directly, from any
+thread that does not already hold mutex(). It is published by buildCapture_()
+(worker or render thread) and reset by invalidateCapture() (UI), so a bare
+read is a shared_ptr data race; the snapshot also keeps the source alive for
+the caller's whole use. captureBuildMutex_ does NOT substitute — it serializes
+builders, while invalidateCapture() resets under mutex(). Tests:
+stress_delete_churn.qxa, stress_stretch_split_slip.qxa (both swept over
+SMARAGD_REVAL_WORKERS).
+
 Self-registration (Phase 5): scut.cpp registers "SCut" with
 SProjectLoader from a static initializer.
 

@@ -8148,3 +8148,47 @@ placeholder against a gain and asserts the level is UNCHANGED.
 Gates: build, layering, logging, `ctest -R
 "plugins_test|plugins_scan_test|io_vector_test|mix_test|playback_test|render_test|action_roundtrip_test|schedule_test"`,
 and the eight plugin/legacy qxa cases — all green.
+
+## 2026-07-27 — Capture path: gesture clamps and capture_ snapshots
+
+Ported the still-relevant half of `65044d4` (branch `fix/capture-reval-crashes`,
+never merged). That commit fixed four defects in the async capture-revalidation
+path; main had since acquired two of them by other routes, and solved a third
+BETTER, so only two were brought over.
+
+**Deliberately NOT ported.** The commit made `SObject::nRefs_` a
+`std::atomic<int>` to stop a worker-side `revalRemoveRef` racing the GUI. Main's
+2026-07-20 fix is better and would have been REGRESSED by taking this: the
+reval pin is a SEPARATE `std::atomic<int> revalPins_`, `nRefs_` stays a plain
+main-thread-only int (Qt signals, deleteLater), and a refcount-driven deletion
+is deferred while any pin is held. Also already in main: the negative
+`srcOffset` handling in `twGrainSource::read` and the revalidator's
+`!revalNeeded` early-return unpin.
+
+**Ported 1 — the clamps.** `buildCapture_()` sized allocations straight from
+gesture values. A right-edge drag past the left edge makes `cutDuration`
+negative, it wins the `min` against `availFromOffset`, and
+`buf.resize((size_t) toRead)` turns it into a huge size_t. This runs on a
+revalidator worker, so the `std::length_error` is `std::terminate` — the app
+dies, no dialog. VERIFIED still live on main before the fix by running the
+branch's own case against the merged binary:
+`terminate called after throwing an instance of 'std::length_error'`.
+need/dur/wantFrames/toRead are floored at 0, the container capture is capped at
+the content duration (a slipped-past-the-end window reads silence anyway), and
+grainOffset is floored as defence in depth.
+
+**Ported 2 — capture_ snapshots.** Main already pinned the capture under lock in
+`rebuildReader`, but three cross-thread reads were still bare: the early
+`if( capture_ )` in `buildCapture_` (holding `captureBuildMutex_`, which does
+not exclude `invalidateCapture()`'s reset under `mutex()`), `ensureCapturePeaks`
+(read AND used across a whole scan loop), and `getPreview`. All three go through
+the new `SCut::captureSnapshot()`. Checked for the nested-lock hazard this
+introduces: `mutex()` is a non-recursive `std::mutex`, and none of the three
+sites holds it — `getPreview` calls `ensureCapturePeaks` unlocked too.
+
+Gates: build, layering, logging, all 18 non-qxa ctest targets, the three
+restored stress cases, and ten slip/loop/extend/split render cases — the ones
+the "cap n at dur" clamp could plausibly have changed
+(`extend_clip_past_content`, `slip_past_data`, `loop_asset_extend` especially).
+Flake gate: `stress_delete_churn` 4/4 at SMARAGD_REVAL_WORKERS 1, 8 and 16;
+`stress_stretch_split_slip` 4/4 at 1 and 16.

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Stress: repeated time-stretch / split / slip on clips referencing the SAME
+  original sample. Each edit calls invalidateCapture(), flooding the 8-worker
+  revalidator pool with async buildCapture_() jobs while the next edit already
+  resets capture_ — the data race behind the intermittent SEGV / std::length_error
+  and the use-after-free in SCut::buildCapture_().
+
+  Kept small (project stays ~4 s) so it loops fast. A short render at the end
+  keeps workers alive to drain queued jobs.
+-->
+<SActionScript version="1" name="stress_stretch_split_slip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Stretch churn on the same grained clip -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="96000" loopLength="0" stretch="1.5"/>
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="96000" loopLength="0" stretch="0.5"/>
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="96000" loopLength="0" stretch="2.0"/>
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="96000" loopLength="0" stretch="1.25"/>
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="96000" loopLength="0" stretch="0.8"/>
+
+    <split-clip clip="0,0" splitTime="48000"/>
+
+    <!-- Slip + stretch churn on the tail, bounded within source -->
+    <resize-clip clip="0,1" startTime="48000" startOffset="30000" duration="48000" loopLength="0" stretch="1.5"/>
+    <resize-clip clip="0,1" startTime="48000" startOffset="60000" duration="36000" loopLength="0" stretch="0.5"/>
+    <resize-clip clip="0,1" startTime="48000" startOffset="90000" duration="30000" loopLength="0" stretch="2.0"/>
+    <resize-clip clip="0,1" startTime="48000" startOffset="45000" duration="24000" loopLength="0" stretch="1.25"/>
+
+    <split-clip clip="0,0" splitTime="24000"/>
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="24000" loopLength="0" stretch="0.75"/>
+    <resize-clip clip="0,1" startTime="24000" startOffset="12000" duration="12000" loopLength="0" stretch="1.5"/>
+    <resize-clip clip="0,2" startTime="48000" startOffset="40000" duration="24000" loopLength="0" stretch="0.9"/>
+
+    <render filename="stress_final.wav" format="wav" quality="10"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

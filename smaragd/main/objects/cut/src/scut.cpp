@@ -302,7 +302,9 @@ void SCut::buildCapture_()
     // object mutex() must never be held that long.
     std::lock_guard<std::mutex> buildLock( captureBuildMutex_ );
 
-    if( capture_ ) {
+    if( captureSnapshot() ) {
+        // Read under mutex(): invalidateCapture() resets capture_ on another
+        // thread and captureBuildMutex_ (held here) does not exclude it.
         return;  // Already built
     }
 
@@ -340,7 +342,25 @@ void SCut::buildCapture_()
     WarpedPos windowEnd = warpedFromClip( ClipPos( windowLen ), snap.startOffset );
     length_t need = (length_t) windowEnd.frames();
     length_t dur  = (length_t) c.getDuration();
+
+    // Every quantity here is driven by a user GESTURE and can be nonsensical
+    // mid-drag: a right-edge drag past the left edge yields a NEGATIVE
+    // cutDuration, and a far slip yields an enormous windowEnd. Clamp before
+    // they reach any allocation — buf.resize((size_t) n) turns a negative into
+    // a huge size_t and throws std::length_error, and this runs on a
+    // revalidator worker where an escaping exception is std::terminate, not a
+    // failed edit.
+    if( need < 0 ) need = 0;
+    if( dur < 0 ) dur = 0;
+
     length_t n = dur > need ? dur : need;
+
+    // A window slipped past the source end reads silence, which twCapturingSource
+    // already returns for out-of-range offsets — so never capture more than the
+    // content actually has. This bounds a far slip's `need` back down to `dur`
+    // instead of allocating multiple GB for a tail that is all zeros.
+    if( dur > 0 && n > dur ) n = dur;
+
     if( n <= 0 ) return;
 
     std::vector<sample_t> buf;
@@ -402,14 +422,25 @@ void SCut::buildCapture_()
         length_t grainedLen = grainSource->length();
 
         // startOffset already lives in the grain OUTPUT (warped) domain, the
-        // domain the grain source is addressed in — unwrap at the seam.
+        // domain the grain source is addressed in — unwrap at the seam. A
+        // negative slip anchor (dragging the content start before 0) makes this
+        // negative; twGrainSource::read() handles that by emitting leading
+        // silence, but clamp anyway so availFromOffset below stays honest.
         offset_t grainOffset = (offset_t) snap.startOffset.frames();
+        if( grainOffset < 0 ) grainOffset = 0;
 
-        // Read from the grain-stretched offset, limited to remaining content
+        // Read from the grain-stretched offset, limited to remaining content.
         length_t availFromOffset = grainedLen > (length_t) grainOffset
                                  ? grainedLen - (length_t) grainOffset : 0;
         length_t wantFrames = snap.cutDuration.frames();
+
+        // cutDuration goes NEGATIVE on a right-edge drag past the left edge. It
+        // is smaller than availFromOffset, so it wins the min below and reaches
+        // buf.resize() as a huge size_t -> std::length_error -> std::terminate
+        // (this runs on a revalidator worker). Clamp both ends.
+        if( wantFrames < 0 ) wantFrames = 0;
         length_t toRead = wantFrames > availFromOffset ? availFromOffset : wantFrames;
+        if( toRead < 0 ) toRead = 0;
 
         buf.resize( (size_t) toRead, 0.0f );
         if( toRead > 0 ) {
@@ -486,8 +517,12 @@ bool SCut::revalPrepPreview()
 bool SCut::ensureCapturePeaks()
 {
     if( capPeaks_ ) return true;
-    if( !capture_ ) return false;
-    length_t len = (length_t) capture_->length();
+    // OWN the capture for the whole scan below: a revalidator worker may publish
+    // or replace capture_, and invalidateCapture() may reset it, while this
+    // GUI-thread peak build is still reading through it.
+    std::shared_ptr<twCapturingSource> cap = captureSnapshot();
+    if( !cap ) return false;
+    length_t len = (length_t) cap->length();
     if( len <= 0 ) return false;
 
     offset_t skip = 256;
@@ -506,7 +541,7 @@ bool SCut::ensureCapturePeaks()
 
     for( offset_t i = 0; i < (offset_t) len; i += skip ) {
         offset_t chunk = ( i + skip <= (offset_t) len ) ? skip : ( (offset_t) len - i );
-        capture_->read( i, buf, chunk, 0 );
+        cap->read( i, buf, chunk, 0 );
         sample_t mn = SAMPLE_NORM_MAX, mx = SAMPLE_NORM_MIN;
         for( offset_t j = 0; j < chunk; ++j ) {
             sample_t a = buf[j];
@@ -541,7 +576,7 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
     // Try async capture first (non-blocking, may be stale or invalid)
     // If not ready, fall back to live content preview (sample-backed cuts only)
     auto page = getPreviewCapture();
-    if( !page || !capture_ ) {
+    if( !page || !captureSnapshot() ) {
         // No capture available (yet or ever)
         // For sample-backed cuts: preview the content live
         // For container-backed cuts: return error (no fallback)

@@ -484,6 +484,24 @@ private:
     // Used temporarily until fully integrated with capture page pool.
     // TODO: Phase 4 future - replace entirely with two-page buffer model.
     std::shared_ptr<twCapturingSource> capture_;
+
+public:
+    // Atomically read capture_ into an OWNED copy. capture_ is published by
+    // buildCapture_() (a revalidator worker OR the render thread) and reset by
+    // invalidateCapture() (UI/arrangement thread), so reading the member
+    // directly from another thread is a shared_ptr data race — and the owned
+    // copy is also what keeps the source alive for the duration of the caller's
+    // use, whatever the interleaving. rebuildReader() already does this inline;
+    // every other cross-thread reader goes through here.
+    //
+    // Note captureBuildMutex_ does NOT serialize against this: invalidateCapture()
+    // resets under mutex(), so only mutex() excludes a concurrent reset.
+    std::shared_ptr<twCapturingSource> captureSnapshot() const {
+        std::lock_guard<std::mutex> lock( mutex() );
+        return capture_;
+    }
+
+private:
     // Set (never cleared) when buildCapture_ publishes a capture; gates
     // onArrangementChanged(). Atomic: written on the reval worker.
     std::atomic<bool> everHadCapture_{false};
