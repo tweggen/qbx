@@ -8091,3 +8091,60 @@ and loads twice in one session without incident.
 **Not recoverable:** the plugin's PLACEMENT in pre-M4 files. The track -> chain
 reference was not serialized either, so a recovered slot would rejoin a chain no
 track owns. The user re-adds the plugin once; everything else comes back.
+
+## 2026-07-27 — Plugin chain: order divergence, and the shared input plug
+
+Ported the two pieces of `979e33c` (branch `fix/plugin-remove-crash`, never
+merged) that current main still lacked, and found a third, deeper defect while
+proving the port worked. The use-after-free that commit was written for is
+already gone — `twPluginChain::plugins_` became
+`vector<shared_ptr<twComponent>>`, so a stale entry holds a strong reference
+instead of dangling — but its *hardening* was still missing and reachable.
+
+**Defect 1 — model index used as a plugins_ position.**
+`STrack::onPluginSlotRemoved` called `removePlugin(index)` with a MODEL index.
+`STrack::onPluginSlotsReordered` called `rebuildWiring()`, which re-wires
+`plugins_` in the order it already has, so a reorder was inaudible AND left the
+two vectors permanently out of step. `twPluginChain::reorderPlugin` had ZERO
+callers — dead code. After a reorder, remove-plugin then erased a different
+insert than the model dropped: the model lost the slot the user picked, the
+audio lost another, and nothing reported it. Removal is now by identity
+(`removePlugin(shared_ptr)`, found by pointer against the twComponent base) and
+reorder now makes the same move in `plugins_`. `slotsReordered()` carries
+(from,to) so it can.
+
+**Defect 2 — a third path drifted.** `SInsertPluginAction` called
+`moveChildToIndex()` directly after `setParent()` had APPENDED the tap, so
+inserting a plugin anywhere but the end desynced immediately, with no reorder
+involved. It goes through `SPluginChain::reorderSlot()` now — the one path that
+tells the DSP.
+
+**Defect 3 (the real one, pre-existing, found by the regression test) — one
+twLatchOutput with two consumers.** `rebuildWiring` handed the head tap the
+CHAIN'S OWN `pInputPlugs_[port]`. `twComponent::setInput` disconnects by calling
+`twLatch::deleteOutput()` on the plug it replaces, which drops it from the
+producing latch's `outputList` — for BOTH holders. The chain's `shared_ptr` kept
+the object alive so the pointer still looked valid, but `sharedOutput()` could
+no longer vend it, so the survivor's `setInput()` silently left its input NULL.
+Removing the FIRST insert of two therefore took the chain's input with it and
+the track rendered DIGITAL SILENCE. This needs no reorder and no divergence: it
+is reachable on plain main today by removing the first of two plugins. Each tap
+now takes its own `addOutput()` from the producing latch.
+
+Instrumentation is what separated these: identity removal reported
+`found=1 size_before=2` (so the erase was right) while the survivor's input read
+back NULL immediately after a `setInput()` that had been handed a non-null plug.
+
+New invariants 19 and 20 in `tw303a/plugins/CONTRACT.md`. Gated by
+`plugin_order_divergence.qxa` (3 parts: reorder-then-remove, front-insert-then-
+remove, remove-the-head). Note the divergence CANNOT be caught by reordering two
+audible plugins — everything `twtestclap` offers is linear and a scalar gain
+commutes with any linear operator, so the render is order-independent. Which
+insert gets removed is what makes it observable, which is why every part probes
+a level after a removal. The pre-existing `plugin_ui_strip_and_editor.qxa`
+reorder step is blind to all of this by construction: it reorders a transparent
+placeholder against a gain and asserts the level is UNCHANGED.
+
+Gates: build, layering, logging, `ctest -R
+"plugins_test|plugins_scan_test|io_vector_test|mix_test|playback_test|render_test|action_roundtrip_test|schedule_test"`,
+and the eight plugin/legacy qxa cases — all green.

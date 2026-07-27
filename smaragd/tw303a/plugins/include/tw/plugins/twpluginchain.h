@@ -2,6 +2,7 @@
 #define _TWPLUGINCHAIN_H_
 
 #include "tw/graph/twcomponent.h"
+#include <memory>
 #include <vector>
 #include <mutex>
 
@@ -42,8 +43,17 @@ public:
     // Add a plugin insert to the chain
     void addPlugin( std::shared_ptr<audio::twPluginInsert> insert );
 
-    // Remove a plugin insert by index
+    // Remove a plugin insert by index. Correct ONLY while the caller's index
+    // means the same thing as a position in plugins_ — prefer the identity
+    // overload below, which cannot target the wrong insert.
     void removePlugin( int index );
+
+    // Remove a plugin insert by identity. This is what the model layer uses:
+    // a model slot index and a plugins_ position are two different numbers the
+    // moment anything reorders, and erasing by the wrong one silently drops a
+    // DIFFERENT plugin from the audio path while the model drops the right one.
+    // A no-op if the insert is not in this chain.
+    void removePlugin( const std::shared_ptr<audio::twPluginInsert> &insert );
 
     // Reorder plugins in the chain
     void reorderPlugin( int fromIndex, int toIndex );

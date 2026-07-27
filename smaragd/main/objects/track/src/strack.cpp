@@ -464,8 +464,8 @@ void STrack::connectPluginChain( SPluginChain *chain )
                       this, SLOT( onPluginSlotInserted( int, SPluginSlot & ) ) );
     QObject::connect( chain, SIGNAL( slotRemoved( int, SPluginSlot & ) ),
                       this, SLOT( onPluginSlotRemoved( int, SPluginSlot & ) ) );
-    QObject::connect( chain, SIGNAL( slotsReordered() ),
-                      this, SLOT( onPluginSlotsReordered() ) );
+    QObject::connect( chain, SIGNAL( slotsReordered( int, int ) ),
+                      this, SLOT( onPluginSlotsReordered( int, int ) ) );
 
     // Bus 0's DSP chain answers SPluginChain::getRootComponent(). Captured by
     // `this` and read lazily, so it follows a later setNBusses().
@@ -708,16 +708,22 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
 
 void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
 {
-    // Sync the model change to all DSP plugin chains
-    // Note: we remove by index since the slot is being deleted
-    {
-        for( int i = 0; i < nBusses_; ++i ) {
-            if( cpPluginChains_[i] ) {
-                cpPluginChains_[i]->removePlugin( index );
-            }
+    // Remove by IDENTITY, never by index. `index` is a position in the model's
+    // childOrder_; twPluginChain::plugins_ is a separate vector, and the two
+    // agree only as long as every structural change is mirrored into both. When
+    // they disagreed, removePlugin(index) erased a DIFFERENT insert than the one
+    // being deleted: the model dropped the right slot, the audio path dropped
+    // the wrong one, and nothing reported it. Identity cannot miss.
+    //
+    // peekInsertForBus (not getInsertForBus) because this is a teardown path —
+    // it must never INSTANTIATE a plugin just to look up what to erase.
+    (void)index;
+    for( int i = 0; i < nBusses_; ++i ) {
+        if( cpPluginChains_[i] ) {
+            cpPluginChains_[i]->removePlugin( slot.peekInsertForBus( i ) );
         }
-        invalidateRenderPath();
     }
+    invalidateRenderPath();
 }
 
 void STrack::onPluginSlotAudioInvalidated()
@@ -728,17 +734,18 @@ void STrack::onPluginSlotAudioInvalidated()
     invalidateRenderPath();
 }
 
-void STrack::onPluginSlotsReordered()
+void STrack::onPluginSlotsReordered( int fromIndex, int toIndex )
 {
-    // Sync plugin reordering to all DSP plugin chains
-    {
-        for( int i = 0; i < nBusses_; ++i ) {
-            if( cpPluginChains_[i] ) {
-                cpPluginChains_[i]->rebuildWiring();
-            }
+    // Make the SAME move in plugins_, do not merely re-wire. rebuildWiring()
+    // alone wires plugins_ in ITS existing order, so the reorder was inaudible
+    // AND it left plugins_ permanently out of step with the model — which is
+    // what made a later removal target the wrong insert.
+    for( int i = 0; i < nBusses_; ++i ) {
+        if( cpPluginChains_[i] ) {
+            cpPluginChains_[i]->reorderPlugin( fromIndex, toIndex );
         }
-        invalidateRenderPath();
     }
+    invalidateRenderPath();
 }
 
 // Mute belongs to the mixer CHANNEL, not to the track: it is enforced by

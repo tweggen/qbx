@@ -280,7 +280,7 @@ CLAP audio-effect plugins are scanned, inserted per track, heard in the signal
 path, saved with the project, and kept as a reloadable placeholder when the
 plugin is not installed. **Design:** `plan/proposed/08_PLUGIN_HOSTING.md`;
 **what was built and in what order:** `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`;
-**the invariants that matter:** `smaragd/tw303a/plugins/CONTRACT.md` (18 of them)
+**the invariants that matter:** `smaragd/tw303a/plugins/CONTRACT.md` (20 of them)
 and `smaragd/main/pluginui/CONTRACT.md`. VST3 (M6) and macOS bring-up (M7) are
 open.
 

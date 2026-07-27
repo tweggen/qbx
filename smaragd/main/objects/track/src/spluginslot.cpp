@@ -155,6 +155,12 @@ std::shared_ptr<audio::twPluginInsert> SPluginSlot::getInsertForBus( int busInde
     return taps_[busIndex];
 }
 
+std::shared_ptr<audio::twPluginInsert> SPluginSlot::peekInsertForBus( int busIndex ) const
+{
+    if( busIndex < 0 || busIndex >= (int) taps_.size() ) return nullptr;
+    return taps_[busIndex];
+}
+
 audio::twPluginSlotState SPluginSlot::getSlotState() const
 {
     return proc_ ? proc_->state() : audio::twPluginSlotState::Missing;

@@ -61,7 +61,10 @@ public:
 signals:
     void slotInserted( int index, SPluginSlot &slot );
     void slotRemoved( int index, SPluginSlot &slot );
-    void slotsReordered();
+    // Carries the indices because the DSP chain has to make the SAME move, not
+    // merely re-wire what it already has: a listener that only rebuilds keeps
+    // the old order. Receivers that just want to repaint may ignore both.
+    void slotsReordered( int fromIndex, int toIndex );
 
 protected:
     void childEvent( QChildEvent *event ) override;

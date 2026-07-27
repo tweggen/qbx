@@ -103,8 +103,11 @@ SPluginSlot *SPluginChain::getSlotAt( int index ) const
 void SPluginChain::reorderSlot( int fromIndex, int toIndex )
 {
     moveChildToIndex( fromIndex, toIndex );
-    // Emit signal to trigger DSP graph rewiring (STrack::onPluginSlotsReordered listens)
-    emit slotsReordered();
+    // Emit signal to trigger DSP graph reordering (STrack::onPluginSlotsReordered
+    // listens). EVERY path that reorders childOrder_ must come through here —
+    // calling moveChildToIndex() directly moves the model and leaves the audio
+    // in the old order, which then makes every later slot index a lie.
+    emit slotsReordered( fromIndex, toIndex );
 }
 
 std::shared_ptr<twComponent> SPluginChain::getChainComponent()

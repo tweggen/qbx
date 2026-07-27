@@ -191,6 +191,31 @@ Invariants:
    from the UI, for what is not a structural change. The caller re-applies its
    stored state chunk afterwards (SPluginSlot::reloadPlugin).
 
+19. EVERY CONSUMER OWNS ITS OWN twLatchOutput; PLUGS ARE NEVER SHARED. A
+   twLatchOutput lives in its producing latch's outputList, and
+   twComponent::setInput() disconnects by calling twLatch::deleteOutput() on the
+   plug it is replacing. So two components pointed at ONE plug are a trap: the
+   first to disconnect unregisters it for both, and because a consumer's
+   shared_ptr keeps the object alive the pointer still looks valid — but
+   sharedOutput() can no longer vend it, so the next setInput() leaves the input
+   NULL and that branch of the graph goes SILENT with nothing logged.
+   twPluginChain::rebuildWiring therefore gives the head tap its own
+   addOutput() from the producing latch rather than handing over the chain's own
+   pInputPlugs_ entry. Removing the head insert used to take the whole chain's
+   input with it — a full-silence track, not a wrong level. Gated by
+   plugin_order_divergence.qxa, part 3.
+
+20. MODEL SLOT ORDER AND plugins_ ORDER ARE TWO VECTORS, AND EVERY STRUCTURAL
+   CHANGE MUST REACH BOTH. A model index is not a plugins_ position; they agree
+   only because each of insert / remove / reorder maintains it. Removal is by
+   IDENTITY (removePlugin(shared_ptr), never the index overload from the model
+   layer), reorder makes the same move in plugins_ (reorderPlugin, not a bare
+   rebuildWiring, which re-wires the order it already has), and any path that
+   moves a link must go through SPluginChain::reorderSlot so the DSP is told —
+   SInsertPluginAction's landing-index move included. When they drifted,
+   remove-plugin erased a DIFFERENT insert than the model dropped, silently.
+   Gated by plugin_order_divergence.qxa, parts 1 and 2.
+
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears
 it), cache reload in a fresh registry instance, refusal of a cache from another

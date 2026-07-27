@@ -64,6 +64,12 @@ public:
     std::shared_ptr<audio::twPluginInsert> getInsert() const { return getInsertForBus(0); }
     std::shared_ptr<audio::twPluginInsert> getInsertForBus( int busIndex ) const;
 
+    // Like getInsertForBus, but NEVER materializes: null if the tap does not
+    // already exist. For teardown paths (STrack::onPluginSlotRemoved), which
+    // need the identity of what is in the chain and must not instantiate a
+    // plugin on the way out.
+    std::shared_ptr<audio::twPluginInsert> peekInsertForBus( int busIndex ) const;
+
     // Declare how many parallel mono buses this slot serves. Called by STrack
     // before the taps are wired; re-deriving the channel-mismatch mapping.
     void setBusCount( int nBuses );

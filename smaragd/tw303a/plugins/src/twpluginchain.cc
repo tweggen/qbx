@@ -90,6 +90,25 @@ void twPluginChain::removePlugin( int index )
     }
 }
 
+void twPluginChain::removePlugin( const std::shared_ptr<audio::twPluginInsert> &insert )
+{
+    if( !insert ) return;
+    std::lock_guard<std::mutex> lock( pluginsMutex_ );
+    // Compare the pointed-to object, not the shared_ptr: plugins_ holds
+    // twComponent bases and the caller holds the twPluginInsert derived type,
+    // so the two shared_ptrs are different types over the same control block.
+    const twComponent *needle = static_cast<const twComponent *>( insert.get() );
+    auto it = std::find_if( plugins_.begin(), plugins_.end(),
+                            [needle]( const std::shared_ptr<twComponent> &p ) {
+                                return p.get() == needle;
+                            } );
+    if( it != plugins_.end() ) {
+        plugins_.erase( it );
+        // _nolock: pluginsMutex_ is NOT recursive and we are holding it.
+        rebuildWiring_nolock();
+    }
+}
+
 void twPluginChain::reorderPlugin( int fromIndex, int toIndex )
 {
     std::lock_guard<std::mutex> lock( pluginsMutex_ );
@@ -159,7 +178,21 @@ void twPluginChain::rebuildWiring_nolock()
         // First insert gets the track input
         std::shared_ptr<twComponent> firstPlugin = plugins_[0];
         if( firstPlugin && port < firstPlugin->getNInputs() && port < (idx_t)pInputPlugs_.size() && pInputPlugs_[port] ) {
-            firstPlugin->setInput( port, pInputPlugs_[port].get() );
+            // Give the head tap its OWN output from the producing latch — do NOT
+            // hand it pInputPlugs_[port], which is OUR plug. Sharing one
+            // twLatchOutput between two consumers is a trap: whoever disconnects
+            // first calls twLatch::deleteOutput() on it, which drops it from the
+            // latch's outputList for BOTH. Our shared_ptr keeps the object alive
+            // so the pointer still looks valid, but sharedOutput() can no longer
+            // vend it, so setInput() silently leaves the input NULL and the whole
+            // chain goes silent. That is exactly what happened when the FIRST
+            // insert was removed: the departing tap took the chain's input with
+            // it. setInput() deletes the tap's previous plug, so re-running this
+            // does not accumulate outputs.
+            twLatch &producer = pInputPlugs_[port]->getParentLatch();
+            if( twLatchOutput *ownPlug = producer.addOutput() ) {
+                firstPlugin->setInput( port, ownPlug );
+            }
         }
 
         // Wire each subsequent insert to the previous one's output

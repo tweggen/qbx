@@ -95,7 +95,11 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     link->setParent(chain);
 
     if (actualIndex != landingIndex) {
-        chain->moveChildToIndex(landingIndex, actualIndex);
+        // reorderSlot(), NOT moveChildToIndex(): setParent() above APPENDED the
+        // tap to every twPluginChain, so moving the link in childOrder_ alone
+        // would leave the DSP order as the append order. Inserting a plugin
+        // anywhere but the end then desynced model and audio immediately.
+        chain->reorderSlot(landingIndex, actualIndex);
     }
 
     // The slot may only need one bus, but STrack builds one chain per bus and

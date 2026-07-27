@@ -94,7 +94,7 @@ public slots:
     void setNBusses( int n );
     void onPluginSlotInserted( int index, SPluginSlot &slot );
     void onPluginSlotRemoved( int index, SPluginSlot &slot );
-    void onPluginSlotsReordered();
+    void onPluginSlotsReordered( int fromIndex, int toIndex );
     // One of our slots changed what it produces (bypass, a parameter, a reload).
     // The slot cannot invalidate the path above itself — the chain is not an
     // SLink child of ours, so SObject::invalidateRenderPath()'s root-down walk

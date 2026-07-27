@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_order_divergence">
+
+  <!-- Regression: the MODEL's slot order and the DSP chain's plugins_ order are
+       two different vectors, and every structural change has to be mirrored into
+       both. When they drifted apart, remove-plugin erased the wrong insert from
+       the audio path — the model dropped the slot the user picked, the audio
+       dropped a different one, and nothing anywhere reported it.
+
+       Three paths could drift, all fixed together:
+
+         reorder   STrack::onPluginSlotsReordered called rebuildWiring(), which
+                   re-wires plugins_ in ITS OWN existing order. The reorder was
+                   therefore inaudible AND left the vectors permanently out of
+                   step. It now calls reorderPlugin(from,to).
+         remove    STrack::onPluginSlotRemoved called removePlugin(index) with a
+                   MODEL index against plugins_. It now removes by identity,
+                   which cannot target the wrong insert.
+         insert    SInsertPluginAction called moveChildToIndex() directly after
+                   setParent() had APPENDED the tap, so inserting anywhere but
+                   the end desynced immediately. It now goes through
+                   reorderSlot(), the one path that tells the DSP.
+
+       The probe is levels, because the divergence is silent by construction.
+       tw.test.clap.stereoskew at gain 1.0 puts channel 0 at RMS 0.100; with no
+       plugin in the path the same material sits at 0.0665 (the level
+       plugin_remove_and_undo.qxa asserts for "plugin removed"). A Missing slot
+       is a transparent placeholder, so REMOVING IT MUST NOT MOVE THE LEVEL —
+       and if the wrong insert goes instead, the skew disappears and the drop to
+       0.0665 is unmissable.
+
+       Note this cannot be tested by reordering two AUDIBLE plugins: everything
+       tw.test.clap offers is linear, and a scalar gain commutes with any linear
+       operator, so the render is order-independent. Which insert gets removed
+       is what makes the divergence observable. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- ============ Part 1: reorder, then remove ============ -->
+
+    <insert-plugin trackPath="/mixer/0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <insert-plugin trackPath="/mixer/0" slotIndex="1"
+                   format="clap" uid="tw.nobody.ships.this.plugin"
+                   name="Nonexistent Reverb" vendor="Acme"
+                   path="nosuchmodule.clap" nIn="2" nOut="2"/>
+
+    <!-- The missing slot is transparent: the skew alone sets the level. -->
+    <render filename="pod_baseline.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pod_baseline.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- Model order becomes [missing, skew]. plugins_ must follow. -->
+    <reorder-plugin trackPath="/mixer/0" fromIndex="1" toIndex="0"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="0"
+                         contains="state=Missing"/>
+    <assert-plugin-strip trackIndex="0" slotIndex="1" contains="state=Active"/>
+
+    <!-- Reordering alone changes nothing audible (both are linear, and the
+         placeholder is transparent) — this is the control for the next step. -->
+    <render filename="pod_reordered.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pod_reordered.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- Remove the TRANSPARENT slot, now at model index 0. Before the fix this
+         erased plugins_[0] — the SKEW — and the level fell to 0.0665. -->
+    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
+                         contains="state=Active"/>
+
+    <render filename="pod_after_remove.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pod_after_remove.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- Undo restores both the model row and the audio it stood for. -->
+    <undo count="1"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="0"
+                         contains="state=Missing"/>
+
+    <render filename="pod_undone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pod_undone.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- ============ Part 2: insert at the FRONT, then remove ============ -->
+
+    <!-- Back to a single Active slot, so the next insert lands in front of it. -->
+    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+    <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
+                         contains="state=Active"/>
+
+    <!-- slotIndex=0 with a slot already there: setParent() appends the tap and
+         the action then has to move it. If that move skips the DSP, plugins_ is
+         [skew, missing] while the model is [missing, skew] — the same drift the
+         reorder used to cause, from a completely different verb. -->
+    <insert-plugin trackPath="/mixer/0" slotIndex="0"
+                   format="clap" uid="tw.nobody.ships.this.plugin"
+                   name="Nonexistent Reverb" vendor="Acme"
+                   path="nosuchmodule.clap" nIn="2" nOut="2"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="0"
+                         contains="state=Missing"/>
+    <assert-plugin-strip trackIndex="0" slotIndex="1" contains="state=Active"/>
+
+    <!-- Removing the transparent front slot must, again, not move the level. -->
+    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
+                         contains="state=Active"/>
+
+    <render filename="pod_front_insert_removed.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pod_front_insert_removed.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.090" maxRms="0.110"/>
+
+    <!-- ============ Part 3: remove the FIRST of two ============ -->
+
+    <!-- No reorder, no middle insert — model and DSP order agree, so even the
+         old index-based removal erased the right element here. This is the
+         separate, deeper defect the two above were hiding:
+         twPluginChain::rebuildWiring used to hand the head tap the CHAIN'S OWN
+         input plug, so one twLatchOutput had two consumers. Removing the head
+         tap disconnected it, twLatch::deleteOutput dropped it from the
+         producing latch's outputList for BOTH, and sharedOutput() could never
+         vend it again — so the survivor's setInput() silently left the input
+         NULL and the whole track went to DIGITAL SILENCE, not merely to the
+         wrong level. Each tap now takes its own output from the latch.
+
+         Order here is [skew, missing]. Removing the skew (index 0, the head)
+         leaves the transparent placeholder, so the level must fall to the
+         no-plugin baseline — and specifically NOT to zero. -->
+    <insert-plugin trackPath="/mixer/0" slotIndex="1"
+                   format="clap" uid="tw.nobody.ships.this.plugin"
+                   name="Nonexistent Reverb" vendor="Acme"
+                   path="nosuchmodule.clap" nIn="2" nOut="2"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="0"
+                         contains="state=Active"/>
+
+    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+
+    <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
+                         contains="state=Missing"/>
+
+    <render filename="pod_head_removed.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="pod_head_removed.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.073"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
