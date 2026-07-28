@@ -1160,10 +1160,10 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         if( delta.manhattanLength() <= CLICK_THRESHOLD ) {
             // No range drag and minimal mouse movement = pure click.
             offset_t ofs = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+            // setGlobalLocatorPos repositions the RUNNING engine too when
+            // playing (see SApplication) — a plain model_->seekTo would only
+            // move the component cursors, not the playback position.
             SApplication::app().setGlobalLocatorPos( ofs );
-            if( SApplication::app().isPlaying() ) {
-                smv_.model_->seekTo( SApplication::app().getGlobalLocatorPos() );
-            }
         }
     }
 }

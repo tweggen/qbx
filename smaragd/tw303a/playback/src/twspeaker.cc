@@ -405,6 +405,17 @@ void twSpeaker::setCycle(bool enabled, offset_t startFrame, offset_t endFrame)
     }
 }
 
+void twSpeaker::requestSeek(offset_t frame)
+{
+    if (frame < 0) frame = 0;
+    // Snapshot the engine under engineMutex_ (same rationale as setCycle) and
+    // post the seek; the engine adopts it on the RT thread. No engine == not
+    // playing, so nothing to do (startOutput seeks from the locator itself).
+    if (auto engine = engineSnapshot()) {
+        engine->requestSeek((uint64_t) frame);
+    }
+}
+
 void twSpeaker::setOutputDevice(const std::string &id)
 {
     outputDeviceId_ = id.empty() ? "default" : id;

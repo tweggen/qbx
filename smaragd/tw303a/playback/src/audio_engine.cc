@@ -56,6 +56,22 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         return 0;
     }
 
+    // Adopt a pending live seek (requestSeek). We are the RT pull thread — the
+    // sole writer of currentPos_ and the frozen-page cursor — so moving them
+    // here races nothing. The readahead thread sees the currentPos_ jump on its
+    // next tick and restarts its chain from the new position; until those pages
+    // are frozen the pulls below simply underrun to silence for a moment.
+    if (seekPending_.exchange(false, std::memory_order_acquire)) {
+        uint64_t sp = seekTarget_.load(std::memory_order_relaxed);
+        currentPos_.store(sp, std::memory_order_relaxed);
+        currentFrozenPage_ = nullptr;
+        prevFrozenPage_ = nullptr;
+        pageFrameOffset_ = 0;
+        cachedPageValidFrames_ = 0;
+        resamplerL_.reset();
+        resamplerR_.reset();
+    }
+
     // Tier 1 Enhancement: Use frozen pages for state-continuous rendering
     // If resampling needed (engine rate != output rate), pull more frames and resample
     if (!resamplerL_.isPassthrough()) {
@@ -519,6 +535,13 @@ void AudioEngine::seekTo(uint64_t offsetSamples) {
     // Reconfigure resamplers for new position
     resamplerL_.reset();
     resamplerR_.reset();
+}
+
+void AudioEngine::requestSeek(uint64_t offsetSamples) {
+    // Post the target; the RT pull thread adopts it at the top of pullBlock().
+    // Ordered so the RT's acquire-exchange of seekPending_ sees seekTarget_.
+    seekTarget_.store(offsetSamples, std::memory_order_relaxed);
+    seekPending_.store(true, std::memory_order_release);
 }
 
 uint64_t AudioEngine::currentPosition() const {

@@ -81,13 +81,32 @@ public:
     /**
      * Seek to an absolute position in the component graph.
      *
-     * Called before rendering a time range, or during playback scrubbing.
-     * Note: Seeking resets component state. Looping uses frozen pages instead
-     * (via setLoopBoundaries) to preserve state.
+     * Called before rendering a time range, or (before the readahead thread is
+     * running) at playback start. Resets component state and the readahead
+     * frontier, so it MUST NOT be called while startReadahead() is active — it
+     * would race the readahead/RT threads. For a live seek during playback use
+     * requestSeek() instead.
      *
      * \param offsetSamples  Absolute position in samples
      */
     void seekTo(uint64_t offsetSamples);
+
+    /**
+     * Request a live reposition WHILE playing (scrubbing / click-to-seek).
+     *
+     * Realtime-safe and callable from the UI thread: it only posts the target
+     * position. The RT pull thread adopts it at the top of the next pullBlock()
+     * — the sole writer of currentPos_ and the frozen-page cursor, so there is
+     * no data race — and the readahead thread notices the playhead jump on its
+     * next tick and restarts its chain from there (see readaheadLoop). Playback
+     * stays PLAYING (no re-buffering); there may be a brief gap until the target
+     * pages are frozen. Does NOT touch the component graph directly; the
+     * discontinuity is resolved by freezePage()'s reset()+seekTo() at the first
+     * page frozen from the new position.
+     *
+     * \param offsetSamples  Absolute position in samples
+     */
+    void requestSeek(uint64_t offsetSamples);
 
     /**
      * Get the current playback position.
@@ -184,6 +203,12 @@ private:
     std::atomic<uint64_t> loopStart_{0};
     std::atomic<uint64_t> loopEnd_{0};
     std::atomic<uint64_t> currentPos_{0};
+
+    // Live-seek request (requestSeek): posted by the UI thread, adopted by the
+    // RT pull thread at the top of pullBlock(). seekPending_ is the handshake;
+    // seekTarget_ carries the absolute position.
+    std::atomic<bool> seekPending_{false};
+    std::atomic<uint64_t> seekTarget_{0};
 
     // Helper: pull one frame of L and R at engine sample rate using frozen pages
     bool pullStereoFrameFrozen(float& outL, float& outR);
