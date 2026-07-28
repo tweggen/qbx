@@ -26,9 +26,15 @@ Invariants:
    the project file falls back to its raw spelling, so linkToFile()'s older
    resolution (the .qxa runner's sample base dir, else the working
    directory) still applies — that is what keeps hand-written fixtures and
-   pre-encoding projects loading. An absolute or "~" form has no second
-   reading and is used as resolved, present or not, so a failure names the
-   file it actually looked for.
+   pre-encoding projects loading. As a LAST resort, whatever the spelling
+   (relative, "~" or absolute), if the resolved reference does not exist but
+   a same-named file sits in the project's OWN directory, that neighbour is
+   adopted — recordings are written into the project folder, so a project
+   moved/copied as a unit keeps its samples beside the .qxp even when the
+   baked-in path names the old location. Self-healing: the next save
+   re-encodes the found path project-relative. Only when even that misses is
+   the reference used as resolved, so a failure names the file it looked for.
+   Gate: sample_recovered_beside_project.qxa.
 
 Self-registration (Phase 5): splainwave.cpp registers "SPlainWave" with
 SProjectLoader AND the SProject extern-file factory (WAV loading) from

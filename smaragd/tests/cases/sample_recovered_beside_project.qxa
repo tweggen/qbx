@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Recovery for a project whose stored sample reference no longer resolves, but
+  the sample sits right next to the project file. This is the shape of a real
+  user file (test4_3.qxp): the project was recorded in one folder (recordings
+  are written INTO the project's own directory), then the whole folder moved to
+  another location (OneDrive), so the baked-in path names the OLD folder while
+  the WAV travelled with the .qxp to the NEW one.
+
+  The fixture stores the wave as "~/__smaragd_no_such_dir_recover__/test_sawtooth.wav":
+  a "~"-anchored, absolute-form path that is GUARANTEED not to exist and that has
+  no project-relative "second reading" (the pre-existing raw-relative fallback in
+  splainwave.cpp only applies to relative spellings). Recovery therefore rests
+  entirely on the basename-beside-the-project search: the loader is invoked from
+  tests/cases/ so the anchor is tests/sample_recovered_beside_project.qxp, and
+  test_sawtooth.wav lives in tests/ next to it.
+
+  If the recovery regresses, the wave fails to resolve, the load aborts (or the
+  render is silent) and the energy assertions fail. Same cut geometry and audio
+  expectations as legacy_project_recovery.qxa, so a recovery that quietly picked
+  up the WRONG file fails too.
+-->
+<SActionScript version="1" name="sample_recovered_beside_project">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../sample_recovered_beside_project.qxp"/>
+
+    <render filename="sample_recovered_beside_project.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: cut plays source sec1 (slip offset via startOffset=48000) -->
+    <assert-audio-energy filename="sample_recovered_beside_project.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 1-2 s: source sec2 -->
+    <assert-audio-energy filename="sample_recovered_beside_project.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <!-- past the 2 s cut: silence -->
+    <assert-audio-energy filename="sample_recovered_beside_project.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

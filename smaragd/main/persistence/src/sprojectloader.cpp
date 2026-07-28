@@ -161,16 +161,29 @@ int SProjectLoader::createObjects( SProject &project )
                     object = instantiateSObjectFromDomElement(
                         tagName, e, NULL );
                     if( !object ) {
+                        // SKIP the element; do NOT abort the project — same
+                        // policy as the id-less branch above. The commonest
+                        // cause is an <SPlainWave> whose sample file is missing
+                        // (after basename recovery next to the project has
+                        // already been tried, see splainwave.cpp). Dropping this
+                        // one element leaves the id unresolved, so the no-progress
+                        // leftover sweep below cascades the drop to any SLink/SCut
+                        // that referenced it — the rest of the project loads
+                        // instead of being lost over one missing file.
                         qWarning() << QString( "Failed to instantiate object of type "
-                                               "\"%1\" (id \"%2\"); aborting load." )
+                                               "\"%1\" (id \"%2\"); SKIPPED so the rest "
+                                               "of the project can load." )
                                           .arg( tagName ).arg( id );
-                        // FIXME: leaks objects already built this pass.
-                        return -1;
+                        QDomNode nodeToDelete = n;
+                        n = n.nextSibling();
+                        docElem.removeChild( nodeToDelete );
+                        progress = true;
+                        continue;
                     }
                     // Now apply the attributes
                     object->readAttributes( e );
                     objectDict_.insert( id, object );
-                } 
+                }
                 QDomNode nodeToDelete = n;
                 n = n.nextSibling();
                 docElem.removeChild( nodeToDelete );

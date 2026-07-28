@@ -8300,3 +8300,42 @@ and renders it), `load_project_render`, `mute_survives_reload`,
 `plugin_missing_placeholder` — all green. `filepathref_test` builds its cases
 around `QDir::homePath()`/`rootPath()`, so the per-rule arithmetic is gated on
 every platform and is not tied to where the repo happens to be checked out.
+
+## 2026-07-28 — A moved project finds its samples again, and one missing sample no longer kills the load
+
+Portable storage (above) fixes new saves, but a real user file — a project
+recorded in `…/Documents/smaragd/test4/`, then moved as a folder to
+`…/OneDrive/Dokumente/smaragd/test4/` — still failed to open: the baked-in
+absolute sample path named the OLD folder while the WAV had travelled with the
+`.qxp` to the NEW one. An absolute/`~` reference has no project-relative "second
+reading", so nothing ever looked for the file where it actually was: right next
+to the project. Two gaps, both closed.
+
+**Basename recovery beside the project** (`splainwave.cpp`,
+`instantiateFromDomElement`). After the encoded reference is resolved and the
+existing raw-relative fallback tried, if it still does not exist AND the project
+has an anchor, look for a same-named file in the project's own directory and
+adopt it. Recordings are written INTO the project folder, so a project moved or
+copied as a unit — or opened past a OneDrive `Documents`↔`Dokumente`
+redirection — keeps its samples beside the `.qxp`. It is self-healing: the file
+now resolves project-relative, so the next save re-encodes it that way. Skipped
+when there is no anchor (headless `.qxa` without `setProjectFilePath`), leaving
+`linkToFile`'s sample-base-dir path untouched.
+
+**A failed instantiate is SKIPPED, not fatal** (`sprojectloader.cpp`). A missing
+sample made `instantiateSObjectFromDomElement` return NULL, and the loader
+hard-`return -1`'d — losing the WHOLE project over one lost file, in defiance of
+the same function's own policy for id-less elements (skip) and dangling
+references (drop). The failed element is now removed from the DOM like the
+id-less branch; the no-progress leftover sweep then cascades the drop to any
+`SLink`/`SCut` that referenced it, so the rest of the project loads. No new
+placeholder type — the plugin missing-placeholder remains the only such
+mechanism; a sample "Locate…"/relink UI is deliberately out of scope.
+
+Gates: build, layering, logging, the full `ctest` suite (92/92), and two new qxa
+cases — `sample_recovered_beside_project` (a `~`-absolute, guaranteed-missing
+reference whose basename sits beside the project; recovery is the ONLY thing that
+makes it render — without it the wave is skipped, the track drops and the render
+is silent) and `sample_missing_survives` (a good track plus an orphan branch
+whose sample exists nowhere; the load must succeed and the good track render
+intact).
