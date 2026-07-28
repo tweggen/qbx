@@ -26,6 +26,9 @@ inline constexpr const char *WheelCtrl      = "mouse/wheelCtrl";
 inline constexpr const char *WheelCtrlShift = "mouse/wheelCtrlShift";
 inline constexpr const char *ZoomToCursor   = "mouse/zoomToCursor";
 inline constexpr const char *InvertZoom     = "mouse/invertZoom";
+// Keep the playhead on screen: re-page the timeline when the cursor advances
+// (under playback/recording) toward the edge of the view. Default on.
+inline constexpr const char *FollowPlayhead = "view/followPlayhead";
 inline constexpr const char *AudioDeviceId  = "audio/deviceId";
 
 // Logging (proposal 24). LogConsole's default is the BUILD's default —

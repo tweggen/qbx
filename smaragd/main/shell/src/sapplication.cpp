@@ -229,6 +229,9 @@ void SApplication::pumpLocator()
         offset_t old = lastShownLocator_;
         lastShownLocator_ = now;
         emit globalLocatorMoved( now, old );
+        // Advance under playback/recording only (this poll never runs for a
+        // manual seek) — the view-follows-playhead feature keys off this.
+        emit locatorAdvanced( now, old );
     }
     // Self-stop once nothing is driving the locator anymore (playback stopped and
     // recording finished). Recording ends asynchronously on the worker thread, so
