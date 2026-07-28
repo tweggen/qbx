@@ -8,12 +8,17 @@
 > out of scope for this proposal.
 >
 > **Thesis:** qbx should not *be* a VCS. It should make its project format
-> *VCS-able* — diff-stable, portable, self-contained — and then wrap an
-> existing VCS (git + LFS) in a thin, DAW-native History/Compare/Restore UX.
-> The parts only qbx can do (stable identity, a portable bundle) are exactly
-> the parts that are broken today; the parts git already does better than we
-> ever could (history, remotes, branching, content dedup) are the parts we
-> must not reinvent.
+> *VCS-able* — diff-stable and portable — and then wrap a **pluggable history
+> backend** (git, *or* a plain shared-filesystem store on a studio NAS) in a
+> thin, DAW-native History/Compare/Restore UX. The parts only qbx can do
+> (stable identity, single-instance media references) are exactly the parts
+> that are broken today; the parts an existing tool does better than we ever
+> could (history, remotes, coordination) are the parts we must not reinvent.
+>
+> **Hard rule:** large media is never duplicated on disk — it is never placed
+> inside a version-control object store, only referenced by path. **git-LFS is
+> rejected on that ground** (see §C.1). This makes the "cheap laptop" and the
+> "conservative NAS studio" cases the *same* design, not competing ones.
 >
 > Prerequisite / adjacent reading: the project file format
 > (`docs/PROJECT_FILE_FORMAT.md`), the persistence module
@@ -22,7 +27,7 @@
 > reuse pattern (`27_ANALYSIS_SIDECARS.md`, `tw303a/sidecar/`). **In-flight
 > sibling work:** relative, cross-platform-safe media path serialization
 > (`SExternFile` / `SPlainWave`, `SProject::linkToFile`) — see the coordination
-> note in §D.
+> note in §E.
 
 ## Decisions taken with the requester (2026-07-28)
 
@@ -32,6 +37,20 @@
    which is exactly the M3 scenario. UUIDs are globally unique by construction,
    so independently-created objects never alias. Accepted cost: larger, less
    human-readable id strings in the diff.
+
+2. **Large media is never duplicated on disk.** Duplicate large files on a
+   drive are unacceptable (cheap laptops, limited SSDs). Therefore media is
+   never stored inside a version-control object store — it is single-instance,
+   referenced by path; version control tracks only the small textual project
+   files. **git-LFS is rejected** (it keeps a second copy by default; its
+   `dedup` reflink is manual and unreliable on macOS/APFS). See §C.1.
+
+3. **The shared-filesystem / NAS backend is a first-class deployment target**,
+   co-equal with git — not a someday-maybe. Real studios are conservative and
+   run SMB/NFS NAS boxes; most will not stand up or administer a git server.
+   The history/coordination backend is therefore *pluggable* (§C), and the
+   append-only + named-media-root constraints that the NAS path needs are
+   design inputs to M0/M1, not retrofits.
 
 ## Motivating use cases (the challenge to meet)
 
@@ -108,8 +127,10 @@ Today those paths are **absolute** (imports come from a file dialog,
 `tw303a/record/src/recording_session.cc:275-283`, but stored absolute). Clone
 onto a second machine and every sample dangles. This alone kills use cases 3, 4,
 5. **A sibling change is converting these to relative, cross-platform-safe paths
-(§D)** — which closes most of this gap, with one residual sliver called out in
-Milestone 1.
+(§E)** — which closes most of this gap. Two residual pieces remain: (a) media
+that lives *outside* the project folder (a NAS stock-media library) needs a
+**named-root** indirection, not just project-relative paths (§C.2); (b) a
+one-shot **collect-media** step for the bundle topology (Milestone 1).
 
 ### A.3 What is already fine
 
@@ -125,7 +146,13 @@ Milestone 1.
 
 ## B. What is explicitly *not* qbx's job
 
-- **A version-control engine.** No home-grown history, diff, or merge. git + LFS.
+- **A version-control engine.** No home-grown diff/merge algorithm; history is
+  delegated to a pluggable backend (git, or the append-only NAS store of §C.4).
+  The *only* homegrown piece is the append-only snapshot store — deliberately
+  trivial (write a file, index it), precisely because git is fragile on network
+  filesystems (§C.4).
+- **A media store.** Large media never enters version control; it is referenced,
+  single-instance (§C.1). No LFS, no annex, no content store for audio.
 - **A merge algorithm for timelines.** DAW timeline data does not textually
   auto-merge safely. Collaboration is made *additive* (per-track files) and
   *coordinated* (soft ownership), not auto-merged. This is the Perforce/gamedev
@@ -134,7 +161,99 @@ Milestone 1.
 - **A production-tracking tool** (à la Kitsu/Zou). That is task/review/status
   coordination layered *on top of* a VCS — complementary, not this proposal.
 
-## C. Design: four milestones, each independently useful
+## C. Deployment topologies & pluggable backends
+
+The design factors into **two orthogonal axes**. Conflating them was the error in
+the first-draft thesis (which assumed git + LFS everywhere):
+
+1. **Where media lives** — referenced in place (a NAS library, or a local
+   folder) vs. collected into a self-contained bundle.
+2. **What records history / coordinates edits** — a *pluggable backend*: git
+   (local, an external remote, or a bare repo on a NAS share), or a plain
+   **shared-filesystem snapshot store** on the studio NAS.
+
+**M0 (stable UUIDs) is the shared bedrock under every combination** — both
+`git diff` and the homegrown snapshot-compare need stable identity to produce a
+readable diff.
+
+### C.1 Hard rule: large media is never duplicated on disk
+
+Media is never stored inside a version-control object store. It is
+single-instance, referenced by path; version control tracks **only the small
+textual project files**. Therefore:
+
+- **git-LFS is rejected.** By default it keeps two local copies (working tree +
+  `.git/lfs/objects`), and the cache retains extra fetched revisions besides.
+  `git lfs dedup` reflinks the pair on copy-on-write filesystems, but it is a
+  manual command and is reported unreliable on macOS/APFS — not a foundation for
+  a hard no-duplication guarantee.
+- **git-annex** *would* meet the letter of the rule (one copy in an annex store,
+  a working-tree symlink to it) but is symlink-based and Windows-hostile;
+  rejected for cross-platform simplicity (revisitable if the bundle topology ever
+  needs single-copy dedup of a huge local library).
+- This is also how professional DAWs behave — Logic/Ableton reference samples,
+  they do not copy them into a versioned store.
+
+### C.2 Media resolution — relative *and* named roots
+
+Extends the sibling's relative-to-project work with a **named-root** indirection,
+because NAS stock media / shared recordings usually live *outside* the project
+folder and the SMB mount path differs per machine (`/Volumes/StudioNAS` on macOS,
+`Z:\` on Windows). A reference stores `${STUDIO_LIB}/drums/kick.wav`; each machine
+maps the root `STUDIO_LIB` to its local mount (persisted per-user in `SSettings`).
+Two coexisting modes: relative-to-project (bundle) and relative-to-named-root
+(NAS library). Reuse the existing `twPluginSearchPaths` named-root pattern.
+
+### C.3 The two topologies
+
+| Topology | Media | History backend | Local media copies |
+|---|---|---|---|
+| **NAS studio** | on the NAS, by named-root reference | shared-FS snapshot store on the NAS | **0 on the laptop** (streamed over SMB) |
+| **Solo / laptop** | one local `media/` folder | git (optional external remote) | **1** (the working folder; never a second) |
+
+Neither ever creates a standing duplicate. The NAS studio never touches git or a
+server; the solo user never needs a NAS. Same app, one config switch. (Off-machine
+backup of the *solo* user's single media copy is an ordinary file-backup concern —
+Time Machine, a synced folder, an external drive — outside VCS scope, because
+media is write-once and needs no history.)
+
+### C.4 Shared-filesystem backend (the conservative-studio path)
+
+- **History = append-only snapshots.** Save Snapshot writes the `.qxp` to
+  `<project>/.qbx/versions/<timestamp>-<label>.qxp` plus a small `history.json`
+  index (author, message, time, parent). It *only ever creates new files* — the
+  safest possible pattern on NFS/SMB, sidestepping the ref-lockfile corruption
+  that plagues git repos on network filesystems. Compare = semantic diff of two
+  snapshot XMLs over stable UUIDs; Restore = copy one back. Only the small XML is
+  versioned, so hundreds of versions are megabytes — no LFS, no duplication. (The
+  CVS-on-a-share idea, minus CVS's central-lock fragility.)
+- **Coordination = advisory lock files with heartbeats.**
+  `<project>/.qbx/locks/<project-or-track>.lock` holding
+  `{user, host, pid, acquired, heartbeat}`; acquired by atomic create (or
+  create-temp-then-rename — atomicity holds on NFSv3+/SMB); refreshed on a
+  heartbeat; a heartbeat older than ~3× the interval is shown stale with a
+  **Break lock** action naming who held it and since when. This fixes exactly
+  what CVS got wrong (wedged stale `.lock` files). Advisory only — a NAS is not a
+  distributed lock manager, but it is the coordination level these studios
+  already run on.
+- **Optional: a bare git repo on the NAS** (`git clone /Volumes/StudioNAS/proj.git`,
+  no server process) is a valid backend for a git-comfortable team wanting real
+  branching, *provided* edits are single-writer — which the lock already enforces.
+  Offered, not the default, because git's ref updates are lock-fragile on network
+  filesystems.
+
+### C.5 The interfaces that make git and the NAS peers
+
+- `VersionBackend { saveSnapshot, listVersions, restore, compare }` →
+  `FilesystemSnapshotBackend`, `GitBackend`.
+- `LockService { acquire, heartbeat, release, break }` → `FilesystemLockService`;
+  a no-op for the solo git user.
+- `MediaResolver` with named roots → covers bundle *and* NAS-library.
+
+M2's History UI is written against `VersionBackend`, so one panel drives git *or*
+the NAS folder, and M0/M1 are backend-agnostic.
+
+## D. Design: four milestones, each independently useful
 
 ### M0 — Make the format diff-stable *(the linchpin; pure persistence work, no VCS)*
 
@@ -159,33 +278,43 @@ track. This milestone alone delivers **use case 1** via plain `git` that a
 developer can already drive today — readable diffs, real "fall back to an earlier
 version," honest `git diff`/`git log`.
 
-### M1 — Self-contained project (collect media into the bundle)
+### M1 — Media resolution: named roots + optional consolidation
 
-The sibling's relative-path work makes references *portable in form*; a relative
-path only *resolves* after a clone if the file travels with the project. Add a
-**"Collect / consolidate media"** operation (on save-as-bundle, or explicit
-menu) that copies externally-referenced media into a project `media/` folder and
-rewrites the reference to the in-bundle relative path. Recorded takes already
-land next to the `.qxp`, so they need nothing; external *imports* are the case
-this closes. Content-addressing the copied files (reuse the `twSidecarStore`
-hashing pattern) is an optional add-on — it dedupes identical samples and is
-ideal for LFS — not a requirement. Delivers **use cases 2 and 3**: a portable
-folder that pushes to a remote and clones elsewhere, media and all.
+Default behaviour adds **zero** copies: media is referenced single-instance via
+the sibling's relative-to-project paths *or* a **named root** (§C.2) for media
+that lives outside the project folder (the NAS-library case). This alone makes a
+project resolvable on another machine that maps the same root — serving the
+**NAS studio** topology with no media movement at all.
 
-### M2 — History / Compare / Restore UX over git + LFS
+For the **bundle** topology, add an explicit, one-shot **"Collect media"**
+operation that brings externally-referenced imports under a project `media/`
+folder and rewrites the reference to the in-bundle relative path. To honour the
+no-duplication rule it defaults to **move**, not copy (with a copy option when
+the user wants the external original left in place — a deliberate choice, never a
+silent standing duplicate). Recorded takes already land next to the `.qxp`, so
+they need nothing. Delivers **use cases 2 and 3** for the solo/bundle user; the
+NAS user already has them via the NAS itself.
 
-A thin, opinionated binding so a musician never types `git`:
+### M2 — History / Compare / Restore UX (backend-agnostic)
 
-- A "History" panel: **Save Snapshot** (= commit), a timeline of versions,
-  **Restore**, and **Compare** (at minimum: which tracks/clips/params differ —
-  a semantic diff over the now-stable IDs, not a raw text diff).
-- Auto-generate `.gitattributes` / LFS tracking for `media/` and a `.gitignore`
-  (the sidecar cache is already out of the tree, so this is small).
-- A remote is optional; when set, Save Snapshot can push. Covers **use cases 1+2
-  for non-developers** and **use case 3** with a remote configured.
+A thin, opinionated binding so a musician never types `git`, written against the
+`VersionBackend` interface (§C.5) so the same panel drives git *or* the NAS
+snapshot store:
 
-Nothing here reimplements VCS internals — it shells out to git and presents a
-DAW-native surface (cf. Cubase project versions, Bitwig's bundling).
+- A "History" panel: **Save Snapshot**, a timeline of versions, **Restore**, and
+  **Compare** — a *semantic* diff over the now-stable UUIDs (which tracks / clips
+  / params differ), not a raw text diff, so it works identically for both
+  backends.
+- **Git backend:** generate a `.gitignore` that excludes `media/` and the sidecar
+  cache — media is never git-tracked (§C.1), so there is no `.gitattributes`/LFS
+  step at all. A remote is optional; when set, Save Snapshot can push.
+- **Filesystem backend:** the append-only snapshot store + the break-lock UI of
+  §C.4; no git, no server.
+
+Covers **use cases 1+2 for non-developers** (both topologies) and **use case 3**
+(git remote, or the shared NAS). Nothing here reimplements VCS internals — the
+git path shells out to git; the FS path writes files (cf. Cubase project
+versions).
 
 ### M3 — Additive, non-real-time collaboration
 
@@ -193,10 +322,13 @@ DAW-native surface (cf. Cubase project versions, Bitwig's bundling).
   bundle so two people editing *different* tracks touch *different* files and git
   auto-merges cleanly. This is the real lever that turns "a musician adds a
   track" (**use case 4**) into a trivially additive commit.
-- **Soft track ownership / lock** convention so concurrent edits to the *same*
-  track are avoided rather than merged (the Perforce lesson).
+- **Track-level locks via `LockService`** (§C.4/C.5) so concurrent edits to the
+  *same* track are avoided rather than merged (the Perforce lesson). On the NAS
+  this is the filesystem lock; for the git-remote user it is a lighter
+  convention. Locking a track lets a studio musician (**use case 4**) take
+  *their* track while everyone else keeps working and appending snapshots.
 - **Export/import a single track + its stems** as the interchange unit for the
-  studio-musician handoff.
+  offline studio-musician handoff (no shared storage at all).
 
 Honest boundary: stable IDs (M0) make diffs readable and additive merges clean;
 concurrent edits to the *same* track still need coordination or explicit conflict
@@ -204,7 +336,7 @@ surfacing — **not** auto-merge. The moment that stops being acceptable is the
 moment the scoped-out real-time/OT server becomes the right tool. This proposal
 stops cleanly at that line.
 
-## D. Coordination with in-flight sibling work
+## E. Coordination with in-flight sibling work
 
 A sibling change is converting media paths to relative, cross-platform-safe form
 in `SExternFile` / `SPlainWave` serialization and `SProject::linkToFile`
@@ -215,28 +347,49 @@ the persistence/serialization path (`main/model/src/sobject.cpp`,
 them so they don't collide on the same files** — recommended order: let the
 relative-path change land first (it is narrower and already in progress), then do
 M0's identity/ordering change on top, since M0's byte-stability acceptance test
-should be written against the *final* path format. M1's collect-media step is the
-natural completion of the sibling's work and should be co-designed with it.
+should be written against the *final* path format. The named-root indirection
+(§C.2) and M1's collect-media step both extend the sibling's work and should be
+co-designed with it.
 
-## E. Options considered and rejected as the primary mechanism
+## F. Options considered and rejected as the primary mechanism
 
+- **git-LFS for media** — rejected on the hard no-duplication rule: two local
+  copies by default, manual/unreliable dedup (§C.1). The reason media never
+  enters git at all.
+- **git-annex** — meets no-duplication (one copy + working-tree symlink) but is
+  Windows-hostile; rejected for cross-platform simplicity (§C.1).
 - **Dropbox/OneDrive on the live folder** — acceptable as dumb backup of a
   *closed* project (partially serves use case 2), but last-write-wins silently
   eats collaborators' edits, offers no semantic history for use case 1, and risks
-  partial writes while qbx holds the folder open. Not a foundation.
-- **Raw git in the user's face** — the correct substrate (chosen, under the M2
-  veneer) but hostile to a non-developer and worthless before M0.
+  partial writes while qbx holds the folder open. Not a foundation. (Studios that
+  use it for *sharing* are served better by the NAS snapshot backend, §C.4.)
+- **Raw git in the user's face** — a valid backend under the M2 veneer, but
+  hostile to a non-developer and worthless before M0; and a self-hosted/external
+  git server is exactly what conservative studios won't run (Decision 3).
+- **A bare git repo on the NAS as the default** — offered as an option (§C.4) but
+  not default: git's ref updates are lock-fragile on NFS/SMB, which the
+  append-only snapshot store avoids by construction.
 - **Kitsu/Zou** — production tracking on top of a VCS, not file versioning;
   complementary, not the mechanism.
 - **CRDT project document** — pulls toward the scoped-out real-time world;
   ordered-timeline CRDTs are hard. Rejected for this proposal.
 
-## F. Open questions
+## G. Open questions
 
 1. `.qxp` single-file (M0–M2) vs. project-as-folder bundle (needed by M1's
-   `media/` and M3's per-track split). Does M1 introduce the folder form, and is
-   the single-file `.qxp` retained as an export/"flatten" format?
-2. Semantic Compare (M2): how much does it show — track/clip add/remove/move —
+   `media/`, the `.qbx/` snapshot+lock store, and M3's per-track split). Does M1
+   introduce the folder form, and is the single-file `.qxp` retained as an
+   export/"flatten" format?
+2. Collect-media default: **move** vs. copy, and the UX when the external
+   original must remain (a shared library the user does not own).
+3. Named roots (§C.2): how are they defined, named, and persisted per machine
+   (`SSettings`), and what is the UX when a root is unmapped on open (prompt to
+   locate, like a DAW "missing files" dialog)?
+4. Default backend per topology, and whether the optional bare-git-on-NAS backend
+   is worth building at all or the snapshot store fully subsumes it.
+5. Semantic Compare (M2): how much does it show — track/clip add/remove/move —
    and does it reuse any of the action-model vocabulary (`docs/ACTIONS.md`)?
-3. Migration: how does an old pointer-ID `.qxp` acquire stable UUIDs on first
+6. Lock atomicity fallback on legacy NFS (pre-v3 `O_EXCL`); is create-then-rename
+   plus heartbeat sufficient, and what is the worst-case on a broken lock?
+7. Migration: how does an old pointer-ID `.qxp` acquire stable UUIDs on first
    load under M0 (assign-on-load, one-time rewrite)?
