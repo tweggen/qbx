@@ -188,25 +188,30 @@ int SMVActualView::getXPosOfOffset( offset_t off ) const
 void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
 {
     // Qt6 forbids constructing a QPainter on a widget outside paintEvent.
-    // Instead, invalidate the columns around the old and new playhead positions
-    // with a width of 3 pixels: the old column fully repaints (erasing the line),
-    // the new column repaints with the cursor on top. paintEvent already knows how
-    // to redraw the playhead (see the cursor block at the end of paintEvent).
+    // Instead, invalidate 3px columns so paintEvent redraws the playhead (see the
+    // cursor block at the end of paintEvent).
     QRect myRect = rect();
     int w = myRect.width();
     int h = myRect.height();
-    int oldX = getXPosOfOffset( oldPos );
     int newX = getXPosOfOffset( newPos );
-    if( oldX == newX ) return;
-
     const int cursorWidth = 3;
-    if( oldX >= 0 && oldX < w ) update( oldX - 1, 0, cursorWidth, h );
+
+    // Erase the cursor at the column where it was ACTUALLY last painted, NOT at
+    // getXPosOfOffset(oldPos): during playback the RT locator keeps advancing
+    // between repaints, so on a manual seek oldPos (the pre-seek atomic value)
+    // is not where the line is on screen — invalidating it would leave the old
+    // line behind as a ghost. lastPaintedCursorX_ is the ground truth.
+    if( newX == lastPaintedCursorX_ && !SApplication::app().isRecordingActive() )
+        return;   // cursor stays in the same column: nothing to redraw
+    if( lastPaintedCursorX_ >= 0 && lastPaintedCursorX_ < w )
+        update( lastPaintedCursorX_ - 1, 0, cursorWidth, h );
     if( newX >= 0 && newX < w ) update( newX - 1, 0, cursorWidth, h );
 
     // While recording, repaint the whole span the playhead swept so the growing
     // capture region fills in continuously (the 3px cursor columns alone would
     // leave gaps when zoomed in / moving fast).
     if( SApplication::app().isRecordingActive() ) {
+        int oldX = getXPosOfOffset( oldPos );
         int lo = ( oldX < newX ? oldX : newX ) - 1;
         int hi = ( oldX < newX ? newX : oldX ) + 1;
         if( lo < 0 ) lo = 0;
@@ -384,6 +389,11 @@ void SMVActualView::paintEvent( QPaintEvent * )
         if( x>=0 && x<myRect.width() ) {
             p.setPen( QColor( 30, 200, 30 ) );
             p.drawLine( x, 0, x, myRect.height()-1 );
+            // Remember where the line really landed so the next move erases THIS
+            // column (globalLocatorMoved), not a drifted position.
+            lastPaintedCursorX_ = x;
+        } else {
+            lastPaintedCursorX_ = -1;   // off-screen: nothing to erase later
         }
     }
 }

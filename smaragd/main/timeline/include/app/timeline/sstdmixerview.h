@@ -185,6 +185,10 @@ private:
     // View-follows-playhead (SOpt::FollowPlayhead), cached alongside the wheel
     // config and refreshed on SSettings::changed. See followLocator().
     bool followPlayhead_;
+    // The x column where paintEvent last drew the playhead (-1 = off-screen /
+    // not yet drawn). globalLocatorMoved erases THIS column rather than a
+    // position-derived one, so an RT-advanced locator can't leave a ghost line.
+    int lastPaintedCursorX_ = -1;
 
     // --- time-range selection -------------------------------------------
     enum RangeDrag { RangeNone, RangeCreate, RangeMoveStart, RangeMoveEnd, RangeMove };
