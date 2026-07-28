@@ -377,6 +377,23 @@ elseif(SMARAGD_MACOS)
         )
     endif()
 
+    # The twtestclap fixture is resolved by qxa plugin cases through a RELATIVE
+    # path against QCoreApplication::applicationDirPath() (SPluginSlot::
+    # resolveModulePath). On macOS that directory is Contents/MacOS INSIDE the
+    # bundle, whereas tw303a drops the fixture next to the .app (build/bin) — so
+    # it must be copied in here as well, or every plugin qxa case loads a
+    # transparent Missing placeholder and its audio assertions fail. Same
+    # before-codesign ordering rule as the probe above. Flat .clap dylib: the
+    # macOS loader now dlopens a plain-file .clap directly (twclapmodule.cc).
+    if(TARGET twtestclap)
+        add_custom_command(TARGET smaragd POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:twtestclap>"
+                    "$<TARGET_BUNDLE_DIR:smaragd>/Contents/MacOS/twtestclap.clap"
+            COMMENT "Copying the twtestclap fixture into the app bundle (qxa cases)"
+        )
+    endif()
+
     # Code-sign app with microphone entitlements after building
     add_custom_command(TARGET smaragd POST_BUILD
         COMMAND codesign --force --deep --sign -
@@ -408,6 +425,13 @@ target_link_libraries(smaragd
 # its crash isolation, which is the kind of regression nobody notices.
 if(TARGET smaragd_pluginprobe)
     add_dependencies(smaragd smaragd_pluginprobe)
+endif()
+
+# The macOS POST_BUILD above copies the twtestclap fixture into the bundle before
+# codesigning; make it exist first. Only relevant on macOS (the copy is gated by
+# SMARAGD_MACOS), harmless elsewhere.
+if(SMARAGD_MACOS AND TARGET twtestclap)
+    add_dependencies(smaragd twtestclap)
 endif()
 
 # Auto-deploy Qt runtime DLLs / plugins next to smaragd.exe on Windows

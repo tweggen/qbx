@@ -216,6 +216,22 @@ Invariants:
    remove-plugin erased a DIFFERENT insert than the model dropped, silently.
    Gated by plugin_order_divergence.qxa, parts 1 and 2.
 
+21. ON macOS A `.clap` IS EITHER A BUNDLE DIRECTORY OR A FLAT DYLIB, AND THE
+   LOADER AND SCANNER MUST AGREE (M7). twClapModule::load() stats the path: a
+   regular file is dlopened as-is; a directory resolves the inner binary from
+   Contents/MacOS, PREFERRING the bundle base name but falling back to the sole
+   regular file there — i.e. CFBundleExecutable without linking CoreFoundation,
+   so a bundle whose inner name differs from the bundle base still loads.
+   twPluginSearchPaths::bundleBinary() carries the SAME fallback, so the scanner
+   discovers exactly what the loader can open; when they disagreed the fixture
+   (a flat MODULE dylib named *.clap) loaded in the scanner but not the loader,
+   and every macOS plugin test failed. entry_->init() still receives the
+   ORIGINAL bundle path, per the CLAP contract, not the resolved inner binary.
+   The app also needs com.apple.security.cs.disable-library-validation in its
+   entitlements to dlopen an unsigned third-party plug-in under the ad-hoc
+   signature — and that plist must stay comment-free (codesign's AMFI parser
+   rejects XML comments).
+
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears
 it), cache reload in a fresh registry instance, refusal of a cache from another

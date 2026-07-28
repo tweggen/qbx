@@ -61,11 +61,20 @@ const char *formatForFile( const QString &name )
 // A macOS-style bundle: <Foo.clap>/Contents/MacOS/Foo. Returns an empty string
 // when there is no such inner binary (a plain-file module, or a Windows folder
 // that merely happens to be named *.clap).
+//
+// Prefer the conventional base name, but fall back to the sole regular file in
+// Contents/MacOS when the bundle names its binary differently — this keeps the
+// scanner in step with the loader (twclapmodule.cc), which resolves the same way,
+// so a mismatched-name bundle is discovered rather than silently skipped.
 QString bundleBinary( const QFileInfo &fi )
 {
-    const QString base = fi.completeBaseName();     // "Foo" out of "Foo.clap"
-    const QString inner = fi.absoluteFilePath() + "/Contents/MacOS/" + base;
-    return QFileInfo::exists( inner ) ? inner : QString();
+    const QString macos = fi.absoluteFilePath() + "/Contents/MacOS";
+    const QString byName = macos + "/" + fi.completeBaseName();
+    if( QFileInfo::exists( byName ) ) return byName;
+
+    const QFileInfoList inner =
+        QDir( macos ).entryInfoList( QDir::Files, QDir::Name );
+    return inner.isEmpty() ? QString() : inner.first().absoluteFilePath();
 }
 
 void walk( const QString &dir, int depth, std::set<QString> &seenDirs,

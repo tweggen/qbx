@@ -8193,6 +8193,57 @@ the "cap n at dur" clamp could plausibly have changed
 Flake gate: `stress_delete_churn` 4/4 at SMARAGD_REVAL_WORKERS 1, 8 and 16;
 `stress_stretch_split_slip` 4/4 at 1 and 16.
 
+## 2026-07-28 — Proposal 08 M7: CLAP plugin hosting on macOS
+
+The whole plugin stack was written cross-platform but had never actually run on
+macOS. The first run exposed three real gaps: `plugins_test` and
+`plugins_scan_test` failed outright, and 7 of 8 `qxa.plugin_*` cases failed
+(`assert-audio-energy` / `assert-plugin-strip` — the plugin was inaudible). All
+three closed; M7 is DONE, M6 (VST3) still open.
+
+**Flat vs. bundle `.clap` — the ctest failures.** `twClapModule` on macOS
+unconditionally rewrote any `.clap` path to `<bundle>/Contents/MacOS/<base>`
+(`macBundleBinary`), so it could not `dlopen` a plain-*file* `.clap` at all — and
+the `twtestclap` fixture (a CMake `MODULE` with `SUFFIX .clap`) is exactly that,
+a flat Mach-O. The scanner already reported both shapes, so loader and scanner
+disagreed. `macBundleBinary` now `stat`s the path: a regular file is dlopened
+as-is; a directory resolves the inner binary, preferring `<base>` and falling
+back to the sole regular file in `Contents/MacOS` — i.e. CFBundleExecutable
+without linking CoreFoundation, so a real bundle whose inner name differs from
+the bundle base still loads (the fragility the exploration flagged). The
+scanner's `bundleBinary` got the same fallback so the two stay in step. POSIX
+`stat`/`opendir` under `#if defined(__APPLE__)`; no new link deps (dlopen is in
+libSystem — only Linux links `dl`).
+
+**`disable-library-validation`.** Added to `smaragd.entitlements`. The app is
+ad-hoc signed (`codesign --force --deep --sign -`); without this entitlement,
+library validation refuses any plug-in not signed by the same identity. Learned
+the hard way that the entitlements plist must be comment-free — codesign's AMFI
+parser is stricter than a general plist parser and dies on an XML comment
+(`Failed to parse entitlements: AMFIUnserializeXML: syntax error near line 10`).
+
+**Fixture inside the bundle — the qxa failures.** `SPluginSlot::resolveModulePath`
+resolves a relative module path against `QCoreApplication::applicationDirPath()`,
+which on macOS is `Contents/MacOS` *inside* the `.app`. But tw303a drops
+`twtestclap.clap` beside the `.app` (`build/bin`), so every plugin qxa case (they
+name the module `path="twtestclap.clap"`) loaded a transparent Missing
+placeholder → no audio → assertions failed. `main/CMakeLists.txt` now copies the
+fixture into `Contents/MacOS` before the codesign step (mirroring the
+`smaragd_pluginprobe` copy, with a matching `add_dependencies`), giving macOS the
+same "fixture next to the binary" semantics that `build/bin` already provides on
+Win/Linux.
+
+Already correct before this, verified unchanged: probe copied into the bundle and
+found via `applicationDirPath()`; codesign + macdeployqt chain; default search
+paths `/Library/Audio/Plug-Ins/CLAP` + `~/Library/…`; `ensure_submodules` in the
+build scripts.
+
+Gates (macOS 15 / arm64): `ctest -R "plugins_test|plugins_scan_test"` green; all
+8 `qxa.plugin_*` green (were 7/8 red); `render_sawtooth_with_effects` green;
+`check_layering` / `check_logging` clean. Not automatable here (no plugin
+installed): the real-plugin manual pass — scan a Surge XT / Vital / u-he from
+Edit → Options → Plugins, insert, hear in stereo, save/reopen, missing-placeholder
+round trip.
 ## 2026-07-28 — External file references are stored portably
 
 A project file recorded the absolute path of every sample it used, so the
