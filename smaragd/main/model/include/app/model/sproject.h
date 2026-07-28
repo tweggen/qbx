@@ -36,6 +36,20 @@ public:
     virtual ~SProject();
 
     const QString &getFileName();
+
+    // Where this project lives on disk (absolute, '/'-separated; empty for an
+    // untitled project). Set by SSaveProjectAction / SLoadProjectAction, which
+    // are the only two paths in or out of a .qxp.
+    //
+    // NOT serialized, and deliberately separate from fileName_: this is the
+    // ANCHOR external file references are stored relative to (SFilePathRef), so
+    // it has to describe where the file is RIGHT NOW, not where it was when the
+    // document was written. A path baked into the file would be exactly wrong
+    // after the project folder is moved or copied to another machine — the case
+    // relative storage exists to survive.
+    void setProjectFilePath( const QString &path );
+    const QString &projectFilePath() const { return projectFilePath_; }
+
     SObject *getRootComponent() const;
     void setRootComponent( SObject * );
 
@@ -189,6 +203,7 @@ private slots:
 
 private:
     QString fileName_;
+    QString projectFilePath_; // see setProjectFilePath()
     QString sampleBaseDir_;   // see setSampleBaseDir()
     SLink *soRoot_;
     double bpmTempo_;

@@ -1266,6 +1266,31 @@ void SMainWindow::runSetTimeSelection()
         QString("Time selection set: 0.0 - %1 seconds").arg(duration / 2.0, 0, 'f', 2), 3000);
 }
 
+namespace {
+
+// The diagnostic round trips below save the LIVE project to a scratch file, and
+// SSaveProjectAction rightly re-anchors it there — external file references are
+// stored relative to the project file, so the copy must be written against the
+// path it is written to. That anchor is a lie once the probe is over (the
+// user's project does not live in %TEMP%), so restore it and keep "the live
+// project is never disturbed" true. The saved copy is unaffected.
+class ScopedProjectAnchor {
+public:
+    explicit ScopedProjectAnchor( SProject *project )
+        : project_( project ),
+          saved_( project ? project->projectFilePath() : QString() ) {}
+    ~ScopedProjectAnchor() {
+        if( project_ ) project_->setProjectFilePath( saved_ );
+    }
+    ScopedProjectAnchor( const ScopedProjectAnchor & ) = delete;
+    ScopedProjectAnchor &operator=( const ScopedProjectAnchor & ) = delete;
+private:
+    SProject *project_;
+    QString   saved_;
+};
+
+} // namespace
+
 // Save/load validation: drive SSaveProjectAction + SLoadProjectAction (the same
 // actions the File menu uses) as a self-contained assertion. Saves the live
 // project to a temp file, reloads it into a throwaway project, and compares
@@ -1283,6 +1308,7 @@ void SMainWindow::runSaveLoadTest()
     QString tmpPath = QDir::tempPath() + "/smaragd_roundtrip.qxp";
 
     // 1. Save the live project via the action.
+    ScopedProjectAnchor anchor(currentProject_);
     SSaveProjectAction saveAction(tmpPath);
     if (!saveAction.apply(currentProject_).applied) {
         statusBar()->showMessage("Round-trip FAILED: save error", 5000);
@@ -1352,6 +1378,7 @@ void SMainWindow::runGroupTrackTest()
 
     // Round-trip the nested arrangement through save/load (live untouched).
     QString tmpPath = QDir::tempPath() + "/smaragd_group.qxp";
+    ScopedProjectAnchor anchor(currentProject_);
     bool saved = SSaveProjectAction(tmpPath).apply(currentProject_).applied;
     bool nestedRoundTrips = false;
     int probeTop = -1;
@@ -1498,6 +1525,7 @@ void SMainWindow::runReorderTrackTest()
 
     // Round-trip the reordered arrangement.
     QString tmpPath = QDir::tempPath() + "/smaragd_reorder.qxp";
+    ScopedProjectAnchor anchor(currentProject_);
     bool saved = SSaveProjectAction(tmpPath).apply(currentProject_).applied;
     bool orderRoundTrips = false;
     if (saved) {

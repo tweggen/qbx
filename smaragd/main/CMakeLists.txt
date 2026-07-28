@@ -21,6 +21,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sdetaileditors.h
     model/include/app/model/sexternfile.h
     model/include/app/model/sexternfilelist.h
+    model/include/app/model/sfilepathref.h
     model/include/app/model/slink.h
     model/include/app/model/sobject.h
     model/include/app/model/sobjectpath.h
@@ -34,6 +35,7 @@ set(APP_MODEL_FILES
     model/src/sdetaileditors.cpp
     model/src/sexternfile.cpp
     model/src/sexternfilelist.cpp
+    model/src/sfilepathref.cpp
     model/src/slink.cpp
     model/src/sobject.cpp
     model/src/sobjectrenderer.cpp
@@ -510,4 +512,17 @@ target_link_libraries(action_roundtrip_test
 # registrars, and offscreen so it never touches a display.
 add_test(NAME action_roundtrip_test COMMAND action_roundtrip_test)
 set_tests_properties(action_roundtrip_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# External-file path encoding (project-relative / "~" / absolute). Pure path
+# arithmetic over app_model, so it needs no project, no audio and no display —
+# but it links all four layers because app_model is an OBJECT library whose
+# static registrars pull in the rest.
+add_executable(filepathref_test testkit/src/filepathref_test.cpp)
+target_link_libraries(filepathref_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME filepathref_test COMMAND filepathref_test)
+set_tests_properties(filepathref_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

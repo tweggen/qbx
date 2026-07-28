@@ -2,12 +2,14 @@
 #include <stdio.h>
 #include <cstring>
 
+#include <QFileInfo>
 #include <qobject.h>
 #include <qwidget.h>
 #include <qlabel.h>
 #include "qmessagebox.h"
 
 #include "app/model/sappcontext.h"
+#include "app/model/sfilepathref.h"
 #include "app/model/sproject.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
 #include "tw/schedule/capture_revalidator.h"
@@ -24,7 +26,14 @@
 
 int SPlainWave::serializeSelfAttributes( QTextStream &o )
 {
-    o << " filename='" << getFileName() << "'";
+    // The reference is stored PORTABLY — relative to the project file, or to
+    // "~", or absolute only as a last resort. See sfilepathref.h for which of
+    // the three applies when. The in-memory fileName_ stays absolute; only the
+    // on-disk spelling changes.
+    SProject *project = qobject_cast<SProject *>( parent() );
+    const QString stored = SFilePathRef::toStored(
+        getFileName(), project ? project->projectFilePath() : QString() );
+    o << " filename='" << stored << "'";
     SExternFile::serializeSelfAttributes( o );
     return 0;
 }
@@ -425,7 +434,27 @@ SLink *SPlainWave::instantiateFromDomElement(
         qWarning() << "SPlainWave: missing/empty filename attribute.";
         return NULL;
     }
-    return projectLoader.getProject().linkToFile( fileName );
+
+    // Undo the portable encoding (project-relative / "~" / absolute) against
+    // the project file we are loading from.
+    SProject &project = projectLoader.getProject();
+    QString resolved =
+        SFilePathRef::fromStored( fileName, project.projectFilePath() );
+
+    // A relative reference that does NOT resolve next to the project file keeps
+    // its raw spelling, so linkToFile() can still apply the older resolution
+    // (the .qxa runner's sample base dir, else the working directory). That is
+    // what keeps hand-written fixtures — and any project saved before this
+    // encoding existed — loading exactly as they did before. An absolute or "~"
+    // form has no such second reading and is used as resolved, missing or not,
+    // so the failure names the file it actually looked for.
+    const bool wasProjectRelative = !fileName.startsWith( QLatin1Char( '~' ) )
+                                    && QFileInfo( fileName ).isRelative();
+    if( wasProjectRelative && resolved != fileName
+        && !QFileInfo::exists( resolved ) ) {
+        resolved = fileName;
+    }
+    return project.linkToFile( resolved );
 }
 
 // Phase 5e: Page cache implementation

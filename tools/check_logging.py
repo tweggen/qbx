@@ -32,6 +32,7 @@ ALLOW_FILES = {
     # A standalone test driver that lives outside a tests/ directory; its
     # PASS/FAIL lines are the program's output, not diagnostics.
     os.path.join("smaragd", "main", "testkit", "src", "action_roundtrip_test.cpp"),
+    os.path.join("smaragd", "main", "testkit", "src", "filepathref_test.cpp"),
 }
 
 # Directory fragments that are exempt wholesale: test drivers print results.

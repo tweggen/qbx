@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  External file references are stored PORTABLY: relative to the project file
+  (this case), relative to "~" when the climb lands exactly on the home
+  directory, absolute only when it goes past home to a root. The rules and the
+  reasoning are in main/model/include/app/model/sfilepathref.h; the per-rule
+  arithmetic is gated by filepathref_test (ctest), which can build synthetic
+  paths around QDir::homePath() and so is not tied to where this repo happens
+  to be checked out.
+
+  What only an end-to-end case can prove is the wiring: that the project knows
+  its own on-disk location at BOTH ends (SSaveProjectAction and
+  SLoadProjectAction set it), and that the encoded spelling actually resolves
+  back to the same audio. Before this, a project saved anywhere but next to its
+  samples carried the absolute paths of the machine that wrote it, so moving or
+  sharing the folder silently produced a project of missing samples.
+
+  Geometry: the sample lives in tests/, the project is written three levels
+  down in build/test-output/, so the stored reference has to CLIMB — the case
+  would still pass on a bare basename if the two happened to share a folder.
+-->
+<SActionScript version="1" name="sample_path_portable">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <save-project path="../../build/test-output/sample_path_portable/song.qxp"/>
+
+    <!-- The exact spelling, not merely "some relative path": an absolute path,
+         a bare basename and a wrongly-anchored climb all fail this. -->
+    <assert-file-contains path="../../build/test-output/sample_path_portable/song.qxp"
+                          text="filename='../../../tests/test_sawtooth.wav'"/>
+
+    <!-- The reference has to survive the round trip as AUDIO, not just as text:
+         resolve it from the project's own directory and render what comes back. -->
+    <load-project path="../../build/test-output/sample_path_portable/song.qxp"/>
+
+    <render filename="sample_path_portable.wav" format="wav" quality="10"/>
+
+    <!-- The ramped sawtooth: a unique RMS per second. A sample that failed to
+         resolve renders silence and fails the first assertion. -->
+    <assert-audio-energy filename="sample_path_portable.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="sample_path_portable.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

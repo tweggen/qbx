@@ -250,6 +250,15 @@ void SProject::setFileName( const QString &fileName )
     emit fileNameChanged( fileName_ );
 }
 
+void SProject::setProjectFilePath( const QString &path )
+{
+    // Absolutized once, here, so every consumer gets the same anchor no matter
+    // what the working directory was when the save/load was requested.
+    projectFilePath_ = path.isEmpty()
+        ? QString()
+        : QDir::cleanPath( QFileInfo( path ).absoluteFilePath() );
+}
+
 void SProject::addExternObject( const SExternFile &extObject )
 {
     QString externFileName = extObject.getFileName();
