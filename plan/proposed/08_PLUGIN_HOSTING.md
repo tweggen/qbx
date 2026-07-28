@@ -1,6 +1,7 @@
 # Concept: Plugin Hosting — Effect Inserts on Tracks (CLAP first; VST3 / AU / LV2 / in‑house later)
 
-> **Status: M0–M5 EXECUTED 2026‑07‑26 — M6 (VST3) and M7 (macOS bring‑up) remain OPEN.**
+> **Status: M0–M5 EXECUTED 2026‑07‑26; M7 (macOS bring‑up) and M8 (AudioUnit
+> backend, macOS) DONE 2026‑07‑28 — M6 (VST3) remains OPEN.**
 >
 > Added after execution; the `Status: OPEN` note and the §Implementation status table
 > below are the PRE‑EXECUTION snapshot and are kept as written. What is live now:
@@ -14,7 +15,8 @@
 > | M4 | done | Slots round‑trip (`id=` + `instantiateFromDomElement` + `<state>` on the QTextStream path), `STrack`↔chain via `pluginChainId` and `SProjectLoader::deferResolve`, `createNullPlugin()` placeholder, `reloadPlugin()`. |
 > | M5 | done | The parameter editor wired in (it had never been constructed anywhere), greyed Missing/Unsupported rows with reason tooltip + Reload/Remove, and the last three actions — `set-plugin-bypass`, `reorder-plugin`, `set-plugin-param` (coalescing). `remove-plugin`'s inverse now carries the state chunk. |
 > | M6 | OPEN | VST3 backend. Should touch only `smaragd/tw303a/plugins/`. |
-> | M7 | OPEN | macOS bring‑up: bundle loading, entitlements, probe in the bundle. |
+> | M7 | done | macOS bring‑up: flat‑vs‑bundle `.clap`, `disable‑library‑validation` entitlement, fixture inside the bundle. |
+> | M8 | done | AudioUnit effect backend (macOS): OS‑registry discovery + AUv2 C‑API hosting, `uid`=type‑subtype‑manufacturer, `'TWAU'` state frame. Touches only `tw303a/plugins/`. Instruments/native‑view out of scope. |
 >
 > Defect 4 of §Defects found in the built code was only HALF fixed by M3 and is
 > fully closed by M5: `SObject::invalidateRenderPath()` is a no‑op for a plugin

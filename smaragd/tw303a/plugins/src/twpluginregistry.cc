@@ -28,6 +28,13 @@
 #include "twclapmodule.h"
 #endif
 
+#ifdef TW_HAVE_AU
+// PRIVATE header of the AudioUnit backend (macOS), same PRIVATE-to-tw_plugins
+// discipline as CLAP above. Declares only std::string/vector signatures, so no
+// AudioToolbox type leaks into this translation unit.
+#include "twaumodule.h"
+#endif
+
 namespace audio {
 
 // Forward declare the PassThrough plugin factory.
@@ -58,6 +65,12 @@ ProbeOutcome probeInProcess( const twPluginModuleFile &m,
 #ifdef TW_HAVE_CLAP
     if( m.format == "clap" ) {
         out = clapModuleDescriptors( m.path );
+        return out.empty() ? ProbeOutcome::Failed : ProbeOutcome::Ok;
+    }
+#endif
+#ifdef TW_HAVE_AU
+    if( m.format == "au" ) {
+        out = auModuleDescriptors( m.path );
         return out.empty() ? ProbeOutcome::Failed : ProbeOutcome::Ok;
     }
 #endif
@@ -305,7 +318,25 @@ void twPluginRegistry::rescan( bool force )
     // re-probed, nothing is trusted.
     if( force ) cache.clear();
 
-    const std::vector<twPluginModuleFile> mods = enumeratePluginModules( dirs );
+    std::vector<twPluginModuleFile> mods = enumeratePluginModules( dirs );
+
+#ifdef TW_HAVE_AU
+    // AudioUnits are discovered from the OS component registry, not by walking
+    // the user's search paths (the registry is authoritative and covers system
+    // units too). The resulting per-component module keys are merged into the
+    // same list so they inherit the path-keyed cache, sticky-failure records and
+    // out-of-process probe unchanged.
+    //
+    // SMARAGD_SCAN_AU=0 suppresses this: the headless scan gate asserts exact
+    // module counts against a controlled fixture directory, which enumerating
+    // every system AU would make non-deterministic. AU insert/instantiate does
+    // NOT go through a scan, so disabling enumeration never affects the qxa
+    // cases — only what the browser lists.
+    if( qEnvironmentVariable( "SMARAGD_SCAN_AU", "1" ) != QLatin1String( "0" ) ) {
+        const std::vector<twPluginModuleFile> au = enumerateAuModules();
+        mods.insert( mods.end(), au.begin(), au.end() );
+    }
+#endif
 
     twPluginScanStats st;
     st.running      = true;
@@ -428,6 +459,16 @@ std::unique_ptr<twPlugin> twPluginRegistry::instantiate( const twPluginDescripto
         TW_LOGE( "plugins", "[registry] cannot instantiate CLAP plugin '%s': this build "
                  "has no CLAP support (the third_party/clap submodule was missing at "
                  "configure time)", desc.uid.c_str() );
+        return nullptr;
+#endif
+    }
+
+    if( desc.format == "au" ) {
+#ifdef TW_HAVE_AU
+        return createAuPlugin( desc.path, desc.uid );
+#else
+        TW_LOGE( "plugins", "[registry] cannot instantiate AudioUnit plugin '%s': this "
+                 "build has no AU support (AU hosting is macOS-only)", desc.uid.c_str() );
         return nullptr;
 #endif
     }

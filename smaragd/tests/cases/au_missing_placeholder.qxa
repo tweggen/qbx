@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="au_missing_placeholder">
+
+  <!-- Proposal 08 M8 (AC 5) for AudioUnit: a project that names an AU this
+       machine does not have must still open, sound like the plugin is not there,
+       and save the AU's identity back untouched. This is the AU sibling of
+       plugin_missing_placeholder.qxa, and it needs NO AU installed at all — the
+       uid is a syntactically-valid but unregistered (type, subtype, manufacturer)
+       triple, so AudioComponentFindNext never resolves it and the slot runs
+       createNullPlugin(declared I/O). macOS-only (registered only where the AU
+       backend exists), but it does not depend on any specific system AU. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- A well-formed AU uid (hex type-subtype-manufacturer) that no machine
+         registers: the slot resolves to a transparent 2-in/2-out placeholder. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="au" uid="deadbeef-deadbeef-deadbeef"
+                   name="Nonexistent AU Effect" vendor="Acme &amp; Co &lt;Audio&gt;"
+                   path="" nIn="2" nOut="2"/>
+
+    <render filename="au_missing_placeholder.wav" format="wav" quality="10"/>
+
+    <!-- The placeholder is a copy: unprocessed sawtooth level (cf.
+         plugin_missing_placeholder.qxa's bands). -->
+    <assert-audio-energy filename="au_missing_placeholder.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.073"/>
+    <assert-audio-energy filename="au_missing_placeholder.wav"
+                         startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.15" maxRms="0.21"/>
+
+    <save-project path="../../build/au_missing_resave.qxp"/>
+
+    <!-- The AU's identity survived a save on a machine without it. -->
+    <assert-file-contains path="../../build/au_missing_resave.qxp"
+                          text="format='au'"/>
+    <assert-file-contains path="../../build/au_missing_resave.qxp"
+                          text="uid='deadbeef-deadbeef-deadbeef'"/>
+    <assert-file-contains path="../../build/au_missing_resave.qxp"
+                          text="name='Nonexistent AU Effect'"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
