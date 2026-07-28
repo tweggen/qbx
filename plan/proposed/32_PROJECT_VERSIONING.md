@@ -24,6 +24,15 @@
 > (`SExternFile` / `SPlainWave`, `SProject::linkToFile`) — see the coordination
 > note in §D.
 
+## Decisions taken with the requester (2026-07-28)
+
+1. **Stable ids are UUIDs**, not a project-scoped counter. A counter risks
+   collisions in the collaboration case — two branches off a common ancestor
+   each allocate the next counter value and produce colliding ids on merge,
+   which is exactly the M3 scenario. UUIDs are globally unique by construction,
+   so independently-created objects never alias. Accepted cost: larger, less
+   human-readable id strings in the diff.
+
 ## Motivating use cases (the challenge to meet)
 
 1. Producing a song; fall back to / compare against an earlier version.
@@ -132,9 +141,10 @@ Milestone 1.
 Give every serialized object a **persistent identity** allocated once and stored
 on the object, replacing the pointer-derived IDs:
 
-- Allocate a stable id on object creation (a UUID, or a project-scoped monotonic
-  counter persisted in the file); serialize *that* instead of
-  `reinterpret_cast<std::uintptr_t>(this)` at the four sites in §A.1. The loader
+- Allocate a stable **UUID** on object creation (see the §Decisions note — a
+  counter is rejected for M3 collision risk) and store it on the object;
+  serialize *that* instead of `reinterpret_cast<std::uintptr_t>(this)` at the
+  four sites in §A.1. The loader
   already treats IDs as opaque within-file keys, so the resolution logic in
   `sprojectloader.cpp` is unaffected — only the *source* of the string changes.
 - Stop serializing the derived `nRefs` (recomputed on load anyway).
@@ -223,15 +233,10 @@ natural completion of the sibling's work and should be co-designed with it.
 
 ## F. Open questions
 
-1. Persistent id: UUID (globally unique, larger, merge-friendly across
-   independently-created objects — matters for M3) vs. a project-scoped counter
-   (compact, human-readable diffs, but two branches can allocate the same number).
-   M3 leans toward UUID; M0 could ship either. Decide before M0 to avoid a second
-   migration.
-2. `.qxp` single-file (M0–M2) vs. project-as-folder bundle (needed by M1's
+1. `.qxp` single-file (M0–M2) vs. project-as-folder bundle (needed by M1's
    `media/` and M3's per-track split). Does M1 introduce the folder form, and is
    the single-file `.qxp` retained as an export/"flatten" format?
-3. Semantic Compare (M2): how much does it show — track/clip add/remove/move —
+2. Semantic Compare (M2): how much does it show — track/clip add/remove/move —
    and does it reuse any of the action-model vocabulary (`docs/ACTIONS.md`)?
-4. Migration: how does an old pointer-ID `.qxp` acquire stable ids on first load
-   under M0 (assign-on-load, one-time rewrite)?
+3. Migration: how does an old pointer-ID `.qxp` acquire stable UUIDs on first
+   load under M0 (assign-on-load, one-time rewrite)?
