@@ -61,9 +61,14 @@ Invariants:
    can never be consumed and spun forever — measured at ~3M passes/minute with
    an unbounded log and RSS. Every pass now tracks whether it consumed
    anything; a pass that consumes nothing names each unresolvable element and
-   its dangling target, drops them, and ends the loop. Both recoveries WARN
+   its dangling target, drops them, and ends the loop. (c) instantiate()
+   returning NULL — commonest cause an <SPlainWave> whose sample is missing
+   (after basename recovery next to the project has already been tried,
+   splainwave.cpp) — was ALSO a return -1; it is now skipped like (a), and the
+   (b) leftover sweep then cascades the drop to any SLink/SCut that referenced
+   it, so one lost sample no longer loses the project. All recoveries WARN
    with the type and identity of what was lost — silent data loss would be
-   worse than the abort they replace.
+   worse than the abort they replace. Gate: sample_missing_survives.qxa.
 7. A FAILED load must not resume background work on the graph it abandons.
    createObjects() returning non-zero leaves a half-built object graph that
    the caller discards (SMainWindow::openProjectFile marks it partial and

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A sample that cannot be found ANYWHERE must not cost the user the whole
+  project. Before this, a missing sample made instantiate() return NULL and the
+  loader hard-aborted the entire load; now a failed instantiate is SKIPPED, like
+  an id-less element, and the no-progress leftover sweep drops whatever
+  referenced it — so the REST of the project loads.
+
+  The fixture carries both a GOOD track and an orphan BAD branch:
+
+   1. track1 -> cut1 -> wave1 ("../test_sawtooth.wav") resolves via the qxa
+      sample base dir and renders, exactly as in legacy_project_recovery.qxa.
+
+   2. wave2 ("~/__smaragd_no_such_dir_missing__/__missing_sample__.wav") exists
+      nowhere and its basename is NOT next to the project either, so basename
+      recovery cannot save it: instantiate fails and wave2 is skipped. cut2
+      references wave2, is referenced by nothing, and is dropped by the leftover
+      sweep. Neither reaches the surviving track.
+
+  The assertions are the point: the load SUCCEEDS (a hard abort would leave zero
+  tracks and a silent render) and the good track renders intact. If wave2 ever
+  aborts the load again, the track count and energy assertions both fail.
+-->
+<SActionScript version="1" name="sample_missing_survives">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../sample_missing_survives.qxp"/>
+
+    <render filename="sample_missing_survives.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: good track plays source sec1 (slip offset via startOffset=48000) -->
+    <assert-audio-energy filename="sample_missing_survives.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 1-2 s: source sec2 -->
+    <assert-audio-energy filename="sample_missing_survives.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <cstring>
 
+#include <QDir>
 #include <QFileInfo>
 #include <qobject.h>
 #include <qwidget.h>
@@ -453,6 +454,26 @@ SLink *SPlainWave::instantiateFromDomElement(
     if( wasProjectRelative && resolved != fileName
         && !QFileInfo::exists( resolved ) ) {
         resolved = fileName;
+    }
+
+    // Last-resort recovery: the reference does not resolve, but a same-named
+    // file sits next to the project file. Recordings are written INTO the
+    // project's own folder, so a project moved/copied as a unit (or opened past
+    // a OneDrive "Documents"<->"Dokumente" redirection) keeps its samples beside
+    // the .qxp even when the stored absolute/"~" path still names the old
+    // location. Adopt that neighbour. Self-healing: the file now resolves next
+    // to the project, so the next save re-encodes it project-relative. Skipped
+    // when there is no anchor (headless tests without setProjectFilePath), which
+    // leaves linkToFile's sample-base-dir resolution untouched.
+    if( !QFileInfo::exists( resolved )
+        && !project.projectFilePath().isEmpty() ) {
+        const QString projectDir =
+            QFileInfo( project.projectFilePath() ).absolutePath();
+        if( !projectDir.isEmpty() ) {
+            const QString candidate = QDir::cleanPath(
+                QDir( projectDir ).filePath( QFileInfo( resolved ).fileName() ) );
+            if( QFileInfo::exists( candidate ) ) resolved = candidate;
+        }
     }
     return project.linkToFile( resolved );
 }
