@@ -302,13 +302,29 @@ CLAP audio-effect plugins are scanned, inserted per track, heard in the signal
 path, saved with the project, and kept as a reloadable placeholder when the
 plugin is not installed. **Design:** `plan/proposed/08_PLUGIN_HOSTING.md`;
 **what was built and in what order:** `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`;
-**the invariants that matter:** `smaragd/tw303a/plugins/CONTRACT.md` (20 of them)
-and `smaragd/main/pluginui/CONTRACT.md`. macOS bring-up (M7) is DONE
-(2026-07-28); VST3 (M6) is open. On macOS a `.clap` may be a directory bundle or
-a flat dylib — `twClapModule` handles both (`stat` the path; bundles resolve the
-inner binary from `Contents/MacOS`, preferring the base name), and the app needs
-the `com.apple.security.cs.disable-library-validation` entitlement to dlopen
-unsigned third-party plug-ins under the ad-hoc signature.
+**the invariants that matter:** `smaragd/tw303a/plugins/CONTRACT.md` and
+`smaragd/main/pluginui/CONTRACT.md`. macOS bring-up (M7) and the **AudioUnit
+effect backend (M8)** are DONE (2026-07-28); VST3 (M6) is open. On macOS a
+`.clap` may be a directory bundle or a flat dylib — `twClapModule` handles both
+(`stat` the path; bundles resolve the inner binary from `Contents/MacOS`,
+preferring the base name), and the app needs the
+`com.apple.security.cs.disable-library-validation` entitlement to dlopen unsigned
+third-party plug-ins under the ad-hoc signature.
+
+**AudioUnit (macOS, M8):** a second format behind the same `twPlugin` interface,
+so the model / serialization / processor-tap / UI are unchanged (proposal 08 AC
+4). Unlike CLAP, AU is discovered from the **OS component registry**
+(`AudioComponentFindNext`), not by walking directories: a "module" is one
+component, keyed `au:<type>-<subtype>-<manufacturer>` (hex), and a descriptor's
+`uid` is that triple with an EMPTY `path` (AU instantiates from the component
+description, so AU projects re-resolve by uid and are portable without a path).
+Hosting is the plain C AudioUnit API (`twaumodule.cc` / `twauplugin.cc`, no
+Obj-C); state is `kAudioUnitProperty_ClassInfo` in a `'TWAU'` frame. Backend
+files are PRIVATE to `tw_plugins` behind `TW_HAVE_AU`. `SMARAGD_SCAN_AU=0`
+suppresses AU enumeration (the headless scan gate uses it; insert/instantiate go
+by descriptor and never scan). Test gating is stock-system-AU based (no in-repo
+`.component` fixture): `au_test` + the macOS-only `au_*.qxa` cases, which use a
+qualitative RMS discriminator (AULowpass), never a byte-`cmp`.
 
 ### Layers
 

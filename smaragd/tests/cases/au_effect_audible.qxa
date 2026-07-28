@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="au_effect_audible">
+
+  <!-- Proposal 08 M8 (AC 1) for AudioUnit: a real AU audibly processes a track's
+       output, and bypass restores it. Apple's stock AULowpass (aufx/lpas/appl)
+       ships with every macOS, so this is macOS-only but not machine-specific.
+
+       AULowpass param 0 is the cutoff frequency (Hz). Driven far below the
+       sawtooth's harmonics it removes most of the energy, so the discrimination
+       is QUALITATIVE (near-total attenuation vs. the untouched signal), which
+       survives the OS-version variance a byte/tight-RMS assertion could not.
+       The bands are deliberately loose for the same reason — this is an RMS
+       discriminator, never a cmp gate. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="au" uid="61756678-6c706173-6170706c"
+                   name="AULowpass" vendor="Apple"
+                   path="" nIn="2" nOut="2"/>
+
+    <!-- Cutoff at the very bottom of the range: almost everything is removed. -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="120.0"/>
+
+    <render filename="au_lowpass_active.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="au_lowpass_active.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.045"/>
+
+    <!-- Bypass restores the untouched sawtooth level (cf. the placeholder/removed
+         bands elsewhere: ~0.0667 for the first second). -->
+    <set-plugin-bypass trackPath="0" slotIndex="0" bypassed="true"/>
+
+    <render filename="au_lowpass_bypassed.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="au_lowpass_bypassed.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.073"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

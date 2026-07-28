@@ -5,8 +5,9 @@ Execution plan for `plan/proposed/08_PLUGIN_HOSTING.md`. That document holds the
 the channel-mismatch table, the settled decisions). This document holds *what is actually built,
 what is broken, and the milestone order to close it out*.
 
-> **Execution status (2026-07-28): M0, M1, M2, M3, M4, M5 and M7 (macOS bring-up)
-> are DONE; M6 (VST3) is OPEN.** Every §Confirmed problems item below is closed, with
+> **Execution status (2026-07-28): M0, M1, M2, M3, M4, M5, M7 (macOS bring-up)
+> and M8 (AudioUnit backend, macOS) are DONE; M6 (VST3) is OPEN.** Every
+> §Confirmed problems item below is closed, with
 > two carry-overs recorded where they landed: the MONO SINK (`RenderSession` /
 > `AudioEngine` collapse the graph's buses to one page and duplicate it) is a
 > tw_render / tw_playback gap, not a plugin-layer one, and is nobody's milestone; and
@@ -349,6 +350,68 @@ Verified on macOS 15 / arm64: `ctest -R "plugins_test|plugins_scan_test"` green;
 none present in CI): scan a real CLAP (Surge XT / Vital / u-he) from Edit → Options → Plugins,
 insert it from the FX strip, hear it in stereo, save/reopen, and the missing-placeholder round
 trip. **VST3 (M6) macOS bring-up is deferred with M6.**
+
+## M8 — AudioUnit backend (proves proposal 08 AC 4 a second time) — **DONE** (2026-07-28)
+
+The AU effect backend, a sibling to CLAP behind the same `twPlugin` interface.
+Touched **only** `smaragd/tw303a/plugins/` (backend + three dispatch branches +
+CMake) plus doc/test files — no change to the processor/tap, model, actions or
+UI, which is the AC-4 finding restated.
+
+Two up-front decisions (from the requester): **discovery + hosting via the OS
+component registry and the AUv2 C API** (not AVFoundation, not AUv3), and **test
+gating against stock system AUs** (no in-repo `.component` fixture).
+
+- **Discovery is registry-based, not directory-based.** AU identity is the
+  `(type, subtype, manufacturer)` triple registered with the OS, so AU does NOT
+  use the directory walker. `enumerateAuModules()` (`src/twaumodule.cc`) lists
+  components with `AudioComponentFindNext` over the effect + music-effect types
+  and returns one synthetic module key `au:<type>-<subtype>-<manufacturer>` (hex)
+  per component. `twPluginRegistry::rescan()` merges that list into the normal
+  scan loop, so AU inherits the path-keyed cache, sticky failed/timeout records
+  and the out-of-process probe unchanged. The component version
+  (`AudioComponentGetVersion`) is folded into the cache key's size field so a
+  plugin update re-probes without a file to stat. `SMARAGD_SCAN_AU=0` suppresses
+  enumeration — the headless scan gate asserts exact fixture counts and must not
+  see the machine's system AUs; AU insert/instantiate never goes through a scan,
+  so this only affects what the browser lists.
+- **Hosting is the plain C AudioUnit API** (`src/twauplugin.cc`, no Objective-C).
+  `createAuPlugin(path, uid)` resolves the triple with `AudioComponentFindNext` +
+  `AudioComponentInstanceNew` (`path` is ignored — cosmetic). `prepare()` sets a
+  non-interleaved float32 `StreamFormat` on both scopes, `MaximumFramesPerSlice`,
+  and an input `AURenderCallback` that memcpies the caller's `in` buffers, then
+  `AudioUnitInitialize`. `process()` points a non-interleaved `AudioBufferList`
+  at the caller's `out` and calls `AudioUnitRender`; any failure passes audio
+  through. Params via `kAudioUnitProperty_ParameterInfo` / `AudioUnitGet|Set
+  Parameter` (documented thread-safe — no lock-free ring, unlike CLAP). State via
+  `kAudioUnitProperty_ClassInfo` (a CFPropertyList) serialized to a binary plist
+  and wrapped in an 8-byte `'TWAU'` frame (the CLAP `'TWCP'` shape, distinct
+  magic). Latency from `kAudioUnitProperty_Latency`; native editor bit from
+  `kAudioUnitProperty_CocoaUI` presence (embedding stays phase 5).
+- **Portability improves.** A saved AU slot re-resolves by `uid` (a
+  machine-independent triple), so its stored `path` is empty and irrelevant; an
+  AU absent on this machine falls through to `createNullPlugin(declared I/O)`, the
+  same missing-placeholder round-trip as CLAP.
+- **Dispatch branches (3 files, mirroring CLAP under `TW_HAVE_AU`):**
+  `twpluginregistry.cc` (`probeInProcess` + `instantiate` + the rescan merge),
+  `plugin_probe.cc` (routes `au:` / `.component`), `twpluginsearchpaths.cc`
+  (`defaults("au")` returns the informational Components dirs). CMake adds a
+  macOS-only `TW_HAVE_AU` block linking AudioToolbox/AudioUnit/CoreAudio/
+  CoreFoundation (PRIVATE — a static lib still propagates these to the app and
+  the probe), and the probe is now built when EITHER backend is present.
+
+Gates (macOS): a new `au_test` unit (enumerate → instantiate a stock AU →
+process → `TWAU` state-frame round-trip → param range; skips if no AU present)
+and three qxa cases registered macOS-only — `au_effect_audible` (AULowpass at a
+120 Hz cutoff drops ch0 RMS to ~0.004 vs the bypassed ~0.067 — a 16× qualitative
+discriminator, loose bands so OS-version DSP drift cannot break it),
+`au_slot_roundtrip` (an `au` descriptor + a `TWAU` state chunk survive save →
+reload), and `au_missing_placeholder` (a bogus AU uid round-trips through the
+placeholder; needs no AU installed). Verified on macOS 15 / arm64: full `ctest`
+green, `check_layering` / `check_logging` clean. Still by hand (needs a real
+third-party AU): scan → insert → hear → save/reopen with e.g. an installed
+Surge XT AU. **AU instruments (`aumu`) and native-view embedding are out of
+scope (gated as for CLAP).**
 
 ---
 

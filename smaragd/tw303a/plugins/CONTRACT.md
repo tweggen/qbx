@@ -282,11 +282,32 @@ Known debt:
   plugin_stereo_chain.qxa works around it with a fixture whose channel 0 depends
   on channel 1's INPUT, which is enough to prove input 1 is wired; per-bus
   DISTINCTNESS is gated at engine level in plugins_test instead.
-- Only CLAP is scanned. `formatForFile()` in twpluginsearchpaths.cc maps
-  `*.clap` and nothing else ON PURPOSE: a `.vst3` found before M6 lands would
-  be probed, fail, and be cached as a permanent failure that M6 would then have
-  to force-clear. `twPluginSearchPaths::defaults("vst3")` already returns the
-  right directories, so M6 adds one line to the extension table.
+- Only CLAP is directory-scanned. `formatForFile()` in twpluginsearchpaths.cc
+  maps `*.clap` and nothing else ON PURPOSE: a `.vst3` found before M6 lands
+  would be probed, fail, and be cached as a permanent failure that M6 would then
+  have to force-clear. `twPluginSearchPaths::defaults("vst3")` already returns
+  the right directories, so M6 adds one line to the extension table. `.component`
+  is deliberately NOT in that table — AU is discovered differently (below).
+- AudioUnit (macOS, M8) is discovered from the OS component registry, NOT by
+  walking directories: `enumerateAuModules()` (twaumodule.cc) lists components
+  with `AudioComponentFindNext` and `twPluginRegistry::rescan()` merges them into
+  the scan loop as synthetic module keys `au:<type>-<subtype>-<manufacturer>`
+  (hex). So an AU "module" is ONE component; a descriptor's `uid` is that triple
+  and its `path` is EMPTY — AU instantiates from the component description, never
+  a path, which is also why an AU project re-resolves by `uid` and is portable
+  without a valid path. `createNullPlugin` still backs a missing AU exactly as
+  for CLAP. `SMARAGD_SCAN_AU=0` suppresses AU enumeration for the count-exact
+  headless scan gate; it never affects insert/instantiate (those bypass the scan).
+- AU state uses the `'TWAU'` frame — the same 8-byte shape as CLAP's `'TWCP'`
+  but a DISTINCT magic, so a blob from one backend is rejected by the other
+  rather than misread. The payload is the unit's `kAudioUnitProperty_ClassInfo`
+  serialized as a binary plist.
+- AU test gates are stock-system-AU based (no in-repo `.component` fixture, which
+  would need a real `Info.plist`/bundle): `au_test` (unit) skips when no AU is
+  registered, and the `au_*.qxa` cases are registered macOS-only. Never assert a
+  byte-`cmp` or a tight RMS on a stock AU — its DSP varies by OS version; use a
+  QUALITATIVE RMS discriminator (au_effect_audible drives AULowpass to near-total
+  attenuation) or a serialization round-trip, never `L != R`.
 - The scan is all-or-nothing per run: there is no incremental "this directory
   changed" trigger and no filesystem watcher, so picking up a plugin installed
   while the app is running needs the Options page's Rescan (or a restart).
