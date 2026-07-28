@@ -1,6 +1,7 @@
 # Proposal 32: Project versioning, sharing, and portability
 
-> **Status: DRAFT (2026-07-28).** A layered answer to "how does a user keep
+> **Status: DRAFT (2026-07-28; reconciled with the merged `SFilePathRef`
+> relative-path work same day).** A layered answer to "how does a user keep
 > revisions of a song, back it up off-machine, work across machines, hand a
 > track to a studio musician, and collaborate with others" — **without** qbx
 > growing its own version-control system, and explicitly **without** real-time
@@ -24,10 +25,10 @@
 > (`docs/PROJECT_FILE_FORMAT.md`), the persistence module
 > (`main/persistence/CONTRACT.md`), `SObject` serialization
 > (`main/model/src/sobject.cpp`), the content-addressed sidecar store as a
-> reuse pattern (`27_ANALYSIS_SIDECARS.md`, `tw303a/sidecar/`). **In-flight
-> sibling work:** relative, cross-platform-safe media path serialization
-> (`SExternFile` / `SPlainWave`, `SProject::linkToFile`) — see the coordination
-> note in §E.
+> reuse pattern (`27_ANALYSIS_SIDECARS.md`, `tw303a/sidecar/`). **Landed
+> (2026-07-28):** portable, cross-platform-safe media path serialization is now
+> merged (`SFilePathRef`, `main/model/include/app/model/sfilepathref.h`, commit
+> `f191e5d`) — this proposal has been reconciled with it; see §A.2 and §E.
 
 ## Decisions taken with the requester (2026-07-28)
 
@@ -66,9 +67,11 @@ would be its own proposal.
 
 ## A. What is wrong today
 
-Two properties of the current format block every use case above. Both are
-prerequisites — no sharing story works until they are fixed, and neither is
-git's job to fix.
+Two properties of the format stood between the current app and every use case
+above, and neither is git's job to fix. **One is now resolved:** the media-path
+portability of §A.2 landed as `SFilePathRef` (2026-07-28). **One remains the
+linchpin:** the diff-stability of §A.1 — no sharing story works until it is
+fixed.
 
 ### A.1 The project file is not diff-stable
 
@@ -112,25 +115,43 @@ Three smaller sources of churn in the same path:
 Consequence: git history is unreadable (every commit touches the whole file) and
 line-level merges — the substrate of use cases 4 and 5 — are impossible.
 
-### A.2 The project is not portable
+### A.2 The project's media references — portability (largely SOLVED, 2026-07-28)
 
-Media is never copied into the project; it is referenced by path
-(`main/objects/wave/src/splainwave.cpp:25-28`):
+Media is not copied into the project; it is referenced by path. This *used* to be
+a raw **absolute** path written verbatim (the old
+`main/objects/wave/src/splainwave.cpp:25-28`, `o << " filename='" <<
+getFileName() << "'"`), so cloning onto a second machine dangled every sample —
+which alone killed use cases 3, 4, 5.
 
-```cpp
-o << " filename='" << getFileName() << "'";
-```
+**This is now fixed.** `SPlainWave::serializeSelfAttributes`
+(`main/objects/wave/src/splainwave.cpp:33-36`) routes the attribute through
+`SFilePathRef::toStored(getFileName(), project->projectFilePath())`
+(`SFilePathRef` is a namespace of free functions,
+`main/model/include/app/model/sfilepathref.h`), which encodes the reference in
+three forms, most-portable first:
 
-Today those paths are **absolute** (imports come from a file dialog,
-`main/shell/src/smainwindow.cpp:1168`; recorded takes are written to
-`<projectDir>/YYYYMMDD_HHMMSS_mmm_<trackId>.wav`,
-`tw303a/record/src/recording_session.cc:275-283`, but stored absolute). Clone
-onto a second machine and every sample dangles. This alone kills use cases 3, 4,
-5. **A sibling change is converting these to relative, cross-platform-safe paths
-(§E)** — which closes most of this gap. Two residual pieces remain: (a) media
-that lives *outside* the project folder (a NAS stock-media library) needs a
-**named-root** indirection, not just project-relative paths (§C.2); (b) a
-one-shot **collect-media** step for the bundle topology (Milestone 1).
+1. **project-relative** (`../../../tests/test_sawtooth.wav`) — the default;
+2. **home-relative** (`~/audio/library/kick.wav`) — when the path would climb all
+   the way up to the home directory;
+3. **absolute** — only when the climb goes past home to a root, or the paths
+   share no root (different Windows drives).
+
+The anchor is `SProject::projectFilePath()` (set at `ssaveprojectaction.cpp:43` /
+`sloadprojectaction.cpp:26`); `SPlainWave::fileName_` stays absolute in memory —
+only the on-disk spelling changes. Load resolves via `fromStored`
+(`splainwave.cpp:441-457`) and falls back to the raw stored spelling (then the
+`.qxa` runner's `sampleBaseDir_`) when a relative reference does not resolve next
+to the project file, so older projects still load. Gates: `filepathref_test`
+(ctest) and `sample_path_portable.qxa`, the latter asserting the exact spelling
+`filename='../../../tests/test_sawtooth.wav'`. (Plugin module paths are out of
+scope — they resolve via the plugin search paths, `spluginslot.cpp`.)
+
+**Two residual portability items remain this proposal's to own:** (a) media that
+lives *outside* the project subtree on a shared volume — a NAS stock-media
+library mounted at `/Volumes/StudioNAS` vs `Z:\` — which the three-rule scheme
+can only spell as home-relative or absolute, i.e. *still* not cross-machine
+portable; this needs a **named-root** indirection (§C.2). (b) a one-shot
+**collect-media** step to make a self-contained bundle (Milestone 1).
 
 ### A.3 What is already fine
 
@@ -194,15 +215,22 @@ textual project files**. Therefore:
 - This is also how professional DAWs behave — Logic/Ableton reference samples,
   they do not copy them into a versioned store.
 
-### C.2 Media resolution — relative *and* named roots
+### C.2 Media resolution — named roots on top of the merged `SFilePathRef`
 
-Extends the sibling's relative-to-project work with a **named-root** indirection,
-because NAS stock media / shared recordings usually live *outside* the project
-folder and the SMB mount path differs per machine (`/Volumes/StudioNAS` on macOS,
-`Z:\` on Windows). A reference stores `${STUDIO_LIB}/drums/kick.wav`; each machine
-maps the root `STUDIO_LIB` to its local mount (persisted per-user in `SSettings`).
-Two coexisting modes: relative-to-project (bundle) and relative-to-named-root
-(NAS library). Reuse the existing `twPluginSearchPaths` named-root pattern.
+The baseline is already in place: `SFilePathRef` (merged, §A.2) encodes a media
+reference as project-relative → home-relative → absolute. That covers a
+self-contained project and a library under `~`, but **not** media on a shared
+volume whose mount path differs per machine (`/Volumes/StudioNAS` on macOS, `Z:\`
+on Windows) — `SFilePathRef` can only spell that as home-relative or absolute,
+neither of which is cross-machine portable.
+
+The **addition** is a **named-root** indirection for exactly that case: a
+reference stores `${STUDIO_LIB}/drums/kick.wav`; each machine maps the root
+`STUDIO_LIB` to its local mount (persisted per-user in `SSettings`). This slots
+in as a fourth, most-portable form ahead of absolute — three modes coexist:
+relative-to-project (bundle) and home-relative (`SFilePathRef`, merged), plus
+relative-to-named-root (this addition, for the NAS library). Reuse the existing
+`twPluginSearchPaths` named-root pattern.
 
 ### C.3 The two topologies
 
@@ -281,10 +309,11 @@ version," honest `git diff`/`git log`.
 ### M1 — Media resolution: named roots + optional consolidation
 
 Default behaviour adds **zero** copies: media is referenced single-instance via
-the sibling's relative-to-project paths *or* a **named root** (§C.2) for media
-that lives outside the project folder (the NAS-library case). This alone makes a
-project resolvable on another machine that maps the same root — serving the
-**NAS studio** topology with no media movement at all.
+the merged `SFilePathRef` relative/home-relative paths (§A.2) *or* a **named
+root** (§C.2, the piece M1 adds) for media that lives outside the project folder
+on a shared mount (the NAS-library case). This alone makes a project resolvable
+on another machine that maps the same root — serving the **NAS studio** topology
+with no media movement at all.
 
 For the **bundle** topology, add an explicit, one-shot **"Collect media"**
 operation that brings externally-referenced imports under a project `media/`
@@ -336,20 +365,25 @@ surfacing — **not** auto-merge. The moment that stops being acceptable is the
 moment the scoped-out real-time/OT server becomes the right tool. This proposal
 stops cleanly at that line.
 
-## E. Coordination with in-flight sibling work
+## E. Relationship to the merged relative-path work
 
-A sibling change is converting media paths to relative, cross-platform-safe form
-in `SExternFile` / `SPlainWave` serialization and `SProject::linkToFile`
-(currently the relative-resolution branch is gated on `sampleBaseDir_`, set only
-by the `.qxa` test runner — this generalizes it). That work and **M0** both touch
-the persistence/serialization path (`main/model/src/sobject.cpp`,
-`main/persistence/src/sprojectloader.cpp`, the `serialize` methods). **Sequence
-them so they don't collide on the same files** — recommended order: let the
-relative-path change land first (it is narrower and already in progress), then do
-M0's identity/ordering change on top, since M0's byte-stability acceptance test
-should be written against the *final* path format. The named-root indirection
-(§C.2) and M1's collect-media step both extend the sibling's work and should be
-co-designed with it.
+The portable media-path work is **merged** (commit `f191e5d`, `SFilePathRef`) —
+media serialization now routes through `SFilePathRef::toStored`/`fromStored`
+(§A.2). The earlier sequencing worry (do the relative-path change first, then M0)
+is therefore moot; what remains is one carry-over for whoever builds M0:
+
+- **M0 touches the same serialize/loader path** that `SFilePathRef` plugged into
+  (`main/objects/wave/src/splainwave.cpp`, `main/model/src/sobject.cpp`,
+  `main/persistence/src/sprojectloader.cpp`, the `serialize` methods). M0's
+  byte-stability acceptance test must therefore be written against the *current,
+  post-`SFilePathRef`* on-disk format — a media reference is now a portable
+  spelling, not a raw absolute path, so a "byte-identical round-trip" baseline
+  captured before `f191e5d` would be wrong.
+- The named-root indirection (§C.2) and M1's collect-media step both **extend**
+  `SFilePathRef` (adding a form / a consolidation op) rather than replacing it,
+  and should be co-designed with its `toStored`/`fromStored` rules so the
+  precedence order (named-root → project-relative → home-relative → absolute)
+  stays in one place.
 
 ## F. Options considered and rejected as the primary mechanism
 
