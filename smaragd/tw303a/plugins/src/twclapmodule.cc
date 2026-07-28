@@ -9,6 +9,10 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#if defined( __APPLE__ )
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 #endif
 
 namespace audio {
@@ -46,24 +50,61 @@ std::wstring widen( const std::string &s )
 #endif
 
 #if defined( __APPLE__ )
-// A macOS .clap is a bundle directory; the DSO lives at
-// <bundle>/Contents/MacOS/<basename-without-extension>. CFBundle is not needed
-// for a plain dlopen of the executable, and avoiding it keeps this file free of
-// CoreFoundation (tw_plugins links neither).
+// Resolve the DSO to dlopen for a macOS .clap path.
+//
+// A macOS .clap is normally a bundle DIRECTORY whose executable lives at
+// <bundle>/Contents/MacOS/<CFBundleExecutable> — conventionally the bundle's own
+// base name, which is what nearly every vendor ships. We prefer that name and
+// fall back to the sole Mach-O in Contents/MacOS when a bundle names its binary
+// differently, so we never hard-depend on the name matching (and stay free of
+// CoreFoundation — tw_plugins links neither CF nor CFBundle).
+//
+// A plain-FILE .clap (a flat dylib, as our test fixture and some tools produce)
+// is loaded directly. This mirrors the scanner (twpluginsearchpaths.cc), which
+// already reports both shapes; the loader used to assume a bundle unconditionally
+// and so could not load a flat .clap at all.
 std::string macBundleBinary( const std::string &bundlePath )
 {
     std::string p = bundlePath;
     while( p.size() > 1 && p.back() == '/' )
         p.pop_back();
 
+    struct stat st;
+    if( ::stat( p.c_str(), &st ) != 0 || !S_ISDIR( st.st_mode ) )
+        return p;                    // not a directory: a flat dylib — load as-is
+
     const std::size_t slash = p.find_last_of( '/' );
     std::string leaf = ( slash == std::string::npos ) ? p : p.substr( slash + 1 );
-
     const std::size_t dot = leaf.find_last_of( '.' );
     if( dot != std::string::npos )
         leaf = leaf.substr( 0, dot );
 
-    return p + "/Contents/MacOS/" + leaf;
+    const std::string macos  = p + "/Contents/MacOS";
+    const std::string byName = macos + "/" + leaf;
+    if( ::stat( byName.c_str(), &st ) == 0 && S_ISREG( st.st_mode ) )
+        return byName;               // the conventional <bundle>/Contents/MacOS/<base>
+
+    // The bundle names its binary something other than the bundle base: take the
+    // (lexicographically first) regular file in Contents/MacOS — CFBundleExecutable
+    // without parsing the plist. Deterministic if there is more than one.
+    if( DIR *d = ::opendir( macos.c_str() ) ) {
+        std::string bestName, bestFull;
+        struct dirent *e = nullptr;
+        while( ( e = ::readdir( d ) ) != nullptr ) {
+            const std::string name = e->d_name;
+            if( name == "." || name == ".." ) continue;
+            const std::string full = macos + "/" + name;
+            if( ::stat( full.c_str(), &st ) == 0 && S_ISREG( st.st_mode ) )
+                if( bestName.empty() || name < bestName ) {
+                    bestName = name;
+                    bestFull = full;
+                }
+        }
+        ::closedir( d );
+        if( !bestFull.empty() ) return bestFull;
+    }
+
+    return byName;                   // nothing found: fail loudly at dlopen
 }
 #endif
 

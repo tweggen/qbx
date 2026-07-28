@@ -5,8 +5,8 @@ Execution plan for `plan/proposed/08_PLUGIN_HOSTING.md`. That document holds the
 the channel-mismatch table, the settled decisions). This document holds *what is actually built,
 what is broken, and the milestone order to close it out*.
 
-> **Execution status (2026-07-26): M0, M1, M2, M3, M4 and M5 are DONE; M6 (VST3) and
-> M7 (macOS bring-up) are OPEN.** Every §Confirmed problems item below is closed, with
+> **Execution status (2026-07-28): M0, M1, M2, M3, M4, M5 and M7 (macOS bring-up)
+> are DONE; M6 (VST3) is OPEN.** Every §Confirmed problems item below is closed, with
 > two carry-overs recorded where they landed: the MONO SINK (`RenderSession` /
 > `AudioEngine` collapse the graph's buses to one page and duplicate it) is a
 > tw_render / tw_playback gap, not a plugin-layer one, and is nobody's milestone; and
@@ -310,17 +310,45 @@ or UI. If it does, that is the finding.
   has one calling convention — MSVC-built plugins are loadable from a MinGW host (Ardour does
   exactly this). A spike is still the gate before writing the wrapper.
 
-## M7 — macOS bring-up — **OPEN**
+## M7 — macOS bring-up — **DONE** (2026-07-28)
 
-Written cross-platform throughout; this milestone is verification plus the mac-only bits.
+Written cross-platform throughout; this milestone was verification plus the mac-only bits.
+Three real gaps surfaced on the first macOS run — the ctest plugin targets and every plugin
+qxa case failed — all now closed:
 
-- CLAP/VST3 bundle loading verified; default search paths under `/Library/Audio/Plug-Ins/`.
-- `smaragd/main/smaragd.entitlements` needs `com.apple.security.cs.disable-library-validation` —
-  the POST_BUILD `codesign --force --deep --sign -` step otherwise refuses to load unsigned
-  third-party bundles.
-- `smaragd_pluginprobe` copied into the app bundle.
-- No dependency automation exists on macOS (`ensure_render_deps` returns early for non-Windows),
-  so the submodules are the whole story — nothing to `brew install`.
+- **Flat vs. bundle `.clap`.** The loader (`twclapmodule.cc::macBundleBinary`) unconditionally
+  rewrote every macOS `.clap` to `<bundle>/Contents/MacOS/<base>`, so it could not load a
+  plain-file `.clap` at all — which is exactly what the `twtestclap` fixture and some tools
+  produce. It now stats the path: a regular file is dlopened directly; a directory resolves the
+  inner binary, preferring `<base>` and falling back to the sole Mach-O in `Contents/MacOS`
+  (CFBundleExecutable without linking CoreFoundation), so a bundle whose inner name differs from
+  the bundle base still loads. The scanner (`twpluginsearchpaths.cc::bundleBinary`) was given the
+  same name-mismatch fallback so it discovers the same bundles the loader can load. This was the
+  root cause of `plugins_test` / `plugins_scan_test` failing on macOS.
+- **`disable-library-validation` entitlement.** Added to `smaragd/main/smaragd.entitlements` so
+  the ad-hoc `codesign --force --deep --sign -` app can dlopen unsigned third-party CLAP bundles.
+  NB: the entitlements plist must stay comment-free — codesign's AMFI parser rejects XML comments
+  (`AMFIUnserializeXML: syntax error`).
+- **Fixture inside the bundle.** On macOS `QCoreApplication::applicationDirPath()` is
+  `Contents/MacOS` *inside* the `.app`, but tw303a drops `twtestclap.clap` beside the `.app`
+  (`build/bin`). Since `SPluginSlot::resolveModulePath` resolves a relative module path against
+  `applicationDirPath()`, every plugin qxa case loaded a transparent Missing placeholder and its
+  audio assertions failed. `smaragd/main/CMakeLists.txt` now copies the fixture into
+  `Contents/MacOS` (before codesign, like `smaragd_pluginprobe`, with a matching
+  `add_dependencies`).
+
+Already in place before this milestone (verified, unchanged): `smaragd_pluginprobe` copied into
+the bundle and located via `applicationDirPath()`; the `codesign` + `macdeployqt` POST_BUILD
+chain; default search paths `/Library/Audio/Plug-Ins/CLAP` + `~/Library/…`; `ensure_submodules`
+in the build scripts. No dependency automation exists on macOS (`ensure_render_deps` returns
+early for non-Windows), so the submodules are the whole story — nothing to `brew install`.
+
+Verified on macOS 15 / arm64: `ctest -R "plugins_test|plugins_scan_test"` green; all 8
+`qxa.plugin_*` cases green (were 7/8 failing); `render_sawtooth_with_effects` green;
+`check_layering` / `check_logging` clean. Still to do by hand (needs a real installed plugin,
+none present in CI): scan a real CLAP (Surge XT / Vital / u-he) from Edit → Options → Plugins,
+insert it from the FX strip, hear it in stereo, save/reopen, and the missing-placeholder round
+trip. **VST3 (M6) macOS bring-up is deferred with M6.**
 
 ---
 
