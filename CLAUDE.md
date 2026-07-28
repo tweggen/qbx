@@ -54,6 +54,28 @@ the action-verb reference is `docs/ACTIONS.md`.
   legacy-pull deletion): `plan/proposed/19_ASYNC_FREEZE_MODEL.md` ("Phase 2
   REVISED") and `plan/proposed/20_DATAFLOW_FOLLOWUPS.md`.
 
+### External file references in a .qxp (2026-07-28)
+
+A sample path is stored PORTABLY, by three rules
+(`main/model/include/app/model/sfilepathref.h`; `SFilePathRef::toStored` /
+`fromStored` are the only encoders):
+
+1. **relative to the project file** — the default;
+2. **relative to `~`** (`~/audio/lib/kick.wav`) when the relative path would
+   have to climb all the way up TO the home directory;
+3. **absolute** only when the climb goes past home to a root, or the paths
+   share no root at all (different Windows volumes).
+
+The anchor is `SProject::projectFilePath()`, set by `SSaveProjectAction` and
+`SLoadProjectAction` — never the serialized `fileName` attribute. In memory
+`SPlainWave::fileName_` stays ABSOLUTE; only the serializer and the loader see
+a stored spelling. A relative reference that does not resolve next to the
+project file falls back to its raw form, so the .qxa runner's sample base dir
+(`setSampleBaseDir`) and older projects still load exactly as before. Plugin
+module paths (`<SPluginSlot path=…>`) are NOT in scope — they resolve against
+the plugin search paths. Gates: `filepathref_test` (ctest) and
+`sample_path_portable.qxa`.
+
 ### Testing knobs & determinism gates
 - `SMARAGD_REVAL_WORKERS=<n>` overrides the revalidation/scheduler worker count
   (clamped [1,64]); `0` disables the revalidator entirely (legacy pull paths).

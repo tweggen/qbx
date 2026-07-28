@@ -19,13 +19,24 @@ Invariants:
    deregisters via its OWN project (not the app's current one).
 4. Preview goes through the page cache with live fallback
    (getStraightPreview) — never block painting on revalidation.
+5. fileName_ is ABSOLUTE; only the serializer sees the portable spelling.
+   serializeSelfAttributes() runs SFilePathRef::toStored() against the
+   project's own path, and instantiateFromDomElement() runs fromStored()
+   before linkToFile(). A relative reference that does NOT resolve next to
+   the project file falls back to its raw spelling, so linkToFile()'s older
+   resolution (the .qxa runner's sample base dir, else the working
+   directory) still applies — that is what keeps hand-written fixtures and
+   pre-encoding projects loading. An absolute or "~" form has no second
+   reading and is used as resolved, present or not, so a failure names the
+   file it actually looked for.
 
 Self-registration (Phase 5): splainwave.cpp registers "SPlainWave" with
 SProjectLoader AND the SProject extern-file factory (WAV loading) from
 static initializers.
 
 How to test: every qxa case that add-samples; the user-project renders
-(loading real WAVs, including truncated ones).
+(loading real WAVs, including truncated ones); sample_path_portable.qxa for
+the stored spelling and load_project_render.qxa for the legacy fallback.
 
 Known debt: swaveformdraw is shared by other renderers (cut) — candidate
 for a render-support module when slices become real targets.

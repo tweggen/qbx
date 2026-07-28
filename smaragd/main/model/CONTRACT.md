@@ -7,7 +7,7 @@ settings, revalidator), extern-file bookkeeping, and the SObjectRenderer
 interface views implement.
 
 Public headers: app/model/{sobject,slink,sproject,sprojectprops,
-ssortedobjlist,sexternfile,sexternfilelist,sobjectrenderer}.h
+ssortedobjlist,sexternfile,sexternfilelist,sfilepathref,sobjectrenderer}.h
 
 Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources.
 App edges: NONE — the model names no concrete object types (Phase 5) and
@@ -50,14 +50,23 @@ Invariants:
    setParent() as their last step, and SObject::childEvent qobject_casts
    (a non-SLink child of an SObject is ignored, never type-confused into
    childOrder_).
-7. addRef()/removeRef() are main-thread-only (asserted). removeRef()'s
+7. An external file reference is PORTABLE ON DISK and ABSOLUTE IN MEMORY.
+   SFilePathRef::toStored/fromStored are the only encoders, and they pick
+   project-relative first, "~/..." when the climb lands exactly on the home
+   directory, absolute only when it goes past home to a root (sfilepathref.h
+   explains why each). The anchor is SProject::projectFilePath(), which the
+   save/load actions maintain — never the serialized fileName attribute.
+   Nothing in the model ever hands a stored spelling to a file API, and
+   nothing hands an absolute path to a serializer.
+8. addRef()/removeRef() are main-thread-only (asserted). removeRef()'s
    deleteLater() is re-checked in SObject::event(): a re-referenced
    (1→0→1) or reval-pinned object swallows the stale DeferredDelete (the
    last unpin re-arms it via deletePending_), and ~SObject warns if it ever
    runs with live references.
 
 How to test: full qxa suite; action_roundtrip_test for serialization
-adjacency.
+adjacency; filepathref_test (ctest) for the three path-storage rules and
+sample_path_portable.qxa for the save -> reload -> render wiring.
 
 Known debt: none of the former model→objects edges remain; the module is
 ready to become a real build target once its remaining consumers are.

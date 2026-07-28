@@ -20,6 +20,11 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
         return {false, nullptr};
     }
 
+    // Anchor for the external file references inside the document: they are
+    // stored relative to the project file (SFilePathRef), so this has to be set
+    // BEFORE createObjects() resolves the first <SPlainWave filename='...'>.
+    project->setProjectFilePath(path_);
+
     // Suppress invalidation during project load to avoid deadlock.
     // All captures are empty on construction anyway, and worker threads
     // would race with the UI thread still deserializing objects.

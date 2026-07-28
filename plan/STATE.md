@@ -8192,3 +8192,60 @@ the "cap n at dur" clamp could plausibly have changed
 (`extend_clip_past_content`, `slip_past_data`, `loop_asset_extend` especially).
 Flake gate: `stress_delete_churn` 4/4 at SMARAGD_REVAL_WORKERS 1, 8 and 16;
 `stress_stretch_split_slip` 4/4 at 1 and 16.
+
+## 2026-07-28 — External file references are stored portably
+
+A project file recorded the absolute path of every sample it used, so the
+moment the project folder was moved, copied to a second machine, or committed
+to a repository, it became a project of missing samples. References are now
+encoded when they are written and decoded when they are read, by three rules
+(the reasoning per rule lives in `main/model/include/app/model/sfilepathref.h`):
+
+1. **Project-relative** — the default: `samples/kick.wav`, `../lib/kick.wav`.
+   Survives moving the whole project folder.
+2. **Home-relative** (`~/audio/lib/kick.wav`) — when the relative path would
+   have to climb all the way up TO the home directory. Such a `../../..` chain
+   says nothing but "somewhere else in my home" and breaks the moment the
+   project moves one level; anchored at `~` it survives that AND a different
+   user name on another machine.
+3. **Absolute** — only when the climb goes BEYOND home to a filesystem root, or
+   the two paths share no root at all (different Windows volumes). There is
+   nothing portable left to say.
+
+`~` is the marker for form 2 and the only reserved spelling. The encoding is
+pure path arithmetic and never touches the disk: a rule that depended on a file
+existing would encode differently on the machine that saved the project than on
+the one that opens it.
+
+**The anchor.** `SProject` gained `setProjectFilePath()` — where the project is
+RIGHT NOW, maintained by `SSaveProjectAction` (after the target file opens,
+before `serialize()`) and `SLoadProjectAction` (before `createObjects()`).
+Deliberately not the serialized `fileName` attribute, which nothing had ever
+set: a path baked into the document describes where the project USED to be,
+which is exactly the case relative storage exists to survive. `fileName_` and
+its slot are untouched, so the wire format grows no new attribute — only the
+spelling of `<SPlainWave filename='...'>` changes.
+
+**In memory nothing changed.** `SPlainWave::fileName_` stays absolute; only the
+serializer and the loader see a stored spelling. A relative reference that does
+not resolve next to the project file falls back to its raw form, so
+`SProject::linkToFile()`'s older resolution (the .qxa runner's sample base dir,
+else the working directory) still applies — that is what keeps hand-written
+fixtures and every pre-encoding project loading unchanged, and
+`load_project_render.qxa` (whose `../test_sawtooth.wav` is anchored at the
+SCRIPT, not the project) is now the gate for that path. An absolute or `~` form
+has no second reading and is used as resolved, present or not, so a failure
+names the file it actually looked for.
+
+Not touched: `<SPluginSlot path='...'>`. A plugin module path is resolved
+against the plugin SEARCH PATHS, not the project folder, and is already stored
+verbatim-and-relative for that reason (proposal 08 M4 / `plugins/CONTRACT.md`).
+
+Gates: build, layering, logging, `ctest -R "filepathref_test|
+action_roundtrip_test|plugins_test|plugins_scan_test"`, and the qxa cases
+`sample_path_portable` (new — asserts the exact stored spelling, then reloads
+and renders it), `load_project_render`, `mute_survives_reload`,
+`legacy_project_recovery`, `plugin_slot_roundtrip`,
+`plugin_missing_placeholder` — all green. `filepathref_test` builds its cases
+around `QDir::homePath()`/`rootPath()`, so the per-rule arithmetic is gated on
+every platform and is not tied to where the repo happens to be checked out.

@@ -38,6 +38,17 @@ Invariants:
    anything a resolver keeps must take its own reference, because those handle
    links are deleted immediately afterwards.
 
+5b. BOTH ACTIONS SET SProject::setProjectFilePath(). External file
+   references are stored relative to the project file (SFilePathRef —
+   app/model/sfilepathref.h), so the project has to know where it is on
+   disk: SSaveProjectAction sets the anchor after the target file opens and
+   before serialize(); SLoadProjectAction sets it before createObjects(), so
+   the first <SPlainWave filename='...'> already has something to resolve
+   against. The anchor is NOT the serialized fileName attribute and is never
+   read out of the document — a path baked into the file describes where the
+   project USED to be, which is precisely the case relative storage exists to
+   survive.
+
 6. ONE BAD ELEMENT MUST NEVER COST THE WHOLE PROJECT, and the instantiation
    loop must always terminate. Two failure modes, both hit by a real user file:
    (a) a child with no id= was answered with "File is corrupt" and a return

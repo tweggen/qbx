@@ -35,6 +35,13 @@ SApplyResult SSaveProjectAction::apply(SProject *project)
         return {false, nullptr};
     }
 
+    // The project now lives HERE, and it has to know that before it serializes:
+    // external file references are written relative to the project file
+    // (SFilePathRef), so the anchor must be the path we are about to write to,
+    // not the one we were last saved to. Set after the file opened, so a
+    // rejected target leaves the project's idea of itself untouched.
+    project->setProjectFilePath(path_);
+
     {
         QTextStream t(&f);
         project->serialize(t);
