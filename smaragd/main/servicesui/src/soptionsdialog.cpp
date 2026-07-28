@@ -105,10 +105,12 @@ QWidget *SOptionsDialog::buildMousePage()
     form->addRow( "Ctrl + Wheel:", wheelCtrl_ );
     form->addRow( "Ctrl + Shift + Wheel:", wheelCtrlShift_ );
 
-    zoomToCursor_ = new QCheckBox( "Zoom toward the mouse cursor" );
-    invertZoom_   = new QCheckBox( "Invert zoom direction" );
+    zoomToCursor_   = new QCheckBox( "Zoom toward the mouse cursor" );
+    invertZoom_     = new QCheckBox( "Invert zoom direction" );
+    followPlayhead_ = new QCheckBox( "Follow the playhead during playback" );
     form->addRow( QString(), zoomToCursor_ );
     form->addRow( QString(), invertZoom_ );
+    form->addRow( QString(), followPlayhead_ );
 
     return page;
 }
@@ -149,6 +151,7 @@ void SOptionsDialog::loadMousePage()
     selectByData( wheelCtrlShift_, s.value( SOpt::WheelCtrlShift, SOpt::def( SOpt::WheelCtrlShift ) ) );
     zoomToCursor_->setChecked( s.value( SOpt::ZoomToCursor, SOpt::def( SOpt::ZoomToCursor ) ).toBool() );
     invertZoom_->setChecked(  s.value( SOpt::InvertZoom,   SOpt::def( SOpt::InvertZoom ) ).toBool() );
+    followPlayhead_->setChecked( s.value( SOpt::FollowPlayhead, SOpt::def( SOpt::FollowPlayhead ) ).toBool() );
 }
 
 void SOptionsDialog::applyMousePage()
@@ -160,6 +163,7 @@ void SOptionsDialog::applyMousePage()
     s.setValue( SOpt::WheelCtrlShift, wheelCtrlShift_->currentData() );
     s.setValue( SOpt::ZoomToCursor,   zoomToCursor_->isChecked() );
     s.setValue( SOpt::InvertZoom,     invertZoom_->isChecked() );
+    s.setValue( SOpt::FollowPlayhead, followPlayhead_->isChecked() );
 }
 
 void SOptionsDialog::loadAudioPage()

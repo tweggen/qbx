@@ -13,6 +13,7 @@ QVariant SOpt::def( const QString &key )
     if( key == WheelCtrlShift ) return (int) ZoomHorizontal;
     if( key == ZoomToCursor )   return true;
     if( key == InvertZoom )     return false;
+    if( key == FollowPlayhead ) return true;
     if( key == AudioDeviceId )  return QString();
 
     // The console default is the build's, so a Debug build keeps its console

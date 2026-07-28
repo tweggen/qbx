@@ -188,30 +188,66 @@ int SMVActualView::getXPosOfOffset( offset_t off ) const
 void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
 {
     // Qt6 forbids constructing a QPainter on a widget outside paintEvent.
-    // Instead, invalidate the columns around the old and new playhead positions
-    // with a width of 3 pixels to ensure complete redraw (covers XOR artifacts).
-    // paintEvent already knows how to redraw the playhead (see the cursor block
-    // at the end of paintEvent).
+    // Instead, invalidate 3px columns so paintEvent redraws the playhead (see the
+    // cursor block at the end of paintEvent).
     QRect myRect = rect();
     int w = myRect.width();
     int h = myRect.height();
-    int oldX = getXPosOfOffset( oldPos );
     int newX = getXPosOfOffset( newPos );
-    if( oldX == newX ) return;
-
     const int cursorWidth = 3;
-    if( oldX >= 0 && oldX < w ) update( oldX - 1, 0, cursorWidth, h );
+
+    // Erase the cursor at the column where it was ACTUALLY last painted, NOT at
+    // getXPosOfOffset(oldPos): during playback the RT locator keeps advancing
+    // between repaints, so on a manual seek oldPos (the pre-seek atomic value)
+    // is not where the line is on screen — invalidating it would leave the old
+    // line behind as a ghost. lastPaintedCursorX_ is the ground truth.
+    if( newX == lastPaintedCursorX_ && !SApplication::app().isRecordingActive() )
+        return;   // cursor stays in the same column: nothing to redraw
+    if( lastPaintedCursorX_ >= 0 && lastPaintedCursorX_ < w )
+        update( lastPaintedCursorX_ - 1, 0, cursorWidth, h );
     if( newX >= 0 && newX < w ) update( newX - 1, 0, cursorWidth, h );
 
     // While recording, repaint the whole span the playhead swept so the growing
     // capture region fills in continuously (the 3px cursor columns alone would
     // leave gaps when zoomed in / moving fast).
     if( SApplication::app().isRecordingActive() ) {
+        int oldX = getXPosOfOffset( oldPos );
         int lo = ( oldX < newX ? oldX : newX ) - 1;
         int hi = ( oldX < newX ? newX : oldX ) + 1;
         if( lo < 0 ) lo = 0;
         update( lo, 0, ( hi - lo ) + cursorWidth, h );
     }
+}
+
+void SMVActualView::followLocator( offset_t newPos, offset_t oldPos )
+{
+    // Only when enabled, and only for a real advance under playback/recording
+    // (this slot is wired to locatorAdvanced, so a manual seek never lands here).
+    if( !followPlayhead_ ) return;
+    if( newPos == oldPos ) return;
+
+    int w = width();
+    if( w <= 0 ) return;
+    int x = getXPosOfOffset( newPos );   // cursor position in view-space pixels
+
+    // Leading-edge zones: last 20% moving forward, first 20% winding backward.
+    // Re-page so the cursor lands back near the far side (10% / 90%), leaving
+    // room ahead of it. Anything outside these zones is left untouched.
+    const double forwardEdge  = 0.80 * w;
+    const double backwardEdge = 0.20 * w;
+    double targetPx;
+    if( newPos > oldPos && x >= forwardEdge )        targetPx = 0.10 * w;
+    else if( newPos < oldPos && x <= backwardEdge )  targetPx = 0.90 * w;
+    else return;
+
+    // Solve for the left time offset that puts newPos at targetPx:
+    //   getXPosOfOffset(newPos) == targetPx
+    // (same shape as the zoom-to-cursor re-anchoring in wheelEvent()).
+    int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
+    double ahead = targetPx / secondWidth_ * srate;
+    offset_t newLeft = ( (double) newPos > ahead )
+                           ? (offset_t)( (double) newPos - ahead ) : 0;
+    setLeftOffset( newLeft );   // recomputes upperLeftX_, syncs scrollbar, repaints
 }
 
 void SMVActualView::resizeEvent( QResizeEvent * )
@@ -340,23 +376,26 @@ void SMVActualView::paintEvent( QPaintEvent * )
     if( myRect.height()>tmp ) {        
         p.fillRect( QRect( 0, tmp, myRect.width(), myRect.height()-tmp+1 ), QColor( 0, 0, 0 ) );
     }
-    // After painting all that track stuff, we try to paint the cursor.
-    // Look, if the cursor is visible. As we are clipped to our range,
-    // we safely can assume no cursor is there.
+    // Time-range selection (grey band in the ruler + vertical edges over all
+    // tracks). Drawn BEFORE the playhead so the cursor sits on top of it.
+    drawRange( p, myRect );
+
+    // After painting all that track stuff, we paint the cursor LAST so it is in
+    // front of everything, including the time-range selection. A solid line
+    // (SourceOver) reads cleanly over the grey selection band, where the old XOR
+    // compositing would have produced a muddy colour.
     {
         int x = getXPosOfOffset( SApplication::app().getGlobalLocatorPos() );
         if( x>=0 && x<myRect.width() ) {
-            QPainter::CompositionMode oldCompositionMode = p.compositionMode();
-            p.setCompositionMode( QPainter::CompositionMode_Xor );
             p.setPen( QColor( 30, 200, 30 ) );
             p.drawLine( x, 0, x, myRect.height()-1 );
-            p.setCompositionMode( oldCompositionMode );
+            // Remember where the line really landed so the next move erases THIS
+            // column (globalLocatorMoved), not a drifted position.
+            lastPaintedCursorX_ = x;
+        } else {
+            lastPaintedCursorX_ = -1;   // off-screen: nothing to erase later
         }
     }
-
-    // Time-range selection on top of everything (grey band in the ruler +
-    // vertical edges over all tracks).
-    drawRange( p, myRect );
 }
 
 /**
@@ -1118,21 +1157,23 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
     }
     clipDragArmed_ = false;
 
-    // Set the cursor only if this was a pure click (no drag of any kind).
-    // This allows click to seek the playhead, but dragging clips or ranges
-    // won't accidentally move the playhead during the drag.
-    if( rangeDrag_ == RangeNone ) {
+    // Reposition the cursor only when this click was NOT consumed by anything
+    // else: no range/take/edge/marker gesture (those returned earlier), no clip
+    // under the cursor (a clip click only selects), and no drag of any kind.
+    // A pure click on empty timeline is the "unconsumed" case that seeks.
+    if( rangeDrag_ == RangeNone && !clipDragArmed_ && lastClickSLink_ == NULL ) {
         // Check that the mouse didn't move significantly (within 4 pixels).
-        // This distinguishes a click from a small drag.
+        // This distinguishes a click from a small drag (so we don't seek while
+        // editing).
         const int CLICK_THRESHOLD = 4;
         QPoint delta = ev->pos() - lastClickPos_;
         if( delta.manhattanLength() <= CLICK_THRESHOLD ) {
             // No range drag and minimal mouse movement = pure click.
             offset_t ofs = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+            // setGlobalLocatorPos repositions the RUNNING engine too when
+            // playing (see SApplication) — a plain model_->seekTo would only
+            // move the component cursors, not the playback position.
             SApplication::app().setGlobalLocatorPos( ofs );
-            if( SApplication::app().isPlaying() ) {
-                smv_.model_->seekTo( SApplication::app().getGlobalLocatorPos() );
-            }
         }
     }
 }
@@ -3252,6 +3293,7 @@ void SMVActualView::loadWheelConfig()
     wheelCtrlShift_    = s.value( SOpt::WheelCtrlShift, SOpt::def( SOpt::WheelCtrlShift ) ).toInt();
     wheelZoomToCursor_ = s.value( SOpt::ZoomToCursor,  SOpt::def( SOpt::ZoomToCursor ) ).toBool();
     wheelInvertZoom_   = s.value( SOpt::InvertZoom,    SOpt::def( SOpt::InvertZoom ) ).toBool();
+    followPlayhead_    = s.value( SOpt::FollowPlayhead, SOpt::def( SOpt::FollowPlayhead ) ).toBool();
 }
 
 int SMVActualView::wheelActionFor( Qt::KeyboardModifiers mods ) const
@@ -3615,8 +3657,11 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
 
     QObject::connect( model_, SIGNAL( durationChanged( length_t ) ), 
                       this, SLOT( contentDurationChanged( length_t ) ) );
-    QObject::connect( &(SApplication::app()), SIGNAL( globalLocatorMoved( offset_t, offset_t ) ), 
+    QObject::connect( &(SApplication::app()), SIGNAL( globalLocatorMoved( offset_t, offset_t ) ),
                       qContent_, SLOT( globalLocatorMoved( offset_t, offset_t ) ) );
+    // View-follows-playhead: only the poll-driven advance (never a manual seek).
+    QObject::connect( &(SApplication::app()), SIGNAL( locatorAdvanced( offset_t, offset_t ) ),
+                      qContent_, SLOT( followLocator( offset_t, offset_t ) ) );
     QObject::connect( model_, SIGNAL( trackInserted( int, STrack & ) ), 
                       SLOT( nTracksChanged() ) );
     QObject::connect( model_, SIGNAL( trackRemoved( int, STrack & ) ), 

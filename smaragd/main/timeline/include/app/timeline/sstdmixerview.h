@@ -161,6 +161,10 @@ protected:
     virtual void dropEvent( QDropEvent * );
 private slots:
     void globalLocatorMoved( offset_t, offset_t );
+    // Keep the playhead on screen while it ADVANCES under playback/recording
+    // (wired to SApplication::locatorAdvanced, never to a manual seek). Re-pages
+    // the view when the cursor nears the leading edge; gated by followPlayhead_.
+    void followLocator( offset_t newPos, offset_t oldPos );
 
 private:
     void updateLastClickVars( const QPoint & );
@@ -178,6 +182,13 @@ private:
     QString describeWheelActions() const;  // Human-readable hint for status bar
     int  wheelPlain_, wheelShift_, wheelCtrl_, wheelCtrlShift_;
     bool wheelZoomToCursor_, wheelInvertZoom_;
+    // View-follows-playhead (SOpt::FollowPlayhead), cached alongside the wheel
+    // config and refreshed on SSettings::changed. See followLocator().
+    bool followPlayhead_;
+    // The x column where paintEvent last drew the playhead (-1 = off-screen /
+    // not yet drawn). globalLocatorMoved erases THIS column rather than a
+    // position-derived one, so an RT-advanced locator can't leave a ghost line.
+    int lastPaintedCursorX_ = -1;
 
     // --- time-range selection -------------------------------------------
     enum RangeDrag { RangeNone, RangeCreate, RangeMoveStart, RangeMoveEnd, RangeMove };

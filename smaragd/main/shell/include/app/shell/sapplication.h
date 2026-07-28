@@ -133,6 +133,11 @@ public:
 
 signals:
     void globalLocatorMoved( offset_t newPos, offset_t oldPos );
+    // Emitted ONLY from pumpLocator() — i.e. when the playhead advances under
+    // playback or recording, never on a manual seek (setGlobalLocatorPos). The
+    // view-follows-playhead feature listens to this so manual positioning never
+    // scrolls the view.
+    void locatorAdvanced( offset_t newPos, offset_t oldPos );
     void statusModeChanged( const QString &mode );
     // Emitted from the MAIN thread once a background plugin scan has finished
     // (see pumpPluginScan). The scan thread must never emit this itself: a Qt

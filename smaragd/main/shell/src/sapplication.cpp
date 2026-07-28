@@ -213,6 +213,13 @@ void SApplication::setGlobalLocatorPos( offset_t o )
     offset_t old = globalLocatorPos_.exchange( o );
     lastShownLocator_ = o;
     emit globalLocatorMoved( o, old );
+
+    // If the engine is live, reposition PLAYBACK too — the playback position is
+    // owned by the AudioEngine, not the component graph, so a click/transport
+    // seek that only moved the locator would leave audio playing from the old
+    // spot. requestSeek is RT-safe and a no-op when nothing is playing.
+    if( isPlaying_ && t3Speaker_ )
+        t3Speaker_->requestSeek( o );
 }
 
 void SApplication::setGlobalLocatorPosRealtime( offset_t o )
@@ -229,6 +236,9 @@ void SApplication::pumpLocator()
         offset_t old = lastShownLocator_;
         lastShownLocator_ = now;
         emit globalLocatorMoved( now, old );
+        // Advance under playback/recording only (this poll never runs for a
+        // manual seek) — the view-follows-playhead feature keys off this.
+        emit locatorAdvanced( now, old );
     }
     // Self-stop once nothing is driving the locator anymore (playback stopped and
     // recording finished). Recording ends asynchronously on the worker thread, so
