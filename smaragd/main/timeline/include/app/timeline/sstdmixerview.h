@@ -182,6 +182,11 @@ private:
     QString describeWheelActions() const;  // Human-readable hint for status bar
     int  wheelPlain_, wheelShift_, wheelCtrl_, wheelCtrlShift_;
     bool wheelZoomToCursor_, wheelInvertZoom_;
+    // Accumulated vertical-scroll wheel delta (angleDelta units). A trackpad or a
+    // Magic Mouse delivers many tiny sub-notch deltas; stepping a whole lane per
+    // event made vertical scroll wildly over-sensitive. We accumulate and step one
+    // lane per SMV_WHEEL_VSCROLL_STEP units instead (see wheelEvent).
+    int  wheelVScrollAccum_ = 0;
     // View-follows-playhead (SOpt::FollowPlayhead), cached alongside the wheel
     // config and refreshed on SSettings::changed. See followLocator().
     bool followPlayhead_;

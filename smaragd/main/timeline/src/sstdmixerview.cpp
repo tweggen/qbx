@@ -75,6 +75,21 @@
 #include "pix/zoomin.xpm"
 #include "pix/zoomout.xpm"
 
+// The timeline's "primary" editing modifier is Qt::ControlModifier. On macOS Qt
+// maps ControlModifier to the Command (⌘) key by DEFAULT (the physical Control
+// key becomes Qt::MetaModifier) — the same swap that makes QKeySequence("Ctrl+S")
+// mean ⌘S. So this one predicate drives the editing gestures with ⌘ on macOS and
+// Ctrl on Windows/Linux, no platform branch. The physical Control key
+// (Qt::MetaModifier on macOS) is deliberately left to the OS: it is the
+// secondary-click (right-click) key and the accessibility screen-zoom scroll key.
+static inline bool hasPrimaryMod( Qt::KeyboardModifiers m ) { return m & Qt::ControlModifier; }
+
+// Vertical wheel-scroll: angleDelta units accumulated before stepping one track
+// lane. A standard mouse notch is 120 units; at 600 that is one lane per 5 notches
+// — ~1/5 the previous per-event sensitivity — and it also tames trackpad / Magic
+// Mouse sub-notch deltas that used to jump a whole lane each.
+static constexpr int SMV_WHEEL_VSCROLL_STEP = 600;
+
 void SMVActualView::setSecondWidth( double w )
 {
     if( w<0.000001 ) w=0.000001;
@@ -1568,7 +1583,7 @@ void SMVActualView::updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers 
                 upper = ( pos.y() - laneTop( rowIdx ) < laneHeight( rowIdx )/2 );
             }
             bool onBorder = onLeft || onRight;
-            bool ctrl = mods & Qt::ControlModifier;
+            bool ctrl = hasPrimaryMod( mods );   // ⌘ on macOS, Ctrl elsewhere
             bool alt  = mods & Qt::AltModifier;
             if( loopMarkerAt( pos, rowIdx, clip ) > 0 )
                                        { shape = Qt::SizeHorCursor;    mode = "Loop length"; }
@@ -2047,8 +2062,9 @@ bool SMVActualView::tryBeginMarkerDrag( QMouseEvent *ev )
 
         QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
         path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
-        if( ev->modifiers() & Qt::ControlModifier ) {
-            // Ctrl-click a handle: delete the marker (undoable).
+        if( hasPrimaryMod( ev->modifiers() ) ) {
+            // Primary-modifier click on a handle (⌘ on macOS, Ctrl elsewhere):
+            // delete the marker (undoable).
             SApplication::app().submitAction(
                 new SDeleteWarpMarkerAction( path, a.src ) );
             return true;
@@ -2245,10 +2261,12 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     return;
                 }
                 bool onBorder = lastClickedStart_ || lastClickedEnd_;
-                if( (modifiers & Qt::ControlModifier) && !onBorder
+                if( hasPrimaryMod( modifiers ) && !onBorder
                     && lastClickLoopMarker_ == 0 ) {
-                    // Ctrl-click on a clip BODY: duplicate it and drag the live copy.
-                    // (Ctrl on a border means time-stretch — handled below.)
+                    // Primary-modifier click on a clip BODY (⌘ on macOS, Ctrl
+                    // elsewhere): duplicate it and drag the live copy.
+                    // (The primary modifier on a border means time-stretch —
+                    // handled below.)
                     // If the clicked clip is part of a multi-selection, the whole
                     // selection is duplicated and dragged as a group (the clicked
                     // clip is the anchor; the rest follow by the same time/row
@@ -2299,10 +2317,11 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                 } else {
                     lastClickSelStartOffset_ = lastClickSLink_->getStartTime();
                     // Arm a clip-edit drag (finalized as one undoable action on
-                    // release). Which gesture: Alt on the body = slip; Ctrl on a
-                    // border = time-stretch; right-edge upper half = loop; plain
-                    // border = resize; plain body = move. Snapshot the full cut
-                    // window so the release can revert-then-action.
+                    // release). Which gesture: Alt on the body = slip; the primary
+                    // modifier (⌘ on macOS, Ctrl elsewhere) on a border =
+                    // time-stretch; right-edge upper half = loop; plain border =
+                    // resize; plain body = move. Snapshot the full cut window so
+                    // the release can revert-then-action.
                     bool alt = modifiers & Qt::AltModifier;
                     clipDragArmed_ = true;
                     clipDragIsDuplicate_ = false;
@@ -2312,10 +2331,10 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     clipDragIsLoopMarker_ = ( lastClickLoopMarker_ > 0 );
                     clipDragIsSlip_    = ( alt && !onBorder
                                            && !clipDragIsLoopMarker_ );
-                    clipDragIsStretch_ = ( (modifiers & Qt::ControlModifier) && onBorder );
-                    clipDragIsLoop_    = ( !(modifiers & Qt::ControlModifier)
+                    clipDragIsStretch_ = ( hasPrimaryMod( modifiers ) && onBorder );
+                    clipDragIsLoop_    = ( !hasPrimaryMod( modifiers )
                                            && lastClickedEnd_ && lastClickedEndUpper_ );
-                    clipDragIsLoopStart_ = ( !(modifiers & Qt::ControlModifier)
+                    clipDragIsLoopStart_ = ( !hasPrimaryMod( modifiers )
                                              && lastClickedStart_ && lastClickedStartUpper_ );
                     clipLoopSeg_ = 0;   // captured lazily on the first loop move
                     clipDragTrack0_ = lastClickTrack_;
@@ -3298,8 +3317,11 @@ void SMVActualView::loadWheelConfig()
 
 int SMVActualView::wheelActionFor( Qt::KeyboardModifiers mods ) const
 {
-    // On macOS, Command key is Qt::MetaModifier. On Windows/Linux, Ctrl is ControlModifier.
-    bool ctrl  = (mods & Qt::ControlModifier) || (mods & Qt::MetaModifier);
+    // The "ctrl" wheel slot maps to the platform primary modifier: Command
+    // (Qt::MetaModifier) on macOS, Ctrl (Qt::ControlModifier) elsewhere. On macOS
+    // plain Ctrl+wheel is deliberately NOT treated as primary here — it is left to
+    // the OS accessibility screen-zoom (see the early-out in wheelEvent()).
+    bool ctrl  = hasPrimaryMod( mods );
     bool shift = mods & Qt::ShiftModifier;
     if( ctrl && shift ) return wheelCtrlShift_;
     if( ctrl )          return wheelCtrl_;
@@ -3347,6 +3369,17 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
         dy = dx;
     }
 
+#ifdef Q_OS_MACOS
+    // The physical Control key is Qt::MetaModifier on macOS, and physical-Ctrl+scroll
+    // is the system "zoom using scroll gesture" accessibility feature. Don't consume
+    // it — leave that scroll to the OS. The app's own zoom is on ⌘+wheel, which is
+    // Qt::ControlModifier here and falls through.
+    if( ev->modifiers() & Qt::MetaModifier ) {
+        QWidget::wheelEvent( ev );
+        return;
+    }
+#endif
+
     if( dy == 0 ) { QWidget::wheelEvent( ev ); return; }
     int dir = (dy > 0) ? +1 : -1;   // +1 = wheel away from the user ("up")
 
@@ -3355,9 +3388,16 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
     switch( action ) {
 
     case SOpt::ScrollVertical: {
-        // One track lane per notch via the scrollbar (keeps it in sync).
+        // Accumulate sub-notch deltas and step one lane per SMV_WHEEL_VSCROLL_STEP
+        // units, so a trackpad / Magic Mouse no longer jumps a whole lane per event
+        // (~1/5 the old sensitivity). +delta = wheel up = scroll toward upper rows.
         if( smv_.qScrollVert_ ) {
-            smv_.qScrollVert_->setValue( smv_.qScrollVert_->value() - dir );
+            wheelVScrollAccum_ += dy;
+            int lanes = wheelVScrollAccum_ / SMV_WHEEL_VSCROLL_STEP;
+            if( lanes != 0 ) {
+                wheelVScrollAccum_ -= lanes * SMV_WHEEL_VSCROLL_STEP;
+                smv_.qScrollVert_->setValue( smv_.qScrollVert_->value() - lanes );
+            }
         }
         break;
     }
@@ -3714,7 +3754,9 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     // moves a clip edge). The keypad bindings are the layout-proof ones: on a
     // US layout "+" IS Shift+"=", so the Shift variants of the main row are
     // ambiguous there, while on a German layout (where "+" is unshifted) both
-    // rows work. Ctrl is deliberately avoided: Ctrl+drag is time-stretch.
+    // rows work. The timeline's primary-modifier gestures (⌘ on macOS, Ctrl
+    // elsewhere) are kept off these QAction shortcuts: the primary modifier +
+    // drag is time-stretch / duplicate.
     auto addPitchAction = [&]( const QString &text, const QList<QKeySequence> &keys,
                                const char *slot ) -> QAction* {
         QAction *a = new QAction( text, this );
