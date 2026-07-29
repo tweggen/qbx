@@ -22,6 +22,9 @@
 
 #include "twclapmodule.h"
 #include "twpluginscancache.h"
+#ifdef TW_HAVE_VST3
+#include "twvst3module.h"
+#endif
 
 #include "tw/core/twlog.h"
 
@@ -74,6 +77,10 @@ int main( int argc, char **argv )
     std::vector<audio::twPluginDescriptor> descs;
     if( qpath.endsWith( ".clap", Qt::CaseInsensitive ) ) {
         descs = audio::clapModuleDescriptors( path );
+#ifdef TW_HAVE_VST3
+    } else if( qpath.endsWith( ".vst3", Qt::CaseInsensitive ) ) {
+        descs = audio::vst3ModuleDescriptors( path );
+#endif
     } else {
         TW_LOGE( "plugins", "[probe] '%s' is not a format this build can probe",
                  path.c_str() );

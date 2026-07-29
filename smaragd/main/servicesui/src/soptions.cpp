@@ -28,10 +28,15 @@ QVariant SOpt::def( const QString &key )
     // spelled out here: the per-OS plugin locations belong to the engine's
     // twPluginSearchPaths, so the scanner and the options page can never
     // disagree about where plugins live.
+    // Every hosted format contributes its own standard locations; the list is one
+    // flat set of directories because the scanner keys on the FILE EXTENSION, not
+    // on which default produced the directory. Order matters only for display.
     if( key == PluginSearchPaths ) {
         QStringList dirs;
-        for( const std::string &d : audio::twPluginSearchPaths::defaults( "clap" ) )
-            dirs << QString::fromStdString( d );
+        for( const char *fmt : { "clap", "vst3" } )
+            for( const std::string &d : audio::twPluginSearchPaths::defaults( fmt ) )
+                dirs << QString::fromStdString( d );
+        dirs.removeDuplicates();
         return dirs;
     }
     if( key == PluginScanOnStartup ) return true;

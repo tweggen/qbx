@@ -8339,3 +8339,93 @@ makes it render — without it the wave is skipped, the track drops and the rend
 is silent) and `sample_missing_survives` (a good track plus an orphan branch
 whose sample exists nowhere; the load must succeed and the good track render
 intact).
+
+## 2026-07-29 — Proposal 08 M6: VST3 plugin hosting
+
+The last open milestone of proposal 08. **AC 4 holds:** a second format really
+was only a new backend — four new files under `tw303a/plugins/src/` and **no
+change** to `twPluginSlotProcessor`, `twPluginInsert`, `twPluginChain`,
+`SPluginSlot`, `SPluginChain`, `STrack`, any action, or any UI. The three
+touches outside `plugins/` were the ones the execution plan predicted and
+recorded in advance: the two `defaults("clap")` hardcodes in `servicesui` now
+seed VST3 too, and `plugin_probe.cc` dispatches on `.vst3`.
+
+**The spike came first, and it was the milestone's gate.** The plan made the
+wrapper conditional on proving that a MinGW-built host can call an MSVC-built
+plugin's vtables and be called back through its own. `plugins/tools/vst3_probe.cc`
+answers it empirically: it walks one class through instantiate → initialize →
+buses → `setBusArrangements` → `setupProcessing` → controller (incl.
+`IConnectionPoint` pairing) → params → state → a real 512-frame `process()` →
+teardown, with host-side `IBStream` / `IHostApplication` / `IComponentHandler`
+so the ABI is exercised in BOTH directions, plus buffer poisoning and
+plausibility checks that turn a `#pragma pack` layout mismatch into a diagnosis
+rather than a puzzle. Verified against **Celemony Melodyne 5.3.1** (imports
+`MSVCP140.dll` / `VCRUNTIME140.dll`, so unambiguously MSVC-built): 1/1 class
+survived, `process()` passed a ±0.5 square wave at peak 0.5000 / rms 0.5000. The
+probe is kept in the tree — it is the fastest way to triage "this one plugin
+will not load" without starting the app.
+
+**Two corrections to the plan, both found by building it.** First, the SDK
+source list (`base/{funknown,coreiids,ustring,conststringtable}.cpp`) is
+necessary but NOT sufficient: `vst3_pluginterfaces` ships no `vstinitiids.cpp`,
+so `coreiids.cpp` defines only the BASE IIDs and every VST module IID
+(`IComponent`, `IAudioProcessor`, `IEditController`, the host interfaces) must be
+defined by us — a build without them links clean and dies at runtime on the first
+`IComponent::iid`. That is `src/twvst3iids.cc`. Second, the submodule is checked
+out as `third_party/vst3_pluginterfaces` while the SDK headers include each other
+as `"pluginterfaces/base/…"`, so a bare `-I third_party` resolves nothing; CMake
+mirrors the 664 KB of headers into `${CMAKE_CURRENT_BINARY_DIR}/vst3_inc/pluginterfaces`
+with a configure-time `file(COPY)` (a symlink needs privileges on Windows, and
+renaming the submodule would churn `.gitmodules` and every checkout for a
+cosmetic reason).
+
+**The backend.** `twvst3module` interns modules by path behind a `weak_ptr`
+table and inherits the CLAP loader's two hard-won details verbatim — per-THREAD
+`SetThreadErrorMode` so a malformed DLL cannot raise a modal box mid-scan, and
+releasing a failed module OUTSIDE the intern mutex (the dtor takes that same
+non-recursive mutex). It resolves both loader shapes, which are not
+hypothetical: Melodyne is a flat DLL renamed `.vst3`, the other test plugin a
+`Contents/x86_64-win/` bundle — the same split that broke the CLAP loader on
+macOS in M7, handled here from the start. `twvst3host` splits refcounting into
+**borrowed** (ours, never self-deletes, clamped at zero so an over-releasing
+plugin is survivable) and **owned** (`IMessage`/`IAttributeList`, manufactured
+through `IHostApplication::createInstance` and destroyed when the plugin lets
+go); those last two are real implementations because a split component/controller
+pair talks to itself THROUGH the host, so `kNotImplemented` would load the plugin
+and silently break its internal channel. `twvst3plugin` handles both the
+single-component and split shapes, exposes parameters in the **normalized [0,1]**
+domain (that is the VST3 interface domain; converting to plain units would put an
+`IEditController` call on every UI-thread read for a slider that looks identical),
+and routes every edit through `ProcessData::inputParameterChanges` using the same
+ring + mirror + resync design as CLAP — `setParamNormalized` is called too, but
+as decoration so a native editor agrees, never as the path. `reset()` is a
+deactivate/activate cycle because VST3 has no `reset()`.
+
+**One real finding from the fixture.** The state blob stored its payload twice:
+in a single-component plugin `IComponent::getState` and
+`IEditController::getState` are the same virtual (identical signatures, so one
+override serves both and the plugin cannot make them differ). The controller
+chunk is now written only for a *separate* controller. Caught because the test
+asserts the FRAMING — 8-byte `'TWV3'` header then two length-prefixed chunks
+accounting for every remaining byte — rather than a magic total.
+
+`plugins/tests/twtestvst3.cpp` is a real 2-in/2-out VST3 built from this repo,
+the counterpart of `twtestclap.c`, C++ because VST3's ABI *is* a C++ vtable and
+linking its own copies of the SDK sources because a module and its host are
+separate binaries. It **deliberately ignores `setParamNormalized`**, so a host
+that writes the controller and stops there fails its level assertion — the single
+most common VST3 host bug, made into a regression test.
+
+Gates (Win11 / Qt 6.11.1 / MinGW 13.1): `ctest -R "plugins_test|plugins_scan_test"`
+green including 30 new VST3 checks; full ctest suite green; `check_layering` /
+`check_logging` clean; both real third-party plugins resolved by
+`smaragd_pluginprobe` to correct format/uid/name/vendor/I-O.
+
+Not verified, carried forward in `plugins/CONTRACT.md` known debt and M6 §Not
+verified: the SPLIT component/controller path has no automated coverage (the
+fixture is a single component; only real plugins exercise the split, and no CI
+machine has one); macOS and Linux are written but unrun, and should expect the
+`.vst3` equivalent of M7's fixture-inside-the-bundle problem; no qxa case inserts
+a VST3 (the model/action/serialization layers are format-agnostic and untouched,
+so this is coverage, not risk); and the real-plugin manual UI pass — scan →
+browse → insert → hear → edit → save/reopen → missing-placeholder round trip.

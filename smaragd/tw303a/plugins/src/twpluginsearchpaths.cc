@@ -49,32 +49,71 @@ void addEnvList( std::vector<std::string> &out, const char *var )
         addDir( out, part );
 }
 
-// "*.clap" -> "clap". Only formats we can actually probe are reported; a .vst3
-// found before M6 lands would otherwise be probed, fail, and be cached as a
-// permanent failure that M6 then has to force-clear.
+// "*.clap" -> "clap", "*.vst3" -> "vst3". Only formats this build can actually
+// probe are reported: a module we cannot load would be probed, fail, and be
+// cached as a permanent failure that a later milestone has to force-clear. That
+// is why .vst3 stayed unreported until M6 landed the backend.
 const char *formatForFile( const QString &name )
 {
     if( name.endsWith( ".clap", Qt::CaseInsensitive ) ) return "clap";
+#ifdef TW_HAVE_VST3
+    if( name.endsWith( ".vst3", Qt::CaseInsensitive ) ) return "vst3";
+#endif
     return nullptr;
 }
 
-// A macOS-style bundle: <Foo.clap>/Contents/MacOS/Foo. Returns an empty string
-// when there is no such inner binary (a plain-file module, or a Windows folder
-// that merely happens to be named *.clap).
-//
-// Prefer the conventional base name, but fall back to the sole regular file in
-// Contents/MacOS when the bundle names its binary differently — this keeps the
-// scanner in step with the loader (twclapmodule.cc), which resolves the same way,
-// so a mismatched-name bundle is discovered rather than silently skipped.
-QString bundleBinary( const QFileInfo &fi )
+// The per-format, per-platform architecture folders inside a bundle, most
+// specific first. A .clap bundle is macOS-only (<Foo.clap>/Contents/MacOS/Foo);
+// a .vst3 bundle carries a per-architecture directory on every platform.
+QStringList bundleArchDirs( const char *fmt )
 {
-    const QString macos = fi.absoluteFilePath() + "/Contents/MacOS";
-    const QString byName = macos + "/" + fi.completeBaseName();
-    if( QFileInfo::exists( byName ) ) return byName;
+    if( QString::fromLatin1( fmt ) == QLatin1String( "clap" ) )
+        return { QStringLiteral( "MacOS" ) };
 
-    const QFileInfoList inner =
-        QDir( macos ).entryInfoList( QDir::Files, QDir::Name );
-    return inner.isEmpty() ? QString() : inner.first().absoluteFilePath();
+#ifdef Q_OS_WIN
+#if defined( __aarch64__ ) || defined( _M_ARM64 )
+    return { QStringLiteral( "arm64ec-win" ), QStringLiteral( "arm64-win" ),
+             QStringLiteral( "x86_64-win" ) };
+#else
+    return { QStringLiteral( "x86_64-win" ) };
+#endif
+#elif defined( Q_OS_MAC )
+    return { QStringLiteral( "MacOS" ) };
+#else
+#if defined( __aarch64__ )
+    return { QStringLiteral( "aarch64-linux" ), QStringLiteral( "arm64-linux" ) };
+#else
+    return { QStringLiteral( "x86_64-linux" ) };
+#endif
+#endif
+}
+
+// The binary inside a bundle directory, or an empty string when there is none (a
+// plain-file module, or a folder that merely happens to be named *.clap/*.vst3).
+//
+// Prefer the conventional names — Windows names a VST3's inner binary Foo.vst3,
+// macOS/Linux name it Foo — then fall back to the sole regular file in the arch
+// directory when a bundle names its binary differently. That fallback keeps the
+// scanner in step with the loaders (twclapmodule.cc, twvst3module.cc), which
+// resolve the same way, so a mismatched-name bundle is discovered rather than
+// silently skipped.
+QString bundleBinary( const QFileInfo &fi, const char *fmt )
+{
+    const QString root = fi.absoluteFilePath();
+    const QString base = fi.fileName();            // "Foo.vst3"
+    const QString stem = fi.completeBaseName();    // "Foo"
+
+    for( const QString &arch : bundleArchDirs( fmt ) ) {
+        const QString dir = root + "/Contents/" + arch;
+        if( !QFileInfo( dir ).isDir() ) continue;
+        for( const QString &cand : { base, stem, stem + QStringLiteral( ".so" ) } ) {
+            const QString full = dir + "/" + cand;
+            if( QFileInfo( full ).isFile() ) return full;
+        }
+        const QFileInfoList inner = QDir( dir ).entryInfoList( QDir::Files, QDir::Name );
+        if( !inner.isEmpty() ) return inner.first().absoluteFilePath();
+    }
+    return QString();
 }
 
 void walk( const QString &dir, int depth, std::set<QString> &seenDirs,
@@ -100,7 +139,7 @@ void walk( const QString &dir, int depth, std::set<QString> &seenDirs,
 
             QFileInfo stat = fi;
             if( fi.isDir() ) {
-                const QString inner = bundleBinary( fi );
+                const QString inner = bundleBinary( fi, fmt );
                 if( inner.isEmpty() ) {
                     // Named like a module but neither a file nor a bundle:
                     // descend instead of reporting something unloadable.

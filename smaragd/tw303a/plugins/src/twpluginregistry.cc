@@ -28,6 +28,11 @@
 #include "twclapmodule.h"
 #endif
 
+#ifdef TW_HAVE_VST3
+// PRIVATE header of the VST3 backend, for the same reason as the CLAP one above.
+#include "twvst3module.h"
+#endif
+
 namespace audio {
 
 // Forward declare the PassThrough plugin factory.
@@ -58,6 +63,12 @@ ProbeOutcome probeInProcess( const twPluginModuleFile &m,
 #ifdef TW_HAVE_CLAP
     if( m.format == "clap" ) {
         out = clapModuleDescriptors( m.path );
+        return out.empty() ? ProbeOutcome::Failed : ProbeOutcome::Ok;
+    }
+#endif
+#ifdef TW_HAVE_VST3
+    if( m.format == "vst3" ) {
+        out = vst3ModuleDescriptors( m.path );
         return out.empty() ? ProbeOutcome::Failed : ProbeOutcome::Ok;
     }
 #endif
@@ -428,6 +439,17 @@ std::unique_ptr<twPlugin> twPluginRegistry::instantiate( const twPluginDescripto
         TW_LOGE( "plugins", "[registry] cannot instantiate CLAP plugin '%s': this build "
                  "has no CLAP support (the third_party/clap submodule was missing at "
                  "configure time)", desc.uid.c_str() );
+        return nullptr;
+#endif
+    }
+
+    if( desc.format == "vst3" ) {
+#ifdef TW_HAVE_VST3
+        return createVst3Plugin( desc.path, desc.uid );
+#else
+        TW_LOGE( "plugins", "[registry] cannot instantiate VST3 plugin '%s': this build "
+                 "has no VST3 support (the third_party/vst3_pluginterfaces submodule was "
+                 "missing at configure time)", desc.uid.c_str() );
         return nullptr;
 #endif
     }

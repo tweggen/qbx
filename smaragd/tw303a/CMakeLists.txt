@@ -246,14 +246,14 @@ else()
     message(WARNING "tw_plugins: third_party/clap not checked out; CLAP plugin hosting DISABLED. Run 'git submodule update --init --recursive' (or ./build.sh, which does it).")
 endif()
 
-# --- VST3 ABI spike (proposal 08 M6 gate) -------------------------------------
-# NOT the VST3 backend: a de-risking spike, the same role clap_probe played for
-# M0/M1. The execution plan gates the wrapper on it — "MinGW ABI note: ... A
-# spike is still the gate before writing the wrapper" — because the whole M6
-# premise is that a MinGW-built host can call an MSVC-built plugin's vtables and
-# be called back through its own. vst3_probe answers that empirically before any
-# twvst3plugin.cc exists. It builds nothing into tw_plugins and defines no
-# TW_HAVE_VST3: there is no backend to gate yet.
+# --- VST3 plugin backend (plugins only) ---------------------------------------
+# Proposal 08 M6, gated by the vst3_probe spike below (which came first and
+# proved the MinGW <-> MSVC ABI works before any of this was written).
+#
+# Same PRIVATE discipline as the CLAP block above, and load-bearing for the same
+# reason: the pluginterfaces include directory and TW_HAVE_VST3 must stay
+# invisible to every other target, so the backend's headers live in plugins/src/
+# and never in plugins/include/ (CONTRACT invariant 4).
 #
 # The include path needs explaining. The SDK headers include each other as
 # "pluginterfaces/base/funknown.h", so the compiler must be able to resolve a
@@ -271,40 +271,91 @@ if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
     file(COPY ${TW_VST3_DIR}/base ${TW_VST3_DIR}/gui ${TW_VST3_DIR}/vst
          DESTINATION ${TW_VST3_INC}/pluginterfaces)
 
-    add_executable(vst3_probe
-        plugins/tools/vst3_probe.cc
-        # The SDK sources the spike links. 08_PLUGIN_HOSTING_EXECUTION.md M6
-        # names exactly these four, and the spike confirms the list is right for
-        # linking — but NOT sufficient for running: vst3_pluginterfaces ships no
-        # vstinitiids.cpp, so the VST module's IIDs (IComponent, IAudioProcessor,
-        # IEditController, the host interfaces) have to be defined by us. The
-        # spike carries that DEF_CLASS_IID block inline; M6 promotes it to
-        # src/twvst3iids.cc.
+    # The SDK sources we compile. 08_PLUGIN_HOSTING_EXECUTION.md M6 named exactly
+    # these four and that list is right for LINKING — but not sufficient for
+    # RUNNING: vst3_pluginterfaces ships no vstinitiids.cpp, so base/coreiids.cpp
+    # defines only the BASE IIDs and every VST module IID (IComponent,
+    # IAudioProcessor, IEditController, the host interfaces) has to be defined by
+    # us. That is plugins/src/twvst3iids.cc, and it must be linked exactly once.
+    set(TW_VST3_SDK_SOURCES
         ${TW_VST3_INC}/pluginterfaces/base/funknown.cpp
         ${TW_VST3_INC}/pluginterfaces/base/coreiids.cpp
         ${TW_VST3_INC}/pluginterfaces/base/ustring.cpp
         ${TW_VST3_INC}/pluginterfaces/base/conststringtable.cpp
     )
-    target_include_directories(vst3_probe PRIVATE ${TW_VST3_INC})
-    # -w for the SDK's own warnings only reaches them via the target, and the
-    # project sets a global -Wall; scoping it to this target keeps our own file
-    # under the project's warning level everywhere else. AUTOMOC OFF: no Qt here,
-    # and moc'ing vendored headers is pure cost.
-    set_target_properties(vst3_probe PROPERTIES AUTOMOC OFF)
+    # The project sets a global -Wall; the vendored SDK is not ours to keep clean,
+    # so silence it per-source rather than lowering the bar for our own files.
     if(NOT MSVC)
-        set_source_files_properties(
-            ${TW_VST3_INC}/pluginterfaces/base/funknown.cpp
-            ${TW_VST3_INC}/pluginterfaces/base/coreiids.cpp
-            ${TW_VST3_INC}/pluginterfaces/base/ustring.cpp
-            ${TW_VST3_INC}/pluginterfaces/base/conststringtable.cpp
+        set_source_files_properties(${TW_VST3_SDK_SOURCES}
             PROPERTIES COMPILE_OPTIONS "-w")
     endif()
+
+    target_sources(tw_plugins PRIVATE
+        plugins/src/twvst3host.h
+        plugins/src/twvst3host.cc
+        plugins/src/twvst3module.h
+        plugins/src/twvst3module.cc
+        plugins/src/twvst3plugin.cc
+        plugins/src/twvst3iids.cc
+        ${TW_VST3_SDK_SOURCES}
+    )
+    target_include_directories(tw_plugins PRIVATE ${TW_VST3_INC})
+    target_compile_definitions(tw_plugins PRIVATE TW_HAVE_VST3=1)
     if(SMARAGD_LINUX)
-        target_link_libraries(vst3_probe PRIVATE dl)
+        target_link_libraries(tw_plugins PRIVATE dl)
     endif()
-    message(STATUS "tw_plugins: VST3 ABI spike ENABLED (vst3_probe; proposal 08 M6 gate)")
+    message(STATUS "tw_plugins: VST3 backend ENABLED (proposal 08 M6)")
+
+    # De-risking spike, NOT shipped and NOT a test gate — the M6 ABI gate. Kept
+    # after the backend landed because it is the fastest way to triage "this one
+    # plugin will not load" without running the app. It links tw_plugins (which
+    # now carries the SDK objects), so it must NOT compile them again.
+    add_executable(vst3_probe plugins/tools/vst3_probe.cc)
+    target_link_libraries(vst3_probe PRIVATE tw_plugins)
+    target_include_directories(vst3_probe PRIVATE
+        ${TW_VST3_INC}
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src
+    )
+    set_target_properties(vst3_probe PROPERTIES AUTOMOC OFF)
+
+    # Build-time test fixture: a real 2-in/2-out VST3 module built from this
+    # repo, so plugins_test can exercise the actual VST3 load path without anyone
+    # installing a third-party plugin. The counterpart of twtestclap, and C++
+    # rather than C because VST3's ABI *is* a C++ vtable.
+    #
+    # It links its OWN copies of the SDK sources: a plugin and its host are
+    # separate binaries and must not share IID definitions or FUnknown internals.
+    add_library(twtestvst3 MODULE
+        plugins/tests/twtestvst3.cpp
+        ${TW_VST3_SDK_SOURCES}
+    )
+    target_include_directories(twtestvst3 PRIVATE ${TW_VST3_INC})
+    set_target_properties(twtestvst3 PROPERTIES
+        PREFIX ""
+        SUFFIX ".vst3"
+        AUTOMOC OFF
+    )
+    # ALSO drop it next to the app binary, for the same reason twtestclap is: a
+    # qxa action script names the module with a RELATIVE path, and
+    # SInsertPluginAction resolves that against the .qxa's directory and then
+    # against QCoreApplication::applicationDirPath().
+    add_custom_command(TARGET twtestvst3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:twtestvst3>
+                ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/twtestvst3.vst3
+        COMMENT "Copying the twtestvst3 fixture next to the app binary (qxa cases)")
+
+    # The SHIPPED out-of-process probe is created in the CLAP block above (it is
+    # format-agnostic; only its extension dispatch is not). Teach it about VST3
+    # here so a crashing .vst3 becomes a cached failure record like a .clap does,
+    # rather than being refused as "not a format this build can probe".
+    if(TARGET smaragd_pluginprobe)
+        target_include_directories(smaragd_pluginprobe PRIVATE ${TW_VST3_INC})
+        target_compile_definitions(smaragd_pluginprobe PRIVATE TW_HAVE_VST3=1)
+    endif()
 else()
-    message(STATUS "tw_plugins: third_party/vst3_pluginterfaces not checked out; VST3 spike skipped.")
+    message(WARNING "tw_plugins: third_party/vst3_pluginterfaces not checked out; VST3 plugin hosting DISABLED. Run 'git submodule update --init --recursive' (or ./build.sh, which does it).")
 endif()
 
 # --- E8 devices: platform audio I/O (backends + inputs) ----------------------
@@ -572,6 +623,14 @@ if(TARGET twtestclap)
     target_compile_definitions(plugins_test PRIVATE
         TW_TESTCLAP_PATH="$<TARGET_FILE:twtestclap>")
 endif()
+# The M6 counterpart. Same shape: its presence is what makes the VST3 half of
+# plugins_test compile at all, so a build without the submodule skips those
+# checks instead of failing to build.
+if(TARGET twtestvst3)
+    add_dependencies(plugins_test twtestvst3)
+    target_compile_definitions(plugins_test PRIVATE
+        TW_TESTVST3_PATH="$<TARGET_FILE:twtestvst3>")
+endif()
 # The scanner/cache gate (proposal 08 M2): cache hit / miss / invalidate-on-mtime,
 # the stickiness of a failed record, and the out-of-process probe. It needs
 # plugins/src on its include path for the cache's private header, and both the
@@ -582,6 +641,11 @@ if(TARGET twtestclap)
     add_dependencies(plugins_scan_test twtestclap)
     target_compile_definitions(plugins_scan_test PRIVATE
         TW_TESTCLAP_PATH="$<TARGET_FILE:twtestclap>")
+endif()
+if(TARGET twtestvst3)
+    add_dependencies(plugins_scan_test twtestvst3)
+    target_compile_definitions(plugins_scan_test PRIVATE
+        TW_TESTVST3_PATH="$<TARGET_FILE:twtestvst3>")
 endif()
 if(TARGET smaragd_pluginprobe)
     add_dependencies(plugins_scan_test smaragd_pluginprobe)

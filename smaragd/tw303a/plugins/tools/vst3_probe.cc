@@ -71,27 +71,18 @@
 
 // --- interface IIDs -----------------------------------------------------------
 //
-// vst3_pluginterfaces ships base/coreiids.cpp, which defines the IIDs of the
-// BASE interfaces only (FUnknown, IBStream, IPluginBase, IPluginFactory{,2,3},
-// ...). The VST module's IIDs — IComponent, IAudioProcessor, IEditController
-// and every host interface — live in public.sdk/source/vst/vstinitiids.cpp in
-// the full SDK, which this submodule does NOT contain. The host must therefore
-// define them itself, once per program.
+// The VST module's IIDs used to be defined right here, inline. That was the
+// spike's single most useful FINDING: vst3_pluginterfaces ships base/coreiids.cpp
+// which defines the BASE IIDs only (FUnknown, IBStream, IPluginBase,
+// IPluginFactory{,2,3}, ...), while IComponent, IAudioProcessor, IEditController
+// and every host interface live in public.sdk/source/vst/vstinitiids.cpp in the
+// FULL SDK — which this submodule does not contain. Without our own definitions
+// the four SDK sources named by 08_PLUGIN_HOSTING_EXECUTION.md M6 build, link,
+// and then fail on the first `IComponent::iid` reference.
 //
-// That is a correction to 08_PLUGIN_HOSTING_EXECUTION.md M6, which lists the
-// SDK sources to compile as base/{funknown,coreiids,ustring,conststringtable}.cpp
-// and stops there: that list builds, links, and then fails at runtime on the
-// first `IComponent::iid` reference. M6 needs this block promoted to its own
-// src/twvst3iids.cc, holding exactly the interfaces the backend touches.
-namespace Steinberg {
-DEF_CLASS_IID( Vst::IComponent )
-DEF_CLASS_IID( Vst::IAudioProcessor )
-DEF_CLASS_IID( Vst::IEditController )
-DEF_CLASS_IID( Vst::IConnectionPoint )
-DEF_CLASS_IID( Vst::IHostApplication )
-DEF_CLASS_IID( Vst::IComponentHandler )
-DEF_CLASS_IID( Vst::IPlugInterfaceSupport )
-}  // namespace Steinberg
+// M6 promoted the block to plugins/src/twvst3iids.cc, which tw_plugins links.
+// The spike links tw_plugins, so it gets them from there — defining them again
+// here would be a duplicate-symbol error.
 
 using namespace Steinberg;
 

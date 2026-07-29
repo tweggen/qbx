@@ -7,7 +7,8 @@ out-of-process probe), the format backends, and the hosting components
 built-in test plugin (a bit-crusher); twClapPlugin is the CLAP backend
 (proposal 08 M1); the scanner is proposal 08 M2; the processor/tap split is
 proposal 08 M3; twNullPlugin (createNullPlugin) is the missing-plugin
-placeholder of proposal 08 M4.
+placeholder of proposal 08 M4; twVst3Plugin is the VST3 backend (proposal 08
+M6), which added four files here and changed nothing above the ABI.
 
 Shape of a slot (proposal 08 M3). ONE twPluginSlotProcessor per slot (plain
 C++, not a twComponent) owns the twPlugin instance(s), the bypass flag, the
@@ -232,6 +233,61 @@ Invariants:
    signature — and that plist must stay comment-free (codesign's AMFI parser
    rejects XML comments).
 
+22. THE ONLY ROUTE FROM A VST3 PARAMETER EDIT TO THE DSP IS
+   ProcessData::inputParameterChanges (M6). IEditController::setParamNormalized
+   updates the CONTROLLER and nothing else — it never reaches IAudioProcessor.
+   A host that stops there has a parameter UI that moves and audio that does
+   not, which is the single most common VST3 host bug. twVst3Plugin::setParam()
+   therefore mirrors the value (what getParam() reads), pushes into the same
+   lock-free single-producer ring the CLAP backend uses, and lets process()
+   drain it into a pre-sized twVst3ParamChanges; the setParamNormalized call it
+   ALSO makes is decoration so a native editor agrees, not the path. Ring
+   overflow raises the same resync flag. tests/twtestvst3.cpp deliberately
+   IGNORES setParamNormalized, so a regression here fails a level assertion in
+   plugins_test rather than going unnoticed.
+23. HOST OBJECTS HANDED TO A VST3 PLUGIN ARE EITHER BORROWED OR OWNED, AND THE
+   TWO MUST NOT BE CONFLATED (M6). twVst3Borrowed (host context, parameter
+   queues, memory streams) belongs to the plugin INSTANCE, lives as long as it,
+   and never self-deletes on release() — its refcount is clamped at zero so an
+   over-releasing plugin is survivable. twVst3Owned (IMessage, IAttributeList) is
+   manufactured on demand through IHostApplication::createInstance, handed over,
+   and destroyed when the last release() lands. Those two must be real
+   implementations and not stubs: a SPLIT component/controller pair talks to
+   itself THROUGH the host, so answering kNotImplemented loads the plugin and
+   then silently breaks its internal channel.
+24. VST3 STATE IS TWO CHUNKS, AND ONLY A SEPARATE CONTROLLER CONTRIBUTES ONE
+   (M6). The frame is 'TWV3' + u16 version + u16 reserved, then two
+   length-prefixed chunks (component, controller) — length-prefixed rather than
+   "everything after the header" precisely because there are two. The magic
+   differs from CLAP's 'TWCP' so a mis-routed blob is REFUSED, not misread, and a
+   truncated blob is refused WHOLE rather than half-applied. In a
+   single-component plugin IComponent::getState and IEditController::getState are
+   the same virtual — identical signatures, so one override serves both and the
+   plugin cannot make them differ — hence the controller chunk is written only
+   when the controller is a separate object. On load the component chunk must
+   ALSO be pushed at the controller via setComponentState, or the editor shows
+   defaults over restored audio.
+25. A `.vst3` IS A FLAT MODULE OR A PER-ARCHITECTURE BUNDLE, ON EVERY PLATFORM
+   (M6). Windows still allows a plain DLL renamed .vst3 (Melodyne ships exactly
+   that) as well as Contents/x86_64-win/Foo.vst3; macOS uses Contents/MacOS/Foo
+   and Linux Contents/x86_64-linux/Foo.so. twVst3Module::resolveBinary() tries
+   the conventional names in the arch dirs and falls back to the sole regular
+   file there, and twPluginSearchPaths::bundleBinary() carries the SAME per-format
+   arch list — invariant 21's rule generalised, because a loader and a scanner
+   that disagree is precisely what broke every macOS plugin test in M7.
+   twVst3Module also inherits invariants 11 and 12 verbatim: release a failed
+   module OUTSIDE the intern mutex, and wrap LoadLibraryExW in a per-THREAD
+   SetThreadErrorMode.
+26. VST3 PARAMETERS ARE EXPOSED IN THE NORMALIZED [0,1] DOMAIN (M6).
+   twPluginParamInfo carries min 0, max 1, default = defaultNormalizedValue,
+   isStepped = stepCount > 0. That IS the VST3 interface domain; converting to
+   plain units (dB, Hz) would put an IEditController call on every UI-thread read
+   and needs a non-monotonic inverse for stepped parameters, for a slider that
+   looks identical either way. Automation is normalized at every other layer too.
+   Note the asymmetry with CLAP, whose parameters keep their plugin-declared
+   min/max — twPluginParamInfo is expressive enough for both, so nothing above
+   the ABI has to care.
+
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears
 it), cache reload in a fresh registry instance, refusal of a cache from another
@@ -261,7 +317,21 @@ handed more frames than the host declared, and in "report block size" mode
 writes the frame count it saw into its output — so a host chunking regression
 fails loudly instead of silently. `tools/clap_probe.cc` (target `clap_probe`,
 not a gate) loads a real third-party .clap with the production loader and
-prints the factory contents. Also qxa.plugin_stereo_chain (a 2-in/2-out CLAP in a
+prints the factory contents.
+
+And the VST3 half (M6): module load through InitDll/GetPluginFactory, the
+IComponent / IAudioProcessor / IEditController lifecycle, the normalized
+parameter surface, a parameter point reaching the processor through
+inputParameterChanges, the two-chunk state frame's version tolerance and its
+mutual refusal with a CLAP-framed blob, module interning across two instances,
+and descriptor resolution by the 32-hex-digit class id. It runs against
+`tests/twtestvst3.cpp`, an in-repo 2-in/2-out VST3 built as `twtestvst3.vst3`,
+which deliberately ignores setParamNormalized so invariant 22 has teeth.
+`plugins_scan_test` additionally proves `.vst3` is discovered, probed, cached
+and resolvable by findByUid, in its own tree so the CLAP counts stay exact.
+`tools/vst3_probe.cc` (target `vst3_probe`, not a gate) was the M6 ABI spike and
+is kept: it walks a real third-party .vst3 through the whole lifecycle and is
+the fastest way to triage "this one plugin will not load" without the app. Also qxa.plugin_stereo_chain (a 2-in/2-out CLAP in a
 stereo track's signal path, gated on the cross-channel level relation),
 qxa.plugin_remove_and_undo (removing a slot really does take the plugin OUT of
 the audio, and undo puts it back), qxa.plugin_slot_roundtrip (M4: a SAVED slot
@@ -282,11 +352,24 @@ Known debt:
   plugin_stereo_chain.qxa works around it with a fixture whose channel 0 depends
   on channel 1's INPUT, which is enough to prove input 1 is wired; per-bus
   DISTINCTNESS is gated at engine level in plugins_test instead.
-- Only CLAP is scanned. `formatForFile()` in twpluginsearchpaths.cc maps
-  `*.clap` and nothing else ON PURPOSE: a `.vst3` found before M6 lands would
-  be probed, fail, and be cached as a permanent failure that M6 would then have
-  to force-clear. `twPluginSearchPaths::defaults("vst3")` already returns the
-  right directories, so M6 adds one line to the extension table.
+- The VST3 backend's SPLIT component/controller path has no automated coverage.
+  tests/twtestvst3.cpp is a SINGLE component; the split shape (IConnectionPoint
+  pairing, setComponentState, separate controller lifecycle, a non-empty
+  controller state chunk) is exercised only against real third-party plugins,
+  which no CI machine has. A second fixture class would close it.
+- VST3 on macOS and Linux is written but unrun. bundleEntry/ModuleEntry, the
+  MacOS and <arch>-linux bundle dirs and dlopen are all in place, but M7's
+  lesson was that the flat-vs-bundle split only reveals itself on the platform.
+  Expect the .vst3 equivalent of M7's fixture-inside-the-bundle problem:
+  twtestvst3.vst3 lands in build/bin, and main/CMakeLists.txt copies
+  twtestclap.clap into Contents/MacOS — it will need the same treatment.
+- No qxa case inserts a VST3; they all name twtestclap.clap. The model, action
+  and serialization layers are format-agnostic and were not touched by M6, so
+  this is a coverage gap rather than a risk.
+- The VST3 backend offers no host extensions beyond IHostApplication,
+  IPlugInterfaceSupport and IComponentHandler, ignores output parameter changes,
+  and passes no ProcessContext — so a plugin gets no tempo, no transport state
+  and no sample position. Notes (inputEvents) are a documented deferral.
 - The scan is all-or-nothing per run: there is no incremental "this directory
   changed" trigger and no filesystem watcher, so picking up a plugin installed
   while the app is running needs the Options page's Rescan (or a restart).
