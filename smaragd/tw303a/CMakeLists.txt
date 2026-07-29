@@ -274,6 +274,16 @@ if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
         ${TW_VST3_INC}/pluginterfaces/base/ustring.cpp
         ${TW_VST3_INC}/pluginterfaces/base/conststringtable.cpp
     )
+    # On macOS the SDK base sources (ustring.cpp, funknown.cpp) call into
+    # CoreFoundation (CFStringCreateWithBytes, CFRelease). Every target that
+    # COMPILES these sources — tw_plugins and the standalone twtestvst3 fixture —
+    # must link the framework, or the arm64 link fails with undefined _CFRelease /
+    # _CFStringCreateWithBytes. The Windows path uses Win32 instead, which is why
+    # this only bites on macOS. Same find_library pattern as the AU/CoreAudio
+    # blocks below.
+    if(SMARAGD_MACOS)
+        find_library(TW_VST3_COREFOUNDATION CoreFoundation)
+    endif()
     # The project sets a global -Wall; the vendored SDK is not ours to keep clean,
     # so silence it per-source rather than lowering the bar for our own files.
     if(NOT MSVC)
@@ -294,6 +304,8 @@ if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
     target_compile_definitions(tw_plugins PRIVATE TW_HAVE_VST3=1)
     if(SMARAGD_LINUX)
         target_link_libraries(tw_plugins PRIVATE dl)
+    elseif(SMARAGD_MACOS)
+        target_link_libraries(tw_plugins PRIVATE ${TW_VST3_COREFOUNDATION})
     endif()
     message(STATUS "tw_plugins: VST3 backend ENABLED (proposal 08 M6)")
 
@@ -326,6 +338,11 @@ if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
         SUFFIX ".vst3"
         AUTOMOC OFF
     )
+    # It compiles the SDK base sources but does NOT link tw_plugins, so it needs
+    # CoreFoundation directly on macOS (see the note by TW_VST3_SDK_SOURCES).
+    if(SMARAGD_MACOS)
+        target_link_libraries(twtestvst3 PRIVATE ${TW_VST3_COREFOUNDATION})
+    endif()
     # ALSO drop it next to the app binary, for the same reason twtestclap is: a
     # qxa action script names the module with a RELATIVE path, and
     # SInsertPluginAction resolves that against the .qxa's directory and then
