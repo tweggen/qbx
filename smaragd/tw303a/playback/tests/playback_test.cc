@@ -112,6 +112,60 @@ int main()
     }
 
     // ------------------------------------------------------------------
+    // Live seek during playback (requestSeek): the RT pull thread adopts the
+    // requested position without a restart/re-buffer, and playback resumes
+    // from there. This is what click-to-seek routes through while playing.
+    {
+        auto src = std::make_shared<ToneComponent>(env);
+        src->init();
+
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
+        engine.startReadahead();
+
+        constexpr length_t BLOCK = 512;
+        std::vector<float> L(BLOCK), R(BLOCK);
+
+        // Prime playback so the position has advanced away from 0.
+        bool audible = false;
+        for (int i = 0; i < 500 && !audible; ++i) {
+            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) audible = true;
+            else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        for (int i = 0; i < 8; ++i) engine.pullBlock(L.data(), R.data(), BLOCK);
+        CHECK(audible && engine.currentPosition() > 0,
+              "seek: playback running and advanced before the seek");
+
+        // Forward live seek, page-aligned and far past the readahead frontier.
+        const uint64_t TARGET = 4ull * (uint64_t)twOutputPage::FRAME_CAPACITY;
+        engine.requestSeek(TARGET);
+        // The very next pull adopts it (the RT pull is the sole writer of
+        // currentPos_), even before any page at TARGET is frozen.
+        engine.pullBlock(L.data(), R.data(), BLOCK);
+        uint64_t after = engine.currentPosition();
+        CHECK(after >= TARGET && after < TARGET + 4 * BLOCK,
+              "seek: RT pull adopts the requested position");
+
+        // Playback resumes from the new position (tone flows again).
+        bool resumed = false;
+        for (int i = 0; i < 500 && !resumed; ++i) {
+            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) resumed = true;
+            else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(resumed && engine.currentPosition() > TARGET,
+              "seek: playback resumes and advances from the sought position");
+
+        // A backward live seek repositions just the same.
+        engine.requestSeek(0);
+        engine.pullBlock(L.data(), R.data(), BLOCK);
+        CHECK(engine.currentPosition() < TARGET,
+              "seek: backward live seek repositions too");
+
+        engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
     // Component-level: replacing a stale-frozen page keeps the pre-edit
     // page reachable (stalePredecessor) until the replacement is frozen.
     {

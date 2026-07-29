@@ -8340,6 +8340,73 @@ is silent) and `sample_missing_survives` (a good track plus an orphan branch
 whose sample exists nowhere; the load must succeed and the good track render
 intact).
 
+## 2026-07-28 — Proposal 08 M8: AudioUnit plugin hosting on macOS
+
+A second plugin format behind the `twPlugin` interface — AU effects — proving
+proposal 08 acceptance criterion 4 (a new format is a new backend in
+`tw303a/plugins/` and nothing else) a second time. Everything above the ABI (the
+`SPluginSlot` model, XML serialization, the processor/tap split, the browser and
+the generic parameter editor, the qxa `format=` plumbing) was already
+format-agnostic and needed no change. Two decisions were taken up front by the
+requester: discovery + hosting via the **OS component registry and the AUv2 C
+API** (not AVFoundation, not AUv3), and test gating against **stock system AUs**
+(no in-repo `.component` fixture).
+
+**Registry discovery, not directory scanning.** An AU's identity is its
+`(type, subtype, manufacturer)` triple registered with the OS, not a file at a
+path — so AU does not use the directory walker. `enumerateAuModules()`
+(`twaumodule.cc`) lists effect + music-effect components with
+`AudioComponentFindNext` and hands back one synthetic module key
+`au:<type>-<subtype>-<manufacturer>` (hex) each; `twPluginRegistry::rescan()`
+merges that list into the ordinary scan loop, so AU inherits the path-keyed
+cache, the sticky failed/timeout records and the out-of-process probe with no new
+machinery. The component version (`AudioComponentGetVersion`) rides in the cache
+key's size field so a plugin update re-probes without a file to stat. New env
+knob `SMARAGD_SCAN_AU=0` suppresses enumeration for the count-exact headless scan
+gate; it can never affect insert/instantiate, which resolve a descriptor directly
+and never touch a scan.
+
+**Hosting is the plain C AudioUnit API** (`twauplugin.cc`, no Objective-C, so
+`.cc`). `createAuPlugin` resolves the triple and `AudioComponentInstanceNew`s it
+(the descriptor `path` is ignored — cosmetic). `prepare()` sets a non-interleaved
+float32 `StreamFormat` on both scopes, `MaximumFramesPerSlice`, and an input
+`AURenderCallback` that copies the caller's `in` buffers, then
+`AudioUnitInitialize`. `process()` points a non-interleaved `AudioBufferList` at
+the caller's `out` and calls `AudioUnitRender`; any failure passes audio through,
+exactly like the CLAP path. Parameters via `kAudioUnitProperty_ParameterInfo` +
+`AudioUnitGet|SetParameter` (documented thread-safe, so no lock-free ring —
+simpler than CLAP). State via `kAudioUnitProperty_ClassInfo` (a CFPropertyList) →
+binary plist, wrapped in an 8-byte `'TWAU'` frame (the `'TWCP'` shape, distinct
+magic so blobs cannot be cross-read). Latency from `kAudioUnitProperty_Latency`;
+the native-editor capability bit from `kAudioUnitProperty_CocoaUI` presence
+(embedding remains phase 5). Because an AU re-resolves by `uid` (a
+machine-independent triple), its stored `path` is empty and AU projects are
+portable without one; an AU missing on this machine falls through to
+`createNullPlugin(declared I/O)` — the same missing-placeholder round-trip.
+
+**Three dispatch branches, mirroring CLAP under `TW_HAVE_AU`:**
+`twpluginregistry.cc` (`probeInProcess`, `instantiate`, and the rescan merge),
+`plugin_probe.cc` (routes an `au:` key / `.component`), `twpluginsearchpaths.cc`
+(`defaults("au")` returns the informational `Components` dirs — AU discovery does
+not depend on them). CMake adds a macOS-only `TW_HAVE_AU` block linking
+AudioToolbox/AudioUnit/CoreAudio/CoreFoundation PRIVATE to `tw_plugins` (a static
+lib still propagates these to the app and the probe), and `smaragd_pluginprobe`
+is now built when EITHER backend is present (guarding its includes on
+`TW_HAVE_*` means its own TU needs those defines — hence the compile-definition
+wiring).
+
+Gates (macOS): `au_test` (enumerate → instantiate a stock AU → process →
+`'TWAU'` state-frame round-trip → param range; skips cleanly when no AU is
+registered), and three macOS-only qxa cases — `au_effect_audible` (AULowpass at a
+120 Hz cutoff takes ch0 RMS to ~0.004 vs the bypassed ~0.067, a 16× qualitative
+discriminator with loose bands so OS-version DSP drift cannot break it),
+`au_slot_roundtrip` (an `au` descriptor + a `'TWAU'` `<state>` chunk survive save
+→ reload), and `au_missing_placeholder` (a bogus AU uid round-trips through the
+placeholder; needs no AU installed). Verified on macOS 15 / arm64: full `ctest`
+green, `check_layering` / `check_logging` clean. Still by hand (needs a real
+third-party AU, none in CI): scan → insert → hear → save/reopen. AU instruments
+(`aumu`) and native-view embedding stay out of scope, gated as for CLAP.
+
 ## 2026-07-29 — Proposal 08 M6: VST3 plugin hosting
 
 The last open milestone of proposal 08. **AC 4 holds:** a second format really

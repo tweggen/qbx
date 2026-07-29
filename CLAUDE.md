@@ -296,16 +296,16 @@ Files written as WAV (PCM, lossless) in project directory:
 4. **Multi-input:** One WAV per input device; multiple inputs with separate files not yet supported.
 5. **Latency control:** Fixed at device default; no user-facing buffer sizing.
 
-## Plugin Hosting (proposal 08 — M0..M7 executed; VST3 landed 2026-07-29)
+## Plugin Hosting (proposal 08 — M0..M8 executed; VST3 landed 2026-07-29)
 
-CLAP **and VST3** audio-effect plugins are scanned, inserted per track, heard in
-the signal path, saved with the project, and kept as a reloadable placeholder
-when the plugin is not installed. **Design:**
+CLAP, **VST3** and **AudioUnit** (macOS) audio-effect plugins are scanned,
+inserted per track, heard in the signal path, saved with the project, and kept as
+a reloadable placeholder when the plugin is not installed. **Design:**
 `plan/proposed/08_PLUGIN_HOSTING.md`; **what was built and in what order:**
 `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`; **the invariants that matter:**
 `smaragd/tw303a/plugins/CONTRACT.md` (26 of them) and
 `smaragd/main/pluginui/CONTRACT.md`. The milestone list is closed — remaining
-work is coverage, not capability (see M6 §Not verified).
+work is coverage, not capability.
 
 On macOS a `.clap` may be a directory bundle or a flat dylib — `twClapModule`
 handles both (`stat` the path; bundles resolve the inner binary from
@@ -327,6 +327,21 @@ submodule directory is named `vst3_pluginterfaces` while the SDK headers include
 each other as `pluginterfaces/...`, so CMake mirrors them into
 `${CMAKE_CURRENT_BINARY_DIR}/vst3_inc/pluginterfaces` at configure time.
 
+**AudioUnit (macOS, M8):** a second format behind the same `twPlugin` interface,
+so the model / serialization / processor-tap / UI are unchanged (proposal 08 AC
+4). Unlike CLAP, AU is discovered from the **OS component registry**
+(`AudioComponentFindNext`), not by walking directories: a "module" is one
+component, keyed `au:<type>-<subtype>-<manufacturer>` (hex), and a descriptor's
+`uid` is that triple with an EMPTY `path` (AU instantiates from the component
+description, so AU projects re-resolve by uid and are portable without a path).
+Hosting is the plain C AudioUnit API (`twaumodule.cc` / `twauplugin.cc`, no
+Obj-C); state is `kAudioUnitProperty_ClassInfo` in a `'TWAU'` frame. Backend
+files are PRIVATE to `tw_plugins` behind `TW_HAVE_AU`. `SMARAGD_SCAN_AU=0`
+suppresses AU enumeration (the headless scan gate uses it; insert/instantiate go
+by descriptor and never scan). Test gating is stock-system-AU based (no in-repo
+`.component` fixture): `au_test` + the macOS-only `au_*.qxa` cases, which use a
+qualitative RMS discriminator (AULowpass), never a byte-`cmp`.
+
 ### Layers
 
 | Piece | Where | What it is |
@@ -334,6 +349,7 @@ each other as `pluginterfaces/...`, so CMake mirrors them into
 | ABI | `tw/plugins/twplugin.h` | `twPlugin`: `prepare`/`process`/`reset`, params, opaque state blob. Format-agnostic and deliberately narrow. |
 | CLAP backend | `plugins/src/twclapmodule.{h,cc}`, `twclapplugin.cc` | DSO load (`LoadLibraryExW` / `dlopen`, macOS bundles → `Contents/MacOS/<base>`), `clap_entry`, modules interned by path. Maps audio-ports / params / state / latency / gui. |
 | VST3 backend | `plugins/src/twvst3module.{h,cc}`, `twvst3plugin.cc`, `twvst3host.{h,cc}`, `twvst3iids.cc` | DSO/bundle load (`InitDll` / `bundleEntry` / `ModuleEntry` → `GetPluginFactory`), modules interned by path. `IComponent` + `IAudioProcessor` + `IEditController`, both the single-component and split-controller shapes. Params NORMALIZED [0,1]; edits reach the DSP only via `inputParameterChanges`. |
+| AU backend (macOS) | `plugins/src/twaumodule.{h,cc}`, `twauplugin.cc` | Plain C AudioUnit API, no Obj-C. NOT directory-scanned — enumerated from the OS component registry (`AudioComponentFindNext`); a "module" is one component keyed `au:<type>-<subtype>-<manufacturer>` and a descriptor's `path` is EMPTY. |
 | Scanner + cache | `plugins/src/twpluginregistry.cc`, `twpluginsearchpaths.cc`, `twpluginscancache.cc` | Search paths, `plugincache.json`, mtime/size/version keying, sticky `failed`/`timeout` records, background scan. |
 | Crash isolation | `plugins/tools/plugin_probe.cc` → `smaragd_pluginprobe` | One module per child process, driven by `QProcess` with a timeout. A crash becomes a cache record, not a dead app. |
 | Slot DSP | `plugins/include/tw/plugins/twpluginslotproc.h` + `src/twplugininsert.cc` | **One processor + N per-bus taps.** See below. |
@@ -403,9 +419,14 @@ virtual, so storing it twice is pure duplication).
 | `smaragd_pluginprobe[.exe]` | The out-of-process probe; the **app** supplies its path (next to the exe; inside `Contents/MacOS` on macOS). Absent ⇒ the scan falls back in-process and logs a warning — safe against a corrupt file, not against a plugin that crashes on instantiation. |
 | `TW_HAVE_VST3` (CMake, **PRIVATE** to `tw_plugins`) | Set when `smaragd/third_party/vst3_pluginterfaces/base/funknown.h` exists. Same PRIVATE discipline and the same consequences as `TW_HAVE_CLAP`. It also gates `formatForFile()` reporting `.vst3`, so a build without the submodule cannot cache an unloadable module as a permanent failure. |
 | `plugins/searchPaths`, `plugins/scanOnStartup` (`SOpt`) | Edited on Edit → Options → Plugins. Defaults are the union of `twPluginSearchPaths::defaults("clap")` and `…("vst3")`, de-duplicated: Windows `%CommonProgramFiles%\{CLAP,VST3}` + `%LOCALAPPDATA%\Programs\Common\{CLAP,VST3}` + `CLAP_PATH`/`VST3_PATH`; macOS `/Library/Audio/Plug-Ins/{CLAP,VST3}` + `~/Library/…`. `SOpt::def()` and `SOptionsDialog::resetPluginDirsToDefaults()` must stay in step. |
+| `TW_HAVE_AU` (CMake, **PRIVATE** to `tw_plugins`) | Set on macOS unless `-DENABLE_AU=OFF`. Nothing to fetch — the AudioToolbox/AudioUnit headers ship in the macOS SDK. Same PRIVATE discipline as the other two. |
+| `SMARAGD_SCAN_AU=0` | Suppresses AU enumeration from the OS component registry. The headless scan gate needs it (it asserts exact module counts against a controlled fixture dir); insert/instantiate go by descriptor and never scan, so it never affects the qxa cases. |
 | `clap_probe`, `vst3_probe` (targets, not gates) | `plugins/tools/{clap_probe,vst3_probe}.cc` — load a real third-party plugin with the production loader and print what it offers. `vst3_probe` was the M6 ABI spike and walks a whole lifecycle (instantiate → buses → params → state → `process()` → teardown); it is the fastest way to triage "this one plugin will not load" without starting the app. |
 
-The scanner reports `*.clap` and `*.vst3` and nothing else. That list is
+`formatForFile()` reports `*.clap` and `*.vst3` and nothing else — `.component`
+is deliberately absent, because AU is enumerated from the OS component registry
+rather than by walking directories (`SMARAGD_SCAN_AU=0` suppresses that
+enumeration for the count-exact headless scan gate). That list is
 deliberately conservative: a module format we cannot load would be probed, fail,
 and be cached as a *permanent* failure a later milestone would have to
 force-clear — which is exactly why `.vst3` stayed unreported until M6.

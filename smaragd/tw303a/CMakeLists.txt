@@ -180,7 +180,9 @@ tw_module(plugins
 # same types (ODR/ABI skew). That is why the backend's own header lives in
 # plugins/src/, not plugins/include/.
 set(TW_CLAP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/clap)
+set(_tw_have_clap FALSE)
 if(EXISTS ${TW_CLAP_DIR}/include/clap/clap.h)
+    set(_tw_have_clap TRUE)
     target_sources(tw_plugins PRIVATE
         plugins/src/twclapmodule.h
         plugins/src/twclapmodule.cc
@@ -203,19 +205,6 @@ if(EXISTS ${TW_CLAP_DIR}/include/clap/clap.h)
         ${TW_CLAP_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src
     )
-
-    # SHIPPED, and the reason plugin scanning cannot take the app down (proposal
-    # 08 M2 / §Decisions 2): the out-of-process probe. One module per run, JSON
-    # to stdout, so a plugin that crashes or hangs while being instantiated
-    # kills THIS process and becomes a cached failed/timeout record. Same
-    # PRIVATE clap includes + plugins/src as clap_probe, for the same reason.
-    add_executable(smaragd_pluginprobe plugins/tools/plugin_probe.cc)
-    target_link_libraries(smaragd_pluginprobe PRIVATE tw_plugins)
-    target_include_directories(smaragd_pluginprobe PRIVATE
-        ${TW_CLAP_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src
-    )
-    set_target_properties(smaragd_pluginprobe PROPERTIES AUTOMOC OFF)
 
     # Build-time test fixture: a real 2-in/2-out CLAP module built from this
     # repo, so plugins_test can exercise the actual load path without anyone
@@ -266,7 +255,9 @@ endif()
 # which is also what has to happen after a submodule bump, so nothing goes stale
 # unnoticed.
 set(TW_VST3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/vst3_pluginterfaces)
+set(_tw_have_vst3 FALSE)
 if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
+    set(_tw_have_vst3 TRUE)
     set(TW_VST3_INC ${CMAKE_CURRENT_BINARY_DIR}/vst3_inc)
     file(COPY ${TW_VST3_DIR}/base ${TW_VST3_DIR}/gui ${TW_VST3_DIR}/vst
          DESTINATION ${TW_VST3_INC}/pluginterfaces)
@@ -345,17 +336,69 @@ if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
                 $<TARGET_FILE:twtestvst3>
                 ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/twtestvst3.vst3
         COMMENT "Copying the twtestvst3 fixture next to the app binary (qxa cases)")
-
-    # The SHIPPED out-of-process probe is created in the CLAP block above (it is
-    # format-agnostic; only its extension dispatch is not). Teach it about VST3
-    # here so a crashing .vst3 becomes a cached failure record like a .clap does,
-    # rather than being refused as "not a format this build can probe".
-    if(TARGET smaragd_pluginprobe)
-        target_include_directories(smaragd_pluginprobe PRIVATE ${TW_VST3_INC})
-        target_compile_definitions(smaragd_pluginprobe PRIVATE TW_HAVE_VST3=1)
-    endif()
 else()
     message(WARNING "tw_plugins: third_party/vst3_pluginterfaces not checked out; VST3 plugin hosting DISABLED. Run 'git submodule update --init --recursive' (or ./build.sh, which does it).")
+endif()
+
+# --- AudioUnit plugin backend (macOS only) ------------------------------------
+# Proposal 08 M8. Unlike CLAP there is nothing to fetch: the AudioUnit /
+# AudioToolbox / CoreFoundation headers ship in the macOS SDK, so discovery is
+# simply "are we on macOS?". The backend is pure C CoreAudio (no Objective-C), so
+# the sources are .cc. AU is discovered from the OS component registry rather than
+# by walking directories (twaumodule.cc), so it needs no search-path plumbing.
+#
+# PRIVATE, exactly like CLAP: the AudioToolbox includes reach tw_plugins only, and
+# the frameworks are PRIVATE link deps. Because tw_plugins is a STATIC library,
+# CMake still propagates these PRIVATE link deps (as LINK_ONLY) to whatever links
+# it — the app and smaragd_pluginprobe — so neither needs to name the frameworks.
+option(ENABLE_AU "Host AudioUnit plugins (macOS)" ON)
+set(_tw_have_au FALSE)
+if(SMARAGD_MACOS AND ENABLE_AU)
+    set(_tw_have_au TRUE)
+    find_library(AU_AUDIOTOOLBOX   AudioToolbox)
+    find_library(AU_AUDIOUNIT      AudioUnit)
+    find_library(AU_COREAUDIO      CoreAudio)
+    find_library(AU_COREFOUNDATION CoreFoundation)
+    target_sources(tw_plugins PRIVATE
+        plugins/src/twaumodule.h
+        plugins/src/twaumodule.cc
+        plugins/src/twauplugin.cc
+    )
+    target_compile_definitions(tw_plugins PRIVATE TW_HAVE_AU=1)
+    target_link_libraries(tw_plugins PRIVATE
+        ${AU_AUDIOTOOLBOX}
+        ${AU_AUDIOUNIT}
+        ${AU_COREAUDIO}
+        ${AU_COREFOUNDATION}
+    )
+    message(STATUS "tw_plugins: AudioUnit backend ENABLED (proposal 08 M8)")
+endif()
+
+# --- Out-of-process scan probe (shipped) --------------------------------------
+# The reason plugin scanning cannot take the app down (proposal 08 M2 /
+# §Decisions 2): one module per run, JSON to stdout, so a plugin that crashes or
+# hangs while being instantiated kills THIS process and becomes a cached
+# failed/timeout record. Built whenever ANY probe-able backend is present. It
+# links tw_plugins statically and calls the backends' descriptor enumerators
+# directly, so its own TU must see the same TW_HAVE_* it dispatches on. Under
+# plugins/tools/ so check_logging.py exempts its stdout (tools/ is an ALLOW_DIR).
+if(_tw_have_clap OR _tw_have_vst3 OR _tw_have_au)
+    add_executable(smaragd_pluginprobe plugins/tools/plugin_probe.cc)
+    target_link_libraries(smaragd_pluginprobe PRIVATE tw_plugins)
+    target_include_directories(smaragd_pluginprobe PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src)
+    set_target_properties(smaragd_pluginprobe PROPERTIES AUTOMOC OFF)
+    if(_tw_have_clap)
+        target_compile_definitions(smaragd_pluginprobe PRIVATE TW_HAVE_CLAP=1)
+        target_include_directories(smaragd_pluginprobe PRIVATE ${TW_CLAP_DIR}/include)
+    endif()
+    if(_tw_have_vst3)
+        target_compile_definitions(smaragd_pluginprobe PRIVATE TW_HAVE_VST3=1)
+        target_include_directories(smaragd_pluginprobe PRIVATE ${TW_VST3_INC})
+    endif()
+    if(_tw_have_au)
+        target_compile_definitions(smaragd_pluginprobe PRIVATE TW_HAVE_AU=1)
+    endif()
 endif()
 
 # --- E8 devices: platform audio I/O (backends + inputs) ----------------------
@@ -651,6 +694,17 @@ if(TARGET smaragd_pluginprobe)
     add_dependencies(plugins_scan_test smaragd_pluginprobe)
     target_compile_definitions(plugins_scan_test PRIVATE
         TW_PLUGINPROBE_PATH="$<TARGET_FILE:smaragd_pluginprobe>")
+endif()
+# The scan gate asserts exact module counts against a controlled fixture dir, so
+# it must NOT also enumerate the machine's system AudioUnits (proposal 08 M8).
+set_tests_properties(plugins_scan_test PROPERTIES ENVIRONMENT "SMARAGD_SCAN_AU=0")
+# The AudioUnit backend gate (proposal 08 M8). Built only where the AU backend
+# is; it skips at runtime when the machine registers no hostable AU, so it is
+# safe on a headless mac. Needs plugins/src for the backend's private header.
+if(_tw_have_au)
+    tw_module_test(au_test plugins/tests/au_test.cc tw_plugins)
+    target_include_directories(au_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src)
+    target_compile_definitions(au_test PRIVATE TW_HAVE_AU=1)
 endif()
 tw_module_test(sources_test                 sources/tests/sources_test.cc               tw_sources)
 tw_module_test(vocoder_test                 sources/tests/vocoder_test.cc               tw_sources)

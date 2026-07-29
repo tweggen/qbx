@@ -20,11 +20,16 @@
 // the JSON on stdout IS this program's output, not a diagnostic. Diagnostics go
 // through TW_LOG* to stderr, so they can never corrupt the JSON.
 
+#ifdef TW_HAVE_CLAP
 #include "twclapmodule.h"
-#include "twpluginscancache.h"
+#endif
 #ifdef TW_HAVE_VST3
 #include "twvst3module.h"
 #endif
+#ifdef TW_HAVE_AU
+#include "twaumodule.h"
+#endif
+#include "twpluginscancache.h"
 
 #include "tw/core/twlog.h"
 
@@ -75,13 +80,29 @@ int main( int argc, char **argv )
     const QString     qpath = QString::fromLocal8Bit( path.c_str() );
 
     std::vector<audio::twPluginDescriptor> descs;
-    if( qpath.endsWith( ".clap", Qt::CaseInsensitive ) ) {
+    bool                                   known = false;
+#ifdef TW_HAVE_CLAP
+    if( !known && qpath.endsWith( ".clap", Qt::CaseInsensitive ) ) {
         descs = audio::clapModuleDescriptors( path );
-#ifdef TW_HAVE_VST3
-    } else if( qpath.endsWith( ".vst3", Qt::CaseInsensitive ) ) {
-        descs = audio::vst3ModuleDescriptors( path );
+        known = true;
+    }
 #endif
-    } else {
+#ifdef TW_HAVE_VST3
+    if( !known && qpath.endsWith( ".vst3", Qt::CaseInsensitive ) ) {
+        descs = audio::vst3ModuleDescriptors( path );
+        known = true;
+    }
+#endif
+#ifdef TW_HAVE_AU
+    // AU "modules" are the synthetic per-component key "au:<triple>" the registry
+    // enumerator produces; the .component spelling is accepted for symmetry.
+    if( !known && ( qpath.startsWith( "au:" )
+                    || qpath.endsWith( ".component", Qt::CaseInsensitive ) ) ) {
+        descs = audio::auModuleDescriptors( path );
+        known = true;
+    }
+#endif
+    if( !known ) {
         TW_LOGE( "plugins", "[probe] '%s' is not a format this build can probe",
                  path.c_str() );
         return 1;

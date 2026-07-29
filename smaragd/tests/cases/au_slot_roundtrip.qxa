@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="au_slot_roundtrip">
+
+  <!-- Proposal 08 M8 (AC 3/4) for AudioUnit: a real AU slot serializes with its
+       identity AND an opaque state chunk, and comes back into the signal path.
+
+       Uses Apple's stock AULowpass (aufx/lpas/appl), which ships with every
+       macOS — so this is macOS-only (registered only where the AU backend is)
+       but not machine-specific. There is deliberately NO byte/RMS assertion on
+       the AU's own DSP output here (that varies by OS version); this case gates
+       the format-agnostic serialization path: an 'au' descriptor round-trips
+       verbatim and a TWAU-framed <state> chunk is pulled fresh from the live
+       unit at save time. The audible-effect discrimination lives in
+       au_effect_audible.qxa. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="au" uid="61756678-6c706173-6170706c"
+                   name="AULowpass" vendor="Apple"
+                   path="" nIn="2" nOut="2"/>
+
+    <!-- Move the cutoff (param 0) so the saved ClassInfo is non-default. -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="500.0"/>
+
+    <render filename="au_slot_roundtrip.wav" format="wav" quality="10"/>
+
+    <save-project path="../../build/au_slot_resave.qxp"/>
+
+    <!-- Identity survives verbatim. -->
+    <assert-file-contains path="../../build/au_slot_resave.qxp"
+                          text="format='au'"/>
+    <assert-file-contains path="../../build/au_slot_resave.qxp"
+                          text="uid='61756678-6c706173-6170706c'"/>
+
+    <!-- A state chunk was written (the AU's ClassInfo, TWAU-framed and base64d).
+         'VFdBV' is the base64 prefix of the bytes 'T','W','A','U'. -->
+    <assert-file-contains path="../../build/au_slot_resave.qxp"
+                          text="&lt;state encoding='base64'&gt;VFdBV"/>
+
+    <!-- The re-saved project reloads cleanly with the slot back in place. -->
+    <load-project path="../../build/au_slot_resave.qxp"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

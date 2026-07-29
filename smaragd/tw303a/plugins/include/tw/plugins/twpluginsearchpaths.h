@@ -13,12 +13,14 @@ namespace audio {
 // it into twPluginRegistry::setSearchPaths(). Nothing here reads or writes
 // settings, so it stays usable from the headless tests and the probe.
 struct twPluginSearchPaths {
-    // format is "clap" or "vst3" (lower case). Unknown formats yield an empty
-    // list rather than guessing. Directories that do not exist are still
+    // format is "clap", "vst3" or "au" (lower case). Unknown formats yield an
+    // empty list rather than guessing. Directories that do not exist are still
     // returned — a user who installs a plugin later should not have to re-add
     // the standard folder, and the scanner simply skips what is not there.
     // The format's own environment variable (CLAP_PATH / VST3_PATH) is appended,
-    // split on the platform's path separator.
+    // split on the platform's path separator. "au" is macOS-only, has no env
+    // var, and its dirs are informational: AudioUnits are discovered from the OS
+    // component registry, not by walking these paths.
     static std::vector<std::string> defaults( const std::string &format );
 };
 

@@ -59,6 +59,7 @@ private:
     QComboBox *wheelCtrlShift_;
     QCheckBox *zoomToCursor_;
     QCheckBox *invertZoom_;
+    QCheckBox *followPlayhead_;
 
     // Audio page.
     QComboBox *audioDevice_;         // Output device

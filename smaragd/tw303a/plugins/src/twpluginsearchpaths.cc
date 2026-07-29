@@ -164,6 +164,19 @@ std::vector<std::string> twPluginSearchPaths::defaults( const std::string &forma
 {
     std::vector<std::string> out;
 
+    // AudioUnit is macOS-only and has no environment override. These directories
+    // are informational only (shown on the Options → Plugins page): AU is NOT
+    // discovered by walking them — formatForFile() does not recognize .component —
+    // it is enumerated from the OS component registry (twaumodule.cc). Returning
+    // here keeps AU out of the folder/env-var machinery below.
+    if( format == "au" ) {
+#if defined( Q_OS_MAC )
+        addDir( out, "/Library/Audio/Plug-Ins/Components" );
+        addDir( out, QDir::homePath() + "/Library/Audio/Plug-Ins/Components" );
+#endif
+        return out;
+    }
+
     // The upper-case folder name each format uses under the standard roots.
     QString folder;
     const char *envVar = nullptr;

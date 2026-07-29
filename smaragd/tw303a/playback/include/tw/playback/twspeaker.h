@@ -126,6 +126,12 @@ public:
     // to call at any time, including during playback.
     void setCycle( bool enabled, offset_t startFrame, offset_t endFrame );
 
+    // Reposition the playhead WHILE playing (click-to-seek / scrub). Forwards to
+    // the live AudioEngine (RT-safe, adopted on the next pull); a no-op when not
+    // playing — playback start does its own seek from the locator. Safe to call
+    // from the UI thread at any time.
+    void requestSeek( offset_t frame );
+
     // Output device selection (for a device-picker UI). The id is a backend
     // device id from outputDevices(); "default" / empty means the system
     // default endpoint. Takes effect on the next startOutput().

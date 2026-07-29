@@ -122,6 +122,20 @@ if(TEST qxa.legacy_project_recovery)
     set_tests_properties(qxa.legacy_project_recovery PROPERTIES TIMEOUT 300)
 endif()
 
+# The AudioUnit qxa cases (proposal 08 M8) host real macOS system AudioUnits, so
+# they are meaningful only on macOS; disable them elsewhere rather than let them
+# fail. On macOS the stock AUs they use (AULowpass) ship with the OS, so absence
+# is not a concern — only OS-version DSP variance, which their loose RMS bands
+# absorb.
+if(NOT APPLE)
+    foreach(_case ${_QXA_CASES})
+        get_filename_component(_name ${_case} NAME_WE)
+        if(_name MATCHES "^au_")
+            set_tests_properties(qxa.${_name} PROPERTIES DISABLED YES)
+        endif()
+    endforeach()
+endif()
+
 message(STATUS "smaragd: ALSA=${ENABLE_ALSA} PipeWire=${ENABLE_PIPEWIRE} "
                "PulseAudio=${ENABLE_PULSEAUDIO} JACK=${ENABLE_JACK} "
                "WASAPI=${ENABLE_WASAPI} CoreAudio=${ENABLE_COREAUDIO}")
