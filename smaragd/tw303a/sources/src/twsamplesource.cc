@@ -3,7 +3,11 @@
 #include <string.h>
 
 #include <qfile.h>
+#include <qfileinfo.h>
 #include <mutex>
+#include <vector>
+
+#include <sndfile.h>
 
 #include "tw/sources/twsamplesource.h"
 #include "tw/sources/twresampledsource.h"
@@ -18,8 +22,19 @@ twSampleSource::twSampleSource( tw303aEnvironment &env, const QString &fileName 
       bits_( 0 ),
       nFrames_( 0 )
 {
-    if( loadWav() < 0 ) {
-        loaded_ = false;
+    // 16-bit PCM WAV keeps the hand-rolled fast path (byte-exact with every
+    // prior build, so existing render gates are untouched). A .wav that the fast
+    // path rejects (e.g. 24/32-bit) falls back to libsndfile; every other format
+    // (MP3/FLAC/AIFF/Ogg/Opus) goes straight to libsndfile.
+    const QString ext = QFileInfo( fileName_ ).suffix().toLower();
+    if( ext == QLatin1String( "wav" ) ) {
+        if( loadWav() < 0 && loadSndfile() < 0 ) {
+            loaded_ = false;
+        }
+    } else {
+        if( loadSndfile() < 0 ) {
+            loaded_ = false;
+        }
     }
 }
 
@@ -221,6 +236,90 @@ int twSampleSource::loadWav()
     contentHash_ = twHashBuffer( data_.data(), data_.size() * sizeof( sample_t ) );
     loaded_ = true;
     TW_LOGI( "sources", "twSampleSource: loaded %lld frames (%lld bytes) resident, content %s.",
+             (long long) nFrames_, (long long) ( data_.size() * sizeof( sample_t ) ),
+             contentHash_.toHex().c_str() );
+    return 0;
+}
+
+// General-purpose importer: decode any libsndfile-readable file (MP3, FLAC,
+// AIFF, Ogg/Opus, and non-16-bit WAV) to the same resident planar-Float32 layout
+// loadWav() produces, so every downstream reader is format-agnostic. MP3 read
+// requires a libsndfile built with mpg123.
+int twSampleSource::loadSndfile()
+{
+    SF_INFO info;
+    memset( &info, 0, sizeof( info ) );   // format must be zero before an SFM_READ open
+
+#ifdef _WIN32
+    // libsndfile can't open a UTF-8 path on Windows; hand it the wide spelling
+    // so non-ASCII sample paths decode.
+    const std::wstring wpath = fileName_.toStdWString();
+    SNDFILE *snd = sf_wchar_open( wpath.c_str(), SFM_READ, &info );
+#else
+    const QByteArray path8 = fileName_.toUtf8();
+    SNDFILE *snd = sf_open( path8.constData(), SFM_READ, &info );
+#endif
+    if( !snd ) {
+        qWarning( "twSampleSource: libsndfile cannot open \"%s\": %s.\n",
+                  (const char *) fileName_.toUtf8().constData(), sf_strerror( nullptr ) );
+        return -1;
+    }
+
+    if( info.channels <= 0 || info.samplerate <= 0 || info.frames <= 0 ) {
+        qWarning( "twSampleSource: libsndfile reports empty/invalid stream for \"%s\".\n",
+                  (const char *) fileName_.toUtf8().constData() );
+        sf_close( snd );
+        return -2;
+    }
+
+    channels_ = (idx_t) info.channels;
+    rate_     = info.samplerate;
+    // Bit depth is informational only (libsndfile hands us float regardless);
+    // report 32 for the float pipeline so the log line reads sensibly.
+    bits_     = 32;
+    nFrames_  = (length_t) info.frames;
+
+    qWarning( "twSampleSource: \"%s\" (libsndfile): %d channels, %d Hz, %lld frames.\n",
+              (const char *) fileName_.toUtf8().constData(),
+              (int) channels_, rate_, (long long) nFrames_ );
+
+    // Read interleaved float frames, looping until the whole stream is resident
+    // (sf_readf_float need not satisfy a large request in one call), then
+    // deinterleave into the planar buffer exactly as loadWav() lays it out.
+    std::vector<float> inter( (size_t) nFrames_ * channels_ );
+    sf_count_t total = 0;
+    while( total < info.frames ) {
+        sf_count_t got = sf_readf_float( snd,
+                                         inter.data() + (size_t) total * channels_,
+                                         info.frames - total );
+        if( got <= 0 ) break;   // EOF or decode error
+        total += got;
+    }
+    sf_close( snd );
+
+    if( total < info.frames ) {
+        qWarning( "twSampleSource: short decode on \"%s\": %lld of %lld frames; "
+                  "clamping to the data actually present.\n",
+                  (const char *) fileName_.toUtf8().constData(),
+                  (long long) total, (long long) info.frames );
+        nFrames_ = (length_t) total;   // size + clip to real data, no phantom tail
+    }
+    if( nFrames_ <= 0 ) return -3;
+
+    data_.assign( (size_t) channels_ * nFrames_, 0.0f );
+    for( length_t f = 0; f < nFrames_; ++f ) {
+        for( idx_t c = 0; c < channels_; ++c ) {
+            data_[ (size_t) c * nFrames_ + f ] =
+                inter[ (size_t) f * channels_ + c ];
+        }
+    }
+
+    // Same digest recipe as loadWav(): over the assembled source-rate planar
+    // Float32, so identical decoded material keys identical sidecars regardless
+    // of filename/mtime/project or on-disk format (proposal 27).
+    contentHash_ = twHashBuffer( data_.data(), data_.size() * sizeof( sample_t ) );
+    loaded_ = true;
+    TW_LOGI( "sources", "twSampleSource: loaded %lld frames (%lld bytes) resident via libsndfile, content %s.",
              (long long) nFrames_, (long long) ( data_.size() * sizeof( sample_t ) ),
              contentHash_.toHex().c_str() );
     return 0;

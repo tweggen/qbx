@@ -17,14 +17,18 @@ class twResampledSource;
 /**
  * A file-backed, fully-resident random-access sample source.
  *
- * At construction it decodes the entire WAV into RAM as planar Float32
+ * At construction it decodes the entire file into RAM as planar Float32
  * (channel-major: channel c, frame f at data_[c*nFrames_ + f]). After that the
  * file handle is closed and read() is a lock-free memcpy out of resident memory
  * — no per-call file I/O and no mutex in the realtime path, which dissolves the
  * UI/audio race that the old twWavInput guarded with a lock (proposal 07 §2/§3).
  *
- * NB: only 16-bit PCM is decoded (matching what twWavInput ever actually
- * supported); other bit depths fail to load.
+ * Decoding: 16-bit PCM WAV takes the hand-rolled fast path (loadWav, byte-exact
+ * with every prior build). Everything else — MP3, FLAC, AIFF, Ogg/Opus and
+ * non-16-bit WAV — decodes through libsndfile (loadSndfile), which yields the
+ * identical planar-Float32 buffer, so all downstream readers are format-agnostic.
+ * MP3 read requires a libsndfile built with mpg123; unsupported/undecodable files
+ * fail to load exactly as before.
  */
 class twSampleSource
     : public twRandomSource,
@@ -83,6 +87,10 @@ public:
 
 private:
     int loadWav();
+    // libsndfile-backed decoder for MP3/FLAC/AIFF/Ogg/Opus and non-16-bit WAV.
+    // Fills data_ (planar Float32), channels_/rate_/nFrames_/bits_ and
+    // contentHash_ exactly as loadWav() does. Returns 0 on success, <0 on error.
+    int loadSndfile();
 
     // Cache entry: uses std::call_once to ensure exactly one construction per rate,
     // even with concurrent viewAtRate() calls from different threads.

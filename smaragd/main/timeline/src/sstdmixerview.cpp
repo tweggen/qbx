@@ -426,7 +426,8 @@ void SStdMixerView::ctInsertSample()
     // OK, we have the track. Insert the sample here.
     QFileDialog dialog(this, "Insert sample",
                        SSettings::instance().lastDir( "sample", QDir::currentPath() ),
-                       "Wave files (*.WAV *.wav)");
+                       "Audio files (*.wav *.mp3 *.flac *.aiff *.aif *.ogg *.opus);;"
+                       "WAV (*.wav);;MP3 (*.mp3);;All files (*)");
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setOptions(QFileDialog::DontUseNativeDialog);
     QString s;
