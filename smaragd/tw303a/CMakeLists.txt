@@ -246,6 +246,67 @@ else()
     message(WARNING "tw_plugins: third_party/clap not checked out; CLAP plugin hosting DISABLED. Run 'git submodule update --init --recursive' (or ./build.sh, which does it).")
 endif()
 
+# --- VST3 ABI spike (proposal 08 M6 gate) -------------------------------------
+# NOT the VST3 backend: a de-risking spike, the same role clap_probe played for
+# M0/M1. The execution plan gates the wrapper on it — "MinGW ABI note: ... A
+# spike is still the gate before writing the wrapper" — because the whole M6
+# premise is that a MinGW-built host can call an MSVC-built plugin's vtables and
+# be called back through its own. vst3_probe answers that empirically before any
+# twvst3plugin.cc exists. It builds nothing into tw_plugins and defines no
+# TW_HAVE_VST3: there is no backend to gate yet.
+#
+# The include path needs explaining. The SDK headers include each other as
+# "pluginterfaces/base/funknown.h", so the compiler must be able to resolve a
+# directory literally NAMED pluginterfaces. Our submodule is checked out as
+# third_party/vst3_pluginterfaces (the upstream repository name), which does not
+# match, so a bare -I third_party would resolve nothing. Mirroring the 664 KB of
+# headers into the build tree at configure time is the portable fix: a symlink
+# needs privileges on Windows, and renaming the submodule would churn .gitmodules
+# and every checkout for a cosmetic reason. It reruns only on re-configure —
+# which is also what has to happen after a submodule bump, so nothing goes stale
+# unnoticed.
+set(TW_VST3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/vst3_pluginterfaces)
+if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
+    set(TW_VST3_INC ${CMAKE_CURRENT_BINARY_DIR}/vst3_inc)
+    file(COPY ${TW_VST3_DIR}/base ${TW_VST3_DIR}/gui ${TW_VST3_DIR}/vst
+         DESTINATION ${TW_VST3_INC}/pluginterfaces)
+
+    add_executable(vst3_probe
+        plugins/tools/vst3_probe.cc
+        # The SDK sources the spike links. 08_PLUGIN_HOSTING_EXECUTION.md M6
+        # names exactly these four, and the spike confirms the list is right for
+        # linking — but NOT sufficient for running: vst3_pluginterfaces ships no
+        # vstinitiids.cpp, so the VST module's IIDs (IComponent, IAudioProcessor,
+        # IEditController, the host interfaces) have to be defined by us. The
+        # spike carries that DEF_CLASS_IID block inline; M6 promotes it to
+        # src/twvst3iids.cc.
+        ${TW_VST3_INC}/pluginterfaces/base/funknown.cpp
+        ${TW_VST3_INC}/pluginterfaces/base/coreiids.cpp
+        ${TW_VST3_INC}/pluginterfaces/base/ustring.cpp
+        ${TW_VST3_INC}/pluginterfaces/base/conststringtable.cpp
+    )
+    target_include_directories(vst3_probe PRIVATE ${TW_VST3_INC})
+    # -w for the SDK's own warnings only reaches them via the target, and the
+    # project sets a global -Wall; scoping it to this target keeps our own file
+    # under the project's warning level everywhere else. AUTOMOC OFF: no Qt here,
+    # and moc'ing vendored headers is pure cost.
+    set_target_properties(vst3_probe PROPERTIES AUTOMOC OFF)
+    if(NOT MSVC)
+        set_source_files_properties(
+            ${TW_VST3_INC}/pluginterfaces/base/funknown.cpp
+            ${TW_VST3_INC}/pluginterfaces/base/coreiids.cpp
+            ${TW_VST3_INC}/pluginterfaces/base/ustring.cpp
+            ${TW_VST3_INC}/pluginterfaces/base/conststringtable.cpp
+            PROPERTIES COMPILE_OPTIONS "-w")
+    endif()
+    if(SMARAGD_LINUX)
+        target_link_libraries(vst3_probe PRIVATE dl)
+    endif()
+    message(STATUS "tw_plugins: VST3 ABI spike ENABLED (vst3_probe; proposal 08 M6 gate)")
+else()
+    message(STATUS "tw_plugins: third_party/vst3_pluginterfaces not checked out; VST3 spike skipped.")
+endif()
+
 # --- E8 devices: platform audio I/O (backends + inputs) ----------------------
 tw_module(devices
     SOURCES

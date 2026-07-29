@@ -281,10 +281,55 @@ comment saying so.
   `SSetPluginParamAction` coalescing by `(slot, paramId)` like the fader merge.
   Check that `SRemovePluginAction`'s inverse carries the state chunk.
 
-## M6 — VST3 backend (proves proposal 08 AC 4) — **OPEN**
+## M6 — VST3 backend (proves proposal 08 AC 4) — **OPEN** (ABI gate PASSED 2026-07-29)
 
-Should touch **only** `smaragd/tw303a/plugins/` — no changes to the processor/tap, model, actions
-or UI. If it does, that is the finding.
+### Gate result — `plugins/tools/vst3_probe.cc`
+
+The MinGW↔MSVC ABI question that gated this milestone is **answered: it works.**
+`vst3_probe` is the spike (same role `clap_probe` played for M0/M1, same home, not shipped
+and not a test gate). It loads a `.vst3` with the loader M6 will use and walks one class
+through `createInstance` → `initialize` → buses → `setBusArrangements` → `setupProcessing`
+→ controller (+`IConnectionPoint` pairing) → params → state round trip → a real 512-frame
+`process()` → teardown. It tests the ABI in **both** directions: the plugin calls back into
+our `IBStream`, `IHostApplication` and `IComponentHandler` vtables, and buffer poisoning plus
+plausibility checks on `BusInfo::channelCount` and the output samples turn a struct-layout
+mismatch into a diagnosis rather than a puzzle.
+
+Verified on Win11 / Qt 6.11.1 MinGW 13.1 against **Celemony Melodyne 5.3.1** — a commercial
+plugin that imports `MSVCP140.dll` / `VCRUNTIME140.dll`, so it is unambiguously MSVC-built —
+and against a second bundle. Both reported `1/1 audio-effect class(es) survived the full
+lifecycle`, with `process()` passing a ±0.5 square wave through at peak 0.5000 / rms 0.5000.
+Both loader shapes are covered by those two: Melodyne is a **flat DLL renamed `.vst3`**,
+the other a **`Contents/x86_64-win/` bundle** — the same flat-vs-bundle split that broke the
+CLAP loader on macOS in M7, so M6's loader must handle both from the start.
+
+Two corrections to what follows, both found by building the spike:
+
+1. **The SDK source list below is necessary but NOT sufficient.** `vst3_pluginterfaces`
+   ships no `vstinitiids.cpp` — `base/coreiids.cpp` defines only the *base* IIDs
+   (`FUnknown`, `IBStream`, `IPluginBase`, `IPluginFactory{,2,3}`). Every VST module IID
+   (`IComponent`, `IAudioProcessor`, `IEditController`, `IConnectionPoint`, and the host
+   interfaces) must be defined by us with `DEF_CLASS_IID`, once per program. A build without
+   it links clean and dies at runtime on the first `IComponent::iid`. M6 promotes the spike's
+   inline block to `src/twvst3iids.cc`.
+2. **The submodule directory name does not match the SDK's include convention.** The headers
+   include each other as `"pluginterfaces/base/funknown.h"`, so the compiler must resolve a
+   directory literally named `pluginterfaces`; ours is checked out as
+   `third_party/vst3_pluginterfaces`. `tw303a/CMakeLists.txt` mirrors the 664 KB of headers
+   into `${CMAKE_CURRENT_BINARY_DIR}/vst3_inc/pluginterfaces` with a configure-time
+   `file(COPY)` — a symlink needs privileges on Windows, and renaming the submodule would
+   churn `.gitmodules` and every checkout for a cosmetic reason. A submodule bump needs a
+   re-configure, which is when the copy refreshes.
+
+### Remaining work
+
+Should touch **only** `smaragd/tw303a/plugins/` — with three known-benign exceptions, so that
+anything *else* is a real finding: `main/servicesui/src/soptions.cpp:33` and
+`soptionsdialog.cpp:516` both hardcode `twPluginSearchPaths::defaults("clap")` and must seed
+the VST3 directories too, and `plugins/tools/plugin_probe.cc:75` dispatches on the `.clap`
+extension. `twpluginsearchpaths.cc::formatForFile()` deliberately does not report `.vst3`
+today — M6 flips that on, and because no `.vst3` was ever enumerated there are no sticky
+`failed` cache records to force-clear and no `kScannerVersion` bump needed.
 
 - `src/twvst3module.h/.cc` — bundle-aware loader. Windows: a `.vst3` may be a plain DLL *or* a
   bundle (`Foo.vst3/Contents/x86_64-win/Foo.vst3`); resolve, `LoadLibraryW`, call
@@ -300,8 +345,9 @@ or UI. If it does, that is the finding.
   over our own `IBStream` memory shim, both in one versioned blob.
 - Host classes we own (small, MinGW-safe): `IHostApplication`, `IComponentHandler`,
   `IPlugInterfaceSupport`, the memory `IBStream`.
-- Compile only `pluginterfaces/base/{funknown,coreiids,ustring,conststringtable}.cpp` from the
-  submodule (exact list confirmed by the M0-style spike). Deliberately avoid `add_subdirectory` on
+- Compile `pluginterfaces/base/{funknown,coreiids,ustring,conststringtable}.cpp` from the
+  submodule — confirmed correct by the spike, but see correction 1 above: our own
+  `src/twvst3iids.cc` is required alongside them. Deliberately avoid `add_subdirectory` on
   the SDK: its CMake assumes MSVC/Xcode and calls `enable_language(OBJCXX)`, which would migrate
   `.mm` out of `CMAKE_CXX_SOURCE_FILE_EXTENSIONS` and change how the existing
   `devices/src/coreaudio_input.mm` is compiled project-wide. Add `-w` for the SDK sources (the
@@ -358,8 +404,9 @@ trip. **VST3 (M6) macOS bring-up is deferred with M6.**
 - new: `include/tw/plugins/twpluginslotproc.h`, `src/twpluginslotproc.cc`,
   `src/twclapmodule.{h,cc}`, `src/twclapplugin.cc`, `src/twnullplugin.cc`,
   `src/twpluginsearchpaths.cc`, `src/twpluginscancache.cc`,
-  `tools/plugin_probe.cc`, `tools/clap_probe.cc`
-- new (M6): `src/twvst3module.{h,cc}`, `src/twvst3plugin.cc`, `src/twvst3host.{h,cc}`
+  `tools/plugin_probe.cc`, `tools/clap_probe.cc`, `tools/vst3_probe.cc` (M6 ABI gate)
+- new (M6): `src/twvst3module.{h,cc}`, `src/twvst3plugin.cc`, `src/twvst3host.{h,cc}`,
+  `src/twvst3iids.cc`
 - changed: `include/tw/plugins/twplugindescriptor.h` (registry API), `src/twpluginregistry.cc`,
   `include/tw/plugins/twplugininsert.h` + `src/twplugininsert.cc` (becomes the per-bus tap),
   `src/twpluginchain.cc` (multi-bus freeze, `requestPage`, epoch forwarding), `CONTRACT.md`
