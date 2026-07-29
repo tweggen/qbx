@@ -308,6 +308,61 @@ int main( int argc, char **argv )
                       "the async scan produced the same module count" );
     }
 
+    // ---- 9: .vst3 discovery (proposal 08 M6) --------------------------------
+    //
+    // Its own tree and its own registry, deliberately: the counts above are
+    // asserted exactly, and threading a second format through them would couple
+    // two unrelated properties. What matters here is only that the scanner now
+    // REPORTS .vst3 — before M6 formatForFile() returned nullptr for it on
+    // purpose, so that an unloadable module could not be cached as a permanent
+    // failure.
+#ifdef TW_TESTVST3_PATH
+    std::cout << "=== .vst3 discovery ===" << std::endl;
+    {
+        const QString v3Dir   = QDir( root ).filePath( "vst3" );
+        const QString v3Cache = QDir( root ).filePath( "plugincache_vst3.json" );
+        QDir().mkpath( v3Dir );
+        const QString v3Mod = QDir( v3Dir ).filePath( "testgain.vst3" );
+        if( audio::check( QFile::copy( QString( TW_TESTVST3_PATH ), v3Mod ),
+                          "copied the twtestvst3.vst3 fixture into a scan tree" ) ) {
+            twPluginRegistry reg;
+            reg.setSearchPaths( { v3Dir.toStdString() } );
+            reg.setCachePath( v3Cache.toStdString() );
+
+            reg.rescan( false );
+            const twPluginScanStats s = reg.scanStats();
+            std::cout << "       vst3: " << audio::statsLine( s ) << std::endl;
+            audio::check( s.modulesFound == 1, "the scanner reports a .vst3 module file" );
+            audio::check( s.modulesProbed == 1, "...and probes it" );
+            audio::check( s.modulesFailed == 0, "...successfully" );
+
+            const std::vector<twPluginDescriptor> all = reg.plugins();
+            const twPluginDescriptor *v3 = nullptr;
+            for( const twPluginDescriptor &d : all )
+                if( d.format == "vst3" ) v3 = &d;
+            if( audio::check( v3 != nullptr, "a format=\"vst3\" descriptor reached the registry" ) ) {
+                audio::check( v3->uid.size() == 32, "its uid is a 32-hex-digit class id" );
+                audio::check( v3->name == "TW Test VST3 Gain", "its name is the class name" );
+                audio::check( v3->io.audioInputs == 2 && v3->io.audioOutputs == 2,
+                              "its I/O came from a live instance" );
+
+                twPluginDescriptor byUid;
+                audio::check( reg.findByUid( "vst3", v3->uid, byUid ),
+                              "findByUid resolves it, as a saved project would" );
+            }
+
+            reg.rescan( false );
+            audio::check( reg.scanStats().modulesProbed == 0,
+                          "the second scan serves the .vst3 from cache" );
+            audio::check( reg.scanStats().modulesCached == 1,
+                          "...and counts it as cached" );
+        }
+    }
+#else
+    std::cout << "  note this build has no VST3 support; .vst3 discovery is skipped"
+              << std::endl;
+#endif
+
     QDir( root ).removeRecursively();
 
     if( audio::gFailures ) {

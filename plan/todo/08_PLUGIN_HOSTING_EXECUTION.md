@@ -5,9 +5,10 @@ Execution plan for `plan/proposed/08_PLUGIN_HOSTING.md`. That document holds the
 the channel-mismatch table, the settled decisions). This document holds *what is actually built,
 what is broken, and the milestone order to close it out*.
 
-> **Execution status (2026-07-28): M0, M1, M2, M3, M4, M5, M7 (macOS bring-up)
-> and M8 (AudioUnit backend, macOS) are DONE; M6 (VST3) is OPEN.** Every
-> §Confirmed problems item below is closed, with
+> **Execution status (2026-07-29): M0..M8 are DONE — the milestone list is
+> closed.** M8 (AudioUnit, macOS) landed 2026-07-28; M6 (VST3) landed 2026-07-29
+> on Win11, and its macOS/Linux bring-up is written but unverified (see M6 §Not
+> verified). Every §Confirmed problems item below is closed, with
 > two carry-overs recorded where they landed: the MONO SINK (`RenderSession` /
 > `AudioEngine` collapse the graph's buses to one page and duplicate it) is a
 > tw_render / tw_playback gap, not a plugin-layer one, and is nobody's milestone; and
@@ -282,15 +283,132 @@ comment saying so.
   `SSetPluginParamAction` coalescing by `(slot, paramId)` like the fader merge.
   Check that `SRemovePluginAction`'s inverse carries the state chunk.
 
-## M6 — VST3 backend (proves proposal 08 AC 4) — **OPEN**
+## M6 — VST3 backend (proves proposal 08 AC 4) — **DONE** (2026-07-29)
 
-Should touch **only** `smaragd/tw303a/plugins/` — no changes to the processor/tap, model, actions
-or UI. If it does, that is the finding.
+### Gate result — `plugins/tools/vst3_probe.cc`
+
+The MinGW↔MSVC ABI question that gated this milestone is **answered: it works.**
+`vst3_probe` is the spike (same role `clap_probe` played for M0/M1, same home, not shipped
+and not a test gate). It loads a `.vst3` with the loader M6 will use and walks one class
+through `createInstance` → `initialize` → buses → `setBusArrangements` → `setupProcessing`
+→ controller (+`IConnectionPoint` pairing) → params → state round trip → a real 512-frame
+`process()` → teardown. It tests the ABI in **both** directions: the plugin calls back into
+our `IBStream`, `IHostApplication` and `IComponentHandler` vtables, and buffer poisoning plus
+plausibility checks on `BusInfo::channelCount` and the output samples turn a struct-layout
+mismatch into a diagnosis rather than a puzzle.
+
+Verified on Win11 / Qt 6.11.1 MinGW 13.1 against **Celemony Melodyne 5.3.1** — a commercial
+plugin that imports `MSVCP140.dll` / `VCRUNTIME140.dll`, so it is unambiguously MSVC-built —
+and against a second bundle. Both reported `1/1 audio-effect class(es) survived the full
+lifecycle`, with `process()` passing a ±0.5 square wave through at peak 0.5000 / rms 0.5000.
+Both loader shapes are covered by those two: Melodyne is a **flat DLL renamed `.vst3`**,
+the other a **`Contents/x86_64-win/` bundle** — the same flat-vs-bundle split that broke the
+CLAP loader on macOS in M7, so M6's loader must handle both from the start.
+
+Two corrections to what follows, both found by building the spike:
+
+1. **The SDK source list below is necessary but NOT sufficient.** `vst3_pluginterfaces`
+   ships no `vstinitiids.cpp` — `base/coreiids.cpp` defines only the *base* IIDs
+   (`FUnknown`, `IBStream`, `IPluginBase`, `IPluginFactory{,2,3}`). Every VST module IID
+   (`IComponent`, `IAudioProcessor`, `IEditController`, `IConnectionPoint`, and the host
+   interfaces) must be defined by us with `DEF_CLASS_IID`, once per program. A build without
+   it links clean and dies at runtime on the first `IComponent::iid`. M6 promotes the spike's
+   inline block to `src/twvst3iids.cc`.
+2. **The submodule directory name does not match the SDK's include convention.** The headers
+   include each other as `"pluginterfaces/base/funknown.h"`, so the compiler must resolve a
+   directory literally named `pluginterfaces`; ours is checked out as
+   `third_party/vst3_pluginterfaces`. `tw303a/CMakeLists.txt` mirrors the 664 KB of headers
+   into `${CMAKE_CURRENT_BINARY_DIR}/vst3_inc/pluginterfaces` with a configure-time
+   `file(COPY)` — a symlink needs privileges on Windows, and renaming the submodule would
+   churn `.gitmodules` and every checkout for a cosmetic reason. A submodule bump needs a
+   re-configure, which is when the copy refreshes.
+
+### What was built
+
+**Proposal 08 AC 4 holds.** The backend is four new files under `tw303a/plugins/src/` and the
+abstraction took them without moving: **no change to `twPluginSlotProcessor`, `twPluginInsert`,
+`twPluginChain`, `SPluginSlot`, `SPluginChain`, `STrack`, any action, or any UI.** A second
+format really was only a new backend.
+
+| File | What it is |
+|---|---|
+| `twvst3iids.cc` | The `DEF_CLASS_IID` block the SDK does not ship (see correction 1). |
+| `twvst3host.{h,cc}` | Host-side objects: `IHostApplication` + `IPlugInterfaceSupport`, `IComponentHandler`, a memory `IBStream`, real `IMessage`/`IAttributeList`, and `IParameterChanges`/`IParamValueQueue`. Two refcount bases — **borrowed** (ours, never self-deletes) vs **owned** (manufactured for the plugin, self-deletes) — because conflating them is a use-after-free that only reproduces on someone else's plugin. |
+| `twvst3module.{h,cc}` | Loader. Interned by path with a `weak_ptr` table, inheriting the CLAP loader's two hard-won details verbatim: per-**thread** `SetThreadErrorMode` so a malformed DLL cannot raise a modal box mid-scan, and releasing a failed module **outside** the table mutex (the dtor takes that same non-recursive mutex to un-intern). Resolves flat-DLL and `Contents/<arch>-win|linux|MacOS` bundles. |
+| `twvst3plugin.cc` | `twVst3Plugin : audio::twPlugin`. Handles both the single-component and split component/controller shapes, connects the pair via `IConnectionPoint`, seeds the controller with `setComponentState`. |
+
+Decisions worth knowing:
+
+- **Parameters are exposed NORMALIZED [0,1]**, which is the VST3 interface domain.
+  Converting to plain units would put an `IEditController` call on every UI-thread read for a
+  slider that looks the same either way.
+- **`setParam()` routes through `ProcessData::inputParameterChanges` only.** The same
+  lock-free ring + mirror + `resyncAll_` design as the CLAP backend. It also writes
+  `setParamNormalized` so a native editor agrees — but that write is decoration, not the path.
+- **`reset()` is a deactivate/activate cycle**: VST3 has no `reset()`.
+- **Only a *separate* controller contributes a state chunk.** In a single-component plugin
+  `IComponent::getState` and `IEditController::getState` are the same virtual — one override
+  serves both and the plugin cannot make them differ — so asking twice stored the payload
+  twice. Caught by the fixture's framing assertion.
+
+### The three known-benign touches outside `plugins/`
+
+Recorded so that anything *else* remains a real finding. All three landed as predicted:
+`main/servicesui/src/soptions.cpp` and `soptionsdialog.cpp` now seed
+`defaults("clap")` **and** `defaults("vst3")` (de-duplicated, and the two must stay in step or
+"restore defaults" silently means something else than the shipped default), and
+`plugins/tools/plugin_probe.cc` dispatches on `.vst3` as well as `.clap`.
+
+`twpluginsearchpaths.cc::formatForFile()` now reports `.vst3` — gated on `TW_HAVE_VST3`, so a
+build without the submodule still cannot cache an unloadable module as a permanent failure.
+No `kScannerVersion` bump was needed: no `.vst3` was ever enumerated, so there are no sticky
+`failed` records to clear.
+
+### Verified
+
+- `ctest -R "plugins_test|plugins_scan_test"` green, including **30 new VST3 checks** against
+  `twtestvst3.vst3`, a real 2-in/2-out VST3 built from this repo (`plugins/tests/twtestvst3.cpp`,
+  the counterpart of `twtestclap.c`). The fixture **deliberately ignores
+  `setParamNormalized`**, so a host that writes the controller and stops there fails its level
+  assertion — the single most common VST3 host bug, made into a regression test.
+- Real third-party plugins on Win11: **Celemony Melodyne 5.3.1** (imports `MSVCP140.dll` /
+  `VCRUNTIME140.dll`, so unambiguously MSVC-built) and a second bundle, both resolved by
+  `smaragd_pluginprobe` to correct format/uid/name/vendor/I-O, and both surviving the full
+  lifecycle under `vst3_probe`. They also cover both loader shapes: Melodyne is a flat DLL
+  renamed `.vst3`, the other a `Contents/x86_64-win/` bundle.
+- `check_layering.py`, `check_logging.py` clean; full build green.
+
+### Not verified — carry these forward
+
+1. **The split component/controller path has no automated coverage.** `twtestvst3` is a single
+   component; the split shape (connection points, `setComponentState`, separate lifecycles) is
+   exercised only by the real plugins above, which no CI machine has. A second fixture class
+   would close it.
+2. **macOS and Linux are written but unrun.** `bundleEntry`/`ModuleEntry`, the `MacOS` and
+   `<arch>-linux` bundle dirs, and `dlopen` are all in place and compile-guarded, but M7's
+   lesson was that the flat-vs-bundle split only reveals itself on the platform. Expect the
+   `.vst3` equivalent of the M7 fixture-inside-the-bundle problem: `twtestvst3.vst3` is dropped
+   in `build/bin`, and `main/CMakeLists.txt` copies `twtestclap.clap` into `Contents/MacOS` —
+   it will need the same treatment.
+3. **No qxa case inserts a VST3.** The plugin qxa cases all name `twtestclap.clap`; an
+   equivalent `plugin_vst3_chain.qxa` would prove the model/action/serialization layers carry a
+   VST3 slot end to end. The layers themselves are format-agnostic and unchanged, which is why
+   this is a coverage gap rather than a risk.
+4. **Manual UI pass not done**: scan → browse → insert from the FX strip → hear → edit params →
+   save/reopen → missing-placeholder round trip, with a real VST3.
+
+### The original design, and how it held up
+
+Kept because the deltas are the interesting part. Everything below was written before any VST3
+code existed; all of it survived except where noted.
 
 - `src/twvst3module.h/.cc` — bundle-aware loader. Windows: a `.vst3` may be a plain DLL *or* a
   bundle (`Foo.vst3/Contents/x86_64-win/Foo.vst3`); resolve, `LoadLibraryW`, call
   `InitDll`/`ExitDll` if exported, resolve `GetPluginFactory`. macOS: CFBundle +
-  `bundleEntry`/`bundleExit`.
+  `bundleEntry`/`bundleExit`. — **Held**, except that CFBundle is not used: `tw_plugins` links
+  neither CF nor CFBundle (the CLAP loader made the same call), so `bundleEntry` gets a null
+  `CFBundleRef`, which is what every CF-free host does and which plugins use only for resource
+  lookup.
 - `src/twvst3plugin.cc` — `IPluginFactory{,2,3}` enumeration (`kVstAudioEffectClass`, instrument
   detected from `subCategories`), `IComponent` + `IAudioProcessor` + `IEditController` connected
   via `IConnectionPoint` both ways, `setBusArrangements` + `activateBus` + `setupProcessing`
@@ -298,18 +416,27 @@ or UI. If it does, that is the finding.
   de-interleaved `AudioBusBuffers`. Params from `IEditController::getParameterInfo`.
   **`setParam` must queue into `ProcessData::inputParameterChanges`** — writing the controller
   alone never reaches the processor. State = `IComponent::getState` + `IEditController::getState`
-  over our own `IBStream` memory shim, both in one versioned blob.
+  over our own `IBStream` memory shim, both in one versioned blob. — **Held in full.** The one
+  refinement: the controller chunk is written only for a *separate* controller (see above).
 - Host classes we own (small, MinGW-safe): `IHostApplication`, `IComponentHandler`,
-  `IPlugInterfaceSupport`, the memory `IBStream`.
-- Compile only `pluginterfaces/base/{funknown,coreiids,ustring,conststringtable}.cpp` from the
-  submodule (exact list confirmed by the M0-style spike). Deliberately avoid `add_subdirectory` on
+  `IPlugInterfaceSupport`, the memory `IBStream`. — **Held, plus two the list missed**: real
+  `IMessage`/`IAttributeList` (a split pair talks to itself *through* the host, so
+  `IHostApplication::createInstance` returning `kNotImplemented` would load such a plugin and
+  silently break its internal channel) and `IParameterChanges`/`IParamValueQueue` (there is no
+  other way to reach the processor).
+- Compile `pluginterfaces/base/{funknown,coreiids,ustring,conststringtable}.cpp` from the
+  submodule — confirmed correct by the spike, but see correction 1 above: our own
+  `src/twvst3iids.cc` is required alongside them. Deliberately avoid `add_subdirectory` on
   the SDK: its CMake assumes MSVC/Xcode and calls `enable_language(OBJCXX)`, which would migrate
   `.mm` out of `CMAKE_CXX_SOURCE_FILE_EXTENSIONS` and change how the existing
   `devices/src/coreaudio_input.mm` is compiled project-wide. Add `-w` for the SDK sources (the
-  project sets a global `-Wall`) and keep `AUTOMOC OFF` on that target.
+  project sets a global `-Wall`) and keep `AUTOMOC OFF` on that target. — **Held.**
+  `add_subdirectory` was avoided; `-w` is scoped per-source so our own files stay under `-Wall`.
 - MinGW ABI note: VST3's interfaces are single-inheritance chains from `FUnknown`, and x64 Windows
   has one calling convention — MSVC-built plugins are loadable from a MinGW host (Ardour does
-  exactly this). A spike is still the gate before writing the wrapper.
+  exactly this). A spike is still the gate before writing the wrapper. — **Correct, and the
+  spike ran first** (`plugins/tools/vst3_probe.cc`; see §Gate result). It is kept in the tree:
+  it is the fastest way to triage "this one plugin will not load" without starting the app.
 
 ## M7 — macOS bring-up — **DONE** (2026-07-28)
 
@@ -421,11 +548,16 @@ scope (gated as for CLAP).**
 - new: `include/tw/plugins/twpluginslotproc.h`, `src/twpluginslotproc.cc`,
   `src/twclapmodule.{h,cc}`, `src/twclapplugin.cc`, `src/twnullplugin.cc`,
   `src/twpluginsearchpaths.cc`, `src/twpluginscancache.cc`,
-  `tools/plugin_probe.cc`, `tools/clap_probe.cc`
-- new (M6): `src/twvst3module.{h,cc}`, `src/twvst3plugin.cc`, `src/twvst3host.{h,cc}`
+  `tools/plugin_probe.cc`, `tools/clap_probe.cc`, `tools/vst3_probe.cc` (M6 ABI gate)
+- new (M6): `src/twvst3module.{h,cc}`, `src/twvst3plugin.cc`, `src/twvst3host.{h,cc}`,
+  `src/twvst3iids.cc`, `tests/twtestvst3.cpp` (the in-repo VST3 fixture)
 - changed: `include/tw/plugins/twplugindescriptor.h` (registry API), `src/twpluginregistry.cc`,
   `include/tw/plugins/twplugininsert.h` + `src/twplugininsert.cc` (becomes the per-bus tap),
   `src/twpluginchain.cc` (multi-bus freeze, `requestPage`, epoch forwarding), `CONTRACT.md`
+- changed (M6): `src/twpluginregistry.cc` (`vst3` probe + instantiate branches),
+  `src/twpluginsearchpaths.cc` (`.vst3` reported; per-format bundle arch dirs),
+  `tools/plugin_probe.cc` (`.vst3` dispatch), `tests/test_plugin_insert.cc`,
+  `tests/scan_test.cc`
 
 **App** `smaragd/main/`
 - `objects/track/src/spluginslot.cpp` + header (serialization, slot state, processor ownership)

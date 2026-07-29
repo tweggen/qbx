@@ -516,9 +516,16 @@ void SOptionsDialog::removePluginDirs()
 
 void SOptionsDialog::resetPluginDirsToDefaults()
 {
+    // Must stay in step with SOpt::def( PluginSearchPaths ) — same formats, same
+    // de-duplication, or "restore defaults" would silently mean something else
+    // than the shipped default.
     pluginDirs_->clear();
-    for( const std::string &d : audio::twPluginSearchPaths::defaults( "clap" ) )
-        pluginDirs_->addItem( QString::fromStdString( d ) );
+    QStringList dirs;
+    for( const char *fmt : { "clap", "vst3" } )
+        for( const std::string &d : audio::twPluginSearchPaths::defaults( fmt ) )
+            dirs << QString::fromStdString( d );
+    dirs.removeDuplicates();
+    for( const QString &d : dirs ) pluginDirs_->addItem( d );
 }
 
 void SOptionsDialog::rescanPluginsNow()

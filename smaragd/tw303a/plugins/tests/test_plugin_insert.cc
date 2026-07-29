@@ -15,6 +15,14 @@
 
 namespace audio {
 
+#ifdef TW_TESTVST3_PATH
+// Defined in the backend's PRIVATE header (plugins/src/twvst3module.h). Named
+// here rather than included, so this test does not drag the VST3 SDK headers —
+// and their deliberately PRIVATE include path — into a target that needs exactly
+// one symbol from them.
+std::vector<twPluginDescriptor> vst3ModuleDescriptors( const std::string &path );
+#endif
+
 namespace {
 
 int gFailures = 0;
@@ -755,6 +763,170 @@ static int testClapBackend()
 
 #endif  // TW_TESTCLAP_PATH
 
+#ifdef TW_TESTVST3_PATH
+
+// The real VST3 load path, against the in-repo fixture module (twtestvst3.cpp).
+// This is the M6 gate: LoadLibrary/dlopen -> InitDll -> GetPluginFactory ->
+// IComponent/IAudioProcessor/IEditController -> setActive/setProcessing ->
+// process -> parameter changes -> the two-chunk state blob.
+static int testVst3Backend()
+{
+    std::cout << "=== VST3 backend (" << TW_TESTVST3_PATH << ") ===" << std::endl;
+
+    tw303aEnvironment env;
+    auto             &registry = pluginRegistry();
+
+    // An empty uid means "the first audio-effect class", which is what a
+    // one-class module makes unambiguous — and it exercises the path a probe
+    // takes before any uid is known.
+    twPluginDescriptor desc;
+    desc.format = "vst3";
+    desc.uid    = "";
+    desc.path   = TW_TESTVST3_PATH;
+    desc.name   = "TW Test VST3 Gain";
+
+    std::unique_ptr<twPlugin> plugin = registry.instantiate( desc );
+    if( !check( plugin != nullptr, "registry instantiates a format=\"vst3\" descriptor" ) )
+        return 1;
+
+    check( plugin->ioLayout().audioInputs == 2 && plugin->ioLayout().audioOutputs == 2,
+           "the main audio buses report 2-in / 2-out" );
+    check( plugin->paramCount() == 1, "IEditController reports 1 parameter" );
+    check( plugin->paramInfo( 0 ).name == "Gain", "parameter 0 is named Gain" );
+    // VST3 parameters are normalized at the interface and this backend keeps
+    // them that way — see the PARAMETER DOMAIN note in twvst3plugin.cc.
+    check( nearly( plugin->paramInfo( 0 ).minValue, 0.0 ) &&
+               nearly( plugin->paramInfo( 0 ).maxValue, 1.0 ),
+           "parameters are exposed in the normalized [0,1] domain" );
+    check( nearly( plugin->getParam( 0 ), 1.0 ), "Gain reads its default of 1.0" );
+    check( plugin->reportedLatency() == 0, "getLatencySamples reports 0" );
+
+    // --- process(): the default unity gain ---------------------------------
+    const std::uint32_t n = 512;
+    std::vector<float>  inL( n ), inR( n ), outL( n ), outR( n );
+    for( std::uint32_t i = 0; i < n; ++i ) {
+        inL[i] = 0.25f + 0.001f * (float)i;
+        inR[i] = -0.5f;
+    }
+    const float *ins[2]  = { inL.data(), inR.data() };
+    float       *outs[2] = { outL.data(), outR.data() };
+
+    plugin->prepare( 48000, twPluginInsert::kChunkFrames );
+    plugin->process( ins, outs, n );
+    bool unity = true;
+    for( std::uint32_t i = 0; i < n; ++i )
+        unity = unity && nearly( outL[i], inL[i] ) && nearly( outR[i], inR[i] );
+    check( unity, "process() at unity gain reproduces the input" );
+
+    // --- setParam(): the ONLY route to the DSP is inputParameterChanges -----
+    // The fixture deliberately ignores setParamNormalized, so this assertion
+    // fails for a host that writes the controller and stops there — the single
+    // most common VST3 host bug, and the reason the fixture is built that way.
+    plugin->setParam( 0, 0.5 );
+    check( nearly( plugin->getParam( 0 ), 0.5 ), "getParam reflects the edit immediately" );
+    plugin->process( ins, outs, n );
+    bool halved = true;
+    for( std::uint32_t i = 0; i < n; ++i )
+        halved = halved && nearly( outL[i], inL[i] * 0.5f, 1e-5 ) &&
+                 nearly( outR[i], inR[i] * 0.5f, 1e-5 );
+    check( halved,
+           "a queued parameter point reaches the processor through "
+           "ProcessData::inputParameterChanges" );
+
+    // --- state through our versioned frame ---------------------------------
+    // 8-byte header + two length-prefixed chunks (component, controller). The
+    // fixture stores 4 bytes of magic and an 8-byte double, and has no separate
+    // controller state.
+    const std::vector<std::uint8_t> saved = plugin->saveState();
+    check( saved[0] == 'T' && saved[1] == 'W' && saved[2] == 'V' && saved[3] == '3',
+           "state blob carries the TWV3 magic" );
+    // Assert the FRAMING, not a magic total: 8-byte header, then two
+    // length-prefixed chunks that must account for every remaining byte.
+    if( check( saved.size() >= 8 + 4 + 4, "state blob has room for both chunk headers" ) ) {
+        auto u32At = []( const std::vector<std::uint8_t> &b, std::size_t at ) {
+            return (std::uint32_t)b[at] | ( (std::uint32_t)b[at + 1] << 8 ) |
+                   ( (std::uint32_t)b[at + 2] << 16 ) | ( (std::uint32_t)b[at + 3] << 24 );
+        };
+        const std::uint32_t compLen = u32At( saved, 8 );
+        const std::size_t   ctrlAt  = 8 + 4 + compLen;
+        if( check( ctrlAt + 4 <= saved.size(), "the component chunk fits inside the blob" ) ) {
+            const std::uint32_t ctrlLen = u32At( saved, ctrlAt );
+            check( ctrlAt + 4 + ctrlLen == saved.size(),
+                   "the two chunks account for exactly the whole blob" );
+            // 4 bytes of magic + an 8-byte double, from twtestvst3.cpp.
+            check( compLen == 12, "the component chunk is the fixture's 12-byte payload" );
+            // A SINGLE-COMPONENT plugin has no controller state of its own:
+            // IComponent::getState and IEditController::getState are the same
+            // virtual, so storing it twice would be pure duplication.
+            check( ctrlLen == 0, "a single-component plugin stores no controller chunk" );
+        }
+    }
+
+    plugin->setParam( 0, 0.25 );
+    plugin->process( ins, outs, n );   // let the edit land in the plugin
+    check( plugin->loadState( saved ), "loadState accepts our own blob" );
+    check( nearly( plugin->getParam( 0 ), 0.5 ),
+           "loadState restores the saved value and refreshes the host mirror" );
+
+    // Version tolerance (CONTRACT invariant 3): a blob from the future is
+    // refused rather than misread, and a foreign/truncated blob cannot crash us.
+    std::vector<std::uint8_t> future = saved;
+    future[4] = 99;
+    check( !plugin->loadState( future ), "a newer state version is refused" );
+    check( !plugin->loadState( std::vector<std::uint8_t>{ 1, 2, 3 } ),
+           "a truncated state blob is refused" );
+    std::vector<std::uint8_t> foreign = saved;
+    foreign[0] = 'X';
+    check( !plugin->loadState( foreign ), "a foreign state magic is refused" );
+    // A CLAP blob must never be readable as a VST3 one, and vice versa: the
+    // magics differ precisely so a mis-routed blob is refused, not misread.
+    std::vector<std::uint8_t> clapish = saved;
+    clapish[2] = 'C';
+    clapish[3] = 'P';
+    check( !plugin->loadState( clapish ), "a CLAP-framed blob is refused by the VST3 backend" );
+    // Truncated CHUNK header (well-formed frame, lying length).
+    std::vector<std::uint8_t> shortChunk( saved.begin(), saved.begin() + 8 + 4 + 2 );
+    check( !plugin->loadState( shortChunk ), "a blob whose chunk runs past the end is refused" );
+
+    // --- a second instance shares the loaded module -------------------------
+    std::unique_ptr<twPlugin> second = registry.instantiate( desc );
+    if( check( second != nullptr, "second VST3 instance shares the interned module" ) ) {
+        second->prepare( 48000, twPluginInsert::kChunkFrames );
+        second->process( ins, outs, n );
+        bool independent = true;
+        for( std::uint32_t i = 0; i < n; ++i )
+            independent = independent && nearly( outL[i], inL[i] );
+        check( independent, "the second instance has its own parameter state (unity)" );
+    }
+
+    // --- resolving by explicit uid ------------------------------------------
+    // What a saved project does: the hex class id round-trips through the
+    // descriptor and finds the same class.
+    const std::vector<twPluginDescriptor> found = vst3ModuleDescriptors( TW_TESTVST3_PATH );
+    if( check( found.size() == 1, "the module reports exactly one audio-effect class" ) ) {
+        check( found[0].format == "vst3", "descriptor format is vst3" );
+        check( found[0].uid.size() == 32, "uid is a 32-hex-digit class id" );
+        check( found[0].name == "TW Test VST3 Gain", "descriptor carries the class name" );
+        check( found[0].vendor == "Smaragd", "descriptor carries the vendor" );
+        check( !found[0].isInstrument, "an Fx subcategory is not an instrument" );
+        check( found[0].io.audioInputs == 2 && found[0].io.audioOutputs == 2,
+               "descriptor I/O comes from a live instance" );
+
+        twPluginDescriptor byUid = found[0];
+        std::unique_ptr<twPlugin> resolved = registry.instantiate( byUid );
+        check( resolved != nullptr, "a descriptor resolved by uid instantiates" );
+    }
+
+    // A path that is not a plugin must fail cleanly, not crash: this is the
+    // property the out-of-process probe depends on for corrupt files.
+    check( vst3ModuleDescriptors( "definitely-not-a-module.vst3" ).empty(),
+           "a missing module yields no descriptors" );
+
+    return 0;
+}
+
+#endif  // TW_TESTVST3_PATH
+
 int testPluginInsert()
 {
     testBuiltinPlugin();
@@ -766,6 +938,11 @@ int testPluginInsert()
     testClapBackend();
 #else
     std::cout << "=== CLAP backend: SKIPPED (built without TW_HAVE_CLAP) ===" << std::endl;
+#endif
+#ifdef TW_TESTVST3_PATH
+    testVst3Backend();
+#else
+    std::cout << "=== VST3 backend: SKIPPED (built without TW_HAVE_VST3) ===" << std::endl;
 #endif
 
     if( gFailures ) {

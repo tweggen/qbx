@@ -23,6 +23,9 @@
 #ifdef TW_HAVE_CLAP
 #include "twclapmodule.h"
 #endif
+#ifdef TW_HAVE_VST3
+#include "twvst3module.h"
+#endif
 #ifdef TW_HAVE_AU
 #include "twaumodule.h"
 #endif
@@ -81,6 +84,12 @@ int main( int argc, char **argv )
 #ifdef TW_HAVE_CLAP
     if( !known && qpath.endsWith( ".clap", Qt::CaseInsensitive ) ) {
         descs = audio::clapModuleDescriptors( path );
+        known = true;
+    }
+#endif
+#ifdef TW_HAVE_VST3
+    if( !known && qpath.endsWith( ".vst3", Qt::CaseInsensitive ) ) {
+        descs = audio::vst3ModuleDescriptors( path );
         known = true;
     }
 #endif
