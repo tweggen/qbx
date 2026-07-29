@@ -110,6 +110,21 @@ tw_module(sources
     DEPS tw_core tw_pages tw_graph tw_sidecar
 )
 
+# tw_sources decodes imported sample files (WAV fast-path in twSampleSource plus
+# every other format — MP3/FLAC/AIFF/Ogg/Opus and non-16-bit WAV — via libsndfile).
+# Same discovery as tw_sinks below (vcpkg CMake-config on Windows, pkg-config on
+# macOS/Linux); this is a third-party link, not a tw_ module edge, so the layering
+# checker is unaffected. MP3 read needs a libsndfile built with mpg123 (vcpkg's
+# `mpeg` default feature; Homebrew's mpg123 dep).
+if(SMARAGD_WINDOWS)
+    find_package(SndFile CONFIG REQUIRED)
+    target_link_libraries(tw_sources PRIVATE SndFile::sndfile)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SNDFILE_SOURCES REQUIRED IMPORTED_TARGET sndfile)
+    target_link_libraries(tw_sources PRIVATE PkgConfig::SNDFILE_SOURCES)
+endif()
+
 
 # --- E5 dsp: unit generators and filters -------------------------------------
 tw_module(dsp

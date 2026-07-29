@@ -469,7 +469,19 @@ channels are equal *by construction*. Never write a qxa assertion of the form
 - **pthreads / std::thread** for backend render threads
 
 ### Audio I/O (Required)
-- **libsndfile** — WAV export (all platforms)
+- **libsndfile** — WAV export (all platforms) AND general sample **import**:
+  every inserted sample except 16-bit-PCM WAV (which keeps a byte-exact
+  hand-rolled fast path) decodes through libsndfile — MP3, FLAC, AIFF, Ogg,
+  Opus, and non-16-bit WAV. `tw_sources` links it (mirroring `tw_sinks`);
+  `twSampleSource::loadSndfile()` yields the same planar-Float32 buffer as the
+  WAV path. MP3 read needs libsndfile built with **mpg123** — present by default
+  via vcpkg's `mpeg` feature (Windows x64) and Homebrew's `mpg123` dep (macOS).
+  The Insert-sample dialog filter (`SStdMixerView::ctInsertSample`) lists the
+  audio extensions; drag-drop already accepts any path. Import is decode-only and
+  dependency-satisfied on both targets — unlike MP3 *export*, which needs the
+  user-provided libmp3lame binary. Gate: `qxa.mp3_sample_import` (RMS
+  discriminator over a committed MP3 fixture; MP3 decode is not byte-cmp-safe
+  across mpg123 versions, and carries a small decoder delay).
 - **libvorbis / libvorbisenc** — OGG Vorbis export (all platforms)
 
 ### Time-stretch / pitch-shift (proposal 27 M5 — in-house default)

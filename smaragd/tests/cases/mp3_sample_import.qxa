@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MP3 sample import (libsndfile-backed decode path). Inserts an MP3 encoded from
+  the same sawtooth ramp as test_sawtooth.wav and renders it. The decode goes
+  through twSampleSource::loadSndfile() (mpg123 via libsndfile), producing the
+  same planar-Float32 buffer the WAV fast path would — so the render must carry
+  the ramp's energy.
+
+  The band is deliberately loose: MP3 is lossy, so the decoded RMS only
+  approximates the WAV's, and mpg123 decode is not byte-reproducible across
+  versions/platforms — hence an RMS discriminator, never a byte-cmp. The plain
+  0 dB sawtooth renders around ~0.25 RMS (cf. grain_with_volume_control.qxa).
+-->
+<SActionScript version="1" name="mp3_sample_import">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.mp3" timePos="0"/>
+
+    <render filename="mp3_sample_import.wav" format="wav" quality="10"/>
+
+    <!-- Skip the first/last few ms (MP3 decoder edge) and assert the ramp's
+         energy is present and in a plausible band for the sawtooth. -->
+    <assert-audio-energy filename="mp3_sample_import.wav"
+                         startFrame="2000" frameCount="180000"
+                         minRms="0.12" maxRms="0.40"/>
+
+    <assert-audio-peak filename="mp3_sample_import.wav" maxPeak="0.999"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

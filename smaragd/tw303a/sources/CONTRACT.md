@@ -1,7 +1,8 @@
 # tw/sources — CONTRACT
 
-Purpose: sample data and everything that reads it — resident WAV material,
-independent read cursors, rate views, loop windows, grain time-stretch.
+Purpose: sample data and everything that reads it — resident sample material
+(WAV plus MP3/FLAC/AIFF/Ogg/Opus via libsndfile), independent read cursors,
+rate views, loop windows, grain time-stretch.
 
 Public headers: twrandomsource.h (THE data contract), twsamplesource.h,
 twsamplereader.h, twresampledsource.h, twresampler.h, twcapturingsource.h,
@@ -49,7 +50,10 @@ Invariants:
 2. twLoopReader is CUT-RELATIVE: loop base baked in at construction.
 3. twGrainSource runs in the STRETCHED domain; offsets scale by stretch.
 4. The WAV loader clamps to bytes actually present (short-read clamp) — the
-   header's frame count is not trusted; it warns and sizes to real data.
+   header's frame count is not trusted; it warns and sizes to real data. The
+   libsndfile path (twSampleSource::loadSndfile, used for every non-16-bit-WAV
+   format) applies the same clamp on a short decode, and produces the byte-
+   identical planar-Float32 layout + content hash the WAV fast path does.
 5. Streaming twGrainSource LIFETIME: the StreamState holds a `sharedRef()`
    co-owning the source PCM for as long as the grain exists — clip-content
    teardown during a queued freeze cannot dangle the borrowed channel views
@@ -69,8 +73,14 @@ mutable, mutex-guarded exception (invariant 6).
 
 How to test: `ctest -R sources_test` (reader absolute seeks, loop window,
 zero-fill, grain stretch — sources/tests/); grain_*.qxa for the audible
-grain path; qxa.render_split_slip_offset for offset semantics end-to-end.
+grain path; qxa.render_split_slip_offset for offset semantics end-to-end;
+qxa.mp3_sample_import for the libsndfile decode path (RMS discriminator over a
+committed MP3 fixture — never a byte-cmp, since mpg123 decode is not
+reproducible across versions/platforms).
 
-Known debt: loader supports 16-bit PCM only and scans the first 8 KiB for
-the data chunk (naive RIFF walk); QString file paths (QtCore); linear
-resampler is pitch-correct but not mastering-grade.
+Known debt: the hand-rolled fast path is 16-bit-PCM-WAV only and scans the
+first 8 KiB for the data chunk (naive RIFF walk) — everything else, including
+non-16-bit WAV, falls to libsndfile. MP3 read needs libsndfile built with
+mpg123 (vcpkg `mpeg` feature / Homebrew mpg123 dep); MP3 carries a small
+decoder delay. QString file paths (QtCore); linear resampler is pitch-correct
+but not mastering-grade.
