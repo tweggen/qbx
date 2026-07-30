@@ -37,6 +37,8 @@ private:
     void createExtentGroup();
     void createOutputGroup();
     void updateQualityUI();
+    void syncPathExtension();
+    QString extensionForSelectedFormat() const;
     bool validateInputs();
 
     SProject *project_;

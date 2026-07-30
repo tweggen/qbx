@@ -19,6 +19,7 @@ public:
 #include <QPushButton>
 #include <QLabel>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QMessageBox>
 
 #include "app/model/sproject.h"
@@ -184,6 +185,45 @@ void SRenderDialog::createOutputGroup() {
 
 void SRenderDialog::onFormatChanged(int id) {
     updateQualityUI();
+    syncPathExtension();
+}
+
+QString SRenderDialog::extensionForSelectedFormat() const {
+    if (oggRadio_->isChecked()) {
+        return "ogg";
+    } else if (mp3Radio_->isChecked()) {
+        return "mp3";
+    }
+    return "wav";
+}
+
+void SRenderDialog::syncPathExtension() {
+    const QString path = outputPathLineEdit_->text();
+    if (path.isEmpty()) {
+        return;  // nothing to sync; empty-path guard applies at render time
+    }
+
+    const QString ext = extensionForSelectedFormat();
+    const QFileInfo info(path);
+    const QString suffix = info.suffix().toLower();
+
+    // Only replace a suffix that is one of our known audio extensions, or
+    // append when there is none — never clobber a suffix the user chose on
+    // purpose.
+    if (!suffix.isEmpty() && suffix != "wav" && suffix != "ogg" &&
+        suffix != "mp3") {
+        return;
+    }
+    if (suffix == ext) {
+        return;  // already correct
+    }
+
+    QString newPath = info.completeBaseName() + "." + ext;
+    const QString dir = info.path();
+    if (!dir.isEmpty() && dir != ".") {
+        newPath = dir + "/" + newPath;
+    }
+    outputPathLineEdit_->setText(newPath);
 }
 
 void SRenderDialog::updateQualityUI() {
@@ -193,14 +233,9 @@ void SRenderDialog::updateQualityUI() {
 }
 
 void SRenderDialog::onBrowseClicked() {
-    QString filter;
-    if (wavRadio_->isChecked()) {
-        filter = "WAV Files (*.wav);;All Files (*)";
-    } else if (oggRadio_->isChecked()) {
-        filter = "OGG Files (*.ogg);;All Files (*)";
-    } else if (mp3Radio_->isChecked()) {
-        filter = "MP3 Files (*.mp3);;All Files (*)";
-    }
+    const QString ext = extensionForSelectedFormat();
+    const QString filter =
+        QString("%1 Files (*.%2);;All Files (*)").arg(ext.toUpper(), ext);
 
     QString fileName =
         QFileDialog::getSaveFileName(this, "Save Audio File", "", filter);
