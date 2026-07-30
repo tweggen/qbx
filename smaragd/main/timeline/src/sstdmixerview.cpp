@@ -429,7 +429,11 @@ void SStdMixerView::ctInsertSample()
                        "Audio files (*.wav *.mp3 *.flac *.aiff *.aif *.ogg *.opus);;"
                        "WAV (*.wav);;MP3 (*.mp3);;All files (*)");
     dialog.setFileMode(QFileDialog::ExistingFile);
+#ifndef Q_OS_MACOS
+    // macOS gets the native Finder picker (which honors the audio filter above,
+    // MP3 included); other platforms keep Qt's own dialog as elsewhere in the app.
     dialog.setOptions(QFileDialog::DontUseNativeDialog);
+#endif
     QString s;
     if (dialog.exec() == QDialog::Accepted) {
         s = dialog.selectedFiles().isEmpty() ? QString() : dialog.selectedFiles().at(0);
