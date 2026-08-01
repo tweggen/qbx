@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -83,6 +84,7 @@ public:
     twPluginParamInfo paramInfo( std::size_t i ) const override;
     double            getParam( std::uint32_t id ) const override;
     void              setParam( std::uint32_t id, double v ) override;
+    std::string       paramValueText( std::uint32_t id, double v ) const override;
 
     std::vector<std::uint8_t> saveState() const override;
     bool loadState( const std::vector<std::uint8_t> & ) override;
@@ -102,6 +104,11 @@ private:
     void readParams();
     void readGui();
 
+    // Fallback for AUs that implement no ParameterStringFromValue: synthesize
+    // "<number><unit>" from the parameter's reported AudioUnitParameterUnit.
+    // Empty for indexed/boolean/unknown units, so the host's numeric formatter runs.
+    std::string unitSuffixText( std::uint32_t id, double v ) const;
+
     static OSStatus renderInputCb( void *refCon, AudioUnitRenderActionFlags *flags,
                                    const AudioTimeStamp *ts, UInt32 bus,
                                    UInt32 nframes, AudioBufferList *io );
@@ -115,6 +122,10 @@ private:
 
     std::vector<twPluginParamInfo>       params_;
     std::vector<AudioUnitParameterID>    paramIds_;
+    // Native unit per parameter (index-aligned with paramIds_). readParams()
+    // collapses this to isStepped for the ABI; the full value drives the
+    // unitSuffixText() display fallback.
+    std::vector<AudioUnitParameterUnit>  paramUnits_;
 
     // Output AudioBufferList storage (variable-length struct), sized in prepare()
     // so process() never allocates. Filled with the caller's out[] pointers.
@@ -262,6 +273,7 @@ void twAuPlugin::readParams()
 
         params_.push_back( std::move( pi ) );
         paramIds_.push_back( id );
+        paramUnits_.push_back( info.unit );
     }
 }
 
@@ -487,6 +499,69 @@ void twAuPlugin::setParam( std::uint32_t id, double v )
             return;
         }
     }
+}
+
+std::string twAuPlugin::unitSuffixText( std::uint32_t id, double v ) const
+{
+    const char *suffix = nullptr;
+    for( std::size_t i = 0; i < paramIds_.size(); ++i ) {
+        if( paramIds_[i] != (AudioUnitParameterID) id )
+            continue;
+        switch( paramUnits_[i] ) {
+            case kAudioUnitParameterUnit_Decibels:       suffix = " dB";  break;
+            case kAudioUnitParameterUnit_Hertz:          suffix = " Hz";  break;
+            case kAudioUnitParameterUnit_Percent:        suffix = " %";   break;
+            case kAudioUnitParameterUnit_Milliseconds:   suffix = " ms";  break;
+            case kAudioUnitParameterUnit_Seconds:        suffix = " s";   break;
+            case kAudioUnitParameterUnit_Cents:          suffix = " ct";  break;
+            case kAudioUnitParameterUnit_SampleFrames:   suffix = " smp"; break;
+            case kAudioUnitParameterUnit_BPM:            suffix = " BPM"; break;
+            case kAudioUnitParameterUnit_Degrees:        suffix = " deg"; break;
+            default: break;  // Indexed/Boolean/Generic/unknown: let the host format
+        }
+        break;
+    }
+    if( !suffix )
+        return {};
+    char buf[64];
+    std::snprintf( buf, sizeof( buf ), "%g%s", v, suffix );
+    return std::string( buf );
+}
+
+std::string twAuPlugin::paramValueText( std::uint32_t id, double v ) const
+{
+    // On the UI/main thread (like readParams); no hostMutex_ (that guards
+    // initialize/uninitialize only). `v` is the parameter's native domain.
+    if( !unit_ )
+        return {};
+
+    // Primary: ask the AU to format the value in its own units/enum names.
+    Float32                            fv  = (Float32) v;
+    AudioUnitParameterStringFromValue  req;
+    std::memset( &req, 0, sizeof( req ) );
+    req.inParamID = (AudioUnitParameterID) id;
+    req.inValue   = &fv;
+    req.outString = nullptr;
+    UInt32 sz = sizeof( req );
+    if( AudioUnitGetProperty( unit_, kAudioUnitProperty_ParameterStringFromValue,
+                              kAudioUnitScope_Global, id, &req, &sz ) == noErr
+        && req.outString ) {
+        const CFIndex len = CFStringGetLength( req.outString );
+        std::string   out( (std::size_t) len * 4 + 1, '\0' );
+        std::string   result;
+        if( CFStringGetCString( req.outString, &out[0], (CFIndex) out.size(),
+                                kCFStringEncodingUTF8 ) ) {
+            out.resize( std::char_traits<char>::length( out.c_str() ) );
+            result = out;
+        }
+        CFRelease( req.outString );
+        if( !result.empty() )
+            return result;
+    }
+
+    // Fallback: many AUs implement no ParameterStringFromValue. Synthesize a
+    // suffix from the unit the AU always reports (empty for indexed/boolean).
+    return unitSuffixText( id, v );
 }
 
 // --- state ------------------------------------------------------------------

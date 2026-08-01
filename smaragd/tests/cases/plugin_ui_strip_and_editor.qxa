@@ -57,8 +57,11 @@
          mean the plugin is not really in the path. -->
     <assert-plugin-strip trackIndex="0" slotIndex="0" contains="mode=Direct"/>
 
-    <!-- 2. Drive the editor's slider. -->
-    <plugin-editor-set-param trackIndex="0" slotIndex="0" paramId="0" value="2.0"/>
+    <!-- 2. Drive the editor's slider. The value LABEL must show the plugin's own
+         value-to-text (the fixture formats value*100 as an integer), proving units
+         / formatted values reach the screen and not just a raw number. -->
+    <plugin-editor-set-param trackIndex="0" slotIndex="0" paramId="0" value="2.0"
+                             expectValueText="200" expectValueRow="0"/>
 
     <render filename="pui_editor_gain2.wav" format="wav" quality="10"/>
     <assert-audio-energy filename="pui_editor_gain2.wav"

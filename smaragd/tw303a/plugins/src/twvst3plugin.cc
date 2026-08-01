@@ -155,6 +155,7 @@ public:
     twPluginParamInfo paramInfo( std::size_t i ) const override;
     double            getParam( std::uint32_t id ) const override;
     void              setParam( std::uint32_t id, double v ) override;
+    std::string       paramValueText( std::uint32_t id, double v ) const override;
 
     std::vector<std::uint8_t> saveState() const override;
     bool loadState( const std::vector<std::uint8_t> & ) override;
@@ -686,6 +687,20 @@ double twVst3Plugin::getParam( std::uint32_t id ) const
         if( params_[i].id == id )
             return mirror_[i].load( std::memory_order_acquire );
     return 0.0;
+}
+
+std::string twVst3Plugin::paramValueText( std::uint32_t id, double v ) const
+{
+    // IEditController lives on the UI/edit-controller thread (= the Qt UI thread),
+    // so this is called off the audio path with no lock — like refreshMirror()'s
+    // getParamNormalized(). `v` is already NORMALIZED [0,1], which is exactly
+    // getParamStringByValue()'s input contract, so no conversion is needed.
+    if( !controller_ )
+        return {};
+    Vst::String128 s{};
+    if( controller_->getParamStringByValue( (Vst::ParamID)id, v, s ) != kResultOk )
+        return {};
+    return u16ToUtf8( s );
 }
 
 void twVst3Plugin::setParam( std::uint32_t id, double v )

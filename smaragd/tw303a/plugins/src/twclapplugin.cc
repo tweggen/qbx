@@ -78,6 +78,7 @@ public:
     twPluginParamInfo paramInfo( std::size_t i ) const override;
     double            getParam( std::uint32_t id ) const override;
     void              setParam( std::uint32_t id, double v ) override;
+    std::string       paramValueText( std::uint32_t id, double v ) const override;
 
     std::vector<std::uint8_t> saveState() const override;
     bool loadState( const std::vector<std::uint8_t> & ) override;
@@ -525,6 +526,21 @@ double twClapPlugin::getParam( std::uint32_t id ) const
         if( params_[i].id == id )
             return mirror_[i].load( std::memory_order_acquire );
     return 0.0;
+}
+
+std::string twClapPlugin::paramValueText( std::uint32_t id, double v ) const
+{
+    // CLAP marks params.value_to_text [main-thread]; the Qt UI thread is the host
+    // main thread, so this is spec-compliant against a concurrent [audio-thread]
+    // process(). No host lock — like getParam(), this must not contend with
+    // prepare()/setParam's flush path.
+    if( !extParams_ || !extParams_->value_to_text )
+        return {};
+    char buf[256];
+    buf[0] = '\0';
+    if( !extParams_->value_to_text( plugin_, id, v, buf, sizeof( buf ) ) )
+        return {};
+    return std::string( buf );   // CLAP NUL-terminates within cap
 }
 
 void twClapPlugin::setParam( std::uint32_t id, double v )

@@ -54,6 +54,12 @@ public:
     // editor has no such parameter. Never synthesizes OS input.
     bool setParamFromUi( std::uint32_t paramId, double value );
 
+    // Headless seam for a qxa case to read back what the value label DISPLAYS
+    // (after the plugin's own value-to-text formatting), so a test proves units /
+    // enum names reach the screen and not just the model. Empty for an out-of-range
+    // row. `row` is 0..paramRowCount()-1, matching paramInfo() order.
+    QString valueLabelText( int row ) const;
+
 protected slots:
     void onParamSliderChanged( int sliderIndex );
     // The model moved: re-read the sliders / rebuild them.
@@ -69,7 +75,10 @@ private:
 
     void buildUI();
     audio::twPlugin *livePlugin() const;
-    static QString formatValue( const audio::twPluginParamInfo &info, double v );
+    // Instance (not static): prefers the live plugin's own value-to-text so a
+    // value shows in the plugin's units / enum names, falling back to a numeric
+    // rendering when the plugin offers no formatter.
+    QString formatValue( const audio::twPluginParamInfo &info, double v ) const;
 
     SPluginSlot *slot_;
     QString      trackPath_;

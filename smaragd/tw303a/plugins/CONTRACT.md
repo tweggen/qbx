@@ -288,6 +288,24 @@ Invariants:
    min/max — twPluginParamInfo is expressive enough for both, so nothing above
    the ABI has to care.
 
+27. PARAMETER DISPLAY TEXT COMES FROM THE PLUGIN, NOT THE HOST.
+   `twPlugin::paramValueText(id, v)` returns the plugin's own formatting of a
+   value (units like dB/Hz/%, enum/choice names, log scaling); empty means "no
+   formatter — the host may render numerically". It is DISPLAY-ONLY, UI-thread
+   callable, and NEVER on the audio path. `v` is in the same domain getParam()
+   returns per format (native for CLAP/AU, normalized [0,1] for VST3) — which is
+   why this, not a `unit` field on twPluginParamInfo, is the seam: it consumes
+   VST3's normalized value directly rather than denormalizing it (invariant 26),
+   and a suffix could not express enum labels or log curves anyway. Backends map
+   it to CLAP `params.value_to_text` (a [main-thread] call — no host lock, like
+   getParam), VST3 `IEditController::getParamStringByValue` (UI thread; the value
+   already normalized), and AU `kAudioUnitProperty_ParameterStringFromValue`. The
+   AU backend adds an internal fallback: when the AU implements no
+   ParameterStringFromValue it synthesizes "<number><unit>" from the
+   `AudioUnitParameterUnit` it stores per parameter (empty for indexed/boolean,
+   so the host still formats those numerically). The null/placeholder plugin has
+   no parameters, so the default empty override is correct.
+
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears
 it), cache reload in a fresh registry instance, refusal of a cache from another

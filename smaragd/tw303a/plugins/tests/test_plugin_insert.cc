@@ -643,6 +643,15 @@ static int testClapBackend()
     check( nearly( plugin->getParam( 0 ), 1.0 ), "Gain reads its default of 1.0" );
     check( plugin->reportedLatency() == 0, "clap.latency reports 0" );
 
+    // --- paramValueText(): the plugin's own value-to-text formatting -------
+    // The fixture's tc_params_value_to_text formats value*100 as an integer, so
+    // this proves the ABI virtual reaches clap.params.value_to_text, the buffer
+    // round-trips, and the empty/non-empty contract holds — the display path.
+    check( plugin->paramValueText( 0, 1.0 ) == "100",
+           "paramValueText formats via the plugin's value_to_text" );
+    check( plugin->paramValueText( 0, 2.0 ) == "200",
+           "paramValueText tracks the passed value" );
+
     // --- process(): the default unity gain -------------------------------
     const std::uint32_t   n = 512;
     std::vector<float>    inL( n ), inR( n ), outL( n ), outR( n );

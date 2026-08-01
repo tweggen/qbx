@@ -107,6 +107,16 @@ SApplyResult SPluginEditorSetParamAction::apply( SProject *project )
         return { false, nullptr };
     }
 
+    if( !expectValueText_.isEmpty() ) {
+        const QString shown = strip->editorValueText( slotIndex_, expectValueRow_ );
+        if( shown != expectValueText_ ) {
+            qWarning() << "plugin-editor-set-param FAILED: value label row"
+                       << expectValueRow_ << "shows" << shown << "expected"
+                       << expectValueText_;
+            return { false, nullptr };
+        }
+    }
+
     return { true, nullptr };
 }
 
@@ -116,6 +126,10 @@ void SPluginEditorSetParamAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "slotIndex", slotIndex_ );
     elem.setAttribute( "paramId", (qulonglong) paramId_ );
     elem.setAttribute( "value", QString::number( value_, 'g', 17 ) );
+    if( !expectValueText_.isEmpty() ) {
+        elem.setAttribute( "expectValueText", expectValueText_ );
+        elem.setAttribute( "expectValueRow", expectValueRow_ );
+    }
 }
 
 bool SPluginEditorSetParamAction::readXml( const QDomElement &elem,
@@ -125,6 +139,8 @@ bool SPluginEditorSetParamAction::readXml( const QDomElement &elem,
     slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
     paramId_    = (std::uint32_t) elem.attribute( "paramId", "0" ).toUInt();
     value_      = elem.attribute( "value", "0" ).toDouble();
+    expectValueText_ = elem.attribute( "expectValueText" );
+    expectValueRow_  = elem.attribute( "expectValueRow", "0" ).toInt();
     return true;
 }
 

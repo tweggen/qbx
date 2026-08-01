@@ -61,6 +61,12 @@ public:
     // test must never pop a dialog onto the user's screen or steal focus).
     bool editorSetParam( int slotIndex, std::uint32_t paramId, double value );
 
+    // Headless readback for a qxa case: the text the editor's value label DISPLAYS
+    // for parameter `row` of `slotIndex` (after the plugin's own value-to-text).
+    // Empty if there is no such editor/row. Pairs with editorSetParam() to prove
+    // units / enum names reach the screen, not just the model.
+    QString editorValueText( int slotIndex, int row );
+
 protected slots:
     void onAddPluginClicked();
     void onRemovePluginClicked( int slotIndex );
