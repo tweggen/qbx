@@ -45,6 +45,10 @@ private:
 // drag does, so the resulting set-plugin-param action (and its audible effect)
 // is what the render measures.
 //   trackIndex = "0", slotIndex = "0", paramId = "0", value = "0"
+//   expectValueText = ""   if set, the editor's value LABEL for row
+//                          `expectValueRow` must equal this after the edit —
+//                          proof the plugin's value-to-text reaches the screen.
+//   expectValueRow  = "0"  which parameter row `expectValueText` is checked on.
 class SPluginEditorSetParamAction : public SAction {
 public:
     QString name() const override
@@ -60,6 +64,8 @@ private:
     int           slotIndex_  = 0;
     std::uint32_t paramId_    = 0;
     double        value_      = 0.0;
+    QString       expectValueText_;
+    int           expectValueRow_ = 0;
 };
 
 #endif  // SPLUGINUITESTACTIONS_H

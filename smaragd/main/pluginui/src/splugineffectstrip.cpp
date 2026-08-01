@@ -397,6 +397,12 @@ bool SPluginEffectStrip::editorSetParam(int slotIndex, std::uint32_t paramId,
     return editor && editor->setParamFromUi(paramId, value);
 }
 
+QString SPluginEffectStrip::editorValueText(int slotIndex, int row)
+{
+    SPluginParamEditor *editor = ensureParamEditor(slotIndex, /*showWindow=*/false);
+    return editor ? editor->valueLabelText(row) : QString();
+}
+
 void SPluginEffectStrip::onAddPluginClicked()
 {
     SPluginBrowserDialog browser(this);

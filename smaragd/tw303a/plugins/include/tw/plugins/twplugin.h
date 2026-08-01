@@ -41,6 +41,14 @@ public:
     virtual double             getParam( std::uint32_t id ) const = 0;
     virtual void               setParam( std::uint32_t id, double v ) = 0; // RT-safe path
 
+    // Display-only formatting of a parameter value in the plugin's own units
+    // (e.g. "-6.0 dB", "440 Hz", "Sine"). Empty string == the plugin offers no
+    // formatter; the host then falls back to a numeric rendering. Best-effort,
+    // UI-thread callable, NEVER on the audio path. `v` is in the SAME domain the
+    // host holds for this parameter (native for CLAP/AU, normalized [0,1] for
+    // VST3) — exactly what getParam() returns.
+    virtual std::string paramValueText( std::uint32_t id, double v ) const { return {}; }
+
     // Opaque state chunk for serialization.
     virtual std::vector<std::uint8_t> saveState() const = 0;
     virtual bool loadState( const std::vector<std::uint8_t> & ) = 0;

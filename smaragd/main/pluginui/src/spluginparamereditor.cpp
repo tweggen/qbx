@@ -66,10 +66,25 @@ audio::twPlugin *SPluginParamEditor::livePlugin() const
 }
 
 QString SPluginParamEditor::formatValue( const audio::twPluginParamInfo &info,
-                                        double v )
+                                        double v ) const
 {
+    // Prefer the plugin's own formatting (units like dB/Hz/%, enum/choice names,
+    // log scaling) — the only correct rendering for VST3's normalized domain. Fall
+    // back to a numeric string when the plugin exposes no value-to-text.
+    if( audio::twPlugin *p = livePlugin() ) {
+        std::string t = p->paramValueText( info.id, v );
+        if( !t.empty() )
+            return QString::fromStdString( t );
+    }
     return info.isStepped ? QString::number( (int) ( v + 0.5 ) )
                           : QString::number( v, 'f', 3 );
+}
+
+QString SPluginParamEditor::valueLabelText( int row ) const
+{
+    if( row < 0 || row >= (int) params_.size() )
+        return {};
+    return params_[row].valueLabel->text();
 }
 
 void SPluginParamEditor::buildUI()

@@ -74,9 +74,17 @@ How to test:
 - Still manual: that the strip and the editor LOOK right, the double-click
   gesture, the drag-to-reorder gesture, and the browser dialog.
 
+Value display: `SPluginParamEditor::formatValue()` prefers the live plugin's own
+value-to-text — `livePlugin()->paramValueText(id, v)` — so a value shows in the
+plugin's units / enum names (e.g. "-6.0 dB", "440 Hz", "Sine"), and falls back to
+the numeric rendering (int if `isStepped`, else 3 decimals) only when the plugin
+returns empty. `valueLabelText(row)` (a headless seam) reads back what a row's
+label displays; `SPluginEffectStrip::editorValueText()` exposes it, and
+`plugin-editor-set-param`'s `expectValueText` asserts it in
+`qxa.plugin_ui_strip_and_editor`.
+
 Known debt: no per-plugin editor plugins — generic sliders only, on a fixed
-1000-tick normalization, with no value-to-text from the plugin (CLAP's
-`value_to_text` is unused) and no native `clap_plugin_gui` / `IPlugView`
+1000-tick normalization, and no native `clap_plugin_gui` / `IPlugView`
 embedding (a deliberate deferral of proposal 08). The drop handler's
 `dragSourceIndex_` is never assigned by any drag START — `startDragFromPlugin()`
 was declared and never defined — so drag-to-reorder cannot fire today even
