@@ -28,6 +28,18 @@ Invariants:
    show() (see STATE.md 2026-07-11 — reordering re-breaks startup).
 5. Startup: settings-selected device is applied to the speaker before any
    playback.
+6. Metering pump (proposal 34): `meterTimer_` (33 ms) emits `meterTick(pos,
+   nowMs, live)` to every meter. `pos` is LATENCY-COMPENSATED here, once, so
+   all meters agree with each other and with the ear —
+   `meterLatencyFrames()` scales the backend's `outputLatencyFrames` from
+   DEVICE frames at the device rate into PROJECT frames (skipping that
+   conversion mis-compensates by the rate ratio). It is a SEPARATE timer from
+   `locatorTimer_`, not a fold into `pumpLocator`: meters need a tick at an
+   unchanged position (to decay) plus a tail after stop, or the bars freeze
+   mid-level. It does NOT run during an offline render (which publishes
+   positions faster than realtime) but DOES run while recording (monitoring
+   playback is live). Consequence, deliberate: meters trail the DRAWN playhead
+   by the device latency, because the playhead itself is uncompensated.
 
 How to test: full qxa suite (headless boots the shell); startup-layout
 repro harness in STATE.md 2026-07-11.

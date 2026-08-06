@@ -46,6 +46,11 @@ DEPS = {
     'schedule': ['core', 'pages', 'graph'],
     'analysis': ['core'],
     'sidecar':  ['core'],
+    # metering (proposal 34): reads levels out of frozen pages by position.
+    # graph for twComponent::getPageIfExists, pages for twOutputPage. It must
+    # NOT reach playback or mix — which component is the right tap is the app's
+    # decision, not the module's.
+    'metering': ['core', 'pages', 'graph'],
 }
 
 APP_HEADERS = re.compile(
@@ -122,7 +127,10 @@ APP_ENG = {
     'actions':        _ENG_BASE | {'render'},
     'persistence':    _ENG_BASE,
     'selection':      _ENG_BASE,
-    'timeline':       _ENG_BASE | {'devices', 'playback', 'sources'},
+    # timeline + metering since proposal 34: the track head owns an SLevelMeter
+    # and a twLevelProbe reading the track's frozen pages by position.
+    'timeline':       _ENG_BASE | {'devices', 'metering', 'pages', 'playback',
+                                   'sources'},
     'pluginui':       _ENG_BASE | {'plugins'},
     # servicesui + plugins since proposal 08 M2: the Options dialog's Plugins
     # page edits the scanner's search paths, and SOpt::def() takes the
@@ -137,12 +145,18 @@ APP_ENG = {
     # shell + plugins since proposal 08 M2: SApplication configures the plugin
     # registry at startup (search paths, cache path, probe executable) and polls
     # the background scan from a main-thread timer.
-    'shell':          _ENG_BASE | {'devices', 'dsp', 'playback', 'plugins',
-                                   'record', 'render', 'schedule', 'sidecar'},
+    # shell + metering since proposal 34: SApplication owns the metering pump and
+    # the master level probe.
+    'shell':          _ENG_BASE | {'devices', 'dsp', 'metering', 'playback',
+                                   'plugins', 'record', 'render', 'schedule',
+                                   'sidecar'},
     # testkit + sidecar + schedule since proposal 27 M1 test verbs:
     # assert-sidecar reads twQafReader/twSidecarStore, wait-analysis polls the
     # revalidator's jobsQueued().
-    'testkit':        _ENG_BASE | {'analysis', 'schedule', 'sidecar'},
+    # testkit + metering + pages since proposal 34: assert-meter freezes the page
+    # for the position it asks about and runs the production twLevelProbe on it.
+    'testkit':        _ENG_BASE | {'analysis', 'metering', 'pages', 'schedule',
+                                   'sidecar'},
 }
 
 def main():

@@ -131,6 +131,14 @@ public slots:
      */
     int removeTrack( SLink &track );
 
+    /**
+     * True if at least one track has its solo flag set — i.e. solo is in force
+     * and every non-soloed track is silenced. Public because audibility is not
+     * knowable from a single track: proposal 34's meters apply the same
+     * "!muted && (!anySolo || solo)" rule reconnectTracksToMixer() does.
+     */
+    bool anyTrackSoloed() const;
+
 protected:
 private slots:
     void mixerUpdateTrackRemoved( int, STrack & );
@@ -143,7 +151,6 @@ private slots:
 private:
     void checkDurationChanged();
     void reconnectTracksToMixer();
-    bool anyTrackSoloed() const;
     std::vector<std::shared_ptr<twMixer> > cpMixers_;
     std::shared_ptr<twRewire> cpRewire_;
     int nBusses_;

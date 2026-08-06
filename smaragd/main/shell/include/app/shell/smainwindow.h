@@ -20,6 +20,7 @@ class SRecordingProgressDialog;
 class SGridToolbar;
 class SExternFileList;
 class SLogView;
+class SLevelMeter;
 class STrackDetailPanel;
 class SClipPropertiesPanel;
 
@@ -54,6 +55,20 @@ public:
     // "" when aligned, else a description of the first mismatch. A null
     // QString with no arranger at all is reported as an error by the caller.
     QString arrangerLaneAlignment();
+
+    // TEST ENTRY POINT: build the REAL track head at `headHeight` and return its
+    // meter's SLevelMeter::describe() string. Goes through the shell because the
+    // testkit may not include app/timeline (testkit CONTRACT inv. 5 — the same
+    // reason drag-clip-edge lands here), and it is the only automated coverage
+    // the meter's density rules can have. Empty string on failure.
+    QString describeTrackMeter( int trackIndex, int headHeight );
+
+    // TEST ENTRY POINT: paint a level meter carrying a known level into a PNG.
+    // The ONLY coverage of SLevelMeter::paintEvent — the describe() assertions
+    // check the geometry maths, but nothing else proves the widget draws. Returns
+    // false if the grab or the save fails.
+    bool grabLevelMeter( const QString &path, double peak, double rms,
+                         bool vertical, int w, int h );
 
     // Log dock control, for the log-stress test action (testkit may not include
     // app/servicesui, so it reaches the dock through the shell — the same route
@@ -200,6 +215,10 @@ private:
     QAction *actStop_, *actPlay_, *actRecord_, *actGotoStart_;
     QAction *actSaveAs_ = nullptr;      // File->Save as...; disabled with no project
     QToolBar *qTBTransport_;
+    // Proposal 34: master level meter, right of the tempo box. Mono today (the
+    // sink duplicates one bus); stereo comes for free when the mixer grows a
+    // second one.
+    SLevelMeter *qMasterMeter_ = nullptr;
     QDoubleSpinBox *tempoSpin_ = nullptr;  // Transport tempo (BPM) box
     // Who had the keyboard before the tempo box took it, so Return can give it
     // back. Cleared implicitly — always re-checked for liveness before use.

@@ -23,6 +23,11 @@ core ── pages ── graph ─┬─ sources ─┐
                     └─ record (devices+sinks+sources)
 ```
 
+Not part of the dataflow above: `tw/analysis` and `tw/sidecar` (→ core) and
+`tw/metering` (→ core+pages+graph) are leaves consumed by the app and the tests.
+`tw/metering` READS frozen pages by position and never freezes or demands, so it
+hangs off the graph without joining the audio path.
+
 | Module | One-liner | Contract |
 |---|---|---|
 | tw/core | value types, format, fraction, AudioFrame | tw303a/core/CONTRACT.md |
@@ -39,6 +44,8 @@ core ── pages ── graph ─┬─ sources ─┐
 | tw/record | recording session | tw303a/record/CONTRACT.md |
 | tw/schedule | async revalidation (IRevalidatable) | tw303a/schedule/CONTRACT.md |
 | tw/analysis | WAV metrics for tests | tw303a/analysis/CONTRACT.md |
+| tw/sidecar | derived-data QAF container + LRU store | tw303a/sidecar/CONTRACT.md |
+| tw/metering | level meters: page probe + ballistics | tw303a/metering/CONTRACT.md |
 
 ## App (`smaragd/main/`) — one SCC, checker-enforced boundaries
 

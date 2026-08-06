@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 34: the meter tap is POST-FADER.
+
+  This matters because it decides what the meter MEANS. The tap is a track's root
+  component (its twRewire), which sits downstream of twTrackMix's gain, so the
+  reading is the track's actual contribution to the mix rather than the raw clip
+  level. Pull the fader down and the meter must follow.
+
+  Two tracks carrying the SAME sample at different gains, rather than one track
+  whose gain is changed twice: each track's page is frozen once, after its gain is
+  set, so the assertion does not depend on re-freezing a page that already exists.
+  (assert-meter drives the legacy pull path, where a post-freeze gain change is
+  not observed — documented in smetertestactions.cpp. Playback and render go
+  through the scheduler and do see it.)
+
+  Fixture: ../test_sawtooth.wav, whose 4th second has RMS ~0.405
+  (testkit/CONTRACT.md inv. 3). Position 168000 is inside that second.
+-->
+<SActionScript version="1" name="meter_postfader">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Gains FIRST, so each track's page is frozen at its final gain. -->
+    <set-track-volume trackIndex="1" volume="-6.0206"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Track 0 at unity reads the source level... -->
+    <assert-meter trackIndex="0" position="168000" minRms="0.300" maxRms="0.510"/>
+    <!-- ...and track 1 at -6.02 dB reads half of it. Same sample, same position,
+         same probe: the only difference is the fader, so this isolates it. -->
+    <assert-meter trackIndex="1" position="168000" minRms="0.150" maxRms="0.255"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

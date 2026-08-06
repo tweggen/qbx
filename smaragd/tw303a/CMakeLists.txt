@@ -513,6 +513,21 @@ tw_module(analysis
     DEPS tw_core
 )
 
+# --- metering: level meters (proposal 34) ---------------------------------------
+# Reads levels out of frozen pages BY POSITION (a page frozen ahead of the
+# playhead still describes the audio at the position it covers), plus the
+# wall-clock ballistics the UI draws. No taps of its own: the app picks the
+# component. Never freezes, never demands — see metering/CONTRACT.md.
+tw_module(metering
+    SOURCES
+        metering/include/tw/metering/tw_level_scan.h
+        metering/include/tw/metering/tw_meter_ballistics.h
+        metering/include/tw/metering/tw_level_probe.h
+        metering/src/tw_meter_ballistics.cc
+        metering/src/tw_level_probe.cc
+    DEPS tw_core tw_pages tw_graph
+)
+
 # --- sidecar: derived-data QAF container + LRU store (proposal 27) --------------
 tw_module(sidecar
     SOURCES
@@ -651,7 +666,7 @@ add_library(tw303a INTERFACE)
 target_link_libraries(tw303a INTERFACE
     tw_core tw_pages tw_graph tw_sources tw_dsp tw_mix tw_plugins
     tw_devices tw_sinks tw_playback tw_render tw_record tw_schedule tw_analysis
-    tw_sidecar
+    tw_sidecar tw_metering
 )
 
 # --- DSP optimization flags (proposal 28 W5) ----------------------------------
@@ -687,6 +702,7 @@ tw_module_test(twwarpmap_test               core/tests/test_twwarpmap.cpp       
 tw_module_test(timemap_test                 core/tests/test_timemap.cpp                 tw_core)
 tw_module_test(twlog_test                   core/tests/test_twlog.cpp                   tw_core)
 tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)
+tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
 if(TARGET twtestclap)

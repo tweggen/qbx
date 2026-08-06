@@ -39,6 +39,19 @@ Invariants:
    Limit: the drop is quantised to a pixel at the view's zoom, so assert on
    ranges rather than exact frame counts.
 
+  assert-meter (proposal 34) needs NO transport, which is the point: levels are
+  read from frozen pages BY POSITION, so the verb freezes the page it asks
+  about (`requestPage` — legal off the RT thread, deduped, the same call the
+  offline render makes) and runs the production twLevelProbe. That keeps it
+  deterministic under SMARAGD_REVAL_WORKERS=0 and independent of
+  toggle-playback, which segfaults in scripts. CAVEAT: it drives the LEGACY
+  PULL path, where twStreamingLatch::copyData gates on the twPluginChain's
+  content epoch — which STrack::invalidateRenderPath() does not reach. So a
+  track's gain must be set BEFORE the position is first probed; changing it
+  afterwards is not observed here (playback and render both see it, because
+  they go through the scheduler). meter_postfader.qxa therefore uses two tracks
+  at different gains rather than changing one track's gain twice.
+
 How to test:
   cd smaragd/tests/cases
   ../../build/bin/smaragd.exe --test-case <case>.qxa --test-output-dir <dir>

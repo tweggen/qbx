@@ -10,6 +10,7 @@
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/plugins/twpluginsearchpaths.h"
 #include "tw/sidecar/twsidecarstore.h"
+#include "tw/devices/audio_backend.h"
 #include "tw/playback/twspeaker.h"
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/dsp/twwhitenoise.h"
@@ -97,6 +98,9 @@ void SApplication::setPlaying( bool f )
         if( f ) { if( !locatorTimer_->isActive() ) locatorTimer_->start(); }
         else pumpLocator();
     }
+    // Meters: start on play; on stop leave the pump running so the bars decay to
+    // the floor (pumpMeters counts the tail down and stops itself).
+    if( f ) startMetering();
 }
 
 const SSelectionList &SApplication::getSelectionList() const
@@ -247,9 +251,80 @@ void SApplication::pumpLocator()
         locatorTimer_->stop();
 }
 
-void SApplication::setSpeakerMaxVal( sample_t /*maxVal*/ )
+// ------------------------------------------------ level metering (prop. 34) ---
+
+bool SApplication::isMeteringActive() const
 {
-    // FIXME: insert for VU.
+    return meterTimer_ && meterTimer_->isActive();
+}
+
+offset_t SApplication::meterLatencyFrames() const
+{
+    // Only the live output path has a device buffer sitting between the position
+    // the RT thread published and the sound the ear gets. A render publishes
+    // positions faster than realtime and is not metered at all (startMetering).
+    if( !isPlaying_ || !t3Speaker_ ) return 0;
+
+    audio::AudioBackend *backend = t3Speaker_->getBackend();
+    if( !backend ) return 0;
+
+    const std::uint32_t devLatency = backend->getLatencyFrames();
+    if( devLatency == 0 ) return 0;   // backend does not know — do not guess
+
+    // outputLatencyFrames is in DEVICE frames at the DEVICE rate, but the locator
+    // counts PROJECT frames. Skipping this conversion mis-compensates by the rate
+    // ratio — ~9% for a 44.1 kHz project on a 48 kHz device.
+    const std::uint32_t devRate  = backend->getConfig().sampleRate;
+    const int           projRate = t3Env_ ? t3Env_->getSRate() : 0;
+    if( devRate == 0 || projRate <= 0 ) return (offset_t) devLatency;
+
+    return (offset_t) ( ( (double) devLatency * (double) projRate )
+                        / (double) devRate + 0.5 );
+}
+
+void SApplication::startMetering()
+{
+    // A render drives the locator through renderSession_->onPosition, faster than
+    // realtime, so metering one would sweep the bars at whatever speed the render
+    // happens to run. Recording IS metered: monitoring playback is live.
+    if( isRenderingActive() || !meterTimer_ ) return;
+
+    if( !meterClock_.isValid() ) meterClock_.start();
+    meterTailTicks_ = METER_TAIL_TICKS;
+    emit meterReset();
+    if( !meterTimer_->isActive() ) meterTimer_->start();
+}
+
+bool SApplication::masterLevel( offset_t pos, twLevelSample &out )
+{
+    // Re-bind every call rather than on a project-change hook: setTap() no-ops
+    // when the component is unchanged and resets the probe when it is not, so a
+    // new project / rewired graph is picked up without another lifecycle edge to
+    // keep in step.
+    masterProbe_.setTap( rootComponent() );
+    return masterProbe_.advanceTo( pos, out );
+}
+
+void SApplication::pumpMeters()
+{
+    const bool live = isPlaying_ || isRecordingActive();
+
+    offset_t pos = globalLocatorPos_.load( std::memory_order_relaxed )
+                   - meterLatencyFrames();
+    if( pos < 0 ) pos = 0;
+
+    emit meterTick( pos, meterClock_.elapsed(), live );
+
+    // Keep ticking for a while after the transport stops so the bars can DECAY to
+    // the floor. Stopping the moment playback ends would leave them frozen
+    // mid-level, which reads as a rendering bug rather than as "stopped".
+    if( live ) {
+        meterTailTicks_ = METER_TAIL_TICKS;
+    } else if( meterTailTicks_ > 0 ) {
+        --meterTailTicks_;
+    } else if( meterTimer_ ) {
+        meterTimer_->stop();
+    }
 }
 
 // ---------------------------------------------- plugin discovery (08 M2) ----
@@ -374,6 +449,11 @@ SApplication::SApplication( int &argc, char **argv )
     locatorTimer_ = new QTimer( this );
     locatorTimer_->setInterval( 33 );
     connect( locatorTimer_, SIGNAL( timeout() ), this, SLOT( pumpLocator() ) );
+    // Proposal 34: the metering pump. Same 33 ms as the playhead so meters and
+    // playhead stay visually locked, but its OWN timer — see pumpMeters().
+    meterTimer_ = new QTimer( this );
+    meterTimer_->setInterval( 33 );
+    connect( meterTimer_, &QTimer::timeout, this, &SApplication::pumpMeters );
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
@@ -568,6 +648,10 @@ void SApplication::startRecording(const audio::RecordingParams &params)
     // lock-free; pumpLocator turns them into repaints and self-stops at the end).
     if( locatorTimer_ && !locatorTimer_->isActive() )
         locatorTimer_->start();
+
+    // Meters follow the monitoring playback started above. isPlaying_ was set
+    // directly here rather than through setPlaying(), so arm the pump explicitly.
+    startMetering();
 }
 
 void SApplication::setSelectionFromPaths(const QList<QList<int>> &paths)

@@ -28,6 +28,26 @@ then runs during DLL `THREAD_DETACH` at thread exit and deadlocks the
 - `audio::PlaybackContext::locatorHeldElsewhere()`/`publishPosition()` are
   called on the audio callback thread — implementations are atomic ops.
 
+The metering pump (proposal 34) is the SECOND instance of the same pattern
+and needs no new machinery on the producing side at all: nothing off the main
+thread publishes a level. `SApplication::pumpMeters` (`meterTimer_`, 33 ms,
+self-stopping after a decay tail) reads the same atomic the playhead reads,
+subtracts the device latency, and emits `meterTick`; each meter then does its
+own page read and its own ballistics ON THE MAIN THREAD. Two consequences
+worth stating:
+
+- **A UI-thread `twComponent::getPageIfExists()` read is SANCTIONED.** It
+  takes the component mutex with `std::try_to_lock` and returns `nullptr`
+  rather than blocking, so it cannot stall the UI and cannot deadlock against
+  a freeze in flight. A lost try-lock is indistinguishable from an absent
+  page, which is why `twLevelProbe` keeps the previous tick's page.
+- **Reading a page's samples while a worker re-freezes it in place is an
+  ACCEPTED race**, not a bug to fix: `getOrAllocatePage` re-renders into the
+  same buffer and `validFrames` is a plain `uint32_t`. `samples` is sized once
+  in the constructor and never resized, so a clamped read stays in bounds and
+  the worst case is one visually wrong meter frame. The audio thread already
+  runs exactly this race (proposal 16's stale-page playback).
+
 ## Rule 2 — snapshot, don't lock, on the audio path
 
 State handoff UI→audio is snapshot/double-buffer based:

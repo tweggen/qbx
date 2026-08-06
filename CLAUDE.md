@@ -122,7 +122,7 @@ the plugin search paths. Gates: `filepathref_test` (ctest) and
 ```
 plan/
 ├── STATE.md              # Chronological record of implementation (authoritative)
-└── proposed/             # Numbered proposals 02..20; highlights:
+└── proposed/             # Numbered proposals 02..34; highlights:
     ├── 14_MODULARIZATION.md         (executed — module DAG, CONTRACT.md files)
     ├── 15_SCOPED_INVALIDATION.md    (executed)
     ├── 16_STALE_PAGE_FALLBACK.md    (executed — RT stale-page playback)
@@ -133,9 +133,13 @@ plan/
     ├── 20_DATAFLOW_FOLLOWUPS.md     (OPEN — preview lanes, pipelining,
     │                                 retirements, housekeeping; start here
     │                                 for the next engine work)
-    └── 21_REALTIME_DATAFLOW_INTEGRATION.md (DRAFT — live inputs / live
-                                      plugin instruments: live lane +
-                                      capture bridge + frontier contract)
+    ├── 21_REALTIME_DATAFLOW_INTEGRATION.md (DRAFT — live inputs / live
+    │                                 plugin instruments: live lane +
+    │                                 capture bridge + frontier contract)
+    └── 34_LEVEL_METERS.md           (executed 2026-08-05 — level meters read
+                                      frozen pages BY POSITION; zero engine
+                                      edits. Read it before touching metering:
+                                      the naive freeze-time design is wrong)
 docs/
 ├── PROJECT_OVERVIEW.md   # This document's source
 ├── ARCHITECTURE.md       # Module map (start here for code navigation)
@@ -232,6 +236,55 @@ MP3 encoding requires `libmp3lame` binary in the application directory due to pa
 # Linux: apt install libmp3lame0 → copy /usr/lib/libmp3lame.so
 # Windows: vcpkg install lame → copy mp3lame.dll
 ```
+
+## Level meters (proposal 34 — executed 2026-08-05)
+
+Per-track meters in the arranger track heads, one in the Track Detail dock, and a
+master meter in the transport toolbar: peak bar + held peak tick + a 300 ms RMS
+bar inside it + a latching clip cap, on a −60…+6 dBFS dB-linear scale, all
+latency-compensated. Design: `plan/proposed/34_LEVEL_METERS.md`. Invariants:
+`tw303a/metering/CONTRACT.md` and `main/timeline/CONTRACT.md` inv. 10-12.
+
+**Read this before touching metering — the obvious design is wrong.** Levels are
+read from FROZEN PAGES **by position** (`twLevelProbe` → `getPageIfExists`), never
+computed at freeze time. Pages are frozen by readahead/revalidator workers far
+ahead of the playhead (65536 frames ≈ 1.37 s at 48 kHz) and by renders with no
+playhead at all, so a freeze-time peak stashed in a per-track atomic would show
+the FUTURE. Reading by position is inherently "what is audible", which is why the
+whole feature needed **zero edits to any existing engine file** — just the new
+`tw/metering` leaf plus app code.
+
+| Thing to know | Why |
+|---|---|
+| The tap is a track's ROOT component (`STrack::getRootComponent()` → its `twRewire`) | It is the only per-track component that CACHES pages: `twTrackMix::freezePage` allocates a fresh page every call, `twPluginChain::freezePage` forwards to its last insert. Content there is post-fader, post-FX, pre-summing. Consequence: a pre-fader meter is not available without new engine work. |
+| `outputLatencyFrames` is in DEVICE frames at the DEVICE rate | The locator counts PROJECT frames. `SApplication::meterLatencyFrames()` scales by `projectRate/deviceRate`; skipping that is a ~9% error for 44.1 k on a 48 k device. Applied ONCE in the pump so all meters share one position. |
+| Ballistics live on the UI thread, driven by wall-clock dt | Frame-rate independence (one 1 s step == 100 × 10 ms steps) is asserted by `metering_test` and is the reason they are not in the engine. |
+| `meterTimer_` is NOT a fold into `pumpLocator` | `pumpLocator` only works when the position changed and stops the instant playback stops. Meters need a tick at a static position (to decay) plus a ~8 s tail, or the bars freeze mid-level. Not started during an offline render; started while recording. |
+| A page miss must DECAY the meter | `advanceTo()` returning false → `idle()`. A dropout then reads as a fast fall, never as a frozen bar. Nothing here may block, wait, or create a demand. |
+| Stale-but-frozen pages are deliberately ACCEPTED | Playback serves exactly those (proposal 16), so rejecting them would make the meter disagree with the ear while an edit is absorbed. |
+| Mono | `SStdMixer` runs one bus and `freezePage_nolock` renders `idx = 0`. Never assert `L != R`. |
+| `twAspectMetadata` stays unclaimed | `freezePage` already stores `validAspects = twAspectAll`, so that "peak levels" bit is already set and already meaningless. Claiming it would drag metering into the demand system for nothing. |
+
+**One engine hole this exposed** (not a product bug, but it shapes tests): the
+LEGACY PULL path does not observe a track-gain change made after a position was
+first frozen — `twStreamingLatch::copyData` gates its cached page on the
+**`twPluginChain`'s** content epoch, which `STrack::invalidateRenderPath()` does
+not reach (the same "an `SPluginChain` is not an `SLink` child of its track"
+pitfall `plugins/CONTRACT.md` records for slots). Playback and render both go
+through the scheduler, which re-plans and re-binds, so both see it. `assert-meter`
+drives the legacy pull, so set a gain BEFORE first probing a position —
+`meter_postfader.qxa` uses two tracks at different gains rather than changing one
+track's gain twice.
+
+There is now ONE volume-fader curve, `app/timeline/sfadercurve.h`. The Track
+Detail dock's slider used to be wired to nothing and to map `value = dB*10`,
+disagreeing with the arranger's `VOLUME_CURVE_EXPONENT = 0.5`; both now share the
+curve and commit through `SSetTrackVolumeAction`.
+
+Gates: `ctest -R metering_test` and the qxa cases `meter_levels` (per-second RMS
+of the ramped-sawtooth fixture, the miss/silence path, the density rules via the
+REAL head built off screen, plus PNG grabs — the only coverage of
+`SLevelMeter::paintEvent`) and `meter_postfader`.
 
 ## Recording Audio
 

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 34 gate: the level meters read the right audio at the right position.
+
+  This case needs NO transport. That is the design paying off: levels are read
+  from FROZEN PAGES BY POSITION, so assert-meter can freeze the page it asks
+  about and probe it — deterministic, worker-count independent, and free of
+  `toggle-playback` (which segfaults in scripts, testkit/CONTRACT.md known debt).
+
+  Fixture: ../test_sawtooth.wav — a 4 s ramped sawtooth (192000 frames @ 48 kHz)
+  whose every SOURCE SECOND has a distinct RMS (testkit/CONTRACT.md inv. 3):
+      sec0 .067   sec1 .176   sec2 .291   sec3 .405
+  Probing mid-second therefore catches a wrong offset as a wrong level rather
+  than as silence. Bands are ~+-25% around those values: tight enough that a
+  wrong-position or wrong-tap bug fails, loose enough to survive the probe's
+  short measurement window landing anywhere inside the second.
+-->
+<SActionScript version="1" name="meter_levels">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Each second of the ramp reads as its own level. -->
+    <assert-meter trackIndex="0" position="24000"  minRms="0.045" maxRms="0.090"/>
+    <assert-meter trackIndex="0" position="72000"  minRms="0.130" maxRms="0.225"/>
+    <assert-meter trackIndex="0" position="120000" minRms="0.215" maxRms="0.370"/>
+    <assert-meter trackIndex="0" position="168000" minRms="0.300" maxRms="0.510"/>
+
+    <!-- Post-fader is asserted in meter_postfader.qxa, which sets the gain BEFORE
+         the page is frozen — see the caveat in smetertestactions.cpp about the
+         legacy pull path and a track's twPluginChain epoch. -->
+
+    <!-- Past the end of the clip there is no audio: the page exists (the track
+         freezes silence) so this is a real measurement of ~0, not a miss. -->
+    <assert-meter trackIndex="0" position="200000" minRms="0.0" maxRms="0.001"
+                  maxPeak="0.001"/>
+
+    <!-- Density rules, via the REAL track head built off screen. Full density
+         (>= 132 px) puts the meter beside a vertical fader; Compact lays it
+         down; Tiny hides it, because hiding beats clipping. -->
+    <assert-meter trackIndex="0" position="72000" headHeight="140" contains="orient=v"/>
+    <assert-meter trackIndex="0" position="72000" headHeight="140" contains="vis=1"/>
+    <assert-meter trackIndex="0" position="72000" headHeight="80"  contains="orient=h"/>
+    <assert-meter trackIndex="0" position="72000" headHeight="20"  contains="vis=0"/>
+
+    <!-- Paint the measured level. Nothing else exercises SLevelMeter::paintEvent,
+         and the PNGs are the only human-checkable picture of the bar. -->
+    <assert-meter trackIndex="0" position="168000" grabPng="meter_v.png"/>
+    <assert-meter trackIndex="0" position="168000" grabPng="meter_h.png"
+                  grabVertical="false"/>
+    <assert-meter trackIndex="0" position="24000"  grabPng="meter_quiet.png"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
