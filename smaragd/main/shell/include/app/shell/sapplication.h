@@ -10,8 +10,10 @@
 #include "tw/render/render_session.h"
 #include "tw/record/recording_session.h"
 #include "tw/playback/playback_context.h"
+#include "tw/metering/tw_level_probe.h"
 #include "app/model/sappcontext.h"
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QString>
 //#include <qptrlist.h>
 
@@ -85,6 +87,16 @@ public:
     bool isPlaying() const;
     bool isRenderingActive() const override;
     bool isRecordingActive() const;
+    // Proposal 34: is the metering pump running? (Also true during the decay
+    // tail after the transport stops.)
+    bool isMeteringActive() const;
+    // The MASTER level at `pos` — read from the frozen pages of the very
+    // component the engine plays (rootComponent()), by the same page-probe
+    // mechanism the per-track meters use, so master and tracks agree. False when
+    // there is nothing to measure (no project, or no frozen page at pos).
+    // Consequence of reading the graph rather than the device: an underrun reads
+    // as normal level, not as a dip.
+    bool masterLevel( offset_t pos, twLevelSample &out );
     // Locator position captured when the current recording began. The view uses
     // it (with the live locator) to draw the growing in-progress capture region.
     offset_t recordingStartFrame() const { return recordingStartFrame_; }
@@ -145,6 +157,22 @@ signals:
     // TLS cleanup deadlocks the teardown join.
     void pluginScanFinished();
 
+    // Proposal 34 — one tick for EVERY meter in the app, ~30 Hz.
+    //   pos    is already LATENCY-COMPENSATED (see meterLatencyFrames): it is the
+    //          position being HEARD, not the one just handed to the device. Every
+    //          meter shares it, so all of them stay mutually consistent.
+    //   nowMs  monotonic timestamp for the ballistics, which integrate over the
+    //          ACTUAL dt rather than counting ticks.
+    //   live   false when the transport is not running. Meters must then decay
+    //          (twMeterBallistics::idle) instead of re-measuring a static
+    //          position, which would show a steady level forever.
+    // A signal rather than a registry: the track heads are deleteLater()'d on
+    // every refreshTrackTree(), so their connections drop themselves.
+    void meterTick( offset_t pos, qint64 nowMs, bool live );
+    // Meters should return to the floor and clear their clip latch. Emitted when
+    // the transport starts.
+    void meterReset();
+
 public slots:
     // Set the status/mode line. Emits statusModeChanged only when it changes.
     void setStatusMode( const QString &mode );
@@ -153,7 +181,6 @@ public slots:
     void clearSelection();
     void unselectSLink( SLink * );
     void setGlobalLocatorPos( offset_t );
-    void setSpeakerMaxVal( sample_t );
     void setPlaying( bool );
 
 private slots:
@@ -165,9 +192,27 @@ private slots:
     // Main-thread poll of the engine's plugin scanner: when it goes idle, stop
     // the timer and emit pluginScanFinished from HERE, the main thread.
     void pumpPluginScan();
+    // Proposal 34: emit meterTick. Deliberately NOT folded into pumpLocator —
+    // that one only does work when the position CHANGED and self-stops the
+    // instant playback stops, whereas meters need a tick at a static position
+    // (to decay) plus a tail after stop, or the bars freeze mid-level.
+    void pumpMeters();
 
 private:
     void initPluginRegistry();
+
+    // Frames to subtract from the published locator so a meter reads the audio
+    // that is being HEARD rather than the audio just handed to the device.
+    // 0 when the backend does not report a latency, or nothing is playing.
+    offset_t meterLatencyFrames() const;
+    // Start (or re-arm) the metering pump. No-op during an offline render.
+    void startMetering();
+
+    // How many idle ticks to keep pumping after the transport stops, so every
+    // meter can decay all the way to the floor before the timer stops. Worst
+    // case is the held peak tick from the top of the scale:
+    // holdSec + (ceilDb-floorDb)/holdDecayDbPerSec = 1.5 + 66/12 = 7.0 s.
+    static constexpr int METER_TAIL_TICKS = 240;   // ~8 s at 33 ms
 
     static SApplication *singleton_;
     SSelectionList *selectionList_;
@@ -187,6 +232,10 @@ private:
     offset_t recordingStartFrame_ = 0; // locator at record start (for the live region)
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     QTimer *pluginScanTimer_ = nullptr;  // polls the background plugin scan
+    QTimer *meterTimer_ = nullptr;    // drives meterTick (proposal 34)
+    QElapsedTimer meterClock_;        // monotonic ms handed to the ballistics
+    int meterTailTicks_ = 0;          // remaining decay ticks after a stop
+    twLevelProbe masterProbe_;        // reads the mixer root's frozen pages
     bool isPlaying_;
     SProject *currentProject_;
     QString statusMode_;

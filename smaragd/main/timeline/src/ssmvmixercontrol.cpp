@@ -24,6 +24,8 @@
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/timeline/sstdmixerview.h"
+#include "app/timeline/slevelmeter.h"
+#include "app/timeline/sfadercurve.h"
 #include "app/objects/track/strack.h"
 #include "app/model/slink.h"
 #include "app/model/sobjectrenderer.h"
@@ -38,37 +40,13 @@
 #include <QUndoStack>
 #include <QPair>
 
-// The fader works in tenths of a dB so it can use an integer QSlider:
-// slider value v  <->  v/10 dB. Range -96.0 .. +24.0 dB.
-static const int FADER_MIN = -960;
-static const int FADER_MAX =  240;
-static const double FADER_MIN_DB = -96.0;
-static const double FADER_MAX_DB =  24.0;
-
-// Volume fader curve exponent: y = x^n where x is normalized [0,1].
-// n=1.0 is linear, n=2.0 is quadratic (recommended), n>1 makes small moves
-// near center more sensitive. Configurable via SOpt if desired.
-static const double VOLUME_CURVE_EXPONENT = 0.5;
-
-// Helper: convert slider value to dB using the configured curve.
-static double sliderToDB( int sliderValue )
-{
-    double normalized = (double)(sliderValue - FADER_MIN) / (FADER_MAX - FADER_MIN);
-    normalized = qBound( 0.0, normalized, 1.0 );
-    // Apply power-law curve: y = x^n
-    double curved = pow( normalized, VOLUME_CURVE_EXPONENT );
-    return FADER_MIN_DB + curved * (FADER_MAX_DB - FADER_MIN_DB);
-}
-
-// Helper: convert dB to slider value using the inverse curve.
-static int dbToSlider( double dB )
-{
-    double normalized = (dB - FADER_MIN_DB) / (FADER_MAX_DB - FADER_MIN_DB);
-    normalized = qBound( 0.0, normalized, 1.0 );
-    // Apply inverse curve: x = y^(1/n)
-    double curved = pow( normalized, 1.0 / VOLUME_CURVE_EXPONENT );
-    return (int)( FADER_MIN + curved * (FADER_MAX - FADER_MIN) + 0.5 );
-}
+// The fader mapping now lives in app/timeline/sfadercurve.h, because the Track
+// Detail dock drives the same track volume and has to agree with this one.
+// Local aliases keep the call sites below unchanged.
+static inline double sliderToDB( int v )   { return sFaderToDb( v ); }
+static inline int    dbToSlider( double d ) { return sDbToFader( d ); }
+static const int FADER_MIN = SFADER_MIN;
+static const int FADER_MAX = SFADER_MAX;
 
 // Width of the grip strip down the left side of the control that acts as the
 // track-reorder drag handle, and the pixels the pointer must travel before a
@@ -527,13 +505,25 @@ SSMVMixerControl::SSMVMixerControl(
     qFaderCol_->addWidget( qVolume_, 1, Qt::AlignHCenter );
     qFaderCol_->addWidget( qVolLabel_, 0, Qt::AlignHCenter );
 
-    // Mute/Solo column, then the fader column; a trailing stretch keeps the
-    // group left-aligned.
+    // Level meter (proposal 34), beside the fader in Full and under it in
+    // Compact — qStripRow_ flips direction, so one insert covers both. It fits
+    // without squeezing anything: at the default 120 px column the content width
+    // is 120 - (SMV_FOLD_W + the 8 px resizer handle) - 4 = 92, of which the
+    // buttons and the fader/readout column use 20 + 4 + ~55 = 79, leaving ~13 px
+    // that the trailing stretch was absorbing. The meter takes 8 + 4 spacing.
+    qMeter_ = new SLevelMeter( this );
+    // Bind ONCE: the track's twRewire is created only when null
+    // (STrack::buildComponents), so its identity is stable for this head's life.
+    probe_.setTap( tk_.getRootComponent() );
+
+    // Mute/Solo column, then the fader column, then the meter; a trailing
+    // stretch keeps the group left-aligned.
     qStripRow_ = new QBoxLayout( QBoxLayout::LeftToRight );
     qStripRow_->setContentsMargins( 0, 0, 0, 0 );
     qStripRow_->setSpacing( 4 );
     qStripRow_->addLayout( qBtnCol_ );
     qStripRow_->addLayout( qFaderCol_ );
+    qStripRow_->addWidget( qMeter_ );
     qStripRow_->addStretch( 1 );
 
     // The head is placed by the view at exactly its lane's size (which can be
@@ -556,6 +546,14 @@ SSMVMixerControl::SSMVMixerControl(
     qArm_->setChecked( tk_.isArmedForRecording() );
     qTakes_->setChecked( smv_.isTrackTakesExpanded( &tk_ ) );
     qGroup_->setChecked( tk_.getEditGroup() != 0 );
+
+    // Metering: one app-wide tick drives every meter (proposal 34). Connecting
+    // per head is deliberate — heads are deleteLater()'d on every
+    // refreshTrackTree(), so the connections drop themselves.
+    QObject::connect( &SApplication::app(), &SApplication::meterTick,
+                      this, &SSMVMixerControl::onMeterTick );
+    QObject::connect( &SApplication::app(), &SApplication::meterReset,
+                      qMeter_, &SLevelMeter::resetMeter );
 
     QObject::connect( qVolume_, SIGNAL( valueChanged( int ) ),
                       this, SLOT( sliderValueChanged( int ) ) );
@@ -699,6 +697,51 @@ void SSMVMixerControl::onSelectedTrackChanged( STrack *track )
     }
 }
 
+// Proposal 34 — one metering tick for this track's meter.
+void SSMVMixerControl::onMeterTick( offset_t pos, qint64 nowMs, bool live )
+{
+    // A hidden meter does ZERO work: this is the first and cheapest layer of the
+    // repaint-storm defence (30 heads x 30 Hz), and in Tiny density every meter
+    // in the project is hidden.
+    if( !qMeter_ || !qMeter_->isVisible() ) return;
+
+    // Meters follow mute/solo. This is already EMERGENT — an inaudible track has
+    // its mixer input plug nulled (SStdMixer::reconnectTracksToMixer), so nothing
+    // pulls or freezes its pages and the mute's epoch bump stales the old ones —
+    // but the pages are the TRACK's own output and can legitimately still hold
+    // audio (another consumer may have frozen them). Check the model too, so the
+    // result does not depend on which path won: THREADING rule 4.
+    if( !live ) { qMeter_->pushIdle( nowMs ); return; }
+
+    bool audible = !tk_.isMuted();
+    if( audible ) {
+        SStdMixer *mixer = smv_.getModel();
+        if( mixer && mixer->anyTrackSoloed() && !tk_.isSolo() ) audible = false;
+    }
+    if( !audible ) { qMeter_->pushIdle( nowMs ); return; }
+
+    // Re-bind every tick rather than only in the ctor: setTap() is a pointer
+    // compare that no-ops when unchanged, and it makes the meter self-healing if
+    // the track's components are ever rebuilt under it — a meter silently dead
+    // because it bound before its tap existed is a whole bug class avoided for
+    // one comparison.
+    probe_.setTap( tk_.getRootComponent() );
+
+    twLevelSample s;
+    if( probe_.advanceTo( pos, s ) ) qMeter_->pushLevel( s, nowMs );
+    else                             qMeter_->pushIdle( nowMs );
+}
+
+QString SSMVMixerControl::describeMeter()
+{
+    if( !qMeter_ ) return QStringLiteral( "vis=0" );
+    // Apply the density rules for the CURRENT size before describing them: Qt
+    // does not deliver a resizeEvent to a widget that was never shown, so a
+    // headless caller's resize() alone would describe the previous layout.
+    updateLayout();
+    return qMeter_->describe();
+}
+
 SSMVMixerControl::Density SSMVMixerControl::densityFor( int h ) const
 {
     if( h >= DENSITY_FULL_MIN_H )    return Density::Full;
@@ -724,6 +767,7 @@ void SSMVMixerControl::applyDensity( Density d )
         qArm_->show(); qTakes_->show(); qGroup_->show();
         qVolume_->show();
         qVolLabel_->show();
+        qMeter_->show();
         break;
     case Density::Compact:
         // One row of small buttons above a horizontal fader; the dB readout
@@ -734,6 +778,9 @@ void SSMVMixerControl::applyDensity( Density d )
         qArm_->show(); qTakes_->show(); qGroup_->show();
         qVolume_->show();
         qVolLabel_->setVisible( height() >= 84 );
+        // The meter is the first thing to go when the rows stack up: a fader you
+        // cannot see is worse than a meter you cannot see.
+        qMeter_->setVisible( height() >= 60 );
         break;
     case Density::Tiny:
         // Barely a lane: the name, and Mute/Solo beside it while a single
@@ -746,6 +793,7 @@ void SSMVMixerControl::applyDensity( Density d )
         qSolo_->setVisible( height() >= 38 );
         qVolume_->hide();
         qVolLabel_->hide();
+        qMeter_->hide();
         break;
     }
 
@@ -755,6 +803,9 @@ void SSMVMixerControl::applyDensity( Density d )
     qVolume_->setOrientation( horizontalFader ? Qt::Horizontal : Qt::Vertical );
     qVolume_->setMinimumHeight( horizontalFader ? 16 : 40 );
     qVolume_->setMaximumHeight( horizontalFader ? 20 : QWIDGETSIZE_MAX );
+
+    // The meter lies down with the fader so the two read as one control.
+    qMeter_->setOrientation( horizontalFader ? Qt::Horizontal : Qt::Vertical );
 
     // In Tiny the name is the whole strip; keep it off the grip and readable.
     qTrkLabel_->setVisible( height() >= 14 );

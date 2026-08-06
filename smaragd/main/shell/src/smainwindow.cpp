@@ -55,6 +55,8 @@
 
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/timeline/sstdmixerview.h"
+#include "app/timeline/slevelmeter.h"
+#include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
 #include "app/timeline/strackdetailpanel.h"
 #include "app/objects/track/strack.h"
@@ -904,6 +906,27 @@ SMainWindow::SMainWindow()
                           if( now == tempoSpin_ && old != tempoSpin_ )
                               tempoPrevFocus_ = old;
                       } );
+
+    // Master level meter (proposal 34), right of the tempo box. It reads the
+    // frozen pages of the component the engine plays — the same probe mechanism
+    // the track heads use, so master and tracks are mutually consistent.
+    qMasterMeter_ = new SLevelMeter( this );
+    qMasterMeter_->setOrientation( Qt::Horizontal );
+    qMasterMeter_->setMinimumWidth( 96 );
+    qMasterMeter_->setMaximumWidth( 96 );
+    qMasterMeter_->setToolTip( "Master level — click to clear the clip indicator" );
+    qTBTransport_->addWidget( qMasterMeter_ );
+    QObject::connect( &SApplication::app(), &SApplication::meterTick, this,
+                      [this]( offset_t pos, qint64 nowMs, bool live ) {
+                          if( !qMasterMeter_ || !qMasterMeter_->isVisible() ) return;
+                          twLevelSample s;
+                          if( live && SApplication::app().masterLevel( pos, s ) )
+                              qMasterMeter_->pushLevel( s, nowMs );
+                          else
+                              qMasterMeter_->pushIdle( nowMs );
+                      } );
+    QObject::connect( &SApplication::app(), &SApplication::meterReset,
+                      qMasterMeter_, &SLevelMeter::resetMeter );
 
     addToolBar( Qt::TopToolBarArea, qTBTransport_ );
 
@@ -1789,6 +1812,57 @@ bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     SStdMixerView *v = ensureArranger_();
     if( !v ) return false;
     return v->dragClipEdge( rowIdx, clipIdx, grabWhere, dropTime, upperHalf, mods );
+}
+
+QString SMainWindow::describeTrackMeter( int trackIndex, int headHeight )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return QString();
+
+    // The APP's current project, not this window's: a headless --test-case run
+    // drives SApplication directly and leaves SMainWindow::currentProject_ null.
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return QString();
+
+    SStdMixer *mixer = dynamic_cast<SStdMixer *>( proj->getRootComponent() );
+    if( !mixer || trackIndex < 0 || trackIndex >= mixer->getNTracks() )
+        return QString();
+    SLink *link = mixer->getTrackAt( trackIndex );
+    STrack *track = link ? dynamic_cast<STrack *>( &link->getSObject() ) : nullptr;
+    if( !track ) return QString();
+
+    // A head built for the assertion and thrown away — parentless and never
+    // shown, so no native window appears (a qxa run on Windows uses the real
+    // platform plugin). resize() runs the real updateLayout()/applyDensity(),
+    // which is the thing under test.
+    SSMVMixerControl head( nullptr, *v, *track );
+    head.resize( SMV_TRACK_CTRL_WIDTH, headHeight > 0 ? headHeight : 1 );
+    return head.describeMeter();
+}
+
+bool SMainWindow::grabLevelMeter( const QString &path, double peak, double rms,
+                                  bool vertical, int w, int h )
+{
+    SLevelMeter meter( nullptr );
+    meter.setOrientation( vertical ? Qt::Vertical : Qt::Horizontal );
+    meter.resize( w, h );
+
+    // Two pushes a simulated second apart: the first sets the peak and arms the
+    // hold, the second lets the peak decay away from it so the held tick is drawn
+    // in a DIFFERENT place than the bar top — otherwise the grab could not tell
+    // the two apart.
+    twLevelSample s;
+    s.peak       = (float) peak;
+    s.meanSquare = (float) ( rms * rms );
+    s.frames     = 1024;
+    s.clipped    = ( peak >= TW_METER_CLIP_THRESHOLD );
+    meter.pushLevel( s, 0 );
+    s.peak = (float) ( peak * 0.5 );
+    meter.pushLevel( s, 250 );
+
+    const QPixmap pm = meter.grab();
+    if( pm.isNull() ) return false;
+    return pm.save( path, "PNG" );
 }
 
 bool SMainWindow::arrangerSetLaneView( int laneScaleRow, double laneScale,

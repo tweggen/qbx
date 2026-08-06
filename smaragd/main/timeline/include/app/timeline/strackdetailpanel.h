@@ -3,7 +3,10 @@
 
 #include <QWidget>
 
+#include "tw/metering/tw_level_probe.h"
+
 class STrack;
+class SLevelMeter;
 class SPluginEffectStrip;
 class QVBoxLayout;
 class QSlider;
@@ -30,8 +33,16 @@ protected:
     // A QWidget subclass must draw its own style-sheet background.
     void paintEvent(QPaintEvent *) override;
 
+private slots:
+    // Fader drag -> track volume, through the action system (undoable).
+    void onVolumeSliderMoved( int sliderValue );
+    // Proposal 34: one metering tick for the selected track.
+    void onMeterTick( offset_t pos, qint64 nowMs, bool live );
+
 private:
     void rebuildUI();
+    // Index of currentTrack_ in the mixer, or -1.
+    int trackIndex_() const;
 
     STrack *currentTrack_ = nullptr;
 
@@ -42,6 +53,8 @@ private:
     QSlider *volumeSlider_;
     QLabel *volumeLabel_;
     QLabel *placeholder_;   // shown instead of the content when no track is set
+    SLevelMeter *meter_ = nullptr;   // proposal 34
+    twLevelProbe probe_;             // re-bound whenever the track changes
 };
 
 #endif

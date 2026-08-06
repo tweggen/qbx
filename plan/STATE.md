@@ -8496,3 +8496,94 @@ machine has one); macOS and Linux are written but unrun, and should expect the
 a VST3 (the model/action/serialization layers are format-agnostic and untouched,
 so this is coverage, not risk); and the real-plugin manual UI pass — scan →
 browse → insert → hear → edit → save/reopen → missing-placeholder round trip.
+
+## 2026-08-05 — Proposal 34: level meters (per-track + master)
+
+Per-track level meters in the arranger track heads, one in the Track Detail dock,
+and a master meter in the transport toolbar. Peak bar with a held peak tick, a
+300 ms RMS bar inside it, a latching clip cap, and all of them
+**latency-compensated** so they agree with what the ear hears. Design and the full
+decision table: `plan/proposed/34_LEVEL_METERS.md`.
+
+**The finding that shaped everything: no engine changes were needed.** Frozen
+pages are POSITION-KEYED, so reading the page covering the compensated playhead is
+inherently "what is audible", regardless of which worker froze it or how far ahead.
+That makes the obvious design wrong: computing a peak inside `freezePage` and
+stashing it in a per-track atomic would show the FUTURE (a page is 65536 frames ≈
+1.37 s at 48 kHz and readahead runs ahead of that), and renders freeze pages with
+no playhead at all. Reading by position instead meant the feature is one new engine
+LEAF module (`tw/metering`) plus app code, with zero edits to any existing engine
+file — so the render byte-`cmp` gate is green by construction.
+
+Three things the exploration overturned, all verified in source:
+
+- **The tap can only be the per-track `twRewire`.** `twTrackMix::freezePage`
+  (`twtrackmix.cc:346`) allocates a fresh page on every call and never populates
+  `outputPages_`; `twPluginChain::freezePage` (`twpluginchain.cc:214`) renders
+  nothing and forwards to its last insert. Neither ever answers
+  `getPageIfExists()`. `twRewire` has no override, so `STrack::getRootComponent()`
+  goes through base `twComponent::freezePage`, which caches and stamps the epoch —
+  and its content is post-fader, post-FX, pre-summing, exactly what the master sums
+  at unity. Consequence: post-fader and post-FX are the SAME tap, and a pre-fader
+  option cannot be offered without new engine work.
+- **Latency compensation already existed and has a unit trap.** Every backend
+  populates `AudioConfig::outputLatencyFrames` and `twSpeaker::getBackend()` was
+  already public — but that figure is in DEVICE frames at the DEVICE rate while the
+  locator counts PROJECT frames, so it must be scaled by `projectRate/deviceRate`
+  (~9% error otherwise for 44.1 k on a 48 k device). Done once, in
+  `SApplication::meterLatencyFrames()`, so every meter shares one position.
+- **Mono, and `twAspectMetadata` stays unclaimed.** `SStdMixer` runs one bus and
+  `freezePage_nolock` renders `idx = 0`, so there is no second channel to meter.
+  And `freezePage` already stores `validAspects = twAspectAll` unconditionally, so
+  the "peak levels" bit is already set and already means nothing; giving it meaning
+  would pull metering into the demand/revalidation system for no benefit.
+
+Ballistics live on the UI thread and are driven by wall-clock dt rather than tick
+count (peak 20 dB/s dB-linear, hold 1.5 s then 12 dB/s, RMS one-pole with
+`alpha = 1-exp(-dt/tau)`). **Frame-rate independence is the load-bearing property**
+— one 1 s step equals 100 x 10 ms steps to within 1e-4, asserted — and it is what
+an engine-side accumulator could not have delivered. The pump is its OWN 33 ms
+timer, not a fold into `pumpLocator`: that one only does work when the position
+changed and stops the instant playback stops, whereas meters need a tick at a
+static position (to decay) plus a ~8 s tail, or the bars freeze mid-level and read
+as a rendering bug. It does not run during an offline render (which publishes
+positions faster than realtime) but does run while recording.
+
+Master reads the GRAPH, not the device (requester's call): the same probe against
+`SApplication::rootComponent()`, so master and tracks are mutually consistent and
+`twSpeaker` / `AudioEngine` / the RT callback are untouched. Accepted consequence:
+an underrun reads as normal level rather than a dip.
+
+**Two things found along the way.** (1) The Track Detail dock's volume slider was
+broken: wired to nothing at all, and mapping dB to pixels as `value = dB*10`,
+ignoring the arranger's `VOLUME_CURVE_EXPONENT = 0.5` power law — so the same dB
+sat in two different places in two views. There is now ONE curve
+(`app/timeline/sfadercurve.h`) used by both, and the dock commits through
+`SSetTrackVolumeAction`. A meter next to a lying fader is worse than no meter.
+(2) The LEGACY PULL path does not observe a post-freeze track-gain change:
+`twStreamingLatch::copyData` gates its cached page on the **twPluginChain's**
+content epoch, which `STrack::invalidateRenderPath()` does not reach — the same
+"an SPluginChain is not an SLink child of its track" pitfall
+`plugins/CONTRACT.md` records for slots. Verified both ways: an offline render
+tracks every change (0.203 → 0.287 → 0.203 for -6/-3/-6 dB) because the scheduler
+re-plans and re-binds, while a direct `requestPage` after a second change serves
+the first gain's audio. NOT a product bug (playback and render are both
+scheduler-driven), but it shapes the tests — `meter_postfader.qxa` uses two tracks
+at different gains rather than changing one track's gain twice. A candidate
+retirement for proposal 20.
+
+Gates: `metering_test` (48 assertions; links `tw_metering` only, so a layering
+regression stops it linking), `qxa.meter_levels` (per-second RMS at four
+positions, the past-the-end silence case, the density rules via the REAL head
+built off screen, and three PNG grabs — the only coverage of
+`SLevelMeter::paintEvent`), `qxa.meter_postfader`. Full suite 100/100 (97 before);
+`check_layering` / `check_logging` clean; both new cases 15/15 on the flake gate
+and `meter_levels` 5/5 under `SMARAGD_REVAL_WORKERS=0`.
+
+Not verified: no by-ear / by-eye pass in the running app with live audio (the PNG
+grabs verify the painting, and the qxa cases verify the levels and the density
+rules, but nobody has yet watched the bars move during playback). Latency
+compensation is exercised only through the code path — the actual device figure is
+0 on the Null backend and unverified against a real CoreAudio/WASAPI buffer. And
+meters deliberately trail the DRAWN playhead by the device latency, because the
+playhead itself is uncompensated; that is a one-line follow-up if it reads wrong.

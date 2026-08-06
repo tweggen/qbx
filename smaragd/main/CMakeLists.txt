@@ -204,6 +204,8 @@ set(APP_UI_FILES
     timeline/include/app/timeline/ssmvmixercontrol.h
     timeline/include/app/timeline/sstdmixerview.h
     timeline/include/app/timeline/strackdetailpanel.h
+    timeline/include/app/timeline/sfadercurve.h
+    timeline/include/app/timeline/slevelmeter.h
     timeline/include/app/timeline/strackheaderresizer.h
     timeline/include/app/timeline/szoomscrollbar.h
     timeline/src/sclippropertiespanel.cpp
@@ -212,6 +214,7 @@ set(APP_UI_FILES
     timeline/src/ssmvmixercontrol.cpp
     timeline/src/sstdmixerview.cpp
     timeline/src/strackdetailpanel.cpp
+    timeline/src/slevelmeter.cpp
     timeline/src/strackheaderresizer.cpp
     timeline/src/szoomscrollbar.cpp
     # --- app/pluginui
@@ -253,6 +256,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sdragclipedgeaction.h
     testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
+    testkit/include/app/testkit/smetertestactions.h
     testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/ssidecartestactions.h
@@ -266,6 +270,7 @@ set(APP_UI_FILES
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
+    testkit/src/smetertestactions.cpp
     testkit/src/spluginuitestactions.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp

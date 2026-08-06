@@ -51,11 +51,29 @@ Invariants:
    by its own commit: re-entrancy flag, blocked signals on every programmatic
    write, commits on editingFinished/clicked only (never valueChanged), and
    no setFocus() from the refresh path. See SClipPropertiesPanel.
+10. Level meters (proposal 34) read FROZEN PAGES through
+   twComponent::getPageIfExists and never block, wait or demand: a miss decays
+   the meter, it does not stall it. The tap is the track's ROOT component (its
+   twRewire) — post-fader, post-FX, and the only per-track component that
+   caches pages (twTrackMix allocates a fresh page per call; twPluginChain
+   forwards). Meters follow mute/solo by an EXPLICIT model check as well as the
+   emergent nulled-plug behaviour, so the result is order-independent.
+11. A meter must not repaint unless what it would DRAW changed: pixel-quantized
+   comparison against what was last PAINTED (not last computed), sub-rect
+   update(), and zero work at all when hidden. 30 heads x 30 Hz is otherwise a
+   repaint storm, and a 20 dB/s decay moves a 48 px bar by well under a pixel
+   per tick.
+12. There is ONE fader curve, app/timeline/sfadercurve.h. Both faders onto a
+   track's volume (the arranger head and the Track Detail dock) use it; the
+   dock previously did a naive value = dB*10 and disagreed with the arranger
+   about where a given dB sits.
 
 How to test: lane_alignment.qxa (lane geometry + head placement under zoom,
 scroll, per-track heights and take lanes), test_track_column_expansion.qxa,
 test_track_width_dragging.qxa, clip_properties_actions.qxa (the property
-verbs the panel submits), screenshot actions in the render cases.
+verbs the panel submits), screenshot actions in the render cases;
+meter_levels.qxa + meter_postfader.qxa (the meter's levels, its miss path and
+its density rules, via the real head built off screen).
 
 Known debt: sstdmixerview is the largest file in the app and knows every
 object type; per-object renderer extraction (proposal 14 slices) is the

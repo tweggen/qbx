@@ -4,7 +4,9 @@
 
 #include <qwidget.h>
 #include "app/model/sobjectrenderer.h"
+#include "tw/metering/tw_level_probe.h"
 
+class SLevelMeter;
 class SStdMixer;
 class QGridLayout;
 class QBoxLayout;
@@ -93,6 +95,18 @@ private:
     // a few pixels — so the layout adapts to BOTH dimensions. Anything that
     // does not fit is hidden, never clipped.
     void updateLayout();
+
+public:
+    // Test face for the meter (see SMainWindow::describeTrackMeter). Non-const
+    // because it re-applies the density rules for the current size first.
+    QString describeMeter();
+
+private slots:
+    // Proposal 34: one metering tick. Reads this track's frozen page at the
+    // (already latency-compensated) position and feeds the meter, or decays it.
+    void onMeterTick( offset_t pos, qint64 nowMs, bool live );
+
+private:
     static constexpr int WIDE_MODE_THRESHOLD = 156;  // ~130% of minimal width (120px)
     bool wideMode_ = false;
     // Vertical density, by available height:
@@ -136,6 +150,13 @@ private:
     QPushButton *qArm_;
     QPushButton *qTakes_;   // "T": show/hide this track's take lanes
     QPushButton *qGroup_;   // "G": edit-group lock (proposal 17 phase 4)
+
+    // Proposal 34 — level meter beside the fader, and the probe that feeds it.
+    // The probe is bound ONCE to the track's root component (its twRewire): the
+    // only per-track component that caches pages, and post-fader/post-FX, so the
+    // reading is the track's actual contribution to the mix.
+    SLevelMeter *qMeter_;
+    twLevelProbe probe_;
 };
 
 #endif

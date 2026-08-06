@@ -1,6 +1,13 @@
 #include "app/timeline/strackdetailpanel.h"
+#include "app/timeline/sfadercurve.h"
+#include "app/timeline/slevelmeter.h"
 #include "app/objects/track/strack.h"
+#include "app/objects/track/ssettrackvolumeaction.h"
+#include "app/objects/mixer/sstdmixer.h"
+#include "app/model/slink.h"
+#include "app/model/sproject.h"
 #include "app/pluginui/splugineffectstrip.h"
+#include "app/shell/sapplication.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSlider>
@@ -52,18 +59,34 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     placeholder_->setEnabled(false);
     mainLayout->addWidget(placeholder_);
 
-    // Volume section
+    // Volume section. The slider uses the SHARED fader curve (sfadercurve.h) —
+    // it previously did a naive `value = dB * 10`, which put the same dB at a
+    // different pixel position than the arranger fader, and it was wired to
+    // nothing at all, so dragging it silently did nothing.
     QHBoxLayout *volLayout = new QHBoxLayout();
     volLayout->addWidget(new QLabel("Volume:"));
     volumeSlider_ = new QSlider(Qt::Horizontal);
-    volumeSlider_->setMinimum(-960);
-    volumeSlider_->setMaximum(240);
-    volumeSlider_->setSliderPosition(0);
+    volumeSlider_->setMinimum(SFADER_MIN);
+    volumeSlider_->setMaximum(SFADER_MAX);
+    volumeSlider_->setSliderPosition(sDbToFader(0.0));
     volLayout->addWidget(volumeSlider_);
     volumeLabel_ = new QLabel("+0.0 dB");
     volumeLabel_->setMinimumWidth(60);
     volLayout->addWidget(volumeLabel_);
+    // Level meter for the selected track (proposal 34), beside its fader.
+    meter_ = new SLevelMeter(this);
+    meter_->setOrientation(Qt::Horizontal);
+    meter_->setMinimumWidth(72);
+    meter_->setMaximumWidth(72);
+    volLayout->addWidget(meter_);
     contentLayout_->addLayout(volLayout);  // Volume at bottom, no stretch
+
+    connect(volumeSlider_, &QSlider::valueChanged,
+            this, &STrackDetailPanel::onVolumeSliderMoved);
+    connect(&SApplication::app(), &SApplication::meterTick,
+            this, &STrackDetailPanel::onMeterTick);
+    connect(&SApplication::app(), &SApplication::meterReset,
+            meter_, &SLevelMeter::resetMeter);
 
     mainLayout->addWidget(contentWidget_, 1);  // Stretch factor 1 to use available space
 
@@ -103,20 +126,84 @@ void STrackDetailPanel::rebuildUI()
         pluginStrip_->setParent(contentWidget_);
         contentLayout_->insertWidget(0, pluginStrip_, 1);
 
-        // Update volume slider
+        // Update volume slider, through the shared curve so this fader and the
+        // arranger's put the same dB in the same place.
         double volume = currentTrack_->getVolume();
         volumeSlider_->blockSignals(true);
-        volumeSlider_->setValue((int)(volume * 10));
+        volumeSlider_->setValue(sDbToFader(volume));
         volumeSlider_->blockSignals(false);
         volumeLabel_->setText(QString::asprintf("%+.1f dB", volume));
+
+        // Point the meter at THIS track's root component (its twRewire).
+        probe_.setTap(currentTrack_->getRootComponent());
+        if (meter_) meter_->resetMeter();
 
         contentWidget_->setVisible(true);
         placeholder_->setVisible(false);
     } else {
+        probe_.setTap(nullptr);
+        if (meter_) meter_->resetMeter();
         contentWidget_->setVisible(false);
         placeholder_->setVisible(true);
     }
     updateGeometry();   // the empty panel asks for far less room than a full one
+}
+
+int STrackDetailPanel::trackIndex_() const
+{
+    if (!currentTrack_) return -1;
+    SProject *proj = SApplication::app().getCurrentProject();
+    SStdMixer *mixer = proj ? dynamic_cast<SStdMixer *>( proj->getRootComponent() )
+                            : nullptr;
+    if (!mixer) return -1;
+
+    const int n = mixer->getNTracks();
+    for (int i = 0; i < n; ++i) {
+        SLink *link = mixer->getTrackAt(i);
+        if (link && &link->getSObject() == (SObject *) currentTrack_) return i;
+    }
+    return -1;
+}
+
+void STrackDetailPanel::onVolumeSliderMoved(int sliderValue)
+{
+    if (!currentTrack_) return;
+
+    const double dB = sFaderToDb(sliderValue);
+    volumeLabel_->setText(QString::asprintf("%+.1f dB", dB));
+
+    // Through the action system so the edit is undoable and both faders follow
+    // the model, exactly as SSMVMixerControl::applyVolume_ does.
+    const int idx = trackIndex_();
+    if (idx >= 0) {
+        SApplication::app().submitAction(new SSetTrackVolumeAction(idx, dB));
+    } else {
+        currentTrack_->setVolume(dB);
+        if (SProject *p = SApplication::app().getCurrentProject())
+            p->notifyArrangementChanged();
+    }
+}
+
+void STrackDetailPanel::onMeterTick(offset_t pos, qint64 nowMs, bool live)
+{
+    if (!meter_ || !meter_->isVisible()) return;   // hidden dock does no work
+
+    if (!live || !currentTrack_) { meter_->pushIdle(nowMs); return; }
+
+    // Same audibility rule the mixer applies (and the track head mirrors).
+    bool audible = !currentTrack_->isMuted();
+    if (audible) {
+        SProject *proj = SApplication::app().getCurrentProject();
+        SStdMixer *mixer = proj ? dynamic_cast<SStdMixer *>( proj->getRootComponent() )
+                            : nullptr;
+        if (mixer && mixer->anyTrackSoloed() && !currentTrack_->isSolo())
+            audible = false;
+    }
+    if (!audible) { meter_->pushIdle(nowMs); return; }
+
+    twLevelSample s;
+    if (probe_.advanceTo(pos, s)) meter_->pushLevel(s, nowMs);
+    else                          meter_->pushIdle(nowMs);
 }
 
 // Preferred height: 50% of screen height, but never more than 450px.
