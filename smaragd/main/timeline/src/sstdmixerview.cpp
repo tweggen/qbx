@@ -825,14 +825,17 @@ bool SStdMixerView::eventFilter( QObject *watched, QEvent *event )
  */
 void SStdMixerView::ctRemoveTrack()
 {
-    // getLastClickTrackIdx() is a row index now; resolve the track and its real
-    // mixer index. (Removing a nested track is not wired here yet.)
+    // Index-PATH from the root mixer, so a track inside a folder can be removed
+    // too. This used to be model_->indexOfChildObject(), which sees the mixer's
+    // DIRECT children only: on a nested track it returned -1 and this slot
+    // returned right here, so "Remove track" did nothing at all — no action, no
+    // message, no undo entry.
     STrack *t = qContent_->getLastClickTrack();
     if( !t || !model_ ) return;
-    int idx = model_->indexOfChildObject( *t );
-    if( idx<0 ) return;                 // nested track: not handled here
+    const QList<int> path = strackpath::pathOf( model_, t );
+    if( path.isEmpty() ) return;        // not in this project's tree
     // Through the action so it is undoable (the track + subtree is restorable).
-    SApplication::app().submitAction( new SRemoveTrackAction( idx ) );
+    SApplication::app().submitAction( new SRemoveTrackAction( path ) );
 }
 
 // --- grouping (proposal 05 §1.2) ----------------------------------------
@@ -880,14 +883,37 @@ void SStdMixerView::ctGroupTrack()
 {
     STrack *t = qContent_->getLastClickTrack();
     if( !t || !model_ ) return;
-    int c = model_->indexOfChildObject( *t );   // top-level tracks only for now
-    if( c<0 ) return;
+    const QList<int> tPath = strackpath::pathOf( model_, t );
+    if( tPath.isEmpty() ) return;
+    QList<int> parentPath = tPath;
+    const int ti = parentPath.takeLast();       // t's slot inside its parent
+
     QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
     if( stack ) stack->beginMacro( "Group track" );
-    // New empty folder at T's slot; T then sits at c+1 and is moved into it.
-    SApplication::app().submitAction( new SAddTrackAction( c ) );
-    SApplication::app().submitAction( new SReparentTrackAction(
-        QList<int>{ c+1 }, QList<int>{ c }, -1 ) );
+
+    if( parentPath.isEmpty() ) {
+        // t is top-level: create the folder directly in t's slot. (This is the
+        // only case the gesture used to handle at all.)
+        SApplication::app().submitAction( new SAddTrackAction( ti ) );
+        SApplication::app().submitAction( new SReparentTrackAction(
+            QList<int>{ ti+1 }, QList<int>{ ti }, -1 ) );
+    } else {
+        // t is NESTED. add-track can only append at the MIXER's top level, and
+        // SReparentTrackAction refuses a same-container move (that is
+        // SMoveTrackAction's job) — so the folder cannot be born in place and
+        // cannot be slid there afterwards if it starts as t's sibling. Create it
+        // top-level, move it INTO t's parent at t's slot (a real cross-container
+        // reparent), which pushes t to ti+1, then move t into it.
+        SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+        const int folderTop = model_->getNTracks() - 1;   // append landed last
+        SApplication::app().submitAction( new SReparentTrackAction(
+            QList<int>{ folderTop }, parentPath, ti ) );
+        QList<int> tNow = parentPath;   tNow.append( ti+1 );
+        QList<int> folderNow = parentPath; folderNow.append( ti );
+        SApplication::app().submitAction( new SReparentTrackAction(
+            tNow, folderNow, -1 ) );
+    }
+
     if( stack ) stack->endMacro();
 }
 
@@ -895,31 +921,48 @@ void SStdMixerView::ctUngroupTrack()
 {
     STrack *t = qContent_->getLastClickTrack();
     if( !t || !model_ ) return;
-    int c = model_->indexOfChildObject( *t );   // top-level folders only for now
-    if( c<0 ) return;
+    const QList<int> tPath = strackpath::pathOf( model_, t );
+    if( tPath.isEmpty() ) return;
+    QList<int> parentPath = tPath;
+    const int ti = parentPath.takeLast();       // the folder's slot in ITS parent
+
     QList<STrack*> kids;
     for( SLink *lk : t->childLinks() ) {
         if( STrack *k = dynamic_cast<STrack*>( &lk->getSObject() ) ) kids.append( k );
     }
     if( kids.isEmpty() ) return;
+
     QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
     if( stack ) stack->beginMacro( "Ungroup track" );
-    // Move each child out to the mixer, filling the slots just before the folder
-    // so they end up where the folder was, in order. The empty folder is left in
-    // place (an undoable track-remove is a separate task).
-    int insertAt = c;
+    // Promote each child into the folder's OWN parent — the mixer when the
+    // folder is top-level, the grandparent folder when it is nested (this used
+    // to hard-code the mixer, so ungrouping a nested folder would have flung its
+    // children out to the top level). Fill the slots just before the folder so
+    // they end up where it was, in order; each insert pushes the folder one
+    // further right, which is why insertAt just increments. Actions apply
+    // synchronously, so pathOf() below re-reads the tree after the previous move.
+    int insertAt = ti;
     for( STrack *k : kids ) {
         SApplication::app().submitAction( new SReparentTrackAction(
-            strackpath::pathOf( model_, k ), QList<int>{}, insertAt ) );
+            strackpath::pathOf( model_, k ), parentPath, insertAt ) );
         ++insertAt;
     }
     // Delete the now-empty folder (undoable: its restore brings it back, then the
     // child reparents undo back into it).
-    int fIdx = model_->indexOfChildObject( *t );
-    if( fIdx>=0 ) {
-        SApplication::app().submitAction( new SRemoveTrackAction( fIdx ) );
+    const QList<int> fPath = strackpath::pathOf( model_, t );
+    if( !fPath.isEmpty() ) {
+        SApplication::app().submitAction( new SRemoveTrackAction( fPath ) );
     }
     if( stack ) stack->endMacro();
+}
+
+bool SStdMixerView::groupGesture( STrack *t, bool ungroup )
+{
+    if( !t || !qContent_ ) return false;
+    qContent_->setLastClickTrack( t );
+    if( ungroup ) ctUngroupTrack();
+    else          ctGroupTrack();
+    return true;
 }
 
 offset_t SMVActualView::getTimeOf( int x ) const

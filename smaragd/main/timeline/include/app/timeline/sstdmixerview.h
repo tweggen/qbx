@@ -106,6 +106,9 @@ public:
     idx_t getLastClickTrackIdx() const { return lastClickTrackIdx_; }
     STrack *getLastClickTrack() const { return lastClickTrack_; }
     void resetLastClickTrack() { lastClickTrack_ = NULL; }
+    // Testkit only: the group/ungroup gestures act on the last-CLICKED track,
+    // and a headless run never clicks. Lets group-track drive the real slots.
+    void setLastClickTrack( STrack *t ) { lastClickTrack_ = t; }
     SLink *getLastClickSLink() const { return lastClickSLink_; }
     void resetLastClickSLink() { lastClickSLink_ = NULL; }
     offset_t getLastClickOffset() const { return lastClickOffset_; }
@@ -399,6 +402,10 @@ public:
     // press lands: GrabBody is what the body gestures (slip, duplicate, move)
     // need, since a press inside an edge band can never arm them.
     enum ClipGrab { GrabStart = 0, GrabEnd = 1, GrabBody = 2 };
+    // Testkit: run the REAL Group/Ungroup context-menu slots on `t`. The index
+    // arithmetic in those slots is the whole risk, so it must be the thing
+    // under test rather than a re-spelling of it in a qxa script.
+    bool groupGesture( STrack *t, bool ungroup );
     bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
                        bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 

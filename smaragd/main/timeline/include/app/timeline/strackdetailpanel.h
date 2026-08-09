@@ -42,7 +42,6 @@ private slots:
 private:
     void rebuildUI();
     // Index of currentTrack_ in the mixer, or -1.
-    int trackIndex_() const;
 
     STrack *currentTrack_ = nullptr;
 

@@ -76,8 +76,9 @@ SApplyResult SAddTrackAction::apply(SProject *project)
     // Auto-select the newly added track (c)
     mixer->setSelectedTrack(track);
 
-    // Create inverse action: remove at the same index.
-    SAction *inverse = new SRemoveTrackAction(actualIndex);
+    // Create inverse action: remove at the same index. add-track always appends
+    // at the MIXER's top level, so a one-element path is the whole address.
+    SAction *inverse = new SRemoveTrackAction(QList<int>{ actualIndex });
 
     return {true, inverse};
 }

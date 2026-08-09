@@ -259,6 +259,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
+    testkit/include/app/testkit/sgrouptrackaction.h
     testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
     testkit/include/app/testkit/smetertestactions.h
@@ -273,6 +274,7 @@ set(APP_UI_FILES
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sdragclipedgeaction.cpp
+    testkit/src/sgrouptrackaction.cpp
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
     testkit/src/smetertestactions.cpp

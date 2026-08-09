@@ -64,6 +64,7 @@ public:
     bool readXml( const QDomElement &elem, int version ) override;
 
 private:
+    QString       trackPath_;          // empty = use trackIndex_
     int           trackIndex_ = 0;
     int           slotIndex_  = 0;
     std::uint32_t paramId_    = 0;

@@ -152,22 +152,6 @@ void STrackDetailPanel::rebuildUI()
     updateGeometry();   // the empty panel asks for far less room than a full one
 }
 
-int STrackDetailPanel::trackIndex_() const
-{
-    if (!currentTrack_) return -1;
-    SProject *proj = SApplication::app().getCurrentProject();
-    SStdMixer *mixer = proj ? dynamic_cast<SStdMixer *>( proj->getRootComponent() )
-                            : nullptr;
-    if (!mixer) return -1;
-
-    const int n = mixer->getNTracks();
-    for (int i = 0; i < n; ++i) {
-        SLink *link = mixer->getTrackAt(i);
-        if (link && &link->getSObject() == (SObject *) currentTrack_) return i;
-    }
-    return -1;
-}
-
 void STrackDetailPanel::onVolumeSliderMoved(int sliderValue)
 {
     if (!currentTrack_) return;
@@ -177,9 +161,9 @@ void STrackDetailPanel::onVolumeSliderMoved(int sliderValue)
 
     // Through the action system so the edit is undoable and both faders follow
     // the model, exactly as SSMVMixerControl::applyVolume_ does. Index-PATH, not
-    // a top-level index: trackIndex_() scans the mixer's DIRECT children only,
-    // so for a track nested in a folder it returned -1 and this fader silently
-    // took the non-undoable fallback below.
+    // a top-level index: this used to scan the mixer's DIRECT children only, so
+    // for a track nested in a folder it resolved -1 and this fader silently took
+    // the non-undoable fallback below. That scan helper is now deleted.
     SProject *proj = SApplication::app().getCurrentProject();
     SObject *root = splacements::rootContainer(proj);
     const QList<int> trackPath =

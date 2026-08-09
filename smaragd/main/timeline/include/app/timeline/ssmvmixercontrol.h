@@ -80,7 +80,6 @@ protected slots:
 
 private:
     // Resolve this control's track index within the mixer model (-1 if gone).
-    int trackIndex_() const;
 
     // Push the slider position to the value v (in dB) without re-submitting
     // an action (model -> view update).

@@ -75,9 +75,11 @@ void SSMVMixerControl::sliderValueChanged( int value )
 /**
  * Apply a new track volume (in dB), routing through the action system so it is
  * undoable and (once the engine drain goes async) coalescable. Address our track
- * by index-PATH from the root mixer — the old top-level `trackIndex_()` scan
- * returned -1 for a track nested in a folder, so a grouped lane's fader silently
- * took the non-undoable fallback below. Same resolution soloToggled() uses.
+ * by index-PATH from the root mixer. This used to scan the mixer's DIRECT
+ * children for our track, which returned -1 for a track nested in a folder, so
+ * a grouped lane's fader silently took the non-undoable fallback below. Same
+ * resolution soloToggled() uses; the old top-level scan helper is gone, so
+ * nobody can reach for it again.
  */
 void SSMVMixerControl::applyVolume_( double newVolume )
 {
@@ -127,25 +129,6 @@ bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
         }
     }
     return QWidget::eventFilter( watched, ev );
-}
-
-/**
- * Locate this control's track within the mixer model. Returns -1 if not found
- * (e.g. the track was removed). The action layer keys off this index.
- */
-int SSMVMixerControl::trackIndex_() const
-{
-    SStdMixer *mixer = smv_.getModel();
-    if( !mixer ) return -1;
-
-    int n = mixer->getNTracks();
-    for( int i = 0; i < n; ++i ) {
-        SLink *link = mixer->getTrackAt( i );
-        if( link && &link->getSObject() == &tk_ ) {
-            return i;
-        }
-    }
-    return -1;
 }
 
 /**

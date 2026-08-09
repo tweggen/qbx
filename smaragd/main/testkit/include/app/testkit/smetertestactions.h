@@ -42,6 +42,12 @@ public:
     bool readXml( const QDomElement &elem, int version ) override;
 
 private:
+    // Resolved lane address: trackPath_ when given, else the legacy top-level
+    // trackIndex_. A one-element path IS a top-level index, so the two spell
+    // the same thing for a flat project.
+    QString effectivePath() const;
+
+    QString trackPath_;          // empty = use trackIndex_
     int     trackIndex_ = 0;
     long long position_ = 0;
     double  minRms_  = -1.0;   // < 0 == not checked

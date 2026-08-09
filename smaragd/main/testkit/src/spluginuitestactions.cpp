@@ -109,9 +109,12 @@ bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/
 
 SApplyResult SPluginEditorSetParamAction::apply( SProject *project )
 {
-    auto strip = makeStrip( project, trackIndex_ );
+    auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
+                                      : makeStripAt( project, trackPath_ );
     if( !strip ) {
-        qWarning() << "plugin-editor-set-param: no track" << trackIndex_;
+        qWarning() << "plugin-editor-set-param: no track"
+                   << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
+                                             : trackPath_ );
         return { false, nullptr };
     }
 
@@ -140,6 +143,7 @@ SApplyResult SPluginEditorSetParamAction::apply( SProject *project )
 
 void SPluginEditorSetParamAction::writeXml( QDomElement &elem ) const
 {
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
     elem.setAttribute( "trackIndex", trackIndex_ );
     elem.setAttribute( "slotIndex", slotIndex_ );
     elem.setAttribute( "paramId", (qulonglong) paramId_ );
@@ -153,6 +157,7 @@ void SPluginEditorSetParamAction::writeXml( QDomElement &elem ) const
 bool SPluginEditorSetParamAction::readXml( const QDomElement &elem,
                                           int /*version*/ )
 {
+    trackPath_  = elem.attribute( "trackPath" );
     trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
     slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
     paramId_    = (std::uint32_t) elem.attribute( "paramId", "0" ).toUInt();

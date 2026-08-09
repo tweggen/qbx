@@ -8900,3 +8900,56 @@ Negative-control proven: restoring the top-level-only scan makes it fail with
 
 All 9 `qxa.plugin_*` cases pass, including `plugin_ui_strip_and_editor`, which
 matches on `describeSlot` output and was unaffected by the new field.
+
+---
+
+## 2026-08-09 — Sweep: the rest of the "top-level children only" family
+
+After the fourth instance surfaced one bug report at a time, an audit of every
+`getTrackAt` / `indexOfChildObject` / `getNTracks` site in `main/`. Four fixes,
+each negative-control proven.
+
+**Cleared, not bugs** (recorded so the next audit does not re-litigate them):
+`SStdMixer::getTrackAt`/`getNTracks` themselves (that IS the top-level list API);
+`add-track`/`restore-track` landing indices (top-level by design);
+`reparent-track`'s `getNTracks()` (only in the destination-mixer branch);
+drag-to-reorder at `sstdmixerview.cpp:2795` (nested is correctly handled in the
+`else` branch via reparent); the vertical scroll range at `:3063` (inside
+`#if 0` — the live path uses `rowCount()` over the flattened tree);
+`assert-track-count` (top-level by design); and the Test-menu diagnostics.
+
+**1. A nested track could not be removed.** `remove-track` carried a top-level
+`index` resolved with `getTrackAt()`, and the arranger's "Remove track" said so
+in a comment ("Removing a nested track is not wired here yet") while silently
+returning. Both the verb and the slot are now path-addressed. The real work was
+not addressing but DETACH/RE-ATTACH SYMMETRY: the container may be the root mixer
+(which owns its track list and rewires summing inputs) or a folder `STrack`
+(which holds an ordinary `SLink` child), so `SRestoreTrackAction` now carries the
+PARENT PATH rather than assuming the mixer, and re-attaches the way the removal
+detached — mirroring `SReparentTrackAction`, which has always had to handle both.
+Removal and restore also run `applyAudibility()`, because removing or restoring a
+lane changes what every other lane hears when solo is in force. Gate:
+`qxa.remove_nested_track`, whose folder carries a clip of its OWN — without that
+control, "removed" and "removed the wrong lane" both render silence and a restore
+into the wrong parent still sums into the master.
+
+**2. Group/Ungroup on an already-nested track** — the proposal 05 backlog
+deferral, now lifted; see the BACKLOG entry for why it was more than addressing.
+
+**3. Two dead top-level scans deleted.** `SSMVMixerControl::trackIndex_()` and
+`STrackDetailPanel::trackIndex_()` became unused when the volume fader was
+path-addressed. They are exactly the helper the next person reaches for, so they
+are gone rather than left lying around.
+
+**4. The test surface could not reach a nested lane at all**, which is the reason
+several of these bugs were unfalsifiable rather than merely unnoticed:
+`assert-meter` (via `SMainWindow::describeTrackMeter`) and
+`plugin-editor-set-param` both took a top-level `trackIndex`. Both now accept
+`trackPath`. This mattered immediately: meters consume the mute/solo audibility
+rule that had just changed, and a nested lane's meter had no coverage whatsoever.
+
+New testkit verb `group-track` drives the arranger's real Group/Ungroup slots
+(same rationale as `drag-clip-edge` for clip gestures). `assert-plugin-strip`'s
+path resolution doubles as a structural probe — it rejects an unresolvable lane,
+so `expectReject="true"` asserts a lane is GONE, which is the only structural
+assertion available given `assert-track-count` counts top-level lanes only.
