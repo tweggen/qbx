@@ -82,6 +82,15 @@ public:
     twEditRange removeClip(const void *key);
     twEditRange updateClip(const void *key, offset_t newStartTime, length_t newDuration);
 
+    // Range-scoped invalidation reaches our CLIP ENTRIES, not just our own
+    // (always empty) page map. Without this override an external invalidation —
+    // STrack::bumpRenderChainEpochRange, i.e. every clip edit, mute, solo or
+    // gain change — left each entry's `previousPage` pointing at the page it
+    // rendered BEFORE the edit, and that page is handed back to the child as its
+    // DSP-state predecessor on the next freeze. twPluginChain has always
+    // forwarded invalidation to its inserts; this is the same duty for clips.
+    void invalidatePagesInRange(offset_t start, offset_t end) override;
+
     // Proposal 19 dataflow stage 2 — planner override: the trackmix consumes
     // its clips by DIRECT view->freezePage calls, so its deps are not input
     // plugs but, per clip overlapping the page, the resolveClip()-resolved

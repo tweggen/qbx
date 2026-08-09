@@ -176,10 +176,18 @@ twEditRange twTrackMix::updateClip(const void *key, offset_t newStartTime, lengt
     // Deferred drop of the clip's previous-page snapshot. Declared before the
     // lock_guard so it destructs AFTER the mutex is released: ~twOutputPage
     // (and the shared_ptr chain it may head) must not run under our lock.
-    std::shared_ptr<twOutputPage> doomedPage;
+    // Deferred drop, plural: one entry per matching key (see the loop note).
+    std::vector<std::shared_ptr<twOutputPage>> doomedPages;
     twEditRange r;
     {
         std::lock_guard<std::mutex> lock(mutex());
+        // EVERY entry with this key, not just the first. removeClip has always
+        // looped; this used to `break`, so a second entry for one SLink* would
+        // stay frozen at its old extent and keep clipping the sum there. The
+        // duplicate is not hypothetical: STrack::setNBusses's initial-sync loop
+        // re-inserts every existing child into every bus mixer, so growing the
+        // bus count duplicates each entry in the mixers that already had it.
+        // Unreachable while the sink is mono — a trap primed for stereo output.
         for( ClipEntry &clip : clips_ ) {
             if( clip.key == key ) {
                 // The affected extent is the UNION of the pre- and post-edit
@@ -188,25 +196,53 @@ twEditRange twTrackMix::updateClip(const void *key, offset_t newStartTime, lengt
                 // startTime/duration are unchanged: slip- or stretch-only edits
                 // arrive here with the same window but changed content
                 // (SCut::setWindow always emits durationChanged).
-                r = clipExtent(clip.startTime, clip.duration);
+                r.unite(clip.startTime, clipExtent(clip.startTime, clip.duration).end);
                 twEditRange n = clipExtent(newStartTime, newDuration);
                 r.unite(n.start, n.end);
                 clip.startTime = newStartTime;
                 clip.duration = newDuration;
-                invalidatePagesInRange_nolock(r.start, r.end);
                 // Restart the clip's state chain: the edit may have changed the
                 // component behind the view (reader rebuild, take selection), and
                 // a predecessor page from another component would restore foreign
                 // DSP state. Discontinuity (reset+seek) is always correct.
                 // Move (not reset) the old page out so it dies after we unlock;
                 // moving leaves clip.previousPage empty, which is the intent.
-                doomedPage = std::move(clip.previousPage);
-                break;
+                if( clip.previousPage )
+                    doomedPages.push_back( std::move( clip.previousPage ) );
             }
         }
+        // One invalidation over the union of every match, after the walk.
+        if( !r.empty() ) invalidatePagesInRange_nolock(r.start, r.end);
     }
-    // lock released here; `doomedPage` destructs next with the mutex open.
+    // lock released here; `doomedPages` destructs next with the mutex open.
     return r;
+}
+
+void twTrackMix::invalidatePagesInRange(offset_t start, offset_t end)
+{
+    // Deferred drop: ~twOutputPage (and the shared_ptr chain it may head) must
+    // not run under our lock — same discipline as updateClip().
+    std::vector<std::shared_ptr<twOutputPage>> doomed;
+
+    // Bumps our own content epoch and stales our own pages (we cache none, but
+    // the epoch is what downstream compares against).
+    twComponent::invalidatePagesInRange(start, end);
+    if (end <= start) return;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        for( ClipEntry &clip : clips_ ) {
+            twEditRange e = clipExtent(clip.startTime, clip.duration);
+            const bool intersects = e.start < end && start < e.end;
+            if( !intersects ) continue;
+            // Restart this clip's state chain, exactly as updateClip does: a
+            // predecessor page rendered against pre-edit audio would restore
+            // foreign DSP state. A discontinuity (reset+seek) is always correct.
+            if( clip.previousPage ) doomed.push_back( std::move( clip.previousPage ) );
+            if( clip.view ) clip.view->invalidatePagesInRange(start, end);
+        }
+    }
+    // lock released; `doomed` destructs here.
 }
 
 twEditRange twTrackMix::setClipMuted(const void *key, bool muted)

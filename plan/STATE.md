@@ -8953,3 +8953,78 @@ New testkit verb `group-track` drives the arranger's real Group/Ungroup slots
 path resolution doubles as a structural probe — it rejects an unresolvable lane,
 so `expectReject="true"` asserts a lane is GONE, which is the only structural
 assertion available given `assert-track-count` counts top-level lanes only.
+
+---
+
+## 2026-08-09 — The six follow-up defects from the nested-lane investigation
+
+`plan/todo/NESTED_LANE_STALE_PAGE.md` is now CLOSED: all six smaller defects
+found while root-causing the stale held page are fixed. Kept in todo/ as the
+forensic record — the A/B proof and the epoch trace are the reusable parts.
+
+**Readahead poisoned the root page cache** (the only one with a present-day
+audible symptom). `audio_engine.cc` probed with `getOrAllocatePage`, which
+INSERTS an empty placeholder for a position that has none; `freezePage` later
+reuses that placeholder instead of allocating, so the page it replaces is never
+recorded as `stalePredecessor` and the proposal-16 fallback has nothing to fall
+back to there — a dropout instead of graceful stale audio across an edit. Now
+`getPageIfExists`: the readahead only ever wanted to know whether a current page
+existed.
+
+**The scheduler's verify-at-publish retry could not do anything.** Confirmed by
+reading the cache path: `freezePageWithInputs` → `freezePage`, whose lookup finds
+the page attempt 1 just wrote — frozen, stamped at the current epoch — and
+returns it untouched. So a node that NOTICED a stale dependency went on to
+publish the very content it had just diagnosed as wrong. The retry now drops that
+page first, range-scoped to exactly its own page.
+
+**`twTrackMix` never forwarded invalidation to its clip entries.** It now has the
+`invalidatePagesInRange` override `twPluginChain` has always had for its inserts:
+bump own epoch, clear `previousPage` on every entry whose extent intersects
+(deferred destruction outside the lock, as `updateClip` does), forward to the
+entry's `twView`. Without it, every clip edit / mute / solo / gain change left
+each entry pointing at its pre-edit page, which is then handed to the child as
+its DSP-state predecessor on the next freeze.
+
+**`updateClip`'s first-match `break` and `setNBusses`'s sync loop are ONE bug,
+not two** — worth recording, because the notes had them as separate items and
+fixing them separately would have treated the symptom. `setNBusses` inserted into
+EVERY bus mixer including ones that already held the clips, so growing the bus
+count duplicated each entry — and that duplicate is precisely what `updateClip`'s
+`break` then mishandled, leaving a second entry frozen at its old extent. The
+sync loop now populates only newly-created mixers and adds the
+`startTimeChanged`/`durationChanged` wiring (`Qt::UniqueConnection`);
+`updateClip` walks every match and invalidates once over the union. Unreachable
+while the sink is mono — a trap primed for the stereo-output work.
+
+### Verification, and its limits
+
+20/20 unit tests, full qxa suite 82/82 (82 runnable registered, 82 run,
+reconciled). The 19 DSP-sensitive cases (`grain_*`, `exact_*`, `stress_*`,
+`warp_*`) were run FIRST and separately, because the `previousPage` clearing
+forces a reset+seek discontinuity and is the change most able to perturb stateful
+output; they were clean.
+
+Items 5 and 6 have **no bespoke gate**, and that is a real gap rather than an
+oversight: both are concurrency/latency properties of paths the offline qxa suite
+does not drive (a mid-render edit racing a worker; the live playback readahead —
+offline renders never run the readahead at all). Their correctness rests on the
+code reading plus absence of regression, which is weaker than the rest of this
+work.
+
+### Suite flakiness — three non-reproducing failures this session
+
+`qxa.trim_start_keeps_end` failed once inside the `t–z` chunk, then passed 50/50
+in isolation (20 at default workers, 15 at `SMARAGD_REVAL_WORKERS=0`, 15 at 1 —
+including the deterministic settings), and the chunk itself passed 11/11 on
+re-run. It sits on the `updateClip` path this change touched, so it was chased
+with `tests/repeat_test.sh` rather than waved through; it could not be
+reproduced.
+
+That is the THIRD single-case failure this session that did not reproduce
+(`delete_clip_undo_restores`, one unidentified case in an `a–g` chunk, and this).
+All three: a single case failing inside a long sequential chunk, passing in
+isolation and on chunk re-run. At least one occurred before any of these six
+fixes existed, so the pattern is not attributable to them — but neither has it
+been explained. A low-rate flake somewhere in the suite under sustained load is
+the working hypothesis and it remains unproven.

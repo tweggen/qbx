@@ -671,7 +671,15 @@ void AudioEngine::readaheadLoop() {
             // page instead, which self-heals under any edit/playback ordering.
             const uint64_t epochNow = synthOutput_->contentEpochNow();
 
-            auto existing = synthOutput_->getOrAllocatePage(pos);
+            // PROBE, don't allocate. getOrAllocatePage() inserts an empty
+            // placeholder for a position that has none, and freezePage() later
+            // REUSES that placeholder instead of allocating a fresh page — so
+            // the page it replaces is never recorded as stalePredecessor, and
+            // the proposal-16 fallback (which is what keeps playback graceful
+            // across an edit) has nothing to fall back TO at that position. The
+            // readahead only wants to know whether a current page already
+            // exists; asking non-destructively is both correct and cheaper.
+            auto existing = synthOutput_->getPageIfExists(pos);
             if (existing && existing->validAspects != 0 &&
                 existing->contentEpoch.load() >= epochNow) {
                 // Already frozen and current; update prevPage and move on

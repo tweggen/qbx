@@ -326,6 +326,9 @@ void STrack::trackChildWasRemoved( SLink &child )
 
 void STrack::setNBusses( int nBusses )
 {
+    // Hoisted: the initial-sync loop at the end needs to know which mixers
+    // are NEW, so it does not re-insert clips into ones that already hold them.
+    int oldMixerCount = 0;
     if( nBusses==nBusses_ ) return;
     int oldNBusses = nBusses_;
     if( nBusses<oldNBusses ) {
@@ -338,7 +341,7 @@ void STrack::setNBusses( int nBusses )
         // the actual container size, not nBusses_: the constructor sets
         // nBusses_==1 while leaving this vector empty, so trusting nBusses_ here
         // would skip creating bus 0 and leave a null shared_ptr behind.
-        int oldMixerCount = (int)cpTrackMixers_.size();
+        oldMixerCount = (int)cpTrackMixers_.size();
         cpTrackMixers_.resize(nBusses);
         // Create the new ones.
         for( int i=oldMixerCount; i<nBusses; ++i ) {
@@ -409,8 +412,15 @@ void STrack::setNBusses( int nBusses )
         }
     }
 
-    // Populate clip list in all track mixers with existing children (initial sync).
-    // This runs on the UI thread, so it's safe to populate before audio starts.
+    // Populate clip list in the NEW track mixers with existing children (initial
+    // sync). This runs on the UI thread, so it's safe to populate before audio
+    // starts.
+    //
+    // Only the mixers created by this call (index >= oldMixerCount): the ones
+    // that already existed already hold every entry, and re-inserting would give
+    // one SLink* two entries in the same mixer — a duplicate that only
+    // removeClip cleaned up correctly, and that would otherwise stay frozen at
+    // its pre-edit extent and clip the sum there.
     for( SLink *lk : childLinks() ) {
         if( !lk || !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();
@@ -423,9 +433,21 @@ void STrack::setNBusses( int nBusses )
         auto resolveFn = [lk]( offset_t off ) {
             return lk->getSObject().resolveClip( off );
         };
-        for( int i=0; i<nBusses; ++i ) {
+        for( int i=oldMixerCount; i<nBusses; ++i ) {
+            if( !cpTrackMixers_[i] ) continue;
             cpTrackMixers_[i]->insertClip(lk, startTime, duration, getComponentFn, resolveFn);
         }
+        // ...and give those entries the same live wiring trackChildWasAdded
+        // makes, or a later move/resize of the clip would never reach the mixers
+        // created here: the clip would stay at the extent it had at bus-growth
+        // time. UniqueConnection because a child adopted the normal way is
+        // already connected.
+        QObject::connect( lk, SIGNAL( startTimeChanged( offset_t ) ),
+                          this, SLOT( trackChildWasMoved( offset_t ) ),
+                          Qt::UniqueConnection );
+        QObject::connect( &(lk->getSObject()), SIGNAL( durationChanged( length_t ) ),
+                          this, SLOT( trackChildDurationChanged( length_t ) ),
+                          Qt::UniqueConnection );
     }
 
     nBusses_ = nBusses;

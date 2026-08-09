@@ -1,7 +1,10 @@
-# Nested-lane stale page — ROOT CAUSE FIXED 2026-08-09
+# Nested-lane stale page — ALL ITEMS FIXED 2026-08-09
 
-**Status:** the headline bug is FIXED and gated. Several smaller defects found
-during the investigation are still OPEN — see "Still open" at the bottom.
+**Status:** CLOSED. The headline bug is fixed and gated, and all six smaller
+defects found during the investigation are now fixed too (see the bottom
+section). Kept in todo/ as the forensic record — the A/B proof, the measured
+epoch trace and the "one session may drive build/ at a time" lesson are the
+reusable parts.
 
 ## The bug
 
@@ -112,10 +115,11 @@ Per-12000-frame RMS of `a_post.wav`:
 | after the fix | 0.0167 | 0.0441 | 0.0726 | 0.1014 |
 | top-level control | 0.0167 | 0.0441 | 0.0726 | 0.1014 |
 
-## Still open
+## The six smaller defects — ALL FIXED
 
 Found while investigating, none of them the headline cause, all confirmed by
-reading the code:
+reading the code, all since fixed. Kept with their diagnosis because the
+reasoning is the reusable part.
 
 1. ~~**Readahead demands are epoch-blind.**~~ **FIXED 2026-08-09.**
    `audio_engine.cc` gated re-demand purely positionally, so an edit made while
@@ -135,22 +139,51 @@ reading the code:
    properly needs a scheduler-driven playback test asserting that a demand
    issued pre-edit is superseded — `playback_test` can link `tw_schedule`
    already, so the vehicle exists.
-2. **`twTrackMix::updateClip` stops at the first matching key** (`break;` at
-   twtrackmix.cc:204) while `removeClip` loops over all of them. Any path that
-   inserts a duplicate entry for one `SLink*` leaves a second entry frozen at its
-   old extent.
-3. **`STrack::setNBusses`'s initial-sync loop** (strack.cpp:399-414) re-inserts
-   every existing child but wires none of the `durationChanged` /
-   `startTimeChanged` connections that `trackChildWasAdded` makes.
-4. **`twTrackMix` has no `invalidatePagesInRange` override** (unlike
-   `twPluginChain`, twpluginchain.cc:296-306), so an external invalidation never
-   clears a clip entry's `previousPage`. Only `updateClip` does.
-5. **The scheduler's verify-at-publish retry is a no-op**:
-   `capture_revalidator.cc:404-414` re-renders through `twComponent::freezePage`,
-   which cache-hits the page attempt 1 just wrote and stamped current
-   (twcomponent.cc:556-561). A mid-render edit cannot be repaired by the retry.
-6. **Readahead poisons the root cache**: `audio_engine.cc:674` calls
-   `getOrAllocatePage(pos)`, inserting an empty placeholder that `freezePage`
-   later reuses, so `stalePredecessor` is never set for that position and the
-   proposal-16 fallback degrades to a dropout there. *Fix:* use the
-   non-allocating `getPageIfExists` in the readahead probe.
+2 + 3. ~~**`updateClip` stops at the first matching key**~~ and ~~**`setNBusses`'s
+   sync loop wires no connections**~~ — **FIXED 2026-08-09, and they are one
+   bug, not two.** The notes treated them separately; tracing it, `setNBusses`
+   inserted into EVERY bus mixer (`for i in 0..nBusses`), including ones that
+   already held the clips — so growing the bus count duplicated every entry, and
+   THAT duplicate is exactly the condition `updateClip`'s `break` mishandled.
+   Fixing only the missing connections would have treated the symptom. Now the
+   sync loop populates only the newly-created mixers (`i >= oldMixerCount`) and
+   adds the `startTimeChanged` / `durationChanged` wiring with
+   `Qt::UniqueConnection`; `updateClip` walks every matching key and invalidates
+   once over the union. Unreachable while the sink is mono, so this was a trap
+   primed for the stereo-output work rather than a live bug.
+4. ~~**`twTrackMix` has no `invalidatePagesInRange` override**~~ — **FIXED.**
+   It now bumps its own epoch, clears `previousPage` on every clip entry whose
+   extent intersects the range (deferred destruction, outside the lock, as
+   `updateClip` does) and forwards to the entry's `twView` — the same duty
+   `twPluginChain` has always had to its inserts. Without it every clip edit,
+   mute, solo or gain change left each entry pointing at the page it rendered
+   BEFORE the edit, and that page is handed to the child as its DSP-state
+   predecessor on the next freeze.
+5. ~~**The scheduler's verify-at-publish retry is a no-op**~~ — **FIXED.**
+   Confirmed exactly as diagnosed: `freezePageWithInputs` → `freezePage`, whose
+   cache lookup finds attempt 1's page (current epoch, `validAspects != 0`) and
+   returns it untouched, so a node that NOTICED a stale dependency then
+   published the very content it had just diagnosed as wrong. The retry now
+   drops that page first via `invalidatePagesInRange` over exactly its own page
+   — range-scoped, so every other page of the component is re-blessed rather
+   than staled.
+6. ~~**Readahead poisons the root cache**~~ — **FIXED.** `getOrAllocatePage` →
+   `getPageIfExists` in the readahead probe. The readahead only wants to know
+   whether a current page exists; asking destructively inserted an empty
+   placeholder that `freezePage` later REUSED, so the page it replaced was never
+   recorded as `stalePredecessor` and the proposal-16 fallback had nothing to
+   fall back to at that position — an audible dropout instead of graceful stale
+   audio. This was the only one of the six with a present-day audible symptom.
+
+**Gates for the six:** 20/20 unit tests (incl. `mix_test` and `schedule_test`),
+and the full qxa suite 82/82. The DSP-sensitive cases (`grain_*`, `exact_*`,
+`stress_*`, `warp_*`, 19 of them) were run FIRST and separately, because item 4
+forces a reset+seek discontinuity on invalidation and that is the change most
+able to perturb stateful output.
+
+**Not gated by a bespoke test:** items 5 and 6 are both concurrency/latency
+properties of paths the offline qxa suite does not drive (a mid-render edit
+racing a worker; the live playback readahead). Item 6 is inert for qxa entirely —
+offline renders never run the readahead. Their correctness rests on the reading
+above plus the absence of regression, which is weaker evidence than the rest of
+this document and is recorded as such.

@@ -410,6 +410,17 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
                 (length_t)twOutputPage::FRAME_CAPACITY, 0, nullptr);
             if (p) fresh.bind(d->component.get(), p);
         }
+        // Drop what attempt 1 published FIRST, or the retry cannot do anything:
+        // freezePageWithInputs() goes through twComponent::freezePage(), whose
+        // cache lookup finds the page attempt 1 just wrote — frozen and stamped
+        // at the current epoch — and returns it untouched. The re-render never
+        // ran, so a node that noticed a stale dependency published the very
+        // content it had just diagnosed as wrong. Range-scoped, so only THIS
+        // page goes stale; every other page of this component is re-blessed to
+        // the new epoch by invalidatePagesInRange itself.
+        node->component->invalidatePagesInRange(
+            node->pageStart,
+            node->pageStart + (offset_t)twOutputPage::FRAME_CAPACITY);
         page = node->component->freezePageWithInputs(node->pageStart, fresh, prev);
     }
     statNodesExecuted_.fetch_add(1, std::memory_order_relaxed);
