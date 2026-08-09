@@ -6,6 +6,8 @@
 #include "app/pluginui/spluginparamereditor.h"
 #include "app/shell/sapplication.h"
 #include "app/model/sproject.h"
+#include "app/model/splacements.h"
+#include "app/model/sobjectpath.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/model/slink.h"
 #include "app/objects/track/sinsertpluginaction.h"
@@ -146,21 +148,27 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
 
 SPluginEffectStrip::~SPluginEffectStrip() = default;
 
+// The strip's track, as an index-path from the root mixer ("2", "0,1", ...).
+//
+// This used to scan mixer->getTrackAt(i) over the mixer's DIRECT children only,
+// so for a track NESTED inside a folder it found nothing and returned an empty
+// string. Every caller here early-returns on empty — add, remove, bypass, edit
+// and reorder alike — so the whole FX strip silently did nothing on a grouped
+// track: the buttons were enabled, the clicks were accepted, and no action was
+// ever submitted. Same defect family as the clip and fader verbs.
 QString SPluginEffectStrip::trackPathString() const
 {
     SProject *project = SApplication::app().getCurrentProject();
     if (!project) return QString();
 
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(project->getRootComponent());
-    if (!mixer) return QString();
+    SObject *root = splacements::rootContainer(project);
+    if (!root) return QString();
 
-    for (int i = 0; i < mixer->getNTracks(); ++i) {
-        SLink *link = mixer->getTrackAt(i);
-        if (link && &link->getSObject() == track_) {
-            return QString::number(i);
-        }
-    }
-    return QString();
+    // pathOf() returns {} for "the root itself" as well as "not found", but
+    // track_ is an STrack and can never BE the root, so empty means not found.
+    const QList<int> path = strackpath::pathOf(root, track_);
+    if (path.isEmpty()) return QString();
+    return strackpath::pathToString(path);
 }
 
 void SPluginEffectStrip::rebuildUI()
@@ -318,9 +326,15 @@ QString SPluginEffectStrip::describeSlot(int slotIndex) const
     }
     const PluginWidget &pw = pluginWidgets_[slotIndex];
     if (!pw.slot) return QString();
+    // trackPath is here because it is the strip's single point of failure and
+    // was invisible from outside: EVERY button handler resolves the track
+    // through trackPathString() and early-returns when it comes back empty, so
+    // a wrong answer disables the whole strip silently rather than misbehaving
+    // visibly. It read empty for any track nested in a folder. Asserting the
+    // resolved path is what makes that regression catchable.
     return QStringLiteral(
                "name=%1|state=%2|mode=%3|bypass=%4|nameEnabled=%5|bypassEnabled=%6"
-               "|editEnabled=%7|reload=%8|tooltip=%9")
+               "|editEnabled=%7|reload=%8|trackPath=%9|tooltip=%10")
         .arg(pw.nameLabel->text(),
              QString::fromLatin1(stateName(pw.slot->getSlotState())),
              QString::fromLatin1(modeName(pw.slot->getSlotMode())))
@@ -329,6 +343,7 @@ QString SPluginEffectStrip::describeSlot(int slotIndex) const
         .arg(pw.bypassCheckbox->isEnabled() ? 1 : 0)
         .arg(pw.editBtn->isEnabled() ? 1 : 0)
         .arg(pw.reloadBtn ? 1 : 0)
+        .arg(trackPathString())
         .arg(pw.tooltip);
 }
 

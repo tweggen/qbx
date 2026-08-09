@@ -20,7 +20,10 @@
 // screen and could steal focus.
 
 // assert-plugin-strip — build the FX strip for a track and assert on a row.
-//   trackIndex  = "0"     which track's strip to build
+//   trackPath   = ""      index-path from the root mixer ("2", "0,1"); needed to
+//                         reach a track NESTED in a folder, which `trackIndex`
+//                         cannot name. Falls back to trackIndex when absent.
+//   trackIndex  = "0"     legacy top-level index; still accepted
 //   slotCount   = "-1"    if >= 0, the number of rows the strip rendered
 //   slotIndex   = "-1"    which row `contains` is matched against
 //   contains    = ""      substring that must appear in
@@ -34,6 +37,7 @@ public:
     bool readXml( const QDomElement &elem, int version ) override;
 
 private:
+    QString trackPath_;          // empty = use trackIndex_
     int     trackIndex_ = 0;
     int     slotCount_  = -1;
     int     slotIndex_  = -1;

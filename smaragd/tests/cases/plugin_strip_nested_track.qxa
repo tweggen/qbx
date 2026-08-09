@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: the FX strip works on a track NESTED inside a folder/group track —
+  including removing a plugin that is MISSING on this machine.
+
+  Reported as: "I would like to be able to remove a plugin even if it is
+  missing." The missing-ness turned out to be incidental. `remove-plugin` itself
+  has always been Missing-tolerant (SRemovePluginAction reads the stored
+  descriptor and saveState() hands back the stored blob verbatim for a non-Active
+  slot), and the strip's Remove button is enabled in every slot state. The actual
+  blocker was addressing:
+
+      SPluginEffectStrip::trackPathString() scanned mixer->getTrackAt(i) — the
+      mixer's DIRECT children only — and returned an EMPTY string for a nested
+      track. Every button handler in the strip early-returns on empty, so on a
+      grouped track add / remove / bypass / edit / reorder were all silent
+      no-ops: buttons enabled, clicks accepted, no action ever submitted.
+
+  Third instance of the same defect family (after the clip verbs and the volume
+  fader), which is why `describeSlot()` now reports the RESOLVED trackPath: it is
+  the strip's single point of failure and was otherwise invisible from outside —
+  a wrong answer disables the whole strip silently rather than misbehaving
+  visibly. `assert-plugin-strip` gained a `trackPath` attribute for the same
+  reason; `trackIndex` cannot name a nested lane at all.
+
+  The plugin used here is twtestclap.clap, built from this repo and copied next
+  to the binary, so this case needs nothing installed.
+-->
+<SActionScript version="1" name="plugin_strip_nested_track">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0: becomes the folder -->
+    <add-track index="-1"/>            <!-- 1: gets nested into it -->
+
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Group it: the folder holds no clips of its own, so the nested lane is
+         path 0,0. -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+
+    <!-- A real, loadable plugin on the NESTED lane. insert-plugin has always
+         been path-addressed, so the model half was never the problem. -->
+    <insert-plugin trackPath="0,0" slotIndex="0" format="clap"
+                   uid="tw.test.clap.gain" name="Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- THE assertion. Building the strip for the nested lane must resolve the
+         path to "0,0". Before the fix trackPathString() returned "", so this
+         read `trackPath=|tooltip=...` and every button was inert. -->
+    <assert-plugin-strip trackPath="0,0" slotCount="1" slotIndex="0"
+                         contains="trackPath=0,0"/>
+    <!-- And it must not silently fall back to a top-level answer. -->
+    <assert-plugin-strip trackPath="0,0" slotIndex="0" absent="trackPath=0|"/>
+
+    <!-- Removing from the nested lane works (this is the model half, which was
+         always fine — asserted so the two halves stay honest about each other). -->
+    <remove-plugin trackPath="0,0" slotIndex="0"/>
+    <assert-plugin-strip trackPath="0,0" slotCount="0"/>
+
+    <undo count="1"/>
+    <assert-plugin-strip trackPath="0,0" slotCount="1" slotIndex="0"
+                         contains="state=Active"/>
+  </actions>
+
+  <assertions>
+    <!-- After the reparent only the folder is top-level. -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

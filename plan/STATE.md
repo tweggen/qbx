@@ -8861,3 +8861,42 @@ Gates: `qxa.volume_nested_track` (new, negative-control proven),
 `qxa.solo_nested_track`, `qxa.delete_clip_in_group`, and the three committed
 cases that still use the legacy `trackIndex` spelling
 (`grain_with_volume_control`, `meter_postfader`, `render_sawtooth_with_effects`).
+
+---
+
+## 2026-08-09 — The FX strip works on a nested track (and so "remove a missing plugin" works)
+
+Reported as: *"I would like to be able to remove a plugin even if it is
+missing."* The missing-ness was incidental — the nesting was the bug.
+
+What was already fine, established before changing anything: `remove-plugin` is
+Missing-tolerant by design (`SRemovePluginAction` reads the STORED descriptor,
+and `saveState()` hands back the stored blob verbatim for a non-Active slot,
+which is what keeps a user's patch intact on a machine without the plugin).
+Driving the real `plugin_missing_placeholder.qxp` fixture headlessly, removing
+the Missing slot works and the strip's row count goes 1 → 0. The Remove button is
+enabled in every slot state. So neither the action nor the button was refusing.
+
+The blocker was `SPluginEffectStrip::trackPathString()`, which scanned
+`mixer->getTrackAt(i)` — the mixer's DIRECT children only — and returned an EMPTY
+string for a track nested in a folder. **Every** button handler in the strip
+early-returns on empty, so on a grouped track add / remove / bypass / edit /
+reorder were all silent no-ops: buttons enabled, clicks accepted, no action ever
+submitted, nothing on the undo stack. Now `strackpath::pathOf`.
+
+This is the THIRD instance of the same defect family in this area (after the clip
+verbs and the volume fader), and the worst-behaved of the three, because the
+failure is completely invisible from outside: a wrong path does not misbehave, it
+disables the whole surface. So `describeSlot()` now reports the RESOLVED
+`trackPath=`, making it assertable, and `assert-plugin-strip` gained a
+`trackPath` attribute — `trackIndex` cannot name a nested lane, so the verb could
+not have tested this even in principle. Recorded as pluginui CONTRACT invariant 8.
+
+Gate: `qxa.plugin_strip_nested_track` — nests a track, inserts a real
+`twtestclap.clap` on it, asserts the strip resolves `trackPath=0,0`, then
+removes, asserts the row is gone, undoes and asserts it is back and Active.
+Negative-control proven: restoring the top-level-only scan makes it fail with
+`trackPath=|tooltip=…` — the empty path, exactly the reported symptom.
+
+All 9 `qxa.plugin_*` cases pass, including `plugin_ui_strip_and_editor`, which
+matches on `describeSlot` output and was unaffected by the new field.
