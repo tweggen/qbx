@@ -5,6 +5,7 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/core/twfraction.h"
 #include "tw/sources/twgrainparams.h"
+#include <QList>
 
 class QString;
 
@@ -19,11 +20,19 @@ class QString;
 //     inverse. Without it, undoing the deletion of an edited clip silently
 //     returned a full-length unedited one, because apply() built a default cut
 //     and nothing else.
+//
+// The lane is addressed by an index-path from the root mixer ({2} = the 3rd
+// top-level track, {0,1} = the 2nd child of the 1st), matching
+// SRemoveSampleAction — undoing the deletion of a clip on a NESTED (grouped)
+// track has to be able to name that lane. The legacy `trackIndex` attribute is
+// still ACCEPTED on read so existing .qxa scripts keep working.
 class SAddSampleAction : public SAction {
 public:
     SAddSampleAction() = default;
-    SAddSampleAction(int trackIdx, const QString &filePath, offset_t timePos);
-    SAddSampleAction(int trackIdx, const QString &filePath, offset_t timePos,
+    SAddSampleAction(const QList<int> &trackPath, const QString &filePath,
+                     offset_t timePos);
+    SAddSampleAction(const QList<int> &trackPath, const QString &filePath,
+                     offset_t timePos,
                      const Fraction &srcStart, length_t cutDuration,
                      length_t loopLength, const twGrainParams &grain);
 
@@ -33,7 +42,7 @@ public:
     bool readXml(const QDomElement &elem, int version) override;
 
 private:
-    int trackIndex_ = 0;
+    QList<int> trackPath_ = { 0 };
     QString filePath_;
     offset_t timePos_ = 0;
 

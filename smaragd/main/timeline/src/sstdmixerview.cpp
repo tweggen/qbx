@@ -491,13 +491,19 @@ void SStdMixerView::ctRemoveSample()
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return;
 
-    SObject *root = project->getRootComponent();
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
-    if( !mixer ) return;
+    SObject *root = splacements::rootContainer( project );
+    if( !root ) return;
 
-    // Get the track index in the mixer (top-level children)
-    int trackIdx = mixer->indexOfChildObject(*oldTrack);
-    if( trackIdx < 0 ) return;
+    // The lane as an index-path from the root mixer, so a track nested inside a
+    // folder resolves too. This used to be mixer->indexOfChildObject(), which
+    // only sees TOP-LEVEL children: on a grouped track it returned -1 and this
+    // slot returned right here, so Delete on such a clip did nothing at all —
+    // no action, no message, no undo entry.
+    //
+    // pathOf() returns {} for "the root itself" as well as "not found", but
+    // oldTrack is an STrack and can never BE the root, so empty means not found.
+    const QList<int> trackPath = strackpath::pathOf( root, oldTrack );
+    if( trackPath.isEmpty() ) return;
 
     // Get the clip index within the track
     int clipIdx = oldTrack->indexOfChild(oldLink);
@@ -531,7 +537,6 @@ void SStdMixerView::ctRemoveSample()
     qContent_->resetLastClickSLink();
 
     if( !assetName.isEmpty() ) {
-        QList<int> trackPath = strackpath::pathOf( root, oldTrack );
         SApplication::app().submitAction(
             new SRemoveAssetPlacementAction( assetName, trackPath, clipIdx, timePos )
         );
@@ -540,7 +545,7 @@ void SStdMixerView::ctRemoveSample()
 
     // Submit the removal action (proper undo/redo support)
     SApplication::app().submitAction(
-        new SRemoveSampleAction(trackIdx, clipIdx, filePath, timePos)
+        new SRemoveSampleAction(trackPath, clipIdx, filePath, timePos)
     );
 }
 
@@ -3506,14 +3511,19 @@ void SMVActualView::dropEvent(QDropEvent *e)
     }
 
     // Resolve the track's path from the root mixer.
-    SObject *root = project->getRootComponent();
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
-    if (!mixer) {
+    SObject *root = splacements::rootContainer(project);
+    if (!root || !root->isPathContainer()) {
         return;
     }
 
     using namespace strackpath;
     QList<int> trackPath = pathOf(root, track);
+    // pathOf() returns {} for "the root itself" as well as "not found", and a
+    // drop row is always a track — so empty means not found. Refuse rather than
+    // let it resolve to the root mixer and drop the clip on the master.
+    if (trackPath.isEmpty()) {
+        return;
+    }
 
     // Parse the MIME payload and submit the appropriate action.
     if (payload.startsWith(QStringLiteral("asset:"))) {
@@ -3545,11 +3555,11 @@ void SMVActualView::dropEvent(QDropEvent *e)
     } else if (payload.startsWith(QStringLiteral("file:"))) {
         QString filePath = payload.mid(5);
         // For file drops, use SAddSampleAction (same as Insert Sample dialog).
-        // The file's track index is its position in the mixer's top-level children.
-        int trackIdx = mixer->indexOfChildObject(*track);
-        if (trackIdx >= 0) {
-            SApplication::app().submitAction(new SAddSampleAction(trackIdx, filePath, timePos));
-        }
+        // The same trackPath the asset branch above uses: an index-path, so a
+        // drop onto a track nested in a folder lands too. This was
+        // mixer->indexOfChildObject(), which only sees top-level children and
+        // made a drop onto a grouped lane a silent no-op.
+        SApplication::app().submitAction(new SAddSampleAction(trackPath, filePath, timePos));
     }
 
     // Repaint the lanes so the newly placed clip becomes visible — the view's

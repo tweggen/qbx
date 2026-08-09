@@ -30,6 +30,23 @@ Invariants:
 3. freezePage never holds the component mutex while rendering.
 4. tw303aEnvironment is the one QObject in the engine; nothing else in
    tw/ may inherit QObject (thread-adoption hardening — THREADING.md).
+5. A page's `contentEpoch` may ONLY be compared against the counter of the
+   component that STAMPED it. It is written by whichever component actually
+   rendered the page, which is often NOT the one you got the page from: an
+   insert-less twPluginChain forwards its upstream twTrackMix page verbatim,
+   and twTrackMix self-bumps on every clip mutation, so its counter runs
+   permanently ahead of the chain's. Comparing across the two is not merely
+   imprecise — it is dead code that can never fire. A consumer that caches a
+   page must therefore remember the epoch IT OBSERVED on the producer it asked
+   (twLatchStreamingOutput::previousPageEpoch_) and re-validate on
+   `observed != contentEpochNow()`. Getting this wrong meant a clip deleted
+   from a track nested in a folder went on being played and metered forever.
+6. A page served from twFrozenInputScope (a scheduler binding) is trusted for
+   THAT render only and must never be recorded as observed-at-the-current-epoch:
+   it carries no validation of its own (verify-at-publish is the scheduler's
+   job), so blessing it would let a later, unbound call reuse it with nothing
+   left to check. mix_test's "empty set falls back to the legacy pull" is the
+   gate.
 
 Threading: THREADING.md rules 2-3; one mutex per component, _nolock suffix
 convention.

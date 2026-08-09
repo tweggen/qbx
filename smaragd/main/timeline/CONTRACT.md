@@ -57,7 +57,12 @@ Invariants:
    twRewire) — post-fader, post-FX, and the only per-track component that
    caches pages (twTrackMix allocates a fresh page per call; twPluginChain
    forwards). Meters follow mute/solo by an EXPLICIT model check as well as the
-   emergent nulled-plug behaviour, so the result is order-independent.
+   emergent nulled-plug behaviour, so the result is order-independent. That
+   check is `ssolo::isLaneAudible` (app/model/ssolorules.h) and MUST NOT be
+   re-spelled here: the rule is whole-tree (a soloed lane keeps its ancestor
+   folders audible, a soloed folder keeps its subtree audible), and the two
+   meter call sites' local copies of the old direct-children-only rule are how
+   the meter and the ear could disagree about a nested lane.
 11. A meter must not repaint unless what it would DRAW changed: pixel-quantized
    comparison against what was last PAINTED (not last computed), sub-rect
    update(), and zero work at all when hidden. 30 heads x 30 Hz is otherwise a

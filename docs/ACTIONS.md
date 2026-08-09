@@ -15,7 +15,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 
 | Verb | Class | Source (under smaragd/main/) | Attributes (name = default) |
 |---|---|---|---|
-| `add-sample` | SAddSampleAction | objects/cut/src/saddsampleaction.cpp | `trackIndex` = "0", `filePath` = "", `timePos` = "0" |
+| `add-sample` | SAddSampleAction | objects/cut/src/saddsampleaction.cpp | `trackPath` = "0" (index-path from the root mixer, so a lane nested in a folder track is addressable; the legacy top-level-only `trackIndex` is still accepted on read), `filePath` = "", `timePos` = "0" |
 | `add-take` | SAddTakeAction | objects/cut/src/saddtakeaction.cpp | `clip`, `filePath`, `startOffset` = "0", `index` = "-1", `activate` = "1", `stretch` = "1.0", `pitchCents` = "0" |
 | `add-to-selection` | SAddToSelectionAction | selection/src/saddtoselectionaction.cpp | `paths` = "" |
 | `add-track` | SAddTrackAction | objects/mixer/src/saddtrackaction.cpp | `index` = "-1" |
@@ -48,7 +48,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `remove-asset` | SRemoveAssetAction | objects/mixer/src/sremoveassetaction.cpp | `assetName` |
 | `remove-from-selection` | SRemoveFromSelectionAction | selection/src/sremovefromselectionaction.cpp | `paths` = "" |
 | `remove-plugin` | SRemovePluginAction | objects/track/src/sremovepluginaction.cpp | `trackPath`, `slotIndex` = "0", `format`, `uid`, `name`, `vendor`, `path` = "", `nIn` = "0", `nOut` = "0", `state` = "" (captured in `apply()` from the live plugin and handed to the inverse; a hand-written element carries none) |
-| `remove-sample` | SRemoveSampleAction | objects/cut/src/sremovesampleaction.cpp | `trackIndex` = "0", `clipIndex` = "0", `filePath` = "", `timePos` = "0" |
+| `remove-sample` | SRemoveSampleAction | objects/cut/src/sremovesampleaction.cpp | `trackPath` = "0" (index-path from the root mixer, so a lane nested in a folder track is addressable; the legacy top-level-only `trackIndex` is still accepted on read), `clipIndex` = "0", `filePath` = "", `timePos` = "0" |
 | `remove-take` | SRemoveTakeAction | objects/cut/src/sremovetakeaction.cpp | `clip`, `take` = "0", `thenActivate` = "-2" |
 | `remove-track` | SRemoveTrackAction | objects/mixer/src/sremovetrackaction.cpp | `index` = "0" |
 | `render` | SRenderAction | actions/src/srenderaction.cpp | `filename` = "", `format` = "wav", `quality` = "10" |
@@ -66,7 +66,9 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `set-plugin-param` | SSetPluginParamAction | objects/track/src/ssetpluginparamaction.cpp | `trackPath`, `slotIndex` = "0", `paramId` = "0", `value` = "0" (ABSOLUTE, clamped to the plugin's declared range; an unknown `paramId` is REJECTED; coalesces by (trackPath, slotIndex, paramId) so one slider drag is one undo entry; refused on a Missing/Unsupported slot) |
 | `set-property` | SSetPropertyAction | actions/src/ssetpropertyaction.cpp | `key`, `value` |
 | `set-selection` | SSetSelectionAction | selection/src/ssetselectionaction.cpp | `paths` = "" |
-| `set-track-volume` | SSetTrackVolumeAction | objects/track/src/ssettrackvolumeaction.cpp | `trackIndex` = "0", `volume` = "0" |
+| `set-track-mute` | SSetTrackMuteAction | objects/track/src/ssettrackmuteaction.cpp | `trackPath` (index-path from the root mixer, so a lane nested in a folder track is addressable; the legacy top-level-only `trackIndex` = "0" is still accepted on read and wins only when no path is given), `muted` = "0" (ABSOLUTE, not a toggle) |
+| `set-track-solo` | SSetTrackSoloAction | objects/track/src/ssettracksoloaction.cpp | `trackPath` (index-path from the root mixer — solo on a NESTED lane is the case this verb exists for), `solo` = "0" (ABSOLUTE, not a toggle; audibility is resolved by app/model/ssolorules.h at every summing container) |
+| `set-track-volume` | SSetTrackVolumeAction | objects/track/src/ssettrackvolumeaction.cpp | `trackPath` = "0" (index-path from the root mixer, so a nested lane's fader is addressable; the legacy top-level-only `trackIndex` is still accepted on read), `volume` = "0" (dB). Coalesces consecutive drags on the same lane — `mergeKey` is the PATH, so two faders at the same index in different folders no longer merge into one undo step |
 | `snap-to-grid-disable` | SSnapToGridAction | actions/src/ssnaptogridaction.cpp | (none) |
 | `snap-to-grid-enable` | SSnapToGridAction | actions/src/ssnaptogridaction.cpp | (none) |
 | `snap-to-grid-toggle` | SSnapToGridAction | actions/src/ssnaptogridaction.cpp | (none) |

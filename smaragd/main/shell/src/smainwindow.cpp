@@ -1222,7 +1222,7 @@ void SMainWindow::runTestSequence()
     TW_LOGD( "ui.shell", "    Add track action submitted" );
 
     // 2. Add the sample to track 0 at time 0.
-    SApplication::app().submitAction(new SAddSampleAction(0, filePath, 0));
+    SApplication::app().submitAction(new SAddSampleAction(QList<int>{0}, filePath, 0));
     TW_LOGD( "ui.shell", "    Add sample action submitted" );
 
     // 3. Start playback.
@@ -1253,7 +1253,7 @@ void SMainWindow::runVolumeBurst()
     const int steps = 50;
     for (int i = 0; i < steps; ++i) {
         double db = -24.0 + (30.0 * i) / (steps - 1);
-        SApplication::app().submitAction(new SSetTrackVolumeAction(0, db));
+        SApplication::app().submitAction(new SSetTrackVolumeAction(QList<int>{0}, db));
     }
 
     int after = stack ? stack->count() : -1;

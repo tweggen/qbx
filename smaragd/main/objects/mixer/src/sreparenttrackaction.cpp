@@ -115,6 +115,12 @@ SApplyResult SReparentTrackAction::apply(SProject *project)
     // Refresh the engine graph root (mirrors SAddTrackAction).
     SAppContext::get().rewireSpeaker();
 
+    // The move changed WHERE a lane sits, and audibility is positional (a
+    // soloed lane keeps its whole ancestor chain audible; a lane inside a
+    // soloed folder is audible). The detach half ran while the track was
+    // parentless, so re-apply the rule once over the settled tree.
+    rootMixer->applyAudibility();
+
     // Detach fired a mid-operation view refresh (track briefly parentless) and
     // the folder-side attach emits no mixer signal; announce the final tree so
     // views rebuild against the completed state.

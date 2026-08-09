@@ -30,10 +30,13 @@
 #include "app/model/slink.h"
 #include "app/model/sobjectrenderer.h"
 #include "app/model/sproject.h"
+#include "app/model/ssolorules.h"
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/objects/track/strackcolormodifier.h"
 #include "app/objects/track/ssettrackvolumeaction.h"
 #include "app/objects/track/seteditgroupaction.h"
+#include "app/objects/track/ssettrackmuteaction.h"
+#include "app/objects/track/ssettracksoloaction.h"
 #include "app/model/seditgroups.h"
 #include "app/model/sobjectpath.h"
 #include "app/actions/sactionhistory.h"
@@ -71,16 +74,21 @@ void SSMVMixerControl::sliderValueChanged( int value )
 
 /**
  * Apply a new track volume (in dB), routing through the action system so it is
- * undoable and (once the engine drain goes async) coalescable. Resolve our
- * track's index in the mixer; if we can't, fall back to a direct mutation so the
- * UI never wedges.
+ * undoable and (once the engine drain goes async) coalescable. Address our track
+ * by index-PATH from the root mixer — the old top-level `trackIndex_()` scan
+ * returned -1 for a track nested in a folder, so a grouped lane's fader silently
+ * took the non-undoable fallback below. Same resolution soloToggled() uses.
  */
 void SSMVMixerControl::applyVolume_( double newVolume )
 {
-    int trackIdx = trackIndex_();
-    if( trackIdx >= 0 ) {
+    SStdMixer *mixer = smv_.getModel();
+    const QList<int> trackPath =
+        mixer ? strackpath::pathOf( mixer, &tk_ ) : QList<int>();
+    // pathOf() returns {} for "the root itself" as well as "not found", but tk_
+    // is an STrack and can never BE the root, so empty means unresolvable.
+    if( !trackPath.isEmpty() ) {
         SApplication::app().submitAction(
-            new SSetTrackVolumeAction( trackIdx, newVolume ) );
+            new SSetTrackVolumeAction( trackPath, newVolume ) );
     } else {
         tk_.setVolume( newVolume );
         // Direct mutation doesn't go through actions, so invalidate caches manually
@@ -302,20 +310,25 @@ void SSMVMixerControl::mouseReleaseEvent( QMouseEvent *ev )
     QWidget::mouseReleaseEvent( ev );
 }
 
+// Mute and solo go through the action system (path-addressed, so a nested lane
+// is nameable) rather than writing the model directly: that is what makes them
+// undoable, scriptable — and testable, which is why nested solo could break and
+// stay broken. The model write itself is unchanged; setMuted()/setSolo() still
+// do the lazy invalidation (proposal 06), so no notifyArrangementChanged() here.
 void SSMVMixerControl::muteToggled( bool on )
 {
-    tk_.setMuted( on );
-    // Lazy invalidation (proposal 06): setMuted() calls notifyDependentsChanged()
-    // to invalidate only affected cuts' Playback+Metadata aspects, not the entire
-    // arrangement. No need to call notifyArrangementChanged() here.
+    SStdMixer *mixer = smv_.getModel();
+    if( !mixer ) { tk_.setMuted( on ); return; }
+    SApplication::app().submitAction(
+        new SSetTrackMuteAction( strackpath::pathOf( mixer, &tk_ ), on ) );
 }
 
 void SSMVMixerControl::soloToggled( bool on )
 {
-    tk_.setSolo( on );
-    // Lazy invalidation (proposal 06): setSolo() calls notifyDependentsChanged()
-    // to invalidate only affected cuts' Playback+Metadata aspects, not the entire
-    // arrangement. No need to call notifyArrangementChanged() here.
+    SStdMixer *mixer = smv_.getModel();
+    if( !mixer ) { tk_.setSolo( on ); return; }
+    SApplication::app().submitAction(
+        new SSetTrackSoloAction( strackpath::pathOf( mixer, &tk_ ), on ) );
 }
 
 void SSMVMixerControl::onMutedChanged( bool on )
@@ -713,12 +726,13 @@ void SSMVMixerControl::onMeterTick( offset_t pos, qint64 nowMs, bool live )
     // result does not depend on which path won: THREADING rule 4.
     if( !live ) { qMeter_->pushIdle( nowMs ); return; }
 
-    bool audible = !tk_.isMuted();
-    if( audible ) {
-        SStdMixer *mixer = smv_.getModel();
-        if( mixer && mixer->anyTrackSoloed() && !tk_.isSolo() ) audible = false;
+    // THE shared rule (app/model/ssolorules.h) — the same one the mixer routes
+    // by. Spelling it out here a second time is how the meter and the ear got to
+    // disagree about nested lanes.
+    if( !ssolo::isLaneAudible( smv_.getModel(), &tk_ ) ) {
+        qMeter_->pushIdle( nowMs );
+        return;
     }
-    if( !audible ) { qMeter_->pushIdle( nowMs ); return; }
 
     // Re-bind every tick rather than only in the ctor: setTap() is a pointer
     // compare that no-ops when unchanged, and it makes the meter self-healing if

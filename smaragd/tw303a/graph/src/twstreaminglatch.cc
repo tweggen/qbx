@@ -65,7 +65,8 @@ void twStreamingLatch::init( length_t bufSize0 )
 }
 
 length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, length_t maxLength,
-                                     std::shared_ptr<twOutputPage>& readerPrevPage )
+                                     std::shared_ptr<twOutputPage>& readerPrevPage,
+                                     std::atomic<uint64_t>& readerPrevEpoch )
 {
 	if (!pDest || maxLength <= 0 || startOffset < 0) {
 		return 0;  // Nothing to copy
@@ -95,6 +96,23 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 
 	std::shared_ptr<twOutputPage> held = std::atomic_load(&readerPrevPage);
 
+	// Staleness is decided by "has MY producer's epoch moved since I accepted
+	// this page", NOT by the page's own contentEpoch stamp. The stamp is
+	// written by whichever component actually RENDERED the page, and that is
+	// frequently not getComponent(): an insert-less twPluginChain launders its
+	// upstream twTrackMix page through verbatim, so the page arrives carrying
+	// the TRACKMIX's counter while the gate below compares against the CHAIN's.
+	// The two are independent per-component atomics (both start at 1) and the
+	// trackmix self-bumps on every insertClip/removeClip/updateClip/
+	// setClipMuted/setTrackGain, so its counter runs permanently ahead — making
+	// the old `page->contentEpoch < epochNow` test dead code that could never
+	// fire. Measured on a folder track: held page stamped 9, chain epoch 7,
+	// so a clip deleted from a NESTED lane went on being played and metered
+	// forever (the page was re-served, then re-stamped current). Comparing a
+	// remembered observation of ONE counter against itself cannot drift.
+	// 0 is a safe "never observed" sentinel: epochs start at 1.
+	uint64_t heldEpoch = readerPrevEpoch.load();
+
 	while (written < maxLength) {
 		const offset_t pos = startOffset + (offset_t)written;
 		// FLOOR-aligned: this seam serves clips that may start before their
@@ -106,7 +124,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		// rendered before it stale, even though its validAspects are still set.
 		std::shared_ptr<twOutputPage> page = held;
 		if (!page || page->startPosition != pageStart || page->validAspects == 0 ||
-		    page->contentEpoch.load() < epochNow) {
+		    heldEpoch != epochNow) {
 			// Need a different page than the one we hold.
 
 			// Proposal 19 dataflow stage 1: a leaf render in progress on this
@@ -126,6 +144,15 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 				    bound->startPosition == pageStart) {
 					held = bound;
 					page = bound;
+					// Deliberately NOT observed-at-epochNow. A bound page is
+					// trusted only for the render that bound it (epoch validity
+					// is the scheduler's verify-at-publish job); recording it as
+					// current would let a LATER call reuse it off the reader
+					// hint, outside any binding, with nothing left to validate
+					// it. 0 forces the next call to re-validate — which is what
+					// mix_test's "empty set falls back to the legacy pull"
+					// control asserts.
+					heldEpoch = 0;
 					boundServed = true;
 				} else {
 					fi->noteMiss(getComponent().get(), pageStart);
@@ -143,9 +170,12 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 			// else is a discontinuity the producer must reset+seek for.
 			// A stale-epoch predecessor is also a discontinuity: its DSP state
 			// was computed against pre-edit audio.
+			// Same like-for-like rule as the reuse gate above: `heldEpoch` is
+			// the epoch we OBSERVED when we took `held`, so it is comparable
+			// with epochNow; the page's own stamp is not (see above).
 			std::shared_ptr<twOutputPage> chainFrom;
 			if (held && held->validAspects != 0 &&
-			    held->contentEpoch.load() >= epochNow &&
+			    heldEpoch == epochNow &&
 			    held->startPosition + held->validFrames == pageStart) {
 				chainFrom = held;
 			}
@@ -162,6 +192,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 				break;  // producer could not materialize this page
 			}
 			held = page;
+			heldEpoch = epochNow;
 			} // !boundServed (legacy pull)
 		}
 
@@ -178,7 +209,11 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		written += n;
 	}
 
-	// Publish the last page this reader served, for continuity on its next call.
+	// Publish the last page this reader served, plus the epoch it was observed
+	// at, for continuity on its next call. `heldEpoch` is only advanced where
+	// `held` is, so a call that bailed out without acquiring anything leaves
+	// the pair unchanged rather than blessing a stale page as current.
 	std::atomic_store(&readerPrevPage, held);
+	readerPrevEpoch.store(heldEpoch);
 	return written;
 }

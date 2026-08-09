@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: a clip on a track NESTED inside a group/folder can be deleted, and
+  undone, exactly like one on a top-level track.
+
+  Reported as: "I cannot remove a clip that is part of a grouped asset." Delete
+  did nothing at all — no dialog, no log line, no undo entry. It was never a
+  reference-count veto (nothing in the model refuses to unlink a referenced
+  object; ~SLink always removeRef()s and destruction is only ever TRIGGERED by
+  the count reaching zero). The clip was simply never reached, for two reasons,
+  the first hiding the second:
+
+  1) SStdMixerView::ctRemoveSample() resolved the lane with
+     mixer->indexOfChildObject(*oldTrack), which scans DIRECT children only. A
+     track nested under a folder is not a direct child of the root mixer, so it
+     returned -1 and the slot returned before submitting anything. That guard
+     also sat ABOVE the asset-placement branch, so an asset placement on a
+     nested lane was equally undeletable.
+
+  2) remove-sample / add-sample carried an `int trackIndex` — a TOP-LEVEL index
+     — unlike every other clip verb (move-clip, split-clip, resize-clip,
+     place-clip, set-pitch, duplicate-clip all take an index-path). So even a
+     hand-written script could not name a nested lane, and the inverse
+     (add-sample) would have restored the clip onto the wrong track.
+
+  This is also the only case that nests a track and then EDITS a clip on it, so
+  it is what keeps nested lanes addressable at all.
+
+  Fixture: test_sawtooth.wav, 4 s, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+-->
+<SActionScript version="1" name="delete_clip_in_group">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0: becomes the folder -->
+    <add-track index="-1"/>            <!-- 1: gets nested into it -->
+
+    <!-- trackPath (not trackIndex) — the new spelling, exercised here. The five
+         cases that still write trackIndex are the backward-compat gate. -->
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Split at 2 s: head [0,2s) = clip 0, tail [2s,4s) = clip 1 with
+         srcStart = 96000. The tail is what gets deleted and restored. -->
+    <split-clip clip="1,0" splitTime="96000"/>
+
+    <!-- Group it: track 1 becomes a child of track 0. The folder carries no
+         clips of its own, so the nested lane is path 0,0 and its tail is
+         0,0,1. Every assertion below is reached only if a nested lane both
+         renders and is addressable. -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+
+    <!-- Baseline THROUGH the folder: head is sec0+sec1, tail is sec2+sec3. -->
+    <render filename="group_pre.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="group_pre.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="group_pre.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="group_pre.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- Delete the TAIL on the NESTED lane. Before the fix this was
+         unexpressible: remove-sample could only name a top-level track. -->
+    <remove-sample trackPath="0,0" clipIndex="1" timePos="96000"/>
+
+    <render filename="group_deleted.wav" format="wav" quality="10"/>
+    <!-- Head survives... -->
+    <assert-audio-energy filename="group_deleted.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <!-- ...and the tail's span is now silent. -->
+    <assert-audio-energy filename="group_deleted.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <undo count="1"/>
+
+    <render filename="group_restored.wav" format="wav" quality="10"/>
+
+    <!-- The tail must come back ON THE NESTED LANE with its ORIGINAL window.
+         An inverse that could only address top-level tracks would either apply
+         to the folder (wrong lane, and the folder is at index 0) or not at all;
+         a whole-wave cut would put sec1 (~0.176) here instead of sec3.
+
+         The sec2 band below is also the regression gate for the STALE HELD PAGE
+         bug this case originally exposed: page 1 ([65536,131072)) used to keep
+         serving its pre-edit content forever, so [96000,131072) read ~0.17
+         instead of ~0.29 while [131072,192000) was exact. Root cause was
+         twStreamingLatch::copyData judging staleness on the page's own
+         contentEpoch stamp — written by whichever component RENDERED the page,
+         which under a folder track is the twTrackMix, not the twPluginChain the
+         gate compared against. See plan/todo/NESTED_LANE_STALE_PAGE.md. -->
+    <assert-audio-energy filename="group_restored.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="group_restored.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- The head is untouched by the round trip. -->
+    <assert-audio-energy filename="group_restored.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- And redo removes it again, so the inverse-of-the-inverse holds. -->
+    <redo count="1"/>
+
+    <render filename="group_redone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="group_redone.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+  </actions>
+
+  <assertions>
+    <!-- After the reparent only the folder is top-level. -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

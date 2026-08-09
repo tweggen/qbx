@@ -697,7 +697,17 @@ void AudioEngine::readaheadLoop() {
             if (scheduler_) {
                 const uint64_t wantEnd =
                     pageStart + (uint64_t)pagesNeeded * pageSize;
+                // Coverage is positional AND epoch-scoped. A demand issued
+                // before an edit was planned against the pre-edit graph, so it
+                // can only ever publish pre-edit pages; treating it as "covered"
+                // suppressed the re-demand until it happened to finish, and the
+                // user went on hearing the old mix for up to a whole readahead
+                // window (~4 s at 48 kHz). Superseding it immediately is what
+                // makes a delete/mute/solo audible at once. The stale handle is
+                // simply dropped — its nodes finish and publish pages that the
+                // per-page validity check above then rejects as stale.
                 const bool covered = pendingDemand_ && !pendingDemand_->done()
+                    && pendingDemandEpoch_ == epochNow
                     && pendingDemandStart_ <= pos && pendingDemandEnd_ >= wantEnd;
                 if (!covered) {
                     const int n = (int)((wantEnd - pos) / pageSize);
@@ -705,6 +715,7 @@ void AudioEngine::readaheadLoop() {
                         synthOutput_, pos, n, /*priority*/ 9);
                     pendingDemandStart_ = pos;
                     pendingDemandEnd_ = wantEnd;
+                    pendingDemandEpoch_ = epochNow;
                 }
                 break;   // frontier advances on later ticks as pages land
             }
