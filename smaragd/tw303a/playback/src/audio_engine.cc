@@ -671,7 +671,15 @@ void AudioEngine::readaheadLoop() {
             // page instead, which self-heals under any edit/playback ordering.
             const uint64_t epochNow = synthOutput_->contentEpochNow();
 
-            auto existing = synthOutput_->getOrAllocatePage(pos);
+            // PROBE, don't allocate. getOrAllocatePage() inserts an empty
+            // placeholder for a position that has none, and freezePage() later
+            // REUSES that placeholder instead of allocating a fresh page — so
+            // the page it replaces is never recorded as stalePredecessor, and
+            // the proposal-16 fallback (which is what keeps playback graceful
+            // across an edit) has nothing to fall back TO at that position. The
+            // readahead only wants to know whether a current page already
+            // exists; asking non-destructively is both correct and cheaper.
+            auto existing = synthOutput_->getPageIfExists(pos);
             if (existing && existing->validAspects != 0 &&
                 existing->contentEpoch.load() >= epochNow) {
                 // Already frozen and current; update prevPage and move on
@@ -697,7 +705,17 @@ void AudioEngine::readaheadLoop() {
             if (scheduler_) {
                 const uint64_t wantEnd =
                     pageStart + (uint64_t)pagesNeeded * pageSize;
+                // Coverage is positional AND epoch-scoped. A demand issued
+                // before an edit was planned against the pre-edit graph, so it
+                // can only ever publish pre-edit pages; treating it as "covered"
+                // suppressed the re-demand until it happened to finish, and the
+                // user went on hearing the old mix for up to a whole readahead
+                // window (~4 s at 48 kHz). Superseding it immediately is what
+                // makes a delete/mute/solo audible at once. The stale handle is
+                // simply dropped — its nodes finish and publish pages that the
+                // per-page validity check above then rejects as stale.
                 const bool covered = pendingDemand_ && !pendingDemand_->done()
+                    && pendingDemandEpoch_ == epochNow
                     && pendingDemandStart_ <= pos && pendingDemandEnd_ >= wantEnd;
                 if (!covered) {
                     const int n = (int)((wantEnd - pos) / pageSize);
@@ -705,6 +723,7 @@ void AudioEngine::readaheadLoop() {
                         synthOutput_, pos, n, /*priority*/ 9);
                     pendingDemandStart_ = pos;
                     pendingDemandEnd_ = wantEnd;
+                    pendingDemandEpoch_ = epochNow;
                 }
                 break;   // frontier advances on later ticks as pages land
             }

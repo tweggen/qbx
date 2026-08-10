@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: Group and Ungroup work on a track that is ALREADY NESTED.
+
+  Both gestures resolved the clicked track with model_->indexOfChildObject(),
+  which sees the mixer's DIRECT children only, and bailed on -1 — so on a nested
+  lane the menu items did nothing at all. Recorded as a deliberate deferral in
+  plan/todo/BACKLOG.md ("Group/Ungroup operate on top-level tracks only"); it is
+  lifted here.
+
+  The generalisation is not just addressing, which is why this is driven through
+  the REAL slots rather than re-spelled as a macro in this script:
+
+  * Group could not simply create the folder in place. add-track only appends at
+    the MIXER's top level, and reparent-track deliberately REFUSES a
+    same-container move (that is move-track's job), so a folder born as the
+    track's sibling could never be slid into its slot. The nested path instead
+    creates the folder top-level, reparents it INTO the target's parent at the
+    target's slot (a real cross-container move, which pushes the target to ti+1),
+    then moves the target into it. Three steps whose index arithmetic is the
+    whole risk.
+  * Ungroup hard-coded the MIXER as the destination for the promoted children,
+    so ungrouping a nested folder would have flung its children out to the top
+    level instead of into the grandparent folder.
+
+  STRUCTURE IS ASSERTED BY PATH RESOLUTION. assert-plugin-strip resolves a lane
+  by index-path and REJECTS when that path does not exist, so it doubles as an
+  existence probe: with expectReject="true" it asserts a lane is GONE. That is
+  the only structural assertion available here — assert-track-count counts
+  top-level lanes only, and would read 1 throughout no matter what happened
+  inside the folder.
+
+  Audio is the transparency check: grouping and ungrouping must not change what
+  is heard. Fixture sec3 (frames 144000..192000) is ~0.405.
+-->
+<SActionScript version="1" name="group_nested_track">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0: the outer folder -->
+    <add-track index="-1"/>            <!-- 1: nested into it below -->
+
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Outer nesting: track 1 becomes 0,0. -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+    <assert-plugin-strip trackPath="0,0" slotCount="0"/>
+
+    <render filename="grp_pre.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="grp_pre.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- GROUP the already-nested lane. Before the fix: a silent no-op. -->
+    <group-track trackPath="0,0"/>
+
+    <!-- A new folder now sits at 0,0 and the original lane moved down to
+         0,0,0. Both probes must resolve. -->
+    <assert-plugin-strip trackPath="0,0" slotCount="0"/>
+    <assert-plugin-strip trackPath="0,0,0" slotCount="0"/>
+
+    <!-- ...and grouping is audibly transparent. -->
+    <render filename="grp_grouped.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="grp_grouped.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- UNGROUP that inner folder. Its child must be promoted into the OUTER
+         folder (0,0), not flung out to the top level. -->
+    <group-track trackPath="0,0" ungroup="1"/>
+
+    <assert-plugin-strip trackPath="0,0" slotCount="0"/>
+    <!-- The third level is gone: the path no longer resolves. -->
+    <assert-plugin-strip trackPath="0,0,0" slotCount="0" expectReject="true"/>
+
+    <render filename="grp_ungrouped.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="grp_ungrouped.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- Undo the ungroup macro: the inner folder comes back with its child. -->
+    <undo count="1"/>
+    <assert-plugin-strip trackPath="0,0,0" slotCount="0"/>
+
+    <render filename="grp_regrouped.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="grp_regrouped.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <!-- Only the outer folder is ever top-level. -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

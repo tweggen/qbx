@@ -132,12 +132,18 @@ public slots:
     int removeTrack( SLink &track );
 
     /**
-     * True if at least one track has its solo flag set — i.e. solo is in force
-     * and every non-soloed track is silenced. Public because audibility is not
-     * knowable from a single track: proposal 34's meters apply the same
-     * "!muted && (!anySolo || solo)" rule reconnectTracksToMixer() does.
+     * True if at least one lane ANYWHERE in the project (nested lanes included)
+     * has its solo flag set — i.e. solo is in force. Public because audibility
+     * is not knowable from a single track; the shared rule that consumes this
+     * lives in app/model/ssolorules.h and is what the meters apply too.
      */
     bool anyTrackSoloed() const;
+
+    /**
+     * Re-apply the mute/solo audibility rule to the whole lane tree: our own
+     * bus wiring plus every folder track's per-lane clip mutes. Idempotent.
+     */
+    void applyAudibility();
 
 protected:
 private slots:

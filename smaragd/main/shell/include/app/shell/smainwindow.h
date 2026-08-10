@@ -61,7 +61,13 @@ public:
     // testkit may not include app/timeline (testkit CONTRACT inv. 5 — the same
     // reason drag-clip-edge lands here), and it is the only automated coverage
     // the meter's density rules can have. Empty string on failure.
-    QString describeTrackMeter( int trackIndex, int headHeight );
+    // trackPath is an index-path from the root mixer ("2", "0,1"), so a track
+    // NESTED inside a folder can be described. A one-element path is exactly the
+    // old top-level index, which is what keeps existing callers spelling-compatible.
+    QString describeTrackMeter( const QString &trackPath, int headHeight );
+    // Testkit: drive the arranger's Group/Ungroup gestures on a lane addressed
+    // by index-path, so a NESTED lane can be exercised.
+    bool groupTrackGesture( const QString &trackPath, bool ungroup );
 
     // TEST ENTRY POINT: paint a level meter carrying a known level into a PNG.
     // The ONLY coverage of SLevelMeter::paintEvent — the describe() assertions

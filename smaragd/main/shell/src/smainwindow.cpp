@@ -27,6 +27,8 @@
 #include "app/shell/smainwindow.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
+#include "app/model/splacements.h"
+#include "app/model/sobjectpath.h"
 #include "app/shell/ssettings.h"
 #include "app/servicesui/srecordingprogress.h"
 #include "app/servicesui/slogview.h"
@@ -1222,7 +1224,7 @@ void SMainWindow::runTestSequence()
     TW_LOGD( "ui.shell", "    Add track action submitted" );
 
     // 2. Add the sample to track 0 at time 0.
-    SApplication::app().submitAction(new SAddSampleAction(0, filePath, 0));
+    SApplication::app().submitAction(new SAddSampleAction(QList<int>{0}, filePath, 0));
     TW_LOGD( "ui.shell", "    Add sample action submitted" );
 
     // 3. Start playback.
@@ -1253,7 +1255,7 @@ void SMainWindow::runVolumeBurst()
     const int steps = 50;
     for (int i = 0; i < steps; ++i) {
         double db = -24.0 + (30.0 * i) / (steps - 1);
-        SApplication::app().submitAction(new SSetTrackVolumeAction(0, db));
+        SApplication::app().submitAction(new SSetTrackVolumeAction(QList<int>{0}, db));
     }
 
     int after = stack ? stack->count() : -1;
@@ -1464,7 +1466,7 @@ void SMainWindow::runUndoRemoveTest()
     STrack *folderTrack = dynamic_cast<STrack*>(&mixer->childAt(0)->getSObject());
     int childCount = folderTrack ? childTrackCount(folderTrack) : -1;
 
-    SApplication::app().submitAction(new SRemoveTrackAction(0));
+    SApplication::app().submitAction(new SRemoveTrackAction(QList<int>{0}));
     int topAfterRemove = mixer->getNTracks();
 
     SApplication::app().actionHistory()->undo();
@@ -1814,7 +1816,19 @@ bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     return v->dragClipEdge( rowIdx, clipIdx, grabWhere, dropTime, upperHalf, mods );
 }
 
-QString SMainWindow::describeTrackMeter( int trackIndex, int headHeight )
+bool SMainWindow::groupTrackGesture( const QString &trackPath, bool ungroup )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    SProject *proj = SApplication::app().getCurrentProject();
+    SObject *root = splacements::rootContainer( proj );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) return false;
+    return v->groupGesture( track, ungroup );
+}
+
+QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeight )
 {
     SStdMixerView *v = ensureArranger_();
     if( !v ) return QString();
@@ -1824,11 +1838,12 @@ QString SMainWindow::describeTrackMeter( int trackIndex, int headHeight )
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
 
-    SStdMixer *mixer = dynamic_cast<SStdMixer *>( proj->getRootComponent() );
-    if( !mixer || trackIndex < 0 || trackIndex >= mixer->getNTracks() )
-        return QString();
-    SLink *link = mixer->getTrackAt( trackIndex );
-    STrack *track = link ? dynamic_cast<STrack *>( &link->getSObject() ) : nullptr;
+    // Path-addressed: the old top-level scan could not describe a nested lane's
+    // head at all, so the density rules and the audibility rule had no coverage
+    // there.
+    SObject *root = splacements::rootContainer( proj );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) return QString();
 
     // A head built for the assertion and thrown away — parentless and never

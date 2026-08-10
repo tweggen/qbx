@@ -55,6 +55,18 @@ Invariants:
    parameter edit at a DIFFERENT plugin. A per-row signal connection whose
    context is the strip would also pile up one per rebuild; use the row's
    container widget, which dies with the rebuild.
+8. The strip addresses its track by INDEX-PATH from the root mixer
+   (trackPathString() -> strackpath::pathOf), never by scanning the mixer's
+   direct children. Every button handler early-returns when that string is
+   empty, so a wrong answer disables the ENTIRE strip silently — buttons
+   enabled, clicks accepted, no action ever submitted — rather than misbehaving
+   visibly. It did exactly that for any track nested in a folder, which is what
+   "I cannot remove a plugin even if it is missing" turned out to be: the
+   missing-ness was incidental (remove-plugin is Missing-tolerant and the Remove
+   button is enabled in every state), the nesting was the bug. Because the
+   failure is invisible from outside, describeSlot() reports the resolved
+   `trackPath=` and `assert-plugin-strip` takes a `trackPath` attribute;
+   `qxa.plugin_strip_nested_track` is the gate.
 
 How to test:
 - `qxa.plugin_bypass_and_param` — a bypass toggle and a parameter edit each
@@ -67,6 +79,9 @@ How to test:
   on Windows uses the real platform plugin) and assert the Active row, the
   greyed Missing row with its reason tooltip and Reload, the editor→action
   wiring, and reorder-plugin.
+- `qxa.plugin_strip_nested_track` — the strip resolves a NESTED lane's path, and
+  insert/remove on it work (invariant 8). Negative-control proven: restoring the
+  top-level-only scan makes it fail with `trackPath=` empty.
 - `qxa.plugin_slot_roundtrip` — extended with a bypass on a LOADED slot, which is
   the only gate on the `STrack::adoptPluginChain()` half of invariant 6's wiring
   (a loaded chain's slots never emit `slotInserted` at anyone).

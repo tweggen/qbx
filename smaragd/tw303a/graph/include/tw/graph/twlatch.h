@@ -5,6 +5,7 @@
 // (proposal 14, Phase 1 — extracted from twcomponent.h, de-Qt'd:
 // QList -> std::vector; this header must stay Qt-free).
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -125,8 +126,15 @@ public:
     // concurrently on two freeze threads — the hint is advisory (a wrong value
     // costs at most a reset+seek discontinuity), so last-writer-wins is fine,
     // but the shared_ptr access itself must be atomic to avoid a refcount race.
+    // readerPrevEpoch is the producer content-epoch this reader OBSERVED when
+    // it accepted readerPrevPage. Staleness must be judged on that, not on the
+    // page's own contentEpoch stamp: the stamp belongs to whichever component
+    // rendered the page, which is not necessarily this latch's component (an
+    // insert-less twPluginChain forwards its twTrackMix page verbatim), and the
+    // two counters drift apart permanently. See copyData for the measured case.
     length_t copyData( offset_t startOffset, sample_t *pDest, length_t maxLength,
-                       std::shared_ptr<twOutputPage>& readerPrevPage );
+                       std::shared_ptr<twOutputPage>& readerPrevPage,
+                       std::atomic<uint64_t>& readerPrevEpoch );
 
     static const int bufSizeDefault;
 };
@@ -143,6 +151,12 @@ private:
     // threads during a double-render. shared_ptr so the page survives a
     // concurrent page invalidation while we still reference it.
     std::shared_ptr<twOutputPage> previousPage_;
+    // The producer content-epoch observed when previousPage_ was accepted.
+    // 0 = nothing observed yet; epochs start at 1, so the first call always
+    // pulls. Kept beside previousPage_ (not on the page) because it records
+    // OUR view of the producer, and two readers of one fanned-out latch may
+    // legitimately hold pages observed at different epochs.
+    std::atomic<uint64_t> previousPageEpoch_{ 0 };
 protected:
 public:
     twLatchStreamingOutput (twStreamingLatch & latch)

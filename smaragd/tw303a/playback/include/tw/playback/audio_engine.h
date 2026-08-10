@@ -232,6 +232,13 @@ private:
     std::shared_ptr<CaptureRevalidator::GraphDemand> pendingDemand_;
     uint64_t pendingDemandStart_{0};
     uint64_t pendingDemandEnd_{0};
+    // The content epoch the pending demand was issued AGAINST. Without it the
+    // coverage test above is purely positional, so an edit made while a demand
+    // is in flight issues no new demand and the pre-edit mix keeps playing until
+    // the stale demand happens to finish — up to the whole readahead window
+    // (~4 s at 48 kHz). That is why edits and solo/mute clicks read as "ignored"
+    // rather than merely late. 0 = no demand issued yet.
+    uint64_t pendingDemandEpoch_{0};
 
     void readaheadLoop();  // Entry point for read-ahead thread
 };

@@ -11,8 +11,9 @@
 #include "tw/core/twfraction.h"
 #include <QDomElement>
 
-SRemoveSampleAction::SRemoveSampleAction(int trackIdx, int clipIdx, const QString &filePath, offset_t timePos)
-    : trackIndex_(trackIdx), clipIndex_(clipIdx), filePath_(filePath), timePos_(timePos)
+SRemoveSampleAction::SRemoveSampleAction(const QList<int> &trackPath, int clipIdx,
+                                         const QString &filePath, offset_t timePos)
+    : trackPath_(trackPath), clipIndex_(clipIdx), filePath_(filePath), timePos_(timePos)
 {
 }
 
@@ -27,15 +28,11 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    // Get the track.
-    SLink *trackLink = root->childAt(trackIndex_);
-    if (!trackLink) {
+    // Get the lane. Path-addressed, so a track nested inside a folder track
+    // resolves as readily as a top-level one.
+    SObject *track = splacements::laneAt( root, trackPath_ );
+    if (!track) {
         return {false, nullptr};
-    }
-
-    SObject *track = &trackLink->getSObject();
-    if (!track->isPathContainer()) {
-        return {false, nullptr};   // addressed child is not a lane
     }
 
     // Get the clip at the specified index.
@@ -84,15 +81,11 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
         }
     }
 
-    // The lane we are removing from, as a path, for the container-backed
-    // inverse (which must also work for a nested lane).
-    QList<int> lanePath = strackpath::pathOf( root, track );
-
     delete clipLink;  // Qt will remove from parent, SCut destructor handles cleanup
 
     if( !containerPath.isEmpty() && haveWindow ) {
         return {true, new SRestoreContainerClipAction(
-                          lanePath, containerPath, timePos_,
+                          trackPath_, containerPath, timePos_,
                           srcStart, cutDuration, loopLength, grain )};
     }
 
@@ -105,15 +98,15 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
 
     SAddSampleAction *inverse =
         haveWindow
-            ? new SAddSampleAction( trackIndex_, filePath, timePos_,
+            ? new SAddSampleAction( trackPath_, filePath, timePos_,
                                     srcStart, cutDuration, loopLength, grain )
-            : new SAddSampleAction( trackIndex_, filePath, timePos_ );
+            : new SAddSampleAction( trackPath_, filePath, timePos_ );
     return {true, inverse};
 }
 
 void SRemoveSampleAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("trackIndex", trackIndex_);
+    elem.setAttribute("trackPath", strackpath::pathToString(trackPath_));
     elem.setAttribute("clipIndex", clipIndex_);
     elem.setAttribute("filePath", filePath_);
     elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
@@ -121,7 +114,12 @@ void SRemoveSampleAction::writeXml(QDomElement &elem) const
 
 bool SRemoveSampleAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    trackIndex_ = elem.attribute("trackIndex", "0").toInt();
+    // Sniff the spelling rather than key off formatVersion(): pre-existing .qxa
+    // scripts carry no version attribute, and `trackIndex` is exactly a
+    // one-element path.
+    trackPath_ = elem.hasAttribute("trackPath")
+        ? strackpath::stringToPath( elem.attribute("trackPath") )
+        : QList<int>{ elem.attribute("trackIndex", "0").toInt() };
     clipIndex_ = elem.attribute("clipIndex", "0").toInt();
     filePath_ = elem.attribute("filePath", "");
     timePos_ = (offset_t)parseFractionOrDouble(elem.attribute("timePos", "0").toStdString()).toDouble();

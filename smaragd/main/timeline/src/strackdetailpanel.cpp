@@ -6,6 +6,9 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
+#include "app/model/splacements.h"
+#include "app/model/sobjectpath.h"
+#include "app/model/ssolorules.h"
 #include "app/pluginui/splugineffectstrip.h"
 #include "app/shell/sapplication.h"
 #include <QVBoxLayout>
@@ -149,22 +152,6 @@ void STrackDetailPanel::rebuildUI()
     updateGeometry();   // the empty panel asks for far less room than a full one
 }
 
-int STrackDetailPanel::trackIndex_() const
-{
-    if (!currentTrack_) return -1;
-    SProject *proj = SApplication::app().getCurrentProject();
-    SStdMixer *mixer = proj ? dynamic_cast<SStdMixer *>( proj->getRootComponent() )
-                            : nullptr;
-    if (!mixer) return -1;
-
-    const int n = mixer->getNTracks();
-    for (int i = 0; i < n; ++i) {
-        SLink *link = mixer->getTrackAt(i);
-        if (link && &link->getSObject() == (SObject *) currentTrack_) return i;
-    }
-    return -1;
-}
-
 void STrackDetailPanel::onVolumeSliderMoved(int sliderValue)
 {
     if (!currentTrack_) return;
@@ -173,10 +160,16 @@ void STrackDetailPanel::onVolumeSliderMoved(int sliderValue)
     volumeLabel_->setText(QString::asprintf("%+.1f dB", dB));
 
     // Through the action system so the edit is undoable and both faders follow
-    // the model, exactly as SSMVMixerControl::applyVolume_ does.
-    const int idx = trackIndex_();
-    if (idx >= 0) {
-        SApplication::app().submitAction(new SSetTrackVolumeAction(idx, dB));
+    // the model, exactly as SSMVMixerControl::applyVolume_ does. Index-PATH, not
+    // a top-level index: this used to scan the mixer's DIRECT children only, so
+    // for a track nested in a folder it resolved -1 and this fader silently took
+    // the non-undoable fallback below. That scan helper is now deleted.
+    SProject *proj = SApplication::app().getCurrentProject();
+    SObject *root = splacements::rootContainer(proj);
+    const QList<int> trackPath =
+        root ? strackpath::pathOf(root, currentTrack_) : QList<int>();
+    if (!trackPath.isEmpty()) {
+        SApplication::app().submitAction(new SSetTrackVolumeAction(trackPath, dB));
     } else {
         currentTrack_->setVolume(dB);
         if (SProject *p = SApplication::app().getCurrentProject())
@@ -190,16 +183,13 @@ void STrackDetailPanel::onMeterTick(offset_t pos, qint64 nowMs, bool live)
 
     if (!live || !currentTrack_) { meter_->pushIdle(nowMs); return; }
 
-    // Same audibility rule the mixer applies (and the track head mirrors).
-    bool audible = !currentTrack_->isMuted();
-    if (audible) {
-        SProject *proj = SApplication::app().getCurrentProject();
-        SStdMixer *mixer = proj ? dynamic_cast<SStdMixer *>( proj->getRootComponent() )
-                            : nullptr;
-        if (mixer && mixer->anyTrackSoloed() && !currentTrack_->isSolo())
-            audible = false;
+    // THE shared rule (app/model/ssolorules.h), the same one the mixer routes by
+    // and the track head applies — nested lanes included.
+    SProject *proj = SApplication::app().getCurrentProject();
+    if (!ssolo::isLaneAudible(splacements::rootContainer(proj), currentTrack_)) {
+        meter_->pushIdle(nowMs);
+        return;
     }
-    if (!audible) { meter_->pushIdle(nowMs); return; }
 
     twLevelSample s;
     if (probe_.advanceTo(pos, s)) meter_->pushLevel(s, nowMs);

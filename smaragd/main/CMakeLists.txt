@@ -30,6 +30,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sproject.h
     model/include/app/model/seditgroups.h
     model/include/app/model/sprojectprops.h
+    model/include/app/model/ssolorules.h
     model/include/app/model/ssortedobjlist.h
     model/src/sappcontext.cpp
     model/src/sdetaileditors.cpp
@@ -154,6 +155,8 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/sreorderpluginaction.h
     objects/track/include/app/objects/track/ssetpluginbypassaction.h
     objects/track/include/app/objects/track/ssetpluginparamaction.h
+    objects/track/include/app/objects/track/ssettrackmuteaction.h
+    objects/track/include/app/objects/track/ssettracksoloaction.h
     objects/track/include/app/objects/track/ssettrackvolumeaction.h
     objects/track/include/app/objects/track/strack.h
     objects/track/include/app/objects/track/strackcolormodifier.h
@@ -169,6 +172,8 @@ set(APP_OBJECTS_FILES
     objects/track/src/sreorderpluginaction.cpp
     objects/track/src/ssetpluginbypassaction.cpp
     objects/track/src/ssetpluginparamaction.cpp
+    objects/track/src/ssettrackmuteaction.cpp
+    objects/track/src/ssettracksoloaction.cpp
     objects/track/src/ssettrackvolumeaction.cpp
     objects/track/src/strack.cpp
     objects/track/src/strackcolormodifier.cpp
@@ -254,6 +259,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
+    testkit/include/app/testkit/sgrouptrackaction.h
     testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
     testkit/include/app/testkit/smetertestactions.h
@@ -268,6 +274,7 @@ set(APP_UI_FILES
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sdragclipedgeaction.cpp
+    testkit/src/sgrouptrackaction.cpp
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
     testkit/src/smetertestactions.cpp

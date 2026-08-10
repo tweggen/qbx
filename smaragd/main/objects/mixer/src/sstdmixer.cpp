@@ -11,6 +11,7 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"   // upcast of the selected track
 #include "app/model/sdetaileditors.h"
+#include "app/model/ssolorules.h"       // the one mute/solo audibility rule
 #include "app/persistence/sprojectloader.h"
 #include "app/model/sappcontext.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
@@ -166,7 +167,8 @@ int SStdMixer::seekTo( offset_t off )
 void SStdMixer::reconnectTracksToMixer()
 {
     int nTracks = childCount();
-    const bool solo = anyTrackSoloed();
+    // ONE whole-tree solo scan for the whole pass (see ssolorules.h).
+    const bool solo = ssolo::anySoloInTree( this );
     // For all busses.
     for( int bus=0; bus<nBusses_; bus++ ) {
         std::shared_ptr<twMixer> mix = cpMixers_[bus];
@@ -175,13 +177,14 @@ void SStdMixer::reconnectTracksToMixer()
         mix->setNInputs( nTracks );
         for( int channel=0; channel<nTracks; channel++ ) {
             SLink *lk = childAt( channel );
-            // A track is audible iff it is not muted and, when any track is
-            // soloed, it is itself soloed. Inaudible tracks get a NULL input so
+            // The shared audibility rule (ssolo::isLaneAudible): a folder that
+            // CONTAINS a soloed lane has to stay wired, or the nested solo would
+            // be silenced by its own parent. Inaudible tracks get a NULL input so
             // their DSP is not pulled at all (processing AND output disabled).
             bool audible = false;
             if( lk ) {
                 SObject &so = lk->getSObject();
-                audible = !so.isMuted() && ( !solo || so.isSolo() );
+                audible = ssolo::isLaneAudible( this, &so, solo );
             }
             if( !lk || !audible ) {
                 mix->setInput( channel, NULL );
@@ -198,14 +201,38 @@ void SStdMixer::reconnectTracksToMixer()
 }
 
 /**
- * True if at least one track has its solo flag set.
+ * True if at least one lane ANYWHERE in the project has its solo flag set.
+ *
+ * This used to iterate the mixer's direct children only, which made a solo on a
+ * lane nested inside a folder track invisible to the routing rule (and to the
+ * meters, which ask the same question) — one of the three reasons nested solo
+ * did nothing at all.
  */
 bool SStdMixer::anyTrackSoloed() const
 {
+    return ssolo::anySoloInTree( const_cast<SStdMixer *>( this ) );
+}
+
+/**
+ * Re-apply the audibility rule over the WHOLE lane tree.
+ *
+ * Solo is global, so one flag flip anywhere changes what every summing
+ * container must do — and there are two kinds of summing container, enforcing
+ * audibility in two different ways:
+ *
+ *   - this mixer, for its direct children: null the input plug;
+ *   - a folder STrack, for its nested lanes: twTrackMix::setClipMuted.
+ *
+ * Driving both from one top-down pass is what keeps them from disagreeing.
+ */
+void SStdMixer::applyAudibility()
+{
+    reconnectTracksToMixer();
     for( SLink *lk : childLinks() ) {
-        if( lk->getSObject().isSolo() ) return true;
+        if( !lk ) continue;
+        if( STrack *t = dynamic_cast<STrack *>( &lk->getSObject() ) )
+            t->applyChildTrackAudibility();
     }
-    return false;
 }
 
 /**
@@ -214,7 +241,7 @@ bool SStdMixer::anyTrackSoloed() const
  */
 void SStdMixer::trackMuteSoloChanged()
 {
-    reconnectTracksToMixer();
+    applyAudibility();
     // Rewiring only changes what FUTURE freezes produce. Pages already frozen
     // here (and downstream at the rewire) still contain the track, so playback
     // readahead and the next render would go on serving it — you mute a track
@@ -334,6 +361,14 @@ void SStdMixer::insertTrack( STrack &trk )
         this, SLOT( trackMuteSoloChanged() ) );
     QObject::connect(
         (QObject*)&trk, SIGNAL( soloChanged( bool ) ),
+        this, SLOT( trackMuteSoloChanged() ) );
+    // A solo on a lane NESTED inside this track is equally our business: solo is
+    // global, so the whole tree's routing has to be re-evaluated. A nested lane
+    // is not our child and reparenting explicitly drops track->mixer connections
+    // (SReparentTrackAction), so it cannot reach us directly — every folder
+    // forwards its subtree's solo changes up as this signal.
+    QObject::connect(
+        (QObject*)&trk, SIGNAL( subtreeSoloChanged() ),
         this, SLOT( trackMuteSoloChanged() ) );
     // Construction parents the link to us, which appends it (childEvent keeps
     // childOrder_ in sync). Position it afterwards with reorderTrack().

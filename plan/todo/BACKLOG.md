@@ -34,19 +34,26 @@ Each item: one line of *what*, one of *why deferred* / what unblocks it.
 
 ## From proposal 05 — track grouping (feature (a), shipped; still in `proposed/`)
 
-Feature (a) is complete; these are the two small leftovers. (Feature (b), live
-region assets, is the live remaining design in proposal 05 — not a backlog item.)
+Feature (a) is complete, and both leftovers below are now CLOSED. (Feature (b),
+live region assets, is the live remaining design in proposal 05 — not a backlog
+item.)
 
-- **Group/Ungroup operate on top-level tracks only** — you cannot group or ungroup
-  a track that is already nested inside a folder.
-  *Deferred:* the gesture/menu plumbing resolves the clicked top-level track;
-  generalising to arbitrary depth is UI work, no model change.
+- ~~**Group/Ungroup operate on top-level tracks only**~~ — **DONE 2026-08-09.**
+  Both gestures are path-addressed and work at any depth. The generalisation was
+  not just addressing: `add-track` only appends at the MIXER's top level and
+  `reparent-track` refuses a same-container move, so for a nested lane the folder
+  has to be created top-level, reparented INTO the target's parent at the
+  target's slot, and the target then moved into it. Ungroup promoted children to
+  the mixer unconditionally, which would have flung a nested folder's children
+  out to the top level; it now promotes into the folder's own parent. Gate:
+  `qxa.group_nested_track`, driven through the REAL slots by the new
+  `group-track` testkit verb (re-spelling the macro in a script would test the
+  script, not the arithmetic).
 
-- **Nested-track solo resolved at the top mixer only** — solo's "silence the
-  others" is computed over the mixer's direct children, so soloing inside a folder
-  doesn't honour the group hierarchy (proposal 05 §1.3).
-  *Deferred:* needs `anyTrackSoloed()` + audibility to walk the whole tree; the
-  intrinsic-processing refactor (§0) already landed, so this is the remaining bit.
+- ~~**Nested-track solo resolved at the top mixer only**~~ — **DONE 2026-08-09.**
+  The audibility rule lives in `app/model/ssolorules.h` and is applied at every
+  summing container; `anyTrackSoloed()` walks the whole tree. See the STATE.md
+  entry "Solo works inside a group". Gate: `qxa.solo_nested_track`.
 
 ---
 

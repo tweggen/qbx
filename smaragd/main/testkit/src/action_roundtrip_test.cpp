@@ -77,6 +77,26 @@ const Fixture kFixtures[] = {
       "<set-plugin-param trackPath='0' slotIndex='1' paramId='7'"
       " value='2.5'/>" },
 
+    // --- the clip verbs that became path-addressed --------------------------
+    // add-sample/remove-sample used to carry a top-level `trackIndex`, which is
+    // why a clip on a NESTED (grouped) track could not be named at all. The
+    // fixtures use a two-level path deliberately: a one-element path would
+    // round-trip even through the old int field.
+    { "add-sample",
+      "<add-sample trackPath='0,1' filePath='x.wav' timePos='96000'/>" },
+    { "remove-sample",
+      "<remove-sample trackPath='0,1' clipIndex='1' filePath='x.wav'"
+      " timePos='96000'/>" },
+
+    // --- the lane flag verbs ------------------------------------------------
+    // Two-level paths deliberately: a top-level-only `trackIndex` (which is
+    // what solo/mute effectively had before there was any verb at all) would
+    // round-trip a one-element path just fine and prove nothing.
+    { "set-track-solo",  "<set-track-solo trackPath='1,0' solo='1'/>" },
+    { "set-track-mute",  "<set-track-mute trackPath='1,1' muted='1'/>" },
+    { "set-track-volume",
+      "<set-track-volume trackPath='1,0' volume='-6'/>" },
+
     // --- the M5 plugin-UI verbs --------------------------------------------
     { "assert-plugin-strip",
       "<assert-plugin-strip trackIndex='0' slotCount='2' slotIndex='1'"

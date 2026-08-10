@@ -1,4 +1,5 @@
 #include "app/objects/track/ssettrackvolumeaction.h"
+#include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
@@ -6,31 +7,25 @@
 #include "app/model/slink.h"
 #include <QDomElement>
 
-SSetTrackVolumeAction::SSetTrackVolumeAction(int trackIdx, double newVolume)
-    : trackIndex_(trackIdx), newVolume_(newVolume)
+using namespace strackpath;
+
+SSetTrackVolumeAction::SSetTrackVolumeAction(const QList<int> &trackPath, double newVolume)
+    : trackPath_(trackPath), newVolume_(newVolume)
 {
 }
 
 SApplyResult SSetTrackVolumeAction::apply(SProject *project)
 {
-    if (!project) {
+    SObject *mixer = splacements::rootContainer( project );
+    // Path-addressed, so a track nested inside a folder resolves as readily as
+    // a top-level one.
+    SObject *lane = splacements::laneAt( mixer, trackPath_ );
+    if (!lane) {
         return {false, nullptr};
     }
 
-    SObject *root = splacements::rootContainer( project );
-    SObject *mixer = root;
-    if (!mixer) {
-        return {false, nullptr};
-    }
-
-    // Resolve the track at the stored index.
-    SLink *trackLink = mixer->childAt(trackIndex_);
-    if (!trackLink) {
-        return {false, nullptr};
-    }
-
-    SObject *trackObj = &trackLink->getSObject();
-    STrack *track = dynamic_cast<STrack*>(trackObj);
+    // Volume is an STrack property (the root mixer is a lane but has no fader).
+    STrack *track = dynamic_cast<STrack*>(lane);
     if (!track) {
         return {false, nullptr};
     }
@@ -41,20 +36,23 @@ SApplyResult SSetTrackVolumeAction::apply(SProject *project)
     double oldVolume = track->getVolume();
     track->setVolume(newVolume_);
 
-    SSetTrackVolumeAction *inverse = new SSetTrackVolumeAction(trackIndex_, oldVolume);
+    SSetTrackVolumeAction *inverse = new SSetTrackVolumeAction(trackPath_, oldVolume);
     return {true, inverse};
 }
 
 QString SSetTrackVolumeAction::mergeKey() const
 {
-    // Same track -> same key, so consecutive drags coalesce.
-    return QStringLiteral("set-track-volume:%1").arg(trackIndex_);
+    // Same lane -> same key, so consecutive drags coalesce. Keyed on the PATH:
+    // a bare index would collide across folders (top-level track 0 and the
+    // first child of a folder both being "0"), merging two different faders'
+    // drags into one undo step.
+    return QStringLiteral("set-track-volume:%1").arg(pathToString(trackPath_));
 }
 
 bool SSetTrackVolumeAction::mergeWith(const SAction *later)
 {
     const SSetTrackVolumeAction *o = dynamic_cast<const SSetTrackVolumeAction*>(later);
-    if (!o || o->trackIndex_ != trackIndex_) {
+    if (!o || o->trackPath_ != trackPath_) {
         return false;
     }
     // Absorb the newer target volume; keep our own (older) value as the
@@ -65,13 +63,18 @@ bool SSetTrackVolumeAction::mergeWith(const SAction *later)
 
 void SSetTrackVolumeAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("trackIndex", trackIndex_);
+    elem.setAttribute("trackPath", pathToString(trackPath_));
     elem.setAttribute("volume", QString::number(newVolume_));
 }
 
 bool SSetTrackVolumeAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    trackIndex_ = elem.attribute("trackIndex", "0").toInt();
+    // Sniff the spelling rather than key off formatVersion(): pre-existing .qxa
+    // scripts carry no version attribute, and `trackIndex` is exactly a
+    // one-element path.
+    trackPath_ = elem.hasAttribute("trackPath")
+        ? stringToPath( elem.attribute("trackPath") )
+        : QList<int>{ elem.attribute("trackIndex", "0").toInt() };
     newVolume_ = elem.attribute("volume", "0").toDouble();
     return true;
 }

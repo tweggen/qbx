@@ -89,6 +89,15 @@ public:
     void bumpRenderChainEpoch() override;
     void bumpRenderChainEpochRange( offset_t start, offset_t end ) override;
 
+    /**
+     * We are a summing container for any child TRACK (a folder lane), so we
+     * enforce the shared mute/solo audibility rule on those lanes by muting
+     * their clip entries (twTrackMix::setClipMuted) — the root mixer's
+     * null-the-input-plug trick cannot reach a nested track. Recurses into
+     * nested folders, and range-invalidates exactly what changed. Idempotent;
+     * driven top-down from SStdMixer::applyAudibility().
+     */
+    void applyChildTrackAudibility();
 
 public slots:
     void setNBusses( int n );
@@ -104,10 +113,18 @@ public slots:
     void onTrackMuteChanged( bool muted );
     // A child track (folder lane) changed its mute; we are its summing parent.
     void childTrackMuteChanged( bool muted );
+    // Somewhere in our subtree a lane's solo flag flipped. Solo is GLOBAL, so
+    // we cannot resolve it ourselves — we relay it upwards (subtreeSoloChanged)
+    // until it reaches the root mixer, which re-applies the rule to the whole
+    // tree. Connected to both a child track's soloChanged and a child folder's
+    // subtreeSoloChanged, so it works at any nesting depth.
+    void childTrackSoloChanged();
     void onTrackVolumeChanged( double gainDb );
 
 signals:
     void nChannelsChanged( int n );
+    // A lane at or below us changed its solo flag (see childTrackSoloChanged).
+    void subtreeSoloChanged();
 
 protected:
     

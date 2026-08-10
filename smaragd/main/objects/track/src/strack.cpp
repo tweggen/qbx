@@ -17,6 +17,8 @@
 #include "app/model/sproject.h"
 #include "app/model/slink.h"
 #include "app/model/sappcontext.h"
+#include "app/model/splacements.h"
+#include "app/model/ssolorules.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/strackrndrinline.h"
 #include "app/objects/track/spluginchain.h"
@@ -260,14 +262,27 @@ void STrack::trackChildWasAdded( SLink &child )
             }
 
             // We are the summing parent for a child TRACK (a folder lane), so
-            // its mute is ours to enforce — a nested track is not a mixer child,
-            // so SStdMixer's null-the-input-plug path never sees it. Seed the
-            // entry from the child's CURRENT state: a track that is already
-            // muted when it is reparented in must land silent.
+            // its audibility is ours to enforce — a nested track is not a mixer
+            // child, so SStdMixer's null-the-input-plug path never sees it. Seed
+            // the entry from the child's CURRENT state under the shared rule: a
+            // track that is already muted (or soloed out) when it is reparented
+            // in must land silent.
             if( STrack *childTrack = dynamic_cast<STrack*>( &child.getSObject() ) ) {
                 QObject::connect( childTrack, SIGNAL( mutedChanged( bool ) ),
-                                  this, SLOT( childTrackMuteChanged( bool ) ) );
-                if( childTrack->isMuted() ) {
+                                  this, SLOT( childTrackMuteChanged( bool ) ),
+                                  Qt::UniqueConnection );
+                // Solo is global: relay it up to the root mixer rather than
+                // resolving it here (see childTrackSoloChanged). Both hops are
+                // needed — the direct flag of this child, and anything a nested
+                // folder below it forwards.
+                QObject::connect( childTrack, SIGNAL( soloChanged( bool ) ),
+                                  this, SLOT( childTrackSoloChanged() ),
+                                  Qt::UniqueConnection );
+                QObject::connect( childTrack, SIGNAL( subtreeSoloChanged() ),
+                                  this, SLOT( childTrackSoloChanged() ),
+                                  Qt::UniqueConnection );
+                SObject *root = splacements::rootContainer( getProjectSafe() );
+                if( !ssolo::isLaneAudible( root, childTrack ) ) {
                     for( int i=0; i<nBusses_; ++i ) {
                         if( cpTrackMixers_[i] ) {
                             twEditRange r =
@@ -311,6 +326,9 @@ void STrack::trackChildWasRemoved( SLink &child )
 
 void STrack::setNBusses( int nBusses )
 {
+    // Hoisted: the initial-sync loop at the end needs to know which mixers
+    // are NEW, so it does not re-insert clips into ones that already hold them.
+    int oldMixerCount = 0;
     if( nBusses==nBusses_ ) return;
     int oldNBusses = nBusses_;
     if( nBusses<oldNBusses ) {
@@ -323,7 +341,7 @@ void STrack::setNBusses( int nBusses )
         // the actual container size, not nBusses_: the constructor sets
         // nBusses_==1 while leaving this vector empty, so trusting nBusses_ here
         // would skip creating bus 0 and leave a null shared_ptr behind.
-        int oldMixerCount = (int)cpTrackMixers_.size();
+        oldMixerCount = (int)cpTrackMixers_.size();
         cpTrackMixers_.resize(nBusses);
         // Create the new ones.
         for( int i=oldMixerCount; i<nBusses; ++i ) {
@@ -394,8 +412,15 @@ void STrack::setNBusses( int nBusses )
         }
     }
 
-    // Populate clip list in all track mixers with existing children (initial sync).
-    // This runs on the UI thread, so it's safe to populate before audio starts.
+    // Populate clip list in the NEW track mixers with existing children (initial
+    // sync). This runs on the UI thread, so it's safe to populate before audio
+    // starts.
+    //
+    // Only the mixers created by this call (index >= oldMixerCount): the ones
+    // that already existed already hold every entry, and re-inserting would give
+    // one SLink* two entries in the same mixer — a duplicate that only
+    // removeClip cleaned up correctly, and that would otherwise stay frozen at
+    // its pre-edit extent and clip the sum there.
     for( SLink *lk : childLinks() ) {
         if( !lk || !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();
@@ -408,9 +433,21 @@ void STrack::setNBusses( int nBusses )
         auto resolveFn = [lk]( offset_t off ) {
             return lk->getSObject().resolveClip( off );
         };
-        for( int i=0; i<nBusses; ++i ) {
+        for( int i=oldMixerCount; i<nBusses; ++i ) {
+            if( !cpTrackMixers_[i] ) continue;
             cpTrackMixers_[i]->insertClip(lk, startTime, duration, getComponentFn, resolveFn);
         }
+        // ...and give those entries the same live wiring trackChildWasAdded
+        // makes, or a later move/resize of the clip would never reach the mixers
+        // created here: the clip would stay at the extent it had at bus-growth
+        // time. UniqueConnection because a child adopted the normal way is
+        // already connected.
+        QObject::connect( lk, SIGNAL( startTimeChanged( offset_t ) ),
+                          this, SLOT( trackChildWasMoved( offset_t ) ),
+                          Qt::UniqueConnection );
+        QObject::connect( &(lk->getSObject()), SIGNAL( durationChanged( length_t ) ),
+                          this, SLOT( trackChildDurationChanged( length_t ) ),
+                          Qt::UniqueConnection );
     }
 
     nBusses_ = nBusses;
@@ -764,26 +801,54 @@ void STrack::onTrackMuteChanged( bool /*muted*/ )
 
 // A child TRACK of ours (a folder lane) changed its mute. We are the summing
 // parent here, so we enforce it — the root mixer's null-the-input-plug trick
-// cannot reach a nested track.
-void STrack::childTrackMuteChanged( bool muted )
+// cannot reach a nested track. Mute is per-lane (it changes nobody else's
+// audibility), so re-applying our own children is enough.
+void STrack::childTrackMuteChanged( bool /*muted*/ )
 {
-    SObject *child = dynamic_cast<SObject*>( sender() );
-    if( !child ) return;
+    applyChildTrackAudibility();
+}
 
-    // Find OUR link to that child; the clip entries are keyed by SLink.
+// A lane at or below one of our child tracks changed its solo flag. Solo is
+// GLOBAL — it re-decides the audibility of every lane in the project, including
+// our siblings and our parent's siblings — so this must not be resolved here.
+// Relay it up; the root mixer answers with one whole-tree re-application
+// (SStdMixer::applyAudibility), which calls back into
+// applyChildTrackAudibility() on us.
+void STrack::childTrackSoloChanged()
+{
+    emit subtreeSoloChanged();
+}
+
+// Enforce the shared audibility rule on our child TRACKS (folder lanes), and
+// recurse. A lane's clip entry is muted exactly when the lane is not audible;
+// twTrackMix::setClipMuted no-ops (and reports an empty range) when the flag is
+// already right, so this is idempotent and costs nothing when nothing changed.
+void STrack::applyChildTrackAudibility()
+{
+    SObject *root = splacements::rootContainer( getProjectSafe() );
+    const bool anySolo = ssolo::anySoloInTree( root );
+
+    twEditRange affected;
     for( SLink *lk : childLinks() ) {
-        if( !lk || &lk->getSObject() != child ) continue;
-        twEditRange affected;
+        if( !lk ) continue;
+        STrack *child = dynamic_cast<STrack*>( &lk->getSObject() );
+        if( !child ) continue;
+        const bool audible = ssolo::isLaneAudible( root, child, anySolo );
         for( int i=0; i<nBusses_; ++i ) {
             if( cpTrackMixers_[i] ) {
-                twEditRange r = cpTrackMixers_[i]->setClipMuted( lk, muted );
+                twEditRange r = cpTrackMixers_[i]->setClipMuted( lk, !audible );
                 affected.unite( r.start, r.end );
             }
         }
-        // Only the lane's own extent gained or lost material.
+        child->applyChildTrackAudibility();   // nested folders
+    }
+
+    // Only the lanes that actually flipped gained or lost material — and the
+    // chain above us has to be staled the same way, or the summed pages we
+    // already froze keep serving the pre-edit mix (AC6 / the mute precedent).
+    if( !affected.empty() ) {
         invalidateRenderPathRange( (offset_t) affected.start,
                                    (offset_t) affected.end );
-        break;
     }
 }
 

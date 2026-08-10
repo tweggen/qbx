@@ -3,6 +3,8 @@
 #include "app/actions/sactionregistry.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
+#include "app/model/splacements.h"
+#include "app/model/sobjectpath.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/shell/sapplication.h"
@@ -30,29 +32,37 @@ SMainWindow *mainWindow()
     return nullptr;
 }
 
-STrack *trackAt( SProject *project, int index )
+// Path-addressed, so a track NESTED inside a folder can be metered. The old
+// version scanned the mixer's DIRECT children, which meant a nested lane's
+// meter had no automated coverage at all — uncomfortable, because the meters
+// consume the mute/solo audibility rule, which is precisely what nesting
+// changes.
+STrack *laneAtPath( SProject *project, const QString &path )
 {
-    if( !project ) return nullptr;
-    SStdMixer *mixer = dynamic_cast<SStdMixer *>( project->getRootComponent() );
-    if( !mixer ) return nullptr;
-    if( index < 0 || index >= mixer->getNTracks() ) return nullptr;
-    SLink *link = mixer->getTrackAt( index );
-    return link ? dynamic_cast<STrack *>( &link->getSObject() ) : nullptr;
+    SObject *root = splacements::rootContainer( project );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( path ) );
+    return dynamic_cast<STrack *>( lane );
 }
 
 }  // namespace
 
+QString SAssertMeterAction::effectivePath() const
+{
+    return trackPath_.isEmpty() ? QString::number( trackIndex_ ) : trackPath_;
+}
+
 SApplyResult SAssertMeterAction::apply( SProject *project )
 {
-    STrack *track = trackAt( project, trackIndex_ );
+    const QString lanePath = effectivePath();
+    STrack *track = laneAtPath( project, lanePath );
     if( !track ) {
-        qWarning() << "assert-meter: no track" << trackIndex_;
+        qWarning() << "assert-meter: no track" << lanePath;
         return { false, nullptr };
     }
 
     std::shared_ptr<twComponent> tap = track->getRootComponent();
     if( !tap ) {
-        qWarning() << "assert-meter: track" << trackIndex_ << "has no root component";
+        qWarning() << "assert-meter: track" << lanePath << "has no root component";
         return { false, nullptr };
     }
 
@@ -168,10 +178,10 @@ SApplyResult SAssertMeterAction::apply( SProject *project )
             qWarning() << "assert-meter FAILED: no main window for headHeight";
             return { false, nullptr };
         }
-        const QString desc = win->describeTrackMeter( trackIndex_, headHeight_ );
+        const QString desc = win->describeTrackMeter( lanePath, headHeight_ );
         if( desc.isEmpty() ) {
             qWarning() << "assert-meter FAILED: no meter description for track"
-                       << trackIndex_;
+                       << lanePath;
             return { false, nullptr };
         }
         if( !desc.contains( contains_ ) ) {
@@ -186,6 +196,7 @@ SApplyResult SAssertMeterAction::apply( SProject *project )
 
 void SAssertMeterAction::writeXml( QDomElement &elem ) const
 {
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
     elem.setAttribute( "trackIndex", trackIndex_ );
     elem.setAttribute( "position", QString::number( position_ ) );
     elem.setAttribute( "minRms", QString::number( minRms_ ) );
@@ -199,6 +210,7 @@ void SAssertMeterAction::writeXml( QDomElement &elem ) const
 
 bool SAssertMeterAction::readXml( const QDomElement &elem, int /*version*/ )
 {
+    trackPath_  = elem.attribute( "trackPath" );
     trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
     position_   = elem.attribute( "position", "0" ).toLongLong();
     minRms_     = elem.attribute( "minRms", "-1" ).toDouble();

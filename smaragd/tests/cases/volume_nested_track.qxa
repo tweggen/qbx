@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: a track NESTED inside a folder can have its volume set, and undone.
+
+  `set-track-volume` carried a single TOP-LEVEL `trackIndex` and resolved it with
+  `mixer->childAt(trackIndex_)`, so a nested lane's fader was unaddressable. The
+  UI made that invisible rather than loud — both faders (the arranger track head
+  and the Track Detail dock) resolved the track by scanning the mixer's DIRECT
+  children, got -1 for a nested track, and silently fell back to a direct
+  non-undoable `setVolume()`. So the fader appeared to work while nothing landed
+  on the undo stack.
+
+  WHY THE FOLDER CARRIES A CLIP OF ITS OWN. The obvious version of this case —
+  one clip on the nested lane, set its volume, assert the level halved — is NOT
+  a gate. Under the old resolution a path of {0,0} degenerates to childAt(0),
+  which IS the folder, and halving the folder halves its nested child too: the
+  rendered audio is identical either way and the case passes against the bug.
+  (Verified: the first draft of this case passed with the defect restored.)
+  So the folder holds its own clip at [0,192000) and the nested lane's clip sits
+  at [192000,384000). Setting the NESTED lane's volume must halve the second span
+  and leave the first at unity; the old resolution halves BOTH, which the
+  unity assertion on the folder's own span catches.
+
+  The legacy `trackIndex` spelling is still accepted on read and stays covered by
+  grain_with_volume_control, meter_postfader and render_sawtooth_with_effects.
+
+  Fixture: test_sawtooth.wav, 4 s, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+  Both assertions key on sec3 (the loudest second) for the best discriminator;
+  -6.0206 dB is exactly half amplitude.
+-->
+<SActionScript version="1" name="volume_nested_track">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0: becomes the folder -->
+    <add-track index="-1"/>            <!-- 1: gets nested into it -->
+
+    <!-- The nested lane's clip, LATER in time: [192000,384000). -->
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="192000"/>
+    <!-- The folder's OWN clip, first: [0,192000). This is the control span. -->
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Group it. The folder already holds one clip link, so the child track
+         lands at index 1 => the nested lane is path 0,1. -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+
+    <!-- Baseline, both spans at unity: sec3 of each clip. -->
+    <render filename="vol_pre.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="vol_pre.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="vol_pre.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- Half amplitude ON THE NESTED LANE. Before the fix this could not name
+         that lane at all. -->
+    <set-track-volume trackPath="0,1" volume="-6.0206"/>
+
+    <render filename="vol_half.wav" format="wav" quality="10"/>
+    <!-- The FOLDER's own clip must be untouched. This is the assertion that
+         fails if the path degenerates to the folder. -->
+    <assert-audio-energy filename="vol_half.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <!-- ...and only the nested lane halved. -->
+    <assert-audio-energy filename="vol_half.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.185" maxRms="0.222"/>
+
+    <!-- Undoable: the fader's fallback path was a direct setVolume() that never
+         reached the undo stack, so this is the half of the fix the level bands
+         alone would not catch. -->
+    <undo count="1"/>
+
+    <render filename="vol_restored.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="vol_restored.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="vol_restored.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <!-- After the reparent only the folder is top-level. -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

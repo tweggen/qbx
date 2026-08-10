@@ -42,75 +42,10 @@ static const bool s_reg_set_locator = (
     ), true
 );
 
-// ------------------------------------------------------------- set-track-mute
-
-SApplyResult SSetTrackMuteAction::apply(SProject *project)
-{
-    if (!project) {
-        return {false, nullptr};
-    }
-
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(project->getRootComponent());
-    if (!mixer) {
-        return {false, nullptr};
-    }
-
-    SObject *obj = nullptr;
-    if (!trackPath_.isEmpty()) {
-        // Path form: resolves through folder-track lanes, which a mixer index
-        // cannot reach (a reparented track is no longer a mixer child).
-        obj = strackpath::resolveByPath(mixer, trackPath_);
-        if (!obj) {
-            qWarning() << "set-track-mute: no track at path"
-                       << strackpath::pathToString(trackPath_);
-            return {false, nullptr};
-        }
-    } else {
-        if (trackIndex_ < 0 || trackIndex_ >= mixer->getNTracks()) {
-            qWarning() << "set-track-mute: no track at index" << trackIndex_;
-            return {false, nullptr};
-        }
-        SLink *link = mixer->getTrackAt(trackIndex_);
-        if (!link) {
-            return {false, nullptr};
-        }
-        obj = &link->getSObject();
-    }
-
-    STrack *track = dynamic_cast<STrack*>(obj);
-    if (!track) {
-        qWarning() << "set-track-mute: target is not a track";
-        return {false, nullptr};
-    }
-
-    track->setMuted(muted_);
-    return {true, nullptr};
-}
-
-void SSetTrackMuteAction::writeXml(QDomElement &elem) const
-{
-    if (!trackPath_.isEmpty()) {
-        elem.setAttribute("trackPath", strackpath::pathToString(trackPath_));
-    } else {
-        elem.setAttribute("trackIndex", QString::number(trackIndex_));
-    }
-    elem.setAttribute("muted", muted_ ? "1" : "0");
-}
-
-bool SSetTrackMuteAction::readXml(const QDomElement &elem, int /*version*/)
-{
-    trackIndex_ = elem.attribute("trackIndex", "0").toInt();
-    trackPath_ = strackpath::stringToPath(elem.attribute("trackPath"));
-    muted_ = elem.attribute("muted", "0") == "1";
-    return true;
-}
-
-static const bool s_reg_set_track_mute = (
-    SActionRegistry::instance().registerType(
-        QStringLiteral("set-track-mute"),
-        []{ return new SSetTrackMuteAction; }
-    ), true
-);
+// set-track-mute used to live here. It is a real, undoable edit now (the mute
+// button submits it), so it moved to
+// main/objects/track/src/ssettrackmuteaction.cpp next to set-track-solo. Its
+// XML is unchanged, index form included, so the committed cases are untouched.
 
 // -------------------------------------------------------------- wait-playhead
 

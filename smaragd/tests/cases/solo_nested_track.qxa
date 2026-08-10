@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: SOLO works for a lane NESTED inside a folder/group track.
+
+  Reported as: "solo does nothing on a track inside a group." The button
+  latched yellow and the mix was byte-identical. Three causes, all of which
+  this case would have caught:
+
+  1) A nested track's soloChanged was connected to NOTHING. SStdMixer::
+     insertTrack() is the only place it was ever wired, and a nested track
+     never goes through insertTrack() — it is adopted by
+     STrack::trackChildWasAdded(), which connected mutedChanged only. Worse,
+     SReparentTrackAction explicitly drops every track->old-mixer connection,
+     so a track that WAS top-level lost its wiring on the way in.
+  2) The audibility rule only ever looked at the mixer's DIRECT children:
+     reconnectTracksToMixer() and anyTrackSoloed() both iterated childLinks()
+     of the mixer, so a solo one level down was invisible to it.
+  3) A folder enforced a child lane's MUTE (twTrackMix::setClipMuted) but had
+     no solo counterpart at all, so even a mixer that knew about the solo had
+     no way to silence the soloed lane's SIBLING.
+
+  The rule now lives in ONE place, app/model/ssolorules.h, and is applied at
+  every summing container (the root mixer nulls an input plug, a folder mutes a
+  clip entry):
+
+     audible = !muted && ( !anySoloAnywhere || isSolo
+                           || hasSoloedDescendant || isDescendantOfSoloed )
+
+  Solo also had no VERB until now — the UI called STrack::setSolo() directly,
+  which is exactly why it had no coverage. set-track-solo is path-addressed, so
+  a nested lane is nameable.
+
+  Layout (after the two reparents):
+
+      0   T1      clip at 0        [0,     192000)
+      1   F       (folder, no clips of its own)
+      1,0   N1    clip at 192000   [192000, 384000)
+      1,1   N2    clip at 384000   [384000, 576000)
+      2   T2      clip at 576000   [576000, 768000)
+
+  Each lane owns a DISJOINT stretch of the timeline, so one render tells us
+  exactly which lanes were audible. Every assertion probes the 4th second of
+  that lane's clip (offset +144000), where the fixture's RMS is ~0.405 — far
+  from both silence and from any other band, so "audible" and "silent" can
+  never be confused.
+
+  Fixture: test_sawtooth.wav, 4 s, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+-->
+<SActionScript version="1" name="solo_nested_track">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0: T1 -->
+    <add-track index="-1"/>            <!-- 1: F, becomes the folder -->
+    <add-track index="-1"/>            <!-- 2: N1, nested into F -->
+    <add-track index="-1"/>            <!-- 3: N2, nested into F -->
+    <add-track index="-1"/>            <!-- 4: T2 -->
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="2" filePath="../test_sawtooth.wav" timePos="192000"/>
+    <add-sample trackPath="3" filePath="../test_sawtooth.wav" timePos="384000"/>
+    <add-sample trackPath="4" filePath="../test_sawtooth.wav" timePos="576000"/>
+
+    <!-- Nest N1 then N2 under F. Indices shift as tracks leave the top level:
+         after the first reparent the top level is [T1, F, N2, T2], so the
+         second reparent's source is 2 again. -->
+    <reparent-track source="2" destParent="1" destIndex="-1"/>
+    <reparent-track source="2" destParent="1" destIndex="-1"/>
+
+    <!-- ============ Baseline: nothing soloed, everything sounds ============ -->
+    <render filename="solo_base.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="solo_base.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- T1 -->
+    <assert-audio-energy filename="solo_base.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- N1 -->
+    <assert-audio-energy filename="solo_base.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- N2 -->
+    <assert-audio-energy filename="solo_base.wav"
+                         startFrame="720000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- T2 -->
+
+    <!-- ================== AC1: solo the NESTED lane N1 ==================== -->
+    <!-- The whole point. Before the fix this render was identical to the
+         baseline: all four lanes still audible. -->
+    <set-track-solo trackPath="1,0" solo="1"/>
+
+    <render filename="solo_n1.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="solo_n1.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>   <!-- T1 silent -->
+    <!-- N1 audible: its ancestor folder F must stay wired into the mixer even
+         though F itself is not soloed (hasSoloedDescendant). A rule that only
+         asked "is F soloed?" would silence the soloed lane through its own
+         parent. -->
+    <assert-audio-energy filename="solo_n1.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <!-- N2 silent: this is the half only a FOLDER can enforce (setClipMuted).
+         F is audible, so nulling a mixer input plug cannot reach N2. -->
+    <assert-audio-energy filename="solo_n1.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="solo_n1.wav"
+                         startFrame="720000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>   <!-- T2 silent -->
+
+    <!-- ============ AC5: un-solo restores the previous state ============== -->
+    <set-track-solo trackPath="1,0" solo="0"/>
+
+    <render filename="solo_off.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="solo_off.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="solo_off.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="solo_off.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="solo_off.wav"
+                         startFrame="720000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- ================ AC2: solo the FOLDER (must not regress) =========== -->
+    <!-- A soloed folder keeps its WHOLE subtree audible (isDescendantOfSoloed),
+         which is the case that already worked and must keep working. -->
+    <set-track-solo trackPath="1" solo="1"/>
+
+    <render filename="solo_folder.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="solo_folder.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>   <!-- T1 silent -->
+    <assert-audio-energy filename="solo_folder.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- N1 audible -->
+    <assert-audio-energy filename="solo_folder.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- N2 audible -->
+    <assert-audio-energy filename="solo_folder.wav"
+                         startFrame="720000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>   <!-- T2 silent -->
+
+    <set-track-solo trackPath="1" solo="0"/>
+
+    <!-- =========== AC3: solo a TOP-LEVEL track (must not regress) ========= -->
+    <!-- This render also proves the un-solo above landed: if F were still
+         soloed its subtree would still be audible. -->
+    <set-track-solo trackPath="0" solo="1"/>
+
+    <render filename="solo_t1.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="solo_t1.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- T1 audible -->
+    <assert-audio-energy filename="solo_t1.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>   <!-- N1 silent -->
+    <assert-audio-energy filename="solo_t1.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>   <!-- N2 silent -->
+    <assert-audio-energy filename="solo_t1.wav"
+                         startFrame="720000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>   <!-- T2 silent -->
+
+    <!-- The verb is a real, undoable edit — solo went through the model
+         directly until now, so it was neither undoable nor scriptable. -->
+    <undo count="1"/>
+
+    <render filename="solo_undone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="solo_undone.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="solo_undone.wav"
+                         startFrame="720000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- ====== AC5: an INDEPENDENT mute survives a solo/un-solo cycle ====== -->
+    <!-- Un-soloing must restore the previous state EXACTLY, not "everything
+         audible": N2 is muted on its own account and has to stay silent. -->
+    <set-track-mute trackPath="1,1" muted="1"/>
+    <set-track-solo trackPath="1,0" solo="1"/>
+    <set-track-solo trackPath="1,0" solo="0"/>
+
+    <render filename="solo_mute_kept.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="solo_mute_kept.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- T1 back -->
+    <assert-audio-energy filename="solo_mute_kept.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- N1 back -->
+    <assert-audio-energy filename="solo_mute_kept.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>   <!-- N2 STILL muted -->
+    <assert-audio-energy filename="solo_mute_kept.wav"
+                         startFrame="720000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>   <!-- T2 back -->
+  </actions>
+
+  <assertions>
+    <!-- After the two reparents the top level is T1, F, T2. -->
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

@@ -1,5 +1,6 @@
 #include "app/objects/cut/saddsampleaction.h"
 #include "app/model/splacements.h"
+#include "app/model/sobjectpath.h"
 #include "app/objects/cut/sremovesampleaction.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
@@ -8,15 +9,17 @@
 #include "tw/core/twfraction.h"
 #include <QDomElement>
 
-SAddSampleAction::SAddSampleAction(int trackIdx, const QString &filePath, offset_t timePos)
-    : trackIndex_(trackIdx), filePath_(filePath), timePos_(timePos)
+SAddSampleAction::SAddSampleAction(const QList<int> &trackPath, const QString &filePath,
+                                   offset_t timePos)
+    : trackPath_(trackPath), filePath_(filePath), timePos_(timePos)
 {
 }
 
-SAddSampleAction::SAddSampleAction(int trackIdx, const QString &filePath, offset_t timePos,
+SAddSampleAction::SAddSampleAction(const QList<int> &trackPath, const QString &filePath,
+                                   offset_t timePos,
                                    const Fraction &srcStart, length_t cutDuration,
                                    length_t loopLength, const twGrainParams &grain)
-    : trackIndex_(trackIdx), filePath_(filePath), timePos_(timePos),
+    : trackPath_(trackPath), filePath_(filePath), timePos_(timePos),
       hasWindow_(true), srcStart_(srcStart), cutDuration_(cutDuration),
       loopLength_(loopLength), grain_(grain)
 {
@@ -33,15 +36,11 @@ SApplyResult SAddSampleAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    // Get the track at the specified index.
-    SLink *trackLink = root->childAt(trackIndex_);
-    if (!trackLink) {
+    // Get the lane. Path-addressed, so a track nested inside a folder track
+    // resolves as readily as a top-level one.
+    SObject *track = splacements::laneAt( root, trackPath_ );
+    if (!track) {
         return {false, nullptr};
-    }
-
-    SObject *track = &trackLink->getSObject();
-    if (!track->isPathContainer()) {
-        return {false, nullptr};   // addressed child is not a lane
     }
 
     // Link to the file.
@@ -91,13 +90,13 @@ SApplyResult SAddSampleAction::apply(SProject *project)
     }
 
     // Return inverse: remove the sample at the same position
-    SRemoveSampleAction *inverse = new SRemoveSampleAction(trackIndex_, clipIndex, filePath_, timePos_);
+    SRemoveSampleAction *inverse = new SRemoveSampleAction(trackPath_, clipIndex, filePath_, timePos_);
     return {true, inverse};
 }
 
 void SAddSampleAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("trackIndex", trackIndex_);
+    elem.setAttribute("trackPath", strackpath::pathToString(trackPath_));
     elem.setAttribute("filePath", filePath_);
     elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
     // Window attributes are written ONLY for the windowed form, so a plain
@@ -115,7 +114,12 @@ void SAddSampleAction::writeXml(QDomElement &elem) const
 
 bool SAddSampleAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    trackIndex_ = elem.attribute("trackIndex", "0").toInt();
+    // Sniff the spelling rather than key off formatVersion(): pre-existing .qxa
+    // scripts carry no version attribute, and `trackIndex` is exactly a
+    // one-element path.
+    trackPath_ = elem.hasAttribute("trackPath")
+        ? strackpath::stringToPath( elem.attribute("trackPath") )
+        : QList<int>{ elem.attribute("trackIndex", "0").toInt() };
     filePath_ = elem.attribute("filePath", "");
     // Preserve precision for large offset_t values by checking denominator
     Fraction frac = parseFractionOrDouble(elem.attribute("timePos", "0").toStdString());

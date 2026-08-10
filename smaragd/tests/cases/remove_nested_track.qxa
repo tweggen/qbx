@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: a track NESTED inside a folder can be removed, and undone.
+
+  `remove-track` carried a single TOP-LEVEL `index` resolved with
+  SStdMixer::getTrackAt(), so a nested track could not be named at all — and the
+  arranger's "Remove track" menu item said so out loud in a comment
+  ("Removing a nested track is not wired here yet") while doing nothing
+  whatsoever: indexOfChildObject() returned -1 and the slot returned before
+  submitting anything. No action, no message, no undo entry.
+
+  Two things had to change together, which is what this case is really gating:
+
+  * ADDRESSING — `remove-track` now takes a `trackPath`. The legacy `index`
+    spelling is still read (a one-element path IS a top-level index).
+  * DETACH/RE-ATTACH SYMMETRY — the container may be the root mixer OR a folder
+    STrack, and they differ: the mixer owns its track list (removeTrack rewires
+    the summing inputs), a folder holds an ordinary SLink child that is deleted.
+    SRestoreTrackAction therefore carries the PARENT PATH, not just an index, and
+    re-attaches the way the removal detached. Restoring a nested track into the
+    mixer instead of its folder would still produce audio here — which is why the
+    layout below distinguishes the two.
+
+  WHY THE FOLDER CARRIES A CLIP OF ITS OWN. With only the nested lane's material
+  in the project, "removed" and "removed the wrong lane" both render silence, and
+  a restore into the wrong parent still sums into the master. The folder's own
+  clip at [0,192000) is the control: it must be audible throughout, and the
+  nested lane's clip at [192000,384000) must vanish and come back.
+
+  Fixture: test_sawtooth.wav, 4 s, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+  Both bands key on sec3 (the loudest second).
+-->
+<SActionScript version="1" name="remove_nested_track">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0: becomes the folder -->
+    <add-track index="-1"/>            <!-- 1: gets nested into it -->
+
+    <!-- The nested lane's clip, LATER in time: [192000,384000). -->
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="192000"/>
+    <!-- The folder's OWN clip, first: [0,192000). The control span. -->
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Group it. The folder already holds one clip link, so the child track
+         lands at index 1 => the nested lane is path 0,1. -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+
+    <render filename="rmtrk_pre.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="rmtrk_pre.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="rmtrk_pre.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- Remove the NESTED lane. Unexpressible before the fix. -->
+    <remove-track trackPath="0,1"/>
+
+    <render filename="rmtrk_gone.wav" format="wav" quality="10"/>
+    <!-- The folder and its own clip survive... -->
+    <assert-audio-energy filename="rmtrk_gone.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <!-- ...and only the nested lane's span went silent. -->
+    <assert-audio-energy filename="rmtrk_gone.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <undo count="1"/>
+
+    <!-- Restored under its ORIGINAL parent at its ORIGINAL index, with its whole
+         subtree (the clip is part of the pinned track, not re-created). -->
+    <render filename="rmtrk_back.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="rmtrk_back.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="rmtrk_back.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- And redo removes it again: the inverse-of-the-inverse addresses the same
+         lane, which a mixer-relative index would not have after the round trip. -->
+    <redo count="1"/>
+
+    <render filename="rmtrk_redone.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="rmtrk_redone.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="rmtrk_redone.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <!-- The folder stays top-level throughout; only its CHILD was removed. -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

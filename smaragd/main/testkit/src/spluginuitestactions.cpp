@@ -3,6 +3,8 @@
 #include "app/actions/sactionregistry.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
+#include "app/model/splacements.h"
+#include "app/model/sobjectpath.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/pluginui/splugineffectstrip.h"
@@ -33,13 +35,27 @@ std::unique_ptr<SPluginEffectStrip> makeStrip( SProject *project, int trackIndex
     return std::make_unique<SPluginEffectStrip>( track, nullptr );
 }
 
+// Path-addressed variant: the only way to reach a track nested in a folder.
+std::unique_ptr<SPluginEffectStrip> makeStripAt( SProject *project,
+                                                 const QString &trackPath )
+{
+    SObject *root = splacements::rootContainer( project );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) return nullptr;
+    return std::make_unique<SPluginEffectStrip>( track, nullptr );
+}
+
 }  // namespace
 
 SApplyResult SAssertPluginStripAction::apply( SProject *project )
 {
-    auto strip = makeStrip( project, trackIndex_ );
+    auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
+                                      : makeStripAt( project, trackPath_ );
     if( !strip ) {
-        qWarning() << "assert-plugin-strip: no track" << trackIndex_;
+        qWarning() << "assert-plugin-strip: no track"
+                   << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
+                                             : trackPath_ );
         return { false, nullptr };
     }
 
@@ -72,6 +88,7 @@ SApplyResult SAssertPluginStripAction::apply( SProject *project )
 
 void SAssertPluginStripAction::writeXml( QDomElement &elem ) const
 {
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
     elem.setAttribute( "trackIndex", trackIndex_ );
     elem.setAttribute( "slotCount", slotCount_ );
     elem.setAttribute( "slotIndex", slotIndex_ );
@@ -81,6 +98,7 @@ void SAssertPluginStripAction::writeXml( QDomElement &elem ) const
 
 bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/ )
 {
+    trackPath_  = elem.attribute( "trackPath" );
     trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
     slotCount_  = elem.attribute( "slotCount", "-1" ).toInt();
     slotIndex_  = elem.attribute( "slotIndex", "-1" ).toInt();
@@ -91,9 +109,12 @@ bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/
 
 SApplyResult SPluginEditorSetParamAction::apply( SProject *project )
 {
-    auto strip = makeStrip( project, trackIndex_ );
+    auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
+                                      : makeStripAt( project, trackPath_ );
     if( !strip ) {
-        qWarning() << "plugin-editor-set-param: no track" << trackIndex_;
+        qWarning() << "plugin-editor-set-param: no track"
+                   << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
+                                             : trackPath_ );
         return { false, nullptr };
     }
 
@@ -122,6 +143,7 @@ SApplyResult SPluginEditorSetParamAction::apply( SProject *project )
 
 void SPluginEditorSetParamAction::writeXml( QDomElement &elem ) const
 {
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
     elem.setAttribute( "trackIndex", trackIndex_ );
     elem.setAttribute( "slotIndex", slotIndex_ );
     elem.setAttribute( "paramId", (qulonglong) paramId_ );
@@ -135,6 +157,7 @@ void SPluginEditorSetParamAction::writeXml( QDomElement &elem ) const
 bool SPluginEditorSetParamAction::readXml( const QDomElement &elem,
                                           int /*version*/ )
 {
+    trackPath_  = elem.attribute( "trackPath" );
     trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
     slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
     paramId_    = (std::uint32_t) elem.attribute( "paramId", "0" ).toUInt();

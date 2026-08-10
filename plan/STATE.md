@@ -8587,3 +8587,444 @@ compensation is exercised only through the code path — the actual device figur
 0 on the Null backend and unverified against a real CoreAudio/WASAPI buffer. And
 meters deliberately trail the DRAWN playhead by the device latency, because the
 playhead itself is uncompensated; that is a one-line follow-up if it reads wrong.
+
+---
+
+## 2026-08-08 — A clip on a grouped (nested) track can be deleted again
+
+Reported as: *"I cannot remove a clip that is part of a grouped asset. I
+understand it is referenced, I would nonetheless expect to be able to remove
+it."* Delete/Backspace on such a clip did **nothing at all** — no dialog, no log
+line, no undo entry.
+
+**It was never a reference-count veto.** Nothing in the model refuses to unlink a
+referenced object: `~SLink` always `removeRef()`s, and `SObject` destruction is
+only ever *triggered by* the count reaching zero (`sobject.cpp:426-446`). There is
+no "still in use" guard anywhere — the two `qWarning`s about live references are
+diagnostics fired *after* the fact, not gates. Nor does the asset pin the clips:
+`SCreateAssetAction` pins the **container** (`SCut(project, *container)` +
+`registerAsset` → one `addRef`), never its contents. The clip was simply never
+reached.
+
+Two causes, the first hiding the second:
+
+1. **`SStdMixerView::ctRemoveSample()` bailed out before submitting anything.** It
+   resolved the lane with `mixer->indexOfChildObject(*oldTrack)`, and
+   `SObject::indexOfChildObject()` scans **direct children only**. A track nested
+   under a folder is not a direct child of the root mixer → `-1` → `return`.
+   Nested lanes are fully clickable (`appendRowsFor` recurses and sets
+   `lastClickTrack_`), so the clip selected fine; Delete just did nothing. That
+   guard also sat **above** the asset branch, so an asset *placement* on a nested
+   lane was equally undeletable even though that branch already used a path.
+2. **`remove-sample` / `add-sample` could only address top-level tracks.** They
+   carried an `int trackIndex` and did `root->childAt(trackIndex_)`, unlike every
+   other clip verb (`move-clip`, `split-clip`, `resize-clip`, `place-clip`,
+   `set-pitch`, `duplicate-clip` — all index-paths). So even a hand-written `.qxa`
+   could not name a nested lane, and the inverse would have restored the clip onto
+   the wrong track.
+
+Both verbs are now path-addressed (`trackPath`, resolved through the existing
+`splacements::laneAt`), and `readXml` **sniffs the attribute** rather than keying
+off `formatVersion()` — pre-existing scripts carry no `version` attribute, and
+`trackIndex` is exactly a one-element path, so all five legacy cases keep working
+untouched. `SRemoveSampleAction` also dropped its now-redundant
+`strackpath::pathOf` call for the container-backed inverse: it already holds the
+lane path.
+
+**Found in passing, same defect, fixed here:** the timeline's *file-drop* handler
+had the identical guard (`mixer->indexOfChildObject(*track)` at the `file:`
+branch), so dropping a sample onto a grouped lane was also a silent no-op — while
+the `asset:` branch three lines above it already used the correct `trackPath`. It
+now uses that same path.
+
+Gates: `ctest -R action_roundtrip_test` (new `add-sample` / `remove-sample`
+fixtures, deliberately two-level paths — a one-element path would round-trip even
+through the old int field) and the new `qxa.delete_clip_in_group`, which nests a
+track via `reparent-track` and then deletes, undoes and redoes a split tail on it.
+That case is also the **only** coverage that a nested lane renders and is
+addressable at all; nothing else in the suite nests a track and then edits a clip
+on it, which is why this survived.
+
+**A separate bug the new case uncovered, written up in
+`plan/todo/NESTED_LANE_STALE_PAGE.md`:** under a folder track, the first frozen
+page that only PARTIALLY covers an edit is never re-rendered — it serves its
+pre-edit content forever (a second render is identically wrong). A clip added at
+96000 is silent until 131072 = 2 × 65536, the end of page 1; everything from that
+boundary on is exact. It is **not** part of clip removal and not caused by this
+change: a plain `<add-sample/>` onto a nested lane reproduces it with no delete
+and no undo, and the same script with the `reparent-track` removed passes.
+Instrumenting `invalidateRenderChainsContainingRange` shows the dirty range
+propagating correctly through the folder to the mixer, and
+`invalidatePagesInRange_nolock`'s intersection test is correct — so the page is
+marked stale and something downstream still serves it. The structural suspect is
+the `twView` (and its latch) that `twTrackMix` wraps every child entry in, which
+the master's `twMixer` has no equivalent of. Consequence for this change: the
+`[96000,144000)` band of the restored render is commented out in
+`delete_clip_in_group.qxa` with the reason; the `[144000,192000)` band is kept and
+is what proves the undo restored the right window on the right lane.
+
+Not fixed, deliberately, and all found while tracing this: `SSetTrackVolumeAction`
+has the identical flat-index bug (`mixer->childAt(trackIndex_)`), so a nested
+track's fader misfires; deleting an `STakeStack` returns `{true, nullptr}` and so
+never reaches the undo stack; Delete ignores the multi-selection (unlike
+`nudgeClipPitch`); Delete does not broadcast to edit groups (unlike
+split/resize/move); `SActionHistory::onRejected_` still has a `// TODO: Log error
+and notify UI`, which is *why* the whole class of bug reads as "nothing happens";
+and `ctDeleteSample()` is an empty stub wired to a live "Delete sample" menu item.
+
+---
+
+## 2026-08-09 — A clip edited on a NESTED lane is finally heard (stale held page)
+
+Reported after the grouped-clip removal fix landed: *"After deletion of the clip,
+I still see the VU meter going; after deletion of the clip, I still hear the
+sample; interesting enough, a related preview (that captured a parent track bar
+of the clip as a sample) reflected the changes."*
+
+### Root cause
+
+`twStreamingLatch::copyData` judged staleness on the page's OWN `contentEpoch`
+stamp:
+
+```cpp
+const uint64_t epochNow = getComponent()->contentEpochNow();
+...
+page->contentEpoch.load() < epochNow
+```
+
+The stamp is written by whichever component actually RENDERED the page
+(`twtrackmix.cc:350`), and that is routinely NOT `getComponent()`. With no
+inserts, `twPluginChain` forwards its upstream `twTrackMix` page through verbatim
+(`twpluginchain.cc:242-252`), so the page arrives carrying the TRACKMIX's counter
+while the gate compares it against the CHAIN's. They are independent
+per-component atomics — both start at 1, and the trackmix self-bumps on
+`insertClip`/`removeClip`/`updateClip`/`setClipMuted`/`setTrackGain`, none of
+which touch the chain. The trackmix counter therefore runs permanently ahead and
+**the staleness test could never fire.** Measured mid-edit: held page stamped 9,
+chain epoch 7.
+
+Why it only bit NESTED lanes: the reuse branch needs
+`held->startPosition == pageStart`, i.e. the reader parked on exactly the page
+being re-frozen. A folder drives its child through
+`twTrackMix::freezePage → twView → child rewire`, which re-freezes single pages
+in place; the master pulls a top-level track through the latch in a sweep that
+keeps moving the reader forward. Instrumented hit counts: **top-level 0, nested 1,
+at exactly the bad page.**
+
+That also explains the reporter's third observation, the one that looked
+paradoxical: the asset PREVIEW was right while playback was wrong.
+`SCut::buildCapture_` rebuilds its whole window from `seekTo(0)` with
+`previousPage = nullptr` (scut.cpp:374-386), so it never reuses a reader hint —
+it cannot hit this bug. And the moving VU meter was not a metering bug at all:
+`twLevelProbe` reads frozen pages by position and deliberately accepts stale ones
+(proposal 34), so the meter was faithfully showing the same stale page the ear
+was hearing.
+
+### Fix
+
+The reader now remembers the epoch it OBSERVED on the producer it asked
+(`twLatchStreamingOutput::previousPageEpoch_`, threaded through `copyData` as
+`readerPrevEpoch`) and re-validates on `observed != contentEpochNow()`. One
+counter compared against itself cannot drift. The same rule replaced the
+`chainFrom` predecessor test.
+
+A page served from a scheduler binding (`twFrozenInputScope`) is deliberately
+recorded as epoch 0 rather than current: it is trusted only for the render that
+bound it (verify-at-publish is the scheduler's job), so blessing it would let a
+later UNBOUND call reuse it with nothing left to validate. `mix_test`'s "empty set
+falls back to the legacy pull" control caught exactly that in the first version of
+this fix. Both rules are now invariants 5 and 6 in `tw303a/graph/CONTRACT.md`.
+
+### Proof
+
+Controlled A/B — revert ONLY the gate condition, rebuild, five runs each way,
+RMS over `[96000,131072)`: fixed 0.0487 ×5, pre-fix 0.0 ×5. **Deterministic.** An
+earlier analysis had concluded the failure was intermittent (reproduced ~15 min,
+then not in ~45 runs); that was an artifact of this binary being rebuilt
+underneath that analysis while it ran. Only one session may drive `build/` at a
+time or such an experiment measures whatever happened to be on disk.
+
+Gates: `qxa.delete_clip_in_group`'s `[96000,144000)` band — commented out while
+this bug was open — is restored and green; `mix_test`; 20/20 unit tests.
+Remaining smaller defects found on the way (epoch-blind readahead demands,
+`updateClip`'s first-match-only `break`, `setNBusses`'s unconnected sync loop,
+the no-op verify-at-publish retry, the readahead's placeholder-poisoning
+`getOrAllocatePage`) are listed in `plan/todo/NESTED_LANE_STALE_PAGE.md`.
+
+---
+
+## 2026-08-09 — Solo works inside a group
+
+Reported alongside the above: *"I pressed solo various times on different tracks,
+it did not work."* Solo worked for TOP-LEVEL tracks and was a **complete silent
+no-op for nested ones** — the button latched yellow and nothing else happened.
+
+Three causes. (1) A nested track's `soloChanged` was connected to nothing:
+`SStdMixer::insertTrack` was the only place it was wired, and a nested track is
+adopted by `STrack::trackChildWasAdded`, which connected `mutedChanged` only.
+(2) `SStdMixer::anyTrackSoloed()` and the audibility loop in
+`reconnectTracksToMixer()` iterate the mixer's DIRECT children, so a solo below
+the top level was invisible and unenforceable. (3) `twTrackMix` has
+`setClipMuted` but no solo counterpart, so a folder had no way to silence a lane.
+
+The audibility rule now lives in exactly one place,
+`app/model/ssolorules.h`: `!muted && (!anySoloAnywhere || isSolo ||
+hasSoloedDescendant || isDescendantOfSoloed)`. A folder relays
+`subtreeSoloChanged` upward rather than resolving locally — solo is a
+project-global relation — and the root mixer answers with one whole-tree pass;
+folders then enforce per-lane audibility through `twTrackMix::setClipMuted` and
+invalidate over the union of the returned extents, mirroring nested mute. The two
+metering call sites that had re-spelled the top-level-only rule
+(`SSMVMixerControl::onMeterTick`, `STrackDetailPanel::onMeterTick`) now call the
+same helper, so meters cannot disagree with the ear.
+
+Solo and mute had bypassed the action system entirely, which is why the whole area
+had no coverage: they are now `set-track-solo` and `set-track-mute`,
+PATH-addressed (nested lanes addressable) and undoable, with `set-track-mute`
+promoted out of the testkit and given an inverse while keeping its XML
+byte-for-byte so existing cases are untouched. New gate
+`qxa.solo_nested_track`, proven to be a real gate by restoring the
+direct-children-only scan and watching it fail at the solo-a-nested-track block.
+
+Still open and adjacent: `SSetTrackVolumeAction` retains the same top-level-only
+`mixer->childAt(trackIndex_)` addressing, so a nested lane's volume fader is still
+unaddressable (and `STrackDetailPanel` silently falls back to a non-undoable
+`setVolume()` for one).
+
+---
+
+## 2026-08-09 — Edits are heard at once (readahead epoch), and a nested lane's fader works
+
+Two follow-ups from the nested-lane investigation, both requested explicitly.
+
+### 1. The readahead re-demand gate was epoch-blind
+
+`AudioEngine::readaheadLoop` decided a window was already covered on POSITION
+alone:
+
+```cpp
+const bool covered = pendingDemand_ && !pendingDemand_->done()
+    && pendingDemandStart_ <= pos && pendingDemandEnd_ >= wantEnd;
+```
+
+A demand issued before an edit was planned against the pre-edit graph, so it can
+only ever publish pre-edit pages — yet it suppressed the re-demand until it
+happened to finish. Up to a whole readahead window (`READAHEAD_PAGES = 3` ×
+65536 ≈ 4 s at 48 kHz) of stale mix kept playing, which is why a delete, a mute
+or a solo click read as *ignored* rather than merely late. The demand now carries
+`pendingDemandEpoch_`, the epoch it was issued against, and coverage requires it
+to still match; the superseded handle is simply dropped and the pages its nodes
+publish are rejected by the per-page validity check that already runs above.
+
+Worth recording: the header comment above these members has said "(or the wanted
+window/epoch moved on)" since the demand consumer was written. Only the window
+half was ever implemented — the intent was right and the code silently did less
+than it claimed.
+
+**No bespoke gate, deliberately.** This is a latency property of the LIVE
+playback path and the qxa suite drives offline renders. A timing assertion tight
+enough to separate the two behaviours would be flaky, and a flaky gate here is
+worse than none. The change can only cause MORE re-demands, never fewer, so its
+failure mode is extra scheduling work, not wrong audio. Gating it properly wants
+a scheduler-driven `playback_test` case asserting a pre-edit demand is
+superseded; `tw_playback` already depends on `tw_schedule`, so the vehicle
+exists. Regression-checked instead against `playback_test`, `schedule_test`,
+`render_test` and the full qxa suite.
+
+### 2. `set-track-volume` was top-level-only
+
+It carried a single `trackIndex` resolved with `mixer->childAt(trackIndex_)`, so
+a nested lane's fader was unaddressable. The UI hid that rather than reporting
+it: both faders (`SSMVMixerControl::applyVolume_` and
+`STrackDetailPanel::onVolumeSliderMoved`) resolved the track by scanning the
+mixer's DIRECT children, got -1 for a nested track, and fell back to a direct
+`setVolume()` that never reached the undo stack. The fader appeared to work while
+nothing was undoable.
+
+Now path-addressed (`trackPath`) like set-track-solo / set-track-mute and the
+clip verbs, with the legacy `trackIndex` still accepted on read. Both call sites
+use `strackpath::pathOf`. `mergeKey()` is now keyed on the PATH — with a bare
+index, top-level track 0 and the first child of a folder shared a key, so two
+different faders' drags coalesced into one undo step.
+
+**The first version of the new gate was not a gate**, and that is worth
+recording. `volume_nested_track.qxa` originally put one clip on the nested lane,
+halved its volume and asserted the level. It passed with the defect restored:
+a path of `{0,0}` degenerates to `childAt(0)`, which IS the folder, and halving
+the folder halves its nested child too — identical audio either way. The case now
+gives the FOLDER a clip of its own at `[0,192000)` with the nested lane's clip at
+`[192000,384000)`; setting the nested lane must halve only the second span. With
+the defect restored it now fails exactly as intended (folder span 0.2027 instead
+of 0.405), and passes with the fix.
+
+Gates: `qxa.volume_nested_track` (new, negative-control proven),
+`qxa.solo_nested_track`, `qxa.delete_clip_in_group`, and the three committed
+cases that still use the legacy `trackIndex` spelling
+(`grain_with_volume_control`, `meter_postfader`, `render_sawtooth_with_effects`).
+
+---
+
+## 2026-08-09 — The FX strip works on a nested track (and so "remove a missing plugin" works)
+
+Reported as: *"I would like to be able to remove a plugin even if it is
+missing."* The missing-ness was incidental — the nesting was the bug.
+
+What was already fine, established before changing anything: `remove-plugin` is
+Missing-tolerant by design (`SRemovePluginAction` reads the STORED descriptor,
+and `saveState()` hands back the stored blob verbatim for a non-Active slot,
+which is what keeps a user's patch intact on a machine without the plugin).
+Driving the real `plugin_missing_placeholder.qxp` fixture headlessly, removing
+the Missing slot works and the strip's row count goes 1 → 0. The Remove button is
+enabled in every slot state. So neither the action nor the button was refusing.
+
+The blocker was `SPluginEffectStrip::trackPathString()`, which scanned
+`mixer->getTrackAt(i)` — the mixer's DIRECT children only — and returned an EMPTY
+string for a track nested in a folder. **Every** button handler in the strip
+early-returns on empty, so on a grouped track add / remove / bypass / edit /
+reorder were all silent no-ops: buttons enabled, clicks accepted, no action ever
+submitted, nothing on the undo stack. Now `strackpath::pathOf`.
+
+This is the THIRD instance of the same defect family in this area (after the clip
+verbs and the volume fader), and the worst-behaved of the three, because the
+failure is completely invisible from outside: a wrong path does not misbehave, it
+disables the whole surface. So `describeSlot()` now reports the RESOLVED
+`trackPath=`, making it assertable, and `assert-plugin-strip` gained a
+`trackPath` attribute — `trackIndex` cannot name a nested lane, so the verb could
+not have tested this even in principle. Recorded as pluginui CONTRACT invariant 8.
+
+Gate: `qxa.plugin_strip_nested_track` — nests a track, inserts a real
+`twtestclap.clap` on it, asserts the strip resolves `trackPath=0,0`, then
+removes, asserts the row is gone, undoes and asserts it is back and Active.
+Negative-control proven: restoring the top-level-only scan makes it fail with
+`trackPath=|tooltip=…` — the empty path, exactly the reported symptom.
+
+All 9 `qxa.plugin_*` cases pass, including `plugin_ui_strip_and_editor`, which
+matches on `describeSlot` output and was unaffected by the new field.
+
+---
+
+## 2026-08-09 — Sweep: the rest of the "top-level children only" family
+
+After the fourth instance surfaced one bug report at a time, an audit of every
+`getTrackAt` / `indexOfChildObject` / `getNTracks` site in `main/`. Four fixes,
+each negative-control proven.
+
+**Cleared, not bugs** (recorded so the next audit does not re-litigate them):
+`SStdMixer::getTrackAt`/`getNTracks` themselves (that IS the top-level list API);
+`add-track`/`restore-track` landing indices (top-level by design);
+`reparent-track`'s `getNTracks()` (only in the destination-mixer branch);
+drag-to-reorder at `sstdmixerview.cpp:2795` (nested is correctly handled in the
+`else` branch via reparent); the vertical scroll range at `:3063` (inside
+`#if 0` — the live path uses `rowCount()` over the flattened tree);
+`assert-track-count` (top-level by design); and the Test-menu diagnostics.
+
+**1. A nested track could not be removed.** `remove-track` carried a top-level
+`index` resolved with `getTrackAt()`, and the arranger's "Remove track" said so
+in a comment ("Removing a nested track is not wired here yet") while silently
+returning. Both the verb and the slot are now path-addressed. The real work was
+not addressing but DETACH/RE-ATTACH SYMMETRY: the container may be the root mixer
+(which owns its track list and rewires summing inputs) or a folder `STrack`
+(which holds an ordinary `SLink` child), so `SRestoreTrackAction` now carries the
+PARENT PATH rather than assuming the mixer, and re-attaches the way the removal
+detached — mirroring `SReparentTrackAction`, which has always had to handle both.
+Removal and restore also run `applyAudibility()`, because removing or restoring a
+lane changes what every other lane hears when solo is in force. Gate:
+`qxa.remove_nested_track`, whose folder carries a clip of its OWN — without that
+control, "removed" and "removed the wrong lane" both render silence and a restore
+into the wrong parent still sums into the master.
+
+**2. Group/Ungroup on an already-nested track** — the proposal 05 backlog
+deferral, now lifted; see the BACKLOG entry for why it was more than addressing.
+
+**3. Two dead top-level scans deleted.** `SSMVMixerControl::trackIndex_()` and
+`STrackDetailPanel::trackIndex_()` became unused when the volume fader was
+path-addressed. They are exactly the helper the next person reaches for, so they
+are gone rather than left lying around.
+
+**4. The test surface could not reach a nested lane at all**, which is the reason
+several of these bugs were unfalsifiable rather than merely unnoticed:
+`assert-meter` (via `SMainWindow::describeTrackMeter`) and
+`plugin-editor-set-param` both took a top-level `trackIndex`. Both now accept
+`trackPath`. This mattered immediately: meters consume the mute/solo audibility
+rule that had just changed, and a nested lane's meter had no coverage whatsoever.
+
+New testkit verb `group-track` drives the arranger's real Group/Ungroup slots
+(same rationale as `drag-clip-edge` for clip gestures). `assert-plugin-strip`'s
+path resolution doubles as a structural probe — it rejects an unresolvable lane,
+so `expectReject="true"` asserts a lane is GONE, which is the only structural
+assertion available given `assert-track-count` counts top-level lanes only.
+
+---
+
+## 2026-08-09 — The six follow-up defects from the nested-lane investigation
+
+`plan/todo/NESTED_LANE_STALE_PAGE.md` is now CLOSED: all six smaller defects
+found while root-causing the stale held page are fixed. Kept in todo/ as the
+forensic record — the A/B proof and the epoch trace are the reusable parts.
+
+**Readahead poisoned the root page cache** (the only one with a present-day
+audible symptom). `audio_engine.cc` probed with `getOrAllocatePage`, which
+INSERTS an empty placeholder for a position that has none; `freezePage` later
+reuses that placeholder instead of allocating, so the page it replaces is never
+recorded as `stalePredecessor` and the proposal-16 fallback has nothing to fall
+back to there — a dropout instead of graceful stale audio across an edit. Now
+`getPageIfExists`: the readahead only ever wanted to know whether a current page
+existed.
+
+**The scheduler's verify-at-publish retry could not do anything.** Confirmed by
+reading the cache path: `freezePageWithInputs` → `freezePage`, whose lookup finds
+the page attempt 1 just wrote — frozen, stamped at the current epoch — and
+returns it untouched. So a node that NOTICED a stale dependency went on to
+publish the very content it had just diagnosed as wrong. The retry now drops that
+page first, range-scoped to exactly its own page.
+
+**`twTrackMix` never forwarded invalidation to its clip entries.** It now has the
+`invalidatePagesInRange` override `twPluginChain` has always had for its inserts:
+bump own epoch, clear `previousPage` on every entry whose extent intersects
+(deferred destruction outside the lock, as `updateClip` does), forward to the
+entry's `twView`. Without it, every clip edit / mute / solo / gain change left
+each entry pointing at its pre-edit page, which is then handed to the child as
+its DSP-state predecessor on the next freeze.
+
+**`updateClip`'s first-match `break` and `setNBusses`'s sync loop are ONE bug,
+not two** — worth recording, because the notes had them as separate items and
+fixing them separately would have treated the symptom. `setNBusses` inserted into
+EVERY bus mixer including ones that already held the clips, so growing the bus
+count duplicated each entry — and that duplicate is precisely what `updateClip`'s
+`break` then mishandled, leaving a second entry frozen at its old extent. The
+sync loop now populates only newly-created mixers and adds the
+`startTimeChanged`/`durationChanged` wiring (`Qt::UniqueConnection`);
+`updateClip` walks every match and invalidates once over the union. Unreachable
+while the sink is mono — a trap primed for the stereo-output work.
+
+### Verification, and its limits
+
+20/20 unit tests, full qxa suite 82/82 (82 runnable registered, 82 run,
+reconciled). The 19 DSP-sensitive cases (`grain_*`, `exact_*`, `stress_*`,
+`warp_*`) were run FIRST and separately, because the `previousPage` clearing
+forces a reset+seek discontinuity and is the change most able to perturb stateful
+output; they were clean.
+
+Items 5 and 6 have **no bespoke gate**, and that is a real gap rather than an
+oversight: both are concurrency/latency properties of paths the offline qxa suite
+does not drive (a mid-render edit racing a worker; the live playback readahead —
+offline renders never run the readahead at all). Their correctness rests on the
+code reading plus absence of regression, which is weaker than the rest of this
+work.
+
+### Suite flakiness — three non-reproducing failures this session
+
+`qxa.trim_start_keeps_end` failed once inside the `t–z` chunk, then passed 50/50
+in isolation (20 at default workers, 15 at `SMARAGD_REVAL_WORKERS=0`, 15 at 1 —
+including the deterministic settings), and the chunk itself passed 11/11 on
+re-run. It sits on the `updateClip` path this change touched, so it was chased
+with `tests/repeat_test.sh` rather than waved through; it could not be
+reproduced.
+
+That is the THIRD single-case failure this session that did not reproduce
+(`delete_clip_undo_restores`, one unidentified case in an `a–g` chunk, and this).
+All three: a single case failing inside a long sequential chunk, passing in
+isolation and on chunk re-run. At least one occurred before any of these six
+fixes existed, so the pattern is not attributable to them — but neither has it
+been explained. A low-rate flake somewhere in the suite under sustained load is
+the working hypothesis and it remains unproven.
