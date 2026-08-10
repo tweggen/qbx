@@ -216,6 +216,26 @@ After the PR merges: `git worktree remove .claude/worktrees/<slug>` and delete t
 Keep the existing prefixes — `feat/`, `fix/`, `docs/` — and carry the issue key when there
 is one: `fix/QBX-123-nested-lane-solo`.
 
+### YouTrack
+
+Issues live at **https://nassau.youtrack.cloud**, project key **QBX**. Where an issue
+exists, it is the anchor: its key goes in the branch name, its URL in the PR body, and it
+gets a comment or a state change when the PR lands.
+
+JetBrains ships an official remote MCP server (YouTrack 2025.3+) at
+`https://nassau.youtrack.cloud/mcp`, so an agent can read and update issues directly.
+Connect it **per user, never per project**:
+
+```bash
+claude mcp add --scope user --transport http \
+  --header "Authorization: Bearer <permanent-token>" \
+  youtrack https://nassau.youtrack.cloud/mcp
+```
+
+Token: YouTrack → Profile → Account Security → Authentication → New token, scope
+*YouTrack*. Requests run with that user's own permissions. **Do not use `--scope project`**
+— that writes `.mcp.json` into the repo and would commit the token.
+
 ### Gates, before every PR
 
 ```bash
