@@ -177,6 +177,73 @@ cmake --build build
 
 See `docs/BUILD.md` for platform-specific details.
 
+## Development workflow (worktrees, branches, PRs)
+
+**A PR is the only route to `main`.** Every landing since #5 is a merge commit from a
+branch; nothing is pushed to `main` directly. The author merges — an agent opens the PR
+and stops there.
+
+**There is no CI** (`.github/` does not exist), so the gates below are the *only* thing
+that will ever check a branch. Running them is not optional diligence; it is the entire
+safety net.
+
+### One worktree per branch
+
+```bash
+git worktree add .claude/worktrees/<slug> -b fix/<slug> main
+cd .claude/worktrees/<slug> && ./build.sh
+```
+
+`.claude/worktrees/` is gitignored ("never track as gitlinks"). The main checkout stays on
+`main`, buildable and undisturbed, so a second effort can start without invalidating the
+first one's incremental build.
+
+Two things that cost time if rediscovered the hard way:
+
+- A fresh worktree has **no `smaragd/build/`** — the first `./build.sh` is a full
+  configure + compile, not an incremental one. Budget for it, or work in the main checkout
+  when the branch is already based on `main` and the delta is small. A docs-only branch
+  needs no build at all.
+- The clap/vst3 submodules are fetched **per worktree**. `ensure_submodules()`
+  (`_env.sh:150`) handles it: it tests both `-d .git` and `-f .git`, and in a worktree
+  `.git` is a *file*. Without the submodules the build still succeeds — it just silently
+  drops CLAP/VST3 hosting, which quietly disables the `plugin_*` qxa cases.
+
+After the PR merges: `git worktree remove .claude/worktrees/<slug>` and delete the branch.
+
+### Branch naming
+
+Keep the existing prefixes — `feat/`, `fix/`, `docs/` — and carry the issue key when there
+is one: `fix/QBX-123-nested-lane-solo`.
+
+### Gates, before every PR
+
+```bash
+./build.sh                                   # re-configures: required, see below
+python3 tools/check_layering.py              # module boundaries
+python3 tools/check_logging.py               # no direct stderr/stdout writes
+ctest --test-dir smaragd/build --output-on-failure
+```
+
+- **The re-configure is load-bearing.** The qxa glob in `smaragd/CMakeLists.txt` is
+  `CONFIGURE_DEPENDS`; without a configure pass a newly added `.qxa` is never registered
+  and `ctest` reports all-green while never having run it.
+- **Reconcile the count**: registered vs run vs skipped. A silently-unregistered case is a
+  failure mode this repo has actually hit.
+- **Run DSP-sensitive cases first and separately** (`grain_*`, `exact_*`, `stress_*`,
+  `warp_*`) when the change touches page freezing, invalidation or predecessor chaining —
+  they are the ones most able to be perturbed.
+- **A case that fails once and passes on re-run is not a pass.** Pin it with
+  `smaragd/tests/repeat_test.sh <bin> <case.qxa> [N] [workers]`, swept over
+  `SMARAGD_REVAL_WORKERS` {1,4,8,16}, before deciding it is a flake. Report it either way.
+
+### What a PR body must say
+
+What was gated, **and what was not**. Concurrency and latency properties of the live
+playback path routinely have no bespoke gate — a timing assertion tight enough to separate
+the behaviours would be flaky. Say so explicitly rather than letting a green suite imply
+coverage that does not exist. Unreproduced flakes get named too.
+
 ## Known Issues & Gaps
 
 1. **Linux ALSA:** Untested since refactor (though xrun recovery added).
