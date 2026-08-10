@@ -14,6 +14,9 @@
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
+#ifdef Q_OS_MACOS
+#include <ApplicationServices/ApplicationServices.h>   // TransformProcessType
+#endif
 
 // Route Qt's qDebug/qInfo/qWarning/qCritical/qFatal into the TwLog sink.
 //
@@ -78,8 +81,10 @@ int main( int argc, char *argv[] )
     tw::TwLog::nameThread( "gui" );
     tw::TwLog::instance().setConsole( SMARAGD_LOG_CONSOLE_DEFAULT ? true : false );
 
-    // Phase 4: Detect headless test mode before QApplication init to set platform
-    // (Only on Linux; macOS and Windows have native headless support or prefer native backends)
+    // Detect headless test mode BEFORE QApplication is constructed. This has to
+    // happen here and not one line later: the platform integration is built by
+    // the QApplication constructor, and on macOS that is precisely where the
+    // process is promoted to a foreground app (see below).
     bool headlessMode = false;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--test-case") == 0) {
@@ -88,33 +93,59 @@ int main( int argc, char *argv[] )
         }
     }
 
-#ifdef Q_OS_LINUX
-    // On Linux, if in headless test mode and -platform not explicitly set, use offscreen
     if (headlessMode) {
-        bool platformSet = false;
-        for (int i = 1; i < argc; ++i) {
-            if (strcmp(argv[i], "-platform") == 0) {
-                platformSet = true;
-                break;
-            }
-        }
-        if (!platformSet) {
-            // Insert -platform offscreen before creating QApplication
-            int newArgc = argc + 2;
-            char **newArgv = new char*[newArgc];
-            newArgv[0] = argv[0];  // program name
-            newArgv[1] = (char*)"-platform";
-            newArgv[2] = (char*)"offscreen";
-            for (int i = 1; i < argc; ++i) {
-                newArgv[i + 2] = argv[i];
-            }
-            argc = newArgc;
-            argv = newArgv;
-        }
-    }
+#ifdef Q_OS_LINUX
+        // Same intent as the previous argv rewrite, minus the undefined
+        // behaviour: that version built `new char*[argc + 2]`, filled every slot
+        // and never wrote the argv[argc] == nullptr terminator the C standard
+        // requires (it also leaked the array, and handed a heap array to a
+        // QApplication that keeps the reference for the process lifetime).
+        // qputenv reaches the platform selection the same way with none of that.
+        //
+        // The old code skipped itself when `-platform` appeared in argv; the env
+        // var needs no such check, because an explicit `-platform` on the command
+        // line outranks QT_QPA_PLATFORM in Qt's own resolution order. So an
+        // operator override still wins, and it wins without us parsing for it.
+        if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+            qputenv("QT_QPA_PLATFORM", "offscreen");
 #endif
+    }
 
     SApplication app( argc, argv );
+
+#ifdef Q_OS_MACOS
+    // Do not take over the desktop for a non-interactive run.
+    //
+    // Test mode never show()s a window (see the `!testMode && runMode` guard
+    // below), yet a ctest run still puts a Smaragd tile in the Dock 106 times
+    // and can pull the frontmost application away. The window is not the
+    // culprit, which is why every window-level remedy is a no-op here
+    // (Qt::WA_ShowWithoutActivating, Qt::WindowDoesNotAcceptFocus,
+    // showMinimized(), never calling show()): they all describe a window, and
+    // the process is promoted to a foreground app before one exists.
+    //
+    // Demote it back. This must run AFTER the QApplication constructor: that is
+    // where the platform integration promotes the process, so anything set
+    // earlier is simply overwritten.
+    //
+    // MEASURED, not assumed. Two things that look like the fix are not:
+    //   - QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM=1, Qt's own gate on
+    //     the promotion, changes nothing here -- sampling `background only` of
+    //     the running process gives foreground=14/14 with the variable set and
+    //     with it unset. For a BUNDLED .app, LaunchServices decides foreground
+    //     status from the Info.plist, and Qt's gate never gets the last word.
+    //   - LSUIElement / LSBackgroundOnly in the Info.plist would work, but a
+    //     plist cannot be conditional: it would make the SHIPPED app dock-less.
+    //
+    // TransformProcessType is the one lever that is both effective and runtime,
+    // so it can be applied only when --test-case is present. It is deprecated
+    // but not removed, and it can only demote -- a process already promoted may
+    // therefore flash in the Dock briefly before this runs.
+    if (headlessMode) {
+        ProcessSerialNumber psn = { 0, kCurrentProcess };
+        TransformProcessType( &psn, kProcessTransformToUIElementApplication );
+    }
+#endif
 
     // Command-line parsing (Phase 1+: --run-actions, Phase 2+: --test-case, --list-actions)
     QCommandLineParser parser;
