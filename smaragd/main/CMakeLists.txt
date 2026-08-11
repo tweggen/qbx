@@ -260,6 +260,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
+    testkit/include/app/testkit/sdumpplaybackcaptureaction.h
     testkit/include/app/testkit/sgrouptrackaction.h
     testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
@@ -276,6 +277,7 @@ set(APP_UI_FILES
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
+    testkit/src/sdumpplaybackcaptureaction.cpp
     testkit/src/sgrouptrackaction.cpp
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp

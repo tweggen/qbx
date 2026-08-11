@@ -31,6 +31,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `cycle-toggle` | SCycleAction | actions/src/scycleaction.cpp | (none) |
 | `drag-clip-edge` | SDragClipEdgeAction | testkit/src/sdragclipedgeaction.cpp | `track` = "0", `clip` = "0", `edge` = "end" / "start" / "body", `toTime`, `half` = "lower" (or "upper" = the loop half), `modifiers` = "" ("ctrl"/"alt"/"shift", "+"-joined) — drives the REAL mouse handlers, the only way to test clip gestures. `edge="body"` is required for slip/duplicate/move; drop is pixel-quantised, so assert on ranges |
 | `duplicate-clip` | SDuplicateClipAction | objects/cut/src/sduplicateclipaction.cpp | `source`, `destTrack`, `startTime` = "0" |
+| `dump-playback-capture` | SDumpPlaybackCaptureAction | testkit/src/sdumpplaybackcaptureaction.cpp | `filename` = "" (no path separators; written into the test output dir), `minFrames` = "0" — writes what the CAPTURE backend recorded during playback as a 16-bit PCM WAV, so assert-audio-* / assert-source-position can be pointed at the PLAYBACK path instead of a render. Captured frame 0 is the first frame of the CURRENT playback session (the recording is cleared at each start), i.e. the locator position playback started from. REJECTS unless the active backend is the capture backend (a --test-case run selects it by default; otherwise SMARAGD_AUDIO_BACKEND=capture) |
 | `grid-disable` | SGridAction | actions/src/sgridaction.cpp | (none) |
 | `grid-enable` | SGridAction | actions/src/sgridaction.cpp | (none) |
 | `grid-toggle` | SGridAction | actions/src/sgridaction.cpp | (none) |

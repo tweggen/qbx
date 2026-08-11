@@ -82,6 +82,18 @@ the plugin search paths. Gates: `filepathref_test` (ctest) and
 - `TW_STRETCH_BACKEND=vocoder|ola` picks the time-stretch backend for the run
   (default `vocoder`; `ola` is the legacy overlap-add reference). Read once
   per process, so the choice is deterministic within a run.
+- `SMARAGD_AUDIO_BACKEND=capture|null|default` picks the audio backend at
+  RUNTIME, ahead of the platform choice. **`capture` is the default for a
+  `--test-case` run** (main.cpp sets it before SApplication exists, unless it is
+  already set): it pumps the render callback on a real-time paced clock and
+  keeps every frame in memory, which is what makes the PLAYBACK path assertable
+  (`<dump-playback-capture>` writes the recording out as a 16-bit WAV and
+  assert-source-position decodes it). It also stops a headless suite from
+  opening the real output device ~90 times.
+- `SMARAGD_CAPTURE_SPEED=<float>` multiplies the capture backend's pacing (4.0 =
+  four times faster than real time) for a smoke run. The pacing is real time by
+  default ON PURPOSE — a clock that waited for the readahead would mask exactly
+  the races and underruns the playback cases hunt.
 - `SMARAGD_SIDECAR_DIR=<path>` relocates the derived-data (QAF) sidecar cache;
   `SMARAGD_SIDECAR_DIR=off` disables it — the store then misses/no-ops and the
   engine result is unchanged, only slower (sidecars alter latency, never output).

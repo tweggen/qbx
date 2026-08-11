@@ -7,8 +7,9 @@ the roundtrip test main.
 
 Public headers: app/testkit/*.h. Verb reference: docs/ACTIONS.md.
 
-Depends on (engine): tw/analysis (+core/graph). App edges: actions, model,
-objects/mixer, objects/track, shell.
+Depends on (engine): tw/analysis, tw/devices, tw/playback, tw/sinks
+(+core/graph, and metering/pages/schedule/sidecar for the verbs that need
+them). App edges: actions, model, objects/mixer, objects/track, shell.
 
 Invariants:
 1. A rejected action FAILS the test unless its element has
@@ -52,11 +53,37 @@ Invariants:
   they go through the scheduler). meter_postfader.qxa therefore uses two tracks
   at different gains rather than changing one track's gain twice.
 
+  dump-playback-capture is the only verb that asserts on the PLAYBACK path.
+  Everything else in this suite reads a RENDER, which is a different consumer
+  of the same graph, so nothing about AudioEngine::pullBlock, the readahead
+  frontier, the seek on start or the stale-page fallback used to be covered at
+  all — NullBackend::startOutput sets a flag and never calls the callback.
+  A --test-case run now selects the CAPTURE backend (main.cpp sets
+  SMARAGD_AUDIO_BACKEND=capture before SApplication exists, unless it is
+  already set), which pumps the callback on a real-time paced clock and keeps
+  every frame. Three rules for writing such a case:
+   1. Captured frame 0 is the first frame of the CURRENT playback session, i.e.
+      the locator position play started from (the recording is cleared at each
+      start). Measured leading silence is zero, but budget for a bounded amount
+      explicitly — do not assert content at frame 0 by luck.
+   2. Playback is REAL TIME. A case's wall-clock cost is the span it plays;
+      keep the spans short (SMARAGD_CAPTURE_SPEED can accelerate a smoke run,
+      but the committed case must pass at 1.0x).
+   3. Keep every position on the 4096-frame block grid when decoding with
+      assert-source-position, and allow a lower minConfidence than the 3.0
+      default: an underrun leaves a short zero gap that leaks energy into other
+      bins, and the argmax is still the right block.
+
 How to test:
   cd smaragd/tests/cases
   ../../build/bin/smaragd.exe --test-case <case>.qxa --test-output-dir <dir>
   ../../build/bin/action_roundtrip_test.exe   # 2 pre-existing assert-action
                                               # serialization failures
 
-Known debt: scripted toggle-playback segfaults (pre-existing); screenshots
-need the window (not truly headless on all platforms).
+Known debt: screenshots need the window (not truly headless on all
+platforms). The older "scripted toggle-playback segfaults" note is retired: two
+cases now drive real playback through the capture backend
+(playback_start_after_edit_position, split_plain_screenshot) and no crash was
+observed over the repeat sweep. What still has NO bespoke gate is the capture
+backend's own pacing and the latency of the playback path — a wall-clock
+assertion tight enough to separate those behaviours would be flaky.

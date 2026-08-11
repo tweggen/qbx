@@ -94,6 +94,23 @@ int main( int argc, char *argv[] )
     }
 
     if (headlessMode) {
+        // A headless case gets the CAPTURE backend by default: it pumps the
+        // render callback on a real-time paced clock and keeps every frame, so
+        // playback is observable (dump-playback-capture) instead of merely
+        // "started". The platform backend is the wrong default here twice over —
+        // a ctest run would open the real output device ~90 times and make noise
+        // on the developer's machine, and its callback timing is at the mercy of
+        // whatever else is playing.
+        //
+        // This must be set BEFORE SApplication is constructed: the speaker (and
+        // with it the backend) is minted in that constructor, and createAudioBackend()
+        // reads the variable exactly once, there.
+        //
+        // Only when unset — an explicit SMARAGD_AUDIO_BACKEND always wins, which
+        // is how a case can still be run against the real device by hand.
+        if (qEnvironmentVariableIsEmpty("SMARAGD_AUDIO_BACKEND"))
+            qputenv("SMARAGD_AUDIO_BACKEND", "capture");
+
 #ifdef Q_OS_LINUX
         // Same intent as the previous argv rewrite, minus the undefined
         // behaviour: that version built `new char*[argc + 2]`, filled every slot

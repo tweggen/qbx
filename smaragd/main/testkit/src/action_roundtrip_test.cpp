@@ -57,6 +57,9 @@ const Fixture kFixtures[] = {
     { "assert-file-contains",
       "<assert-file-contains path='p.qxp' text='uid=&apos;x&apos;'"
       " absent='true'/>" },
+    // minFrames is only written when non-zero, so a fixture must give it one.
+    { "dump-playback-capture",
+      "<dump-playback-capture filename='playback.wav' minFrames='315392'/>" },
     { "assert-sidecar",
       "<assert-sidecar aspect='onsets' minRecords='1' maxRecords='4'"
       " expectExists='true'/>" },
