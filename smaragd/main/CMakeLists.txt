@@ -542,3 +542,19 @@ target_link_libraries(filepathref_test
 add_test(NAME filepathref_test COMMAND filepathref_test)
 set_tests_properties(filepathref_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The CONTAINER branch of SObject::straightCalcPreviewData(): a preview built
+# from a live sub-arrangement reads FROZEN PAGES (chained, page-aligned) rather
+# than seeking the live component per preview window. Values, page-boundary
+# indexing, state chaining and the reposition count are all asserted against a
+# synthetic component — the paint path is otherwise the only consumer, and a
+# screenshot cannot localise any of them. Needs a QApplication (offscreen) for
+# the app object libraries' static registrars, like the two tests above.
+add_executable(preview_container_test testkit/src/preview_container_test.cpp)
+target_link_libraries(preview_container_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME preview_container_test COMMAND preview_container_test)
+set_tests_properties(preview_container_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
