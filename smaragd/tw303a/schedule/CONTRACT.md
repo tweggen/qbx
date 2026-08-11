@@ -20,9 +20,36 @@ Invariants:
    different layouts, do not mix.
 5. Workers are raw std::threads: no Qt anywhere downstream
    (invalidateAspects → scheduleRevalidation is fire-and-forget).
+6. **Epoch comparisons are SAME-COUNTER only.** Content epochs are PER
+   COMPONENT, so a value is meaningful only against the counter it was read
+   from. A page's `contentEpoch` stamp is written by whichever component
+   RENDERED it, which is not always the component that returned it — an
+   insert-less `twPluginChain` forwards its `twTrackMix`'s page verbatim — so
+   `page->contentEpoch < someOtherComponent->contentEpochNow()` is noise:
+   whichever counter ran ahead decides it, permanently, in whichever direction.
+   Verify-at-publish therefore compares `PageNode::observedEpoch` (that
+   component's own epoch, read by `planPage`) against that same component's
+   `contentEpochNow()`.
+7. Verify-at-publish has TWO halves and they are not symmetric. Stale DEPS or
+   an incomplete bound set ⇒ ONE bounded retry with re-frozen deps. An
+   outdated own PLAN (`observedEpoch` moved: the dep set / clip resolutions
+   are the pre-edit ones) ⇒ NO retry — the same plan would rebuild the same
+   wrong structure. Publish the page anyway (proposal 16's RT stale-page
+   fallback needs something to serve) and re-stale the position so the
+   epoch-scoped readahead supersession re-demands and re-PLANS it.
+8. Anything the scheduler invalidates itself bumps that component's epoch, and
+   that bump must be re-observed into `observedEpoch` — a scheduler bump read
+   back as an edit re-stales the page it just published, which the readahead
+   re-demands, which retries and bumps again: a livelock, not a fix. For the
+   same reason the self-stale invalidate is skipped unless a CURRENT cached
+   page actually exists at that position (most per-track components cache
+   nothing, and the epoch is shared by every page of the component).
 
-How to test: exercised by every project load + edit (invalidation chains);
-no dedicated unit test yet.
+How to test: `ctest -R schedule_test` (retireObject lifetime, the dependency-
+counting scheduler, and both directions of verify-at-publish self-staleness);
+`SMARAGD_LOG_LEVEL=debug` prints the run's `nodesExecuted / nodeRetries /
+missPages / selfStale` at shutdown, which is how a scheduler change is shown
+not to multiply renders. Also exercised by every project load + edit.
 
 Known debt: revalidationComplete UI signal still TODO (UI re-reads on next
 paint); shutdown discards queued jobs (acceptable for background work).
