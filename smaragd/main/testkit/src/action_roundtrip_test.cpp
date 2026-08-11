@@ -55,6 +55,11 @@ const Fixture kFixtures[] = {
     { "assert-sidecar",
       "<assert-sidecar aspect='onsets' minRecords='1' maxRecords='4'"
       " expectExists='true'/>" },
+    // All three slip attributes at once: each is written only when present,
+    // so a fixture naming just one would leave the other two untested.
+    { "slip-clip",
+      "<slip-clip clip='0,1' startOffset='48000' srcStart='24000'"
+      " loopStart='12000'/>" },
 
     // --- the five plugin verbs (proposal 08) --------------------------------
     // insert-plugin/remove-plugin carry the opaque plugin STATE chunk since M5:

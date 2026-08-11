@@ -34,7 +34,25 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
    capture bakes the grain params in, so every grain-param setter must
    invalidateCapture() or the waveform preview keeps drawing the previous
    transform (playback is unaffected - it grains the raw source).
-6. Pitch is stored in CENTS on twGrainParams, per clip and (on a stack)
+6. A SLIP-ONLY edit (setStartOffset / setSrcStart / setLoopStart) must
+   invalidateRenderPathRange(0, duration). Nothing else notices it: the
+   clip's position and length do not change, so twTrackMix::updateClip is
+   never reached, while resolveClip folds the new slip into the very next
+   freeze — already-frozen track/chain/mixer pages then keep the PRE-slip
+   material at the same timeline position (mixed generations). Reader
+   pages are deliberately NOT bumped (POSITION_DOMAINS rule 4: they are
+   source-keyed, so a slipped clip just asks for different ones). The
+   duration for the range comes from the SAME locked section that applied
+   the edit, never a later getDuration() — a stale 0 makes the range
+   empty and invalidates nothing. THROTTLED to ~3/s per cut (the live
+   drag calls setStartOffset per mouse-move and each call walks the tree
+   from the root): the first call after a quiet period is immediate, so
+   single programmatic edits stay deterministic, and a coalesced one arms
+   a single-shot QTimer so the final drag position always lands. Test:
+   slip_invalidates_render_path.qxa, via the slip-clip testkit verb —
+   resize-clip cannot cover this (it commits through setWindow, whose
+   durationChanged stales the extent regardless).
+7. Pitch is stored in CENTS on twGrainParams, per clip and (on a stack)
    PER TAKE - only length ops write through to all lanes. It is realised
    in the grain stage (the read rate inside each grain) and is therefore
    duration-invariant: a pitch edit changes no window value, no position

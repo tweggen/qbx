@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  W9 regression: a SLIP-ONLY edit must stale the render path.
+
+  Slipping a clip changes which source material lands at a timeline position
+  without touching the clip's position or its length. Nothing else on the
+  render path notices that: SCut::resolveClip / mapTimelineToComponentPos fold
+  the NEW slip into the very next freeze, while every page already frozen on
+  the track mix / plugin chain / rewire / root mix keeps the PRE-slip audio at
+  exactly the same position. The result is mixed generations — the ear (and a
+  render) get whichever pages happened to exist.
+
+  The three slip setters used to publish nothing that reaches a twComponent
+  epoch: setStartOffset and setSrcStart only called invalidateCapture()
+  (capture world), and setLoopStart invalidated nothing at all.
+
+  Why slip-clip and not resize-clip: the resize-clip action (and the release of
+  a real drag) goes through SCut::setWindow, whose durationChanged emit lands
+  in twTrackMix::updateClip, which stales the clip's extent unconditionally —
+  so neither can ever expose a bug in the slip setters. <slip-clip/> is one
+  tick of the live drag (SStdMixerView calls setStartOffset per mouse-move),
+  i.e. the state the model is in between press and release, which is where the
+  bug lived.
+
+  Structure is the double-render cache-poisoning idiom of
+  render_after_edit_stale_cache: the FIRST render deliberately bakes the
+  pre-slip pages into every cache; the assertions on the SECOND render fail if
+  any of them is still served.
+
+  Fixture: test_sawtooth.wav is a 4 s sawtooth whose amplitude ramps 0 -> 0.8,
+  so every second of source material has a unique RMS:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+-->
+<SActionScript version="1" name="slip_invalidates_render_path">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s ramped sawtooth at position 0, unslipped: timeline second N is
+         source second N. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- FIRST render: bakes the pre-slip timeline into the page caches -->
+    <render filename="render_pre_slip.wav" format="wav" quality="10"/>
+
+    <!-- Sanity: the pre-slip timeline really is sec0..sec3 in order. -->
+    <assert-audio-energy filename="render_pre_slip.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="render_pre_slip.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="render_pre_slip.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="render_pre_slip.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- THE EDIT: slide the content one whole second to the left under a clip
+         that does not move and does not change length. Post-slip timeline:
+           0-1 s : source sec1
+           1-2 s : source sec2
+           2-3 s : source sec3
+           3-4 s : past the end of the sample -> silence          -->
+    <slip-clip clip="0,0" startOffset="48000"/>
+
+    <!-- SECOND render: must reflect the slip, not the cached pages. -->
+    <render filename="render_post_slip.wav" format="wav" quality="10"/>
+
+    <!-- The bite: a stale cache replays source sec0 (~0.067) here. -->
+    <assert-audio-energy filename="render_post_slip.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="render_post_slip.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="render_post_slip.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- The clip window now runs past the end of its data: silence, and a
+         stale page would put source sec3 (~0.405) here. -->
+    <assert-audio-energy filename="render_post_slip.wav"
+                         startFrame="148000" frameCount="40000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
