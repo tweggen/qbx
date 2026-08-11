@@ -387,7 +387,10 @@ void SCut::buildCapture_()
                 pagePos,
                 nullptr,     // No input data for container renders
                 0,
-                (length_t) remainingSamples,
+                // One page at a time: remainingSamples is the whole remaining
+                // capture, and a page holds FRAME_CAPACITY frames.
+                std::min<length_t>( (length_t) remainingSamples,
+                                    (length_t) twOutputPage::FRAME_CAPACITY ),
                 env.getSRate(),
                 nullptr      // No prior state
             );

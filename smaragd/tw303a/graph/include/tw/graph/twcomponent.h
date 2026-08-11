@@ -342,14 +342,6 @@ public:
         }
     }
 
-    // Internal: mark a specific page as frozen and valid for given aspects.
-    // Called by revalidator after successful freezing.
-    void setPageAsFrozen(
-        offset_t startPos,
-        std::shared_ptr<twOutputPage> page,
-        uint32_t aspects = twAspectAll
-    );
-
     // Freeze component output into a page (Phase 2 - Gap 3)
     // Called by CaptureRevalidator worker threads to materialize frozen output.
     //
