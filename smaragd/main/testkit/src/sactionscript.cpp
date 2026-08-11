@@ -38,6 +38,61 @@ bool SActionScript::readFile(const QString &path)
     return readXml(doc);
 }
 
+// Opt-in strict attributes (SAction::knownAttributes).
+//
+// An action's readXml() takes the attributes it recognises and ignores the
+// rest, so a misspelled or obsolete attribute in a .qxa is COMPLETELY silent:
+// the action applies with its default for that field and the case passes while
+// testing something other than what it says. This repo has already paid for
+// that once — split_plain_screenshot's `<toggle-playback/>` meant "stop", not
+// "play", for as long as it existed, and its `wait-playhead position=...` was
+// read by nothing at all.
+//
+// A verb that declares its attributes gets checked against them. The warning is
+// unconditional (it is free, and it is the only way anyone learns); failing the
+// case is behind SMARAGD_STRICT_ATTRS=1, so turning the screw on the whole
+// committed suite stays a deliberate act rather than a side effect of adding
+// the mechanism. `expectReject` and `version` belong to the runner and the
+// registry rather than to any verb, so they are always allowed.
+bool SActionScript::checkAttributes_(const QDomElement &elem,
+                                     const SAction *action,
+                                     QString &error) const
+{
+    const QStringList known = action->knownAttributes();
+    if (known.isEmpty()) {
+        return true;  // undeclared: not checked, exactly as before
+    }
+
+    static const bool strict = !qEnvironmentVariableIsEmpty("SMARAGD_STRICT_ATTRS")
+                            && qgetenv("SMARAGD_STRICT_ATTRS") == "1";
+
+    QStringList unknown;
+    const QDomNamedNodeMap attrs = elem.attributes();
+    for (int i = 0; i < attrs.length(); ++i) {
+        const QString name = attrs.item(i).toAttr().name();
+        if (name == QLatin1String("expectReject") || name == QLatin1String("version")) {
+            continue;
+        }
+        if (!known.contains(name)) {
+            unknown.append(name);
+        }
+    }
+    if (unknown.isEmpty()) {
+        return true;
+    }
+
+    qWarning() << "qxa: <" << elem.tagName() << "> has unknown attribute(s)"
+               << unknown.join(", ") << "- known:" << known.join(", ")
+               << (strict ? "(FAILING: SMARAGD_STRICT_ATTRS=1)"
+                          : "(ignored; set SMARAGD_STRICT_ATTRS=1 to fail)");
+    if (strict) {
+        error = QString("<%1> has unknown attribute(s): %2 (known: %3)")
+                    .arg(elem.tagName(), unknown.join(", "), known.join(", "));
+        return false;
+    }
+    return true;
+}
+
 bool SActionScript::readXml(const QDomDocument &doc)
 {
     QDomElement root = doc.documentElement();
@@ -72,6 +127,13 @@ bool SActionScript::readXml(const QDomDocument &doc)
             SAction *action = SActionRegistry::instance().createFromXml(child);
             if (!action) {
                 error_ = QString("Unknown or malformed action: %1").arg(child.tagName());
+                return false;
+            }
+
+            QString attrError;
+            if (!checkAttributes_(child, action, attrError)) {
+                delete action;
+                error_ = attrError;
                 return false;
             }
 

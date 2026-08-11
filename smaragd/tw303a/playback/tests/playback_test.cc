@@ -9,6 +9,9 @@
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/tw_output_page.h"
+#include "tw/pages/capture_page_pool.h"
+#include "tw/schedule/capture_revalidator.h"
+#include "tw/core/position_code.h"
 
 #include <atomic>
 #include <chrono>
@@ -52,6 +55,50 @@ public:
     const char *getInputName(idx_t) const override { return nullptr; }
     const char *getOutputName(idx_t) const override { return "tone"; }
 };
+
+// A source whose OUTPUT NAMES ITS OWN POSITION: it renders the integer-cycle
+// tone staircase of tw/core/position_code.h as a function of the ABSOLUTE frame
+// index it is being asked for, exactly as the on-disk fixture encodes source
+// frames. Decode a block of what came out of the engine and you learn which
+// position the engine actually pulled — not merely that it produced audio.
+//
+// This is the in-memory half of the harness. It shares the encoding with the
+// fixture generator and the file decoder through position_code.h, so "the
+// component agrees with the fixture" is true by construction rather than by
+// two implementations happening to match.
+class PositionCodedComponent : public twComponent {
+public:
+    explicit PositionCodedComponent(tw303aEnvironment &e) : twComponent(e) {}
+    offset_t pos = 0;
+    std::atomic<int> renderCalls{0};
+
+    bool isSeekable() const override { return true; }
+    int seekTo(offset_t p) override { pos = p; return 0; }
+    void reset() override { pos = 0; }
+    length_t renderFrames(sample_t *out, length_t n, const sample_t *,
+                          length_t, idx_t) override {
+        renderCalls.fetch_add(1);
+        for (length_t i = 0; i < n; ++i) {
+            out[i] = (sample_t)tw::poscode::sampleAtFrame((int64_t)pos + (int64_t)i);
+        }
+        pos += (offset_t)n;
+        return n;
+    }
+    void createOutputLatches() override {}
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName(idx_t) const override { return nullptr; }
+    const char *getOutputName(idx_t) const override { return "coded"; }
+};
+
+// Decode a float buffer straight out of pullBlock(). Thin wrapper over the
+// shared decoder — the widening to double is the only thing that belongs here.
+static tw::poscode::Decode decodeFloats(const float *x, int64_t n)
+{
+    std::vector<double> d((size_t)n);
+    for (int64_t i = 0; i < n; ++i) d[(size_t)i] = (double)x[(size_t)i];
+    return tw::poscode::decodeBuffer(d.data(), n);
+}
 
 int main()
 {
@@ -214,6 +261,126 @@ int main()
         CHECK(freshPage &&
                   std::atomic_load(&freshPage->stalePredecessor) == nullptr,
               "pre-edit page is released once the replacement is frozen");
+    }
+
+    // ------------------------------------------------------------------
+    // Position-coded playback under the SCHEDULER: what comes out of
+    // pullBlock() must be the audio that belongs at the position the engine
+    // says it is at.
+    //
+    // This is the first time the RT adoption ladder and the demand scheduler
+    // are driven together from a unit test. Everything above proves the engine
+    // produces frames (amplitude, no dropout, position arithmetic); none of it
+    // could catch the engine serving the RIGHT-LOOKING audio from the WRONG
+    // position, because a constant tone has nothing to say about where it came
+    // from. The staircase does.
+    {
+        auto src = std::make_shared<PositionCodedComponent>(env);
+        src->init();
+
+        // Declared before the engine: AudioEngine only BORROWS the scheduler
+        // pointer, so the revalidator has to outlive it.
+        CapturePagePool pool(64);
+        CaptureRevalidator reval(&pool, 4);
+
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
+        engine.setScheduler(&reval);   // must precede startReadahead()
+        engine.startReadahead();
+
+        // Pull exactly one encoded block at a time: starting from 0 that keeps
+        // every window inside one block, which is where the encoding decodes
+        // exactly. A window straddling a boundary is DETECTED (low confidence)
+        // rather than mis-decoded, and skipped below.
+        constexpr length_t BLOCK = (length_t)tw::poscode::kBlockFrames;
+        std::vector<float> L((size_t)BLOCK), R((size_t)BLOCK);
+
+        bool audible = false;
+        for (int i = 0; i < 1000 && !audible; ++i) {
+            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n == BLOCK && !decodeFloats(L.data(), n).silent) audible = true;
+            else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(audible, "coded: scheduler-driven playback produces audio");
+
+        int checked = 0, wrongPosition = 0, ambiguous = 0;
+        for (int i = 0; i < 200 && checked < 8; ++i) {
+            const uint64_t before = engine.currentPosition();
+            const length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n != BLOCK) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            if (before % (uint64_t)tw::poscode::kBlockFrames != 0) {
+                continue;  // window straddles a block: nothing to conclude
+            }
+            const tw::poscode::Decode d = decodeFloats(L.data(), n);
+            if (d.silent) continue;
+            if (d.confidence < 100.0) { ++ambiguous; continue; }
+            ++checked;
+            if ((uint64_t)d.sourceFrame != before) {
+                ++wrongPosition;
+                printf("     pulled at position %llu but the audio decodes to "
+                       "source frame %lld (block %lld, confidence %.1f)\n",
+                       (unsigned long long)before, (long long)d.sourceFrame,
+                       (long long)d.blockIndex, d.confidence);
+            }
+        }
+        CHECK(checked >= 4,
+              "coded: enough aligned blocks pulled to judge position");
+        CHECK(wrongPosition == 0,
+              "coded: pulled audio decodes to the engine's reported position");
+        CHECK(ambiguous == 0,
+              "coded: aligned windows decode unambiguously");
+
+        // The scheduler really was the producer — if setScheduler() had been
+        // ignored, the readahead would have frozen pages itself and the graph
+        // node counter would sit at zero, and the checks above would still
+        // pass. They are a position gate, not a plumbing gate; this is the
+        // plumbing gate.
+        CHECK(reval.graphStats().nodesExecuted > 0,
+              "coded: pages came from the demand scheduler, not a local freeze");
+
+        // A live seek must land on the audio OF the new position. This is the
+        // assertion a seek-race regression trips: currentPosition() reports the
+        // target the moment the RT pull adopts it, so a position-blind test sees
+        // a correct seek even when the audio being served still belongs to the
+        // old position.
+        const uint64_t TARGET = 8ull * (uint64_t)twOutputPage::FRAME_CAPACITY;
+        static_assert(twOutputPage::FRAME_CAPACITY % tw::poscode::kBlockFrames == 0,
+                      "a page boundary must also be a coded-block boundary, or "
+                      "no post-seek window is decodable");
+        engine.requestSeek(TARGET);
+
+        bool seekAudioCorrect = false;
+        int64_t lastDecoded = -1;
+        double lastConfidence = 0.0;
+        for (int i = 0; i < 1000 && !seekAudioCorrect; ++i) {
+            const uint64_t before = engine.currentPosition();
+            const length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n != BLOCK || before < TARGET
+                || before % (uint64_t)tw::poscode::kBlockFrames != 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            const tw::poscode::Decode d = decodeFloats(L.data(), n);
+            if (d.silent || d.confidence < 100.0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            lastDecoded = d.sourceFrame;
+            lastConfidence = d.confidence;
+            seekAudioCorrect = ((uint64_t)d.sourceFrame == before);
+            if (!seekAudioCorrect) break;   // wrong audio: report, do not retry
+        }
+        if (!seekAudioCorrect) {
+            printf("     after seek to %llu: decoded source frame %lld "
+                   "(confidence %.1f)\n", (unsigned long long)TARGET,
+                   (long long)lastDecoded, lastConfidence);
+        }
+        CHECK(seekAudioCorrect,
+              "coded: after a live seek the audio belongs to the new position");
+
+        engine.stopReadahead();
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall playback tests passed\n",

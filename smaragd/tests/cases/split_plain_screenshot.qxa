@@ -31,8 +31,13 @@
     <!-- Live audio engine like the GUI session: playback readahead demands
          pages around the locator, so the split's range invalidation triggers
          concurrent worker re-freezes of exactly the edited pages. -->
-    <toggle-playback/>
-    <wait-playhead position="490000" timeoutMs="5000"/>
+    <!-- play="1" is REQUIRED: the verb is absolute, not a toggle, and `play`
+         defaults to "0" — a bare <toggle-playback/> STOPS. This case asked for
+         live playback and got a stop for as long as it existed, and its
+         wait-playhead position= was read by nobody until wait-playhead learned
+         the absolute form. Both now do what the comment above always claimed. -->
+    <toggle-playback play="1"/>
+    <wait-playhead position="490000" minAdvance="4096" timeoutMs="5000"/>
 
     <!-- Split 1 s into the clip: head [480000,528000), tail [528000,672000). -->
     <split-clip clip="0,0" splitTime="528000"/>

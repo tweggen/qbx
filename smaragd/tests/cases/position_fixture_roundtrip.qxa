@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The position harness proving itself end to end: fixture -> engine -> render ->
+  decoder -> verb, in one deterministic case.
+
+  test_position.wav is the "integer-cycle tone staircase" (tw/core/position_code.h,
+  written and re-provable by the gen_position_fixture tool): 187 blocks of 4096
+  frames, each a pure tone on its own DFT bin, so a 4096-frame window of it
+  decodes to the SOURCE FRAME it came from. Dropped on a track at timePos 0 and
+  rendered, source frame N must come out at render frame N.
+
+  What this case is FOR is the reverse: every other audio assertion in this
+  suite (RMS, peak, f0) is position-blind, so a render that plays the right
+  material from the wrong place passes all of them. This one fails, with both
+  numbers in the message. Sibling work (the seek race, the capture backend)
+  gates on exactly this decoder.
+
+  Deliberately RENDER-only: it is a gate on the encoding and the verb, not on
+  live playback. The playback path's position is gated by playback_test's
+  scheduler case, which decodes the same encoding out of pullBlock().
+-->
+<SActionScript version="1" name="position_fixture_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 15.96 s of position-coded audio, source frame 0 at render frame 0. -->
+    <add-sample trackIndex="0" filePath="../test_position.wav" timePos="0"/>
+
+    <render filename="position_roundtrip.wav" format="wav" quality="10"/>
+
+    <!-- Block 0: the render's first block carries source frame 0. -->
+    <assert-source-position filename="position_roundtrip.wav"
+                            startFrame="0" expectSourceFrame="0"/>
+
+    <!-- Block 10 (10 * 4096) and block 100 (100 * 4096). A clip played from the
+         wrong offset still passes an RMS check here; it cannot pass these. -->
+    <assert-source-position filename="position_roundtrip.wav"
+                            startFrame="40960" expectSourceFrame="40960"/>
+    <assert-source-position filename="position_roundtrip.wav"
+                            startFrame="409600" expectSourceFrame="409600"/>
+
+    <!-- The last complete block (186 * 4096 = 761856): the top of the cycle
+         staircase, where the bins are closest together in relative terms and a
+         decoder with a resampling or aliasing problem would fail first. -->
+    <assert-source-position filename="position_roundtrip.wav"
+                            startFrame="761856" expectSourceFrame="761856"/>
+
+    <!-- Tolerance is one block by default, so a neighbouring block is still
+         accepted; ask for an exact hit here to pin the mapping itself. -->
+    <assert-source-position filename="position_roundtrip.wav"
+                            startFrame="204800" expectSourceFrame="204800"
+                            tolerance="0"/>
+
+    <!-- expectSourceFrameAny is how proposal 16's stale-page rule is written as
+         an assertion: several positions are legitimate, any OTHER one is a bug.
+         With a static render only the true position can match, which is what
+         makes this a test of the list form rather than of the render. -->
+    <assert-source-position filename="position_roundtrip.wav"
+                            startFrame="40960"
+                            expectSourceFrameAny="36864,40960,45056"
+                            tolerance="0"/>
+
+    <!-- Past the end of the fixture (765952 frames): nothing plays there. This
+         is the assertion that a clip which over-runs its data would break. -->
+    <assert-source-position filename="position_roundtrip.wav"
+                            startFrame="790528" expectSilence="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
