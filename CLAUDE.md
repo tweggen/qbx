@@ -228,13 +228,30 @@ Connect it **per user, never per project**:
 
 ```bash
 claude mcp add --scope user --transport http \
-  --header "Authorization: Bearer <permanent-token>" \
-  youtrack https://nassau.youtrack.cloud/mcp
+  youtrack https://nassau.youtrack.cloud/mcp \
+  --header "Authorization: Bearer perm:<permanent-token>"
 ```
+
+**`--header` goes last.** It is declared variadic (`-H, --header <header...>`), so putting
+it before the positional arguments makes it swallow the server name and the URL as extra
+header values, and the command dies with `error: missing required argument 'name'`.
 
 Token: YouTrack → Profile → Account Security → Authentication → New token, scope
 *YouTrack*. Requests run with that user's own permissions. **Do not use `--scope project`**
 — that writes `.mcp.json` into the repo and would commit the token.
+
+Validate the token *before* wiring it. A bad token surfaces through MCP only as an opaque
+connect failure, whereas the REST API answers in one line — `200` good, `401` bad:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer perm:<permanent-token>" \
+  https://nassau.youtrack.cloud/api/users/me
+```
+
+`/api/users/me` succeeds for any valid token regardless of scope, so a `401` there means
+the credential itself is rejected — not a permissions or MCP-feature problem. To replace a
+token: `claude mcp remove youtrack -s user`, then add again.
 
 ### Gates, before every PR
 
