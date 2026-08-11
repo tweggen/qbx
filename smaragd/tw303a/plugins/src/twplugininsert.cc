@@ -112,8 +112,8 @@ int twPluginInsert::seekTo( offset_t offset )
     // The seek is deliberately NOT forwarded upstream any more: this tap reads
     // its producer through requestPage(startPos, ...), which is positional by
     // construction, so moving the producer's cursor from here would only race
-    // the producer's own freeze. twPluginChain::seekTo still seeks the chain's
-    // input plugs (the track mix) and every tap.
+    // the producer's own freeze. twPluginChain::seekTo follows the same rule —
+    // it seeks every tap of the chain and nothing beyond them.
     renderPos_.store( offset, std::memory_order_relaxed );
     return 0;
 }

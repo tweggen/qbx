@@ -618,9 +618,15 @@ void SMainWindow::startPlaying()
         SObject *root = currentProject_->getRootComponent();
         if( !root ) return;
         qWarning() << "startPlaying(): Preparing start." << Qt::endl;
-        qWarning() << "startPlaying(): About to call root->seekTo()" << Qt::endl;
-        root->seekTo( SApplication::app().getGlobalLocatorPos() );
-        qWarning() << "startPlaying(): After root->seekTo()" << Qt::endl;
+        // NO graph seek here. Play start used to walk the whole model tree
+        // seeking every component to the locator; that cascade takes only each
+        // component's mutex(), never its cursorMutex_, so it could land between
+        // an in-flight freeze's seekTo(startPos) and its renderFrames() and fill
+        // a whole 65536-frame page with audio from the seek target — cached
+        // under the ORIGINAL startPos and stamped valid. Position is carried by
+        // the page (freezePage_nolock seeks per page, under cursorMutex_) and by
+        // the engine's own locator; the offline render dropped its cursor
+        // cascade for the same reason and is the exactness gate.
         // Arm cycle (loop) playback from the current project state before output
         // starts, so the loop region is honoured from the first buffer.
         syncCyclePlayback();

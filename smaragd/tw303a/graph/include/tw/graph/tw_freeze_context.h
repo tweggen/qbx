@@ -81,6 +81,13 @@ public:
     // (detects cycles: if component is in the freeze stack, freezing it would recurse)
     static bool isComponentInStack(std::shared_ptr<twComponent> comp);
 
+    // Same question, by raw identity. twComponent::seek() asks it to decide
+    // whether a seek is EXTERNAL to every freeze on this thread or is the
+    // component's own freeze repositioning itself; it cannot use the
+    // shared_ptr overload, because shared_from_this() throws for a component
+    // that is not shared-owned (several module tests hold theirs by value).
+    static bool isComponentInStack(const twComponent *comp);
+
     // Get the component this context is marking as "being frozen"
     std::shared_ptr<twComponent> getComponent() { return component_; }
     const std::shared_ptr<twComponent> getComponent() const { return component_; }

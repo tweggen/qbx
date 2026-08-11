@@ -107,6 +107,35 @@ int twComponent::seekTo( offset_t offset )
     return -1;  // Base implementation: component doesn't support seeking
 }
 
+// The external seek entry point + freeze-race detector. See the header doc for
+// why an external seek concurrent with a freeze corrupts a whole page.
+int twComponent::seek( offset_t offset )
+{
+    // Exemption: this thread is already INSIDE this component's own freeze, so
+    // it owns the cursor it is about to move — that is the freeze positioning
+    // itself, not an outside cascade. (freezePage_nolock calls seekTo()
+    // directly and never comes through here; the exemption covers a component
+    // that reaches its own seek() through a helper.)
+    const bool inFlight = freezeInFlight_.load( std::memory_order_acquire ) != 0;
+    if( inFlight && !FreezeContext::isComponentInStack( this ) ) {
+        // One-shot report, like twRtThreadGuard: a violating cascade fires per
+        // page and would otherwise bury the log. The assert below is the gate
+        // (this repo strips NDEBUG from RelWithDebInfo, so it is live in the
+        // suite); the log is what a release build leaves behind.
+        static std::atomic<bool> reported{ false };
+        if( !reported.exchange( true ) ) {
+            TW_LOGE( "graph", "ERROR: external seek(%lld) on component=%p while "
+                              "%d freeze(s) are rendering it — the seek can "
+                              "displace a whole page's content. Seek cascades "
+                              "must not run concurrently with freezes.",
+                     (long long) offset, (void *) this,
+                     freezeInFlight_.load( std::memory_order_relaxed ) );
+        }
+        assert( !"external seek during an in-flight freeze" );
+    }
+    return seekTo( offset );
+}
+
 void twComponent::resetAllLatches()
 {
     // Reset all output latches to offset 0, ensuring deterministic capture rebuilds.
@@ -774,6 +803,11 @@ length_t twComponent::freezePage_nolock(
     // on this same component, FreezeContext::current() detects the cycle and
     // returns silence instead of recursing.
     FreezeContext freezeCtx(shared_from_this());
+
+    // Mark the render window for the seek detector: from here until this
+    // function returns, an EXTERNAL seek() of this component is a bug (it would
+    // move the cursor the seekTo/renderFrames pair below depends on).
+    FreezeInFlight inFlight( *this );
 
     // Initialize position and state. page->startPosition is authoritative for
     // the content; the component's current cursor is never trusted. Position is

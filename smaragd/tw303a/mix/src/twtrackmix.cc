@@ -442,6 +442,12 @@ length_t twTrackMix::freezePage_nolock(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
+    // twTrackMix overrides the WHOLE freeze rather than the base
+    // freezePage_nolock, so the base's freeze-window marker never runs for it —
+    // mark it here, or an external seek() of a track mix mid-freeze would go
+    // undetected (see twComponent::seek).
+    FreezeInFlight inFlight( *this );
+
     // Restore track-level state from previous page snapshot (mutex already held)
     if (previousPage) {
         restoreInternalState_nolock(previousPage->internalState);
