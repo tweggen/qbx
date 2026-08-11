@@ -35,18 +35,19 @@ AudioEngine::~AudioEngine() {
 }
 
 bool AudioEngine::pullFrame(AudioFrame& outFrame) {
-    float outL, outR;
-    if (!pullStereoFrameFrozen(outL, outR)) {
-        outFrame.channels[0] = 0.0f;
-        outFrame.channels[1] = 0.0f;
-        return false;
-    }
-
-    outFrame.channels[0] = outL;
-    outFrame.channels[1] = outR;
+    // One frame is just the smallest possible block. This used to be its own
+    // cursor implementation (pullStereoFrameFrozen), which duplicated the page
+    // walk and got it subtly wrong: its page advance recomputed the position
+    // from currentPageStartPos_, discarding the playhead, and it honoured
+    // neither the live-seek adoption nor the cycle wrap. Routing through
+    // pullBlock leaves exactly one cursor in this class to be correct.
+    float l = 0.0f, r = 0.0f;
+    const length_t n = pullBlock(&l, &r, 1);   // every miss path zeroes l/r
+    outFrame.channels[0] = l;
+    outFrame.channels[1] = r;
     outFrame.numChannels = 2;
     outFrame.sampleRate = engineSampleRate_;
-    return true;
+    return n == 1;
 }
 
 length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
@@ -334,67 +335,6 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
     return produced;
 }
 
-bool AudioEngine::pullStereoFrameFrozen(float& outL, float& outR) {
-    if (!synthOutput_) {
-        outL = outR = 0.0f;
-        return false;
-    }
-
-    // Acquire loop state (atomic, lock-free)
-    const bool loopValid = cycleEnabled_.load(std::memory_order_relaxed);
-    uint64_t pos = currentPos_.load(std::memory_order_relaxed);
-    const uint64_t loopStart = loopStart_.load(std::memory_order_relaxed);
-    const uint64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
-
-    // Handle loop wrapping WITHOUT seekTo() - maintains state continuity
-    if (loopValid && pos >= loopEnd) {
-        if (loopEnd > loopStart) {
-            pos = loopStart;  // Wrap position mathematically
-            prevFrozenPage_ = nullptr;  // Reset for loop restart
-        }
-    }
-
-    // Update frozen page if we've moved to a new page position
-    updateFrozenPage(pos);
-
-    if (!currentFrozenPage_) {
-        outL = outR = 0.0f;
-        currentPos_.store(pos, std::memory_order_relaxed);
-        return false;
-    }
-
-    // Read sample from current frozen page. If at the end of the page's fixed
-    // timeline range, try to advance to the next page.
-    if (pageFrameOffset_ >= twOutputPage::FRAME_CAPACITY) {
-        // At end of current page; try to move to next page
-        // Advance position to next page and try to load it
-        pos = (currentPageStartPos_ / twOutputPage::FRAME_CAPACITY + 1) * twOutputPage::FRAME_CAPACITY;
-        updateFrozenPage(pos);
-
-        // Try again with the new page
-        if (!currentFrozenPage_ || pageFrameOffset_ >= twOutputPage::FRAME_CAPACITY) {
-            outL = outR = 0.0f;
-            currentPos_.store(pos, std::memory_order_relaxed);
-            return false;
-        }
-    }
-
-    // Extract samples from frozen page (mono frozen output, duplicate to stereo).
-    // Beyond validFrames the page's range is silence (content ended mid-page).
-    float sample = (pageFrameOffset_ < currentFrozenPage_->validFrames)
-        ? currentFrozenPage_->samples[pageFrameOffset_]
-        : 0.0f;
-    outL = sample;
-    outR = sample;
-
-    // Advance position
-    pageFrameOffset_++;
-    pos++;
-
-    currentPos_.store(pos, std::memory_order_relaxed);
-    return true;
-}
-
 void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     // Calculate which page this position belongs to
     uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
@@ -422,97 +362,112 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     const bool heldIsStale = currentFrozenPage_ &&
         currentFrozenPage_->contentEpoch.load() < epochNow;
 
-    // If we're still in the current valid page, nothing to do
-    if (currentFrozenPage_ && !heldIsStale &&
+    // If we're still in the current valid page, there is no page to CHOOSE —
+    // but the cursor still has to be re-derived below, because desiredPos can
+    // move inside the held page without the batch loop having walked it there
+    // (a cycle wrap back into this same page is exactly that case). Falling
+    // through to the tail costs two integer ops; the cache lookup stays behind
+    // this branch so the steady state never touches the page map.
+    const bool heldStillCovers = currentFrozenPage_ && !heldIsStale &&
         currentFrozenPage_->startPosition == pageStartPos &&
-        currentFrozenPage_->validAspects != 0) {
-        return;
+        currentFrozenPage_->validAspects != 0;
+
+    if (!heldStillCovers) {
+        // Lock-free cache lookup (read-only audio thread).
+        // Audio thread never allocates pages, only reads existing ones.
+        // Read-ahead thread allocates and freezes pages; this just reads the cache.
+        auto page = synthOutput_->getPageIfExists(pageStartPos);
+        if (page && page->validAspects != 0 &&
+            page->contentEpoch.load() >= epochNow &&
+            // Trust the page's OWN startPosition, never the map key it was
+            // found under (cf. twPluginInsert::pullUpstreamPage).
+            page->startPosition == pageStartPos) {
+            // Page is ready; switch to it
+            prevFrozenPage_ = currentFrozenPage_;
+            currentFrozenPage_ = page;
+
+            // DEBUG: Page found
+            if (gapLogCounter++ % 500 == 0) {
+                int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
+                TW_LOGD( "playback", "[AUDIO] Page FOUND: playback=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k)",
+                        pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0 );
+            }
+        } else if (currentFrozenPage_ &&
+                   currentFrozenPage_->startPosition == pageStartPos &&
+                   currentFrozenPage_->validAspects != 0) {
+            // No current-epoch page yet, but the (stale) held page still covers
+            // this position: keep playing pre-edit audio rather than going silent
+            // while the readahead re-freezes the page (proposal 16).
+            readaheadCv_.notify_one();
+            if (gapLogCounter++ % 500 == 0) {
+                TW_LOGW( "playback", "[AUDIO] Serving STALE page at %llu as fallback (epoch %llu < %llu), awaiting re-freeze",
+                        (unsigned long long)pageStartPos,
+                        (unsigned long long)currentFrozenPage_->contentEpoch.load(),
+                        (unsigned long long)epochNow );
+            }
+        } else if (auto fallbackPage = [&]() -> std::shared_ptr<twOutputPage> {
+                       // Stale-but-frozen fallback from the cache: either the
+                       // pre-edit page still sitting in the map, or — if the map
+                       // entry is already a mid-render placeholder — the pre-edit
+                       // page it replaced (kept reachable as stalePredecessor).
+                       if (page && page->validAspects != 0) return page;
+                       if (page) return std::atomic_load(&page->stalePredecessor);
+                       return nullptr;
+                   }();
+                   fallbackPage && fallbackPage->validAspects != 0 &&
+                   fallbackPage->startPosition == pageStartPos) {
+            // Crossed into a page whose re-freeze is pending or in flight; adopt
+            // the pre-edit page as fallback (proposal 16). The fast path stays
+            // unsatisfied (stale epoch), so adoption of the fresh page is retried
+            // every batch.
+            prevFrozenPage_ = currentFrozenPage_;
+            currentFrozenPage_ = fallbackPage;
+            readaheadCv_.notify_one();
+            if (gapLogCounter++ % 500 == 0) {
+                TW_LOGW( "playback", "[AUDIO] Adopted STALE fallback page at %llu, awaiting re-freeze",
+                        (unsigned long long)pageStartPos );
+            }
+        } else {
+            // Page not ready; check if within underrun threshold or too far behind
+            int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
+
+            // Phase 6b: Underrun detection
+            if (gap >= 0 && gap < (int64_t)underrunThresholdFrames_) {
+                // Gap is small (< 1 sec): output silence but continue (graceful degradation)
+                if (gapLogCounter++ % 50 == 0) {
+                    TW_LOGW( "playback", "[AUDIO] UNDERRUN THRESHOLD: gap=%.2f sec (< 1 sec), outputting silence for recovery",
+                            (double)gap / 48000.0 );
+                }
+            } else {
+                // Gap is large or negative: serious issue
+                if (gapLogCounter++ % 10 == 0 || gap < 0) {
+                    TW_LOGW( "playback", "[AUDIO] Page MISSING: playback wants=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k) ***SILENCE***",
+                            pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0 );
+                }
+            }
+
+            currentFrozenPage_ = nullptr;
+            pageFrameOffset_ = 0;
+            readaheadCv_.notify_one();
+        }
     }
 
-    // Lock-free cache lookup (read-only audio thread).
-    // Audio thread never allocates pages, only reads existing ones.
-    // Read-ahead thread allocates and freezes pages; this just reads the cache.
-    auto page = synthOutput_->getPageIfExists(pageStartPos);
-    if (page && page->validAspects != 0 && page->contentEpoch.load() >= epochNow) {
-        // Page is ready; switch to it
-        prevFrozenPage_ = currentFrozenPage_;
-        currentFrozenPage_ = page;
-        currentPageStartPos_ = pageStartPos;
-        currentPageGeneration_ = page->generation.load();
-        pageFrameOffset_ = desiredPos - pageStartPos;
+    // ONE tail, reached by every branch: the cursor is DERIVED from the page we
+    // ended up holding and the position we were asked for. It is never carried
+    // over from a previous call — the batch loops advance it in lockstep with
+    // the playhead, but a cycle wrap (pullBlock) rewrites the playhead without
+    // touching the offset, so anything that trusted the carried value read the
+    // page at the PRE-WRAP offset while the playhead reported loopStart.
+    // Deriving it here is what makes "what you hear" == "where the playhead is"
+    // on every path, including the two that used to return early.
+    if (currentFrozenPage_) {
+        currentPageStartPos_ = (uint64_t)currentFrozenPage_->startPosition;
+        pageFrameOffset_ = (size_t)(desiredPos - currentPageStartPos_);
         // Phase 2 perf: Cache validFrames to avoid repeated loads in batching loop.
         // pageFrameOffset_ may exceed validFrames: that region of the page's
         // range is silence, and the pull paths handle it without reading samples.
         cachedPageValidFrames_ = currentFrozenPage_->validFrames;
-
-        // DEBUG: Page found
-        if (gapLogCounter++ % 500 == 0) {
-            int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
-            TW_LOGD( "playback", "[AUDIO] Page FOUND: playback=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k)",
-                    pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0 );
-        }
-    } else if (currentFrozenPage_ &&
-               currentFrozenPage_->startPosition == pageStartPos &&
-               currentFrozenPage_->validAspects != 0) {
-        // No current-epoch page yet, but the (stale) held page still covers
-        // this position: keep playing pre-edit audio rather than going silent
-        // while the readahead re-freezes the page (proposal 16).
-        readaheadCv_.notify_one();
-        if (gapLogCounter++ % 500 == 0) {
-            TW_LOGW( "playback", "[AUDIO] Serving STALE page at %llu as fallback (epoch %llu < %llu), awaiting re-freeze",
-                    (unsigned long long)pageStartPos,
-                    (unsigned long long)currentFrozenPage_->contentEpoch.load(),
-                    (unsigned long long)epochNow );
-        }
-    } else if (auto fallbackPage = [&]() -> std::shared_ptr<twOutputPage> {
-                   // Stale-but-frozen fallback from the cache: either the
-                   // pre-edit page still sitting in the map, or — if the map
-                   // entry is already a mid-render placeholder — the pre-edit
-                   // page it replaced (kept reachable as stalePredecessor).
-                   if (page && page->validAspects != 0) return page;
-                   if (page) return std::atomic_load(&page->stalePredecessor);
-                   return nullptr;
-               }();
-               fallbackPage && fallbackPage->validAspects != 0 &&
-               fallbackPage->startPosition == pageStartPos) {
-        // Crossed into a page whose re-freeze is pending or in flight; adopt
-        // the pre-edit page as fallback (proposal 16). The fast path stays
-        // unsatisfied (stale epoch), so adoption of the fresh page is retried
-        // every batch.
-        prevFrozenPage_ = currentFrozenPage_;
-        currentFrozenPage_ = fallbackPage;
-        currentPageStartPos_ = pageStartPos;
-        currentPageGeneration_ = fallbackPage->generation.load();
-        pageFrameOffset_ = desiredPos - pageStartPos;
-        cachedPageValidFrames_ = currentFrozenPage_->validFrames;
-        readaheadCv_.notify_one();
-        if (gapLogCounter++ % 500 == 0) {
-            TW_LOGW( "playback", "[AUDIO] Adopted STALE fallback page at %llu, awaiting re-freeze",
-                    (unsigned long long)pageStartPos );
-        }
-    } else {
-        // Page not ready; check if within underrun threshold or too far behind
-        int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
-
-        // Phase 6b: Underrun detection
-        if (gap >= 0 && gap < (int64_t)underrunThresholdFrames_) {
-            // Gap is small (< 1 sec): output silence but continue (graceful degradation)
-            if (gapLogCounter++ % 50 == 0) {
-                TW_LOGW( "playback", "[AUDIO] UNDERRUN THRESHOLD: gap=%.2f sec (< 1 sec), outputting silence for recovery",
-                        (double)gap / 48000.0 );
-            }
-        } else {
-            // Gap is large or negative: serious issue
-            if (gapLogCounter++ % 10 == 0 || gap < 0) {
-                TW_LOGW( "playback", "[AUDIO] Page MISSING: playback wants=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k) ***SILENCE***",
-                        pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0 );
-            }
-        }
-
-        currentFrozenPage_ = nullptr;
-        pageFrameOffset_ = 0;
-        readaheadCv_.notify_one();
-        pageFrameOffset_ = 0;
+        currentPageGeneration_ = currentFrozenPage_->generation.load();
     }
 }
 
