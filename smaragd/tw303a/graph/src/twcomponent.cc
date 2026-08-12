@@ -411,26 +411,6 @@ void twComponent::invalidateAllPages()
     invalidateDependents();
 }
 
-void twComponent::setPageAsFrozen(
-    offset_t startPos,
-    std::shared_ptr<twOutputPage> page,
-    uint32_t aspects
-)
-{
-    std::lock_guard<std::mutex> lock(mutex());
-
-    auto it = outputPages_.find(startPos);
-    if (it != outputPages_.end()) {
-        // Update existing page reference
-        it->second = page;
-        page->validAspects |= aspects;  // Mark aspects as complete
-    } else {
-        // Insert new page
-        page->validAspects |= aspects;
-        outputPages_[startPos] = page;
-    }
-}
-
 // ============================================================================
 // Sequential Freezing Implementation (Phase 2 - Gap 3)
 // ============================================================================
