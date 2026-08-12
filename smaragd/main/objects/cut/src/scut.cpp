@@ -6,6 +6,7 @@
 #include <chrono>
 
 #include <QDebug>
+#include <QTimer>
 
 #include "tw/core/twfraction.h"
 #include "tw/graph/twcomponent.h"
@@ -778,24 +779,35 @@ QList<SObject::SDirtyRange> SCut::mapChildRangesToSelf(
     return out;
 }
 
+// W9: the render path must learn about a slip. See the comment on
+// invalidateRenderPathForSlip in the header for why, and why the duration is
+// read under the SAME lock that applied the edit rather than through
+// getDuration() afterwards (the try-lock snapshot can hand back 0 under worker
+// contention, and an empty range invalidates nothing at all).
 void SCut::setStartOffset( offset_t off )
 {
+    length_t dur;
     {
         std::lock_guard<std::mutex> lock(mutex());
         setStartOffsetRaw( WarpedPos( (int64_t) off ) );
         buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
+        dur = cutDuration_.frames();
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
+    invalidateRenderPathForSlip( dur );
 }
 
 void SCut::setSrcStart( const Fraction &srcStart )
 {
+    length_t dur;
     {
         std::lock_guard<std::mutex> lock(mutex());
         srcStart_ = srcStart;
         buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
+        dur = cutDuration_.frames();
     }
     invalidateCapture();  // Window change requires new capture (formal guidelines)
+    invalidateRenderPathForSlip( dur );
 }
 
 void SCut::setDuration( length_t dur )
@@ -812,10 +824,72 @@ void SCut::setDuration( length_t dur )
 
 void SCut::setLoopStart( offset_t s )
 {
+    length_t dur;
     {
         std::lock_guard<std::mutex> lock(mutex());
         loopStart_ = WarpedPos( (int64_t) s );
+        buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
+        dur = cutDuration_.frames();
     }
+    // Was the odd one out: it published nothing at all, not even the capture,
+    // so it now follows its siblings exactly.
+    invalidateCapture();
+    invalidateRenderPathForSlip( dur );
+}
+
+// Throttled render-path invalidation for the slip setters. See the header.
+void SCut::invalidateRenderPathForSlip( length_t duration )
+{
+    bool immediate = false;
+    {
+        std::lock_guard<std::mutex> lock( slipThrottleMutex_ );
+        const auto now = std::chrono::steady_clock::now();
+        if( !slipInvalidateEver_
+            || now - lastSlipInvalidate_
+                   >= std::chrono::milliseconds( SLIP_INVALIDATE_MS ) ) {
+            slipInvalidateEver_    = true;
+            lastSlipInvalidate_    = now;
+            slipInvalidatePending_ = false;
+            immediate              = true;
+        } else {
+            slipInvalidatePending_ = true;
+        }
+    }
+    if( immediate ) {
+        invalidateRenderPathRange( 0, (offset_t) duration );
+        return;
+    }
+    // Coalesced: arm (or re-arm) the trailing shot. AutoConnection so an edit
+    // made off the object's thread hops to it instead of touching a QTimer
+    // from the wrong thread (THREADING.md Rule 1).
+    QMetaObject::invokeMethod( this, "armSlipInvalidateTimer_",
+                               Qt::AutoConnection );
+}
+
+void SCut::armSlipInvalidateTimer_()
+{
+    if( !slipInvalidateTimer_ ) {
+        slipInvalidateTimer_ = new QTimer( this );   // dies with this cut
+        slipInvalidateTimer_->setSingleShot( true );
+        QObject::connect( slipInvalidateTimer_, &QTimer::timeout,
+                          this, &SCut::flushSlipInvalidation_ );
+    }
+    // restart: the LAST mouse-move of a drag is the one that must land
+    slipInvalidateTimer_->start( SLIP_INVALIDATE_MS );
+}
+
+void SCut::flushSlipInvalidation_()
+{
+    bool pending = false;
+    {
+        std::lock_guard<std::mutex> lock( slipThrottleMutex_ );
+        pending                = slipInvalidatePending_;
+        slipInvalidatePending_ = false;
+        if( pending ) lastSlipInvalidate_ = std::chrono::steady_clock::now();
+    }
+    // Blocking read: the trailing shot runs on the edit thread with no lock
+    // held, and a stale 0 here would silently invalidate nothing.
+    if( pending ) invalidateRenderPathRange( 0, (offset_t) getDurationBlocking() );
 }
 
 void SCut::setLoopLength( length_t l )
@@ -972,6 +1046,14 @@ SCut::~SCut()
     // build a capture on the worker; repro = split a grained cut, delete the tail.)
     if( revalidator_ ) {
         revalidator_->retireObject( this );
+    }
+
+    // Disarm the trailing slip invalidation before anything else goes away.
+    // (~QObject would stop it too, but only AFTER this body has run.)
+    if( slipInvalidateTimer_ ) slipInvalidateTimer_->stop();
+    {
+        std::lock_guard<std::mutex> lock( slipThrottleMutex_ );
+        slipInvalidatePending_ = false;
     }
 
     // Unregister from content's dependents (lazy invalidation, proposal 06).
