@@ -55,3 +55,9 @@ compile_commands.json
 # the screenshot action grabs the root window, not the app window). Two such
 # desktop captures reached the remote before this rule existed.
 smaragd/test-output/
+
+# Hand-made scratch audio at the repo root. Named individually ON PURPOSE: a
+# blanket *.wav / *.ogg would also match render.wav and test_sawtooth.wav, which
+# ARE tracked here and are fixtures the qxa cases depend on.
+/testspur.wav
+/testspur.ogg
