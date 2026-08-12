@@ -19,6 +19,15 @@
 //       advanced by at least minAdvance frames. Rejects on timeout, so a
 //       stalled playback fails the test.
 //
+//   <wait-playhead position="490000" timeoutMs="5000"/>
+//       ABSOLUTE form: waits until the locator REACHES position. A case that
+//       wants playback to arrive somewhere specific (so a decode at that
+//       position means something) cannot express it as a relative advance
+//       without knowing where playback started. Both attributes may be given,
+//       in which case both conditions must hold. `position` was already being
+//       written in a committed case and read by NOBODY — see
+//       split_plain_screenshot.
+//
 //   <undo count="1"/>
 //   <redo count="1"/>
 //       Drives the real undo stack (SActionHistory), so a case can assert what
@@ -34,6 +43,7 @@ public:
     explicit SSetLocatorAction(qulonglong position) : position_(position) {}
 
     QString name() const override { return QStringLiteral("set-locator"); }
+    QStringList knownAttributes() const override { return {QStringLiteral("position")}; }
     SApplyResult apply(SProject *project) override;
     void writeXml(QDomElement &elem) const override;
     bool readXml(const QDomElement &elem, int version) override;
@@ -49,12 +59,17 @@ public:
         : minAdvance_(minAdvance), timeoutMs_(timeoutMs) {}
 
     QString name() const override { return QStringLiteral("wait-playhead"); }
+    QStringList knownAttributes() const override {
+        return {QStringLiteral("minAdvance"), QStringLiteral("position"),
+                QStringLiteral("timeoutMs")};
+    }
     SApplyResult apply(SProject *project) override;
     void writeXml(QDomElement &elem) const override;
     bool readXml(const QDomElement &elem, int version) override;
 
 private:
     qulonglong minAdvance_ = 0;
+    qulonglong position_ = 0;   // 0 = no absolute target
     int timeoutMs_ = 10000;
 };
 
