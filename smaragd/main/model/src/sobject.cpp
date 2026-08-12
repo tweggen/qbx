@@ -284,7 +284,9 @@ int SObject::straightCalcPreviewData()
         if( rs ) {
             rs->read( i, buffer, previewSkip_, 0 );
         } else {
-            getRootComponent()->seekTo( i );
+            // The legacy pull preview: seek + calcOutputTo, from whatever
+            // thread wants a waveform. External by definition — seek().
+            getRootComponent()->seek( i );
             getRootComponent()->calcOutputTo( buffer, previewSkip_, 0 );
         }
         sample_t *p = buffer;
@@ -371,7 +373,9 @@ void SObject::setDuration( length_t )
 
 int SObject::seekTo( offset_t ofs )
 {
-    return getRootComponent()->seekTo( ofs );
+    // seek(), not seekTo(): this is the app model crossing into the engine, the
+    // definition of an EXTERNAL seek, so it goes through the detector.
+    return getRootComponent()->seek( ofs );
 }
 
 int SObject::getNReferences() const

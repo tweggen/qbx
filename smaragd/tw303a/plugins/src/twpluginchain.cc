@@ -127,25 +127,26 @@ int twPluginChain::seekTo( offset_t offset )
 {
     std::vector<std::shared_ptr<twComponent> > snapshot = snapshotPlugins();
 
-    // Forward seek to all inserts in the chain
+    // Forward the seek to this chain's own inserts, and NO further. Each tap
+    // only records the position (twPluginInsert::seekTo stores renderPos_),
+    // which is how renderFrames() learns the page position its signature does
+    // not carry — a purely local, freeze-scoped write.
     for( std::shared_ptr<twComponent> plugin : snapshot ) {
         if( plugin ) {
             plugin->seekTo( offset );
         }
     }
 
-    // Also seek the input plugs (the source feeding into the chain)
-    std::vector<std::shared_ptr<twLatchOutput> > plugs;
-    {
-        std::lock_guard<std::mutex> lock( mutex() );
-        plugs = pInputPlugs_;
-    }
-    for( idx_t i = 0; i < nBusses_ && i < (idx_t)plugs.size(); ++i ) {
-        if( !plugs[i] ) continue;
-        twLatch &latch = plugs[i]->getParentLatch();
-        std::shared_ptr<twComponent> comp = latch.getComponent();
-        if( comp ) comp->seekTo( offset );
-    }
+    // The chain deliberately does NOT seek its input plugs' PRODUCERS (the
+    // track mix feeding it) any more. Every insert reads its producer through
+    // requestPage(startPos, ...), which is positional by construction (see the
+    // rationale at twPluginInsert::seekTo), so moving the producer's cursor
+    // from here bought nothing — and could only race the producer's own
+    // freeze, which seeks under a DIFFERENT lock (cursorMutex_) than a seek
+    // takes (mutex()). A seek that lands between a freeze's
+    // seekTo(page->startPosition) and its renderFrames() displaces that whole
+    // page's content while it is still cached under, and served for, the
+    // original position.
 
     return 0;
 }

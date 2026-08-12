@@ -47,12 +47,32 @@ Invariants:
    job), so blessing it would let a later, unbound call reuse it with nothing
    left to check. mix_test's "empty set falls back to the legacy pull" is the
    gate.
+7. A component's play cursor has exactly ONE writer at a time, and a freeze is
+   that writer for the duration of its render. freezePage_nolock does
+   reset()/restore → seekTo(page->startPosition) → renderFrames(), serialized on
+   cursorMutex_ — but seekTo() itself takes only mutex(), a DIFFERENT lock. So a
+   seek arriving from outside that freeze rewrites the cursor the render is
+   about to read, and the whole 65536-frame page comes out as the audio of the
+   SEEK TARGET while being cached under, and served for, its original startPos —
+   valid, current-epoch and indistinguishable from correct. Therefore: code
+   OUTSIDE the freeze machinery calls twComponent::seek(), which asserts the
+   window is clear before dispatching; code INSIDE a freeze (freezePage_nolock,
+   twTrackMix's clip walk, twView::seekTo, a plugin chain seeking its own taps)
+   calls the virtual seekTo() directly. Every component that renders must mark
+   its window with twComponent::FreezeInFlight — the base freezePage_nolock does
+   it, and so must any subclass that overrides the whole freeze (twTrackMix).
+   There are deliberately NO external seek cascades left: play start, record
+   start, the SCut capture rebuild and the plugin chain's producer seek were all
+   deleted rather than locked, because position is carried BY THE PAGE.
 
 Threading: THREADING.md rules 2-3; one mutex per component, _nolock suffix
 convention.
 
 How to test: the full qxa suite exercises every sub-contract;
-render_split_slip_offset.qxa is the MapPosFn regression.
+render_split_slip_offset.qxa is the MapPosFn regression. Invariant 7 has a
+dedicated stress case in playback_test ("seek storm"): four threads freezing
+position-coded pages while a fifth hammers AudioEngine::seekTo, then every
+produced page is decoded and must carry the audio of its own startPosition.
 
 Known debt: calcOutputTo default impl allocates per block; deprecated
 raw-pointer calcOutputTo overload awaits removal; tw303a.cc (dead standalone

@@ -32,3 +32,14 @@ bool FreezeContext::isComponentInStack(std::shared_ptr<twComponent> comp)
     }
     return false;  // Component is not in the freeze stack
 }
+
+bool FreezeContext::isComponentInStack(const twComponent *comp)
+{
+    if (!comp) return false;
+    for (FreezeContext* ctx = g_activeContext; ctx != nullptr; ctx = ctx->previousContext_) {
+        if (ctx->getComponent().get() == comp) {
+            return true;
+        }
+    }
+    return false;
+}

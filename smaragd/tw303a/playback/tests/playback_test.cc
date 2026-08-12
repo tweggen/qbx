@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdio>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -97,21 +98,39 @@ public:
 class PositionCodedComponent : public twComponent {
 public:
     explicit PositionCodedComponent(tw303aEnvironment &e) : twComponent(e) {}
-    offset_t pos = 0;
+    // Atomic because the seek-race stress test below deliberately writes it
+    // from another thread while a render reads it; a plain offset_t would make
+    // the very race under test formally undefined.
+    std::atomic<offset_t> pos{0};
     std::atomic<int> renderCalls{0};
+    // Widens the window between freezePage_nolock's seekTo(startPos) and the
+    // point this render reads `pos` — the window an external seek cascade used
+    // to land in. A real component's window is its DSP work; this is the same
+    // window, made observable.
+    std::atomic<int> renderDelayMs{0};
 
     bool isSeekable() const override { return true; }
-    int seekTo(offset_t p) override { pos = p; return 0; }
-    void reset() override { pos = 0; }
+    int seekTo(offset_t p) override { pos.store(p); return 0; }
+    void reset() override { pos.store(0); }
     length_t renderFrames(sample_t *out, length_t n, const sample_t *,
                           length_t, idx_t) override {
         renderCalls.fetch_add(1);
+        const int delay = renderDelayMs.load();
+        if (delay > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+        const offset_t at = pos.load();
         for (length_t i = 0; i < n; ++i) {
-            out[i] = (sample_t)tw::poscode::sampleAtFrame((int64_t)pos + (int64_t)i);
+            out[i] = (sample_t)tw::poscode::sampleAtFrame((int64_t)at + (int64_t)i);
         }
-        pos += (offset_t)n;
+        pos.store(at + (offset_t)n);
         return n;
     }
+    // It carries a play cursor written by seekTo() and advanced by
+    // renderFrames() — the exact shape usesSerialCursor() describes, so freezes
+    // of it must serialize on cursorMutex_ like twWavInput's do. Without this
+    // the component would race ITSELF and the seek stress test below could not
+    // attribute a wrong page to the external seek.
+    bool usesSerialCursor() const override { return true; }
     void createOutputLatches() override {}
     idx_t getNInputs() const override { return 0; }
     idx_t getNOutputs() const override { return 1; }
@@ -505,6 +524,134 @@ int main()
               "coded: after a live seek the audio belongs to the new position");
 
         engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
+    // The seek/freeze race, head-on: freezes running while the PUBLIC seek
+    // path is hammered.
+    //
+    // A page freeze positions its component itself — freezePage_nolock does
+    // reset()/restore, then seekTo(page->startPosition), then renderFrames() —
+    // and serializes that on cursorMutex_. An outside seek takes a DIFFERENT
+    // lock, so one landing between that seekTo and the render rewrites the
+    // cursor the render is about to read: the whole 65536-frame page comes out
+    // as the audio of the SEEK TARGET, cached under (and served for) its
+    // original startPos, stamped valid and current. Nothing downstream can
+    // notice — the page looks perfectly well-formed.
+    //
+    // Which is why this assertion needs position-coded content: it decodes
+    // every page that came out of the storm and demands that each one carry the
+    // audio of ITS OWN startPosition. AudioEngine::seekTo() is the hammer
+    // because it is the seek entry point playback actually used, and the one
+    // that used to cascade into the graph.
+    {
+        auto src = std::make_shared<PositionCodedComponent>(env);
+        src->init();
+        // Widen the seekTo→render window. Without this the race is real but
+        // narrow (a page render is a few ms); with it a hammering seeker lands
+        // inside essentially every freeze.
+        src->renderDelayMs.store(2);
+
+        // The engine is here only to own the seek entry point. No readahead is
+        // started: this test drives the freezes itself, so nothing else
+        // competes for pages and every produced page is accounted for.
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
+
+        constexpr int FREEZERS = 4;
+        constexpr int ROUNDS   = 60;
+        const length_t FULL = (length_t)twOutputPage::FRAME_CAPACITY;
+        static_assert(twOutputPage::FRAME_CAPACITY % tw::poscode::kBlockFrames == 0,
+                      "a page must span whole coded blocks or it cannot be "
+                      "decoded window by window");
+
+        // Distinct page positions in play. Capped so every probed window falls
+        // inside the encoding's candidate range: decodeBuffer() only sweeps
+        // kDefaultBlocks bins, so a window past that decodes to the wrong block
+        // with low confidence — an artefact of the fixture's extent, not of the
+        // engine, and it would make the storm unreadable.
+        constexpr int SPREAD =
+            (int)((tw::poscode::kDefaultBlocks * tw::poscode::kBlockFrames)
+                  / (int64_t)twOutputPage::FRAME_CAPACITY);
+        static_assert(SPREAD >= 4, "too few in-range page positions to storm");
+
+        std::atomic<bool> stop{false};
+        std::mutex collectMutex;
+        std::vector<std::shared_ptr<twOutputPage>> produced;
+
+        std::thread seeker([&] {
+            uint64_t k = 0;
+            while (!stop.load(std::memory_order_relaxed)) {
+                // Sweep the same page positions the freezers use, so a leaked
+                // cascade lands on a plausible-but-wrong position rather than
+                // somewhere obviously out of range.
+                engine.seekTo((++k % SPREAD) * (uint64_t)FULL);
+            }
+        });
+
+        std::vector<std::thread> freezers;
+        for (int t = 0; t < FREEZERS; ++t) {
+            freezers.emplace_back([&, t] {
+                std::vector<std::shared_ptr<twOutputPage>> mine;
+                for (int r = 0; r < ROUNDS; ++r) {
+                    const offset_t startPos =
+                        (offset_t)((r * FREEZERS + t) % SPREAD) * (offset_t)FULL;
+                    auto p = src->freezePage(startPos, nullptr, 0, FULL,
+                                             env.getSRate(), nullptr);
+                    if (p && p->validAspects != 0 && p->validFrames > 0)
+                        mine.push_back(p);
+                    // Force a genuine render next round instead of a cache hit:
+                    // a cached page proves nothing about the race.
+                    src->bumpContentEpoch();
+                }
+                std::lock_guard<std::mutex> lk(collectMutex);
+                for (auto &p : mine) produced.push_back(std::move(p));
+            });
+        }
+        for (auto &th : freezers) th.join();
+        stop.store(true, std::memory_order_relaxed);
+        seeker.join();
+
+        // Decode two windows per page — the head, and one a third of the way in
+        // — so a page that is only partly displaced is caught too.
+        const int64_t PROBES[] = { 0, 8 * (int64_t)tw::poscode::kBlockFrames };
+        int decoded = 0, displaced = 0, ambiguous = 0;
+        int64_t firstBadAt = -1, firstBadTo = -1, firstBadWindow = -1;
+
+        for (const auto &p : produced) {
+            for (int64_t off : PROBES) {
+                if (off + (int64_t)tw::poscode::kBlockFrames > (int64_t)p->validFrames)
+                    continue;
+                const tw::poscode::Decode d = decodeFloats(
+                    p->samples.data() + off, (int64_t)tw::poscode::kBlockFrames);
+                if (d.silent || d.confidence < 100.0) { ++ambiguous; continue; }
+                ++decoded;
+                const int64_t expect = (int64_t)p->startPosition + off;
+                if (d.sourceFrame != expect) {
+                    ++displaced;
+                    if (firstBadAt < 0) {
+                        firstBadAt     = expect;
+                        firstBadTo     = d.sourceFrame;
+                        firstBadWindow = off;
+                    }
+                }
+            }
+        }
+
+        if (displaced) {
+            printf("     %d of %d decoded windows carry the wrong position; "
+                   "first: page window at source frame %lld decodes to %lld "
+                   "(probe offset %lld)\n",
+                   displaced, decoded, (long long)firstBadAt,
+                   (long long)firstBadTo, (long long)firstBadWindow);
+        }
+        CHECK(src->renderCalls.load() >= FREEZERS * ROUNDS / 2,
+              "seek storm: the freezers really rendered (not served from cache)");
+        CHECK(decoded >= FREEZERS * ROUNDS,
+              "seek storm: enough pages decoded to judge");
+        CHECK(ambiguous == 0, "seek storm: every probed window decodes cleanly");
+        CHECK(displaced == 0,
+              "seek storm: every frozen page carries the audio of its OWN "
+              "start position");
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall playback tests passed\n",

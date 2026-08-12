@@ -31,10 +31,11 @@ length_t twLatchStreamingOutput::readStreamingData( sample_t * pDest, length_t m
 	// Pass this reader's own page-chain hint; copyData reads and updates it
 	// atomically. Keeping it per-reader (not on the shared latch) means two
 	// readers of a fanned-out producer don't clobber each other's continuity.
-	len = getParentStreamingLatch().copyData( offset, pDest, maxLength,
+	len = getParentStreamingLatch().copyData( offset.load( std::memory_order_relaxed ),
+	                                          pDest, maxLength,
 	                                          previousPage_, previousPageEpoch_ );
 	if( len>0 ) {
-		offset += len;
+		offset.fetch_add( len, std::memory_order_relaxed );
 	}
 	return len;
 }

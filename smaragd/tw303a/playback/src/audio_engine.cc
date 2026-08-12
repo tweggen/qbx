@@ -472,12 +472,21 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
 }
 
 void AudioEngine::seekTo(uint64_t offsetSamples) {
-    // Seeking resets state (unavoidable when scrubbing to arbitrary positions)
-    // For looping, setLoopBoundaries() uses frozen pages instead
-    if (synthOutput_) {
-        synthOutput_->seekTo(offsetSamples);
-        synthOutput_->reset();  // Reset to ensure clean state for the seek
-    }
+    // The graph is deliberately NOT touched here. A seek moves the ENGINE's
+    // read position; it does not move the graph's cursors.
+    //
+    // This used to do synthOutput_->seekTo(offsetSamples) + ->reset(). Both
+    // take only the component's mutex(), while a page freeze serializes on its
+    // cursorMutex_ — so a seek arriving between an in-flight freeze's
+    // seekTo(page->startPosition) and its renderFrames() rewrote the cursor
+    // that render was about to use, and the whole 65536-frame page came out as
+    // the audio of the SEEK TARGET while being cached under, and served for,
+    // the original startPos. That is the wrong-position playback symptom.
+    //
+    // Nothing is lost: the first page after a seek is a chain discontinuity
+    // (readaheadPrevPage_ is cleared just below), and freezePage_nolock answers
+    // a discontinuity with reset() + seekTo(startPos) ITSELF — scoped to the
+    // one freeze that needs it, under that component's cursorMutex_.
     currentPos_.store(offsetSamples, std::memory_order_relaxed);
     currentFrozenPage_ = nullptr;  // Clear frozen page cache
     prevFrozenPage_ = nullptr;

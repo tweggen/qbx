@@ -371,8 +371,13 @@ void SCut::buildCapture_()
         // Container-backed: Phase 3 - use freezePage for page-based rendering
         // Instead of recursive offline rendering (renderObjectInto), call freezePage
         // on the content's twComponent to materialize its output to pages.
-        // Seek container to start before freezing to ensure children are positioned.
-        c.seekTo( 0 );
+        //
+        // NO seek here. This runs on a revalidator worker, so a c.seekTo(0)
+        // cascade could land inside another thread's in-flight freeze of the
+        // same components and displace that page's content. It was never load-
+        // bearing either: freezePage_nolock positions the component itself
+        // (reset() + seekTo(page->startPosition)) for every page it renders,
+        // under the component's own cursorMutex_.
         std::shared_ptr<twComponent> rootComp = c.getRootComponent();
 
         buf.resize( (size_t) n, 0.0f );
@@ -420,8 +425,12 @@ void SCut::buildCapture_()
         // The grain source materializes the time-stretched output, so we read the
         // full transformed signal and store it for both preview and playback.
         twRandomSource *rs = c.getRandomSource();
-        // Ensure the source is positioned at the start before grain processing
-        c.seekTo( 0 );
+        // NO seek here either. The grain path is addressed by OFFSET —
+        // grainSource->read( grainOffset, ... ) below reads *rs through the
+        // random-access interface, which touches no play cursor at all. The
+        // seek only ever moved c's ROOT COMPONENT (a different object from
+        // rs), so it could not position anything this code reads; all it could
+        // do was race a concurrent freeze of that component.
         auto grainSource = std::make_shared<twGrainSource>( *rs, snap.grainParams );
         length_t grainedLen = grainSource->length();
 
@@ -683,7 +692,10 @@ int SCut::seekTo( offset_t off )
     // conversion folds the slip offset in; no stretch factor can appear here.
     offset_t seekPos = (offset_t) clipToReaderMap( snap.reader.looping )
                            .map( Fraction( (int64_t) off ) ).floorToInt();
-    if( snap.reader.reader ) return snap.reader.reader->seekTo( seekPos );
+    // seek(): app model → engine component (see twComponent::seek). The
+    // content-object branch stays on SObject::seekTo, which does the same
+    // conversion one level down.
+    if( snap.reader.reader ) return snap.reader.reader->seek( seekPos );
     return content_->getSObject().seekTo( seekPos );
 }
 
