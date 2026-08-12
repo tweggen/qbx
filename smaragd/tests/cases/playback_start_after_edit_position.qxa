@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE HEADLINE CASE: after an edit, starting PLAYBACK in the edited region must
+  play the material that belongs at the playhead — not a fragment from some
+  other position.
+
+  The user's repro was exactly this and nothing else: with tracks nested inside
+  a group, edit a clip, hit play somewhere near the edit, and the first second or
+  so is audibly WRONG — recognisable material, from the wrong place. Every audio
+  assertion this suite owned was blind to it twice over:
+
+    * they are position-BLIND. RMS, peak and f0 all pass on the right material
+      played from the wrong offset. (Closed by the position fixture + the
+      assert-source-position verb.)
+    * they are render-only, and a RENDER is a different consumer of the graph
+      than playback. The only backend a headless run could use was NullBackend,
+      whose startOutput() sets a flag and never calls the render callback — so
+      AudioEngine::pullBlock, the readahead frontier, the seek-on-start and the
+      stale-page fallback had NO automated coverage at all. (Closed by the
+      capture backend + dump-playback-capture.)
+
+  This case is the first one to assert on audio that came out of the PLAYBACK
+  path. It plays in real time into memory, writes the recording out, and decodes
+  the recorded stream position by position.
+
+  ================================================================= arithmetic
+
+  All numbers are multiples of the encoding's 4096-frame block, because the
+  decoder resolves to a block: a window that straddles a source block boundary
+  lights two bins and is reported as ambiguous rather than as an answer. Keeping
+  the split, the move, the locator and every window on the block grid is what
+  makes the expectations exact instead of approximate.
+
+  Fixture test_position.wav: 187 blocks = 765952 frames = 15.96 s @ 48 kHz,
+  dropped at timeline 0 on the NESTED lane (path 0,0 — a track inside a folder,
+  as in the repro).
+
+    edit:  split at        393216  (8.192 s)  -> head [0,393216)  src = t
+                                                 tail [393216,765952) src = t
+           move tail to    491520 (10.24 s)   = +98304 (2.048 s) later
+                                              -> tail [491520,864256) src = t - 98304
+           gap            [393216,491520)     -> silence, 2.048 s of it
+
+    pass 1 (bakes pages, exercises playback START before the edit):
+           locator 98304 (2.048 s), play until 147456 (3.072 s), stop.
+    pass 2 (the assertion pass, playback START inside/around the edit):
+           locator 245760 (5.12 s), play until 573440 (11.94 s), stop.
+
+  CAPTURE ALIGNMENT. The recording begins when the backend's pump starts, i.e.
+  at playback start, so captured frame f is timeline frame 245760 + f. Measured
+  on this machine: leading silence is ZERO frames and the recording is exactly
+  as long as the playhead travelled (327680 frames), over 9 runs across
+  SMARAGD_REVAL_WORKERS in {default, 0, 16}. The case does not DEPEND on that:
+  the first content assertion sits 8192 frames in and carries a tolerance of
+  8192, so up to two blocks of startup slop are absorbed explicitly rather than
+  by luck. Everything the case discriminates is ~98304 frames away, so the
+  budget costs no strength.
+
+  MIN CONFIDENCE 1.5, not the default 3.0. A momentary underrun (the pump is
+  paced by a real-time clock and does not wait for the readahead — deliberately)
+  leaves a short zero gap inside a window, which leaks energy into the other
+  bins and drags the best/runner-up ratio down. The argmax is still the right
+  block; demanding 3.0 would turn a dropout into a POSITION failure and blame
+  the wrong thing. One such run was observed at SMARAGD_REVAL_WORKERS=0
+  (confidence 2.27, correct best guess).
+
+  TWO LEGITIMATE ANSWERS IN THE MOVED REGION. Proposal 16 lets playback serve a
+  stale-but-frozen page while an edit is absorbed, so a window over the moved
+  tail may legitimately decode either the POST-edit source (t - 98304) or the
+  PRE-edit one (t). Both are listed; a decode to any THIRD position is the bug
+  this case exists for, and the failure message names the frame it decoded.
+-->
+<SActionScript version="1" name="playback_start_after_edit_position">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0: becomes the folder -->
+    <add-track index="-1"/>            <!-- 1: gets nested into it -->
+
+    <add-sample trackPath="1" filePath="../test_position.wav" timePos="0"/>
+
+    <!-- Nest it: the clip now lives on lane 0,0, one level inside a group,
+         which is the structure the repro was reported on. -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+
+    <!-- Pass 1: real playback well before the edit region. This is not
+         scene-setting — it starts the engine, bakes pages through the readahead
+         and leaves a warm state chain, which is the state the reported bug
+         appeared from. -->
+    <set-locator position="98304"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="147456" minAdvance="4096" timeoutMs="20000"/>
+    <toggle-playback play="0"/>
+
+    <!-- The edit: split at 8.192 s, move the tail 2.048 s later. -->
+    <split-clip clip="0,0,0" splitTime="393216"/>
+    <move-clip clip="0,0,1" destTrack="0,0" startTime="491520"/>
+
+    <!-- Pass 2: start playback 3 s BEFORE the split and play through the split
+         point, the gap and into the moved tail. -->
+    <set-locator position="245760"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="573440" minAdvance="4096" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+
+    <!-- The recording, written with the same 16-bit PCM writer a render uses.
+         minFrames is the last window's end: a short recording must be reported
+         as a transport failure here, not decoded as silence three lines down. -->
+    <dump-playback-capture filename="playback.wav" minFrames="315392"/>
+
+    <!-- ============ 1. before the edit: the IDENTITY mapping ============
+         capture f -> timeline 245760+f -> source == timeline (head is unmoved).
+         The first one is the leading-silence budget (see the header). -->
+    <assert-source-position filename="playback.wav" startFrame="8192"
+                            expectSourceFrame="253952" tolerance="8192"
+                            minConfidence="1.5"/>
+    <assert-source-position filename="playback.wav" startFrame="40960"
+                            expectSourceFrame="286720" minConfidence="1.5"/>
+    <assert-source-position filename="playback.wav" startFrame="98304"
+                            expectSourceFrame="344064" minConfidence="1.5"/>
+    <!-- timeline 389120: the last whole block before the split at 393216. -->
+    <assert-source-position filename="playback.wav" startFrame="143360"
+                            expectSourceFrame="389120" minConfidence="1.5"/>
+
+    <!-- ============ 2. the gap the move left behind: SILENCE ============
+         timeline [393216,491520) -> capture [147456,245760). Nothing may play
+         here: not the head (it ends at the split), not the tail (it starts
+         2.048 s later), and not a stale pre-edit page — pass 1 never played
+         within 245760 frames of this region, so nothing here was ever frozen
+         with the pre-edit content. -->
+    <assert-source-position filename="playback.wav" startFrame="163840"
+                            expectSilence="true"/>
+    <assert-source-position filename="playback.wav" startFrame="196608"
+                            expectSilence="true"/>
+    <assert-source-position filename="playback.wav" startFrame="229376"
+                            expectSilence="true"/>
+
+    <!-- ============ 3. the moved tail: post-edit OR pre-edit ============
+         capture 245760 -> timeline 491520 = the moved clip's FIRST frame, the
+         most sensitive point in the case: post-edit source 393216, pre-edit
+         source 491520.
+         capture 262144 -> timeline 507904: post 409600, pre 507904.
+         capture 311296 -> timeline 557056: post 458752, pre 557056.
+         Anything else — a neighbouring page, the head's material, the block
+         that used to live at this timeline position before the SPLIT — is the
+         wrong-position bug, and the rejection message names the frame. -->
+    <assert-source-position filename="playback.wav" startFrame="245760"
+                            expectSourceFrameAny="393216,491520"
+                            minConfidence="1.5"/>
+    <assert-source-position filename="playback.wav" startFrame="262144"
+                            expectSourceFrameAny="409600,507904"
+                            minConfidence="1.5"/>
+    <assert-source-position filename="playback.wav" startFrame="311296"
+                            expectSourceFrameAny="458752,557056"
+                            minConfidence="1.5"/>
+  </actions>
+
+  <assertions>
+    <!-- After the reparent only the folder is top-level. -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

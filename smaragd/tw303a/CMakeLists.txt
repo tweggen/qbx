@@ -439,9 +439,11 @@ tw_module(devices
     SOURCES
         devices/include/tw/devices/audio_backend.h
         devices/include/tw/devices/null_backend.h
+        devices/include/tw/devices/capture_backend.h
         devices/include/tw/devices/audio_input.h
         devices/src/audio_backend.cc
         devices/src/null_backend.cc
+        devices/src/capture_backend.cc
         devices/src/audio_input.cc
         devices/src/null_input.cc
         devices/src/null_input.h
