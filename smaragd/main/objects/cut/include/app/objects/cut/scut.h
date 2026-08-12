@@ -6,6 +6,7 @@
 #include <mutex>
 #include <atomic>
 #include <memory>
+#include <chrono>
 #include "app/model/sobject.h"
 #include "app/model/slink.h"
 #include "tw/sources/twgrainparams.h"
@@ -16,6 +17,7 @@
 
 class SProject;
 class QWidget;
+class QTimer;
 class twComponent;
 class twRandomSource;
 class twSampleReader;
@@ -373,10 +375,52 @@ private slots:
     // stalled renders (the workers=8 takes_group_broadcast hang).
     void onArrangementChanged();
 
+    // Trailing edge of the slip-invalidation throttle (see
+    // invalidateRenderPathForSlip). Both run on THIS object's thread: the
+    // timer is a child QObject, and armSlipInvalidateTimer_ is only ever
+    // reached through a QMetaObject::invokeMethod with AutoConnection.
+    void armSlipInvalidateTimer_();
+    void flushSlipInvalidation_();
+
 protected:
     virtual int serializeSelfAttributes( QTextStream &o ) override;
 
 private:
+    // W9: a slip-only edit (startOffset / srcStart / loopStart) changes which
+    // source material this clip maps to WITHOUT touching its timeline extent,
+    // so nothing else on the render path notices — resolveClip folds the new
+    // slip on the very next freeze while the already-frozen track / chain /
+    // mixer pages keep the pre-slip audio at the same position (mixed
+    // generations). Every slip setter therefore stales this clip's whole
+    // timeline range, exactly like setRenderGateReady does.
+    //
+    // Reader pages are NOT bumped, and must not be: they are keyed in the
+    // reader's own SOURCE domain (POSITION_DOMAINS rule 4), so a slipped clip
+    // simply asks for different source pages — the ones it already has stay
+    // correct.
+    //
+    // THROTTLED, because the live slip drag calls setStartOffset once per
+    // mouse-move and each call walks the project tree from the root: the first
+    // call after a quiet period invalidates IMMEDIATELY (so a single
+    // programmatic edit — qxa, undo, load — is unthrottled and deterministic),
+    // and a call inside the window arms the single-shot timer instead, which
+    // guarantees the FINAL slip position of a drag always lands.
+    void invalidateRenderPathForSlip( length_t duration );
+
+    static constexpr int SLIP_INVALIDATE_MS = 333;   // ~3 invalidations / second
+
+    // NOT the object mutex(): the throttle is consulted AFTER the edit's
+    // critical section has been released, and taking mutex() again there
+    // would serialize a drag tick against the audio thread's snapshot reads
+    // for no reason.
+    mutable std::mutex slipThrottleMutex_;           // guards the three below
+    std::chrono::steady_clock::time_point lastSlipInvalidate_{};
+    bool slipInvalidateEver_ = false;
+    bool slipInvalidatePending_ = false;
+    // Thread-confined to this object's thread (see the slots above), not
+    // covered by slipThrottleMutex_.
+    QTimer *slipInvalidateTimer_ = nullptr;          // child QObject, lazily built
+
     // Check if revalidation is needed for specific aspects. _nolock: caller must hold mutex().
     // Internal version used by public needsRevalidation() when lock is acquired.
     bool needsRevalidation_nolock(uint32_t aspectsMask) const;

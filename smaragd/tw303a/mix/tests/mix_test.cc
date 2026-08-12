@@ -298,7 +298,7 @@ int main()
         int rendersBefore = compS->renders;
 
         twFrozenInputs inputs;
-        inputs.bind(trackS.get(), trackPage);
+        inputs.bind(trackS.get(), 0, trackPage);
 
         auto boundPage = std::make_shared<twOutputPage>();
         boundPage->startPosition = 0;
@@ -389,7 +389,7 @@ int main()
         for (const twPageDep &d : trackPlan.deps) {
             auto depPage = d.producer->freezePage(d.pageStart, nullptr, 0, FULL,
                                                   env.getSRate(), nullptr);
-            planInputs.bind(d.producer.get(), depPage);
+            planInputs.bind(d.producer.get(), d.pageStart, depPage);
         }
 
         //    Stale the source; the bound page must carry the content.
@@ -474,6 +474,51 @@ int main()
         }
         CHECK(displaced == 0,
               "concurrent freezes of one latch consumer never displace content");
+    }
+
+    // ------------------------------------------------------------------
+    // A page holds exactly FRAME_CAPACITY frames, but inputLength is sized
+    // from CONTENT by some callers (SCut::buildCapture_ hands over the whole
+    // remaining capture length, which is millions of frames for a long
+    // container). freezePage must clamp it: the fill of the page buffer and
+    // the endPos that drives the clip-overlap walk both take it at face value,
+    // so an over-long length is a heap overrun plus every clip in the track
+    // dragged into this one page's mix.
+    {
+        auto trackL = std::make_shared<twTrackMix>(env);
+        trackL->init();
+        auto compL = std::make_shared<RampComponent>(env);
+        compL->init();
+        const int keyL = 0;
+        const uint64_t CAP = twOutputPage::FRAME_CAPACITY;
+        const length_t FULL = (length_t)CAP;
+
+        // One clip at 0 spanning four pages, identity mapping.
+        trackL->insertClip(&keyL, 0, (length_t)(4 * CAP),
+                           [compL]() -> std::shared_ptr<twComponent> { return compL; });
+
+        auto ref = trackL->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
+        CHECK(ref && ref->validFrames == FULL,
+              "page-length clamp: full-page reference freeze");
+
+        // 64 pages' worth of frames in one request.
+        auto huge = trackL->freezePage(0, nullptr, 0, (length_t)(64 * CAP),
+                                       env.getSRate(), nullptr);
+        CHECK(huge && huge->validFrames == FULL,
+              "an over-long inputLength is clamped to one page of valid frames");
+        CHECK(huge && huge->samples.size() == (size_t)CAP,
+              "the page buffer is not grown or overrun by an over-long length");
+        bool sameL = huge && ref;
+        for (size_t i = 0; sameL && i < (size_t)FULL; ++i)
+            if (huge->samples[i] != ref->samples[i]) sameL = false;
+        CHECK(sameL, "the clamped render is identical to the full-page render");
+
+        // inputLength == 0 means "no input data supplied", not "render
+        // nothing" — RenderSession pulls the graph root with 0 and expects a
+        // full page (render_session.cc).
+        auto zero = trackL->freezePage(0, nullptr, 0, 0, env.getSRate(), nullptr);
+        CHECK(zero && zero->validFrames == FULL,
+              "inputLength == 0 renders a full page, not an empty one");
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall mix tests passed\n",

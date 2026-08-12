@@ -381,7 +381,7 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
     // Deps are Done (guaranteed by the counters); their results are immutable.
     twFrozenInputs inputs;
     for (auto &d : node->deps)
-        if (d->result) inputs.bind(d->component.get(), d->result);
+        if (d->result) inputs.bind(d->component.get(), d->pageStart, d->result);
     std::shared_ptr<twOutputPage> prev =
         node->predecessor ? node->predecessor->result : nullptr;
 
@@ -408,7 +408,7 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
             auto p = d->component->requestPage(
                 d->pageStart, nullptr, 0,
                 (length_t)twOutputPage::FRAME_CAPACITY, 0, nullptr);
-            if (p) fresh.bind(d->component.get(), p);
+            if (p) fresh.bind(d->component.get(), d->pageStart, p);
         }
         // Drop what attempt 1 published FIRST, or the retry cannot do anything:
         // freezePageWithInputs() goes through twComponent::freezePage(), whose
