@@ -23,7 +23,9 @@ Invariants:
    QBX_* defines; adding a backend touches this module + CMake only.
 
 How to test: WASAPI is the only regularly exercised backend (manual GUI
-playback); Null backend keeps headless/CI paths honest.
+playback); Null backend keeps headless/CI paths honest. devices/tools/
+asio_probe (Windows, needs the drop-in ASIO SDK — proposal 35) triages an
+installed ASIO driver end to end without starting the app.
 
 Known debt: WASAPI shared-mode only; ALSA untested since the refactor;
 PipeWire/Pulse/JACK placeholders; input enumeration shows only defaults.

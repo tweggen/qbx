@@ -55,3 +55,8 @@ compile_commands.json
 # the screenshot action grabs the root window, not the app window). Two such
 # desktop captures reached the remote before this rule existed.
 smaragd/test-output/
+
+# Steinberg ASIO SDK — licensed, NOT redistributable (unlike the clap/vst3
+# submodules), so it is a manual drop-in: unzip the SDK from steinberg.net to
+# smaragd/third_party/asiosdk. It must never be committed.
+smaragd/third_party/asiosdk/
