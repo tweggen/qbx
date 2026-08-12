@@ -210,10 +210,11 @@ private:
     std::atomic<bool> seekPending_{false};
     std::atomic<uint64_t> seekTarget_{0};
 
-    // Helper: pull one frame of L and R at engine sample rate using frozen pages
-    bool pullStereoFrameFrozen(float& outL, float& outR);
+    // Helper: manage frozen page transitions and state continuity (read-only on
+    // audio thread). Both the page choice AND the read cursor (pageFrameOffset_,
+    // currentPageStartPos_, cachedPageValidFrames_) are settled here, derived
+    // from desiredPos — no caller may carry the cursor across a position jump.
 
-    // Helper: manage frozen page transitions and state continuity (read-only on audio thread)
     void updateFrozenPage(uint64_t desiredPos);
     // Read-ahead thread: pre-computes pages to keep ahead of playhead
     std::thread readaheadThread_;

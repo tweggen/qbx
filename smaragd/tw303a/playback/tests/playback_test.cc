@@ -53,6 +53,34 @@ public:
     const char *getOutputName(idx_t) const override { return "tone"; }
 };
 
+// Position-identifying, never-zero sample value (the mix_test pattern), so a
+// pulled sample says WHICH absolute frame it came from and silence is
+// distinguishable from content.
+static float rampVal(long long p) { return (float)((p % 977) + 1) / 1000.0f; }
+
+// A source whose every frame carries its own absolute position.
+class RampComponent : public twComponent {
+public:
+    explicit RampComponent(tw303aEnvironment &e) : twComponent(e) {}
+    offset_t pos = 0;
+
+    bool isSeekable() const override { return true; }
+    int seekTo(offset_t p) override { pos = p; return 0; }
+    void reset() override { pos = 0; }
+    length_t renderFrames(sample_t *out, length_t n, const sample_t *,
+                          length_t, idx_t) override {
+        for (length_t i = 0; i < n; ++i)
+            out[i] = rampVal((long long)(pos + i));
+        pos += (offset_t)n;
+        return n;
+    }
+    void createOutputLatches() override {}
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName(idx_t) const override { return nullptr; }
+    const char *getOutputName(idx_t) const override { return "ramp"; }
+};
+
 int main()
 {
     tw303aEnvironment env;
@@ -161,6 +189,101 @@ int main()
         engine.pullBlock(L.data(), R.data(), BLOCK);
         CHECK(engine.currentPosition() < TARGET,
               "seek: backward live seek repositions too");
+
+        engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
+    // Cycle wrap INSIDE one page: the audio must restart at loopStart.
+    //
+    // The wrap in pullBlock rewrites the playhead (pos = loopStart) and clears
+    // prevFrozenPage_, but it does not touch the page read cursor. When the loop
+    // region fits inside a single 65536-frame page, updateFrozenPage(loopStart)
+    // finds the very page it is already holding — so if the cursor were merely
+    // CARRIED rather than derived, the RT thread would keep reading at the
+    // pre-wrap offset while the playhead reported loopStart: wrong-position
+    // audio on every single wrap. Each frame here names its own position, so the
+    // assertion is what the listener would hear, not a proxy for it.
+    {
+        auto src = std::make_shared<RampComponent>(env);
+        src->init();
+
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
+
+        constexpr length_t BLOCK = 4096;
+        // Half a page: the wrap target lands inside the page already held.
+        constexpr uint64_t LOOP_END = twOutputPage::FRAME_CAPACITY / 2;  // 32768
+        static_assert(LOOP_END % BLOCK == 0,
+                      "loop end must be block-aligned so the wrap falls on a "
+                      "block boundary");
+        constexpr int BLOCKS_TO_END = (int)(LOOP_END / BLOCK);
+
+        engine.setLoopBoundaries(true, 0, LOOP_END);
+        engine.startReadahead();
+
+        std::vector<float> L(BLOCK), R(BLOCK);
+
+        // Prime: wait for the readahead to freeze the first page.
+        bool audible = false;
+        for (int i = 0; i < 500 && !audible; ++i) {
+            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n == BLOCK && L[0] != 0.0f) audible = true;
+            else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(audible, "cycle: playback starts inside the loop region");
+
+        // Put the playhead back on the loop start so the wrap is a known number
+        // of blocks away. The next pullBlock adopts it.
+        engine.requestSeek(0);
+
+        // Walk up to the loop end, asserting position-exactness the whole way:
+        // a post-wrap failure then cannot be blamed on the ramp itself.
+        bool preWrapExact = true;
+        int preWrapShort = 0;
+        for (int b = 0; b < BLOCKS_TO_END; ++b) {
+            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n != BLOCK) { ++preWrapShort; break; }
+            const uint64_t base = (uint64_t)b * BLOCK;
+            for (length_t j = 0; j < BLOCK; ++j) {
+                if (L[j] != rampVal((long long)(base + j))) {
+                    preWrapExact = false;
+                    break;
+                }
+            }
+            if (!preWrapExact) break;
+        }
+        CHECK(preWrapShort == 0,
+              "cycle: no dropout while playing up to the loop end");
+        CHECK(preWrapExact,
+              "cycle: pre-wrap frames decode to their own absolute positions");
+        CHECK(engine.currentPosition() == LOOP_END,
+              "cycle: playhead sits exactly on the loop end before wrapping");
+
+        // THE WRAP. loopStart is inside the page still held, so this is the
+        // fast path of updateFrozenPage — the branch that used to return
+        // without re-deriving the cursor.
+        length_t nWrap = engine.pullBlock(L.data(), R.data(), BLOCK);
+        CHECK(nWrap == BLOCK, "cycle: the wrapping block still produces frames");
+
+        char msg[224];
+        std::snprintf(msg, sizeof(msg),
+                      "cycle: first post-wrap sample is loopStart's, not the "
+                      "pre-wrap offset's (got %.4f, want %.4f, pre-wrap "
+                      "offset would give %.4f)",
+                      (double)L[0], (double)rampVal(0),
+                      (double)rampVal((long long)LOOP_END));
+        CHECK(nWrap == BLOCK && L[0] == rampVal(0), msg);
+
+        bool wrapExact = (nWrap == BLOCK);
+        for (length_t j = 0; j < nWrap && wrapExact; ++j)
+            if (L[j] != rampVal((long long)j)) wrapExact = false;
+        CHECK(wrapExact,
+              "cycle: the whole post-wrap block replays from loopStart");
+
+        // The product invariant behind all of the above: what is heard and what
+        // the playhead reports are the same position.
+        CHECK(engine.currentPosition() == BLOCK,
+              "cycle: playhead and audio agree after the wrap");
 
         engine.stopReadahead();
     }
