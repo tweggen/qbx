@@ -63,10 +63,22 @@ Invariants:
    (1→0→1) or reval-pinned object swallows the stale DeferredDelete (the
    last unpin re-arms it via deletePending_), and ~SObject warns if it ever
    runs with live references.
+9. The preview NEVER moves a live play cursor. A sample-backed object reads
+   its twRandomSource statelessly; a CONTAINER (no random source) reads its
+   root component's FROZEN PAGES — requestPage() at FRAME_CAPACITY
+   granularity, each page chained into the next as previousPage
+   (FREEZE_PROTOCOL.md "Sequential consumers"). The retired spelling —
+   seek() + calcOutputTo() per preview window — wrote a cursor an in-flight
+   freeze on another thread was about to read (the exact race
+   twComponent::seek()'s detector was installed for), from the paint path.
+   One probe means the same thing either way: the signed min/max envelope
+   of its previewSkip_ window, scaled to [-128,127].
 
 How to test: full qxa suite; action_roundtrip_test for serialization
 adjacency; filepathref_test (ctest) for the three path-storage rules and
-sample_path_portable.qxa for the save -> reload -> render wiring.
+sample_path_portable.qxa for the save -> reload -> render wiring;
+preview_container_test (ctest) for invariant 9 — probe values across page
+boundaries, one reset for four pages, one reposition per page.
 
 Known debt: none of the former model→objects edges remain; the module is
 ready to become a real build target once its remaining consumers are.
