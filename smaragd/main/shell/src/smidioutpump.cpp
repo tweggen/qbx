@@ -57,6 +57,11 @@ SMidiOutPump::SMidiOutPump( QObject *parent )
 {
     timer_ = new QTimer( this );
     timer_->setInterval( kTickMs );
+    // PRECISE, not the default coarse timer: Qt is allowed to coalesce a coarse
+    // timer by up to 5 % of its interval, and on Windows a coarse timer rounds
+    // to the system tick. The pump's whole budget is a few milliseconds of
+    // jitter, so it asks for the accurate one explicitly.
+    timer_->setTimerType( Qt::PreciseTimer );
     connect( timer_, &QTimer::timeout, this, &SMidiOutPump::tick );
 
     // The enumeration probes are constructed HERE, at app startup, and never
@@ -204,6 +209,29 @@ void SMidiOutPump::start()
     portIdCache_.clear();   // a device may have been re-selected while stopped
     resetRun( app.getGlobalLocatorPos() );
     running_ = true;
+
+    // OPEN THE PORTS NOW, not on the first tick that needs one. Opening a MIDI
+    // device is unbounded work - a real WinMM/CoreMIDI open, a thread spawn, a
+    // high-resolution timer - and the first tick that has a usable clock is
+    // exactly the tick that must not do unbounded work: an event at the very
+    // first frame of playback has a due time that is ALREADY in the past by
+    // then, so every millisecond spent opening the port is a millisecond that
+    // event is late. Measured under a loaded box, lazily opening it put the
+    // first note of a run 153 ms (7364 frames) late while every later note was
+    // within 12 ms; opened here it is within 8 ms.
+    //
+    // The lazy path in schedulerFor() stays, because a port can appear
+    // mid-run (a track gains one, or is un-muted).
+    if( SProject *project = app.getCurrentProject() ) {
+        SObject *root = splacements::rootContainer( project );
+        std::vector<STrack *> tracks;
+        collectTracks( root, ssolo::anySoloInTree( root ), tracks );
+        for( STrack *t : tracks ) {
+            const QString portId = resolvePortId( t->getMidiOutPort() );
+            if( !portId.isEmpty() ) schedulerFor( portId );
+        }
+    }
+
     if( timer_ && !timer_->isActive() ) timer_->start();
 }
 
