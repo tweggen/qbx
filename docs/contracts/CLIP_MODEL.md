@@ -7,6 +7,11 @@ of double-audio, silent-clip, and wrong-material bugs.
 
 1. **`SLink` (app/model)** — the PLACEMENT: parent container + `startTime`
    (timeline frames). One `SObject` can be placed many times via many links.
+   Since proposal 36 it also carries a **`timebase`**: `time` (frames are the
+   authority; audio's default) or `beats` (an exact `startTicks` is the
+   authority and `startTime` is derived through the project's tempo map; the
+   default for EVENT content). `set-tempo` re-derives every `beats` link, which
+   is how a MIDI clip stays at bar 5 while an audio clip does not move.
 2. **`SClipWindow` (app/model), implemented by `SCut` (app/objects/cut)** —
    the WINDOW: slip into the content, timeline duration, loop length, time
    scaling. `SCut` is the AUDIO window: it stores `srcStart_` /
@@ -25,6 +30,16 @@ of double-audio, silent-clip, and wrong-material bugs.
    forms, because the anchor is content-authoritative (POSITION_DOMAINS rule
    3) and must not drift under a stretch edit. Pitch, formants, warp anchors
    and the grain params are audio-only and stay on `SCut`.
+   `SMidiCut` (app/objects/midi) is the EVENT window: the same three layers,
+   but its window is stored in musical TICKS and every frame-facing value is
+   derived through `twTempoMap` exactly once inside the cut (POSITION_DOMAINS
+   rule 7). Its engine view is NOT a `ClipEntry`: a track routes a
+   `contentKind() == Event` child into its `twEventClipSet` instead of the bus
+   mixers, so an event clip costs no page freeze. Its SPLIT is
+   NON-DESTRUCTIVE — the window gates the notes and the shared sequence is
+   never edited, so a straddling note keeps its full duration in the head, the
+   head's window end SYNTHESISES the note-off, and the tail never re-attacks
+   it (events/CONTRACT inv. 8).
 3. **`ClipEntry` (tw/mix, inside `twTrackMix`)** — the ENGINE VIEW:
    `{startTime, duration, key, twView*, previousPage}`. The `twView` wraps
    "get me the current component" + the position mapper (MapPosFn).

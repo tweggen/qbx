@@ -560,6 +560,42 @@ of the ramped-sawtooth fixture, the miss/silence path, the density rules via the
 REAL head built off screen, plus PNG grabs — the only coverage of
 `SLevelMeter::paintEvent`) and `meter_postfader`.
 
+## Event clips (proposal 36 P1 — executed 2026-08-15)
+
+MIDI is in the model: `SMidiSequence` (content) + `SMidiCut` (window) +
+`SLink::timebase` (placement), the verbs to edit them, and a per-track event
+feed the instrument slot will read in P3b. Nothing SOUNDS yet — an event clip
+on a track without an instrument is inaudible, not rejected (design D3).
+Design: `plan/proposed/36_MIDI_INSTRUMENTS_AUTOMATION.md` §3.1–§3.4.
+Invariants: `main/objects/midi/CONTRACT.md` (11 of them), `main/objects/track/
+CONTRACT.md` inv. 5b/5c, `docs/contracts/POSITION_DOMAINS.md` rule 7.
+
+**Read this before touching anything positional — the obvious design is wrong.**
+Events are stored in MUSICAL TICKS (PPQ 960) and so is the window; frames are
+DERIVED. Two of the three code studies recommended frames-now and were
+overruled on industry evidence: recorded MIDI that does not follow a tempo
+change is a defect users hit in the first hour, and Ardour ≤ 6 is the
+cautionary tale that forced their 7.0 rewrite.
+
+| Thing to know | Why |
+|---|---|
+| `twTempoMap` (tw/events) is THE tempo authority; `SProject::getBPMTempo()` is a derived view and `bpmTempo_` is gone | Tempo is stored as SMF's own unit, µs per quarter (an integer), so BPM and the map cannot disagree. A stored `60/bpm` seconds-per-beat and a stored µs/quarter differ in the tenth microsecond, which lands on a frame boundary in a long project. |
+| The tick→frame conversion happens EXACTLY ONCE per value, inside `SMidiCut::rebuild_nolock()` | Two callers converting independently is how a rounding difference becomes an off-by-one clip edge. `getDuration()`, `loopLength()`, `startOffset()` and the frame-domain event table are all derived there, by multiplying an exact tick `Fraction` by the map's exact frames-per-tick and flooring once. |
+| `set-tempo` is the ONLY tempo write, and it is an ACTION | It re-derives `startTime` for every `timebase=beats` link in the project (nested containers and assets included) — so a MIDI clip at bar 5 stays at bar 5 while audio does not move — and being an action is what keeps undo exact by LIFO. The two direct `setBPMTempo()` writes (the ruler dialog, the transport box) are gone. Gate: `grep -rn "bpmTempo_ =\|setBPMTempo(" main/` hits only the verb and the loader. |
+| An event clip goes into `STrack`'s `twEventClipSet`, NEVER into the bus mixers | A MIDI clip has no page to freeze. Inserting one as a `ClipEntry` costs a dummy freeze per page per clip AND makes `twView::getComponent() returned nullptr` fire once per freeze forever. The absence of that log line is the only observable difference between the two routings — hence `assert-log … maxCount="0"` in `midi_clip_render_silent`. |
+| `objects/track` has NO edge to `objects/midi` | The track consults MIDI-ness through `SObject::contentKind()` and `SObject::resolveEventClip()` — both on the base class for exactly this reason. `objects/midi` sits at the RANK of `objects/cut`: a second window/content pair, not a layer above one. |
+| Split is NON-DESTRUCTIVE: the window gates, the sequence is never edited | A note straddling the split keeps its ORIGINAL duration in the head; the head's window end SYNTHESISES the note-off; the tail never re-attacks it (a note-on before the window reaches a consumer only through the chase set). A content-editing `split-notes-at` is a later verb. |
+| A note-off exists only inside a `collect` | Notes are stored WITH their length, so nothing in any table is a note-off. `assert-midi-events kind="noteoff-synth"` runs a real collect over the clip's window PLUS ONE FRAME — windows are half-open and a clip-end release lands on the boundary, i.e. in the window that STARTS there (events/CONTRACT inv. 8–9). |
+| The track FEED is rebuilt on every read | `STrack::eventFeed()` merges its own clip set with every child track that bubbles events up (design §3.2.1). Solo is GLOBAL, so a dirty flag would have to be poked from anywhere in the project — which is the coupling `ssolorules.h` exists to avoid. The merge OBJECT is stable; only its source list is recomputed. |
+| `serializeSelfAttributes` must not hold `mutex()` across the base call | `SObject::serializeSelfAttributes` calls `getDuration()`, which takes the same mutex, and `std::mutex` is not recursive. The failure is silent: the save simply never finishes. |
+| Notes are persisted INLINE (`<events><e …/></events>`), sorted on write | Note data must never be able to go missing the way a sample file can, so an imported `.mid` is materialised on the first save and the file is never consulted again. Unknown kinds — and every meta payload — round-trip verbatim. |
+
+Gates: `midi_clip_roundtrip` (import → save → load → export is
+BYTE-IDENTICAL; legitimate only because twSmf has one canonical spelling and
+`tests/midi_multitrack.mid` was authored by it — `midi_fixture_authoring`
+regenerates it), `midi_clip_edit_verbs`, `midi_clip_tempo_remap`,
+`midi_clip_render_silent`, `midi_folder_feed`, plus `action_roundtrip_test`.
+
 ## Recording Audio
 
 Smaragd supports recording from input devices (microphone, line-in, etc.) via **Record** button in the transport toolbar or **Ctrl-R** / **Cmd-R** keyboard shortcut. Recorded audio is automatically converted to clips and placed on armed tracks.

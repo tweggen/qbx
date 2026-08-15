@@ -91,7 +91,7 @@ Invariants:
    - **Container** (`STrack`, `SStdMixer`, `STakeStack`) — drop the dangling
      `<SLink>` and keep the element. A track that lost one clip is still the
      user's track, and every other clip on it is still their work.
-   - **Window** (`SCut`; `SMidiCut` from P1) — drop the ELEMENT. A window
+   - **Window** (`SCut`, `SMidiCut`) — drop the ELEMENT. A window
      whose content is gone has nothing to show; its own placement becomes a
      dangling link on the next pass, where the container rule handles it.
    - **Plain** (everything else, and every unregistered/unknown element) —
@@ -109,6 +109,15 @@ Invariants:
    describes hangs off it, so an empty shell that reports success would look
    like an opened project and overwrite the file on the next save. Gates:
    `load_unknown_object_survives.qxa`, `load_missing_sample_placed_survives.qxa`.
+
+6c. An `<SMidiSequence>` carries its events as an INLINE `<events>` payload
+   (proposal 36 3.1). That is the sanctioned non-`<SLink>` child: the
+   instantiation loop's dependency ordering only looks at `<SLink objectId>`
+   children, so a payload element is invisible to it and must stay that way.
+   Note data is inline rather than file-referenced ON PURPOSE - it is the one
+   thing that must never be able to go missing the way a sample can, so an
+   imported `.mid` is materialised on the first save and the file is never
+   consulted again.
 
 7b. `<SProject formatVersion='N'>` (proposal 36 D8a). Written unconditionally
    (`SProject::FORMAT_VERSION`, 2 today); read with a default of **1**, which

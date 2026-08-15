@@ -12,6 +12,7 @@ domains. Learn the table, then the rules.
 | **Clip-relative** | frames @ project rate | clip's `startTime` | what `twTrackMix` hands a clip: `pos - clip.startTime` |
 | **Component/source** | frames @ project rate | source material start (or stretched/loop-window equivalents) | `twSampleReader::pos_`, `twWavInput::playOffset_`, page-cache keys |
 | **Native file** | frames @ file rate | file start | `twSampleSource` internals only |
+| **Ticks** (musical) | ticks @ PPQ 960, exact rational | the sequence's start | `SMidiSequence` events, `SMidiCut`'s window (`srcStart`/`lengthTicks`/`loopTicks`), the ruler's bars.beats. **Only `twTempoMap` converts.** |
 
 ## The rules
 
@@ -61,6 +62,23 @@ domains. Learn the table, then the rules.
    positions are `startOffsetSamples_ + samplesWritten` (a marked range does
    NOT start at 0). The app's locator is also absolute timeline; sessions
    publish it via `onPosition` callbacks.
+
+7. **An `SMidiCut` speaks FRAMES on every side the track sees, and the
+   tick→frame conversion happens exactly ONCE per value, inside the cut**
+   (proposal 36 D2). The window is stored in musical ticks — that is what makes
+   a tempo change keep the same notes inside the clip — but `getDuration()`,
+   `loopLength()`, `startOffset()`, `SLink::startTime` and the event sequence
+   the engine reads are all frames, derived in one place
+   (`SMidiCut::rebuild_nolock`) by multiplying an exact tick value by the tempo
+   map's exact frames-per-tick and flooring once. `twTempoMap` (tw/events) is
+   the ONLY converter and the single tempo authority; `SProject::getBPMTempo()`
+   is a derived view of it. Nobody outside may compute a tick from a frame by
+   multiplying.
+
+   The same rule governs a PLACEMENT: an `SLink` with `timebase = beats` (the
+   default for event content) carries an exact `startTicks` as the authority
+   and derives `startTime`; `set-tempo` re-derives the frames and never touches
+   the ticks, so repeated tempo edits cannot drift.
 
 ## Historical failures these rules encode
 

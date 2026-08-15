@@ -16,7 +16,16 @@ Invariants:
    audio threads (THREADING.md rule 1).
 2. Clip content drawing goes through SObjectRenderer
    (getInlineRenderer()) — do not dynamic_cast concrete object types in the
-   canvas (existing casts are debt, not precedent).
+   canvas (existing casts are debt, not precedent). Where the canvas must
+   branch on WHAT a clip is, it asks `SObject::contentKind()`, not what the
+   content happens to support: `SCutRendererInline`'s container heuristic
+   (`!getRandomSource()`) would classify an event object as a container capture
+   and draw a waveform of silence, and `drawTakeLane`'s `dynamic_cast<SCut*>`
+   drew an event take as nothing at all. Both are fixed; a new one is a bug.
+   The Clip Properties dock follows the same rule with a per-kind PAGE rather
+   than a widened struct — the audio page reads SCut-only getters (slip,
+   stretch, pitch, formants, warp anchors) that are deliberately not on the
+   window interface, so an event clip gets its own page instead of blanks.
 3. Gestures COMMIT through actions (e.g. resize-clip on release); live drag
    feedback may use the Raw setters but must leave the model consistent if
    cancelled.

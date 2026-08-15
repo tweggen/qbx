@@ -10,7 +10,9 @@ Public headers: app/model/{sobject,slink,sproject,sprojectprops,
 ssortedobjlist,sexternfile,sexternfilelist,sfilepathref,sobjectrenderer,
 sclipwindow}.h
 
-Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources.
+Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources,
+tw/events (SProject owns the twTempoMap — the single tempo authority — and
+SLink's beats timebase converts through it; nothing else in the app may).
 App edges: NONE — the model names no concrete object types (Phase 5) and
 hosts the Phase 6 decoupling seams: sappcontext.h (the ONLY way core
 modules reach the application), sdetaileditors.h (view-widget factory),
@@ -98,6 +100,25 @@ Invariants:
    verb. The per-kind wrap factory is registered from the slice that owns the
    window type (static initializer, OBJECT-library rule), so the model still
    names no concrete object type.
+11b. **`SLink::timebase` and the tempo map** (proposal 36 D2). `SProject`
+   holds ONE `twTempoMap`; `getBPMTempo()` is a derived view of it and there is
+   no second tempo scalar (a stored `60/bpm` and a stored µs/quarter disagree
+   in the tenth microsecond, which lands on a frame boundary in a long
+   project). It is written by exactly two callers — the `set-tempo` verb and
+   the loader. An `SLink` whose timebase is `beats` carries an exact
+   `startTicks` as the AUTHORITY and derives `startTime`; `setStartTime()`
+   converts once and stores ticks, and `set-tempo` re-derives frames from the
+   ticks, so no number is ever converted twice and repeated tempo edits cannot
+   drift. Serialized only when non-default for the object's content kind, so
+   every pre-36 project re-serializes byte-identically.
+
+11c. **`resolveEventClip()` and `eventsChanged()` live on `SObject`, not on a
+   MIDI type.** That is what lets `app/objects/track` route an event clip into
+   its `twEventClipSet` and react to a note edit without an edge to
+   `app/objects/midi` — the track consults MIDI-ness only through
+   `contentKind()`. `windowTakeAt()` is the same idea for a take column: a verb
+   can address a take without naming `STakeStack`.
+
 12. There is ONE notion of how long the project is.
     SProject::getDurationFrames() is the root container's content extent —
     getRootComponent()->getDuration(), i.e. the same SObject::
