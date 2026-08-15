@@ -23,6 +23,12 @@ Invariants:
    RMS (sec0 .067 / sec1 .176 / sec2 .291 / sec3 .405) so wrong-offset bugs
    are detectable by region RMS, and it is strongly periodic at ~440 Hz so
    assert-audio-frequency can measure a transposition on it.
+   The assert-audio-* verbs and assert-channels-differ resolve `filename=`
+   through resolveTestFilePath (app/testkit/stestfilepath.h): the test output
+   dir first — a render, the normal case — then the .qxa's own directory, then
+   the cwd. That is what lets an assertion be pointed at a committed FIXTURE
+   (`../test_channels4.wav`), which never appears in the output dir. A name
+   that exists nowhere still fails with the output-dir spelling, unchanged.
 4. Exit code: 0 iff all actions applied as expected AND <assertions> pass.
 5. drag-clip-edge is the ONLY route to clip-edge gesture code. Every clamp and
    snap of a trim / extend / loop / loop-marker drag lives in
@@ -39,6 +45,25 @@ Invariants:
    clip too narrow to have a body clear of both bands is rejected.
    Limit: the drop is quantised to a pixel at the view's zoom, so assert on
    ranges rather than exact frame counts.
+6. `channel=` means the channel, ALWAYS. It used to be dropped whenever
+   `frameCount` was omitted (the whole-file path hard-coded the all-channels
+   pooled figure), which was invisible while every channel of every render was
+   equal and would have started mis-passing the day the sink goes wide
+   (proposal 35 M0). A channel index the file does not have is now an ERROR,
+   not an empty selection reporting RMS 0 — that reads exactly like a silent
+   render. Gates: channel_assert_fixture.qxa (every band there is chosen to
+   EXCLUDE the pooled value, so the pre-fix code fails it) and
+   channel_assert_dupmono.qxa.
+7. assert-channels-differ measures two things in one pass — |rms(A) - rms(B)|
+   (`minRmsDelta`, a LEVEL discriminator) and rms(A - B) (`minDiffRms`, a
+   CONTENT one, off by default). The level test is what a duplicated bus fails;
+   the content test is what catches two channels at the same level holding
+   different audio. Today's sink duplicates, so channel_assert_dupmono.qxa
+   asserts the failure via expectReject — and is SUPPOSED to break when the
+   sink goes wide. ../test_channels4.wav is the asymmetric fixture it is proved
+   against: 4 channels of a 480 Hz sine on a 6 dB RMS ladder
+   (0.5 / 0.25 / 0.125 / 0.0625, pooled 0.28810), written and re-checked by
+   tw303a/analysis/tools/gen_channel_fixture.cc (`--verify`).
 
   assert-meter (proposal 34) needs NO transport, which is the point: levels are
   read from frozen pages BY POSITION, so the verb freezes the page it asks

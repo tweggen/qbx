@@ -9028,3 +9028,75 @@ isolation and on chunk re-run. At least one occurred before any of these six
 fixes existed, so the pattern is not attributable to them — but neither has it
 been explained. A low-rate flake somewhere in the suite under sustained load is
 the working hypothesis and it remains unproven.
+
+## 2026-08-15 — Proposal 35 M0: the suite can see channels at all
+
+`plan/proposed/35_MULTICHANNEL_SIGNAL_FLOW.md` M0. No audible behaviour changes;
+this is entirely about the gates being able to detect the rest of proposal 35
+landing — or regressing.
+
+**The bug, and why it was invisible.** `assert-audio-energy` and
+`assert-audio-peak` branched on `frameCount == -1` into `audio::analyzeWavFile`,
+a separate whole-file path that hard-coded `channelIndex = -1` (all channels
+pooled). So `channel=` was silently DROPPED on every whole-file assertion. It
+cost nothing to date because the sink duplicates one mono bus into every channel,
+making the pooled figure equal to each channel's — and it would have started
+silently mis-passing the day the sink goes wide, which is exactly the milestone
+this suite is supposed to gate. There is no second path now: a whole file IS a
+region with `frameCount < 0`, `analyzeWavFile` only forwards, and one call serves
+both spellings.
+
+`assert-audio-frequency` and `assert-source-position` were checked for the same
+shape and **do not have it** — `estimateFundamental` has always handled
+`frameCount < 0` itself and honoured the channel, and `decodePositionAt` requires
+a positive window. Proposal 35 §7 trap 1 says "assert-audio-*"; only two of the
+four verbs were affected.
+
+**Two adjacent holes closed while in there.** A `channelIndex` at or past the
+file's channel count used to select nothing and report RMS 0 / peak 0 — which
+reads exactly like "the render came out silent"; it is an error now. And the
+verbs resolved `filename` only against the test output dir, so a committed
+FIXTURE was unaddressable; `resolveTestFilePath` now tries the output dir, then
+the `.qxa`'s own directory, then the cwd, and falls back to the output-dir
+spelling so a missing render fails the way it always did.
+
+**The discriminator.** `assert-channels-differ filename= channelA= channelB=
+minRmsDelta= [minDiffRms=] [startFrame=] [frameCount=]` — "these two channels are
+genuinely different audio", assertable rather than inferred. Two measurements in
+one pass, because they fail differently: `|rms(A) - rms(B)|` is what a duplicated
+bus fails, and `rms(A - B)` is what catches two channels sitting at the same
+level while holding different audio. Same channel twice, or a channel the file
+lacks, is rejected rather than trivially satisfied.
+
+**The fixture.** `smaragd/tests/test_channels4.wav` (96 KB): 4 channels of a
+480 Hz sine, 12000 frames = 120 WHOLE cycles at 48 kHz, amplitudes 0.7071/2^c —
+so each channel's RMS is exactly amplitude/√2, a clean 6 dB ladder
+0.5 / 0.25 / 0.125 / 0.0625, against a pooled 0.28810. Written by
+`tw303a/analysis/tools/gen_channel_fixture.cc`, which also has a `--verify` mode
+that re-measures every channel of an existing file against the ladder — the same
+reason `gen_position_fixture` exists, and the reason the `.wav` may be committed
+at all. It refuses a partial cycle count, and refuses a quietest channel too
+close to the 16-bit floor.
+
+**Gates.** Two new cases. `channel_assert_fixture` asserts every verb against the
+fixture with `frameCount` both GIVEN and OMITTED; every band in it is chosen to
+EXCLUDE the pooled 0.28810 (and every peak bound to exclude the pooled 0.70711),
+so the pre-fix code fails it — verified by temporarily restoring the old branch,
+which reported `got 0.288103` on six assertions. Half its actions are
+`expectReject="true"`: a WRONG channel selection must fail, or the right one
+proves nothing. `channel_assert_dupmono` renders through the ordinary path and
+asserts, again via `expectReject`, that the two channels are the same audio by
+level AND sample for sample. **That case is supposed to fail at M3** — it is the
+signal that the sink went wide, not a regression to loosen.
+
+Full suite green: 111 tests registered (21 unit + 90 qxa; 88 qxa before, +2), 108
+run, 108 passed, 3 not run — the `au_*` trio, disabled off macOS as always.
+Reconciled by hand against `ctest -N`. Both new cases were also pinned with
+`repeat_test.sh` over `SMARAGD_REVAL_WORKERS` {1,4,8,16} — 60/60 and 40/40, and
+its byte-identical-render check passed on every dupmono run. No flake was seen
+anywhere in this session's runs.
+`plugin_stereo_chain` — the one case that already asserts per-channel bands, and
+the only pre-existing user of `channel=` outside the plugin/AU family — is
+unchanged and green: all 33 existing `channel=` users pass `frameCount=` too
+(checked by parsing all 90 cases, not by grep), so the fix is behaviour-
+preserving for every one of them.

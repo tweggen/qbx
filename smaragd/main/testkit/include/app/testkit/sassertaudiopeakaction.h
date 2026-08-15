@@ -22,8 +22,14 @@
  * - filename: Path to WAV file (relative to test output dir)
  * - maxPeak: Maximum acceptable peak amplitude (0.0 to 1.0)
  * - startFrame: Frame to start analysis (default: 0)
- * - frameCount: Number of frames to analyze (-1 = entire file)
- * - channel: Channel to analyze (-1 = all channels, 0+ = specific channel)
+ * - frameCount: Number of frames to analyze (-1 = to the end of the file)
+ * - channel: Channel to analyze (-1 = all channels pooled, 0+ = that channel)
+ *
+ * `channel` applies WITH OR WITHOUT `frameCount` — see the longer note in
+ * sassertaudioenergyaction.h; both verbs had the same bug (proposal 35 M0).
+ * A peak hides it especially well: the pooled peak is the MAX over channels, so
+ * dropping `channel=` can only ever report a QUIET channel as loud, never the
+ * reverse.
  */
 class SAssertAudioPeakAction : public SAction {
 public:

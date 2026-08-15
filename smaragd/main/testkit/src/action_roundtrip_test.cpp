@@ -49,6 +49,12 @@ const Fixture kFixtures[] = {
     { "assert-audio-frequency",
       "<assert-audio-frequency filename='r.wav' minHz='430' maxHz='450'"
       " frameCount='48000' channel='0'/>" },
+    // minDiffRms is written only when >= 0 (the default -1 means "not checked"),
+    // so the fixture gives it a real value to keep it in the audit.
+    { "assert-channels-differ",
+      "<assert-channels-differ filename='r.wav' channelA='0' channelB='3'"
+      " minRmsDelta='0.250000' minDiffRms='0.100000' startFrame='4000'"
+      " frameCount='4000'/>" },
     // expectSilence is only written when true, so it stays out of the fixture.
     { "assert-source-position",
       "<assert-source-position filename='r.wav' startFrame='40960'"

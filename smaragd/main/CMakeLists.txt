@@ -257,6 +257,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudioenergyaction.h
     testkit/include/app/testkit/sassertaudiofrequencyaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
+    testkit/include/app/testkit/sassertchannelsdifferaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
@@ -269,12 +270,14 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/sslipclipaction.h
+    testkit/include/app/testkit/stestfilepath.h
     testkit/include/app/testkit/stransporttestactions.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
     testkit/src/sassertaudioenergyaction.cpp
     testkit/src/sassertaudiofrequencyaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
+    testkit/src/sassertchannelsdifferaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
@@ -287,6 +290,7 @@ set(APP_UI_FILES
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
     testkit/src/sslipclipaction.cpp
+    testkit/src/stestfilepath.cpp
     testkit/src/stransporttestactions.cpp
 )
 

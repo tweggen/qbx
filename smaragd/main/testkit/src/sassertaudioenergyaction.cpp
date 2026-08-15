@@ -1,4 +1,5 @@
 #include "app/testkit/sassertaudioenergyaction.h"
+#include "app/testkit/stestfilepath.h"
 #include "app/actions/sactionregistry.h"
 #include "app/shell/sapplication.h"
 #include "tw/analysis/audio_analysis.h"
@@ -15,7 +16,7 @@ SAssertAudioEnergyAction::SAssertAudioEnergyAction(const QString &filename,
 {
 }
 
-SApplyResult SAssertAudioEnergyAction::apply(SProject * /*project*/)
+SApplyResult SAssertAudioEnergyAction::apply(SProject *project)
 {
     if (filename_.isEmpty()) {
         qWarning() << "SAssertAudioEnergyAction: no filename given";
@@ -30,24 +31,22 @@ SApplyResult SAssertAudioEnergyAction::apply(SProject * /*project*/)
         return {false, nullptr};
     }
 
-    QString fullPath = outputDir + "/" + filename_;
+    QString fullPath = resolveTestFilePath(filename_, outputDir, project);
 
-    // Analyze the audio file
+    // Analyze the audio file. ONE call, region or not: the whole-file path used
+    // to be a separate call that hard-coded channel = -1, so `channel=` was
+    // silently ignored whenever frameCount was omitted (proposal 35 M0). A
+    // negative frameCount now means "to the end of the file" inside the
+    // analyzer, which is the only difference between the two cases.
     std::string error;
-    audio::AcousticMetrics metrics;
-
-    if (frameCount_ == -1) {
-        // Analyze entire file
-        metrics = audio::analyzeWavFile(fullPath.toStdString(), error);
-    } else {
-        // Analyze specific region
-        metrics = audio::analyzeWavFileRegion(fullPath.toStdString(),
-                                             startFrame_, frameCount_,
-                                             channel_, error);
-    }
+    audio::AcousticMetrics metrics =
+        audio::analyzeWavFileRegion(fullPath.toStdString(),
+                                    startFrame_, frameCount_,
+                                    channel_, error);
 
     if (!error.empty()) {
-        qWarning() << "SAssertAudioEnergyAction: failed to analyze file:" << QString::fromStdString(error);
+        qWarning() << "SAssertAudioEnergyAction: failed to analyze file:"
+                   << fullPath << ":" << QString::fromStdString(error);
         return {false, nullptr};
     }
 
@@ -55,7 +54,9 @@ SApplyResult SAssertAudioEnergyAction::apply(SProject * /*project*/)
     bool energyOk = audio::isEnergyInRange(metrics, minRms_, maxRms_);
 
     if (!energyOk) {
-        qWarning() << "SAssertAudioEnergyAction: RMS energy out of range"
+        qWarning() << "SAssertAudioEnergyAction:" << filename_
+                   << "channel" << channel_ << "(-1 = all pooled)"
+                   << "RMS energy out of range"
                    << "expected [" << minRms_ << ", " << maxRms_ << "]"
                    << "got" << metrics.rmsEnergy;
         return {false, nullptr};

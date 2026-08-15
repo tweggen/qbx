@@ -602,6 +602,19 @@ else()
     target_link_libraries(gen_position_fixture PRIVATE PkgConfig::SNDFILE)
 endif()
 
+# --- gen_channel_fixture: writer + verifier for the multichannel fixture -------
+# Same deal as gen_position_fixture, for tests/test_channels4.wav: four channels
+# on a 6 dB RMS ladder, so a test can prove WHICH channel it measured
+# (proposal 35 M0). --verify measures every channel of an existing file against
+# the ladder, which is why that .wav may be committed. Offline tool, not a gate.
+add_executable(gen_channel_fixture analysis/tools/gen_channel_fixture.cc)
+target_link_libraries(gen_channel_fixture PRIVATE tw_analysis)
+if(SMARAGD_WINDOWS)
+    target_link_libraries(gen_channel_fixture PRIVATE SndFile::sndfile)
+else()
+    target_link_libraries(gen_channel_fixture PRIVATE PkgConfig::SNDFILE)
+endif()
+
 # --- Platform audio backends (devices only) --------------------------------------
 if(SMARAGD_LINUX AND ENABLE_ALSA)
     find_package(ALSA REQUIRED)

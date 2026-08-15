@@ -24,25 +24,72 @@ struct AcousticMetrics {
 /**
  * Read a WAV file and analyze acoustic properties.
  *
+ * `channelIndex` defaults to -1 (all channels pooled), which is what this
+ * signature meant before it had the parameter at all. It exists because the
+ * whole-file path used to HARD-CODE -1: a caller that had a channel in hand
+ * silently lost it (proposal 35 M0, trap 1). A whole-file analysis is just a
+ * region analysis with frameCount < 0, so this only forwards.
+ *
  * @param filename Path to WAV file
  * @param error Output string for error messages
+ * @param channelIndex Which channel to analyze (-1 for all channels pooled)
  * @return Acoustic metrics, or zero-filled metrics on error
  */
-AcousticMetrics analyzeWavFile(const std::string &filename, std::string &error);
+AcousticMetrics analyzeWavFile(const std::string &filename, std::string &error,
+                               int channelIndex = -1);
 
 /**
  * Analyze a specific region of a WAV file.
  *
+ * A `channelIndex` at or beyond the file's channel count is an ERROR, not an
+ * empty selection: skipping every channel would otherwise report RMS 0 / peak
+ * 0, which reads exactly like "the render is silent" and would let a typo pass
+ * for a real finding.
+ *
  * @param filename Path to WAV file
  * @param startFrame Starting frame index (0-based)
- * @param frameCount Number of frames to analyze
- * @param channelIndex Which channel to analyze (-1 for all channels mixed)
+ * @param frameCount Number of frames to analyze (< 0 = to the end of the file)
+ * @param channelIndex Which channel to analyze (-1 for all channels pooled)
  * @param error Output string for error messages
  * @return Acoustic metrics for the region
  */
 AcousticMetrics analyzeWavFileRegion(const std::string &filename,
                                      int64_t startFrame, int64_t frameCount,
                                      int channelIndex, std::string &error);
+
+/**
+ * Per-channel RMS of a region, plus the RMS of the DIFFERENCE between two
+ * channels.
+ *
+ * The discriminator behind `assert-channels-differ` (proposal 35 M0). Two
+ * separate questions, because they fail differently:
+ *
+ *  - `rmsA` vs `rmsB` — do the channels carry different LEVELS? This is what
+ *    catches a sink that duplicates one bus into every channel.
+ *  - `rmsDiff` — is the sample-by-sample difference non-zero? Two channels can
+ *    hold the same level and completely different audio (opposite polarity, a
+ *    different partial, a different clip), and a level comparison calls those
+ *    identical.
+ *
+ * One pass, so both are always available to the caller's message even when only
+ * one of them is being asserted on.
+ *
+ * @param filename Path to WAV file
+ * @param startFrame Starting frame index (0-based)
+ * @param frameCount Number of frames to analyze (< 0 = to the end of the file)
+ * @param channelA First channel index
+ * @param channelB Second channel index
+ * @param rmsA Out: RMS of channel A over the region
+ * @param rmsB Out: RMS of channel B over the region
+ * @param rmsDiff Out: RMS of (A - B) over the region
+ * @param error Output string for error messages
+ * @return True when the region was read and the three values are meaningful
+ */
+bool compareWavChannels(const std::string &filename,
+                        int64_t startFrame, int64_t frameCount,
+                        int channelA, int channelB,
+                        double &rmsA, double &rmsB, double &rmsDiff,
+                        std::string &error);
 
 /**
  * Check if RMS energy falls within expected range.

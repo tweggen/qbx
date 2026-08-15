@@ -1,4 +1,5 @@
 #include "app/testkit/sassertaudiopeakaction.h"
+#include "app/testkit/stestfilepath.h"
 #include "app/actions/sactionregistry.h"
 #include "app/shell/sapplication.h"
 #include "tw/analysis/audio_analysis.h"
@@ -14,7 +15,7 @@ SAssertAudioPeakAction::SAssertAudioPeakAction(const QString &filename, double m
 {
 }
 
-SApplyResult SAssertAudioPeakAction::apply(SProject * /*project*/)
+SApplyResult SAssertAudioPeakAction::apply(SProject *project)
 {
     if (filename_.isEmpty()) {
         qWarning() << "SAssertAudioPeakAction: no filename given";
@@ -29,24 +30,22 @@ SApplyResult SAssertAudioPeakAction::apply(SProject * /*project*/)
         return {false, nullptr};
     }
 
-    QString fullPath = outputDir + "/" + filename_;
+    QString fullPath = resolveTestFilePath(filename_, outputDir, project);
 
-    // Analyze the audio file
+    // ONE call, region or not — see the note in SAssertAudioEnergyAction::apply:
+    // the old whole-file branch hard-coded channel = -1 and dropped `channel=`
+    // whenever frameCount was omitted (proposal 35 M0). For a PEAK that bug is
+    // especially quiet: the pooled peak is the max over all channels, so it
+    // equals the loudest channel's and only ever mis-passes a quiet one.
     std::string error;
-    audio::AcousticMetrics metrics;
-
-    if (frameCount_ == -1) {
-        // Analyze entire file
-        metrics = audio::analyzeWavFile(fullPath.toStdString(), error);
-    } else {
-        // Analyze specific region
-        metrics = audio::analyzeWavFileRegion(fullPath.toStdString(),
-                                             startFrame_, frameCount_,
-                                             channel_, error);
-    }
+    audio::AcousticMetrics metrics =
+        audio::analyzeWavFileRegion(fullPath.toStdString(),
+                                    startFrame_, frameCount_,
+                                    channel_, error);
 
     if (!error.empty()) {
-        qWarning() << "SAssertAudioPeakAction: failed to analyze file:" << QString::fromStdString(error);
+        qWarning() << "SAssertAudioPeakAction: failed to analyze file:"
+                   << fullPath << ":" << QString::fromStdString(error);
         return {false, nullptr};
     }
 
@@ -54,7 +53,9 @@ SApplyResult SAssertAudioPeakAction::apply(SProject * /*project*/)
     bool peakOk = audio::isPeakInRange(metrics, maxPeak_);
 
     if (!peakOk) {
-        qWarning() << "SAssertAudioPeakAction: peak amplitude out of range"
+        qWarning() << "SAssertAudioPeakAction:" << filename_
+                   << "channel" << channel_ << "(-1 = all pooled)"
+                   << "peak amplitude out of range"
                    << "expected <=" << maxPeak_
                    << "got" << metrics.peakAmplitude;
         return {false, nullptr};
