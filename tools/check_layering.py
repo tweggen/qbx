@@ -46,6 +46,13 @@ DEPS = {
     'schedule': ['core', 'pages', 'graph'],
     'analysis': ['core'],
     'sidecar':  ['core'],
+    # events (proposal 36 P0b): the MIDI/event model leaf - one twEvent, the
+    # event sequence, the tempo map (the only tick<->frame converter), SMF I/O,
+    # the automation curve, the event clip set and the feed merge. CORE ONLY and
+    # deliberately outside the dataflow DAG: events are model data, not pages
+    # (D1), and the clip set has to be includable from tw/plugins, which may not
+    # include tw/mix (F15) - so it may never grow an edge to pages/graph/mix.
+    'events':   ['core'],
     # metering (proposal 34): reads levels out of frozen pages by position.
     # graph for twComponent::getPageIfExists, pages for twOutputPage. It must
     # NOT reach playback or mix — which component is the right tap is the app's

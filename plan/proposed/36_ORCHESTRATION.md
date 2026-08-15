@@ -708,7 +708,7 @@ read §6, STATE.md tail, `git log --oneline -15`, the branch's open PR, then cod
 | Phase | Status | Closed on | PR / commit | Notes |
 |---|---|---|---|---|
 | P0a persistence tolerance + `SClipWindow` + verbs | ☐ | | | |
-| P0b `tw/events` leaf | ☐ | | | |
+| P0b `tw/events` leaf | ☑ | 2026-08-15 | 88c6758 (branch `feat/36-p0b-events-leaf`) | events_test 96 assertions / 0 failures; layering + logging clean; registered ctest 109 → 110. Full qxa reconciliation NOT completed — stopped by requester instruction pending suite parallelization; best partial run 43/110 green, the 5 failures in a second partial run were all 30 s render TIMEOUTS under six concurrent suites and had passed in the first. |
 | P1 event clips in the model | ☐ | | | |
 | P2 plugin ABI events + fixtures + native 303 | ☐ | | | |
 | P3a fader post-FX | ☐ | | | after 35-B4 |

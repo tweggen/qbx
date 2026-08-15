@@ -9028,3 +9028,132 @@ isolation and on chunk re-run. At least one occurred before any of these six
 fixes existed, so the pattern is not attributable to them — but neither has it
 been explained. A low-rate flake somewhere in the suite under sustained load is
 the working hypothesis and it remains unproven.
+
+## 2026-08-15 — Proposal 36 P0b: tw/events leaf
+
+The engine leaf every later phase of proposal 36 leans on, landed on its own so
+nothing else has to wait for it: `smaragd/tw303a/events/`, **core-only**, with no
+place in the dataflow DAG and nothing linking it yet (P1 and P2 are its first
+consumers). Design: `plan/proposed/36_MIDI_INSTRUMENTS_AUTOMATION.md` §4.1, §4.2,
+§3.2.1, D1/D2/D4/D5; brief: `36_ORCHESTRATION.md` §3 "P0b". Invariants:
+`tw303a/events/CONTRACT.md` (18 of them).
+
+**What landed**
+
+- `twEvent` / `twEventKind` — **the one** event type, pinned exactly as §4.1
+  specifies, shared later by the sequence, the clip set, the plugin ABI and
+  MIDI-out. `time` has two documented uses and no third (a position in the
+  owner's domain, or chunk-relative in a `process()` call); payloads live in the
+  OWNER's arena, never in the struct.
+- `twEventSeq` — immutable, sorted, arena-owning, `slice`, `stateAt(P)` → the
+  chase set (held notes {key, channel, velocity, start, noteId, srcIndex},
+  sustain, last CC per (channel, cc), bend, channel pressure, program). Notes are
+  stored WITH their duration; the open-note representation (closed FIFO by a
+  later note-off) is honoured too, because a live capture produces it.
+- `twTempoMap` — the ONLY tick↔frame converter and the single tempo authority.
+  µs/quarter (SMF's own unit) stored, BPM derived; exact rational conversion;
+  constant tempo with the API already shaped for segments.
+- `TickPos` / `TickLen` in `tw/core/twdomains.h` (exact-rational, the one domain
+  that is not frames) and `twFrameRange` in core (twEditRange's shape, for the
+  modules that may not depend on `tw/mix`).
+- `twSmf` — type 0/1 read and write, running status expanded, velocity-0
+  note-offs, FIFO pairing of overlapping same-key notes, meta → kinds with the
+  RAW payload always preserved (unknown meta survives as `Unknown`), PPQ rescale,
+  SMPTE and type 2 refused rather than guessed at.
+- `twAutomationCurve` — step / linear / exp-with-tension, `valueAt`, `fillRamp`.
+- `twEventSource` + `twEventClipSet` + `twEventMerge` — the seam the instrument
+  slot and the MIDI-out pump will read through. `collect(startPos, len, out)`
+  returns the chase at `startPos` plus the window's events at page-relative
+  times, clamped to each clip window, with synthesised note-offs at a clip end
+  and at a loop wrap, note-ons before the window reachable ONLY through the
+  chase, loop and slip through the resolver's map, and note ids namespaced per
+  clip slot and per merge source.
+
+**Two implementation decisions worth knowing** (both in CONTRACT.md, neither a
+design change):
+
+1. The clip resolver's map returns `{seqPos, runFrames}`, not a bare position.
+   Audio never needed the run — `twTrackMix` asks a clip to render a page and the
+   clip loops internally — but events must be ENUMERATED, and an enumeration
+   needs the extent of the affine segment, not just a point.
+2. Note ids are composed from the note's own index (`twMakeNoteId(clipSlot,
+   eventIndex)`), not counted per call: the note-off of a note chased in one page
+   has to carry the id its note-on carried in the previous one.
+
+A third rule fell out of the half-open windows and is the subtlest thing here: a
+clip end or loop wrap landing exactly ON a window start belongs to THAT window at
+offset 0. Without it the previous window (which ended before the boundary) and
+the next one (which begins a new segment where the note is not open) both skip
+the release, and the note hangs forever. `collect` therefore accepts a clip whose
+end equals `startPos`. Asserted both ways.
+
+**Gate**
+
+- `./build.sh` clean (full configure + build in the fresh worktree; clap and vst3
+  submodules fetched, so the `plugin_*` cases are registered and did run).
+- `python tools/check_layering.py` → clean, with `events: ['core']` declared. The
+  rule was verified to BITE: a temporary `#include "tw/pages/…"` in the module
+  produced "events may not include tw/pages", and `events_test` links only
+  `tw_events`, so losing the core-only shape is also a link failure.
+- `python tools/check_logging.py` → clean.
+- `ctest`: registered 109 → **110**, the diff being exactly `events_test`.
+  The full-suite reconciliation was **NOT completed on this branch, by requester
+  instruction**: another session is preparing suite parallelization plus a
+  `getDuration()` fix that lands first, and this phase was told to stop waiting
+  rather than start a third run. What WAS observed, in two partial runs:
+  - Run A (sequential, machine moderately loaded): **43 passed, 0 failed**,
+    3 `au_*` `Not Run (Disabled)` (macOS-only), reaching case #46 of 110. It was
+    killed by this session's own foreground wait timing out and taking the
+    background job's process group with it — an operator error, not a test
+    result.
+  - Run B (restart): **12 passed, 5 failed**, same 3 disabled, reaching #20 of
+    110 before it was stopped deliberately. Every one of the five failures is
+    `SRenderAction: render timeout after 30000 ms` — a WALL-CLOCK timeout, with
+    every audio assertion inside them passing (`folder_track_sums_once` logged
+    four `RMS energy OK` lines before failing). At that moment SIX other ctest
+    suites from five other worktrees (one with `-j4`) were running on this
+    machine, and the qxa capture backend is real-time paced. **All five —
+    `exact_stretch_roundtrip`, `folder_track_sums_once`, `grain_asset_stretch`,
+    `grain_loop_stretch`, `grain_minimal_stretch` — had PASSED in run A**, which
+    is what identifies them as contention casualties rather than regressions.
+  - `events_test` is registered at #104 and neither partial run reached it; it
+    was run directly instead (below). No case in either run failed on an
+    assertion.
+- `events_test`: **96 assertions, 0 failures**, byte-identical output over three
+  runs (fixed RNG seed). It implements the brief's AC1 (a)–(f): a six-fixture SMF
+  corpus (two hand-crafted FOREIGN byte streams — a type 0 leaning on running
+  status, a type 1 with tempo/timesig/keysig/marker/lyric meta, a sysex and an
+  unmodelled meta — and four authored by our own writer, including a
+  30 000-event file), equal event tables through import→export→import for all six
+  and BYTE identity for the authored four, lossless 480↔960 PPQ rescale;
+  `stateAt` against a brute-force scan at 1000 random positions of a random
+  2000-event sequence; `ticksToFrames` exact at 44.1/48/96 kHz (960 ticks =
+  24000 frames @ 48 k) with `framesToTicks` round-tripping every tick multiple
+  and denominators asserted under `ppq·10⁶`; the curve's closed forms to 1e-12
+  and `fillRamp` == n `valueAt` calls; the clip set's clip-end synthesised off,
+  chase-only note-ons, loop repetition and slip; and the merge's two-notes-with-
+  distinct-ids, union chase and clean source removal.
+
+**NOT gated**
+
+- **The qxa suite reconciliation itself** (see above): stopped by requester
+  instruction with 43/110 the best single-run coverage. Whoever merges this
+  should run it once on the parallelized suite.
+- **Nothing links the module**, so there is no end-to-end coverage of any seam:
+  `twEventSource`, `twEventClipResolved` and the note-id namespacing are asserted
+  by unit tests only. The first real evidence arrives in P1/P3b.
+- **Renders are byte-identical by construction, not by measurement.** No engine
+  file was touched and no target the app links gained a dependency (`tw303a`'s
+  umbrella target is unchanged), so no render path can have moved; the qxa render
+  cases were run, but no pre-phase/post-phase WAV `cmp` corpus was produced,
+  because there is nothing for it to detect.
+- No concurrency gate: `twEventClipSet` and `twEventMerge` take their own mutexes
+  and copy their lists before walking, but no test drives them from two threads.
+- Constant tempo only; a `Tempo` meta read from a file lands in the sequence as
+  an event and nothing feeds it to the map yet.
+
+**Housekeeping.** `*.mid` is marked `binary` in `.gitattributes` — the corpus is
+compared byte for byte, so no eol conversion may touch it. The branch is based on
+`main` at 9db00ad (plus the four proposal-36 document commits); `main` has since
+advanced by three merges (ASIO spike, head wheel/name, multi-track selection),
+which this branch does not carry.
