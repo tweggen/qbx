@@ -44,6 +44,7 @@ namespace audio {
 
 // Forward declare the PassThrough plugin factory.
 std::unique_ptr<twPlugin> createPassThroughPlugin();
+std::unique_ptr<twPlugin> createNativeInstrument();
 
 // Static registry instance.
 static twPluginRegistry gRegistry;
@@ -236,8 +237,32 @@ void twPluginRegistry::appendBuiltins_nolock()
     passThrough.vendor = "Smaragd";
     passThrough.io     = { 2, 2 };
     passThrough.isInstrument = false;
+    passThrough.nOutBuses = 1;
+    passThrough.outBusChannels = { 2 };
 
     plugins_.push_back( passThrough );
+
+    // The in-house 303 (proposal 36 D7). Linked in exactly like the pass-through
+    // and for the same reason: the instrument path must be reachable in EVERY
+    // build and every worktree, with no SDK, no submodule and nothing installed.
+    // It appears in the browser like any other plugin, and it is the fallback
+    // instrument every instrument gate can rely on being present.
+    twPluginDescriptor native;
+    native.format = "tw";
+    native.uid    = "tw.native.303";
+    native.path   = "";   // linked-in, not a separate module
+    native.name   = "Smaragd 303";
+    native.vendor = "Smaragd";
+    native.io     = { 0, 1 };   // a generator: no audio in, one mono out
+    native.isInstrument   = true;
+    native.acceptsNotes   = true;
+    native.emitsNotes     = false;
+    native.eventPortsIn   = 1;
+    native.eventPortsOut  = 0;
+    native.nOutBuses      = 1;
+    native.outBusChannels = { 1 };
+
+    plugins_.push_back( native );
 }
 
 std::vector<twPluginDescriptor> twPluginRegistry::plugins() const
@@ -458,6 +483,9 @@ std::unique_ptr<twPlugin> twPluginRegistry::instantiate( const twPluginDescripto
 {
     if( desc.uid == "tw.passthrough" ) {
         return createPassThroughPlugin();
+    }
+    if( desc.uid == "tw.native.303" ) {
+        return createNativeInstrument();
     }
 
     if( desc.format == "clap" ) {

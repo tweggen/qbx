@@ -33,7 +33,10 @@ DEPS = {
     'sources':  ['core', 'pages', 'graph', 'sidecar'],
     'dsp':      ['core', 'graph'],
     'mix':      ['core', 'pages', 'graph'],
-    'plugins':  ['core', 'graph'],
+    # plugins -> events since proposal 36 P2: the plugin ABI's event list quotes
+    # tw/events/twevent.h. tw/events is core-only and NOT in the dataflow DAG,
+    # so this adds no page dependency (design F15: plugins may not reach mix).
+    'plugins':  ['core', 'graph', 'events'],
     'devices':  ['core'],
     'sinks':    ['core'],
     # playback → schedule since proposal 19 stage 5: the readahead is a

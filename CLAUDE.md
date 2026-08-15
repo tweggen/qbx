@@ -472,7 +472,7 @@ inserted per track, heard in the signal path, saved with the project, and kept a
 a reloadable placeholder when the plugin is not installed. **Design:**
 `plan/proposed/08_PLUGIN_HOSTING.md`; **what was built and in what order:**
 `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`; **the invariants that matter:**
-`smaragd/tw303a/plugins/CONTRACT.md` (26 of them) and
+`smaragd/tw303a/plugins/CONTRACT.md` (35 of them) and
 `smaragd/main/pluginui/CONTRACT.md`. The milestone list is closed — remaining
 work is coverage, not capability.
 
@@ -602,21 +602,44 @@ force-clear — which is exactly why `.vst3` stayed unreported until M6.
 
 ### Testing without installing anything
 
-`plugins/tests/twtestclap.c` is a real 2-in/2-out CLAP module built from this
-repo as `twtestclap.clap` and copied next to the binary. Two entry points:
+`plugins/tests/twtestclap.c` is a real CLAP module built from this repo as
+`twtestclap.clap` and copied next to the binary. Four entry points:
 `tw.test.clap.gain` (`out = in * gain`, plus a "report block size" mode that
-writes the frame count it actually saw) and `tw.test.clap.stereoskew`
+writes the frame count it actually saw, plus — since proposal 36 P2 — a
+`Clip Threshold` at **param id 2** that hard-clips AFTER the gain, which is the
+order-sensitive fixture the fader-move case needs); `tw.test.clap.stereoskew`
 (`out[0] = in[0]*0.5*gain + in[1]*gain`, `out[c>=1] = in[c]*0.5*gain`) — the
-cross-channel term is what makes a silent second input visible in a mono render.
+cross-channel term is what makes a silent second input visible in a mono render;
+`tw.test.clap.sine`, the reference INSTRUMENT (0 audio in, stereo main + mono aux
+out, a CLAP|MIDI note port preferring CLAP, 16 envelope-less voices so the RMS of
+a held note is `velocity/√2` in closed form and the silence either side is
+EXACT); and `tw.test.clap.arp` (note in/out on a fixed 4096-frame grid, so its
+output count has a closed form).
 
-`plugins/tests/twtestvst3.cpp` is the VST3 counterpart — a real 2-in/2-out VST3
-built as `twtestvst3.vst3`, one `Gain` parameter, unity by default. It is C++
-because VST3's ABI *is* a C++ vtable, and it links its own copies of the SDK
-sources (a module and its host are separate binaries). It **deliberately ignores
-`setParamNormalized`**, so a host that writes the controller and stops there
-fails the level assertion — the most common VST3 host bug, made into a
-regression test. It is a *single component*; the split component/controller
-shape has no automated coverage (recorded in `plugins/CONTRACT.md` known debt).
+`plugins/tests/twtestvst3.cpp` is the VST3 counterpart, built as
+`twtestvst3.vst3`. It is C++ because VST3's ABI *is* a C++ vtable, and it links
+its own copies of the SDK sources (a module and its host are separate binaries).
+`TW Test VST3 Gain` is a 2-in/2-out single component with one `Gain` parameter,
+unity by default, which **deliberately ignores `setParamNormalized`**, so a host
+that writes the controller and stops there fails the level assertion — the most
+common VST3 host bug, made into a regression test. `TW Test VST3 Sine`
+(proposal 36 P2) is a SPLIT component/controller instrument: it closes the
+"split pair untested" debt, maps CC 7 to Gain through `IMidiMapping` (the only
+route a CC has in VST3), honours `sampleOffset`, and **ignores an unactivated
+kEvent bus** — so a host that forgets `activateBus` renders silence rather than
+failing nothing.
+
+**Events (proposal 36 P2).** The ABI carries notes, CCs, note expressions and
+sample-accurate parameter points: `tw/plugins/twpluginevents.h` (`twEventList` /
+`twEventOut` / `twProcessContext`, all quoting the ONE `twEvent` from
+`tw/events`), plus `capabilities()`, `audioOutBusCount()/audioOutBus(i)` and
+`tailFrames()` on `twPlugin`. The new `process()` overload's default forwards to
+the legacy one and every backend's legacy overload forwards back with an empty
+list — the pre-36 path is the same instructions, which is why no golden moved.
+`twNativeInstrument` (`format="tw"`, uid `tw.native.303`) is an in-repo 303
+registered like `twPassThrough`, so an instrument is present in every build.
+**Nothing above the ABI consumes any of it yet** — the processor/tap split is
+untouched, and hosting an instrument is proposal 36 P3b.
 
 Gates: `ctest -R "plugins_test|plugins_scan_test"` and the qxa cases
 `plugin_stereo_chain`, `plugin_remove_and_undo`, `plugin_slot_roundtrip`,

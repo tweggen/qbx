@@ -163,10 +163,38 @@ tw_module(mix
     DEPS tw_core tw_pages tw_graph
 )
 
+# --- events: MIDI/event model leaf (proposal 36 P0b) ---------------------------
+# The one twEvent, the immutable event sequence, the tempo map (the ONLY
+# tick<->frame converter), the SMF reader/writer, the automation curve, and the
+# event clip set + merge the instrument slot and the MIDI-out pump read through.
+# Declared BEFORE tw_plugins because the plugin ABI links it (proposal 36 P2).
+# CORE ONLY, and no place in the dataflow DAG: events are model data, not pages
+# (D1), and tw/plugins may not include tw/mix (F15) - which is why the clip set
+# lives here and returns a core twFrameRange. See events/CONTRACT.md.
+tw_module(events
+    SOURCES
+        events/include/tw/events/twevent.h
+        events/include/tw/events/tweventseq.h
+        events/include/tw/events/tweventsource.h
+        events/include/tw/events/tweventclipset.h
+        events/include/tw/events/tweventmerge.h
+        events/include/tw/events/twtempomap.h
+        events/include/tw/events/twsmf.h
+        events/include/tw/events/twautomationcurve.h
+        events/src/tweventseq.cc
+        events/src/tweventclipset.cc
+        events/src/tweventmerge.cc
+        events/src/twtempomap.cc
+        events/src/twsmf.cc
+        events/src/twautomationcurve.cc
+    DEPS tw_core
+)
+
 # --- E7 plugins: plugin ABI, registry, hosting chain --------------------------
 tw_module(plugins
     SOURCES
         plugins/include/tw/plugins/twplugin.h
+        plugins/include/tw/plugins/twpluginevents.h
         plugins/include/tw/plugins/twplugindescriptor.h
         plugins/include/tw/plugins/twpluginchain.h
         plugins/include/tw/plugins/twplugininsert.h
@@ -181,7 +209,8 @@ tw_module(plugins
         plugins/src/twpluginscancache.h
         plugins/src/twpluginscancache.cc
         plugins/src/twpluginsearchpaths.cc
-    DEPS tw_core tw_graph
+        plugins/src/twnativeinstrument.cc
+    DEPS tw_core tw_graph tw_events
 )
 
 # --- CLAP plugin backend (plugins only) ---------------------------------------
@@ -531,32 +560,6 @@ tw_module(metering
         metering/src/tw_meter_ballistics.cc
         metering/src/tw_level_probe.cc
     DEPS tw_core tw_pages tw_graph
-)
-
-# --- events: MIDI/event model leaf (proposal 36 P0b) ---------------------------
-# The one twEvent, the immutable event sequence, the tempo map (the ONLY
-# tick<->frame converter), the SMF reader/writer, the automation curve, and the
-# event clip set + merge the instrument slot and the MIDI-out pump read through.
-# CORE ONLY, and no place in the dataflow DAG: events are model data, not pages
-# (D1), and tw/plugins may not include tw/mix (F15) - which is why the clip set
-# lives here and returns a core twFrameRange. See events/CONTRACT.md.
-tw_module(events
-    SOURCES
-        events/include/tw/events/twevent.h
-        events/include/tw/events/tweventseq.h
-        events/include/tw/events/tweventsource.h
-        events/include/tw/events/tweventclipset.h
-        events/include/tw/events/tweventmerge.h
-        events/include/tw/events/twtempomap.h
-        events/include/tw/events/twsmf.h
-        events/include/tw/events/twautomationcurve.h
-        events/src/tweventseq.cc
-        events/src/tweventclipset.cc
-        events/src/tweventmerge.cc
-        events/src/twtempomap.cc
-        events/src/twsmf.cc
-        events/src/twautomationcurve.cc
-    DEPS tw_core
 )
 
 # --- sidecar: derived-data QAF container + LRU store (proposal 27) --------------

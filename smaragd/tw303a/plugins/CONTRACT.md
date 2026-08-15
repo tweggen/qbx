@@ -10,6 +10,16 @@ proposal 08 M3; twNullPlugin (createNullPlugin) is the missing-plugin
 placeholder of proposal 08 M4; twVst3Plugin is the VST3 backend (proposal 08
 M6), which added four files here and changed nothing above the ABI.
 
+Proposal 36 P2 added the EVENT half of the ABI (twpluginevents.h: twEventList,
+twEventOut, twProcessContext, twPluginCapabilities, twPluginBusInfo), the
+event-aware process() overload, capabilities()/audioOutBus*/tailFrames(), the
+CLAP/VST3/AU translation behind them, scanner version 2, and twNativeInstrument
+(the in-repo 303, format "tw", uid tw.native.303, registered like
+twPassThrough). It changed NOTHING in twPluginSlotProcessor, twPluginInsert or
+twPluginChain — the hosting components are rewritten by proposal 35-B4 and the
+generator modes are proposal 36 P3b, so today NOTHING in the app calls the new
+overload and every rendered byte is unchanged.
+
 Shape of a slot (proposal 08 M3). ONE twPluginSlotProcessor per slot (plain
 C++, not a twComponent) owns the twPlugin instance(s), the bypass flag, the
 prepare() state, the block chunking, the channel-mismatch mapping and a small
@@ -18,10 +28,13 @@ TAPS, one per track bus, each strictly 1 in / 1 out. The taps are what the
 graph sees; channel coherence is what the processor provides. STrack builds one
 twPluginChain per bus, and each chain holds that bus's taps in slot order.
 
-Public headers: twplugin.h, twplugindescriptor.h, twpluginsearchpaths.h,
-twpluginchain.h, twplugininsert.h, twpluginslotproc.h.
+Public headers: twplugin.h, twpluginevents.h, twplugindescriptor.h,
+twpluginsearchpaths.h, twpluginchain.h, twplugininsert.h, twpluginslotproc.h.
 
-Depends on: tw/core, tw/graph. Forbidden: app headers, devices/sinks.
+Depends on: tw/core, tw/graph, tw/events. Forbidden: app headers,
+devices/sinks, tw/mix (design F15). tw/events is a CORE-ONLY leaf outside the
+dataflow DAG, so the edge adds no page dependency; it exists because there is
+exactly ONE twEvent in this codebase and the ABI quotes it (design §4.1).
 
 Invariants:
 1. Plugin discovery is SYMBOL-referenced (the registry calls
@@ -306,6 +319,91 @@ Invariants:
    so the host still formats those numerically). The null/placeholder plugin has
    no parameters, so the default empty override is correct.
 
+28. EVENTS ARE CHUNK-RELATIVE, SORTED, AND ARRIVE AS ONE LIST PER CALL
+   (proposal 36 P2). Inside a `twEventList` handed to `process()`,
+   `twEvent::time` is 0..nframes-1 of THAT call and never a project position —
+   the position of frame 0 is `twProcessContext::position` instead, and the
+   context's `validFlags` says which of its fields are real (a host that does
+   not know the tempo must SAY so; a plugin cannot tell a real 120 bpm from a
+   default one). The list is sorted by time, non-decreasing: CLAP and VST3 both
+   require it, so an unsorted list is a host bug that surfaces as a plugin
+   refusing to process. Metadata kinds (Tempo, TimeSig, Marker, Lyric, ...) are
+   sequence-only and never appear; a backend may assume it never sees one.
+   ONE list per call, containing everything — a UI parameter edit, an
+   automation slice and the clip's notes are merged by the caller, not
+   concatenated by the backend.
+29. THE HOST ISSUES NOTE IDS, AND A NoteOff CARRIES THE SAME ID OR -1
+   (proposal 36 P2). A note's identity is the id, not (port, channel, key):
+   that is what lets two overlapping notes on one key be released
+   independently, and it is the only thing per-note expression can target.
+   A backend matches an off by id when one was issued and falls back to key
+   otherwise; a host that sends a DIFFERENT id on the off leaves the note
+   hanging, which is why both sine fixtures match that way and the silence
+   assertion in `plugins_test` catches it.
+30. THE SAME NOTE IS NEVER SENT IN TWO DIALECTS (proposal 36 P2). CLAP
+   negotiates per note port: `clap_note_port_info.supported_dialects` /
+   `preferred_dialect`, and we speak CLAP (structured, note ids, note
+   expressions) or MIDI 1, exactly one per port, chosen once at instantiation.
+   Sending a note as BOTH a `clap_event_note` and a raw MIDI note-on would make
+   a plugin that understands both play it twice. A port offering only MPE or
+   MIDI 2 receives nothing and says so once in the log, rather than being sent a
+   dialect it never asked for. The host now vends `clap.host-note-ports`,
+   `clap.host-params` and `clap.host-tail`; all three only RECORD (the audio and
+   worker sides must never reach into component wiring, and twComponent is not
+   a QObject to signal from).
+31. THE VST3 kEvent BUS MUST BE ACTIVATED AT prepare(), AND UNTIL PROPOSAL 36
+   P2 IT WAS NOT. `twVst3Plugin::prepare` switched on the AUDIO buses only, so
+   a plugin that gates its note handling on `activateBus` — which the spec
+   entitles it to do — received a perfectly well-formed `IEventList` and ignored
+   every note in it. The symptom is total silence from an instrument with NO
+   error anywhere. `tests/twtestvst3.cpp`'s `TestSine` reproduces it
+   deliberately (it ignores an unactivated bus), and `SMARAGD_VST3_NO_EVENT_BUS=1`
+   suppresses the activation so `plugins_test` can drive the SAME fixture down
+   the broken path and watch it go silent — an assertion that a bug is fixed is
+   worthless unless it can still fail. Never set that variable in production.
+   Two more VST3 facts of the same kind: a CONTROL CHANGE has no VST3 event type
+   at all, so `IMidiMapping::getMidiControllerAssignment` (queried once at
+   prepare, on the CONTROLLER) is the ONLY route a CC has to the DSP and an
+   unmapped CC is DROPPED rather than assigned a parameter we invented; and
+   parameter points are added at their own `sampleOffset`, which is what makes a
+   mid-block automation step land on the right frame.
+32. EVENT STORAGE IS SIZED IN prepare() AND OVERFLOW IS COUNTED, NOT GROWN
+   (proposal 36 P2, an instance of invariant 2). `twEventLimits::kMaxEventsPerBlock`
+   is what a host may send and what a backend reserves — the CLAP event vector,
+   the VST3 `twVst3EventList` pair and the parameter queues' per-parameter point
+   capacity. A plugin that pushes more into `twEventOut` than the host sized for
+   loses the surplus and the host can read `dropped()`; growing would allocate
+   on the render path and returning an error would make a chatty arpeggiator
+   fail a render.
+33. THE LEGACY process() IS THE SAME CODE, NOT AN EQUIVALENT ONE (proposal 36
+   P2). Every backend's three-argument `process()` forwards to the event-aware
+   overload with an EMPTY list, an unreachable sink and an all-invalid context —
+   so no host events are translated, `clap_process::transport` and
+   `ProcessData::processContext` stay nullptr, and output events are still
+   discarded. That identity is what lets the effect goldens be compared byte for
+   byte across this phase, and it is why a backend must never override BOTH
+   overloads with independent implementations. `acceptsNotes()` likewise stays
+   as a forwarder to `capabilities().acceptsNotes` for one release; a backend
+   overrides `capabilities()` and gets it for free.
+34. AUX OUTPUT BUSES ARE DISCOVERED AND NOT YET ROUTED (proposal 36 P2).
+   `audioOutBusCount()` / `audioOutBus(i)` report every audio output bus — CLAP
+   ports, VST3 buses, AU output ELEMENTS — and the scanner records them
+   (`nOutBuses`, `outBusChannels`). Only bus 0 is wired: the event-aware
+   `process()` reads `outBuses[0]` and nothing consumes the rest. Proposal 36
+   §5.4 routes them to return tracks in P9; reporting them now is what stops
+   that from needing an ABI change.
+35. AU IS macOS-ONLY AND ITS EVENT PATH IS UNVERIFIED (proposal 36 P2). The
+   `aumu`/`aumi` enumeration, `MusicDeviceMIDIEvent` posted BEFORE
+   `AudioUnitRender` with its own `inOffsetSampleFrame`,
+   `AudioUnitScheduleParameters` for sample-accurate parameter steps, and the
+   output-element walk are all written to the documented API — and were written
+   on Windows, where the whole backend is compiled out. Nothing in it has ever
+   been compiled, let alone run against an AudioUnit. `plugins_test` says so
+   out loud on a non-Apple build rather than leaving a silent gap. AU MIDI-OUT
+   is reported as a capability but NOT wired: `kAudioUnitProperty_MIDIOutputCallback`
+   must be installed BEFORE `AudioUnitInitialize`, which is a lifecycle change
+   this phase did not make.
+
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears
 it), cache reload in a fresh registry instance, refusal of a cache from another
@@ -346,7 +444,40 @@ and descriptor resolution by the 32-hex-digit class id. It runs against
 `tests/twtestvst3.cpp`, an in-repo 2-in/2-out VST3 built as `twtestvst3.vst3`,
 which deliberately ignores setParamNormalized so invariant 22 has teeth.
 `plugins_scan_test` additionally proves `.vst3` is discovered, probed, cached
-and resolvable by findByUid, in its own tree so the CLAP counts stay exact.
+and resolvable by findByUid, in its own tree so the CLAP counts stay exact, and
+(proposal 36 P2) that a scanner-VERSION-1 cache is discarded and every module
+re-probed exactly ONCE, that the probe's JSON carries the new descriptor fields
+for all three test modules, and that those fields survive the plugincache.json
+round trip.
+
+And the EVENT half (proposal 36 P2), driven DIRECTLY on `twPlugin::process` by a
+small block pump in `plugins_test` — 4096-frame calls with a chunk-relative
+event list, no processor and no tap anywhere near it, because P2 changes the ABI
+and the backends and nothing about the hosting components. Per format (the
+native 303, `tw.test.clap.sine`, the SPLIT VST3 `TestSine`): a NoteOn(60, vel
+100) at offset 1000 gives EXACT silence before it (peak < 1e-6), a fundamental
+of 261.6 +/- 1 Hz by autocorrelation with parabolic interpolation over 4096
+frames (integer lags alone resolve only to ~0.8 Hz at this pitch, which would
+sit on the band), an RMS of vel/sqrt(2) +/- 2 % for the sines, and EXACT silence
+after the NoteOff at 30000 — for the 303, 512 frames later, once its 6 ms VCA
+release has run out. Plus: a `ParamValue` at block offset 1234 stepping the
+level at EXACTLY frame 1234 (CLAP and VST3 — and the VST3 fixture ignores
+`setParamNormalized`, so only a correctly-offset `inputParameterChanges` point
+passes); the unactivated-event-bus teeth of invariant 31; `tw.test.clap.arp`'s
+note-out count against its closed form (ceil(N/4096) ons, each paired with one
+off, over 65536 frames); and reset determinism — reset, NoteOn at 0, 8192
+frames, twice, byte-identical, for all three. AU is SKIPPED on a non-Apple build
+and says so (invariant 35).
+
+The in-repo fixtures grew to match: `twtestclap.c` exports four plugins now
+(`gain` with a third parameter, id 2 `Clip Threshold`, which hard-clips AFTER
+the gain and is the order-sensitive fixture proposal 36 P3a's fader-move case
+needs; `stereoskew`; the `sine` instrument with a stereo main out AND a mono aux
+out; and the `arp`), and `twtestvst3.cpp` exports the `TestSine` SPLIT
+component/controller pair, which closes the "split VST3 pair untested" debt this
+file carried since M6. `tw.test.clap.gain`'s state blob still writes 16 bytes
+when the clipper is off, so `plugin_slot_roundtrip.qxa`'s exact-base64
+assertion is untouched; the third double is appended only when it is set.
 `tools/vst3_probe.cc` (target `vst3_probe`, not a gate) was the M6 ABI spike and
 is kept: it walks a real third-party .vst3 through the whole lifecycle and is
 the fastest way to triage "this one plugin will not load" without the app. Also qxa.plugin_stereo_chain (a 2-in/2-out CLAP in a
@@ -378,11 +509,13 @@ Known debt:
   exactly why `.vst3` stayed unreported until M6 landed the backend, and why the
   entry is gated on TW_HAVE_VST3 so a build without the submodule still cannot
   poison its cache.
-- The VST3 backend's SPLIT component/controller path has no automated coverage.
-  tests/twtestvst3.cpp is a SINGLE component; the split shape (IConnectionPoint
-  pairing, setComponentState, separate controller lifecycle, a non-empty
-  controller state chunk) is exercised only against real third-party plugins,
-  which no CI machine has. A second fixture class would close it.
+- The VST3 SPLIT component/controller path is covered since proposal 36 P2:
+  `TestSine` in tests/twtestvst3.cpp is a real split pair (IConnectionPoint
+  pairing, getControllerClassId, setComponentState, a separate controller
+  lifecycle and its own state chunk), and `plugins_test` drives it. What is
+  still uncovered is a split plugin that USES the message channel between the
+  two halves for something functional — ours connects and answers, but never
+  sends.
 - VST3 on macOS and Linux is written but unrun. bundleEntry/ModuleEntry, the
   MacOS and <arch>-linux bundle dirs and dlopen are all in place, but M7's
   lesson was that the flat-vs-bundle split only reveals itself on the platform.

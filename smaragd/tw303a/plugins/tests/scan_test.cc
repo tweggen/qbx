@@ -29,6 +29,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QString>
 
 #include <iostream>
@@ -250,6 +252,59 @@ int main( int argc, char **argv )
         audio::check( other.empty(), "...and yields nothing partially trusted" );
     }
 
+    // ---- 6b: AC7 — a version-1 cache is invalidated and rescanned ONCE -------
+    //
+    // kScannerVersion went 1 -> 2 in proposal 36 P2, because the descriptor
+    // gained fields a v1 record cannot supply. The concrete promise is: an
+    // existing plugincache.json from the previous build is thrown away, every
+    // module is re-probed exactly once, and the SECOND scan is a cache hit again
+    // — i.e. the invalidation is a one-off, not a permanent cold start.
+    std::cout << "=== a scanner-v1 cache is invalidated once (proposal 36 P2) ===" << std::endl;
+    {
+        const QString v1Cache = QDir( root ).filePath( "plugincache_v1.json" );
+
+        // Write a well-formed cache that CLAIMS version 1 and holds a record for
+        // every module — the shape the previous build left behind.
+        {
+            twPluginRegistry warm;
+            warm.setSearchPaths( { modDir.toStdString() } );
+            warm.setCachePath( v1Cache.toStdString() );
+            warm.rescan( true );
+
+            QFile f( v1Cache );
+            if( audio::check( f.open( QIODevice::ReadOnly ),
+                              "the freshly written cache is readable" ) ) {
+                const QByteArray raw = f.readAll();
+                f.close();
+                QJsonDocument doc = QJsonDocument::fromJson( raw );
+                QJsonObject   root2 = doc.object();
+                audio::check( root2.value( "scannerVersion" ).toInt( -1 ) == 2,
+                              "this build writes scannerVersion 2" );
+                root2["scannerVersion"] = 1;   // pretend it came from the old build
+                if( f.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
+                    f.write( QJsonDocument( root2 ).toJson( QJsonDocument::Compact ) );
+                    f.close();
+                }
+            }
+        }
+
+        twPluginRegistry reg;
+        reg.setSearchPaths( { modDir.toStdString() } );
+        reg.setCachePath( v1Cache.toStdString() );
+
+        reg.rescan( false );   // NOT forced: the version alone must invalidate it
+        const twPluginScanStats s = reg.scanStats();
+        std::cout << "       after v1: " << audio::statsLine( s ) << std::endl;
+        audio::check( s.modulesProbed == expectFound,
+                      "a v1 cache is discarded and every module is re-probed" );
+        audio::check( s.modulesCached == 0, "...nothing was served from it" );
+
+        reg.rescan( false );
+        const twPluginScanStats s2 = reg.scanStats();
+        audio::check( s2.modulesProbed == 0,
+                      "the rescan happened ONCE: the next scan hits the new cache" );
+    }
+
     // ---- 7: the same verdicts through the out-of-process probe --------------
 #ifdef TW_PLUGINPROBE_PATH
     std::cout << "=== out-of-process probe (" << TW_PLUGINPROBE_PATH << ") ===" << std::endl;
@@ -277,6 +332,34 @@ int main( int argc, char **argv )
                           "...including the real channel counts" );
             audio::check( d.name == "Smaragd Test Gain",
                           "...and the plugin name" );
+
+            // AC7: the probe's JSON schema carries the scanner-v2 fields. The
+            // gain effect has none of them set, so the discriminating case is
+            // the SINE instrument from the same module.
+            audio::check( !d.acceptsNotes && d.nOutBuses == 1 &&
+                              d.outBusChannels.size() == 1 && d.outBusChannels[0] == 2,
+                          "...and the effect's (empty) event fields + its one bus" );
+
+            twPluginDescriptor sine;
+            if( audio::check( reg.findByUid( "clap", "tw.test.clap.sine", sine ),
+                              "the probe also reports the sine instrument" ) ) {
+                audio::check( sine.isInstrument && sine.acceptsNotes &&
+                                  sine.eventPortsIn == 1 && !sine.emitsNotes,
+                              "...with its INSTRUMENT feature and its note port" );
+                audio::check( sine.nOutBuses == 2 && sine.outBusChannels.size() == 2 &&
+                                  sine.outBusChannels[0] == 2 &&
+                                  sine.outBusChannels[1] == 1,
+                              "...and both output buses (stereo main + mono aux)" );
+            }
+            twPluginDescriptor arp;
+            if( audio::check( reg.findByUid( "clap", "tw.test.clap.arp", arp ),
+                              "the probe also reports the arpeggiator" ) ) {
+                audio::check( arp.acceptsNotes && arp.emitsNotes &&
+                                  arp.eventPortsIn == 1 && arp.eventPortsOut == 1,
+                              "...with note ports in AND out" );
+                audio::check( arp.nOutBuses == 0,
+                              "...and no audio output bus at all" );
+            }
         }
 
         reg.rescan( false );
@@ -336,10 +419,20 @@ int main( int argc, char **argv )
             audio::check( s.modulesProbed == 1, "...and probes it" );
             audio::check( s.modulesFailed == 0, "...successfully" );
 
+            // TWO vst3 descriptors since proposal 36 P2 (the gain effect and
+            // the SPLIT sine instrument); the instrument's controller class is
+            // not an audio-effect class and must not appear.
             const std::vector<twPluginDescriptor> all = reg.plugins();
-            const twPluginDescriptor *v3 = nullptr;
-            for( const twPluginDescriptor &d : all )
-                if( d.format == "vst3" ) v3 = &d;
+            const twPluginDescriptor *v3   = nullptr;
+            const twPluginDescriptor *sine = nullptr;
+            int nVst3 = 0;
+            for( const twPluginDescriptor &d : all ) {
+                if( d.format != "vst3" ) continue;
+                ++nVst3;
+                if( d.name == "TW Test VST3 Gain" ) v3 = &d;
+                if( d.name == "TW Test VST3 Sine" ) sine = &d;
+            }
+            audio::check( nVst3 == 2, "both audio-effect classes reached the registry" );
             if( audio::check( v3 != nullptr, "a format=\"vst3\" descriptor reached the registry" ) ) {
                 audio::check( v3->uid.size() == 32, "its uid is a 32-hex-digit class id" );
                 audio::check( v3->name == "TW Test VST3 Gain", "its name is the class name" );
@@ -350,12 +443,36 @@ int main( int argc, char **argv )
                 audio::check( reg.findByUid( "vst3", v3->uid, byUid ),
                               "findByUid resolves it, as a saved project would" );
             }
+            // AC7: the SCANNER (version 2) records the event/bus fields, and
+            // they survive the cache round trip below.
+            if( audio::check( sine != nullptr, "the SPLIT instrument was scanned" ) ) {
+                audio::check( sine->isInstrument, "...as an instrument" );
+                audio::check( sine->acceptsNotes && sine->eventPortsIn == 1,
+                              "...with its kEvent input bus recorded" );
+                audio::check( !sine->emitsNotes && sine->eventPortsOut == 0,
+                              "...and no event output" );
+                audio::check( sine->nOutBuses == 1 && sine->outBusChannels.size() == 1 &&
+                                  sine->outBusChannels[0] == 2,
+                              "...and one stereo output bus" );
+            }
 
             reg.rescan( false );
             audio::check( reg.scanStats().modulesProbed == 0,
                           "the second scan serves the .vst3 from cache" );
             audio::check( reg.scanStats().modulesCached == 1,
                           "...and counts it as cached" );
+
+            // The version-2 fields must survive the JSON round trip, or a
+            // cached instrument would come back looking like an effect.
+            const twPluginDescriptor *cachedSine = nullptr;
+            for( const twPluginDescriptor &d : reg.plugins() )
+                if( d.name == "TW Test VST3 Sine" ) cachedSine = &d;
+            if( audio::check( cachedSine != nullptr, "the cached instrument is back" ) ) {
+                audio::check( cachedSine->isInstrument && cachedSine->acceptsNotes &&
+                                  cachedSine->eventPortsIn == 1 &&
+                                  cachedSine->nOutBuses == 1,
+                              "the scanner-v2 fields round-trip through plugincache.json" );
+            }
         }
     }
 #else

@@ -307,9 +307,29 @@ std::vector<twPluginDescriptor> clapModuleDescriptors( const std::string &path )
         // The channel counts need a live instance (clap.audio-ports is a plugin
         // extension, not a descriptor field). Creating one is the only honest
         // answer; it is also what makes an out-of-process probe worthwhile in M2.
+        // Scanner version 2 (proposal 36 P2) reads the note ports and the aux
+        // output buses off the SAME instance — no extra cost, and no activate():
+        // capabilities() and audioOutBus() are answered from what init() read.
         d.io = twPluginIoLayout{ 0, 0 };
-        if( std::unique_ptr<twPlugin> inst = createClapPlugin( path, d.uid ) )
+        if( std::unique_ptr<twPlugin> inst = createClapPlugin( path, d.uid ) ) {
             d.io = inst->ioLayout();
+
+            const twPluginCapabilities caps = inst->capabilities();
+            d.acceptsNotes  = caps.acceptsNotes;
+            d.emitsNotes    = caps.emitsNotes;
+            d.eventPortsIn  = caps.notePortsIn;
+            d.eventPortsOut = caps.notePortsOut;
+            // The FEATURE list said instrument above; a plugin whose instance
+            // disagrees (no features, but a note input and no audio input) is
+            // still an instrument for our purposes, and the browser's Kind
+            // filter is the only consumer.
+            d.isInstrument = d.isInstrument || caps.isInstrument;
+
+            d.nOutBuses = (std::uint16_t)inst->audioOutBusCount();
+            d.outBusChannels.clear();
+            for( std::size_t b = 0; b < (std::size_t)d.nOutBuses; ++b )
+                d.outBusChannels.push_back( inst->audioOutBus( b ).channels );
+        }
 
         out.push_back( std::move( d ) );
     }

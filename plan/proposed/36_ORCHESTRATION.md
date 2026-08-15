@@ -710,7 +710,7 @@ read §6, STATE.md tail, `git log --oneline -15`, the branch's open PR, then cod
 | P0a persistence tolerance + `SClipWindow` + verbs | ☑ | 2026-08-15 | `feat/36-p0a-clipwindow-loader` — `d6c8982`, `5866a7d`, `224f97a`, `a0517c5` | AC1/AC2/AC4/AC5/AC6 green; AC3 by targeted corpus compare. The full-suite reconciliation was NOT completed here (requester: parallelization + a `getDuration()` fix merge first) — see STATE.md 2026-08-15 |
 | P0b `tw/events` leaf | ☑ | 2026-08-15 | 88c6758 (branch `feat/36-p0b-events-leaf`) | events_test 96 assertions / 0 failures; layering + logging clean; registered ctest 109 → 110. Full qxa reconciliation NOT completed — stopped by requester instruction pending suite parallelization; best partial run 43/110 green, the 5 failures in a second partial run were all 30 s render TIMEOUTS under six concurrent suites and had passed in the first. |
 | P1 event clips in the model | ☐ | | | |
-| P2 plugin ABI events + fixtures + native 303 | ☐ | | | |
+| P2 plugin ABI events + fixtures + native 303 | ☑ | 2026-08-15 | `feat/36-p2-plugin-events` | AC1–AC8 green. `clipThreshold` is param id **2**, not 1 (id 1 was already the block-size reporter). AU implemented but UNVERIFIED (Windows). Full ctest NOT run — requester instruction. |
 | P3a fader post-FX | ☐ | | | after 35-B4 |
 | P3b instrument slot + event feed | ☐ | | | after 35-B4 |
 | P3c render barrier + determinism | ☐ | | | |
