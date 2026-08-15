@@ -8,6 +8,8 @@
 #include <QFile>
 #include <QFileInfo>
 
+#include <cstring>   // memcmp over the compared range
+
 namespace {
 
 // A file's path as this verb resolves it. See the header for the three rules;

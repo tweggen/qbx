@@ -225,6 +225,19 @@ int SProjectLoader::createObjects( SProject &project )
             QDomNode leftover = docElem.firstChild();
             while( !leftover.isNull() ) {
                 QDomNode next = leftover.nextSibling();
+                const QDomElement le = leftover.toElement();
+                if( !le.isNull() ) {
+                    // Reachable only for a set of elements that reference each
+                    // other and nothing outside itself (a cycle the file
+                    // describes but the loader cannot enter). Name it: every
+                    // recovery warns, and a silent drop would be the one thing
+                    // worse than the abort all of this replaces.
+                    qWarning() << QString( "Project child of type \"%1\" (id \"%2\") "
+                                           "cannot be resolved in any order; "
+                                           "DROPPED so the rest of the project "
+                                           "can load." )
+                                      .arg( le.tagName(), le.attribute( "id" ) );
+                }
                 docElem.removeChild( leftover );
                 leftover = next;
             }
