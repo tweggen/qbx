@@ -165,7 +165,7 @@ length_t twPluginInsert::pullUpstreamPage( offset_t startPos, length_t len,
 
     const length_t n = std::min<length_t>( len, (length_t)page->validFrames );
     if( n > 0 )
-        std::memcpy( dst, page->samples.data(), (std::size_t)n * sizeof( sample_t ) );
+        std::memcpy( dst, page->channelPtr( 0 ), (std::size_t)n * sizeof( sample_t ) );
     return n;
 }
 
@@ -252,7 +252,7 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
                     std::min<length_t>( inputLength,
                                         (length_t)twOutputPage::FRAME_CAPACITY ) );
                 if( n > 0 )
-                    std::memcpy( page->samples.data(), up->samples.data(),
+                    std::memcpy( page->channelPtr( 0 ), up->channelPtr( 0 ),
                                  (std::size_t)n * sizeof( sample_t ) );
                 page->setValidFrames( (uint32_t)std::max<length_t>( n, 0 ) );
             }

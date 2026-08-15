@@ -148,7 +148,13 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
                 length_t dataFrames = (pageFrameOffset_ < cachedPageValidFrames_)
                     ? std::min(batchSize, (length_t)(cachedPageValidFrames_ - pageFrameOffset_))
                     : 0;
-                const float *pageData = &currentFrozenPage_->samples[pageFrameOffset_];
+                // Channel 0, duplicated to both device channels below: the sink
+                // is still mono (proposal 35 B5 widens it). channelPtr() bounds-
+                // checks the channel index only -- nothing here reads the page's
+                // width, so a page of any width is safe to serve, which matters
+                // on THIS path because proposal 16 deliberately hands the RT
+                // callback stale pages.
+                const float *pageData = currentFrozenPage_->channelPtr(0) + pageFrameOffset_;
                 std::copy(pageData, pageData + dataFrames, resampleBufL_.data() + inOffset);
                 std::copy(pageData, pageData + dataFrames, resampleBufR_.data() + inOffset);
                 if (dataFrames < batchSize) {
@@ -307,7 +313,7 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             length_t dataFrames = (pageFrameOffset_ < cachedPageValidFrames_)
                 ? std::min(batchSize, (length_t)(cachedPageValidFrames_ - pageFrameOffset_))
                 : 0;
-            const float *pageData = &currentFrozenPage_->samples[pageFrameOffset_];
+            const float *pageData = currentFrozenPage_->channelPtr(0) + pageFrameOffset_;
             // Duplicate mono frozen output to stereo
             std::copy(pageData, pageData + dataFrames, outL + outOffset);
             std::copy(pageData, pageData + dataFrames, outR + outOffset);

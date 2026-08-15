@@ -738,6 +738,11 @@ tw_module_test(io_vector_test               pages/tests/io_vector_test.cc       
 # Proposal 35 B1a: the releaseOldPages retention boundary (frames, not bytes) and
 # the page-memory accounting the later phases' memory claims rest on.
 tw_module_test(graph_test                   graph/tests/graph_test.cc                   tw_graph)
+# Proposal 35 B1b: the page's channel dimension. The ONLY gate that can see a
+# wrong `samples` -> `channelPtr()` conversion — at width 1, which is every page
+# in the tree today, a mistake and a correct conversion are the same instruction,
+# so neither the byte-exactness gate nor the grep can tell them apart.
+tw_module_test(page_channels_test           graph/tests/page_channels_test.cc           tw_graph)
 tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)

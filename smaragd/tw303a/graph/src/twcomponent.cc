@@ -833,7 +833,7 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
         // available yet — freeze an explicit silent page. It is stamped
         // valid+current below like any render, so nothing blocks; readiness
         // arrival bumps the epoch and it re-freezes with real audio.
-        std::fill(page->samples.begin(), page->samples.end(), 0.0f);
+        page->fillSilence();
         page->validFrames = 0;
     } else {
         page->validFrames = freezePage_nolock(
@@ -1067,8 +1067,13 @@ length_t twComponent::freezePage_nolock(
     // Safe from infinite recursion because FreezeContext is active; calcOutputTo
     // can query pre-frozen input pages instead of calling freezePage again.
     length_t toRender = twOutputPage::FRAME_CAPACITY;
+    // Channel 0 (§4.3: at width 1 this is byte-for-byte today's path, not
+    // "equivalent to" it). A width > 1 component renders every channel of its
+    // page in ONE pass through renderPageWide() — B2 — precisely because a
+    // per-channel loop here would advance a cursor-bearing component's cursor
+    // once per channel and fill channel 1 with the next page's audio.
     length_t rendered = renderFrames(
-        page->samples.data(),
+        page->channelPtr(0),
         toRender,
         pageInput,
         pageInputLength,
@@ -1149,10 +1154,10 @@ length_t twComponent::calcOutputTo( IOVector& dest, idx_t idx )
 {
     // Create temporary buffer for old interface, then copy to dest
     auto tmpPage = std::make_shared<twOutputPage>();
-    tmpPage->samples.resize(dest.length(), 0.0f);
+    tmpPage->resizeMonoScratch((size_t)dest.length());
 
     // Call the raw-pointer version (which all existing components implement)
-    length_t rendered = calcOutputTo(tmpPage->samples.data(), dest.length(), idx);
+    length_t rendered = calcOutputTo(tmpPage->channelPtr(0), dest.length(), idx);
 
     // Copy rendered data into the IOVector destination
     if (rendered > 0) {
@@ -1170,7 +1175,7 @@ length_t twComponent::calcOutputTo( sample_t *pDest, length_t length, idx_t idx 
 {
     // Use temporary page-backed IOVector wrapper
     auto tmpPage = std::make_shared<twOutputPage>();
-    tmpPage->samples.resize(length, 0.0f);
+    tmpPage->resizeMonoScratch((size_t)length);
     IOVector dest = IOVector::CreateForPageOutput(tmpPage);
 
     // Call the IOVector version (the new primary interface)
@@ -1178,7 +1183,7 @@ length_t twComponent::calcOutputTo( sample_t *pDest, length_t length, idx_t idx 
 
     // Copy result back to raw-pointer buffer
     if (rendered > 0) {
-        memcpy(pDest, tmpPage->samples.data(), rendered * sizeof(sample_t));
+        memcpy(pDest, tmpPage->channelPtr(0), rendered * sizeof(sample_t));
     }
 
     return rendered;

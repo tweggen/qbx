@@ -1,7 +1,16 @@
 #include "tw/pages/io_vector.h"
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <sstream>
+
+// Proposal 35 §4.6: IOVector STAYS MONO. It is a view over ONE channel of its
+// pages, and every page it sees today is one channel wide. The channel is named
+// once, here, rather than spelled `0` in fourteen places, so that the day a wide
+// twTrackMix needs `IOVector` over channel c (B4) the change is a parameter and
+// not another sweep. Making IOVector itself channel-aware was considered and
+// rejected in §4.6: wide mixing is a loop over channels of the same page pair.
+static constexpr idx_t kChannel = 0;
 
 // ========== Constructors ==========
 
@@ -55,7 +64,9 @@ IOVector IOVector::CreateFromBuffer(sample_t* buffer, length_t lengthFrames)
 
     // Directly assign the buffer as the samples (without copying)
     // Note: This assumes the caller's vector stays alive during IOVector operations
-    tempPage->samples.assign(buffer, buffer + lengthFrames);
+    // Mono scratch: a plain buffer of the caller's length, no stride, width 1.
+    tempPage->resizeMonoScratch((size_t)lengthFrames);
+    std::copy(buffer, buffer + lengthFrames, tempPage->channelPtr(0));
     tempPage->validFrames = lengthFrames;
     tempPage->validAspects = twAspectAll;  // Mark as valid so readers can use it
 
@@ -132,10 +143,10 @@ sample_t* IOVector::rawPointer() const
     if (!pages_[0]) {
         throw std::runtime_error("IOVector::rawPointer: page is null");
     }
-    if (pages_[0]->samples.empty()) {
+    if (pages_[0]->channelFrames() == 0) {
         throw std::runtime_error("IOVector::rawPointer: page samples buffer is empty");
     }
-    return pages_[0]->samples.data() + startOffset_;
+    return pages_[0]->channelPtr(kChannel) + startOffset_;
 }
 
 // ========== Helper Methods ==========
@@ -196,8 +207,8 @@ length_t IOVector::copyFrom(const IOVector& source,
             srcMap.pageIndex < source.pages_.size() &&
             dstMap.pageIndex < pages_.size()) {
 
-            memcpy(pages_[dstMap.pageIndex]->samples.data() + dstMap.offsetInPage,
-                   source.pages_[srcMap.pageIndex]->samples.data() + srcMap.offsetInPage,
+            memcpy(pages_[dstMap.pageIndex]->channelPtr(kChannel) + dstMap.offsetInPage,
+                   source.pages_[srcMap.pageIndex]->channelPtr(kChannel) + srcMap.offsetInPage,
                    copyBytes);
         }
     } else {
@@ -208,11 +219,11 @@ length_t IOVector::copyFrom(const IOVector& source,
 
             if (srcMap.pageIndex < source.pages_.size() && dstMap.pageIndex < pages_.size() &&
                 source.pages_[srcMap.pageIndex] && pages_[dstMap.pageIndex] &&
-                srcMap.offsetInPage < source.pages_[srcMap.pageIndex]->samples.size() &&
-                dstMap.offsetInPage < pages_[dstMap.pageIndex]->samples.size()) {
+                srcMap.offsetInPage < (offset_t)source.pages_[srcMap.pageIndex]->channelFrames() &&
+                dstMap.offsetInPage < (offset_t)pages_[dstMap.pageIndex]->channelFrames()) {
 
-                pages_[dstMap.pageIndex]->samples[dstMap.offsetInPage] =
-                    source.pages_[srcMap.pageIndex]->samples[srcMap.offsetInPage];
+                pages_[dstMap.pageIndex]->channelPtr(kChannel)[dstMap.offsetInPage] =
+                    source.pages_[srcMap.pageIndex]->channelPtr(kChannel)[srcMap.offsetInPage];
             }
         }
     }
@@ -249,8 +260,9 @@ length_t IOVector::mixFrom(const IOVector& source,
             srcMap.pageIndex < source.pages_.size() &&
             dstMap.pageIndex < pages_.size()) {
 
-            sample_t* dstPtr = pages_[dstMap.pageIndex]->samples.data() + dstMap.offsetInPage;
-            sample_t* srcPtr = source.pages_[srcMap.pageIndex]->samples.data() + srcMap.offsetInPage;
+            sample_t* dstPtr = pages_[dstMap.pageIndex]->channelPtr(kChannel) + dstMap.offsetInPage;
+            const sample_t* srcPtr =
+                source.pages_[srcMap.pageIndex]->channelPtr(kChannel) + srcMap.offsetInPage;
 
             for (length_t i = 0; i < actualFrames; ++i) {
                 dstPtr[i] += srcPtr[i];
@@ -264,11 +276,11 @@ length_t IOVector::mixFrom(const IOVector& source,
 
             if (srcMap.pageIndex < source.pages_.size() && dstMap.pageIndex < pages_.size() &&
                 source.pages_[srcMap.pageIndex] && pages_[dstMap.pageIndex] &&
-                srcMap.offsetInPage < source.pages_[srcMap.pageIndex]->samples.size() &&
-                dstMap.offsetInPage < pages_[dstMap.pageIndex]->samples.size()) {
+                srcMap.offsetInPage < (offset_t)source.pages_[srcMap.pageIndex]->channelFrames() &&
+                dstMap.offsetInPage < (offset_t)pages_[dstMap.pageIndex]->channelFrames()) {
 
-                pages_[dstMap.pageIndex]->samples[dstMap.offsetInPage] +=
-                    source.pages_[srcMap.pageIndex]->samples[srcMap.offsetInPage];
+                pages_[dstMap.pageIndex]->channelPtr(kChannel)[dstMap.offsetInPage] +=
+                    source.pages_[srcMap.pageIndex]->channelPtr(kChannel)[srcMap.offsetInPage];
             }
         }
     }
@@ -292,7 +304,7 @@ length_t IOVector::fillSilence(offset_t dstOffset, length_t numFrames)
         auto dstMap = mapOffset(dstOffset);
 
         if (pages_[0] && dstMap.pageIndex < pages_.size()) {
-            memset(pages_[dstMap.pageIndex]->samples.data() + dstMap.offsetInPage,
+            memset(pages_[dstMap.pageIndex]->channelPtr(kChannel) + dstMap.offsetInPage,
                    0, actualFrames * sizeof(sample_t));
         }
     } else {
@@ -301,9 +313,9 @@ length_t IOVector::fillSilence(offset_t dstOffset, length_t numFrames)
             auto dstMap = mapOffset(dstOffset + i);
 
             if (dstMap.pageIndex < pages_.size() && pages_[dstMap.pageIndex] &&
-                dstMap.offsetInPage < pages_[dstMap.pageIndex]->samples.size()) {
+                dstMap.offsetInPage < (offset_t)pages_[dstMap.pageIndex]->channelFrames()) {
 
-                pages_[dstMap.pageIndex]->samples[dstMap.offsetInPage] = 0.0f;
+                pages_[dstMap.pageIndex]->channelPtr(kChannel)[dstMap.offsetInPage] = 0.0f;
             }
         }
     }
@@ -327,9 +339,10 @@ length_t IOVector::fillConstant(offset_t dstOffset, length_t numFrames, sample_t
         auto dstMap = mapOffset(dstOffset);
 
         if (pages_[0] && dstMap.pageIndex < pages_.size() &&
-            dstMap.offsetInPage < pages_[dstMap.pageIndex]->samples.size()) {
+            dstMap.offsetInPage < (offset_t)pages_[dstMap.pageIndex]->channelFrames()) {
+            sample_t* dstPtr = pages_[dstMap.pageIndex]->channelPtr(kChannel);
             for (offset_t i = 0; i < actualFrames; ++i) {
-                pages_[dstMap.pageIndex]->samples[dstMap.offsetInPage + i] = value;
+                dstPtr[dstMap.offsetInPage + i] = value;
             }
         }
     } else {
@@ -338,9 +351,9 @@ length_t IOVector::fillConstant(offset_t dstOffset, length_t numFrames, sample_t
             auto dstMap = mapOffset(dstOffset + i);
 
             if (dstMap.pageIndex < pages_.size() && pages_[dstMap.pageIndex] &&
-                dstMap.offsetInPage < pages_[dstMap.pageIndex]->samples.size()) {
+                dstMap.offsetInPage < (offset_t)pages_[dstMap.pageIndex]->channelFrames()) {
 
-                pages_[dstMap.pageIndex]->samples[dstMap.offsetInPage] = value;
+                pages_[dstMap.pageIndex]->channelPtr(kChannel)[dstMap.offsetInPage] = value;
             }
         }
     }

@@ -104,11 +104,14 @@ bool twLevelProbe::advanceTo( offset_t pos, twLevelSample &out, float clipThresh
 
     const offset_t valid = (offset_t)page->validFrames;
     if( to > valid ) to = valid;
-    const offset_t capacity = (offset_t)page->samples.size();
+    const offset_t capacity = (offset_t)page->channelFrames();
     if( to > capacity ) to = capacity;
 
     if( from >= to ) { ++misses_; return false; }
 
-    out = twScanSpan( &page->samples[(size_t)from], to - from, clipThreshold );
+    // Channel 0. The meter is scalar BY TYPE (twLevelSample, twScanSpan,
+    // SLevelMeter) -- N-lane metering is B8, and until then reading anything but
+    // channel 0 would have nowhere to put the answer.
+    out = twScanSpan( page->channelPtr( 0 ) + (size_t)from, to - from, clipThreshold );
     return true;
 }

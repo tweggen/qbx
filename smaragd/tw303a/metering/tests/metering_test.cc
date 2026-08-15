@@ -222,7 +222,7 @@ int main()
         CHECK( probe.advanceTo( 5000, s ), "a frozen page mid-page reads" );
         // No history -> MIN_WINDOW: the span is [5000-256, 5000).
         {
-            twLevelSample expect = twScanSpan( &p0->samples[5000 - 256], 256 );
+            twLevelSample expect = twScanSpan( &p0->channelPtr(0)[5000 - 256], 256 );
             CHECK( near_( s.peak, expect.peak, 1e-6 ) && s.frames == 256,
                    "the first read measures MIN_WINDOW ending at the position" );
         }
@@ -231,7 +231,7 @@ int main()
         CHECK( probe.advanceTo( 6600, s ), "a continued read succeeds" );
         CHECK( s.frames == 1600, "the window is exactly what elapsed" );
         {
-            twLevelSample expect = twScanSpan( &p0->samples[5000], 1600 );
+            twLevelSample expect = twScanSpan( &p0->channelPtr(0)[5000], 1600 );
             CHECK( near_( s.peak, expect.peak, 1e-6 ),
                    "the continued window starts where the previous one ended" );
         }

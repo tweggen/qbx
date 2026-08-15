@@ -205,7 +205,15 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		const uint64_t want  = (uint64_t)(maxLength - written);
 		const length_t n = (length_t)(avail < want ? avail : want);
 
-		memcpy(pDest + written, page->samples.data() + inPage, (size_t)n * sizeof(sample_t));
+		// THE PLUG SEAM. This latch already carries the index it was built with
+		// (twLatch(component, idx)) and has never consulted it. Proposal 35 4.4
+		// rule (1) gives that index its channel meaning here -- a plug pull yields
+		// channel min(latchIndex, page->channels - 1) of the page the producer
+		// ACTUALLY froze, which reproduces today's behaviour exactly while every
+		// page is one channel wide. Wiring the latch index in is B2's job; what
+		// B1b does is make the channel EXPLICIT, so the day it becomes a variable
+		// there is one place to change.
+		memcpy(pDest + written, page->channelPtr(0) + inPage, (size_t)n * sizeof(sample_t));
 		written += n;
 	}
 
