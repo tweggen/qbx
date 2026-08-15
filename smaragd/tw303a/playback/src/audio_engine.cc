@@ -361,6 +361,20 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         prevFrozenPage_ = nullptr;
     }
 
+    // WIDTH MISMATCH IS A MISS (proposal 36 §4.5). Every acceptance below —
+    // the fast path, the stale-held fallback, the stalePredecessor fallback —
+    // is gated on this, because the stale fallbacks are the ONE path on which a
+    // page frozen before a project width change can reach the RT callback. A
+    // page of the wrong width is not degraded audio, it is a different
+    // geometry; serving it would be reading the wrong bytes on the audio
+    // thread. Dropping the held page here also covers the heldStillCovers fast
+    // path below without a second test.
+    const idx_t widthNow = synthOutput_->getOutputChannels();
+    if (currentFrozenPage_ && !twPageWidthUsable(currentFrozenPage_.get(), widthNow)) {
+        currentFrozenPage_ = nullptr;
+        prevFrozenPage_ = nullptr;
+    }
+
     // A held page from an older content epoch is still a consistent waveform
     // (proposal 16): it stays playable as a FALLBACK, but no longer satisfies
     // the fast path — every batch re-checks the cache for its re-frozen
@@ -385,6 +399,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         auto page = synthOutput_->getPageIfExists(pageStartPos);
         if (page && page->validAspects != 0 &&
             page->contentEpoch.load() >= epochNow &&
+            twPageWidthUsable(page.get(), widthNow) &&
             // Trust the page's OWN startPosition, never the map key it was
             // found under (cf. twPluginInsert::pullUpstreamPage).
             page->startPosition == pageStartPos) {
@@ -421,6 +436,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
                        return nullptr;
                    }();
                    fallbackPage && fallbackPage->validAspects != 0 &&
+                   twPageWidthUsable(fallbackPage.get(), widthNow) &&
                    fallbackPage->startPosition == pageStartPos) {
             // Crossed into a page whose re-freeze is pending or in flight; adopt
             // the pre-edit page as fallback (proposal 16). The fast path stays

@@ -55,11 +55,28 @@ Invariants:
 9. `resizeMonoScratch()` is the pre-existing throwaway-buffer path
    (twComponent::calcOutputTo, IOVector::CreateFromBuffer) and is legal at
    width 1 only; on a wider page it is refused and logged, never applied.
+10. WIDTH MISMATCH IS A MISS (proposal 36 §4.5, wired by B2).
+    `twPageWidthUsable(page, producerChannels)` is the one place the rule
+    lives: a cached page whose width disagrees with what its producer now
+    declares is treated as a MISS — playback falls back to silence for that
+    page, a meter decays — and never as audio. It matters because the
+    stale-page fallback (proposal 16) deliberately serves stale pages during
+    live playback, so that is the ONE path on which a page frozen before a
+    width change can reach the RT callback or twLevelProbe, where reading
+    channelPtr(1) of a width-1 page would be an out-of-bounds read on the audio
+    thread. Every acceptance in AudioEngine::updateFrozenPage and every rung of
+    twLevelProbe's ladder is gated on it. A fresh page always passes (pages are
+    allocated at their producer's declared width), and a correctly-WIDE page is
+    never rejected merely because its consumer only reads channel 0 — that
+    consumer is narrow, not wrong. Gated by metering_test; the RT half is
+    AC B4.5's to prove, since nothing in production is wide before B4.
 
 How to test: `ctest -R page_channels` (the channel dimension: stride
 arithmetic, a four-channel round trip through channelPtr with signals whose
 value ranges are pairwise disjoint so a single sample names its channel, and
-the type-level immutability of `channels`), `ctest -R io_vector` (pages/tests/,
+the type-level immutability of `channels`), `ctest -R wide_graph_test` (the
+same page through the REAL scheduler, plus the §4.4 plug/bound-page rules and
+the width > 1 refusal), `ctest -R metering_test` (inv. 10), `ctest -R io_vector` (pages/tests/,
 links only tw_pages) and `ctest -R graph_test` (the accounting arithmetic, from
 tw_graph, which is where the per-component half lives); page behavior is
 exercised by every render qxa case, and `<report-page-memory>` prints the

@@ -45,6 +45,33 @@ void twOutputPage::reportChannelOutOfRange(idx_t c, std::uint16_t channels)
     }
 }
 
+bool twPageWidthUsable(const twOutputPage *page, idx_t producerChannels)
+{
+    if (!page) {
+        return false;
+    }
+    if (producerChannels < 1) {
+        producerChannels = 1;   // a producer always has at least channel 0
+    }
+    if ((idx_t)page->channels() == producerChannels) {
+        return true;
+    }
+    // Reported once per process. This fires on the audio thread, so it must be
+    // an atomic exchange and a single record — and it must never be a
+    // Q_ASSERT (§7 trap 9: compiled out of the build everyone runs).
+    static std::atomic<bool> reported{false};
+    if (!reported.exchange(true)) {
+        TW_LOGW("pages",
+                "width-mismatch MISS: a cached page is %u channels wide but its "
+                "producer now declares %d. Treating it as a miss (silence for "
+                "playback, a decay for a meter) rather than as audio — proposal "
+                "36 §4.5. Expected transiently after a project width change, "
+                "until the position re-freezes. (reported once)",
+                (unsigned)page->channels(), (int)producerChannels);
+    }
+    return false;
+}
+
 void twOutputPage::reportScratchOnWidePage(std::uint16_t channels)
 {
     static std::atomic<bool> reported{false};

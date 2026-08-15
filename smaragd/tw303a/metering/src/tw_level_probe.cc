@@ -18,13 +18,21 @@ void twLevelProbe::reset()
 
 std::shared_ptr<twOutputPage> twLevelProbe::resolvePage_( offset_t pageStart )
 {
+    // WIDTH MISMATCH IS A MISS (proposal 36 §4.5). Every rung of the ladder is
+    // gated on it, because rungs 2-4 all serve pages that are deliberately
+    // allowed to be STALE, and a page frozen before a project width change has a
+    // different geometry — not older audio. A miss decays the meter, which is
+    // exactly the right reading for a position whose audio is being re-frozen.
+    const idx_t widthNow = tap_->getOutputChannels();
+
     // Ladder step 1 & 2 — the cached page, whether or not it is from the current
     // content epoch. A stale-but-frozen page is deliberately ACCEPTED: playback
     // is serving exactly that page (proposal 16), so rejecting it would make the
     // meter disagree with the ear precisely when an edit is being absorbed.
     std::shared_ptr<twOutputPage> page = tap_->getPageIfExists( pageStart );
     if( page && page->startPosition == pageStart ) {
-        if( page->validAspects.load( std::memory_order_acquire ) != 0 ) {
+        if( page->validAspects.load( std::memory_order_acquire ) != 0 &&
+            twPageWidthUsable( page.get(), widthNow ) ) {
             held_ = page;
             return page;
         }
@@ -32,7 +40,8 @@ std::shared_ptr<twOutputPage> twLevelProbe::resolvePage_( offset_t pageStart )
         // pre-edit predecessor is what playback is serving in the meantime.
         std::shared_ptr<twOutputPage> pred = std::atomic_load( &page->stalePredecessor );
         if( pred && pred->startPosition == pageStart &&
-            pred->validAspects.load( std::memory_order_acquire ) != 0 ) {
+            pred->validAspects.load( std::memory_order_acquire ) != 0 &&
+            twPageWidthUsable( pred.get(), widthNow ) ) {
             held_ = pred;
             return pred;
         }
@@ -43,7 +52,8 @@ std::shared_ptr<twOutputPage> twLevelProbe::resolvePage_( offset_t pageStart )
     // has no predecessor yet. The page we scanned last tick is still the best
     // evidence we have about this position — but only if it IS this position.
     if( held_ && held_->startPosition == pageStart &&
-        held_->validAspects.load( std::memory_order_acquire ) != 0 ) {
+        held_->validAspects.load( std::memory_order_acquire ) != 0 &&
+        twPageWidthUsable( held_.get(), widthNow ) ) {
         return held_;
     }
 

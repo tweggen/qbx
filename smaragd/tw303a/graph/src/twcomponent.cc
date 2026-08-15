@@ -31,11 +31,18 @@ offset_t twComponent::tellPos() const
 
 twFormatCaps twComponent::getOutputCaps( idx_t /*idx*/ ) const
 {
-    // The engine exchanges mono Float32; `rates` left empty == any rate (the
+    // The engine exchanges Float32; `rates` left empty == any rate (the
     // negotiator intersects it with the candidate set D).
     twFormatCaps c;
     c.types        = { twSampleType::Float32 };
-    c.channelCounts = { 1 };
+    // DERIVED, never independently stated (proposal 36 §5 B2). channelCounts was
+    // seeded a literal { 1 } and never narrowed, and from B2 on getOutputChannels()
+    // is authoritative for page width — two hard-coded 1s that could drift apart
+    // is exactly what the milestone forbids, so this reads the authority instead
+    // of restating it. That does NOT make it a second source of truth: nothing in
+    // the tree READS channelCounts (the negotiator has zero channel logic, §7 trap
+    // 5), so this is a value kept honest until B9 deletes the field.
+    c.channelCounts = { (std::uint16_t)getOutputChannels() };
     return c;
 }
 
@@ -43,8 +50,54 @@ twFormatCaps twComponent::getInputCaps( idx_t /*idx*/ ) const
 {
     twFormatCaps c;
     c.types        = { twSampleType::Float32 };
+    // Deliberately NOT derived from getOutputChannels(): a component's INPUT
+    // width is not declared by anything in the engine at B2 (the plug seam
+    // clamps per §4.4 rule 1 instead), and inventing a declaration here would be
+    // the drifting second authority this milestone exists to avoid. Left at the
+    // pre-B2 literal; B9 deletes the field, or B4 gives input width a real
+    // declaration and this follows it.
     c.channelCounts = { 1 };
     return c;
+}
+
+// --- The wide render path (proposal 36 §4.3, milestone B2) ------------------
+//
+// A width > 1 page can only be filled by a component that knows how; there is no
+// safe generic answer (see the renderPageWide() doc for why a per-channel loop
+// over renderFrames() corrupts every cursor-bearing component). So the base
+// implementation REFUSES, loudly and countably, and returns 0 frames — a page
+// stamped valid with zero frames, i.e. explicit silence, never a plausible
+// render of the wrong thing.
+//
+// Not a Q_ASSERT: §7 trap 9 — Q_ASSERT_X is compiled out of the build everyone
+// runs, so an assert here would be a check that never runs.
+static std::atomic<uint64_t> g_wideRenderRefusals{0};
+
+uint64_t twComponent::wideRenderRefusals()
+{
+    return g_wideRenderRefusals.load();
+}
+
+length_t twComponent::renderPageWide( twOutputPage &page, length_t /*frames*/,
+                                      const sample_t * /*input*/,
+                                      length_t /*inputLength*/ )
+{
+    g_wideRenderRefusals.fetch_add( 1 );
+
+    static std::atomic<bool> reported{ false };
+    if( !reported.exchange( true ) ) {
+        TW_LOGE( "graph",
+                 "twComponent::renderPageWide(): a component declaring "
+                 "getOutputChannels() = %d was asked to fill a %u-channel page "
+                 "and does NOT override renderPageWide(). Refusing: the page is "
+                 "silence with 0 valid frames. A width > 1 component MUST render "
+                 "every channel in one pass (proposal 36 §4.3) — there is no "
+                 "correct generic per-channel loop. (reported once)",
+                 (int)getOutputChannels(), (unsigned)page.channels() );
+    }
+
+    page.fillSilence();
+    return 0;
 }
 
 namespace {
@@ -406,8 +459,10 @@ std::shared_ptr<twOutputPage> twComponent::getOrAllocatePage(
         return page;
     }
 
-    // Allocate new page
-    auto page = std::make_shared<twOutputPage>();
+    // Allocate new page, at THIS component's declared width (proposal 36 §4.2 —
+    // getOutputChannels() is authoritative for page width from B2 on). Default 1,
+    // so this allocates exactly the page it allocated before.
+    auto page = std::make_shared<twOutputPage>((std::uint16_t)getOutputChannels());
     page->startPosition = startPos;
     page->createdAt = std::chrono::steady_clock::now();
     outputPages_[startPos] = page;
@@ -723,7 +778,10 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
                     (void *)this, (unsigned long long)startPos );
         }
         assert(!"freezePage on RT audio thread");
-        auto empty = std::make_shared<twOutputPage>();
+        // At this component's declared width, so even a defused page has the
+        // geometry its consumer expects (§4.5's width check would otherwise read
+        // it as a miss for a second, unrelated reason).
+        auto empty = std::make_shared<twOutputPage>((std::uint16_t)getOutputChannels());
         empty->startPosition = startPos;
         empty->validFrames = 0;
         return empty;
@@ -805,8 +863,11 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
             needsRendering = true;
         } else {
             // Page doesn't exist, or exists but predates the last edit;
-            // allocate a fresh placeholder (claims the render for this thread)
-            page = std::make_shared<twOutputPage>();
+            // allocate a fresh placeholder (claims the render for this thread),
+            // at THIS component's declared width — proposal 36 §4.2, the single
+            // place a real engine page learns how wide it is. Default 1, so this
+            // is the same allocation it was before B2.
+            page = std::make_shared<twOutputPage>((std::uint16_t)getOutputChannels());
             page->startPosition = startPos;
             page->createdAt = std::chrono::steady_clock::now();
             page->validAspects = 0;  // Not yet frozen
@@ -1067,18 +1128,31 @@ length_t twComponent::freezePage_nolock(
     // Safe from infinite recursion because FreezeContext is active; calcOutputTo
     // can query pre-frozen input pages instead of calling freezePage again.
     length_t toRender = twOutputPage::FRAME_CAPACITY;
-    // Channel 0 (§4.3: at width 1 this is byte-for-byte today's path, not
-    // "equivalent to" it). A width > 1 component renders every channel of its
-    // page in ONE pass through renderPageWide() — B2 — precisely because a
-    // per-channel loop here would advance a cursor-bearing component's cursor
-    // once per channel and fill channel 1 with the next page's audio.
-    length_t rendered = renderFrames(
-        page->channelPtr(0),
-        toRender,
-        pageInput,
-        pageInputLength,
-        0  // idx = 0 (first output)
-    );
+    // THE WIDTH FORK (proposal 36 §4.3, milestone B2). The decision is made on
+    // the width of the PAGE IN HAND, never on getOutputChannels(): a declared
+    // width is a promise about future pages, and the legacy mono-scratch and
+    // calcOutputTo paths hand real components a width-1 page to fill.
+    //
+    // At width 1 this is byte-for-byte the pre-B2 code — not "equivalent to" it,
+    // the same call — which is what keeps the byte-exactness gate meaningful.
+    //
+    // At width > 1 the component renders every channel in ONE pass, from one
+    // seek, with one cursor advance. A per-channel loop here would advance a
+    // cursor-bearing component's cursor once per channel and fill channel 1 with
+    // the next page's audio. A component that has not overridden renderPageWide()
+    // gets the base implementation, which refuses rather than rendering.
+    length_t rendered;
+    if (page->channels() > 1) {
+        rendered = renderPageWide(*page, toRender, pageInput, pageInputLength);
+    } else {
+        rendered = renderFrames(
+            page->channelPtr(0),
+            toRender,
+            pageInput,
+            pageInputLength,
+            0  // idx = 0 (first output)
+        );
+    }
 
     // Capture new internal state for next page resumption
     {

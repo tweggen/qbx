@@ -32,10 +32,21 @@
 // component looped per channel would fill channel 1 with the NEXT page's audio.
 // The cursor here exists to make that property testable.
 //
-// AT B1b THIS IS A UNIT PROBE ONLY. It is never added to a graph, never
-// scheduled, and no production component declares a width > 1. B2 promotes it to
-// a real graph participant, which is why it lives in a header rather than inside
-// one test's .cc.
+// PROMOTED BY B2 TO A REAL GRAPH PARTICIPANT, in place — which is why it lived
+// in a header rather than inside one test's .cc. It now declares its width
+// (getOutputChannels() == 4, §4.2) and overrides renderPageWide() (§4.3), so a
+// freeze through the ORDINARY path — twComponent::freezePage allocating a page
+// at the component's declared width, freezePage_nolock forking on the width of
+// the page in hand — produces a genuine 4-channel page, on the real scheduler's
+// worker threads. renderWide() below is still the body; renderPageWide() is the
+// engine's door to it, and page_channels_test still drives renderWide() directly
+// as a unit probe.
+//
+// PORT COUNT IS SEPARATE FROM WIDTH, and this component is where that is
+// demonstrated: `nPorts` output latches, default 1. §4.4 rule (1) maps latch
+// index -> channel min(index, page->channels - 1), so a 4-latch instance is the
+// shape twSampleReader has always had (one latch per source channel) and the
+// only thing that was ever missing was the channel meaning of the index.
 
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/twlatch.h"
@@ -49,7 +60,8 @@ class twSyntheticWideSource : public twComponent
 public:
     static constexpr std::uint16_t kChannels = 4;
 
-    explicit twSyntheticWideSource( tw303aEnvironment &e ) : twComponent( e ) {}
+    explicit twSyntheticWideSource( tw303aEnvironment &e, idx_t nPorts = 1 )
+        : twComponent( e ), nPorts_( nPorts < 1 ? 1 : nPorts ) {}
 
     // The signal, as a pure function of (channel, absolute frame). A test can
     // predict any sample without running the component.
@@ -99,18 +111,61 @@ public:
     int advanceCount() const { return advanceCount_; }
 
     // --- twComponent contract (the minimum that makes this a component) ---
+
+    // §4.2. This is what makes twComponent::freezePage allocate a 4-channel page
+    // for this component, and therefore what makes freezePage_nolock take the
+    // wide fork. Nothing else in the tree returns anything but 1 at B2.
+    idx_t getOutputChannels() const override { return kChannels; }
+
+    // §4.3 — the engine's door into renderWide(). page.startPosition is
+    // authoritative for the content (freezePage_nolock has already reset or
+    // restored state and seeked), so the seek-once/advance-once shape is the
+    // same one the unit probe drives directly.
+    length_t renderPageWide( twOutputPage &page, length_t frames,
+                             const sample_t * /*input*/,
+                             length_t /*inputLength*/ ) override
+    {
+        return renderWide( page, page.startPosition, frames );
+    }
+
+    // The NARROW degradation: what this component does when it is handed a
+    // one-channel buffer — the legacy calcOutputTo / mono-scratch paths, which
+    // no width fork can widen. It renders channel 0, which is the same answer
+    // §4.4's plug clamp gives, and it is what a real wide component (B3's
+    // twSampleReader) must also keep. Overriding it is not optional
+    // bookkeeping: twComponent's base renderFrames() calls calcOutputTo() and
+    // the base calcOutputTo() calls renderFrames(), so a component that
+    // overrides NEITHER recurses until the stack ends.
+    length_t renderFrames( sample_t *out, length_t n, const sample_t *,
+                           length_t, idx_t ) override
+    {
+        for( length_t i = 0; i < n; ++i ) out[i] = value( 0, cursor_ + (offset_t)i );
+        cursor_ += n;
+        return n;
+    }
+
     void reset() override { cursor_ = 0; }
     void createOutputLatches() override
     {
-        pOutputLatches_[0] =
-            std::make_shared<twStreamingLatch>( shared_from_this(), 0, 0 );
+        // One latch per PORT (not per channel of the page — §4.4 rule 1 maps a
+        // latch index onto a channel at read time, which is the whole point).
+        for( idx_t i = 0; i < nPorts_; ++i ) {
+            pOutputLatches_[i] =
+                std::make_shared<twStreamingLatch>( shared_from_this(), i, 0 );
+        }
     }
+    // A source: seekable, and its cursor is its own — so the freeze must
+    // serialize on it exactly as a real reader's does.
+    bool isSeekable() const override { return true; }
+    int seekTo( offset_t p ) override { cursor_ = p; return 0; }
+    bool usesSerialCursor() const override { return true; }
     idx_t getNInputs() const override { return 0; }
-    idx_t getNOutputs() const override { return 1; }
+    idx_t getNOutputs() const override { return nPorts_; }
     const char *getInputName( idx_t ) const override { return nullptr; }
     const char *getOutputName( idx_t ) const override { return "out"; }
 
 private:
+    const idx_t nPorts_ = 1;
     offset_t cursor_ = 0;
     int seekCount_ = 0;
     int advanceCount_ = 0;

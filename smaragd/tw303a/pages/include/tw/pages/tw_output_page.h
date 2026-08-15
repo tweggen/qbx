@@ -241,4 +241,32 @@ private:
     static void reportScratchOnWidePage(std::uint16_t channels);
 };
 
+// WIDTH MISMATCH IS A MISS (proposal 36 §4.5, wired by B2).
+//
+// Returns true iff `page` may be READ by a consumer of a producer that currently
+// declares `producerChannels` channels. A page whose width disagrees is treated
+// as a MISS — never as audio: playback falls back to silence for that page, a
+// meter decays.
+//
+// WHY THIS RULE EXISTS AT ALL. twOutputPage::channels is immutable after
+// allocation, so a project width change cannot mutate a cached page; it bumps the
+// content epoch instead, and the old-width pages become stale by the existing
+// mechanism. But proposal 16's stale-page fallback DELIBERATELY serves stale
+// pages during live playback, so that is the one path on which a page of the
+// WRONG width can reach the RT callback or twLevelProbe — and reading
+// channelPtr(1) of a stale width-1 page would be an out-of-bounds read ON THE
+// AUDIO THREAD. (channelPtr clamps and reports rather than reading out of bounds,
+// but a clamp that fires on the audio thread is a bug being papered over, not a
+// policy.) Width mismatch is the one staleness that is not tolerable.
+//
+// A FRESH page always passes: pages are allocated at their producer's declared
+// width, so only a page that predates a width change can fail. In particular a
+// correctly-wide page is NOT rejected because a consumer only reads channel 0 —
+// that consumer is narrow, not wrong, and rejecting it would silence playback
+// between the milestone that widens the graph and the one that widens the sink.
+//
+// nullptr is not usable (there is nothing to read), which lets call sites write
+// the check and the null test as one condition.
+bool twPageWidthUsable(const twOutputPage *page, idx_t producerChannels);
+
 #endif  // _TW_OUTPUT_PAGE_H_

@@ -205,15 +205,39 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		const uint64_t want  = (uint64_t)(maxLength - written);
 		const length_t n = (length_t)(avail < want ? avail : want);
 
-		// THE PLUG SEAM. This latch already carries the index it was built with
-		// (twLatch(component, idx)) and has never consulted it. Proposal 36 4.4
-		// rule (1) gives that index its channel meaning here -- a plug pull yields
-		// channel min(latchIndex, page->channels - 1) of the page the producer
-		// ACTUALLY froze, which reproduces today's behaviour exactly while every
-		// page is one channel wide. Wiring the latch index in is B2's job; what
-		// B1b does is make the channel EXPLICIT, so the day it becomes a variable
-		// there is one place to change.
-		memcpy(pDest + written, page->channelPtr(0) + inPage, (size_t)n * sizeof(sample_t));
+		// THE PLUG SEAM, and proposal 36 §4.4 rule (1), wired here by B2:
+		//
+		//   a plug pull yields channel min(latchIndex, page->channels - 1)
+		//   of the page the producer ACTUALLY froze.
+		//
+		// This latch has carried the index it was built with since it was written
+		// (twLatch(component, idx)) and never consulted it. Giving that stored
+		// index its channel meaning is the whole change — and it is what finally
+		// makes twSampleReader's per-channel latches (one per source channel,
+		// getNOutputs() == src_.channels()) mean something instead of being dead:
+		// every one of them served channel 0 before this line.
+		//
+		// The width acted on is page->channels(), NEVER the producer's declared
+		// getOutputChannels(). A declared width is a promise about future pages;
+		// the tree launders pages between components (an insert-less
+		// twPluginChain forwards its twTrackMix page verbatim, and its silence
+		// pages are default-constructed width 1), so the only width that is a
+		// fact is the width of the page in hand.
+		//
+		// The clamp is exactly what twSampleSource::read already does for an
+		// out-of-range channel ("mono plays on every channel"), so at width 1 —
+		// every page in the tree at B2 — every latch index maps to channel 0 and
+		// this is byte-for-byte the previous behaviour. Downmix policy (average
+		// vs. select) belongs to whatever component wants it, never to the plug.
+		//
+		// Serves the bound-page branch above and the legacy pull below it alike:
+		// both arrive here holding a page, which is the only thing the rule needs.
+		const idx_t nCh = (idx_t)page->channels();
+		idx_t plugChannel = getIndex();
+		if (plugChannel < 0) plugChannel = 0;
+		if (plugChannel > nCh - 1) plugChannel = nCh - 1;
+		memcpy(pDest + written, page->channelPtr(plugChannel) + inPage,
+		       (size_t)n * sizeof(sample_t));
 		written += n;
 	}
 
