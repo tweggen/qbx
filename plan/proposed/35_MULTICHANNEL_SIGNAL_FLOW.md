@@ -324,15 +324,37 @@ plus the **byte-exactness gate**, which needs a named corpus or it is a wish:
 A case that fails once and passes on re-run is not a pass: pin with
 `repeat_test.sh` over `SMARAGD_REVAL_WORKERS` {1,4,8,16} and report either way.
 
-### M0 — Make the gates able to see channels *(in progress)*
+### M0 — Make the gates able to see channels ✅ **EXECUTED 2026-08-15** (`50f1e29`)
+
+> Delivered: the whole-file/region split collapsed (a whole file *is* a region
+> with `frameCount < 0`), `assert-channels-differ` measuring both level
+> (`minRmsDelta`) and content (`minDiffRms`, which catches equal-level-but-
+> different channels), a committed 4-channel fixture with an exact RMS ladder
+> (0.5 / 0.25 / 0.125 / 0.0625) from a committed generator with a `--verify`
+> mode, and fixture path resolution. `channel_assert_dupmono.qxa` asserts the
+> duplicated-mono sink **via `expectReject`** — it is a gate that is *supposed to
+> break at B5*, which is the cleanest possible signal that the sink went wide.
+> See §7 trap 1 for what this proposal got wrong about it.
 
 The suite currently cannot detect this feature landing or regressing.
 
 1. `assert-audio-energy` / `assert-audio-peak` **silently ignore `channel=` when
-   `frameCount="-1"`** (both take the whole-file path, which hard-codes the
-   all-channel mean). Invisible today because the channels are equal; it would
-   silently mis-pass the day the sink goes wide. Check the same shape in
-   `assert-audio-frequency` and `assert-source-position`.
+   `frameCount="-1"`** (both take a separate whole-file path that hard-codes
+   `channelIndex = -1`). Invisible today because the channels are equal; it would
+   silently mis-pass the day the sink goes wide.
+   *Executed 2026-08-15 — and three of this item's premises were wrong:*
+   `assert-audio-frequency` and `assert-source-position` do **not** have the bug
+   (`estimateFundamental` already handled `frameCount < 0` correctly and
+   `decodePositionAt` requires a positive window), so it is two verbs, not four.
+   The fold is **not** an "all-channel mean": it is the *pooled RMS* for energy
+   and the *max over channels* for peak — which is why a dropped `channel=` on a
+   peak assertion can only mis-report a quiet channel as loud, never the reverse,
+   and why the fixture case bounds channel 1 with `maxPeak=0.40`. Two blocking
+   holes went unmentioned in this proposal and had to be closed to deliver M0 at
+   all: the assert verbs could resolve `filename` **only** against the test
+   output dir, so "commit a fixture and assert on it" was not achievable; and an
+   out-of-range `channel=` reported RMS 0 / peak 0 rather than failing, so a typo
+   could masquerade as a silent render.
 2. Add `assert-channels-differ` so "genuinely different audio" is assertable.
 3. Commit a reproducibly-generated asymmetric 4-channel WAV fixture.
 
