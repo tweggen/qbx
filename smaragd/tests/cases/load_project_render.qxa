@@ -28,10 +28,10 @@
                          startFrame="48000" frameCount="48000"
                          minRms="0.26" maxRms="0.33"/>
 
-    <!-- past the 2 s cut: silence -->
-    <assert-audio-energy filename="load_project_render.wav"
-                         startFrame="96000" frameCount="48000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="load_project_render.wav"
+                         minFrames="96000" maxFrames="96000"/>
   </actions>
 
   <assertions>

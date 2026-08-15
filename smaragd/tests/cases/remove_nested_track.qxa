@@ -64,10 +64,10 @@
     <assert-audio-energy filename="rmtrk_gone.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
-    <!-- ...and only the nested lane's span went silent. -->
-    <assert-audio-energy filename="rmtrk_gone.wav"
-                         startFrame="336000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- ...and only the nested lane's span went away: the arrangement
+         ends at the surviving lane's clip. -->
+    <assert-audio-length filename="rmtrk_gone.wav"
+                         minFrames="192000" maxFrames="192000"/>
 
     <undo count="1"/>
 
@@ -86,9 +86,10 @@
     <redo count="1"/>
 
     <render filename="rmtrk_redone.wav" format="wav" quality="10"/>
-    <assert-audio-energy filename="rmtrk_redone.wav"
-                         startFrame="336000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- ...and only the nested lane's span went away: the arrangement
+         ends at the surviving lane's clip. -->
+    <assert-audio-length filename="rmtrk_redone.wav"
+                         minFrames="192000" maxFrames="192000"/>
     <assert-audio-energy filename="rmtrk_redone.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>

@@ -45,10 +45,10 @@
     <assert-audio-frequency filename="clip_properties_a.wav"
                             startFrame="48000" frameCount="24000"
                             minHz="852" maxHz="905"/>
-    <!-- Same length: the clip still ends at 192000 frames -->
-    <assert-audio-energy filename="clip_properties_a.wav"
-                         startFrame="192000" frameCount="24000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="clip_properties_a.wav"
+                         minFrames="192000" maxFrames="192000"/>
 
     <!-- Serialization roundtrip: the clip properties survive save/load -->
     <save-project path="../../build/clip_properties_actions.qxp"/>
@@ -59,9 +59,10 @@
     <assert-audio-frequency filename="clip_properties_b.wav"
                             startFrame="48000" frameCount="24000"
                             minHz="852" maxHz="905"/>
-    <assert-audio-energy filename="clip_properties_b.wav"
-                         startFrame="192000" frameCount="24000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="clip_properties_b.wav"
+                         minFrames="192000" maxFrames="192000"/>
   </actions>
 
   <assertions>

@@ -52,9 +52,10 @@
     <remove-sample trackIndex="2" clipIndex="0" timePos="384000"/>
 
     <render filename="assetcopy_deleted.wav" format="wav" quality="10"/>
-    <assert-audio-energy filename="assetcopy_deleted.wav"
-                         startFrame="384000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="assetcopy_deleted.wav"
+                         minFrames="288000" maxFrames="288000"/>
 
     <undo count="1"/>
 

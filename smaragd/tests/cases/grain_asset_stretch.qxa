@@ -57,10 +57,10 @@
                          startFrame="480000" frameCount="384000"
                          minRms="0.20" maxRms="0.34"/>
 
-    <!-- Past the asset (18 s+): silence. -->
-    <assert-audio-energy filename="grain_asset_stretch.wav"
-                         startFrame="864000" frameCount="48000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="grain_asset_stretch.wav"
+                         minFrames="864000" maxFrames="864000"/>
   </actions>
 
   <assertions>

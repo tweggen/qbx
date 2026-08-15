@@ -74,10 +74,10 @@
                          startFrame="192000" frameCount="48000"
                          minRms="0.36" maxRms="0.48"/>
 
-    <!-- 5-6 s: past the stretched tail; silence -->
-    <assert-audio-energy filename="render_split_slip_stretch.wav"
-                         startFrame="240000" frameCount="48000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="render_split_slip_stretch.wav"
+                         minFrames="240000" maxFrames="240000"/>
 
     <!-- Full-scale allowed (proposal 26): Rubber Band preserves RMS but can
          overshoot hot transients to full-scale (Gibbs); the 0.8-peak sawtooth

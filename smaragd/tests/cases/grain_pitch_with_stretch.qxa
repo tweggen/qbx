@@ -33,9 +33,10 @@
     <assert-audio-energy filename="grain_pitch_with_stretch.wav"
                          startFrame="0" frameCount="384000"
                          minRms="0.20" maxRms="0.32"/>
-    <assert-audio-energy filename="grain_pitch_with_stretch.wav"
-                         startFrame="384000" frameCount="24000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="grain_pitch_with_stretch.wav"
+                         minFrames="384000" maxFrames="384000"/>
 
     <!-- Full-scale allowed (proposal 26): Rubber Band preserves RMS but can
          overshoot hot transients to full-scale (Gibbs); the 0.8-peak sawtooth
