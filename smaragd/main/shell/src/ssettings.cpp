@@ -53,6 +53,28 @@ void SSettings::setAudioInputDeviceId( const QString &id )
     setValue( "audio/inputDeviceId", id );
 }
 
+QString SSettings::midiPortId( const QString &portName ) const
+{
+    if( portName.isEmpty() ) return QString();
+    return value( "midi/portId/" + portName ).toString();
+}
+
+void SSettings::setMidiPortId( const QString &portName, const QString &deviceId )
+{
+    if( portName.isEmpty() ) return;
+    setValue( "midi/portId/" + portName, deviceId );
+}
+
+QStringList SSettings::midiInputPortIds() const
+{
+    return value( "midi/inputPortIds" ).toStringList();
+}
+
+void SSettings::setMidiInputPortIds( const QStringList &ids )
+{
+    setValue( "midi/inputPortIds", ids );
+}
+
 uint32_t SSettings::audioOutputLatencyFrames( const QString &deviceId ) const
 {
     return value( "audio/outputLatency/" + deviceId, 0u ).toUInt();

@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 P7b, AC3b. The PER-TRACK SEND OFFSET and the FOLDER FEED (D6,
+  design 3.2.1). Both are asserted in one playback run, on two different MIDI
+  channels, because they are independent of each other and the run is the
+  expensive part.
+
+  1. OFFSET. `offsetMs` is signed, +-500 ms, and POSITIVE means SEND EARLIER -
+     the requester's outboard-gear case: gear whose audio return arrives late
+     is compensated so its audio lands on the grid. 200 ms at 48 kHz is 9600
+     frames, so every event on the offset track leaves 9600 frames before the
+     audio at its position is audible.
+
+     The notes start at 1 s rather than at 0, and that is not incidental: you
+     cannot send a message 200 ms before the transport started. An event whose
+     shifted due time falls before the run start is sent as soon as the pump
+     has a clock, i.e. clamped, which would make an assertion at -9600 a
+     statement about the clamp rather than about the offset. Pre-roll for the
+     lead-in is a later feature (design D4 has it for instruments).
+
+  2. FOLDER FEED. A track's feed is its own event clip set merged with the feed
+     of every child that passes events up, and a child bubbles iff it has no
+     local consumer - which now includes a MIDI-out port of its own. So a
+     folder carrying the port sends its CHILDREN's patterns, remapped to the
+     folder's channel: the drum-machine-on-the-folder case, and REAPER's
+     behaviour.
+
+  120 BPM / PPQ 960 / 48 kHz: 1920 ticks = 1 s = 48000 frames.
+-->
+<SActionScript version="1" name="midi_out_offset_and_folder">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- track 0: the offset track, channel 2 -->
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="9600" name="offset"/>
+    <add-note clip="0,0" tick="1920" dur="960" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="3840" dur="960" key="64" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="5760" dur="960" key="67" velocity="100" channel="0"/>
+    <set-track-midi-output trackPath="0" port="capture" channel="2" offsetMs="200"/>
+
+    <!-- tracks 1 + 2, grouped into a folder that owns the port -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="childA"/>
+    <add-note clip="1,0" tick="0"   dur="480" key="72" velocity="100" channel="0"/>
+    <insert-midi-clip trackPath="2" timePos="0" duration="3840" name="childB"/>
+    <add-note clip="2,0" tick="960" dur="480" key="76" velocity="100" channel="1"/>
+
+    <!-- group-track runs the arranger's REAL Group macro. -->
+    <select-track trackPath="1"/>
+    <select-track trackPath="2" modifiers="ctrl"/>
+    <group-track trackPath="1"/>
+
+    <!-- Only the FOLDER has a port. Its children keep `auto` routing, have no
+         local consumer, and therefore bubble their events up into its feed. -->
+    <set-track-midi-output trackPath="1" port="capture" channel="5" offsetMs="0"/>
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-ms ms="3800"/>
+    <toggle-playback play="0"/>
+
+    <dump-midi-capture filename="offset_folder.txt" minCount="5"/>
+
+    <!-- 1. OFFSET: 9600 frames earlier than 48000 / 96000 / 144000. -->
+    <assert-midi-out kind="noteon" key="60" channel="2" at="38400"  tolerance="4096" count="1"/>
+    <assert-midi-out kind="noteon" key="64" channel="2" at="86400"  tolerance="4096" count="1"/>
+    <assert-midi-out kind="noteon" key="67" channel="2" at="134400" tolerance="4096" count="1"/>
+    <!-- ... and NOT at the un-offset positions: 9600 frames is more than twice
+         the tolerance, so these two assertions cannot both pass by accident. -->
+    <assert-midi-out kind="noteon" key="60" channel="2" at="48000" tolerance="4096" count="0"/>
+
+    <!-- 2. FOLDER: BOTH children's notes went out on the PARENT's port, and
+         both were remapped to the parent's channel 5 - including child B's,
+         which was authored on channel 1. -->
+    <assert-midi-out kind="noteon" key="72" channel="5" at="0"     tolerance="4096" count="1"/>
+    <assert-midi-out kind="noteon" key="76" channel="5" at="24000" tolerance="4096" count="1"/>
+    <!-- Nothing escaped on an authored channel: track 0 forces 2, the folder
+         forces 5, and no child sends on its own. -->
+    <assert-midi-out channel="0" count="0"/>
+    <assert-midi-out channel="1" count="0"/>
+
+    <!-- The panic at the stop covers BOTH channels that were used, and only
+         those. -->
+    <assert-midi-out kind="cc" cc="123" value="0" channel="2" minCount="1"/>
+    <assert-midi-out kind="cc" cc="123" value="0" channel="5" minCount="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

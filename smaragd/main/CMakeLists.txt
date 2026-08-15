@@ -190,6 +190,8 @@ set(APP_OBJECTS_FILES
     objects/track/src/sreorderpluginaction.cpp
     objects/track/src/ssetpluginbypassaction.cpp
     objects/track/src/ssetpluginparamaction.cpp
+    objects/track/include/app/objects/track/ssettrackmidioutputaction.h
+    objects/track/src/ssettrackmidioutputaction.cpp
     objects/track/src/ssettrackmidiroutingaction.cpp
     objects/track/src/ssettrackmuteaction.cpp
     objects/track/src/ssettracksoloaction.cpp
@@ -265,9 +267,11 @@ set(APP_UI_FILES
     servicesui/src/srenderprogress.cpp
     # --- app/shell
     shell/include/app/shell/sapplication.h
+    shell/include/app/shell/smidioutpump.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssettings.h
     shell/src/sapplication.cpp
+    shell/src/smidioutpump.cpp
     shell/src/smainwindow.cpp
     shell/src/ssettings.cpp
     # --- app/testkit
@@ -316,6 +320,8 @@ set(APP_UI_FILES
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
     testkit/src/smetertestactions.cpp
+    testkit/include/app/testkit/smidiouttestactions.h
+    testkit/src/smidiouttestactions.cpp
     testkit/src/smiditestactions.cpp
     testkit/src/spluginuitestactions.cpp
     testkit/src/sreportpagememoryaction.cpp

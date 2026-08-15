@@ -207,6 +207,12 @@ const Fixture kFixtures[] = {
       "<set-link-timebase clip='1,0' timebase='time'/>" },
     { "set-track-midi-routing",
       "<set-track-midi-routing trackPath='1,0' routing='parent'/>" },
+    // set-track-midi-output is ABSOLUTE, so every attribute is always written
+    // (an omitted channel would otherwise read back as "as authored" and undo
+    // would restore the wrong thing).
+    { "set-track-midi-output",
+      "<set-track-midi-output trackPath='1,0' port='capture' channel='2'"
+      " offsetMs='-200'/>" },
 
     // --- the event test verbs ----------------------------------------------
     // clip AND trackPath, kind, contains and velocityTolerance are each
@@ -221,6 +227,22 @@ const Fixture kFixtures[] = {
       "<assert-midi-file filename='out.mid' trackCount='3' noteCount='6'"
       " eventCount='10' firstTick='0' ppq='960' format='1'/>" },
     // timebase is written only when non-empty.
+    // --- the MIDI-out verbs (proposal 36 P7b) -------------------------------
+    // port/kind are written only when non-empty and `at` only when it was
+    // given, so the fixture sets all three plus every numeric attribute.
+    { "assert-midi-out",
+      "<assert-midi-out port='capture' kind='noteon' channel='2' key='60'"
+      " cc='7' value='100' at='-9600' tolerance='2048' count='1'"
+      " minCount='1' maxCount='2' index='0'/>" },
+    // minCount is written only when non-zero.
+    { "dump-midi-capture",
+      "<dump-midi-capture filename='midi_out.txt' minCount='6'/>" },
+    { "assert-midi-options",
+      "<assert-midi-options contains='backend=capture' absent='virtual=no'"
+      " outputPorts='1' inputPorts='1'/>" },
+    { "set-option", "<set-option key='midi/outOffsetMs' value='120'/>" },
+    { "wait-ms", "<wait-ms ms='3600'/>" },
+
     { "assert-clip-window",
       "<assert-clip-window clip='1,0' startTime='96000' duration='192000'"
       " loopLength='24000' startOffset='4800' timebase='beats' take='1'/>" },

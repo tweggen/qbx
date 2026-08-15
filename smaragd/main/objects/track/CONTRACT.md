@@ -76,6 +76,21 @@ Invariants (normative detail: CLIP_MODEL.md):
    project machine-specific. SPluginSlot::serializeSelfAttributes calls
    SObject::serializeSelfAttributes FIRST — that is what emits id=, and without
    it SProjectLoader::createObjects aborts the WHOLE load.
+9. MIDI output (proposal 36 P7b) is three serialized attributes and nothing
+   more: `midiOutPort` is a PORTABLE device NAME (never a machine-local id —
+   `SSettings` maps the name to a WinMM index / CoreMIDI uniqueID / ALSA
+   "client:port" per machine, the same split the audio output device uses),
+   `midiOutChannel` is 0-BASED 0..15 with -1 meaning "as authored", and
+   `midiOutOffsetMs` is a signed +-500 ms send offset where POSITIVE means SEND
+   EARLIER. All three are written ONLY when they are not the default, so every
+   project written before proposal 36 re-serializes byte-identically. The track
+   itself opens no port and sends nothing: `SMidiOutPump` (main/shell) reads
+   `hasMidiOut()` and the feed.
+10. hasMidiOut() feeds `bubblesEventsUp()`, so GAINING OR LOSING A PORT changes
+   the `auto` routing rule ("consumed here, or bubbled up") and therefore what
+   the PARENT's feed — and its instrument — receives. `setMidiOutput` range-
+   invalidates `[0, inf)` on that transition and only on it; a channel or
+   offset change moves no audio and invalidates nothing.
 
 Self-registration (Phase 5): strack.cpp registers "STrack" and
 spluginslot.cpp registers "SPluginSlot" with SProjectLoader from a static

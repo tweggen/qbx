@@ -204,6 +204,45 @@ if(TEST qxa.log_dock_scale)
     set_tests_properties(qxa.log_dock_scale PROPERTIES RUN_SERIAL TRUE)
 endif()
 
+# --- MIDI out (proposal 36 P7b) ----------------------------------------------
+#
+# These four PLAY, in real time, and assert WHEN a MIDI message reached the wire
+# against the audio capture backend's own block log. That makes them
+# wall-clock-latency tests in exactly the sense the section above describes, so
+# they get the machine to themselves within the run. Two of them additionally
+# write a per-user setting (midi/chaseNoteOns, midi/outOffsetMs) that the pump
+# reads at every transport start, so a concurrent playback case would inherit
+# it -- another reason the set is serialized rather than merely paced.
+#
+# midi_out_render_silent and midi_out_backend_reject neither play nor mutate a
+# setting, so they stay parallel.
+foreach(_serial midi_out_capture midi_out_chase_and_stop midi_out_loop_wrap
+                midi_out_offset_and_folder midi_options_page)
+    if(TEST qxa.${_serial})
+        set_tests_properties(qxa.${_serial} PROPERTIES RUN_SERIAL TRUE)
+    endif()
+endforeach()
+
+# SMARAGD_CAPTURE_SPEED=1 is spelled out rather than left to the default: the
+# testkit maps a MIDI host time onto a project frame through the audio capture
+# backend's block log, and any other pacing changes what a project frame means
+# in wall-clock terms while the MIDI due times keep meaning wall-clock (D6).
+foreach(_paced midi_out_capture midi_out_chase_and_stop midi_out_loop_wrap
+               midi_out_offset_and_folder)
+    if(TEST qxa.${_paced})
+        set_tests_properties(qxa.${_paced} PROPERTIES
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+    endif()
+endforeach()
+
+# AC5: `assert-midi-out` must REJECT when there is no capture MIDI recorder,
+# instead of reporting "0 messages, all good". The only way to put the app in
+# that state is to choose another backend before it starts.
+if(TEST qxa.midi_out_backend_reject)
+    set_tests_properties(qxa.midi_out_backend_reject PROPERTIES
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_MIDI_BACKEND=null")
+endif()
+
 message(STATUS "smaragd: ALSA=${ENABLE_ALSA} PipeWire=${ENABLE_PIPEWIRE} "
                "PulseAudio=${ENABLE_PULSEAUDIO} JACK=${ENABLE_JACK} "
                "WASAPI=${ENABLE_WASAPI} CoreAudio=${ENABLE_COREAUDIO} "
