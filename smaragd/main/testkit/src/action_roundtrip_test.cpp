@@ -220,6 +220,25 @@ const Fixture kFixtures[] = {
     { "assert-midi-file",
       "<assert-midi-file filename='out.mid' trackCount='3' noteCount='6'"
       " eventCount='10' firstTick='0' ppq='960' format='1'/>" },
+    // --- the event-editor verbs (proposal 36 P4) ---------------------------
+    // Every attribute is written unconditionally by these four, so a fixture
+    // declaring all of them keeps all of them in the audit.
+    { "virtual-key",
+      "<virtual-key key='67' velocity='90' durationTicks='480'/>" },
+    // edge='end' deliberately: with an empty edge and lane='notes', readXml
+    // DEFAULTS toKey to key (a move needs a destination, a resize does not),
+    // which would hide a dropped toKey.
+    { "drag-note",
+      "<drag-note clip='1,0' tick='960' key='64' channel='2' toTick='1920'"
+      " toKey='67' edge='end' lane='notes' toValue='90'/>" },
+    { "assert-event-editor",
+      "<assert-event-editor clip='1,0' kind='pianoroll' contains='notes=2'"
+      " absent='empty=1' grabPng='roll.png' grabWidth='640'"
+      " grabHeight='320'/>" },
+    { "assert-track-head",
+      "<assert-track-head trackPath='1,0' headHeight='132'"
+      " contains='density=Full' absent='I=1'/>" },
+
     // timebase is written only when non-empty.
     { "assert-clip-window",
       "<assert-clip-window clip='1,0' startTime='96000' duration='192000'"

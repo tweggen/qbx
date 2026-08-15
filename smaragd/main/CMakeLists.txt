@@ -241,6 +241,19 @@ set(APP_UI_FILES
     timeline/src/slevelmeter.cpp
     timeline/src/strackheaderresizer.cpp
     timeline/src/szoomscrollbar.cpp
+    # --- app/eventui (proposal 36 P4)
+    eventui/include/app/eventui/seventeditordock.h
+    eventui/include/app/eventui/seventeditorview.h
+    eventui/include/app/eventui/seventtimeaxis.h
+    eventui/include/app/eventui/seventtimeruler.h
+    eventui/include/app/eventui/spianorollview.h
+    eventui/include/app/eventui/svirtualkeyboarddock.h
+    eventui/src/seventeditordock.cpp
+    eventui/src/seventeditorview.cpp
+    eventui/src/seventtimeaxis.cpp
+    eventui/src/seventtimeruler.cpp
+    eventui/src/spianorollview.cpp
+    eventui/src/svirtualkeyboarddock.cpp
     # --- app/pluginui
     pluginui/include/app/pluginui/spluginbrowserdialog.h
     pluginui/include/app/pluginui/splugineffectstrip.h
@@ -284,6 +297,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertlogaction.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
+    testkit/include/app/testkit/seventuitestactions.h
     testkit/include/app/testkit/sdumpplaybackcaptureaction.h
     testkit/include/app/testkit/sgrouptrackaction.h
     testkit/include/app/testkit/slanelayouttestactions.h
@@ -311,6 +325,7 @@ set(APP_UI_FILES
     testkit/src/sassertlogaction.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
+    testkit/src/seventuitestactions.cpp
     testkit/src/sdumpplaybackcaptureaction.cpp
     testkit/src/sgrouptrackaction.cpp
     testkit/src/slanelayouttestactions.cpp
@@ -364,6 +379,7 @@ target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins tw_sidecar)
 add_library(app_ui OBJECT ${APP_UI_FILES})
 target_include_directories(app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/timeline/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/eventui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/pluginui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/servicesui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/shell/include

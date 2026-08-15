@@ -162,6 +162,31 @@ Event assertions (proposal 36 P1):
   into the shared tests/cases working directory (that is one of the properties
   that make the suite safe under ctest -j). Cases name ../../build/<case>.mid.
 
+Event EDITOR gestures (proposal 36 P4):
+  virtual-key, drag-note, assert-event-editor and assert-track-head all go
+  through the SHELL (SMainWindow), because testkit may include neither
+  app/eventui nor app/timeline (inv. 5) - the same route drag-clip-edge and
+  assert-meter take to reach the arranger and the track head.
+  They drive the REAL widgets. virtual-key presses the virtual keyboard, which
+  submits `add-note` at the LOCATOR; drag-note synthesises press/move/release
+  on SPianoRollView, which submits `set-notes` on release. Neither verb is
+  undoable itself: the NESTED action is what lands on the stack, so
+  `<undo count="1"/>` after the verb reverses the gesture - exactly the shape
+  drag-clip-edge and plugin-editor-set-param already have.
+  A drag-note drop is PIXEL-QUANTISED and then grid-snapped. At the arranger's
+  default 30 px/s one pixel is 64 ticks and the 1/16 grid is 240, so a move of
+  a BAR lands on the slot it aimed at with margin either side while a move of
+  one division would not. Assert a grid position or a range, never an
+  arbitrary tick.
+  A note dragged ONTO the clip's window end disappears from the clip's
+  snapshot - windows are half-open. That is the window's rule, not the
+  gesture's; give the case a clip long enough that the destination is inside.
+  assert-event-editor's `contains` matches a CONTIGUOUS substring of
+  describe(), so the field ORDER of `kind=…|notes=…|grid=…|linked=…|empty=…`
+  is part of the contract. assert-track-head reads describeHead(), whose
+  fitW/fitH fields are the "hiding beats clipping" density rule made
+  assertable. PNG grabs are coverage of the paint paths, never oracles.
+
 How to test:
   cd smaragd/tests/cases
   ../../build/bin/smaragd.exe --test-case <case>.qxa --test-output-dir <dir>

@@ -23,6 +23,8 @@ class SLogView;
 class SLevelMeter;
 class STrackDetailPanel;
 class SClipPropertiesPanel;
+class SEventEditorDock;
+class SVirtualKeyboardDock;
 
 class SMainWindow
     : public QMainWindow
@@ -88,6 +90,34 @@ public:
     // false if the grab or the save fails.
     bool grabLevelMeter( const QString &path, double peak, double rms,
                          bool vertical, int w, int h );
+
+    // TEST ENTRY POINT (proposal 36 P4): build the REAL track head at
+    // `headHeight` and return SSMVMixerControl::describeHead() — the density
+    // rules for the instrument "I" and automation "A" buttons, and whether the
+    // strip still FITS the lane it was given. Sibling of describeTrackMeter,
+    // and here for the same reason: testkit may not include app/timeline
+    // (testkit CONTRACT inv. 5). Empty string when the path names no lane.
+    QString describeTrackHead( const QString &trackPath, int headHeight );
+
+    // TEST ENTRY POINTS for the event editor (proposal 36 P4). The dock is
+    // built in the ctor and never shown in a headless run, so these drive the
+    // REAL widget rather than a re-spelling of it.
+    //
+    //   describeEventEditor  — bind the dock to `clipPath` (empty = follow the
+    //                          selection) and return SEventEditorDock::
+    //                          describe(); `kind` switches the editor kind
+    //                          first when non-empty.
+    //   grabEventEditor      — paint the dock into a PNG. Coverage, not oracle.
+    //   dragNote             — one REAL press/move/release on the piano roll.
+    //   virtualKey           — one virtual-keyboard note at the locator, which
+    //                          submits `add-note`. False when there is no event
+    //                          clip to write into.
+    QString describeEventEditor( const QString &clipPath, const QString &kind );
+    bool grabEventEditor( const QString &path, int w, int h );
+    bool dragNote( const QString &clipPath, qint64 tick, int key, int channel,
+                   qint64 toTick, int toKey, const QString &edge,
+                   const QString &lane, double toValue );
+    bool virtualKey( int key, double velocity, qint64 durationTicks );
 
     // Log dock control, for the log-stress test action (testkit may not include
     // app/servicesui, so it reaches the dock through the shell — the same route
@@ -192,6 +222,15 @@ private:
     // the project's arrangementChanged rather than a signal of its own.
     void attachClipProperties();
     void detachClipProperties();
+    // Same lifecycle again for the event editor dock (proposal 36 P4): a
+    // selection follower, refreshed off arrangementChanged.
+    void attachEventEditor();
+    void detachEventEditor();
+    // Keep the editor's time axis on the arranger's zoom/scroll while the
+    // "Link" toggle is on. Wired HERE because the shell is the only module
+    // that sees both app/timeline and app/eventui — the editor deliberately
+    // does not depend on the arranger.
+    void linkEventEditorAxis();
     // Enable + sync the palette buttons to a project's properties (or disable
     // them when project == NULL), and connect to its propertyChanged signal.
     void syncPaletteToProject( SProject *project );
@@ -277,6 +316,15 @@ private:
     QDockWidget          *qDockClipProps_ = nullptr;
     SClipPropertiesPanel *clipPropsPanel_ = nullptr;
     QMetaObject::Connection clipPropsConn_;
+    QDockWidget          *qDockEventEditor_ = nullptr;
+    SEventEditorDock     *eventEditor_      = nullptr;
+    QMetaObject::Connection eventEditorConn_;
+    // The two axis links, kept so a re-link (a new project, a testkit call)
+    // replaces them instead of stacking a second lambda on the same signal.
+    QMetaObject::Connection axisZoomConn_;
+    QMetaObject::Connection axisScrollConn_;
+    QDockWidget          *qDockVirtualKeys_ = nullptr;
+    SVirtualKeyboardDock *virtualKeys_      = nullptr;
     QAction *actClipProps_ = nullptr;   // the F2 (default) binding
 
     // Permanent mode indicator on the right of the status bar.

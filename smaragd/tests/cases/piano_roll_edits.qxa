@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 P4, AC1. The piano roll's gestures, driven through the REAL
+  widgets: the virtual keyboard's own key handler and the piano roll's own
+  mouse handlers. A script that submitted add-note / set-notes itself would
+  test the script; these verbs exist so the UI arithmetic is what runs.
+
+  Frames per tick here: 120 BPM, PPQ 960, 48 kHz -> 960 ticks = 24000 frames,
+  i.e. exactly 25 frames per tick. Every `at=` below is an exact integer.
+
+  THE DROP IS PIXEL-QUANTISED, and then snapped to the editor's grid. At the
+  arranger's default zoom (30 px/s) one pixel is 1600 frames = 64 ticks, and
+  the 1/16 grid is 240 ticks - so a move of 2 s lands on the grid slot it aimed
+  at with more than a pixel of margin either side, while a move of one grid
+  division would not. That is why the moves here are BARS, not sixteenths; it
+  is the same caveat `drag-clip-edge` carries, and the reason this case asserts
+  the snapped position rather than an arbitrary tick.
+
+  Every gesture is followed by an EXPLICIT undo and the prior assertion: the
+  runner's verify-undo pass compares track counts only, so it can see none of
+  this. Each gesture is ONE undo step - a drag of N notes is one `set-notes`,
+  which is the whole point of the batch verb.
+
+  The clip is 8 bars (7680 ticks) so a note moved to bar 3 is still INSIDE the
+  window; a note on the window's end boundary is outside it (windows are
+  half-open) and would vanish from the clip's snapshot for a reason that has
+  nothing to do with the gesture.
+-->
+<SActionScript version="1" name="piano_roll_edits">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Notes"/>
+    <!-- The editor and the keyboard both follow the SELECTION. -->
+    <set-selection paths="0,0"/>
+    <set-locator position="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="0"/>
+
+    <!-- ============================= virtual-key ======================== -->
+    <!-- One press on the painted keyboard: C4 at the locator, through
+         `add-note`. It is the headless note source AND the thing a user
+         plays. -->
+    <virtual-key key="60" velocity="100" durationTicks="960"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"
+                        velocity="100"/>
+    <assert-midi-events clip="0,0" contains="dur=24000"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="0"/>
+    <virtual-key key="60" velocity="100" durationTicks="960"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+
+    <!-- =========================== drag-note: move ====================== -->
+    <!-- Press on the note, move two bars right, release. The gesture commits
+         ONE set-notes; 3840 ticks = 96000 frames. -->
+    <drag-note clip="0,0" tick="0" key="60" toTick="3840" toKey="60"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="96000"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+
+    <!-- ===================== drag-note: move + transpose ================ -->
+    <!-- The vertical axis is keys, so the same gesture carries a transpose:
+         one bar right and up a major third. -->
+    <drag-note clip="0,0" tick="0" key="60" toTick="1920" toKey="64"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="64" at="48000"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+
+    <!-- ========================= drag-note: resize ====================== -->
+    <!-- The END grab band, which is a different branch of the same handler:
+         the note keeps its position and grows to end at bar 2 (1920 ticks =
+         48000 frames long). -->
+    <drag-note clip="0,0" tick="0" key="60" edge="end" toTick="1920"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+    <assert-midi-events clip="0,0" contains="dur=48000"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" contains="dur=24000"/>
+
+    <!-- ====================== drag-note: velocity lane ================== -->
+    <!-- The velocity band is the SAME widget and the same handlers, dispatched
+         on which band the press landed in. The target value is expressed in
+         pixels of a 48 px lane, so 64 arrives as 63.5 - one pixel is 127/48 =
+         2.6 velocity units, which is the honest resolution of the gesture. -->
+    <drag-note clip="0,0" tick="0" key="60" lane="velocity" toValue="64"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60"
+                        velocity="64" velocityTolerance="3"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60"
+                        velocity="100" velocityTolerance="0.5"/>
+
+    <!-- ====================== virtual-key with no clip ================== -->
+    <!-- Nothing selected and no event clip on the selected track: the verb
+         REJECTS rather than quietly doing nothing. -->
+    <add-track index="-1"/>
+    <set-selection paths="1"/>
+    <select-track trackPath="1"/>
+    <virtual-key key="67" velocity="100" durationTicks="960"
+                 expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

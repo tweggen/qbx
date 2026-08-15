@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 P4, AC3. The track head's DENSITY rules for the second button
+  pair (design 6.1): the instrument "I" and the automation "A".
+
+  The head is built for the assertion and thrown away - parentless, never
+  shown, resized to the lane height under test, which runs the real
+  updateLayout()/applyDensity(). Same seam and same reason as
+  `assert-meter headHeight=` (proposal 34): the density rules have no other
+  automated coverage, and Qt delivers no resizeEvent to a widget that was
+  never shown, so describeHead() re-applies them first.
+
+  THE RULES, and why each is a rule rather than a preference:
+
+    * "A" is FULL DENSITY ONLY, and only while the button COLUMN still fits.
+      Five buttons need 108 px of a Full lane, six need 130, and Full starts
+      at 132 px - so an unconditional sixth button would clip exactly the
+      shortest Full lanes. The boundary is asserted below (132 hides it, 136
+      shows it), because "hiding beats clipping" is the whole rule and an
+      off-by-one in the fit test is invisible to the eye.
+
+    * "I" additionally requires slot 0 to BE an instrument. Nothing in the app
+      can insert one yet (the instrument slot is proposal 36 P3b), so this
+      case asserts the NEGATIVE everywhere: `I=0`. That is the honest gate
+      today, and the day P3b lands it is the assertion that has to change.
+
+    * fitW / fitH say the VISIBLE strip fits the lane in the direction the
+      buttons are laid out. They are the machine-checkable form of "anything
+      that does not fit is hidden, never clipped".
+
+  Tiny at 14 px is the degenerate end: no buttons at all, and it must still
+  report a fit rather than a negative-space clip.
+-->
+<SActionScript version="1" name="track_head_density">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <!-- group-track runs the arranger's REAL Group macro over the selection:
+         a new folder appears and both lanes are reparented under it, so
+         "0,0" is a NESTED lane. -->
+    <select-track trackPath="0"/>
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <group-track trackPath="0"/>
+
+    <!-- ================================ Full =========================== -->
+    <!-- The full strip: M/S/R/T/G in a column, plus the automation button. -->
+    <assert-track-head trackPath="0" headHeight="160"
+                       contains="density=Full|w=120|h=160|btns=M,S,R,T,G,A|I=0|A=1|fitW=1|fitH=1"/>
+
+    <!-- The fit boundary. 132 px is the first Full lane and is one pixel pair
+         too short for a six-button column, so "A" hides itself. -->
+    <assert-track-head trackPath="0" headHeight="132"
+                       contains="density=Full|w=120|h=132|btns=M,S,R,T,G|I=0|A=0|fitW=1|fitH=1"/>
+    <assert-track-head trackPath="0" headHeight="136"
+                       contains="density=Full|w=120|h=136|btns=M,S,R,T,G,A|I=0|A=1|fitW=1|fitH=1"/>
+
+    <!-- ============================== Compact ========================== -->
+    <!-- Below 132 px the strip is Compact: the same five toggles at 16 px,
+         and NEITHER of the new buttons - the second column is Full-only. -->
+    <assert-track-head trackPath="0" headHeight="100"
+                       contains="density=Compact|w=120|h=100|btns=M,S,R,T,G|I=0|A=0|fitW=1|fitH=1"/>
+    <!-- The narrowest Compact lane: the buttons lie down into a row and the
+         name loses its place beside them. -->
+    <assert-track-head trackPath="0" headHeight="46"
+                       contains="density=Compact|w=120|h=46|btns=M,S,R,T,G|I=0|A=0|fitW=1|fitH=1|name=ownline"/>
+
+    <!-- ================================ Tiny =========================== -->
+    <!-- Barely a lane: the name plus Mute/Solo, and nothing else. -->
+    <assert-track-head trackPath="0" headHeight="40"
+                       contains="density=Tiny|w=120|h=40|btns=M,S|I=0|A=0|fitW=1|fitH=1"/>
+    <!-- The degenerate end: no buttons survive, and the strip still fits. -->
+    <assert-track-head trackPath="0" headHeight="14"
+                       contains="density=Tiny|w=120|h=14|btns=|I=0|A=0|fitW=1|fitH=1"/>
+
+    <!-- ========================== a NESTED lane ======================== -->
+    <!-- The same rules on a lane inside a folder, which is the only reason
+         the seam is path-addressed at all. -->
+    <assert-track-head trackPath="0,0" headHeight="160"
+                       contains="btns=M,S,R,T,G,A|I=0|A=1|fitW=1|fitH=1"/>
+    <assert-track-head trackPath="0,0" headHeight="40"
+                       contains="btns=M,S|I=0|A=0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

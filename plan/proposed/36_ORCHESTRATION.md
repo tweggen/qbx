@@ -731,7 +731,7 @@ read §6, STATE.md tail, `git log --oneline -15`, the branch's open PR, then cod
 | P3a fader post-FX | ☐ | | | after 35-B4 |
 | P3b instrument slot + event feed | ☐ | | | after 35-B4 |
 | P3c render barrier + determinism | ☐ | | | |
-| P4 event editor + virtual keyboard | ☐ | | | |
+| P4 event editor + virtual keyboard | ☑ | 2026-08-15 | `feat/36-p4-event-editor` | AC1/AC2/AC3/AC5 green; **AC4 (audible) SKIPPED - it needs P3b**, and belongs in a P3b case. ctest -j4: **128/128 run green** (131 registered, 3 `au_*` disabled); layering + logging clean. New module `main/eventui` at the rank of `pluginui` with NO edge to `timeline` (the axis link lives in the shell). Cases `piano_roll_edits`, `event_editor_dock`, `track_head_density`. CC lanes are draw-one-point (curve drawing is P6) and the `A` button is the seam only. See STATE.md 2026-08-15 |
 | P5 automation model + engine | ☐ | | | |
 | P6 automation UI | ☐ | | | |
 | P7 MIDI output | ☐ | | | **P7a (engine half) done 2026-08-15**, branch `feat/36-p7a-midi-devices`: `tw/devices` MIDI interfaces + WinMM/CoreMIDI/ALSA-seq/capture/null backends + `MidiOutScheduler` + the audio capture backend's host-time block log; `devices_midi_test` green (max \|sent − due\| 1.32 ms over 40 runs), ctest 121 → 122. CoreMIDI/ALSA-seq UNVERIFIED (Windows). Row stays unticked — P7b (app pump, per-track port/channel/offset, Options page, `assert-midi-out`/`dump-midi-capture`, the AC1–AC6 qxa cases) completes it. |

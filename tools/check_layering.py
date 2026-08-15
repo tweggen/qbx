@@ -116,13 +116,24 @@ APP_DEPS = {
                        'objects/mixer', 'objects/track', 'objects/wave',
                        'pluginui', 'servicesui', 'shell'},
     'pluginui':       {'model', 'objects/mixer', 'objects/track', 'shell'},
+    # eventui (proposal 36 P4) sits at the RANK of pluginui: a UI slice that
+    # edits ONE object kind through the action system and is hosted by the
+    # shell. It deliberately does NOT reach `timeline`: the arranger's zoom and
+    # scroll arrive through the SHELL, which already depends on both, so the
+    # editor stays independent of the 4000-line arranger. objects/mixer +
+    # objects/track are the virtual keyboard's "first event clip on the
+    # SELECTED track" fallback.
+    'eventui':        {'actions', 'model', 'objects/midi', 'objects/mixer',
+                       'objects/track', 'shell'},
     'servicesui':     {'model', 'shell'},
     # shell + objects/midi since proposal 36 P1: the transport tempo box
     # commits through the set-tempo verb instead of writing the project.
-    'shell':          {'actions', 'model', 'objects/cut', 'objects/midi',
-                       'objects/mixer', 'objects/track', 'objects/wave',
-                       'persistence', 'selection', 'servicesui', 'testkit',
-                       'timeline'},
+    # shell + eventui since proposal 36 P4: the event editor and the virtual
+    # keyboard are docks, created in SMainWindow's ctor like every other one.
+    'shell':          {'actions', 'eventui', 'model', 'objects/cut',
+                       'objects/midi', 'objects/mixer', 'objects/track',
+                       'objects/wave', 'persistence', 'selection',
+                       'servicesui', 'testkit', 'timeline'},
     # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:
     # set-render-gate addresses an SCut, wait-analysis reads SPlainWave.
     # testkit + pluginui since proposal 08 M5: assert-plugin-strip and
@@ -169,6 +180,10 @@ APP_ENG = {
     'timeline':       _ENG_BASE | {'devices', 'events', 'metering', 'pages',
                                    'playback', 'sources'},
     'pluginui':       _ENG_BASE | {'plugins'},
+    # eventui + events since proposal 36 P4: the ruler and the piano roll grid
+    # read the project's twTempoMap, the single tempo authority (D2). No other
+    # engine module is in reach - the editor never touches a page.
+    'eventui':        _ENG_BASE | {'events'},
     # servicesui + plugins since proposal 08 M2: the Options dialog's Plugins
     # page edits the scanner's search paths, and SOpt::def() takes the
     # per-platform defaults from twPluginSearchPaths rather than restating them.

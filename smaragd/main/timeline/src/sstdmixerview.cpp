@@ -63,6 +63,7 @@
 #include "app/objects/cut/sselecttakeaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
 #include "app/objects/midi/smidiclipactions.h"
+#include "app/objects/midi/smidieventactions.h"
 #include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/objects/mixer/sremoveassetplacementaction.h"
@@ -103,7 +104,10 @@ void SMVActualView::setSecondWidth( double w )
     upperLeftX_ = (int)( ((double)upperLeftOffset_)/srate*secondWidth_ );
     smv_.viewResized();
     update();
-    // FIXME: Emit signal?
+    // The zoom is part of the px<->frame mapping, and since proposal 36 P4 the
+    // event editor's axis mirrors that mapping - so the signal that was a FIXME
+    // here is now load-bearing.
+    emit secondWidthChanged( secondWidth_ );
 }
 
 void SMVActualView::setTrackHeight( int h )
@@ -3507,6 +3511,10 @@ void SStdMixerView::zoomOutVert()
 
 void SStdMixerView::onProjectTempoChanged( double bpmTempo )
 {
+    // The map moved with the tempo; the snap grid reads it (proposal 36 P4).
+    if( currentSnapSpec_ && model_ )
+        currentSnapSpec_->setTempoMap( model_->getProject().tempoMap() );
+
     STimeGridSpec tgs = getTimeGridSpec();
     double oldTempo = tgs.getBPM();
     if ( bpmTempo != oldTempo ) {
@@ -3563,8 +3571,47 @@ void SSnapSpec::setSnapMethod( int snapMethod )
     emit snapMethodChanged( snapMethod );
 }
 
+void SSnapSpec::setGridDivision( const QString &division )
+{
+    gridDivision_ = division;
+}
+
+void SSnapSpec::setTempoMap( const twTempoMap &map )
+{
+    tempoMap_ = map;
+    haveTempoMap_ = true;
+}
+
+// The snap step in frames for the current division, or 0 when there is none.
+// Exact rational through the tempo map (D2), floored once - the same shape
+// SMidiCut converts a window with.
+offset_t SSnapSpec::divisionFrames_() const
+{
+    if( gridDivision_.isEmpty() || !haveTempoMap_ ) return 0;
+    const qint64 ticks =
+        SQuantizeNotesAction::gridTicks( gridDivision_, tempoMap_.ppq() );
+    if( ticks <= 0 ) return 0;
+    const int64_t f =
+        tempoMap_.ticksToFrames( TickLen( (int64_t) ticks ), sampleRate_ )
+                 .floorToInt();
+    return f > 0 ? (offset_t) f : (offset_t) 0;
+}
+
 offset_t SSnapSpec::alignTime( offset_t o )
 {
+    // A named DIVISION wins when there is one (proposal 36 P4). With none, this
+    // is byte-for-byte the pre-36 beat snap, which is what keeps every
+    // committed case's snapped positions unchanged.
+    if( ( snapMethod_ & SnapToBeats ) ) {
+        const offset_t wo = divisionFrames_();
+        if( wo > 0 ) {
+            offset_t onew = ( ( o + ( wo >> 1 ) ) / wo ) * wo;
+            length_t diff = onew - o;
+            if( diff < 0 ) diff = -diff;
+            if( ( (offset_t) diff ) < wo / 2 ) o = onew;
+            return o;
+        }
+    }
     if( snapMethod_ & SnapToBeats ) {
         //int beatsPerBar = tgs_.getEmphasizeGrids( 0 );
         //if( beatsPerBar<=0 ) beatsPerBar = 1;
@@ -3644,6 +3691,35 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // Context menu for the time-range bar (top ruler).
     qRangePopup_ = new QMenu( this );
     qRangePopup_->addAction( "Set &BPM...", this, SLOT( ctRangeSetBPM() ) );
+    // Grid division (proposal 36 P4) — the arranger's snap step, named the way
+    // `quantize-notes grid=` and the event editor's grid name one. "Beat" is
+    // the empty division, i.e. the pre-36 behaviour.
+    {
+        QMenu *divMenu = qRangePopup_->addMenu( "&Grid division" );
+        static const char *const kDivs[] = {
+            "", "1/1", "1/2", "1/4", "1/4t", "1/8", "1/8t", "1/16", "1/16t",
+            "1/32", "1/32t"
+        };
+        for( const char *d : kDivs ) {
+            const QString div = QLatin1String( d );
+            QAction *a = divMenu->addAction( div.isEmpty() ? QStringLiteral( "Beat" )
+                                                           : div );
+            a->setCheckable( true );
+            QObject::connect( a, &QAction::triggered, this, [this, div] {
+                if( smv_.snapSpec() ) smv_.snapSpec()->setGridDivision( div );
+                update();
+            } );
+        }
+        QObject::connect( divMenu, &QMenu::aboutToShow, this, [this, divMenu] {
+            const QString cur = smv_.snapSpec() ? smv_.snapSpec()->gridDivision()
+                                                : QString();
+            for( QAction *a : divMenu->actions() ) {
+                const QString name = a->text();
+                a->setChecked( cur.isEmpty() ? name == QStringLiteral( "Beat" )
+                                             : name == cur );
+            }
+        } );
+    }
     qRangePopup_->addSeparator();
     qRangeActClear_ = qRangePopup_->addAction( "&Clear range", this, SLOT( ctRangeClear() ) );
     qRangePopup_->addSeparator();
@@ -4132,6 +4208,9 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     currentSnapSpec_ = new SSnapSpec( timeGridSpec_ );
     if( model_ ) {
         currentSnapSpec_->setSampleRate( model_->getProject().getSRate() );
+        // THE tempo authority (proposal 36 D2). The snap spec converts a named
+        // division through it, never through 60/bpm.
+        currentSnapSpec_->setTempoMap( model_->getProject().tempoMap() );
     }
 
     QObject::connect( model_, SIGNAL( durationChanged( length_t ) ), 
