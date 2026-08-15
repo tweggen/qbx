@@ -690,7 +690,18 @@ generic `widget-gesture` seam, PDC, a playback-run barrier (needs an RT page-
 boundary swap policy).
 
 ## 4. Failure & flake protocol
-A flake at any worker count is a real bug — never rerun-until-green. Suspects, in
+A flake at any worker count is a real bug — never rerun-until-green. **Known
+pre-existing family, NOT ours (characterised 2026-08-15 by the render-duration
+work, PR #34):** a worker-count-sensitive project-TEARDOWN segfault after PASS
+in the dangling-`SLink` family — `warp_anchors_roundtrip`,
+`exact_stretch_roundtrip` (~3/100 at `SMARAGD_REVAL_WORKERS=16`, 1/30 at 8,
+0/30 at 4) and `lane_alignment` (a case with no `<render>` at all). If a 36 case
+dies with that signature (crash strictly AFTER its assertions passed, at
+teardown, worker-count dependent), record it against that issue in STATE.md and
+do not spend the phase on it; a NEW crash inside a 36 code path is ours. Since
+PR #34 a render is as long as the arrangement (no 60 s constant): a "silence
+past the end" assertion must be aimed at the RENDER length, never at a frame
+beyond it. Suspects, in
 order, for this proposal: the readahead's cached-page reuse across runs (F3) vs the
 render barrier's call site (main thread, BEFORE the demand); the processor's
 `lastEnd_` after a barrier; a lane/event snapshot swapped without the owner mutex;
