@@ -23,6 +23,25 @@ struct twPluginDescriptor {
     std::string   name, vendor;
     twPluginIoLayout io;
     bool          isInstrument = false;
+
+    // --- proposal 36 P2: what the scanner learned about EVENTS ---------------
+    //
+    // Derived from a live instance's capabilities() at scan time, exactly like
+    // `io` is derived from its ioLayout(): none of it is a descriptor field in
+    // any format. They exist so the browser can offer a Kind filter and
+    // "Add Instrument" without instantiating every plugin in the list, and so a
+    // project that references a plugin this machine does not have still knows
+    // the SHAPE it will get (plugins/CONTRACT.md invariant 17).
+    bool          acceptsNotes  = false;
+    bool          emitsNotes    = false;
+    std::uint16_t eventPortsIn  = 0;
+    std::uint16_t eventPortsOut = 0;
+
+    // Audio OUTPUT buses. nOutBuses is >= 1 for anything that makes sound; bus
+    // 0 is the main bus and its channel count equals io.audioOutputs. The rest
+    // are aux outs (proposal 36 §5.4, built in P9).
+    std::uint16_t              nOutBuses = 0;
+    std::vector<std::uint16_t> outBusChannels;
 };
 
 // What the scanner learned about ONE module file (proposal 08 M2).
@@ -71,7 +90,11 @@ public:
     // (new descriptor field, changed I/O derivation, ...). It is part of the
     // cache key, so bumping it invalidates every record — including the
     // remembered failures.
-    static constexpr int kScannerVersion = 1;
+    // 1 -> 2 (proposal 36 P2): the descriptor gained acceptsNotes, emitsNotes,
+    // eventPortsIn/Out, nOutBuses and outBusChannels. A v1 record cannot supply
+    // them, so every record — including the remembered failures — is
+    // invalidated once and re-probed.
+    static constexpr int kScannerVersion = 2;
 
     twPluginRegistry() = default;
     ~twPluginRegistry();
