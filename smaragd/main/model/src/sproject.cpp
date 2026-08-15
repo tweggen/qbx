@@ -203,10 +203,24 @@ void SProject::setRootComponent( SObject *obj )
     }
 }
 
+void SProject::setTempoMap( const twTempoMap &map )
+{
+    tempoMap_ = map;
+    // One signal for every tempo-derived view. bpmTempoChanged is what the
+    // ruler, the transport box and SMidiCut already listen to, and BPM is the
+    // map's derived view — a second signal would only let the two drift.
+    emit bpmTempoChanged( tempoMap_.bpm() );
+}
+
 void SProject::setBPMTempo( double newTempo )
 {
-    bpmTempo_ = newTempo;
-    emit bpmTempoChanged( newTempo );
+    // BPM is a VIEW of the map (D2): this stores round(6e7/bpm) µs per quarter
+    // and everything reads back through the map. Callers are the `set-tempo`
+    // verb and the loader; a direct call from a widget is the bug this
+    // proposal removed (the ruler dialog and the transport box both did it).
+    twTempoMap map = tempoMap_;
+    map.setBpm( newTempo );
+    setTempoMap( map );
 }
 
 void SProject::setSRate( int rate )
@@ -376,6 +390,27 @@ void SProject::registerExternFileFactory( ExternFileFactory f )
     externFileFactory() = f;
 }
 
+static QHash<QString, SProject::ContentFileFactory> &contentFileFactories()
+{
+    static QHash<QString, SProject::ContentFileFactory> factories;
+    return factories;
+}
+
+void SProject::registerContentFileFactory( const QStringList &suffixes,
+                                           ContentFileFactory f )
+{
+    if( !f ) return;
+    for( const QString &sfx : suffixes )
+        contentFileFactories().insert( sfx.toLower(), f );
+}
+
+QStringList SProject::contentFileSuffixes()
+{
+    QStringList out = contentFileFactories().keys();
+    out.sort();
+    return out;
+}
+
 SLink *SProject::linkToFile( QString &fileName )
 {
     // Resolve a relative path against the action-script directory when one is
@@ -391,6 +426,15 @@ SLink *SProject::linkToFile( QString &fileName )
         if( QFileInfo::exists( resolved ) ) {
             fileName = resolved;
         }
+    }
+
+    // Suffix-claimed content (a .mid) first: it is materialised inline and has
+    // no extern-file identity to cache (see registerContentFileFactory).
+    const QString suffix = QFileInfo( fileName ).suffix().toLower();
+    if( ContentFileFactory cf = contentFileFactories().value( suffix, nullptr ) ) {
+        SObject *obj = cf( this, fileName );
+        if( !obj ) return NULL;
+        return new SLink( *obj );
     }
 
     SExternFile *ef = externFileDict_.value( fileName );
@@ -525,7 +569,6 @@ void SProject::markAsPartialLoad()
 
 SProject::SProject()
     : soRoot_( NULL ),
-      bpmTempo_( 120. ),
       sampleRate_( 48000 ),
       posFactor_( 1, 48000 ),
       candidateRates_{ 44100, 48000, 88200, 96000 },

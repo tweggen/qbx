@@ -74,6 +74,9 @@ public:
     /** The take at index as a WINDOW (null when out of range). */
     SClipWindow *takeAt( int index ) const;
     SClipWindow *activeTake() const { return takeAt( activeTake_ ); }
+    /** SObject: index < 0 means the ACTIVE take (the generic take seam). */
+    SClipWindow *windowTakeAt( int index ) const override
+    { return takeAt( index < 0 ? activeTake_ : index ); }
     /** The take at index as the model OBJECT it also is (delegation target). */
     SObject *takeObjectAt( int index ) const;
     SObject *activeTakeObject() const { return takeObjectAt( activeTake_ ); }
@@ -118,6 +121,13 @@ public:
     // --- SObject ---------------------------------------------------------
     std::shared_ptr<twComponent> getRootComponent() override;
     offset_t mapTimelineToComponentPos( offset_t off ) override;
+    /**
+     * A stack of EVENT takes resolves to its active take, exactly as the audio
+     * delegation does (proposal 36 P1). Without this the track would route the
+     * stack into its event clip set - contentKind() says Event - and get an
+     * empty record back, i.e. a silently mute column.
+     */
+    twEventClipResolved resolveEventClip( offset_t clipPos ) override;
     // Inv-1: resolve component + mapped position via the active take in
     // ONE call, so a take switch or lazy reader build can't split them.
     twResolvedClip resolveClip( offset_t off ) override;

@@ -136,6 +136,32 @@ Invariants:
       default: an underrun leaves a short zero gap that leaks energy into other
       bins, and the argmax is still the right block.
 
+Event assertions (proposal 36 P1):
+  assert-midi-events has TWO scopes and they are not the same object.
+  scope="clip" reads the cut's own frame-domain snapshot - what the edit verbs
+  move. scope="feed" runs STrack::eventFeed()->collect(), the merge of the
+  track's own clip set with every child track that bubbles events up, which is
+  the ONLY place mute, solo and midiRouting are observable and is what an
+  instrument will read in P3b.
+  A note-off is not in any table - notes are stored WITH their length - so a
+  kind="noteoff*" assertion runs a real collect, over the clip's window PLUS
+  ONE FRAME: windows are half-open and a release SYNTHESISED at the clip end
+  lands on the boundary, i.e. in the window that STARTS there (events/CONTRACT
+  inv. 8-9). kind="noteoff-synth" is what gates the non-destructive split.
+  assert-clip-window is the geometry assertion the tempo work needed: a clip's
+  placement and window in timeline frames, read through SClipWindow so it works
+  for any window type. Before it, a script could only see a clip's position by
+  rendering it, and a render cannot separate "the clip moved" from "the clip
+  moved and its content moved back".
+  assert-midi-file is counts and shape; byte identity of an SMF is
+  assert-file-identical's job and is only a legitimate gate for a file twSmf
+  AUTHORED (it has one canonical spelling, so a foreign file round-trips to an
+  equal event TABLE, not to equal bytes).
+  A .mid written by export-midi-file goes where the case says, verbatim: the
+  path is NOT resolved against the script directory, because nothing may write
+  into the shared tests/cases working directory (that is one of the properties
+  that make the suite safe under ctest -j). Cases name ../../build/<case>.mid.
+
 How to test:
   cd smaragd/tests/cases
   ../../build/bin/smaragd.exe --test-case <case>.qxa --test-output-dir <dir>

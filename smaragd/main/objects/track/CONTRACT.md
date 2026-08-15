@@ -7,8 +7,10 @@ move/reparent/restore-track, set-track-volume, move-clip, remove-clip.
 
 Public headers: app/objects/track/*.h
 
-Depends on (engine): tw/core, tw/graph, tw/mix, tw/plugins. App edges: per
-tools/check_layering.py.
+Depends on (engine): tw/core, tw/graph, tw/mix, tw/plugins, tw/events. App
+edges: per tools/check_layering.py. NOT app/objects/midi, deliberately: the
+track consults MIDI-ness only through SObject::contentKind() and
+SObject::resolveEventClip() (proposal 36 3.5).
 
 Invariants (normative detail: CLIP_MODEL.md):
 1. Clips are keyed by SLink* in every insertClip/updateClip/removeClip —
@@ -22,6 +24,32 @@ Invariants (normative detail: CLIP_MODEL.md):
    signal).
 5. strackpath resolution: comma-separated child indices from the root
    mixer; reparent guards against self/descendant cycles.
+
+5b. EVENT CHILDREN GO INTO THE EVENT CLIP SET, NOT THE BUS MIXERS (proposal
+   36 3.2). A child whose contentKind() is Event is inserted into the track's
+   ONE twEventClipSet - same slots, same SLink* key rule as the mixers, but one
+   set per track rather than one per bus, because events are not per bus. It is
+   never inserted as a ClipEntry: a MIDI clip has no page to freeze, and doing
+   so would cost a dummy freeze per page per clip plus a twView warning per
+   freeze (fact M5/F12). The resolver is the generic
+   SObject::resolveEventClip(), resolved ONCE per collect at the window start -
+   the same coherence rule twView::resolve gives the audio path.
+   Every event edit invalidates [a, INFINITY): the consumer of an event stream
+   is class-1 (a synth voice carries state across pages), so a change at one
+   position can
+   be heard at any later one (F9). The app-side walk is the ONLY path that
+   carries a clip change up to the root (F13), so touchClip alone is not enough
+   - invalidateRenderPathRange must follow it.
+
+5c. THE FEED IS REBUILT ON EVERY READ (3.2.1). STrack::eventFeed() is a stable
+   twEventMerge object whose SOURCE LIST is recomputed per call: its own clip
+   set plus the feed of every child track that bubbles events up (no instrument
+   slot and no MIDI-out, unless the serialized midiRouting says otherwise), with
+   muted and solo-excluded children contributing nothing under the shared
+   ssolorules.h resolution. Rebuilding rather than dirty-flagging is deliberate:
+   SOLO IS GLOBAL, so a flag would have to be poked from anywhere in the
+   project, which is exactly the coupling ssolorules.h exists to avoid. The
+   merge object identity is stable, so a consumer may hold it.
 
 6. A track's plugin chain is referenced by the ATTRIBUTE pluginChainId, and
    adopted LATE (proposal 08 M4). SPluginChain is not an SLink child of the

@@ -62,6 +62,7 @@
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/sselecttakeaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
+#include "app/objects/midi/smidiclipactions.h"
 #include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/objects/mixer/sremoveassetplacementaction.h"
@@ -436,7 +437,10 @@ void SStdMixerView::ctInsertSample()
     // OK, we have the track. Insert the sample here.
     QFileDialog dialog(this, "Insert sample",
                        SSettings::instance().lastDir( "sample", QDir::currentPath() ),
+                       "Audio and MIDI (*.wav *.mp3 *.flac *.aiff *.aif *.ogg "
+                       "*.opus *.mid *.midi);;"
                        "Audio files (*.wav *.mp3 *.flac *.aiff *.aif *.ogg *.opus);;"
+                       "MIDI files (*.mid *.midi);;"
                        "WAV (*.wav);;MP3 (*.mp3);;All files (*)");
     dialog.setFileMode(QFileDialog::ExistingFile);
 #ifndef Q_OS_MACOS
@@ -1568,8 +1572,12 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
     for( SLink *lk : row.track->childLinks() ) {
         STakeStack *stack = dynamic_cast<STakeStack*>( &lk->getSObject() );
         if( !stack ) continue;
-        SCut *cut = dynamic_cast<SCut*>( stack->takeObjectAt( row.takeRow ) );
-        if( !cut ) continue;                        // this stack has fewer takes
+        // Timeline invariant 2: the canvas does not know clip types. A take
+        // lane draws whatever window is on it through the polymorphic renderer
+        // path, so an event take paints like an audio one (proposal 36 P1) -
+        // the SCut cast this replaced silently drew nothing.
+        SObject *take = stack->takeObjectAt( row.takeRow );
+        if( !take ) continue;                       // this stack has fewer takes
         const offset_t start = lk->getStartTime();
         const length_t dur = stack->getDuration();
         int x0 = getXPosOfOffset( start );
@@ -1584,7 +1592,7 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
         p.fillRect( vr, QColor( 160, 160, 160 ) );
         InlineRenderContext myctx( *this, p );
         myctx.setVisibRect( vr );
-        if( SObjectRenderer *rndr = cut->getInlineRenderer() )
+        if( SObjectRenderer *rndr = take->getInlineRenderer() )
             rndr->draw( *lk, myctx );   // outer link for timing, his own window
         if( active ) {
             p.setPen( QColor( 240, 220, 80 ) );
@@ -1862,7 +1870,11 @@ void SMVActualView::ctRangeSetBPM()
         &smv_, "Smaragd request", tr( "Please enter new BPM" ),
         oldTempo, 10., 4000., 1, &ok );
     if( ok && newTempo != oldTempo ) {
-        smv_.model_->getProject().setBPMTempo( newTempo );
+        // Through the verb, never the project: set-tempo is the ONLY tempo
+        // write (proposal 36 D2). It also re-derives every beats-timebase
+        // link, which a bare project write would silently skip, and it is
+        // what puts a tempo change on the undo stack at all.
+        SApplication::app().submitAction( new SSetTempoAction( newTempo ) );
     }
 }
 
@@ -3493,7 +3505,7 @@ void SStdMixerView::zoomOutVert()
     qContent_->setTrackHeight( (h*2)/3 );
 }
 
-void SStdMixerView::setBPMTempo( double bpmTempo )
+void SStdMixerView::onProjectTempoChanged( double bpmTempo )
 {
     STimeGridSpec tgs = getTimeGridSpec();
     double oldTempo = tgs.getBPM();
@@ -3867,7 +3879,10 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
 
 void SMVActualView::dragEnterEvent(QDragEnterEvent *e)
 {
-    if (e->mimeData()->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {
+    // Our own resource drags, plus OS file drops (proposal 36 6.1: a .mid
+    // dragged in from a file manager is the natural way to get one in).
+    if (e->mimeData()->hasFormat(QStringLiteral("application/x-smaragd-resource"))
+        || e->mimeData()->hasUrls()) {
         e->acceptProposedAction();
     }
 }
@@ -3882,11 +3897,21 @@ void SMVActualView::dragMoveEvent(QDragMoveEvent *e)
 void SMVActualView::dropEvent(QDropEvent *e)
 {
     const QMimeData *mimeData = e->mimeData();
-    if (!mimeData->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {
-        return;
+    QString payload;
+    if (mimeData->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {
+        payload = QString::fromUtf8(
+            mimeData->data(QStringLiteral("application/x-smaragd-resource")));
+    } else if (mimeData->hasUrls()) {
+        // An OS file drop (proposal 36 6.1). Normalised into the same "file:"
+        // payload the internal drag uses, so there is one placement path and
+        // one extension dispatch below it - a .mid becomes an event clip
+        // because SProject::linkToFile says so, not because this branch knows.
+        for (const QUrl &url : mimeData->urls()) {
+            if (!url.isLocalFile()) continue;
+            payload = QStringLiteral("file:") + url.toLocalFile();
+            break;   // one clip per drop; multi-file drops are a later gesture
+        }
     }
-
-    QString payload = QString::fromUtf8(mimeData->data(QStringLiteral("application/x-smaragd-resource")));
     if (payload.isEmpty()) {
         return;
     }
@@ -4133,7 +4158,7 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
                       this, SLOT( avLeftOffsetChanged( offset_t ) ) );
 
     QObject::connect( &(model_->getProject()), SIGNAL( bpmTempoChanged( double ) ),
-                      this, SLOT( setBPMTempo( double ) ) );
+                      this, SLOT( onProjectTempoChanged( double ) ) );
 
     // Take lanes: clip-level edits (add-take/remove-take/stack split) change
     // an expanded track's row count without a track-structure signal.

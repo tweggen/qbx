@@ -222,6 +222,12 @@ QList<SObject::SDirtyRange> STakeStack::mapChildRangesToSelf(
     return SObject::mapChildRangesToSelf( childLink, childRanges );
 }
 
+twEventClipResolved STakeStack::resolveEventClip( offset_t clipPos )
+{
+    SObject *take = activeTakeObject();
+    return take ? take->resolveEventClip( clipPos ) : twEventClipResolved{};
+}
+
 offset_t STakeStack::mapTimelineToComponentPos( offset_t off )
 {
     if( SObject *take = activeTakeObject() )

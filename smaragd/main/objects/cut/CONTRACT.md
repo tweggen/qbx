@@ -111,6 +111,11 @@ select-take; split-clip/resize-clip/unsplit are stack-aware (length ops
 write through to every take, slip and pitch target one take via `take`).
 
 Notes:
+- A stack of EVENT takes forwards `resolveEventClip()` to its active take,
+  exactly as the audio delegation forwards the component and the position map.
+  Without it a MIDI column would be routed into the track's event clip set
+  (its `contentKind()` says Event) and answer with an empty record — a
+  silently mute column.
 - A stack is a column of `SClipWindow`s, not of SCuts (proposal 36 D8b):
   `takeAt(i)` returns the window, `takeObjectAt(i)` the model object it also
   is, and `activeTakeObject()` is what the delegation (component, position

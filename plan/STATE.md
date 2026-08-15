@@ -9906,3 +9906,179 @@ the driver releases the header) and sysex IN (`MIM_LONGDATA`) which is not
 implemented; `MidiInput` has no consumer at all until P8. The timing assertion
 measures the MACHINE as much as the code — `devices_midi_test` is `RUN_SERIAL`
 for the same reason `twlog_test` is.
+## 2026-08-15 — Proposal 36 P1: event clips in the model
+
+Branch `feat/36-p1-event-clips` (off the merged P0a+P0b+P2 tree at `8943ef1`):
+`e2fb1df` model + slice + verbs, `d7cdbae` UI wiring, `402ef68` tests + SMF
+fixture, `cd89d24` contracts. MIDI is now in the document model — content,
+window, placement, the verbs to edit them, and a per-track event feed. Nothing
+SOUNDS yet: an event clip on a track with no instrument is inaudible, not
+rejected (D3), and the instrument slot is P3b.
+
+### What landed
+
+**Tick-native, frames derived, converted once.** `SMidiSequence` stores a
+sorted `std::vector<SEvent>` in musical ticks at PPQ 960; `SMidiCut` stores
+`srcStartTicks` / `lengthTicks` / `loopTicks` as exact `Fraction` ticks plus an
+exact `rate`. Every frame-facing value — `getDuration()`, `loopLength()`,
+`startOffset()`, and the frame-domain `twEventSeq` the engine reads — is
+derived in ONE place, `SMidiCut::rebuild_nolock()`, by multiplying an exact
+tick value by the tempo map's exact frames-per-tick and flooring once. That is
+POSITION_DOMAINS' new rule 7 and the new **Ticks** domain row.
+
+**`twTempoMap` is the tempo authority.** `SProject::bpmTempo_` is GONE;
+`getBPMTempo()` is `6e7/usPerQuarter`. `set-tempo` is the only write, and it is
+an action: it re-derives `startTime` for every `timebase=beats` `SLink` in the
+project (walking the project's own children, which reaches nested containers,
+take-stack lanes and unplaced assets alike, each link exactly once). The two
+direct `setBPMTempo()` writes — the ruler's "Set BPM" dialog and the transport
+spin box — now submit the verb. `SStdMixerView::setBPMTempo` was renamed
+`onProjectTempoChanged`: it was always a LISTENER, and the name made the write
+audit ambiguous.
+
+**`SLink::timebase`** (`time` | `beats`, default `beats` for Event content,
+`time` otherwise; serialized only when non-default so every pre-36 project
+re-serializes byte-identically). A beats link carries an exact `startTicks` as
+the authority and derives `startTime`; `setStartTime()` converts once and
+stores ticks, so repeated tempo edits cannot drift.
+
+**`main/objects/midi`**, a new slice at the RANK of `objects/cut` (a second
+window/content pair, not a layer above one) with app edges
+`{actions, model, persistence}` and engine `{core, graph, events}`. It carries
+`SMidiSequence`, `SMidiCut`, the inline renderers and thirteen verbs:
+`insert-midi-clip`, `import-midi-file`, `export-midi-file`, `add-note`,
+`remove-note`, `set-notes`, `add-event`, `remove-event`, `set-events`,
+`quantize-notes`, `set-midi-cut`, `set-tempo`, `set-link-timebase`.
+`set-track-midi-routing` lives in `objects/track` where the attribute does.
+
+**One mutator, therefore one inverse.** Every content verb goes through
+`SMidiSequence::setEvents` (an absolute new table) and hands back a
+`set-events` carrying the previous one, so "the inverse is the previous state"
+is true by construction. That is also what makes a piano-roll drag one undo
+step (`set-notes` coalesces by clip+take) and `quantize-notes` its own inverse.
+
+**`STrack` routes Event children into a `twEventClipSet`, never the bus
+mixers** — same slots, same `SLink*` key rule, but ONE set per track (events
+are not per bus). It owns `eventFeed()`, a `twEventMerge` over its own set plus
+every child track that bubbles events up (§3.2.1: no instrument slot and no
+MIDI-out, unless the serialized `midiRouting` says otherwise; muted and
+solo-excluded children contribute nothing, resolved with `ssolorules.h`). Every
+event edit invalidates `[a, INT64_MAX)` — the consumer is class-1, so a change
+is never bounded on the right (F9).
+
+**`objects/track` has NO edge to `objects/midi`.** Three seams on `SObject`
+make that work and are useful beyond MIDI: `resolveEventClip()` (the event twin
+of `resolveClip`), an `eventsChanged(from)` signal, and `windowTakeAt(i)` — a
+generic take accessor, so a verb can address a take without naming
+`STakeStack`. `STakeStack` forwards `resolveEventClip` to its active take, or a
+MIDI column would be routed into the clip set (its `contentKind()` says Event)
+and answer with an empty record.
+
+**UI**, all of it through existing polymorphic paths: an
+`SMidiCutRendererInline` thumbnail (note rects scaled to the present pitch
+range, controllers as ticks, metadata along the top edge); `SCutRendererInline`'s
+container heuristic now asks `contentKind()` BEFORE `getRandomSource()` (an
+event object also answers null and would have been drawn as an asset waveform);
+`drawTakeLane`'s `dynamic_cast<SCut*>` is gone (it drew an event take as
+nothing); a Clip Properties page for `SMidiCut`; `.mid` in the insert filter;
+and OS file drops (`text/uri-list`), normalised into the same `file:` payload
+the internal drag uses so there is one placement path and the extension
+dispatch lives in `SProject::linkToFile`.
+
+### Gate
+
+| Gate | Result |
+|---|---|
+| `./build.sh` (re-configure) | clean |
+| `python tools/check_layering.py` | clean |
+| `python tools/check_logging.py` | clean |
+| `ctest --test-dir smaragd/build -j4` | **124/124 passed** in 154.8 s; 127 registered, 3 `au_*` Not Run (Disabled). Reconciled: 104 `.qxa` on disk = 104 `qxa.*` registered |
+| golden byte-compare | **69/69 WAVs byte-identical** across 40 `render_*` / `grain_*` / `exact_*` / `warp_*` / `plugin_*` / `meter_*` case dirs, against renders taken from the branch tip BEFORE the first P1 commit |
+
+Counts before P1: 121 registered / 118 run. After: 127 / 124 — six new `.qxa`
+cases, no unit-test target added.
+
+**AC by AC.** AC1 `midi_clip_roundtrip`: import a 3-track SMF → save → load →
+export is BYTE-IDENTICAL to the source (142 bytes), plus `assert-midi-file`
+counts. AC2 `midi_clip_edit_verbs`: every verb with `<undo count="1"/>` and the
+prior assertion after it; the non-destructive split asserted three ways; rate,
+slip, loop; the take-homogeneity refusal. AC3 `midi_clip_tempo_remap`:
+`set-tempo` 120→60 doubles the beats link's `startTime` (96000→192000), its
+duration and its note's frame position, and moves the audio clip not at all;
+`set-link-timebase time` pins it; every step undone and re-asserted. AC4
+`midi_clip_render_silent`: silent render of exactly the arrangement's length
+and `twView::getComponent() returned nullptr` count 0. AC4b `midi_folder_feed`:
+two children under a folder, mute / solo / `midiRouting=none` each remove one
+contribution, each undone. AC6: `action_roundtrip_test` green with a fixture
+row per new verb (18 rows added), `docs/ACTIONS.md` re-sorted with 15 new rows,
+layering as specified, and `grep -rn "bpmTempo_ =\|setBPMTempo(" main/` hits
+only `set-tempo`'s apply and the loader. AC7: the golden compare above.
+
+**AC5 is the orchestrator's** (cross-binary: open a P1-saved `.qxp` in the P0a
+binary and expect the MIDI clip dropped and the audio intact). The fixture it
+needs is produced by the suite: `smaragd/build/midi_clip_roundtrip.qxp`.
+
+### Deviations, and what is NOT gated
+
+- **`objects/midi`'s engine deps are `{core, graph, events}`, not `{events,
+  core}`.** `tw/graph` is in `check_layering.py`'s `_ENG_BASE` (allowed
+  everywhere) and is needed for the private silence `twComponent`, exactly as
+  `objects/cut` needs it for `STakeSilence`.
+- **`events` was also granted to `testkit`** (on top of the model /
+  objects/track / timeline grants the brief names): `assert-midi-file` reads
+  `twSmf` and `assert-midi-events` drives a real `twEventSource::collect`.
+  `testkit → objects/midi` likewise.
+- **Two testkit verbs beyond the brief.** `assert-clip-window` (a clip's
+  placement and window in timeline frames, through `SClipWindow`) — AC3 demands
+  asserting a link's `startTime` and a clip's duration, and there was no way to
+  see clip geometry from a script without rendering it, which cannot separate
+  "the clip moved" from "the clip moved and its content moved back". And the
+  `noteoff*` kinds on `assert-midi-events`, which collect over the clip's window
+  PLUS ONE FRAME (a clip-end release lands on the half-open boundary, i.e. in
+  the window that STARTS there — events/CONTRACT inv. 8-9).
+- **`SEvent` uses the ENGINE's field names** (`kind`/`channel`/`key`/`value`/
+  `value2`/`paramId`/`duration`) rather than design §3.1's `a`/`b`/`f`. §3.1's
+  own comment spells out that a/b/f MEAN key/velocity, cc/value, … per kind; a
+  second vocabulary would need a translation table that could disagree with
+  itself, which is what events/CONTRACT inv. 1 rejects. The XML attribute names
+  stay generic (`k t d ch key p v v2 text blob m`) as the design specifies.
+- **The SMF fixture is authored by this build's own exporter**
+  (`midi_fixture_authoring.qxa` writes `tests/midi_multitrack.mid`), so AC1's
+  byte compare is a round-trip identity rather than an independent oracle. That
+  is what "authored by `twSmf`" means here, and the independent half of the
+  gate is `events_test`'s own foreign-file corpus (P0b) plus `assert-midi-file`.
+- **`import-midi-file mode="channels"` is not implemented** (only `tracks` and
+  `merged`); the design lists three.
+- **Loop tiling is not DRAWN** for an event clip — the thumbnail paints the
+  window once. Playback tiling is correct and gated (`midi_clip_edit_verbs`
+  asserts 4 note-ons over a 4× loop through the feed).
+- **`midiOutPort` / `midiOutChannel` / `midiOutOffsetMs` are NOT added** (P7);
+  `STrack::hasMidiOut()` returns false with a comment, so the `auto` routing
+  rule is expressible today and complete when P7 wires the port.
+- **No `repeat_test.sh` sweep**: nothing here touches the scheduler, a class-1
+  processor, the barrier or the readahead. The event clip set is read only by
+  `assert-midi-events` so far — there is no concurrent consumer to race.
+- **Nothing about MIDI is AUDIBLE**, by design, so no case asserts event→audio.
+  The `twEventClipSet`/`twEventMerge` seams are exercised end to end for the
+  first time here (P0b tested them as units), but only through a test verb.
+
+### Found on the way: a teardown hang in the plugin scan (NOT touched)
+
+Every case hangs at exit — PASS is printed, the process never leaves — when the
+plugin cache is COLD. `~twPluginRegistry` (a namespace-scope static) calls
+`waitForScan()` on the main thread; the still-running scan thread logs
+`[scan] '<module>': N plugin(s)` through `TwLog::instance()`, whose
+function-local static was constructed LATER and is therefore destroyed EARLIER.
+`std::mutex::lock` on the dead impl throws `std::system_error`, the QThread
+lambda has no catch, `std::terminate` → `abort()` blocks against the main
+thread, and the process deadlocks. Caught under gdb (`catch throw`), stack in
+`twlog.cc:349` ← `twpluginregistry.cc:440`.
+
+It is latent, not new: it needs a scan that is still running when the process
+exits, i.e. a cold cache. It bit here because two worktrees with different
+`kScannerVersion` (P0b at 1, this branch at 2 after P2) share
+`%APPDATA%/Smaragd/plugincache.json` and kept invalidating each other's. It did
+NOT fire in either full suite run — the first case warms the cache. Recorded,
+not chased: `tw/plugins` is outside P1's module set (ground rule 6), and the
+fix belongs where the registry is (drain or detach the scan before static
+destruction, or give the scan thread a catch-all).

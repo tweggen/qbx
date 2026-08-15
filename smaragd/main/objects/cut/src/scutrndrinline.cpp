@@ -254,7 +254,14 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     // Both fold the cut's startOffset into the time mapping (via the
     // InlineRenderContext / LoopSegmentContext) so the drawn region matches what
     // plays.
-    const bool container = !content.getRandomSource();
+    // A cut whose content has no random source is a CONTAINER capture (a live
+    // asset over a track or the mixer) - unless the content is not audio at
+    // all, which is the case proposal 36 added: an event object also answers
+    // null here, and drawing its "rendered output" would be a waveform of
+    // silence. Ask what the material IS (contentKind) before asking how it is
+    // read, so the heuristic cannot mistake a second content kind for an asset.
+    const bool container = content.contentKind() == SContentKind::Audio
+                        && !content.getRandomSource();
     SObjectRenderer *rndr = container ? NULL : content.getInlineRenderer();
     if( !container && !rndr ) {
         p.drawText( visibRect, Qt::AlignCenter, "SCut: No renderer." );

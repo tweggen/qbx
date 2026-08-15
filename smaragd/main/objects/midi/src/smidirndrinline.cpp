@@ -1,0 +1,158 @@
+#include "app/objects/midi/smidirndrinline.h"
+
+#include <QPainter>
+#include <algorithm>
+#include <vector>
+
+#include "app/model/slink.h"
+#include "app/objects/midi/smidicut.h"
+#include "app/objects/midi/smidisequence.h"
+#include "tw/events/twevent.h"
+#include "tw/events/tweventseq.h"
+
+namespace {
+
+const QColor kNoteColor( 120, 220, 150 );
+const QColor kCcColor( 90, 140, 190 );
+const QColor kMetaColor( 200, 190, 110 );
+
+/**
+ * Paint one frame-domain sequence into `visib`, mapping FRAME positions
+ * through the context's own x<->time map so the drawing lines up with the
+ * lane's zoom exactly as a waveform does.
+ *
+ * `firstFrame`/`lastFrame` bound what the window admits; events outside are
+ * skipped rather than clamped, which is what makes a split clip's head and
+ * tail draw the two halves of a straddling note correctly.
+ */
+void paintSeq( QPainter &p, SRenderContext &ctx, const twEventSeq &seq,
+               offset_t originFrame, offset_t firstFrame, offset_t lastFrame )
+{
+    const QRect visib = ctx.getVisibRect();
+    if( visib.width() <= 0 || visib.height() <= 0 ) return;
+
+    const offset_t tLeft  = ctx.getTimeOf( visib.left() );
+    const offset_t tRight = ctx.getTimeOf( visib.right() + 1 );
+    const double span = (double) ( tRight - tLeft );
+    if( !( span > 0.0 ) ) return;
+    const double pxPerFrame = visib.width() / span;
+
+    // The PRESENT pitch range, so a clip of a few notes uses the full height.
+    int lowKey = 127, highKey = 0;
+    bool anyNote = false;
+    for( const twEvent &e : seq.events() ) {
+        if( e.kind != twEventKind::NoteOn || e.key < 0 ) continue;
+        if( e.time + e.duration <= firstFrame || e.time >= lastFrame ) continue;
+        lowKey = std::min( lowKey, (int) e.key );
+        highKey = std::max( highKey, (int) e.key );
+        anyNote = true;
+    }
+    if( !anyNote ) { lowKey = 48; highKey = 72; }
+    if( highKey - lowKey < 11 ) {            // never thinner than an octave
+        const int mid = ( highKey + lowKey ) / 2;
+        lowKey = mid - 6; highKey = mid + 6;
+    }
+    const int keySpan = highKey - lowKey;
+    const int top = visib.top() + 2, bottom = visib.bottom() - 1;
+    const int usable = std::max( 4, bottom - top );
+    const int noteH = std::max( 1, usable / std::max( 1, keySpan ) );
+
+    auto xOf = [&]( offset_t frame ) {
+        return visib.left()
+             + (int) ( ( (double) ( frame + originFrame - tLeft ) ) * pxPerFrame );
+    };
+
+    p.save();
+    p.setClipRect( visib );
+    for( const twEvent &e : seq.events() ) {
+        if( twEventIsMetadata( e.kind ) ) {
+            if( e.time < firstFrame || e.time >= lastFrame ) continue;
+            p.fillRect( QRect( xOf( e.time ), visib.top(), 1, 3 ), kMetaColor );
+            continue;
+        }
+        if( e.kind == twEventKind::NoteOn ) {
+            if( e.key < 0 ) continue;
+            const offset_t a = std::max<offset_t>( e.time, firstFrame );
+            const offset_t b = std::min<offset_t>(
+                e.time + std::max<int64_t>( e.duration, 1 ), lastFrame );
+            if( b <= a ) continue;
+            const int x0 = xOf( a );
+            const int w = std::max( 1, xOf( b ) - x0 );
+            const int y = bottom - noteH
+                        - (int) ( ( (double) ( e.key - lowKey ) / keySpan )
+                                  * ( usable - noteH ) );
+            QColor c = kNoteColor;
+            // Velocity as opacity: a soft note reads as a soft note.
+            const int alpha = 90 + (int) ( 165.0 * std::min( 1.0, e.value / 127.0 ) );
+            c.setAlpha( std::max( 60, std::min( 255, alpha ) ) );
+            p.fillRect( QRect( x0, y, w, noteH ), c );
+            continue;
+        }
+        // Everything else (CC, bend, pressure): a faint tick low in the body.
+        if( e.time < firstFrame || e.time >= lastFrame ) continue;
+        p.fillRect( QRect( xOf( e.time ), bottom - 2, 1, 2 ), kCcColor );
+    }
+    p.restore();
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+
+SMidiSequenceRendererInline::SMidiSequenceRendererInline( SMidiSequence &s )
+    : SObjectRenderer( (SObject &) s )
+{
+}
+
+SMidiSequence &SMidiSequenceRendererInline::sequence() const
+{
+    return (SMidiSequence &) getObject();
+}
+
+void SMidiSequenceRendererInline::draw( SLink &lk, SRenderContext &ctx )
+{
+    SMidiSequence &seq = sequence();
+    std::shared_ptr<const twEventSeq> table = seq.tickSnapshot();
+    if( !table ) return;
+    // A bare sequence placed directly (no window) draws its whole table. The
+    // table is in TICKS, so it has no frame mapping of its own; the only
+    // honest thing is to draw nothing rather than to invent a tempo here.
+    // Every real placement goes through SMidiCut.
+    (void) lk; (void) ctx;
+}
+
+// ---------------------------------------------------------------------------
+
+SMidiCutRendererInline::SMidiCutRendererInline( SMidiCut &c )
+    : SObjectRenderer( (SObject &) c )
+{
+}
+
+SMidiCut &SMidiCutRendererInline::cut() const
+{
+    return (SMidiCut &) getObject();
+}
+
+void SMidiCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
+{
+    SMidiCut &c = cut();
+    const SMidiCutSnapshot snap = c.getSnapshot();
+    if( !snap.framesSeq ) return;
+
+    QPainter &p = ctx.getPainter();
+    const offset_t clipStart = lk.getStartTime();
+    const offset_t first = snap.startOffsetFrames;
+    const offset_t last  = snap.startOffsetFrames + snap.durationFrames;
+    // The sequence's zero is the CONTENT's zero, so the origin that maps a
+    // sequence position onto the timeline is (clip start - slip).
+    paintSeq( p, ctx, *snap.framesSeq, clipStart - snap.startOffsetFrames,
+              first, last );
+
+    if( !c.getSName().isEmpty() ) {
+        p.save();
+        p.setPen( QColor( 210, 230, 215 ) );
+        p.drawText( ctx.getVisibRect().adjusted( 3, 1, -3, -1 ),
+                    Qt::AlignLeft | Qt::AlignTop, c.getSName() );
+        p.restore();
+    }
+}

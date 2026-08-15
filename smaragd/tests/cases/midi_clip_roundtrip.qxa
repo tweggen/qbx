@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 P1, AC1. Import a multi-track SMF, save the project, load it back,
+  export the MIDI again, and demand the SAME BYTES.
+
+  Byte identity is a legitimate gate here (and only here) because twSmf has ONE
+  canonical spelling - explicit status bytes, minimal VLQ deltas, note-offs
+  before note-ons at a tick, end-of-track at the recorded end (events/CONTRACT
+  inv. 15) - and ../midi_multitrack.mid was AUTHORED by that writer
+  (midi_fixture_authoring.qxa regenerates it). A foreign file would round-trip
+  to an equal event TABLE, not to equal bytes; that is what assert-midi-file is
+  for, and it is asserted here too.
+
+  What the byte compare actually proves, none of which a count could:
+    - notes are paired back into note-on/note-off with the same deltas, so
+      durations survive the tick to frame to tick journey;
+    - every meta event - tempo, time signature, the track name - survives with
+      its RAW payload through the model's inline <events> and back out;
+    - the per-track end-of-track tick (lengthTicks) survives a save/load;
+    - the inline <events> serializer is order-stable, so a reload cannot
+      permute a tick's events.
+-->
+<SActionScript version="1" name="midi_clip_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- 3 SMF tracks -> 3 project tracks, each with one event clip. -->
+    <import-midi-file filePath="../midi_multitrack.mid" timePos="0"
+                      mode="tracks" newTracks="1"/>
+
+    <!-- The import is one atomic composite: the tracks it created are part of
+         it, so this count is also the undo unit. -->
+    <assert-midi-events scope="clip" clip="1,0" kind="note" count="4"/>
+    <assert-midi-events scope="clip" clip="2,0" kind="note" count="2"/>
+    <!-- The conductor track carries metadata only. -->
+    <assert-midi-events scope="clip" clip="0,0" kind="note" count="0"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="tempo" count="1"/>
+
+    <save-project path="../../build/midi_clip_roundtrip.qxp"/>
+    <load-project path="../../build/midi_clip_roundtrip.qxp"/>
+
+    <!-- The notes came back through the .qxp, not through the .mid. -->
+    <assert-midi-events scope="clip" clip="1,0" kind="note" count="4"/>
+    <assert-midi-events scope="clip" clip="2,0" kind="note" count="2"/>
+
+    <export-midi-file filePath="../../build/midi_clip_roundtrip.mid" type="1"/>
+    <assert-file-identical actual="../../build/midi_clip_roundtrip.mid"
+                           expected="../midi_multitrack.mid"/>
+
+    <!-- The counts, independently of the bytes. -->
+    <assert-midi-file filename="../../build/midi_clip_roundtrip.mid"
+                      trackCount="3" noteCount="6" eventCount="10"
+                      ppq="960" format="1" firstTick="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

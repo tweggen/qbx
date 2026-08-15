@@ -60,8 +60,8 @@ a STATIC lib would drop):
 
     app_model < app_core < app_objects < app_ui
     (model)     (actions,     (objects/cut,   (timeline, pluginui,
-                persistence,   wave, track,    servicesui, shell,
-                selection)     mixer)          testkit)
+                persistence,   wave, midi,     servicesui, shell,
+                selection)     track, mixer)   testkit)
 
 The layer boundaries are COMPILE-TIME ENFORCED: each layer target publishes
 only its own include dirs and links only the lower layers plus its declared
@@ -77,7 +77,9 @@ stderr/stdout directly — `python tools/check_logging.py` enforces that
 `python tools/check_layering.py` guards the finer grain the build cannot:
 per-MODULE engine deps and the declared intra-layer edge set. Since the
 placement service (`app/model/splacements.h`) the object slices form a DAG
-— wave < cut < track < mixer — leaving UI+shell as the only cyclic group. Do not
+— wave < cut < track < mixer, with midi at the RANK of cut (a second
+window/content pair, not a layer above one) — leaving UI+shell as the only
+cyclic group. Do not
 add SApplication::app() call sites below the UI layer, and keep SAppContext
 minimal.
 
@@ -85,6 +87,7 @@ minimal.
 |---|---|---|
 | app/model | SObject/SLink/SProject document tree | main/model/CONTRACT.md |
 | app/objects/cut | clip window (SCut) + renderer + window actions | main/objects/cut/CONTRACT.md |
+| app/objects/midi | event clip (SMidiSequence/SMidiCut) + renderer + event verbs | main/objects/midi/CONTRACT.md |
 | app/objects/wave | sample object + renderer + sample actions | main/objects/wave/CONTRACT.md |
 | app/objects/track | track + clip sync to engine + placement actions | main/objects/track/CONTRACT.md |
 | app/objects/mixer | root mixer, plugin chain model, asset actions | main/objects/mixer/CONTRACT.md |
