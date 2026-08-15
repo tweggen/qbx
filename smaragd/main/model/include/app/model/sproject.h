@@ -85,6 +85,24 @@ public:
     int getSRate() const { return sampleRate_; }
     const std::vector<std::uint32_t> &candidateRates() const { return candidateRates_; }
 
+    // Project channel count (persisted as <SProject channels='N'>; default 2,
+    // which is what every project sounds like today). Proposal 35 M1.
+    //
+    // THIS IS DATA ONLY. Nothing reads it into a bus count, a mixer width or
+    // tw303aEnvironment — the signal flow goes wide in proposal 35 B4/B5.
+    // Wiring it now would drive STrack::setNBusses through a SHRINK on an undo
+    // of, say, 6 -> 2, and shrink is still Q_ASSERT_X( false, ... ) — an abort
+    // under -DCMAKE_BUILD_TYPE=Debug, and under the default RelWithDebInfo
+    // build (which strips NDEBUG but still gets Qt's QT_NO_DEBUG) a SILENT
+    // refusal that leaves the graph half-wired, which is the worse of the two.
+    // project_channels_test pins that no bus count moves.
+    int channels() const { return channels_; }
+
+    // The permitted widths: 1 / 2 / 4 / 6 / 8. Anything else is REFUSED by
+    // set-project-channels, and on LOAD falls back to 2 with a warning — a
+    // project must never fail to open over a channel count.
+    static bool isValidChannelCount( int n );
+
     // Position factor for time-based coordinates (exact rational arithmetic).
     // Default: 1/sampleRate (positions measured in sample units).
     // Can be overridden at any hierarchy level for stretching/transformation.
@@ -187,6 +205,7 @@ signals:
     void externFileRemoved( const QString );
     void bpmTempoChanged( double );
     void sampleRateChanged( int );
+    void channelsChanged( int );
     void propertyChanged( const QString &key, const QVariant &value );
 
 public slots:
@@ -195,6 +214,10 @@ public slots:
     void removeExternObject( QString & );
     void setBPMTempo( double );
     void setSRate( int );
+    // Refuses an invalid width (see isValidChannelCount) rather than clamping:
+    // a silently-adjusted channel count is a project that does not hold what it
+    // was told to hold.
+    void setChannels( int );
     void setCandidateRates( std::vector<std::uint32_t> );
 
 protected:
@@ -208,6 +231,7 @@ private:
     SLink *soRoot_;
     double bpmTempo_;
     int sampleRate_;
+    int channels_;        // see channels(); 2 for a fresh project
     Fraction posFactor_;  // Time coordinate scaling (default: 1/sampleRate)
     std::vector<std::uint32_t> candidateRates_;
     QVariantMap properties_;

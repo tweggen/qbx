@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include <stdlib.h>
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -327,8 +328,20 @@ void STrack::trackChildWasRemoved( SLink &child )
     }
 }
 
+// See STrack::setNBussesCallCount() in the header for why this exists.
+// std::atomic because setNBusses() is a UI-thread slot but the counter is read
+// from a test's main thread; relaxed because only the total matters.
+static std::atomic<long> s_setNBussesCalls{ 0 };
+
+long STrack::setNBussesCallCount()
+{
+    return s_setNBussesCalls.load( std::memory_order_relaxed );
+}
+
 void STrack::setNBusses( int nBusses )
 {
+    s_setNBussesCalls.fetch_add( 1, std::memory_order_relaxed );
+
     // Hoisted: the initial-sync loop at the end needs to know which mixers
     // are NEW, so it does not re-insert clips into ones that already hold them.
     int oldMixerCount = 0;
@@ -632,9 +645,34 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     SObject::readPreChildrenAttributes( element );
     
     QString data;
-    data = element.attribute( "nBusses", "1" );
-    setNBusses( data.toInt() );
-    
+    // The default is the CONSTRUCTOR's width, not 1 (proposal 35 M1).
+    //
+    // It read "1" while STrack() builds 2 busses, so a .qxp that omitted the
+    // attribute asked for a SHRINK — and shrink is Q_ASSERT_X( false, ... ).
+    // Note WHICH failure that is here: the default RelWithDebInfo build strips
+    // NDEBUG (to keep the engine's own asserts) but Qt still defines
+    // QT_NO_DEBUG, so Q_ASSERT_X compiles out and the branch returned SILENTLY,
+    // leaving the ctor's 2. Only an explicit -DCMAKE_BUILD_TYPE=Debug aborts.
+    // Either way it has never been noticed, because every project this build
+    // has ever WRITTEN carries nBusses='2'; a hand-written fixture, a file from
+    // an older build, or any of it once width is a real variable finds it.
+    //
+    // A file that genuinely asks for FEWER busses than we already built is
+    // clamped, loudly, for the same reason: shrink lands in proposal 35 B4,
+    // together with the wide track path that makes it meaningful. Until then
+    // keeping the wider wiring is inaudible (the extra bus is summed nowhere
+    // today), whereas asserting would cost the user their project.
+    data = element.attribute( "nBusses", QString::number( getNBusses() ) );
+    int wanted = data.toInt();
+    if( wanted < getNBusses() ) {
+        qWarning() << "STrack: project asks for" << wanted
+                   << "busses but the track already has" << getNBusses()
+                   << "- keeping" << getNBusses()
+                   << "(bus-count shrink lands with proposal 35 B4).";
+    } else {
+        setNBusses( wanted );
+    }
+
     return 0;
 }
 

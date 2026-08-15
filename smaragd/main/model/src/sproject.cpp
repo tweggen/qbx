@@ -69,6 +69,7 @@ int SProject::serializeSelfAttributes( QTextStream &o )
 {
     o << " bpmTempo='" << (double) getBPMTempo() << "'";
     o << " sampleRate='" << sampleRate_ << "'";
+    o << " channels='" << channels_ << "'";
     o << " posFactor='" << QString::fromStdString( posFactor_.toString() ) << "'";
     o << " candidateRates='";
     for( size_t i = 0; i < candidateRates_.size(); ++i ) {
@@ -103,6 +104,38 @@ int SProject::readPreChildrenAttributes( QDomElement &element )
         setSRate( 44100 );
     } else {
         setSRate( srateStr.toInt() );
+    }
+
+    // Channel count — the sampleRate idiom above, deliberately copied.
+    //
+    // A missing attribute means a file written before proposal 35 M1, and every
+    // such file sounds like 2 channels, so 2 is the only defensible default.
+    // It WARNS rather than defaulting silently for the same reason the rate
+    // does: a wrong channel count is as corrupting as a wrong rate — it would
+    // silently narrow or widen the project's output the day the signal flow
+    // goes wide (B5). Exactly one warning per load, whichever way it fails.
+    //
+    // A present-but-invalid value (a typo, a hand-edit, a width a future build
+    // wrote and this one does not know) also falls back to 2 rather than
+    // refusing the document: a project must never fail to open over this.
+    QString chStr = element.attribute( "channels" );
+    if( chStr.isEmpty() ) {
+        qWarning() << "WARNING: Project file missing channels attribute. "
+                   << "Defaulting to 2 channels (stereo), which is what every "
+                   << "project written before this attribute existed sounds "
+                   << "like. Save the project to correct this.";
+        setChannels( 2 );
+    } else {
+        bool ok = false;
+        int ch = chStr.toInt( &ok );
+        if( !ok || !isValidChannelCount( ch ) ) {
+            qWarning() << "WARNING: Project file has an unsupported channels "
+                       << "attribute" << chStr
+                       << "- defaulting to 2. Supported: 1, 2, 4, 6, 8.";
+            setChannels( 2 );
+        } else {
+            setChannels( ch );
+        }
     }
 
     // Load position factor (time coordinate scaling). Default to 1/sampleRate.
@@ -195,6 +228,29 @@ void SProject::setSRate( int rate )
     // Initialize posFactor to 1/sampleRate (default: positions in sample units)
     posFactor_ = Fraction( 1, rate );
     emit sampleRateChanged( rate );
+}
+
+bool SProject::isValidChannelCount( int n )
+{
+    // 1 / 2 / 4 / 6 / 8 — the widths proposal 35 delivers. Not "any n >= 1":
+    // every one of these has to be a real, gated configuration by B5, and an
+    // arbitrary width would be a promise nothing keeps.
+    return n == 1 || n == 2 || n == 4 || n == 6 || n == 8;
+}
+
+void SProject::setChannels( int n )
+{
+    if( !isValidChannelCount( n ) ) {
+        qWarning() << "SProject::setChannels: refusing unsupported channel count"
+                   << n << "- supported: 1, 2, 4, 6, 8.";
+        return;
+    }
+    if( n == channels_ ) return;
+    channels_ = n;
+    // DELIBERATELY the end of the line (proposal 35 M1): nobody connects this
+    // to a bus count yet. The signal exists so B4/B5 has one seam to widen,
+    // not because anything downstream is listening today.
+    emit channelsChanged( n );
 }
 
 void SProject::setCandidateRates( std::vector<std::uint32_t> rates )
@@ -484,6 +540,7 @@ SProject::SProject()
     : soRoot_( NULL ),
       bpmTempo_( 120. ),
       sampleRate_( 48000 ),
+      channels_( 2 ),
       posFactor_( 1, 48000 ),
       candidateRates_{ 44100, 48000, 88200, 96000 },
       properties_( SProjectProps::defaults() )

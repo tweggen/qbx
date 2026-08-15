@@ -116,6 +116,13 @@ const Fixture kFixtures[] = {
     { "set-track-volume",
       "<set-track-volume trackPath='1,0' volume='-6'/>" },
 
+    // --- proposal 35 M1 -----------------------------------------------------
+    // A NON-default width, deliberately: the default (2) is what an unread
+    // attribute also produces, so a fixture of 2 would round-trip through a
+    // readXml that ignored the attribute entirely.
+    { "set-project-channels",
+      "<set-project-channels channels='6'/>" },
+
     // --- the M5 plugin-UI verbs --------------------------------------------
     { "assert-plugin-strip",
       "<assert-plugin-strip trackIndex='0' slotCount='2' slotIndex='1'"

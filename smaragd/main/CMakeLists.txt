@@ -68,6 +68,7 @@ set(APP_CORE_FILES
     actions/src/sgridaction.cpp
     actions/src/smetronomeaction.cpp
     actions/src/srenderaction.cpp
+    actions/src/ssetprojectchannelsaction.cpp
     actions/src/ssetpropertyaction.cpp
     actions/src/ssnaptogridaction.cpp
     actions/src/stoggleplaybackaction.cpp
@@ -563,4 +564,18 @@ target_link_libraries(preview_container_test
 )
 add_test(NAME preview_container_test COMMAND preview_container_test)
 set_tests_properties(preview_container_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The project's CHANNEL COUNT as project data (proposal 35 M1): the default,
+# the legacy warn-and-default, the round trip, and — the reason it is a test and
+# not a code review — that set-project-channels and its undo make NO
+# STrack::setNBusses call. M1 is inaudible on purpose, and only instrumentation
+# can fail when that stops being true. Same shape as the three tests above.
+add_executable(project_channels_test testkit/src/project_channels_test.cpp)
+target_link_libraries(project_channels_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME project_channels_test COMMAND project_channels_test)
+set_tests_properties(project_channels_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

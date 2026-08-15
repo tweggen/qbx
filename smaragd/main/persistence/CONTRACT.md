@@ -21,7 +21,15 @@ Invariants:
    through the loader dictionary; order of definition matters (content
    before referencing cuts).
 3. Positions serialize as Fractions (exact); durations in frames at the
-   PROJECT's sampleRate attribute; legacy files default 44.1 kHz.
+   PROJECT's sampleRate attribute; legacy files default 44.1 kHz. The
+   PROJECT's channels attribute reads the same way and defaults to 2 — see
+   app/model/CONTRACT.md inv. 10 for why the two defaults differ (the rate's
+   legacy value is historical, the width's is today's audible behaviour).
+   An STrack's nBusses attribute defaults to the CONSTRUCTOR's width, not 1:
+   it read 1 while STrack() builds 2, so a document omitting it asked
+   setNBusses for a shrink, which it refuses. A file asking for fewer busses
+   than the track already has is clamped with a warning until proposal 35 B4
+   makes shrink real.
 4. Loaded projects must re-serialize byte-equivalently modulo volatile
    attributes (serialization_roundtrip_test guards the Fraction layer and the
    base64 state-chunk layer; plugin_slot_roundtrip.qxa /

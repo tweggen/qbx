@@ -1,0 +1,26 @@
+<SProject fileName='' rootId='root1' bpmTempo='120' sampleRate='48000' posFactor='1/48000' candidateRates='44100,48000,88200,96000' properties='{"cycle":false,"gridVisible":true,"metronome":false,"rangeEnd":0,"rangeStart":0,"rangeValid":false,"rulerMode":"bars","snapToGrid":true}'>
+<SPlainWave filename='../test_sawtooth.wav' id='wave1' nRefs='2' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+</SPlainWave>
+<SCut startOffset='0' cutDuration='48000' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='cut1' nRefs='1' hasDuration='1' durationSec='1' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='wave1' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SCut startOffset='48000' cutDuration='48000' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='cut2' nRefs='1' hasDuration='1' durationSec='1' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='wave1' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<STrack id='track1' nRefs='1' hasDuration='1' durationSec='1' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='cut1' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<STrack nBusses='1' id='track2' nRefs='1' hasDuration='1' durationSec='2' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='cut2' hasStartTime='1' startTime='48000'>
+</SLink>
+</STrack>
+<SStdMixer id='root1' nRefs='1' hasDuration='1' durationSec='2' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='track1' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='track2' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+</SProject>
