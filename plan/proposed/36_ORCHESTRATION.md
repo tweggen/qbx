@@ -1,6 +1,6 @@
 # Proposal 36 — Orchestration plan (execution companion)
 
-> **Status: PLAN v2 (2026-08-15).** How to execute `36_MIDI_INSTRUMENTS_AUTOMATION.md`
+> **Status: PLAN v2.1 (2026-08-15).** How to execute `36_MIDI_INSTRUMENTS_AUTOMATION.md`
 > phase by phase. v2 re-cuts the phases per the adversarial review (design §13):
 > P0a gains the two testkit verbs everyone leans on; P2 is ABI/backends/fixtures
 > only and depends on P0b's event header; P3 is three PRs (fader move, instrument
@@ -114,12 +114,12 @@ identical` (P0a) — or `cmp` — against the phase binary in the same worktree
 committed-goldens rule is on `main` — then use it). A re-freeze needs an AC that
 licenses it and a written justification.
 
-Dependency graph:
+Dependency graph (P3a needs 35-B4 + P2; P3b needs P1 + P2 + P3a):
 ```
-P0a ─┬────────────► P1 ─┬─► P4
-P0b ─┤        ┌────►    │
-     └─► P2 ──┘         ├─► (35-B4) ─► P3a ─► P3b ─► P3c ─► P5 ─► P6
-P1 ─────────────────────┴─► P7
+P0a ──────────► P1 ──┬──► P4 (audible AC needs P3b)
+P0b ──┬───────► P1   ├──► P7
+      └──► P2 ──┬────┤
+(35-B4) ────────┴► P3a ┴──► P3b ──► P3c ──► P5 ──► P6
 ```
 
 ---
@@ -154,8 +154,9 @@ P1 ─────────────────────┴─► P7
      `STakeStack` gains the homogeneity rule (`add-take` refuses a different
      `contentKind`; `STakeStack::contentKind()` = its takes').
   3. `SObject::contentKind()` virtual (`Audio | Event`, default Audio).
-  4. Testkit verbs: `assert-file-identical` (`a`, `b`, optional `startFrame`/
-     `frameCount` for WAVs — byte compare of the sample data) and `assert-log`
+  4. Testkit verbs: `assert-file-identical` (`a`, `b` — absolute paths ALLOWED,
+     unlike `render`'s output name, so cross-process compares work; optional
+     `startFrame`/`frameCount` for WAVs — byte compare of the sample data) and `assert-log`
      (`contains`, `minCount`="1", `maxCount`="-1", `level`="" over the in-process
      `TwLog` ring since case start). Rows in `action_roundtrip_test`;
      `docs/ACTIONS.md`.
@@ -172,13 +173,18 @@ P1 ─────────────────────┴─► P7
     `render_*` case green and **byte-identical renders** to pre-phase
     (`assert-file-identical` against the scratchpad copies).
   - AC4 `action_roundtrip_test` green with fixture rows for the two new verbs.
-  - AC5 `grep -rn "dynamic_cast<SCut\*>\|className() == \"SCut\"" main/objects/cut/
-    src/` returns only the pitch/formant/slip/warp sites listed in the PR body.
+  - AC5 `grep -rn "dynamic_cast<SCut\*>\|\"SCut\"" main/objects/cut/src/` returns
+    only the pitch/formant/slip/warp sites and the class-registration literal
+    listed in the PR body (the split action's `strcmp(…className(), "SCut")` must
+    be gone).
   - AC6 an old-format `.qxp` (no `formatVersion`) loads and re-saves with
     `formatVersion='2'`; a `.qxp` with `formatVersion='99'` loads and `assert-log`
     finds the warning.
-  - AC7 `add-take` of a mismatched content kind `expectReject`s (fixture: a stub
-    Event-kind object registered by the test — or defer this AC to P1 and say so).
+  - (The mixed-kind `add-take` refusal is gated in **P1** AC2, once an Event-kind
+    object exists; P0a only implements the rule.)
+  - `assert-log` implementation note: raise the `TwLog` ring capacity under
+    `--test-case` and count entries since the previous action, so a long render
+    cannot evict the line under test.
 - **Orchestrator-reviewed:** the sweep policy (persistence inv. 6); the interface.
 
 ### P0b — `tw/events` engine leaf  *(engine leaf; core-only dependency)*
@@ -187,17 +193,19 @@ P1 ─────────────────────┴─► P7
   core/twdomains.h` (+ `twFrameRange` in core), `tw303a/CMakeLists.txt`,
   `tools/check_layering.py`.
 - **Deliverables:** **the one** `twEventKind`/`twEvent` (`tw/events/twevent.h`,
-  design §5.1 field list); `twEventSeq` (immutable sorted; `slice(a,b)`, `stateAt(P)`
-  → held notes {key, channel, velocity, start}, sustain, last CC per (channel, cc),
-  bend, program); `twTempoMap` (constant: `usPerQuarter`, `ppq`, `num/den`;
+  exactly the struct pinned in design §4.1: `int64 time`, metadata kinds, payload
+  offset/size into the owner's arena); `twEventSeq` (immutable sorted + owned
+  payload arena; `slice(a,b)`, `stateAt(P)` → held notes {key, channel, velocity,
+  start}, sustain, last CC per (channel, cc), bend, program); `twTempoMap` (constant: `usPerQuarter`, `ppq`, `num/den`;
   `ticksToFrames(TickPos, srate) → Fraction`, `framesToTicks`; API shaped for
   segments; the single tempo authority — `bpm()` derived); `TickPos` exact-rational
   domain; `twSmf` (type 0/1 read/write; PPQ rescale; running status; meta → kinds;
   unknown meta preserved; notes paired on write); `twAutomationCurve` (`valueAt`,
   `fillRamp`, shapes step/linear/exp with tension); **`twEventClipSet` +
-  `twEventSource`** (design §4.2: opaque `void*` key, resolver, MapPosFn, `collect`
-  with chase set + window clamp + synthesised note-offs; returns `twFrameRange`);
-  `events_test`.
+  `twEventSource`** (design §4.2: opaque `void*` key, the module's OWN
+  `twEventClipResolved {seq, MapPosFn}` record — never `tw/graph`'s
+  `twResolvedClip` — `collect` with chase set + window clamp + synthesised
+  note-offs; returns `twFrameRange`); `events_test`.
 - **Gate (ACs):**
   - AC1 `events_test`: (a) SMF corpus of ≥ 6 committed fixtures (type 0, type 1
     multi-track, running status, sysex, tempo/timesig/keysig/lyric meta, a 30 k-
@@ -233,7 +241,11 @@ P1 ─────────────────────┴─► P7
   window; frames on every track-facing side; listens to `bpmTempoChanged` and
   `sampleRateChanged`; `durationSec` migration overridden), `SLink::timebase`
   (default `beats` for Event content, `time` otherwise; serialized only when
-  non-default), serialization (`<events><e …/></events>` inline, sorted on write,
+  non-default; a `beats` link carries exact `startTicks` as authority and derives
+  `startTime` — `move-clip`/`duplicate-clip`/`place-*` convert once and store
+  ticks; `set-tempo` re-derives frames for every `beats` link incl. nested
+  containers/assets), the take-stack homogeneity refusal (`add-take` of a
+  mismatched `contentKind` `expectReject`s), serialization (`<events><e …/></events>` inline, sorted on write,
   unknown kinds verbatim incl. their attribute map), verbs `insert-midi-clip`,
   `import-midi-file`, `export-midi-file`, `add-note`, `remove-note`, `set-notes`,
   `add-event`, `remove-event`, `set-events`, `quantize-notes`, `set-midi-cut`,
@@ -260,7 +272,8 @@ P1 ─────────────────────┴─► P7
     snapshot end synthesises the note-off (assert through `collect`-backed
     `assert-midi-events at=… kind=noteoff-synth`), the tail does not sound it;
     `resize-clip stretch="2/1"` (rate) doubles every note's frame position;
-    loop and slip through `resize-clip` behave as for audio.
+    loop and slip through `resize-clip` behave as for audio; `add-take` of an
+    audio file onto a MIDI cut `expectReject`s.
   - AC3 `qxa` `midi_clip_tempo_remap`: track 0 audio clip at 2 s, track 1 MIDI clip
     (`timebase=beats`) at 2 s with a note at tick 960; `set-tempo` 120 → 60: the
     MIDI link's `startTime` doubles, its duration doubles, the note's frame position
@@ -269,14 +282,15 @@ P1 ─────────────────────┴─► P7
     restores each step (assert positions after each undo).
   - AC4 `qxa` `midi_clip_render_silent`: a project with only a MIDI clip renders
     (no instrument yet) with `assert-audio-energy maxRms=0.0001` and
-    `assert-log contains="null component" maxCount="0"` (or the exact `twview.cc:35`
-    text).
+    `assert-log contains="twView::getComponent() returned nullptr" maxCount="0"`
+    (the exact `twview.cc:35` text — re-check it before writing the case).
   - AC5 (orchestrator-run, cross-binary) a `.qxp` saved by this phase with a MIDI
     clip opens in the P0a binary with the clip dropped and the audio intact.
   - AC6 `action_roundtrip_test` green with a fixture row per new verb; `docs/
     ACTIONS.md` updated; layering shows `objects/midi` at the rank of `objects/cut`
-    with engine deps `{events, core}` and **no edge from `objects/track` to
-    `objects/midi`**; `grep -rn "bpmTempo_ =\|setBPMTempo(" main/` hits only
+    with engine deps `{events, core}`, the engine edge `events` granted to
+    `model` (`twTempoMap` on `SProject`), `objects/track` (`twEventClipSet`) and
+    `timeline` (the ruler), and **no edge from `objects/track` to `objects/midi`**; `grep -rn "bpmTempo_ =\|setBPMTempo(" main/` hits only
     `set-tempo`'s apply/inverse and the loader.
   - AC7 goldens byte-identical.
 - **Orchestrator-reviewed:** `STrack` sync routing; the single tick→frame
@@ -297,7 +311,9 @@ P1 ─────────────────────┴─► P7
   `MusicDeviceMIDIEvent` before render, `AudioUnitScheduleParameters`, output
   elements); `tw.test.clap.sine`, `tw.test.clap.arp`, VST3 `TestSine` (split
   component/controller), `twNativeInstrument` (`format="tw"`, `tw.native.303`,
-  registered like `twPassThrough`); scanner `kScannerVersion` 2 + descriptor fields
+  registered like `twPassThrough`); **`tw.test.clap.gain` gains param id 1
+  `clipThreshold` (default 0 = off; > 0 = hard clip at ±threshold AFTER the gain)**
+  — the order-sensitive fixture P3a needs; scanner `kScannerVersion` 2 + descriptor fields
   + probe JSON; `plugins_test` extensions driving `twPlugin::process` directly on
   instances. **Explicitly out:** `twPluginSlotProcessor`, `twPluginInsert`,
   `twPluginChain` (35-B4 rewrites them; P3b owns the generator modes).
@@ -333,8 +349,8 @@ P1 ─────────────────────┴─► P7
 - **Orchestrator-reviewed:** `twpluginevents.h`; the VST3 host support list.
 
 ### P3a — Fader post-FX  *(engine `tw/mix`; app wiring; docs)*
-- **Entry:** 35-B4 merged (one wide page per component; per-bus chains retired).
-  Read 35's tracker first (rule 7).
+- **Entry:** 35-B4 merged (one wide page per component; per-bus chains retired)
+  and P2 merged (the `clipThreshold` fixture). Read 35's tracker first (rule 7).
 - **Modules:** `tw303a/mix` (+ CONTRACT), `main/objects/track` (fader/mute wiring),
   `main/testkit`, `docs/contracts/THREADING.md` (none), CLAUDE.md "Level meters"
   paragraph, `tw303a/metering/CONTRACT.md` note.
@@ -348,14 +364,22 @@ P1 ─────────────────────┴─► P7
 - **Gate (ACs):**
   - AC1 every existing golden **byte-identical** (no golden combines a fader with a
     plugin — verified in the review; the same multiply on the same page).
-  - AC2 new `qxa` `fader_post_fx`: `test_sawtooth.wav` (first second RMS 0.0667
-    unprocessed) with `set-track-volume −6.02` and `tw.test.clap.gain` at 2.0 →
-    RMS of the first second within ±1 % of 0.0667 (the product commutes); with the
-    plugin bypassed → within ±1 % of 0.0333; `assert-meter` at 0.5 s reads the
-    post-fader level (`meter_postfader`'s band arithmetic).
+  - AC2 new `qxa` `fader_post_fx` — two cases: (a) VALUE: `test_sawtooth.wav`
+    (first second RMS 0.0667 unprocessed) with `set-track-volume −6.02` and
+    `tw.test.clap.gain` at 2.0 → RMS of the first second within ±1 % of 0.0667
+    (the product commutes); bypassed → within ±1 % of 0.0333; `assert-meter` at
+    0.5 s reads the post-fader level. (b) ORDER: `set-track-volume −6.02` and
+    `tw.test.clap.gain` gain 1.0, `clipThreshold` 0.5, on a fixture whose peak is
+    ≥ 0.9 in its loudest second: pre-FX gain would leave that second unclipped
+    (RMS = 0.5 × unprocessed), post-FX gain clips first (RMS strictly below that,
+    against a closed form computed from the fixture and written into the test
+    comment). This case FAILS on the pre-move binary — verify that once and
+    record it in STATE.md.
   - AC3 `meter_levels`, `meter_postfader`, `assert-meter`-driven cases green
     WITHOUT the "set gain before first probe" workaround (a second fixture that
-    sets the gain AFTER a first probe and asserts the new level).
+    sets the gain AFTER a first probe and asserts the new level). If the legacy
+    pull still gates on a stale epoch somewhere else, the agent REPORTS it in
+    STATE.md/the PR body rather than fixing outside this phase's modules.
   - AC4 mute via `set-track-mute` still nulls the plug (solo cases green); a
     render with mute toggled at page boundaries is unchanged vs pre-phase.
 - **Orchestrator-reviewed:** the golden argument (float order identical);
@@ -374,7 +398,10 @@ P1 ─────────────────────┴─► P7
 - **Deliverables:** design §4.3 in full: generator mapping rows on the wide page,
   head tap keeps its audio input and SUMS it, per-page `collect` → per-chunk slice
   → `process(…, events, eventsOut, ctx)`, ONE sorted list per chunk (UI ring +
-  host events), reset + chase + pre-roll K on discontinuity, instrument bypass keeps
+  host events), reset + chase + pre-roll K on discontinuity with **K = min(max(4096,
+  tailFrames(), P − start(earliest held note)), 4 s)** (design D4),
+  `twPluginSlotProcessor::forgetContinuity()` (clears `lastEnd_/haveLastEnd_`
+  under `mutex_`; exposed through `SPluginSlot` for P3c), instrument bypass keeps
   events, `tailFrames()` → project end, instruments freeze-only (`calcOutputTo` =
   silence + one log); slot rules (`insert-plugin` of an instrument → slot 0, second
   refused, `reorder-plugin` across slot 0 refused); event edit → tap epoch (via
@@ -390,9 +417,12 @@ P1 ─────────────────────┴─► P7
     and a MIDI note (1–2 s) on one track with the sine instrument → both audible
     (RMS bands per second); with the instrument PRESENT and NO notes the render is
     `assert-file-identical` to the no-instrument render (`x + 0.0f == x`).
-  - AC3 `qxa` `instrument_edit_reaches_render`: render A; `add-note` at 2 s; render
-    B → `assert-file-identical` A vs B over frames [0, 96000) and RMS differs in
-    second 3; `<undo count="1"/>`; render C `assert-file-identical` to A.
+  - AC3 `qxa` `instrument_edit_reaches_render`: a MIDI clip whose only note is at
+    3 s (nothing sounds before 2 s — the open-ended invalidation re-renders page 1
+    with reset+chase, which must be inaudible, so no held note may cross it);
+    render A; `add-note` at 2 s; render B → `assert-file-identical` A vs B over
+    frames [0, 96000) and RMS differs in second 3; `<undo count="1"/>`; render C
+    `assert-file-identical` to A.
   - AC4 `qxa` `instrument_transpose_and_velocity`: `set-midi-cut transpose="12"`
     doubles the frequency; `velocityScale="0.5"` halves the RMS (sine fixture).
   - AC5 `qxa` `instrument_bypass_keeps_voices`: bypass at 0.5 s inside a 0–2 s
@@ -422,10 +452,13 @@ P1 ─────────────────────┴─► P7
   track` (registration helper), `main/testkit`, `docs/contracts/FREEZE_PROTOCOL.md`,
   `tw303a/schedule/CONTRACT.md` (a note that the barrier is NOT a scheduler feature).
 - **Deliverables:** `SApplication::beginRun(pos)`: main-thread walk over tracks
-  whose slot 0 is an instrument → `invalidateRenderPathRange(pos, INT64_MAX)`;
-  called from `startRender` before the session spawns, from `setGlobalLocatorPos`
-  while stopped before `requestSeek`, and from play start before the engine's
-  pre-readahead `seekTo`. Never from the readahead thread; never on a seek during
+  whose slot 0 is an instrument → `invalidateRenderPathRange(pos, INT64_MAX)` +
+  `slot->forgetContinuity()`; called from `startRender` before the session
+  spawns, and from play start immediately before `t3Speaker_->startOutput()`
+  (which performs the engine's pre-readahead `seekTo(locator)` + `startReadahead()`
+  on the main thread — so the barrier precedes the first demand). NOT from
+  `setGlobalLocatorPos` (a stopped locate demands nothing; `requestSeek` only runs
+  while playing). Never from the readahead thread; never on a seek during
   playback or a loop wrap.
 - **Gate (ACs):**
   - AC1 `qxa` `instrument_render_determinism`: render A; `toggle-playback` for
@@ -435,11 +468,17 @@ P1 ─────────────────────┴─► P7
   - AC2 `qxa` `instrument_locate_continuity` (capture backend): (a) sine: a note
     held 0–4 s; `set-locator` 2.0 s while stopped; play 1 s; `dump-playback-
     capture`; `assert-audio-frequency` on the first 4096 frames shows the note
-    (chase); (b) 303 with `decay` long and a note held 0–4 s: the same locate; RMS
-    of frames [0, 2048) of the capture within ±10 % of the RMS of frames
-    [96000, 98048) of a full render (pre-roll warmth — without pre-roll the
-    chased note-on restarts the attack and the band fails; the test comment records
-    the measured no-pre-roll value).
+    (chase); (b) 303 with `decay` long and a note held 0–4 s: the same locate at
+    2.0 s; because K reaches back to the note's start (P − 0 = 2 s ≤ 4 s cap) the
+    voice is pre-rolled from its own note-on, so RMS of frames [0, 2048) of the
+    capture is within ±10 % of the RMS of frames [96000, 98048) of a full render.
+    Without the held-note reach-back (K = one chunk) the chased note-on restarts
+    the envelope and the band fails — verify that once by forcing K = 4096 in a
+    debug knob and record the measured value in the test comment.
+  - AC2c the AC1 render is `assert-file-identical` (absolute path) to a render
+    made in a fresh process AFTER a play/stop cycle in that process — proves
+    `forgetContinuity()`: a run starting exactly at the previous run's `lastEnd_`
+    must not continue its voices.
   - AC3 `repeat_test.sh` on both, N=50 × workers {1,4,8,16}, 100 %.
   - AC4 goldens byte-identical (no instrument ⇒ no barrier effect).
   - **Not gated (PR body):** seek-during-playback splices; loop-wrap splices; the

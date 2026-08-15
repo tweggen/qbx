@@ -1,8 +1,11 @@
 # Proposal 36 — Event clips, instruments, MIDI output and automation
 
-> **Status: DRAFT v2 (2026-08-15).** v2 applies an adversarial review of v1
+> **Status: DRAFT v2.1 (2026-08-15).** v2 applies an adversarial review of v1
 > (§13: 5 blockers, 16 majors, 13 minors — every one answered inline, so the
-> reasoning survives). The blockers were real: the run barrier as written never
+> reasoning survives); v2.1 applies the reviewer's verification pass (§13.2:
+> pre-roll must reach back to the held note's start, one pinned `twEvent`, the
+> barrier must explicitly forget processor continuity, beat-timebase links carry
+> exact ticks, and a handful of AC strings). The blockers were real: the run barrier as written never
 > reached the pages that are actually served; two phases defined two different
 > `twEvent` types; the instrument event feed had no legal layering path; the MIDI
 > cut window was specified in frames while every tempo consequence needed ticks;
@@ -233,10 +236,15 @@ no `durationSec` migration and rebuilds on `sampleRateChanged` like on
 
 **Placement follows the beat by default for MIDI (review #13):** `SLink` gains
 `timebase = time | beats` (default `beats` for links whose object is an event
-clip, `time` for audio — REAPER's defaults). `set-tempo` rescales the `startTime`
-of every `beats` link proportionally as part of the action (constant map ⇒ a
-multiplication; the inverse restores) — so a MIDI clip at bar 5 stays at bar 5
-and audio does not move. This is REAPER "Beats (position, length, rate)".
+clip, `time` for audio — REAPER's defaults). A `beats` link carries an **exact
+`startTicks` (Fraction) as the authority** and derives `startTime` (frames)
+through the map; `move-clip` / `duplicate-clip` / `place-*` on a `beats` link
+convert the frame argument to ticks once and store ticks (so repeated tempo
+edits never drift — a frames-only rescale would lose a frame per edit).
+`set-tempo` re-derives `startTime` for every `beats` link, walking nested
+containers and assets too, as part of the action (the inverse restores the map;
+the ticks never changed) — so a MIDI clip at bar 5 stays at bar 5 and audio
+does not move. This is REAPER "Beats (position, length, rate)".
 
 The `SClipWindow` interface (D8) is phrased in the **window's own units** with a
 frame-facing read API (`duration()`, `loopLength()` in frames — derived for MIDI)
@@ -280,8 +288,13 @@ content is shared, so a split must not edit it).
 An instrument page frozen at a position that is not `lastEnd_` is a REPOSITION:
 `reset()` (all notes off) → chase `stateAt(P − K)` (held notes with their
 velocities, sustain, last CC values, bend, program) at offset 0 → pre-roll K frames
-with events at their real offsets, output discarded → render the page. K = min(the
-plugin's declared tail, one 4096 chunk) by default. Instruments need no upstream
+with events at their real offsets, output discarded → render the page.
+**K reaches back to the held notes:** `K = min( max(4096, tailFrames(),
+P − start(earliest note held at P)), 4 s )` — `stateAt` returns each held note's
+start, so a pad held since 0 s and located at 2 s is pre-rolled from its own
+note-on and its envelope arrives at P in the same state as in a continuous run
+(a note held longer than 4 s has converged by then; the cap bounds cost). Chase
+at `P − K` covers only notes started before that. Instruments need no upstream
 pages for pre-roll, so it is plannable without a `planPage` override (plugins inv.
 14). Effects stay reset-only. Rejected: capturing the plugin state blob per page —
 `saveState()` per 65536-frame page per instance is a serialization of the *preset*,
@@ -295,11 +308,16 @@ consumers look at, and F14 shows a playback barrier would add a mid-page switch
 - The barrier is the **full path** invalidation, on the **main thread**:
   `STrack::invalidateRenderPathRange(pos, INT64_MAX)` for every track owning an
   **instrument** processor (registered via `STrack` → `SApplication`; effects are
-  NOT barriered — their splice at page boundaries is today's behaviour).
+  NOT barriered — their splice at page boundaries is today's behaviour) **plus an
+  explicit `twPluginSlotProcessor::forgetContinuity()`** (reached through
+  `SPluginSlot`) — an epoch bump does NOT clear `lastEnd_` (only `rebuild_nolock`
+  and the rate checks do), and a render whose first page starts exactly at the
+  previous run's `lastEnd_` would otherwise continue that run's voices.
 - It is issued at **render start** (before the worker spawns — this is the
-  determinism hole F4) and at **transport start / locate while stopped**
-  (`SApplication::setGlobalLocatorPos` before `requestSeek`; play start before
-  the engine's pre-readahead `seekTo`).
+  determinism hole F4) and at **play start**, immediately before
+  `twSpeaker::startOutput()` (which is what calls the engine's pre-readahead
+  `seekTo(locator)` + `startReadahead()`, on the main thread) — that covers
+  locate-while-stopped, since a stopped locate demands nothing until play.
 - It is **not** issued on a seek during playback or on a loop wrap: those keep
   today's page-boundary splices (chase + pre-roll make a hole page approximately
   right; a mid-page RT switch would be worse). Stated as accepted and NOT gated.
@@ -334,7 +352,11 @@ faders are what every reference DAW does. Honest golden statement (review #7):
 no existing golden combines a fader with a plugin (P4), so every existing render
 is byte-identical *by construction* (the same multiply on the same page); the
 ordering change itself is gated by a **new fixture with a closed form**
-(`fader_post_fx.qxa`), not by a `cmp`. `twGainStage` implements the legacy pull
+(`fader_post_fx.qxa`), not by a `cmp` — and because a linear insert cannot tell
+pre- from post-FX, `tw.test.clap.gain` gains an optional **hard-clip threshold
+parameter** (P2) so the fixture has an order-sensitive case: fader −6 dB then a
+clipper at 0.5 leaves a unit-peak sawtooth unclipped pre-FX (RMS = 0.5·rms) and
+clipped post-FX (lower, closed-form RMS). `twGainStage` implements the legacy pull
 (`calcOutputTo`) too, so `assert-meter` keeps working — and it retires the
 "legacy pull does not see a gain change" caveat (the rewire's producer is now the
 gain stage, whose epoch `copyData` gates on). Mute: the `self:Muted` **lane**
@@ -541,10 +563,13 @@ not top-level objects.
 | `set-automation-points` | `owner`, `target`, `from`, `to`, child `<p t= v= c=/>` | the batch/coalescing verb (curve drawing, Touch/Latch/Write commit); `mergeKey` = owner + target |
 | `set-track-volume` / `set-track-mute` on a track with a Read lane | unchanged attributes | become a `set-automation-points` at the locator, else history and lane disagree |
 
-Test-harness verbs (testkit): `assert-file-identical` (byte compare of two files;
-for WAVs an optional frame range) and `assert-log` (`contains`, `minCount`,
+Test-harness verbs (testkit): `assert-file-identical` (byte compare of two files
+— absolute paths allowed, unlike `render`'s output name — for WAVs an optional
+frame range over the sample data) and `assert-log` (`contains`, `minCount`,
 `maxCount` over the in-process `TwLog` ring — there is no log file under
-`--test-case`) land in **P0a** because every later phase leans on them;
+`--test-case`; the ring's capacity is raised under `--test-case` and the count
+is taken since the previous action, so a long render cannot evict the line
+under test) land in **P0a** because every later phase leans on them;
 `assert-midi-events` (count / kind / at / key / velocity / contains on a cut's
 snapshot), `assert-midi-file` (counts / first tick), `assert-automation-value`
 (`owner`, `target`, `time`, `value`, `tolerance`), `assert-midi-out` (against the
@@ -561,9 +586,12 @@ a state assertion) — the runner's verify-undo pass compares track counts only 
 ### 3.5 Serialization and versioning
 New classes self-register by static initializer (OBJECT-lib rule); a new slice
 `objects/midi` at the DAG rank of `objects/cut` (`check_layering.py` rows:
-`objects/midi → {actions, model, persistence}` + engine `tw/events`, `tw/core`);
-`objects/track` must NOT depend on `objects/midi` — the track consults MIDI-ness
-only through `SObject::contentKind()`. `<SProject formatVersion='2'>` (D8a);
+`objects/midi → {actions, model, persistence}` + engine `tw/events`, `tw/core`;
+engine edge `events` is ALSO granted to `main/model` (`SProject` owns the
+`twTempoMap`), `main/objects/track` (owns the `twEventClipSet`) and
+`main/timeline` (the ruler reads the map)); `objects/track` must NOT depend on
+`objects/midi` — the track consults MIDI-ness only through
+`SObject::contentKind()`. `<SProject formatVersion='2'>` (D8a);
 `kScannerVersion` 1 → 2 for the plugin cache (P2 adds descriptor fields).
 Portable references: `.mid` import paths through `SFilePathRef`; MIDI device ids
 are machine-local and live in `SSettings` keyed by a portable name.
@@ -577,9 +605,33 @@ each phase edits it by hand.
 ### 4.1 `tw/events` — a new leaf module (core only), no place in the dataflow DAG
 - **One** definition of `twEventKind` / `twEvent` (review #2), shared by the
   engine snapshot, the event clip set, the plugin ABI (`tw/plugins → tw/events →
-  tw/core`) and MIDI-out. Times are `uint32` chunk/page-relative in the ABI and
-  `ClipPos` frames in the sequence — the same struct, two documented uses.
-- `twEventSeq` (immutable sorted vector + `slice(a, b)` + `stateAt(P)`),
+  tw/core`) and MIDI-out. Pinned so no phase has to invent it:
+  ```
+  enum class twEventKind : uint8_t {
+    NoteOn, NoteOff, NoteChoke, NoteEnd, NoteExpression, PolyPressure,
+    ControlChange, PitchBend, ChannelPressure, ProgramChange, Sysex, Midi1,
+    ParamValue, ParamMod, ParamGestureBegin, ParamGestureEnd, Transport,
+    // metadata (SMF meta + notation/tab/tracker) — sequence-only, never sent to a plugin
+    Tempo, TimeSig, KeySig, Marker, Lyric, ChordSymbol, Articulation,
+    StringFret, TrackerCell, Text, NoteAttr,
+    Unknown = 0xF0 };
+  struct twEvent {
+    int64_t     time;      // frames (ClipPos) in a sequence / clip set; CHUNK-RELATIVE
+                           // (0..n-1) in a process() call — same field, two documented uses
+    twEventKind kind;  uint8_t flags;   // IsLive, DontRecord, Muted, SynthesisedOff
+    int16_t     port, channel, key;     // -1 = wildcard / n/a
+    int32_t     noteId;                 // host-issued, -1 = none
+    uint32_t    paramId;                // ParamValue/Mod/Gesture/NoteExpression type
+    double      value, value2;          // velocity/CC/bend/param/expr; tuning cents, bank, …
+    int64_t     duration;               // NoteOn in a SEQUENCE only (notes are stored with length)
+    uint32_t    payloadOffset, payloadSize;   // Sysex / text / Unknown blob → the OWNER's arena
+  };
+  ```
+  A `twEventSeq` OWNS a byte arena its payload offsets index; the ABI's
+  `twEventList` points into a host arena valid for the call (the processor copies
+  the slice's payloads into its pre-sized arena when it rebases). Metadata kinds
+  never reach `process()`.
+- `twEventSeq` (immutable sorted vector + arena + `slice(a, b)` + `stateAt(P)`),
   `twTempoMap` (constant tempo now: `usPerQuarter`, `ppq`, `num/den`;
   `ticksToFrames(TickPos, srate) → Fraction`, `framesToTicks`; API shaped for
   segments; denominators `ppq·10⁶/gcd` are within `Fraction`'s red line — stated
@@ -595,8 +647,9 @@ each phase edits it by hand.
 ### 4.2 `twEventClipSet` (tw/events) — the event twin of `twTrackMix`'s clip list
 Not a `twComponent` (like the processor is not): it produces no pages.
 `insertClip/updateClip/removeClip/setClipMuted(key = opaque void*, startTime,
-duration, resolver → shared_ptr<const twEventSeq> + MapPosFn)` return
-`twFrameRange`; it implements **`twEventSource { collect(startPos, len, out) }`**
+duration, resolver)` return `twFrameRange`; the resolver yields the module's OWN
+record `twEventClipResolved { shared_ptr<const twEventSeq> seq; MapPosFn map; }`
+(not `tw/graph`'s `twResolvedClip` — `tw/events` stays core-only); it implements **`twEventSource { collect(startPos, len, out) }`**
 — (a) the **chase set** at `startPos` and (b) events in `[startPos, startPos+len)`
 with page-relative offsets, clamped to each clip window, with the event twin of
 the clip-end-bleed clamp: **note-offs are synthesised at the clip end for notes
@@ -653,12 +706,11 @@ shape every invalidation walk assumes).
 
 ### 4.4 The run barrier — main thread, full path, instruments, render + play start (D4)
 `SApplication::beginRun(pos)` walks the tracks whose slot 0 is an instrument and
-calls `invalidateRenderPathRange(pos, INT64_MAX)` (the app-side path walk, F13,
-which also clears the processor's `lastEnd_` through the tap epoch), then returns.
-Called from `startRender` before the session spawns; from `setGlobalLocatorPos`
-(while stopped) before `requestSeek`; from play start before the engine's
-pre-readahead `seekTo`. Never from the readahead thread, never during playback
-seeks or loop wraps (F14). If a worker is mid-render at that position, verify-at-
+calls `invalidateRenderPathRange(pos, INT64_MAX)` (the app-side path walk, F13)
+and `slot->forgetContinuity()` (clears the processor's `lastEnd_/haveLastEnd_`
+under its mutex), then returns. Called from `startRender` before the session
+spawns and from play start immediately before `twSpeaker::startOutput()`. Never
+from the readahead thread, never during playback seeks or loop wraps (F14). If a worker is mid-render at that position, verify-at-
 publish self-staleness re-stales it (schedule inv. 8), so the wrong page is never
 *current*.
 
@@ -703,13 +755,10 @@ records host time per delivered block; `assert-midi-out` maps through the latter
 
 ### 5.1 One header, one overload, no format types
 `tw/plugins/twpluginevents.h` *uses* `tw/events/twevent.h`'s `twEvent`/
-`twEventKind` (`NoteOn, NoteOff, NoteChoke, NoteEnd, NoteExpression, PolyPressure,
-ControlChange, PitchBend, ChannelPressure, ProgramChange, ParamValue,
-ParamGestureBegin/End, ParamMod, Midi1, Sysex, Transport`; fields `time, kind,
-flags (IsLive, DontRecord), port, channel, key, noteId, paramId, value, value2,
-data/size, bytes[4]`) and adds `twEventList` (host-owned, sized in `prepare()`),
-`twEventOut` (plugin → host sink, overflow counted and dropped),
-`twProcessContext`. `twPlugin` gains `capabilities()` (`acceptsNotes, emitsNotes,
+`twEventKind` exactly as pinned in §4.1 (`time` chunk-relative in a call; the
+metadata kinds never appear) and adds `twEventList` (host-owned events + payload
+arena, sized in `prepare()`), `twEventOut` (plugin → host sink, overflow counted
+and dropped), `twProcessContext`. `twPlugin` gains `capabilities()` (`acceptsNotes, emitsNotes,
 isInstrument, wantsMidi1Raw, supportsNoteIds, supportsNoteExpression,
 emitsParamChanges, notePortsIn/Out`), `audioOutBusCount()/audioOutBus(i)`,
 `tailFrames()`, and `process(in, outBuses[bus][chan], n, const twEventList&,
@@ -889,10 +938,10 @@ corpus** unless an AC licenses a re-freeze with a written justification.
 | **P0a** Persistence tolerance + `SClipWindow` + testkit basics | prune-and-retry loader; `formatVersion`; `SClipWindow` + wrap factory; every cast site dispatches on it; `contentKind()`; `assert-file-identical`, `assert-log` | — | `load_unknown_object_survives` + `load_missing_sample_placed_survives`; every windowed/take verb round-trips; goldens byte-identical (incl. `plugin_*`) |
 | **P0b** `tw/events` leaf | `twEvent` (the one), `twEventSeq`, `twTempoMap`, `TickPos`, `twSmf`, `twAutomationCurve`, `twEventClipSet` + `twEventSource`, `events_test` | — | event-table-equal SMF round-trip (byte-identical for twSmf-authored files); `stateAt` vs brute force; tick↔frame exact at 3 rates; `collect` clamps + synthesised note-offs; layering leaf |
 | **P1** Event clips in the model | `SMidiSequence`, `SMidiCut` (tick window), `SLink::timebase`, `objects/midi`, verbs, `STrack` → event clip set, thumbnail, Clip Properties page, `assert-midi-events/-file`, `set-tempo` as the only tempo write | P0a, P0b | import → save → load → export equal; non-destructive split; stretch/loop/slip/take verbs; `set-tempo` moves beat-timebase MIDI links and re-maps notes, moves no audio; explicit undo asserts; MIDI-only project renders silent without a `twview` warning (`assert-log`) |
-| **P2** Plugin ABI events + fixtures + native 303 (`twPlugin` level only) | `twpluginevents.h`, `process()` overload, capabilities, tail, aux-out discovery; CLAP/VST3/AU translation; `tw.test.clap.sine/arp`, VST3 `TestSine`, `twNativeInstrument`; scanner v2 | P0b (`twevent.h`) | `plugins_test` at the `twPlugin` level: notes → sine RMS + frequency per format; mid-block gain step at the offset; unactivated-bus teeth; arp event-out; effect goldens byte-identical; **no processor / chain change** |
-| **P3a** Fader post-FX | `twGainStage` (freeze + legacy pull), fader/mute wiring, trackmix gain forced to 0 dB, docs | 35-B4 | all goldens byte-identical (by construction, P4); new `fader_post_fx.qxa` closed form; `meter_*` green |
+| **P2** Plugin ABI events + fixtures + native 303 (`twPlugin` level only) | `twpluginevents.h`, `process()` overload, capabilities, tail, aux-out discovery; CLAP/VST3/AU translation; `tw.test.clap.sine/arp` + a `clipThreshold` param on `tw.test.clap.gain`, VST3 `TestSine`, `twNativeInstrument`; scanner v2 | P0b (`twevent.h`) | `plugins_test` at the `twPlugin` level: notes → sine RMS + frequency per format; mid-block gain step at the offset; unactivated-bus teeth; arp event-out; effect goldens byte-identical; **no processor / chain change** |
+| **P3a** Fader post-FX | `twGainStage` (freeze + legacy pull), fader/mute wiring, trackmix gain forced to 0 dB, docs | 35-B4, P2 (clipper) | all goldens byte-identical (by construction, P4); new `fader_post_fx.qxa` value case + ORDER case (clipper) that fails on the pre-move binary; `meter_*` green |
 | **P3b** Instrument slot + event feed | generator modes (post-35 wide), pass-through sum, `twEventSource` feed, reset+chase+pre-roll, slot rules, browser/strip/head minimum, project end + tail | P1, P2, P3a, 35-B4 | `instrument_sine_render` (freq/RMS per note), `instrument_mixed_track` (no-notes ⇒ byte-equal), edit reaches the render, native 303 presence; `repeat_test` sweep |
-| **P3c** Render barrier + determinism | `beginRun` main-thread walk at render start / play start / locate | P3b | `instrument_render_determinism` (`cmp` two in-process renders around a playback + one fresh process); `instrument_locate_continuity` (303 warmth + sine chase after `set-locator`); playback seek splices stated as NOT gated |
+| **P3c** Render barrier + determinism | `beginRun` main-thread walk (path invalidation + `forgetContinuity()`) at render start and play start | P3b | `instrument_render_determinism` (`cmp` two in-process renders around a playback + one fresh process); `instrument_locate_continuity` (303 warmth + sine chase after `set-locator`); playback seek splices stated as NOT gated |
 | **P4** Event editor (piano roll) + virtual keyboard | `main/eventui`, dock, view base + kind registry, piano roll + velocity/CC lanes, time axis link, grid/quantize, `virtual-key`, `drag-note`, `assert-event-editor`, `describeTrackHead` | P1 (P3b for audible checks) | explicit undo per editor op; off-screen `describe()`; PNGs; `virtual-key` → render → `assert-audio-frequency` |
 | **P5** Automation model + engine | `SAutomationLane`, `ParamRef`, verbs, curve snapshots, gain-stage ramps, processor param events + `automationEpoch_`, clip gain envelope, range invalidation | P0b, P3b | `automation_volume_ramp` (per-second RMS; render `cmp`), `automation_mute_step` (ramp windows between levels), `automation_plugin_param` (step at a mid-page-1 offset, CLAP + VST3), `automation_clip_gain`, `assert-automation-value`; goldens without lanes byte-identical |
 | **P6** Automation UI | sub-lanes, painting, gestures, picker, head mode button, Touch/Latch/Write recorder committing one action, plugin-gesture punch-in, clip envelope overlay, fader shows the read value | P5 | `drag-automation-point` + `automation-write-tick` cases (`<undo count="1"/>`); `assert-lane-alignment` over automation lanes; head `describe()` at three densities; `sstdmixerview.cpp` growth ≤ 100 lines |
@@ -901,8 +950,8 @@ corpus** unless an AC licenses a re-freeze with a written justification.
 | **P9** Follow-ups *(outline)* | multi-out → return tracks; tempo segments (37); MIDI-FX routing (arp → instrument in-app); score/tab/tracker views; `split-notes-at`; generic `widget-gesture`; PDC | P3/P5 | own proposals |
 
 Parallelism: P0a ∥ P0b at the start; P1 (after P0a+P0b) ∥ P2 (after P0b); P3a
-after 35-B4; P3b after P1+P2+P3a; P3c after P3b; P4 ∥ P5 after P3b; P6 after P5;
-P7 after P1. Critical path: P0 → P1 → (35-B4) → P3a → P3b → P3c → P5 → P6.
+after 35-B4 + P2; P3b after P1+P2+P3a; P3c after P3b; P4 ∥ P5 after P3b; P6 after
+P5; P7 after P1. Critical path: P0 → P1/P2 → (35-B4) → P3a → P3b → P3c → P5 → P6.
 
 ---
 
@@ -944,7 +993,7 @@ param editor into the native editor.
 |---|---|
 | The fader move (D5) changes float ordering for a track with a non-linear insert at a non-unity fader | No such golden exists (P4); the new fixture asserts a closed form; future goldens are frozen post-move |
 | Chase alone restarts envelopes on pads (audible after a locate) | Pre-roll K subsumes it for notes started inside the window; K per slot; the locate case is a playback property, gated by warmth (303) + presence (sine) on the capture backend, not `cmp` |
-| The render barrier costs a re-render of the readahead window when play starts on instrument tracks | Only tracks with an instrument; only at start/locate-while-stopped; measured in P3c |
+| The render barrier costs a re-render of the readahead window when play starts on instrument tracks | Only tracks with an instrument; only at render/play start; measured in P3c |
 | Playback seek splices are not barriered | Same as effects today; chase + pre-roll bound the damage; stated as NOT gated in every PR |
 | Ticks-in-window (D2) couples `SMidiCut` duration/anchors to the tempo | One class listens to `bpmTempoChanged`; LIFO undo keeps frame-captured inverses exact; take stacks homogeneous |
 | `set-tempo` moving beat-timebase links surprises audio-first users | REAPER's default; `set-link-timebase` per clip; audio never moves |
@@ -1004,6 +1053,30 @@ a playback-run barrier (would need an RT page-boundary swap policy).
 | 20 | MAJOR | P5 arithmetic (70000 is page 1) and ill-posed "no click" | Fixed; ramp-window RMS between levels |
 | 21 | MAJOR | Missing: tail vs project end, sample-rate rebuild, `REVAL_WORKERS=0`, MIDI-out loop wrap, SMF tempo maps, containers, `TickPos` type, `kCacheEntries` | All addressed in §3.1/§4.3/§4.6/D6; `kCacheEntries` claim dropped |
 | 22–34 | MINOR | tempo authority; Fraction red line; unknown attributes; mute lane vs button; stale docs; ACTIONS.md hand-maintained; `plugin_*` in P0a goldens; cross-binary check is orchestrator-run; single instrument reason; centre-mono sum; `<undo count>`; Clip Properties for SMidiCut; §11 timing | All folded in (D2, §3.1, §3.4, §3.5, §6.1, §11, briefs) |
+
+### 13.2 Verification pass (v2 → v2.1)
+
+The reviewer re-read v2: #2–#6, #8–#14, #16, #17, #19–#21 RESOLVED; four
+PARTIALLY, plus eleven items the rewrite introduced. All applied:
+
+| Item | Change in v2.1 |
+|---|---|
+| #1 partial — an epoch bump does not clear `lastEnd_` | `forgetContinuity()` on the processor, called by `beginRun` (D4, §4.4, P3b/P3c) |
+| #7 partial — a linear insert cannot gate pre/post order | `tw.test.clap.gain` gains a hard-clip threshold (P2); `fader_post_fx` gets an order-sensitive case (P3a AC2) |
+| #15 partial / new (a) — K = one chunk cannot warm a 303 held since 0 s | K reaches back to the earliest held note's start (≤ 4 s), D4 |
+| #18 partial — engine `events` edge for model/track/timeline | §3.5, P1 AC6 |
+| (b) `twEvent` under-specified (uint32 vs ClipPos, meta kinds, payload ownership) | pinned struct + arena, §4.1; §5.1 refers to it |
+| (c) P3b AC3 fails if a note sounds before the added one | fixture constrained; compare `[0, 96000)` with nothing sounding before 2 s |
+| (d) wrong `twview` log text | exact text in P1 AC4 |
+| (e) `twResolvedClip` is tw/graph | `twEventClipResolved` in tw/events, §4.2 |
+| (f) frames-only rescale drifts | `beats` links carry exact `startTicks`; frames derived; nested walk (D2) |
+| (g) `beginRun` sites | before `twSpeaker::startOutput()`; the locate-while-stopped site dropped |
+| (h) grep pattern | `"SCut"` literal (P0a AC5) |
+| (i) capture host-time log RT-safe; `assert-file-identical` absolute paths | §3.4, P7 |
+| (j) dependency graph vs table | graph redrawn (orchestration §3.0) |
+| (k) P3a "legacy pull now sees gain" | AC3 licenses the agent to report, not fix elsewhere |
+| `assert-log` ring capacity | raised under `--test-case`; counted since the previous action |
+| P0a AC7 | moved to P1 definitively |
 
 ## 14. Glossary (ours → the references)
 
