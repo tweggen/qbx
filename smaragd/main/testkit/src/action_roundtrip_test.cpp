@@ -63,7 +63,7 @@ const Fixture kFixtures[] = {
     { "assert-file-contains",
       "<assert-file-contains path='p.qxp' text='uid=&apos;x&apos;'"
       " absent='true'/>" },
-    // proposal 35 B1a. maxReportedDiffs is written only when it is NOT the
+    // proposal 36 B1a. maxReportedDiffs is written only when it is NOT the
     // default 8, so the fixture gives it another value to keep it in the audit.
     { "assert-file-identical",
       "<assert-file-identical actual='r.wav' expected='../goldens/mc_mono.wav'"
@@ -125,7 +125,7 @@ const Fixture kFixtures[] = {
     { "set-track-volume",
       "<set-track-volume trackPath='1,0' volume='-6'/>" },
 
-    // --- proposal 35 M1 -----------------------------------------------------
+    // --- proposal 36 M1 -----------------------------------------------------
     // A NON-default width, deliberately: the default (2) is what an unread
     // attribute also produces, so a fixture of 2 would round-trip through a
     // readXml that ignored the attribute entirely.

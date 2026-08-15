@@ -13,7 +13,7 @@ AcousticMetrics analyzeWavFile(const std::string &filename, std::string &error,
     // The whole file IS a region: frameCount < 0 means "to the end". This used
     // to open the file itself only to pass sfInfo.frames back down, and passed
     // a hard-coded -1 for the channel — so `channel=` was silently dropped on
-    // every whole-file assertion (proposal 35 M0).
+    // every whole-file assertion (proposal 36 M0).
     return analyzeWavFileRegion(filename, 0, -1, channelIndex, error);
 }
 

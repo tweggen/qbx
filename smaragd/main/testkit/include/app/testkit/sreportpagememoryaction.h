@@ -4,7 +4,7 @@
 #include "app/actions/saction.h"
 
 /**
- * Test hook: report resident frozen-page memory (proposal 35 B1a).
+ * Test hook: report resident frozen-page memory (proposal 36 B1a).
  *
  * There is no twOutputPage pool to query — pages are make_shared on demand into
  * unbounded per-component maps — so "how much page memory does this project

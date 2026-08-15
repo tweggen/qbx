@@ -67,7 +67,7 @@ Invariants:
 
 8. Page retention is stated in FRAMES. releaseOldPages(keepAfterPos) drops a
    page whose [startPos, startPos + FRAME_CAPACITY) ends before keepAfterPos.
-   It compared against PAGE_SIZE — the page's size in BYTES — until proposal 35
+   It compared against PAGE_SIZE — the page's size in BYTES — until proposal 36
    B1a, which made the window four times wider than the comment claimed. Note
    the second half of the finding: NOTHING IN THE TREE CALLS releaseOldPages.
    Component page caches are pruned only by invalidation and by teardown, so a
@@ -75,7 +75,7 @@ Invariants:
    because B1b multiplies a page's byte size by its channel count, at which
    point the same expression would have become width-dependent as well as
    wrong. Pinned frame-exactly by graph_test.
-9. Every live twComponent is in a process-wide registry (proposal 35 B1a), for
+9. Every live twComponent is in a process-wide registry (proposal 36 B1a), for
    the per-component half of the page accounting. The registry holds RAW
    pointers and owns nothing; it is a leaked singleton so that a component
    destroyed after static destruction still has somewhere to deregister.

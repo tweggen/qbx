@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  THE BYTE-EXACTNESS GATE for proposal 35, channels='1' half (§5, built by B1a).
+  THE BYTE-EXACTNESS GATE for proposal 36, channels='1' half (§5, built by B1a).
 
   This repo has gated render exactness by cmp since the beginning, but only ever
-  BETWEEN RUNS — never against a stored file. Proposal 35 rewrites the most
+  BETWEEN RUNS — never against a stored file. Proposal 36 rewrites the most
   load-bearing contract in the engine (the frozen page grows a channel
   dimension), and its entire safety argument is that the whole mechanical sweep
   happens while every page is still one channel wide, so the byte gate is green

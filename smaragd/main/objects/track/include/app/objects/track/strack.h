@@ -70,7 +70,7 @@ public:
     virtual SLink *getTopMostSLinkAt( offset_t ) const;
     int getNBusses() const { return nBusses_; }
 
-    // TEST HOOK (proposal 35 M1). Every entry into setNBusses() is counted,
+    // TEST HOOK (proposal 36 M1). Every entry into setNBusses() is counted,
     // process-wide, whether or not it changes anything.
     //
     // It exists because M1's central claim is a NEGATIVE one — the project's new

@@ -295,16 +295,16 @@ public:
     // keepAfterPos. keepAfterPos and startPos are both FRAME positions; the
     // page's own extent is FRAME_CAPACITY frames, NOT PAGE_SIZE (which is the
     // page's size in BYTES). See the note on the definition — this comparison
-    // was frames-against-bytes until proposal 35 B1a.
+    // was frames-against-bytes until proposal 36 B1a.
     //
     // NOTE (B1a): nothing in the tree calls this. Page caches are pruned only by
     // invalidation and by component teardown, so a long session's outputPages_
-    // maps grow without bound. Retiring or wiring it is proposal 35 B9's call;
+    // maps grow without bound. Retiring or wiring it is proposal 36 B9's call;
     // the arithmetic is fixed here because widening the page would have
     // multiplied the error the day it did get wired.
     void releaseOldPages(offset_t keepAfterPos);
 
-    // --- Page-memory accounting (proposal 35 B1a) ---------------------------
+    // --- Page-memory accounting (proposal 36 B1a) ---------------------------
     //
     // The GLOBAL figures live in tw::pages::PageAccounting and are exact by
     // construction (they ride the page's own lifetime). These add the PER

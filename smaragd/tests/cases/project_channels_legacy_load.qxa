@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 35 M1, AC 1.2 at the document level: a .qxp written before the
+  Proposal 36 M1, AC 1.2 at the document level: a .qxp written before the
   channels attribute existed opens, sounds exactly as it did, and comes back out
   carrying channels='2'.
 

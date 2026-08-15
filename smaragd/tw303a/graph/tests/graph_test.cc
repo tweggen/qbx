@@ -1,4 +1,4 @@
-// tw/graph module test (proposal 35 B1a).
+// tw/graph module test (proposal 36 B1a).
 //
 // Two things, both of which had no gate at all before this milestone:
 //

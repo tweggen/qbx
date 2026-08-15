@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   The channel-selecting assert verbs, gated against a fixture whose channels are
-  KNOWN to differ (proposal 35 M0).
+  KNOWN to differ (proposal 36 M0).
 
   ../test_channels4.wav is written by gen_channel_fixture (tw303a/analysis/tools):
   four channels of a 480 Hz sine, 12000 frames = 120 whole cycles at 48 kHz, at

@@ -10,11 +10,11 @@
  * ever BETWEEN RUNS — two renders produced by the same session, or by two
  * builds, compared by hand outside the harness. There was no verb, so
  * "byte-identical to a committed golden" could be stated in a PR body and could
- * not be enforced by the suite. Proposal 35's whole safety argument depends on
+ * not be enforced by the suite. Proposal 36's whole safety argument depends on
  * that being enforceable across milestones, machines and weeks (§5), so B1a adds
  * it before the page grows a channel dimension.
  *
- * Both paths go through resolveTestFilePath (proposal 35 M0), so `actual` is
+ * Both paths go through resolveTestFilePath (proposal 36 M0), so `actual` is
  * normally a render in the test output directory and `expected` is normally a
  * committed fixture addressed relative to the .qxa — e.g.
  * `expected="../goldens/mc_mono.wav"`.

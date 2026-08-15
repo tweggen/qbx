@@ -1,4 +1,4 @@
-// twOutputPage's out-of-line half (proposal 35 B1b).
+// twOutputPage's out-of-line half (proposal 36 B1b).
 //
 // The page struct is otherwise header-only and deliberately stays that way: the
 // hot accessors (channelPtr) must inline into the freeze and the audio callback.
@@ -39,7 +39,7 @@ void twOutputPage::reportChannelOutOfRange(idx_t c, std::uint16_t channels)
                 "twOutputPage::channelPtr(%d) on a %u-channel page: out of "
                 "range. Serving channel 0 so this can never be an out-of-bounds "
                 "read on the audio thread — but the caller is wrong. The plug "
-                "clamp of proposal 35 §4.4 belongs in twStreamingLatch, not "
+                "clamp of proposal 36 §4.4 belongs in twStreamingLatch, not "
                 "here. (reported once)",
                 (int)c, (unsigned)channels);
     }

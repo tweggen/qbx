@@ -3,7 +3,7 @@
 // The fixture is a WAV whose channels are DELIBERATELY unequal: channel c holds
 // a sine at amplitude A0 / 2^c, so the per-channel RMS is a clean 6 dB ladder
 // (0.5, 0.25, 0.125, 0.0625 for the committed 4-channel default). That is the
-// only thing the file is for. Proposal 35 M0 needs a file where "which channel
+// only thing the file is for. Proposal 36 M0 needs a file where "which channel
 // did you measure?" has a different answer per channel and every answer is known
 // in advance — because until M0 the assert verbs SILENTLY IGNORED `channel=`
 // whenever `frameCount` was omitted, and no fixture in the tree could tell.

@@ -49,7 +49,7 @@ Invariants:
    `frameCount` was omitted (the whole-file path hard-coded the all-channels
    pooled figure), which was invisible while every channel of every render was
    equal and would have started mis-passing the day the sink goes wide
-   (proposal 35 M0). A channel index the file does not have is now an ERROR,
+   (proposal 36 M0). A channel index the file does not have is now an ERROR,
    not an empty selection reporting RMS 0 — that reads exactly like a silent
    render. Gates: channel_assert_fixture.qxa (every band there is chosen to
    EXCLUDE the pooled value, so the pre-fix code fails it) and
@@ -64,11 +64,11 @@ Invariants:
    against: 4 channels of a 480 Hz sine on a 6 dB RMS ladder
    (0.5 / 0.25 / 0.125 / 0.0625, pooled 0.28810), written and re-checked by
    tw303a/analysis/tools/gen_channel_fixture.cc (`--verify`).
-8. THE GOLDEN CORPUS is tests/goldens/ (proposal 35 B1a): mc_mono.qxp
+8. THE GOLDEN CORPUS is tests/goldens/ (proposal 36 B1a): mc_mono.qxp
    (channels='1') and mc_stereo.qxp (channels='2') — one arrangement, differing
    only in the width attribute — plus their frozen 16-bit PCM renders
    mc_mono.wav / mc_stereo.wav, 768 044 bytes each. Each project carries one of
-   every path proposal 35 touches (plain / stretched / pitched / asset / nested
+   every path proposal 36 touches (plain / stretched / pitched / asset / nested
    lane / twtestclap insert), each in its OWN time window inside 4 s, so a byte
    difference names its culprit by offset. assert-file-identical is the gate.
    Four things about it are load-bearing:
@@ -171,7 +171,7 @@ How to test:
   ../../build/bin/smaragd.exe --test-case <case>.qxa --test-output-dir <dir>
   ../../build/bin/action_roundtrip_test.exe   # 2 pre-existing assert-action
                                               # serialization failures
-  ctest -R "qxa.mc_golden"                    # the proposal 35 byte gate
+  ctest -R "qxa.mc_golden"                    # the proposal 36 byte gate
 
 Known debt: screenshots need the window (not truly headless on all
 platforms). The older "scripted toggle-playback segfaults" note is retired: two

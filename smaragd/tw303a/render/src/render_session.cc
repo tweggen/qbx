@@ -155,7 +155,7 @@ void RenderSession::renderThreadMain() {
         // Phase 5 Gap 11: Use unified page size constant
         // FRAMES, not bytes — twOutputPage::PAGE_SIZE is the page's size in
         // BYTES and this arithmetic is all positions. Named PAGE_SIZE here
-        // until proposal 35 B1a, one identifier away from the units bug that
+        // until proposal 36 B1a, one identifier away from the units bug that
         // really did land in releaseOldPages. twOutputPage::FRAME_CAPACITY is
         // the same value spelled unambiguously.
         const uint64_t PAGE_FRAMES = (uint64_t) twOutputPage::FRAME_CAPACITY;

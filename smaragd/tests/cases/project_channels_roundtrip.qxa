@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 35 M1, ACs 1.1 / 1.3 / 1.4 at the document level.
+  Proposal 36 M1, ACs 1.1 / 1.3 / 1.4 at the document level.
 
   M1 makes the channel count PROJECT DATA and nothing else, so this case is
   deliberately shaped around the two things that can go wrong with that:

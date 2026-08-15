@@ -28,7 +28,7 @@ Invariants:
    An STrack's nBusses attribute defaults to the CONSTRUCTOR's width, not 1:
    it read 1 while STrack() builds 2, so a document omitting it asked
    setNBusses for a shrink, which it refuses. A file asking for fewer busses
-   than the track already has is clamped with a warning until proposal 35 B4
+   than the track already has is clamped with a warning until proposal 36 B4
    makes shrink real.
 4. Loaded projects must re-serialize byte-equivalently modulo volatile
    attributes (serialization_roundtrip_test guards the Fraction layer and the

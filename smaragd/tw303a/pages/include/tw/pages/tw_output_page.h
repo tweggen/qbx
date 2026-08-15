@@ -41,7 +41,7 @@ enum twRenderAspect : uint32_t {
 // Frozen output of a component for a time window
 // Stores component output samples + internal state snapshot for sequential rendering
 //
-// CHANNELS (proposal 35 §4.1, built by B1b).
+// CHANNELS (proposal 36 §4.1, built by B1b).
 // A page is PLANAR and carries its own channel count. Channel c occupies
 // [c * CHANNEL_STRIDE, c * CHANNEL_STRIDE + channelFrames()) of the sample
 // buffer, and CHANNEL_STRIDE is the constant FRAME_CAPACITY — deliberately NOT
@@ -121,7 +121,7 @@ struct twOutputPage : public PageBase {
     {
         channelFrames_ = FRAME_CAPACITY;
         samples_.resize((size_t)channels_ * CHANNEL_STRIDE);
-        // Proposal 35 B1a: page memory is accounted at the PAGE's own lifetime,
+        // Proposal 36 B1a: page memory is accounted at the PAGE's own lifetime,
         // because there is no pool to ask. accountedBytes_ is remembered rather
         // than recomputed in the destructor, so an accounting pair can never be
         // unbalanced by a later resizeMonoScratch() — the counters stay exact

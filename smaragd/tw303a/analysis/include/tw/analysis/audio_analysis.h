@@ -27,7 +27,7 @@ struct AcousticMetrics {
  * `channelIndex` defaults to -1 (all channels pooled), which is what this
  * signature meant before it had the parameter at all. It exists because the
  * whole-file path used to HARD-CODE -1: a caller that had a channel in hand
- * silently lost it (proposal 35 M0, trap 1). A whole-file analysis is just a
+ * silently lost it (proposal 36 M0, trap 1). A whole-file analysis is just a
  * region analysis with frameCount < 0, so this only forwards.
  *
  * @param filename Path to WAV file
@@ -61,7 +61,7 @@ AcousticMetrics analyzeWavFileRegion(const std::string &filename,
  * Per-channel RMS of a region, plus the RMS of the DIFFERENCE between two
  * channels.
  *
- * The discriminator behind `assert-channels-differ` (proposal 35 M0). Two
+ * The discriminator behind `assert-channels-differ` (proposal 36 M0). Two
  * separate questions, because they fail differently:
  *
  *  - `rmsA` vs `rmsB` — do the channels carry different LEVELS? This is what

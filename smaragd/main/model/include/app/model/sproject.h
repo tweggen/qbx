@@ -86,10 +86,10 @@ public:
     const std::vector<std::uint32_t> &candidateRates() const { return candidateRates_; }
 
     // Project channel count (persisted as <SProject channels='N'>; default 2,
-    // which is what every project sounds like today). Proposal 35 M1.
+    // which is what every project sounds like today). Proposal 36 M1.
     //
     // THIS IS DATA ONLY. Nothing reads it into a bus count, a mixer width or
-    // tw303aEnvironment — the signal flow goes wide in proposal 35 B4/B5.
+    // tw303aEnvironment — the signal flow goes wide in proposal 36 B4/B5.
     // Wiring it now would drive STrack::setNBusses through a SHRINK on an undo
     // of, say, 6 -> 2, and shrink is still Q_ASSERT_X( false, ... ) — an abort
     // under -DCMAKE_BUILD_TYPE=Debug, and under the default RelWithDebInfo

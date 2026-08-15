@@ -645,7 +645,7 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     SObject::readPreChildrenAttributes( element );
     
     QString data;
-    // The default is the CONSTRUCTOR's width, not 1 (proposal 35 M1).
+    // The default is the CONSTRUCTOR's width, not 1 (proposal 36 M1).
     //
     // It read "1" while STrack() builds 2 busses, so a .qxp that omitted the
     // attribute asked for a SHRINK — and shrink is Q_ASSERT_X( false, ... ).
@@ -658,7 +658,7 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     // an older build, or any of it once width is a real variable finds it.
     //
     // A file that genuinely asks for FEWER busses than we already built is
-    // clamped, loudly, for the same reason: shrink lands in proposal 35 B4,
+    // clamped, loudly, for the same reason: shrink lands in proposal 36 B4,
     // together with the wide track path that makes it meaningful. Until then
     // keeping the wider wiring is inaudible (the extra bus is summed nowhere
     // today), whereas asserting would cost the user their project.
@@ -668,7 +668,7 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
         qWarning() << "STrack: project asks for" << wanted
                    << "busses but the track already has" << getNBusses()
                    << "- keeping" << getNBusses()
-                   << "(bus-count shrink lands with proposal 35 B4).";
+                   << "(bus-count shrink lands with proposal 36 B4).";
     } else {
         setNBusses( wanted );
     }

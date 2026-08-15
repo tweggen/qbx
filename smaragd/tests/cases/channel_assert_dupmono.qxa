@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The other half of the discriminator gate (proposal 35 M0): what
+  The other half of the discriminator gate (proposal 36 M0): what
   assert-channels-differ says about a render produced by TODAY's sink.
 
   The sink is mono. RenderSession pulls one page and writes it to both channels

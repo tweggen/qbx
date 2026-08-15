@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Generator for the proposal 35 byte-exactness corpus (§5, executed by B1a).
+  Generator for the proposal 36 byte-exactness corpus (§5, executed by B1a).
 
   NOT A TEST. It lives outside tests/cases/ so the CONFIGURE_DEPENDS glob never
   registers it — running it REWRITES the two committed fixture projects, which

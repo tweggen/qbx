@@ -16,7 +16,7 @@ Invariants:
 2. Pure functions over files — no engine state, safe from any thread.
 3. analyzeWavFile IS analyzeWavFileRegion(0, -1, channel). It used to be a
    separate path that hard-coded channel -1, which is how `channel=` came to be
-   silently ignored by every whole-file assertion (proposal 35 M0). Do not
+   silently ignored by every whole-file assertion (proposal 36 M0). Do not
    reintroduce a second whole-file path.
 4. compareWavChannels reports rms(A), rms(B) and rms(A - B) from ONE pass.
    Levels and content are separate findings: two channels can hold the same

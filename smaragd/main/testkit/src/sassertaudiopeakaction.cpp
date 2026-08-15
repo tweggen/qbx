@@ -34,7 +34,7 @@ SApplyResult SAssertAudioPeakAction::apply(SProject *project)
 
     // ONE call, region or not — see the note in SAssertAudioEnergyAction::apply:
     // the old whole-file branch hard-coded channel = -1 and dropped `channel=`
-    // whenever frameCount was omitted (proposal 35 M0). For a PEAK that bug is
+    // whenever frameCount was omitted (proposal 36 M0). For a PEAK that bug is
     // especially quiet: the pooled peak is the max over all channels, so it
     // equals the loudest channel's and only ever mis-passes a quiet one.
     std::string error;

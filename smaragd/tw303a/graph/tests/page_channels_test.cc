@@ -1,4 +1,4 @@
-// twOutputPage's channel dimension (proposal 35 §4.1, milestone B1b).
+// twOutputPage's channel dimension (proposal 36 §4.1, milestone B1b).
 //
 // AC B1b.4 and AC B1b.5 live here. The reason this test exists at all is stated
 // in the proposal and is worth repeating where the code is: B1b converts every

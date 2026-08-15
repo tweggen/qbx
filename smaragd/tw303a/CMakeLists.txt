@@ -607,7 +607,7 @@ endif()
 # --- gen_channel_fixture: writer + verifier for the multichannel fixture -------
 # Same deal as gen_position_fixture, for tests/test_channels4.wav: four channels
 # on a 6 dB RMS ladder, so a test can prove WHICH channel it measured
-# (proposal 35 M0). --verify measures every channel of an existing file against
+# (proposal 36 M0). --verify measures every channel of an existing file against
 # the ladder, which is why that .wav may be committed. Offline tool, not a gate.
 add_executable(gen_channel_fixture analysis/tools/gen_channel_fixture.cc)
 target_link_libraries(gen_channel_fixture PRIVATE tw_analysis)
@@ -735,10 +735,10 @@ tw_module_test(twwarpmap_test               core/tests/test_twwarpmap.cpp       
 tw_module_test(timemap_test                 core/tests/test_timemap.cpp                 tw_core)
 tw_module_test(twlog_test                   core/tests/test_twlog.cpp                   tw_core)
 tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)
-# Proposal 35 B1a: the releaseOldPages retention boundary (frames, not bytes) and
+# Proposal 36 B1a: the releaseOldPages retention boundary (frames, not bytes) and
 # the page-memory accounting the later phases' memory claims rest on.
 tw_module_test(graph_test                   graph/tests/graph_test.cc                   tw_graph)
-# Proposal 35 B1b: the page's channel dimension. The ONLY gate that can see a
+# Proposal 36 B1b: the page's channel dimension. The ONLY gate that can see a
 # wrong `samples` -> `channelPtr()` conversion — at width 1, which is every page
 # in the tree today, a mistake and a correct conversion are the same instruction,
 # so neither the byte-exactness gate nor the grep can tell them apart.

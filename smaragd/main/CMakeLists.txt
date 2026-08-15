@@ -570,7 +570,7 @@ add_test(NAME preview_container_test COMMAND preview_container_test)
 set_tests_properties(preview_container_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# The project's CHANNEL COUNT as project data (proposal 35 M1): the default,
+# The project's CHANNEL COUNT as project data (proposal 36 M1): the default,
 # the legacy warn-and-default, the round trip, and — the reason it is a test and
 # not a code review — that set-project-channels and its undo make NO
 # STrack::setNBusses call. M1 is inaudible on purpose, and only instrumentation

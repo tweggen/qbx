@@ -9029,10 +9029,10 @@ fixes existed, so the pattern is not attributable to them — but neither has it
 been explained. A low-rate flake somewhere in the suite under sustained load is
 the working hypothesis and it remains unproven.
 
-## 2026-08-15 — Proposal 35 M0: the suite can see channels at all
+## 2026-08-15 — Proposal 36 M0: the suite can see channels at all
 
-`plan/proposed/35_MULTICHANNEL_SIGNAL_FLOW.md` M0. No audible behaviour changes;
-this is entirely about the gates being able to detect the rest of proposal 35
+`plan/proposed/36_MULTICHANNEL_SIGNAL_FLOW.md` M0. No audible behaviour changes;
+this is entirely about the gates being able to detect the rest of proposal 36
 landing — or regressing.
 
 **The bug, and why it was invisible.** `assert-audio-energy` and
@@ -9049,7 +9049,7 @@ both spellings.
 `assert-audio-frequency` and `assert-source-position` were checked for the same
 shape and **do not have it** — `estimateFundamental` has always handled
 `frameCount < 0` itself and honoured the channel, and `decodePositionAt` requires
-a positive window. Proposal 35 §7 trap 1 says "assert-audio-*"; only two of the
+a positive window. Proposal 36 §7 trap 1 says "assert-audio-*"; only two of the
 four verbs were affected.
 
 **Two adjacent holes closed while in there.** A `channelIndex` at or past the
@@ -9101,7 +9101,7 @@ unchanged and green: all 33 existing `channel=` users pass `frameCount=` too
 (checked by parsing all 90 cases, not by grep), so the fix is behaviour-
 preserving for every one of them.
 
-## 2026-08-15 — Proposal 35 B1a: the byte gate, the page accounting, and a units bug
+## 2026-08-15 — Proposal 36 B1a: the byte gate, the page accounting, and a units bug
 
 **B1 is the milestone that grows a channel dimension on the frozen page while
 every page in the system stays one channel wide** — that ordering is what makes
@@ -9134,7 +9134,7 @@ Committing rendered WAVs is new for this repo (requester decision). Exactness ha
 been `cmp`'d across runs and builds since the beginning and never against a
 stored file, which is precisely why "byte-identical to the pre-milestone golden"
 could be written in a PR body and not enforced. The corpus is NOT built on a
-save->load->save round trip — proposal 35 §7 trap 10: `load-project` deserializes
+save->load->save round trip — proposal 36 §7 trap 10: `load-project` deserializes
 INTO the current project instead of replacing it, so a round trip accumulates
 orphan mixers and chains. Loading a fixture into a freshly-`new` project is the
 safe shape and is what both cases do.
@@ -9202,7 +9202,7 @@ timing-dependent, while residency is stable run to run.
 **And the number that dwarfs all of them.** `CapturePagePool` pre-allocates its
 whole `std::vector<CapturePageData>` in its constructor, and `SProject` asks for
 2048 pages — **553 648 128 bytes, 528 MiB, reserved eagerly per project**, of
-which the corpus ever uses ONE page. Proposal 35 B1 says `CapturePagePool` is
+which the corpus ever uses ONE page. Proposal 36 B1 says `CapturePagePool` is
 "used in production nowhere"; that is wrong on both halves (`SProject` builds one
 at `sproject.cpp:551`, and `CapturePageData` is the preview/metadata capture page
 throughout `SObject`/`SCut`), and a page-memory report that showed only the 12 MB

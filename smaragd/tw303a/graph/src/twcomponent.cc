@@ -306,7 +306,7 @@ int twComponent::initOperation( int initId )
 
 // --- Live-component registry, for the per-component page accounting ---------
 //
-// Proposal 35 B1a. A leaked singleton on purpose: a component can in principle
+// Proposal 36 B1a. A leaked singleton on purpose: a component can in principle
 // be destroyed after static destructors have run (a detached worker dropping its
 // last shared_ptr), and unregistering into a destroyed registry is a crash at
 // exit that would look like an engine bug. Leaking one std::set costs one
@@ -428,7 +428,7 @@ void twComponent::releaseOldPages(offset_t keepAfterPos)
         // (65536 frames), so retention was 4x more generous than the comment
         // above it claims — a page was kept until the playhead had passed its
         // end by three further pages. Nothing depended on it (nothing calls this
-        // at all), but proposal 35 B1b multiplies a page's byte size by its
+        // at all), but proposal 36 B1b multiplies a page's byte size by its
         // channel count, at which point the same expression would have become
         // width-dependent as well as wrong. Pinned by graph_test.
         if (it->first + (offset_t) twOutputPage::FRAME_CAPACITY < keepAfterPos) {
@@ -440,7 +440,7 @@ void twComponent::releaseOldPages(offset_t keepAfterPos)
     }
 }
 
-// --- Page-memory accounting (proposal 35 B1a) -------------------------------
+// --- Page-memory accounting (proposal 36 B1a) -------------------------------
 
 // The measurement itself, with the caller holding whatever lock it holds. Two
 // deliberate properties, both forced by WHERE this runs:

@@ -1,4 +1,4 @@
-# Proposal 35 — Configurable multichannel signal flow (mono / stereo / 4 / 6 / 8)
+# Proposal 36 — Configurable multichannel signal flow (mono / stereo / 4 / 6 / 8)
 
 > **Status: DRAFT v3 (2026-08-15).** v3 applies an adversarial review of v2 that
 > found three blockers: the channel-at-the-plug mechanism did not exist and was

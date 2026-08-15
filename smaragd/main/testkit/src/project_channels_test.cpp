@@ -1,4 +1,4 @@
-// Gate for proposal 35 M1 — the project's channel count as PROJECT DATA.
+// Gate for proposal 36 M1 — the project's channel count as PROJECT DATA.
 //
 // M1 adds one integer to SProject, one attribute to the .qxp, and one action.
 // Its whole risk is in the negative space around that, so this is what the test

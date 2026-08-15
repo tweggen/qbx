@@ -74,7 +74,7 @@ Invariants:
    One probe means the same thing either way: the signed min/max envelope
    of its previewSkip_ window, scaled to [-128,127].
 
-10. SProject::channels() is PROJECT DATA AND NOTHING ELSE (proposal 35 M1).
+10. SProject::channels() is PROJECT DATA AND NOTHING ELSE (proposal 36 M1).
    It persists as <SProject channels='N'>, takes only 1/2/4/6/8, and reads
    with the sampleRate warn-and-default idiom: missing (a legacy file) or
    unsupported means 2 — today's audible width — plus exactly one warning,
@@ -82,7 +82,7 @@ Invariants:
    rate, and because a project must never fail to OPEN over it. Nothing
    connects it to a bus count, a mixer width or tw303aEnvironment: an undo of
    6 -> 2 that reached STrack::setNBusses would hit the shrink
-   Q_ASSERT_X( false, ... ). The signal flow goes wide in proposal 35 B4/B5,
+   Q_ASSERT_X( false, ... ). The signal flow goes wide in proposal 36 B4/B5,
    and only then does this become a consequence.
 
 How to test: full qxa suite; action_roundtrip_test for serialization

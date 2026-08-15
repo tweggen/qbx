@@ -149,7 +149,7 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
                     ? std::min(batchSize, (length_t)(cachedPageValidFrames_ - pageFrameOffset_))
                     : 0;
                 // Channel 0, duplicated to both device channels below: the sink
-                // is still mono (proposal 35 B5 widens it). channelPtr() bounds-
+                // is still mono (proposal 36 B5 widens it). channelPtr() bounds-
                 // checks the channel index only -- nothing here reads the page's
                 // width, so a page of any width is safe to serve, which matters
                 // on THIS path because proposal 16 deliberately hands the RT

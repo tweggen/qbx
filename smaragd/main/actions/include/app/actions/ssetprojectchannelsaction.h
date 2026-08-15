@@ -3,7 +3,7 @@
 
 #include "app/actions/saction.h"
 
-// Action: set the PROJECT's channel count (proposal 35 M1).
+// Action: set the PROJECT's channel count (proposal 36 M1).
 // Inverse: another SSetProjectChannelsAction carrying the pre-mutation count.
 //
 // ABSOLUTE, not a delta. The permitted widths are 1 / 2 / 4 / 6 / 8

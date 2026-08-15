@@ -206,7 +206,7 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		const length_t n = (length_t)(avail < want ? avail : want);
 
 		// THE PLUG SEAM. This latch already carries the index it was built with
-		// (twLatch(component, idx)) and has never consulted it. Proposal 35 4.4
+		// (twLatch(component, idx)) and has never consulted it. Proposal 36 4.4
 		// rule (1) gives that index its channel meaning here -- a plug pull yields
 		// channel min(latchIndex, page->channels - 1) of the page the producer
 		// ACTUALLY froze, which reproduces today's behaviour exactly while every

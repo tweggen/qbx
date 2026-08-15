@@ -30,7 +30,7 @@ private:
     // Seconds to render, from 0. Negative (the default) = the project's
     // duration, which is what every existing case gets and is unchanged.
     //
-    // Added by proposal 35 B1a for the golden corpus, and the reason is worth
+    // Added by proposal 36 B1a for the golden corpus, and the reason is worth
     // stating: SProject::getDurationSeconds() is a hard-coded `return 60.0;`
     // with a "TODO: calculate from arrangement" beside it, so EVERY render in
     // this suite is 60 seconds long no matter what the project contains. A ~4 s

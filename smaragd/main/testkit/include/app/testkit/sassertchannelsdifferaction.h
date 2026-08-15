@@ -6,7 +6,7 @@
 /**
  * Assertion action: verify that two channels of a WAV carry DIFFERENT audio.
  *
- * The discriminator proposal 35 M0 exists to add. Until it, "these channels are
+ * The discriminator proposal 36 M0 exists to add. Until it, "these channels are
  * genuinely different" could only be INFERRED — by asserting a per-channel RMS
  * band on each and reading the two results against each other, which needs the
  * expected numbers to be known in advance and says nothing when they happen to

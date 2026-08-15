@@ -8,7 +8,7 @@ CapturePagePool::CapturePagePool(size_t numPages)
     for (size_t i = 0; i < numPages; ++i) {
         freeIndices_.push(i);
     }
-    // Proposal 35 B1a. This vector is allocated in FULL, here, and SProject
+    // Proposal 36 B1a. This vector is allocated in FULL, here, and SProject
     // asks for 2048 pages — over half a gigabyte per project, reserved whether
     // or not one capture page is ever handed out. Report it, or a
     // page-memory figure of "12 MB" is a true number that tells a lie.

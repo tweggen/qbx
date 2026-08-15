@@ -4,13 +4,13 @@
 #include <cstddef>
 #include <cstdint>
 
-// Process-wide accounting for frozen page memory (proposal 35 B1a).
+// Process-wide accounting for frozen page memory (proposal 36 B1a).
 //
 // There is NO twOutputPage pool to instrument. Pages are make_shared on demand
 // (twcomponent.cc getOrAllocatePage / freezePage, twtrackmix.cc) into unbounded
 // per-component std::map<offset_t, page> caches; CapturePagePool is a DIFFERENT
 // type (CapturePageData) and is used in production nowhere. So "how much page
-// memory is resident" had no answer at all, and every later phase of proposal 35
+// memory is resident" had no answer at all, and every later phase of proposal 36
 // makes a memory claim that needs one — B1b multiplies a page's bytes by its
 // channel count and B9.2 has to publish the 8-channel figure.
 //

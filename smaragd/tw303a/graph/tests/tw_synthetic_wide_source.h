@@ -1,7 +1,7 @@
 #ifndef _TW_SYNTHETIC_WIDE_SOURCE_H_
 #define _TW_SYNTHETIC_WIDE_SOURCE_H_
 
-// A TEST-ONLY 4-channel component (proposal 35, pulled forward into B1 from
+// A TEST-ONLY 4-channel component (proposal 36, pulled forward into B1 from
 // v2's B2 because it is the ONLY thing that can catch a wrong conversion).
 //
 // The width-1 byte gate cannot see a mis-converted call site — at width 1 every

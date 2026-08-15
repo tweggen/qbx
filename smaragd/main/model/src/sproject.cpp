@@ -108,7 +108,7 @@ int SProject::readPreChildrenAttributes( QDomElement &element )
 
     // Channel count — the sampleRate idiom above, deliberately copied.
     //
-    // A missing attribute means a file written before proposal 35 M1, and every
+    // A missing attribute means a file written before proposal 36 M1, and every
     // such file sounds like 2 channels, so 2 is the only defensible default.
     // It WARNS rather than defaulting silently for the same reason the rate
     // does: a wrong channel count is as corrupting as a wrong rate — it would
@@ -232,7 +232,7 @@ void SProject::setSRate( int rate )
 
 bool SProject::isValidChannelCount( int n )
 {
-    // 1 / 2 / 4 / 6 / 8 — the widths proposal 35 delivers. Not "any n >= 1":
+    // 1 / 2 / 4 / 6 / 8 — the widths proposal 36 delivers. Not "any n >= 1":
     // every one of these has to be a real, gated configuration by B5, and an
     // arbitrary width would be a promise nothing keeps.
     return n == 1 || n == 2 || n == 4 || n == 6 || n == 8;
@@ -247,7 +247,7 @@ void SProject::setChannels( int n )
     }
     if( n == channels_ ) return;
     channels_ = n;
-    // DELIBERATELY the end of the line (proposal 35 M1): nobody connects this
+    // DELIBERATELY the end of the line (proposal 36 M1): nobody connects this
     // to a bus count yet. The signal exists so B4/B5 has one seam to widen,
     // not because anything downstream is listening today.
     emit channelsChanged( n );

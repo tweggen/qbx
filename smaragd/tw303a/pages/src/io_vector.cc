@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <sstream>
 
-// Proposal 35 §4.6: IOVector STAYS MONO. It is a view over ONE channel of its
+// Proposal 36 §4.6: IOVector STAYS MONO. It is a view over ONE channel of its
 // pages, and every page it sees today is one channel wide. The channel is named
 // once, here, rather than spelled `0` in fourteen places, so that the day a wide
 // twTrackMix needs `IOVector` over channel c (B4) the change is a parameter and

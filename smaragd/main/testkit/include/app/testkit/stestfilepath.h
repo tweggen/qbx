@@ -13,7 +13,7 @@ class SProject;
  * "<testOutputDir>/<name>" and that stays the first and normal answer. But a
  * committed FIXTURE (tests/test_channels4.wav) is not render output and never
  * appears in the output directory, so an assertion aimed at one had no spelling
- * at all — which is why proposal 35 M0 needs this: the multichannel gates assert
+ * at all — which is why proposal 36 M0 needs this: the multichannel gates assert
  * against a fixture whose channels are known, before any code exists that could
  * produce such a file.
  *

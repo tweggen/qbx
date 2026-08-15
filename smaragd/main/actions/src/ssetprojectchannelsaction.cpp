@@ -31,7 +31,7 @@ SApplyResult SSetProjectChannelsAction::apply( SProject *project )
 
     project->setChannels( channels_ );
 
-    // Proposal 35 M1: this is the whole apply(). No bus count, no mixer width,
+    // Proposal 36 M1: this is the whole apply(). No bus count, no mixer width,
     // no tw303aEnvironment. See the header for why the omission is deliberate
     // and how it is gated.
     return { true, new SSetProjectChannelsAction( oldChannels ) };

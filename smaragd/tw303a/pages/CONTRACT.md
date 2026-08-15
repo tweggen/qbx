@@ -24,7 +24,7 @@ Invariants:
    pointers across page boundaries (CreateFromBuffer is legacy interop only).
 4. generation increments on invalidation so lock-free readers detect staleness.
 5. Page memory is accounted at the PAGE's own lifetime, not a pool's
-   (proposal 35 B1a). twOutputPage's constructor calls
+   (proposal 36 B1a). twOutputPage's constructor calls
    tw::pages::PageAccounting::onPageAllocated with the sample bytes it just
    reserved and remembers that number in accountedBytes_; the destructor
    returns exactly that number. A page that changes width must therefore be
@@ -33,7 +33,7 @@ Invariants:
    Consequence worth knowing: the counter sees pages NO POOL WOULD — one bound
    into a scheduler node, held by an audio callback, or hanging off a
    stalePredecessor chain is resident memory and is counted.
-6. A page's CHANNEL COUNT IS IMMUTABLE (proposal 35 §4.5, built by B1b) and is
+6. A page's CHANNEL COUNT IS IMMUTABLE (proposal 36 §4.5, built by B1b) and is
    enforced by the type: `channels_` is a const member, the sample buffer is
    private, there is no setter, and the page is neither copy- nor
    move-assignable. Later phases treat a stale page whose width differs from
@@ -76,10 +76,10 @@ is not a small one: it pre-allocates its whole std::vector in its constructor an
 SProject asks for 2048 pages — 553 648 128 bytes reserved eagerly per project,
 of which a 4 s corpus render uses ONE. It is accounted separately
 (PageAccounting::poolReserved) precisely so nobody reads a twOutputPage figure as
-this process's page memory. Proposal 35 B1 calls it "used in production
+this process's page memory. Proposal 36 B1 calls it "used in production
 nowhere"; that is wrong on both halves.
 
-IOVector is deliberately NOT channel-aware (proposal 35 §4.6): it is a mono view
+IOVector is deliberately NOT channel-aware (proposal 36 §4.6): it is a mono view
 and reads channel 0 of whatever pages it holds. Wide mixing is a loop over
 channels of the same page pair, so the channel belongs to the loop, not to the
 view — but §4.6's own phrasing, "a view over one channelPtr(c)", implies a
