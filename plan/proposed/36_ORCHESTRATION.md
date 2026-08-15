@@ -1,6 +1,8 @@
 # Proposal 36 — Orchestration plan (execution companion)
 
-> **Status: PLAN v2.1 (2026-08-15).** How to execute `36_MIDI_INSTRUMENTS_AUTOMATION.md`
+> **Status: PLAN v2.2 (2026-08-15).** v2.2 adds the folder event feed and the
+> per-track MIDI-out offset (design §3.2.1, D6) to P0b/P1/P3b/P7.
+> How to execute `36_MIDI_INSTRUMENTS_AUTOMATION.md`
 > phase by phase. v2 re-cuts the phases per the adversarial review (design §13):
 > P0a gains the two testkit verbs everyone leans on; P2 is ABI/backends/fixtures
 > only and depends on P0b's event header; P3 is three PRs (fader move, instrument
@@ -205,7 +207,9 @@ P0b ──┬───────► P1   ├──► P7
   `twEventSource`** (design §4.2: opaque `void*` key, the module's OWN
   `twEventClipResolved {seq, MapPosFn}` record — never `tw/graph`'s
   `twResolvedClip` — `collect` with chase set + window clamp + synthesised
-  note-offs; returns `twFrameRange`); `events_test`.
+  note-offs; returns `twFrameRange`); **`twEventMerge`** (a `twEventSource` over N
+  sources: k-way merge by time, chase = union of `stateAt`, note ids namespaced
+  per source index in the high bits — design §3.2.1); `events_test`.
 - **Gate (ACs):**
   - AC1 `events_test`: (a) SMF corpus of ≥ 6 committed fixtures (type 0, type 1
     multi-track, running status, sysex, tempo/timesig/keysig/lyric meta, a 30 k-
@@ -222,7 +226,9 @@ P0b ──┬───────► P1   ├──► P7
     yields a synthesised NoteOff at the clip end; a note starting before the
     window appears only in the chase set; a looped clip (`loopLength < duration`)
     repeats events at the loop period; slip shifts positions without touching the
-    sequence.
+    sequence; (f) `twEventMerge` over two sources emitting the same key on the
+    same channel yields two NoteOns with distinct note ids and two NoteOffs; its
+    chase set is the union; a source removed mid-stream is dropped cleanly.
   - AC2 `check_layering.py` shows `events` as a leaf depending only on `core`;
     nothing in the dataflow DAG links it yet.
   - AC3 goldens byte-identical (no engine path touched — by construction; run the
@@ -253,8 +259,13 @@ P0b ──┬───────► P1   ├──► P7
   are replaced; rescales `beats` links; inverse restores both); generic verbs
   (`split/resize/duplicate/move/take-*`) work on `SMidiCut` via `SClipWindow`;
   `STrack` owns one `twEventClipSet`, routes `contentKind() == Event` children
-  into it (same slots, `SLink*` key) and NOT into the bus mixers; every event edit
-  → `invalidateRenderPathRange(a, ∞)`; `SMidiSequenceRendererInline` thumbnail;
+  into it (same slots, `SLink*` key) and NOT into the bus mixers; **the track
+  FEED** (`STrack::eventFeed()`, a `twEventMerge` over the own set + every child
+  track that passes events up — design §3.2.1: no instrument slot and no MIDI-out
+  unless `midiRouting` overrides; muted / solo-excluded children contribute
+  nothing, resolved with `ssolorules.h`; rebuilt on child add/remove/reparent,
+  mute/solo change and routing change), `midiRouting` serialized +
+  `set-track-midi-routing`; every event edit → `invalidateRenderPathRange(a, ∞)`; `SMidiSequenceRendererInline` thumbnail;
   `contentKind()` replaces the `container` heuristic; `.mid` in the insert filter +
   `text/uri-list` drops; Clip Properties page for `SMidiCut`; testkit `assert-midi-
   events`, `assert-midi-file`; `action_roundtrip_test` fixtures for every verb;
@@ -284,6 +295,11 @@ P0b ──┬───────► P1   ├──► P7
     (no instrument yet) with `assert-audio-energy maxRms=0.0001` and
     `assert-log contains="twView::getComponent() returned nullptr" maxCount="0"`
     (the exact `twview.cc:35` text — re-check it before writing the case).
+  - AC4b `qxa` `midi_folder_feed`: a folder (`group-track`) with two child tracks
+    each holding a MIDI clip (C4 / E4) and no instrument: `assert-midi-events
+    scope="feed" trackPath="<parent>" count=2`; `set-track-mute` child 0 → count 1;
+    `set-track-solo` child 1 → count 1; `set-track-midi-routing none` on child 0
+    → count 1; each step `<undo count="1"/>` + re-assert.
   - AC5 (orchestrator-run, cross-binary) a `.qxp` saved by this phase with a MIDI
     clip opens in the P0a binary with the clip dropped and the audio intact.
   - AC6 `action_roundtrip_test` green with a fixture row per new verb; `docs/
@@ -433,6 +449,11 @@ P0b ──┬───────► P1   ├──► P7
     `expectReject`s; `<undo count="1"/>` of the first insert removes the row.
   - AC7 project end: a track whose last MIDI clip ends at 3 s with a `tailFrames()`
     = 24000 instrument reports `getDuration()` = 3.5 s (assert via `render` length).
+  - AC7b `qxa` `instrument_folder_drums`: the sine instrument on a folder parent;
+    two children (no instrument) with C4 in second 1 and E4 in second 2 → both
+    frequencies in their seconds; `set-track-mute` child 0 → second 1 silent,
+    second 2 unchanged; a child playing the same key at the same time as the
+    other yields RMS ≈ 2× one voice (two overlapping notes, not one).
   - AC8 `repeat_test.sh` on `instrument_sine_render` and `instrument_mixed_track`:
     N=50 × workers {1,4,8,16}, 100 % pass (never `0`).
   - AC9 goldens byte-identical (no track without an instrument changes path);
@@ -618,7 +639,10 @@ P0b ──┬───────► P1   ├──► P7
   notes-off per used channel; renders emit nothing); latency alignment via
   `meterLatencyFrames()`'s mapping + user offset; `set-track-midi-output`; Options
   MIDI page (`build/load/apply` mirroring Audio; inputs listed but inactive until
-  P8; "Create virtual port" gated per platform); testkit `assert-midi-out`
+  P8; "Create virtual port" gated per platform; global MIDI-out offset default);
+  per-track `midiOutOffsetMs` (`set-track-midi-output offsetMs=`, ±500, positive
+  = earlier) applied by the pump; the pump reads the track FEED (children of a
+  folder parent go out of the parent's port); testkit `assert-midi-out`
   (host time → project frame through the audio capture timeline), `dump-midi-
   capture`; THREADING inventory row.
 - **Gate (ACs):**
@@ -635,6 +659,10 @@ P0b ──┬───────► P1   ├──► P7
   - AC3 `qxa` `midi_out_loop_wrap`: cycle 0–2 s, a note 1.5–2.5 s: capture shows
     NoteOff at 2.0 s (cycle end) then the next cycle's events from 0; no doubled
     NoteOn.
+  - AC3b `qxa` `midi_out_offset_and_folder`: `offsetMs=200` on the AC1 track →
+    every event lands 9600 ± 4096 frames EARLIER than in AC1; a folder parent
+    with `port="capture"` and two children with notes → both children's notes on
+    the parent's port, channel remapped to the parent's channel.
   - AC4 goldens byte-identical (MIDI-out touches no render path); `render` with a
     MIDI-out track produces no capture events.
   - AC5 `assert-midi-out` `expectReject`s when the backend is not `capture`.

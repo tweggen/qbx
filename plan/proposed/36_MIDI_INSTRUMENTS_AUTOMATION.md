@@ -1,6 +1,9 @@
 # Proposal 36 — Event clips, instruments, MIDI output and automation
 
-> **Status: DRAFT v2.1 (2026-08-15).** v2 applies an adversarial review of v1
+> **Status: DRAFT v2.2 (2026-08-15).** v2.2 adds §3.2.1 (events bubble up the
+> track hierarchy) and the per-track MIDI-out delay (D6) from the requester's
+> challenges; the requester accepted §11's decisions 1–6.
+> v2 applies an adversarial review of v1
 > (§13: 5 blockers, 16 majors, 13 minors — every one answered inline, so the
 > reasoning survives); v2.1 applies the reviewer's verification pass (§13.2:
 > pre-roll must reach back to the held note's start, one pinned `twEvent`, the
@@ -383,8 +386,15 @@ model for MIDI-out) and hands `{dueHostTimeNs, port, bytes}` to a
 `MidiOutScheduler` std::thread (no Qt) through an SPSC ring; CoreMIDI/ALSA-seq
 get driver timestamps handed off early, WinMM gets send-at-due-time (±1 ms,
 honestly not gated). Alignment: `dueHostTime = hostTime(playhead) +
-deviceOutputLatency − midiOutLatency − userOffset`, reusing
-`meterLatencyFrames()`'s device→project mapping. On start/locate: chase CC/PC/
+deviceOutputLatency − midiOutLatency − globalOffset − trackOffset`, reusing
+`meterLatencyFrames()`'s device→project mapping. **`trackOffset` is a per-track,
+signed, adjustable MIDI-out delay** (`STrack::midiOutOffsetMs`, ±500 ms,
+serialized; `set-track-midi-output offsetMs=`; positive = send EARLIER, the
+requester use case: outboard gear whose audio return arrives late is compensated
+so its audio lands on the grid for monitoring or recording; a global default
+lives in Options). Together with proposal 21's per-device *recording offset* it
+aligns a full MIDI-out → outboard → audio-in round trip; the external-instrument
+object that bundles the two is P9. On start/locate: chase CC/PC/
 bend (always) and note-ons (per setting; default OFF for MIDI-out); on loop wrap:
 the window is split at the cycle end, held notes get note-off at the cycle end,
 chase re-issued at the cycle start; on stop / locate / panic: sustain-off + all-
@@ -507,9 +517,10 @@ silent (D3). Project end for a track with an instrument = last event clip end +
 `tailFrames()` (deliverable P3b).
 
 ### 3.2 Track: no kind, three derived facts, two attributes
-`STrack` gains `midiOutPort=''` / `midiOutChannel='-1'` (serialized) and three
-derived, non-serialized helpers: `instrumentSlot()` (slot 0 with `isInstrument`),
-`hasEventClips()`, `hasMidiOut()`. `trackChildWasAdded/Moved/Removed` and
+`STrack` gains `midiOutPort=''` / `midiOutChannel='-1'` / `midiOutOffsetMs='0'`
+/ `midiRouting='auto'` (serialized) and four derived, non-serialized helpers:
+`instrumentSlot()` (slot 0 with `isInstrument`), `hasEventClips()`,
+`hasMidiOut()`, `eventFeed()` (§3.2.1). `trackChildWasAdded/Moved/Removed` and
 `trackChildDurationChanged` route `contentKind() == Event` children into the
 per-track **event clip set** (§4.2) keyed by `SLink*` — same slots, same key rule
 (CLIP_MODEL "identity is the SLink pointer") — and NOT into the bus mixers, so no
@@ -518,6 +529,37 @@ dummy freeze per page per MIDI clip. Every event edit calls
 F9) and that walk must reach the **instrument tap** via the processor's epoch
 (the same "an `SPluginChain` is not an `SLink` child" pitfall as plugin edits;
 `STrack::bumpRenderChainEpochRange` already covers the chain).
+
+### 3.2.1 Event routing in the track hierarchy (folders) — events bubble up like audio
+Audio from a child track is summed by its parent (folder tracks, assets). Events
+do the same, under one rule (requester use case: a drum machine on the parent,
+each child holding one pattern on the same MIDI channel):
+
+- A track's **event feed** = its own event clip set **merged with the feeds of
+  every child track that passes events up**. A child passes events up iff it has
+  **no instrument slot and no MIDI-out port** — "consumed here, or bubbled up" —
+  unless its serialized `midiRouting = auto | parent | none` says otherwise
+  (`auto` is the rule above; `parent` forces bubbling even past a local
+  consumer; `none` keeps them local). REAPER analogue: MIDI passes through a
+  child's empty FX chain to the folder parent's input, so a VSTi on the folder
+  plays the children; Cubase/Logic route MIDI tracks to instruments explicitly —
+  `midiRouting=parent` is that explicit route restricted to the hierarchy.
+- The feed is a `twEventMerge` (tw/events, a `twEventSource` over N sources):
+  k-way merge by time; chase = union of the sources' `stateAt`; **note ids are
+  namespaced per source** (source index in the high bits), so two children
+  playing the same key on the same channel are two overlapping notes to the
+  instrument, never one truncated one.
+- **Mute / solo**: a child that is muted or solo-excluded (`app/model/
+  ssolorules.h`, the same resolution the summing container uses for audio)
+  contributes no events; the parent's own mute silences the parent's audio as
+  today. Clip-level mute (`SLink`/take) is already inside the clip set.
+- **Invalidation** needs nothing new: an event edit on a child calls
+  `invalidateRenderPathRange(a, ∞)` on the cut and the existing ancestor walk
+  (`STrack::bumpRenderChainEpochRange` at every ancestor track) reaches the
+  parent's chain — i.e. the parent's instrument tap.
+- The parent's **MIDI-out** sends its whole feed (children included); the
+  parent's instrument consumes it; both at once is allowed (the feed is read,
+  not moved). Containers/assets: same rule inside the container.
 
 ### 3.3 Automation persistence
 `SAutomationLane` — a plain owner-held `QObject` (NOT an SObject; never an `SLink`
@@ -556,7 +598,8 @@ not top-level objects.
 | `set-tempo` | `bpm` | the ONLY tempo write; rescales `timebase=beats` links; inverse restores both |
 | `set-link-timebase` | `clip`, `timebase`="beats\|time" | |
 | `insert-plugin` | + `isInstrument`="false" in the descriptor | no new verb; instrument ⇒ slot 0, refused if one exists |
-| `set-track-midi-output` | `trackPath`, `port`="" (portable device NAME), `channel`="-1" | per-machine ids resolve in `SSettings`, like the audio input device |
+| `set-track-midi-output` | `trackPath`, `port`="" (portable device NAME), `channel`="-1", `offsetMs`="0" (signed, ±500) | per-machine ids resolve in `SSettings`, like the audio input device |
+| `set-track-midi-routing` | `trackPath`, `routing`="auto\|parent\|none" | §3.2.1; absolute |
 | `add-automation-lane` / `remove-automation-lane` | `owner` (trackPath \| clip \| trackPath+`slotIndex`), `target`, `mode`="read" | inverse carries the whole point list |
 | `set-automation-mode` | `owner`, `target`, `mode`="off\|trim\|read\|touch\|latch\|write" | |
 | `add-automation-point` / `move-automation-point` / `remove-automation-point` | `owner`, `target`, `time`, `value`, `curve`="linear", (`toTime`, `toValue`) | points addressed by old `(time, value)` |
@@ -656,8 +699,10 @@ the clip-end-bleed clamp: **note-offs are synthesised at the clip end for notes
 still held, and note-ons before the window are only ever issued through the
 chase**. Loop and slip go through the cut's map like audio (POSITION_DOMAINS
 rules 1-3). Consumers: the instrument slot processor (§4.3) through the
-`twEventSource` pointer, and the MIDI-out pump (§4.6). Owned by `STrack`, one per
-track (events are not per bus).
+`twEventSource` pointer, and the MIDI-out pump (§4.6) — both read the track's
+**feed** (`twEventMerge` over the own set + bubbling children, §3.2.1), which is
+also a `twEventSource`. Owned by `STrack`, one set per track (events are not per
+bus).
 
 ### 4.3 The instrument slot (tw/plugins) — generator modes of the existing processor
 Design option A (engine study): the instrument is **slot 0 of the existing
@@ -744,8 +789,8 @@ n, hostTimeNs) /* device thread, no Qt */ }`, `createMidiOutput()` selected by
 bytes}`, `WaitableTimer`/`nanosleep` at 1 ms granularity (`timeBeginPeriod(1)` on
 Windows), joined Qt-free at shutdown. `MidiOutPump` (app, main-thread `QTimer`,
 numbers in D6): reads the playhead atomic, walks tracks with `midiOutPort`,
-`collect`s their event clip set over the lookahead window, converts channel remap,
-de-dups, enqueues; start/locate/loop-wrap/stop/panic behaviour per D6. The
+`collect`s their event FEED over the lookahead window, converts channel remap,
+applies the per-track offset, de-dups, enqueues; start/locate/loop-wrap/stop/panic behaviour per D6. The
 capture MIDI backend records `{hostTimeNs, bytes}`; the AUDIO capture backend
 records host time per delivered block; `assert-midi-out` maps through the latter.
 
@@ -936,16 +981,16 @@ corpus** unless an AC licenses a re-freeze with a written justification.
 | Phase | Deliverable | Depends on | Gate (headline ACs) |
 |---|---|---|---|
 | **P0a** Persistence tolerance + `SClipWindow` + testkit basics | prune-and-retry loader; `formatVersion`; `SClipWindow` + wrap factory; every cast site dispatches on it; `contentKind()`; `assert-file-identical`, `assert-log` | — | `load_unknown_object_survives` + `load_missing_sample_placed_survives`; every windowed/take verb round-trips; goldens byte-identical (incl. `plugin_*`) |
-| **P0b** `tw/events` leaf | `twEvent` (the one), `twEventSeq`, `twTempoMap`, `TickPos`, `twSmf`, `twAutomationCurve`, `twEventClipSet` + `twEventSource`, `events_test` | — | event-table-equal SMF round-trip (byte-identical for twSmf-authored files); `stateAt` vs brute force; tick↔frame exact at 3 rates; `collect` clamps + synthesised note-offs; layering leaf |
-| **P1** Event clips in the model | `SMidiSequence`, `SMidiCut` (tick window), `SLink::timebase`, `objects/midi`, verbs, `STrack` → event clip set, thumbnail, Clip Properties page, `assert-midi-events/-file`, `set-tempo` as the only tempo write | P0a, P0b | import → save → load → export equal; non-destructive split; stretch/loop/slip/take verbs; `set-tempo` moves beat-timebase MIDI links and re-maps notes, moves no audio; explicit undo asserts; MIDI-only project renders silent without a `twview` warning (`assert-log`) |
+| **P0b** `tw/events` leaf | `twEvent` (the one), `twEventSeq`, `twTempoMap`, `TickPos`, `twSmf`, `twAutomationCurve`, `twEventClipSet` + `twEventSource` + `twEventMerge`, `events_test` | — | event-table-equal SMF round-trip (byte-identical for twSmf-authored files); `stateAt` vs brute force; tick↔frame exact at 3 rates; `collect` clamps + synthesised note-offs; layering leaf |
+| **P1** Event clips in the model | `SMidiSequence`, `SMidiCut` (tick window), `SLink::timebase`, `objects/midi`, verbs, `STrack` → event clip set + folder feed (`twEventMerge`, mute/solo, `midiRouting`), thumbnail, Clip Properties page, `assert-midi-events/-file`, `set-tempo` as the only tempo write | P0a, P0b | import → save → load → export equal; non-destructive split; stretch/loop/slip/take verbs; `set-tempo` moves beat-timebase MIDI links and re-maps notes, moves no audio; explicit undo asserts; MIDI-only project renders silent without a `twview` warning (`assert-log`) |
 | **P2** Plugin ABI events + fixtures + native 303 (`twPlugin` level only) | `twpluginevents.h`, `process()` overload, capabilities, tail, aux-out discovery; CLAP/VST3/AU translation; `tw.test.clap.sine/arp` + a `clipThreshold` param on `tw.test.clap.gain`, VST3 `TestSine`, `twNativeInstrument`; scanner v2 | P0b (`twevent.h`) | `plugins_test` at the `twPlugin` level: notes → sine RMS + frequency per format; mid-block gain step at the offset; unactivated-bus teeth; arp event-out; effect goldens byte-identical; **no processor / chain change** |
 | **P3a** Fader post-FX | `twGainStage` (freeze + legacy pull), fader/mute wiring, trackmix gain forced to 0 dB, docs | 35-B4, P2 (clipper) | all goldens byte-identical (by construction, P4); new `fader_post_fx.qxa` value case + ORDER case (clipper) that fails on the pre-move binary; `meter_*` green |
-| **P3b** Instrument slot + event feed | generator modes (post-35 wide), pass-through sum, `twEventSource` feed, reset+chase+pre-roll, slot rules, browser/strip/head minimum, project end + tail | P1, P2, P3a, 35-B4 | `instrument_sine_render` (freq/RMS per note), `instrument_mixed_track` (no-notes ⇒ byte-equal), edit reaches the render, native 303 presence; `repeat_test` sweep |
+| **P3b** Instrument slot + event feed | generator modes (post-35 wide), pass-through sum, `twEventSource` feed (the track FEED incl. bubbling children), reset+chase+pre-roll, slot rules, browser/strip/head minimum, project end + tail | P1, P2, P3a, 35-B4 | `instrument_sine_render` (freq/RMS per note), `instrument_mixed_track` (no-notes ⇒ byte-equal), `instrument_folder_drums` (parent instrument plays two children; child mute drops its part), edit reaches the render, native 303 presence; `repeat_test` sweep |
 | **P3c** Render barrier + determinism | `beginRun` main-thread walk (path invalidation + `forgetContinuity()`) at render start and play start | P3b | `instrument_render_determinism` (`cmp` two in-process renders around a playback + one fresh process); `instrument_locate_continuity` (303 warmth + sine chase after `set-locator`); playback seek splices stated as NOT gated |
 | **P4** Event editor (piano roll) + virtual keyboard | `main/eventui`, dock, view base + kind registry, piano roll + velocity/CC lanes, time axis link, grid/quantize, `virtual-key`, `drag-note`, `assert-event-editor`, `describeTrackHead` | P1 (P3b for audible checks) | explicit undo per editor op; off-screen `describe()`; PNGs; `virtual-key` → render → `assert-audio-frequency` |
 | **P5** Automation model + engine | `SAutomationLane`, `ParamRef`, verbs, curve snapshots, gain-stage ramps, processor param events + `automationEpoch_`, clip gain envelope, range invalidation | P0b, P3b | `automation_volume_ramp` (per-second RMS; render `cmp`), `automation_mute_step` (ramp windows between levels), `automation_plugin_param` (step at a mid-page-1 offset, CLAP + VST3), `automation_clip_gain`, `assert-automation-value`; goldens without lanes byte-identical |
 | **P6** Automation UI | sub-lanes, painting, gestures, picker, head mode button, Touch/Latch/Write recorder committing one action, plugin-gesture punch-in, clip envelope overlay, fader shows the read value | P5 | `drag-automation-point` + `automation-write-tick` cases (`<undo count="1"/>`); `assert-lane-alignment` over automation lanes; head `describe()` at three densities; `sstdmixerview.cpp` growth ≤ 100 lines |
-| **P7** MIDI output | `tw/devices` MIDI interfaces + WinMM/CoreMIDI/ALSA-seq/capture/null; scheduler thread; out pump; audio-capture host-time log; `set-track-midi-output`; Options MIDI page; chase; panic | P1 (P3 optional) | `midi_out_capture` (notes at expected frames ± 4096 through the audio clock; chase after locate; all-notes-off on stop; loop wrap); goldens unaffected; WinMM jitter NOT gated |
+| **P7** MIDI output | `tw/devices` MIDI interfaces + WinMM/CoreMIDI/ALSA-seq/capture/null; scheduler thread; out pump over the track FEED; per-track offset; audio-capture host-time log; `set-track-midi-output`; Options MIDI page; chase; panic | P1 (P3 optional) | `midi_out_capture` (notes at expected frames ± 4096 through the audio clock; chase after locate; all-notes-off on stop; loop wrap; `offsetMs=200` shifts every event 9600 frames earlier; a folder parent's port carries its children's notes); goldens unaffected; WinMM jitter NOT gated |
 | **P8** Live MIDI input + recording *(outline; gated on proposal 21 P1)* | `MidiInput` backends, event ring → processor merge point, computer keyboard as input, record to clip with takes | 21-P1, P3b, P7 | to be written when 21-P1 lands |
 | **P9** Follow-ups *(outline)* | multi-out → return tracks; tempo segments (37); MIDI-FX routing (arp → instrument in-app); score/tab/tracker views; `split-notes-at`; generic `widget-gesture`; PDC | P3/P5 | own proposals |
 
@@ -1004,7 +1049,7 @@ param editor into the native editor.
 | Legacy pull path (`assert-meter`) does not see event/automation edits | Documented; disappears with proposal 20; the gain caveat is retired by the gain stage |
 | Proposal 35 stalls | §9.1's explicit re-cut option |
 
-## 11. Decisions taken in v2 (requester may veto before P1)
+## 11. Decisions taken in v2 (requester accepted all six on 2026-08-15; v2.2 adds 7–8 from the requester's own challenges)
 
 1. **Pass-through sum** on an instrument track (audio clips audible; REAPER
    overwrites, Cubase/Logic disallow) — chosen for a kind-less track; centre-panned
@@ -1019,6 +1064,12 @@ param editor into the native editor.
    time-locked (REAPER defaults).
 6. **One instrument per track** (single event feed) — REAPER allows several VSTi;
    revisit with MIDI-FX routing (P9).
+7. **Events bubble up folder hierarchies** like audio: a child with no local
+   consumer (no instrument, no MIDI-out) feeds its parent's instrument / port;
+   `midiRouting = auto | parent | none` overrides; mute/solo respected; note ids
+   namespaced per child (§3.2.1).
+8. **Per-track adjustable MIDI-out delay** (`midiOutOffsetMs`, ±500 ms, positive
+   = earlier) for outboard round-trip latency, plus a global default (D6).
 
 ## 12. Deliberately not done here
 Tempo segments/ramps (37); return tracks / multi-out UI (P9); MIDI-FX chains
