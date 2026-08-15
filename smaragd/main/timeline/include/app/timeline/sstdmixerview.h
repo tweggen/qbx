@@ -570,7 +570,9 @@ public slots:
     void ctPitchDownFine() { nudgeClipPitch(  -10.0 ); }
     void ctAddLink();
     void setTimeGridSpec( const STimeGridSpec & );    
-    void setBPMTempo( double );
+    // The project's tempo moved (bpmTempoChanged): re-derive the ruler grid.
+    // A LISTENER, not a writer - the only tempo write is the set-tempo verb.
+    void onProjectTempoChanged( double );
     // void scrollTo( QPoint &x );
     
 signals:

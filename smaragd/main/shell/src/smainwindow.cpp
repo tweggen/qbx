@@ -27,6 +27,7 @@
 #include "app/shell/smainwindow.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
+#include "app/objects/midi/smidiclipactions.h"
 #include "app/model/splacements.h"
 #include "app/model/sobjectpath.h"
 #include "app/shell/ssettings.h"
@@ -1975,10 +1976,12 @@ void SMainWindow::ungroupTrack()
 
 void SMainWindow::onTempoSpinChanged( double bpm )
 {
-    // Direct set (no undo action), matching the ruler "Set BPM" dialog. The
-    // resulting bpmTempoChanged updates the grid and echoes back to the box,
-    // but setValue to an unchanged value emits nothing, so there is no loop.
-    if( currentProject_ ) currentProject_->setBPMTempo( bpm );
+    // Through the set-tempo VERB (proposal 36 D2): it is the only tempo write,
+    // it re-derives every beats-timebase link so MIDI clips stay on their bar,
+    // and it coalesces a spin-box drag into one undo step. The resulting
+    // bpmTempoChanged updates the grid and echoes back to the box, but
+    // setValue to an unchanged value emits nothing, so there is no loop.
+    if( currentProject_ ) SApplication::app().submitAction( new SSetTempoAction( bpm ) );
 }
 
 void SMainWindow::undo()

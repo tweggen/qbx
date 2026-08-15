@@ -110,14 +110,19 @@ APP_DEPS = {
     'actions':        {'model'},
     'persistence':    {'actions', 'model'},
     'selection':      {'actions', 'model'},
-    'timeline':       {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'pluginui',
-                       'servicesui', 'shell'},
+    # timeline + objects/midi since proposal 36 P1: the Clip Properties dock
+    # grows an SMidiCut page, and the ruler's Set BPM commits through set-tempo.
+    'timeline':       {'actions', 'model', 'objects/cut', 'objects/midi',
+                       'objects/mixer', 'objects/track', 'objects/wave',
+                       'pluginui', 'servicesui', 'shell'},
     'pluginui':       {'model', 'objects/mixer', 'objects/track', 'shell'},
     'servicesui':     {'model', 'shell'},
-    'shell':          {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'persistence',
-                       'selection', 'servicesui', 'testkit', 'timeline'},
+    # shell + objects/midi since proposal 36 P1: the transport tempo box
+    # commits through the set-tempo verb instead of writing the project.
+    'shell':          {'actions', 'model', 'objects/cut', 'objects/midi',
+                       'objects/mixer', 'objects/track', 'objects/wave',
+                       'persistence', 'selection', 'servicesui', 'testkit',
+                       'timeline'},
     # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:
     # set-render-gate addresses an SCut, wait-analysis reads SPlainWave.
     # testkit + pluginui since proposal 08 M5: assert-plugin-strip and
@@ -159,8 +164,10 @@ APP_ENG = {
     'selection':      _ENG_BASE,
     # timeline + metering since proposal 34: the track head owns an SLevelMeter
     # and a twLevelProbe reading the track's frozen pages by position.
-    'timeline':       _ENG_BASE | {'devices', 'metering', 'pages', 'playback',
-                                   'sources'},
+    # timeline + events since proposal 36 P1: the ruler and the snap grid read
+    # the project's tempo map, which is the single tempo authority (D2).
+    'timeline':       _ENG_BASE | {'devices', 'events', 'metering', 'pages',
+                                   'playback', 'sources'},
     'pluginui':       _ENG_BASE | {'plugins'},
     # servicesui + plugins since proposal 08 M2: the Options dialog's Plugins
     # page edits the scanner's search paths, and SOpt::def() takes the
