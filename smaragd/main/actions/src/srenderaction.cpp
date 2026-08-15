@@ -6,6 +6,7 @@
 #include "tw/render/render_session.h"
 #include <QDomElement>
 #include <QDebug>
+#include <QFileInfo>
 #include <thread>
 #include <chrono>
 
@@ -80,6 +81,8 @@ SApplyResult SRenderAction::apply(SProject *project)
     params.quality = quality_;
     params.extent = audio::RenderParams::Extent::EntireProject;
     params.startTimeSec = 0.0;
+    // The ARRANGEMENT decides how long this render is (it used to be a hardcoded
+    // 60 s, which truncated anything longer and padded everything shorter).
     params.endTimeSec = project->getDurationSeconds();
 
     // Start rendering
@@ -87,8 +90,11 @@ SApplyResult SRenderAction::apply(SProject *project)
     // For now, start and hope it completes before the test ends (ideally sync would be better).
     app.startRender(params);
 
-    // Poll until rendering completes (with timeout)
-    int maxWaitMs = 30000;  // 30 second max wait
+    // Poll until rendering completes (with timeout). The budget scales with the
+    // arrangement now that the extent is not a fixed minute: a case may legally
+    // render several minutes of audio, and a fixed 30 s ceiling would turn that
+    // into a spurious failure.
+    int maxWaitMs = 30000 + static_cast<int>(params.endTimeSec * 2000.0);
     auto start = std::chrono::steady_clock::now();
     while (app.isRenderingActive()) {
         auto now = std::chrono::steady_clock::now();
@@ -98,6 +104,15 @@ SApplyResult SRenderAction::apply(SProject *project)
             return {false, nullptr};
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // A render that never started leaves no file behind, and startRender() does
+    // not report that back — the action would otherwise report SUCCESS for a
+    // case whose output does not exist, and the failure would surface much later
+    // as a confusing assert against a missing WAV.
+    if (!QFileInfo::exists(fullPath)) {
+        qWarning() << "SRenderAction: no output file was produced:" << fullPath;
+        return {false, nullptr};
     }
 
     qDebug() << "SRenderAction: rendered to" << fullPath;
