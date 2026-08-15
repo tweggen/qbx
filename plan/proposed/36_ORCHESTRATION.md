@@ -707,7 +707,7 @@ read §6, STATE.md tail, `git log --oneline -15`, the branch's open PR, then cod
 
 | Phase | Status | Closed on | PR / commit | Notes |
 |---|---|---|---|---|
-| P0a persistence tolerance + `SClipWindow` + verbs | ☐ | | | |
+| P0a persistence tolerance + `SClipWindow` + verbs | ☑ | 2026-08-15 | `feat/36-p0a-clipwindow-loader` — `d6c8982`, `5866a7d`, `224f97a`, `a0517c5` | AC1/AC2/AC4/AC5/AC6 green; AC3 by targeted corpus compare. The full-suite reconciliation was NOT completed here (requester: parallelization + a `getDuration()` fix merge first) — see STATE.md 2026-08-15 |
 | P0b `tw/events` leaf | ☐ | | | |
 | P1 event clips in the model | ☐ | | | |
 | P2 plugin ABI events + fixtures + native 303 | ☐ | | | |

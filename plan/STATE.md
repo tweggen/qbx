@@ -9028,3 +9028,174 @@ isolation and on chunk re-run. At least one occurred before any of these six
 fixes existed, so the pattern is not attributable to them — but neither has it
 been explained. A low-rate flake somewhere in the suite under sustained load is
 the working hypothesis and it remains unproven.
+
+---
+
+## 2026-08-15 — Proposal 36 P0a: loader tolerance + `SClipWindow` + verbs
+
+Branch `feat/36-p0a-clipwindow-loader`, commits `d6c8982`, `5866a7d`, `224f97a`,
+`a0517c5`. Design: `plan/proposed/36_MIDI_INSTRUMENTS_AUTOMATION.md` D8 and the
+P0a brief in `36_ORCHESTRATION.md` §3. Everything here is app-model work — no
+engine file was touched, and no audio behaviour was meant to change.
+
+### 1. The loader repairs per element kind, and iterates
+
+A missing sample under a PLACED clip cost the user the WHOLE project. The
+leftover sweep dropped every unresolvable element in one pass, so a dead
+`<SPlainWave>` took its `<SCut>`, the cut took the `<STrack>` that placed it,
+the track took the `<SStdMixer>`, and the load ended on "root component of
+project was not found". `sample_missing_survives.qxa` only ever covered the
+easy half — there the dead cut hangs off nothing.
+
+The sweep now repairs by KIND and retries the instantiation loop to a fixed
+point: a CONTAINER (`STrack`, `SStdMixer`, `STakeStack`) loses the dangling
+`<SLink>` and keeps the element; a WINDOW (`SCut`, later `SMidiCut`) whose
+content is gone is dropped itself, and its own placement then meets the
+container rule on the next pass; everything else, unknown element names
+included, is dropped as before. The kind is declared at registration, so
+persistence still names no concrete type, and an unregistered element is Plain —
+an element from a newer build costs itself and nothing more.
+
+Two things the fixtures caught, both of which would have made this useless:
+
+- **A link whose target is still IN THE DOCUMENT is not dangling.** Without
+  that test the pass cascaded exactly like the sweep it replaces, one level per
+  call: at prune time a track waiting for its clip is itself absent from the
+  dictionary, so the mixer's link to that track looked dead too, and dropping it
+  lost the track while the repair that would have saved it had not been retried.
+- **Termination is not left to the policy.** Each pass removes at least one node
+  or link, and a pass that repairs nothing falls back to dropping every
+  leftover (naming each) — the hang `legacy_project_recovery.qxa` guards cannot
+  come back through this door.
+
+The ROOT is the one thing with no recovery: `createObjects()` now returns -1
+when `rootId` does not resolve, instead of an empty shell that looks like an
+opened project and would overwrite the file on the next save.
+
+`<SProject formatVersion='2'>` is written unconditionally and read with a
+default of 1. A higher version WARNS and loads: refusing would strand a user's
+file on whichever build they happen to have, and an unknown element is already
+skipped by name.
+
+### 2. `SClipWindow` — the window layer as an interface
+
+split / resize / duplicate / unsplit / set-clip-name / add-, remove-,
+select-take / place-clip all did their window arithmetic through
+`dynamic_cast<SCut*>`, and `ssplitclipaction.cpp` compared the class NAME — a
+second window type could not exist without editing all of them, which is what
+P1's event clips need. `app/model/sclipwindow.h` is that arithmetic: reads in
+TIMELINE FRAMES, `timelineToSourceExact` for the one map split needs,
+`cloneWindowOver` for a faithful copy, and setters that take timeline frames and
+convert exactly ONCE inside the implementation (two callers converting
+independently is how a rounding difference becomes an off-by-one clip edge).
+The exact anchor forms exist because the slip anchor is content-authoritative
+and must not drift under a stretch edit (proposal 18 Phase 3).
+
+`SObject::contentKind()` (Audio | Event, default Audio) says what an object's
+material is; `SClipWindow::wrapContent()` mints the window type that fits it,
+registered by `SCut` from a static initializer, so app/model still names no
+concrete type. `STakeStack` is now a column of windows and is HOMOGENEOUS —
+`insertTake` refuses a different content kind (add-take rejects, the loader
+skips one take and keeps the column). The mixed-kind refusal has no gate yet:
+there is no Event-kind object to build one with, which is P1 AC2.
+
+`SCut` implements the interface by FORWARDING to what it already had; its body
+is otherwise untouched. Pitch, formants, warp anchors and the grain params stay
+audio-only, and every cast left in `objects/cut/src/` says which of those it is
+(8 sites: the class-registration literal, set-pitch, set-formant-preserve, the
+warp-marker actions, resize-clip ×2 for warp anchors, remove-take for pitch,
+remove-sample for the grain params).
+
+### 3. Two testkit verbs everything after this leans on
+
+`assert-file-identical` is the byte-`cmp` determinism gate, moved inside a case:
+run by hand from a shell it could not be committed, so "the goldens did not
+move" was a claim in a PR body rather than a test. Absolute paths are allowed
+(unlike `render`'s output name) so a case can compare against a file another
+process wrote; an optional frame range compares only that slice of the WAV's
+`data` chunk.
+
+`assert-log` is the only way to gate a RECOVERY: a repaired project renders
+exactly like a project that never needed repairing, so the warning is the whole
+evidence — and a `--test-case` run writes no log file. It reads the in-process
+`TwLog` ring over the records logged since the previous action started. A
+`--test-case` run raises the ring capacity (in ONE call — `setCapacity`
+discards what is buffered), and an assert-log does not move the window, so two
+in a row examine the same action.
+
+### 4. Gate
+
+- `./build.sh` clean; `check_layering.py` clean; `check_logging.py` clean.
+- `action_roundtrip_test`: 83/83 (81 before), with fixture rows for both new
+  verbs carrying every optional attribute.
+- AC1 `load_unknown_object_survives` and AC2 `load_missing_sample_placed_survives`
+  green. Neither was RUN against the pre-phase binary (it no longer existed by
+  then); what they assert is behaviour that did not exist there at all, since
+  the old sweep dropped every leftover at once. Both did fail mid-branch, on
+  the first version of the sweep, and that failure is what found the
+  still-in-the-document rule. AC6 rides on them rather than adding a
+  third case: AC1's fixture has NO formatVersion and is re-saved as 2
+  (`assert-file-contains`), AC2's declares `formatVersion='99'` and is loaded
+  with the warning (`assert-log`).
+- AC3, byte-identical renders: **62 of 62 WAVs byte-identical**, over the
+  36 corpus cases that produce one (`render_*`, `grain_*`, `exact_*`, `warp_*`,
+  `plugin_*`, `meter_*` — 39 cases registered, 39 green, three of them produce
+  no WAV). The pre-phase copies were rendered on the branch-tip binary BEFORE
+  any code changed and kept in the scratchpad, never in the repo; the compare is
+  plain `cmp`, whole file, headers included. The split/duplicate/take rewrites
+  were the risk here — every window value they now read through the interface is
+  the same value, computed in the same place, as the code they replace.
+- Full suite: the registered count is **111 = the base's 109 + the two new cases**
+  (`ctest -N` before and after). The RUN was **not completed in this branch, by
+  requester instruction** — another session is preparing suite parallelization
+  plus a `getDuration()` fix that merges first, and the suite is to be re-run
+  there. What had been observed when it was stopped: **36/111 started, 27
+  passed, 6 failed**, and every one of the six is
+  `SRenderAction: render timeout after 30000 ms` in a `grain_*` case
+  (`grain_multiple_stretch_factors`, `grain_pitch_octave_up`,
+  `grain_pitch_semitone_down`, `grain_pitch_with_stretch`,
+  `grain_split_delete_crash`, `grain_time_stretch_2x`). NOT ONE failed on an
+  assertion: `grain_multiple_stretch_factors` even logged
+  `RMS energy OK 0.260689 in range [0.2, 0.32]` before its render ran out of
+  time.
+
+### The six failures are the machine, not the branch
+
+The host was at 100% CPU for the whole run, with THREE other `ctest` processes
+(one of them `-j4`) and a `cmake`/`ninja` build belonging to a concurrent
+session on the main checkout — the workflow this repo explicitly supports
+(CLAUDE.md, "concurrent Claude sessions"). Under that load a 60-second
+vocoder render does not finish inside `SRenderAction`'s 30 s budget, and the
+case fails without ever reaching a wrong number.
+
+The same contention had already produced FOUR failures on the PRE-phase binary
+earlier in this session (`grain_minimal_stretch`,
+`grain_multiple_stretch_factors`, `render_after_edit_sibling_tracks`,
+`render_after_edit_stale_cache`), and all four then passed in isolation — so
+the failure family predates the branch and is not attributable to it. Five of
+the six then passed in the targeted corpus re-run above (39/39 green) once the
+competing load dropped, which is as close to a controlled disproof as this
+environment allowed. That is
+consistent with, but not the same as, the unexplained single-case flake the
+2026-08-09 entry records: this one has a named mechanism and a visible cause.
+
+What that costs, stated plainly: the qxa suite has NOT been run green
+end-to-end on this branch. The evidence that the branch is sound is the
+targeted corpus above, the two new cases, the round-trip audit and the 27
+cases that did pass — not a clean full suite.
+
+### 5. What was NOT gated
+
+- The take-stack HOMOGENEITY rule is implemented but unexercised — it needs an
+  Event-kind object (P1 AC2).
+- `setWindowFromTimeline` has no caller yet: every P0a call site had an exact
+  anchor to pass. Its rounding is therefore argued (it reads the offset through
+  the NEW stretch, like `SResizeClipAction::readXml`'s legacy migration) rather
+  than measured.
+- Nothing here touches threading, the scheduler or a class-1 processor, so no
+  `repeat_test.sh` sweep was run. The one concurrency-adjacent claim — that
+  `cloneWindowOver`'s blocking duration read is the same read the code it
+  replaces made — rests on reading the diff.
+- `SClipWindow::of()` is a cross-cast on every windowed verb's hot path for
+  edits; no measurement was taken, and none is likely to matter (these are
+  user-gesture paths).
