@@ -50,6 +50,12 @@ protected:
     // SStdMixerView::showTrackContextMenu) — the heads have none of their own.
     void contextMenuEvent( QContextMenuEvent * ) override;
     void resizeEvent( QResizeEvent * ) override;
+    // A head has no time axis, so the wheel means what it means over the
+    // arranger canvas: the configured scroll / zoom gestures. Child widgets
+    // that ignore the wheel (buttons, labels, the meter) propagate here on
+    // their own; the FADER keeps its own wheel (1 dB per notch) and is the one
+    // deliberate exception.
+    void wheelEvent( QWheelEvent * ) override;
     // Watches the fader for a double-click, which resets it to 0.0 dB.
     bool eventFilter( QObject *, QEvent * ) override;
 
@@ -105,6 +111,26 @@ private:
     // does not fit is hidden, never clipped.
     void updateLayout();
 
+    // Where the track name sits. The name belongs NEXT TO the M/S/R/T/G
+    // buttons; which layout that is depends on how the buttons are arranged and
+    // on whether the column is wide enough to hold both:
+    //   BesideButtons — Full density: the buttons are a column, so the name goes
+    //                   at the top of the right-hand column, beside them.
+    //   InButtonRow   — Compact/Tiny: the buttons are a row and the name rides
+    //                   at its end, taking the leftover width.
+    //   OwnLine       — the fallback when that leftover is too narrow to read
+    //                   (a five-button row already fills the 120 px column).
+    enum class LabelSpot { BesideButtons, InButtonRow, OwnLine };
+    void placeLabel( LabelSpot );
+    // Whether a readable name still fits beside `btn`-sized visible buttons.
+    bool nameFitsInButtonRow( int btn ) const;
+    // Whether a COLUMN of nBtns `btn`-sized buttons still fits this lane's
+    // height. It is what decides the strip's shape in Compact density.
+    bool buttonColumnFits( int btn, int nBtns ) const;
+    // The narrowest name field worth having; below it the name gets its own line.
+    static constexpr int NAME_MIN_W = 56;
+    LabelSpot labelSpot_ = LabelSpot::BesideButtons;   // where the ctor puts it
+
 public:
     // Test face for the meter (see SMainWindow::describeTrackMeter). Non-const
     // because it re-applies the density rules for the current size first.
@@ -159,7 +185,9 @@ private:
     // their direction instead of rebuilding the strip.
     QBoxLayout *qBtnCol_;    // M / S / R / T / G
     QBoxLayout *qFaderCol_;  // fader + dB readout
-    QBoxLayout *qStripRow_;  // buttons next to (or above) the fader
+    QBoxLayout *qFaderRow_;  // fader column next to (or above) the meter
+    QBoxLayout *qRightCol_;  // track name over the fader row
+    QBoxLayout *qStripRow_;  // buttons next to (or above) the right column
     QSlider *qVolume_;
     QLabel *qVolLabel_;
     QLineEdit *qTrkLabel_;

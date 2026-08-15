@@ -652,6 +652,44 @@ if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
     message(STATUS "tw_devices: WASAPI backend and input (recording) enabled")
 endif()
 
+# --- ASIO backend (Windows) — proposal 35, Phase 1: SDK detection + probe -----
+# The Steinberg ASIO SDK is licensed but NOT redistributable, so unlike
+# clap/vst3_pluginterfaces it cannot be a submodule: the user unzips it to
+# third_party/asiosdk by hand and this block detects the sentinel header —
+# the same EXISTS-else-WARNING pattern as the VST3 block in this file. The
+# directory is gitignored; a build without it stays green with ASIO disabled.
+#
+# Phase 1 builds ONLY the asio_probe spike (the analog of vst3_probe): it has
+# to prove that this MinGW-built host can CoCreate an MSVC-built ASIO driver
+# and call through its C++ vtable (x64 has a single calling convention, the
+# same bet vst3_probe proved for VST3) BEFORE any backend architecture lands.
+# We compile ZERO SDK sources — headers only for the types; driver discovery
+# is our own registry scan (asio_driver_list.cc, pure advapi32), which is
+# what sidesteps the MSVC-isms in the SDK's host/pc/asiolist.cpp on MinGW.
+# Phase 2 promotes asio_driver_list into tw_devices and adds the backend.
+set(TW_ASIOSDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/asiosdk)
+if(SMARAGD_WINDOWS AND ENABLE_ASIO)
+    if(EXISTS ${TW_ASIOSDK_DIR}/common/iasiodrv.h)
+        add_executable(asio_probe
+            devices/tools/asio_probe.cc
+            devices/src/asio_driver_list.cc
+            devices/src/asio_driver_list.h
+        )
+        target_include_directories(asio_probe PRIVATE
+            ${TW_ASIOSDK_DIR}/common
+            ${CMAKE_CURRENT_SOURCE_DIR}/devices/src
+        )
+        # ole32: CoCreateInstance/CLSIDFromString; advapi32: the registry scan;
+        # user32: the HWND handed to IASIO::init (drivers park their control
+        # panel on it).
+        target_link_libraries(asio_probe PRIVATE ole32 advapi32 user32)
+        set_target_properties(asio_probe PROPERTIES AUTOMOC OFF)
+        message(STATUS "tw_devices: ASIO SDK found — asio_probe spike enabled (proposal 35 Phase 1)")
+    else()
+        message(WARNING "tw_devices: third_party/asiosdk not present; ASIO DISABLED. Download the Steinberg ASIO SDK and unzip it to smaragd/third_party/asiosdk (so that common/iasiodrv.h exists). It is deliberately not a submodule: Steinberg's license forbids redistribution.")
+    endif()
+endif()
+
 if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
     find_library(COREAUDIO_LIBRARY  CoreAudio)
     find_library(AUDIOUNIT_LIBRARY  AudioUnit)

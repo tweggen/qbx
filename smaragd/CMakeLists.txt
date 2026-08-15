@@ -75,6 +75,10 @@ option(ENABLE_PULSEAUDIO "Enable PulseAudio audio backend (Linux)"    OFF)
 option(ENABLE_JACK       "Enable JACK audio backend (cross-platform)" OFF)
 option(ENABLE_WASAPI     "Enable WASAPI audio backend (Windows)"      ${SMARAGD_WINDOWS})
 option(ENABLE_COREAUDIO  "Enable CoreAudio audio backend (macOS)"     ${SMARAGD_MACOS})
+# ASIO additionally needs the Steinberg ASIO SDK dropped into
+# smaragd/third_party/asiosdk (license forbids redistributing it as a
+# submodule); without the SDK the option is inert and configure warns once.
+option(ENABLE_ASIO       "Enable ASIO audio backend (Windows)"        ${SMARAGD_WINDOWS})
 
 if(MSVC)
     add_compile_options(/W3 /permissive-)
@@ -138,4 +142,5 @@ endif()
 
 message(STATUS "smaragd: ALSA=${ENABLE_ALSA} PipeWire=${ENABLE_PIPEWIRE} "
                "PulseAudio=${ENABLE_PULSEAUDIO} JACK=${ENABLE_JACK} "
-               "WASAPI=${ENABLE_WASAPI} CoreAudio=${ENABLE_COREAUDIO}")
+               "WASAPI=${ENABLE_WASAPI} CoreAudio=${ENABLE_COREAUDIO} "
+               "ASIO=${ENABLE_ASIO}")
