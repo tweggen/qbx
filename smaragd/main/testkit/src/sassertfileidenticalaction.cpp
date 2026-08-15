@@ -20,7 +20,7 @@ SAssertFileIdenticalAction::SAssertFileIdenticalAction( const QString &actual,
 
 namespace {
 
-// Minimal RIFF/WAVE geometry (proposal 36 P0a): where the sample data starts,
+// Minimal RIFF/WAVE geometry (proposal 37 P0a): where the sample data starts,
 // how long it is, and how many bytes one frame takes. Deliberately hand-rolled
 // and read-only - pulling in a decoder would decode, and this verb must compare
 // the BYTES that were written, not a reinterpretation of them.
@@ -125,7 +125,7 @@ SApplyResult SAssertFileIdenticalAction::apply( SProject *project )
         return { false, nullptr };
     }
 
-    // A frame range: compare the sample DATA of that range only (36 P0a).
+    // A frame range: compare the sample DATA of that range only (37 P0a).
     if( frameCount_ >= 0 || startFrame_ != 0 ) {
         return compareWavRange_( a, e );
     }

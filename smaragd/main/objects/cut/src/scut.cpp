@@ -1562,7 +1562,7 @@ bool SCut::needsRevalidation(uint32_t aspectsMask) const
 // Self-registration with the project loader (proposal 14, Phase 5): the
 // persistence module names no concrete types; each slice registers its own
 // element name. Relies on the app being an OBJECT library (no TU elision).
-// The Audio window type (proposal 36 D8b): SClipWindow::wrapContent( project,
+// The Audio window type (proposal 37 D8b): SClipWindow::wrapContent( project,
 // <any audio content> ) mints an SCut. Registered here, next to the loader
 // registration, for the same reason — app/model must name no concrete type.
 static const bool s_registered_scut_wrap = (
@@ -1577,5 +1577,5 @@ static const bool s_registered_scut =
           SCut::instantiateFromDomElement,
           // A WINDOW: an SCut whose content link is dead has nothing left to
           // show, so the loader drops the cut itself rather than the track
-          // that carries it (proposal 36 D8a).
+          // that carries it (proposal 37 D8a).
           SElementKind::Window ), true );

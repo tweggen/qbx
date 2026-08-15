@@ -4,7 +4,7 @@
 #include <cstdint>
 
 /**
- * tw/events — THE one event type (proposal 36 §4.1).
+ * tw/events — THE one event type (proposal 37 §4.1).
  *
  * There is exactly one twEvent in this codebase. The engine's sequence
  * snapshots, the event clip set, the plugin ABI's event list and the MIDI-out

@@ -75,7 +75,7 @@ protected slots:
     // shown only when slot 0 IS an instrument, so this cannot be reached
     // otherwise; the native-editor route is proposal 33 M3.
     void instrumentClicked();
-    // "A": automation mode. The lanes and the modes land in proposal 36 P5/P6;
+    // "A": automation mode. The lanes and the modes land in proposal 37 P5/P6;
     // at P4 this is the SEAM plus its density rule, and the button says so
     // rather than pretending to cycle a mode that does not exist yet.
     void automationClicked();
@@ -144,7 +144,7 @@ public:
     // because it re-applies the density rules for the current size first.
     QString describeMeter();
 
-    // Test face for the STRIP (proposal 36 P4, design 6.1). Same shape and
+    // Test face for the STRIP (proposal 37 P4, design 6.1). Same shape and
     // same reason as describeMeter: it re-applies the density rules for the
     // current size first, because Qt delivers no resizeEvent to a widget that
     // was never shown. Reads
@@ -216,8 +216,8 @@ private:
     QPushButton *qArm_;
     QPushButton *qTakes_;   // "T": show/hide this track's take lanes
     QPushButton *qGroup_;   // "G": edit-group lock (proposal 17 phase 4)
-    QPushButton *qInstr_;   // "I": instrument slot editor (proposal 36 6.1)
-    QPushButton *qAuto_;    // "A": automation mode  (proposal 36 6.1)
+    QPushButton *qInstr_;   // "I": instrument slot editor (proposal 37 6.1)
+    QPushButton *qAuto_;    // "A": automation mode  (proposal 37 6.1)
 
     // Does this track carry an INSTRUMENT in slot 0? The one question the "I"
     // button's visibility turns on; asked of the model every time the density

@@ -27,7 +27,7 @@ Invariants:
 6. The log view never uses QSortFilterProxyModel and never gives the table a
    variable row height. Both reintroduce per-row cost that scales with the
    ring (see the header comments; `log_dock_scale.qxa` fails if either goes).
-7. The MIDI page (proposal 36 P7b) mirrors the Audio page — same
+7. The MIDI page (proposal 37 P7b) mirrors the Audio page — same
    build/load/apply triple, same rule that the port list comes from the ACTIVE
    backend rather than a hard-coded table (an Options page showing the
    machine's real MIDI ports while the capture backend is running would be a
@@ -41,7 +41,7 @@ Invariants:
    inv. 18); a loopMIDI-style driver shows up as an ordinary device instead.
    Same shape as the MP3 render option's gating.
 9. Input ports are LISTED and PERSISTED here (`midi/inputPortIds`) and read by
-   nobody: opening them is proposal 36 P8. The page says so.
+   nobody: opening them is proposal 37 P8. The page says so.
 
 How to test: `ctest -R qxa.log_dock_scale` covers the log dock's scale
 requirement numerically (300k records, asserts the worst drain tick). The

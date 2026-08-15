@@ -165,11 +165,11 @@ tw_module(mix
     DEPS tw_core tw_pages tw_graph
 )
 
-# --- events: MIDI/event model leaf (proposal 36 P0b) ---------------------------
+# --- events: MIDI/event model leaf (proposal 37 P0b) ---------------------------
 # The one twEvent, the immutable event sequence, the tempo map (the ONLY
 # tick<->frame converter), the SMF reader/writer, the automation curve, and the
 # event clip set + merge the instrument slot and the MIDI-out pump read through.
-# Declared BEFORE tw_plugins because the plugin ABI links it (proposal 36 P2).
+# Declared BEFORE tw_plugins because the plugin ABI links it (proposal 37 P2).
 # CORE ONLY, and no place in the dataflow DAG: events are model data, not pages
 # (D1), and tw/plugins may not include tw/mix (F15) - which is why the clip set
 # lives here and returns a core twFrameRange. See events/CONTRACT.md.
@@ -468,7 +468,7 @@ if(_tw_have_clap OR _tw_have_vst3 OR _tw_have_au)
 endif()
 
 # --- E8 devices: platform audio I/O (backends + inputs) + MIDI I/O ------------
-# The MIDI half (proposal 36 P7a) is the same shape as the audio half: one
+# The MIDI half (proposal 37 P7a) is the same shape as the audio half: one
 # interface pair (MidiOutput/MidiInput), a factory selected by an environment
 # variable ahead of the platform, and the platform backends added by the
 # per-platform blocks further down. tw_core only, exactly as before.
@@ -671,7 +671,7 @@ if(SMARAGD_LINUX AND ENABLE_ALSA)
         devices/src/alsa_input.cc
         devices/src/alsa_input.h
     )
-    # The MIDI half rides on the same libasound (proposal 36 P7a): the ALSA
+    # The MIDI half rides on the same libasound (proposal 37 P7a): the ALSA
     # SEQUENCER, not raw MIDI, because that is where virtual ports and
     # queue-scheduled delivery live. It is inside the ENABLE_ALSA block because
     # it needs exactly the same library — a Linux build with ALSA off has no
@@ -720,7 +720,7 @@ if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
     message(STATUS "tw_devices: WASAPI backend and input (recording) enabled")
 endif()
 
-# --- Platform MIDI backends (devices only) — proposal 36 P7a ------------------
+# --- Platform MIDI backends (devices only) — proposal 37 P7a ------------------
 # Same shape as the audio backends above: a PRIVATE compile definition, PRIVATE
 # platform libraries, and the backend's own header under devices/src so no other
 # target can see a platform type. Nothing here is optional in the way CLAP/VST3
@@ -945,7 +945,7 @@ tw_module_test(events_test                  events/tests/events_test.cc         
 # check needs) is read from the source tree, not copied - the test only reads.
 target_compile_definitions(events_test PRIVATE
     TW_EVENTS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/events/tests/fixtures")
-# The MIDI device layer (proposal 36 P7a): the scheduler's timing and shutdown,
+# The MIDI device layer (proposal 37 P7a): the scheduler's timing and shutdown,
 # the capture port, the env-var selection, and the audio capture backend's
 # host-time -> frame map. It measures WALL-CLOCK LATENESS of a paced sender, so
 # like twlog_test it measures the machine as much as the code — RUN_SERIAL, or a

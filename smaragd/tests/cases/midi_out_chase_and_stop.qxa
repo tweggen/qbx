@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P7b, AC2. CHASE at a locate, and PANIC at a stop (design D6).
+  Proposal 37 P7b, AC2. CHASE at a locate, and PANIC at a stop (design D6).
 
   Starting playback in the MIDDLE of a piece is the case a naive MIDI-out gets
   wrong: the controller values that were set earlier never reach the device, so

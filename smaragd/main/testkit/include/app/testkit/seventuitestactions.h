@@ -6,7 +6,7 @@
 #include "app/actions/saction.h"
 
 /**
- * The event-editor test verbs (proposal 36 P4, design 6.4).
+ * The event-editor test verbs (proposal 37 P4, design 6.4).
  *
  * All four go through the SHELL, exactly as `drag-clip-edge` and `assert-meter`
  * do: testkit may not include app/eventui or app/timeline

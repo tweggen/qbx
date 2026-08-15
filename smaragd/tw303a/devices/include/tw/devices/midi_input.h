@@ -14,7 +14,7 @@ namespace audio {
 
 // Delivered ON THE DEVICE THREAD (the WinMM callback, the CoreMIDI read proc,
 // the ALSA sequencer poll thread). It must be Qt-free, allocation-light and
-// non-blocking: proposal 36 P8 pushes into an SPSC ring from here and does the
+// non-blocking: proposal 37 P8 pushes into an SPSC ring from here and does the
 // model work on the main thread.
 using MidiInputCallback =
     std::function<void(const std::uint8_t *bytes, std::size_t size,

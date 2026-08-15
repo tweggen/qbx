@@ -1,6 +1,6 @@
 # tw/events — CONTRACT
 
-Purpose: the MIDI/event model leaf (proposal 36 P0b) — **the one** `twEvent`,
+Purpose: the MIDI/event model leaf (proposal 37 P0b) — **the one** `twEvent`,
 the immutable event sequence, the tempo map (the only tick↔frame converter),
 the SMF reader/writer, the automation curve, and the event clip set + feed
 merge that the instrument slot and the MIDI-out pump read through.
@@ -22,7 +22,7 @@ Nothing in the dataflow DAG links `tw_events` yet. P1 (the app model) and P2
 ## Invariants
 
 1. **One `twEvent`.** The engine snapshot, the clip set, the plugin ABI and
-   MIDI-out all use the struct in `twevent.h` (proposal 36 §4.1), pinned:
+   MIDI-out all use the struct in `twevent.h` (proposal 37 §4.1), pinned:
    fields are appended, never renamed or reordered, because both the ABI and
    the file format quote it. A second, format-flavoured event type is what
    review #2 rejected.

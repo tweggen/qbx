@@ -63,7 +63,7 @@ DEF_CLASS_IID( Vst::IAttributeList )
 DEF_CLASS_IID( Vst::IParameterChanges )
 DEF_CLASS_IID( Vst::IParamValueQueue )
 
-// --- events (proposal 36 P2) ------------------------------------------------
+// --- events (proposal 37 P2) ------------------------------------------------
 // IEventList travels in BOTH directions (ProcessData::inputEvents is ours,
 // outputEvents is ours too and the plugin fills it). IMidiMapping and
 // INoteExpressionController are queried on the plugin's CONTROLLER — a CC has

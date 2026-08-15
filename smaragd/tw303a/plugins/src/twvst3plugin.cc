@@ -224,7 +224,7 @@ private:
 
     twPluginCapabilities caps_{};
     Steinberg::int32     eventBusesIn_ = 0, eventBusesOut_ = 0;
-    // The CC -> parameter map (proposal 36 §5.2). VST3 has NO event type for a
+    // The CC -> parameter map (proposal 37 §5.2). VST3 has NO event type for a
     // control change: IMidiMapping::getMidiControllerAssignment is the only
     // route, and an unmapped CC is dropped rather than invented. Read ONCE at
     // prepare, per (bus, channel, cc) — the spec allows it to change only on a
@@ -486,7 +486,7 @@ void twVst3Plugin::readBusLayout()
     io_.audioOutputs = (std::uint16_t)( mainOutBus_ >= 0 ? outBusShape_[(std::size_t)mainOutBus_].channels : 0 );
 }
 
-// Event (note) buses + what the CONTROLLER offers (proposal 36 §5.2).
+// Event (note) buses + what the CONTROLLER offers (proposal 37 §5.2).
 //
 // VST3 puts the two halves of "can this thing take notes" in two places: the
 // COMPONENT declares kEvent buses, and the CONTROLLER declares the CC map and
@@ -698,7 +698,7 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
         component_->activateBus( Vst::kAudio, Vst::kOutput, (int32)i,
                                  (int)i == mainOutBus_ );
 
-    // THE EVENT BUSES MUST BE ACTIVATED, AND UNTIL PROPOSAL 36 P2 THEY WERE NOT
+    // THE EVENT BUSES MUST BE ACTIVATED, AND UNTIL PROPOSAL 37 P2 THEY WERE NOT
     // (plugins/CONTRACT.md invariant 29). Only AUDIO buses were switched on
     // here, so a plugin that gates its note handling on activateBus — which the
     // spec entitles it to do — received a perfectly well-formed IEventList and
@@ -764,7 +764,7 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
 
     // Worst case per drain is one point per parameter (last-value-wins within a
     // block), plus headroom for a ring's worth landing on one parameter. Since
-    // proposal 36 P2 an automation slice can put MANY points on one parameter
+    // proposal 37 P2 an automation slice can put MANY points on one parameter
     // inside one block, so the per-parameter headroom is the block's event cap.
     paramChanges_.reserve( params_.size(), twEventLimits::kMaxEventsPerBlock );
     // Event storage, sized here and never grown in process() (invariant 2).
@@ -926,7 +926,7 @@ void twVst3Plugin::drainEditsIntoChanges()
     }
 }
 
-// --- events (proposal 36 P2) --------------------------------------------------
+// --- events (proposal 37 P2) --------------------------------------------------
 
 Vst::ParamID twVst3Plugin::ccParam( std::uint32_t cc ) const
 {
@@ -1100,7 +1100,7 @@ void twVst3Plugin::drainOutputEvents( twEventOut &eventsOut )
 
 // The LEGACY overload — an empty event list, an unreachable sink and an
 // all-invalid context, so it executes exactly the instructions it executed
-// before proposal 36: no input events, no ProcessContext, no output events
+// before proposal 37: no input events, no ProcessContext, no output events
 // collected. That identity is what the effect goldens' byte-`cmp` rests on.
 void twVst3Plugin::process( const float *const *in, float *const *out,
                             std::uint32_t nframes )
@@ -1117,7 +1117,7 @@ void twVst3Plugin::process( const float *const *in, float *const *const *outBuse
                             twEventOut &eventsOut, const twProcessContext &ctx )
 {
     // Only the MAIN bus is wired; bus > 0 is aux output, which nothing consumes
-    // yet (proposal 36 §5.4).
+    // yet (proposal 37 §5.4).
     float *const *out = ( outBuses && !outBusShape_.empty() ) ? outBuses[0] : nullptr;
 
     const std::uint32_t nIn  = io_.audioInputs;
@@ -1184,7 +1184,7 @@ void twVst3Plugin::process( const float *const *in, float *const *const *outBuse
     data.outputEvents           = eventBusesOut_ > 0 ? &outEventList_ : nullptr;
 
     // ProcessContext, built only from what the caller CLAIMS to know
-    // (proposal 36 F5: before this, every plugin saw processContext == nullptr,
+    // (proposal 37 F5: before this, every plugin saw processContext == nullptr,
     // so an arpeggiator could not sync to anything). An all-invalid context —
     // which is what the legacy overload passes — leaves it nullptr, exactly as
     // before.

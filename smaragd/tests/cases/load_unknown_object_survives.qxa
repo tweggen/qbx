@@ -5,10 +5,10 @@
   The fixture is a legacy-shaped project (no formatVersion attribute) whose
   track 0 carries two placements: a real <SCut> over ../test_sawtooth.wav, and
   a link to <SFutureThing id='future1'> — an element no registered class
-  answers for, standing in for anything a later build (proposal 36's event
+  answers for, standing in for anything a later build (proposal 37's event
   clips first) writes into a file this build then opens.
 
-  Before the prune-and-retry sweep (proposal 36 D8a) that unknown element cost
+  Before the prune-and-retry sweep (proposal 37 D8a) that unknown element cost
   the whole project: instantiate() returned NULL and the element was skipped,
   which left the track linking an id the dictionary did not have; the leftover
   sweep then dropped every unresolvable element AT ONCE, so the track went,
@@ -27,7 +27,7 @@
       cannot tell you whether anything was repaired, so the warning naming
       the lost element IS the evidence (assert-log).
 
-  It also carries proposal 36's formatVersion contract, because this is the
+  It also carries proposal 37's formatVersion contract, because this is the
   natural fixture for it: the project declares no version at all (= 1, every
   file written before P0a), and re-saving it must stamp formatVersion='2'.
 -->

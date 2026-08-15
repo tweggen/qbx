@@ -242,7 +242,7 @@ void twPluginRegistry::appendBuiltins_nolock()
 
     plugins_.push_back( passThrough );
 
-    // The in-house 303 (proposal 36 D7). Linked in exactly like the pass-through
+    // The in-house 303 (proposal 37 D7). Linked in exactly like the pass-through
     // and for the same reason: the instrument path must be reachable in EVERY
     // build and every worktree, with no SDK, no submodule and nothing installed.
     // It appears in the browser like any other plugin, and it is the fallback

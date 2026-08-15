@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P4, AC3. The track head's DENSITY rules for the second button
+  Proposal 37 P4, AC3. The track head's DENSITY rules for the second button
   pair (design 6.1): the instrument "I" and the automation "A".
 
   The head is built for the assertion and thrown away - parentless, never
@@ -20,7 +20,7 @@
       off-by-one in the fit test is invisible to the eye.
 
     * "I" additionally requires slot 0 to BE an instrument. Nothing in the app
-      can insert one yet (the instrument slot is proposal 36 P3b), so this
+      can insert one yet (the instrument slot is proposal 37 P3b), so this
       case asserts the NEGATIVE everywhere: `I=0`. That is the honest gate
       today, and the day P3b lands it is the assertion that has to change.
 

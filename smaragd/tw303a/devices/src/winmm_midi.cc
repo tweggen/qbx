@@ -209,7 +209,7 @@ void CALLBACK WinMMMidiInput::midiInProc(HMIDIIN /*h*/, UINT msg, DWORD_PTR inst
                                          DWORD_PTR p1, DWORD_PTR /*p2*/)
 {
     // MIM_DATA only. Sysex arrives as MIM_LONGDATA against buffers we would have
-    // to add with midiInAddBuffer; proposal 36 P8 adds that when there is a
+    // to add with midiInAddBuffer; proposal 37 P8 adds that when there is a
     // consumer for it. Everything else (MIM_OPEN/CLOSE/ERROR) is ignored.
     if (msg != MIM_DATA) return;
     auto *self = reinterpret_cast<WinMMMidiInput *>(instance);

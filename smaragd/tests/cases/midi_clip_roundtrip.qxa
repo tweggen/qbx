@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P1, AC1. Import a multi-track SMF, save the project, load it back,
+  Proposal 37 P1, AC1. Import a multi-track SMF, save the project, load it back,
   export the MIDI again, and demand the SAME BYTES.
 
   Byte identity is a legitimate gate here (and only here) because twSmf has ONE

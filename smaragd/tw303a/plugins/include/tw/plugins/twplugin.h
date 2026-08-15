@@ -60,13 +60,13 @@ public:
     // Capabilities — keep the core narrow; query for the rest.
     virtual bool supportsNativeEditor() const { return false; }
 
-    // Kept as a FORWARDER for one release (proposal 36 §5.1). New code asks
+    // Kept as a FORWARDER for one release (proposal 37 §5.1). New code asks
     // capabilities(); a backend overrides capabilities() and gets this for
     // free, and the pre-36 call sites keep compiling and keep meaning what they
     // meant. Do not override both in one backend.
     virtual bool acceptsNotes() const { return capabilities().acceptsNotes; }
 
-    // --- events (proposal 36 P2) --------------------------------------------
+    // --- events (proposal 37 P2) --------------------------------------------
 
     // What this instance can do with events. Derived once at instantiation by
     // every backend, never per call.
@@ -75,7 +75,7 @@ public:
     // AUDIO OUTPUT buses. Bus 0 is the main bus and always agrees with
     // ioLayout().audioOutputs; buses above it are aux outputs, which the
     // backends have read and discarded since proposal 08 and which nothing
-    // consumes yet (proposal 36 §5.4 routes them to return tracks in P9). A
+    // consumes yet (proposal 37 §5.4 routes them to return tracks in P9). A
     // plugin with no audio output at all reports 0 buses.
     virtual std::size_t audioOutBusCount() const
     {
@@ -93,7 +93,7 @@ public:
 
     // How long the plugin keeps producing after its input goes silent (a
     // reverb tail, a synth release). Frames, at the prepared rate. Used to size
-    // the instrument pre-roll and the project end (proposal 36 D4); 0 means
+    // the instrument pre-roll and the project end (proposal 37 D4); 0 means
     // "no tail" and is the honest answer for a pure gain.
     virtual std::uint32_t tailFrames() const { return 0; }
 
@@ -144,7 +144,7 @@ public:
 // plugin). SPluginSlot::saveState() therefore never reads a non-Active slot.
 // `caps` lets the placeholder also report the DECLARED event shape, for the same
 // reason it reports the declared I/O: a slot whose missing plugin was an
-// instrument must keep looking like one (proposal 36 P2). Defaulted, so every
+// instrument must keep looking like one (proposal 37 P2). Defaulted, so every
 // pre-36 call site is unchanged and still gets an inert audio pass-through.
 std::unique_ptr<twPlugin> createNullPlugin( const twPluginIoLayout &io,
                                             const twPluginCapabilities &caps

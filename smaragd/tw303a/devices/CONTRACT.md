@@ -2,7 +2,7 @@
 
 Purpose: platform I/O. AudioBackend (callback-pull output) and AudioInput
 (capture) plus the WASAPI/ALSA/CoreAudio/Null/Capture implementations; and,
-since proposal 36 P7a, the MIDI half — MidiOutput/MidiInput plus the
+since proposal 37 P7a, the MIDI half — MidiOutput/MidiInput plus the
 WinMM/CoreMIDI/ALSA-sequencer/Capture/Null implementations and MidiOutScheduler,
 the one thread that puts MIDI bytes on the wire at their due time.
 
@@ -16,7 +16,7 @@ Depends on: tw/core. Platform SDKs (ole32/avrt/winmm/ALSA/CoreAudio/CoreMIDI)
 are PRIVATE link deps; QBX_* backend defines are PRIVATE compile definitions.
 Forbidden: tw/graph and above — a backend moves buffers, it does not know
 components. MIDI knows nothing of tw/events either: the wire carries BYTES, and
-the model-to-bytes conversion belongs to the app's pump (proposal 36 P7b).
+the model-to-bytes conversion belongs to the app's pump (proposal 37 P7b).
 
 Invariants:
 1. The render callback runs on the BACKEND'S thread: THREADING.md rule 1
@@ -50,7 +50,7 @@ Invariants:
    counted in droppedFrames rather than silently discarded.
 9. CaptureBackend ALSO logs {hostTimeNs, firstFrame} per block it keeps
    (capturedBlockLog / frameAtHostTime, piecewise linear). That log is the
-   INDEPENDENT clock a MIDI-out assertion is measured against (proposal 36 D6,
+   INDEPENDENT clock a MIDI-out assertion is measured against (proposal 37 D6,
    review #12): the MIDI capture port records host times only, so the map from
    host time to project frame comes from the audio pump, which knows nothing of
    the pump under test. It is stamped with MidiOutScheduler::hostNowNs() — the
@@ -60,7 +60,7 @@ Invariants:
    still works (the log is empirical), but it changes what a project frame means
    in wall-clock terms, so MIDI-out cases run at 1.0.
 
---- MIDI (proposal 36 P7a) ---
+--- MIDI (proposal 37 P7a) ---
 
 10. MIDI out is emitted at PLAY time by MidiOutScheduler's thread, never at
     freeze time. This is the metering lesson (proposal 34) verbatim: pages are
@@ -131,6 +131,6 @@ reviewed on Windows, compiled and run nowhere in the P7a gate. WinMM sysex OUT
 blocks the sender thread until the driver releases the header (rare, bounded,
 and the alternative was a completion queue for a path nothing uses yet); sysex
 IN (MIM_LONGDATA) is not implemented at all. Neither MidiInput nor the capture
-MIDI input has a consumer until proposal 36 P8. Send jitter against real
+MIDI input has a consumer until proposal 37 P8. Send jitter against real
 hardware, driver timestamps, and virtual-port creation on Windows (which needs a
 loopback driver) are not gated by anything.

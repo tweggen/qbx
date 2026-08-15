@@ -12,7 +12,7 @@
 #include "tw/events/tweventsource.h"
 
 /**
- * twEventClipSet — the event twin of twTrackMix's ClipEntry list (proposal 36
+ * twEventClipSet — the event twin of twTrackMix's ClipEntry list (proposal 37
  * §4.2).
  *
  * NOT a twComponent, for the same reason the plugin slot processor is not: it

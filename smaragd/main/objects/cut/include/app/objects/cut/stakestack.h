@@ -34,7 +34,7 @@ private:
  *
  * Placed on a track like any clip (SLink carries the timeline start), it
  * holds one child SLink per take, each wrapping an SClipWindow over that
- * take's media (an SCut for audio; proposal 36 D8b made the stack window-
+ * take's media (an SCut for audio; proposal 37 D8b made the stack window-
  * typed rather than SCut-typed, so an event take needs no change here).
  * Exactly one take is audible at a time (activeTake_, -1 = none);
  * the stack delegates getRootComponent()/mapTimelineToComponentPos()/
@@ -86,7 +86,7 @@ public:
      * (-1 = append). Maintains the activeTake_ index. Does NOT activate the
      * new take — callers decide (the actions do).
      *
-     * HOMOGENEITY (proposal 36 D8b): a stack is a column of ALTERNATIVES for
+     * HOMOGENEITY (proposal 37 D8b): a stack is a column of ALTERNATIVES for
      * one region, so every take must carry the same kind of material. A take
      * whose contentKind() differs from the takes already here is REFUSED and
      * null is returned — the caller (add-take) turns that into a rejected
@@ -123,7 +123,7 @@ public:
     offset_t mapTimelineToComponentPos( offset_t off ) override;
     /**
      * A stack of EVENT takes resolves to its active take, exactly as the audio
-     * delegation does (proposal 36 P1). Without this the track would route the
+     * delegation does (proposal 37 P1). Without this the track would route the
      * stack into its event clip set - contentKind() says Event - and get an
      * empty record back, i.e. a silently mute column.
      */

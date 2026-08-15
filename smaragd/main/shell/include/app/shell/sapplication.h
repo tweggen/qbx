@@ -148,7 +148,7 @@ public:
     // else does. 0 when unknown.
     offset_t outputBufferFramesProject() const;
 
-    // The MIDI-out pump (proposal 36 P7b). Never null after construction; the
+    // The MIDI-out pump (proposal 37 P7b). Never null after construction; the
     // Options dialog asks it for the port lists rather than minting a
     // MidiOutput of its own (see SMidiOutPump::outputPorts).
     SMidiOutPump *midiOutPump() const { return midiOutPump_.get(); }
@@ -266,7 +266,7 @@ private:
     QElapsedTimer meterClock_;        // monotonic ms handed to the ballistics
     int meterTailTicks_ = 0;          // remaining decay ticks after a stop
     twLevelProbe masterProbe_;        // reads the mixer root's frozen pages
-    std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 36 P7b
+    std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 37 P7b
     bool isPlaying_;
     SProject *currentProject_;
     QString statusMode_;

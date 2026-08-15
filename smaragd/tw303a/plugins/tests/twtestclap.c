@@ -1,6 +1,6 @@
 /* twtestclap — an in-repo CLAP plugin used as a BUILD-TIME TEST FIXTURE.
  *
- * proposal 08 M1, extended by proposal 36 P2. Without this, the only way to
+ * proposal 08 M1, extended by proposal 37 P2. Without this, the only way to
  * exercise the real CLAP load path (LoadLibrary/dlopen -> clap_entry -> factory
  * -> activate -> process -> params -> events -> state) is to install a
  * third-party plugin on the machine running the tests, which no CI and no fresh
@@ -15,8 +15,8 @@
  *
  *   tw.test.clap.gain         2 in / 2 out effect     (M1)
  *   tw.test.clap.stereoskew   2 in / 2 out effect     (M3)
- *   tw.test.clap.sine         0 in / stereo + aux out INSTRUMENT   (36 P2)
- *   tw.test.clap.arp          note in / note out      (36 P2)
+ *   tw.test.clap.sine         0 in / stereo + aux out INSTRUMENT   (37 P2)
+ *   tw.test.clap.arp          note in / note out      (37 P2)
  *
  * --- tw.test.clap.gain -------------------------------------------------------
  *
@@ -30,7 +30,7 @@
  *                             when > 0, the gained sample is HARD CLIPPED to
  *                             +/- threshold. Order-sensitive by construction:
  *                             gain-then-clip and clip-then-gain give different
- *                             audio, which is what proposal 36 P3a's fader-move
+ *                             audio, which is what proposal 37 P3a's fader-move
  *                             ORDER case discriminates with.
  *
  *   NOTE ON THE ID. The brief for P2 says "param id 1 clipThreshold". Id 1 was
@@ -40,7 +40,7 @@
  *   plan/STATE.md so P3a's case quotes the right id.
  *
  * Parameter values are applied AT THEIR EVENT TIME, not at the top of the block
- * (proposal 36 AC2): the plugin renders the block in segments split at each
+ * (proposal 37 AC2): the plugin renders the block in segments split at each
  * parameter event. With no mid-block event that is one segment and exactly the
  * arithmetic M1 had, so the effect goldens do not move.
  *
@@ -74,7 +74,7 @@
  *  - out[1] != out[0], so once the sink really is multi-channel the same
  *    fixture proves the per-bus taps carry distinct audio.
  *
- * --- tw.test.clap.sine (proposal 36 P2, design §5.3) -------------------------
+ * --- tw.test.clap.sine (proposal 37 P2, design §5.3) -------------------------
  *
  * The reference INSTRUMENT. Features INSTRUMENT|SYNTHESIZER; 0 audio in; a
  * stereo MAIN out plus a mono AUX out (so the descriptor's nOutBuses / aux
@@ -95,7 +95,7 @@
  * WILDCARD note-on (key < 0): a host that forwards a wildcard to an instrument
  * has lost the note's identity, and failing loudly beats playing a wrong note.
  *
- * --- tw.test.clap.arp (proposal 36 P2, AC4) ----------------------------------
+ * --- tw.test.clap.arp (proposal 37 P2, AC4) ----------------------------------
  *
  * A note-in / note-out plugin with NO audio ports. It holds the keys that are
  * down and emits a NoteOn on a fixed 4096-frame grid with a NoteOff 2048 frames
@@ -398,7 +398,7 @@ static bool tc_ports_get( const clap_plugin_t *p, uint32_t index, bool is_input,
          return true;
       }
       if( index == 1 ) {
-         /* The AUX out. Nothing consumes it yet (proposal 36 §5.4 routes aux
+         /* The AUX out. Nothing consumes it yet (proposal 37 §5.4 routes aux
           * outs to return tracks in P9) — it exists so the descriptor's
           * nOutBuses / outBusChannels have something other than 1 to report,
           * and so a host that mis-sizes its per-port scratch is caught. */
@@ -552,7 +552,7 @@ static bool tc_state_load( const clap_plugin_t *p, const clap_istream_t *is )
    memcpy( &self->report, buf + 8, sizeof( double ) );
 
    /* The optional third value. A short blob (every project written before
-    * proposal 36) simply leaves the clipper off. */
+    * proposal 37) simply leaves the clipper off. */
    uint8_t  extra[8];
    uint64_t got = 0;
    while( got < sizeof( extra ) ) {
@@ -779,7 +779,7 @@ static clap_process_status tc_process_effect( tw_testclap_t *self,
    const uint32_t nev = ( in && in->size && in->get ) ? in->size( in ) : 0;
 
    /* Render in SEGMENTS split at each parameter event, so a value applies from
-    * exactly its own frame (proposal 36 AC2). With no event, or with every event
+    * exactly its own frame (proposal 37 AC2). With no event, or with every event
     * at time 0 (the pre-36 parameter ring), this is one segment and exactly the
     * arithmetic M1 had — which is why the effect goldens do not move. */
    uint32_t pos = 0;

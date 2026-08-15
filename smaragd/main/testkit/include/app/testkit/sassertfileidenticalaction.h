@@ -35,7 +35,7 @@
  * - expected: the reference file, resolved the same way
  * - maxReportedDiffs: how many differing offsets to list individually
  *                     (default 8; 0 = just the summary)
- * - startFrame / frameCount (proposal 36 P0a): given a range (frameCount >= 0
+ * - startFrame / frameCount (proposal 37 P0a): given a range (frameCount >= 0
  *             or startFrame != 0), both files are parsed as RIFF/WAVE, their
  *             formats must agree, and only those frames of the data chunk are
  *             compared - so a case can assert "identical BEFORE the edit" while

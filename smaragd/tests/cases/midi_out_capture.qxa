@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P7b, AC1. MIDI OUT reaches the wire, on time.
+  Proposal 37 P7b, AC1. MIDI OUT reaches the wire, on time.
 
   Three notes a second apart on one track with a MIDI-out port, played back
   under the AUDIO capture backend at real-time pacing. What is asserted is not

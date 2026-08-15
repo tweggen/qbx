@@ -26,7 +26,7 @@
  *   Source   - frames of the concrete source material (recording/capture)
  *   Tick     - musical pulses (PPQ), tempo- and rate-free; the domain
  *              MIDI content and an event clip's window live in
- *              (proposal 36 D2). Exact-rational, not int64 frames.
+ *              (proposal 37 D2). Exact-rational, not int64 frames.
  *
  * The raw engine currency (offset_t/length_t, page keys, reader cursors)
  * stays untyped; these types live where windows are DEFINED and
@@ -88,7 +88,7 @@ using SourcePos   = DomainPos<SourceDomain>;
 using SourceLen   = DomainLen<SourceDomain>;
 
 // ============================================================================
-// Ticks - musical time (proposal 36 D2). The ONE domain here that is NOT
+// Ticks - musical time (proposal 37 D2). The ONE domain here that is NOT
 // frames: an event's position in a score, at a fixed pulses-per-quarter
 // resolution, independent of tempo and of sample rate.
 //

@@ -115,7 +115,7 @@ private:
     void readGui();
 
     // Post MIDI 1.0 bytes and scheduled parameter changes to the unit BEFORE
-    // AudioUnitRender (proposal 36 §5.2) — AU has no event list in the render
+    // AudioUnitRender (proposal 37 §5.2) — AU has no event list in the render
     // call, so an event is delivered by calling the unit ahead of it with the
     // offset it should take effect at.
     void postEvents( const twEventList &events, std::uint32_t nframes );
@@ -138,7 +138,7 @@ private:
 
     twPluginCapabilities caps_{};
     // Channel count per OUTPUT ELEMENT. Element 0 is the main out; 1..N are the
-    // aux outs a multi-output instrument declares (proposal 36 §5.4). Only
+    // aux outs a multi-output instrument declares (proposal 37 §5.4). Only
     // element 0 is rendered today — an aux element needs its OWN
     // AudioUnitRender at the same timestamp, which is P9's job.
     std::vector<std::uint16_t> outElemChans_;
@@ -306,7 +306,7 @@ void twAuPlugin::readParams()
     }
 }
 
-// The OUTPUT ELEMENTS (proposal 36 §5.2/§5.4). AU spells a multi-output plugin
+// The OUTPUT ELEMENTS (proposal 37 §5.2/§5.4). AU spells a multi-output plugin
 // as several output elements on the output scope, each rendered by its OWN
 // AudioUnitRender at the same timestamp. Only element 0 is rendered today;
 // enumerating them is what lets the descriptor report nOutBuses honestly so P9
@@ -529,7 +529,7 @@ OSStatus twAuPlugin::renderInputCb( void *refCon, AudioUnitRenderActionFlags *,
 
 // --- processing -------------------------------------------------------------
 
-// Post the block's events to the unit BEFORE AudioUnitRender (proposal 36 §5.2).
+// Post the block's events to the unit BEFORE AudioUnitRender (proposal 37 §5.2).
 //
 // AU has no event list in the render call at all: MusicDeviceMIDIEvent takes an
 // inOffsetSampleFrame and must be called ahead of the render for the block the
@@ -642,7 +642,7 @@ void twAuPlugin::process( const float *const *in, float *const *const *outBuses,
     (void) ctx;         // kAudioUnitProperty_HostCallbacks is a later phase
 
     // Only element 0 is rendered; the aux elements need their own render call
-    // (proposal 36 §5.4, P9).
+    // (proposal 37 §5.4, P9).
     float *const *out = ( outBuses && !outElemChans_.empty() ) ? outBuses[0] : nullptr;
 
     const std::uint32_t nIn  = io_.audioInputs;

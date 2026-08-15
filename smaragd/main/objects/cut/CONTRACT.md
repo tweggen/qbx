@@ -52,7 +52,7 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
    slip_invalidates_render_path.qxa, via the slip-clip testkit verb —
    resize-clip cannot cover this (it commits through setWindow, whose
    durationChanged stales the extent regardless).
-8. SCut IMPLEMENTS `SClipWindow` (app/model/sclipwindow.h, proposal 36 D8b)
+8. SCut IMPLEMENTS `SClipWindow` (app/model/sclipwindow.h, proposal 37 D8b)
    and registers itself as the Audio wrap factory, so
    `SClipWindow::wrapContent(project, content)` mints a cut for audio content
    without anything in app/model naming SCut. THE RULE FOR THIS SLICE:
@@ -66,7 +66,7 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
    (resize-clip, warp-marker actions), the grain params (remove-sample's
    inverse) and slip's throttled invalidation (the slip-clip test verb).
    Every one of those sites says so in a comment; a new one needs the same
-   justification. Gate: the AC5 grep in proposal 36 P0a.
+   justification. Gate: the AC5 grep in proposal 37 P0a.
 7. Pitch is stored in CENTS on twGrainParams, per clip and (on a stack)
    PER TAKE - only length ops write through to all lanes. It is realised
    in the grain stage (the read rate inside each grain) and is therefore
@@ -116,7 +116,7 @@ Notes:
   Without it a MIDI column would be routed into the track's event clip set
   (its `contentKind()` says Event) and answer with an empty record — a
   silently mute column.
-- A stack is a column of `SClipWindow`s, not of SCuts (proposal 36 D8b):
+- A stack is a column of `SClipWindow`s, not of SCuts (proposal 37 D8b):
   `takeAt(i)` returns the window, `takeObjectAt(i)` the model object it also
   is, and `activeTakeObject()` is what the delegation (component, position
   map, preview, renderer) goes through. It is HOMOGENEOUS: `insertTake`

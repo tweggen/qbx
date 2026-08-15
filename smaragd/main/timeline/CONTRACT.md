@@ -105,7 +105,7 @@ Invariants:
    about where a given dB sits.
 
 14. **The track head's second button pair is density-gated, and the gate is
-   a FIT test, not a constant** (proposal 36 P4, design 6.1). "A" (automation
+   a FIT test, not a constant** (proposal 37 P4, design 6.1). "A" (automation
    mode) is Full-density only AND only while a six-button column still fits
    the lane; "I" (instrument) additionally requires slot 0 to BE an instrument
    (`SPluginSlot::getDescriptor().isInstrument` — the DESCRIPTOR, so a slot
@@ -116,7 +116,7 @@ Invariants:
    re-applies the density rules for the current size first (Qt delivers no
    resizeEvent to a widget that was never shown) and reports `fitW`/`fitH`,
    which is "hiding beats clipping" made assertable.
-15. **The snap spec's grid DIVISION reads the tempo map** (proposal 36 P4).
+15. **The snap spec's grid DIVISION reads the tempo map** (proposal 37 P4).
    `SSnapSpec::setGridDivision("1/16")` is parsed by
    `SQuantizeNotesAction::gridTicks()` — the ONE parser, shared with
    `quantize-notes` and the event editor — and converted through

@@ -8,7 +8,7 @@
 
 /**
  * twTempoMap — THE tick↔frame converter and the single tempo authority
- * (proposal 36 D2).
+ * (proposal 37 D2).
  *
  * Tempo is stored the way SMF stores it: MICROSECONDS PER QUARTER NOTE, an
  * integer. BPM is a DERIVED view (`bpm() == 6e7 / usPerQuarter`), never a

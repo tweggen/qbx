@@ -112,7 +112,7 @@ int main( int argc, char *argv[] )
             qputenv("SMARAGD_AUDIO_BACKEND", "capture");
 
         // ... and the CAPTURE MIDI ports, for the same three reasons plus one
-        // (proposal 36 D6, P7b): it records {hostTimeNs, port, bytes} in memory
+        // (proposal 37 D6, P7b): it records {hostTimeNs, port, bytes} in memory
         // so assert-midi-out has something to read; it keeps a headless suite
         // from opening - and sending notes at - whatever synth the developer
         // has plugged in; and it reports supportsTimestamps() == false ON

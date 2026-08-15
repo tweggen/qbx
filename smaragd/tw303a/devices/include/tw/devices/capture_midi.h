@@ -11,7 +11,7 @@ namespace audio {
 
 // A MIDI port that records into MEMORY instead of reaching a synth.
 //
-// Why it exists (proposal 36 D6, review #12): the MIDI-out pump has to be
+// Why it exists (proposal 37 D6, review #12): the MIDI-out pump has to be
 // measurable without a MIDI device and, more importantly, WITHOUT measuring
 // itself. So this backend records only what it can observe — the wall-clock
 // instant a message actually arrived at the wire, and the bytes — and the
@@ -74,7 +74,7 @@ private:
 
 // The input counterpart: a port that never delivers anything by itself, but
 // whose inject() lets a headless case feed bytes to the callback as if a device
-// had. Proposal 36 P8 uses it as the headless input source; P7a ships it so the
+// had. Proposal 37 P8 uses it as the headless input source; P7a ships it so the
 // interface has a working implementation on every platform.
 class CaptureMidiInput : public MidiInput {
 public:

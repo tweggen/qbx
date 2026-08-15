@@ -150,7 +150,7 @@ public slots:
 signals:
     void trackHeightChanged( int x );
     // Pixels per second. It was declared `int` and never emitted at all (a
-    // FIXME in setSecondWidth); proposal 36 P4 needs it, because the event
+    // FIXME in setSecondWidth); proposal 37 P4 needs it, because the event
     // editor's time axis follows the arranger's zoom and an int would quantise
     // every zoom step below 1 px/s.
     void secondWidthChanged( double x );
@@ -381,7 +381,7 @@ public:
     void setSampleRate( int srate ) { sampleRate_ = srate; }
 
     /**
-     * GRID DIVISIONS (proposal 36 P4). The subdivision used to be an unexposed
+     * GRID DIVISIONS (proposal 37 P4). The subdivision used to be an unexposed
      * `beatSubDiv_` that alignTime never read; a division is now named the way
      * the whole app names one - "1/1".."1/32", with a trailing `t` for triplets
      * - and parsed by SQuantizeNotesAction::gridTicks(), the ONE parser, so
@@ -436,12 +436,12 @@ public:
 
     STimeGridSpec getTimeGridSpec() const { return timeGridSpec_; }
 
-    // The time-axis canvas. Exposed for the SHELL only (proposal 36 P4): the
+    // The time-axis canvas. Exposed for the SHELL only (proposal 37 P4): the
     // event editor's SEventTimeAxis follows this widget's zoom and scroll, and
     // the shell is the one module that sees both app/timeline and app/eventui.
     SMVActualView *contentView() const { return qContent_; }
 
-    // The snap spec (grid divisions since proposal 36 P4). Null before the
+    // The snap spec (grid divisions since proposal 37 P4). Null before the
     // view is fully constructed.
     SSnapSpec *snapSpec() const { return currentSnapSpec_; }
 

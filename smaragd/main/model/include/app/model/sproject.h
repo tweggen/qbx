@@ -41,7 +41,7 @@ public:
     /**
      * Wire-format version written into <SProject formatVersion='...'>.
      *
-     * 1 = every project written before proposal 36 (the attribute is absent
+     * 1 = every project written before proposal 37 (the attribute is absent
      *     there, so a reader that finds nothing must assume 1).
      * 2 = the loader's prune-and-retry recovery per element kind (D8a): a
      *     document written by this build may rely on a reader that keeps a
@@ -94,7 +94,7 @@ public:
     static void registerExternFileFactory( ExternFileFactory );
 
     /**
-     * EXTENSION-DISPATCHED content factory (proposal 36 §6.1).
+     * EXTENSION-DISPATCHED content factory (proposal 37 §6.1).
      *
      * `registerExternFileFactory` is the sample path: one factory, any
      * extension, and the result is an SExternFile the project caches by
@@ -121,7 +121,7 @@ public:
     virtual int serialize( QTextStream & );
 
     /**
-     * THE tempo authority (proposal 36 D2). `twTempoMap` stores SMF's own
+     * THE tempo authority (proposal 37 D2). `twTempoMap` stores SMF's own
      * unit — microseconds per quarter note, an integer — and BPM is a DERIVED
      * view of it. There is deliberately no second tempo scalar on the project:
      * a stored `60/bpm` seconds-per-beat and a stored µs/quarter disagree in

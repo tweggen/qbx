@@ -21,7 +21,7 @@ namespace audio {
 //   - a QUEUE delivers events at a real-time stamp, so supportsTimestamps() is
 //     true and MidiOutScheduler hands off early instead of pacing.
 //
-// UNVERIFIED (proposal 36 P7a was implemented on Windows): written against the
+// UNVERIFIED (proposal 37 P7a was implemented on Windows): written against the
 // documented API and reviewed, never executed.
 class AlsaSeqMidiOutput : public MidiOutput {
 public:

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P4, AC2. The event editor DOCK: the real fifth QDockWidget built
+  Proposal 37 P4, AC2. The event editor DOCK: the real fifth QDockWidget built
   in SMainWindow's constructor, never shown (a headless run does not show the
   window at all), described through SEventEditorDock::describe().
 

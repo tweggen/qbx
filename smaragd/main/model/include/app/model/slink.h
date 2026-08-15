@@ -30,7 +30,7 @@ class SLink
     Q_OBJECT
 public:
     /**
-     * How this placement's position is ANCHORED (proposal 36 D2).
+     * How this placement's position is ANCHORED (proposal 37 D2).
      *
      *  Time  — `startTime` (timeline frames) is the authority. A tempo change
      *          leaves the clip where it is. Audio's default, and REAPER's.

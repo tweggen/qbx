@@ -8,7 +8,7 @@
 
 /**
  * `set-track-midi-routing` - how this track's events reach its parent
- * (proposal 36 3.2.1). ABSOLUTE, like every other track flag.
+ * (proposal 37 3.2.1). ABSOLUTE, like every other track flag.
  *
  *   auto   - "consumed here, or bubbled up": the track passes its events up
  *            iff it has neither an instrument slot nor a MIDI-out port. This

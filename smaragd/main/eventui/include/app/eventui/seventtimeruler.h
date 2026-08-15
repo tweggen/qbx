@@ -7,7 +7,7 @@
 class SEventTimeAxis;
 
 /**
- * SEventTimeRuler - the event editor's bars.beats.ticks strip (proposal 36
+ * SEventTimeRuler - the event editor's bars.beats.ticks strip (proposal 37
  * 6.2).
  *
  * It reads the PROJECT'S TEMPO MAP, not a BPM scalar: the map is the single

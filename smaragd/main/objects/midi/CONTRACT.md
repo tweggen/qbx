@@ -15,9 +15,9 @@ model, persistence} — the RANK of `objects/cut`, deliberately: this is a
 second window/content pair, not a layer above one, and it must stay
 independent of the audio window. **`objects/track` must NOT depend on this
 slice**: the track consults MIDI-ness only through `SObject::contentKind()`
-and `SObject::resolveEventClip()` (design 36 §3.5).
+and `SObject::resolveEventClip()` (design 37 §3.5).
 
-Design: `plan/proposed/36_MIDI_INSTRUMENTS_AUTOMATION.md` §3.1–§3.4 (D2, D3).
+Design: `plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` §3.1–§3.4 (D2, D3).
 Normative background: CLIP_MODEL.md, POSITION_DOMAINS.md (rule 7),
 `tw303a/events/CONTRACT.md`.
 

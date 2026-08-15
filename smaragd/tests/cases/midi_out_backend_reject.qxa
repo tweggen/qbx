@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P7b, AC5. `assert-midi-out` REFUSES to measure what it cannot see.
+  Proposal 37 P7b, AC5. `assert-midi-out` REFUSES to measure what it cannot see.
 
   This case runs with SMARAGD_MIDI_BACKEND=null (set on the CTest entry - see
   smaragd/CMakeLists.txt), so the pump sends to a port that records nothing.

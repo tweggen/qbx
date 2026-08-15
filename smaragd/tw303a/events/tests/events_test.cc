@@ -1,4 +1,4 @@
-// tw/events module test (proposal 36 P0b).
+// tw/events module test (proposal 37 P0b).
 //
 // The gate for the event leaf: the SMF corpus round-trips, stateAt agrees with
 // a brute-force scan, tick<->frame conversion is EXACT (and stays inside

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P7b, AC6. The Options -> MIDI page (design 6.3).
+  Proposal 37 P7b, AC6. The Options -> MIDI page (design 6.3).
 
   The page mirrors the Audio one - same build/load/apply triple, same rule that
   the DEVICE LIST comes from the backend rather than from a hard-coded table -

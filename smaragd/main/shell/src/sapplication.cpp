@@ -103,7 +103,7 @@ void SApplication::setPlaying( bool f )
     // the floor (pumpMeters counts the tail down and stops itself).
     if( f ) startMetering();
 
-    // MIDI out (proposal 36 P7b). NOT a fold into the metering pump: the meters
+    // MIDI out (proposal 37 P7b). NOT a fold into the metering pump: the meters
     // deliberately keep ticking after a stop so the bars can decay, whereas
     // MIDI-out must go silent - and send its all-notes-off - at the instant the
     // transport does. A render never gets here (it does not set isPlaying_),
@@ -490,7 +490,7 @@ SApplication::SApplication( int &argc, char **argv )
     meterTimer_ = new QTimer( this );
     meterTimer_->setInterval( 33 );
     connect( meterTimer_, &QTimer::timeout, this, &SApplication::pumpMeters );
-    // Proposal 36 P7b: the MIDI-out pump. Built here, before any project
+    // Proposal 37 P7b: the MIDI-out pump. Built here, before any project
     // exists, because its enumeration probe port must be the FIRST MidiOutput
     // this process constructs (see SMidiOutPump's constructor). Its own timer
     // only runs between play and stop.

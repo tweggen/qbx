@@ -307,7 +307,7 @@ std::vector<twPluginDescriptor> clapModuleDescriptors( const std::string &path )
         // The channel counts need a live instance (clap.audio-ports is a plugin
         // extension, not a descriptor field). Creating one is the only honest
         // answer; it is also what makes an out-of-process probe worthwhile in M2.
-        // Scanner version 2 (proposal 36 P2) reads the note ports and the aux
+        // Scanner version 2 (proposal 37 P2) reads the note ports and the aux
         // output buses off the SAME instance — no extra cost, and no activate():
         // capabilities() and audioOutBus() are answered from what init() read.
         d.io = twPluginIoLayout{ 0, 0 };

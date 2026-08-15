@@ -232,7 +232,7 @@ tresult PLUGIN_API twVst3PlugInterfaceSupport::isPlugInterfaceSupported( const T
         FUnknownPrivate::iidEqual( _iid, Vst::IMessage::iid ) ||
         FUnknownPrivate::iidEqual( _iid, Vst::IParameterChanges::iid ) ||
         FUnknownPrivate::iidEqual( _iid, Vst::IParamValueQueue::iid ) ||
-        // proposal 36 P2. IEventList is implemented (twVst3EventList, both
+        // proposal 37 P2. IEventList is implemented (twVst3EventList, both
         // directions); IMidiMapping and INoteExpressionController are QUERIED on
         // the controller rather than implemented, and this list is about what a
         // plugin may expect the HOST to understand — a plugin that sees them
@@ -357,7 +357,7 @@ tresult PLUGIN_API twVst3ParamValueQueue::addPoint( int32 sampleOffset, Vst::Par
     return kResultOk;
 }
 
-// --- twVst3EventList (proposal 36 P2) -----------------------------------------
+// --- twVst3EventList (proposal 37 P2) -----------------------------------------
 
 tresult PLUGIN_API twVst3EventList::queryInterface( const TUID _iid, void **obj )
 {

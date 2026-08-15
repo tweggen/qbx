@@ -22,7 +22,7 @@ class SProject;
 class STrack;
 
 /**
- * SMidiOutPump - MIDI out at PLAY time (proposal 36 D6, phase P7b).
+ * SMidiOutPump - MIDI out at PLAY time (proposal 37 D6, phase P7b).
  *
  * THE METERING LESSON (proposal 34) APPLIES VERBATIM, and it is the reason
  * this class exists at all rather than a hook in the freeze path: pages are

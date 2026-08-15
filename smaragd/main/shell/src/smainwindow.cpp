@@ -1121,7 +1121,7 @@ SMainWindow::SMainWindow()
     addDockWidget( Qt::RightDockWidgetArea, qDockClipProps_ );
     qDockClipProps_->hide();
 
-    // The event editor dock (proposal 36 P4) — the fifth dock, BOTTOM, tabified
+    // The event editor dock (proposal 37 P4) — the fifth dock, BOTTOM, tabified
     // with the Log so the two share the strip under the arranger. Created here
     // in the ctor for the same reason every other dock is (shell CONTRACT
     // inv. 4: restoreWindowLayout() runs later and can only restore docks that
@@ -1134,7 +1134,7 @@ SMainWindow::SMainWindow()
     tabifyDockWidget( qDockLog_, qDockEventEditor_ );
     qDockEventEditor_->hide();
 
-    // The virtual keyboard (proposal 36 6.3). Bottom as well, beside the
+    // The virtual keyboard (proposal 37 6.3). Bottom as well, beside the
     // editor. It inserts notes at the locator through `add-note` and is the
     // headless note source behind the `virtual-key` verb.
     qDockVirtualKeys_ = new QDockWidget( tr( "Virtual Keyboard" ), this );
@@ -2017,7 +2017,7 @@ QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeigh
     return head.describeMeter();
 }
 
-// --- proposal 36 P4 test seams -------------------------------------------
+// --- proposal 37 P4 test seams -------------------------------------------
 
 QString SMainWindow::describeTrackHead( const QString &trackPath,
                                         int headHeight )
@@ -2173,7 +2173,7 @@ void SMainWindow::ungroupTrack()
 
 void SMainWindow::onTempoSpinChanged( double bpm )
 {
-    // Through the set-tempo VERB (proposal 36 D2): it is the only tempo write,
+    // Through the set-tempo VERB (proposal 37 D2): it is the only tempo write,
     // it re-derives every beats-timebase link so MIDI clips stay on their bar,
     // and it coalesces a spin-box drag into one undo step. The resulting
     // bpmTempoChanged updates the grid and echoes back to the box, but

@@ -11,7 +11,7 @@ class QToolButton;
 
 /**
  * SVirtualKeyboardDock - two painted octaves driven by the computer keyboard
- * (proposal 36 6.3).
+ * (proposal 37 6.3).
  *
  * The key map is REAPER's, because it is the one a user coming from any other
  * DAW already has in their fingers:
@@ -25,7 +25,7 @@ class QToolButton;
  * keyboard happened to have focus, which is the single most annoying bug a
  * virtual keyboard can have.
  *
- * A press INSERTS A NOTE at the locator through `add-note` (proposal 36 3.4) -
+ * A press INSERTS A NOTE at the locator through `add-note` (proposal 37 3.4) -
  * it does not sound anything yet; live preview through an instrument is P3b/P8
  * work. That is also what makes it the headless note source behind the
  * `virtual-key` verb: one entry point, one action, one undo step.

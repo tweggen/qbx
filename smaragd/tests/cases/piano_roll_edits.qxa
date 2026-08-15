@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P4, AC1. The piano roll's gestures, driven through the REAL
+  Proposal 37 P4, AC1. The piano roll's gestures, driven through the REAL
   widgets: the virtual keyboard's own key handler and the piano roll's own
   mouse handlers. A script that submitted add-note / set-notes itself would
   test the script; these verbs exist so the UI arithmetic is what runs.

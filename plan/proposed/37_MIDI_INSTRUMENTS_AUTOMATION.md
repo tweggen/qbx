@@ -1,4 +1,4 @@
-# Proposal 36 — Event clips, instruments, MIDI output and automation
+# Proposal 37 — Event clips, instruments, MIDI output and automation
 
 > **Status: DRAFT v2.2 (2026-08-15).** v2.2 adds §3.2.1 (events bubble up the
 > track hierarchy) and the per-track MIDI-out delay (D6) from the requester's
@@ -14,7 +14,7 @@
 > cut window was specified in frames while every tempo consequence needed ticks;
 > and half the early gates asserted on a log file that a `--test-case` run does
 > not write. Design + phased plan; no code. Execution companion:
-> `36_ORCHESTRATION.md` — one Opus 5 sub-agent per phase, every gate written as
+> `37_ORCHESTRATION.md` — one Opus 5 sub-agent per phase, every gate written as
 > acceptance criteria.
 >
 > Written in a dedicated worktree (`docs/midi-instruments-automation`) from five
@@ -969,7 +969,7 @@ thread in the inventory table: `MidiOutScheduler`.
 
 ---
 
-## 8. Phases and gates (summary — the briefs are in `36_ORCHESTRATION.md`)
+## 8. Phases and gates (summary — the briefs are in `37_ORCHESTRATION.md`)
 
 Each phase is one Opus 5 sub-agent's unit of work with an entry condition and a
 gate written as acceptance criteria. Independent phases run in parallel worktrees.

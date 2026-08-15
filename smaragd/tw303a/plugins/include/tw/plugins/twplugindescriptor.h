@@ -24,7 +24,7 @@ struct twPluginDescriptor {
     twPluginIoLayout io;
     bool          isInstrument = false;
 
-    // --- proposal 36 P2: what the scanner learned about EVENTS ---------------
+    // --- proposal 37 P2: what the scanner learned about EVENTS ---------------
     //
     // Derived from a live instance's capabilities() at scan time, exactly like
     // `io` is derived from its ioLayout(): none of it is a descriptor field in
@@ -39,7 +39,7 @@ struct twPluginDescriptor {
 
     // Audio OUTPUT buses. nOutBuses is >= 1 for anything that makes sound; bus
     // 0 is the main bus and its channel count equals io.audioOutputs. The rest
-    // are aux outs (proposal 36 §5.4, built in P9).
+    // are aux outs (proposal 37 §5.4, built in P9).
     std::uint16_t              nOutBuses = 0;
     std::vector<std::uint16_t> outBusChannels;
 };
@@ -90,7 +90,7 @@ public:
     // (new descriptor field, changed I/O derivation, ...). It is part of the
     // cache key, so bumping it invalidates every record — including the
     // remembered failures.
-    // 1 -> 2 (proposal 36 P2): the descriptor gained acceptsNotes, emitsNotes,
+    // 1 -> 2 (proposal 37 P2): the descriptor gained acceptsNotes, emitsNotes,
     // eventPortsIn/Out, nOutBuses and outBusChannels. A v1 record cannot supply
     // them, so every record — including the remembered failures — is
     // invalidated once and re-probed.

@@ -9365,11 +9365,11 @@ three cases pinning the three lengths: `render_duration_short`,
 64 s render is now the most expensive case in the suite), `render_duration_empty`.
 ---
 
-## 2026-08-15 — Proposal 36 P0a: loader tolerance + `SClipWindow` + verbs
+## 2026-08-15 — Proposal 37 P0a: loader tolerance + `SClipWindow` + verbs
 
 Branch `feat/36-p0a-clipwindow-loader`, commits `d6c8982`, `5866a7d`, `224f97a`,
-`a0517c5`. Design: `plan/proposed/36_MIDI_INSTRUMENTS_AUTOMATION.md` D8 and the
-P0a brief in `36_ORCHESTRATION.md` §3. Everything here is app-model work — no
+`a0517c5`. Design: `plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` D8 and the
+P0a brief in `37_ORCHESTRATION.md` §3. Everything here is app-model work — no
 engine file was touched, and no audio behaviour was meant to change.
 
 ### 1. The loader repairs per element kind, and iterates
@@ -9533,13 +9533,13 @@ cases that did pass — not a clean full suite.
 - `SClipWindow::of()` is a cross-cast on every windowed verb's hot path for
   edits; no measurement was taken, and none is likely to matter (these are
   user-gesture paths).
-## 2026-08-15 — Proposal 36 P0b: tw/events leaf
+## 2026-08-15 — Proposal 37 P0b: tw/events leaf
 
-The engine leaf every later phase of proposal 36 leans on, landed on its own so
+The engine leaf every later phase of proposal 37 leans on, landed on its own so
 nothing else has to wait for it: `smaragd/tw303a/events/`, **core-only**, with no
 place in the dataflow DAG and nothing linking it yet (P1 and P2 are its first
-consumers). Design: `plan/proposed/36_MIDI_INSTRUMENTS_AUTOMATION.md` §4.1, §4.2,
-§3.2.1, D1/D2/D4/D5; brief: `36_ORCHESTRATION.md` §3 "P0b". Invariants:
+consumers). Design: `plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` §4.1, §4.2,
+§3.2.1, D1/D2/D4/D5; brief: `37_ORCHESTRATION.md` §3 "P0b". Invariants:
 `tw303a/events/CONTRACT.md` (18 of them).
 
 **What landed**
@@ -9658,10 +9658,10 @@ end equals `startPos`. Asserted both ways.
 
 **Housekeeping.** `*.mid` is marked `binary` in `.gitattributes` — the corpus is
 compared byte for byte, so no eol conversion may touch it. The branch is based on
-`main` at 9db00ad (plus the four proposal-36 document commits); `main` has since
+`main` at 9db00ad (plus the four proposal-37 document commits); `main` has since
 advanced by three merges (ASIO spike, head wheel/name, multi-track selection),
 which this branch does not carry.
-## 2026-08-15 — Proposal 36 P2: plugin ABI events, fixtures, native 303
+## 2026-08-15 — Proposal 37 P2: plugin ABI events, fixtures, native 303
 
 Branch `feat/36-p2-plugin-events`, off P0b. The plugin layer learns about events
 at the `twPlugin` level ONLY: the ABI, the three format backends, the scanner,
@@ -9798,7 +9798,7 @@ and named rather than waved through.
 - No `repeat_test.sh` sweep: nothing here touches the scheduler, a class-1
   processor, the barrier or the readahead.
 
-## 2026-08-15 — Proposal 36: P0a + P0b + P2 reconciled on the merged tree
+## 2026-08-15 — Proposal 37: P0a + P0b + P2 reconciled on the merged tree
 
 `docs/midi-instruments-automation` at `1e402a1` = P0a + P0b + P2 + PRs #34
 (render length = arrangement), #35 (offscreen plugin deploy), #37 (channel=
@@ -9813,9 +9813,9 @@ green; **`ctest -j4`: 118/118 passed in 155.7 s** (121 registered; 3 `au_*`
 disabled off macOS). This is the full-suite reconciliation P0a/P0b/P2 had
 deferred by requester instruction.
 
-## 2026-08-15 — Proposal 36 P7a: MIDI device layer
+## 2026-08-15 — Proposal 37 P7a: MIDI device layer
 
-The ENGINE half of the P7 brief (`36_ORCHESTRATION.md` §3, P7), split out so it
+The ENGINE half of the P7 brief (`37_ORCHESTRATION.md` §3, P7), split out so it
 could run in parallel with P1. `tw/devices` only — no app code, no model, no
 render path, so **the goldens are byte-identical by construction**: nothing P7a
 adds is reachable from `freezePage`, `RenderSession` or `AudioEngine`. The app
@@ -9906,7 +9906,7 @@ the driver releases the header) and sysex IN (`MIM_LONGDATA`) which is not
 implemented; `MidiInput` has no consumer at all until P8. The timing assertion
 measures the MACHINE as much as the code — `devices_midi_test` is `RUN_SERIAL`
 for the same reason `twlog_test` is.
-## 2026-08-15 — Proposal 36 P1: event clips in the model
+## 2026-08-15 — Proposal 37 P1: event clips in the model
 
 Branch `feat/36-p1-event-clips` (off the merged P0a+P0b+P2 tree at `8943ef1`):
 `e2fb1df` model + slice + verbs, `d7cdbae` UI wiring, `402ef68` tests + SMF
@@ -10085,7 +10085,7 @@ destruction, or give the scan thread a catch-all).
 
 ---
 
-## 2026-08-15 — Proposal 36 P4: event editor + virtual keyboard
+## 2026-08-15 — Proposal 37 P4: event editor + virtual keyboard
 
 - **Status:** ✅ COMPLETE (AC1, AC2, AC3, AC5 green; **AC4 skipped — it needs
   P3b**, see "Not gated" below)
@@ -10225,11 +10225,11 @@ A note dragged ONTO a clip's window end vanishes from the clip's snapshot —
 windows are half-open. That is the window's rule, not the gesture's, and it
 cost one debugging round: give a case a clip long enough that the destination
 is strictly inside.
-## 2026-08-15 — Proposal 36 P7b: MIDI-out pump, verbs, options
+## 2026-08-15 — Proposal 37 P7b: MIDI-out pump, verbs, options
 
 - **Status:** ✅ COMPLETE (branch `feat/36-p7b-midi-out-app`; P7a landed the
   `tw/devices` half separately, so the P7 row is now closed)
-- **Scope:** the APP half of proposal 36 P7 — `SMidiOutPump`, the per-track
+- **Scope:** the APP half of proposal 37 P7 — `SMidiOutPump`, the per-track
   MIDI-output attributes and their verb, the Options → MIDI page, the testkit
   verbs, and the seven qxa cases that gate AC1–AC6.
 - **Modules:** `main/shell`, `main/objects/track`, `main/servicesui`,
@@ -10380,7 +10380,7 @@ one of them inside a probing process** — and **zero** among the ~520
 warm-cache case runs in the same four invocations. The victims are spread
 across P0a's, P1's, proposal 34's and proposal 08's cases; the run-4 victim is
 a plugin case with no MIDI in it at all. This is the family
-`36_ORCHESTRATION.md` §4 names, and specifically the cold-plugin-cache
+`37_ORCHESTRATION.md` §4 names, and specifically the cold-plugin-cache
 `~twPluginRegistry` vs `TwLog` static-destruction hang that P1's own entry
 recorded — concurrent processes rewrite `plugincache.json` through `QSaveFile`,
 the lost updates leave records that no longer match, and the NEXT invocation's

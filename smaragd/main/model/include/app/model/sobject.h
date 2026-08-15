@@ -50,7 +50,7 @@ private:
 
 /**
  * What an object's material IS, independent of what windows or plays it
- * (proposal 36 D8b). Audio is sample data (and anything rendered from it);
+ * (proposal 37 D8b). Audio is sample data (and anything rendered from it);
  * Event is note/controller data. It decides which window type wraps a content
  * object (SClipWindow::wrapContent), and a take stack refuses to mix the two.
  *
@@ -168,7 +168,7 @@ public:
     { return twResolvedClip{ getRootComponent(), mapTimelineToComponentPos( off ) }; }
 
     /**
-     * The EVENT twin of resolveClip (proposal 36 §4.2): the frame-domain event
+     * The EVENT twin of resolveClip (proposal 37 §4.2): the frame-domain event
      * sequence this clip contributes, plus the clip-relative position map the
      * track's twEventClipSet enumerates it through. The default returns an
      * empty record, which the clip set reads as "nothing to collect".
@@ -191,7 +191,7 @@ public:
     virtual bool isPathContainer() const { return false; }
 
     /**
-     * The kind of material this object carries (proposal 36 D8b). Audio by
+     * The kind of material this object carries (proposal 37 D8b). Audio by
      * default — every object that existed before event clips is audio, and a
      * container's kind is the kind of what it renders, which is audio too.
      * An event content object (SMidiSequence) and the window over it override.

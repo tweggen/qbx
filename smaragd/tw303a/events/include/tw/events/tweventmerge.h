@@ -9,7 +9,7 @@
 #include "tw/events/tweventsource.h"
 
 /**
- * twEventMerge - one twEventSource over N of them (proposal 36 §3.2.1).
+ * twEventMerge - one twEventSource over N of them (proposal 37 §3.2.1).
  *
  * This is a track's FEED: its own event clip set merged with the feeds of every
  * child track that passes events up ("consumed here, or bubbled up"). A folder

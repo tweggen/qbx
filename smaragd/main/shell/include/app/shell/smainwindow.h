@@ -91,7 +91,7 @@ public:
     bool grabLevelMeter( const QString &path, double peak, double rms,
                          bool vertical, int w, int h );
 
-    // TEST ENTRY POINT (proposal 36 P4): build the REAL track head at
+    // TEST ENTRY POINT (proposal 37 P4): build the REAL track head at
     // `headHeight` and return SSMVMixerControl::describeHead() — the density
     // rules for the instrument "I" and automation "A" buttons, and whether the
     // strip still FITS the lane it was given. Sibling of describeTrackMeter,
@@ -99,7 +99,7 @@ public:
     // (testkit CONTRACT inv. 5). Empty string when the path names no lane.
     QString describeTrackHead( const QString &trackPath, int headHeight );
 
-    // TEST ENTRY POINTS for the event editor (proposal 36 P4). The dock is
+    // TEST ENTRY POINTS for the event editor (proposal 37 P4). The dock is
     // built in the ctor and never shown in a headless run, so these drive the
     // REAL widget rather than a re-spelling of it.
     //
@@ -222,7 +222,7 @@ private:
     // the project's arrangementChanged rather than a signal of its own.
     void attachClipProperties();
     void detachClipProperties();
-    // Same lifecycle again for the event editor dock (proposal 36 P4): a
+    // Same lifecycle again for the event editor dock (proposal 37 P4): a
     // selection follower, refreshed off arrangementChanged.
     void attachEventEditor();
     void detachEventEditor();

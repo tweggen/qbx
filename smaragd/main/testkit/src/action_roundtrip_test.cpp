@@ -158,7 +158,7 @@ const Fixture kFixtures[] = {
     { "assert-track-selection",
       "<assert-track-selection paths='0;1,0' primary='1,0'/>" },
 
-    // --- the event-clip verbs (proposal 36 P1) ------------------------------
+    // --- the event-clip verbs (proposal 37 P1) ------------------------------
     // Two-level paths throughout, for the reason above. `duration` here is in
     // TICKS (the clip's own unit); everything else positional is frames.
     { "insert-midi-clip",
@@ -226,7 +226,7 @@ const Fixture kFixtures[] = {
     { "assert-midi-file",
       "<assert-midi-file filename='out.mid' trackCount='3' noteCount='6'"
       " eventCount='10' firstTick='0' ppq='960' format='1'/>" },
-    // --- the event-editor verbs (proposal 36 P4) ---------------------------
+    // --- the event-editor verbs (proposal 37 P4) ---------------------------
     // Every attribute is written unconditionally by these four, so a fixture
     // declaring all of them keeps all of them in the audit.
     { "virtual-key",
@@ -246,7 +246,7 @@ const Fixture kFixtures[] = {
       " contains='density=Full' absent='I=1'/>" },
 
     // timebase is written only when non-empty.
-    // --- the MIDI-out verbs (proposal 36 P7b) -------------------------------
+    // --- the MIDI-out verbs (proposal 37 P7b) -------------------------------
     // port/kind are written only when non-empty and `at` only when it was
     // given, so the fixture sets all three plus every numeric attribute.
     { "assert-midi-out",

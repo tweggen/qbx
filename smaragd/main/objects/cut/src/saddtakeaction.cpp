@@ -78,7 +78,7 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     const int at = ( index_ >= 0 && index_ <= stack->nTakes() )
                        ? index_ : stack->nTakes();
     if( !stack->insertTake( *takeCut, at == stack->nTakes() ? -1 : at ) ) {
-        // Homogeneity (proposal 36 D8b): the column already holds a different
+        // Homogeneity (proposal 37 D8b): the column already holds a different
         // kind of material. Reject rather than build a column that plays
         // audio or notes depending on which lane is active.
         delete takeCut;

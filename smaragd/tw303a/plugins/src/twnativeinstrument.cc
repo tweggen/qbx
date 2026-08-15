@@ -1,4 +1,4 @@
-// twNativeInstrument — the in-repo 303 voice, as a twPlugin (proposal 36 D7, P2).
+// twNativeInstrument — the in-repo 303 voice, as a twPlugin (proposal 37 D7, P2).
 //
 // WHY THIS EXISTS. The instrument path (event delivery, chase, pre-roll, the run
 // barrier, the byte-`cmp` determinism gates) has to be built and gated against
@@ -27,7 +27,7 @@
 // self-oscillating runaway; and `f` is computed per sample from the envelope
 // instead of read from an audio-rate input latch.
 //
-// DETERMINISM IS A CONTRACT, not an accident (dsp invariant 2, proposal 36 AC5).
+// DETERMINISM IS A CONTRACT, not an accident (dsp invariant 2, proposal 37 AC5).
 // reset() returns every piece of state to a fixed value — phase 0, all eight
 // ladder registers 0, envelope 0, no note held, glide target = current — so
 // "reset, note-on at offset 0, render N frames" is byte-identical every time and
@@ -206,7 +206,7 @@ public:
     }
 
     // The AUDIBLE tail is the VCA release (6 ms). The number reported here is
-    // the FILTER decay instead, deliberately and conservatively: proposal 36 D4
+    // the FILTER decay instead, deliberately and conservatively: proposal 37 D4
     // uses tailFrames() to size the instrument pre-roll, i.e. "how far back must
     // a render reach to rebuild the state this instrument carries", and the
     // filter envelope is state that outlives the sound. An over-estimate costs

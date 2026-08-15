@@ -7,7 +7,7 @@
 
 /**
  * twAutomationCurve — an immutable, sorted breakpoint curve in FRAMES
- * (proposal 36 D5).
+ * (proposal 37 D5).
  *
  * The snapshot a consuming component is handed under its mutex and reads at
  * freeze time, exactly like a cut snapshot: the UI edits the model, the model

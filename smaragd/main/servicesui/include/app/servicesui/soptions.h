@@ -57,7 +57,7 @@ inline constexpr const char *ShortcutClipProperties = "ui/shortcuts/clipProperti
 inline constexpr const char *PluginSearchPaths   = "plugins/searchPaths";
 inline constexpr const char *PluginScanOnStartup = "plugins/scanOnStartup";
 
-// MIDI (proposal 36 D6 / P7b). All three are per-user and machine-local, which
+// MIDI (proposal 37 D6 / P7b). All three are per-user and machine-local, which
 // is exactly why they are here and not in the project: a port NAME travels with
 // the project, the id it resolves to does not (SSettings::midiPortId).
 //

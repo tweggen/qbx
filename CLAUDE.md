@@ -91,7 +91,7 @@ the plugin search paths. Gates: `filepathref_test` (ctest) and
   assert-source-position decodes it). It also stops a headless suite from
   opening the real output device ~90 times.
 - `SMARAGD_MIDI_BACKEND=winmm|coremidi|alsaseq|capture|null|default` picks the
-  MIDI ports the same way, ahead of the platform choice (proposal 36 P7a,
+  MIDI ports the same way, ahead of the platform choice (proposal 37 P7a,
   `tw/devices/midi_output.h`). **`capture` is the intended default for a
   `--test-case` run** — it records `{hostTimeNs, port, bytes}` in memory and
   nothing else, so a MIDI-out assertion is measured against the AUDIO capture
@@ -571,13 +571,13 @@ of the ramped-sawtooth fixture, the miss/silence path, the density rules via the
 REAL head built off screen, plus PNG grabs — the only coverage of
 `SLevelMeter::paintEvent`) and `meter_postfader`.
 
-## Event clips (proposal 36 P1 — executed 2026-08-15)
+## Event clips (proposal 37 P1 — executed 2026-08-15)
 
 MIDI is in the model: `SMidiSequence` (content) + `SMidiCut` (window) +
 `SLink::timebase` (placement), the verbs to edit them, and a per-track event
 feed the instrument slot will read in P3b. Nothing SOUNDS yet — an event clip
 on a track without an instrument is inaudible, not rejected (design D3).
-Design: `plan/proposed/36_MIDI_INSTRUMENTS_AUTOMATION.md` §3.1–§3.4.
+Design: `plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` §3.1–§3.4.
 Invariants: `main/objects/midi/CONTRACT.md` (11 of them), `main/objects/track/
 CONTRACT.md` inv. 5b/5c, `docs/contracts/POSITION_DOMAINS.md` rule 7.
 
@@ -607,12 +607,12 @@ BYTE-IDENTICAL; legitimate only because twSmf has one canonical spelling and
 regenerates it), `midi_clip_edit_verbs`, `midi_clip_tempo_remap`,
 `midi_clip_render_silent`, `midi_folder_feed`, plus `action_roundtrip_test`.
 
-## MIDI output (proposal 36 P7 — executed 2026-08-15)
+## MIDI output (proposal 37 P7 — executed 2026-08-15)
 
 A track can send its event feed to a MIDI port. The device layer is
 `tw/devices` (P7a: `MidiOutput`/`MidiInput`, WinMM/CoreMIDI/ALSA-seq/capture/
 null, `MidiOutScheduler`); the app half is `SMidiOutPump` in `main/shell`
-(P7b). Design: `plan/proposed/36_MIDI_INSTRUMENTS_AUTOMATION.md` D6 and §4.6.
+(P7b). Design: `plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` D6 and §4.6.
 Invariants: `tw303a/devices/CONTRACT.md` inv. 10-18, `main/shell/CONTRACT.md`
 inv. 7-8, `main/objects/track/CONTRACT.md` inv. 9-10.
 
@@ -857,7 +857,7 @@ force-clear — which is exactly why `.vst3` stayed unreported until M6.
 `plugins/tests/twtestclap.c` is a real CLAP module built from this repo as
 `twtestclap.clap` and copied next to the binary. Four entry points:
 `tw.test.clap.gain` (`out = in * gain`, plus a "report block size" mode that
-writes the frame count it actually saw, plus — since proposal 36 P2 — a
+writes the frame count it actually saw, plus — since proposal 37 P2 — a
 `Clip Threshold` at **param id 2** that hard-clips AFTER the gain, which is the
 order-sensitive fixture the fader-move case needs); `tw.test.clap.stereoskew`
 (`out[0] = in[0]*0.5*gain + in[1]*gain`, `out[c>=1] = in[c]*0.5*gain`) — the
@@ -875,13 +875,13 @@ its own copies of the SDK sources (a module and its host are separate binaries).
 unity by default, which **deliberately ignores `setParamNormalized`**, so a host
 that writes the controller and stops there fails the level assertion — the most
 common VST3 host bug, made into a regression test. `TW Test VST3 Sine`
-(proposal 36 P2) is a SPLIT component/controller instrument: it closes the
+(proposal 37 P2) is a SPLIT component/controller instrument: it closes the
 "split pair untested" debt, maps CC 7 to Gain through `IMidiMapping` (the only
 route a CC has in VST3), honours `sampleOffset`, and **ignores an unactivated
 kEvent bus** — so a host that forgets `activateBus` renders silence rather than
 failing nothing.
 
-**Events (proposal 36 P2).** The ABI carries notes, CCs, note expressions and
+**Events (proposal 37 P2).** The ABI carries notes, CCs, note expressions and
 sample-accurate parameter points: `tw/plugins/twpluginevents.h` (`twEventList` /
 `twEventOut` / `twProcessContext`, all quoting the ONE `twEvent` from
 `tw/events`), plus `capabilities()`, `audioOutBusCount()/audioOutBus(i)` and
@@ -891,7 +891,7 @@ list — the pre-36 path is the same instructions, which is why no golden moved.
 `twNativeInstrument` (`format="tw"`, uid `tw.native.303`) is an in-repo 303
 registered like `twPassThrough`, so an instrument is present in every build.
 **Nothing above the ABI consumes any of it yet** — the processor/tap split is
-untouched, and hosting an instrument is proposal 36 P3b.
+untouched, and hosting an instrument is proposal 37 P3b.
 
 Gates: `ctest -R "plugins_test|plugins_scan_test"` and the qxa cases
 `plugin_stereo_chain`, `plugin_remove_and_undo`, `plugin_slot_roundtrip`,

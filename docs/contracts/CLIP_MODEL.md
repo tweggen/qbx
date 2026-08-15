@@ -7,7 +7,7 @@ of double-audio, silent-clip, and wrong-material bugs.
 
 1. **`SLink` (app/model)** — the PLACEMENT: parent container + `startTime`
    (timeline frames). One `SObject` can be placed many times via many links.
-   Since proposal 36 it also carries a **`timebase`**: `time` (frames are the
+   Since proposal 37 it also carries a **`timebase`**: `time` (frames are the
    authority; audio's default) or `beats` (an exact `startTicks` is the
    authority and `startTime` is derived through the project's tempo map; the
    default for EVENT content). `set-tempo` re-derives every `beats` link, which
@@ -18,7 +18,7 @@ of double-audio, silent-clip, and wrong-material bugs.
    `cutDuration_` / `loopLength_` / grain params, owns the playback chain
    (reader, optional grain stage, optional loop reader) and, for
    container-backed or grained content, a rendered capture.
-   **The verbs address the INTERFACE, not the class** (proposal 36 D8b):
+   **The verbs address the INTERFACE, not the class** (proposal 37 D8b):
    split / resize / duplicate / unsplit / set-clip-name / add-, remove-,
    select-take / place-clip read `duration()`, `loopLength()`,
    `startOffset()`, `stretchOrRate()` in TIMELINE FRAMES, map with

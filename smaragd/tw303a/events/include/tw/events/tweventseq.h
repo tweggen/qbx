@@ -11,7 +11,7 @@
 
 /**
  * twEventSeq — an IMMUTABLE, sorted, binary-searchable event table plus the
- * byte arena its payload offsets index (proposal 36 D1).
+ * byte arena its payload offsets index (proposal 37 D1).
  *
  * Events are model data, not pages: there is no event page kind, no planPage
  * and no scheduler edge for them. A consumer slices the table by position and

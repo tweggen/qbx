@@ -93,7 +93,7 @@ private:
     QList<ClipRef> collectClips() const;
 
     /**
-     * The EVENT selection (proposal 36 P1). A second resolution rather than a
+     * The EVENT selection (proposal 37 P1). A second resolution rather than a
      * widened ClipRef: everything in the audio path above reads SCut-only
      * getters (slip, stretch, pitch, formants, warp anchors), which are
      * deliberately not on the window interface because they are audio verbs.
@@ -163,7 +163,7 @@ private:
     QPushButton    *clearLoopButton_ = nullptr;
     QCheckBox      *formantCheck_ = nullptr;
 
-    // The MIDI page (proposal 36 6.1): the per-clip modifiers plus the one
+    // The MIDI page (proposal 37 6.1): the per-clip modifiers plus the one
     // placement property that is not shared with audio, the timebase.
     QLineEdit      *midiNameEdit_     = nullptr;
     QSpinBox       *midiStartSpin_    = nullptr;

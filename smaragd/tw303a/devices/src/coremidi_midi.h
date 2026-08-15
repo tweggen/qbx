@@ -19,7 +19,7 @@ namespace audio {
 //     driver does the pacing. supportsTimestamps() is true, so MidiOutScheduler
 //     hands messages off as soon as it has them and stops pacing entirely.
 //
-// UNVERIFIED (proposal 36 P7a was implemented on Windows): this file compiles
+// UNVERIFIED (proposal 37 P7a was implemented on Windows): this file compiles
 // and runs nowhere in the P7a gate. It is written against the documented API
 // and reviewed, not executed.
 class CoreMidiOutput : public MidiOutput {

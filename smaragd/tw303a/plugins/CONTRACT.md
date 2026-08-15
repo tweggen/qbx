@@ -10,14 +10,14 @@ proposal 08 M3; twNullPlugin (createNullPlugin) is the missing-plugin
 placeholder of proposal 08 M4; twVst3Plugin is the VST3 backend (proposal 08
 M6), which added four files here and changed nothing above the ABI.
 
-Proposal 36 P2 added the EVENT half of the ABI (twpluginevents.h: twEventList,
+Proposal 37 P2 added the EVENT half of the ABI (twpluginevents.h: twEventList,
 twEventOut, twProcessContext, twPluginCapabilities, twPluginBusInfo), the
 event-aware process() overload, capabilities()/audioOutBus*/tailFrames(), the
 CLAP/VST3/AU translation behind them, scanner version 2, and twNativeInstrument
 (the in-repo 303, format "tw", uid tw.native.303, registered like
 twPassThrough). It changed NOTHING in twPluginSlotProcessor, twPluginInsert or
 twPluginChain — the hosting components are rewritten by proposal 35-B4 and the
-generator modes are proposal 36 P3b, so today NOTHING in the app calls the new
+generator modes are proposal 37 P3b, so today NOTHING in the app calls the new
 overload and every rendered byte is unchanged.
 
 Shape of a slot (proposal 08 M3). ONE twPluginSlotProcessor per slot (plain
@@ -320,7 +320,7 @@ Invariants:
    no parameters, so the default empty override is correct.
 
 28. EVENTS ARE CHUNK-RELATIVE, SORTED, AND ARRIVE AS ONE LIST PER CALL
-   (proposal 36 P2). Inside a `twEventList` handed to `process()`,
+   (proposal 37 P2). Inside a `twEventList` handed to `process()`,
    `twEvent::time` is 0..nframes-1 of THAT call and never a project position —
    the position of frame 0 is `twProcessContext::position` instead, and the
    context's `validFlags` says which of its fields are real (a host that does
@@ -333,14 +333,14 @@ Invariants:
    automation slice and the clip's notes are merged by the caller, not
    concatenated by the backend.
 29. THE HOST ISSUES NOTE IDS, AND A NoteOff CARRIES THE SAME ID OR -1
-   (proposal 36 P2). A note's identity is the id, not (port, channel, key):
+   (proposal 37 P2). A note's identity is the id, not (port, channel, key):
    that is what lets two overlapping notes on one key be released
    independently, and it is the only thing per-note expression can target.
    A backend matches an off by id when one was issued and falls back to key
    otherwise; a host that sends a DIFFERENT id on the off leaves the note
    hanging, which is why both sine fixtures match that way and the silence
    assertion in `plugins_test` catches it.
-30. THE SAME NOTE IS NEVER SENT IN TWO DIALECTS (proposal 36 P2). CLAP
+30. THE SAME NOTE IS NEVER SENT IN TWO DIALECTS (proposal 37 P2). CLAP
    negotiates per note port: `clap_note_port_info.supported_dialects` /
    `preferred_dialect`, and we speak CLAP (structured, note ids, note
    expressions) or MIDI 1, exactly one per port, chosen once at instantiation.
@@ -368,14 +368,14 @@ Invariants:
    parameter points are added at their own `sampleOffset`, which is what makes a
    mid-block automation step land on the right frame.
 32. EVENT STORAGE IS SIZED IN prepare() AND OVERFLOW IS COUNTED, NOT GROWN
-   (proposal 36 P2, an instance of invariant 2). `twEventLimits::kMaxEventsPerBlock`
+   (proposal 37 P2, an instance of invariant 2). `twEventLimits::kMaxEventsPerBlock`
    is what a host may send and what a backend reserves — the CLAP event vector,
    the VST3 `twVst3EventList` pair and the parameter queues' per-parameter point
    capacity. A plugin that pushes more into `twEventOut` than the host sized for
    loses the surplus and the host can read `dropped()`; growing would allocate
    on the render path and returning an error would make a chatty arpeggiator
    fail a render.
-33. THE LEGACY process() IS THE SAME CODE, NOT AN EQUIVALENT ONE (proposal 36
+33. THE LEGACY process() IS THE SAME CODE, NOT AN EQUIVALENT ONE (proposal 37
    P2). Every backend's three-argument `process()` forwards to the event-aware
    overload with an EMPTY list, an unreachable sink and an all-invalid context —
    so no host events are translated, `clap_process::transport` and
@@ -385,14 +385,14 @@ Invariants:
    overloads with independent implementations. `acceptsNotes()` likewise stays
    as a forwarder to `capabilities().acceptsNotes` for one release; a backend
    overrides `capabilities()` and gets it for free.
-34. AUX OUTPUT BUSES ARE DISCOVERED AND NOT YET ROUTED (proposal 36 P2).
+34. AUX OUTPUT BUSES ARE DISCOVERED AND NOT YET ROUTED (proposal 37 P2).
    `audioOutBusCount()` / `audioOutBus(i)` report every audio output bus — CLAP
    ports, VST3 buses, AU output ELEMENTS — and the scanner records them
    (`nOutBuses`, `outBusChannels`). Only bus 0 is wired: the event-aware
-   `process()` reads `outBuses[0]` and nothing consumes the rest. Proposal 36
+   `process()` reads `outBuses[0]` and nothing consumes the rest. Proposal 37
    §5.4 routes them to return tracks in P9; reporting them now is what stops
    that from needing an ABI change.
-35. AU IS macOS-ONLY AND ITS EVENT PATH IS UNVERIFIED (proposal 36 P2). The
+35. AU IS macOS-ONLY AND ITS EVENT PATH IS UNVERIFIED (proposal 37 P2). The
    `aumu`/`aumi` enumeration, `MusicDeviceMIDIEvent` posted BEFORE
    `AudioUnitRender` with its own `inOffsetSampleFrame`,
    `AudioUnitScheduleParameters` for sample-accurate parameter steps, and the
@@ -445,12 +445,12 @@ and descriptor resolution by the 32-hex-digit class id. It runs against
 which deliberately ignores setParamNormalized so invariant 22 has teeth.
 `plugins_scan_test` additionally proves `.vst3` is discovered, probed, cached
 and resolvable by findByUid, in its own tree so the CLAP counts stay exact, and
-(proposal 36 P2) that a scanner-VERSION-1 cache is discarded and every module
+(proposal 37 P2) that a scanner-VERSION-1 cache is discarded and every module
 re-probed exactly ONCE, that the probe's JSON carries the new descriptor fields
 for all three test modules, and that those fields survive the plugincache.json
 round trip.
 
-And the EVENT half (proposal 36 P2), driven DIRECTLY on `twPlugin::process` by a
+And the EVENT half (proposal 37 P2), driven DIRECTLY on `twPlugin::process` by a
 small block pump in `plugins_test` — 4096-frame calls with a chunk-relative
 event list, no processor and no tap anywhere near it, because P2 changes the ABI
 and the backends and nothing about the hosting components. Per format (the
@@ -471,7 +471,7 @@ and says so (invariant 35).
 
 The in-repo fixtures grew to match: `twtestclap.c` exports four plugins now
 (`gain` with a third parameter, id 2 `Clip Threshold`, which hard-clips AFTER
-the gain and is the order-sensitive fixture proposal 36 P3a's fader-move case
+the gain and is the order-sensitive fixture proposal 37 P3a's fader-move case
 needs; `stereoskew`; the `sine` instrument with a stereo main out AND a mono aux
 out; and the `arp`), and `twtestvst3.cpp` exports the `TestSine` SPLIT
 component/controller pair, which closes the "split VST3 pair untested" debt this
@@ -509,7 +509,7 @@ Known debt:
   exactly why `.vst3` stayed unreported until M6 landed the backend, and why the
   entry is gated on TW_HAVE_VST3 so a build without the submodule still cannot
   poison its cache.
-- The VST3 SPLIT component/controller path is covered since proposal 36 P2:
+- The VST3 SPLIT component/controller path is covered since proposal 37 P2:
   `TestSine` in tests/twtestvst3.cpp is a real split pair (IConnectionPoint
   pairing, getControllerClassId, setComponentState, a separate controller
   lifecycle and its own state chunk), and `plugins_test` drives it. What is

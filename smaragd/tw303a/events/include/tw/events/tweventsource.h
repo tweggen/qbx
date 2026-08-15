@@ -8,7 +8,7 @@
 #include "tw/events/tweventseq.h"
 
 /**
- * twEventSource — the seam every event consumer reads through (proposal 36
+ * twEventSource — the seam every event consumer reads through (proposal 37
  * §4.2): the instrument slot processor per page, and the MIDI-out pump per
  * tick. A track's event clip set is one; a track's FEED (the merge of its own
  * set with the feeds of the children that bubble events up, §3.2.1) is another;

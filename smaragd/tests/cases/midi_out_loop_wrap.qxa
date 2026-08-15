@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P7b, AC3. THE LOOP WRAP (design D6).
+  Proposal 37 P7b, AC3. THE LOOP WRAP (design D6).
 
   A cycle is where MIDI-out goes wrong quietly: the transport jumps from the
   cycle end back to the cycle start, and a note that was sounding across that

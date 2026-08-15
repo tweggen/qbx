@@ -569,7 +569,7 @@ SSMVMixerControl::SSMVMixerControl(
     qGroup_->setToolTip( "Edit group: lock this track (and its subtree) together" );
     qGroup_->setStyleSheet( "QPushButton:checked { background:#40a060; color:white; }" );
 
-    // Proposal 36 6.1 - the second pair. Both are FULL-DENSITY ONLY and both
+    // Proposal 37 6.1 - the second pair. Both are FULL-DENSITY ONLY and both
     // additionally require the button column to still fit vertically: five
     // buttons need 108 px of a 132 px Full lane, and seven need 152, so
     // unconditional buttons would clip exactly the shortest Full lanes.
@@ -583,7 +583,7 @@ SSMVMixerControl::SSMVMixerControl(
     qAuto_ = new QPushButton( "A", this );
     qAuto_->setFixedSize( 20, 20 );
     qAuto_->setFont( btnFont );
-    qAuto_->setToolTip( "Automation mode (lanes land with proposal 36 P5/P6)" );
+    qAuto_->setToolTip( "Automation mode (lanes land with proposal 37 P5/P6)" );
 
     // Mute over Solo over Arm in a column. QBoxLayout (not QVBoxLayout) so the
     // compact density can lay the same buttons out in a row.
@@ -928,11 +928,11 @@ void SSMVMixerControl::instrumentClicked()
 
 void SSMVMixerControl::automationClicked()
 {
-    // The seam, and nothing more (proposal 36 P4). Automation lanes, the mode
+    // The seam, and nothing more (proposal 37 P4). Automation lanes, the mode
     // cycle and the right-click picker are P5/P6; saying so beats a button that
     // silently does nothing.
     QToolTip::showText( QCursor::pos(),
-                        tr( "Automation lanes arrive with proposal 36 P5/P6" ),
+                        tr( "Automation lanes arrive with proposal 37 P5/P6" ),
                         qAuto_ );
 }
 
@@ -1009,7 +1009,7 @@ void SSMVMixerControl::applyDensity( Density d )
                             qInstr_, qAuto_ } )
         b->setFixedSize( btn, btn );
 
-    // The second button pair (proposal 36 6.1): Full density only, and only
+    // The second button pair (proposal 37 6.1): Full density only, and only
     // while the COLUMN still fits. "I" additionally needs slot 0 to actually be
     // an instrument - a button that opens nothing is worse than no button.
     const bool showAuto  = ( d == Density::Full ) && buttonColumnFits( btn, 6 );

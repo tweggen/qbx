@@ -16,7 +16,7 @@ namespace audio {
 
 // The thing that actually puts bytes on the wire, at the right time.
 //
-// Proposal 36 D6: MIDI-out is emitted at PLAY time, never at freeze time — the
+// Proposal 37 D6: MIDI-out is emitted at PLAY time, never at freeze time — the
 // metering lesson (34) verbatim, because pages are frozen ~1.4 s ahead of the
 // playhead and by renders with no playhead at all. The app's MidiOutPump
 // (main-thread QTimer, 20 ms period, 250 ms lookahead — P7b) slices the event

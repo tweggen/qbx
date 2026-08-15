@@ -6,10 +6,10 @@
 // It links its OWN copies of the SDK sources and its own IID definitions —
 // a module and its host are separate binaries and must not share either.
 //
-// TWO classes since proposal 36 P2:
+// TWO classes since proposal 37 P2:
 //
 //   "TW Test VST3 Gain"  2 in / 2 out effect, SINGLE component     (M6)
-//   "TW Test VST3 Sine"  0 in / stereo out INSTRUMENT, SPLIT pair  (36 P2)
+//   "TW Test VST3 Sine"  0 in / stereo out INSTRUMENT, SPLIT pair  (37 P2)
 //
 // The split pair closes the "split VST3 component/controller untested" debt
 // plugins/CONTRACT.md has carried since M6 — and it had to, because IMidiMapping
@@ -59,7 +59,7 @@ DEF_CLASS_IID( Vst::IAudioProcessor )
 DEF_CLASS_IID( Vst::IEditController )
 DEF_CLASS_IID( Vst::IParameterChanges )
 DEF_CLASS_IID( Vst::IParamValueQueue )
-// proposal 36 P2: the SPLIT pair (TestSine) needs these in its OWN binary.
+// proposal 37 P2: the SPLIT pair (TestSine) needs these in its OWN binary.
 DEF_CLASS_IID( Vst::IEventList )
 DEF_CLASS_IID( Vst::IConnectionPoint )
 DEF_CLASS_IID( Vst::IMidiMapping )
@@ -250,7 +250,7 @@ public:
         const Vst::AudioBusBuffers &in  = data.inputs[0];
         Vst::AudioBusBuffers       &out = data.outputs[0];
 
-        // SAMPLE-ACCURATE parameter points (proposal 36 AC2). The block is
+        // SAMPLE-ACCURATE parameter points (proposal 37 AC2). The block is
         // rendered in SEGMENTS split at each point's sampleOffset, so a gain
         // written at offset 1234 takes effect at frame 1234 and not at the top
         // of the block. A host that passes offset 0 for everything — which is
@@ -442,7 +442,7 @@ private:
     double controllerGain_ = 1.0;   // what setParamNormalized wrote; unused on purpose
 };
 
-// --- TestSine: the SPLIT component/controller instrument (proposal 36 P2) -----
+// --- TestSine: the SPLIT component/controller instrument (proposal 37 P2) -----
 //
 // Everything here exists to make a host path fail loudly if it is wrong:
 //
@@ -606,7 +606,7 @@ public:
 
     // --- IMidiMapping --------------------------------------------------------
     // VST3 has no control-change EVENT at all; this map is the only route a CC
-    // has to the DSP (proposal 36 §5.2).
+    // has to the DSP (proposal 37 §5.2).
     tresult PLUGIN_API getMidiControllerAssignment( int32 busIndex, int16 channel,
                                                     Vst::CtrlNumber midiControllerNumber,
                                                     Vst::ParamID &id ) override
@@ -1040,7 +1040,7 @@ public:
         return kResultOk;
     }
 
-    // THREE classes since proposal 36 P2: the gain effect, the sine INSTRUMENT
+    // THREE classes since proposal 37 P2: the gain effect, the sine INSTRUMENT
     // and the instrument's separate CONTROLLER. Only the first two carry
     // kVstAudioEffectClass, so the host's scanner still sees exactly two
     // plugins — a controller class is reached through getControllerClassId, not

@@ -209,7 +209,7 @@ int SProjectLoader::createObjects( SProject &project )
 
         if( !progress ) {
             // Nothing left is resolvable by rescanning. PRUNE, then RETRY
-            // (proposal 36 D8a): the repair is per element KIND, and each
+            // (proposal 37 D8a): the repair is per element KIND, and each
             // repair can unblock elements the next pass CAN consume — a
             // container that loses one dangling link becomes instantiable, and
             // dropping a dead window turns its own placement into a dangling
@@ -256,7 +256,7 @@ int SProjectLoader::createObjects( SProject &project )
         if( !rootLink ) {
             // The one loss there is no recovery from: everything the document
             // describes hangs off the root, so a project without one is not a
-            // damaged project, it is no project. FAIL the load (proposal 36
+            // damaged project, it is no project. FAIL the load (proposal 37
             // D8a) instead of handing the caller an empty shell that looks
             // like a successful open and would overwrite the file on save.
             qWarning() << QString( "Root component of project (rootId \"%1\") was "

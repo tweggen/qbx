@@ -201,7 +201,7 @@ void SClipPropertiesPanel::buildUi()
 
     formLayout->addWidget( playGroup );
 
-    // --- MIDI clip (proposal 36 P1) ----------------------------------------
+    // --- MIDI clip (proposal 37 P1) ----------------------------------------
     // Shown INSTEAD of the four audio groups when the selection is event
     // material. The window itself (length, slip, loop, rate) is edited through
     // the same generalized resize-clip the audio page uses, so there is no
@@ -344,7 +344,7 @@ QList<SClipPropertiesPanel::ClipRef> SClipPropertiesPanel::collectClips() const
             // per-clip action uses when take == -1).
             if( STakeStack *stack =
                     dynamic_cast<STakeStack*>( &link->getSObject() ) ) {
-                // A stack is a column of WINDOWS now (proposal 36 D8b); this
+                // A stack is a column of WINDOWS now (proposal 37 D8b); this
                 // panel edits audio window properties, so it asks for the
                 // audio one and simply skips a take that is not.
                 ref.cut       = dynamic_cast<SCut*>( stack->activeTakeObject() );
@@ -795,7 +795,7 @@ void SClipPropertiesPanel::onFormantClicked( bool )
 }
 
 // ---------------------------------------------------------------------------
-// The MIDI page (proposal 36 P1)
+// The MIDI page (proposal 37 P1)
 // ---------------------------------------------------------------------------
 
 QList<SClipPropertiesPanel::MidiClipRef>

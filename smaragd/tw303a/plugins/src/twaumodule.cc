@@ -40,7 +40,7 @@ std::string cfToStd( CFStringRef s )
 }
 
 // The types we host. Effects and music-effects are track inserts (proposal 08);
-// MUSIC DEVICES (aumu) and MIDI PROCESSORS (aumi) joined them in proposal 36 P2,
+// MUSIC DEVICES (aumu) and MIDI PROCESSORS (aumi) joined them in proposal 37 P2,
 // because the note model they were gated on now exists — a MusicDevice has no
 // audio input and is an instrument, which is exactly the shape the instrument
 // slot wants.
@@ -163,7 +163,7 @@ std::vector<twPluginDescriptor> auModuleDescriptors( const std::string &moduleKe
     d.format       = "au";
     d.uid          = auUidFromCodes( t, s, mfr );
     d.path         = std::string();   // AU identity is the uid; path is cosmetic
-    // A MusicDevice IS the instrument type (proposal 36 P2); the capabilities
+    // A MusicDevice IS the instrument type (proposal 37 P2); the capabilities
     // read off the live instance below confirm it.
     d.isInstrument = t == (std::uint32_t) kAudioUnitType_MusicDevice;
 
@@ -190,7 +190,7 @@ std::vector<twPluginDescriptor> auModuleDescriptors( const std::string &moduleKe
     if( std::unique_ptr<twPlugin> inst = createAuPlugin( d.path, d.uid ) ) {
         d.io = inst->ioLayout();
 
-        // Scanner version 2 (proposal 36 P2), off the same instance.
+        // Scanner version 2 (proposal 37 P2), off the same instance.
         const twPluginCapabilities caps = inst->capabilities();
         d.acceptsNotes  = caps.acceptsNotes;
         d.emitsNotes    = caps.emitsNotes;

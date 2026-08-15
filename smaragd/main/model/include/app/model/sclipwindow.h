@@ -10,7 +10,7 @@ class SProject;
  * SClipWindow — the WINDOW layer of the clip model, as an interface.
  *
  * CLIP_MODEL.md's three layers are placement (`SLink`), window (`SCut` today,
- * `SMidiCut` from proposal 36 P1) and content. Every windowed verb —
+ * `SMidiCut` from proposal 37 P1) and content. Every windowed verb —
  * split-clip, resize-clip, duplicate-clip, unsplit-clip, set-clip-name,
  * add/remove/select-take — needs exactly the arithmetic below and nothing else
  * that is specific to audio. Before this interface each of them reached for

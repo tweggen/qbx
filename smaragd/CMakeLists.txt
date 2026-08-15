@@ -204,7 +204,7 @@ if(TEST qxa.log_dock_scale)
     set_tests_properties(qxa.log_dock_scale PROPERTIES RUN_SERIAL TRUE)
 endif()
 
-# --- MIDI out (proposal 36 P7b) ----------------------------------------------
+# --- MIDI out (proposal 37 P7b) ----------------------------------------------
 #
 # These four PLAY, in real time, and assert WHEN a MIDI message reached the wire
 # against the audio capture backend's own block log. That makes them

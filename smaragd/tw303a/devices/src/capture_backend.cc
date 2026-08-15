@@ -2,7 +2,7 @@
 
 // The block log below MUST be stamped with the same clock MIDI-out uses, or the
 // testkit could not map a captured MIDI host time onto a project frame at all
-// (proposal 36 D6). Calling hostNowNs() rather than re-deriving steady_clock
+// (proposal 37 D6). Calling hostNowNs() rather than re-deriving steady_clock
 // here is what makes that impossible to break by editing only one of the two.
 #include "tw/devices/midi_out_scheduler.h"
 

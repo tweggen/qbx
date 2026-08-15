@@ -18,7 +18,7 @@ class SEventTimeRuler;
 class SPianoRollView;
 
 /**
- * SEventEditorDock - the event editor's widget (proposal 36 6.2). The fifth
+ * SEventEditorDock - the event editor's widget (proposal 37 6.2). The fifth
  * QDockWidget, bottom, tabified with the Log; the dock itself is created in
  * SMainWindow's constructor, like every other one (shell/CONTRACT invariant 4:
  * restoreWindowLayout() can only restore docks that already exist).

@@ -599,5 +599,5 @@ static const bool s_registered_sstdmixer =
     ( SProjectLoader::registerSObjectClass( "SStdMixer",
           SStdMixer::instantiateFromDomElement,
           // A CONTAINER of tracks: one unloadable track costs its own link,
-          // never the whole mixer — which IS the project (proposal 36 D8a).
+          // never the whole mixer — which IS the project (proposal 37 D8a).
           SElementKind::Container ), true );

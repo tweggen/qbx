@@ -27,7 +27,7 @@ Not part of the dataflow above: `tw/analysis` and `tw/sidecar` (→ core) and
 `tw/metering` (→ core+pages+graph) are leaves consumed by the app and the tests.
 `tw/metering` READS frozen pages by position and never freezes or demands, so it
 hangs off the graph without joining the audio path. `tw/events` (→ core ONLY,
-proposal 36) is the MIDI/event model leaf: events are model data, not pages, so
+proposal 37) is the MIDI/event model leaf: events are model data, not pages, so
 it has no place in the dataflow DAG at all — and it must stay core-only because
 `tw/plugins` (which will consume its event clip set) may not include `tw/mix`.
 

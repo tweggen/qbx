@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P1, AC2. Every event verb, each one followed by an EXPLICIT undo
+  Proposal 37 P1, AC2. Every event verb, each one followed by an EXPLICIT undo
   and the prior assertion - the runner's verify-undo pass compares track counts
   only, so it can see none of this.
 

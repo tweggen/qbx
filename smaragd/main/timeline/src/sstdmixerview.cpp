@@ -104,7 +104,7 @@ void SMVActualView::setSecondWidth( double w )
     upperLeftX_ = (int)( ((double)upperLeftOffset_)/srate*secondWidth_ );
     smv_.viewResized();
     update();
-    // The zoom is part of the px<->frame mapping, and since proposal 36 P4 the
+    // The zoom is part of the px<->frame mapping, and since proposal 37 P4 the
     // event editor's axis mirrors that mapping - so the signal that was a FIXME
     // here is now load-bearing.
     emit secondWidthChanged( secondWidth_ );
@@ -1578,7 +1578,7 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
         if( !stack ) continue;
         // Timeline invariant 2: the canvas does not know clip types. A take
         // lane draws whatever window is on it through the polymorphic renderer
-        // path, so an event take paints like an audio one (proposal 36 P1) -
+        // path, so an event take paints like an audio one (proposal 37 P1) -
         // the SCut cast this replaced silently drew nothing.
         SObject *take = stack->takeObjectAt( row.takeRow );
         if( !take ) continue;                       // this stack has fewer takes
@@ -1875,7 +1875,7 @@ void SMVActualView::ctRangeSetBPM()
         oldTempo, 10., 4000., 1, &ok );
     if( ok && newTempo != oldTempo ) {
         // Through the verb, never the project: set-tempo is the ONLY tempo
-        // write (proposal 36 D2). It also re-derives every beats-timebase
+        // write (proposal 37 D2). It also re-derives every beats-timebase
         // link, which a bare project write would silently skip, and it is
         // what puts a tempo change on the undo stack at all.
         SApplication::app().submitAction( new SSetTempoAction( newTempo ) );
@@ -3511,7 +3511,7 @@ void SStdMixerView::zoomOutVert()
 
 void SStdMixerView::onProjectTempoChanged( double bpmTempo )
 {
-    // The map moved with the tempo; the snap grid reads it (proposal 36 P4).
+    // The map moved with the tempo; the snap grid reads it (proposal 37 P4).
     if( currentSnapSpec_ && model_ )
         currentSnapSpec_->setTempoMap( model_->getProject().tempoMap() );
 
@@ -3599,7 +3599,7 @@ offset_t SSnapSpec::divisionFrames_() const
 
 offset_t SSnapSpec::alignTime( offset_t o )
 {
-    // A named DIVISION wins when there is one (proposal 36 P4). With none, this
+    // A named DIVISION wins when there is one (proposal 37 P4). With none, this
     // is byte-for-byte the pre-36 beat snap, which is what keeps every
     // committed case's snapped positions unchanged.
     if( ( snapMethod_ & SnapToBeats ) ) {
@@ -3691,7 +3691,7 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // Context menu for the time-range bar (top ruler).
     qRangePopup_ = new QMenu( this );
     qRangePopup_->addAction( "Set &BPM...", this, SLOT( ctRangeSetBPM() ) );
-    // Grid division (proposal 36 P4) — the arranger's snap step, named the way
+    // Grid division (proposal 37 P4) — the arranger's snap step, named the way
     // `quantize-notes grid=` and the event editor's grid name one. "Beat" is
     // the empty division, i.e. the pre-36 behaviour.
     {
@@ -3955,7 +3955,7 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
 
 void SMVActualView::dragEnterEvent(QDragEnterEvent *e)
 {
-    // Our own resource drags, plus OS file drops (proposal 36 6.1: a .mid
+    // Our own resource drags, plus OS file drops (proposal 37 6.1: a .mid
     // dragged in from a file manager is the natural way to get one in).
     if (e->mimeData()->hasFormat(QStringLiteral("application/x-smaragd-resource"))
         || e->mimeData()->hasUrls()) {
@@ -3978,7 +3978,7 @@ void SMVActualView::dropEvent(QDropEvent *e)
         payload = QString::fromUtf8(
             mimeData->data(QStringLiteral("application/x-smaragd-resource")));
     } else if (mimeData->hasUrls()) {
-        // An OS file drop (proposal 36 6.1). Normalised into the same "file:"
+        // An OS file drop (proposal 37 6.1). Normalised into the same "file:"
         // payload the internal drag uses, so there is one placement path and
         // one extension dispatch below it - a .mid becomes an event clip
         // because SProject::linkToFile says so, not because this branch knows.
@@ -4208,7 +4208,7 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     currentSnapSpec_ = new SSnapSpec( timeGridSpec_ );
     if( model_ ) {
         currentSnapSpec_->setSampleRate( model_->getProject().getSRate() );
-        // THE tempo authority (proposal 36 D2). The snap spec converts a named
+        // THE tempo authority (proposal 37 D2). The snap spec converts a named
         // division through it, never through 60/bpm.
         currentSnapSpec_->setTempoMap( model_->getProject().tempoMap() );
     }

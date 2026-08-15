@@ -15,7 +15,7 @@ int SLink::serializeSelfAttributes( QTextStream &o )
         o << " startTime='" << QString::fromStdString( startTimeFrac.toString() ) << "'";
     }
     // Written only when it is NOT the default for this content kind, so every
-    // audio project written before proposal 36 re-serializes byte-identically
+    // audio project written before proposal 37 re-serializes byte-identically
     // (persistence invariant 4) and an event clip needs no attribute either.
     if( timebase_ != defaultTimebaseFor( object_ ) ) {
         o << " timebase='"

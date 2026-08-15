@@ -6,7 +6,7 @@
 #include "tw/core/twtypes.h"
 
 /**
- * SEventTimeAxis - the event editor's horizontal time axis (proposal 36 6.2).
+ * SEventTimeAxis - the event editor's horizontal time axis (proposal 37 6.2).
  *
  * ONE px<->frame conversion, and it is deliberately the SAME arithmetic
  * SMVActualView::getXPosOfOffset / getTimeOf use (timeline invariant 4: pixel

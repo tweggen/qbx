@@ -74,7 +74,7 @@ public:
     int getNBusses() const { return nBusses_; }
     SPluginChain *getPluginChain() const { return cpPluginChain_; }
 
-    // --- events (proposal 36 3.2 / 3.2.1) ---------------------------------
+    // --- events (proposal 37 3.2 / 3.2.1) ---------------------------------
     //
     // A track holds no KIND (D3): it takes whatever clips it is given, and it
     // routes them by their material. An `SObject::contentKind() == Event`
@@ -117,7 +117,7 @@ public:
     bool hasEventClips() const;
     /** Slot 0 of the plugin chain when it carries an instrument, else null. */
     SPluginSlot *instrumentSlot() const;
-    /** Whether this track sends its feed to a MIDI port (proposal 36 P7b). */
+    /** Whether this track sends its feed to a MIDI port (proposal 37 P7b). */
     bool hasMidiOut() const { return !midiOutPort_.isEmpty(); }
 
     // --- MIDI output (D6 / P7b) -------------------------------------------
@@ -242,7 +242,7 @@ private:
     MidiRouting                     midiRouting_ = MidiRouting::Auto;
     // MIDI output (P7b). Portable NAME + 0-based channel (-1 = as authored) +
     // signed send offset in ms. Serialized only when non-default, so every
-    // project written before proposal 36 re-serializes byte-identically.
+    // project written before proposal 37 re-serializes byte-identically.
     QString                         midiOutPort_;
     int                             midiOutChannel_ = -1;
     int                             midiOutOffsetMs_ = 0;

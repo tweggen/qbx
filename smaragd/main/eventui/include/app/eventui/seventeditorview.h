@@ -19,7 +19,7 @@ class SProject;
 
 /**
  * SEventEditorView - the abstract face every event editor presents to the dock
- * (proposal 36 6.2).
+ * (proposal 37 6.2).
  *
  * The dock owns the toolbar, the ruler and the CLIP PATH; a view owns nothing
  * but a way to draw a snapshot of that clip and a way to commit an edit. That
@@ -134,7 +134,7 @@ protected:
 };
 
 /**
- * The KIND REGISTRY (proposal 36 6.2). A view kind registers itself from a
+ * The KIND REGISTRY (proposal 37 6.2). A view kind registers itself from a
  * static initializer in its own .cpp, exactly as the actions and the loader
  * factories do - which is why `app_ui` must stay an OBJECT library.
  *

@@ -23,7 +23,7 @@ struct MidiPortInfo {
 // The output half of the device layer, mirroring AudioBackend's shape: a thin,
 // format-agnostic wire for raw MIDI bytes, with the platform behind it.
 //
-// Threading (proposal 36 D6): every method here is called from EXACTLY ONE
+// Threading (proposal 37 D6): every method here is called from EXACTLY ONE
 // thread at a time. In the app that thread is MidiOutScheduler's — the
 // scheduler is the sole sender, so a backend needs no lock of its own; the
 // control-plane calls (open/close/createVirtualPort) happen with the scheduler
@@ -76,7 +76,7 @@ public:
 // the platform choice, an unknown value warns and falls back to the platform,
 // `default` (or unset) IS the platform. A --test-case run is expected to set it
 // to `capture` before the app exists unless it is already set (the app half of
-// that lives in main.cpp — proposal 36 P7b).
+// that lives in main.cpp — proposal 37 P7b).
 std::unique_ptr<MidiOutput> createMidiOutput();
 
 // The same selection, named explicitly — for a settings dialog or a test that

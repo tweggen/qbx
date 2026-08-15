@@ -12,7 +12,7 @@
 
 /**
  * SPianoRollView - the first registered event editor kind ("pianoroll",
- * proposal 36 6.2).
+ * proposal 37 6.2).
  *
  * ONE widget, three horizontal BANDS, one set of mouse handlers that dispatch
  * on which band the press landed in:

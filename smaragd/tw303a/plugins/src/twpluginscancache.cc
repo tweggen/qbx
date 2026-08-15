@@ -47,7 +47,7 @@ QJsonObject descriptorToJson( const twPluginDescriptor &d )
     o["nIn"]          = (int) d.io.audioInputs;
     o["nOut"]         = (int) d.io.audioOutputs;
     o["isInstrument"] = d.isInstrument;
-    // Proposal 36 P2 (scanner version 2). Written unconditionally so a record
+    // Proposal 37 P2 (scanner version 2). Written unconditionally so a record
     // is self-describing; a v1 file can never be read as a v2 one anyway
     // (scannerVersion is part of the cache key, invariant 9).
     o["acceptsNotes"]  = d.acceptsNotes;
@@ -76,7 +76,7 @@ bool descriptorFromJson( const QJsonObject &o, twPluginDescriptor &d )
     d.io.audioOutputs = (std::uint16_t) o.value( "nOut" ).toInt( 0 );
     d.isInstrument = o.value( "isInstrument" ).toBool( false );
 
-    // Proposal 36 P2. Defaults are the pre-36 answers ("no events, one output
+    // Proposal 37 P2. Defaults are the pre-36 answers ("no events, one output
     // bus if it has outputs at all"), so a record written by a probe that
     // predates a field degrades to today's behaviour rather than to nonsense.
     d.acceptsNotes  = o.value( "acceptsNotes" ).toBool( false );

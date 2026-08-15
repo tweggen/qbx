@@ -308,7 +308,7 @@ private:
     std::vector<Point>      points_;
 };
 
-// --- IEventList (proposal 36 P2) ----------------------------------------------
+// --- IEventList (proposal 37 P2) ----------------------------------------------
 //
 // The note lane, in both directions. Borrowed and pre-sized in prepare(), for
 // the same reason twVst3ParamChanges is: process() must not allocate.

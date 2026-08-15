@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P1, AC3. `set-tempo` moves MIDI and leaves audio where it is.
+  Proposal 37 P1, AC3. `set-tempo` moves MIDI and leaves audio where it is.
 
   This is the whole point of D2's `SLink::timebase`. An event clip is placed on
   the BEAT (`timebase=beats`, the default for event content, REAPER's default

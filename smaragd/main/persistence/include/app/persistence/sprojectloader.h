@@ -12,7 +12,7 @@ typedef QHash<QString,SLink*> SObjectDictionary;
 
 /**
  * How the leftover sweep may repair an element whose <SLink objectId='…'>
- * names an object the file does not contain (proposal 36 D8a).
+ * names an object the file does not contain (proposal 37 D8a).
  *
  *  Plain     — drop the ELEMENT (the historic behaviour; it is the only safe
  *              answer for a type the loader knows nothing structural about).

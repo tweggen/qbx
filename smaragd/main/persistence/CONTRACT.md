@@ -80,7 +80,7 @@ Invariants:
    crash on the SECOND open attempt, the first attempt's last log line being a
    preview recompute.
 
-6b. THE RECOVERY IS PER ELEMENT KIND, AND IT ITERATES (proposal 36 D8a).
+6b. THE RECOVERY IS PER ELEMENT KIND, AND IT ITERATES (proposal 37 D8a).
    Invariant 6(b)'s single sweep dropped every leftover at once, which
    cascaded: a missing sample killed its `<SCut>`, the cut killed the
    `<STrack>` that placed it, the track killed the `<SStdMixer>`, and the load
@@ -111,7 +111,7 @@ Invariants:
    `load_unknown_object_survives.qxa`, `load_missing_sample_placed_survives.qxa`.
 
 6c. An `<SMidiSequence>` carries its events as an INLINE `<events>` payload
-   (proposal 36 3.1). That is the sanctioned non-`<SLink>` child: the
+   (proposal 37 3.1). That is the sanctioned non-`<SLink>` child: the
    instantiation loop's dependency ordering only looks at `<SLink objectId>`
    children, so a payload element is invisible to it and must stay that way.
    Note data is inline rather than file-referenced ON PURPOSE - it is the one
@@ -119,9 +119,9 @@ Invariants:
    imported `.mid` is materialised on the first save and the file is never
    consulted again.
 
-7b. `<SProject formatVersion='N'>` (proposal 36 D8a). Written unconditionally
+7b. `<SProject formatVersion='N'>` (proposal 37 D8a). Written unconditionally
    (`SProject::FORMAT_VERSION`, 2 today); read with a default of **1**, which
-   is what every pre-proposal-36 file is. A HIGHER version is warned about and
+   is what every pre-proposal-37 file is. A HIGHER version is warned about and
    then read anyway — a reader that refused would strand a user's file on
    whichever build they happen to have, while an element it does not know is
    already skipped by name with its own warning. Nothing branches on the

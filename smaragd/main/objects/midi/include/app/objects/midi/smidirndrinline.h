@@ -7,7 +7,7 @@ class SMidiCut;
 class SMidiSequence;
 
 /**
- * The event-clip thumbnail (proposal 36 6.1).
+ * The event-clip thumbnail (proposal 37 6.1).
  *
  * It joins the arranger through the existing polymorphic path
  * (`STrackRendererInline` -> `lk->getSObject().getInlineRenderer()->draw()`,

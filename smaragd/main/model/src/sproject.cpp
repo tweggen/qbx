@@ -67,7 +67,7 @@ int SProject::serialize( QTextStream &o )
 
 int SProject::serializeSelfAttributes( QTextStream &o )
 {
-    // Wire-format version (proposal 36 D8a). Written unconditionally, read
+    // Wire-format version (proposal 37 D8a). Written unconditionally, read
     // with a default of 1, never a reason to refuse a document — see
     // SProject::FORMAT_VERSION.
     o << " formatVersion='" << FORMAT_VERSION << "'";

@@ -9,7 +9,7 @@
 #include "app/objects/midi/smidisequence.h"
 
 /**
- * The event-content verbs (proposal 36 3.4).
+ * The event-content verbs (proposal 37 3.4).
  *
  * ONE mutator sits under all of them - `SMidiSequence::setEvents`, an absolute
  * new table - so every inverse is the same thing: a `set-events` carrying the

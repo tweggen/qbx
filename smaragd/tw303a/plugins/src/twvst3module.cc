@@ -451,7 +451,7 @@ std::vector<twPluginDescriptor> vst3ModuleDescriptors( const std::string &path )
         if( std::unique_ptr<twPlugin> inst = createVst3Plugin( path, d.uid ) ) {
             d.io = inst->ioLayout();
 
-            // Scanner version 2 (proposal 36 P2): the event buses and the aux
+            // Scanner version 2 (proposal 37 P2): the event buses and the aux
             // audio outs, read off the SAME instance the I/O came from.
             const twPluginCapabilities caps = inst->capabilities();
             d.acceptsNotes  = caps.acceptsNotes;

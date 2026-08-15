@@ -25,7 +25,7 @@ namespace audio {
 //     they then appear as ordinary devices. createVirtualPort() returns false.
 //   - TIMESTAMPED SEND. midiOutShortMsg sends NOW. supportsTimestamps() is
 //     false, so MidiOutScheduler holds each message until it is due and eats
-//     the ±1 ms of pacing jitter itself (proposal 36 D6, explicitly not gated).
+//     the ±1 ms of pacing jitter itself (proposal 37 D6, explicitly not gated).
 class WinMMMidiOutput : public MidiOutput {
 public:
     ~WinMMMidiOutput() override;

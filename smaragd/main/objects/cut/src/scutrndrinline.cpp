@@ -256,7 +256,7 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     // plays.
     // A cut whose content has no random source is a CONTAINER capture (a live
     // asset over a track or the mixer) - unless the content is not audio at
-    // all, which is the case proposal 36 added: an event object also answers
+    // all, which is the case proposal 37 added: an event object also answers
     // null here, and drawing its "rendered output" would be a waveform of
     // silence. Ask what the material IS (contentKind) before asking how it is
     // read, so the heuristic cannot mistake a second content kind for an asset.

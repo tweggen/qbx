@@ -10,7 +10,7 @@
  * the part of the downstream chain the edit can be heard in (proposal 18
  * Phase 5). tw/mix's twEditRange is the same shape for the audio clip list;
  * this one lives in core so a module that may not depend on tw/mix — tw/events,
- * because tw/plugins may not include tw/mix (proposal 36 F15) — can return the
+ * because tw/plugins may not include tw/mix (proposal 37 F15) — can return the
  * same thing without inventing a second type.
  *
  * Signed, like offset_t: a range may start before zero (a clip anchored ahead

@@ -20,7 +20,7 @@ class QTimer;
 // The tree item and the stack page for a category MUST be added in the same
 // order: the mapping is by top-level index, nothing else.
 //
-// The MIDI page (proposal 36 P7b) mirrors the Audio one deliberately: the same
+// The MIDI page (proposal 37 P7b) mirrors the Audio one deliberately: the same
 // build/load/apply triple, the same "the device list comes from the backend"
 // rule. It asks SApplication's MIDI-out pump for the port lists rather than
 // minting a MidiOutput of its own - the capture backend registers the most
@@ -91,7 +91,7 @@ private:
     QCheckBox *logToFile_;
     QLabel    *logPathLabel_;
 
-    // MIDI page (proposal 36 P7b). `midiVirtualBtn_` is DISABLED where the
+    // MIDI page (proposal 37 P7b). `midiVirtualBtn_` is DISABLED where the
     // backend has no virtual-port concept (WinMM - tw/devices CONTRACT inv.
     // 18), the same "gate the offer on the capability, not on the platform"
     // shape the MP3 render option uses.

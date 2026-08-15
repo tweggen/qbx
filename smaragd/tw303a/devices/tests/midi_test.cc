@@ -1,4 +1,4 @@
-// tw/devices module test: the MIDI device layer (proposal 36 P7a).
+// tw/devices module test: the MIDI device layer (proposal 37 P7a).
 //
 // What it pins, and why each of these is here rather than in a qxa case:
 //   1. The scheduler actually sends AT the due time. A qxa case can only see

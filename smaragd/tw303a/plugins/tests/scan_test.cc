@@ -254,12 +254,12 @@ int main( int argc, char **argv )
 
     // ---- 6b: AC7 — a version-1 cache is invalidated and rescanned ONCE -------
     //
-    // kScannerVersion went 1 -> 2 in proposal 36 P2, because the descriptor
+    // kScannerVersion went 1 -> 2 in proposal 37 P2, because the descriptor
     // gained fields a v1 record cannot supply. The concrete promise is: an
     // existing plugincache.json from the previous build is thrown away, every
     // module is re-probed exactly once, and the SECOND scan is a cache hit again
     // — i.e. the invalidation is a one-off, not a permanent cold start.
-    std::cout << "=== a scanner-v1 cache is invalidated once (proposal 36 P2) ===" << std::endl;
+    std::cout << "=== a scanner-v1 cache is invalidated once (proposal 37 P2) ===" << std::endl;
     {
         const QString v1Cache = QDir( root ).filePath( "plugincache_v1.json" );
 
@@ -419,7 +419,7 @@ int main( int argc, char **argv )
             audio::check( s.modulesProbed == 1, "...and probes it" );
             audio::check( s.modulesFailed == 0, "...successfully" );
 
-            // TWO vst3 descriptors since proposal 36 P2 (the gain effect and
+            // TWO vst3 descriptors since proposal 37 P2 (the gain effect and
             // the SPLIT sine instrument); the instrument's controller class is
             // not an audio-effect class and must not appear.
             const std::vector<twPluginDescriptor> all = reg.plugins();

@@ -8,7 +8,7 @@
 
 /**
  * `set-track-midi-output` - where this track's event FEED goes on the wire
- * (proposal 36 D6, 3.2 / 3.4). ABSOLUTE, like every other track flag: it
+ * (proposal 37 D6, 3.2 / 3.4). ABSOLUTE, like every other track flag: it
  * carries the whole state, and its inverse carries the previous whole state.
  *
  *   port      - a PORTABLE device NAME, never a machine-local id. WinMM device

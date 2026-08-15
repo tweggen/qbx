@@ -65,7 +65,7 @@ domains. Learn the table, then the rules.
 
 7. **An `SMidiCut` speaks FRAMES on every side the track sees, and the
    tick→frame conversion happens exactly ONCE per value, inside the cut**
-   (proposal 36 D2). The window is stored in musical ticks — that is what makes
+   (proposal 37 D2). The window is stored in musical ticks — that is what makes
    a tempo change keep the same notes inside the clip — but `getDuration()`,
    `loopLength()`, `startOffset()`, `SLink::startTime` and the event sequence
    the engine reads are all frames, derived in one place

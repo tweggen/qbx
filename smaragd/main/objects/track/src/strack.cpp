@@ -53,10 +53,10 @@ int STrack::serializeSelfAttributes( QTextStream &o )
         o << " pluginChainId='"
           << reinterpret_cast<std::uintptr_t>( (SObject *) cpPluginChain_ ) << "'";
     // Written only when it is not the default, so every project written before
-    // proposal 36 re-serializes byte-identically (persistence invariant 4).
+    // proposal 37 re-serializes byte-identically (persistence invariant 4).
     if( midiRouting_ != MidiRouting::Auto )
         o << " midiRouting='" << midiRoutingToString( midiRouting_ ) << "'";
-    // MIDI output (proposal 36 P7b), each written only when it is not the
+    // MIDI output (proposal 37 P7b), each written only when it is not the
     // default, for the same byte-identity reason as midiRouting above. The
     // PORT is the portable NAME; the machine-local device id lives in
     // SSettings, keyed by that name.
@@ -837,13 +837,13 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     data = element.attribute( "nBusses", "1" );
     setNBusses( data.toInt() );
     
-    // Absent = auto, which is what every project written before proposal 36
+    // Absent = auto, which is what every project written before proposal 37
     // means and what a track without a serialized routing should do.
     midiRouting_ = midiRoutingFromString(
         element.attribute( "midiRouting", "auto" ) );
 
     // MIDI output (P7b). Absent = no output, which is what every project
-    // written before proposal 36 means.
+    // written before proposal 37 means.
     setMidiOutput( element.attribute( "midiOutPort", "" ),
                    element.attribute( "midiOutChannel", "-1" ).toInt(),
                    element.attribute( "midiOutOffsetMs", "0" ).toInt() );
@@ -1087,5 +1087,5 @@ static const bool s_registered_strack =
     ( SProjectLoader::registerSObjectClass( "STrack",
           STrack::instantiateFromDomElement,
           // A CONTAINER of clips and nested lanes: one unloadable clip costs
-          // its own link, never the track (proposal 36 D8a).
+          // its own link, never the track (proposal 37 D8a).
           SElementKind::Container ), true );

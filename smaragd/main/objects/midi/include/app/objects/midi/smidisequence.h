@@ -20,7 +20,7 @@ class SProjectLoader;
 class twComponent;
 
 /**
- * SEvent - one event as the MODEL stores and persists it (proposal 36 3.1).
+ * SEvent - one event as the MODEL stores and persists it (proposal 37 3.1).
  *
  * It is deliberately the same vocabulary as the engine's `twEvent` (kind,
  * channel, key, value/value2, duration, paramId) rather than a second one:

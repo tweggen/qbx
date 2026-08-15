@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P7b, AC4. A RENDER EMITS NOTHING (design D6).
+  Proposal 37 P7b, AC4. A RENDER EMITS NOTHING (design D6).
 
   This is the metering lesson (proposal 34) in its sharpest form. A render has
   no playhead at all, and its pages are frozen as fast as the machine can

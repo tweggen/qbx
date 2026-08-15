@@ -25,7 +25,7 @@
 // re-sends *every* parameter from the mirror. Parameters are last-value-wins, so
 // a full resync is always a correct substitute for a backlog.
 //
-// EVENTS (proposal 36 P2)
+// EVENTS (proposal 37 P2)
 // -----------------------
 // process(..., twEventList, twEventOut, twProcessContext) translates the host's
 // format-free twEvents into CLAP events, appended AFTER the parameter ring's
@@ -304,7 +304,7 @@ const clap_host_tail_t twClapPlugin::s_hostTail = {
 
 const void *twClapPlugin::hostGetExtension( const clap_host_t *, const char *id )
 {
-    // Only what we genuinely implement (proposal 36 §5.2). Claiming an
+    // Only what we genuinely implement (proposal 37 §5.2). Claiming an
     // extension we answer with nothing useful is how a plugin ends up in a
     // state the host never leaves — e.g. a plugin that sees clap.host-params
     // and stops polling.
@@ -344,7 +344,7 @@ void twClapPlugin::hostParamsRescan( const clap_host_t *h, clap_param_rescan_fla
 void twClapPlugin::hostParamsClear( const clap_host_t *, clap_id, clap_param_clear_flags )
 {
     // We keep no per-parameter automation state inside the backend, so there is
-    // nothing to clear. The app's automation lanes are proposal 36 P5.
+    // nothing to clear. The app's automation lanes are proposal 37 P5.
 }
 
 void twClapPlugin::hostParamsRequestFlush( const clap_host_t *h )
@@ -400,7 +400,7 @@ const clap_event_header_t *twClapPlugin::eventsGet( const clap_input_events_t *l
 bool twClapPlugin::outEventsTryPush( const clap_output_events_t *list,
                                      const clap_event_header_t  *h )
 {
-    // Proposal 36 P2: the plugin's own events reach the host's twEventOut when
+    // Proposal 37 P2: the plugin's own events reach the host's twEventOut when
     // one is supplied (the event-aware process() overload). The legacy overload
     // supplies none, so it still DISCARDS — deliberately, because that path
     // must keep producing exactly what it produced before.
@@ -643,7 +643,7 @@ void twClapPlugin::readPortLayout()
         (std::uint16_t)( mainOutPort_ >= 0 ? outPortChans_[(size_t)mainOutPort_] : 0 );
 }
 
-// clap.note-ports, and the DIALECT decision (proposal 36 §5.2).
+// clap.note-ports, and the DIALECT decision (proposal 37 §5.2).
 //
 // A port declares a bitfield of dialects it understands and a preferred one.
 // We speak CLAP and MIDI 1; MPE and MIDI 2 are not translated, so a port that
@@ -1001,7 +1001,7 @@ void twClapPlugin::drainEditsIntoEvents()
         eventPtrs_[i] = &events_[i].header;
 }
 
-// Translate the host's twEvents and APPEND them to events_ (proposal 36 §5.2).
+// Translate the host's twEvents and APPEND them to events_ (proposal 37 §5.2).
 //
 // Ordering: everything drainEditsIntoEvents() produced is at time 0 and the
 // host list is sorted with times >= 0, so appending keeps the whole list sorted
@@ -1214,7 +1214,7 @@ void twClapPlugin::process( const float *const *in, float *const *const *outBuse
                             twEventOut &eventsOut, const twProcessContext &ctx )
 {
     // Only the MAIN bus is wired: bus > 0 is aux output, which nothing consumes
-    // yet (proposal 36 §5.4). Reading outBuses[0] is what the legacy overload
+    // yet (proposal 37 §5.4). Reading outBuses[0] is what the legacy overload
     // always did.
     float *const *out = ( outBuses && !outPortChans_.empty() ) ? outBuses[0] : nullptr;
 
@@ -1270,7 +1270,7 @@ void twClapPlugin::process( const float *const *in, float *const *const *outBuse
         outBufs_[(std::size_t)mainOutPort_].data32 =
             mainOutPtrs_.empty() ? nullptr : mainOutPtrs_.data();
 
-    // Transport (proposal 36 §5.2). Built only from what the context CLAIMS to
+    // Transport (proposal 37 §5.2). Built only from what the context CLAIMS to
     // know: an all-invalid context (which is what the legacy overload passes)
     // leaves p.transport nullptr, exactly as before. steady_time stays -1 —
     // pages are frozen out of order, so a monotonic sample clock would be a

@@ -40,7 +40,7 @@ Invariants:
    positions faster than realtime) but DOES run while recording (monitoring
    playback is live). Consequence, deliberate: meters trail the DRAWN playhead
    by the device latency, because the playhead itself is uncompensated.
-7. MIDI-out pump (proposal 36 P7b): `SMidiOutPump`, a 20 ms main-thread
+7. MIDI-out pump (proposal 37 P7b): `SMidiOutPump`, a 20 ms main-thread
    QTimer started by `setPlaying(true)` and stopped by `setPlaying(false)`.
    It reads the playhead, slices every MIDI-out track's `STrack::eventFeed()`
    over a 250 ms lookahead, and enqueues into a per-port `MidiOutScheduler`.
@@ -80,7 +80,7 @@ Invariants:
 7. **Docks are created in the CONSTRUCTOR, with a stable objectName**, or
    `restoreWindowLayout()` cannot restore them (inv. 4). There are now six:
    `dock_extern_file_list`, `dock_track_detail`, `dock_log`,
-   `dock_clip_properties`, and — since proposal 36 P4 —
+   `dock_clip_properties`, and — since proposal 37 P4 —
    `dock_event_editor` (bottom, tabified with the Log) and
    `dock_virtual_keyboard` (bottom, tabified with the editor). Both start
    hidden; the View menu carries their toggles (Ctrl+Shift+E for the editor).

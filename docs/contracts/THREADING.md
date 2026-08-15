@@ -15,7 +15,7 @@
 | MIDI device thread | the platform MIDI input (WinMM callback / CoreMIDI read proc / ALSA-seq poll) | delivers received bytes to `MidiInputCallback` | **NO** |
 | MIDI-out pump | `SApplication`'s `SMidiOutPump` QTimer (20 ms) | reads the playhead, slices each MIDI-out track's event FEED over a 250 ms window, enqueues `{dueHostTimeNs, bytes}` into `MidiOutScheduler` | yes (it IS the main thread) |
 
-The MIDI-out pump is on this list to make the SEAM explicit: it is the single producer into `MidiOutScheduler`'s lock-free ring, and it is on the main thread, so everything above the ring may use Qt freely and everything below it may not. MIDI-out is emitted at PLAY time and only at play time — never at freeze time (proposal 36 D6, the proposal-34 metering lesson verbatim: pages are frozen ~1.4 s ahead of the playhead, and by renders that have no playhead at all).
+The MIDI-out pump is on this list to make the SEAM explicit: it is the single producer into `MidiOutScheduler`'s lock-free ring, and it is on the main thread, so everything above the ring may use Qt freely and everything below it may not. MIDI-out is emitted at PLAY time and only at play time — never at freeze time (proposal 37 D6, the proposal-34 metering lesson verbatim: pages are frozen ~1.4 s ahead of the playhead, and by renders that have no playhead at all).
 
 ## Rule 1 — no Qt off the main thread. Ever.
 

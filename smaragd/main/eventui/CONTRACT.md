@@ -3,7 +3,7 @@
 Purpose: the EVENT EDITOR — the piano roll and the widgets around it
 (`SEventEditorDock`: toolbar + `SEventTimeRuler` + a view from the kind
 registry; `SEventEditorView` + `SPianoRollView`; `SEventTimeAxis`), and the
-`SVirtualKeyboardDock`. Proposal 36 P4, design §6.2 and §6.3.
+`SVirtualKeyboardDock`. Proposal 37 P4, design §6.2 and §6.3.
 
 Public headers: app/eventui/*.h
 
@@ -89,12 +89,12 @@ Known debt:
 - **CC lanes are draw-one-point, not curve editing.** A press in a CC lane
   sets one controller value at the snapped tick through `set-events`; there is
   no line tool, no ramp, no selection. Curve drawing arrives with the
-  automation UI (proposal 36 P6), which needs the same gestures.
+  automation UI (proposal 37 P6), which needs the same gestures.
 - **No zoom of its own.** The vertical key height is fixed (8 px) and the
   horizontal axis is the arranger's. Unlinking the axis works, but there is no
   UI to zoom the unlinked axis yet.
 - **Nothing sounds.** The editor writes notes; hearing them needs the
-  instrument slot (proposal 36 P3b). `virtual-key` therefore inserts rather
+  instrument slot (proposal 37 P3b). `virtual-key` therefore inserts rather
   than previews, and there is no note-preview-on-click.
 - The `SStepGridView` (tracker) and score kinds named in design §6.2 are not
   built; the registry exists so they are additions rather than surgery.

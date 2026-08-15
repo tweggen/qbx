@@ -363,7 +363,7 @@ static const bool s_reg_stakestack = (
     SProjectLoader::registerSObjectClass(
         "STakeStack", STakeStack::instantiateFromDomElement,
         // A CONTAINER of takes: one unloadable take costs its own link, never
-        // the column and its siblings (proposal 36 D8a).
+        // the column and its siblings (proposal 37 D8a).
         SElementKind::Container ), true );
 
 // ---------------------------------------------------------------------------

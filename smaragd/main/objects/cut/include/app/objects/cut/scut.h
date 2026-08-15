@@ -288,7 +288,7 @@ public:
     const twGrainParams &getGrainParams() const { return grainParams_; }
     void setGrainParams( const twGrainParams & );
 
-    // --- SClipWindow (proposal 36 D8b) -----------------------------------
+    // --- SClipWindow (proposal 37 D8b) -----------------------------------
     //
     // The window arithmetic every windowed verb needs, expressed without
     // naming SCut. Each one FORWARDS to the member above it: this is a

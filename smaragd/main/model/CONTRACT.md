@@ -77,7 +77,7 @@ Invariants:
    One probe means the same thing either way: the signed min/max envelope
    of its previewSkip_ window, scaled to [-128,127].
 10. `SObject::contentKind()` says what an object's material IS (Audio or
-   Event, proposal 36 D8b); the default is Audio, because everything that
+   Event, proposal 37 D8b); the default is Audio, because everything that
    existed before event clips is. It is NOT a track kind — a track holds
    whatever clips it is given — and nothing above the clip branches on it.
    Two things consume it: `SClipWindow::wrapContent()` picks the window type
@@ -100,7 +100,7 @@ Invariants:
    verb. The per-kind wrap factory is registered from the slice that owns the
    window type (static initializer, OBJECT-library rule), so the model still
    names no concrete object type.
-11b. **`SLink::timebase` and the tempo map** (proposal 36 D2). `SProject`
+11b. **`SLink::timebase` and the tempo map** (proposal 37 D2). `SProject`
    holds ONE `twTempoMap`; `getBPMTempo()` is a derived view of it and there is
    no second tempo scalar (a stored `60/bpm` and a stored µs/quarter disagree
    in the tenth microsecond, which lands on a frame boundary in a long

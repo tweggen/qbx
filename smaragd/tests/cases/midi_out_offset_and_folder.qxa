@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P7b, AC3b. The PER-TRACK SEND OFFSET and the FOLDER FEED (D6,
+  Proposal 37 P7b, AC3b. The PER-TRACK SEND OFFSET and the FOLDER FEED (D6,
   design 3.2.1). Both are asserted in one playback run, on two different MIDI
   channels, because they are independent of each other and the run is the
   expensive part.

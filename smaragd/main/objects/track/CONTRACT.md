@@ -10,7 +10,7 @@ Public headers: app/objects/track/*.h
 Depends on (engine): tw/core, tw/graph, tw/mix, tw/plugins, tw/events. App
 edges: per tools/check_layering.py. NOT app/objects/midi, deliberately: the
 track consults MIDI-ness only through SObject::contentKind() and
-SObject::resolveEventClip() (proposal 36 3.5).
+SObject::resolveEventClip() (proposal 37 3.5).
 
 Invariants (normative detail: CLIP_MODEL.md):
 1. Clips are keyed by SLink* in every insertClip/updateClip/removeClip —
@@ -76,14 +76,14 @@ Invariants (normative detail: CLIP_MODEL.md):
    project machine-specific. SPluginSlot::serializeSelfAttributes calls
    SObject::serializeSelfAttributes FIRST — that is what emits id=, and without
    it SProjectLoader::createObjects aborts the WHOLE load.
-9. MIDI output (proposal 36 P7b) is three serialized attributes and nothing
+9. MIDI output (proposal 37 P7b) is three serialized attributes and nothing
    more: `midiOutPort` is a PORTABLE device NAME (never a machine-local id —
    `SSettings` maps the name to a WinMM index / CoreMIDI uniqueID / ALSA
    "client:port" per machine, the same split the audio output device uses),
    `midiOutChannel` is 0-BASED 0..15 with -1 meaning "as authored", and
    `midiOutOffsetMs` is a signed +-500 ms send offset where POSITIVE means SEND
    EARLIER. All three are written ONLY when they are not the default, so every
-   project written before proposal 36 re-serializes byte-identically. The track
+   project written before proposal 37 re-serializes byte-identically. The track
    itself opens no port and sends nothing: `SMidiOutPump` (main/shell) reads
    `hasMidiOut()` and the feed.
 10. hasMidiOut() feeds `bubblesEventsUp()`, so GAINING OR LOSING A PORT changes

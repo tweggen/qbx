@@ -8,7 +8,7 @@
 #include <string>
 
 /**
- * tw/plugins — the EVENT half of the plugin ABI (proposal 36 §5.1, P2).
+ * tw/plugins — the EVENT half of the plugin ABI (proposal 37 §5.1, P2).
  *
  * This header is deliberately format-free (plugins/CONTRACT.md invariant 4).
  * There is no clap_*, no Steinberg::, no AudioUnit type anywhere in it, and
@@ -18,7 +18,7 @@
  * same type (ODR/ABI skew).
  *
  * It also does not define an event. `twEvent` and `twEventKind` come from
- * tw/events/twevent.h and are THE ones (proposal 36 §4.1, review #2): the
+ * tw/events/twevent.h and are THE ones (proposal 37 §4.1, review #2): the
  * sequence snapshots, the event clip set, this ABI and the MIDI-out pump all
  * quote the same struct. That is why tw_plugins links tw_events.
  *
@@ -174,7 +174,7 @@ private:
 
 // ---------------------------------------------------------------------------
 // twProcessContext — where in the project this call is, and what the transport
-// is doing (proposal 36 F5: today NOTHING reaches a plugin, so an arpeggiator
+// is doing (proposal 37 F5: today NOTHING reaches a plugin, so an arpeggiator
 // cannot sync and a plugin's own position is free-running).
 //
 // `validFlags` is not decoration: a host that does not know the tempo must say
@@ -237,7 +237,7 @@ struct twPluginCapabilities {
 //
 // The main bus is what twPluginIoLayout::audioOutputs already describes; the
 // rest are aux outputs, which every backend has been reading and DISCARDING
-// since proposal 08. Reporting them is what proposal 36 §5.4 needs to route an
+// since proposal 08. Reporting them is what proposal 37 §5.4 needs to route an
 // aux tap to a return track later; nothing consumes bus > 0 yet.
 // ---------------------------------------------------------------------------
 struct twPluginBusInfo {

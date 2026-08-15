@@ -6,7 +6,7 @@
 #include "app/actions/saction.h"
 
 /**
- * Headless coverage for MIDI OUT (proposal 36 D6 / P7b).
+ * Headless coverage for MIDI OUT (proposal 37 D6 / P7b).
  *
  * THE MEASUREMENT IS INDEPENDENT OF THE THING MEASURED, and that is the whole
  * point of the arrangement (design review #12). Two recorders, written by two

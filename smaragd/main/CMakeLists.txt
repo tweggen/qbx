@@ -243,7 +243,7 @@ set(APP_UI_FILES
     timeline/src/slevelmeter.cpp
     timeline/src/strackheaderresizer.cpp
     timeline/src/szoomscrollbar.cpp
-    # --- app/eventui (proposal 36 P4)
+    # --- app/eventui (proposal 37 P4)
     eventui/include/app/eventui/seventeditordock.h
     eventui/include/app/eventui/seventeditorview.h
     eventui/include/app/eventui/seventtimeaxis.h

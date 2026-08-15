@@ -10,7 +10,7 @@
       track1 -> cut1 -> wave1 (../test_sawtooth.wav)   good, audible
              -> cut2 -> wave2 (nowhere on any machine) dead
 
-  Before proposal 36 D8a that lost EVERYTHING. wave2 could not be
+  Before proposal 37 D8a that lost EVERYTHING. wave2 could not be
   instantiated, so cut2 could never resolve, so track1 could never resolve,
   so the mixer could not either, and the load ended on "root component of
   project was not found". The prune-and-retry sweep repairs by element kind

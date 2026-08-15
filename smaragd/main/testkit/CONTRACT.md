@@ -136,7 +136,7 @@ Invariants:
       default: an underrun leaves a short zero gap that leaks energy into other
       bins, and the argmax is still the right block.
 
-MIDI-out assertions (proposal 36 P7b):
+MIDI-out assertions (proposal 37 P7b):
   A --test-case run also selects the CAPTURE MIDI ports (main.cpp sets
   SMARAGD_MIDI_BACKEND=capture unless it is already set), for the audio
   backend's three reasons plus one: the capture port records
@@ -174,7 +174,7 @@ MIDI-out assertions (proposal 36 P7b):
       values at every transport start and a concurrent playback case would
       inherit them.
 
-Event assertions (proposal 36 P1):
+Event assertions (proposal 37 P1):
   assert-midi-events has TWO scopes and they are not the same object.
   scope="clip" reads the cut's own frame-domain snapshot - what the edit verbs
   move. scope="feed" runs STrack::eventFeed()->collect(), the merge of the
@@ -200,7 +200,7 @@ Event assertions (proposal 36 P1):
   into the shared tests/cases working directory (that is one of the properties
   that make the suite safe under ctest -j). Cases name ../../build/<case>.mid.
 
-Event EDITOR gestures (proposal 36 P4):
+Event EDITOR gestures (proposal 37 P4):
   virtual-key, drag-note, assert-event-editor and assert-track-head all go
   through the SHELL (SMainWindow), because testkit may include neither
   app/eventui nor app/timeline (inv. 5) - the same route drag-clip-edge and

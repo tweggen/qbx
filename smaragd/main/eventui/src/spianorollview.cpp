@@ -597,7 +597,7 @@ void SPianoRollView::nudgeSelection( qint64 dTicks, int dKey )
 
 void SPianoRollView::keyPressEvent( QKeyEvent *ev )
 {
-    // Space belongs to the transport, always (proposal 36 6.3). Anything this
+    // Space belongs to the transport, always (proposal 37 6.3). Anything this
     // view does not consume is ignore()d and propagates, which is what keeps
     // the shell's shortcuts alive while the editor holds focus.
     const Resolved r = resolve();
@@ -716,7 +716,7 @@ bool SPianoRollView::tkDragNote( qint64 tick, int key, int channel,
     return true;
 }
 
-// The KIND REGISTRY entry (proposal 36 6.2). A static initializer, which is why
+// The KIND REGISTRY entry (proposal 37 6.2). A static initializer, which is why
 // app_ui must stay an OBJECT library - a STATIC one would drop this silently.
 static const bool s_reg_pianoroll = (
     SEventEditorRegistry::instance().registerKind(

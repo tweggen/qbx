@@ -637,7 +637,7 @@ static int testClapBackend()
 
     check( plugin->ioLayout().audioInputs == 2 && plugin->ioLayout().audioOutputs == 2,
            "clap.audio-ports reports the main port as 2-in / 2-out" );
-    // THREE since proposal 36 P2: Gain, Report Block Size and the Clip
+    // THREE since proposal 37 P2: Gain, Report Block Size and the Clip
     // Threshold the fader-move ORDER case needs (id 2 — id 1 was already the
     // block-size reporter; see the fixture's header comment).
     check( plugin->paramCount() == 3, "clap.params reports 3 parameters" );
@@ -917,7 +917,7 @@ static int testVst3Backend()
     // --- resolving by explicit uid ------------------------------------------
     // What a saved project does: the hex class id round-trips through the
     // descriptor and finds the same class.
-    // TWO audio-effect classes since proposal 36 P2 (the gain effect and the
+    // TWO audio-effect classes since proposal 37 P2 (the gain effect and the
     // sine instrument); the instrument's separate CONTROLLER class carries
     // kVstComponentControllerClass and must NOT be enumerated as a plugin.
     const std::vector<twPluginDescriptor> found = vst3ModuleDescriptors( TW_TESTVST3_PATH );
@@ -963,7 +963,7 @@ static int testVst3Backend()
 #endif  // TW_TESTVST3_PATH
 
 // ===========================================================================
-// Proposal 36 P2 — the EVENT half of the ABI, driven DIRECTLY on twPlugin.
+// Proposal 37 P2 — the EVENT half of the ABI, driven DIRECTLY on twPlugin.
 //
 // Nothing below goes through twPluginSlotProcessor or twPluginInsert. That is
 // deliberate and it is what the phase brief asks for: P2 changes the ABI and
@@ -1242,7 +1242,7 @@ static int testEventAbi()
 {
     using namespace ev36;
 
-    std::cout << "=== proposal 36 P2: events at the twPlugin level ===" << std::endl;
+    std::cout << "=== proposal 37 P2: events at the twPlugin level ===" << std::endl;
 
     auto &registry = pluginRegistry();
 

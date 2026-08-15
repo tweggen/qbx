@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 36 P1, AC4. A project made only of MIDI renders SILENCE - quietly.
+  Proposal 37 P1, AC4. A project made only of MIDI renders SILENCE - quietly.
 
   There is no instrument yet (that is P3b), so an event clip on a track is
   INAUDIBLE, not rejected (D3: the same rule as a take stack with no active

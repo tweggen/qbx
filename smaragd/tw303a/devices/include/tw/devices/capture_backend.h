@@ -59,7 +59,7 @@ public:
     // recording-relative index of the block's first frame, so the pair is one
     // sample of the map host time -> project frame.
     //
-    // Why it exists (proposal 36 D6, review #12): the MIDI capture backend
+    // Why it exists (proposal 37 D6, review #12): the MIDI capture backend
     // records the host time a message reached the wire and NOTHING else, so a
     // MIDI-out assertion needs an INDEPENDENT way to say where the playhead was
     // at that instant. This log is it — produced by the audio pump, from the

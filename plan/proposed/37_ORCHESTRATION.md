@@ -1,8 +1,8 @@
-# Proposal 36 — Orchestration plan (execution companion)
+# Proposal 37 — Orchestration plan (execution companion)
 
 > **Status: PLAN v2.2 (2026-08-15).** v2.2 adds the folder event feed and the
 > per-track MIDI-out offset (design §3.2.1, D6) to P0b/P1/P3b/P7.
-> How to execute `36_MIDI_INSTRUMENTS_AUTOMATION.md`
+> How to execute `37_MIDI_INSTRUMENTS_AUTOMATION.md`
 > phase by phase. v2 re-cuts the phases per the adversarial review (design §13):
 > P0a gains the two testkit verbs everyone leans on; P2 is ABI/backends/fixtures
 > only and depends on P0b's event header; P3 is three PRs (fader move, instrument
@@ -13,14 +13,14 @@
 > against a written brief (§3), and closes only when every acceptance criterion in
 > its GATE is green. The orchestrator (whoever runs this plan — a Claude Code
 > session on the top model, or the requester) reviews the diff, runs the gate
-> verdict, and merges via PR. To use: *"Read plan/proposed/36_ORCHESTRATION.md and
+> verdict, and merges via PR. To use: *"Read plan/proposed/37_ORCHESTRATION.md and
 > execute the next phase"* (or a named phase). Progress lives in STATE.md, the
 > tracker (§6) and git — never in a session's memory.
 
 ## 0. Ground rules (bind every phase, every agent)
 
 1. **The proposal is the spec.** The eight decisions D1–D8 in
-   `36_MIDI_INSTRUMENTS_AUTOMATION.md` §2 and the six v2 decisions in §11 are
+   `37_MIDI_INSTRUMENTS_AUTOMATION.md` §2 and the six v2 decisions in §11 are
    settled — do not re-litigate ticks-vs-frames, no-track-kind, reset+chase+
    pre-roll, the render-only barrier, the fader move, or play-time MIDI-out
    mid-implementation. A genuine contradiction found in code: STOP, write it into
