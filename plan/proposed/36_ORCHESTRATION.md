@@ -710,7 +710,7 @@ read §6, STATE.md tail, `git log --oneline -15`, the branch's open PR, then cod
 | P0a persistence tolerance + `SClipWindow` + verbs | ☐ | | | |
 | P0b `tw/events` leaf | ☐ | | | |
 | P1 event clips in the model | ☐ | | | |
-| P2 plugin ABI events + fixtures + native 303 | ☐ | | | |
+| P2 plugin ABI events + fixtures + native 303 | ☑ | 2026-08-15 | `feat/36-p2-plugin-events` | AC1–AC8 green. `clipThreshold` is param id **2**, not 1 (id 1 was already the block-size reporter). AU implemented but UNVERIFIED (Windows). Full ctest NOT run — requester instruction. |
 | P3a fader post-FX | ☐ | | | after 35-B4 |
 | P3b instrument slot + event feed | ☐ | | | after 35-B4 |
 | P3c render barrier + determinism | ☐ | | | |

@@ -30,10 +30,9 @@
 // here, because this plugin never consults its controller from process().
 //
 // Shape: a SINGLE component (IComponent + IAudioProcessor + IEditController on
-// one object). The split component/controller shape exercises more host code
-// (connection points, setComponentState, separate lifecycles) and is covered by
-// the manual real-plugin verification, not by this fixture — a gap recorded in
-// 08_PLUGIN_HOSTING_EXECUTION.md rather than papered over.
+// one object). The SPLIT shape — connection points, getControllerClassId,
+// setComponentState, a separate controller lifecycle — is TestSine's job,
+// further down this file.
 
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/base/ibstream.h"

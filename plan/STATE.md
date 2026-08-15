@@ -9028,3 +9028,142 @@ isolation and on chunk re-run. At least one occurred before any of these six
 fixes existed, so the pattern is not attributable to them — but neither has it
 been explained. A low-rate flake somewhere in the suite under sustained load is
 the working hypothesis and it remains unproven.
+
+---
+
+## 2026-08-15 — Proposal 36 P2: plugin ABI events, fixtures, native 303
+
+Branch `feat/36-p2-plugin-events`, off P0b. The plugin layer learns about events
+at the `twPlugin` level ONLY: the ABI, the three format backends, the scanner,
+the in-repo fixtures and the in-house 303. **Nothing in `twPluginSlotProcessor`,
+`twPluginInsert` or `twPluginChain` was touched** — proposal 35-B4 rewrites those
+and P3b owns the generator modes — so nothing in the app calls the new path yet
+and no rendered byte moves.
+
+### What landed
+
+- **`tw/plugins/twpluginevents.h`** — `twEventList` (a view over host-owned
+  events plus a payload arena, valid for one call), `twEventOut` (a host-sized
+  sink; overflow COUNTED and dropped, never grown), `twProcessContext`
+  (position/transport with `validFlags`, because a host that does not know the
+  tempo must say so rather than send a default 120), `twPluginCapabilities`,
+  `twPluginBusInfo`, `twEventLimits`. No format type appears in it (CONTRACT
+  inv. 4) and it defines no event of its own: `twEvent`/`twEventKind` come from
+  `tw/events/twevent.h`, which is why `tw_plugins` now links `tw_events` and
+  `check_layering.py` grows a `plugins -> events` edge. `tw/events` is a
+  core-only leaf outside the dataflow DAG, so that adds no page dependency
+  (design F15 still forbids `plugins -> mix`).
+- **`twPlugin`** gains `capabilities()`, `audioOutBusCount()/audioOutBus(i)`,
+  `tailFrames()` and `process(in, outBuses, n, events, eventsOut, ctx)`. The new
+  overload's default forwards to the legacy one; every backend's legacy overload
+  forwards the other way with an empty list, an unreachable sink and an
+  all-invalid context — so the pre-36 render path is **the same instructions**,
+  not an equivalent computation. `acceptsNotes()` stays a forwarder to
+  `capabilities().acceptsNotes` for one release.
+- **CLAP**: notes (dialect-negotiated per port), note expressions, CC/bend/
+  pressure/PC/sysex, parameter values/mods/gestures in; the plugin's own events
+  out into `twEventOut`; `clap.tail`; aux ports reported; a transport built from
+  the context. Host extensions `clap.host-note-ports`, `clap.host-params`,
+  `clap.host-tail` — all record-only.
+- **VST3**: **the kEvent bus is now activated at `prepare()`**, which it never
+  was. That is a real bug this phase fixes, not a new feature: a plugin that
+  gates note handling on `activateBus` (as the spec entitles it to) received a
+  well-formed `IEventList` and ignored every note, with no error anywhere.
+  `twVst3EventList` both ways; `IMidiMapping` CC-to-parameter points at their
+  `sampleOffset` (VST3 has no CC event type at all, so this is the ONLY route,
+  and an unmapped CC is dropped rather than assigned an invented parameter);
+  `ProcessContext`; `INoteExpressionController` queried; the host support list
+  grown. A first cut gated the whole translation on the event-bus count, which
+  silently dropped every automation point for every EFFECT — caught by AC2 and
+  fixed to gate per event kind.
+- **AU (macOS)**: `MusicDeviceMIDIEvent` posted before `AudioUnitRender` with its
+  own `inOffsetSampleFrame`, `MusicDeviceSysEx`, `AudioUnitScheduleParameters`,
+  output ELEMENTS enumerated, `aumu`/`aumi` added to the scan.
+- **Fixtures**: `tw.test.clap.sine` (0 in, stereo main + mono aux out, CLAP|MIDI
+  note port preferring CLAP, 16 envelope-less voices, `NOTE_END` on off,
+  `CLAP_PROCESS_ERROR` on a wildcard note-on), `tw.test.clap.arp` (note in/out on
+  a 4096-frame grid with a 2048-frame gate, counted in ABSOLUTE frames from
+  reset), a third parameter on `tw.test.clap.gain`, and the VST3 `TestSine` as a
+  real SPLIT component/controller pair — which closes the "split VST3 pair
+  untested" debt `plugins/CONTRACT.md` has carried since M6, and had to, because
+  `IMidiMapping` lives on the controller.
+- **`twNativeInstrument`** (`format="tw"`, uid `tw.native.303`), registered like
+  `twPassThrough`: monophonic saw/square, portamento, `twMoog`'s ladder
+  arithmetic lifted into float buffer functions, a decay envelope on the cutoff,
+  accent at velocity >= 100/127, and a VCA that is a gate with a 6 ms release
+  (the Decay knob sweeps the FILTER, as on the instrument — so a released note
+  stops promptly however long the sweep is set). `reset()` is total, which is a
+  contract: it is what makes P3c's render-vs-render byte gates possible.
+- **Scanner v2**: descriptor gains `acceptsNotes`, `emitsNotes`,
+  `eventPortsIn/Out`, `nOutBuses`, `outBusChannels`; `kScannerVersion` 1 to 2.
+
+### Gate numbers
+
+`./build.sh` clean. `check_layering.py` clean. `check_logging.py` clean.
+
+`plugins_test` — all green, including:
+
+| AC | Measured |
+|---|---|
+| AC1 303 | silence before the note-on < 1e-6; fundamental **261.558 Hz** (want 261.626 +/- 1); held RMS **0.1729** (> 0.05); exact silence 512 frames after the off |
+| AC1 CLAP sine | fundamental **261.875 Hz**; RMS **0.556439** vs closed form **0.556777** (-0.06 %, band +/- 2 %); exact silence both sides |
+| AC1 VST3 TestSine | fundamental **261.875 Hz**; RMS **0.556439** vs **0.556777**; exact silence both sides |
+| AC1 AU | **SKIPPED** — macOS-only; the test says so out loud |
+| AC2 | CLAP and VST3: frame 1233 at unity, frame 1234 at 0.5, held to the end of the block |
+| AC3 | with `SMARAGD_VST3_NO_EVENT_BUS=1` the same fixture renders peak < 1e-6 — the teeth |
+| AC4 | 16 note-ons over 65536 frames = `ceil(65536/4096)`; 16 paired note-offs; 0 sink drops |
+| AC5 | reset + NoteOn at 0 + 8192 frames, twice, `memcmp` identical, all three instruments |
+
+The frequency estimator interpolates parabolically around the autocorrelation
+peak, and that is load-bearing rather than polish: at 48 kHz a 261.6 Hz period is
+183.5 samples, so integer lags alone resolve only to about +/- 0.8 Hz and the
+verdict would have depended on which side of a sample the period fell.
+
+`plugins_scan_test` — all green, including AC7: a cache claiming
+`scannerVersion` 1 is discarded (`probed=2 cached=0`), the next scan is a cache
+hit (`probed=0`), and the probe's JSON carries the new fields for all three test
+modules (sine: `nOutBuses=2` = stereo main + mono aux; arp: note ports in AND
+out, `nOutBuses=0`; gain: no event ports, one bus).
+
+AC6 — the golden corpus (`plugin_*` + `render_*`, 21 cases, 42 WAVs) rendered on
+the pre-phase binary and `cmp`'d against this one: **42/42 byte-identical**.
+`plugin_slot_roundtrip`'s exact-base64 assertion on the saved state chunk is
+among them and is untouched, because the gain fixture still writes a 16-byte blob
+when the clipper is off.
+
+ctest registered count **110 = 110** (88 qxa + 22 units), unchanged: this phase
+adds no case and no test target.
+
+### Deviations
+
+**`clipThreshold` is parameter id 2, not id 1.** The P2 brief says id 1; id 1 was
+already `Report Block Size`, which the host-chunking gate reads out of the
+plugin's own output. Renumbering a live gate's parameter would have bought
+nothing. **P3a's `fader_post_fx` ORDER case must quote id 2.**
+
+`plugin_ui_strip_and_editor` timed out once on the BASE binary (`SRenderAction:
+render timeout after 30000 ms`) while the machine was loaded by another suite; it
+passed on re-run and on the phase binary. Pre-existing, unrelated to this change,
+and named rather than waved through.
+
+### NOT gated
+
+- **The full `ctest` suite was not run on this branch**, by requester
+  instruction (another session is landing suite parallelisation and a
+  `getDuration()` fix first). What ran: `plugins_test`, `plugins_scan_test`, the
+  21 `plugin_*`/`render_*` qxa cases with a byte compare, and `ctest -N` for the
+  registered count.
+- **The AU event path is UNVERIFIED.** It was written on Windows, where the whole
+  backend is compiled out — never compiled, let alone run against an AudioUnit.
+  CONTRACT invariant 35 records it and `plugins_test` prints it on a non-Apple
+  build. AU MIDI-OUT is reported as a capability but not wired (the callback must
+  be installed before `AudioUnitInitialize`).
+- **Nothing is hosted in the app.** No processor, chain or tap change, so no qxa
+  case exercises the event path end to end and no instrument is audible in a
+  render yet. That is P3b — and it is why the goldens could be byte-identical.
+- **Aux output buses** are discovered and reported but not routed anywhere (P9).
+- **Note expressions, sysex and MIDI-out translation** compile and are covered by
+  the mapping code, but no fixture sends one — only notes, CCs and parameter
+  points are driven by a test.
+- No `repeat_test.sh` sweep: nothing here touches the scheduler, a class-1
+  processor, the barrier or the readahead.
