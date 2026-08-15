@@ -40,10 +40,47 @@
     <!-- And NOT ONE byte reached the wire. -->
     <assert-midi-out count="0"/>
     <dump-midi-capture filename="render_midi.txt" minCount="0"/>
+
+    <!-- ============ the verb is ABSOLUTE, and its UNDO is exact ==========
+
+         Gating an undo needs a STATE assertion, not the runner's verify-undo
+         pass (which compares track counts only). There is no
+         assert-track-midi-output verb, and there does not need to be: giving a
+         track a port CHANGES WHAT ITS PARENT HEARS, because `auto` routing
+         means "consumed here, or bubbled up". So the feed IS the observation,
+         and it gates the coupling as well as the undo.                      -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="childA"/>
+    <add-note clip="1,0" tick="0" dur="480" key="72" velocity="100" channel="0"/>
+    <insert-midi-clip trackPath="2" timePos="0" duration="3840" name="childB"/>
+    <add-note clip="2,0" tick="0" dur="480" key="76" velocity="100" channel="0"/>
+    <select-track trackPath="1"/>
+    <select-track trackPath="2" modifiers="ctrl"/>
+    <group-track trackPath="1"/>
+
+    <!-- Both children bubble: neither has a local consumer. -->
+    <assert-midi-events scope="feed" trackPath="1" kind="note" count="2"
+                        startFrame="0" frameCount="96000"/>
+
+    <!-- Give child 0 a port of its own and it stops bubbling. -->
+    <set-track-midi-output trackPath="1,0" port="capture" channel="3" offsetMs="-100"/>
+    <assert-midi-events scope="feed" trackPath="1" kind="note" count="1"
+                        key="76" startFrame="0" frameCount="96000"/>
+    <!-- ... and its events are still its own. -->
+    <assert-midi-events scope="feed" trackPath="1,0" kind="note" count="1"
+                        key="72" startFrame="0" frameCount="96000"/>
+
+    <!-- The inverse carries the WHOLE previous state (port, channel and
+         offset), so one undo puts the child back in the parent's feed. -->
+    <undo count="1"/>
+    <assert-midi-events scope="feed" trackPath="1" kind="note" count="2"
+                        startFrame="0" frameCount="96000"/>
   </actions>
 
   <assertions>
-    <assert-track-count equals="1"/>
+    <!-- The MIDI-out track, plus the folder the routing block groups. -->
+    <assert-track-count equals="2"/>
   </assertions>
 
 </SActionScript>

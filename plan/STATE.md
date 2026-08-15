@@ -10082,3 +10082,210 @@ NOT fire in either full suite run — the first case warms the cache. Recorded,
 not chased: `tw/plugins` is outside P1's module set (ground rule 6), and the
 fix belongs where the registry is (drain or detach the scan before static
 destruction, or give the scan thread a catch-all).
+
+---
+
+## 2026-08-15 — Proposal 36 P7b: MIDI-out pump, verbs, options
+
+- **Status:** ✅ COMPLETE (branch `feat/36-p7b-midi-out-app`; P7a landed the
+  `tw/devices` half separately, so the P7 row is now closed)
+- **Scope:** the APP half of proposal 36 P7 — `SMidiOutPump`, the per-track
+  MIDI-output attributes and their verb, the Options → MIDI page, the testkit
+  verbs, and the seven qxa cases that gate AC1–AC6.
+- **Modules:** `main/shell`, `main/objects/track`, `main/servicesui`,
+  `main/testkit`, `docs/ACTIONS.md`, `docs/contracts/THREADING.md`, four
+  CONTRACT.md files. No engine file was touched.
+
+### What landed
+
+**`SMidiOutPump` (`main/shell/{include/app/shell,src}/smidioutpump.{h,cpp}`).**
+A 20 ms main-thread `QTimer` with a 250 ms lookahead, started by
+`setPlaying(true)` and stopped by `setPlaying(false)`. Each tick it reads the
+playhead atomic, slices every MIDI-out track's `STrack::eventFeed()` — so a
+folder parent's port carries its children's patterns (design §3.2.1) — converts
+the events to bytes, and enqueues `{dueHostTimeNs, bytes}` into one
+`MidiOutScheduler` per resolved port. Nothing below the ring touches Qt.
+
+**MIDI out is emitted at PLAY time and only there.** This is the proposal-34
+metering lesson verbatim, and it is why the pump exists rather than a hook in
+the freeze path: pages are frozen ~1.4 s ahead of the playhead and by renders
+that have no playhead at all, so a freeze-time MIDI-out would spray a whole
+arrangement at the user's hardware with the transport stopped. `startRender`
+does not set `isPlaying_`, and `tick()` returns immediately while a render is
+active — "renders emit nothing" is true by construction, and gated.
+
+**Two device-side timing corrections, both measured rather than assumed.** The
+first cut anchored the clock on a position CHANGE and put the first note of a
+run **2833 frames (59 ms) early**; the fix anchors on a position PUBLICATION
+(`SApplication::locatorPublishSeq()`, a counter the RT thread bumps next to the
+position store). twSpeaker defers the device start until the readahead is
+primed, so before the first callback the playhead sits still at the locator and
+a due time hung on it fires before a single audio frame has been delivered. The
+second correction is the PUBLISH LAG: twSpeaker publishes
+`engine->currentPosition()` *after* the pull, so the frame just handed to the
+device is `published − bufferFrames`, not `published`. Without it every note is
+one device buffer (~21 ms at 1024 frames / 48 kHz) early. The output latency
+itself reuses `meterLatencyFrames()` verbatim, because it already converts
+DEVICE frames at the DEVICE rate into PROJECT frames.
+
+After both corrections the measured error, over the four playback cases, is
+**−244 … +902 frames (−5 … +19 ms)** against a 4096-frame (85 ms) budget.
+
+**De-dup is a monotone per-track frontier plus its loop iteration**, rather than
+the design's set of `(clip key, event ordinal, loop iteration)` keys. Windows
+are contiguous and never overlap, so the frontier gives the same guarantee with
+no bookkeeping, and it additionally survives an edit that renumbers ordinals
+mid-flight, which a key set would not. Recorded here as a deviation in
+mechanism, not in behaviour.
+
+**Chase / wrap / stop, exactly per D6.** Controllers, program and bend are
+chased on every start and locate; note-ons only when Options → MIDI says so,
+default OFF (re-attacking a hardware synth on every locate is a surprise, not a
+service). A loop wrap splits the window at the cycle end, releases every note
+the pump has sent and not released, and re-issues the chase at the cycle start.
+Stop and locate flush the queued future first — a queued note-on that escaped
+after the transport stopped is a stuck note — then send CC64=0 + CC123=0 on
+every channel the run used.
+
+**`STrack`** gains `midiOutPort` / `midiOutChannel` / `midiOutOffsetMs`, all
+serialized only when non-default so every pre-36 project re-serializes
+byte-identically. The port is a PORTABLE NAME; `SSettings` maps it to the
+machine-local device id (`midi/portId/<name>`), the same split the audio output
+device uses. The channel is 0-BASED, matching `twEvent::channel` and
+`add-note channel=`, so the whole scripting API speaks one convention.
+`hasMidiOut()` now returns something, which means gaining or losing a port
+changes the `auto` routing rule ("consumed here, or bubbled up") — hence the
+range-invalidation on that transition and only on it.
+
+**Verbs:** `set-track-midi-output` (absolute, undoable, inverse carries the
+whole previous state), plus testkit `assert-midi-out`, `dump-midi-capture`,
+`assert-midi-options`, `set-option` and `wait-ms`. Rows in
+`action_roundtrip_test` and `docs/ACTIONS.md` for all six.
+
+**Options → MIDI page** mirroring the Audio page's build/load/apply triple: the
+port lists come from the ACTIVE backend (an Options page showing the machine's
+real ports while the capture backend runs would be a lie), "Create virtual
+port" is gated on the capability the backend reports rather than on the
+platform, and the global offset + note-on-chase settings persist. Inputs are
+listed and persisted but read by nobody until P8.
+
+**`main.cpp`** defaults `SMARAGD_MIDI_BACKEND=capture` under `--test-case`,
+unless it is already set.
+
+### The measurement is independent of the thing measured
+
+Design review #12's requirement, and it is what makes these gates worth
+anything. Two recorders written by two threads that know nothing of each other:
+the capture MIDI port records `{hostTimeNs, port, bytes}` and deliberately NOT
+the due time it was asked for (the difference between the two IS the
+measurement), while the audio capture backend records `{hostTimeNs, firstFrame}`
+per delivered block. `assert-midi-out` maps every message through the AUDIO log
+(`CaptureBackend::frameAtHostTime`) and subtracts the device output latency, so
+`at` reads "the project frame whose audio was being HEARD when this message
+left". Asking the pump where it thought it was would have proved nothing.
+`SMARAGD_CAPTURE_SPEED` must be 1 for any of it.
+
+### Gate results
+
+- `./build.sh` clean (re-configured; the qxa glob is `CONFIGURE_DEPENDS`).
+- `python tools/check_layering.py` clean — new edges: `main/shell → tw/events`
+  (the pump slices a `twEventMerge`) and `testkit → servicesui`
+  (`assert-midi-options` builds the real `SOptionsDialog`).
+- `python tools/check_logging.py` clean.
+- `action_roundtrip_test` green with six new fixture rows.
+- **`ctest --test-dir smaragd/build -j4`: 131 / 132 run green**, 135 registered
+  (128 before this phase + 7 new qxa cases), 3 Not Run (the macOS-only `au_*`
+  trio), 222.94 s. The one failure is `plugin_missing_placeholder` — a
+  PRE-EXISTING teardown crash characterised below, in a case P7b does not
+  touch. All 7 new cases green, and all 6 of P1's `midi_*` cases green.
+
+Per-AC, with the measured lateness in frames (worst |sent − expected| over the
+matching messages, through the audio clock):
+
+| AC | Case | Result |
+|---|---|---|
+| AC1 | `midi_out_capture` | 3 note-ons + 3 note-offs at 0 / 48000 / 96000 and 24000 / 72000 / 120000; worst offsets **−176, +362, +149, −30, +93, +69** frames. Nothing before the play start (asserted). Stop panic on channel 2 only. |
+| AC2 | `midi_out_chase_and_stop` | Locate to 1.5 s, mid-note. Chase CC1=100 is message **#0**, chased NoteOn 60 is **#1** at **−244** frames. With the setting OFF the NoteOn is absent and the CC still chases. CC64=0 + CC123=0 at the stop. |
+| AC3 | `midi_out_loop_wrap` | Cycle 0–2 s, note 1.5–2.5 s. NoteOn **+902**, NoteOff at the CYCLE END (**+218** of 96000), pass 2 at **+596 / +319**. Exactly 2 note-ons and 2 note-offs over the run — no doubling. |
+| AC3b | `midi_out_offset_and_folder` | `offsetMs=200` → every event 9600 frames earlier (**+512, +165, +201**), and NOT at the un-offset positions. A folder's port carries both children's notes, remapped from channels 0 and 1 to the parent's 5 (**−232, +607**). |
+| AC4 | `midi_out_render_silent` | A render with a MIDI-out track produces **0** capture events; the render is the same 192000 frames of silence as P1's port-less case. Goldens byte-identical (nothing here touches a render path). The case also carries the UNDO gate for `set-track-midi-output`: giving a child a port removes it from its folder's feed, and one `<undo/>` puts it back — a state assertion through `assert-midi-events scope="feed"`, not the runner's verify-undo pass. |
+| AC5 | `midi_out_backend_reject` | Registered with `SMARAGD_MIDI_BACKEND=null`; `assert-midi-out` and `dump-midi-capture` `expectReject`. |
+| AC6 | `midi_options_page` | `describe()` lists exactly the capture backend's one output and one input, `backend=capture`, `virtual=yes`, `selected=0`; a written `midi/outOffsetMs` persists and reads back. |
+
+The four playback cases are `RUN_SERIAL` and pinned to
+`SMARAGD_CAPTURE_SPEED=1`: they assert wall-clock latency, which makes the box's
+load part of the answer, and two of them write a per-user setting the pump reads
+at every transport start.
+
+### The teardown crash family, characterised (NOT ours)
+
+The first two full-suite runs produced failures that are worth recording
+precisely, because the correlation is airtight and it is **not** a MIDI
+problem. Run 1: two failures. Run 2: six. Every single one printed **`PASS`**
+and then died — a crash at teardown, or a process that hung for 350+ s after
+its last assertion. And in both runs the set of failing cases is EXACTLY the
+set of processes whose log contains a live plugin PROBE
+(`[scan] '…/CastelloReverb.clap': 1 plugin(s)`), i.e. the ones that found
+`plugincache.json` cold or contended:
+
+| Run | Live probes | Teardown crashes / hangs | All inside a probing process? |
+|---|---|---|---|
+| 1 | 1 | 1 — `midi_out_backend_reject` (`0xc0000374`) | yes |
+| 2 | 6 | 6 — `midi_clip_edit_verbs` SEGFAULT, `midi_clip_tempo_remap` `0xc0000374`, `midi_fixture_authoring` SEGFAULT, `midi_out_backend_reject`, `midi_clip_roundtrip` (354 s), `meter_postfader` (359 s) | yes |
+| 3 | 5 | 1 — `render_sawtooth_clipped_section` SEGFAULT | yes |
+| 4 | 1 | 1 — `plugin_missing_placeholder` (`0xc0000374`) | yes |
+
+Thirteen live probes across four invocations, nine teardown failures, **every
+one of them inside a probing process** — and **zero** among the ~520
+warm-cache case runs in the same four invocations. The victims are spread
+across P0a's, P1's, proposal 34's and proposal 08's cases; the run-4 victim is
+a plugin case with no MIDI in it at all. This is the family
+`36_ORCHESTRATION.md` §4 names, and specifically the cold-plugin-cache
+`~twPluginRegistry` vs `TwLog` static-destruction hang that P1's own entry
+recorded — concurrent processes rewrite `plugincache.json` through `QSaveFile`,
+the lost updates leave records that no longer match, and the NEXT invocation's
+short cases re-probe and then race at static destruction. Recorded, not chased
+(ground rule 6: `tw/plugins` is outside this phase's module set).
+
+`midi_out_backend_reject` is the case most exposed to it because it is the
+shortest MIDI case in the suite — it never plays — so it finishes while the
+scan thread is still working. It is 12/12 clean standalone.
+
+**One genuinely new observation**, from a case whose `.qxa` I had temporarily
+broken: a malformed script makes `main.cpp` call `std::exit(1)`, which runs
+static destructors and hits that same hang — the process sat for 20 minutes
+until it was killed. Pre-existing, and another argument for draining the
+registry before static destruction.
+
+### Not gated
+
+- **WinMM send jitter against real hardware** (±1 ms by design). Everything here
+  is measured against the capture port; no MIDI device was involved.
+- **CoreMIDI and ALSA-sequencer** — unverified, as P7a already recorded. Windows
+  box.
+- **Virtual-port creation on Windows.** WinMM has no such concept; the offer is
+  gated on `supportsVirtualPorts()` and the loopMIDI route is documented, not
+  tested.
+- **`SMARAGD_CAPTURE_SPEED ≠ 1`.** Deliberately out of scope: the audio block
+  log stays empirically correct at other speeds, but a project frame then means
+  something different in wall-clock terms while the MIDI due times do not.
+- **Sysex.** Refused by the ring (`kMaxMessageBytes` = 16) and skipped by the
+  pump rather than truncated; a payload-carrying path is P9.
+- **The `midi/portId/<name>` mapping UI.** The Options page lists the machine's
+  ports but cannot re-point a project's port name at one — that needs editing
+  `smaragd.ini`. Recorded as known debt in `main/servicesui/CONTRACT.md`.
+- **A per-track MIDI-output UI.** The verb and the serialized attributes exist;
+  the arranger does not offer them yet.
+
+### Two things worth knowing next time
+
+`set-property`'s `value` is JSON wrapped in a ONE-ELEMENT ARRAY
+(`value="[true]"`). A bare `value="true"` parses as nothing and the write is
+silently skipped — which is how the loop-wrap case first "proved" that cycling
+did not work. Now documented in `docs/ACTIONS.md`.
+
+An event whose offset-shifted due time falls before the run start is CLAMPED —
+you cannot send a message before the transport started. So AC3b's notes start at
+1 s rather than 0: an assertion at −9600 would otherwise be a statement about
+the clamp rather than about the offset. Pre-roll for the lead-in is a later
+feature (D4 has it for instruments).

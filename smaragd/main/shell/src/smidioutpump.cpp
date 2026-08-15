@@ -421,6 +421,19 @@ void SMidiOutPump::tick()
     //    - the ~9 % error proposal 34 records for 44.1 kHz on a 48 kHz device.
     const quint64 seq = app.locatorPublishSeq();
     if( seq != lastPublishSeq_ ) {
+        // A locate is published by the UI thread immediately, but the RT thread
+        // can still deliver one block against the OLD position before the
+        // engine's seek lands. Anchoring the FIRST time on such a publication
+        // would put the whole first window's due times in the past and flush it
+        // at once. So the first anchor of a run only accepts a position near
+        // where the run started; every later one is unconditional, because by
+        // then the playhead is the authority on where playback actually is.
+        // NOT GATED: a seek DURING playback has no bespoke case - a timing
+        // assertion tight enough to separate the behaviours would be flaky.
+        if( !haveAnchor_
+            && qAbs( pos - runStartPos_ ) > (qint64) rate ) {
+            return;   // NOT consumed: retry on the next publication
+        }
         lastPublishSeq_ = seq;
         anchorAbs_ = pos - (qint64) app.outputBufferFramesProject()
                      + (qint64) playIter_ * cycleLen;
