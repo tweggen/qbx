@@ -1,6 +1,8 @@
 
 #include <stdlib.h>
 
+#include <algorithm>
+
 #include <QtDebug>
 #include <qwidget.h>
 #include <qpushbutton.h>
@@ -330,6 +332,14 @@ void SMVActualView::paintEvent( QPaintEvent * )
             drawTakeLane( p, *row, i,
                           QRect( 0, top+1, myRect.width(), lh-2 ) );
         } else {
+            // A selected lane gets a tinted BACKGROUND (under the clips, which
+            // paint over it), so a multi-track selection is legible in the
+            // timeline and not only on the heads.
+            if( row->track && smv_.getModel()
+                && smv_.getModel()->isTrackSelected( row->track ) ) {
+                p.fillRect( QRect( 0, top+1, myRect.width(), lh-2 ),
+                            QColor( 30, 46, 66 ) );
+            }
             // Draw the track's clips.
             row->track->getInlineRenderer()->draw( *row->link, ctx );
         }
@@ -646,8 +656,15 @@ void SStdMixerView::nudgeClipPitch( double cents )
 
 void SMVActualView::ctToggleTakeLanes()
 {
-    if( lastClickTrack_ )
-        smv_.toggleTrackTakesExpanded( lastClickTrack_ );
+    if( !lastClickTrack_ ) return;
+    // The clicked lane decides the direction; the rest of the selection is
+    // driven TO that state rather than each toggled on its own, so a mixed
+    // selection ends up uniform instead of inverted.
+    const bool want = !smv_.isTrackTakesExpanded( lastClickTrack_ );
+    for( STrack *t : smv_.selectionTargets( lastClickTrack_ ) ) {
+        if( smv_.isTrackTakesExpanded( t ) != want )
+            smv_.toggleTrackTakesExpanded( t );
+    }
 }
 
 // Clip context menu: open the clip properties panel (proposal 31). The panel
@@ -689,7 +706,13 @@ void SMVActualView::ctGlobalShow()
     }
     qGlobalPopup_->addAction( smv_.actNewTrack_ );
     if( lastClickTrack_ ) {
-        qGlobalPopup_->addAction( "Remove track", &smv_, SLOT( ctRemoveTrack() ) );
+        // How many tracks the track items below will actually act on. The menu
+        // says so out loud: an item that silently hits four lanes when the
+        // pointer is on one is the whole risk of a multi-selection.
+        const int nSel = smv_.selectionTargets( lastClickTrack_ ).size();
+        const QString sfx = ( nSel > 1 ) ? QString( " (%1 tracks)" ).arg( nSel )
+                                         : QString();
+        qGlobalPopup_->addAction( "Remove track" + sfx, &smv_, SLOT( ctRemoveTrack() ) );
         qGlobalPopup_->addSeparator();
         qGlobalPopup_->addAction(
             smv_.isTrackTakesExpanded( lastClickTrack_ )
@@ -714,10 +737,9 @@ void SMVActualView::ctGlobalShow()
                 a->setData( p.scale );
                 QObject::connect( a, &QAction::triggered, this,
                                   [this, a]() {
-                                      if( lastClickTrack_ )
+                                      for( STrack *t : smv_.selectionTargets( lastClickTrack_ ) )
                                           smv_.setTrackHeightScale(
-                                              lastClickTrack_,
-                                              a->data().toDouble() );
+                                              t, a->data().toDouble() );
                                   } );
             }
         }
@@ -728,9 +750,14 @@ void SMVActualView::ctGlobalShow()
         }
         qGlobalPopup_->addMenu( qLaneHeightMenu_ );
         qGlobalPopup_->addSeparator();
-        qGlobalPopup_->addAction( "Indent track (nest under above)", &smv_, SLOT( ctIndentTrack() ) );
-        qGlobalPopup_->addAction( "Outdent track", &smv_, SLOT( ctOutdentTrack() ) );
-        qGlobalPopup_->addAction( "Group track", &smv_, SLOT( ctGroupTrack() ) );
+        qGlobalPopup_->addAction( "Indent track (nest under above)" + sfx,
+                                  &smv_, SLOT( ctIndentTrack() ) );
+        qGlobalPopup_->addAction( "Outdent track" + sfx, &smv_, SLOT( ctOutdentTrack() ) );
+        // One folder for the whole block, not one each.
+        qGlobalPopup_->addAction(
+            nSel > 1 ? QString( "Group %1 tracks" ).arg( nSel )
+                     : QString( "Group track" ),
+            &smv_, SLOT( ctGroupTrack() ) );
         if( smv_.rowIndexOfTrack( lastClickTrack_ )>=0
             && smv_.rowAt( smv_.rowIndexOfTrack( lastClickTrack_ ) )->hasChildren ) {
             qGlobalPopup_->addAction( "Ungroup track", &smv_, SLOT( ctUngroupTrack() ) );
@@ -744,6 +771,122 @@ void SMVActualView::ctGlobalShow()
         if( !hasRange() )
             aAsset->setText( "Create &asset from range  (select a range first)" );
     }
+}
+
+// --- multi-track selection --------------------------------------------------
+//
+// The set lives on SStdMixer; what lives here is the GESTURE side of it — how a
+// click becomes a selection, which tracks an operation then acts on, and in what
+// order. See the block comment on these declarations in the header for the one
+// rule that governs every track operation below.
+
+QList<STrack *> SStdMixerView::tracksBetween( STrack *a, STrack *b ) const
+{
+    QList<STrack *> out;
+    const int ra = rowIndexOfTrack( a );
+    const int rb = rowIndexOfTrack( b );
+    if( ra < 0 || rb < 0 ) {
+        // One end is not on screen (a collapsed folder's child, say). Degrade
+        // to the ends themselves rather than selecting nothing.
+        if( a ) out.append( a );
+        if( b && b != a ) out.append( b );
+        return out;
+    }
+    const int lo = qMin( ra, rb ), hi = qMax( ra, rb );
+    for( int i = lo; i <= hi; ++i ) {
+        const STrackRow *row = rowAt( i );
+        // Sub-lanes (take lanes) belong to the track lane above them and are
+        // not separately selectable.
+        if( !row || row->isSubLane() || !row->track ) continue;
+        if( !out.contains( row->track ) ) out.append( row->track );
+    }
+    return out;
+}
+
+QList<STrack *> SStdMixerView::orderByLane( const QList<STrack *> &in ) const
+{
+    QList<STrack *> out = in;
+    std::stable_sort( out.begin(), out.end(),
+                      [this]( STrack *l, STrack *r ) {
+                          const int li = rowIndexOfTrack( l );
+                          const int ri = rowIndexOfTrack( r );
+                          // Tracks with no visible lane sort last, stably.
+                          if( li < 0 ) return false;
+                          if( ri < 0 ) return true;
+                          return li < ri;
+                      } );
+    return out;
+}
+
+QList<STrack *> SStdMixerView::pruneNestedTargets( const QList<STrack *> &in )
+{
+    QList<STrack *> out;
+    for( STrack *t : in ) {
+        bool covered = false;
+        for( STrack *other : in ) {
+            if( other == t ) continue;
+            // isSelfOrDescendant( candidate, ancestor ): is t below other?
+            if( strackpath::isSelfOrDescendant( t, other ) ) { covered = true; break; }
+        }
+        if( !covered ) out.append( t );
+    }
+    return out;
+}
+
+QList<STrack *> SStdMixerView::selectionTargets( STrack *clicked ) const
+{
+    QList<STrack *> out;
+    if( !clicked ) return out;
+    // THE rule: only a gesture aimed INTO the selection broadcasts. Aiming at a
+    // lane outside it acts on that lane alone, so an operation can never reach
+    // a track the user is not pointing at.
+    if( model_ && model_->isTrackSelected( clicked )
+        && model_->nSelectedTracks() > 1 ) {
+        return orderByLane( model_->getSelectedTracks() );
+    }
+    out.append( clicked );
+    return out;
+}
+
+void SStdMixerView::applyTrackSelectionClick( STrack *t, Qt::KeyboardModifiers mods )
+{
+    if( !t || !model_ ) return;
+    const bool ctrl  = mods.testFlag( Qt::ControlModifier );
+    const bool shift = mods.testFlag( Qt::ShiftModifier );
+
+    if( shift ) {
+        STrack *anchor = selectionAnchor_.data();
+        if( !anchor || rowIndexOfTrack( anchor ) < 0 ) anchor = model_->getSelectedTrack();
+        if( !anchor ) anchor = t;
+        QList<STrack *> range = tracksBetween( anchor, t );
+        if( ctrl ) {
+            // Ctrl+Shift: add the range to what is already selected.
+            QList<STrack *> merged = model_->getSelectedTracks();
+            for( STrack *r : range ) if( !merged.contains( r ) ) merged.append( r );
+            model_->setSelectedTracks( merged, t );
+        } else {
+            model_->setSelectedTracks( range, t );
+        }
+        // The anchor deliberately does NOT move, so successive Shift-clicks
+        // pivot around the same lane instead of walking away from it.
+        return;
+    }
+
+    selectionAnchor_ = t;
+    if( ctrl ) model_->toggleTrackSelection( t );
+    else       model_->setSelectedTrack( t );
+}
+
+void SStdMixerView::showTrackContextMenu( STrack *t, const QPoint &globalPos )
+{
+    if( !t || !qContent_ ) return;
+    // A right-click on a lane OUTSIDE the selection selects it first, so the
+    // menu can never appear to act on one track while operating on others —
+    // the same rule the clip properties menu follows.
+    if( model_ && !model_->isTrackSelected( t ) ) {
+        applyTrackSelectionClick( t, Qt::NoModifier );
+    }
+    qContent_->popupTrackMenu( t, globalPos );
 }
 
 /**
@@ -821,31 +964,60 @@ bool SStdMixerView::eventFilter( QObject *watched, QEvent *event )
 }
 
 /**
- * Remove the currently selected track. This also will remove its children.
+ * Remove the tracks the gesture targets (the whole selection when it was aimed
+ * into it). Each removal also removes that track's children.
  */
 void SStdMixerView::ctRemoveTrack()
 {
-    // Index-PATH from the root mixer, so a track inside a folder can be removed
-    // too. This used to be model_->indexOfChildObject(), which sees the mixer's
-    // DIRECT children only: on a nested track it returned -1 and this slot
-    // returned right here, so "Remove track" did nothing at all — no action, no
-    // message, no undo entry.
-    STrack *t = qContent_->getLastClickTrack();
-    if( !t || !model_ ) return;
-    const QList<int> path = strackpath::pathOf( model_, t );
-    if( path.isEmpty() ) return;        // not in this project's tree
-    // Through the action so it is undoable (the track + subtree is restorable).
-    SApplication::app().submitAction( new SRemoveTrackAction( path ) );
+    STrack *clicked = qContent_->getLastClickTrack();
+    if( !clicked || !model_ ) return;
+    // Outermost tracks only: removing a folder takes its subtree with it, so a
+    // selected child inside a selected folder must not be removed twice (its
+    // path would resolve to a different track by then).
+    const QList<STrack*> targets =
+        pruneNestedTargets( selectionTargets( clicked ) );
+    if( targets.isEmpty() ) return;
+
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Remove tracks" ) );
+    // Bottom-up: every removal shifts the indices of the lanes below it, and
+    // the paths are re-derived per step anyway (submitAction drains
+    // synchronously), but going upwards keeps each re-derivation cheap and the
+    // undo order the mirror of the redo order.
+    for( int i = targets.size()-1; i >= 0; --i ) {
+        // Index-PATH from the root mixer, so a track inside a folder can be
+        // removed too. This used to be model_->indexOfChildObject(), which sees
+        // the mixer's DIRECT children only: on a nested track it returned -1 and
+        // this slot returned right here, so "Remove track" did nothing at all —
+        // no action, no message, no undo entry.
+        const QList<int> path = strackpath::pathOf( model_, targets.at( i ) );
+        if( path.isEmpty() ) continue;      // not in this project's tree
+        // Through the action so it is undoable (the track + subtree is restorable).
+        SApplication::app().submitAction( new SRemoveTrackAction( path ) );
+    }
+    if( macro ) stack->endMacro();
+    // Nothing that was removed may stay selected.
+    if( model_ ) {
+        QList<STrack*> keep;
+        for( STrack *s : model_->getSelectedTracks() )
+            if( !strackpath::pathOf( model_, s ).isEmpty() ) keep.append( s );
+        model_->setSelectedTracks( keep );
+    }
 }
 
 // --- grouping (proposal 05 §1.2) ----------------------------------------
 
-void SStdMixerView::ctIndentTrack()
+// One track's worth of "indent": nest it under its nearest preceding sibling
+// that is not itself on the move. `alsoMoving` matters only for the very first
+// step of a multi-track indent — later steps see a tree the earlier ones
+// already changed, because submitAction drains synchronously and the view
+// rebuilds its rows on the tree-changed signal.
+bool SStdMixerView::indentOne_( STrack *t, const QList<STrack*> &alsoMoving )
 {
-    STrack *t = qContent_->getLastClickTrack();
-    if( !t || !model_ ) return;
+    if( !t || !model_ ) return false;
     int ri = rowIndexOfTrack( t );
-    if( ri<0 ) return;
+    if( ri<0 ) return false;
     const STrackRow *row = rowAt( ri );
     SObject *parent = row->parent;
     int depth = row->depth;
@@ -854,64 +1026,119 @@ void SStdMixerView::ctIndentTrack()
     for( int i=ri-1; i>=0; --i ) {
         const STrackRow *r = rowAt( i );
         if( r->depth < depth ) break;          // left this sibling group
-        if( r->parent == parent ) { prevSibling = r->track; break; }
+        if( r->parent != parent ) continue;
+        if( alsoMoving.contains( r->track ) ) continue;   // it is moving too
+        prevSibling = r->track;
+        break;
     }
-    if( !prevSibling ) return;                  // nothing to nest under
+    if( !prevSibling ) return false;             // nothing to nest under
     SApplication::app().submitAction( new SReparentTrackAction(
         strackpath::pathOf( model_, t ),
         strackpath::pathOf( model_, prevSibling ), -1 ) );
+    return true;
 }
 
-void SStdMixerView::ctOutdentTrack()
+void SStdMixerView::ctIndentTrack()
 {
-    STrack *t = qContent_->getLastClickTrack();
-    if( !t || !model_ ) return;
+    STrack *clicked = qContent_->getLastClickTrack();
+    if( !clicked || !model_ ) return;
+    const QList<STrack*> targets =
+        pruneNestedTargets( selectionTargets( clicked ) );
+    if( targets.isEmpty() ) return;
+
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Indent tracks" ) );
+    // Top down: the first target nests under the lane above the block, and each
+    // later one then finds that same lane as its preceding sibling — so a
+    // contiguous block lands inside one folder, in order.
+    for( STrack *t : targets ) indentOne_( t, targets );
+    if( macro ) stack->endMacro();
+}
+
+// One track's worth of "outdent": move it to its grandparent, just after the
+// folder it is leaving.
+bool SStdMixerView::outdentOne_( STrack *t )
+{
+    if( !t || !model_ ) return false;
     int ri = rowIndexOfTrack( t );
-    if( ri<0 ) return;
+    if( ri<0 ) return false;
     SObject *parent = rowAt( ri )->parent;
     STrack *parentTrack = dynamic_cast<STrack*>( parent );
-    if( !parentTrack ) return;                  // already top-level
+    if( !parentTrack ) return false;             // already top-level
     int pri = rowIndexOfTrack( parentTrack );
     SObject *grand = (pri>=0) ? rowAt( pri )->parent : (SObject*)model_;
     int dstIndex = grand->indexOfChildObject( *parentTrack ) + 1;  // just after parent
     SApplication::app().submitAction( new SReparentTrackAction(
         strackpath::pathOf( model_, t ),
         strackpath::pathOf( model_, grand ), dstIndex ) );
+    return true;
+}
+
+void SStdMixerView::ctOutdentTrack()
+{
+    STrack *clicked = qContent_->getLastClickTrack();
+    if( !clicked || !model_ ) return;
+    const QList<STrack*> targets =
+        pruneNestedTargets( selectionTargets( clicked ) );
+    if( targets.isEmpty() ) return;
+
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Outdent tracks" ) );
+    // BOTTOM UP: each track lands immediately after the folder it left, so
+    // promoting the lowest one first is what keeps the block's relative order
+    // (top-down would reverse it).
+    for( int i = targets.size()-1; i >= 0; --i ) outdentOne_( targets.at( i ) );
+    if( macro ) stack->endMacro();
 }
 
 void SStdMixerView::ctGroupTrack()
 {
-    STrack *t = qContent_->getLastClickTrack();
-    if( !t || !model_ ) return;
-    const QList<int> tPath = strackpath::pathOf( model_, t );
+    STrack *clicked = qContent_->getLastClickTrack();
+    if( !clicked || !model_ ) return;
+    // One new folder for the whole target block — not one per track.
+    const QList<STrack*> targets =
+        pruneNestedTargets( selectionTargets( clicked ) );
+    if( targets.isEmpty() ) return;
+
+    STrack *first = targets.first();
+    const QList<int> tPath = strackpath::pathOf( model_, first );
     if( tPath.isEmpty() ) return;
     QList<int> parentPath = tPath;
-    const int ti = parentPath.takeLast();       // t's slot inside its parent
+    const int ti = parentPath.takeLast();       // first target's slot in its parent
 
     QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
     if( stack ) stack->beginMacro( "Group track" );
 
     if( parentPath.isEmpty() ) {
-        // t is top-level: create the folder directly in t's slot. (This is the
-        // only case the gesture used to handle at all.)
+        // The block is top-level: create the folder directly in its slot. (This
+        // is the only case the gesture used to handle at all.)
         SApplication::app().submitAction( new SAddTrackAction( ti ) );
-        SApplication::app().submitAction( new SReparentTrackAction(
-            QList<int>{ ti+1 }, QList<int>{ ti }, -1 ) );
     } else {
-        // t is NESTED. add-track can only append at the MIXER's top level, and
+        // NESTED. add-track can only append at the MIXER's top level, and
         // SReparentTrackAction refuses a same-container move (that is
         // SMoveTrackAction's job) — so the folder cannot be born in place and
-        // cannot be slid there afterwards if it starts as t's sibling. Create it
-        // top-level, move it INTO t's parent at t's slot (a real cross-container
-        // reparent), which pushes t to ti+1, then move t into it.
+        // cannot be slid there afterwards if it starts as a sibling. Create it
+        // top-level, then move it INTO the parent at the target's slot (a real
+        // cross-container reparent), which pushes the targets down by one.
         SApplication::app().submitAction( new SAddTrackAction( -1 ) );
         const int folderTop = model_->getNTracks() - 1;   // append landed last
         SApplication::app().submitAction( new SReparentTrackAction(
             QList<int>{ folderTop }, parentPath, ti ) );
-        QList<int> tNow = parentPath;   tNow.append( ti+1 );
-        QList<int> folderNow = parentPath; folderNow.append( ti );
-        SApplication::app().submitAction( new SReparentTrackAction(
-            tNow, folderNow, -1 ) );
+    }
+    // Resolve the folder BY POINTER from here on: every reparent below shifts
+    // the indices its path would otherwise have been spelled with.
+    QList<int> folderPath = parentPath; folderPath.append( ti );
+    STrack *folder = dynamic_cast<STrack*>(
+        strackpath::resolveByPath( model_, folderPath ) );
+    if( folder ) {
+        for( STrack *t : targets ) {
+            const QList<int> src = strackpath::pathOf( model_, t );
+            if( src.isEmpty() ) continue;
+            SApplication::app().submitAction( new SReparentTrackAction(
+                src, strackpath::pathOf( model_, folder ), -1 ) );
+        }
     }
 
     if( stack ) stack->endMacro();
@@ -919,7 +1146,23 @@ void SStdMixerView::ctGroupTrack()
 
 void SStdMixerView::ctUngroupTrack()
 {
-    STrack *t = qContent_->getLastClickTrack();
+    STrack *clicked = qContent_->getLastClickTrack();
+    if( !clicked || !model_ ) return;
+    const QList<STrack*> targets =
+        pruneNestedTargets( selectionTargets( clicked ) );
+    if( targets.isEmpty() ) return;
+
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Ungroup tracks" ) );
+    for( int i = targets.size()-1; i >= 0; --i ) ungroupOne_( targets.at( i ) );
+    if( macro ) stack->endMacro();
+}
+
+// Dissolve one folder track, promoting its children into the folder's own
+// parent, then deleting the (now empty) folder.
+void SStdMixerView::ungroupOne_( STrack *t )
+{
     if( !t || !model_ ) return;
     const QList<int> tPath = strackpath::pathOf( model_, t );
     if( tPath.isEmpty() ) return;
@@ -954,6 +1197,50 @@ void SStdMixerView::ctUngroupTrack()
         SApplication::app().submitAction( new SRemoveTrackAction( fPath ) );
     }
     if( stack ) stack->endMacro();
+}
+
+bool SStdMixerView::tkClickTrackHead( STrack *t, Qt::KeyboardModifiers mods )
+{
+    if( !t || !model_ ) return false;
+    applyTrackSelectionClick( t, mods );
+    return true;
+}
+
+bool SStdMixerView::tkToggleTrackHead( STrack *t, const QString &which, bool on )
+{
+    if( !t ) return false;
+    for( SSMVMixerControl *mc : *controlArray_ ) {
+        if( mc && &mc->getTrack() == t ) return mc->tkClickToggle( which, on );
+    }
+    return false;      // no head for that track (it is inside a collapsed folder)
+}
+
+bool SStdMixerView::tkDragTrackHead( STrack *t, int targetRow, bool nestOnto )
+{
+    if( !t ) return false;
+    SSMVMixerControl *mc = nullptr;
+    for( SSMVMixerControl *c : *controlArray_ ) {
+        if( c && &c->getTrack() == t ) { mc = c; break; }
+    }
+    if( !mc ) return false;
+    if( targetRow < 0 || targetRow > rowCount() ) return false;
+    if( nestOnto && targetRow >= rowCount() ) return false;
+
+    // What the grip press does before the drag arms: a head outside the
+    // selection selects itself first (so it drags alone), one inside it leaves
+    // the selection untouched (so the whole block travels).
+    if( model_ && !model_->isTrackSelected( t ) )
+        applyTrackSelectionClick( t, Qt::NoModifier );
+
+    const int y = nestOnto ? controlYOfRow( targetRow ) + rowHeight( targetRow )/2
+                           : controlYOfRow( targetRow );
+    beginTrackDrag( mc );
+    updateTrackDrag( y );
+    // Safe to call straight through here (unlike the mouse handler, which
+    // defers it): no widget event is being dispatched, so the rebuild that
+    // deletes the heads cannot free one out from under its own handler.
+    endTrackDrag( y );
+    return true;
 }
 
 bool SStdMixerView::groupGesture( STrack *t, bool ungroup )
@@ -2024,6 +2311,14 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
     }
 }
 
+void SMVActualView::popupTrackMenu( STrack *t, const QPoint &globalPos )
+{
+    lastClickTrack_ = t;
+    lastClickSLink_ = NULL;      // a head click names no clip
+    ctGlobalShow();
+    qGlobalPopup_->popup( globalPos );
+}
+
 void SMVActualView::contextMenuEvent( QContextMenuEvent *ev )
 {
     // Range bar (ruler) gets its own menu.
@@ -2792,7 +3087,15 @@ void SStdMixerView::updateTrackDrag( int yInControlBox )
     if( !dragControl_ || !dropIndicator_ ) return;
     STrack *onto = NULL; int slot = 0;
     resolveDrop( yInControlBox, &onto, &slot );
-    if( onto && onto != &dragControl_->getTrack() ) {
+    // Never offer a nest into a lane that is itself part of the drag (or below
+    // one) — endTrackDrag would refuse it, and the outline would be a lie.
+    if( onto ) {
+        for( STrack *t : pruneNestedTargets(
+                 selectionTargets( &dragControl_->getTrack() ) ) ) {
+            if( strackpath::isSelfOrDescendant( onto, t ) ) { onto = NULL; break; }
+        }
+    }
+    if( onto ) {
         // Nest: outline the whole target lane group.
         int r = rowIndexOfTrack( onto );
         dropIndicator_->setStyleSheet( "border:2px solid #2080ff; background:transparent;" );
@@ -2815,41 +3118,70 @@ void SStdMixerView::endTrackDrag( int yInControlBox )
     SSMVMixerControl *control = dragControl_;
     dragControl_ = NULL;
     if( !control || !model_ ) return;
-    STrack *t = &control->getTrack();
-    int ri = rowIndexOfTrack( t );
-    SObject *curParent = (ri>=0) ? rowAt( ri )->parent : NULL;
+    STrack *dragged = &control->getTrack();
+
+    // Drag the whole selection when the grip that was grabbed belongs to it —
+    // outermost tracks only, since a folder carries its subtree along.
+    const QList<STrack*> targets =
+        pruneNestedTargets( selectionTargets( dragged ) );
+    if( targets.isEmpty() ) return;
 
     STrack *onto = NULL; int slot = 0;
     resolveDrop( yInControlBox, &onto, &slot );
 
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+
     // Dropped onto a lane:
     if( onto ) {
-        // Onto itself or the parent it already sits in -> no-op (don't submit a
-        // doomed reparent).
-        if( onto == t || (SObject*)onto == curParent ) return;
-        // Otherwise nest under it (the action also guards cycles).
-        SApplication::app().submitAction( new SReparentTrackAction(
-            strackpath::pathOf( model_, t ),
-            strackpath::pathOf( model_, onto ), -1 ) );
+        // A drop onto a lane that is itself being dragged (or into one of the
+        // dragged subtrees) has no meaning — refuse the whole gesture rather
+        // than let part of it through.
+        for( STrack *t : targets )
+            if( strackpath::isSelfOrDescendant( onto, t ) ) return;
+
+        if( macro ) stack->beginMacro( QStringLiteral( "Move tracks" ) );
+        for( STrack *t : targets ) {
+            int ri = rowIndexOfTrack( t );
+            SObject *curParent = (ri>=0) ? rowAt( ri )->parent : NULL;
+            // Already inside the target folder -> no-op (don't submit a doomed
+            // reparent; SReparentTrackAction refuses a same-container move).
+            if( (SObject*)onto == curParent ) continue;
+            // Otherwise nest under it (the action also guards cycles).
+            SApplication::app().submitAction( new SReparentTrackAction(
+                strackpath::pathOf( model_, t ),
+                strackpath::pathOf( model_, onto ), -1 ) );
+        }
+        if( macro ) stack->endMacro();
         return;
     }
 
     // Dropped on a boundary -> reorder at top level, or pop a nested track out.
-    int nTop = model_->getNTracks();
-    int fromTop = model_->indexOfChildObject( *t );
-    if( fromTop>=0 ) {
-        int target = (slot>fromTop) ? slot-1 : slot;
-        if( target<0 ) target = 0;
-        if( target>=nTop ) target = nTop-1;
-        if( target==fromTop ) return;
-        SApplication::app().submitAction( new SMoveTrackAction( QList<int>{ fromTop }, target ) );
-    } else {
-        int target = slot;
-        if( target<0 ) target = 0;
-        if( target>nTop ) target = nTop;
-        SApplication::app().submitAction( new SReparentTrackAction(
-            strackpath::pathOf( model_, t ), QList<int>{}, target ) );
+    // `slot` is an insertion GAP among the top-level lanes, and it walks: each
+    // track that lands takes the gap and the next one goes after it, so a
+    // dragged block keeps its internal order.
+    if( macro ) stack->beginMacro( QStringLiteral( "Move tracks" ) );
+    for( STrack *t : targets ) {
+        int nTop = model_->getNTracks();
+        int fromTop = model_->indexOfChildObject( *t );
+        if( fromTop>=0 ) {
+            int target = (slot>fromTop) ? slot-1 : slot;
+            if( target<0 ) target = 0;
+            if( target>=nTop ) target = nTop-1;
+            if( target!=fromTop )
+                SApplication::app().submitAction(
+                    new SMoveTrackAction( QList<int>{ fromTop }, target ) );
+            slot = target + 1;      // the next one goes just below this one
+        } else {
+            int target = slot;
+            if( target<0 ) target = 0;
+            if( target>nTop ) target = nTop;
+            SApplication::app().submitAction( new SReparentTrackAction(
+                strackpath::pathOf( model_, t ), QList<int>{}, target ) );
+            slot = target + 1;
+        }
     }
+    if( macro ) stack->endMacro();
 }
 
 void SStdMixerView::nTracksChanged()
@@ -3875,6 +4207,10 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     // there — see SMainWindow::attachTrackDetail(). All we still care about is
     // repainting the lanes when the selection highlight moves.
     connect(model_, &SStdMixer::selectedTrackChanged,
+            qContent_, QOverload<>::of(&QWidget::update));
+    // ...and when the SET changes without the primary moving (a Ctrl-click on
+    // a third lane), which is exactly the case the lane tint exists for.
+    connect(model_, &SStdMixer::selectedTracksChanged,
             qContent_, QOverload<>::of(&QWidget::update));
 }
 

@@ -3,6 +3,7 @@
 #define _SSMVMIXERCONTROL_H
 
 #include <qwidget.h>
+#include <QList>
 #include "app/model/sobjectrenderer.h"
 #include "tw/metering/tw_level_probe.h"
 
@@ -45,6 +46,9 @@ protected:
     void mousePressEvent( QMouseEvent * ) override;
     void mouseMoveEvent( QMouseEvent * ) override;
     void mouseReleaseEvent( QMouseEvent * ) override;
+    // Right-click on a head shows the arranger's track menu (see
+    // SStdMixerView::showTrackContextMenu) — the heads have none of their own.
+    void contextMenuEvent( QContextMenuEvent * ) override;
     void resizeEvent( QResizeEvent * ) override;
     // Watches the fader for a double-click, which resets it to 0.0 dB.
     bool eventFilter( QObject *, QEvent * ) override;
@@ -75,10 +79,16 @@ protected slots:
     void showChannelMenu();
     void setRecordingChannels( uint32_t channels );
 
-    // Track selection highlight
+    // Track selection highlight (the primary moved / the set changed).
     void onSelectedTrackChanged( STrack *track );
+    void onSelectionChanged();
 
 private:
+    // The tracks this head's M / S / R / G toggles act on: the whole selection
+    // when this lane is part of it, this lane alone otherwise. See
+    // SStdMixerView::selectionTargets.
+    QList<STrack *> toggleTargets() const;
+
     // Resolve this control's track index within the mixer model (-1 if gone).
 
     // Push the slider position to the value v (in dB) without re-submitting
@@ -99,6 +109,13 @@ public:
     // Test face for the meter (see SMainWindow::describeTrackMeter). Non-const
     // because it re-applies the density rules for the current size first.
     QString describeMeter();
+
+    // TEST ENTRY POINT: press one of this head's toggle buttons ("mute",
+    // "solo", "arm", "takes", "group") as a user does, driving the button's
+    // own signal — which is what makes the selection BROADCAST the thing under
+    // test rather than a re-spelling of it. No-op (true) when the button is
+    // already in the requested state; false for an unknown name.
+    bool tkClickToggle( const QString &which, bool on );
 
 private slots:
     // Proposal 34: one metering tick. Reads this track's frozen page at the
@@ -124,8 +141,10 @@ private:
     bool foldable_ = false;
     bool collapsed_ = false;
 
-    // Track selection state for styling
+    // Track selection state for styling: in the selection at all, and the
+    // PRIMARY of it (the lane the Track Detail dock follows).
     bool selected_ = false;
+    bool primary_ = false;
 
     // Track-reorder drag: armed on press in the grip strip, active once the
     // pointer moves past a small threshold.

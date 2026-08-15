@@ -1834,6 +1834,47 @@ bool SMainWindow::groupTrackGesture( const QString &trackPath, bool ungroup )
     return v->groupGesture( track, ungroup );
 }
 
+// Resolve an index-path from the root mixer to a track, for the testkit
+// entry points below. NULL when the path names no lane.
+static STrack *trackAtPath_( const QString &trackPath )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    SObject *root = splacements::rootContainer( proj );
+    if( !root ) return nullptr;
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    return dynamic_cast<STrack *>( lane );
+}
+
+bool SMainWindow::selectTrackGesture( const QString &trackPath,
+                                      Qt::KeyboardModifiers mods )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkClickTrackHead( track, mods );
+}
+
+bool SMainWindow::toggleTrackHead( const QString &trackPath,
+                                   const QString &which, bool on )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkToggleTrackHead( track, which, on );
+}
+
+bool SMainWindow::dragTrackHead( const QString &trackPath, int targetRow,
+                                 bool nestOnto )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkDragTrackHead( track, targetRow, nestOnto );
+}
+
 QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeight )
 {
     SStdMixerView *v = ensureArranger_();
