@@ -11,6 +11,7 @@
 #include "app/shell/ssettings.h"
 #include "app/servicesui/soptions.h"
 #include "tw/core/twlog.h"
+#include "tw/plugins/twplugindescriptor.h"
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
@@ -70,6 +71,29 @@ static bool parseLogLevel( const QString &s, tw::LogLevel &out )
     if( v == "debug" )                { out = tw::LogLevel::Debug; return true; }
     if( v == "trace" )                { out = tw::LogLevel::Trace; return true; }
     return false;
+}
+
+// Orderly process teardown, run on EVERY way out of main -- including the
+// std::exit() a --test-case run leaves through, where no stack object is
+// destroyed and no destructor of ours runs at all.
+//
+// Order matters in one direction only: every thread that can still LOG must be
+// gone before we stop reading records. It is no longer a CORRECTNESS
+// requirement (the sink is immortal now, see twlog.cc), which is the point --
+// this is the house "orderly runner teardown" pattern from the M2 sidecar-store
+// fix, not a latch that a different ordering could break.
+//
+// What used to happen without it: a --test-case run with a COLD plugin cache
+// exited while the startup plugin scan was still walking the machine's
+// installed modules. Static destruction destroyed the log sink first, the scan
+// thread's next TW_LOG locked a DESTROYED mutex, the resulting std::system_error
+// escaped the scan lambda, std::terminate -> abort() blocked against the main
+// thread waiting in ~twPluginRegistry, and the process hung forever after having
+// printed PASS (plan/STATE.md 2026-08-16).
+static void smaragdOrderlyShutdown()
+{
+    audio::pluginRegistry().stopScan();
+    tw::TwLog::instance().shutdown();
 }
 
 int main( int argc, char *argv[] )
@@ -256,6 +280,7 @@ int main( int argc, char *argv[] )
         for (const QString &name : names) {
             std::cout << name.toStdString() << "\n";
         }
+        smaragdOrderlyShutdown();
         return 0;
     }
 
@@ -356,14 +381,19 @@ int main( int argc, char *argv[] )
             std::cout.flush();
             std::cerr.flush();
 
-            // Exit immediately in test mode
+            // Exit immediately in test mode -- but not before the orderly
+            // teardown: std::exit() destroys no stack object, so this call
+            // is the ONLY thing that stops the plugin scan thread and
+            // flushes the log before static destruction begins.
             if (testMode) {
+                smaragdOrderlyShutdown();
                 std::exit(result.passed ? 0 : 1);
             }
         } else {
             std::cerr << "Failed to load script: " << script.error().toStdString() << "\n";
             std::cerr.flush();
             if (testMode) {
+                smaragdOrderlyShutdown();
                 std::exit(1);
             }
         }
@@ -398,8 +428,9 @@ int main( int argc, char *argv[] )
 
     app.exec();
 
-    // Flush and join the log's file writer before the process tears down.
+    // Stop the plugin scan thread and flush the log's file writer before the
+    // process tears down.
     TW_LOGI( "ui.shell", "Smaragd exiting" );
-    tw::TwLog::instance().shutdown();
+    smaragdOrderlyShutdown();
     return 0;
 }

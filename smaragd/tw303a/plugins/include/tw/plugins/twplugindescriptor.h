@@ -137,6 +137,18 @@ public:
     bool isScanning() const { return scanning_.load( std::memory_order_acquire ); }
     void waitForScan();
 
+    // Ask a running scan to stop at the next module boundary, then join it.
+    // This is what the app's ORDERLY TEARDOWN calls (SApplication's destructor
+    // and main.cpp's smaragdOrderlyShutdown) so the scan thread is gone BEFORE
+    // static destruction begins: a --test-case run leaves through std::exit(),
+    // where no stack object is destroyed, and a scan thread still alive at that
+    // point used to log into an already-destroyed sink (see plan/STATE.md
+    // 2026-08-16). Whatever the aborted scan had already probed is still
+    // written to the cache, so successive runs converge instead of restarting
+    // cold every time. Safe to call when no scan is running, and safe to call
+    // twice.
+    void stopScan();
+
     twPluginScanStats scanStats() const;
 
     // --- results -----------------------------------------------------------
@@ -167,6 +179,7 @@ private:
     twPluginScanProgressFn          progress_;
 
     std::atomic<bool>               scanning_{ false };
+    std::atomic<bool>               stopRequested_{ false };  // set by stopScan()
     mutable std::mutex              threadMutex_;   // guards scanThread_ only
     QThread                        *scanThread_ = nullptr;
 };

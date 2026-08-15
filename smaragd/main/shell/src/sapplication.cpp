@@ -486,9 +486,13 @@ SApplication::SApplication( int &argc, char **argv )
 
 SApplication::~SApplication()
 {
-    // Join the scan worker BEFORE anything else goes away: it holds a QProcess
-    // and writes the cache, and the registry outlives us (it is a static).
-    audio::pluginRegistry().waitForScan();
+    // Stop and join the scan worker BEFORE anything else goes away: it holds a
+    // QProcess and writes the cache, and the registry outlives us (it is a
+    // static). stopScan(), not waitForScan(): a scan still walking this
+    // machine's installed modules must not hold the process open for minutes,
+    // and it must not still be alive (and logging) once static destruction
+    // starts -- see plan/STATE.md 2026-08-16.
+    audio::pluginRegistry().stopScan();
     DTOR_DEL( actionHistory_ );
     t3Speaker_.reset();
     DTOR_DEL( t3Env_ );

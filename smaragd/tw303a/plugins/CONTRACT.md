@@ -404,6 +404,24 @@ Invariants:
    must be installed BEFORE `AudioUnitInitialize`, which is a lifecycle change
    this phase did not make.
 
+36. THE SCAN IS STOPPED FROM THE APP'S ORDERLY TEARDOWN, NOT FROM A
+   DESTRUCTOR. twPluginRegistry::stopScan() sets a flag the scan loop reads
+   BETWEEN two modules and then joins the thread; SApplication's destructor and
+   main.cpp's smaragdOrderlyShutdown both call it, so the scan thread is gone
+   before static destruction begins. It has to be explicit because a
+   --test-case run leaves through std::exit(), where no stack object is
+   destroyed at all: the registry is a namespace-scope static, ~twPluginRegistry
+   then joined a scan thread that was still LOGGING, and with a mortal log sink
+   (destroyed earlier, because it was constructed later) that thread abort()ed
+   and deadlocked the process after PASS had been printed — reproduced 6 hangs
+   and 3 crashes in 10 cold-cache runs, plan/STATE.md 2026-08-16. The abort
+   point is deliberately between modules, never inside a probe, so the join is
+   bounded by one probeTimeoutMs_ at worst. An aborted scan still SAVES the
+   cache — the records it probed plus, carried over, the records for modules it
+   never reached — so successive short runs converge instead of restarting cold
+   forever (invariant 9's stickiness is preserved either way). It does NOT
+   replace plugins_: a partial result is not the plugin table.
+
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears
 it), cache reload in a fresh registry instance, refusal of a cache from another
