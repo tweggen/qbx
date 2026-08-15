@@ -2,8 +2,8 @@
 
 Purpose: the headless test harness — SActionScript (.qxa parsing),
 SActionRunner (submit actions, per-action rejection accounting,
-assertions), assert-audio-energy/peak/frequency, screenshot action, and
-the roundtrip test main.
+assertions), assert-audio-energy/peak/frequency, assert-file-identical,
+assert-log, screenshot action, and the roundtrip test main.
 
 Public headers: app/testkit/*.h. Verb reference: docs/ACTIONS.md.
 
@@ -52,6 +52,31 @@ Invariants:
   afterwards is not observed here (playback and render both see it, because
   they go through the scheduler). meter_postfader.qxa therefore uses two tracks
   at different gains rather than changing one track's gain twice.
+
+  assert-file-identical is the byte-`cmp` determinism gate, inside a case.
+  Until it existed that compare could only be run by hand from a shell, so no
+  committed case carried it and every "the goldens did not move" claim in a PR
+  body was a human's word. Absolute paths are ALLOWED (unlike `render`'s output
+  name) precisely so a case can compare against a file another process wrote; a
+  bare name still resolves in the test output directory. A frame range parses
+  both files as RIFF/WAVE and compares only that slice of the `data` chunk —
+  the files are 16-bit PCM, so this is a byte compare, never a float
+  reinterpretation.
+
+  assert-log is the ONLY way to gate a recovery. A recovery is exactly the case
+  where the audio cannot tell you anything: a repaired project renders like a
+  project that never needed repairing, so the WARNING is the evidence. There is
+  no log file under `--test-case` (main.cpp skips the file sink deliberately —
+  the suite would otherwise append to the one smaragd.log in the user's config
+  dir and race over it under `ctest -j`), so the verb reads the in-process TwLog
+  ring, which every channel funnels into. Two rules make it dependable: a
+  `--test-case` run RAISES the ring capacity (a long render must not be able to
+  evict the line under test before the assertion reads it — and the capacity is
+  set exactly once, because setCapacity discards what is buffered), and the
+  window is the records logged since the PREVIOUS action started
+  (SActionRunner marks each boundary; an assert-log does not move the window, so
+  two in a row examine the same action). Counting the whole run instead would
+  make "twice" depend on everything that came before.
 
   dump-playback-capture is the only verb that asserts on the PLAYBACK path.
   Everything else in this suite reads a RENDER, which is a different consumer

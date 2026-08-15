@@ -260,6 +260,8 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudiofrequencyaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
+    testkit/include/app/testkit/sassertfileidenticalaction.h
+    testkit/include/app/testkit/sassertlogaction.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
     testkit/include/app/testkit/sdumpplaybackcaptureaction.h
@@ -278,6 +280,8 @@ set(APP_UI_FILES
     testkit/src/sassertaudiofrequencyaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
+    testkit/src/sassertfileidenticalaction.cpp
+    testkit/src/sassertlogaction.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/sdumpplaybackcaptureaction.cpp

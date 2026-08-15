@@ -3,6 +3,7 @@
 
 #include <qfile.h>
 #include <QDebug>
+#include <QSet>
 
 #include <iostream>
 
@@ -272,6 +273,20 @@ int SProjectLoader::createObjects( SProject &project )
 // resolvable.
 bool SProjectLoader::pruneUnresolvable_( QDomElement &docElem )
 {
+    // A link is only UNRESOLVABLE if its target is neither built yet nor still
+    // in the document. Without the second half this pass would cascade exactly
+    // as the old sweep did, one level per call: at the moment it runs, a track
+    // that is waiting for its clip is itself missing from the dictionary, so
+    // the mixer's link to that track looks dangling too — and dropping it
+    // would lose the whole track while the repair that was about to save it
+    // (dropping ONE link) had not been retried yet.
+    QSet<QString> stillInDocument;
+    for( QDomNode c = docElem.firstChild(); !c.isNull(); c = c.nextSibling() ) {
+        if( !c.isElement() ) continue;
+        const QString id = c.toElement().attribute( "id" );
+        if( !id.isEmpty() ) stillInDocument.insert( id );
+    }
+
     bool changed = false;
     QDomNode leftover = docElem.firstChild();
     while( !leftover.isNull() ) {
@@ -288,7 +303,8 @@ bool SProjectLoader::pruneUnresolvable_( QDomElement &docElem )
         for( QDomNode c = le.firstChild(); !c.isNull(); c = c.nextSibling() ) {
             if( c.isElement() && c.nodeName() == "SLink" ) {
                 const QString oid = c.toElement().attribute( "objectId" );
-                if( !objectDict_.value( oid ) ) {
+                if( !objectDict_.value( oid )
+                    && !stillInDocument.contains( oid ) ) {
                     dangling.append( c );
                     missing << oid;
                 }

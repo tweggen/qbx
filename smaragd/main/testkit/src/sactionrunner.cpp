@@ -1,5 +1,6 @@
 #include "app/testkit/sactionrunner.h"
 #include "app/testkit/sactionscript.h"
+#include "app/testkit/sassertlogaction.h"
 #include "app/actions/saction.h"
 #include "app/shell/sapplication.h"
 #include "app/model/sproject.h"
@@ -51,6 +52,12 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
         // This ensures coalescing, undo stack, and Phase 2 draining are all exercised.
         // Note: submitAction takes ownership; actions in the script are consumed.
         int rejectedBefore = app.actionHistory() ? app.actionHistory()->rejectedCount() : 0;
+
+        // Move assert-log's window to here, so an assertion reads what the
+        // action right before it logged rather than the whole run (an
+        // assert-log does not move it — see SAssertLogAction::beginAction).
+        SAssertLogAction::beginAction(actionName);
+
         app.submitAction(action);
 
         // Pump the event loop to drain Qt events and allow UI updates.
