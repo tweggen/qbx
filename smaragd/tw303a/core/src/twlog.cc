@@ -143,8 +143,23 @@ TwLog::~TwLog()
 
 TwLog &TwLog::instance()
 {
-    static TwLog inst;
-    return inst;
+    // IMMORTAL, deliberately (see tw/core/CONTRACT.md invariant 6). A
+    // function-local `static TwLog inst;` is destroyed during static
+    // destruction, and it is constructed LATE (at the first log call, inside
+    // main) so it is destroyed EARLY -- before namespace-scope statics that
+    // own threads. One of those, audio::gRegistry, joins its plugin-scan
+    // thread in its destructor, and that thread logs: it then locked a
+    // DESTROYED std::mutex, std::system_error escaped the QThread lambda,
+    // std::terminate -> abort() blocked against the main thread, and the
+    // process deadlocked after having printed PASS.
+    //
+    // A heap instance that is never deleted removes the ordering assumption
+    // outright (THREADING.md rule 4): a late record from ANY thread, at ANY
+    // point in teardown, is at worst not written to the file. The file sink is
+    // flushed and joined by the explicit shutdown() call in the app's orderly
+    // teardown, never by a destructor.
+    static TwLog *inst = new TwLog();
+    return *inst;
 }
 
 // ---------------------------------------------------------------------------

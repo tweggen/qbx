@@ -10437,3 +10437,143 @@ you cannot send a message before the transport started. So AC3b's notes start at
 1 s rather than 0: an assertion at −9600 would otherwise be a statement about
 the clamp rather than about the offset. Pre-roll for the lead-in is a later
 feature (D4 has it for instruments).
+
+---
+
+## 2026-08-16 - Plugin-scan vs TwLog teardown hang fixed
+
+Branch `fix/plugin-scan-teardown-hang`. The failure two earlier sessions
+characterised and deliberately did not chase (2026-08-15 "Proposal 36 P1",
+section "Found on the way", and "Proposal 36 P7a", section "One pre-existing
+failure"): a `--test-case` run prints `PASS` and then **never exits**, or dies
+with SIGSEGV after the PASS line. `qxa.takes_screenshot` is the case that hit it
+in the `-j4` suite (CTest Timeout, 600 s).
+
+### Root cause (gdb from the earlier sessions, reproduced and confirmed here)
+
+Two statics whose destruction order is the exact opposite of what their
+dependency needs:
+
+- `audio::gRegistry` (`twpluginregistry.cc`) is a **namespace-scope** static, so
+  it is constructed during dynamic initialisation, BEFORE main.
+- `TwLog::instance()` was a **function-local** static, so it was constructed at
+  the FIRST log call - inside main, i.e. later - and was therefore destroyed
+  EARLIER.
+
+`~twPluginRegistry` joined the startup plugin-scan thread. That thread logs
+(`[scan] '<module>': N plugin(s)`), so it locked an already-destroyed
+`std::mutex`; the `std::system_error` escaped the `QThread::create` lambda,
+which has no catch; `std::terminate` -> `__verbose_terminate_handler` ->
+`abort()` blocked inside the CRT against the main thread; the main thread stayed
+in `QThread::wait()` forever. The earlier session's gdb put the throw at
+`twlog.cc:349` and the waiter at `twpluginregistry.cc:440`.
+
+It needs a scan that is still running at process exit, i.e. a **COLD**
+`plugincache.json` - which is why a full suite usually hides it (the first case
+warms the cache) and why it surfaced after a `kScannerVersion` bump, when two
+worktrees at different scanner versions kept invalidating each other's cache.
+
+The other half of the setup: a `--test-case` run leaves main through
+**`std::exit()`** ("Exit immediately in test mode", `main.cpp`). No stack object
+is destroyed, so `~SApplication` - which has joined the scan since 08 M2 - never
+runs at all, and the registry's own destructor is left holding the problem.
+
+### The fix - both halves, order-independent (THREADING.md rule 4)
+
+1. **The log sink is IMMORTAL.** `TwLog::instance()` returns `*(new TwLog())`:
+   created once, never destroyed. A late record from any thread at any point in
+   teardown can no longer touch a destroyed mutex; at worst it does not reach
+   the file. `shutdown()` (flush + join the file writer) is now an EXPLICIT call
+   from the orderly teardown, never a destructor. `tw/core/CONTRACT.md`
+   invariant 6.
+2. **The scan is stopped from the orderly teardown.**
+   `twPluginRegistry::stopScan()` sets a flag the scan loop reads BETWEEN two
+   modules, then joins. `~SApplication` calls it instead of `waitForScan()`, and
+   `main.cpp`'s new `smaragdOrderlyShutdown()` calls it on EVERY way out of main
+   - both `std::exit` sites, `--list-actions`, and the interactive tail -
+   followed by `TwLog::shutdown()`. `tw/plugins/CONTRACT.md` invariant 36.
+
+Either half alone stops the hang. Both are in, because the thing to remove is
+the ordering ASSUMPTION, not one of its two consequences.
+
+An aborted scan still **saves the cache**: the records it probed, plus the
+records for modules it never reached carried over from the previous cache, so
+successive short runs converge instead of restarting cold forever (invariant 9's
+sticky failures are preserved either way). It does NOT replace `plugins_` - a
+partial result is not the plugin table. The abort point is between modules,
+never inside a probe, so the join is bounded by one `probeTimeoutMs_` at worst.
+**Nothing changes for a warm cache**: the flag is false, the loop is the same
+loop, and the scan ends exactly as it did.
+
+Files: `tw303a/core/src/twlog.cc` (+ `tw/core/twlog.h` comment),
+`tw303a/plugins/src/twpluginregistry.cc` (+ the declaration in
+`tw/plugins/twplugindescriptor.h`), `main/shell/src/main.cpp`,
+`main/shell/src/sapplication.cpp`, `tw303a/core/tests/test_twlog.cpp`.
+
+### Numbers: cold cache before EVERY iteration, `SMARAGD_REVAL_WORKERS=16`
+
+Judged by **exit code**, not by the PASS line: `repeat_test.sh` greps stdout and
+scores every one of these failures as a pass (CLAUDE.md says so under "Two known
+crash flakes"). Each iteration deletes `<configDir>/plugincache.json` first; a
+run that had not exited after 45 s was killed and counted as a hang. Same box,
+same cases, the only difference being the seven-file diff above.
+
+| Case | BEFORE (10 runs) | AFTER (30 runs) |
+|---|---|---|
+| `takes_screenshot` | **1 pass**, 3 fail (exit 127 / 139), 6 hangs | **30/30** |
+| `split_plain_screenshot` | **1 pass**, 2 fail, 7 hangs | **30/30** |
+| `exact_stretch_roundtrip` | 9 pass, 1 hang | **30/30** |
+| `warp_anchors_roundtrip` | 10 pass | **30/30** |
+| `lane_alignment` | **0 pass**, 4 fail, 6 hangs | **30/30** |
+
+150 cold runs after the fix, 0 failures, 0 hangs.
+
+### Gate
+
+| Gate | Result |
+|---|---|
+| `./build.sh` (re-configure) | clean |
+| `python tools/check_layering.py` | clean |
+| `python tools/check_logging.py` | clean |
+| `twlog_test` | 36 assertions, 0 failed (3 new) |
+| `ctest --test-dir smaragd/build -j4` | **128/128 passed** in 107.5 s; 131 registered, 3 `au_*` Not Run (Disabled). Reconciled: 107 `.qxa` on disk = 107 `qxa.*` registered |
+
+`twlog_test` gained `testShutdownIsSafe`: `shutdown()` is idempotent, a thread
+STARTED AFTER it can still log, and those records still reach the ring - plus an
+`atexit` handler registered as the first statement of `main()`, before anything
+in the process has touched `TwLog::instance()`. Destructor and atexit
+registrations share one LIFO order, so a handler registered FIRST runs LAST:
+under the old mortal sink that call landed after the sink's destructor, which is
+precisely the crash; under the immortal one it is just a log call.
+
+**Goldens are byte-identical by construction** - nothing here is reachable from
+`freezePage`, `RenderSession` or `AudioEngine`. The only thing that executes
+differently inside a rendering process is one relaxed flag read between two
+plugin-module probes.
+
+### What this is NOT, and what remains
+
+- **The teardown SEGFAULT family is a different bug and is not fixed here.**
+  The worker-count-sensitive dangling-`SLink` teardown race (PR #34's session)
+  and the `split_plain_screenshot` / `clip_properties_actions` crash flakes
+  CLAUDE.md records are a crash, not a hang; they need full-suite context, not a
+  cold plugin cache. What the numbers above DO show is that most of what looked
+  like that family in a cold-cache run was in fact this bug: `lane_alignment`
+  went 0/10 -> 30/30 and `exact_stretch_roundtrip` 9/10 -> 30/30 without a line
+  of model code changing. Neither reproduced at all in the 150 isolated runs
+  after the fix, which is consistent with CLAUDE.md's note that they do not
+  reproduce in isolation - so this is not evidence that they are gone.
+- **`stopScan()` cannot interrupt a probe that is already running.** It waits
+  for the module currently being probed, so a plugin that burns its full
+  `probeTimeoutMs_` (15 s) still adds that to process exit, once. Killing the
+  `QProcess` from the stopping thread would be the next step if that ever bites.
+- **A cold-cache `--test-case` run now never finishes its scan**, because the
+  process exits first and the scan is stopped at the next module boundary. That
+  was already true in effect (the process was exiting); the difference is that
+  the partial result is now written, so the cache warms up over a few runs
+  instead of never.
+- Reproducing this needs the SHARED `<configDir>/plugincache.json` to be cold,
+  and that file is shared by every worktree on the machine. Deleting it while
+  another session is running its suite gives that session a cold scan too - and
+  on a binary without this fix, a hang. Restore it (or let one full run rebuild
+  it) when the sweep is done.

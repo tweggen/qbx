@@ -527,9 +527,13 @@ SApplication::SApplication( int &argc, char **argv )
 
 SApplication::~SApplication()
 {
-    // Join the scan worker BEFORE anything else goes away: it holds a QProcess
-    // and writes the cache, and the registry outlives us (it is a static).
-    audio::pluginRegistry().waitForScan();
+    // Stop and join the scan worker BEFORE anything else goes away: it holds a
+    // QProcess and writes the cache, and the registry outlives us (it is a
+    // static). stopScan(), not waitForScan(): a scan still walking this
+    // machine's installed modules must not hold the process open for minutes,
+    // and it must not still be alive (and logging) once static destruction
+    // starts -- see plan/STATE.md 2026-08-16.
+    audio::pluginRegistry().stopScan();
     // The MIDI scheduler threads join HERE, on the main thread, while the log
     // sink is still alive - not during static destruction, which is where this
     // repo has already recorded a teardown hang of exactly that shape.
