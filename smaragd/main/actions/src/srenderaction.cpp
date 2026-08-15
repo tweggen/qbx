@@ -80,7 +80,8 @@ SApplyResult SRenderAction::apply(SProject *project)
     params.quality = quality_;
     params.extent = audio::RenderParams::Extent::EntireProject;
     params.startTimeSec = 0.0;
-    params.endTimeSec = project->getDurationSeconds();
+    params.endTimeSec = ( durationSec_ > 0.0 ) ? durationSec_
+                                               : project->getDurationSeconds();
 
     // Start rendering
     // Note: RenderSession is asynchronous. For test mode, we should wait for completion.
@@ -122,6 +123,10 @@ void SRenderAction::writeXml(QDomElement &elem) const
     }
     elem.setAttribute("format", formatStr);
     elem.setAttribute("quality", QString::number(quality_));
+    // Written only when set, so every existing case round-trips unchanged.
+    if (durationSec_ > 0.0) {
+        elem.setAttribute("durationSec", QString::number(durationSec_));
+    }
 }
 
 bool SRenderAction::readXml(const QDomElement &elem, int /*version*/)
@@ -145,6 +150,13 @@ bool SRenderAction::readXml(const QDomElement &elem, int /*version*/)
     quality_ = elem.attribute("quality", "10").toInt(&ok);
     if (!ok || quality_ < 0 || quality_ > 320) {
         qWarning() << "SRenderAction::readXml: invalid quality:" << elem.attribute("quality");
+        return false;
+    }
+
+    durationSec_ = elem.attribute("durationSec", "-1").toDouble(&ok);
+    if (!ok) {
+        qWarning() << "SRenderAction::readXml: invalid durationSec:"
+                   << elem.attribute("durationSec");
         return false;
     }
 

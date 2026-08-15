@@ -49,6 +49,12 @@ const Fixture kFixtures[] = {
     { "assert-audio-frequency",
       "<assert-audio-frequency filename='r.wav' minHz='430' maxHz='450'"
       " frameCount='48000' channel='0'/>" },
+    // minDiffRms is written only when >= 0 (the default -1 means "not checked"),
+    // so the fixture gives it a real value to keep it in the audit.
+    { "assert-channels-differ",
+      "<assert-channels-differ filename='r.wav' channelA='0' channelB='3'"
+      " minRmsDelta='0.250000' minDiffRms='0.100000' startFrame='4000'"
+      " frameCount='4000'/>" },
     // expectSilence is only written when true, so it stays out of the fixture.
     { "assert-source-position",
       "<assert-source-position filename='r.wav' startFrame='40960'"
@@ -57,6 +63,20 @@ const Fixture kFixtures[] = {
     { "assert-file-contains",
       "<assert-file-contains path='p.qxp' text='uid=&apos;x&apos;'"
       " absent='true'/>" },
+    // maxReportedDiffs is written only when it is NOT the default 8, so the
+    // fixture gives it another value to keep it in the audit.
+    { "assert-file-identical",
+      "<assert-file-identical actual='r.wav' expected='../ref.wav'"
+      " maxReportedDiffs='3'/>" },
+    // Same shape: maxPages/maxBytes are written only when >= 0.
+    { "report-page-memory",
+      "<report-page-memory label='after render' maxPages='4096'"
+      " maxBytes='1073741824'/>" },
+    // durationSec is written only when > 0, so a fixture must give it one — it
+    // is the only optional attribute `render` has.
+    { "render",
+      "<render filename='r.wav' format='wav' quality='10'"
+      " durationSec='2.5'/>" },
     // minFrames is only written when non-zero, so a fixture must give it one.
     { "dump-playback-capture",
       "<dump-playback-capture filename='playback.wav' minFrames='315392'/>" },

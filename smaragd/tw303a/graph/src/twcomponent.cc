@@ -7,6 +7,9 @@
 #include <cassert>
 #include <iostream>
 #include <iterator>
+#include <sstream>
+#include <typeinfo>
+#include <unordered_set>
 #include <vector>
 
 #include "tw/core/twsyslog.h"
@@ -301,10 +304,37 @@ int twComponent::initOperation( int initId )
     return 0;
 }
 
+// --- Live-component registry, for the per-component page accounting ---------
+//
+// A leaked singleton on purpose: a component can in principle
+// be destroyed after static destructors have run (a detached worker dropping its
+// last shared_ptr), and unregistering into a destroyed registry is a crash at
+// exit that would look like an engine bug. Leaking one std::set costs one
+// allocation for the life of the process.
+namespace {
+
+struct ComponentRegistry {
+    std::mutex                                m;
+    std::unordered_set<const twComponent *>   live;
+};
+
+ComponentRegistry &componentRegistry()
+{
+    static ComponentRegistry *r = new ComponentRegistry();
+    return *r;
+}
+
+}  // namespace
+
 twComponent::~twComponent ()
 {
     // Phase 1: Vectors handle RAII cleanup automatically
     // shared_ptr destructs when removed from vector or when vector is destroyed
+    {
+        ComponentRegistry &r = componentRegistry();
+        std::lock_guard<std::mutex> lock( r.m );
+        r.live.erase( this );
+    }
 }
 
 /**
@@ -329,6 +359,9 @@ twComponent::twComponent( tw303aEnvironment &env0 )
       env( env0 )
       // Phase 1: vectors initialize empty by default
 {
+    ComponentRegistry &r = componentRegistry();
+    std::lock_guard<std::mutex> lock( r.m );
+    r.live.insert( this );
 }
 
 // ============================================================================
@@ -390,13 +423,206 @@ void twComponent::releaseOldPages(offset_t keepAfterPos)
     std::lock_guard<std::mutex> lock(mutex());
 
     for (auto it = outputPages_.begin(); it != outputPages_.end(); ) {
-        if (it->first + twOutputPage::PAGE_SIZE < keepAfterPos) {
+        // FRAMES against FRAMES. This read PAGE_SIZE (262144 BYTES) where the
+        // page's extent in the same units as keepAfterPos is FRAME_CAPACITY
+        // (65536 frames), so retention was 4x more generous than the comment
+        // above it claims — a page was kept until the playhead had passed its
+        // end by three further pages. Nothing depended on it (nothing calls this
+        // at all), which is exactly why it survived: the only way this stays
+        // fixed is a test, so it is pinned frame-exactly by graph_test.
+        if (it->first + (offset_t) twOutputPage::FRAME_CAPACITY < keepAfterPos) {
             // Page is entirely before keepAfterPos; release it
             it = outputPages_.erase(it);
         } else {
             ++it;
         }
     }
+}
+
+// --- Page-memory accounting -------------------------------------------------
+
+// The measurement itself, with the caller holding whatever lock it holds. Two
+// deliberate properties, both forced by WHERE this runs:
+//
+//  * TRY_LOCK, never a blocking lock. The two static walkers below hold the
+//    registry lock while they call this (see componentPageStats for why that is
+//    the memory-safe order), so a blocking acquire here would be a lock-order
+//    inversion against any thread that destroys a component while holding some
+//    component's mutex. A busy component is skipped and counted, not waited for.
+//  * It reads accountedBytes(), the byte count the page REGISTERED, rather than
+//    samples.size() — so the per-component sum and the global counter cannot
+//    disagree even if a page's vector is ever grown in place.
+bool twComponent::pageStatsTry( PageStats &out ) const
+{
+    std::unique_lock<std::mutex> lock(mutex(), std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return false;
+    }
+
+    for (const auto &kv : outputPages_) {
+        if (!kv.second) {
+            continue;
+        }
+        out.pages += 1;
+        out.bytes += kv.second->accountedBytes();
+        if (kv.second->validAspects.load() != 0) {
+            out.frozen += 1;
+        }
+    }
+    return true;
+}
+
+twComponent::PageStats twComponent::pageStats() const
+{
+    // The single-component entry point, for a caller that owns the component and
+    // is not walking the registry: it may block, because there is no registry
+    // lock above it to invert against.
+    std::lock_guard<std::mutex> lock(mutex());
+
+    PageStats s;
+    for (const auto &kv : outputPages_) {
+        if (!kv.second) {
+            continue;
+        }
+        s.pages += 1;
+        s.bytes += kv.second->accountedBytes();
+        if (kv.second->validAspects.load() != 0) {
+            s.frozen += 1;
+        }
+    }
+    return s;
+}
+
+twComponent::PageStats twComponent::componentPageStats()
+{
+    // THE REGISTRY LOCK IS HELD FOR THE WHOLE WALK, and that is what makes the
+    // raw pointers safe rather than merely convenient. ~twComponent takes this
+    // same lock as the FIRST thing it does, so while we hold it no component can
+    // get past the top of its base destructor — and the shared_ptr deleter only
+    // frees the storage after that destructor returns. Snapshotting the pointers
+    // and releasing the lock, the obvious alternative, would leave exactly the
+    // window in which a worker dropping the last reference to a reader turns a
+    // diagnostic into a use-after-free.
+    //
+    // The deadlock that arrangement would otherwise invite is closed by
+    // pageStatsTry's try_lock: we never wait for a component mutex while holding
+    // the registry lock.
+    ComponentRegistry &r = componentRegistry();
+    std::lock_guard<std::mutex> lock( r.m );
+
+    PageStats total;
+    for (const twComponent *c : r.live) {
+        PageStats s;
+        if (c->pageStatsTry( s )) {
+            total.pages  += s.pages;
+            total.bytes  += s.bytes;
+            total.frozen += s.frozen;
+        }
+    }
+    return total;
+}
+
+std::string twComponent::describePageMemory( const char *label )
+{
+    ComponentRegistry &r = componentRegistry();
+    std::lock_guard<std::mutex> registryLock( r.m );   // see componentPageStats
+
+    struct TypeRow {
+        size_t instances = 0;   // components of this type that exist
+        size_t holders   = 0;   // of those, how many hold at least one page
+        size_t pages     = 0;
+        size_t bytes     = 0;
+        size_t frozen    = 0;
+    };
+    std::map<std::string, TypeRow> byType;
+
+    PageStats total;
+    size_t    skipped = 0;
+    for (const twComponent *c : r.live) {
+        // typeid on a component another thread is still constructing (or already
+        // unwinding) reports the base type rather than the derived one. That
+        // mislabels a ROW; it cannot crash, because the registry lock keeps the
+        // storage alive for the whole walk.
+        const std::string type = typeid( *c ).name();
+
+        PageStats s;
+        if (!c->pageStatsTry( s )) {
+            ++skipped;
+            continue;
+        }
+
+        TypeRow &row = byType[type];
+        row.instances += 1;
+        row.holders   += (s.pages > 0) ? 1 : 0;
+        row.pages     += s.pages;
+        row.bytes     += s.bytes;
+        row.frozen    += s.frozen;
+
+        total.pages  += s.pages;
+        total.bytes  += s.bytes;
+        total.frozen += s.frozen;
+    }
+
+    const tw::pages::PageMemoryStats g = tw::pages::PageAccounting::global();
+    const tw::pages::PageMemoryStats pool = tw::pages::PageAccounting::poolReserved();
+
+    std::ostringstream os;
+    os << "page-memory [" << (label ? label : "") << "]"
+       << " global=" << g.pages << " pages/" << g.bytes << " B"
+       << " capturePoolReserved=" << pool.pages << " pages/" << pool.bytes << " B"
+       << " inComponents=" << total.pages << " pages/" << total.bytes << " B"
+       << " frozen=" << total.frozen
+       << " elsewhere=" << (g.pages >= total.pages ? g.pages - total.pages : 0)
+       << " components=" << r.live.size()
+       << " skippedBusy=" << skipped
+       << " everAllocated=" << tw::pages::PageAccounting::everAllocated()
+       << " peakBytes=" << tw::pages::PageAccounting::peakBytes()
+       << "\n";
+
+    // Heaviest type first; ties broken by name so the text is stable enough to
+    // diff between two runs.
+    std::vector<std::pair<std::string, TypeRow>> rows( byType.begin(), byType.end() );
+    std::sort( rows.begin(), rows.end(),
+               []( const std::pair<std::string, TypeRow> &a,
+                   const std::pair<std::string, TypeRow> &b ) {
+                   if( a.second.pages != b.second.pages )
+                       return a.second.pages > b.second.pages;
+                   return a.first < b.first;
+               } );
+
+    for (const auto &kv : rows) {
+        os << "page-memory [" << (label ? label : "") << "]   "
+           << kv.first
+           << " instances=" << kv.second.instances
+           << " holders="   << kv.second.holders
+           << " pages="     << kv.second.pages
+           << " frozen="    << kv.second.frozen
+           << " bytes="     << kv.second.bytes
+           << "\n";
+    }
+
+    return os.str();
+}
+
+std::string twComponent::reportPageMemory( const char *label )
+{
+    const std::string text = describePageMemory( label );
+
+    // One TW_LOG record per line: the ring stores one line per record, and a
+    // multi-line record would be unreadable in the log dock.
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t nl = text.find('\n', start);
+        if (nl == std::string::npos) {
+            nl = text.size();
+        }
+        if (nl > start) {
+            TW_LOGI( "pages", "%s", text.substr( start, nl - start ).c_str() );
+        }
+        start = nl + 1;
+    }
+
+    return text;
 }
 
 std::vector<std::shared_ptr<twOutputPage>> twComponent::getPagesInRange(
