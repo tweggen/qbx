@@ -90,6 +90,17 @@ the plugin search paths. Gates: `filepathref_test` (ctest) and
   (`<dump-playback-capture>` writes the recording out as a 16-bit WAV and
   assert-source-position decodes it). It also stops a headless suite from
   opening the real output device ~90 times.
+- `SMARAGD_MIDI_BACKEND=winmm|coremidi|alsaseq|capture|null|default` picks the
+  MIDI ports the same way, ahead of the platform choice (proposal 36 P7a,
+  `tw/devices/midi_output.h`). **`capture` is the intended default for a
+  `--test-case` run** — it records `{hostTimeNs, port, bytes}` in memory and
+  nothing else, so a MIDI-out assertion is measured against the AUDIO capture
+  backend's independent block log (`CaptureBackend::frameAtHostTime`, host time
+  → project frame, piecewise linear) rather than against the pump under test.
+  Unlike the audio variable it is read at every `createMidiOutput()` call, and
+  `createMidiOutput("winmm")` names a backend explicitly. MIDI is emitted at
+  PLAY time by `MidiOutScheduler`'s Qt-free thread — never at freeze time, for
+  exactly the reason level meters are not computed there.
 - `SMARAGD_CAPTURE_SPEED=<float>` multiplies the capture backend's pacing (4.0 =
   four times faster than real time) for a smoke run. The pacing is real time by
   default ON PURPOSE — a clock that waited for the readahead would mask exactly

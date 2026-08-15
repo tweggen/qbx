@@ -734,6 +734,6 @@ read §6, STATE.md tail, `git log --oneline -15`, the branch's open PR, then cod
 | P4 event editor + virtual keyboard | ☐ | | | |
 | P5 automation model + engine | ☐ | | | |
 | P6 automation UI | ☐ | | | |
-| P7 MIDI output | ☐ | | | |
+| P7 MIDI output | ☐ | | | **P7a (engine half) done 2026-08-15**, branch `feat/36-p7a-midi-devices`: `tw/devices` MIDI interfaces + WinMM/CoreMIDI/ALSA-seq/capture/null backends + `MidiOutScheduler` + the audio capture backend's host-time block log; `devices_midi_test` green (max \|sent − due\| 1.32 ms over 40 runs), ctest 121 → 122. CoreMIDI/ALSA-seq UNVERIFIED (Windows). Row stays unticked — P7b (app pump, per-track port/channel/offset, Options page, `assert-midi-out`/`dump-midi-capture`, the AC1–AC6 qxa cases) completes it. |
 | P8 live MIDI input (outline) | ☐ | | | gated on 21-P1 |
 | P9 follow-ups (outline) | ☐ | | | own proposals |

@@ -40,7 +40,7 @@ it has no place in the dataflow DAG at all — and it must stay core-only becaus
 | tw/dsp | oscillators, filters, noise | tw303a/dsp/CONTRACT.md |
 | tw/mix | track mix (clip model), mixer, rewire | tw303a/mix/CONTRACT.md |
 | tw/plugins | plugin ABI, registry, hosting chain | tw303a/plugins/CONTRACT.md |
-| tw/devices | WASAPI/ALSA/CoreAudio backends + inputs | tw303a/devices/CONTRACT.md |
+| tw/devices | WASAPI/ALSA/CoreAudio backends + inputs; MIDI in/out (WinMM/CoreMIDI/ALSA-seq/capture/null) + `MidiOutScheduler` | tw303a/devices/CONTRACT.md |
 | tw/sinks | file writers (WAV/OGG/MP3), frame sinks | tw303a/sinks/CONTRACT.md |
 | tw/playback | speaker, audio engine, readahead | tw303a/playback/CONTRACT.md |
 | tw/render | **the rendering engine** (offline) | tw303a/render/CONTRACT.md |
