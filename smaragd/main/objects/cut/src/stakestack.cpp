@@ -1,5 +1,5 @@
 #include "app/objects/cut/stakestack.h"
-#include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
 #include "app/model/sappcontext.h"
@@ -54,24 +54,47 @@ STakeStack::~STakeStack()
     cpSilence_.reset();
 }
 
-SCut *STakeStack::takeCutAt( int index ) const
+SObject *STakeStack::takeObjectAt( int index ) const
 {
     if( index < 0 || index >= childCount() ) return nullptr;
     SLink *lk = childAt( index );
-    return lk ? dynamic_cast<SCut *>( &lk->getSObject() ) : nullptr;
+    return lk ? &lk->getSObject() : nullptr;
 }
 
-SLink *STakeStack::insertTake( SCut &cut, int atIndex )
+SClipWindow *STakeStack::takeAt( int index ) const
 {
-    SLink *lk = new SLink( cut, nullptr );
+    return SClipWindow::of( takeObjectAt( index ) );
+}
+
+SContentKind STakeStack::contentKind() const
+{
+    // Homogeneous by construction (insertTake refuses a mismatch), so the
+    // first take answers for the column. An empty column cannot occur in a
+    // loaded project (invariant 3) but can exist for an instant while one is
+    // being built — Audio is the default everywhere else too.
+    if( SObject *first = takeObjectAt( 0 ) ) return first->contentKind();
+    return SContentKind::Audio;
+}
+
+SLink *STakeStack::insertTake( SClipWindow &window, int atIndex )
+{
+    SObject &obj = window.asObject();
+    if( childCount() > 0 && window.contentKind() != contentKind() ) {
+        qWarning( "STakeStack: refusing a take of content kind %d into a "
+                  "column of kind %d — a take is an ALTERNATIVE for the same "
+                  "region, not a different instrument.",
+                  (int) window.contentKind(), (int) contentKind() );
+        return nullptr;
+    }
+    SLink *lk = new SLink( obj, nullptr );
     lk->setStartTime( 0 );                     // takes are column-relative
     lk->setParent( this );                     // appends to childOrder_
     if( atIndex >= 0 && atIndex < childCount() - 1 ) {
         moveChildToIndex( childCount() - 1, atIndex );
         if( atIndex <= activeTake_ )
-            ++activeTake_;                     // keep pointing at the same cut
+            ++activeTake_;                     // keep pointing at the same take
     }
-    QObject::connect( &cut, SIGNAL( durationChanged( length_t ) ),
+    QObject::connect( &obj, SIGNAL( durationChanged( length_t ) ),
                       this, SLOT( onTakeCutChanged( length_t ) ) );
     return lk;
 }
@@ -80,8 +103,8 @@ void STakeStack::removeTake( int index )
 {
     SLink *lk = childAt( index );
     if( !lk ) return;
-    if( SCut *cut = takeCutAt( index ) ) {
-        QObject::disconnect( cut, SIGNAL( durationChanged( length_t ) ),
+    if( SObject *take = takeObjectAt( index ) ) {
+        QObject::disconnect( take, SIGNAL( durationChanged( length_t ) ),
                              this, SLOT( onTakeCutChanged( length_t ) ) );
     }
     delete lk;                                 // refcount release → deleteLater
@@ -115,12 +138,12 @@ void STakeStack::setDurationAll( length_t duration )
 {
     forwardSuppressed_ = true;
     for( int i = 0; i < childCount(); ++i ) {
-        if( SCut *cut = takeCutAt( i ) )
-            cut->setDuration( duration );
+        if( SClipWindow *take = takeAt( i ) )
+            take->setDurationFromTimeline( duration );
     }
     forwardSuppressed_ = false;
     // Emit the value we just set on every take — NOT getDuration(), which reads
-    // the active cut via SCut::getSnapshot()'s try-lock and can return the stale
+    // the active take via SCut::getSnapshot()'s try-lock and can return the stale
     // pre-edit duration when a background revalidation worker holds the cut mutex.
     // That stale value reached the track (STrack::trackChildDurationChanged →
     // twTrackMix::updateClip), leaving a split clip's HEAD at its full pre-split
@@ -139,15 +162,15 @@ void STakeStack::applyWindowAll( length_t duration, length_t loopLength,
 {
     forwardSuppressed_ = true;
     for( int i = 0; i < childCount(); ++i ) {
-        SCut *cut = takeCutAt( i );
-        if( !cut ) continue;
+        SClipWindow *take = takeAt( i );
+        if( !take ) continue;
         // Slip offsets live in the stretched OUTPUT domain: a stretch change
         // rescales them so every take keeps pointing at the same material.
-        // The source anchor is authoritative (proposal 18 Phase 3): a
+        // The content anchor is authoritative (proposal 18 Phase 3): a
         // stretch change does not move it, so the old warped-offset rescale
         // (and its per-take rounding) is simply gone.
-        cut->setWindow( cut->getSrcStart(), ClipLen( duration ),
-                        WarpedLen( loopLength ), stretch );
+        take->setWindowExact( take->contentAnchorExact(), duration,
+                              loopLength, stretch );
     }
     forwardSuppressed_ = false;
     // Authoritative value we just set on every take (proposal 19 Phase 2b) —
@@ -162,7 +185,7 @@ void STakeStack::onTakeCutChanged( length_t )
     // it must resync the track (same window, changed content — updateClip
     // bumps the epoch unconditionally for exactly this case).
     SObject *obj = dynamic_cast<SObject *>( sender() );
-    if( obj && static_cast<SObject *>( activeCut() ) == obj )
+    if( obj && activeTakeObject() == obj )
         // Blocking read: never the stale try-lock duration (proposal 19 Phase 2b).
         emit durationChanged( getDurationBlocking() );
 }
@@ -181,8 +204,8 @@ std::shared_ptr<twComponent> STakeStack::ensureSilence()
 
 std::shared_ptr<twComponent> STakeStack::getRootComponent()
 {
-    if( SCut* cut = activeCut() )
-        return cut->getRootComponent();
+    if( SObject *take = activeTakeObject() )
+        return take->getRootComponent();
     return ensureSilence();
 }
 
@@ -193,35 +216,34 @@ QList<SObject::SDirtyRange> STakeStack::mapChildRangesToSelf(
     // Only the active take reaches the mix; an edit inside an inactive
     // take's content changes nothing audible (selecting that take later
     // goes through updateClip, which re-stales the column's extent).
-    SCut *active = takeCutAt( activeTakeIndex() );
-    if( !childLink || !active
-        || &childLink->getSObject() != (SObject *) active )
+    SObject *active = activeTakeObject();
+    if( !childLink || !active || &childLink->getSObject() != active )
         return {};
     return SObject::mapChildRangesToSelf( childLink, childRanges );
 }
 
 offset_t STakeStack::mapTimelineToComponentPos( offset_t off )
 {
-    if( SCut *cut = activeCut() )
-        return cut->mapTimelineToComponentPos( off );
+    if( SObject *take = activeTakeObject() )
+        return take->mapTimelineToComponentPos( off );
     return off;
 }
 
 twResolvedClip STakeStack::resolveClip( offset_t off )
 {
-    // Read activeCut() ONCE and resolve the whole clip through that take, so the
+    // Read the active take ONCE and resolve the whole clip through it, so the
     // component and the mapping can't come from different takes (getRootComponent
-    // and mapTimelineToComponentPos used to call activeCut() separately) nor from
+    // and mapTimelineToComponentPos used to resolve the take separately) nor from
     // different reader generations of the same take (SCut::resolveClip fuses it).
-    if( SCut *cut = activeCut() )
-        return cut->resolveClip( off );
+    if( SObject *take = activeTakeObject() )
+        return take->resolveClip( off );
     return twResolvedClip{ ensureSilence(), off };
 }
 
 int STakeStack::seekTo( offset_t off )
 {
-    if( SCut *cut = activeCut() )
-        return cut->seekTo( off );
+    if( SObject *take = activeTakeObject() )
+        return take->seekTo( off );
     return 0;
 }
 
@@ -229,10 +251,10 @@ length_t STakeStack::getDuration() const
 {
     // The window survives deactivation (activeTake == -1 plays silence but
     // the column keeps its extent), so fall back to the first take.
-    if( const SCut *cut = activeCut() )
-        return cut->getDuration();
-    if( const SCut *cut = takeCutAt( 0 ) )
-        return cut->getDuration();
+    if( const SObject *take = activeTakeObject() )
+        return take->getDuration();
+    if( const SObject *take = takeObjectAt( 0 ) )
+        return take->getDuration();
     return 0;
 }
 
@@ -241,24 +263,24 @@ length_t STakeStack::getDurationBlocking() const
     // Blocking-snapshot duration for the edit/signal path (proposal 19 Phase 2b):
     // a durationChanged emit must carry the CURRENT duration, not the stale
     // try-lock value getDuration() can return under background-worker contention.
-    if( const SCut *cut = activeCut() )
-        return cut->getDurationBlocking();
-    if( const SCut *cut = takeCutAt( 0 ) )
-        return cut->getDurationBlocking();
+    if( const SObject *take = activeTakeObject() )
+        return take->getDurationBlocking();
+    if( const SObject *take = takeObjectAt( 0 ) )
+        return take->getDurationBlocking();
     return 0;
 }
 
 bool STakeStack::hasPreview() const
 {
-    SCut *cut = activeCut();
-    return cut ? cut->hasPreview() : false;
+    SObject *take = activeTakeObject();
+    return take ? take->hasPreview() : false;
 }
 
 int STakeStack::getPreview( preview_t *dest, offset_t start, length_t length,
                             offset_t nProbes )
 {
-    if( SCut *cut = activeCut() )
-        return cut->getPreview( dest, start, length, nProbes );
+    if( SObject *take = activeTakeObject() )
+        return take->getPreview( dest, start, length, nProbes );
     return -1;
 }
 
@@ -310,12 +332,15 @@ SLink *STakeStack::instantiateFromDomElement(
             SLink *contentLink =
                 projectLoader.getObjectDictionary().value( objectId );
             if( contentLink ) {
-                if( SCut *cut = dynamic_cast<SCut *>(
-                        &contentLink->getSObject() ) ) {
-                    stack->insertTake( *cut );
+                if( SClipWindow *take =
+                        SClipWindow::of( &contentLink->getSObject() ) ) {
+                    // May be refused on a content-kind mismatch (see
+                    // insertTake); that warns for itself and costs one take,
+                    // never the column.
+                    stack->insertTake( *take );
                 } else {
-                    qWarning( "STakeStack: child %s is not an SCut, skipped",
-                              qPrintable( objectId ) );
+                    qWarning( "STakeStack: child %s is not a clip window, "
+                              "skipped", qPrintable( objectId ) );
                 }
             } else {
                 qWarning( "STakeStack: object not in dictionary: %s",
@@ -330,7 +355,10 @@ SLink *STakeStack::instantiateFromDomElement(
 
 static const bool s_reg_stakestack = (
     SProjectLoader::registerSObjectClass(
-        "STakeStack", STakeStack::instantiateFromDomElement ), true );
+        "STakeStack", STakeStack::instantiateFromDomElement,
+        // A CONTAINER of takes: one unloadable take costs its own link, never
+        // the column and its siblings (proposal 36 D8a).
+        SElementKind::Container ), true );
 
 // ---------------------------------------------------------------------------
 // STakeStackRendererInline
@@ -352,8 +380,8 @@ void STakeStackRendererInline::draw( SLink &lk, SRenderContext &ctx )
     const QRect vr = ctx.getVisibRect();
     STakeStack &st = stack();
 
-    if( SCut *cut = st.activeCut() ) {
-        if( SObjectRenderer *rndr = cut->getInlineRenderer() )
+    if( SObject *take = st.activeTakeObject() ) {
+        if( SObjectRenderer *rndr = take->getInlineRenderer() )
             rndr->draw( lk, ctx );    // my link but his object (CLIP_MODEL)
     } else {
         p.fillRect( vr, QBrush( QColor( 70, 70, 70 ), Qt::BDiagPattern ) );

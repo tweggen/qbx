@@ -872,4 +872,7 @@ void STrack::onTrackVolumeChanged( double gainDb )
 // element name. Relies on the app being an OBJECT library (no TU elision).
 static const bool s_registered_strack =
     ( SProjectLoader::registerSObjectClass( "STrack",
-          STrack::instantiateFromDomElement ), true );
+          STrack::instantiateFromDomElement,
+          // A CONTAINER of clips and nested lanes: one unloadable clip costs
+          // its own link, never the track (proposal 36 D8a).
+          SElementKind::Container ), true );

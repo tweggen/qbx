@@ -271,7 +271,10 @@ QList<SClipPropertiesPanel::ClipRef> SClipPropertiesPanel::collectClips() const
             // per-clip action uses when take == -1).
             if( STakeStack *stack =
                     dynamic_cast<STakeStack*>( &link->getSObject() ) ) {
-                ref.cut       = stack->activeCut();
+                // A stack is a column of WINDOWS now (proposal 36 D8b); this
+                // panel edits audio window properties, so it asks for the
+                // audio one and simply skips a take that is not.
+                ref.cut       = dynamic_cast<SCut*>( stack->activeTakeObject() );
                 ref.takeIndex = stack->activeTakeIndex();
                 ref.nTakes    = stack->nTakes();
             }

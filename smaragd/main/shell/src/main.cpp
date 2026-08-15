@@ -214,7 +214,18 @@ int main( int argc, char *argv[] )
 
         const int cap = settings.value( SOpt::LogCapacity,
                                         SOpt::def( SOpt::LogCapacity ) ).toInt();
-        log.setCapacity( cap > 0 ? (size_t)cap : 200000 );
+        size_t wantCapacity = cap > 0 ? (size_t)cap : 200000;
+        // A --test-case run gets a bigger ring, and gets it in ONE call
+        // (setCapacity discards whatever is already buffered). assert-log
+        // reads this ring, and a case that renders for a minute can emit far
+        // more records afterwards than the line it is asserting about — an
+        // eviction would turn a real assertion into a silent false failure.
+        // Nothing is pre-reserved per slot (twlog.cc), so the cost is
+        // proportional to what actually gets logged.
+        if( parser.isSet( "test-case" ) && wantCapacity < 1000000 ) {
+            wantCapacity = 1000000;
+        }
+        log.setCapacity( wantCapacity );
         log.setConsole( wantConsole );
         log.setMinLevel( level );
 

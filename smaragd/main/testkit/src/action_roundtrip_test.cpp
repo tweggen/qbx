@@ -57,6 +57,15 @@ const Fixture kFixtures[] = {
     { "assert-file-contains",
       "<assert-file-contains path='p.qxp' text='uid=&apos;x&apos;'"
       " absent='true'/>" },
+    // Both optional attributes present: startFrame/frameCount are written only
+    // when non-default, so a fixture without them would test neither.
+    { "assert-file-identical",
+      "<assert-file-identical a='render.wav' b='/tmp/golden.wav'"
+      " startFrame='48000' frameCount='96000'/>" },
+    // level is written only when non-empty; minCount/maxCount always are.
+    { "assert-log",
+      "<assert-log contains='SFutureThing' minCount='2' maxCount='4'"
+      " level='warn'/>" },
     // minFrames is only written when non-zero, so a fixture must give it one.
     { "dump-playback-capture",
       "<dump-playback-capture filename='playback.wav' minFrames='315392'/>" },

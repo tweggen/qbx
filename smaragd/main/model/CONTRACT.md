@@ -7,7 +7,8 @@ settings, revalidator), extern-file bookkeeping, and the SObjectRenderer
 interface views implement.
 
 Public headers: app/model/{sobject,slink,sproject,sprojectprops,
-ssortedobjlist,sexternfile,sexternfilelist,sfilepathref,sobjectrenderer}.h
+ssortedobjlist,sexternfile,sexternfilelist,sfilepathref,sobjectrenderer,
+sclipwindow}.h
 
 Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources.
 App edges: NONE — the model names no concrete object types (Phase 5) and
@@ -73,6 +74,30 @@ Invariants:
    twComponent::seek()'s detector was installed for), from the paint path.
    One probe means the same thing either way: the signed min/max envelope
    of its previewSkip_ window, scaled to [-128,127].
+10. `SObject::contentKind()` says what an object's material IS (Audio or
+   Event, proposal 36 D8b); the default is Audio, because everything that
+   existed before event clips is. It is NOT a track kind — a track holds
+   whatever clips it is given — and nothing above the clip branches on it.
+   Two things consume it: `SClipWindow::wrapContent()` picks the window type
+   for a piece of content, and `STakeStack` refuses a take of a different
+   kind.
+11. `SClipWindow` (sclipwindow.h) is the WINDOW layer of CLIP_MODEL.md as an
+   INTERFACE, and it is what the windowed verbs address — split, resize,
+   duplicate, unsplit, set-clip-name and the take verbs all dispatch on it
+   rather than on a concrete window class (`ssplitclipaction.cpp` used to
+   compare the class NAME, which no second window type could ever have
+   satisfied). Two rules keep it implementable by a window whose content is
+   not measured in frames: the READ api is timeline FRAMES, and a setter
+   takes timeline frames and converts EXACTLY ONCE inside the implementation
+   — two callers converting independently is how a rounding difference
+   becomes an off-by-one clip edge. The exceptions are explicit
+   (`contentAnchorExact` / `setWindowExact`), because the slip anchor is
+   stored content-authoritative and must not drift under a stretch edit.
+   Pitch, formants, warp anchors and the grain params are deliberately NOT
+   on it: they are audio-specific, and a verb that edits one is an audio
+   verb. The per-kind wrap factory is registered from the slice that owns the
+   window type (static initializer, OBJECT-library rule), so the model still
+   names no concrete object type.
 
 How to test: full qxa suite; action_roundtrip_test for serialization
 adjacency; filepathref_test (ctest) for the three path-storage rules and

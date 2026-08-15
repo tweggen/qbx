@@ -5,13 +5,12 @@
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
 #include "app/model/slink.h"
-#include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
 #include "app/objects/cut/stakestack.h"
 #include "app/model/seditgroups.h"
 #include "app/actions/scompositeaction.h"
 #include "tw/core/twfraction.h"
 #include <QDomElement>
-#include <cstring>
 
 using namespace strackpath;
 
@@ -62,27 +61,28 @@ SApplyResult SSplitClipAction::apply(SProject *project)
         return {false, nullptr};        // split point outside the clip
     }
 
-    // A take stack splits into two stacks: every take cut is split with the
-    // plain-cut arithmetic below (offsets and durations live in the stretched
-    // OUTPUT domain, so the timeline split offset applies to each take as-is,
-    // whatever its stretch). Both columns keep the active-take selection —
-    // this is what turns takes into per-region comping.
+    // A take stack splits into two stacks: every take is split with the
+    // plain-window arithmetic below (offsets and durations live in the
+    // stretched OUTPUT domain, so the timeline split offset applies to each
+    // take as-is, whatever its stretch). Both columns keep the active-take
+    // selection — this is what turns takes into per-region comping.
     if (STakeStack *stack = dynamic_cast<STakeStack*>(&obj0)) {
         STakeStack *stack2 = new STakeStack(project);
         for (int i = 0; i < stack->nTakes(); ++i) {
-            SCut *c1 = stack->takeCutAt(i);
-            if (!c1) continue;
-            SCut *c2 = new SCut(project, c1->getContent());
-            c2->setGrainParamsRaw(c1->getGrainParams());
-            // Tail anchor = head anchor + split offset mapped to source:
-            // exact rational, no floor (proposal 18 Phase 3).
-            // W1: exact rational, no floor, through the WARP MAP (piecewise
-            // when anchors exist; identical to the old /stretch otherwise).
-            c2->setSrcStartRaw( c1->warpedToSourceExact(
-                c1->sourceToWarpedExact( c1->getSrcStart() )
-                + Fraction( (int64_t)inObjOffset ) ) );
-            c2->setDuration(fullDur - inObjOffset);
-            stack2->insertTake(*c2);
+            SClipWindow *w1 = stack->takeAt(i);
+            if (!w1) continue;
+            SClipWindow *w2 = w1->cloneWindowOver(project);
+            if (!w2) continue;
+            // Tail anchor = the content position the split offset maps to:
+            // exact rational, no floor (proposal 18 Phase 3; W1 makes it
+            // piecewise through the warp map, identical to the old /stretch
+            // when there are no anchors). The tail carries no loop — a loop
+            // is a property of the region that was cut in two.
+            w2->setWindowExact( w1->timelineToSourceExact(
+                                    Fraction( (int64_t)inObjOffset ) ),
+                                fullDur - inObjOffset, 0,
+                                w1->stretchOrRate() );
+            stack2->insertTake(*w2);
         }
         stack2->setActiveTake(stack->activeTakeIndex());
         stack->setDurationAll(inObjOffset);
@@ -99,48 +99,55 @@ SApplyResult SSplitClipAction::apply(SProject *project)
         return {true, inverse};
     }
 
-    // Ensure the clip is an SCut (wrap a raw clip), replacing the link in place.
-    // The cut creates its OWN content link (+1 ref on obj0) — the old adopting
-    // ctor took `link` itself as content_, and the `delete link` below then
-    // left the cut's content_ dangling (use-after-free on the next
-    // getContent()). Delete the old placement link only AFTER the cut holds
-    // its ref, so obj0's refcount never touches zero (removeRef()'s
+    // Ensure the clip is a WINDOW (wrap raw content), replacing the link in
+    // place. The window creates its OWN content link (+1 ref on obj0) — the
+    // old adopting ctor took `link` itself as content_, and the `delete link`
+    // below then left the window's content_ dangling (use-after-free on the
+    // next getContent()). Delete the old placement link only AFTER the window
+    // holds its ref, so obj0's refcount never touches zero (removeRef()'s
     // deleteLater() cannot be rescinded).
+    //
+    // Which window type that is comes from the CONTENT's kind (the wrap
+    // factory), not from a class-name compare here — this line used to strcmp
+    // obj0.metaObject()->className() against the audio window's class name,
+    // which no second window type could ever have satisfied.
     SLink *cutLink = link;
-    if (strcmp(obj0.metaObject()->className(), "SCut") != 0) {
+    if (!SClipWindow::of(&obj0)) {
         SObject *parentObj = (SObject*)link->parent();
-        SCut *sc = new SCut((SProject*)obj0.parent(), obj0);
-        SLink *nlk = new SLink(*sc);
+        SClipWindow *wrapped =
+            SClipWindow::wrapContent((SProject*)obj0.parent(), obj0);
+        if (!wrapped) {
+            return {false, nullptr};
+        }
+        SLink *nlk = new SLink(wrapped->asObject());
         nlk->setStartTime(startTime);
         delete link;
         nlk->setParent(parentObj);
         cutLink = nlk;
     }
-    SCut *sc1 = dynamic_cast<SCut*>(&cutLink->getSObject());
-    if (!sc1) {
+    SClipWindow *w1 = SClipWindow::of(&cutLink->getSObject());
+    if (!w1) {
         return {false, nullptr};
     }
-    Fraction sc1Anchor = sc1->getSrcStart();
-    length_t origDur = sc1->getDurationBlocking();   // edit path — never stale (P19)
+    length_t origDur = w1->durationBlocking();   // edit path — never stale (P19)
 
-    // Second part: a new cut over the same content, starting at the split point.
-    // startOffset_ and cutDuration_ both live in the grain source's *output*
-    // (stretched) frame domain — the same domain inObjOffset is measured in — so
-    // the offset arithmetic below is correct only if sc2 carries the same stretch
-    // as sc1. Inherit the full grain params (stretch + pitch) via the Raw setter:
-    // setGrainParams() would rescale offset/duration by the stretch ratio (it
-    // assumes you are *changing* stretch on an existing clip), which would
-    // double-apply the factor here. setStartOffset/setDuration below rebuild the
-    // reader with these params in place.
-    SCut *sc2 = new SCut(project, sc1->getContent());
-    sc2->setGrainParamsRaw(sc1->getGrainParams());
-    // W1: exact rational, no floor, through the WARP MAP (see above).
-    sc2->setSrcStartRaw( sc1->warpedToSourceExact(
-        sc1->sourceToWarpedExact( sc1Anchor )
-        + Fraction( (int64_t)inObjOffset ) ) );
-    sc2->setDuration(origDur - inObjOffset);
-    sc1->setDuration(inObjOffset);
-    SLink *sl2 = new SLink(*sc2, NULL);
+    // Second part: a new window over the same content, starting at the split
+    // point. Offsets and durations live in the window's *output* (stretched)
+    // frame domain — the domain inObjOffset is measured in — so the tail must
+    // carry the head's time scaling; cloneWindowOver copies it (and the grain
+    // params) faithfully, and setWindowExact then narrows the copy. Copying
+    // through setGrainParams() instead would preserve-span-rescale the
+    // duration and double-apply the factor.
+    SClipWindow *w2 = w1->cloneWindowOver(project);
+    if (!w2) {
+        return {false, nullptr};
+    }
+    // W1: exact rational, no floor, through the window's own map.
+    w2->setWindowExact( w1->timelineToSourceExact(
+                            Fraction( (int64_t)inObjOffset ) ),
+                        origDur - inObjOffset, 0, w1->stretchOrRate() );
+    w1->setDurationFromTimeline(inObjOffset);
+    SLink *sl2 = new SLink(w2->asObject(), NULL);
     sl2->setStartTime(startTime + inObjOffset);
     sl2->setParent(track);
 

@@ -80,6 +80,44 @@ Invariants:
    crash on the SECOND open attempt, the first attempt's last log line being a
    preview recompute.
 
+6b. THE RECOVERY IS PER ELEMENT KIND, AND IT ITERATES (proposal 36 D8a).
+   Invariant 6(b)'s single sweep dropped every leftover at once, which
+   cascaded: a missing sample killed its `<SCut>`, the cut killed the
+   `<STrack>` that placed it, the track killed the `<SStdMixer>`, and the load
+   ended with "root component not found" — one lost file, no project. The
+   sweep now applies a policy by element kind and RETRIES the instantiation
+   loop until it reaches a fixed point:
+
+   - **Container** (`STrack`, `SStdMixer`, `STakeStack`) — drop the dangling
+     `<SLink>` and keep the element. A track that lost one clip is still the
+     user's track, and every other clip on it is still their work.
+   - **Window** (`SCut`; `SMidiCut` from P1) — drop the ELEMENT. A window
+     whose content is gone has nothing to show; its own placement becomes a
+     dangling link on the next pass, where the container rule handles it.
+   - **Plain** (everything else, and every unregistered/unknown element) —
+     drop the element, exactly as before.
+
+   The kind is declared at registration (`registerSObjectClass(..., kind)`),
+   so persistence still names no concrete type; unregistered means Plain, so
+   an element from a newer build costs itself and nothing else. Each pass
+   removes at least one node or link, and a pass that repairs NOTHING falls
+   back to dropping every leftover — termination is not left to the policy.
+   Every repair still WARNS with the type, the id and the missing target.
+
+   THE ROOT IS THE ONE THING THAT MAY NOT BE RECOVERED: `createObjects()`
+   returns -1 when `rootId` does not resolve. Everything the document
+   describes hangs off it, so an empty shell that reports success would look
+   like an opened project and overwrite the file on the next save. Gates:
+   `load_unknown_object_survives.qxa`, `load_missing_sample_placed_survives.qxa`.
+
+7b. `<SProject formatVersion='N'>` (proposal 36 D8a). Written unconditionally
+   (`SProject::FORMAT_VERSION`, 2 today); read with a default of **1**, which
+   is what every pre-proposal-36 file is. A HIGHER version is warned about and
+   then read anyway — a reader that refused would strand a user's file on
+   whichever build they happen to have, while an element it does not know is
+   already skipped by name with its own warning. Nothing branches on the
+   version yet; it exists so that something can.
+
 How to test: load-project + save-project qxa actions; the test4 user
 project is the realistic corpus. legacy_project_recovery.qxa carries both
 of invariant 6's defects in one fixture (an id-less <SPluginSlot> and a
@@ -87,8 +125,11 @@ chain linking to an id that exists nowhere) and asserts the rest of the
 project survives intact; it has a CTest TIMEOUT because a regression of 6(b)
 HANGS rather than fails.
 
-Known debt: an unknown element name in a project file warns and yields a
-null link (unchanged legacy behavior) — consider a hard load error.
+Known debt: an unknown element name in a project file warns, yields a null
+link and is skipped; since 6b the links that referenced it are pruned rather
+than cascading, so it costs exactly that object (`load_unknown_object_survives`
+is the gate). A hard load error would be wrong for exactly the same reason
+7b gives.
 Pre-M4 projects cannot have their plugin PLACEMENT recovered: the track ->
 chain reference was not serialized either, so a recovered slot would rejoin
 a chain no track owns. Such slots are dropped and must be re-added by hand.

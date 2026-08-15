@@ -1,6 +1,6 @@
 #include "app/objects/cut/stakehelpers.h"
 #include "app/objects/cut/stakestack.h"
-#include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
 
@@ -10,19 +10,23 @@ SLink *wrapCutLinkIntoStack( SProject *project, SObject *lane,
                              SLink *cutLink )
 {
     if( !project || !lane || !cutLink ) return nullptr;
-    SCut *cut = dynamic_cast<SCut *>( &cutLink->getSObject() );
-    if( !cut ) return nullptr;
+    SClipWindow *win = SClipWindow::of( &cutLink->getSObject() );
+    if( !win ) return nullptr;
+    SObject &winObj = win->asObject();
 
     const offset_t startTime = cutLink->getStartTime();
 
     STakeStack *stack = new STakeStack( project );
-    stack->insertTake( *cut );        // refs the cut BEFORE the old link dies
+    if( !stack->insertTake( *win ) ) {  // refs it BEFORE the old link dies
+        delete stack;                   // cannot be refused into an empty stack
+        return nullptr;
+    }
     stack->setActiveTake( 0 );        // the wrapped material stays audible
 
-    // The lane connected the cut's durationChanged when its link was added;
+    // The lane connected the window's durationChanged when its link was added;
     // deleting the link does not sever an object-level connection. From now
-    // on the cut reports to the stack, the stack to the lane.
-    QObject::disconnect( cut, SIGNAL( durationChanged( length_t ) ),
+    // on the window reports to the stack, the stack to the lane.
+    QObject::disconnect( &winObj, SIGNAL( durationChanged( length_t ) ),
                          lane, nullptr );
 
     SLink *stackLink = new SLink( *stack, nullptr );
@@ -41,16 +45,16 @@ SLink *collapseSingleTakeStack( SObject *lane, SLink *stackLink )
     if( !lane || !stackLink ) return nullptr;
     STakeStack *stack = dynamic_cast<STakeStack *>( &stackLink->getSObject() );
     if( !stack || stack->nTakes() != 1 ) return nullptr;
-    SCut *cut = stack->takeCutAt( 0 );
-    if( !cut ) return nullptr;
+    SObject *take = stack->takeObjectAt( 0 );
+    if( !take ) return nullptr;
 
     const offset_t startTime = stackLink->getStartTime();
 
     // Sever the stack's per-take forwarding before it is orphaned.
-    QObject::disconnect( cut, SIGNAL( durationChanged( length_t ) ),
+    QObject::disconnect( take, SIGNAL( durationChanged( length_t ) ),
                          stack, nullptr );
 
-    SLink *cutLink = new SLink( *cut, nullptr );   // ref before the stack dies
+    SLink *cutLink = new SLink( *take, nullptr );  // ref before the stack dies
     cutLink->setStartTime( startTime );
     const int origIndex = lane->indexOfChild( stackLink );
     delete stackLink;                 // stack unreferenced → deleteLater

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  An element this build has never heard of must cost exactly ITSELF.
+
+  The fixture is a legacy-shaped project (no formatVersion attribute) whose
+  track 0 carries two placements: a real <SCut> over ../test_sawtooth.wav, and
+  a link to <SFutureThing id='future1'> — an element no registered class
+  answers for, standing in for anything a later build (proposal 36's event
+  clips first) writes into a file this build then opens.
+
+  Before the prune-and-retry sweep (proposal 36 D8a) that unknown element cost
+  the whole project: instantiate() returned NULL and the element was skipped,
+  which left the track linking an id the dictionary did not have; the leftover
+  sweep then dropped every unresolvable element AT ONCE, so the track went,
+  then the mixer, and the load ended on "root component of project was not
+  found" — one unknown element, no project.
+
+  Now the sweep repairs per element kind and retries: STrack is a CONTAINER,
+  so the dangling link is dropped and the track survives with its real clip.
+
+  Three things are asserted, and each of them failed before:
+   1. the load succeeded and the track is still there (assert-track-count);
+   2. the real clip still renders its own material (RMS per source second —
+      the same expectations as sample_missing_survives.qxa, which loads the
+      same clip shape);
+   3. the drop was ANNOUNCED. A recovery is exactly the case where the audio
+      cannot tell you whether anything was repaired, so the warning naming
+      the lost element IS the evidence (assert-log).
+
+  It also carries proposal 36's formatVersion contract, because this is the
+  natural fixture for it: the project declares no version at all (= 1, every
+  file written before P0a), and re-saving it must stamp formatVersion='2'.
+-->
+<SActionScript version="1" name="load_unknown_object_survives">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../load_unknown_object_survives.qxp"/>
+
+    <!-- The recovery announced itself, naming the element it dropped. -->
+    <assert-log contains="SFutureThing" minCount="1"/>
+
+    <!-- A legacy file (no formatVersion) re-saves as version 2. -->
+    <save-project path="../../build/load_unknown_object_resave.qxp"/>
+    <assert-file-contains path="../../build/load_unknown_object_resave.qxp"
+                          text="formatVersion='2'"/>
+
+    <render filename="load_unknown_object_survives.wav" format="wav" quality="10"/>
+
+    <!-- 0-1 s: the surviving clip plays source sec1 (startOffset=48000) -->
+    <assert-audio-energy filename="load_unknown_object_survives.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 1-2 s: source sec2 -->
+    <assert-audio-energy filename="load_unknown_object_survives.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

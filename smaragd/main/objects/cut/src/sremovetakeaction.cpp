@@ -2,7 +2,8 @@
 #include "app/objects/cut/saddtakeaction.h"
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/stakehelpers.h"
-#include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
+#include "app/objects/cut/scut.h"        // pitch only (audio-specific)
 #include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
@@ -40,19 +41,23 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     if( !stack || takeIndex_ < 0 || takeIndex_ >= stack->nTakes() ) {
         return {false, nullptr};
     }
-    SCut *cut = stack->takeCutAt( takeIndex_ );
-    if( !cut ) {
+    SClipWindow *take = stack->takeAt( takeIndex_ );
+    if( !take ) {
         return {false, nullptr};
     }
 
     // Capture the take's window for the inverse. Only file-backed takes are
     // restorable; anything else yields a non-undoable (but valid) removal.
     QString filePath;
-    if( SExternFile *xf = dynamic_cast<SExternFile *>( &cut->getContent() ) )
+    if( SExternFile *xf =
+            dynamic_cast<SExternFile *>( &take->windowContent() ) )
         filePath = xf->getFileName();
-    const offset_t off = (offset_t) cut->getStartOffset().frames();
-    const Fraction stretch = cut->getStretchExact();
-    const double pitchCents = cut->getPitchCents();
+    const offset_t off = take->startOffset();
+    const Fraction stretch = take->stretchOrRate();
+    // Pitch is audio-only (cut/CONTRACT invariant 7), so the inverse carries
+    // it only for an audio take; add-take is an audio verb anyway.
+    SCut *audioCut = dynamic_cast<SCut *>( &take->asObject() );
+    const double pitchCents = audioCut ? audioCut->getPitchCents() : 0.0;
     const bool wasActive = ( stack->activeTakeIndex() == takeIndex_ );
 
     stack->removeTake( takeIndex_ );
