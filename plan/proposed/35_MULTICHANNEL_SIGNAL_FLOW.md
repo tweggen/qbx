@@ -314,6 +314,12 @@ plus the **byte-exactness gate**, which needs a named corpus or it is a wish:
 > committed 16-bit PCM WAVs at the **start of B1** and `cmp`'d at every
 > milestone thereafter. Re-freezing requires an AC that licenses it and a written
 > explanation of why the bytes moved.
+>
+> **The WAVs are committed to the repo** (requester decision, 2026-08-15). This
+> is new for this project — exactness has so far been `cmp`'d across runs and
+> builds, never against a stored file — and it is what makes "byte-identical to
+> the pre-milestone golden" enforceable across milestones, machines and weeks
+> rather than aspirational. Keep them short: they are a gate, not a demo.
 
 A case that fails once and passes on re-run is not a pass: pin with
 `repeat_test.sh` over `SMARAGD_REVAL_WORKERS` {1,4,8,16} and report either way.
