@@ -47,12 +47,24 @@
  *
  * File layout invariants: header(144) | params | [seek table] | payload,
  * each region contiguous, offsets ascending. Writers produce files atomically
- * (write to "<path>.tmp", then rename over) so a reader never observes a
- * partial file. Any validation failure (magic, version, CRC, region bounds)
- * makes open() fail — a bad sidecar is treated as absent, never "repaired".
+ * (write to "<path>.<pid>.<seq>.tmp", then rename over) so a reader never
+ * observes a partial file. Any validation failure (magic, version, CRC, region
+ * bounds) makes open() fail — a bad sidecar is treated as absent, never
+ * "repaired".
+ *
+ * NOTE the CRC covers the HEADER only. The payload is validated by region
+ * bounds against the file size, nothing more — so a torn payload of the right
+ * length would be accepted. That is why the temp name carries the writer's pid
+ * and a sequence number rather than being a fixed "<path>.tmp": the sidecar
+ * root is a shared per-user location, several processes routinely write it at
+ * once (`ctest -j` runs the whole suite against one store, and every case
+ * using the same fixture derives the same key), and a shared temp name would
+ * let two writers interleave into one file and publish the mixture.
  *
  * Threading: a twQafReader/Writer instance is single-threaded; distinct
- * instances on distinct files are freely concurrent. No Qt, no engine state.
+ * instances on distinct files are freely concurrent. Distinct writers on the
+ * SAME target path are also safe — each stages its own temp, and the last
+ * rename wins with a whole, well-formed file. No Qt, no engine state.
  */
 
 struct twQafInfo {
@@ -75,7 +87,8 @@ uint32_t twCrc32( const void *data, size_t len, uint32_t seed = 0 );
 
 class twQafWriter {
 public:
-    // One-shot atomic write: header+params+payload to "<path>.tmp", fsync,
+    // One-shot atomic write: header+params+payload to a private temp
+    // ("<path>.<pid>.<seq>.tmp"), fsync,
     // rename over path. Creates parent directories. Returns false (and
     // TW_LOGW) on any failure; a failed write leaves no partial file behind.
     // info.payloadLen is ignored; payloadLen parameter is authoritative.
