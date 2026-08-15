@@ -41,6 +41,28 @@ Invariants:
    playback is live). Consequence, deliberate: meters trail the DRAWN playhead
    by the device latency, because the playhead itself is uncompensated.
 
+7. **Docks are created in the CONSTRUCTOR, with a stable objectName**, or
+   `restoreWindowLayout()` cannot restore them (inv. 4). There are now six:
+   `dock_extern_file_list`, `dock_track_detail`, `dock_log`,
+   `dock_clip_properties`, and — since proposal 36 P4 —
+   `dock_event_editor` (bottom, tabified with the Log) and
+   `dock_virtual_keyboard` (bottom, tabified with the editor). Both start
+   hidden; the View menu carries their toggles (Ctrl+Shift+E for the editor).
+8. **The event editor's time axis is linked to the arranger HERE**
+   (`linkEventEditorAxis()`), because the shell is the only module that sees
+   both app/timeline and app/eventui — the editor deliberately has no
+   dependency on the 4000-line arranger. The two connections are kept in
+   members so a re-link (a new project, a testkit call) REPLACES them instead
+   of stacking a second lambda on the same signal.
+9. The P4 test seams (`describeTrackHead`, `describeEventEditor`,
+   `grabEventEditor`, `dragNote`, `virtualKey`) live here for the same reason
+   `dragClipEdge` and `describeTrackMeter` do: testkit may include neither
+   app/timeline nor app/eventui (testkit CONTRACT inv. 5). `grabEventEditor`
+   temporarily DETACHES the dock's widget before sizing it — the dock's layout
+   owns the geometry, so a `resize()` while parented is undone before `grab()`
+   renders, and the first version of that grab produced whatever strip the
+   hidden main window happened to allot.
+
 How to test: full qxa suite (headless boots the shell); startup-layout
 repro harness in STATE.md 2026-07-11.
 

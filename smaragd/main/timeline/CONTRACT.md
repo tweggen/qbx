@@ -104,12 +104,41 @@ Invariants:
    dock previously did a naive value = dB*10 and disagreed with the arranger
    about where a given dB sits.
 
+14. **The track head's second button pair is density-gated, and the gate is
+   a FIT test, not a constant** (proposal 36 P4, design 6.1). "A" (automation
+   mode) is Full-density only AND only while a six-button column still fits
+   the lane; "I" (instrument) additionally requires slot 0 to BE an instrument
+   (`SPluginSlot::getDescriptor().isInstrument` — the DESCRIPTOR, so a slot
+   whose plugin is missing on this machine keeps its identity). Five 20 px
+   buttons need 108 px, six need 130, and Full starts at 132 — so an
+   unconditional sixth button clips exactly the shortest Full lanes. The seam
+   is `SSMVMixerControl::describeHead()`, a `describeMeter()` sibling that
+   re-applies the density rules for the current size first (Qt delivers no
+   resizeEvent to a widget that was never shown) and reports `fitW`/`fitH`,
+   which is "hiding beats clipping" made assertable.
+15. **The snap spec's grid DIVISION reads the tempo map** (proposal 36 P4).
+   `SSnapSpec::setGridDivision("1/16")` is parsed by
+   `SQuantizeNotesAction::gridTicks()` — the ONE parser, shared with
+   `quantize-notes` and the event editor — and converted through
+   `twTempoMap`, the single tempo authority (D2), never by multiplying
+   60/bpm. An EMPTY division is the pre-36 beat snap byte for byte, which is
+   what keeps every committed case's snapped positions unchanged.
+16. `SMVActualView::secondWidthChanged` is now EMITTED (it was declared and
+   never fired — a FIXME in `setSecondWidth`) and carries a `double`. The
+   event editor's time axis mirrors this widget's px↔frame mapping, so an
+   `int` would quantise every zoom below 1 px/s. `contentView()` and
+   `snapSpec()` are exposed for the SHELL, which is the only module that sees
+   both app/timeline and app/eventui; the editor must not depend on the
+   arranger.
+
 How to test: lane_alignment.qxa (lane geometry + head placement under zoom,
 scroll, per-track heights and take lanes), test_track_column_expansion.qxa,
 test_track_width_dragging.qxa, clip_properties_actions.qxa (the property
 verbs the panel submits), screenshot actions in the render cases;
 meter_levels.qxa + meter_postfader.qxa (the meter's levels, its miss path and
 its density rules, via the real head built off screen);
+track_head_density.qxa (the head's density rules and the instrument /
+automation buttons, through the real head built off screen);
 multitrack_selection.qxa (the click semantics, the mute broadcast and its
 single undo step, the multi-track head drag and Group over a selection — all
 through the real widgets via select-track / track-head-toggle / drag-track).

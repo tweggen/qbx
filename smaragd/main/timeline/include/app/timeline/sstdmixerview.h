@@ -7,6 +7,7 @@
 
 #include "tw/core/twfraction.h"
 #include "tw/core/twwarpmap.h"
+#include "tw/events/twtempomap.h"
 #include "app/model/sobjectrenderer.h"
 // Complete type for the QPointer<STrack> selection anchor below.
 #include "app/objects/track/strack.h"
@@ -148,7 +149,11 @@ public slots:
 
 signals:
     void trackHeightChanged( int x );
-    void secondWidthChanged( int x );
+    // Pixels per second. It was declared `int` and never emitted at all (a
+    // FIXME in setSecondWidth); proposal 36 P4 needs it, because the event
+    // editor's time axis follows the arranger's zoom and an int would quantise
+    // every zoom step below 1 px/s.
+    void secondWidthChanged( double x );
     void leftOffsetChanged( offset_t );
     void topOffsetChanged( offset_t );
     
@@ -375,6 +380,28 @@ public:
     int getSnapMethod() const;
     void setSampleRate( int srate ) { sampleRate_ = srate; }
 
+    /**
+     * GRID DIVISIONS (proposal 36 P4). The subdivision used to be an unexposed
+     * `beatSubDiv_` that alignTime never read; a division is now named the way
+     * the whole app names one - "1/1".."1/32", with a trailing `t` for triplets
+     * - and parsed by SQuantizeNotesAction::gridTicks(), the ONE parser, so
+     * `quantize-notes grid=`, the event editor's grid and the arranger's snap
+     * cannot mean different things by the same string.
+     *
+     * An empty division restores the pre-36 behaviour exactly (snap to the beat
+     * width the STimeGridSpec carries), which is what keeps every committed qxa
+     * case's snapped positions unchanged.
+     */
+    void setGridDivision( const QString &division );
+    QString gridDivision() const { return gridDivision_; }
+
+    /**
+     * The TEMPO MAP is the single tempo authority (D2), so a division is
+     * converted to frames through it and not by multiplying 60/bpm. Without
+     * one set, alignTime falls back to the grid spec's beat width.
+     */
+    void setTempoMap( const twTempoMap &map );
+
 signals:
     void snapMethodChanged( int );
     void beatSubDivChanged( idx_t );
@@ -384,10 +411,16 @@ public slots:
     void setSnapMethod( int );
 protected:
 private:
+    /** The snap step in frames, or 0 when there is no usable division. */
+    offset_t divisionFrames_() const;
+
     idx_t beatSubDiv_;
     int snapMethod_;
     int sampleRate_;
     STimeGridSpec &tgs_;
+    QString    gridDivision_;
+    twTempoMap tempoMap_;
+    bool       haveTempoMap_ = false;
 };
 
 class SStdMixerView
@@ -402,6 +435,15 @@ public:
         { return model_; }
 
     STimeGridSpec getTimeGridSpec() const { return timeGridSpec_; }
+
+    // The time-axis canvas. Exposed for the SHELL only (proposal 36 P4): the
+    // event editor's SEventTimeAxis follows this widget's zoom and scroll, and
+    // the shell is the one module that sees both app/timeline and app/eventui.
+    SMVActualView *contentView() const { return qContent_; }
+
+    // The snap spec (grid divisions since proposal 36 P4). Null before the
+    // view is fully constructed.
+    SSnapSpec *snapSpec() const { return currentSnapSpec_; }
 
     SLink *ensureSCut( SLink * );
 

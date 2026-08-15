@@ -71,6 +71,14 @@ protected slots:
     // on SStdMixerView; the rebuild this triggers deletes this control via
     // deleteLater, which is safe from inside the handler).
     void takesToggled( bool );
+    // "I": open the instrument slot's parameter editor (slot 0). The button is
+    // shown only when slot 0 IS an instrument, so this cannot be reached
+    // otherwise; the native-editor route is proposal 33 M3.
+    void instrumentClicked();
+    // "A": automation mode. The lanes and the modes land in proposal 36 P5/P6;
+    // at P4 this is the SEAM plus its density rule, and the button says so
+    // rather than pretending to cycle a mode that does not exist yet.
+    void automationClicked();
     // "G": edit-group shortcut — lock this track's subtree together, or
     // dissolve the whole group it belongs to (one undo macro of
     // set-edit-group actions).
@@ -136,6 +144,18 @@ public:
     // because it re-applies the density rules for the current size first.
     QString describeMeter();
 
+    // Test face for the STRIP (proposal 36 P4, design 6.1). Same shape and
+    // same reason as describeMeter: it re-applies the density rules for the
+    // current size first, because Qt delivers no resizeEvent to a widget that
+    // was never shown. Reads
+    //
+    //   density=Full|w=120|h=160|btns=M,S,R,T,G,A|I=0|A=1|fitW=1|fitH=1|name=beside
+    //
+    // `I`/`A` are the instrument and automation buttons' VISIBILITY, and
+    // fitW/fitH say the visible strip still fits the lane it was given - the
+    // "hiding beats clipping" rule made assertable rather than eyeballed.
+    QString describeHead();
+
     // TEST ENTRY POINT: press one of this head's toggle buttons ("mute",
     // "solo", "arm", "takes", "group") as a user does, driving the button's
     // own signal — which is what makes the selection BROADCAST the thing under
@@ -196,6 +216,13 @@ private:
     QPushButton *qArm_;
     QPushButton *qTakes_;   // "T": show/hide this track's take lanes
     QPushButton *qGroup_;   // "G": edit-group lock (proposal 17 phase 4)
+    QPushButton *qInstr_;   // "I": instrument slot editor (proposal 36 6.1)
+    QPushButton *qAuto_;    // "A": automation mode  (proposal 36 6.1)
+
+    // Does this track carry an INSTRUMENT in slot 0? The one question the "I"
+    // button's visibility turns on; asked of the model every time the density
+    // is applied, because an insert-plugin can change the answer.
+    bool hasInstrumentSlot() const;
 
     // Proposal 34 — level meter beside the fader, and the probe that feeds it.
     // The probe is bound ONCE to the track's root component (its twRewire): the

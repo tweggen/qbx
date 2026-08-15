@@ -17,6 +17,7 @@
 #include <QPolygon>
 #include <QSignalBlocker>
 #include <QCursor>
+#include <QToolTip>
 
 #include "app/shell/sapplication.h"
 #include "tw/devices/audio_input.h"
@@ -38,6 +39,11 @@
 #include "app/objects/track/ssettrackmuteaction.h"
 #include "app/objects/track/ssettracksoloaction.h"
 #include "app/model/seditgroups.h"
+#include "app/model/sobjectpath.h"
+#include "app/model/splacements.h"
+#include "app/objects/track/spluginchain.h"
+#include "app/objects/track/spluginslot.h"
+#include "app/pluginui/spluginparamereditor.h"
 #include "app/model/sobjectpath.h"
 #include "app/actions/sactionhistory.h"
 #include <QUndoStack>
@@ -563,6 +569,22 @@ SSMVMixerControl::SSMVMixerControl(
     qGroup_->setToolTip( "Edit group: lock this track (and its subtree) together" );
     qGroup_->setStyleSheet( "QPushButton:checked { background:#40a060; color:white; }" );
 
+    // Proposal 36 6.1 - the second pair. Both are FULL-DENSITY ONLY and both
+    // additionally require the button column to still fit vertically: five
+    // buttons need 108 px of a 132 px Full lane, and seven need 152, so
+    // unconditional buttons would clip exactly the shortest Full lanes.
+    qInstr_ = new QPushButton( "I", this );
+    qInstr_->setFixedSize( 20, 20 );
+    qInstr_->setFont( btnFont );
+    qInstr_->setToolTip( "Instrument: open its parameter editor" );
+    qInstr_->setStyleSheet( "QPushButton { background:#6050a0; color:white; }" );
+    qInstr_->hide();      // no instrument until slot 0 says so
+
+    qAuto_ = new QPushButton( "A", this );
+    qAuto_->setFixedSize( 20, 20 );
+    qAuto_->setFont( btnFont );
+    qAuto_->setToolTip( "Automation mode (lanes land with proposal 36 P5/P6)" );
+
     // Mute over Solo over Arm in a column. QBoxLayout (not QVBoxLayout) so the
     // compact density can lay the same buttons out in a row.
     qBtnCol_ = new QBoxLayout( QBoxLayout::TopToBottom );
@@ -573,6 +595,8 @@ SSMVMixerControl::SSMVMixerControl(
     qBtnCol_->addWidget( qArm_, 0, Qt::AlignTop );
     qBtnCol_->addWidget( qTakes_, 0, Qt::AlignTop );
     qBtnCol_->addWidget( qGroup_, 0, Qt::AlignTop );
+    qBtnCol_->addWidget( qInstr_, 0, Qt::AlignTop );
+    qBtnCol_->addWidget( qAuto_, 0, Qt::AlignTop );
     qBtnCol_->addStretch( 1 );
 
     // Fader with its dB readout directly beneath it, both centred so they line
@@ -663,6 +687,10 @@ SSMVMixerControl::SSMVMixerControl(
                       this, SLOT( takesToggled( bool ) ) );
     QObject::connect( qGroup_, SIGNAL( toggled( bool ) ),
                       this, SLOT( groupToggled( bool ) ) );
+    QObject::connect( qInstr_, SIGNAL( clicked() ),
+                      this, SLOT( instrumentClicked() ) );
+    QObject::connect( qAuto_, SIGNAL( clicked() ),
+                      this, SLOT( automationClicked() ) );
     QObject::connect( &tk_, SIGNAL( editGroupChanged( int ) ),
                       this, SLOT( onEditGroupChanged( int ) ) );
     QObject::connect( &tk_, SIGNAL( mutedChanged( bool ) ),
@@ -859,6 +887,101 @@ bool SSMVMixerControl::tkClickToggle( const QString &which, bool on )
     return true;
 }
 
+bool SSMVMixerControl::hasInstrumentSlot() const
+{
+    SPluginChain *chain = tk_.getPluginChain();
+    if( !chain || chain->getSlotCount() <= 0 ) return false;
+    SPluginSlot *slot = chain->getSlotAt( 0 );
+    // The DESCRIPTOR's flag, not the live plugin's: a slot whose plugin is
+    // missing on this machine keeps its identity (plugins/CONTRACT), and the
+    // head must still show that the track is an instrument track.
+    return slot && slot->getDescriptor().isInstrument;
+}
+
+void SSMVMixerControl::instrumentClicked()
+{
+    SPluginChain *chain = tk_.getPluginChain();
+    SPluginSlot *slot = chain ? chain->getSlotAt( 0 ) : nullptr;
+    if( !slot ) return;
+
+    SStdMixer *mixer = smv_.getModel();
+    SObject *root = mixer ? static_cast<SObject *>( mixer ) : nullptr;
+    if( !root ) return;
+    const QString trackPath =
+        strackpath::pathToString( strackpath::pathOf( root, &tk_ ) );
+
+    // The generic parameter editor, as its own window - the same widget the FX
+    // strip opens on a double-click, so a parameter edit is the same undoable
+    // set-plugin-param either way (pluginui/CONTRACT inv. 3). The native
+    // editor is proposal 33 M3.
+    SPluginParamEditor *editor =
+        new SPluginParamEditor( slot, trackPath, 0, nullptr );
+    editor->setAttribute( Qt::WA_DeleteOnClose );
+    editor->setWindowTitle( tr( "%1 - %2" )
+        .arg( tk_.getSName(), slot->getDescriptor().name.empty()
+                                  ? tr( "Instrument" )
+                                  : QString::fromStdString(
+                                        slot->getDescriptor().name ) ) );
+    editor->resize( 340, 420 );
+    editor->show();
+}
+
+void SSMVMixerControl::automationClicked()
+{
+    // The seam, and nothing more (proposal 36 P4). Automation lanes, the mode
+    // cycle and the right-click picker are P5/P6; saying so beats a button that
+    // silently does nothing.
+    QToolTip::showText( QCursor::pos(),
+                        tr( "Automation lanes arrive with proposal 36 P5/P6" ),
+                        qAuto_ );
+}
+
+QString SSMVMixerControl::describeHead()
+{
+    // Apply the density rules for the CURRENT size before describing them: Qt
+    // delivers no resizeEvent to a widget that was never shown, so a headless
+    // caller's resize() alone would describe the previous layout. Same reason
+    // as describeMeter().
+    updateLayout();
+
+    struct Row { QPushButton *b; const char *tag; };
+    const Row rows[] = { { qMute_, "M" }, { qSolo_, "S" }, { qArm_, "R" },
+                         { qTakes_, "T" }, { qGroup_, "G" },
+                         { qInstr_, "I" }, { qAuto_, "A" } };
+    QStringList visible;
+    int nVisible = 0;
+    for( const Row &r : rows )
+        if( r.b && !r.b->isHidden() ) { visible << QLatin1String( r.tag ); ++nVisible; }
+
+    const int btn = ( density_ == Density::Full ) ? 20 : 16;
+    const QMargins m = qLayout_->contentsMargins();
+    const int contentW = width() - m.left() - m.right();
+    const int contentH = height() - m.top() - m.bottom();
+    const bool columnVertical =
+        ( qBtnCol_->direction() == QBoxLayout::TopToBottom );
+    // "Hiding beats clipping" made assertable: the VISIBLE strip has to fit the
+    // lane it was given, in the direction the buttons are laid out.
+    const int run = nVisible > 0 ? nVisible * btn + ( nVisible - 1 ) * 2 : 0;
+    const bool fitH = columnVertical ? ( contentH >= run )
+                                     : ( nVisible == 0 || contentH >= btn );
+    const bool fitW = columnVertical ? ( nVisible == 0 || contentW >= btn )
+                                     : ( contentW >= run );
+
+    const char *dens = density_ == Density::Full ? "Full"
+                     : density_ == Density::Compact ? "Compact" : "Tiny";
+    const char *spot = labelSpot_ == LabelSpot::BesideButtons ? "beside"
+                     : labelSpot_ == LabelSpot::InButtonRow ? "inrow" : "ownline";
+
+    return QStringLiteral( "density=%1|w=%2|h=%3|btns=%4|I=%5|A=%6"
+                           "|fitW=%7|fitH=%8|name=%9" )
+        .arg( QLatin1String( dens ) ).arg( width() ).arg( height() )
+        .arg( visible.join( QLatin1Char( ',' ) ) )
+        .arg( ( qInstr_ && !qInstr_->isHidden() ) ? 1 : 0 )
+        .arg( ( qAuto_ && !qAuto_->isHidden() ) ? 1 : 0 )
+        .arg( fitW ? 1 : 0 ).arg( fitH ? 1 : 0 )
+        .arg( QLatin1String( spot ) );
+}
+
 QString SSMVMixerControl::describeMeter()
 {
     if( !qMeter_ ) return QStringLiteral( "vis=0" );
@@ -882,8 +1005,18 @@ SSMVMixerControl::Density SSMVMixerControl::densityFor( int h ) const
 void SSMVMixerControl::applyDensity( Density d )
 {
     const int btn = ( d == Density::Full ) ? 20 : 16;
-    for( QPushButton *b : { qMute_, qSolo_, qArm_, qTakes_, qGroup_ } )
+    for( QPushButton *b : { qMute_, qSolo_, qArm_, qTakes_, qGroup_,
+                            qInstr_, qAuto_ } )
         b->setFixedSize( btn, btn );
+
+    // The second button pair (proposal 36 6.1): Full density only, and only
+    // while the COLUMN still fits. "I" additionally needs slot 0 to actually be
+    // an instrument - a button that opens nothing is worse than no button.
+    const bool showAuto  = ( d == Density::Full ) && buttonColumnFits( btn, 6 );
+    const bool showInstr = ( d == Density::Full ) && hasInstrumentSlot()
+                         && buttonColumnFits( btn, showAuto ? 7 : 6 );
+    qAuto_->setVisible( showAuto );
+    qInstr_->setVisible( showInstr );
 
     switch( d ) {
     case Density::Full:
@@ -1005,7 +1138,8 @@ bool SSMVMixerControl::buttonColumnFits( int btn, int nBtns ) const
 bool SSMVMixerControl::nameFitsInButtonRow( int btn ) const
 {
     int nBtns = 0;
-    for( QPushButton *b : { qMute_, qSolo_, qArm_, qTakes_, qGroup_ } )
+    for( QPushButton *b : { qMute_, qSolo_, qArm_, qTakes_, qGroup_,
+                            qInstr_, qAuto_ } )
         if( !b->isHidden() ) ++nBtns;
     if( nBtns == 0 ) return false;      // no row to ride on
     const QMargins m = qLayout_->contentsMargins();
