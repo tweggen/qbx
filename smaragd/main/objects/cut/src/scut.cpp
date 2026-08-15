@@ -1095,6 +1095,22 @@ SCut::~SCut()
     content_ = NULL;
 }
 
+// SClipWindow: a NEW cut over the SAME content with this cut's window copied
+// faithfully — grain params RAW first (setGrainParams would preserve-span-
+// rescale the duration we are about to set), then the window in one publish.
+// This is exactly what duplicate-clip did by hand; split-clip narrows the copy
+// afterwards through the interface.
+SClipWindow *SCut::cloneWindowOver( SProject *project ) const
+{
+    SCut *copy = new SCut( project, getContent() );
+    copy->setGrainParamsRaw( getGrainParams() );
+    // Blocking duration read (P19): the copy must mirror the CURRENT window,
+    // never the stale try-lock fallback.
+    copy->setWindow( getSrcStart(), ClipLen( getDurationBlocking() ),
+                     getLoopLength(), getStretchExact() );
+    return copy;
+}
+
 SCut::SCut( SProject *parentProject, SObject &content )
     : SObject( parentProject ),
       srcStart_( 0 ),
@@ -1546,6 +1562,20 @@ bool SCut::needsRevalidation(uint32_t aspectsMask) const
 // Self-registration with the project loader (proposal 14, Phase 5): the
 // persistence module names no concrete types; each slice registers its own
 // element name. Relies on the app being an OBJECT library (no TU elision).
+// The Audio window type (proposal 36 D8b): SClipWindow::wrapContent( project,
+// <any audio content> ) mints an SCut. Registered here, next to the loader
+// registration, for the same reason — app/model must name no concrete type.
+static const bool s_registered_scut_wrap = (
+    SClipWindow::registerWrapFactory(
+        SContentKind::Audio,
+        []( SProject *project, SObject &content ) -> SClipWindow * {
+            return new SCut( project, content );
+        } ), true );
+
 static const bool s_registered_scut =
     ( SProjectLoader::registerSObjectClass( "SCut",
-          SCut::instantiateFromDomElement ), true );
+          SCut::instantiateFromDomElement,
+          // A WINDOW: an SCut whose content link is dead has nothing left to
+          // show, so the loader drops the cut itself rather than the track
+          // that carries it (proposal 36 D8a).
+          SElementKind::Window ), true );

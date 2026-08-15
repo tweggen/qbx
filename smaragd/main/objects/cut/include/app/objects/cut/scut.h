@@ -9,6 +9,7 @@
 #include <chrono>
 #include "app/model/sobject.h"
 #include "app/model/slink.h"
+#include "app/model/sclipwindow.h"
 #include "tw/sources/twgrainparams.h"
 #include "tw/core/twfraction.h"
 #include "tw/core/twdomains.h"
@@ -92,7 +93,8 @@ struct SCutSnapshot {
 };
 
 class SCut
-    : public SObject
+    : public SObject,
+      public SClipWindow    // the WINDOW layer, for the type-agnostic verbs
 {
     Q_OBJECT
     Q_PROPERTY( double Stretch READ getStretch WRITE setStretch )
@@ -285,6 +287,54 @@ public:
     void setPreserveFormants( bool on );
     const twGrainParams &getGrainParams() const { return grainParams_; }
     void setGrainParams( const twGrainParams & );
+
+    // --- SClipWindow (proposal 36 D8b) -----------------------------------
+    //
+    // The window arithmetic every windowed verb needs, expressed without
+    // naming SCut. Each one FORWARDS to the member above it: this is a
+    // vocabulary, not a second implementation, so there is nothing here that
+    // can disagree with the cut's own behaviour. Frames in, frames out
+    // (SClipWindow rule 1); the two exact forms carry the SOURCE-domain
+    // anchor, which is authoritative (invariant 4).
+    SObject &asObject() override { return *this; }
+    SObject &windowContent() const override { return getContent(); }
+    length_t duration() const override { return getDuration(); }
+    length_t durationBlocking() const override { return getDurationBlocking(); }
+    length_t loopLength() const override { return getLoopLength().frames(); }
+    offset_t startOffset() const override { return getStartOffset().frames(); }
+    Fraction stretchOrRate() const override { return getStretchExact(); }
+    Fraction contentAnchorExact() const override { return getSrcStart(); }
+    Fraction timelineToSourceExact( const Fraction &relTimeline ) const override
+    { return clipToSource( relTimeline ); }
+
+    void setDurationFromTimeline( length_t d ) override { setDuration( d ); }
+    void setStartOffsetFromTimeline( offset_t off ) override
+    { setStartOffset( off ); }
+    void setWindowFromTimeline( offset_t startOffset, length_t duration,
+                                length_t loopLength,
+                                const Fraction &stretchOrRate ) override
+    {
+        // The offset is read in the timeline domain the window will have AFTER
+        // this edit, i.e. through the NEW stretch — the same reading
+        // SResizeClipAction::readXml gives a legacy warped `startOffset`
+        // attribute. Converted here, exactly once, never by the caller.
+        const twWarpMap wm( grainParams_.warpAnchors,
+                            stretchOrRate > Fraction( 0 ) ? stretchOrRate
+                                                          : Fraction( 1 ) );
+        setWindow( wm.warpedToSrc( Fraction( (int64_t) startOffset ) ),
+                   ClipLen( duration ), WarpedLen( loopLength ), stretchOrRate );
+    }
+    void setWindowExact( const Fraction &contentAnchor, length_t duration,
+                         length_t loopLength,
+                         const Fraction &stretchOrRate ) override
+    {
+        setWindow( contentAnchor, ClipLen( duration ), WarpedLen( loopLength ),
+                   stretchOrRate );
+    }
+    void setContentAnchorExact( const Fraction &contentAnchor ) override
+    { setSrcStartRaw( contentAnchor ); }
+
+    SClipWindow *cloneWindowOver( SProject *project ) const override;
 
     // Transposition limit, in cents. ±2 octaves; setPitchCents() and the
     // set-pitch action both clamp to it, so no entry point can store a value

@@ -614,7 +614,7 @@ void SStdMixerView::nudgeClipPitch( double cents )
         if( !cut ) {
             // A take stack transposes its ACTIVE take (pitch is per-take).
             if( STakeStack *stack = dynamic_cast<STakeStack*>( &lk->getSObject() ) )
-                cut = stack->activeCut();
+                cut = dynamic_cast<SCut*>( stack->activeTakeObject() );
         }
         if( !cut ) continue;
         double target = SCut::clampPitchCents( cut->getPitchCents() + cents );
@@ -1266,7 +1266,7 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
     for( SLink *lk : row.track->childLinks() ) {
         STakeStack *stack = dynamic_cast<STakeStack*>( &lk->getSObject() );
         if( !stack ) continue;
-        SCut *cut = stack->takeCutAt( row.takeRow );
+        SCut *cut = dynamic_cast<SCut*>( stack->takeObjectAt( row.takeRow ) );
         if( !cut ) continue;                        // this stack has fewer takes
         const offset_t start = lk->getStartTime();
         const length_t dur = stack->getDuration();
@@ -2278,7 +2278,7 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
             if( lastClickSLink_ ) {
                 STakeStack *stack = dynamic_cast<STakeStack*>(
                     &lastClickSLink_->getSObject() );
-                if( stack && stack->takeCutAt( clickRow->takeRow ) ) {
+                if( stack && stack->takeAt( clickRow->takeRow ) ) {
                     QList<int> path =
                         strackpath::pathOf( smv_.getModel(), clickRow->track );
                     path.append(

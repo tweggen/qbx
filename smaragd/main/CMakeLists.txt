@@ -18,6 +18,7 @@
 set(APP_MODEL_FILES
     # --- app/model
     model/include/app/model/sappcontext.h
+    model/include/app/model/sclipwindow.h
     model/include/app/model/sdetaileditors.h
     model/include/app/model/sexternfile.h
     model/include/app/model/sexternfilelist.h
@@ -33,6 +34,7 @@ set(APP_MODEL_FILES
     model/include/app/model/ssolorules.h
     model/include/app/model/ssortedobjlist.h
     model/src/sappcontext.cpp
+    model/src/sclipwindow.cpp
     model/src/sdetaileditors.cpp
     model/src/sexternfile.cpp
     model/src/sexternfilelist.cpp

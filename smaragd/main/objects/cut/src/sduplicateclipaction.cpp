@@ -5,10 +5,9 @@
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
 #include "app/model/slink.h"
-#include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
 #include "tw/core/twfraction.h"
 #include <QDomElement>
-#include <cstring>
 
 using namespace strackpath;
 
@@ -16,23 +15,18 @@ SLink *makeDuplicateClip( SProject *project, SObject &srcObj,
                           SObject *destLane, offset_t startTime )
 {
     if( !project || !destLane ) return nullptr;
-    SCut *copy;
-    if( strcmp( srcObj.metaObject()->className(), "SCut" ) == 0 ) {
-        SCut *s = static_cast<SCut*>( &srcObj );
-        copy = new SCut( project, s->getContent() );   // share the same content
-        // Copy the WHOLE window faithfully: grain params (pitch/grain/crossfade)
-        // first without rescale, then the window (offset/duration/loop/stretch).
-        // startOffset lives in the stretched output domain, so copying it without
-        // the stretch would land the copy elsewhere in the source (and unstretched).
-        copy->setGrainParamsRaw( s->getGrainParams() );
-        // Blocking duration read (P19): the copy's window must mirror the
-        // CURRENT source window, never the stale try-lock fallback.
-        copy->setWindow( s->getSrcStart(), ClipLen( s->getDurationBlocking() ),
-                         s->getLoopLength(), s->getStretchExact() );
+    SClipWindow *copy;
+    if( SClipWindow *src = SClipWindow::of( &srcObj ) ) {
+        // Copy the WHOLE window faithfully — cloneWindowOver shares the same
+        // content and reproduces every window value in one place (the slip
+        // lives in the stretched output domain, so copying it without the
+        // stretch would land the copy elsewhere in the source, unstretched).
+        copy = src->cloneWindowOver( project );
     } else {
-        copy = new SCut( project, srcObj );             // wrap a raw clip whole
+        copy = SClipWindow::wrapContent( project, srcObj );  // wrap raw content
     }
-    SLink *link = new SLink( *copy, NULL );
+    if( !copy ) return nullptr;
+    SLink *link = new SLink( copy->asObject(), NULL );
     link->setStartTime( startTime );
     link->setParent( destLane );
     return link;

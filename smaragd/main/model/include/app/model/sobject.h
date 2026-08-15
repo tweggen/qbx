@@ -47,6 +47,21 @@ private:
 
 
 /**
+ * What an object's material IS, independent of what windows or plays it
+ * (proposal 36 D8b). Audio is sample data (and anything rendered from it);
+ * Event is note/controller data. It decides which window type wraps a content
+ * object (SClipWindow::wrapContent), and a take stack refuses to mix the two.
+ *
+ * Deliberately NOT a track kind: a track holds whatever clips it is given
+ * (design D3), so nothing above the clip needs to branch on this.
+ */
+enum class SContentKind {
+    Audio = 0,
+    Event = 1
+};
+
+
+/**
  * This is QBX generic data container.
  * All data containers are children of the project object.
  * They linked together by SLink objects.
@@ -157,6 +172,14 @@ public:
      * dynamic_cast<STrack*> did. STrack returns true.
      */
     virtual bool isPathContainer() const { return false; }
+
+    /**
+     * The kind of material this object carries (proposal 36 D8b). Audio by
+     * default — every object that existed before event clips is audio, and a
+     * container's kind is the kind of what it renders, which is audio too.
+     * An event content object (SMidiSequence) and the window over it override.
+     */
+    virtual SContentKind contentKind() const { return SContentKind::Audio; }
 
     /**
      * Volume (dB) snapshot safe to take while audio runs / UI sliders move:

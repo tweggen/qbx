@@ -1,7 +1,7 @@
 # app/objects/cut — CONTRACT
 
-Purpose: the clip window object. SCut (startOffset/duration/loopLength/grain
-window over any content, reader-chain ownership, container capture,
+Purpose: the AUDIO clip window object. SCut (startOffset/duration/loopLength/
+grain window over any content, reader-chain ownership, container capture,
 snapshot-based audio access), its inline renderer, and the window actions:
 split-clip, unsplit-clip, resize-clip, duplicate-clip, set-pitch.
 
@@ -52,6 +52,21 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
    slip_invalidates_render_path.qxa, via the slip-clip testkit verb —
    resize-clip cannot cover this (it commits through setWindow, whose
    durationChanged stales the extent regardless).
+8. SCut IMPLEMENTS `SClipWindow` (app/model/sclipwindow.h, proposal 36 D8b)
+   and registers itself as the Audio wrap factory, so
+   `SClipWindow::wrapContent(project, content)` mints a cut for audio content
+   without anything in app/model naming SCut. THE RULE FOR THIS SLICE:
+   **a windowed verb never casts to SCut for arithmetic the interface
+   provides.** split / resize / duplicate / unsplit / set-clip-name / the
+   take verbs / place-clip all go through `SClipWindow` — reads in timeline
+   frames, `timelineToSourceExact` for the one map they need,
+   `cloneWindowOver` for a faithful copy, `setWindowExact` to narrow it.
+   A cast is legitimate ONLY for what is genuinely audio: pitch
+   (set-pitch, remove-take's inverse), formant preservation, warp anchors
+   (resize-clip, warp-marker actions), the grain params (remove-sample's
+   inverse) and slip's throttled invalidation (the slip-clip test verb).
+   Every one of those sites says so in a comment; a new one needs the same
+   justification. Gate: the AC5 grep in proposal 36 P0a.
 7. Pitch is stored in CENTS on twGrainParams, per clip and (on a stack)
    PER TAKE - only length ops write through to all lanes. It is realised
    in the grain stage (the read rate inside each grain) and is therefore
@@ -96,6 +111,15 @@ select-take; split-clip/resize-clip/unsplit are stack-aware (length ops
 write through to every take, slip and pitch target one take via `take`).
 
 Notes:
+- A stack is a column of `SClipWindow`s, not of SCuts (proposal 36 D8b):
+  `takeAt(i)` returns the window, `takeObjectAt(i)` the model object it also
+  is, and `activeTakeObject()` is what the delegation (component, position
+  map, preview, renderer) goes through. It is HOMOGENEOUS: `insertTake`
+  refuses a window whose `contentKind()` differs from the takes already
+  there — a take is an ALTERNATIVE for one region, so a column that played
+  audio or notes depending on which lane is active would be a different
+  feature. add-take turns that refusal into a rejected action; the loader
+  turns it into one skipped take and keeps the column.
 - The stack serves a private silent component while no take is active
   (STakeSilence in stakestack.cpp) — objects/cut may not include tw/mix,
   so no twRewire here.
