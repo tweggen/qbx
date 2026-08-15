@@ -4,7 +4,10 @@
 
 #include <qobject.h>
 #include <qlist.h>
+#include <memory>
 #include "app/model/sobject.h"
+#include "tw/events/tweventclipset.h"
+#include "tw/events/tweventmerge.h"
 
 class twComponent;
 class STrack;
@@ -71,6 +74,61 @@ public:
     int getNBusses() const { return nBusses_; }
     SPluginChain *getPluginChain() const { return cpPluginChain_; }
 
+    // --- events (proposal 36 3.2 / 3.2.1) ---------------------------------
+    //
+    // A track holds no KIND (D3): it takes whatever clips it is given, and it
+    // routes them by their material. An `SObject::contentKind() == Event`
+    // child goes into THIS set — same slots, same `SLink*` key rule as the bus
+    // mixers (CLIP_MODEL "identity is the SLink pointer") — and NOT into the
+    // mixers, so a MIDI clip costs no dummy freeze per page. Nothing here
+    // names a MIDI type: the content answers `contentKind()` and
+    // `resolveEventClip()`, which is why `objects/track` has no edge to
+    // `objects/midi`.
+
+    /** This track's own event clips. Never null. */
+    const std::shared_ptr<twEventClipSet> &eventClips() const
+        { return eventClips_; }
+
+    /**
+     * THE FEED (3.2.1): this track's own set merged with the feeds of every
+     * child track that passes events up. Events bubble like audio sums, under
+     * one rule — a child passes up iff it neither consumes them locally (an
+     * instrument slot, a MIDI-out port) nor is told otherwise by its
+     * serialized `midiRouting`:
+     *
+     *   auto   — the rule above (the default; a folder with a drum machine on
+     *            it plays its children's patterns, REAPER's behaviour);
+     *   parent — force bubbling even past a local consumer;
+     *   none   — keep them local.
+     *
+     * A child that is muted or solo-excluded contributes NOTHING (the same
+     * ssolo resolution the summing container uses for audio). Clip-level mute
+     * is already inside the clip set.
+     *
+     * The merge OBJECT is stable — a consumer may hold it — while its source
+     * list is rebuilt on every call. Rebuilding is O(children) and always
+     * correct; a dirty flag would have to be poked from a solo change anywhere
+     * in the project, which is precisely the coupling ssolorules.h exists to
+     * avoid.
+     */
+    std::shared_ptr<twEventMerge> eventFeed();
+
+    /** True while any Event child is placed here. Derived, never stored. */
+    bool hasEventClips() const;
+    /** Slot 0 of the plugin chain when it carries an instrument, else null. */
+    SPluginSlot *instrumentSlot() const;
+    /** Whether this track sends its feed to a MIDI port (P7 wires the port). */
+    bool hasMidiOut() const { return false; }
+
+    /** How this track's events reach its parent (3.2.1). Serialized. */
+    enum class MidiRouting { Auto = 0, Parent = 1, None = 2 };
+    MidiRouting getMidiRouting() const { return midiRouting_; }
+    void setMidiRouting( MidiRouting );
+    static MidiRouting midiRoutingFromString( const QString &, bool *ok = nullptr );
+    static QString midiRoutingToString( MidiRouting );
+    /** Does this track hand its events to its parent right now? */
+    bool bubblesEventsUp() const;
+
     // Adopt a plugin chain loaded from a project file (proposal 08 M4): drop the
     // empty one the constructor made, take over the loaded one, reconnect its
     // signals and rebuild the per-bus DSP chains from its slots. Called from the
@@ -120,6 +178,8 @@ public slots:
     // subtreeSoloChanged, so it works at any nesting depth.
     void childTrackSoloChanged();
     void onTrackVolumeChanged( double gainDb );
+    /** An event clip of ours changed its content or its window (3.2). */
+    void trackEventClipChanged( offset_t fromClipPos );
 
 signals:
     void nChannelsChanged( int n );
@@ -152,6 +212,13 @@ private:
     // project. Deleted by ~STrack.
     SLink *cpPluginChainRef_ = nullptr;
     std::vector<std::shared_ptr<twPluginChain> > cpPluginChains_;  // DSP components (one per bus)
+
+    // The event twin of cpTrackMixers_ — ONE set per track, not one per bus:
+    // events are not per bus (4.2). Held by shared_ptr because a parent's
+    // feed merges it in and must not be able to outlive it in flight.
+    std::shared_ptr<twEventClipSet> eventClips_;
+    std::shared_ptr<twEventMerge>   eventFeed_;
+    MidiRouting                     midiRouting_ = MidiRouting::Auto;
     
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;

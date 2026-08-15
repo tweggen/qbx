@@ -146,6 +146,21 @@ set(APP_OBJECTS_FILES
     objects/wave/src/splainwave.cpp
     objects/wave/src/splainwaverndrinline.cpp
     objects/wave/src/swaveformdraw.cpp
+    # --- app/objects/midi
+    objects/midi/include/app/objects/midi/smidiactionsupport.h
+    objects/midi/include/app/objects/midi/smidiclipactions.h
+    objects/midi/include/app/objects/midi/smidicut.h
+    objects/midi/include/app/objects/midi/smidieventactions.h
+    objects/midi/include/app/objects/midi/smidifileactions.h
+    objects/midi/include/app/objects/midi/smidirndrinline.h
+    objects/midi/include/app/objects/midi/smidisequence.h
+    objects/midi/src/smidiactionsupport.cpp
+    objects/midi/src/smidiclipactions.cpp
+    objects/midi/src/smidicut.cpp
+    objects/midi/src/smidieventactions.cpp
+    objects/midi/src/smidifileactions.cpp
+    objects/midi/src/smidirndrinline.cpp
+    objects/midi/src/smidisequence.cpp
     # --- app/objects/track
     objects/track/include/app/objects/track/sinsertpluginaction.h
     objects/track/include/app/objects/track/seteditgroupaction.h
@@ -157,6 +172,7 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/sreorderpluginaction.h
     objects/track/include/app/objects/track/ssetpluginbypassaction.h
     objects/track/include/app/objects/track/ssetpluginparamaction.h
+    objects/track/include/app/objects/track/ssettrackmidiroutingaction.h
     objects/track/include/app/objects/track/ssettrackmuteaction.h
     objects/track/include/app/objects/track/ssettracksoloaction.h
     objects/track/include/app/objects/track/ssettrackvolumeaction.h
@@ -174,6 +190,7 @@ set(APP_OBJECTS_FILES
     objects/track/src/sreorderpluginaction.cpp
     objects/track/src/ssetpluginbypassaction.cpp
     objects/track/src/ssetpluginparamaction.cpp
+    objects/track/src/ssettrackmidiroutingaction.cpp
     objects/track/src/ssettrackmuteaction.cpp
     objects/track/src/ssettracksoloaction.cpp
     objects/track/src/ssettrackvolumeaction.cpp
@@ -271,6 +288,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
     testkit/include/app/testkit/smetertestactions.h
+    testkit/include/app/testkit/smiditestactions.h
     testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
@@ -296,6 +314,7 @@ set(APP_UI_FILES
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
     testkit/src/smetertestactions.cpp
+    testkit/src/smiditestactions.cpp
     testkit/src/spluginuitestactions.cpp
     testkit/src/sreportpagememoryaction.cpp
     testkit/src/sscreenshotaction.cpp
@@ -312,7 +331,7 @@ add_library(app_model OBJECT ${APP_MODEL_FILES})
 target_include_directories(app_model PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/model/include)
 target_link_libraries(app_model
     PUBLIC
-        tw_core tw_graph tw_pages tw_schedule tw_sources
+        tw_core tw_graph tw_pages tw_schedule tw_sources tw_events
         Qt${QT_VERSION_MAJOR}::Core
         Qt${QT_VERSION_MAJOR}::Gui
         Qt${QT_VERSION_MAJOR}::Widgets
@@ -332,6 +351,7 @@ target_link_libraries(app_core PUBLIC app_model tw_render)
 add_library(app_objects OBJECT ${APP_OBJECTS_FILES})
 target_include_directories(app_objects PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/cut/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/objects/midi/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/wave/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/track/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/mixer/include

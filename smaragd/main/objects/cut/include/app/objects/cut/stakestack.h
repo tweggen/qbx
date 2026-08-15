@@ -74,6 +74,9 @@ public:
     /** The take at index as a WINDOW (null when out of range). */
     SClipWindow *takeAt( int index ) const;
     SClipWindow *activeTake() const { return takeAt( activeTake_ ); }
+    /** SObject: index < 0 means the ACTIVE take (the generic take seam). */
+    SClipWindow *windowTakeAt( int index ) const override
+    { return takeAt( index < 0 ? activeTake_ : index ); }
     /** The take at index as the model OBJECT it also is (delegation target). */
     SObject *takeObjectAt( int index ) const;
     SObject *activeTakeObject() const { return takeObjectAt( activeTake_ ); }

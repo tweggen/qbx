@@ -11,11 +11,13 @@
 #include <atomic>
 #include <mutex>
 #include <memory>
+#include "tw/events/tweventclipset.h"
 #include "tw/pages/capture_page_pool.h"
 #include "tw/schedule/revalidatable.h"
 
 class QWidget;
 
+class SClipWindow;
 class twComponent;
 class twRandomSource;
 class SProject;
@@ -166,6 +168,21 @@ public:
     { return twResolvedClip{ getRootComponent(), mapTimelineToComponentPos( off ) }; }
 
     /**
+     * The EVENT twin of resolveClip (proposal 36 §4.2): the frame-domain event
+     * sequence this clip contributes, plus the clip-relative position map the
+     * track's twEventClipSet enumerates it through. The default returns an
+     * empty record, which the clip set reads as "nothing to collect".
+     *
+     * It lives on SObject, not on a MIDI type, so `app/objects/track` can route
+     * an event clip into its clip set without depending on `app/objects/midi`
+     * (design §3.5: the track consults MIDI-ness only through contentKind()).
+     * Resolved ONCE per collect, at the window start, exactly as twView::resolve
+     * is for audio.
+     */
+    virtual twEventClipResolved resolveEventClip( offset_t clipPos )
+    { (void) clipPos; return twEventClipResolved{}; }
+
+    /**
      * True for containers the index-path search may descend into (track
      * lanes). Path RESOLUTION follows explicit indices and needs no flag;
      * this only scopes the reverse search (pathOf) exactly as the historical
@@ -195,6 +212,19 @@ public:
      * renderers need no mixer type.
      */
     virtual SObject *activeLane() const { return nullptr; }
+
+    /**
+     * A column of ALTERNATIVE windows (a take stack) exposes its lanes here:
+     * the window at `index`, or the ACTIVE one when index < 0. Null for
+     * everything else, which is every object that is not a stack.
+     *
+     * It exists so a verb can address a take without naming STakeStack: a
+     * slice at the rank of objects/cut (objects/midi) has no edge to it, and
+     * the take rule is generic anyway - a stack is homogeneous by contentKind,
+     * so whoever asks already knows what it will get back.
+     */
+    virtual SClipWindow *windowTakeAt( int index ) const
+    { (void) index; return nullptr; }
 
     /**
      * Ordered view of this container's SLink children. Prefer this and the
@@ -393,6 +423,17 @@ signals:
      * Ths link's duration changed.
      */
     void durationChanged( length_t newDuration );
+
+    /**
+     * This object's EVENT content changed from `fromClipPos` (clip-relative
+     * frames) onward — a note edit, a window edit, a tempo re-map. The owning
+     * container touches its event clip set and invalidates [from, INF) (design
+     * §3.2: the consumer is class-1, so a change is never bounded on the right).
+     *
+     * Declared here rather than on SMidiCut so `app/objects/track` can connect
+     * to it without an edge to `app/objects/midi`.
+     */
+    void eventsChanged( offset_t fromClipPos );
 
     /**
      * Child object was added.

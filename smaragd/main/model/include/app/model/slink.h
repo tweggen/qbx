@@ -29,12 +29,54 @@ class SLink
 {
     Q_OBJECT
 public:
+    /**
+     * How this placement's position is ANCHORED (proposal 36 D2).
+     *
+     *  Time  — `startTime` (timeline frames) is the authority. A tempo change
+     *          leaves the clip where it is. Audio's default, and REAPER's.
+     *  Beats — `startTicks` (exact rational musical ticks) is the authority
+     *          and `startTime` is DERIVED through the project's tempo map. A
+     *          tempo change moves the clip so it stays at the same bar. The
+     *          default for an EVENT clip: recorded MIDI that does not follow a
+     *          tempo change is a defect users hit in the first hour.
+     *
+     * The ticks are exact and are never re-derived from frames by `set-tempo`,
+     * so repeated tempo edits cannot drift (a frames-only rescale loses a
+     * frame per edit).
+     */
+    enum class Timebase { Time = 0, Beats = 1 };
+
     SLink( SObject &sobject, SObject *parent=0 );
     SLink( const SLink & );
     virtual ~SLink();
 
     SObject &getSObject() const
         { return object_; }
+
+    /** The timebase a link over `obj` is born with (Beats for Event content). */
+    static Timebase defaultTimebaseFor( const SObject &obj );
+
+    Timebase getTimebase() const { return timebase_; }
+    /**
+     * Switch the anchor. The CURRENT position is preserved: switching to Beats
+     * converts today's `startTime` to ticks once; switching to Time simply
+     * stops re-deriving. Never moves the clip by itself.
+     */
+    void setTimebase( Timebase );
+
+    /**
+     * The musical anchor, exact. Meaningful only for a Beats link (a Time link
+     * keeps it in step so a later switch has something to start from).
+     */
+    const Fraction &getStartTicks() const { return startTicks_; }
+    /** Set the musical anchor and DERIVE startTime from it (Beats links). */
+    void setStartTicks( const Fraction &ticks );
+    /**
+     * Re-derive `startTime` from `startTicks` at the project's CURRENT tempo.
+     * Called by `set-tempo` for every Beats link in the project; a no-op for a
+     * Time link. Returns true when the derived frame position actually moved.
+     */
+    bool rederiveStartTime();
 
     virtual int serialize( QTextStream & );
     virtual int serializeSelfAttributes( QTextStream & );
@@ -74,7 +116,16 @@ public slots:
 
 protected:
 private:
+    // ticks <-> frames through the project's tempo map, which is the ONE
+    // converter (events/CONTRACT inv. 4). Null project (a link built before
+    // parenting, or during teardown) degrades to leaving the value alone.
+    void syncTicksFromTime_();
+
     offset_t startTime_;
+    // The musical anchor. Kept in step for every link so `set-link-timebase`
+    // never has to invent one; AUTHORITATIVE only while timebase_ == Beats.
+    Fraction startTicks_;
+    Timebase timebase_;
     SObject &object_;
 };
 

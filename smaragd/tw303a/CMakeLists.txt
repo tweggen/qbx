@@ -768,7 +768,7 @@ add_library(tw303a INTERFACE)
 target_link_libraries(tw303a INTERFACE
     tw_core tw_pages tw_graph tw_sources tw_dsp tw_mix tw_plugins
     tw_devices tw_sinks tw_playback tw_render tw_record tw_schedule tw_analysis
-    tw_sidecar tw_metering
+    tw_sidecar tw_metering tw_events
 )
 
 # --- DSP optimization flags (proposal 28 W5) ----------------------------------
