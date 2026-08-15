@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 P1, AC4b. Events BUBBLE UP the track hierarchy the way audio sums
+  (design 3.2.1) - the requester's drum-machine-on-the-folder case.
+
+  A folder's FEED is its own event clip set merged with the feed of every child
+  that passes events up, under one rule: a child bubbles iff it neither
+  consumes them locally (an instrument slot, a MIDI-out port) nor is told
+  otherwise by its serialized `midiRouting`. A child that is MUTED or
+  SOLO-EXCLUDED contributes nothing - the same `ssolorules.h` resolution the
+  summing container applies to audio.
+
+  The feed is the only place any of this is observable: the clip sets are
+  per-track and unmerged, and there is no instrument yet to hear the result.
+  Hence `assert-midi-events scope="feed"`, which runs the real
+  `STrack::eventFeed()->collect()`.
+
+  Note the note ids are namespaced per merge source, so the two children
+  playing at the same time are two overlapping notes to whatever consumes the
+  feed and never one truncated one (events/CONTRACT inv. 13) - that is what
+  makes count=2 the right expectation rather than an accident.
+-->
+<SActionScript version="1" name="midi_folder_feed">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Two tracks, each with one note, then folded into a folder. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="C"/>
+    <add-note clip="0,0" tick="0" dur="480" key="60" velocity="100" channel="0"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="E"/>
+    <add-note clip="1,0" tick="0" dur="480" key="64" velocity="100" channel="0"/>
+
+    <!-- group-track runs the arranger's REAL Group macro: a new folder track
+         appears and both lanes are reparented under it. -->
+    <select-track trackPath="0"/>
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <group-track trackPath="0"/>
+
+    <!-- The folder holds no clips of its own; its feed is entirely its
+         children's, merged by time. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="2"
+                        startFrame="0" frameCount="96000"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" key="60" count="1"
+                        startFrame="0" frameCount="96000"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" key="64" count="1"
+                        startFrame="0" frameCount="96000"/>
+
+    <!-- ============================ mute ================================ -->
+    <set-track-mute trackPath="0,0" muted="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        key="64" startFrame="0" frameCount="96000"/>
+    <undo count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="2"
+                        startFrame="0" frameCount="96000"/>
+
+    <!-- ============================ solo ================================ -->
+    <!-- Solo is GLOBAL: soloing child 1 excludes child 0 from the feed, by
+         exactly the rule that excludes its audio from the sum. -->
+    <set-track-solo trackPath="0,1" solo="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        key="64" startFrame="0" frameCount="96000"/>
+    <undo count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="2"
+                        startFrame="0" frameCount="96000"/>
+
+    <!-- ========================== midiRouting =========================== -->
+    <!-- `none` keeps a child's events local: audible to an instrument on that
+         child (later), invisible to the parent. -->
+    <set-track-midi-routing trackPath="0,0" routing="none"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        key="64" startFrame="0" frameCount="96000"/>
+    <!-- ... and the child's own feed still has it. -->
+    <assert-midi-events scope="feed" trackPath="0,0" kind="note" count="1"
+                        key="60" startFrame="0" frameCount="96000"/>
+    <undo count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="2"
+                        startFrame="0" frameCount="96000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

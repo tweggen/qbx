@@ -157,6 +157,73 @@ const Fixture kFixtures[] = {
       "<drag-track trackPath='1,0' targetRow='2' mode='before'/>" },
     { "assert-track-selection",
       "<assert-track-selection paths='0;1,0' primary='1,0'/>" },
+
+    // --- the event-clip verbs (proposal 36 P1) ------------------------------
+    // Two-level paths throughout, for the reason above. `duration` here is in
+    // TICKS (the clip's own unit); everything else positional is frames.
+    { "insert-midi-clip",
+      "<insert-midi-clip trackPath='1,0' timePos='96000' duration='3840'"
+      " name='Verse'/>" },
+    { "import-midi-file",
+      "<import-midi-file trackPath='1,0' filePath='../song.mid'"
+      " timePos='96000' mode='merged' newTracks='0'/>" },
+    // Both addressing attributes at once: each is written only when present,
+    // so a fixture naming one would leave the other untested.
+    { "export-midi-file",
+      "<export-midi-file filePath='out.mid' clip='1,0' trackPath='1'"
+      " type='0'/>" },
+    { "add-note",
+      "<add-note clip='1,0' tick='960' dur='480' key='64' velocity='90'"
+      " channel='2' releaseVelocity='32' take='1' broadcast='0'/>" },
+    { "remove-note",
+      "<remove-note clip='1,0' tick='960' key='64' channel='2' take='1'"
+      " broadcast='0'/>" },
+    // The batch verbs carry CHILD elements, so the round trip has to survive
+    // the children as well as the attributes.
+    { "set-notes",
+      "<set-notes clip='1,0' take='1' broadcast='0'>"
+      "<n tick='0' dur='480' key='60' velocity='100' channel='0'/>"
+      "<n tick='960' dur='240' key='67' velocity='80' channel='0'/>"
+      "</set-notes>" },
+    { "set-events",
+      "<set-events clip='1,0' take='1'>"
+      "<e k='cc' t='480' ch='0' p='7' v='64'/>"
+      "<e k='note' t='0' d='480' ch='0' key='60' v='100'/>"
+      "</set-events>" },
+    { "add-event",
+      "<add-event clip='1,0' kind='cc' tick='480' channel='2' key='64' p='7'"
+      " v='64' v2='2' text='hello' blob='07a120' take='1'/>" },
+    { "remove-event",
+      "<remove-event clip='1,0' kind='cc' tick='480' channel='2' p='7'"
+      " take='1'/>" },
+    { "quantize-notes",
+      "<quantize-notes clip='1,0' grid='1/8t' strength='0.75' swing='0.15'"
+      " take='1' broadcast='0'/>" },
+    { "set-midi-cut",
+      "<set-midi-cut clip='1,0' transpose='-12' velocityScale='0.5'"
+      " channel='3' take='1' broadcast='0'/>" },
+    { "set-tempo", "<set-tempo bpm='132.5'/>" },
+    { "set-link-timebase",
+      "<set-link-timebase clip='1,0' timebase='time'/>" },
+    { "set-track-midi-routing",
+      "<set-track-midi-routing trackPath='1,0' routing='parent'/>" },
+
+    // --- the event test verbs ----------------------------------------------
+    // clip AND trackPath, kind, contains and velocityTolerance are each
+    // written only when set, so the fixture sets every one of them.
+    { "assert-midi-events",
+      "<assert-midi-events scope='feed' clip='1,0' trackPath='1' take='1'"
+      " kind='noteoff-synth' at='24000' tolerance='64' key='60'"
+      " velocity='100' velocityTolerance='2' channel='0' count='2'"
+      " minCount='1' maxCount='3' startFrame='48000' frameCount='96000'"
+      " contains='dur=48000'/>" },
+    { "assert-midi-file",
+      "<assert-midi-file filename='out.mid' trackCount='3' noteCount='6'"
+      " eventCount='10' firstTick='0' ppq='960' format='1'/>" },
+    // timebase is written only when non-empty.
+    { "assert-clip-window",
+      "<assert-clip-window clip='1,0' startTime='96000' duration='192000'"
+      " loopLength='24000' startOffset='4800' timebase='beats' take='1'/>" },
 };
 
 const char *fixtureFor(const QString &verb)

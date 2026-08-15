@@ -121,8 +121,13 @@ SApplyResult SAssertMidiEventsAction::apply( SProject *project )
             set.insertClip( cut, 0, snap.durationFrames,
                             [cut]( offset_t p ) { return cut->resolveEventClip( p ); } );
             twEventBlock block;
-            const int64_t len = frameCount_ >= 0 ? frameCount_
-                                                 : (int64_t) snap.durationFrames;
+            // +1: windows are half-open, and the clip-end note-off lands at
+            // OFFSET durationFrames (events/CONTRACT inv. 9 - a boundary that
+            // falls exactly on a window edge belongs to the window that starts
+            // there). A collect over [0, duration) would therefore never show
+            // the very release this assertion exists to see.
+            const int64_t len = frameCount_ >= 0
+                ? frameCount_ : (int64_t) snap.durationFrames + 1;
             set.collect( startFrame_, len, block );
             events = block.events;
         } else {

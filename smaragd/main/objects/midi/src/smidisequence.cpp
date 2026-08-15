@@ -368,11 +368,15 @@ SObjectRenderer *SMidiSequence::getInlineRenderer()
 
 int SMidiSequence::serializeSelfAttributes( QTextStream &o )
 {
-    o << " ppq='" << ppq_ << "'";
+    // Snapshot under the lock, WRITE outside it: the base serializer calls
+    // getDuration(), which takes mutex() too, and std::mutex is not recursive.
+    qint64 explicitLength = 0;
     {
         std::lock_guard<std::mutex> lock( mutex() );
-        if( lengthTicks_ > 0 ) o << " lengthTicks='" << lengthTicks_ << "'";
+        explicitLength = lengthTicks_;
     }
+    o << " ppq='" << ppq_ << "'";
+    if( explicitLength > 0 ) o << " lengthTicks='" << explicitLength << "'";
     const char *originName = origin_ == Origin::Smf ? "smf"
                            : origin_ == Origin::Recorded ? "recorded" : "drawn";
     o << " origin='" << originName << "'";

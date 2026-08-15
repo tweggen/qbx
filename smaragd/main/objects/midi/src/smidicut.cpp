@@ -393,17 +393,32 @@ SClipWindow *SMidiCut::cloneWindowOver( SProject *project ) const
 
 int SMidiCut::serializeSelfAttributes( QTextStream &o )
 {
-    std::lock_guard<std::mutex> lock( mutex() );
+    // Snapshot first, WRITE second. The base class's serializer calls
+    // getDuration(), which takes mutex() - holding it across that call is a
+    // self-deadlock (std::mutex is not recursive), and it is silent: the save
+    // simply never finishes.
+    Fraction srcStartTicks, lengthTicks, loopTicks, rate;
+    int transpose; double velocityScale; int channelOverride;
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        srcStartTicks = srcStartTicks_;
+        lengthTicks = lengthTicks_;
+        loopTicks = loopTicks_;
+        rate = rate_;
+        transpose = transpose_;
+        velocityScale = velocityScale_;
+        channelOverride = channelOverride_;
+    }
     o << " srcStartTicks='"
-      << QString::fromStdString( srcStartTicks_.toString() ) << "'"
+      << QString::fromStdString( srcStartTicks.toString() ) << "'"
       << " lengthTicks='"
-      << QString::fromStdString( lengthTicks_.toString() ) << "'"
+      << QString::fromStdString( lengthTicks.toString() ) << "'"
       << " loopTicks='"
-      << QString::fromStdString( loopTicks_.toString() ) << "'"
-      << " rate='" << QString::fromStdString( rate_.toString() ) << "'";
-    if( transpose_ != 0 ) o << " transpose='" << transpose_ << "'";
-    if( velocityScale_ != 1.0 ) o << " velocityScale='" << velocityScale_ << "'";
-    if( channelOverride_ >= 0 ) o << " channel='" << channelOverride_ << "'";
+      << QString::fromStdString( loopTicks.toString() ) << "'"
+      << " rate='" << QString::fromStdString( rate.toString() ) << "'";
+    if( transpose != 0 ) o << " transpose='" << transpose << "'";
+    if( velocityScale != 1.0 ) o << " velocityScale='" << velocityScale << "'";
+    if( channelOverride >= 0 ) o << " channel='" << channelOverride << "'";
     SObject::serializeSelfAttributes( o );
     return 0;
 }

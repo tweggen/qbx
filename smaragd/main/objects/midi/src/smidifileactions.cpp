@@ -86,18 +86,13 @@ bool projectIsEmpty( SProject *project )
     return true;
 }
 
-/** Ensure `lane index` exists directly under the root mixer; returns the lane. */
-SObject *ensureLane( SProject *project, const QList<int> &basePath, int extra )
+/**
+ * An `add-track` action, built through the REGISTRY rather than by naming
+ * SAddTrackAction: objects/midi sits at the rank of objects/cut and has no
+ * edge to objects/mixer, and "add a track" is a verb, not a type.
+ */
+SAction *makeAddTrack()
 {
-    SObject *mixer = splacements::rootContainer( project );
-    QList<int> path = basePath;
-    if( path.isEmpty() ) path.append( 0 );
-    path.last() += extra;
-    if( SObject *lane = splacements::laneAt( mixer, path ) ) return lane;
-
-    // Build one through the registry rather than by naming SAddTrackAction:
-    // objects/midi sits at the rank of objects/cut and has no edge to
-    // objects/mixer, and "add a track" is a verb, not a type.
     QDomDocument doc;
     QDomElement el = doc.createElement( "add-track" );
     el.setAttribute( "index", "-1" );
@@ -105,11 +100,7 @@ SObject *ensureLane( SProject *project, const QList<int> &basePath, int extra )
     SAction *add = SActionRegistry::instance().create( QStringLiteral( "add-track" ) );
     if( !add ) return nullptr;
     add->readXml( el, add->formatVersion() );
-    SApplyResult r = add->apply( project );
-    delete add;
-    delete r.inverse;
-    if( !r.applied ) return nullptr;
-    return splacements::laneAt( mixer, path );
+    return add;
 }
 
 }  // namespace
@@ -206,18 +197,28 @@ SApplyResult SImportMidiFileAction::apply( SProject *project )
         imported.push_back( std::move( all ) );
     }
 
+    // Lane planning. The add-track actions go INSIDE the composite, so an
+    // import is one atomic undo step - tracks included. That means the paths
+    // have to be computed rather than resolved: add-track appends, so the i-th
+    // new lane lands at (current root child count + i).
+    SObject *mixer = splacements::rootContainer( project );
+    const int laneBase = mixer ? mixer->childCount() : 0;
     for( size_t i = 0; i < imported.size(); ++i ) {
-        SObject *lane = newTracks_
-            ? ensureLane( project, trackPath_, (int) i )
-            : splacements::laneAt( splacements::rootContainer( project ),
-                                   trackPath_ );
-        if( !lane ) {
-            qWarning() << "import-midi-file: no lane for SMF track" << (int) i;
-            delete composite;
-            return { false, nullptr };
+        QList<int> lanePath;
+        if( newTracks_ ) {
+            SAction *add = makeAddTrack();
+            if( !add ) { delete composite; return { false, nullptr }; }
+            composite->append( add );
+            lanePath.append( laneBase + (int) i );
+        } else {
+            lanePath = trackPath_;
+            if( !splacements::laneAt( mixer, lanePath ) ) {
+                qWarning() << "import-midi-file: no lane at"
+                           << pathToString( trackPath_ );
+                delete composite;
+                return { false, nullptr };
+            }
         }
-        QList<int> lanePath = strackpath::pathOf(
-            splacements::rootContainer( project ), lane );
         composite->append( new SInsertMidiClipAction(
             lanePath, timePos_, imported[i].endTick, imported[i].name,
             imported[i].events ) );
@@ -334,10 +335,15 @@ SApplyResult SExportMidiFileAction::apply( SProject *project )
         return { false, nullptr };
     }
 
-    QString path = filePath_;
-    if( !QFileInfo( path ).isAbsolute() && !project->sampleBaseDir().isEmpty() )
-        path = QDir::cleanPath( QDir( project->sampleBaseDir() ).filePath( path ) );
+    // The path is used AS GIVEN (resolved against the working directory when
+    // relative), which is exactly what save-project does. Deliberately NOT
+    // resolved against the script directory: a bare name would then be written
+    // into tests/cases, and "nothing writes into the shared WORKING_DIRECTORY"
+    // is one of the properties that make the suite safe to run under ctest -j.
+    // A qxa case names its target explicitly (../../build/<case>.mid).
+    const QString path = filePath_;
 
+    QDir().mkpath( QFileInfo( path ).absolutePath() );
     std::string err;
     if( !twSmf::writeFile( path.toStdString(), file, &err ) ) {
         qWarning() << "export-midi-file:" << path << "-"
