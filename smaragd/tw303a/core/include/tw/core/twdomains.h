@@ -24,6 +24,9 @@
  *   Warped   - grain-OUTPUT (stretched) frames; the domain the cut window
  *              (startOffset/loopLength) is addressed in
  *   Source   - frames of the concrete source material (recording/capture)
+ *   Tick     - musical pulses (PPQ), tempo- and rate-free; the domain
+ *              MIDI content and an event clip's window live in
+ *              (proposal 36 D2). Exact-rational, not int64 frames.
  *
  * The raw engine currency (offset_t/length_t, page keys, reader cursors)
  * stays untyped; these types live where windows are DEFINED and
@@ -83,6 +86,71 @@ using WarpedPos   = DomainPos<WarpedDomain>;
 using WarpedLen   = DomainLen<WarpedDomain>;
 using SourcePos   = DomainPos<SourceDomain>;
 using SourceLen   = DomainLen<SourceDomain>;
+
+// ============================================================================
+// Ticks - musical time (proposal 36 D2). The ONE domain here that is NOT
+// frames: an event's position in a score, at a fixed pulses-per-quarter
+// resolution, independent of tempo and of sample rate.
+//
+// EXACT-RATIONAL, unlike the four frame domains above, and for the same
+// reason SCut's srcStart is: a tick position is produced by dividing (a
+// timeline frame through the tempo map, a split point, a quantize grid), and
+// rounding it at birth is exactly the drift D2 rejects. Content events carry
+// INTEGER ticks (TickPos(int64_t)); the rational form exists so the arithmetic
+// between them stays lossless.
+//
+// The ONLY converter between ticks and frames is twTempoMap (tw/events) -
+// there is no ticksToFrames here, because the conversion needs the tempo,
+// which is state, and core holds none.
+// ============================================================================
+
+struct TickDomain {};
+
+struct TickLen {
+    TickLen() : v_(0) {}
+    explicit TickLen(int64_t ticks) : v_(ticks) {}
+    explicit TickLen(const Fraction &ticks) : v_(ticks) {}
+    const Fraction &ticks() const { return v_; }
+    // Explicit, lossy projections - the seam where rounding is allowed.
+    int64_t floorTicks() const { return v_.floorToInt(); }
+    int64_t ceilTicks() const { return v_.ceilToInt(); }
+
+    friend TickLen operator+(TickLen a, TickLen b) { return TickLen(a.v_ + b.v_); }
+    friend TickLen operator-(TickLen a, TickLen b) { return TickLen(a.v_ - b.v_); }
+    friend TickLen operator*(TickLen a, const Fraction &f) { return TickLen(a.v_ * f); }
+    friend TickLen operator-(TickLen a) { return TickLen(-a.v_); }
+    friend bool operator==(TickLen a, TickLen b) { return a.v_ == b.v_; }
+    friend bool operator!=(TickLen a, TickLen b) { return a.v_ != b.v_; }
+    friend bool operator<(TickLen a, TickLen b)  { return a.v_ < b.v_; }
+    friend bool operator<=(TickLen a, TickLen b) { return a.v_ <= b.v_; }
+    friend bool operator>(TickLen a, TickLen b)  { return a.v_ > b.v_; }
+    friend bool operator>=(TickLen a, TickLen b) { return a.v_ >= b.v_; }
+
+private:
+    Fraction v_;
+};
+
+struct TickPos {
+    TickPos() : v_(0) {}
+    explicit TickPos(int64_t ticks) : v_(ticks) {}
+    explicit TickPos(const Fraction &ticks) : v_(ticks) {}
+    const Fraction &ticks() const { return v_; }
+    int64_t floorTicks() const { return v_.floorToInt(); }
+    int64_t ceilTicks() const { return v_.ceilToInt(); }
+
+    friend TickPos operator+(TickPos p, TickLen l) { return TickPos(p.v_ + l.ticks()); }
+    friend TickPos operator-(TickPos p, TickLen l) { return TickPos(p.v_ - l.ticks()); }
+    friend TickLen operator-(TickPos a, TickPos b) { return TickLen(a.v_ - b.v_); }
+    friend bool operator==(TickPos a, TickPos b) { return a.v_ == b.v_; }
+    friend bool operator!=(TickPos a, TickPos b) { return a.v_ != b.v_; }
+    friend bool operator<(TickPos a, TickPos b)  { return a.v_ < b.v_; }
+    friend bool operator<=(TickPos a, TickPos b) { return a.v_ <= b.v_; }
+    friend bool operator>(TickPos a, TickPos b)  { return a.v_ > b.v_; }
+    friend bool operator>=(TickPos a, TickPos b) { return a.v_ >= b.v_; }
+
+private:
+    Fraction v_;
+};
 
 // ============================================================================
 // Named domain conversions - THE single implementation of each mapping.
