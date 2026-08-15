@@ -9812,3 +9812,70 @@ Gate on the merged tree: `./build.sh` clean; layering + logging clean;
 green; **`ctest -j4`: 118/118 passed in 155.7 s** (121 registered; 3 `au_*`
 disabled off macOS). This is the full-suite reconciliation P0a/P0b/P2 had
 deferred by requester instruction.
+
+## 2026-08-15 — Proposal 36 P7a: MIDI device layer
+
+The ENGINE half of the P7 brief (`36_ORCHESTRATION.md` §3, P7), split out so it
+could run in parallel with P1. `tw/devices` only — no app code, no model, no
+render path, so **the goldens are byte-identical by construction**: nothing P7a
+adds is reachable from `freezePage`, `RenderSession` or `AudioEngine`. The app
+pump, the per-track port/channel/offset, the Options page and the testkit verbs
+are P7b, and the P7 tracker row stays unticked until they land.
+
+**What landed** (`tw303a/devices`, ~1 900 lines):
+
+- `tw/devices/midi_output.h` / `midi_input.h` — `MidiPortInfo{id,name,isVirtual}`;
+  `MidiOutput{ open/close/isOpen/listPorts/createVirtualPort/send(bytes,size,
+  hostTimeNs=0)/supportsTimestamps/latencyNs/backendName }`; `MidiInput{ … +
+  setCallback(bytes,size,hostTimeNs) }`; `createMidiOutput()`/`createMidiInput()`
+  selected by **`SMARAGD_MIDI_BACKEND`** with the `SMARAGD_AUDIO_BACKEND`
+  precedence (variable outranks platform, unknown warns and falls back, never a
+  null pointer), plus an explicit `createMidiOutput(backend)` overload — a
+  MidiOutput IS minted where a caller can pass a name, unlike the audio backend.
+- Backends: **WinMM** (`midiOut*`/`midiIn*`, `MIM_DATA`, no virtual ports, no
+  timestamps — send at due time), **CoreMIDI** and **ALSA sequencer** (both with
+  virtual ports and driver timestamps, both **UNVERIFIED** — written and reviewed
+  on Windows, compiled nowhere in this gate), **capture** (records
+  `{hostTimeNs, port, bytes}` and a static `active()` accessor), **null**.
+- `MidiOutScheduler` — one Qt-free `std::thread`, SPSC ring (4096 slots, 16-byte
+  messages, single producer = the app pump), sends AT the due time or hands off
+  early where the driver stamps, `flush()`/`panic(channelMask)`, `stop()`+join in
+  the destructor, `sent/dropped/late/maxLatenessNs` counters, `hostNowNs()` =
+  `steady_clock`.
+- `CaptureBackend` gained a `{hostTimeNs, firstFrame}` block log under the
+  EXISTING `captureMutex_` (cleared with the recording) plus `frameAtHostTime`,
+  piecewise linear, extrapolating past both ends. That is the independent clock
+  D6/review #12 asks for: `assert-midi-out` (P7b) will measure the pump against
+  the AUDIO timeline, not against itself. No RT-thread rule was touched.
+
+**Two things worth knowing next time:**
+
+1. **`timeBeginPeriod(1)` was not enough on Windows 11.** With it held, a
+   `std::condition_variable::wait_until` still rounded up to the 15.6 ms system
+   tick: the first measured run had max |sent − due| = **15.36 ms**, i.e. exactly
+   one tick, and the test failed. The fix is a **high-resolution waitable timer**
+   (`CreateWaitableTimerExW` + `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, falling
+   back to an ordinary timer) waited together with an auto-reset wake event;
+   `timeBeginPeriod(1)` stays for the 1 ms sleeps elsewhere. After the change the
+   same run measures **0.33–1.32 ms** over 40 consecutive runs.
+2. **A ring alone does not bound memory.** The sender drains eagerly, so a
+   runaway producer grows the sender's pending list without limit while the ring
+   never looks full — 8192 enqueues were all accepted and none refused. The
+   pending list is now capped at `kRingSlots`, dropping the FURTHEST-FUTURE
+   messages (what is about to be heard outranks what a runaway pump queued for
+   later) and counting them in `dropped()`.
+
+**Gate:** `./build.sh` clean; `check_layering.py` clean (devices deps unchanged
+— tw_core only); `check_logging.py` clean; **`devices_midi_test` 52 assertions,
+0 failures, 40/40 consecutive runs green**, max |sent − due| across those runs
+1.32 ms (asserted ≤ 5 ms; the box was otherwise idle); every other unit test
+green (24/24 non-qxa at `-j4`); `ctest -N` 121 → **122**.
+
+**NOT gated:** WinMM send jitter against real hardware (±1 ms by design);
+CoreMIDI and ALSA-seq at all (no macOS/Linux box in this phase — they are
+written, reviewed, guarded, and unverified); virtual-port creation on Windows
+(needs loopMIDI); sysex OUT beyond compiling (it blocks the sender thread until
+the driver releases the header) and sysex IN (`MIM_LONGDATA`) which is not
+implemented; `MidiInput` has no consumer at all until P8. The timing assertion
+measures the MACHINE as much as the code — `devices_midi_test` is `RUN_SERIAL`
+for the same reason `twlog_test` is.

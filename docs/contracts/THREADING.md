@@ -11,6 +11,8 @@
 | Record worker | `RecordingSession::start` | device capture → resample → WAV writers | **NO** |
 | Revalidator pool | `CaptureRevalidator` (N workers) | page recompute via `IRevalidatable` | **NO** |
 | Buffering monitor | `twSpeaker::startOutput` | polls readahead, starts backend | **NO** |
+| MIDI out scheduler | `MidiOutScheduler::start` | drains an SPSC ring, sends each message AT its due time (or hands it to a timestamping driver early) | **NO** |
+| MIDI device thread | the platform MIDI input (WinMM callback / CoreMIDI read proc / ALSA-seq poll) | delivers received bytes to `MidiInputCallback` | **NO** |
 
 ## Rule 1 — no Qt off the main thread. Ever.
 
