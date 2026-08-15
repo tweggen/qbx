@@ -94,6 +94,13 @@ the plugin search paths. Gates: `filepathref_test` (ctest) and
   four times faster than real time) for a smoke run. The pacing is real time by
   default ON PURPOSE — a clock that waited for the readahead would mask exactly
   the races and underruns the playback cases hunt.
+- `SMARAGD_RENDER_TIMEOUT_MS=<ms>` overrides `SRenderAction`'s render watchdog
+  (default 30000). It is a **wall-clock budget for one render**, so on a busy
+  machine it fires on a perfectly healthy one — measured under `ctest -j8`, a
+  render advancing steadily (a page every ~1.6 s rather than ~0.03 s) was killed
+  at **96 % done**, a second short. `<render>` appears 147 times across the qxa
+  suite, so this one constant is what caps the usable `-j`; the suite therefore
+  sets it to 180000 and leans on CTest's per-test `TIMEOUT` as the hang guard.
 - `SMARAGD_SIDECAR_DIR=<path>` relocates the derived-data (QAF) sidecar cache;
   `SMARAGD_SIDECAR_DIR=off` disables it — the store then misses/no-ops and the
   engine result is unchanged, only slower (sidecars alter latency, never output).
@@ -175,6 +182,16 @@ up vcpkg (`-DCMAKE_TOOLCHAIN_FILE` + `x64-mingw-dynamic` triplet) for the render
 deps automatically. `AUTO_DEPLOY_QT` defaults ON, so `windeployqt` copies the Qt
 runtime + plugins + MinGW runtime next to the exe — the binary is self-contained
 and runnable without any PATH setup (`AUTO_DEPLOY_QT=OFF` in the env to skip it).
+
+The deploy step also copies **`qoffscreen`** into `build/bin/platforms/`, which
+`windeployqt` does *not* do: it deploys only the platform plugin the *app* needs
+(`qwindows`), while every headless gate runs with `QT_QPA_PLATFORM=offscreen`.
+Its absence does not fail fast — Qt blocks in a platform-plugin dialog nobody can
+see, so each affected test burns its **entire 300 s timeout at ~0 s of CPU**
+instead of passing in ~0.05 s. That has cost real gate runs ten minutes of pure
+timeout and reads as a suite problem rather than a missing file. If you build
+with `AUTO_DEPLOY_QT=OFF`, copy it by hand:
+`cp <QtPrefix>/plugins/platforms/qoffscreen.* smaragd/build/bin/platforms/`.
 
 **Manual (Windows, equivalent):**
 ```powershell
@@ -271,20 +288,151 @@ token: `claude mcp remove youtrack -s user`, then add again.
 ./build.sh                                   # re-configures: required, see below
 python3 tools/check_layering.py              # module boundaries
 python3 tools/check_logging.py               # no direct stderr/stdout writes
-ctest --test-dir smaragd/build --output-on-failure
+ctest --test-dir smaragd/build -j4 --output-on-failure     # THE routine gate
 ```
+
+**Run the suite in parallel. `-j4` is the routine gate.** The cases were audited
+for isolation and are safe to run concurrently — see "Why `-j` is safe" below,
+and do not weaken any of those properties without re-reading it. There is no CI,
+so this suite is the entire safety net and every branch pays it in full; `-j` is
+the cheapest available win.
+
+Measured on this repo's usual Windows box (16 logical cores, 16 GB RAM),
+107 tests run + 3 disabled, back to back, nothing else of consequence on the
+machine:
+
+| Mode | Wall clock | Speedup | Result |
+|---|---|---|---|
+| serial | 2338 s | 1.00× | 105/107 — 2 crash flakes, see below |
+| `-j2` | 1151 s | 2.03× | 106/107 — 1 crash flake |
+| **`-j4`** | **791 s** | **2.96×** | **107/107 green** |
+| `-j8` | 552 s | 4.23× | 107/107 green |
+
+`-j8` is faster still and was green here, but `-j4` is the recommendation: it
+leaves headroom on a box that is also running an editor, a browser and possibly
+another worktree's build, and the failure mode of running out of headroom is not
+graceful (see the render watchdog below). Scale by RAM, not by core count.
+
+A serial run uses about **1/16 of this machine** — measured, CPU sat at ~6 %
+during it. That is the whole argument for `-j`.
 
 - **The re-configure is load-bearing.** The qxa glob in `smaragd/CMakeLists.txt` is
   `CONFIGURE_DEPENDS`; without a configure pass a newly added `.qxa` is never registered
   and `ctest` reports all-green while never having run it.
-- **Reconcile the count**: registered vs run vs skipped. A silently-unregistered case is a
-  failure mode this repo has actually hit.
-- **Run DSP-sensitive cases first and separately** (`grain_*`, `exact_*`, `stress_*`,
-  `warp_*`) when the change touches page freezing, invalidation or predecessor chaining —
-  they are the ones most able to be perturbed.
+- **Reconcile the count**: registered vs run vs skipped — `ctest -N` against the run's
+  own summary, and do it for the parallel run too. A silently-unregistered case is a
+  failure mode this repo has actually hit. On a non-Apple box the expected shape is
+  **110 registered / 107 run / 3 Not Run (Disabled)** — the disabled three are the
+  macOS-only `au_*` trio.
 - **A case that fails once and passes on re-run is not a pass.** Pin it with
   `smaragd/tests/repeat_test.sh <bin> <case.qxa> [N] [workers]`, swept over
   `SMARAGD_REVAL_WORKERS` {1,4,8,16}, before deciding it is a flake. Report it either way.
+  **Run `repeat_test.sh` from `smaragd/tests/cases/`** or it reports 0/N for perfectly
+  good cases (the fixture paths are CWD-relative).
+
+#### When to run it SERIALLY instead
+
+`-j` is the routine gate, not the only one. Drop back to plain `ctest` (no `-j`) for:
+
+- **Flake hunting.** Reproducing an intermittent failure means controlling the
+  variables, and background load from 3 concurrent cases is a variable. Same for
+  every `repeat_test.sh` sweep — those exist to separate a real race from noise,
+  which they cannot do while the box is also running seven other cases.
+- **DSP-sensitive cases** (`grain_*`, `exact_*`, `stress_*`, `warp_*`) when the
+  change touches page freezing, invalidation or predecessor chaining. Run these
+  first and separately: they are the ones most able to be perturbed, and a
+  byte-exact `cmp` gate deserves an uncontended run.
+- **Anything timing-shaped you are actually investigating** — latency, underruns,
+  readahead behaviour. Under `-j` the rest of the suite IS the load.
+
+**A `-j` failure is not automatically an isolation bug.** Two tests assert a
+wall-clock LATENCY BOUND, so they measure the machine rather than the code, and
+both carry `RUN_SERIAL` (CTest runs them alone within the invocation):
+
+| Test | Asserts | Why it moves |
+|---|---|---|
+| `twlog_test` | one non-blocking `TW_LOG` from a pretend-RT thread completes in **< 2000 µs** while 4 threads contend the logger lock | 137–191 µs on an idle box; **4 000–51 000 µs at ~100 % CPU**, failing 6 runs in 10 — same binary, no code change |
+| `qxa.log_dock_scale` | **no single event-loop pump exceeds 50 ms** while the log dock drains 300 k records | a stall cap is a latency bound on the GUI thread; same shape |
+
+`RUN_SERIAL` only excludes *other tests in this ctest run*. It cannot protect
+them from load outside it — a second worktree building, or another agent's suite.
+If either fails, **confirm the box is idle before treating it as a regression.**
+
+#### Two known crash flakes — NOT parallelism (they show up SERIALLY)
+
+Measuring the curve above turned up rare crashes that predate and are unrelated
+to `-j`. Recorded here so the next person does not re-diagnose them, and does not
+mistake them for an isolation bug:
+
+| Case | Shape | Seen |
+|---|---|---|
+| `qxa.clip_properties_actions` | `***Exception: SegFault` | 1 of 2 serial runs |
+| `qxa.split_plain_screenshot` | script prints `PASS`, process then exits non-zero — a crash during **teardown**, after every action and assertion succeeded | serial and `-j2` |
+
+They are not a `-j` problem: they appeared in the **serial** run and both passed
+in the green `-j4` and `-j8` runs. Neither reproduces in isolation —
+`split_plain_screenshot` 80/80 (including 25 with `SMARAGD_SIDECAR_DIR=off`) and
+`clip_properties_actions` 15/15 — so they need the full-suite context. Root cause
+is **not** established; treat them as open. `split_plain_screenshot` is itself a
+crash regression test for the split-then-repaint path under live playback, and
+this failure is a delayed-destruction variant of exactly what it guards.
+
+**`repeat_test.sh` cannot see the second shape at all.** It judges a run by
+grepping stdout for `^PASS - `, so a case that passes and *then* crashes on exit
+counts as a pass, while `ctest` — which judges by exit code — fails it. When you
+are chasing a teardown crash, loop on the exit code instead.
+
+#### Why `-j` is safe (audited, not assumed)
+
+Every way two concurrent cases could interfere, and the evidence. Treat this as a
+contract: a change that breaks one of these breaks the parallel gate.
+
+| Shared thing | Verdict |
+|---|---|
+| **Per-case artifacts** | Isolated. Each case gets `--test-output-dir build/test-output/<case>`, and `render` / `screenshot` / `dump-playback-capture` / `assert-audio-*` / `sidecar-root` all resolve *through* `SApplication::testOutputDir()` and **refuse to run when it is unset** — none of them can fall back to the CWD. |
+| **The shared `WORKING_DIRECTORY`** | Clean. All 89 cases run from `tests/cases/`, but nothing writes there: every `path=` in a `.qxa` is either a committed read-only fixture under `tests/`, a plugin module name, or an explicit `../../build/…` target. `git status tests/` stays clean across a full run. |
+| **`.qxp` save targets** | No collision. Nine cases save into the build root; the names are unique per case (`au_missing_resave`, `au_slot_resave`, `clip_properties_actions`, `exact_stretch_roundtrip`, `plugin_missing_resave`, `plugin_remove_restores_param`, `plugin_slot_resave`, `takes_roundtrip`, `warp_anchors_roundtrip`) and each is written and read back **by its own case only**. No case consumes another case's artifact. |
+| **The sidecar (QAF) store** | **This was a real bug, now fixed.** One shared per-user cache dir, and **80 of 89 cases use the same `test_sawtooth.wav`** → the same content hash → the same aspect keys, so concurrent stores of one key are the normal case, not the exotic one. The writer used a fixed `<path>.tmp`, so two processes truncated and interleaved into one temp and one published the mixture. Only the QAF **header** is CRC-protected — a torn payload of the right length passes the reader's bounds check and feeds wrong analysis data (onsets / f0 / warp.pcm) into the engine. The temp is now `<path>.<pid>.<seq>.tmp`; see `tw303a/sidecar/CONTRACT.md` inv. 2. Note the hazard is **latent**: it only bites when a key is cold, i.e. on the runs right after an aspect-version bump or a cleared cache — exactly when nobody is expecting it. |
+| **`plugincache.json`** | Harmless. Written on every run (`plugins/scanOnStartup` defaults true), but through `QSaveFile` — write-to-temp-then-rename, so a concurrent write is a lost update at worst, never a torn file. Verified live: parsed as valid JSON repeatedly while four `smaragd.exe` processes rewrote it. A lost update costs a re-probe, and records are keyed on path+size+mtime so it cannot manufacture a false failure. |
+| **`smaragd.ini`** | Harmless. Qt takes a `QLockFile` around `QSettings` writes, and a headless run does not write it at all — mtime unchanged across a full suite. |
+| **`smaragd.log`** | Not shared. `--test-case` runs deliberately take **no file sink** (`main/shell/src/main.cpp`), which the code already justifies by naming `ctest -j`. |
+| **Wall-clock latency assertions** | Not isolation bugs — see the table above. `RUN_SERIAL`. |
+
+Deliberately **not** isolated per test, with reasons:
+
+- **The sidecar store stays shared.** Once the temp name is per-writer, sharing is
+  safe, and it is worth keeping: a per-test store would recompute every analysis
+  in every case and make the gate substantially slower for no correctness gain.
+- **No `RESOURCE_LOCK` is used anywhere.** Nothing left needs mutual exclusion —
+  every remaining shared resource is either per-case, atomically written, or
+  read-only. `RUN_SERIAL` on the two latency tests is a different mechanism for a
+  different reason (they need an idle box, not exclusive access to a file).
+
+**The thing that actually caps `-j` is a wall-clock watchdog, not isolation.**
+`SRenderAction` bounds one render with a 30 s wall-clock budget, meant to catch a
+render that has HUNG. Under load it instead catches renders that are merely slow:
+measured at `-j8`, a render was advancing steadily — a page every ~1.6 s instead
+of the usual ~0.03 s — and was killed at **96 % done** (2 764 800 of 2 880 000
+samples), about a second from finishing. Before this was addressed, a `-j4` run
+taken while three other worktrees were also running suites produced **19 failures,
+every one of them this timeout**, in a single contiguous 3.6-minute window; re-run
+afterwards on a quieter box, all 19 passed. So the failures were a load artifact,
+not a case-isolation bug — but with `<render>` appearing 147 times across the
+suite it is the dominant `-j` risk. The qxa cases now run with
+`SMARAGD_RENDER_TIMEOUT_MS=180000` and a CTest `TIMEOUT 600`, which keeps a real
+hang bounded while letting a slow-but-progressing render finish.
+
+**If you see a wave of `Action render (#N) failed to apply` failures**, that is
+this, and the diagnosis is load rather than the change under test. Check
+`render timeout after` in the output and whether the failures cluster in time
+rather than by case.
+
+**Memory is the other limit.** Each case is a whole
+`smaragd.exe` that pre-allocates a 512 MB `CapturePagePool` and spawns 8
+revalidation workers — **~720 MB committed / ~250 MB working set per process,
+measured**. On a 16 GB box `-j4` is comfortable and `-j8` is tight; scale by RAM,
+not by core count. Do not lower `SMARAGD_REVAL_WORKERS` to buy headroom — the
+worker count is part of what the race-hunting cases exercise.
 
 ### What a PR body must say
 
