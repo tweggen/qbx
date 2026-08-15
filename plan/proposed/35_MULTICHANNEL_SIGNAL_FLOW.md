@@ -364,11 +364,22 @@ one, with `frameCount` both given and omitted.
 the fixture.
 **AC 0.3** Every existing `.qxa` case passes unchanged.
 
-### M1 — Channel count becomes project data (inaudible)
+### M1 — Channel count becomes project data (inaudible) ✅ **EXECUTED 2026-08-15** (`10b58db`)
+
+> Delivered as specified. Three of this milestone's own premises were wrong and
+> are corrected in place below; see also §7 traps 9-11, which M1 found and which
+> B4 in particular must not rediscover.
 
 - `SProject::channels()` + `<SProject … channels='N'>`, read with the
-  `sampleRate` **warn-and-default** idiom (missing ⇒ 2 + one warning), propagated
-  to `tw303aEnvironment` as `setSRate` is.
+  `sampleRate` **warn-and-default** idiom (missing ⇒ 2 + one warning).
+  ~~propagated to `tw303aEnvironment` as `setSRate` is~~ — **struck: not
+  implementable and self-contradictory.** `tw303aEnvironment` has no channel
+  state at all (only `bufferSize`, `sampleRate`, `candidateRates_`), so
+  "propagate" would have meant inventing engine state inside the milestone whose
+  defining constraint is that it touches no engine state. The constraint won.
+  Valid widths are 1/2/4/6/8, gated in one place; an unsupported value is
+  *rejected* by the action and *warned-and-defaulted* on load, because a project
+  must never fail to open over this.
 - `set-project-channels` action; `docs/ACTIONS.md` updated (hand-maintained).
 - Fix the `nBusses` loader/ctor drift (`"1"` default vs ctor 2).
 
@@ -378,6 +389,10 @@ the fixture.
 action must be inert with respect to the graph, and its AC must prove that.
 
 **AC 1.1** Save→load→save byte-equivalent (`persistence/CONTRACT.md` inv. 4).
+*Note for every later milestone that cites it:* `serialization_roundtrip_test` is
+a `tw_core` test over `Fraction` and base64 — **it never sees a `.qxp`**. It is a
+"don't break this" check, not evidence about document round-tripping. Name a real
+document-level gate instead.
 **AC 1.2** A legacy `.qxp` without `channels=` loads as 2 and warns once.
 **AC 1.3** `channels='6'` survives a round trip on a project with nested tracks.
 **AC 1.4** `set-project-channels` and its undo touch no `setNBusses` call
@@ -613,6 +628,28 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
 8. `getNOutputs()` means three different things in three classes today. B2
    introduces `getOutputChannels()` precisely so it can keep meaning ports —
    resist every temptation to merge them.
+9. **`Q_ASSERT_X` is compiled OUT of the build everyone runs** (found by M1).
+   `smaragd/CMakeLists.txt:21` strips `-DNDEBUG` from RelWithDebInfo to keep the
+   engine's own asserts, but Qt still defines `QT_NO_DEBUG`, so every `Q_ASSERT*`
+   vanishes. `STrack::setNBusses`'s shrink therefore does **not** "assert the app
+   dead" — it returns *silently*, leaving stale wiring and saying nothing, which
+   is the worse failure and is why the `nBusses` drift stayed invisible (the
+   resulting count was right by accident). **B4 must not rely on a `Q_ASSERT` to
+   catch a width mistake**, and §4.3's "the base implementation asserts" must be a
+   real runtime check plus `TW_LOG`, not `Q_ASSERT_X`.
+10. **`load-project` deserializes INTO the current project instead of replacing
+    it** (`sloadprojectaction.cpp`; found by M1). The GUI's File→Open builds a
+    fresh `SProject` and swaps; the action does not. So a `.qxa`
+    save→load→save accumulates the previous arrangement plus zero-ref orphan
+    mixers and plugin chains (2157 → 4186 bytes in M1's case). This contradicts
+    `main/objects/track/CONTRACT.md` inv. 7's claim that holding a chain
+    reference "is what lets a save/load/save comparison be byte-equivalent".
+    Pre-existing and unrelated to channels — but **B1's golden corpus must not be
+    built on a save→load→save round trip** until it is fixed.
+11. **`tests/repeat_test.sh` must be run from `tests/cases/`**, despite its header
+    claiming it works from any directory (found by M1). Elsewhere, relative
+    `load-project`/`save-project`/`assert-file-contains` paths resolve against the
+    CWD and a perfectly good case reports 0/10. Do not read that as a flake.
 
 ## 8. Non-goals (named, so they are not assumed)
 
