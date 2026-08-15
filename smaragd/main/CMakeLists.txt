@@ -495,6 +495,37 @@ if(AUTO_DEPLOY_QT AND (SMARAGD_WINDOWS OR SMARAGD_MACOS))
             COMMENT "Deploying Qt runtime alongside $<TARGET_FILE_NAME:smaragd>"
             VERBATIM
         )
+
+        # windeployqt deploys only the platform plugin the APP needs — qwindows.
+        # But every headless gate (the ~90 qxa cases via --test-case, plus
+        # action_roundtrip_test / filepathref_test / preview_container_test) runs
+        # with QT_QPA_PLATFORM=offscreen, and qoffscreen.dll is NOT deployed.
+        # Its absence does not fail fast: Qt blocks in a "this application failed
+        # to start" platform-plugin dialog that nobody can see in a headless run,
+        # so each affected test burns its ENTIRE timeout (300 s) at ~0 s of CPU
+        # instead of passing in ~0.05 s. That has cost real gate runs ten
+        # minutes of pure timeout and reads as a suite problem rather than a
+        # missing file, so deploy it here instead of leaving it to be
+        # rediscovered.
+        if(TARGET Qt${QT_VERSION_MAJOR}::QOffscreenIntegrationPlugin)
+            add_custom_command(TARGET smaragd POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                        "$<TARGET_FILE_DIR:smaragd>/platforms"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "$<TARGET_FILE:Qt${QT_VERSION_MAJOR}::QOffscreenIntegrationPlugin>"
+                        "$<TARGET_FILE_DIR:smaragd>/platforms/"
+                COMMENT "Deploying the offscreen platform plugin (headless tests)"
+                VERBATIM
+            )
+        else()
+            message(WARNING
+                "Qt${QT_VERSION_MAJOR}::QOffscreenIntegrationPlugin was not found, so "
+                "qoffscreen.dll cannot be deployed. Headless tests that set "
+                "QT_QPA_PLATFORM=offscreen will HANG until their timeout rather "
+                "than fail fast. Copy it next to the binary by hand: "
+                "<QtPrefix>/plugins/platforms/qoffscreen.* -> "
+                "build/bin/platforms/.")
+        endif()
     else()
         message(WARNING
             "AUTO_DEPLOY_QT is ON but the deploy tool was not found in "
