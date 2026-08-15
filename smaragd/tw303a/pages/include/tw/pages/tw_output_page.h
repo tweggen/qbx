@@ -14,6 +14,7 @@
 #include <any>
 
 #include "tw/pages/page_interface.h"
+#include "tw/pages/tw_page_accounting.h"
 
 // Forward declaration
 class twComponent;
@@ -96,7 +97,22 @@ struct twOutputPage : public PageBase {
           createdAt(std::chrono::steady_clock::now())
     {
         samples.resize(FRAME_CAPACITY);
+        // Proposal 35 B1a: page memory is accounted at the PAGE's own lifetime,
+        // because there is no pool to ask. accountedBytes_ is remembered rather
+        // than recomputed in the destructor, so an accounting pair can never be
+        // unbalanced by a later samples.resize() — the counters stay exact even
+        // if some future code path grows a page in place.
+        accountedBytes_ = samples.size() * sizeof(float);
+        tw::pages::PageAccounting::onPageAllocated(accountedBytes_);
     }
+
+    ~twOutputPage()
+    {
+        tw::pages::PageAccounting::onPageReleased(accountedBytes_);
+    }
+
+    // Sample bytes this page reported to the accounting when it was built.
+    size_t accountedBytes() const { return accountedBytes_; }
 
     // PageBase interface implementation
     std::mutex& getMutex() const override { return pageMutex; }
@@ -114,6 +130,9 @@ struct twOutputPage : public PageBase {
     std::any& getInternalState() override { return internalState; }
     const std::any& getInternalState() const override { return internalState; }
     std::chrono::steady_clock::time_point getCreatedAt() const override { return createdAt; }
+
+private:
+    size_t accountedBytes_ = 0;
 };
 
 #endif  // _TW_OUTPUT_PAGE_H_

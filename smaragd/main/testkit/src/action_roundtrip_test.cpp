@@ -63,6 +63,15 @@ const Fixture kFixtures[] = {
     { "assert-file-contains",
       "<assert-file-contains path='p.qxp' text='uid=&apos;x&apos;'"
       " absent='true'/>" },
+    // proposal 35 B1a. maxReportedDiffs is written only when it is NOT the
+    // default 8, so the fixture gives it another value to keep it in the audit.
+    { "assert-file-identical",
+      "<assert-file-identical actual='r.wav' expected='../goldens/mc_mono.wav'"
+      " maxReportedDiffs='3'/>" },
+    // Same shape: maxPages/maxBytes are written only when >= 0.
+    { "report-page-memory",
+      "<report-page-memory label='after render' maxPages='4096'"
+      " maxBytes='1073741824'/>" },
     // minFrames is only written when non-zero, so a fixture must give it one.
     { "dump-playback-capture",
       "<dump-playback-capture filename='playback.wav' minFrames='315392'/>" },

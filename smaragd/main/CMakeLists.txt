@@ -260,6 +260,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sassertchannelsdifferaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
+    testkit/include/app/testkit/sassertfileidenticalaction.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
     testkit/include/app/testkit/sdumpplaybackcaptureaction.h
@@ -268,6 +269,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/slogstressaction.h
     testkit/include/app/testkit/smetertestactions.h
     testkit/include/app/testkit/spluginuitestactions.h
+    testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/sslipclipaction.h
@@ -280,6 +282,7 @@ set(APP_UI_FILES
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sassertchannelsdifferaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
+    testkit/src/sassertfileidenticalaction.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/sdumpplaybackcaptureaction.cpp
@@ -288,6 +291,7 @@ set(APP_UI_FILES
     testkit/src/slogstressaction.cpp
     testkit/src/smetertestactions.cpp
     testkit/src/spluginuitestactions.cpp
+    testkit/src/sreportpagememoryaction.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
     testkit/src/sslipclipaction.cpp

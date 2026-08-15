@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE BYTE-EXACTNESS GATE for proposal 35, channels='1' half (§5, built by B1a).
+
+  This repo has gated render exactness by cmp since the beginning, but only ever
+  BETWEEN RUNS — never against a stored file. Proposal 35 rewrites the most
+  load-bearing contract in the engine (the frozen page grows a channel
+  dimension), and its entire safety argument is that the whole mechanical sweep
+  happens while every page is still one channel wide, so the byte gate is green
+  BY CONSTRUCTION through the riskiest phase. That argument needs a golden that
+  outlives the session which produced it. Hence goldens/mc_mono.wav, committed.
+
+  The fixture project carries one of every path this proposal touches, each in
+  its OWN time window so a byte difference names its own culprit by offset:
+
+    0.00-0.60 s   plain clip                 offset 44 .. 115244
+    0.65-1.28 s   stretched clip (x1.25)     offset 124844 .. 244844
+    1.35-1.95 s   pitched clip (+700 cents)  offset 259244 .. 374444
+    2.00-2.60 s   container/asset clip       offset 384044 .. 499244
+    2.70-3.30 s   clip on a NESTED lane      offset 518444 .. 633644
+    3.35-3.95 s   clip through a twtestclap  offset 643244 .. 758444
+
+  (16-bit stereo PCM, 44-byte header: offset = 44 + frame * 4.)
+
+  It is LOADED into a freshly-new project, never built by a save-load-save round
+  trip: §7 trap 10 — load-project deserializes INTO the current project instead
+  of replacing it, so a round trip accumulates orphan mixers and chains. Loading
+  a fixture into a new project is the shape that is safe.
+
+  Regenerate the .qxp with tests/tools/gen_mc_corpus.qxa. Re-freezing the .wav
+  requires an AC that licenses it and a written explanation of why the bytes
+  moved (§5).
+
+  DEPENDENCY, stated rather than assumed: the last window needs twtestclap.clap
+  next to the binary, i.e. the clap submodule present at configure time. Without
+  it the plugin is a Missing placeholder, the insert is transparent, and this
+  case fails on the very last window while the other five match — which is a
+  correct and legible way for a missing dependency to announce itself.
+-->
+<SActionScript version="1" name="mc_golden_mono">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../goldens/mc_mono.qxp"/>
+
+    <!-- Pages resident before anything is rendered. Reported, not asserted:
+         the count is a function of the readahead and the worker count, so a
+         bound would be a flake generator. Making it VISIBLE is the point. -->
+    <report-page-memory label="mc_mono after load"/>
+
+    <render filename="mc_mono.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <report-page-memory label="mc_mono after render"/>
+
+    <!-- THE GATE. -->
+    <assert-file-identical actual="mc_mono.wav" expected="../goldens/mc_mono.wav"/>
+
+    <!-- Every window carries audio, so a golden that went silent could not pass
+         by matching a silent render. These bands are wide on purpose: they are
+         a liveness check, not a second exactness gate. -->
+    <assert-audio-energy filename="mc_mono.wav"
+                         startFrame="2000" frameCount="24000"
+                         minRms="0.05" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_mono.wav"
+                         startFrame="33000" frameCount="24000"
+                         minRms="0.05" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_mono.wav"
+                         startFrame="66000" frameCount="24000"
+                         minRms="0.05" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_mono.wav"
+                         startFrame="98000" frameCount="24000"
+                         minRms="0.05" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_mono.wav"
+                         startFrame="131000" frameCount="24000"
+                         minRms="0.05" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_mono.wav"
+                         startFrame="162000" frameCount="24000"
+                         minRms="0.02" maxRms="0.60"/>
+
+    <!-- AC B1a.2: THE GATE MUST BE SEEN TO FAIL. A gate that has only ever
+         passed is not known to be a gate — and the failure mode this guards
+         against is not "the verb is wrong" but "the verb compares the render
+         with itself", which passes for ever.
+
+         Muting the plugin track is a deliberate, minimal corruption: it changes
+         only the last 0.6 s, so the rejection below also demonstrates that the
+         diagnosis LOCATES the difference rather than merely announcing one. The
+         warning it prints carries the first differing offset (~643 244, the
+         start of the twtestclap window) and the differing-byte count. -->
+    <set-track-mute trackPath="5" muted="1"/>
+    <render filename="mc_mono_muted.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="mc_mono_muted.wav"
+                           expected="../goldens/mc_mono.wav"
+                           expectReject="true"/>
+
+    <!-- …and back. This is not decoration: it says the difference above was the
+         mute and not an unrelated drift, and it exercises invalidation across
+         the gate rather than only in one direction. -->
+    <undo count="1"/>
+    <render filename="mc_mono_unmuted.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="mc_mono_unmuted.wav"
+                           expected="../goldens/mc_mono.wav"/>
+
+    <report-page-memory label="mc_mono after three renders"/>
+  </actions>
+
+  <assertions>
+    <!-- plain, stretched, pitched, asset, folder (holding the nested lane), fx -->
+    <assert-track-count equals="6"/>
+  </assertions>
+
+</SActionScript>

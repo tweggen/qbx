@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <map>
 #include <atomic>
+#include <string>
 #include <vector>
 
 #include "tw/core/twtypes.h"
@@ -243,8 +244,11 @@ public:
     // to enable sequential rendering with state resumption between pages.
     //
     // Example: Spring Reverb
-    //   Page 0 [0..PAGE_SIZE]: render from reset, save delay line state → OutputPage.internalState
-    //   Page 1 [PAGE_SIZE..2*PAGE_SIZE]: restore delay line state, render, save new state
+    //   Page 0 [0..FRAME_CAPACITY]: render from reset, save delay line state → OutputPage.internalState
+    //   Page 1 [FRAME_CAPACITY..2*FRAME_CAPACITY]: restore delay line state, render, save new state
+    //   (FRAME_CAPACITY, not PAGE_SIZE: a page's extent in POSITIONS is 65536
+    //    frames; PAGE_SIZE is its 262144 BYTES. Saying PAGE_SIZE here is how the
+    //    releaseOldPages units bug got written — see invariant 8 in CONTRACT.md.)
     //   Result: Reverb output is continuous; no artifacts at page boundaries
     //
     // Stateless components (oscillators, simple mixers) use default (empty any, no-op restore).
@@ -287,8 +291,64 @@ public:
     std::shared_ptr<twOutputPage> getPageIfExists(offset_t startPos);
 
     // Release pages outside of a time retention window (memory management).
-    // Frees pages whose [startPos, startPos+PAGE_SIZE) range ends before keepAfterPos.
+    // Frees pages whose [startPos, startPos + FRAME_CAPACITY) range ends before
+    // keepAfterPos. keepAfterPos and startPos are both FRAME positions; the
+    // page's own extent is FRAME_CAPACITY frames, NOT PAGE_SIZE (which is the
+    // page's size in BYTES). See the note on the definition — this comparison
+    // was frames-against-bytes until proposal 35 B1a.
+    //
+    // NOTE (B1a): nothing in the tree calls this. Page caches are pruned only by
+    // invalidation and by component teardown, so a long session's outputPages_
+    // maps grow without bound. Retiring or wiring it is proposal 35 B9's call;
+    // the arithmetic is fixed here because widening the page would have
+    // multiplied the error the day it did get wired.
     void releaseOldPages(offset_t keepAfterPos);
+
+    // --- Page-memory accounting (proposal 35 B1a) ---------------------------
+    //
+    // The GLOBAL figures live in tw::pages::PageAccounting and are exact by
+    // construction (they ride the page's own lifetime). These add the PER
+    // COMPONENT breakdown, which the global counters cannot give: they answer
+    // "which components are holding the resident pages", which is the question
+    // a memory regression is actually about.
+    //
+    // A component registers itself in a process-wide registry at construction.
+    // The registry is intentionally NOT an owner — it holds raw pointers and the
+    // destructor removes them — so it cannot keep a component alive.
+
+    struct PageStats {
+        size_t pages = 0;   // pages in THIS component's outputPages_
+        size_t bytes = 0;   // their sample bytes
+        size_t frozen = 0;  // of those, how many carry validAspects != 0
+    };
+
+    // This component's own cache. Takes mutex(); never call from the RT thread.
+    PageStats pageStats() const;
+
+    // The same measurement with a TRY-lock, ADDING into `out` and reporting
+    // whether it got the lock at all. The registry walkers below use it: they
+    // hold the registry lock for the whole walk (which is what keeps the raw
+    // pointers alive), so waiting on a component mutex there would be a
+    // lock-order inversion against a thread destroying a component.
+    bool pageStatsTry( PageStats &out ) const;
+
+    // Sum over every live component. Note this is NOT the same number as
+    // tw::pages::PageAccounting::global(): a page bound into a scheduler node,
+    // held by an audio callback, or chained as a stalePredecessor is alive but
+    // may no longer be in any component's map. The DIFFERENCE between the two is
+    // the interesting figure, and reportPageMemory() prints both.
+    static PageStats componentPageStats();
+
+    // TW_LOG one summary line plus one line per component TYPE holding pages,
+    // heaviest first. `label` names the moment ("after render", "at exit").
+    // RETURNS the same text it logged, so a caller that also wants to print it
+    // (the report-page-memory test hook does, into the harness's own stdout)
+    // gets ONE walk of the registry and cannot print figures that disagree with
+    // the ones in the log.
+    static std::string reportPageMemory( const char *label );
+
+    // The breakdown as text without logging it. One record per line.
+    static std::string describePageMemory( const char *label );
 
     // Get all cached pages in a time range (for iteration, cleanup, debugging).
     std::vector<std::shared_ptr<twOutputPage>> getPagesInRange(

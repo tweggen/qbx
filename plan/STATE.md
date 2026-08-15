@@ -9100,3 +9100,160 @@ the only pre-existing user of `channel=` outside the plugin/AU family — is
 unchanged and green: all 33 existing `channel=` users pass `frameCount=` too
 (checked by parsing all 90 cases, not by grep), so the fix is behaviour-
 preserving for every one of them.
+
+## 2026-08-15 — Proposal 35 B1a: the byte gate, the page accounting, and a units bug
+
+**B1 is the milestone that grows a channel dimension on the frozen page while
+every page in the system stays one channel wide** — that ordering is what makes
+the byte-exactness gate meaningful through the riskiest phase of the proposal.
+B1a is its groundwork, and it touches NO page struct and NO channel code: it
+builds the safety net B1b then leans on, and fixes what would otherwise corrupt
+it.
+
+**The corpus.** `smaragd/tests/goldens/` now holds `mc_mono.qxp` (`channels='1'`)
+and `mc_stereo.qxp` (`channels='2'`) — ONE arrangement written twice, differing
+only in the width attribute, so "the width is the only difference" is a property
+of how they were built rather than a claim — plus their frozen 16-bit PCM renders
+`mc_mono.wav` / `mc_stereo.wav`, 768 044 bytes each. Each project carries one of
+every path this proposal touches — a plain clip, a stretched clip (x1.25), a
+pitched clip (+700 cents), a container/asset clip, a clip on a NESTED lane, and a
+clip through a `twtestclap` insert — and each occupies its OWN time window inside
+4 s, so a byte difference names its culprit by offset rather than merely
+announcing itself. `tests/tools/gen_mc_corpus.qxa` regenerates the projects and
+lives deliberately OUTSIDE `tests/cases/` so the `CONFIGURE_DEPENDS` glob never
+runs it: a "gate" that rewrites its own fixture is not one.
+
+The two goldens are byte-identical to each other today, and that is correct:
+`RenderSession` hard-codes `config.channels = 2` and duplicates one mono bus, so
+a width-1 and a width-2 project render the same file. B5 is where they must
+diverge. They are kept apart from the start anyway, because a corpus that
+acquired its second half at the milestone that needed it would be re-frozen
+exactly when the gate was supposed to be holding still.
+
+Committing rendered WAVs is new for this repo (requester decision). Exactness has
+been `cmp`'d across runs and builds since the beginning and never against a
+stored file, which is precisely why "byte-identical to the pre-milestone golden"
+could be written in a PR body and not enforced. The corpus is NOT built on a
+save->load->save round trip — proposal 35 §7 trap 10: `load-project` deserializes
+INTO the current project instead of replacing it, so a round trip accumulates
+orphan mixers and chains. Loading a fixture into a freshly-`new` project is the
+safe shape and is what both cases do.
+
+**The verb the repo did not have.** `assert-file-identical actual= expected=
+[maxReportedDiffs=]`, resolving both paths through M0's `resolveTestFilePath` so
+a committed golden is addressable. On mismatch it reports both sizes, the offset
+and byte values of the FIRST difference, how many bytes differ, and the first few
+offsets — a truncated render and a re-rendered one are both "not identical" and
+have nothing else in common. Proven to FAIL three ways: a single flipped byte
+(`offset 400000 (0x61a80): 101 vs 100; 1 of 768044 common bytes differ`), a
+100-byte truncation (`SIZE differs by -100 B; the common 767944 bytes are
+IDENTICAL`), and a missing golden (a distinct message, because naming a golden
+that was never committed must not read as "the render is wrong"). Each gate case
+also MUTES a track and asserts the comparison rejects — a gate that has only ever
+passed is not known to be a gate, and the failure it really guards against is
+"the verb is comparing the render with itself", which passes for ever. That
+rejection reports `first differing byte at offset 643244 (0x9d0ac)`, which is
+frame 160800 — the first frame of the muted track's clip, to the sample.
+
+**`render` grew `durationSec=`** (default -1 = unchanged), and the reason is a
+finding: `SProject::getDurationSeconds()` is a hard-coded `return 60.0;` with a
+"TODO: calculate from arrangement" beside it, so EVERY render in this suite is 60
+seconds long regardless of what the project contains. The 4 s corpus rendered
+11.5 MB, 93% of it silence. Bounding the render keeps a committed golden at
+768 KB; the project-duration defect is left exactly where it was, because fixing
+it would change the length of every render in the suite and that is not this
+milestone's to do.
+
+**Page-memory accounting**, because there is no pool to instrument. Pages are
+`make_shared` on demand into unbounded per-component maps; `CapturePagePool` is a
+different type. So the instrument is the PAGE's own lifetime:
+`tw::pages::PageAccounting` counts sample bytes from `twOutputPage`'s constructor
+and destructor, which is exact no matter who owns the page — including one bound
+into a scheduler node, held by an audio callback, or hanging off a
+`stalePredecessor` chain, all of which a pool-side counter would have missed. On
+top of that, every live `twComponent` registers in a process-wide raw-pointer
+registry so the report can break the total down PER COMPONENT TYPE, which is the
+question a memory regression is actually about. `<report-page-memory label=
+[maxPages=] [maxBytes=]>` is the test hook; the two bounds default OFF, because
+resident page count depends on the readahead and the worker count and a tight
+bound would be a flake generator rather than a gate.
+
+What it measured on the corpus (identical for both projects, since M1 made the
+channel count data only):
+
+| moment | resident pages | bytes | in components | elsewhere |
+|---|---|---|---|---|
+| after load | 0 | 0 | 0 | 0 |
+| after one render | 49 | 12 845 056 | 41 | 8 |
+| after three renders | 50 | 13 107 200 | 42 | 8 |
+
+The per-type breakdown after one render, which is the half the global counter
+cannot give: `twRewire` 24 pages over 8 holders (the per-track root, and the only
+per-track component that caches — proposal 34 already recorded that
+`twTrackMix::freezePage` mints a fresh page every call and `twPluginChain`
+forwards, and the report shows exactly that: 14 `twTrackMix` and 14
+`twPluginChain` instances holding ZERO pages between them), `twSampleReader` 8
+over 6, `twPluginInsert` 6 over 2, `twMixer` 3 over 1. 24+8+6+3 = 41 =
+`inComponents`; the remaining 8 of the global 49 are `elsewhere`, alive outside
+any component cache. `everAllocated` was 253-257 for one render and 525-529 for
+three — pages are re-minted on every re-freeze, so churn is ~5x residency and is
+timing-dependent, while residency is stable run to run.
+
+**And the number that dwarfs all of them.** `CapturePagePool` pre-allocates its
+whole `std::vector<CapturePageData>` in its constructor, and `SProject` asks for
+2048 pages — **553 648 128 bytes, 528 MiB, reserved eagerly per project**, of
+which the corpus ever uses ONE page. Proposal 35 B1 says `CapturePagePool` is
+"used in production nowhere"; that is wrong on both halves (`SProject` builds one
+at `sproject.cpp:551`, and `CapturePageData` is the preview/metadata capture page
+throughout `SObject`/`SCut`), and a page-memory report that showed only the 12 MB
+of `twOutputPage` would have understated this process by a factor of forty. The
+pool reservation and its occupancy are now in the same report.
+
+**The units bug.** `twComponent::releaseOldPages(keepAfterPos)` compared
+`it->first + twOutputPage::PAGE_SIZE < keepAfterPos` — **PAGE_SIZE is 262 144
+BYTES; `keepAfterPos` and `it->first` are FRAME positions** — so the retention
+window was four pages wide instead of one. It is frames-vs-frames now
+(`FRAME_CAPACITY`), pinned frame-exactly from BOTH sides by the new `graph_test`
+(a page whose end equals `keepAfterPos` is retained; one frame later it is
+released), and the test was confirmed to fail 4 of its 25 checks against the old
+expression.
+
+**But note the second half of that finding: NOTHING IN THE TREE CALLS
+`releaseOldPages`.** Component page caches are pruned only by invalidation and by
+teardown, so a long session's `outputPages_` maps grow without bound. The fix
+therefore changed no measured number — deliberately verified rather than assumed,
+by rebuilding with the old expression and re-measuring: 49/50 resident pages and
+the same byte totals either way, and both goldens byte-identical under both. AC
+B1a.5 expected a drop in resident pages; there is none, and the reason is the
+more useful result. Wiring or retiring `releaseOldPages` belongs to B9.
+
+**The rest of the frames-vs-bytes hunt**, since widening the page multiplies this
+class of error. Two more instances, both cosmetic today and both fixed because
+they are how the real one got written: `render_session.cc` named a FRAME count
+`PAGE_SIZE` (`twOutputPage::PAGE_SIZE / sizeof(sample_t)`, value correct, name
+one identifier away from the bug) — now `PAGE_FRAMES` off `FRAME_CAPACITY`; and
+`twcomponent.h`'s state-chaining example documented a page's extent as
+`[0..PAGE_SIZE]`. Everything else that divides `PAGE_SIZE` by an element size
+(`CapturePageData::getValidFrames`, `splainwave.cpp`'s preview count, the
+revalidator's two copy bounds) is a correct bytes-to-elements conversion.
+`PageBase::getPageSize()` returns bytes and has no callers at all.
+
+**What is NOT gated**, said plainly: the accounting is a diagnostic, and no case
+asserts a page-count ceiling — the numbers above are reported and reconciled by
+eye, not enforced, because a bound tight enough to catch a regression would flake
+on the readahead. `releaseOldPages` has no production caller, so its fixed
+retention window is proven only by a unit test and never by the suite. And the
+corpus asserts the RENDER path only; the playback path over the same projects has
+no golden, because a capture-backend recording is real-time paced and its byte
+content is not reproducible enough to `cmp`.
+
+**Gates.** Full ctest **117 registered / 114 run / 114 passed / 3 not run** (the
+macOS `au_*` trio, disabled off macOS), 2134.74 s — reconciled by hand against
+`ctest -N`: +3 on M1's 114, being `qxa.mc_golden_mono`, `qxa.mc_golden_stereo`
+and `graph_test`. `check_layering.py` and `check_logging.py` clean.
+`action_roundtrip_test` covers 85 actions (+2 fixtures). The DSP-sensitive set
+(`grain_*`, `exact_*`, `stress_*`, `warp_*`, 20 tests) was run first and
+separately and is green. Both new qxa cases pinned with `repeat_test.sh` FROM
+`tests/cases/` (§7 trap 11) over `SMARAGD_REVAL_WORKERS` {1,4,8,16}: 10/10 each,
+80/80 in total, and the harness's own byte-identical-render check green on every
+run. No flake was seen anywhere in this session.

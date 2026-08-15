@@ -55,7 +55,9 @@ tw_module(pages
         pages/include/tw/pages/page_interface.h
         pages/include/tw/pages/io_vector.h
         pages/include/tw/pages/capture_page_pool.h
+        pages/include/tw/pages/tw_page_accounting.h
         pages/src/tw_output_page.cc
+        pages/src/tw_page_accounting.cc
         pages/src/io_vector.cc
         pages/src/capture_page_pool.cc
     DEPS tw_core
@@ -733,6 +735,9 @@ tw_module_test(twwarpmap_test               core/tests/test_twwarpmap.cpp       
 tw_module_test(timemap_test                 core/tests/test_timemap.cpp                 tw_core)
 tw_module_test(twlog_test                   core/tests/test_twlog.cpp                   tw_core)
 tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)
+# Proposal 35 B1a: the releaseOldPages retention boundary (frames, not bytes) and
+# the page-memory accounting the later phases' memory claims rest on.
+tw_module_test(graph_test                   graph/tests/graph_test.cc                   tw_graph)
 tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)

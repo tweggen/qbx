@@ -64,6 +64,37 @@ Invariants:
    against: 4 channels of a 480 Hz sine on a 6 dB RMS ladder
    (0.5 / 0.25 / 0.125 / 0.0625, pooled 0.28810), written and re-checked by
    tw303a/analysis/tools/gen_channel_fixture.cc (`--verify`).
+8. THE GOLDEN CORPUS is tests/goldens/ (proposal 35 B1a): mc_mono.qxp
+   (channels='1') and mc_stereo.qxp (channels='2') — one arrangement, differing
+   only in the width attribute — plus their frozen 16-bit PCM renders
+   mc_mono.wav / mc_stereo.wav, 768 044 bytes each. Each project carries one of
+   every path proposal 35 touches (plain / stretched / pitched / asset / nested
+   lane / twtestclap insert), each in its OWN time window inside 4 s, so a byte
+   difference names its culprit by offset. assert-file-identical is the gate.
+   Four things about it are load-bearing:
+     * The projects are LOADED into a freshly-new project and never rebuilt by a
+       save->load->save round trip — §7 trap 10: load-project deserializes INTO
+       the current project, so a round trip accumulates orphan mixers and
+       chains.
+     * The renders are bounded with `durationSec="4.0"`, because
+       SProject::getDurationSeconds() is a hard-coded 60.0 and an unbounded
+       corpus render is 11.5 MB of mostly silence.
+     * Each gate case MUTES a track and asserts the comparison REJECTS. A gate
+       that has only ever passed is not known to be a gate, and the failure it
+       guards against is not "the verb is wrong" but "the verb is comparing the
+       render with itself".
+     * The two goldens are byte-identical to each other TODAY, on purpose: the
+       sink duplicates one mono bus, so a width-1 and a width-2 project render
+       the same file. B5 is where they must diverge, and re-freezing needs an AC
+       that licenses it plus a written explanation (§5).
+   Regenerate the .qxp pair with tests/tools/gen_mc_corpus.qxa (deliberately
+   OUTSIDE tests/cases/, so the CONFIGURE_DEPENDS glob never runs it); re-freeze
+   the .wav pair from the gate cases' own renders, never from the generator's.
+9. report-page-memory is the only window onto frozen-page memory, because there
+   is no page pool to query. Its two bounds (`maxPages`, `maxBytes`) default OFF
+   and the corpus cases leave them off: the resident page count depends on the
+   readahead and the worker count, so a tight bound would be a flake generator
+   rather than a gate. Making the number visible is the deliverable.
 
   assert-meter (proposal 34) needs NO transport, which is the point: levels are
   read from frozen pages BY POSITION, so the verb freezes the page it asks
@@ -104,6 +135,7 @@ How to test:
   ../../build/bin/smaragd.exe --test-case <case>.qxa --test-output-dir <dir>
   ../../build/bin/action_roundtrip_test.exe   # 2 pre-existing assert-action
                                               # serialization failures
+  ctest -R "qxa.mc_golden"                    # the proposal 35 byte gate
 
 Known debt: screenshots need the window (not truly headless on all
 platforms). The older "scripted toggle-playback segfaults" note is retired: two
