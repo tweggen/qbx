@@ -252,8 +252,20 @@ The rule instead:
 // width > 1 -> the component MUST override renderPageWide(); the base
 //              implementation for width > 1 asserts and logs. It never
 //              silently renders something plausible.
+// SKETCH — not what shipped; see below.
 virtual bool renderPageWide( twOutputPage &out, const twFrozenInputs &in, … );
 ```
+
+**That signature is not buildable** (B2). `freezePage_nolock` has no
+`twFrozenInputs` in hand — the set is *thread-scoped*
+(`twFrozenInputScope::active()`) — and threading it in explicitly would change
+the width-**1** path's signature, which is the one thing that must not move. What
+shipped mirrors `renderFrames` (`twOutputPage&`, frames, input, inputLength) and
+a wide component reaches for bound pages via `twFrozenInputScope::active()`
+itself, which is what §4.4 rule 2 already implies.
+
+**The fork is on `page->channels()`, not on the declaration** — so width 1 makes
+byte-for-byte the same `renderFrames(channelPtr(0), …)` call as before.
 
 A wide component seeks once, fills every channel of its page in that one pass,
 and advances its cursor once — which is what `twSampleReader` wants anyway
@@ -302,8 +314,16 @@ RT callback (`audio_engine.cc:310` reads `&currentFrozenPage_->samples[…]`) or
 `twLevelProbe` (`tw_level_probe.cc:112`). Reading `channelPtr(1)` of a stale
 width-1 page is an **out-of-bounds read on the audio thread**. Therefore:
 
-> **A stale page whose `channels` differs from the width the consumer expects is
-> treated as a MISS, never as audio.** Playback falls back to silence for that
+> **A stale page whose `channels` differs from its PRODUCER'S DECLARED WIDTH is
+> treated as a MISS, never as audio.** *(v3 said "the width the consumer
+> expects"; B2 corrected it. "Consumer expects" is undefined without new
+> plumbing, and worse: a narrow consumer of a correctly-wide page would read as a
+> mismatch — which would silence playback for the entire gap between B4, when the
+> graph goes wide, and B5, when the sink does. Comparing `page->channels()` to
+> `producer->getOutputChannels()` rejects only pages that predate a width change;
+> fresh pages pass by construction. This does not weaken §4.4's "act on the page
+> in your hand", which answers a different question: **which channel to read**.)*
+> Playback falls back to silence for that
 > page; a meter decays. Width mismatch is the one staleness that is not
 > tolerable.
 
@@ -470,7 +490,7 @@ unchanged at width 1 versus a pre-B1 measurement of the same projects.
 **AC B1.5** `releaseOldPages` retention is frames-vs-frames, with a test that
 pins the boundary.
 
-### B2 — Components declare width; the wide render path exists
+### B2 — Components declare width; the wide render path exists ✅ **EXECUTED 2026-08-15** (`316bf5d`)
 
 `getOutputChannels()`; `renderPageWide()` with the §4.3 rule (width 1 keeps
 today's code, width > 1 must override, base asserts); the §4.4 plug channel rule
@@ -490,7 +510,10 @@ channel 0; a width-4 consumer of a width-1 producer reads that channel on all
 four. Both asserted, both paths (plug pull and bound page).
 **AC B2.3** A width > 1 component that does *not* override `renderPageWide`
 asserts rather than rendering — proven by a test that expects the failure.
-**AC B2.4** Byte-exactness gate green. Scheduler node count on the corpus
+**AC B2.4** *(B2: "node count unchanged" can only ever be a **distribution**, not
+a number — `nodesExecuted` jitters ±2 run-to-run at fixed workers on an unchanged
+tree. `nodeRetries` and `missPages` are the stable, sharper observables. B9.2 must
+plan for that.)* Byte-exactness gate green. Scheduler node count on the corpus
 unchanged — noting that at B2 nothing in production is wide, so this AC shows
 *"no regression"*, **not** B's central claim; that is B9.2's job.
 
@@ -725,6 +748,24 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     distinct* mode appears at workers=8: `SRenderAction: render timeout after
     30000 ms` at 96% of the render — a wall-clock budget blown on a loaded box,
     aggravated by trap 13. The exit code separates them; do not conflate them.
+18. **`renderFrames()` and `calcOutputTo()` are mutually recursive in the base
+    class** (found by B2, by mutation: stack exhaustion, `0xC00000FD`). Base
+    `renderFrames` calls `calcOutputTo`; base `calcOutputTo` calls `renderFrames`.
+    A component overriding **neither** recurses until the stack ends. Pre-existing
+    and harmless today because everything overrides one — but **B3 and B4 write
+    wide components**, and a wide-only component handed a mono scratch page walks
+    straight into it. **A wide component must keep a narrow `renderFrames()`
+    degradation.**
+19. **Three components override `freezePage` and allocate their OWN pages**,
+    bypassing the width wiring entirely: `twTrackMix`, `twPluginChain`,
+    `twPluginInsert` (found by B2; all three sites marked in `415efc4`). Because
+    the render fork is on the *page's* width, a component that declares 4 but
+    hands itself a width-1 page renders channel 0 and publishes it **with no
+    refusal**. §4.5 catches it downstream as a miss — one log line and silence,
+    not garbage — so it is findable, but it is B4's job to actually fix the
+    allocation. Expect it; do not spend an afternoon on it.
+20. **`idx_t` is `short int` in this tree.** Relevant whenever a channel count is
+    cast or compared.
 
 ## 8. Non-goals (named, so they are not assumed)
 
