@@ -9797,3 +9797,18 @@ and named rather than waved through.
   points are driven by a test.
 - No `repeat_test.sh` sweep: nothing here touches the scheduler, a class-1
   processor, the barrier or the readahead.
+
+## 2026-08-15 — Proposal 36: P0a + P0b + P2 reconciled on the merged tree
+
+`docs/midi-instruments-automation` at `1e402a1` = P0a + P0b + P2 + PRs #34
+(render length = arrangement), #35 (offscreen plugin deploy), #37 (channel=
+fix, byte gate, page accounting) and #36 (parallel test gate). The two
+`assert-file-identical` verbs (PR #37's and P0a's) were unified: PR #37's class
+and attribute names (`actual`/`expected`/`maxReportedDiffs`) plus P0a's
+`startFrame`/`frameCount` WAV-range compare and absolute-path acceptance.
+
+Gate on the merged tree: `./build.sh` clean; layering + logging clean;
+`action_roundtrip_test`, `events_test`, `plugins_test`, `plugins_scan_test`
+green; **`ctest -j4`: 118/118 passed in 155.7 s** (121 registered; 3 `au_*`
+disabled off macOS). This is the full-suite reconciliation P0a/P0b/P2 had
+deferred by requester instruction.
