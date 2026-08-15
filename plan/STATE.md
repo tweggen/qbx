@@ -9028,3 +9028,90 @@ isolation and on chunk re-run. At least one occurred before any of these six
 fixes existed, so the pattern is not attributable to them — but neither has it
 been explained. A low-rate flake somewhere in the suite under sustained load is
 the working hypothesis and it remains unproven.
+
+## 2026-08-15 — Several tracks selected at once
+
+The arranger could select exactly one track. You can now select many — plain
+click, Ctrl-click to toggle, Shift-click for a lane range — and one gesture then
+applies to all of them: mute / solo / arm / record-channels / edit-group from a
+head's buttons, and remove / indent / outdent / group / ungroup / lane height /
+take lanes from the context menu, plus dragging the block into or out of a
+folder track.
+
+### The one rule
+
+**A gesture aimed at a track that is PART of the selection acts on the whole
+selection; a gesture aimed at any other track acts on that track alone.**
+`SStdMixerView::selectionTargets()` is its only implementation, and everything
+above goes through it. The alternative — "act on the selection, full stop" —
+means pressing M on an unselected lane silently mutes four lanes somewhere else
+on screen, which is the failure mode that makes multi-selection feel dangerous
+in a DAW.
+
+Two corollaries that are easy to miss:
+
+* A press on a head's GRIP does not collapse a selection it belongs to. A plain
+  click anywhere else on the head does (that is what "plain click" means), so
+  without the grip exception a multi-track drag could never start — the press
+  would have thrown the selection away before the drag armed.
+* The right-click that opens the menu SELECTS an unselected lane first, so the
+  menu can never appear over one lane while acting on others. Same rule the
+  clip-properties menu already followed.
+
+### Where the state lives
+
+The SET lives on the model (`SStdMixer`), the GESTURES on the view. The model
+holds `QPointer`s: `SRemoveTrackAction` keeps a removed track alive for undo but
+a discarded command finally deletes it, and a raw pointer in the selection would
+then dangle until the next click. One distinguished PRIMARY (the last lane
+touched) is what `getSelectedTrack()`, `activeLane()` and the Track Detail dock
+keep meaning, so nothing outside the arranger had to change. Two signals:
+`selectedTracksChanged()` for the set, `selectedTrackChanged()` for the primary —
+a head repaints on either, because a Ctrl-click on a third lane moves the set
+without moving the primary and the old single signal would not have fired.
+
+Selection is view state: not serialized, not an action, not undoable. (The
+existing `app/selection` module is about CLIPS — SLinks — and is untouched.)
+
+### What multi-track structural edits actually cost
+
+Every one of them is a LOOP over single-track actions, and three things decide
+whether the loop is correct:
+
+1. **Re-resolve the path between steps.** `submitAction` drains synchronously,
+   so each applied action has already shifted the indices the next one would
+   have used. Every step re-derives `pathOf()` from the live tree; nothing
+   pre-computes a list of paths.
+2. **Prune nested targets.** `pruneNestedTargets()` drops any track that has an
+   ancestor in the same target list — a folder carries its subtree, so acting on
+   a child as well either double-applies or tears the subtree apart.
+3. **Order, and it is opposite per operation.** Remove and outdent go BOTTOM-UP
+   (each outdented lane lands just after the folder it left, so promoting the
+   lowest first is what preserves the block's order); indent and the drag's
+   top-level insert go TOP-DOWN (the first lane nests under the lane above the
+   block, and the rest then find it as their preceding sibling — which is how a
+   contiguous block lands inside ONE folder). Group creates ONE folder for the
+   whole block, in the first target's slot, then reparents each target into it.
+
+Each broadcast is ONE undo step (a `QUndoStack` macro), because the user made
+one gesture. Targets get the ABSOLUTE value the pressed button now shows, not a
+per-lane toggle, so a mixed selection ends up uniform.
+
+### Gate
+
+`multitrack_selection.qxa`, driving the REAL widgets through three new testkit
+verbs — `select-track` (one head click with modifiers), `track-head-toggle`
+(presses the actual M/S/R button) and `drag-track` (grip-drag to a lane ROW, so
+the script does not encode the current zoom). A script that set the model's
+selection and submitted one `set-track-mute` per track would have tested the
+script, not the feature; same rationale as `drag-clip-edge` and `group-track`.
+It covers the click semantics including the Shift anchor, the mute broadcast
+being audible on the lane that was NOT pressed, a press OUTSIDE the selection
+staying on its own lane, single-step undo of the broadcast, the multi-track drag
+into a folder, and Group over a selection producing one folder — each structural
+step asserted by path resolution and each audio state by region RMS.
+
+**Not gated:** the highlight rendering (head colours, the tinted lane
+background), the head context menu popping at all, and the menu item labels that
+count the targets. Those are paint/menu-construction paths with no assertion
+hook, as elsewhere in the arranger.

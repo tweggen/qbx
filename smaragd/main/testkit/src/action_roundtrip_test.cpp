@@ -117,6 +117,19 @@ const Fixture kFixtures[] = {
     { "plugin-editor-set-param",
       "<plugin-editor-set-param trackIndex='0' slotIndex='0' paramId='1'"
       " value='0.25'/>" },
+
+    // --- the multi-track selection verbs ------------------------------------
+    // Two-level paths and a modifier COMBINATION deliberately: the modifier
+    // string is re-derived from parsed flags on write, so a single-modifier
+    // fixture would not catch a dropped one.
+    { "select-track",
+      "<select-track trackPath='1,0' modifiers='ctrl+shift'/>" },
+    { "track-head-toggle",
+      "<track-head-toggle trackPath='1,0' control='solo' on='0'/>" },
+    { "drag-track",
+      "<drag-track trackPath='1,0' targetRow='2' mode='before'/>" },
+    { "assert-track-selection",
+      "<assert-track-selection paths='0;1,0' primary='1,0'/>" },
 };
 
 const char *fixtureFor(const QString &verb)

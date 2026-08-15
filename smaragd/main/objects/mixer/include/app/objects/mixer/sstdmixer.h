@@ -5,6 +5,12 @@
 //#include <qptrlist.h>
 
 #include "app/model/sobject.h"
+// Complete type needed by the QPointer<STrack> members below (QPointer has to
+// see the QObject base). strack.h is a leaf-ish header — qobject + sobject.
+#include "app/objects/track/strack.h"
+
+#include <QList>
+#include <QPointer>
 
 class twComponent;
 class twMixer;
@@ -58,9 +64,31 @@ public:
     virtual length_t getDuration() const override;
     virtual bool hasDuration() const override;
 
-    // Track selection for the detail panel
-    STrack *getSelectedTrack() const { return selectedTrack_; }
+    // --- track selection ------------------------------------------------
+    // The selection is a SET of tracks with one distinguished PRIMARY (the
+    // last one the user touched). The primary is what the Track Detail dock
+    // and every "the selected track" caller sees; the set is what the arranger
+    // broadcasts mute/solo/arm and the structural track operations over.
+    //
+    // Held as QPointers on purpose: SRemoveTrackAction keeps a removed track
+    // alive for undo, but a discarded command finally deletes it — a raw
+    // pointer in here would then dangle until the next click.
+    STrack *getSelectedTrack() const;
+    // Selection in no particular order, pruned of tracks that have died. The
+    // arranger re-orders it by lane when order matters.
+    QList<STrack *> getSelectedTracks() const;
+    int nSelectedTracks() const;
+    bool isTrackSelected( STrack *track ) const;
+
+    // Select exactly this one track (it becomes the primary). NULL clears.
     void setSelectedTrack( STrack *track );
+    // Replace the whole selection. `primary` must be a member; when it is NULL
+    // the last entry of `tracks` becomes the primary.
+    void setSelectedTracks( const QList<STrack *> &tracks,
+                            STrack *primary = nullptr );
+    // Add/remove `track` (Ctrl-click). A track that joins becomes the primary;
+    // when the primary leaves, the last remaining member takes over.
+    void toggleTrackSelection( STrack *track );
 
     // Scoped invalidation (proposal 15): the mixer's rewire is the engine's
     // synthOutput_ — its cached pages hold the summed mix and go stale on any
@@ -87,9 +115,19 @@ signals:
     void tracksReordered();
 
     /**
-     * Emitted when a different track is selected (for the detail panel).
+     * Emitted when a different track becomes the PRIMARY selection (for the
+     * detail panel). Always preceded by selectedTracksChanged() when the set
+     * changed too, so a listener that only wants "what is highlighted" can
+     * watch the set signal alone.
      */
     void selectedTrackChanged( STrack *track );
+
+    /**
+     * Emitted when the selection SET changed (members added or removed),
+     * whether or not the primary moved. Carries no payload: listeners ask
+     * isTrackSelected() for the track they care about.
+     */
+    void selectedTracksChanged();
 
 public slots:
     /**
@@ -164,7 +202,10 @@ private:
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;
 
-    STrack *selectedTrack_ = nullptr;
+    // See the selection block above. selectedTracks_ always contains
+    // selectedTrack_ while the latter is non-null.
+    QPointer<STrack> selectedTrack_;
+    QList<QPointer<STrack> > selectedTracks_;
 };
 
 #endif

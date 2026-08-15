@@ -269,6 +269,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/sslipclipaction.h
+    testkit/include/app/testkit/strackselectionactions.h
     testkit/include/app/testkit/stransporttestactions.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
@@ -287,6 +288,7 @@ set(APP_UI_FILES
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
     testkit/src/sslipclipaction.cpp
+    testkit/src/strackselectionactions.cpp
     testkit/src/stransporttestactions.cpp
 )
 

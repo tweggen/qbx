@@ -17,6 +17,17 @@ Invariants:
    the last placement does not delete the asset (remove-asset does).
 3. SPluginChain mirrors its model into tw/plugins chain components; wiring
    rebuilds go through rebuildWiring() after input changes.
+4. Track selection is a SET with one distinguished PRIMARY, and both are
+   held as QPointers — a removed track survives on the undo stack but dies
+   when that command is discarded, so raw pointers here would dangle until
+   the next click. Every mutator funnels through setSelectedTracks(), which
+   is the one place that normalizes (no nulls, no duplicates), decides the
+   primary (a member, else the last entry), and emits: selectedTracksChanged()
+   for the set, then selectedTrackChanged() for the primary. The primary is
+   what "the selected track" means everywhere else (activeLane(), the Track
+   Detail dock); the SET only matters to the arranger, which decides what a
+   gesture acts on (app/timeline/CONTRACT.md inv. 12). Selection is NOT
+   serialized and is not an action — it is view state.
 
 Self-registration (Phase 5): sstdmixer.cpp and spluginchain.cpp register
 "SStdMixer" / "SPluginChain" with SProjectLoader from static initializers.

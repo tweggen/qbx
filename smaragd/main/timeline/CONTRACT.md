@@ -68,7 +68,29 @@ Invariants:
    update(), and zero work at all when hidden. 30 heads x 30 Hz is otherwise a
    repaint storm, and a 20 dB/s decay moves a 48 px bar by well under a pixel
    per tick.
-12. There is ONE fader curve, app/timeline/sfadercurve.h. Both faders onto a
+12. **A track-level gesture acts on the SELECTION when it is aimed into it,
+   and on the clicked track alone otherwise.** That is the single rule behind
+   multi-track mute/solo/arm, the structural operations (remove / indent /
+   outdent / group / ungroup / lane height / take lanes) and the head drag;
+   `SStdMixerView::selectionTargets()` is its ONE implementation and nothing
+   may re-spell it. Aiming outside the selection must never reach a lane the
+   pointer is not on. Consequences that are easy to get wrong:
+   - The set lives on the MODEL (`SStdMixer`, QPointers so a removed track
+     cannot dangle) with one distinguished PRIMARY — the lane the Track Detail
+     dock follows. The GESTURES (which modifier does what, the Shift range
+     anchor) live here, in the view.
+   - Structural operations run over `pruneNestedTargets()` (outermost tracks
+     only: a folder carries its subtree) and re-resolve every path BETWEEN
+     steps, because each applied action shifts the indices the next one would
+     have used. Order matters and is opposite per operation: remove and outdent
+     go bottom-up, indent and drag-insert go top-down.
+   - A broadcast is ONE undo step (a QUndoStack macro) — the user made one
+     gesture. Each target gets the ABSOLUTE value the pressed button now shows,
+     so a mixed selection ends up uniform rather than inverted lane by lane.
+   - A press on a head's GRIP does not collapse a selection it is part of;
+     that is what makes dragging several tracks possible. A press anywhere
+     else on the head applies the click semantics.
+13. There is ONE fader curve, app/timeline/sfadercurve.h. Both faders onto a
    track's volume (the arranger head and the Track Detail dock) use it; the
    dock previously did a naive value = dB*10 and disagreed with the arranger
    about where a given dB sits.
@@ -78,7 +100,10 @@ scroll, per-track heights and take lanes), test_track_column_expansion.qxa,
 test_track_width_dragging.qxa, clip_properties_actions.qxa (the property
 verbs the panel submits), screenshot actions in the render cases;
 meter_levels.qxa + meter_postfader.qxa (the meter's levels, its miss path and
-its density rules, via the real head built off screen).
+its density rules, via the real head built off screen);
+multitrack_selection.qxa (the click semantics, the mute broadcast and its
+single undo step, the multi-track head drag and Group over a selection — all
+through the real widgets via select-track / track-head-toggle / drag-track).
 
 Known debt: sstdmixerview is the largest file in the app and knows every
 object type; per-object renderer extraction (proposal 14 slices) is the
