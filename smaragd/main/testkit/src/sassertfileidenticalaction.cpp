@@ -1,33 +1,29 @@
 #include "app/testkit/sassertfileidenticalaction.h"
+#include "app/testkit/stestfilepath.h"
 #include "app/actions/sactionregistry.h"
 #include "app/shell/sapplication.h"
 
 #include <QDebug>
-#include <QDir>
 #include <QDomElement>
 #include <QFile>
 #include <QFileInfo>
 
-#include <cstring>   // memcmp over the compared range
+SAssertFileIdenticalAction::SAssertFileIdenticalAction( const QString &actual,
+                                                        const QString &expected,
+                                                        int maxReportedDiffs,
+                                                        qint64 startFrame,
+                                                        qint64 frameCount )
+    : actual_( actual ), expected_( expected ), maxReportedDiffs_( maxReportedDiffs ),
+      startFrame_( startFrame ), frameCount_( frameCount )
+{
+}
 
 namespace {
 
-// A file's path as this verb resolves it. See the header for the three rules;
-// the ONLY thing that matters is that an absolute path survives untouched, so
-// a golden that lives outside the output directory can be named at all.
-QString resolvePath( const QString &spec )
-{
-    if( spec.isEmpty() ) return spec;
-    if( QDir::isAbsolutePath( spec ) ) return spec;
-    if( spec.contains( '/' ) || spec.contains( '\\' ) ) return spec;
-    const QString outDir = SApplication::app().testOutputDir();
-    return outDir.isEmpty() ? spec : ( outDir + "/" + spec );
-}
-
-// Minimal RIFF/WAVE geometry: where the sample data starts, how long it is,
-// and how many bytes one frame takes. Deliberately hand-rolled and read-only —
-// pulling in a decoder would decode, and this verb must compare the BYTES that
-// were written, not a reinterpretation of them.
+// Minimal RIFF/WAVE geometry (proposal 36 P0a): where the sample data starts,
+// how long it is, and how many bytes one frame takes. Deliberately hand-rolled
+// and read-only - pulling in a decoder would decode, and this verb must compare
+// the BYTES that were written, not a reinterpretation of them.
 struct WavGeom {
     qint64  dataOffset = -1;
     qint64  dataBytes  = 0;
@@ -77,11 +73,15 @@ bool parseWav( const QByteArray &buf, WavGeom &out, QString &error )
     return true;
 }
 
-bool readAll( const QString &path, QByteArray &out, QString &error )
+// Read whole files. A rendered WAV in this suite is a few hundred KB to a few
+// MB; a streaming compare in fixed chunks buys nothing there and would make
+// the "how many bytes differ in total" figure harder to get right, which is the
+// part of the diagnosis a hash could not give.
+bool readAll( const QString &path, QByteArray &out, QString &err )
 {
     QFile f( path );
     if( !f.open( QIODevice::ReadOnly ) ) {
-        error = QStringLiteral("cannot open %1").arg( path );
+        err = QStringLiteral( "cannot open %1 (%2)" ).arg( path, f.errorString() );
         return false;
     }
     out = f.readAll();
@@ -91,134 +91,192 @@ bool readAll( const QString &path, QByteArray &out, QString &error )
 
 }  // namespace
 
-SAssertFileIdenticalAction::SAssertFileIdenticalAction( const QString &a,
-                                                        const QString &b,
-                                                        int64_t startFrame,
-                                                        int64_t frameCount )
-    : a_( a ), b_( b ), startFrame_( startFrame ), frameCount_( frameCount )
+SApplyResult SAssertFileIdenticalAction::apply( SProject *project )
 {
+    if( actual_.isEmpty() || expected_.isEmpty() ) {
+        qWarning() << "SAssertFileIdenticalAction: both actual= and expected= are required";
+        return { false, nullptr };
+    }
+
+    SApplication &app = SApplication::app();
+    const QString outputDir = app.testOutputDir();
+    if( outputDir.isEmpty() ) {
+        qWarning() << "SAssertFileIdenticalAction: no test output directory configured";
+        return { false, nullptr };
+    }
+
+    QStringList triedA, triedE;
+    const QString pathA = resolveTestFilePath( actual_,   outputDir, project, &triedA );
+    const QString pathE = resolveTestFilePath( expected_, outputDir, project, &triedE );
+
+    QByteArray a, e;
+    QString err;
+    if( !readAll( pathA, a, err ) ) {
+        qWarning() << "SAssertFileIdenticalAction: actual:" << err
+                   << "- tried" << triedA;
+        return { false, nullptr };
+    }
+    if( !readAll( pathE, e, err ) ) {
+        // A missing REFERENCE is a different failure from a missing render, and
+        // the one place this verb gets used wrong: naming a reference that was
+        // never produced would otherwise read as "the render is wrong".
+        qWarning() << "SAssertFileIdenticalAction: expected (the reference):" << err
+                   << "- tried" << triedE;
+        return { false, nullptr };
+    }
+
+    // A frame range: compare the sample DATA of that range only (36 P0a).
+    if( frameCount_ >= 0 || startFrame_ != 0 ) {
+        return compareWavRange_( a, e );
+    }
+
+    const qint64 nA = a.size();
+    const qint64 nE = e.size();
+    const qint64 nCommon = qMin( nA, nE );
+
+    qint64 firstDiff = -1;
+    qint64 nDiff = 0;
+    QStringList offsets;
+    for( qint64 i = 0; i < nCommon; ++i ) {
+        if( a.at( i ) != e.at( i ) ) {
+            if( firstDiff < 0 ) firstDiff = i;
+            ++nDiff;
+            if( offsets.size() < maxReportedDiffs_ ) {
+                offsets << QStringLiteral( "%1:%2!=%3" )
+                               .arg( i )
+                               .arg( (quint8) a.at( i ), 2, 16, QChar( '0' ) )
+                               .arg( (quint8) e.at( i ), 2, 16, QChar( '0' ) );
+            }
+        }
+    }
+
+    if( nA == nE && nDiff == 0 ) {
+        qDebug() << "SAssertFileIdenticalAction: OK —" << actual_ << "is byte-identical to"
+                 << expected_ << QStringLiteral( "(%1 bytes)" ).arg( nA );
+        return { true, nullptr };   // assertions are not undoable
+    }
+
+    // Everything below is the diagnosis. Report the size difference AND the
+    // content difference: a truncated render and a re-rendered one are both
+    // "not identical" and have nothing else in common.
+    QString msg = QStringLiteral( "%1 (%2 B) differs from %3 (%4 B)" )
+                      .arg( actual_ ).arg( nA ).arg( expected_ ).arg( nE );
+
+    if( nA != nE ) {
+        msg += QStringLiteral( "; SIZE differs by %1 B" ).arg( nA - nE );
+    }
+    if( firstDiff >= 0 ) {
+        msg += QStringLiteral( "; first differing byte at offset %1 (0x%2): %3 vs %4" )
+                   .arg( firstDiff )
+                   .arg( firstDiff, 0, 16 )
+                   .arg( (quint8) a.at( firstDiff ) )
+                   .arg( (quint8) e.at( firstDiff ) );
+        msg += QStringLiteral( "; %1 of %2 common bytes differ (%3%)" )
+                   .arg( nDiff ).arg( nCommon )
+                   .arg( nCommon ? ( 100.0 * (double) nDiff / (double) nCommon ) : 0.0,
+                         0, 'f', 3 );
+        if( !offsets.isEmpty() ) {
+            msg += QStringLiteral( "; first offsets [%1]" ).arg( offsets.join( ' ' ) );
+        }
+    } else {
+        msg += QStringLiteral( "; the common %1 bytes are IDENTICAL (a pure "
+                               "length difference)" ).arg( nCommon );
+    }
+
+    qWarning() << "SAssertFileIdenticalAction:" << msg;
+    return { false, nullptr };
 }
 
-SApplyResult SAssertFileIdenticalAction::apply( SProject * /*project*/ )
+SApplyResult SAssertFileIdenticalAction::compareWavRange_( const QByteArray &a,
+                                                           const QByteArray &e )
 {
-    if( a_.isEmpty() || b_.isEmpty() ) {
-        qWarning() << "SAssertFileIdenticalAction: both 'a' and 'b' are required";
+    WavGeom ga, ge;
+    QString err;
+    if( !parseWav( a, ga, err ) ) {
+        qWarning() << "SAssertFileIdenticalAction: actual:" << actual_ << err;
         return { false, nullptr };
     }
-    const QString pathA = resolvePath( a_ );
-    const QString pathB = resolvePath( b_ );
-
-    QByteArray bufA, bufB;
-    QString error;
-    if( !readAll( pathA, bufA, error ) || !readAll( pathB, bufB, error ) ) {
-        qWarning() << "SAssertFileIdenticalAction:" << error;
+    if( !parseWav( e, ge, err ) ) {
+        qWarning() << "SAssertFileIdenticalAction: expected:" << expected_ << err;
         return { false, nullptr };
     }
-
-    if( frameCount_ < 0 && startFrame_ == 0 ) {
-        // Whole file, headers included — the `cmp` this verb exists to replace.
-        if( bufA.size() != bufB.size() ) {
-            qWarning() << "SAssertFileIdenticalAction: sizes differ —" << pathA
-                       << bufA.size() << "bytes vs" << pathB << bufB.size()
-                       << "bytes";
-            return { false, nullptr };
-        }
-        if( bufA != bufB ) {
-            qint64 firstDiff = -1;
-            for( qint64 i = 0; i < bufA.size(); ++i ) {
-                if( bufA[(int) i] != bufB[(int) i] ) { firstDiff = i; break; }
-            }
-            qWarning() << "SAssertFileIdenticalAction: files differ at byte"
-                       << firstDiff << "—" << pathA << "vs" << pathB;
-            return { false, nullptr };
-        }
-        qDebug() << "SAssertFileIdenticalAction: OK —" << pathA << "=="
-                 << pathB << "(" << bufA.size() << "bytes )";
-        return { true, nullptr };
-    }
-
-    // A frame range: compare the sample data only, so a case can assert about
-    // a region without asserting about the header or the rest of the file.
-    WavGeom ga, gb;
-    if( !parseWav( bufA, ga, error ) ) {
-        qWarning() << "SAssertFileIdenticalAction:" << pathA << error;
+    if( ga.channels != ge.channels || ga.bits != ge.bits || ga.rate != ge.rate
+        || ga.blockAlign != ge.blockAlign ) {
+        qWarning() << "SAssertFileIdenticalAction: formats differ -"
+                   << actual_ << QStringLiteral( "%1ch/%2bit/%3Hz" )
+                                    .arg( ga.channels ).arg( ga.bits ).arg( ga.rate )
+                   << "vs" << expected_
+                   << QStringLiteral( "%1ch/%2bit/%3Hz" )
+                          .arg( ge.channels ).arg( ge.bits ).arg( ge.rate );
         return { false, nullptr };
     }
-    if( !parseWav( bufB, gb, error ) ) {
-        qWarning() << "SAssertFileIdenticalAction:" << pathB << error;
-        return { false, nullptr };
-    }
-    if( ga.channels != gb.channels || ga.bits != gb.bits
-        || ga.rate != gb.rate || ga.blockAlign != gb.blockAlign ) {
-        qWarning() << "SAssertFileIdenticalAction: formats differ —" << pathA
-                   << ga.channels << "ch" << ga.bits << "bit" << ga.rate << "Hz vs"
-                   << pathB << gb.channels << "ch" << gb.bits << "bit"
-                   << gb.rate << "Hz";
-        return { false, nullptr };
-    }
-
     const qint64 frameBytes = ga.blockAlign;
     const qint64 framesA = ga.dataBytes / frameBytes;
-    const qint64 framesB = gb.dataBytes / frameBytes;
-    const qint64 first = startFrame_ < 0 ? 0 : (qint64) startFrame_;
-    const qint64 want = frameCount_ < 0 ? qMin( framesA, framesB ) - first
-                                        : (qint64) frameCount_;
-    if( want <= 0 ) {
-        qWarning() << "SAssertFileIdenticalAction: empty frame range ( start"
-                   << first << "count" << want << ")";
+    const qint64 framesE = ge.dataBytes / frameBytes;
+    const qint64 first = startFrame_ < 0 ? 0 : startFrame_;
+    const qint64 want = frameCount_ < 0 ? qMin( framesA, framesE ) - first : frameCount_;
+    if( want < 0 || first + want > framesA || first + want > framesE ) {
+        qWarning() << "SAssertFileIdenticalAction: range" << first << "+" << want
+                   << "exceeds the data:" << actual_ << "has" << framesA
+                   << "frames," << expected_ << "has" << framesE;
         return { false, nullptr };
     }
-    if( first + want > framesA || first + want > framesB ) {
-        qWarning() << "SAssertFileIdenticalAction: range [" << first << ","
-                   << ( first + want ) << ") is past the end —" << pathA
-                   << framesA << "frames," << pathB << framesB << "frames";
-        return { false, nullptr };
-    }
-
-    const char *pa = bufA.constData() + ga.dataOffset + first * frameBytes;
-    const char *pb = bufB.constData() + gb.dataOffset + first * frameBytes;
+    const char *pa = a.constData() + ga.dataOffset + first * frameBytes;
+    const char *pe = e.constData() + ge.dataOffset + first * frameBytes;
     const qint64 nBytes = want * frameBytes;
-    if( memcmp( pa, pb, (size_t) nBytes ) != 0 ) {
-        qint64 firstDiff = 0;
-        while( firstDiff < nBytes && pa[firstDiff] == pb[firstDiff] ) ++firstDiff;
-        qWarning() << "SAssertFileIdenticalAction: sample data differs at frame"
-                   << ( first + firstDiff / frameBytes ) << "(byte" << firstDiff
-                   << "of the compared range) —" << pathA << "vs" << pathB;
-        return { false, nullptr };
+    qint64 firstDiff = -1, nDiff = 0;
+    for( qint64 i = 0; i < nBytes; ++i ) {
+        if( pa[i] != pe[i] ) {
+            if( firstDiff < 0 ) firstDiff = i;
+            ++nDiff;
+        }
     }
-
-    qDebug() << "SAssertFileIdenticalAction: OK —" << want << "frames from"
-             << first << "identical (" << pathA << "vs" << pathB << ")";
-    return { true, nullptr };   // assertions are not undoable
+    if( nDiff == 0 ) {
+        qDebug() << "SAssertFileIdenticalAction: OK -" << actual_ << "and" << expected_
+                 << "are identical over frames" << first << "+" << want;
+        return { true, nullptr };
+    }
+    qWarning() << "SAssertFileIdenticalAction:" << actual_ << "differs from" << expected_
+               << "in the sample data: first difference at frame"
+               << ( first + firstDiff / frameBytes )
+               << QStringLiteral( "(%1 of %2 bytes in the range differ)" )
+                      .arg( nDiff ).arg( nBytes );
+    return { false, nullptr };
 }
 
 void SAssertFileIdenticalAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "a", a_ );
-    elem.setAttribute( "b", b_ );
+    elem.setAttribute( "actual", actual_ );
+    elem.setAttribute( "expected", expected_ );
+    if( maxReportedDiffs_ != 8 ) {
+        elem.setAttribute( "maxReportedDiffs", QString::number( maxReportedDiffs_ ) );
+    }
     if( startFrame_ != 0 ) {
         elem.setAttribute( "startFrame", QString::number( startFrame_ ) );
     }
-    if( frameCount_ != -1 ) {
+    if( frameCount_ >= 0 ) {
         elem.setAttribute( "frameCount", QString::number( frameCount_ ) );
     }
 }
 
 bool SAssertFileIdenticalAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    // Missing paths are reported by apply(), not here: a readXml that fails
+    // Missing attributes are reported by apply(), not here: readXml failing
     // makes the action undeserializable, which breaks the round-trip audit
-    // (it feeds every verb a DEFAULT instance through write -> read -> write).
-    a_ = elem.attribute( "a", "" );
-    b_ = elem.attribute( "b", "" );
-    bool ok1 = false, ok2 = false;
-    startFrame_ = elem.attribute( "startFrame", "0" ).toLongLong( &ok1 );
-    frameCount_ = elem.attribute( "frameCount", "-1" ).toLongLong( &ok2 );
-    if( !ok1 || !ok2 ) {
-        qWarning() << "SAssertFileIdenticalAction::readXml: invalid numeric "
-                      "attributes";
+    // (it feeds every action a DEFAULT instance through write->read->write).
+    actual_   = elem.attribute( "actual", "" );
+    expected_ = elem.attribute( "expected", "" );
+
+    bool ok = true;
+    maxReportedDiffs_ = elem.attribute( "maxReportedDiffs", "8" ).toInt( &ok );
+    if( !ok || maxReportedDiffs_ < 0 ) {
+        qWarning() << "SAssertFileIdenticalAction::readXml: invalid maxReportedDiffs";
         return false;
     }
+    startFrame_ = elem.attribute( "startFrame", "0" ).toLongLong( &ok );
+    if( !ok ) return false;
+    frameCount_ = elem.attribute( "frameCount", "-1" ).toLongLong( &ok );
+    if( !ok ) return false;
     return true;
 }
 

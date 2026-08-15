@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  assert-file-identical, proven in all four directions.
+
+  This repo has claimed render exactness since the beginning and has always
+  checked it by running `cmp` BY HAND on two rendered WAVs, outside the harness.
+  Nothing in the suite enforced it, so "byte-identical" could be written in a PR
+  body and never be true again afterwards. This case is that claim, as a gate:
+  two renders of the SAME unchanged project must agree byte for byte.
+
+  A gate never seen to fail is not known to be a gate, so three of the four
+  assertions here are `expectReject="true"`, and each proves a DIFFERENT branch
+  of the comparison, because the three failures look nothing alike in the
+  message:
+
+    * CONTENT   — same size, differing bytes (the muted render).
+    * SIZE      — one file is a prefix of the other (the shorter render).
+    * MISSING   — the reference does not exist at all, which must not read as
+                  "the render is wrong".
+
+  Every render here is bounded with durationSec, so the case costs four short
+  files rather than four full-length ones.
+-->
+<SActionScript version="1" name="file_identical_gate">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- The 4 s ramped sawtooth: ordinary material, ordinary render path. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Two renders of one unchanged project. -->
+    <render filename="file_identical_a.wav" format="wav" quality="10"
+            durationSec="2"/>
+    <render filename="file_identical_b.wav" format="wav" quality="10"
+            durationSec="2"/>
+
+    <!-- Both really carry audio, so the comparison below is about the bytes
+         and not about two empty files agreeing. -->
+    <assert-audio-energy filename="file_identical_a.wav"
+                         startFrame="24000" frameCount="48000"
+                         minRms="0.01" maxRms="0.60"/>
+
+    <!-- THE GATE: determinism, byte for byte. -->
+    <assert-file-identical actual="file_identical_a.wav"
+                           expected="file_identical_b.wav"/>
+
+    <!-- SIZE. Half the audio, so one file is a strict prefix of the other:
+         the message must say the sizes differ, not point at an offset. -->
+    <render filename="file_identical_short.wav" format="wav" quality="10"
+            durationSec="1"/>
+    <assert-file-identical actual="file_identical_short.wav"
+                           expected="file_identical_a.wav"
+                           expectReject="true"/>
+
+    <!-- CONTENT. Same length, different audio — a fader move, not a mute: a
+         muted track renders a header-only file, which is another SIZE
+         difference and would leave this branch untested. -->
+    <set-track-volume trackPath="0" volume="-12"/>
+    <render filename="file_identical_quiet.wav" format="wav" quality="10"
+            durationSec="2"/>
+    <assert-file-identical actual="file_identical_quiet.wav"
+                           expected="file_identical_a.wav"
+                           expectReject="true"/>
+
+    <!-- MISSING. Naming a reference that does not exist must be its own
+         failure; reading it as a content mismatch would send the next person
+         hunting a render bug that is not there. -->
+    <assert-file-identical actual="file_identical_a.wav"
+                           expected="../no_such_reference_file.wav"
+                           expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

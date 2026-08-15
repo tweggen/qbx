@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The channel-selecting assert verbs, gated against a fixture whose channels are
+  KNOWN to differ.
+
+  ../test_channels4.wav is written by gen_channel_fixture (tw303a/analysis/tools):
+  four channels of a 480 Hz sine, 12000 frames = 120 whole cycles at 48 kHz, at
+  amplitudes 0.7071 / 2^c. So each channel's RMS is exactly amplitude/sqrt(2):
+
+      ch 0  rms 0.50000   peak 0.70711
+      ch 1  rms 0.25000   peak 0.35355
+      ch 2  rms 0.12500   peak 0.17678
+      ch 3  rms 0.06250   peak 0.08839
+      all channels pooled: rms 0.28810, peak 0.70711
+
+  Why this case exists, and what it would have caught: `assert-audio-energy` and
+  `assert-audio-peak` took a WHOLE-FILE path whenever `frameCount` was omitted,
+  and that path hard-coded channelIndex = -1 — so `channel=` was silently
+  ignored and the pooled figure was asserted instead. Every band below is chosen
+  to exclude the pooled value, so each "no frameCount" assertion FAILS against
+  the pre-fix code and passes now. It is invisible on any file whose channels
+  are equal, which is every other fixture and every render in this suite.
+
+  `expectReject="true"` is doing real work here: it is how "this assertion must
+  FAIL" becomes a passing, permanently-run gate. Half of these actions are
+  asserting that a WRONG channel selection is rejected.
+-->
+<SActionScript version="1" name="channel_assert_fixture">
+
+  <setup project="new"/>
+
+  <actions>
+
+    <!-- ================= assert-audio-energy, frameCount GIVEN ============ -->
+    <!-- 4000 frames from 4000 is 40 whole cycles, so the region RMS equals the
+         whole-file RMS exactly; the two halves of this case differ only in
+         whether frameCount is present. -->
+    <assert-audio-energy filename="../test_channels4.wav"
+                         startFrame="4000" frameCount="4000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="../test_channels4.wav"
+                         startFrame="4000" frameCount="4000"
+                         channel="1" minRms="0.245" maxRms="0.255"/>
+    <assert-audio-energy filename="../test_channels4.wav"
+                         startFrame="4000" frameCount="4000"
+                         channel="3" minRms="0.0610" maxRms="0.0640"/>
+
+    <!-- ...and the wrong channel must FAIL, or the band proves nothing. -->
+    <assert-audio-energy filename="../test_channels4.wav"
+                         startFrame="4000" frameCount="4000"
+                         channel="1" minRms="0.495" maxRms="0.505"
+                         expectReject="true"/>
+    <assert-audio-energy filename="../test_channels4.wav"
+                         startFrame="4000" frameCount="4000"
+                         channel="2" minRms="0.0610" maxRms="0.0640"
+                         expectReject="true"/>
+
+    <!-- ================= assert-audio-energy, frameCount OMITTED ========== -->
+    <!-- THE BUG. Every one of these used to measure the pooled 0.28810. -->
+    <assert-audio-energy filename="../test_channels4.wav"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="../test_channels4.wav"
+                         channel="1" minRms="0.245" maxRms="0.255"/>
+    <assert-audio-energy filename="../test_channels4.wav"
+                         channel="2" minRms="0.1225" maxRms="0.1275"/>
+    <assert-audio-energy filename="../test_channels4.wav"
+                         channel="3" minRms="0.0610" maxRms="0.0640"/>
+
+    <assert-audio-energy filename="../test_channels4.wav"
+                         channel="1" minRms="0.495" maxRms="0.505"
+                         expectReject="true"/>
+    <assert-audio-energy filename="../test_channels4.wav"
+                         channel="2" minRms="0.0610" maxRms="0.0640"
+                         expectReject="true"/>
+
+    <!-- No channel at all still means "all channels pooled", unchanged. -->
+    <assert-audio-energy filename="../test_channels4.wav"
+                         minRms="0.286" maxRms="0.290"/>
+
+    <!-- A channel the file does not have is an ERROR, not an empty selection
+         that reports RMS 0 and reads like a silent render. -->
+    <assert-audio-energy filename="../test_channels4.wav"
+                         channel="4" minRms="0.0" maxRms="1.0"
+                         expectReject="true"/>
+
+    <!-- ================= assert-audio-peak =============================== -->
+    <!-- The pooled peak is the MAX over channels, so it equals the loudest
+         channel's: the dropped `channel=` could only ever mis-report a QUIET
+         channel as loud. maxPeak 0.40 passes for ch 1 (0.35355) and fails for
+         both ch 0 (0.70711) and the pooled figure. -->
+    <assert-audio-peak filename="../test_channels4.wav"
+                       startFrame="4000" frameCount="4000"
+                       channel="1" maxPeak="0.40"/>
+    <assert-audio-peak filename="../test_channels4.wav"
+                       channel="1" maxPeak="0.40"/>
+    <assert-audio-peak filename="../test_channels4.wav"
+                       channel="3" maxPeak="0.10"/>
+
+    <assert-audio-peak filename="../test_channels4.wav"
+                       startFrame="4000" frameCount="4000"
+                       channel="0" maxPeak="0.40" expectReject="true"/>
+    <assert-audio-peak filename="../test_channels4.wav"
+                       channel="0" maxPeak="0.40" expectReject="true"/>
+    <assert-audio-peak filename="../test_channels4.wav"
+                       maxPeak="0.40" expectReject="true"/>
+    <assert-audio-peak filename="../test_channels4.wav"
+                       channel="4" maxPeak="1.0" expectReject="true"/>
+
+    <!-- ================= assert-channels-differ ========================== -->
+    <!-- rms(ch0) - rms(ch1) = 0.25, and rms(ch0 - ch1) = 0.25 as well (the two
+         channels are the same sine at half the amplitude, so the difference is
+         a 0.35355-amplitude sine). -->
+    <assert-channels-differ filename="../test_channels4.wav"
+                            channelA="0" channelB="1"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+    <assert-channels-differ filename="../test_channels4.wav"
+                            channelA="0" channelB="1"
+                            startFrame="4000" frameCount="4000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+    <!-- The quietest neighbouring pair: 0.125 vs 0.0625. -->
+    <assert-channels-differ filename="../test_channels4.wav"
+                            channelA="2" channelB="3"
+                            minRmsDelta="0.05"/>
+
+    <!-- A threshold the file cannot meet must fail... -->
+    <assert-channels-differ filename="../test_channels4.wav"
+                            channelA="0" channelB="1" minRmsDelta="0.30"
+                            expectReject="true"/>
+    <!-- ...as must a channel against itself (trivially equal, so accepting it
+         would let a case assert a difference it cannot observe)... -->
+    <assert-channels-differ filename="../test_channels4.wav"
+                            channelA="2" channelB="2" minRmsDelta="0.001"
+                            expectReject="true"/>
+    <!-- ...and a channel the file does not have. -->
+    <assert-channels-differ filename="../test_channels4.wav"
+                            channelA="0" channelB="4" minRmsDelta="0.001"
+                            expectReject="true"/>
+
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

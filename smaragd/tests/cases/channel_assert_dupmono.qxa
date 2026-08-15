@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The other half of the discriminator gate: what assert-channels-differ says
+  about a render produced by TODAY's sink.
+
+  The sink is mono. RenderSession pulls one page and writes it to both channels
+  ("Duplicate to stereo (temporary; proper multi-channel TBD)"), so a rendered
+  WAV's two channels are equal BY CONSTRUCTION — which is exactly why
+  plugins/CONTRACT.md forbids `L != R` assertions. This case pins that: the
+  channels of a real render are the same audio, by level AND sample for sample.
+
+  It is written as `expectReject="true"` rather than as a "channels are equal"
+  verb on purpose. The day the sink goes wide this case is SUPPOSED to fail, and
+  a failure here is the signal that it did. Update it then; do not loosen it
+  before then.
+-->
+<SActionScript version="1" name="channel_assert_dupmono">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- The 4 s ramped sawtooth: ordinary material, ordinary render path. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <render filename="channel_assert_dupmono.wav" format="wav" quality="10"/>
+
+    <!-- The render really does carry audio (so the rejections below are about
+         the CHANNELS being equal, not about the file being silent). -->
+    <assert-audio-energy filename="channel_assert_dupmono.wav"
+                         startFrame="0" frameCount="192000"
+                         channel="0" minRms="0.15" maxRms="0.40"/>
+    <assert-audio-energy filename="channel_assert_dupmono.wav"
+                         startFrame="0" frameCount="192000"
+                         channel="1" minRms="0.15" maxRms="0.40"/>
+
+    <!-- Levels: identical, so even the loosest level discriminator rejects. -->
+    <assert-channels-differ filename="channel_assert_dupmono.wav"
+                            channelA="0" channelB="1" minRmsDelta="0.0001"
+                            expectReject="true"/>
+
+    <!-- Content: identical sample for sample, so the difference signal is zero
+         too. A level test alone could not tell duplication from two channels
+         that merely happen to sit at the same level. -->
+    <assert-channels-differ filename="channel_assert_dupmono.wav"
+                            channelA="0" channelB="1" minRmsDelta="0.0"
+                            minDiffRms="0.0001"
+                            expectReject="true"/>
+
+    <!-- Same question, region-scoped, so a difference confined to one stretch
+         of the file could not hide behind a whole-file average. -->
+    <assert-channels-differ filename="channel_assert_dupmono.wav"
+                            channelA="0" channelB="1"
+                            startFrame="96000" frameCount="48000"
+                            minRmsDelta="0.0" minDiffRms="0.0001"
+                            expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

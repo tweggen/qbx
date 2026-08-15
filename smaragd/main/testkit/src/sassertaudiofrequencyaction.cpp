@@ -1,4 +1,5 @@
 #include "app/testkit/sassertaudiofrequencyaction.h"
+#include "app/testkit/stestfilepath.h"
 #include "app/actions/sactionregistry.h"
 #include "app/shell/sapplication.h"
 #include "tw/analysis/audio_analysis.h"
@@ -15,7 +16,7 @@ SAssertAudioFrequencyAction::SAssertAudioFrequencyAction(const QString &filename
 {
 }
 
-SApplyResult SAssertAudioFrequencyAction::apply(SProject * /*project*/)
+SApplyResult SAssertAudioFrequencyAction::apply(SProject *project)
 {
     if (filename_.isEmpty()) {
         qWarning() << "SAssertAudioFrequencyAction: no filename given";
@@ -29,7 +30,7 @@ SApplyResult SAssertAudioFrequencyAction::apply(SProject * /*project*/)
         return {false, nullptr};
     }
 
-    QString fullPath = outputDir + "/" + filename_;
+    QString fullPath = resolveTestFilePath(filename_, outputDir, project);
 
     std::string error;
     double hz = audio::estimateFundamental(fullPath.toStdString(),

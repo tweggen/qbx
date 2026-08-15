@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Two things that had no user in the suite: `render durationSec=` and
+  `report-page-memory`.
+
+  DURATIONSEC is an explicit bound on how much audio a case renders. It only
+  ever narrows a render — it cannot make one longer than the project would give
+  — so its whole observable claim is "this file stops earlier than the
+  unbounded render does", and that is what is asserted here, in two independent
+  ways: a region past the bound is out of the bounded file (and in the unbounded
+  one), and the two files are not byte-identical.
+
+  The 3 s probe is deliberately inside the 4 s arrangement rather than out at
+  the far end of a fixed-length render, so the assertion says "the arrangement
+  reaches here and the bounded render does not" whatever the unbounded render's
+  length happens to be.
+
+  REPORT-PAGE-MEMORY exists to make resident frozen-page memory visible; there
+  is no twOutputPage pool to ask, so without it the number does not exist at
+  all. The ceilings here are deliberately LOOSE. Resident page count is a
+  function of the readahead, the worker count and scheduler timing, so a tight
+  bound would be a flake generator rather than a gate; what is gated is that the
+  accounting reports SOMETHING (maxPages="0" must reject after a render) and
+  that it stays inside an order-of-magnitude sanity ceiling. The exact numbers
+  are pinned by graph_test, against a page count a unit test controls exactly.
+-->
+<SActionScript version="1" name="render_duration_and_pages">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- The 4 s ramped sawtooth = 192000 frames at 48 kHz. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Nothing has been frozen yet. -->
+    <report-page-memory label="after load"/>
+
+    <!-- ================= durationSec bounds the render =================== -->
+    <render filename="render_duration_bounded.wav" format="wav" quality="10"
+            durationSec="2"/>
+
+    <!-- 1.0 s .. 1.5 s is inside the bound and inside the clip. -->
+    <assert-audio-energy filename="render_duration_bounded.wav"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.01" maxRms="0.60"/>
+
+    <!-- 3.0 s is inside the ARRANGEMENT and past the bound, so the region does
+         not exist in this file and the assertion must be rejected. -->
+    <assert-audio-energy filename="render_duration_bounded.wav"
+                         startFrame="144000" frameCount="24000"
+                         minRms="0.0" maxRms="1.0"
+                         expectReject="true"/>
+
+    <!-- The same project, unbounded: 3.0 s IS there. This is the half that
+         makes the rejection above mean "durationSec cut the render" rather
+         than "the arrangement was short". -->
+    <render filename="render_duration_full.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="render_duration_full.wav"
+                         startFrame="144000" frameCount="24000"
+                         minRms="0.01" maxRms="0.60"/>
+
+    <!-- ...and the two files are demonstrably not the same file. -->
+    <assert-file-identical actual="render_duration_bounded.wav"
+                           expected="render_duration_full.wav"
+                           expectReject="true"/>
+
+    <!-- ================= page-memory accounting ========================== -->
+    <!-- A loose sanity ceiling: 4096 resident pages is 1 GiB of samples, which
+         a one-track two-render case has no business approaching. -->
+    <report-page-memory label="after renders" maxPages="4096"
+                        maxBytes="1073741824"/>
+
+    <!-- ...and the bound is a real bound: pages ARE resident after a render,
+         so a ceiling of zero must reject. Without this the two numbers above
+         would be satisfied just as well by an accounting that reported nothing
+         at all. -->
+    <report-page-memory label="ceiling proof" maxPages="0"
+                        expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -156,8 +156,9 @@ P0b ──┬───────► P1   ├──► P7
      `STakeStack` gains the homogeneity rule (`add-take` refuses a different
      `contentKind`; `STakeStack::contentKind()` = its takes').
   3. `SObject::contentKind()` virtual (`Audio | Event`, default Audio).
-  4. Testkit verbs: `assert-file-identical` (`a`, `b` — absolute paths ALLOWED,
-     unlike `render`'s output name, so cross-process compares work; optional
+  4. Testkit verbs: `assert-file-identical` (`actual`, `expected` — the attribute
+     names PR #37 landed with; absolute paths ALLOWED, unlike `render`'s output
+     name, so cross-process compares work; `maxReportedDiffs`; optional
      `startFrame`/`frameCount` for WAVs — byte compare of the sample data) and `assert-log`
      (`contains`, `minCount`="1", `maxCount`="-1", `level`="" over the in-process
      `TwLog` ring since case start). Rows in `action_roundtrip_test`;

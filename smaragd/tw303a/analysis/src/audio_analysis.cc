@@ -28,21 +28,14 @@ bool readAudioFileInfo(const std::string &filename, AudioFileInfo &info,
     return true;
 }
 
-AcousticMetrics analyzeWavFile(const std::string &filename, std::string &error)
+AcousticMetrics analyzeWavFile(const std::string &filename, std::string &error,
+                               int channelIndex)
 {
-    SF_INFO sfInfo;
-    std::memset(&sfInfo, 0, sizeof(sfInfo));
-
-    SNDFILE *infile = sf_open(filename.c_str(), SFM_READ, &sfInfo);
-    if (!infile) {
-        error = std::string("Failed to open WAV file: ") + sf_strerror(nullptr);
-        return AcousticMetrics{0, 0, 0, 0, 0, 0, 0};
-    }
-
-    // Analyze entire file
-    AcousticMetrics metrics = analyzeWavFileRegion(filename, 0, sfInfo.frames, -1, error);
-    sf_close(infile);
-    return metrics;
+    // The whole file IS a region: frameCount < 0 means "to the end". This used
+    // to open the file itself only to pass sfInfo.frames back down, and passed
+    // a hard-coded -1 for the channel — so `channel=` was silently dropped on
+    // every whole-file assertion.
+    return analyzeWavFileRegion(filename, 0, -1, channelIndex, error);
 }
 
 AcousticMetrics analyzeWavFileRegion(const std::string &filename,
@@ -65,7 +58,20 @@ AcousticMetrics analyzeWavFileRegion(const std::string &filename,
         return AcousticMetrics{0, 0, 0, 0, 0, 0, 0};
     }
 
-    int64_t endFrame = std::min(startFrame + frameCount, sfInfo.frames);
+    // A channel the file does not have is an error, not an empty selection:
+    // the loop below would skip every sample and report RMS 0 / peak 0, which
+    // is indistinguishable from "the render came out silent".
+    if (channelIndex >= sfInfo.channels) {
+        error = "Channel index " + std::to_string(channelIndex)
+              + " out of range (file has " + std::to_string(sfInfo.channels)
+              + " channel(s))";
+        sf_close(infile);
+        return AcousticMetrics{0, 0, 0, 0, 0, 0, 0};
+    }
+
+    int64_t endFrame = (frameCount < 0)
+                     ? (int64_t) sfInfo.frames
+                     : std::min(startFrame + frameCount, (int64_t) sfInfo.frames);
     int64_t framesToRead = endFrame - startFrame;
 
     if (framesToRead <= 0) {
@@ -132,6 +138,89 @@ AcousticMetrics analyzeWavFileRegion(const std::string &filename,
         sfInfo.channels,
         sfInfo.samplerate
     };
+}
+
+bool compareWavChannels(const std::string &filename,
+                        int64_t startFrame, int64_t frameCount,
+                        int channelA, int channelB,
+                        double &rmsA, double &rmsB, double &rmsDiff,
+                        std::string &error)
+{
+    rmsA = rmsB = rmsDiff = 0.0;
+
+    SF_INFO sfInfo;
+    std::memset(&sfInfo, 0, sizeof(sfInfo));
+
+    SNDFILE *infile = sf_open(filename.c_str(), SFM_READ, &sfInfo);
+    if (!infile) {
+        error = std::string("Failed to open WAV file: ") + sf_strerror(nullptr);
+        return false;
+    }
+
+    if (channelA < 0 || channelB < 0
+        || channelA >= sfInfo.channels || channelB >= sfInfo.channels) {
+        error = "Channel index out of range (file has "
+              + std::to_string(sfInfo.channels) + " channel(s), asked for "
+              + std::to_string(channelA) + " and " + std::to_string(channelB) + ")";
+        sf_close(infile);
+        return false;
+    }
+    if (channelA == channelB) {
+        // Always trivially "the same": accepting it would let a case assert a
+        // difference it cannot possibly observe.
+        error = "channelA and channelB are the same channel";
+        sf_close(infile);
+        return false;
+    }
+    if (startFrame < 0 || startFrame >= sfInfo.frames) {
+        error = "Start frame out of bounds";
+        sf_close(infile);
+        return false;
+    }
+
+    const int64_t endFrame = (frameCount < 0)
+                           ? (int64_t) sfInfo.frames
+                           : std::min(startFrame + frameCount, (int64_t) sfInfo.frames);
+    const int64_t framesToRead = endFrame - startFrame;
+    if (framesToRead <= 0) {
+        error = "Invalid frame range";
+        sf_close(infile);
+        return false;
+    }
+
+    sf_seek(infile, startFrame, SEEK_SET);
+
+    const int BUFFER_SIZE = 4096;
+    std::vector<float> buffer((size_t)(BUFFER_SIZE * sfInfo.channels));
+
+    double sumA = 0.0, sumB = 0.0, sumD = 0.0;
+    int64_t framesRead = 0;
+
+    while (framesRead < framesToRead) {
+        int64_t toRead = std::min((int64_t) BUFFER_SIZE, framesToRead - framesRead);
+        sf_count_t nRead = sf_readf_float(infile, buffer.data(), toRead);
+        if (nRead <= 0) break;
+        for (sf_count_t i = 0; i < nRead; ++i) {
+            const double a = buffer[(size_t)(i * sfInfo.channels + channelA)];
+            const double b = buffer[(size_t)(i * sfInfo.channels + channelB)];
+            sumA += a * a;
+            sumB += b * b;
+            sumD += (a - b) * (a - b);
+        }
+        framesRead += nRead;
+    }
+
+    sf_close(infile);
+
+    if (framesRead <= 0) {
+        error = "Region held no frames";
+        return false;
+    }
+
+    rmsA    = std::sqrt(sumA / (double) framesRead);
+    rmsB    = std::sqrt(sumB / (double) framesRead);
+    rmsDiff = std::sqrt(sumD / (double) framesRead);
+    return true;
 }
 
 bool isEnergyInRange(const AcousticMetrics &metrics, double minRms, double maxRms)

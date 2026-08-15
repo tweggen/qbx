@@ -606,9 +606,10 @@ not top-level objects.
 | `set-automation-points` | `owner`, `target`, `from`, `to`, child `<p t= v= c=/>` | the batch/coalescing verb (curve drawing, Touch/Latch/Write commit); `mergeKey` = owner + target |
 | `set-track-volume` / `set-track-mute` on a track with a Read lane | unchanged attributes | become a `set-automation-points` at the locator, else history and lane disagree |
 
-Test-harness verbs (testkit): `assert-file-identical` (byte compare of two files
-— absolute paths allowed, unlike `render`'s output name — for WAVs an optional
-frame range over the sample data) and `assert-log` (`contains`, `minCount`,
+Test-harness verbs (testkit): `assert-file-identical` (`actual`/`expected`, the
+names PR #37's byte gate landed with; byte compare of two files — absolute paths
+allowed, unlike `render`'s output name — for WAVs an optional `startFrame`/
+`frameCount` range over the sample data) and `assert-log` (`contains`, `minCount`,
 `maxCount` over the in-process `TwLog` ring — there is no log file under
 `--test-case`; the ring's capacity is raised under `--test-case` and the count
 is taken since the previous action, so a long render cannot evict the line
