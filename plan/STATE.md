@@ -10577,3 +10577,11 @@ plugin-module probes.
   another session is running its suite gives that session a cold scan too - and
   on a binary without this fix, a hang. Restore it (or let one full run rebuild
   it) when the sweep is done.
+
+## 2026-08-16 — Proposal 37: integration tip verified
+
+`docs/midi-instruments-automation` at `3cf620f` (P0a, P0b, P1, P2, P4, P7a+P7b,
+the teardown fix, PRs #34–#37, renumbered 36 → 37): `./build.sh` clean; layering +
+logging clean; **`ctest -j4`: 135/135 passed in 117.7 s** (138 registered, 3 `au_*`
+disabled off macOS). Remaining phases P3a/P3b/P3c (then P5/P6) wait for the
+multichannel proposal (now 36, `feat/multichannel`) to land B4 on `main`.
