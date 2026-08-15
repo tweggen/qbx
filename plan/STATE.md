@@ -9869,7 +9869,34 @@ are P7b, and the P7 tracker row stays unticked until they land.
 — tw_core only); `check_logging.py` clean; **`devices_midi_test` 52 assertions,
 0 failures, 40/40 consecutive runs green**, max |sent − due| across those runs
 1.32 ms (asserted ≤ 5 ms; the box was otherwise idle); every other unit test
-green (24/24 non-qxa at `-j4`); `ctest -N` 121 → **122**.
+green (24/24 non-qxa at `-j4`); `ctest -N` 121 → **122**; the **full suite
+`ctest -j4`: 118 of 119 run passed in 730 s** (122 registered, 3 `au_*`
+disabled off macOS), the single failure being the pre-existing teardown hang
+characterised below — the box was ALSO running two other sessions' suites at
+the time, which is why 730 s rather than the usual ~160 s.
+
+**One pre-existing failure, characterised and NOT ours:** `qxa.takes_screenshot`
+fails (CTest Timeout, 600 s) in the full `-j4` run and **reproduces alone** —
+and it reproduces identically on a build of this worktree with `tw303a/devices`
+checked out at the PRE-P7a commit (3/3 runs: PASS printed, then exit 1 or
+SIGSEGV). The case passes every assertion and then never exits. `gdb` on the
+hung process says exactly where:
+
+```
+Thread 1: twPluginRegistry::~twPluginRegistry → waitForScan() → QThread::wait()
+Thread 2: the scan thread, inside __verbose_terminate_handler → abort()
+          → stuck in msvcrt's abort (RtlEnterCriticalSection)
+```
+
+So the STARTUP PLUGIN SCAN of this machine's installed third-party modules
+(Melodyne.vst3, MangrovePlugin.clap, CastelloReverb.clap are in the log)
+terminates the scan thread, `abort()` deadlocks, and the registry destructor
+waits for that thread forever. It is a teardown race between process exit and a
+still-running scan — a short case exits while the scan is mid-flight, which is
+why one screenshot case and not the other 117 hit it. Same family as the
+`split_plain_screenshot` teardown crash CLAUDE.md already records, and it needs
+its own investigation (`plugins/scanOnStartup`, the probe path, and whether the
+in-process fallback is being taken). Nothing in P7a is reachable from it.
 
 **NOT gated:** WinMM send jitter against real hardware (±1 ms by design);
 CoreMIDI and ALSA-seq at all (no macOS/Linux box in this phase — they are
