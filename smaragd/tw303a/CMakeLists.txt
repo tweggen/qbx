@@ -31,6 +31,8 @@ tw_module(core
         core/include/tw/core/twformat.h
         core/include/tw/core/twconvert.h
         core/include/tw/core/twfraction.h
+        core/include/tw/core/twdomains.h
+        core/include/tw/core/twframerange.h
         core/include/tw/core/exc.h
         core/include/tw/core/twsyslog.h
         core/include/tw/core/twlog.h
@@ -531,6 +533,32 @@ tw_module(metering
     DEPS tw_core tw_pages tw_graph
 )
 
+# --- events: MIDI/event model leaf (proposal 36 P0b) ---------------------------
+# The one twEvent, the immutable event sequence, the tempo map (the ONLY
+# tick<->frame converter), the SMF reader/writer, the automation curve, and the
+# event clip set + merge the instrument slot and the MIDI-out pump read through.
+# CORE ONLY, and no place in the dataflow DAG: events are model data, not pages
+# (D1), and tw/plugins may not include tw/mix (F15) - which is why the clip set
+# lives here and returns a core twFrameRange. See events/CONTRACT.md.
+tw_module(events
+    SOURCES
+        events/include/tw/events/twevent.h
+        events/include/tw/events/tweventseq.h
+        events/include/tw/events/tweventsource.h
+        events/include/tw/events/tweventclipset.h
+        events/include/tw/events/tweventmerge.h
+        events/include/tw/events/twtempomap.h
+        events/include/tw/events/twsmf.h
+        events/include/tw/events/twautomationcurve.h
+        events/src/tweventseq.cc
+        events/src/tweventclipset.cc
+        events/src/tweventmerge.cc
+        events/src/twtempomap.cc
+        events/src/twsmf.cc
+        events/src/twautomationcurve.cc
+    DEPS tw_core
+)
+
 # --- sidecar: derived-data QAF container + LRU store (proposal 27) --------------
 tw_module(sidecar
     SOURCES
@@ -779,6 +807,12 @@ add_executable(warp_bench sources/tests/warp_bench.cc)
 target_link_libraries(warp_bench PRIVATE tw_sources tw_sidecar)
 tw_module_test(mix_test                     mix/tests/mix_test.cc                       tw_mix)
 tw_module_test(schedule_test                schedule/tests/schedule_test.cc             tw_schedule tw_pages)
+tw_module_test(events_test                  events/tests/events_test.cc                 tw_events)
+# The committed SMF corpus (type 0 with running status, a multi-track type 1 with
+# meta + sysex, a 30k-event file, and the writer-authored ones the byte-identity
+# check needs) is read from the source tree, not copied - the test only reads.
+target_compile_definitions(events_test PRIVATE
+    TW_EVENTS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/events/tests/fixtures")
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)
 tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc             tw_sidecar)
 # tw_schedule + tw_pages are named EXPLICITLY (playback already depends on both,
