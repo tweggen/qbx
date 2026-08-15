@@ -39,7 +39,7 @@
     <!-- Place at 4 s, past track 0's material, so the region is the asset alone. -->
     <place-asset assetName="Section" trackPath="1" timePos="192000"/>
 
-    <render filename="asset_over_muted.wav" format="wav" quality="10"/>
+    <render filename="asset_over_muted.wav" format="wav" quality="10" durationSec="7.5"/>
 
     <!-- 0-4 s: track 0 is muted, so its own material must be silent. This is
          the half of the contract that must NOT regress. -->

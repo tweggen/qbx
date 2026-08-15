@@ -50,7 +50,7 @@
                    name="Smaragd Test Stereo Skew" vendor="Smaragd"
                    path="twtestclap.clap" nIn="2" nOut="2"/>
 
-    <render filename="pbp_base.wav" format="wav" quality="10"/>
+    <render filename="pbp_base.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pbp_base.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>
@@ -58,7 +58,7 @@
     <!-- 1. A parameter edit must be audible. -->
     <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="2.0"/>
 
-    <render filename="pbp_gain2.wav" format="wav" quality="10"/>
+    <render filename="pbp_gain2.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pbp_gain2.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.185" maxRms="0.215"/>
@@ -67,7 +67,7 @@
          this has to land back on gain 1.0 and not merely stop moving. -->
     <undo count="1"/>
 
-    <render filename="pbp_gain_undone.wav" format="wav" quality="10"/>
+    <render filename="pbp_gain_undone.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pbp_gain_undone.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>
@@ -81,7 +81,7 @@
     <!-- 4. A bypass toggle must be audible: back to unprocessed 1.0x. -->
     <set-plugin-bypass trackPath="0" slotIndex="0" bypassed="true"/>
 
-    <render filename="pbp_bypassed.wav" format="wav" quality="10"/>
+    <render filename="pbp_bypassed.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pbp_bypassed.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.060" maxRms="0.073"/>
@@ -89,7 +89,7 @@
     <!-- 5. ...and must undo. -->
     <undo count="1"/>
 
-    <render filename="pbp_bypass_undone.wav" format="wav" quality="10"/>
+    <render filename="pbp_bypass_undone.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pbp_bypass_undone.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>

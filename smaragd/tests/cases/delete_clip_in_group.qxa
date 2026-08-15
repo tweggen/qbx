@@ -52,7 +52,7 @@
     <reparent-track source="1" destParent="0" destIndex="-1"/>
 
     <!-- Baseline THROUGH the folder: head is sec0+sec1, tail is sec2+sec3. -->
-    <render filename="group_pre.wav" format="wav" quality="10"/>
+    <render filename="group_pre.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="group_pre.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.05" maxRms="0.085"/>
@@ -67,7 +67,7 @@
          unexpressible: remove-sample could only name a top-level track. -->
     <remove-sample trackPath="0,0" clipIndex="1" timePos="96000"/>
 
-    <render filename="group_deleted.wav" format="wav" quality="10"/>
+    <render filename="group_deleted.wav" format="wav" quality="10" durationSec="4.5"/>
     <!-- Head survives... -->
     <assert-audio-energy filename="group_deleted.wav"
                          startFrame="0" frameCount="48000"
@@ -79,7 +79,7 @@
 
     <undo count="1"/>
 
-    <render filename="group_restored.wav" format="wav" quality="10"/>
+    <render filename="group_restored.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- The tail must come back ON THE NESTED LANE with its ORIGINAL window.
          An inverse that could only address top-level tracks would either apply
@@ -109,7 +109,7 @@
     <!-- And redo removes it again, so the inverse-of-the-inverse holds. -->
     <redo count="1"/>
 
-    <render filename="group_redone.wav" format="wav" quality="10"/>
+    <render filename="group_redone.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="group_redone.wav"
                          startFrame="96000" frameCount="48000"
                          minRms="0.0" maxRms="0.001"/>

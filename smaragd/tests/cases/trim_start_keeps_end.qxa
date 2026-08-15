@@ -27,7 +27,7 @@
     <!-- Trim 1 s off the FRONT. The clip must now run 1 s .. 8 s. -->
     <drag-clip-edge track="0" clip="0" edge="start" toTime="48000" half="lower"/>
 
-    <render filename="trim_start_keeps_end.wav" format="wav" quality="10"/>
+    <render filename="trim_start_keeps_end.wav" format="wav" quality="10" durationSec="8.5"/>
 
     <!-- 7 s in: inside the clip only if its end stayed at 8 s. With the clamp
          the clip ended at 4 s and this is silence. -->

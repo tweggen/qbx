@@ -47,7 +47,7 @@
     <reparent-track source="1" destParent="0" destIndex="-1"/>
     <assert-plugin-strip trackPath="0,0" slotCount="0"/>
 
-    <render filename="grp_pre.wav" format="wav" quality="10"/>
+    <render filename="grp_pre.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="grp_pre.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
@@ -61,7 +61,7 @@
     <assert-plugin-strip trackPath="0,0,0" slotCount="0"/>
 
     <!-- ...and grouping is audibly transparent. -->
-    <render filename="grp_grouped.wav" format="wav" quality="10"/>
+    <render filename="grp_grouped.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="grp_grouped.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
@@ -74,7 +74,7 @@
     <!-- The third level is gone: the path no longer resolves. -->
     <assert-plugin-strip trackPath="0,0,0" slotCount="0" expectReject="true"/>
 
-    <render filename="grp_ungrouped.wav" format="wav" quality="10"/>
+    <render filename="grp_ungrouped.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="grp_ungrouped.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
@@ -83,7 +83,7 @@
     <undo count="1"/>
     <assert-plugin-strip trackPath="0,0,0" slotCount="0"/>
 
-    <render filename="grp_regrouped.wav" format="wav" quality="10"/>
+    <render filename="grp_regrouped.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="grp_regrouped.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>

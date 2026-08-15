@@ -21,7 +21,7 @@
 
     <set-pitch clip="0,0" cents="1200"/>
 
-    <render filename="grain_pitch_octave_up.wav" format="wav" quality="10"/>
+    <render filename="grain_pitch_octave_up.wav" format="wav" quality="10" durationSec="5.0"/>
 
     <!-- (a) One octave up: 439.x Hz -> ~878 Hz (±3%) -->
     <assert-audio-frequency filename="grain_pitch_octave_up.wav"

@@ -34,7 +34,7 @@
     <assert-plugin-strip trackPath="0,0" slotCount="0"/>
 
     <!-- BEFORE the channel change. -->
-    <render filename="chan_before.wav" format="wav" quality="10"/>
+    <render filename="chan_before.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="chan_before.wav"
                          startFrame="48000" frameCount="48000"
                          minRms="0.15" maxRms="0.21"/>
@@ -47,7 +47,7 @@
     <!-- AFTER: identical bounds. The two files are also byte-compared outside
          the harness (see the PR body) — chan_before.wav and chan_after.wav are
          left in the test output directory precisely so that is possible. -->
-    <render filename="chan_after.wav" format="wav" quality="10"/>
+    <render filename="chan_after.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="chan_after.wav"
                          startFrame="48000" frameCount="48000"
                          minRms="0.15" maxRms="0.21"/>
@@ -64,7 +64,7 @@
         text="channels='2'"/>
 
     <!-- …and the render is still the same after the undo. -->
-    <render filename="chan_undone.wav" format="wav" quality="10"/>
+    <render filename="chan_undone.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="chan_undone.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
@@ -102,7 +102,7 @@
 
     <!-- And the RELOADED 6-channel project still renders exactly as the
          2-channel one did: M1 is inaudible on both sides of the file. -->
-    <render filename="chan_reloaded.wav" format="wav" quality="10"/>
+    <render filename="chan_reloaded.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="chan_reloaded.wav"
                          startFrame="48000" frameCount="48000"
                          minRms="0.15" maxRms="0.21"/>

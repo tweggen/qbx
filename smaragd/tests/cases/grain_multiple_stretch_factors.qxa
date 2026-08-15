@@ -24,7 +24,7 @@
     <resize-clip clip="0,2" startTime="960000" startOffset="0"
                  duration="144000" loopLength="0" stretch="0.75"/>
 
-    <render filename="grain_multiple_stretch_factors.wav" format="wav" quality="10"/>
+    <render filename="grain_multiple_stretch_factors.wav" format="wav" quality="10" durationSec="23.5"/>
 
     <!-- Each clip region carries the ramp RMS (~0.25-0.27) -->
     <assert-audio-energy filename="grain_multiple_stretch_factors.wav"

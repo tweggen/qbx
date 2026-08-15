@@ -31,7 +31,7 @@
     <resize-clip clip="0,0" startTime="0" startOffset="72000"
                  duration="96000" loopLength="0" stretch="3/2"/>
 
-    <render filename="exact_stretch_a.wav" format="wav" quality="10"/>
+    <render filename="exact_stretch_a.wav" format="wav" quality="10" durationSec="3.5"/>
     <assert-audio-energy filename="exact_stretch_a.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.125" maxRms="0.19"/>
@@ -47,7 +47,7 @@
     <resize-clip clip="0,0" startTime="0" srcStart="48000"
                  duration="64000" loopLength="0" stretch="1"/>
 
-    <render filename="exact_stretch_b.wav" format="wav" quality="10"/>
+    <render filename="exact_stretch_b.wav" format="wav" quality="10" durationSec="3.5"/>
     <assert-audio-energy filename="exact_stretch_b.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.14" maxRms="0.21"/>
@@ -61,7 +61,7 @@
     <!-- Serialization roundtrip: the exact anchor survives save/load -->
     <save-project path="../../build/exact_stretch_roundtrip.qxp"/>
     <load-project path="../../build/exact_stretch_roundtrip.qxp"/>
-    <render filename="exact_stretch_c.wav" format="wav" quality="10"/>
+    <render filename="exact_stretch_c.wav" format="wav" quality="10" durationSec="3.5"/>
     <assert-audio-energy filename="exact_stretch_c.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.14" maxRms="0.21"/>

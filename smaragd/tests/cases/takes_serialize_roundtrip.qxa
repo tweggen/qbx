@@ -26,7 +26,7 @@
     <save-project path="../../build/takes_roundtrip.qxp"/>
     <load-project path="../../build/takes_roundtrip.qxp"/>
 
-    <render filename="takes_roundtrip.wav" format="wav" quality="10"/>
+    <render filename="takes_roundtrip.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- head column, take 1 (slip 96000): source sec2, sec3 -->
     <assert-audio-energy filename="takes_roundtrip.wav"

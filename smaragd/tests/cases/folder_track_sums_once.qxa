@@ -32,7 +32,7 @@
 
     <reparent-track source="1" destParent="0" destIndex="-1"/>
 
-    <render filename="folder_track_sums_once.wav" format="wav" quality="10"/>
+    <render filename="folder_track_sums_once.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- sec0: one copy ~0.067, two copies ~0.133. -->
     <assert-audio-energy filename="folder_track_sums_once.wav"

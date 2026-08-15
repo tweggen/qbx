@@ -27,7 +27,7 @@
   <actions>
     <load-project path="../sample_recovered_beside_project.qxp"/>
 
-    <render filename="sample_recovered_beside_project.wav" format="wav" quality="10"/>
+    <render filename="sample_recovered_beside_project.wav" format="wav" quality="10" durationSec="3.5"/>
 
     <!-- 0-1 s: cut plays source sec1 (slip offset via startOffset=48000) -->
     <assert-audio-energy filename="sample_recovered_beside_project.wav"

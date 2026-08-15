@@ -14,7 +14,7 @@
     <resize-clip clip="0,0" startTime="0" startOffset="0"
                  duration="96000" loopLength="0" stretch="0.5"/>
 
-    <render filename="grain_time_stretch_half.wav" format="wav" quality="10"/>
+    <render filename="grain_time_stretch_half.wav" format="wav" quality="10" durationSec="3.5"/>
 
     <!-- Clip region: compressed ramp keeps its RMS (~0.25-0.27) -->
     <assert-audio-energy filename="grain_time_stretch_half.wav"

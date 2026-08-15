@@ -38,7 +38,7 @@
          resolve it from the project's own directory and render what comes back. -->
     <load-project path="../../build/test-output/sample_path_portable/song.qxp"/>
 
-    <render filename="sample_path_portable.wav" format="wav" quality="10"/>
+    <render filename="sample_path_portable.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- The ramped sawtooth: a unique RMS per second. A sample that failed to
          resolve renders silence and fails the first assertion. -->

@@ -38,7 +38,7 @@
          region renders alone. -->
     <place-asset assetName="Stretched" trackPath="1" timePos="480000"/>
 
-    <render filename="grain_asset_stretch.wav" format="wav" quality="10"/>
+    <render filename="grain_asset_stretch.wav" format="wav" quality="10" durationSec="19.5"/>
 
     <!-- Track 0 DIRECT: the stretched signal is present (the bug rendered it
          missing). Loudness preserved -> overall RMS ~0.267. -->

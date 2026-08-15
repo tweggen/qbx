@@ -30,7 +30,7 @@
     <set-edit-group trackPath="1" group="1"/>
 
     <!-- both play take 1 (auto-activated): slipped content, doubled -->
-    <render filename="group_take1.wav" format="wav" quality="10"/>
+    <render filename="group_take1.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="group_take1.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.52" maxRms="0.66"/>
@@ -42,7 +42,7 @@
          (Assert sec0/sec1 only — the doubled sec2+ peaks past 1.0 and the
          rendered WAV clips, deflating the RMS.) -->
     <select-take clip="0,0" take="0"/>
-    <render filename="group_take0.wav" format="wav" quality="10"/>
+    <render filename="group_take0.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="group_take0.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.11" maxRms="0.16"/>
@@ -55,7 +55,7 @@
          the source end on BOTH -> silence, heads keep take 0 -->
     <split-clip clip="0,0" splitTime="96000"/>
     <select-take clip="0,1" take="1"/>
-    <render filename="group_comped.wav" format="wav" quality="10"/>
+    <render filename="group_comped.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="group_comped.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.11" maxRms="0.16"/>
@@ -70,7 +70,7 @@
          track; the corresponding take on the other member must follow -->
     <resize-clip clip="0,0" take="0" startTime="0" startOffset="48000"
                  duration="96000" loopLength="0" stretch="1.0"/>
-    <render filename="group_slipped.wav" format="wav" quality="10"/>
+    <render filename="group_slipped.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="group_slipped.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.31" maxRms="0.40"/>

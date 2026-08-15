@@ -22,7 +22,7 @@
     <set-pitch clip="0,0" cents="700"/>
     <set-pitch clip="0,0" cents="0"/>
 
-    <render filename="grain_pitch_reset_roundtrip.wav" format="wav" quality="10"/>
+    <render filename="grain_pitch_reset_roundtrip.wav" format="wav" quality="10" durationSec="5.0"/>
 
     <!-- Back to the source pitch (±3%) -->
     <assert-audio-frequency filename="grain_pitch_reset_roundtrip.wav"

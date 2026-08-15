@@ -27,7 +27,7 @@
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- FIRST render: bakes the pre-edit timeline into the page caches -->
-    <render filename="render_pre_edit.wav" format="wav" quality="10"/>
+    <render filename="render_pre_edit.wav" format="wav" quality="10" durationSec="6.5"/>
 
     <!-- Sanity: pre-edit timeline is source sec0..sec3 in order -->
     <assert-audio-energy filename="render_pre_edit.wav"
@@ -46,7 +46,7 @@
     <move-clip clip="0,0" destTrack="0" startTime="192000"/>
 
     <!-- SECOND render: must reflect the edit, not the cached pages -->
-    <render filename="render_post_edit.wav" format="wav" quality="10"/>
+    <render filename="render_post_edit.wav" format="wav" quality="10" durationSec="6.5"/>
 
     <!-- 0-2 s: now empty. Stale caches replay source sec0/sec1 here. -->
     <assert-audio-energy filename="render_post_edit.wav"

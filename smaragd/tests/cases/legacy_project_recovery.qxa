@@ -35,7 +35,7 @@
   <actions>
     <load-project path="../legacy_idless_slot.qxp"/>
 
-    <render filename="legacy_project_recovery.wav" format="wav" quality="10"/>
+    <render filename="legacy_project_recovery.wav" format="wav" quality="10" durationSec="3.5"/>
 
     <!-- 0-1 s: cut plays source sec1 (slip offset via the loaded startOffset) -->
     <assert-audio-energy filename="legacy_project_recovery.wav"

@@ -35,7 +35,7 @@
          2 s of leading silence, then the whole 4 s sample. -->
     <drag-clip-edge track="0" clip="0" edge="start" toTime="0" half="lower"/>
 
-    <render filename="clip_starts_before_data.wav" format="wav" quality="10"/>
+    <render filename="clip_starts_before_data.wav" format="wav" quality="10" durationSec="7.5"/>
 
     <!-- The lead-in is silent... -->
     <assert-audio-energy filename="clip_starts_before_data.wav"

@@ -22,7 +22,7 @@
     <!-- ...and an octave up on top of it -->
     <set-pitch clip="0,0" cents="1200"/>
 
-    <render filename="grain_pitch_with_stretch.wav" format="wav" quality="10"/>
+    <render filename="grain_pitch_with_stretch.wav" format="wav" quality="10" durationSec="9.0"/>
 
     <!-- Pitch: still one octave up despite the stretch -->
     <assert-audio-frequency filename="grain_pitch_with_stretch.wav"

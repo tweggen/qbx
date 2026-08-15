@@ -14,7 +14,7 @@
     <resize-clip clip="0,0" startTime="0" startOffset="0"
                  duration="288000" loopLength="0" stretch="1.5"/>
 
-    <render filename="grain_energy_verification.wav" format="wav" quality="10"/>
+    <render filename="grain_energy_verification.wav" format="wav" quality="10" durationSec="7.5"/>
 
     <!-- Clip region: stretched ramp keeps its RMS (~0.25-0.27) -->
     <assert-audio-energy filename="grain_energy_verification.wav"

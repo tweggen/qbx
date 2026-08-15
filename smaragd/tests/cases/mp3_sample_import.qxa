@@ -20,7 +20,7 @@
 
     <add-sample trackIndex="0" filePath="../test_sawtooth.mp3" timePos="0"/>
 
-    <render filename="mp3_sample_import.wav" format="wav" quality="10"/>
+    <render filename="mp3_sample_import.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- Skip the first/last few ms (MP3 decoder edge) and assert the ramp's
          energy is present and in a plausible band for the sawtooth. -->

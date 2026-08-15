@@ -39,7 +39,7 @@
          4-6 s carries the asset alone and no summing can mask a wrong offset. -->
     <place-asset assetName="Section" trackPath="1" timePos="192000"/>
 
-    <render filename="asset_window_offset.wav" format="wav" quality="10"/>
+    <render filename="asset_window_offset.wav" format="wav" quality="10" durationSec="7.5"/>
 
     <!-- 0-1 s: track 0's own clip, source sec0. Guards the baseline. -->
     <assert-audio-energy filename="asset_window_offset.wav"

@@ -44,7 +44,7 @@
     <resize-clip clip="0,1" startTime="96000" startOffset="144000"
                  duration="144000" loopLength="0" stretch="1.5"/>
 
-    <render filename="render_split_slip_stretch.wav" format="wav" quality="10"/>
+    <render filename="render_split_slip_stretch.wav" format="wav" quality="10" durationSec="6.5"/>
 
     <!-- 0-1 s: head = source sec0 -->
     <assert-audio-energy filename="render_split_slip_stretch.wav"

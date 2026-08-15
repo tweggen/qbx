@@ -19,7 +19,7 @@
 
     <set-pitch clip="0,0" cents="-700"/>
 
-    <render filename="grain_pitch_semitone_down.wav" format="wav" quality="10"/>
+    <render filename="grain_pitch_semitone_down.wav" format="wav" quality="10" durationSec="5.0"/>
 
     <!-- A fifth down: ~293.7 Hz (±3%) -->
     <assert-audio-frequency filename="grain_pitch_semitone_down.wav"

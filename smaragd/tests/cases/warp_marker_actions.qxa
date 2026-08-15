@@ -30,7 +30,7 @@
     <assert-warp-anchor clip="0,0" src="96000" warped="96000" count="2"/>
     <assert-warp-anchor clip="0,0" src="192000" warped="288000"/>
 
-    <render filename="warp_marker_a.wav" format="wav" quality="10"/>
+    <render filename="warp_marker_a.wav" format="wav" quality="10" durationSec="7.5"/>
     <!-- unwarped first half: source second 1 lands at output second 1 -->
     <assert-audio-energy filename="warp_marker_a.wav"
                          startFrame="48000" frameCount="48000"
@@ -54,7 +54,7 @@
     <move-warp-marker clip="0,0" src="192000" newWarped="240000"/>
     <assert-warp-anchor clip="0,0" src="192000" warped="240000"/>
 
-    <render filename="warp_marker_b.wav" format="wav" quality="10"/>
+    <render filename="warp_marker_b.wav" format="wav" quality="10" durationSec="7.5"/>
     <!-- 1.5x interior: output second 4 reads source [3.33,4.0)s (wide band;
          the orchestrator pins it after the first run) -->
     <assert-audio-energy filename="warp_marker_b.wav"

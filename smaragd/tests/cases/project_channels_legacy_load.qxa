@@ -34,7 +34,7 @@
   <actions>
     <load-project path="../project_channels_legacy.qxp"/>
 
-    <render filename="legacy_load.wav" format="wav" quality="10"/>
+    <render filename="legacy_load.wav" format="wav" quality="10" durationSec="3.5"/>
 
     <!-- 0-1 s: track 1, source sec0 -->
     <assert-audio-energy filename="legacy_load.wav"

@@ -25,7 +25,7 @@
                  duration="48000" loopLength="0" stretch="1.0"/>
 
     <!-- Render the project (two clips of 1 second each) -->
-    <render filename="render_clipped_section.wav" format="wav" quality="10"/>
+    <render filename="render_clipped_section.wav" format="wav" quality="10" durationSec="3.5"/>
 
     <!-- 0-1 s: head clip = source sec0 -->
     <assert-audio-energy filename="render_clipped_section.wav"

@@ -95,6 +95,42 @@ Invariants:
    and the corpus cases leave them off: the resident page count depends on the
    readahead and the worker count, so a tight bound would be a flake generator
    rather than a gate. Making the number visible is the deliverable.
+10. EVERY RENDER IS BOUNDED with `durationSec=`, and the bound is DERIVED, never
+    guessed. `SProject::getDurationSeconds()` is a hard-coded `return 60.0;`
+    ("TODO: calculate from arrangement"), so an unbounded `<render>` synthesizes
+    60 s whatever the project holds — the fixtures hold about 4 s, so ~93% of
+    every rendered sample was silence and the suite's whole cost was 153 renders
+    x ~6.5 s. Until the arranged-duration fix lands (its own branch off main),
+    a case's bound is `max(startFrame + frameCount)` over EVERY audio assertion
+    it makes — plus 4096 for an `assert-source-position` block, plus the clip
+    extent for a smoke case that asserts no audio at all — converted at the
+    project rate and rounded up with ~0.5 s of margin. Three ways to get it
+    wrong:
+      * A SILENCE assertion after the content is asserting something real (the
+        clip really does end there); a silence assertion out past the arrangement
+        is asserting the padding. Both look identical in the .qxa — derive from
+        the frame number, not from the comment.
+      * `analyzeWavFileRegion` REJECTS `startFrame >= frames` but silently CLAMPS
+        the end, so a window that half-runs off the end still returns an RMS.
+        A too-short bound can therefore pass for the wrong reason. Leave margin.
+      * A whole-file assertion (`assert-audio-*` with no `frameCount`) pools the
+        ENTIRE file, so a length change moves what it measures. Today every one
+        of them on a RENDER is an `assert-audio-peak maxPeak=` — an UPPER bound
+        over a tail that is pure silence, so truncation can only lower the
+        observed peak and the bound survives (`grain_*`, `mp3_sample_import`,
+        `render_split_slip_stretch` are bounded on exactly that argument). A
+        whole-file `minRms`, or a `minPeak`, would NOT survive. The whole-file
+        asserts in `channel_assert_fixture` read a committed fixture rather than
+        a render and are not affected at all.
+    `channel_assert_dupmono` is deliberately left unbounded: it is expected to
+    break at B5 and its timing must stay comparable. So are the three macOS-only
+    `au_*` cases, which cannot be gated from Windows.
+    Bounding is also a ROBUSTNESS fix, not only a speed one: `SRenderAction`
+    gives a render 30 s of wall clock before it reports "failed to apply", and a
+    60 s unbounded render of a stretched project takes >30 s on a machine
+    running several suites at once — `grain_asset_stretch` and
+    `grain_loop_stretch` were observed failing exactly that way, with every one
+    of their own assertions still green.
 
   assert-meter (proposal 34) needs NO transport, which is the point: levels are
   read from frozen pages BY POSITION, so the verb freezes the page it asks

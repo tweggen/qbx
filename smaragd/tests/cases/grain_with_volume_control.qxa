@@ -23,7 +23,7 @@
     <set-track-volume trackIndex="0" volume="-6.0"/>
     <set-track-volume trackIndex="1" volume="0.0"/>
 
-    <render filename="grain_with_volume_control.wav" format="wav" quality="10"/>
+    <render filename="grain_with_volume_control.wav" format="wav" quality="10" durationSec="14.5"/>
 
     <!-- Track 0 region at -6 dB: about half the ramp RMS -->
     <assert-audio-energy filename="grain_with_volume_control.wav"

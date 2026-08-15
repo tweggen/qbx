@@ -21,7 +21,7 @@
                  duration="288000" loopLength="0" stretch="1"
                  warpAnchors="96000:96000|192000:288000"/>
 
-    <render filename="warp_anchors_a.wav" format="wav" quality="10"/>
+    <render filename="warp_anchors_a.wav" format="wav" quality="10" durationSec="7.5"/>
     <!-- unwarped first half: source second 1 lands at output second 1 -->
     <assert-audio-energy filename="warp_anchors_a.wav"
                          startFrame="48000" frameCount="48000"
@@ -42,7 +42,7 @@
     <!-- Serialization roundtrip: exact anchors survive save/load -->
     <save-project path="../../build/warp_anchors_roundtrip.qxp"/>
     <load-project path="../../build/warp_anchors_roundtrip.qxp"/>
-    <render filename="warp_anchors_b.wav" format="wav" quality="10"/>
+    <render filename="warp_anchors_b.wav" format="wav" quality="10" durationSec="7.5"/>
     <assert-audio-energy filename="warp_anchors_b.wav"
                          startFrame="48000" frameCount="48000"
                          minRms="0.155" maxRms="0.20"/>

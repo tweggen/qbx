@@ -20,7 +20,7 @@
     <set-track-volume trackIndex="0" volume="-6.0"/>
 
     <!-- Render the project (sawtooth at reduced volume due to master track attenuation) -->
-    <render filename="render_with_effects.wav" format="wav" quality="10"/>
+    <render filename="render_with_effects.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- Screenshot of the track hierarchy with volume adjustment -->
     <screenshot filename="render_with_effects_hierarchy.png" resolution="50%"/>

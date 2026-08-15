@@ -21,7 +21,7 @@
                  duration="240000" loopLength="0" stretch="1.25"/>
 
     <!-- Render the grain-processed audio -->
-    <render filename="grain_minimal_stretch.wav" format="wav" quality="10"/>
+    <render filename="grain_minimal_stretch.wav" format="wav" quality="10" durationSec="6.5"/>
 
     <!-- Clip region: healthy stretched-ramp energy -->
     <assert-audio-energy filename="grain_minimal_stretch.wav"

@@ -43,7 +43,7 @@
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- FIRST render: bakes the pre-slip timeline into the page caches -->
-    <render filename="render_pre_slip.wav" format="wav" quality="10"/>
+    <render filename="render_pre_slip.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- Sanity: the pre-slip timeline really is sec0..sec3 in order. -->
     <assert-audio-energy filename="render_pre_slip.wav"
@@ -68,7 +68,7 @@
     <slip-clip clip="0,0" startOffset="48000"/>
 
     <!-- SECOND render: must reflect the slip, not the cached pages. -->
-    <render filename="render_post_slip.wav" format="wav" quality="10"/>
+    <render filename="render_post_slip.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- The bite: a stale cache replays source sec0 (~0.067) here. -->
     <assert-audio-energy filename="render_post_slip.wav"

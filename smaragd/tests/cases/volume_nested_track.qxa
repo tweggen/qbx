@@ -47,7 +47,7 @@
     <reparent-track source="1" destParent="0" destIndex="-1"/>
 
     <!-- Baseline, both spans at unity: sec3 of each clip. -->
-    <render filename="vol_pre.wav" format="wav" quality="10"/>
+    <render filename="vol_pre.wav" format="wav" quality="10" durationSec="8.5"/>
     <assert-audio-energy filename="vol_pre.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
@@ -59,7 +59,7 @@
          that lane at all. -->
     <set-track-volume trackPath="0,1" volume="-6.0206"/>
 
-    <render filename="vol_half.wav" format="wav" quality="10"/>
+    <render filename="vol_half.wav" format="wav" quality="10" durationSec="8.5"/>
     <!-- The FOLDER's own clip must be untouched. This is the assertion that
          fails if the path degenerates to the folder. -->
     <assert-audio-energy filename="vol_half.wav"
@@ -75,7 +75,7 @@
          alone would not catch. -->
     <undo count="1"/>
 
-    <render filename="vol_restored.wav" format="wav" quality="10"/>
+    <render filename="vol_restored.wav" format="wav" quality="10" durationSec="8.5"/>
     <assert-audio-energy filename="vol_restored.wav"
                          startFrame="336000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>

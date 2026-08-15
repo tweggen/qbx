@@ -39,7 +39,7 @@
     <set-formant-preserve clip="0,0" on="1"/>
     <set-pitch clip="0,0" cents="1200"/>
 
-    <render filename="clip_properties_a.wav" format="wav" quality="10"/>
+    <render filename="clip_properties_a.wav" format="wav" quality="10" durationSec="5.0"/>
 
     <!-- One octave up: 439.x Hz -> ~878 Hz (±3%) -->
     <assert-audio-frequency filename="clip_properties_a.wav"
@@ -54,7 +54,7 @@
     <save-project path="../../build/clip_properties_actions.qxp"/>
     <load-project path="../../build/clip_properties_actions.qxp"/>
 
-    <render filename="clip_properties_b.wav" format="wav" quality="10"/>
+    <render filename="clip_properties_b.wav" format="wav" quality="10" durationSec="5.0"/>
 
     <assert-audio-frequency filename="clip_properties_b.wav"
                             startFrame="48000" frameCount="24000"

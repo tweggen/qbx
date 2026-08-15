@@ -27,7 +27,7 @@
     <!-- "record" 4 s starting at 0: gap [0,2s) + take on the column at 2s -->
     <place-recording trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
-    <render filename="takes_rec.wav" format="wav" quality="10"/>
+    <render filename="takes_rec.wav" format="wav" quality="10" durationSec="6.5"/>
 
     <!-- gap cut: recording sec0, sec1 on the timeline 0-2 s -->
     <assert-audio-energy filename="takes_rec.wav"
@@ -52,7 +52,7 @@
 
     <!-- the pre-recording take is still there: comp back to it -->
     <select-take clip="0,0" take="0"/>
-    <render filename="takes_rec_orig.wav" format="wav" quality="10"/>
+    <render filename="takes_rec_orig.wav" format="wav" quality="10" durationSec="6.5"/>
     <!-- original clip content restored on the column (source sec0 at 2 s) -->
     <assert-audio-energy filename="takes_rec_orig.wav"
                          startFrame="96000" frameCount="48000"

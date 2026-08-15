@@ -40,7 +40,7 @@
     <split-clip clip="0,0" splitTime="96000"/>
 
     <!-- Baseline: head is sec0+sec1, tail is sec2+sec3. -->
-    <render filename="undo_pre.wav" format="wav" quality="10"/>
+    <render filename="undo_pre.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="undo_pre.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.05" maxRms="0.085"/>
@@ -54,7 +54,7 @@
     <!-- Delete the TAIL (clip index 1 on track 0). -->
     <remove-sample trackIndex="0" clipIndex="1" timePos="96000"/>
 
-    <render filename="undo_deleted.wav" format="wav" quality="10"/>
+    <render filename="undo_deleted.wav" format="wav" quality="10" durationSec="4.5"/>
     <!-- Head survives... -->
     <assert-audio-energy filename="undo_deleted.wav"
                          startFrame="0" frameCount="48000"
@@ -66,7 +66,7 @@
 
     <undo count="1"/>
 
-    <render filename="undo_restored.wav" format="wav" quality="10"/>
+    <render filename="undo_restored.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- The tail must come back with its ORIGINAL window. Defect 1 leaves this
          span silent (undo never applied); defect 2 fills it with source sec0
@@ -87,7 +87,7 @@
     <!-- And redo removes it again, so the inverse-of-the-inverse holds. -->
     <redo count="1"/>
 
-    <render filename="undo_redone.wav" format="wav" quality="10"/>
+    <render filename="undo_redone.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="undo_redone.wav"
                          startFrame="96000" frameCount="48000"
                          minRms="0.0" maxRms="0.001"/>
