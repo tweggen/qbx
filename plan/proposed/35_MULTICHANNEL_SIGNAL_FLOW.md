@@ -183,10 +183,23 @@ learn it at read time; a constant stride is a compile-time fact. Planar, not
 interleaved, because *every source in the engine is already planar* and because a
 mono page must stay byte-identical to today's.
 
-`getDataPtr()` keeps returning channel 0, so every existing call site remains
-correct for width 1 — but each one is still reviewed in B1 and converted to an
-explicit accessor, because "correct today, silently wrong at width 2" is exactly
-the bug class this proposal exists to eliminate.
+~~`getDataPtr()` keeps returning channel 0, so every existing call site remains
+correct for width 1~~ — **there are no such call sites: `getDataPtr()` has zero
+callers in the entire tree** (found by B1b; only the two overrides exist, in
+`twOutputPage` and `CapturePageData`). It is dead polymorphic API and a
+width-blind hole; B9 should delete it alongside `twFormatCaps::channelCounts`.
+Every *real* consumer was reviewed and converted in B1, because "correct today,
+silently wrong at width 2" is the bug class this proposal exists to eliminate —
+and B1b made the page's buffer **private**, which turns that from a grep result
+into something the compiler enforces.
+
+**`sampleCount() == channels * FRAME_CAPACITY` is NOT universally true**, and v3
+did not know it. A pre-existing **mono scratch** path resizes a page's buffer to
+an arbitrary caller-chosen length — `twComponent::calcOutputTo` (both overloads)
+and `IOVector::CreateFromBuffer` build a throwaway page as a plain buffer. B1b
+preserved it as `resizeMonoScratch()` (width-1 only; refuses a wide page).
+**`channelFrames()` is therefore the only honest frame bound**, in every phase
+from here on.
 
 **Memory:** page bytes = `channels × 256 KiB`. A mono project's footprint is
 unchanged to the byte. 8 channels × 4 readahead pages × 30 tracks ≈ 240 MiB —
@@ -305,6 +318,12 @@ are. **No bus dimension is added anywhere.** That is the whole point of B.
 `channelPtr(c)`, and wide mixing is a loop over channels of the same page pair.
 Deciding this here rather than inside B1's sweep is deliberate; it is exactly the
 kind of choice that otherwise gets made silently and differently in six places.
+
+*B1b built it mono against a single named `kChannel` constant, deliberately
+without a channel selector — an unused parameter in the one phase whose entire
+safety argument is that nothing is untested would have been self-defeating.*
+**B4 must add that selector** the moment a wide `twTrackMix` mixes channel *c*.
+Recorded in `pages/CONTRACT.md`.
 
 ---
 
@@ -684,6 +703,28 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     mono bus, so a width-1 and a width-2 project produce the same file. That is
     correct *now* — and it is a second gate that is **supposed to break at B5**,
     alongside `channel_assert_dupmono.qxa`. When they diverge, the sink is real.
+15. **A missing `qoffscreen.dll` costs 600 s, not a fast failure** (found by B1b).
+    `preview_container_test` and `project_channels_test` both set
+    `QT_QPA_PLATFORM=offscreen` and both construct a `QApplication`;
+    `windeployqt` deploys only `qwindows.dll`, so Qt blocks in an invisible
+    platform-plugin dialog — **0.03 s of CPU over a 300 s timeout, each**. Copy it
+    from the Qt prefix into `smaragd/build/bin/platforms/`, and **re-copy after
+    every `./rebuild.sh`**, which wipes `build/bin`. A green suite reported by an
+    agent that had the plugin is not evidence for one that does not.
+16. **`twlog_test` asserts a wall-clock bound and therefore measures the machine**
+    (found by B1b): 137-191 µs idle, **4 000-51 000 µs at 100% CPU, failing 6 runs
+    in 10**, same binary. It is the one wall-clock assertion in the suite. Never
+    diagnose it as a code regression without checking the load first, and note
+    that it is fundamentally hostile to a parallel test run.
+17. **`warp_anchors_roundtrip` has a pre-existing teardown segfault**, ~1 in 30 at
+    `SMARAGD_REVAL_WORKERS=1`, load-sensitive (found by B1b, bisected below B1a's
+    work). Exit 139 inside `~SProject`, *after* all audio work: the case leaves
+    **two objects that outlived the refcount cascade with dangling `SLink`s** on
+    every run, pass or fail, and occasionally the teardown order kills it. That is
+    the known `~SLink`-must-`setParent(nullptr)`-first UAF class. A *second,
+    distinct* mode appears at workers=8: `SRenderAction: render timeout after
+    30000 ms` at 96% of the render — a wall-clock budget blown on a loaded box,
+    aggravated by trap 13. The exit code separates them; do not conflate them.
 
 ## 8. Non-goals (named, so they are not assumed)
 
