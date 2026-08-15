@@ -10082,3 +10082,146 @@ NOT fire in either full suite run — the first case warms the cache. Recorded,
 not chased: `tw/plugins` is outside P1's module set (ground rule 6), and the
 fix belongs where the registry is (drain or detach the scan before static
 destruction, or give the scan thread a catch-all).
+
+---
+
+## 2026-08-15 — Proposal 36 P4: event editor + virtual keyboard
+
+- **Status:** ✅ COMPLETE (AC1, AC2, AC3, AC5 green; **AC4 skipped — it needs
+  P3b**, see "Not gated" below)
+- **Branch:** `feat/36-p4-event-editor`
+- **Modules:** new `main/eventui/` (+ CONTRACT.md), `main/shell` (two docks,
+  the View menu, five test seams, the axis link), `main/timeline` (the head's
+  second button pair + `describeTrackHead`, `SSnapSpec` grid divisions,
+  `secondWidthChanged`), `main/testkit` (four verbs), `tools/check_layering.py`,
+  `docs/ACTIONS.md`, `docs/ARCHITECTURE.md`.
+
+### What landed
+
+A **selection-following event editor dock** — the fifth `QDockWidget`, bottom,
+tabified with the Log — and a **virtual keyboard dock** beside it. Both are
+created in `SMainWindow`'s constructor with stable objectNames
+(`dock_event_editor`, `dock_virtual_keyboard`), hidden on a first run, with
+View-menu toggles (Ctrl+Shift+E for the editor).
+
+Inside `main/eventui`:
+
+| Class | What it is |
+|---|---|
+| `SEventTimeAxis` | The ONE px<->frame conversion, deliberately the same arithmetic (integer truncation included) as `SMVActualView::getXPosOfOffset`/`getTimeOf`. `linked` says whether it follows the arranger. |
+| `SEventTimeRuler` | bars.beats.ticks off the **tempo map**, not off a BPM scalar; the arranger ruler's 480-PPQ display becomes the map's 960 here. |
+| `SEventEditorView` | The abstract face: `setClip(path)`, `setTimeAxis`, `setGrid`, `setTool`, `describe()`, plus the tick/frame/pixel helpers and `commitNotes()`. Holds the rules a subclass inherits. |
+| `SEventEditorRegistry` | Static-initializer KIND REGISTRY. `SPianoRollView` registers as `"pianoroll"`; a tracker grid or a score view is a new file plus one registration. |
+| `SPianoRollView` | Draw / erase / select / move / resize / marquee / keyboard-nudge, a velocity lane and a CC lane stack — **one widget, three bands, one set of mouse handlers dispatched on the band**. |
+| `SEventEditorDock` | Toolbar (select/draw/erase, grid 1/1..1/32 + triplets, Quantize, CC lane, Link, kind switch) + ruler + the view slot; the selection follower. |
+| `SVirtualKeyboardDock` | Two painted octaves, REAPER's key map, velocity, octave +/-; inserts at the locator through `add-note`. |
+
+**Every edit is one P1 verb per gesture.** A drag paints out of a preview and
+never touches the model; the release discards the preview and submits ONE
+`set-notes` (revert-then-action, timeline inv. 3). Draw submits `add-note`,
+erase `remove-note`, a CC point `set-events`, the toolbar's Quantize
+`quantize-notes`. Nothing here caches an `SLink*` — the dock re-resolves the
+selection PATH on every `arrangementChanged`.
+
+**Track head (design 6.1):** the second button pair, `I` (instrument) and `A`
+(automation), plus `SSMVMixerControl::describeHead()` — a `describeMeter()`
+sibling. `A` is Full-density only **and** only while a six-button column still
+fits (five 20 px buttons need 108 px, six need 130, and Full starts at 132 — an
+unconditional sixth clips exactly the shortest Full lanes); `I` additionally
+requires slot 0 to be an instrument, which nothing can create yet (P3b), so the
+gate asserts the negative. `I` opens the generic plugin parameter editor; `A`
+is the seam plus its density rule and says so in a tooltip.
+
+**Grid divisions in the snap spec (design 6.2):** `SSnapSpec::setGridDivision`
++ `setTempoMap`, parsed by `SQuantizeNotesAction::gridTicks()` — the ONE parser,
+shared with `quantize-notes` and the editor — and converted through
+`twTempoMap`, the single tempo authority. An empty division is the pre-36 beat
+snap byte for byte. Exposed on the ruler's context menu next to "Set BPM".
+
+**One FIXME resolved:** `SMVActualView::secondWidthChanged` was declared and
+never emitted. It now fires and carries a `double` (an `int` would quantise
+every zoom below 1 px/s), because the editor's axis mirrors that mapping.
+
+### Verbs (docs/ACTIONS.md rows + `action_roundtrip_test` fixtures)
+
+`virtual-key` (`key`, `velocity`="100", `durationTicks`="960"),
+`drag-note` (`clip`, `tick`/`key`/`channel`, `toTick`, `toKey`, `edge="end"`,
+`lane="velocity"` + `toValue`), `assert-event-editor` (`clip`, `kind`,
+`contains`, `absent`, `grabPng`), `assert-track-head` (`trackPath`,
+`headHeight`, `contains`, `absent`). All four go through `SMainWindow` —
+testkit may include neither `app/eventui` nor `app/timeline`. None is undoable
+itself: the NESTED action is what lands on the stack, so `<undo count="1"/>`
+after the verb reverses the gesture.
+
+### Gate results
+
+- `./build.sh` clean (the re-configure included: 128 -> **131** registered
+  tests, i.e. the three new qxa cases).
+- `python tools/check_layering.py` clean — `eventui` at the rank of `pluginui`,
+  engine deps `{core, graph, events}`, **no edge to `timeline`**: the arranger's
+  zoom and scroll arrive through the SHELL, which already sees both.
+- `python tools/check_logging.py` clean.
+- **AC1** `piano_roll_edits.qxa`: virtual-key C4 -> `count=1 key=60 at=0
+  velocity=100 dur=24000`; a two-bar move -> `at=96000`; a move+transpose ->
+  `key=64 at=48000`; an end-edge resize -> `dur=48000`; a velocity-lane drag ->
+  `63.5` (one pixel of a 48 px lane is 2.6 velocity units, which is the honest
+  resolution of the gesture). Each followed by `<undo count="1"/>` and the
+  prior assertion. `virtual-key` with no event clip `expectReject`s.
+- **AC2** `event_editor_dock.qxa`: `kind=pianoroll|notes=0|grid=1/16|linked=1|
+  empty=0` on an empty clip, `notes=1|grid=1/16|linked=1` after a note,
+  `empty=1` when the selection moves to an audio clip and back again, plus
+  `quantize-notes` from the toolbar with its undo. Two PNG grabs written.
+- **AC3** `track_head_density.qxa`: Full 160 -> `btns=M,S,R,T,G,A|I=0|A=1`;
+  the FIT boundary 132 -> `A=0` / 136 -> `A=1`; Compact 100 and 46; Tiny 40 ->
+  `btns=M,S` and 14 -> no buttons; the same on a NESTED lane. `fitW=1|fitH=1`
+  everywhere — no clipping.
+- **AC5** `action_roundtrip_test` green with a fixture row per new verb.
+- **Full suite**: `ctest --test-dir smaragd/build -j4 --output-on-failure` from
+  `smaragd/tests/cases/` — **100% of 128 run tests passed**, 0 failed, 165 s.
+  Reconciled: **131 registered**, 128 run, 3 Not Run (Disabled — the macOS-only
+  `au_*` trio). No flake, no retry, nothing re-run to get green.
+
+**Goldens are byte-identical BY CONSTRUCTION and were not re-frozen:** nothing
+in this phase is on an engine, render or freeze path. The only pre-existing
+files touched at all are UI widgets (`ssmvmixercontrol`, `sstdmixerview`'s
+snap/zoom seams, `smainwindow`), and the one behavioural change outside new
+code — `SSnapSpec`'s division — is inert until a division is SET, which nothing
+in the committed suite does.
+
+### Not gated / deviations
+
+- **AC4 (audible: `virtual-key` C4 -> render -> 261.6 +/- 1 Hz) is SKIPPED.**
+  It needs an instrument in the signal path, which is P3b; today an event clip
+  on a track without an instrument is silent by design (D3). The editor writes
+  notes and nothing sounds them, so there is nothing to measure. It belongs in
+  a P3b case rather than being re-cut here.
+- **CC lanes are draw-one-point**, not curve editing: a press sets one
+  controller value at the snapped tick through `set-events`. Curve drawing is
+  the automation UI's gesture set (P6). Recorded in `main/eventui/CONTRACT.md`.
+- **No zoom of the editor's own**: the vertical key height is fixed at 8 px and
+  the horizontal axis is the arranger's. Unlinking works; there is no UI to
+  zoom the unlinked axis.
+- **The `A` button does nothing yet** — automation lands in P5/P6.
+- **No `repeat_test.sh` sweep**: nothing here touches the scheduler, a class-1
+  processor, the barrier or the readahead. This is UI code on the main thread.
+- **PNG grabs are coverage, not oracles.** Nothing asserts their pixels; they
+  exist because a widget that throws in `paintEvent` passes every `describe()`
+  assertion ever written.
+- `SStepGridView` (tracker) and the score/tab kinds named in design 6.2 are not
+  built. The registry exists so they are additions rather than surgery.
+
+### One thing worth knowing before touching this again
+
+`grabEventEditor` **detaches** the dock's widget before sizing it. The dock's
+layout owns the geometry, so a `resize()` while parented is undone before
+`grab()` renders — the first version produced a 620x186 strip of whatever the
+hidden main window happened to allot, with the "No event clip selected"
+placeholder painted over a bound piano roll. That placeholder bug is why
+`SEventEditorDock::bindClip()` exists: the placeholder and the view are
+exclusive, and the explicit-path binding has to say so as much as the
+selection path does.
+
+A note dragged ONTO a clip's window end vanishes from the clip's snapshot —
+windows are half-open. That is the window's rule, not the gesture's, and it
+cost one debugging round: give a case a clip long enough that the destination
+is strictly inside.

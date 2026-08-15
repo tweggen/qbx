@@ -53,15 +53,15 @@ it has no place in the dataflow DAG at all — and it must stay core-only becaus
 
 ## App (`smaragd/main/`) — one SCC, checker-enforced boundaries
 
-13 module directories with `app/<module>/…` includes, built as FOUR
+14 module directories with `app/<module>/…` includes, built as FOUR
 layered OBJECT libraries (OBJECT is load-bearing: actions and the loader/
 editor/extern-file registries self-register via static initializers, which
 a STATIC lib would drop):
 
     app_model < app_core < app_objects < app_ui
     (model)     (actions,     (objects/cut,   (timeline, pluginui,
-                persistence,   wave, midi,     servicesui, shell,
-                selection)     track, mixer)   testkit)
+                persistence,   wave, midi,     eventui, servicesui,
+                selection)     track, mixer)   shell, testkit)
 
 The layer boundaries are COMPILE-TIME ENFORCED: each layer target publishes
 only its own include dirs and links only the lower layers plus its declared
@@ -96,6 +96,7 @@ minimal.
 | app/selection | selection state + actions | main/selection/CONTRACT.md |
 | app/timeline | the arrangement canvas + chrome | main/timeline/CONTRACT.md |
 | app/pluginui | plugin browser/editor widgets | main/pluginui/CONTRACT.md |
+| app/eventui | event editor (piano roll) + virtual keyboard | main/eventui/CONTRACT.md |
 | app/servicesui | render/record/options dialogs | main/servicesui/CONTRACT.md |
 | app/shell | SApplication, SMainWindow, main() — composition root | main/shell/CONTRACT.md |
 | app/testkit | qxa runner, audio assertions | main/testkit/CONTRACT.md |
