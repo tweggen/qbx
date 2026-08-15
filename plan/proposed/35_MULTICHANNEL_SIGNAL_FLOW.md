@@ -1,16 +1,32 @@
 # Proposal 35 — Configurable multichannel signal flow (mono / stereo / 4 / 6 / 8)
 
-> **Status: DRAFT (2026-08-15).** No code yet. This proposal answers a gap that
-> `plan/STATE.md:7741` recorded and left unowned: *"The multi-channel sink above
-> is nobody's milestone yet and **should become one**."* It is now one.
+> **Status: DRAFT v3 (2026-08-15).** v3 applies an adversarial review of v2 that
+> found three blockers: the channel-at-the-plug mechanism did not exist and was
+> never designed (§4.6); the default per-channel render loop would corrupt every
+> cursor-bearing component, starting with the one it was meant to serve (§4.3);
+> and B4/B6 were internally contradictory for any track with a plugin (now one
+> milestone). It also corrected a factual error in §2 that changed the milestone
+> ordering. The review's findings are recorded inline rather than summarised, so
+> the reasoning survives.
 >
-> Prerequisite reading: `plan/proposed/04_WIRE_FORMAT_AND_SAMPLE_RATE.md`
+> **v2 (2026-08-15).** v1 recommended extending the existing
+> "N channels = N parallel mono component instances" model and holding the page
+> rewrite behind a measurement gate. **The requester chose the page rewrite
+> instead**, so v2 adopts it as the design and re-plans everything downstream of
+> it. v1's cost analysis is kept in §3 unchanged — it is the reason the choice is
+> a real one, and it is the list of things that must not be rediscovered.
+>
+> This proposal answers a gap `plan/STATE.md:7741` recorded and left unowned:
+> *"The multi-channel sink above is nobody's milestone yet and **should become
+> one**."*
+>
+> Prerequisite reading: `docs/contracts/FREEZE_PROTOCOL.md` §"Page geometry"
+> (the contract this proposal amends), `plan/proposed/19_ASYNC_FREEZE_MODEL.md`
+> ("Phase 2 REVISED"), `plan/proposed/04_WIRE_FORMAT_AND_SAMPLE_RATE.md`
 > (`twFormat` already carries `channels`/`layout`),
 > `plan/proposed/08_PLUGIN_HOSTING.md` §"Design premise 2" and §"Settled
-> decisions 5, 6" (the parallel-mono-wires decision and the channel-mismatch
-> policy), `docs/contracts/FREEZE_PROTOCOL.md` §"Page geometry",
-> `plan/proposed/19_ASYNC_FREEZE_MODEL.md` ("Phase 2 REVISED"),
-> `smaragd/tw303a/plugins/CONTRACT.md:364-372`,
+> decisions 5, 6" (the decision this proposal reverses, and the channel-mismatch
+> policy it keeps), `smaragd/tw303a/plugins/CONTRACT.md:364-372`,
 > `plan/todo/COMPONENT_CHAIN_BUGS.md` BUG 3.
 
 ---
@@ -33,16 +49,15 @@ places, plus two decisions that deliberately scoped it out while leaving hooks:
 | `docs/contracts/FREEZE_PROTOCOL.md:49` | pages are 65536 **mono** frames, normatively | decision |
 | `plan/todo/BACKLOG.md:24` | "multi-channel capture (mono for now)" | backlog, one line |
 
-Notably `plan/proposed/29_FOLLOWUPS.md` — the "what's next" routing document —
-does not mention channel width at all. So: the ground is prepared, the gap is
-recorded everywhere it bites, and nobody owns it.
+`plan/proposed/29_FOLLOWUPS.md` — the "what's next" routing document — does not
+mention channel width at all.
 
 ---
 
 ## 2. What is actually true today (and it is not "the engine is mono")
 
 The received summary is *"the engine is mono"*. That is wrong in a way that
-changes the plan, so state it precisely:
+changes the plan:
 
 **Already N-channel, working, tested:**
 
@@ -52,44 +67,52 @@ changes the plan, so state it precisely:
   in its own tests).
 - **The reader already treats `idx` as a channel.**
   `twSampleReader::getNOutputs()` returns `src_.channels()` and builds one latch
-  per channel; `calcOutputTo(dest, idx)` calls `src_.read(pos_, …, idx)`. This is
-  the one place in the engine where a port index *is* a channel index.
-- **A track really is two buses.** `STrack::setNBusses(2)` in the ctor builds two
-  `twTrackMix` + two `twPluginChain` instances joined by a 2-plug `twRewire`;
-  gain fans out over both; the plugin taps render both.
-- **The file writers, the WASAPI backend, the analysis layer and
-  `dump-playback-capture` are all genuinely N-channel** and merely pinned to 2.
+  per channel; `calcOutputTo(dest, idx)` calls `src_.read(pos_, …, idx)`.
+- **A track really is two buses**: two `twTrackMix` + two `twPluginChain` joined
+  by a 2-plug `twRewire`; gain fans out; plugin taps render both.
+- **The file writers, the WASAPI backend, the whole analysis layer and
+  `dump-playback-capture` are genuinely N-channel** and merely pinned to 2.
 
-**So on a 2-bus track a stereo WAV already produces two genuinely different
-buses.** The audio exists. It is destroyed downstream, at three chokepoints:
+**But the audio never reaches bus 1 through the freeze path.** v2 claimed it did;
+that was wrong, and the correction reorders the plan. Every bus's `twTrackMix`
+receives the *same* clip with the *same* `getComponentFn`/`resolveFn`
+(`strack.cpp:252-265`); the resolved component's page cache is keyed by position
+alone (`outputPages_`, `twcomponent.h:594`) and filled at `idx = 0`
+(`twcomponent.cc:848`). **Bus 0 and bus 1 therefore receive the identical
+channel-0 page, for every clip.** The per-channel latches of `twSampleReader` are
+only reachable through the legacy `calcOutputTo` pull; the freeze path never uses
+them. So the narrowing happens in four places, earliest first:
 
-1. **The master**, `SStdMixer::setNBusses(1)` (ctor, hard-coded, never
-   serialized): the summing loop runs `bus < 1`, so every track's bus 1 is
-   built, filtered, plugin-processed — and dropped. `getRootComponent()` still
-   carries `// FIXME: Generate a channel reassignment.`
-2. **The sink**, twice: `RenderSession` (`config.channels = 2;` +
+1. **The clip / reader seam — for ALL clips.** The resolved component freezes one
+   mono page at `idx = 0`, so a stereo file's channel 1 is computed by nobody.
+   This is the broadest destruction point and v2 missed it entirely.
+2. **The clip capture**, `SCut::buildCapture_`: reads channel `0` into a
+   `twCapturingSource(…, 1, …)` — so stretched, pitched and container-backed
+   clips are mono *a second time over*, independently of (1).
+3. **The master**, `SStdMixer::setNBusses(1)` (ctor, hard-coded, never
+   serialized): the summing loop runs `bus < 1`, so every track's bus 1 is built,
+   filtered, plugin-processed — and dropped. `getRootComponent()` still carries
+   `// FIXME: Generate a channel reassignment.`
+4. **The sink**, twice: `RenderSession` (`config.channels = 2;` +
    `bufR[i] = sample;  // Duplicate to stereo (temporary; proper multi-channel
-   TBD)`) and `AudioEngine::pullBlock(outL, outR, n)` (`// Duplicate mono frozen
-   output to stereo`), sitting on `AudioFrame::MAX_CHANNELS = 2`. `twSpeaker`
-   then fans out `(c % 2 == 0) ? sL : sR`.
-3. **The clip capture**, `SCut::buildCapture_`: reads channel `0` and builds a
-   `twCapturingSource(…, 1, …)`. **Any stretched, pitched or container-backed
-   clip becomes mono**, whatever the file was. This one is not at the sink at
-   all, and it is the least-known of the three.
+   TBD)`) and `AudioEngine::pullBlock(outL, outR, n)`, on top of
+   `AudioFrame::MAX_CHANNELS = 2`; then `twSpeaker` fans out `(c % 2 == 0)`.
 
-Plus one structural blocker: **channel width cannot change at runtime.**
-`STrack::setNBusses` grows only — shrink is `Q_ASSERT_X(false, …, "bus count
-shrink not supported")` — and the loader's default (`nBusses="1"`) contradicts
-the ctor's 2.
+The one place two genuinely different buses exist today is *downstream of a
+stereo plugin*, because `twPluginSlotProcessor` renders all buses itself and the
+`twtestclap` skew fixture manufactures the cross-channel term. That is the
+existing coverage, and it is why it was built that way.
+
+Plus: **width cannot change at runtime.** `STrack::setNBusses` grows only —
+shrink is `Q_ASSERT_X(false, …)` — and the loader default (`nBusses="1"`)
+contradicts the ctor's 2.
 
 ---
 
-## 3. The architectural question this forces
+## 3. The fork, and why B was chosen
 
 Proposal 08 settled it once: **N channels = N parallel mono wires = N parallel
-component instances**, because the frozen page is mono by contract. That is not a
-style preference — it is forced by the page model, and every layer is built on
-it:
+component instances**, because the frozen page is mono by contract:
 
 ```
 twOutputPage:  std::vector<float> samples;   // FRAME_CAPACITY "mono frames",
@@ -102,276 +125,475 @@ plan dep:      struct twPageDep { producer; pageStart; }   // no output index
 bound inputs:  struct Entry { producer; pageStart; page; } // no output index
 ```
 
-There is **no bus dimension anywhere in the freeze, cache, demand or invalidation
-machinery.** Nothing needs one, *as long as* N channels are N components.
+**The costs of extending that model** (v1's analysis, unchanged — these are the
+reasons B was chosen, and they are why the work below is worth its risk):
 
-The cost of that decision is already visible in the tree, and it is worth being
-blunt about it before extending it to 8 channels:
+- `twPluginSlotProcessor` exists *only* to work around it. Its header: *"It is
+  deliberately NOT a twComponent… so N parallel mono wires are N parallel
+  component instances"*; `twplugininsert.h`: *"a component that wrote interleaved
+  stereo into one page produced garbage the engine then read as mono."* Every
+  channel-coherent stage needs that out-of-band processor + per-bus tap + private
+  cache.
+- Per-bus instantiation has already produced bugs: the `setNBusses` grow crash
+  and shrink assert; the pre-M3 `twPluginChain` loop that fed a 2-in plugin *"bus
+  audio on input 0 and SILENCE on input 1"*; the nested-lane duplicate-key trap
+  logged as *"primed for the stereo-output work"*.
+- It multiplies the DAG: 8 channels = 8× nodes, 8× dependency counting, 8× epoch
+  bookkeeping, 8× invalidation walks, 8× components per track.
 
-- **`twPluginSlotProcessor` exists only to work around it.** Its header:
-  *"It is deliberately NOT a twComponent… so N parallel mono wires are N parallel
-  component instances"*, and `twplugininsert.h`: *"a component that wrote
-  interleaved stereo into one page produced garbage the engine then read as
-  mono."* Every channel-coherent stage needs this out-of-band processor + per-bus
-  tap + private cache pattern.
-- **Per-bus instantiation has already produced bugs**: the `setNBusses` grow
-  crash and shrink assert; the pre-M3 `twPluginChain` loop that fed a 2-in plugin
-  "bus audio on input 0 and SILENCE on input 1"; the nested-lane duplicate-key
-  trap explicitly logged as *"primed for the stereo-output work"*.
-- **It multiplies the DAG.** 8 channels = 8× nodes, 8× dependency counting, 8×
-  epoch bookkeeping, 8× invalidation walks, 8× `twTrackMix`/`twPluginChain`
-  instances per track.
+**What B costs, stated honestly, because it is what this plan must survive:** it
+changes the most load-bearing contract in the engine and touches every
+`freezePage` override, the page pool, the latch seam, capture, sidecar keys,
+metering and preview. Byte-exactness is verifiable only after the fact. §5 is
+ordered specifically to make that survivable: **the entire mechanical sweep
+happens while every page in the system is still one channel wide**, so the
+byte-`cmp` gate is green by construction through the riskiest phase.
 
-### Option A — extend the current model (parallel wires all the way out)
+**What B buys, concretely:**
 
-Widen `SStdMixer`, the sink, the capture and the UI; keep one mono page per
-component and one component per channel.
-
-- Page contract untouched → the render byte-`cmp` gate is safe by construction
-  for mono, and stays meaningful throughout.
-- Every milestone is independently shippable and gateable.
-- The graph half is *already proven at N=2*; this is finishing it, not inventing.
-- **But** every future channel-coherent stage (panner, stereo width, M/S,
-  correlation metering, linked dynamics) needs the processor/tap workaround, and
-  the DAG grows linearly in channels.
-
-### Option B — make the page multichannel (planar, page carries `channels`)
-
-One component = one page holding N planar channels; components declare width.
-
-- The scheduler key `(component, position)` stays *exactly as it is* — no node
-  explosion, no bus dimension to add.
-- The planar source side flows straight through; `twSampleReader`'s per-channel
-  latches and the processor/tap split both become unnecessary.
-- Channel-coherent DSP becomes ordinary, not a special case.
-- **But** it changes the single most load-bearing contract in the engine
-  (`FREEZE_PROTOCOL` page geometry) and touches every `freezePage` override, the
-  page pool, the latch seam, capture, sidecar keys, metering and preview *at
-  once*, with byte-exactness verifiable only afterwards. It is a stop-the-world
-  change to the layer that caches, invalidates, stales and meters everything.
-
-### Option C — keep mono pages, promote the tap pattern to a facility
-
-Extract `twPluginSlotProcessor`/`twPluginInsert` into a reusable
-`twWideProcessor` + `twWideTap` pair that any channel-coherent stage can use.
-Not an alternative to A — a component of it.
-
-### Recommendation
-
-**A + C now; B behind an explicit decision gate (M6).**
-
-The reasoning is not "A is nicer". It is that A reaches the user-visible goal —
-configurable mono/stereo/4/6/8 with real audio on every channel — **without
-touching the contract that every correctness gate in this repo is anchored to**,
-and the graph half of A is already working at N=2. B is the better long-run
-model, and this proposal says so; but it should be entered with measurements in
-hand (M6), not speculatively, and as its own proposal. Adopting B *first* would
-mean rewriting the page model before a single channel of audio has ever reached a
-file — i.e. taking the largest risk before validating any of the value.
-
-**If the requester prefers B up front, M0–M2 are unchanged and still required;
-M3–M5 would be re-planned.** That is the fork, and it is recorded here so the
-choice is deliberate.
+| | today (A) | under B |
+|---|---|---|
+| scheduler key | `(component, position)` | **unchanged** |
+| 8-channel DAG | 8× nodes | 1× nodes |
+| channel-coherent DSP | processor + N taps + private cache | ordinary component |
+| `twSampleReader` | N latches, only latch 0 ever frozen | one wide page, dead code retired |
+| planar source → page | narrowed to channel 0 at the reader | flows straight through |
+| a track | N × (`twTrackMix` + `twPluginChain` + inserts) | one of each, width N |
 
 ---
 
-## 4. Goals / non-goals
+## 4. The design
 
-**Goals**
+### 4.1 The page carries its channels, planar, with a constant stride
 
-- A project-level channel count: 1, 2, 4, 6, 8. Persisted, changeable, defaulting
-  to 2 for legacy projects (which is what they sound like today).
-- Every track carries that many buses; sources with N channels reach the master,
-  the file and the device with their channels intact.
-- Stretched / pitched / container-backed clips keep their channels.
-- Renders and playback produce genuinely N-channel output, gated by assertions
-  that can tell the channels apart.
-- Metering, preview and the render dialog stop lying about width.
+```cpp
+struct twOutputPage : PageBase {
+    static constexpr size_t FRAME_CAPACITY = 65536;   // per channel, unchanged
+    std::uint16_t channels = 1;                       // NEW
+    std::vector<float> samples;                       // channels * FRAME_CAPACITY
 
-**Non-goals (named, so they are not assumed)**
+    float       *channelPtr( idx_t c );               // &samples[c * FRAME_CAPACITY]
+    const float *channelPtr( idx_t c ) const;
+};
+```
 
-- **Panning.** `SObject::pan_` is serialized into every `.qxp` and has *zero*
-  consumers — no action, no UI, no DSP. A pan law + panner stage is a separate
-  proposal (36). Without it, a stereo project with mono sources is dual-mono:
-  correct, and not yet musical.
-- **A routing matrix** for plugins whose I/O matches no bus count (proposal 08
-  left these bypassed; they stay bypassed).
-- **Surround semantics** — channel *roles* (L/R/C/LFE/Ls/Rs), fold-down presets,
-  ambisonics. This proposal delivers N channels, not a 5.1 *format*.
-- **Multichannel MIDI/instruments**, and per-clip channel routing.
-- **Changing `twOutputPage`** (that is M6's question, not this proposal's work).
+**The stride is `FRAME_CAPACITY`, not `validFrames`.** A stride that tracked the
+valid length would change as tails shorten, and every consumer would have to
+learn it at read time; a constant stride is a compile-time fact. Planar, not
+interleaved, because *every source in the engine is already planar* and because a
+mono page must stay byte-identical to today's.
+
+`getDataPtr()` keeps returning channel 0, so every existing call site remains
+correct for width 1 — but each one is still reviewed in B1 and converted to an
+explicit accessor, because "correct today, silently wrong at width 2" is exactly
+the bug class this proposal exists to eliminate.
+
+**Memory:** page bytes = `channels × 256 KiB`. A mono project's footprint is
+unchanged to the byte. 8 channels × 4 readahead pages × 30 tracks ≈ 240 MiB —
+the same total the parallel-wire model would have used, in one allocation instead
+of eight. The page pool must size and account by width (AC in B1).
+
+### 4.2 A component declares its width
+
+```cpp
+virtual idx_t getOutputChannels() const { return 1; }
+```
+
+Deliberately **not** `getNOutputs()`. That is the patch-bay port count, and the
+two mean different things in different classes today — `twRewire`'s N plugs are
+buses, `twSampleReader`'s N outputs are channels, `twWavInput` returns a
+hardcoded 4 with one latch created. Conflating them is how this stays broken.
+Default 1 ⇒ every existing component is unchanged and correct.
+
+### 4.3 Rendering: width 1 keeps today's path; width > 1 MUST render wide
+
+v2 proposed a default per-channel loop over `renderFrames(…, idx)`. **That is
+wrong and must not be built.** `twSampleReader::calcOutputTo` — the very
+component the loop was meant to serve — advances a cursor (`pos_ +=
+dest.length()`, `twsamplereader.cc:58-72`), while `freezePage_nolock` seeks
+*once* before rendering (`twcomponent.cc:825-826`). A loop would render channel 0,
+advance the cursor a whole page, and fill channel 1 with the **next page's
+audio** — the "coherent page displaced by one page" bug this repo has already
+bled for. The same applies to every input-side plug cursor, and `internalState`
+is captured once after rendering (`twcomponent.cc:851-855`), so a state chain
+would be meaningful for channel 0 only.
+
+The rule instead:
+
+```cpp
+// width 1  -> byte-for-byte today's code path. Not "equivalent to": the same code.
+// width > 1 -> the component MUST override renderPageWide(); the base
+//              implementation for width > 1 asserts and logs. It never
+//              silently renders something plausible.
+virtual bool renderPageWide( twOutputPage &out, const twFrozenInputs &in, … );
+```
+
+A wide component seeks once, fills every channel of its page in that one pass,
+and advances its cursor once — which is what `twSampleReader` wants anyway
+(`src_.read(pos_, out.channelPtr(c), len, c)` per channel, then one `pos_ +=`).
+No implicit per-channel input mapping exists, so none can be got wrong.
+
+### 4.4 Two rules for width adaptation, both stated per PAGE
+
+> **(1) A plug pull yields channel `min(latchIndex, page->channels - 1)` of the
+> page the producer actually froze.**
+> **(2) A wide component reads its bound input PAGES directly and picks channels
+> itself.**
+
+Rule (1) is the mechanism v2 assumed and never specified. It lives in
+`twStreamingLatch::copyData`, which today is channel-blind (`memcpy(pDest +
+written, page->samples.data() + inPage, …)`, `twstreaminglatch.cc:208`) and
+already carries the index it needs (`twLatch(component0, idx0)`, ctor line 13-14)
+without ever consulting it. Giving that stored index its channel meaning is the
+whole change, and it makes `twSampleReader`'s existing per-channel latches
+correct rather than dead. Rule (2) is why no channel argument has to be threaded
+through `readStreamingData`/`copyData` for wide consumers: they already receive
+whole pages at the two seams (`twcomponent.cc:514-523` and the latch's bound
+path).
+
+The clamp reproduces today's behaviour exactly — it is what
+`twSampleSource::read` already does (`if( ch >= channels_ ) ch = channels_ - 1;
+// mono plays on every channel`). Downmix policy (average vs. select) belongs to
+whatever component wants it, **never** to the plug.
+
+**Both rules say `page->channels`, never "the producer's declared width."** The
+width you may act on is the width of the page in your hand. A component's
+declared width is a promise about *future* pages, and the tree already launders
+pages between components: an insert-less `twPluginChain` forwards its
+`twTrackMix` page verbatim (`twpluginchain.cc:243-249`) and its silence pages are
+default-constructed width 1 (`:224, 250, 268, 276`).
+
+### 4.5 Width changes, stale pages, and the RT thread
+
+`twOutputPage::channels` is **immutable after allocation**. A project width change
+bumps the global content epoch, so cached pages of the old width are stale by the
+existing mechanism rather than a new one.
+
+Stale-page fallback (proposal 16) deliberately serves stale pages during live
+playback, so it is the one path where a page of the *wrong* width could reach the
+RT callback (`audio_engine.cc:310` reads `&currentFrozenPage_->samples[…]`) or
+`twLevelProbe` (`tw_level_probe.cc:112`). Reading `channelPtr(1)` of a stale
+width-1 page is an **out-of-bounds read on the audio thread**. Therefore:
+
+> **A stale page whose `channels` differs from the width the consumer expects is
+> treated as a MISS, never as audio.** Playback falls back to silence for that
+> page; a meter decays. Width mismatch is the one staleness that is not
+> tolerable.
+
+### 4.6 What does NOT change
+
+The scheduler, the demand system, invalidation, content epochs and
+metering-by-position all key on `(component, position)` and stay exactly as they
+are. **No bus dimension is added anywhere.** That is the whole point of B.
+
+`IOVector` — the mixing seam `twTrackMix` actually uses (`mixFrom`,
+`twtrackmix.cc:536-539`) — **stays mono by design**: it becomes a view over one
+`channelPtr(c)`, and wide mixing is a loop over channels of the same page pair.
+Deciding this here rather than inside B1's sweep is deliberate; it is exactly the
+kind of choice that otherwise gets made silently and differently in six places.
 
 ---
 
 ## 5. Milestones and acceptance criteria
 
-Every milestone: `./build.sh` + `python tools/check_layering.py` +
-`python tools/check_logging.py` + full `ctest` green, and **a mono (channels=1)
-and a stereo-today (channels=2) project must render byte-identically to their
-pre-milestone goldens** (`cmp` on 16-bit PCM WAVs) unless the milestone's AC
-explicitly says otherwise. That standing gate is written once here and assumed
-below.
+Standing gate for **every** milestone — written once, assumed in each:
 
-### M0 — Make the gates able to see channels (no behaviour change)
+```
+./build.sh                                   # the re-configure is load-bearing (CONFIGURE_DEPENDS glob)
+python tools/check_layering.py
+python tools/check_logging.py
+ctest --test-dir smaragd/build --output-on-failure     # reconcile registered vs run vs skipped
+```
+plus the **byte-exactness gate**, which needs a named corpus or it is a wish:
 
-The suite currently *cannot* detect the feature landing or regressing.
+> Two fixture projects live in `smaragd/tests/goldens/`: `mc_mono.qxp`
+> (`channels=1`) and `mc_stereo.qxp` (`channels=2`). Each is ~4 s and must
+> contain, at minimum: a plain clip, a stretched clip, a pitched clip, a
+> container/asset clip, a nested track, and a track with a `twtestclap` insert —
+> i.e. one of every path this proposal touches. Their renders are frozen as
+> committed 16-bit PCM WAVs at the **start of B1** and `cmp`'d at every
+> milestone thereafter. Re-freezing requires an AC that licenses it and a written
+> explanation of why the bytes moved.
 
-1. Fix `assert-audio-energy` / `assert-audio-peak`: `channel=` is **silently
-   ignored when `frameCount="-1"`** (both take the whole-file path, which
-   hard-codes `channelIndex = -1`, the all-channel mean). Today this is invisible
-   because the channels are equal; it would start silently mis-passing the day
-   the sink goes wide.
-2. Add a discriminator verb — `assert-channels-differ filename= channelA=
-   channelB= minRmsDelta=` (or equivalent) — so "the channels are genuinely
-   different audio" is assertable rather than inferred.
-3. Commit an asymmetric multichannel fixture (a 4-channel WAV whose channels
-   carry different, known RMS).
+A case that fails once and passes on re-run is not a pass: pin with
+`repeat_test.sh` over `SMARAGD_REVAL_WORKERS` {1,4,8,16} and report either way.
 
-**AC 0.1** The fixed verbs FAIL on the asymmetric fixture with a wrong `channel=`
-and PASS with the right one, with `frameCount` both given and omitted.
-**AC 0.2** `assert-channels-differ` fails on a duplicated-mono render and passes
-on the fixture.
-**AC 0.3** Every existing `.qxa` case still passes unchanged (all current
-`channel=` users also pass `frameCount=`, so the fix is behaviour-preserving for
-them — verify, do not assume).
+### M0 — Make the gates able to see channels *(in progress)*
 
-### M1 — Channel count becomes project data (still inaudible)
+The suite currently cannot detect this feature landing or regressing.
+
+1. `assert-audio-energy` / `assert-audio-peak` **silently ignore `channel=` when
+   `frameCount="-1"`** (both take the whole-file path, which hard-codes the
+   all-channel mean). Invisible today because the channels are equal; it would
+   silently mis-pass the day the sink goes wide. Check the same shape in
+   `assert-audio-frequency` and `assert-source-position`.
+2. Add `assert-channels-differ` so "genuinely different audio" is assertable.
+3. Commit a reproducibly-generated asymmetric 4-channel WAV fixture.
+
+**AC 0.1** The fixed verbs FAIL with a wrong `channel=` and PASS with the right
+one, with `frameCount` both given and omitted.
+**AC 0.2** `assert-channels-differ` fails on a duplicated-mono render, passes on
+the fixture.
+**AC 0.3** Every existing `.qxa` case passes unchanged.
+
+### M1 — Channel count becomes project data (inaudible)
 
 - `SProject::channels()` + `<SProject … channels='N'>`, read with the
-  `sampleRate` **warn-and-default** idiom (missing ⇒ 2 + a warning), propagated
-  to `tw303aEnvironment` the way `setSRate` is.
-- `set-project-channels` action; `docs/ACTIONS.md` updated (it is hand-maintained
-  and must stay truthful).
-- `STrack::setNBusses` **shrink** implemented (no stale wiring, no
-  use-after-free), and the loader/ctor drift fixed (`nBusses="1"` default vs 2).
+  `sampleRate` **warn-and-default** idiom (missing ⇒ 2 + one warning), propagated
+  to `tw303aEnvironment` as `setSRate` is.
+- `set-project-channels` action; `docs/ACTIONS.md` updated (hand-maintained).
+- Fix the `nBusses` loader/ctor drift (`"1"` default vs ctor 2).
 
-**AC 1.1** Save→load→save is byte-equivalent (`persistence/CONTRACT.md` inv. 4;
-`serialization_roundtrip_test` green).
-**AC 1.2** A legacy `.qxp` with no `channels=` loads as 2 and warns once.
-**AC 1.3** A project saved at `channels='6'` reloads with 6 buses on every track,
-including nested ones.
-**AC 1.4** 8 → 2 shrink, then a render, does not assert, crash, or leak; run
-under `repeat_test.sh` N=50 across `SMARAGD_REVAL_WORKERS` {1,4,8,16}.
+**M1 is project DATA ONLY. Nothing propagates to any bus count until B4.**
+`STrack::setNBusses` shrink is still `Q_ASSERT_X(false, …)` at this point
+(`strack.cpp:337-341`), so an undo of 6→2 that reached it would assert. The
+action must be inert with respect to the graph, and its AC must prove that.
 
-### M2 — The master carries N buses (sink still mono)
+**AC 1.1** Save→load→save byte-equivalent (`persistence/CONTRACT.md` inv. 4).
+**AC 1.2** A legacy `.qxp` without `channels=` loads as 2 and warns once.
+**AC 1.3** `channels='6'` survives a round trip on a project with nested tracks.
+**AC 1.4** `set-project-channels` and its undo touch no `setNBusses` call
+(assert by instrumentation or by inspection recorded in the PR), and a render
+before/after the action is byte-identical.
 
-- `SStdMixer` bus count from the project (persisted, not a ctor constant); the
-  summing loop covers every bus; the `getRootComponent()` FIXME resolved;
-  `SApplication::rewireSpeaker`'s `if(root->getNOutputs() > 1)` branch becomes
-  live rather than dead.
+### B1 — The page grows a channel dimension, still always 1 (**the big sweep**)
 
-**AC 2.1** An engine-level test asserts master bus *k*'s page equals the sum of
-the tracks' bus *k* pages, for k in [0,N), at several positions.
-**AC 2.2** `plugins_test`'s "the two buses are genuinely different audio" still
-green; `plugin_stereo_chain.qxa` still passes with its current (wide) bands.
-**AC 2.3** Standing byte-exactness gate holds for channels=1 and channels=2.
+`channels` field, `channelPtr()`, and **every consumer of `page->samples`
+converted to an explicit accessor**: the latch seam, `twTrackMix` (and its
+`IOVector` use, per §4.6), `twPluginChain`, capture, `RenderSession`,
+`AudioEngine`, `twLevelProbe`, preview (`readContainerFrames`), `getPagesInRange`
+users. Nothing declares width > 1 yet.
 
-### M3 — The sink goes wide (the payoff)
+**There is no `twOutputPage` pool to resize.** Pages are `make_shared` on demand
+(`twcomponent.cc:377, 582`; `twtrackmix.cc:382`) into unbounded per-component maps
+pruned by `releaseOldPages`; `CapturePagePool` is a *different type*
+(`CapturePageData`, fixed `alignas(4096)` array) used in production nowhere. So
+this phase **builds page-memory accounting** (resident pages and bytes, per
+component and globally) rather than adjusting a pool that does not exist.
 
-- `AudioEngine::pullBlock` takes N buffers (or an `IOVector` of them); per-channel
-  resamplers; `AudioFrame`'s 2-cap replaced or retired along with `FileSink`'s
-  frame-at-a-time write.
-- `RenderSession` pulls one root page per channel and interleaves; `RenderParams`
-  gains `channels`; the writers get the real count.
-- `twSpeaker` interleaves N properly instead of `(c % 2 == 0) ? sL : sR`, and its
-  vestigial input plugs are resolved.
+Fix in the same sweep, because widening multiplies it:
+`releaseOldPages` compares `it->first + twOutputPage::PAGE_SIZE < keepAfterPos`
+(`twcomponent.cc:393`) — **bytes (262144) against a frame position**, so retention
+is already ~4× too generous. Hunt the whole frames-vs-bytes class here.
 
-**AC 3.1** `plugin_stereo_chain.qxa` tightened to the numbers **the case itself
-already documents** for this day: channel 1 → `[0.030, 0.037]`, channel 0
-unchanged. (The case says so in a comment; make it true.)
-**AC 3.2** A stereo file rendered to WAV has genuinely different channels
-(`assert-channels-differ`), via a cross-channel fixture — never `L != R` on a
-path that could still be duplicating.
-**AC 3.3** A 6-channel project renders a 6-channel file whose per-channel
-energies match expectation within band.
-**AC 3.4** `dump-playback-capture` shows the same asymmetry as the offline render
-at the same positions (playback and render agree).
-**AC 3.5** Standing byte-exactness gate holds for channels=1; for channels=2 the
-golden is **allowed to change once**, and the change must be explained (bus 1 is
-new audio, not a regression) and re-frozen.
+Pull the synthetic 4-channel component (v2 had it in B2) **forward into B1** as a
+unit-level probe: it is the only thing that can catch a wrong conversion, since
+both the grep and the width-1 byte gate pass a mistake happily.
 
-### M4 — Clips keep their channels
+**AC B1.1** Byte-exactness gate green against the frozen corpus — and it *means*
+something here, because this phase is pure mechanism.
+**AC B1.2** A grep-backed inventory in the PR body: every `samples`/`getDataPtr`
+call site, converted or justified. No raw `samples.data()` outside the page class
+and the wide-render path. (This AC is necessary and **not sufficient** — a wrong
+conversion passes it; B1.4 is what actually detects one.)
+**AC B1.3** Page-memory accounting exists, is reported for the corpus, and is
+unchanged at width 1 versus a pre-B1 measurement of the same projects.
+**AC B1.4** The synthetic 4-channel component's page round-trips through
+`channelPtr()` with four distinguishable signals at unit level.
+**AC B1.5** `releaseOldPages` retention is frames-vs-frames, with a test that
+pins the boundary.
 
-- `SCut::buildCapture_` captures N channels (`twCapturingSource` with N), the
-  container/asset render path renders per channel, and `channels` is threaded
-  into the grain/vocoder configs (both are already channel-aware).
+### B2 — Components declare width; the wide render path exists
 
-**AC 4.1** A stereo file stretched 1.25× still has distinct channels at the sink
-(RMS discriminator, not `L != R`).
-**AC 4.2** The same for a pitched clip and for a container/asset clip.
-**AC 4.3** All `grain_*`, `warp_*`, `exact_*` cases green; mono byte-exactness
-holds; sidecar/capture cache keys that encode channel count are bumped so no old
-entry can be a wrong-shape hit.
+`getOutputChannels()`; `renderPageWide()` with the §4.3 rule (width 1 keeps
+today's code, width > 1 must override, base asserts); the §4.4 plug channel rule
+in `twStreamingLatch::copyData`; the §4.5 width-mismatch-is-a-miss rule. The
+synthetic 4-channel component from B1 is promoted from unit probe to a real
+graph participant.
 
-### M5 — Metering, preview, UI stop lying
+`getOutputChannels()` is **authoritative for page width from this milestone on.**
+`twFormatCaps::channelCounts` is currently seeded `{1}` and never narrowed
+(`twcomponent.cc:29-45`); it is either seeded from `getOutputChannels()` here or
+deleted in B9 — it may not sit alongside as a second, drifting authority.
 
-- N-lane metering (`twLevelSample`/`twScanSpan`/`SLevelMeter` are scalar **by
-  type** — this is a widget + probe change, not a config change), fitted into the
-  track head's density rules (the 120 px column has ~13 px of slack: a second
-  lane needs a real layout decision, not a squeeze).
-- Render dialog channel control (needs `RenderParams.channels` from M3).
-- Preview: per-channel or an explicitly documented fold — either way bump
-  `twAspect::PreviewPeaksVersion`, because the sidecar key currently asserts
-  `qi.channels = 1` and every existing sidecar would otherwise mis-hit.
+**AC B2.1** The synthetic component's page carries four distinguishable channels,
+asserted at several positions, **through the real scheduler**.
+**AC B2.2** The §4.4 clamp: a width-1 consumer of a width-4 producer reads
+channel 0; a width-4 consumer of a width-1 producer reads that channel on all
+four. Both asserted, both paths (plug pull and bound page).
+**AC B2.3** A width > 1 component that does *not* override `renderPageWide`
+asserts rather than rendering — proven by a test that expects the failure.
+**AC B2.4** Byte-exactness gate green. Scheduler node count on the corpus
+unchanged — noting that at B2 nothing in production is wide, so this AC shows
+*"no regression"*, **not** B's central claim; that is B9.2's job.
 
-**AC 5.1** `metering_test` extended: per-lane ballistics remain frame-rate
+### B3 — The clip path goes wide (this is where a stereo file becomes audible)
+
+Per §2's correction, this is the broadest narrowing point and it must come before
+the sink has anything true to say. `twSampleReader` renders all channels into one
+page in one pass with a single cursor advance (§4.3), and its per-channel latches
+become the plug mechanism of §4.4 rather than dead code; **the clip resolution
+chain (`twView` / `twLoopMap` / `SCut`'s resolve) carries width through**;
+`twWavInput`'s hardcoded `getNOutputs() → 4` inconsistency is resolved;
+grain/vocoder `channels` are threaded through (both are already channel-aware).
+
+Capture-backed clips (stretch / pitch / container) stay mono here — that is B7 —
+so B3's ACs are scoped to **plain** clips and must say so.
+
+**AC B3.1** A stereo WAV's page carries two distinct channels at the reader,
+asserted at engine level.
+**AC B3.2** A plain stereo clip on a track yields two distinct channels at the
+track's root component (not merely at the reader).
+**AC B3.3** A mono WAV renders byte-identically; the corpus gate holds.
+**AC B3.4** `grain_*`, `warp_*`, `exact_*` green; content/sidecar keys that must
+encode channel count are bumped so no old entry is a wrong-shape hit (assert a
+**miss**, not a wrong hit).
+
+### B4 — The whole track path goes wide, plugins included
+
+v2 split this from the plugin work and the split was incoherent: the tap
+architecture *requires* one chain per bus (`twpluginchain.cc:65-66, 161-212`;
+`strack.cpp:381-414`), so a wide `twTrackMix` feeding per-bus chains has nowhere
+to put the bus-1 tap and — by §4.4 — no way for it to read channel 1. Either the
+chain widens with everything else, or an adapter gets built and thrown away. So
+this milestone is one piece:
+
+- `STrack` builds **one** `twTrackMix` + **one** `twPluginChain` of width N;
+  per-bus instantiation retires, and with it the grow-crash and shrink-assert.
+- `twPluginInsert` becomes a wide component (`renderPageWide`); the
+  `twPluginSlotProcessor` all-bus cache and per-bus tap fan-out retire (the
+  processor may remain as the plugin lifetime/state holder).
+- Proposal 08's channel-mismatch policy (Direct / DualMono / MonoFold /
+  Unsupported) is **preserved semantically** and re-derived from page width
+  instead of bus count.
+- `twRewire` becomes the genuine channel-mapping component its FIXME asks for;
+  `SStdMixer`'s width comes from the project and is persisted.
+
+**AC B4.1** Master page channel *k* equals the sum of the tracks' channel *k*,
+for all k, at several positions.
+**AC B4.2** Runtime width change 2→8→2 renders correctly and does not assert,
+crash or leak; `repeat_test.sh` N=50 across workers {1,4,8,16}.
+**AC B4.3** `plugins_test`, `plugins_scan_test` and every `plugin_*` qxa case
+green; the `twtestclap` skew fixture proves cross-channel flow through the new
+wide insert.
+**AC B4.4** A plugin sees all channels in one `process()` call (report-block-size
+and skew fixtures), and the mismatch table still holds at widths 1, 2 and 6.
+**AC B4.5** Mixed-width safety (§4.5): a stale page of the wrong width is a miss,
+proven by a test that forces one — including on the RT path and in `twLevelProbe`.
+**AC B4.6** The **legacy pull path** is exercised wide at least once
+(`SMARAGD_REVAL_WORKERS=0`), since `assert-meter` drives it and no AC elsewhere
+covers it.
+**AC B4.7** Width-1 projects byte-exact throughout.
+
+### B5 — The sink goes wide *(first audible multichannel)*
+
+`AudioEngine::pullBlock` takes N buffers; per-channel resamplers; `AudioFrame`'s
+2-cap and `FileSink`'s frame-at-a-time write retired; `RenderSession` interleaves
+from one wide root page; `RenderParams.channels`; writers fed the real count;
+`twSpeaker` interleaves N instead of `(c % 2 == 0) ? sL : sR`.
+
+**AC B5.1** `plugin_stereo_chain.qxa` tightened to the numbers **the case itself
+already documents for this day**: channel 1 → `[0.030, 0.037]`, channel 0
+unchanged.
+**AC B5.2** A **plain** stereo clip rendered to WAV has genuinely different
+channels (`assert-channels-differ`). This is why B3 precedes B5: without the clip
+path wide, the only cross-channel content that exists is a plugin's, and this AC
+would be asserting the plugin fixture rather than the signal flow. Capture-backed
+clips are explicitly excluded here and covered by B7.
+**AC B5.3** A 6-channel project renders a 6-channel file with per-channel
+energies in band.
+**AC B5.4** `dump-playback-capture` shows the same asymmetry as the offline
+render at the same positions.
+**AC B5.5** Mono byte-exactness holds. The `channels=2` golden may change **once**
+here — bus 1 is new audio, not a regression — with the change explained and
+re-frozen.
+
+### B7 — Capture-backed clips keep their channels
+
+`SCut::buildCapture_` captures N channels; the container/asset render path
+renders per channel.
+
+**AC B7.1** A stereo file stretched 1.25× still has distinct channels at the sink
+(RMS discriminator).
+**AC B7.2** Same for a pitched clip and a container/asset clip.
+**AC B7.3** `grain_*`/`warp_*`/`exact_*` green; mono byte-exact.
+
+### B8 — Metering, preview, UI stop lying
+
+N-lane metering (`twLevelSample`/`twScanSpan`/`SLevelMeter` are scalar **by
+type** — a widget and probe change, not config), fitted into the track head's
+density rules (the 120 px column has ~13 px of slack: a second lane is a layout
+decision, not a squeeze); render-dialog channel control; preview per-channel or
+an explicitly documented fold — either way bump `twAspect::PreviewPeaksVersion`,
+because the sidecar key asserts `qi.channels = 1` today and every existing
+sidecar would otherwise mis-hit.
+
+**AC B8.1** `metering_test` extended; per-lane ballistics stay frame-rate
 independent.
-**AC 5.2** `meter_levels` asserts that a wide project's lanes read *differently*,
-plus PNG grabs of the multi-lane meter.
-**AC 5.3** Old sidecars are ignored rather than mis-read after the version bump
-(assert a miss, not a wrong hit).
-**AC 5.4** Track head at every density (150/100/60/40 px) and both column widths
-renders without clipping — grabs attached to the PR.
+**AC B8.2** `meter_levels` asserts a wide project's lanes read *differently*, with
+PNG grabs.
+**AC B8.3** Old sidecars miss rather than mis-read after the version bump.
+**AC B8.4** Track head at 150/100/60/40 px and both column widths renders without
+clipping — grabs attached to the PR.
 
-### M6 — Decision gate on the page model (spike, nothing ships)
+### B9 — Contracts, cleanup, and the report
 
-Measure at 8 channels: scheduler node count, pages in flight, memory, freeze
-wall-clock, invalidation cost. Prototype `twOutputPage.channels` far enough to
-size the change.
+Amend `docs/contracts/FREEZE_PROTOCOL.md` §"Page geometry" (it currently says
+65536 **mono** frames, normatively) and the affected `CONTRACT.md` files; delete
+or wire the dead scaffolding (`twFormatCaps::channelCounts`, `twSpeaker`'s unread
+input plugs, `twConvertFrames`' planar refusal if a wire now needs it); publish
+the 8-channel measurements (node count, pages in flight, memory, freeze
+wall-clock, invalidation cost) that v1 would have gathered in its M6.
 
-**AC 6.1** A written recommendation with numbers appended to this proposal.
-**AC 6.2** No merge to `main` from this milestone; if B is recommended it becomes
-proposal 37 with its own milestones.
+**AC B9.1** No contract in the tree still asserts a mono page.
+**AC B9.2** Measurements published in this proposal; node count at 8 channels is
+within noise of the width-1 count (B's central claim, now evidenced or refuted).
+**AC B9.3** Full suite green; `repeat_test.sh` on the DSP-sensitive set.
 
 ---
 
 ## 6. Execution
 
 - **Workspace:** worktree `.claude/worktrees/multichannel`, branch
-  `feat/multichannel`, already created and building green. One PR per milestone
-  off that branch (or a stacked branch per milestone), never a direct push to
-  `main`.
-- **Agents:** one Opus agent per milestone, each given (a) this proposal, (b) the
-  milestone's ACs as its definition of done, (c) the standing gate list from §5.
-  An agent that cannot make an AC true stops and reports — it does not weaken the
-  AC. Milestones are ordered; M0 and M1 may run concurrently, everything after
-  M2 is serial.
-- **The suite is the only safety net** (there is no CI). Every milestone re-runs
-  `cmake` configure (the qxa glob is `CONFIGURE_DEPENDS`) and reconciles
-  registered vs run vs skipped case counts.
-- **A case that fails once and passes on re-run is not a pass** — pin with
-  `repeat_test.sh`, swept over `SMARAGD_REVAL_WORKERS` {1,4,8,16}, and report
-  either way.
+  `feat/multichannel`. One PR per milestone; never a direct push to `main`.
+- **Agents:** one Opus agent per milestone, given this proposal, its milestone's
+  ACs as the definition of done, and the standing gate list. **An agent that
+  cannot make an AC true stops and reports — it does not weaken the AC.** v2's
+  review found exactly the failure mode this guards against: a milestone whose
+  ACs could not all be true at once, which an agent would have "resolved" by
+  weakening whichever was closer.
+- Order: **M0, M1** (independent of each other and of B1) → **B1 → B2 → B3 → B4
+  → B5 → B7 → B8 → B9**, strictly serial from B1 on. Each phase's safety comes
+  from the previous one's gate. (v2's B6 is folded into B4; the numbering is kept
+  so the review's findings stay traceable.)
+- **User-visible state while half-built:** from M1 the project carries a channel
+  count that does nothing audible until B5. The render dialog and options UI
+  **must not expose it before B5** — a control that silently does nothing is
+  worse than no control. B8 exposes it.
+- **The suite is the only safety net** — there is no CI.
 
 ## 7. Known traps, collected
 
-1. `assert-audio-*` ignores `channel=` when `frameCount="-1"` (M0 fixes it) —
-   until then, no channel assertion in this repo means what it appears to mean.
+1. `assert-audio-*` ignores `channel=` when `frameCount="-1"` (M0) — until then no
+   channel assertion in this repo means what it appears to mean.
 2. `SObject::recordingChannels_` is live in the UI and plumbed to
    `RecordingParams`, but **never serialized** — a per-track channel selection
-   silently dies on save. Adjacent, half-built, worth finishing in M1.
-3. `RecordingParams.channels` is hard-coded 2 in `SMainWindow`.
-4. `SObject::pan_` is dead weight in every `.qxp`. Removing it would break
-   `assert-project-matches` goldens; giving it meaning is proposal 36. Do
-   neither by accident.
-5. `twWavInput::getNOutputs()` returns a hardcoded **4** while only latch 0 is
-   created — an outright inconsistency that will bite the moment latches beyond 0
-   are pulled.
-6. `twFormatCaps::channelCounts` is declared and never populated; the negotiator
-   has zero channel logic. Either wire it in M1 or delete it — leaving it is how
-   the next reader concludes width is negotiated when it is not.
-7. `twConvertFrames` refuses planar layouts (no wire uses them yet). If M4 moves
-   planar data across a wire, this is the boundary that will fail first.
-8. The `updateClip` / duplicate-key class of bug is documented as *"a trap primed
-   for the stereo-output work"*. Expect it to go live in M2–M3; the fix pattern is
+   dies on save. `RecordingParams.channels` is hard-coded 2 in `SMainWindow`.
+3. `SObject::pan_` is serialized into every `.qxp` with zero consumers. Removing
+   it breaks `assert-project-matches` goldens; giving it meaning is proposal 36.
+   Do neither by accident.
+4. `twWavInput::getNOutputs()` returns a hardcoded **4** while only latch 0 is
+   created (B3).
+5. `twFormatCaps::channelCounts` is declared and never populated; the negotiator
+   has zero channel logic. Wire it or delete it (B9) — leaving it is how the next
+   reader concludes width is negotiated when it is not.
+6. `twConvertFrames` refuses planar layouts. If a planar buffer ever crosses a
+   wire, this is the boundary that fails first.
+7. The `updateClip` duplicate-key class of bug is documented as *"a trap primed
+   for the stereo-output work"*. Expect it live in B4; the fix pattern is
    "invalidate over the union of matching keys".
+8. `getNOutputs()` means three different things in three classes today. B2
+   introduces `getOutputChannels()` precisely so it can keep meaning ports —
+   resist every temptation to merge them.
+
+## 8. Non-goals (named, so they are not assumed)
+
+- **Panning.** No pan law, no panner stage; `SObject::pan_` stays dead until
+  proposal 36. A stereo project with mono sources is dual-mono — correct, and not
+  yet musical. This is the single most likely "but it doesn't *do* anything yet"
+  reaction, and it is by design.
+- **A routing matrix** for plugins matching no width (they stay bypassed, per 08).
+- **Surround semantics** — channel roles (L/R/C/LFE/Ls/Rs), fold-down presets,
+  ambisonics. This delivers N channels, not a 5.1 *format*.
+- **Multichannel MIDI/instruments**, per-clip channel routing, and interleaved
+  page layouts (`twLayout::Planar` is the engine's internal shape by §4.1).
