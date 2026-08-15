@@ -307,6 +307,16 @@ machine:
 | `-j2` | 1151 s | 2.03× | 106/107 — 1 crash flake |
 | **`-j4`** | **791 s** | **2.96×** | **107/107 green** |
 | `-j8` | 552 s | 4.23× | 107/107 green |
+| serial, repeated later | 2719 s | — | 107/107 green |
+
+Counts reconciled both ways and every time: 89 `.qxa` files on disk = 89 `qxa.*`
+tests registered, 110 registered in total, 3 Not Run (Disabled), **107 run**.
+
+The serial run was done twice because the first one was the only run in the set
+that was not green, and its two failures were crashes rather than assertion
+failures. The second serial run is 16 % slower than the first for no reason
+either run can explain, which is roughly the noise floor for wall-clock numbers
+on a desktop — do not read small differences in this table as signal.
 
 `-j8` is faster still and was green here, but `-j4` is the recommendation: it
 leaves headroom on a box that is also running an editor, a browser and possibly
@@ -367,7 +377,7 @@ mistake them for an isolation bug:
 | Case | Shape | Seen |
 |---|---|---|
 | `qxa.clip_properties_actions` | `***Exception: SegFault` | 1 of 2 serial runs |
-| `qxa.split_plain_screenshot` | script prints `PASS`, process then exits non-zero — a crash during **teardown**, after every action and assertion succeeded | serial and `-j2` |
+| `qxa.split_plain_screenshot` | script prints `PASS`, process then exits non-zero — a crash during **teardown**, after every action and assertion succeeded | 1 of 2 serial runs, and `-j2` |
 
 They are not a `-j` problem: they appeared in the **serial** run and both passed
 in the green `-j4` and `-j8` runs. Neither reproduces in isolation —
