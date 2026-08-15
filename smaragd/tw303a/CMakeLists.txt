@@ -757,6 +757,16 @@ tw_module_test(twfraction_test              core/tests/test_twfraction.cpp      
 tw_module_test(twwarpmap_test               core/tests/test_twwarpmap.cpp               tw_core)
 tw_module_test(timemap_test                 core/tests/test_timemap.cpp                 tw_core)
 tw_module_test(twlog_test                   core/tests/test_twlog.cpp                   tw_core)
+# twlog_test asserts a WALL-CLOCK LATENCY BOUND: one non-blocking TW_LOG call
+# from a pretend-RT thread must complete in < 2000 us while four threads contend
+# the logger lock. That is the whole point of the try_lock, but it means the test
+# measures the MACHINE as much as the code -- 137-191 us on an idle box, but
+# 4 000-51 000 us at ~100% CPU, failing 6 runs in 10 with no code change. Under
+# `ctest -j` the rest of the suite IS that load, so give it the box to itself.
+# It must be set HERE, not in ../CMakeLists.txt: set_tests_properties() only
+# reaches tests added in the same directory scope, and from the parent
+# `if(TEST twlog_test)` is simply false -- it fails silently, not loudly.
+set_tests_properties(twlog_test PROPERTIES RUN_SERIAL TRUE)
 tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)
 tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
