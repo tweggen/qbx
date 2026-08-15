@@ -191,7 +191,21 @@ the bug class this proposal exists to eliminate.
 **Memory:** page bytes = `channels × 256 KiB`. A mono project's footprint is
 unchanged to the byte. 8 channels × 4 readahead pages × 30 tracks ≈ 240 MiB —
 the same total the parallel-wire model would have used, in one allocation instead
-of eight. The page pool must size and account by width (AC in B1).
+of eight.
+
+**That estimate was the wrong order of magnitude, and B1a measured why.** The
+corpus resides at **49 pages / 12.8 MB** of `twOutputPage` after a render — but
+`SProject` eagerly builds a `CapturePagePool` of **2048 pages = 528 MiB per
+project** (`sproject.cpp:551`), of which the corpus uses *one*. So `twOutputPage`
+is not the dominant term today and a page-count figure alone understates the
+process by ~40×. Two consequences this proposal must carry: **(a)** `releaseOldPages`
+**has no caller anywhere in the tree**, so component page caches are pruned only
+by invalidation and teardown and `outputPages_` grows unbounded across a session
+— at width 8 each retained page is 2 MiB, so what is untidy today is a real
+problem at width 8; **(b)** `CapturePageData` (the pool's element, and the
+preview/capture page type) is a *different* type from `twOutputPage`, and B7 must
+decide explicitly whether it widens too — an eager 528 MiB pool multiplied by
+width is not something to discover late.
 
 ### 4.2 A component declares its width
 
@@ -408,11 +422,12 @@ converted to an explicit accessor**: the latch seam, `twTrackMix` (and its
 users. Nothing declares width > 1 yet.
 
 **There is no `twOutputPage` pool to resize.** Pages are `make_shared` on demand
-(`twcomponent.cc:377, 582`; `twtrackmix.cc:382`) into unbounded per-component maps
-pruned by `releaseOldPages`; `CapturePagePool` is a *different type*
-(`CapturePageData`, fixed `alignas(4096)` array) used in production nowhere. So
-this phase **builds page-memory accounting** (resident pages and bytes, per
-component and globally) rather than adjusting a pool that does not exist.
+(`twcomponent.cc:377, 582`; `twtrackmix.cc:382`) into per-component maps. So this
+phase **builds page-memory accounting** (resident pages and bytes, per component
+and globally) rather than adjusting a pool that does not exist. `CapturePagePool`
+is a *different type* (`CapturePageData`) — and v3's claim that it is "used in
+production nowhere" was **wrong**: `SProject` builds one of 2048 pages, 528 MiB,
+eagerly per project (`sproject.cpp:551`). See §4.1.
 
 Fix in the same sweep, because widening multiplies it:
 `releaseOldPages` compares `it->first + twOutputPage::PAGE_SIZE < keepAfterPos`
@@ -650,6 +665,25 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     claiming it works from any directory (found by M1). Elsewhere, relative
     `load-project`/`save-project`/`assert-file-contains` paths resolve against the
     CWD and a perfectly good case reports 0/10. Do not read that as a flake.
+12. **`releaseOldPages` has no caller anywhere** (found by B1a). Its retention bug
+    was therefore latent, and the fix provably changes no runtime number — but the
+    reason it was latent is the finding: **`outputPages_` is pruned only by
+    invalidation and teardown, so it grows unbounded across a session.** Wiring it
+    up (or retiring it) is B9 work, and it gets *worse* with width — 2 MiB per
+    retained page at width 8. If memory bites earlier than B9, this is the cause
+    to look at first.
+13. **`SProject::getDurationSeconds()` is a hard-coded `return 60.0;`** with a
+    "TODO: calculate from arrangement" (found by B1a). **Every render in the
+    suite is 60 s regardless of content** — the 4 s corpus rendered 11.5 MB, 93%
+    of it silence. B1a added an optional `durationSec=` to `render` (default -1 =
+    today's behaviour, every existing case untouched) rather than change the
+    length of every render in the suite. Any timing or memory measurement taken
+    from a render must account for this, including B9.2's.
+14. **The two goldens are byte-identical to each other today** (found by B1a),
+    because `RenderSession` hard-codes `config.channels = 2` and duplicates one
+    mono bus, so a width-1 and a width-2 project produce the same file. That is
+    correct *now* — and it is a second gate that is **supposed to break at B5**,
+    alongside `channel_assert_dupmono.qxa`. When they diverge, the sink is real.
 
 ## 8. Non-goals (named, so they are not assumed)
 
