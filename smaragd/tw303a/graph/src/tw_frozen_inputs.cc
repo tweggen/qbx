@@ -1,11 +1,19 @@
 #include "tw/graph/tw_frozen_inputs.h"
 #include "tw/pages/tw_output_page.h"
 
+#include <cassert>
+
 void twFrozenInputs::bind( const twComponent *producer,
+                           offset_t pageStart,
                            std::shared_ptr<twOutputPage> page )
 {
     if( !producer || !page ) return;
-    entries.push_back( Entry{ producer, page->startPosition, std::move( page ) } );
+    // Key on the DEMANDED position, which is what find() is queried with. A
+    // producer that answers a demand with a differently-positioned page (a
+    // remapping view, a defused RT-guard page) would otherwise bind under a key
+    // no consumer asks for — a silent miss, or worse, another position's audio.
+    assert( page->startPosition == pageStart );
+    entries.push_back( Entry{ producer, pageStart, std::move( page ) } );
 }
 
 std::shared_ptr<twOutputPage> twFrozenInputs::find( const twComponent *producer,

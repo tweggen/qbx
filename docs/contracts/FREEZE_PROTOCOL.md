@@ -64,6 +64,12 @@ reset, which is correct.
 `twTrackMix` chains per-clip: `ClipEntry::previousPage` holds each clip's
 last frozen page so clip-internal state carries across track pages.
 
+`SObject::straightCalcPreviewData()` is the third one: a CONTAINER's waveform
+peaks are scanned out of the same chained page sequence (the app model may not
+seek a live component — app/model/CONTRACT.md inv. 9). A page the component
+cannot produce reads as silence; the preview never waits and never declares a
+demand.
+
 ## Preview variant
 
 `freezePreviewPage(startPos, length, previewRate, fullRate, prev)` renders

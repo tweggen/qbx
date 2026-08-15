@@ -149,6 +149,9 @@ public:
         uint64_t nodesExecuted = 0;   // graph nodes run to completion
         uint64_t nodeRetries   = 0;   // verify-at-publish re-renders
         uint64_t missPages     = 0;   // bound-set misses seen during renders
+        uint64_t selfStale     = 0;   // pages published from an OUTDATED PLAN
+                                      // and immediately re-staled (see
+                                      // processGraphNode's self-staleness note)
     };
     GraphStats graphStats() const;
 
@@ -292,6 +295,7 @@ private:
     std::atomic<uint64_t> statNodesExecuted_{0};
     std::atomic<uint64_t> statNodeRetries_{0};
     std::atomic<uint64_t> statMissPages_{0};
+    std::atomic<uint64_t> statSelfStale_{0};
 
     // Shutdown coordination
     std::atomic<bool> shutdown_{false};
@@ -322,6 +326,18 @@ private:
         int priority = 5;
         int pendingDeps = 0;                 // unresolved edges (inputs + pred)
         int attempts = 0;                    // verify-at-publish retries
+        // The epoch of THIS node's own component that the content it published
+        // corresponds to — the verify-at-publish reference, in the component's
+        // OWN counter. Seeded from plan.epoch (read by planPage before any
+        // render) and re-read whenever this node re-renders, so the scheduler's
+        // own retry bump is not mistaken for an edit. Never compare it against
+        // result->contentEpoch: a page can be stamped by a DIFFERENT component
+        // (an insert-less twPluginChain forwards the track mix's page verbatim),
+        // and two independent counters can only drift, never agree.
+        // Written by the worker running this node, read by its dependents after
+        // it reaches Done — the queueLock_ in completeGraphNode() is the
+        // happens-before, exactly as for `result`.
+        uint64_t observedEpoch = 0;
         enum State { Waiting, Ready, Running, Done } state = Waiting;
         std::shared_ptr<twOutputPage> result;
         twPagePlan plan;

@@ -68,17 +68,25 @@ class twLatchOutput
 private:
     twLatch & parentLatch;
 protected:
-    offset_t offset;
+    // This reader's position on the producer's timeline. Written by
+    // seekStream() (from twComponent::seekInputStreams) and advanced by
+    // readStreamingData(). Since the external seek cascades were deleted, every
+    // writer is FREEZE-SCOPED — a consumer with streaming inputs serializes its
+    // whole freeze on cursorMutex_ (see twComponent::freezePage), which is what
+    // makes seek-then-read one indivisible sequence. Atomic with relaxed ops
+    // anyway: it is read by getOffset-style diagnostics off that path, and a
+    // plain offset_t here is a formal data race with nothing to gain.
+    std::atomic<offset_t> offset;
 public:
     twLatchOutput (twLatch & latch)
-        : parentLatch(latch) { offset = latch.getOffset(); }
+        : parentLatch(latch) { offset.store( latch.getOffset(), std::memory_order_relaxed ); }
     virtual ~twLatchOutput() = default;
     inline twLatch & getParentLatch () { return parentLatch; }
 
     // Re-position this reader on the producer's timeline. Must be called when
     // the consuming component seeks; readStreamingData() otherwise keeps
     // pulling content for the old position.
-    void seekStream( offset_t pos ) { offset = pos; }
+    void seekStream( offset_t pos ) { offset.store( pos, std::memory_order_relaxed ); }
 
     // The consumer's single entry point for "what am I about to read?".
     // Delegates to the producing latch.

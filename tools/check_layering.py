@@ -155,8 +155,13 @@ APP_ENG = {
     # revalidator's jobsQueued().
     # testkit + metering + pages since proposal 34: assert-meter freezes the page
     # for the position it asks about and runs the production twLevelProbe on it.
-    'testkit':        _ENG_BASE | {'analysis', 'metering', 'pages', 'schedule',
-                                   'sidecar'},
+    # testkit + devices + playback + sinks since the capture backend:
+    # dump-playback-capture reaches the live twSpeaker's backend (playback),
+    # checks it is the CaptureBackend (devices), and writes its recording out
+    # through the SAME 16-bit WAV writer the render path uses (sinks), so a
+    # captured playback and a render are comparable files.
+    'testkit':        _ENG_BASE | {'analysis', 'devices', 'metering', 'pages',
+                                   'playback', 'schedule', 'sidecar', 'sinks'},
 }
 
 def main():

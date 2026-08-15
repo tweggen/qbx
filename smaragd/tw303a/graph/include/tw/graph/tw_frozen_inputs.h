@@ -54,7 +54,10 @@ struct twFrozenInputs {
     // re-plan triggers). Mutable: recorded through the const active scope.
     mutable std::vector<std::pair<const twComponent *, offset_t>> misses;
 
+    // `pageStart` is the position the page was DEMANDED at; it is the key, and
+    // the page's own startPosition must agree with it (asserted).
     void bind( const twComponent *producer,
+               offset_t pageStart,
                std::shared_ptr<twOutputPage> page );
 
     std::shared_ptr<twOutputPage> find( const twComponent *producer,

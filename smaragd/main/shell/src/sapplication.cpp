@@ -637,8 +637,15 @@ void SApplication::startRecording(const audio::RecordingParams &params)
     // recording. Output is best-effort — capture and the playhead still work if
     // it fails (the worker drives the locator regardless).
     if (!isPlaying_ && currentProject_) {
-        if (SObject *root = currentProject_->getRootComponent()) {
-            root->seekTo(getGlobalLocatorPos());
+        // The root is a PRESENCE check only: there is nothing to monitor
+        // without one.
+        if (currentProject_->getRootComponent()) {
+            // NO graph seek here (same reason as SMainWindow::startPlaying):
+            // an external seek cascade races in-flight page freezes, which
+            // serialize on cursorMutex_ while a seek takes only mutex(). The
+            // monitoring playback starts at the locator because the engine
+            // pulls pages BY POSITION, not because the graph's cursors were
+            // moved.
             t3Speaker_->startOutput();
             isPlaying_ = true;
         }

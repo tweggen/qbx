@@ -49,12 +49,25 @@ const Fixture kFixtures[] = {
     { "assert-audio-frequency",
       "<assert-audio-frequency filename='r.wav' minHz='430' maxHz='450'"
       " frameCount='48000' channel='0'/>" },
+    // expectSilence is only written when true, so it stays out of the fixture.
+    { "assert-source-position",
+      "<assert-source-position filename='r.wav' startFrame='40960'"
+      " frameCount='4096' channel='0' expectSourceFrame='40960'"
+      " tolerance='2048' expectSourceFrameAny='0,40960' minConfidence='5.000'/>" },
     { "assert-file-contains",
       "<assert-file-contains path='p.qxp' text='uid=&apos;x&apos;'"
       " absent='true'/>" },
+    // minFrames is only written when non-zero, so a fixture must give it one.
+    { "dump-playback-capture",
+      "<dump-playback-capture filename='playback.wav' minFrames='315392'/>" },
     { "assert-sidecar",
       "<assert-sidecar aspect='onsets' minRecords='1' maxRecords='4'"
       " expectExists='true'/>" },
+    // All three slip attributes at once: each is written only when present,
+    // so a fixture naming just one would leave the other two untested.
+    { "slip-clip",
+      "<slip-clip clip='0,1' startOffset='48000' srcStart='24000'"
+      " loopStart='12000'/>" },
 
     // --- the five plugin verbs (proposal 08) --------------------------------
     // insert-plugin/remove-plugin carry the opaque plugin STATE chunk since M5:

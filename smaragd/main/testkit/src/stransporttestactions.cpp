@@ -61,27 +61,50 @@ SApplyResult SWaitPlayheadAction::apply(SProject *project)
     QElapsedTimer timer;
     timer.start();
 
+    // Two independent conditions, both optional, both must hold:
+    //   minAdvance — RELATIVE: "playback moved". Survives not knowing where
+    //                playback started.
+    //   position   — ABSOLUTE: "playback arrived HERE". The one a positional
+    //                assertion needs, since it is the position, not the
+    //                distance, that the following decode is about.
+    // The relative measurement re-anchors on a backwards jump (loop wrap, a
+    // seek); the absolute one deliberately does not — a wrap past the target
+    // means the target was reached.
     offset_t current = start;
-    while ((qulonglong)(current - start) < minAdvance_) {
+    offset_t anchor = start;
+    bool reachedPosition = (position_ == 0);
+    for (;;) {
+        const bool advanced = (qulonglong)(current - anchor) >= minAdvance_;
+        if (advanced && reachedPosition) {
+            break;
+        }
         if (timer.elapsed() > timeoutMs_) {
             qWarning() << "wait-playhead: TIMEOUT after" << timeoutMs_ << "ms;"
-                       << "playhead advanced" << (qulonglong)(current - start)
-                       << "of" << minAdvance_ << "frames (start" << (qulonglong)start
-                       << "now" << (qulonglong)current << ")";
+                       << "playhead advanced" << (qulonglong)(current - anchor)
+                       << "of" << minAdvance_ << "frames (start"
+                       << (qulonglong)start << "now" << (qulonglong)current << ")"
+                       << (position_ ? QString("; target position %1 %2 reached")
+                                           .arg(position_)
+                                           .arg(reachedPosition ? "was" : "NOT")
+                                     : QString());
             return {false, nullptr};
         }
         QCoreApplication::processEvents();
         QThread::msleep(10);
         current = app.getGlobalLocatorPos();
-        if (current < start) {
+        if (position_ != 0 && current >= (offset_t)position_) {
+            reachedPosition = true;
+        }
+        if (current < anchor) {
             // Locator jumped backwards (loop wrap or user seek): re-anchor so
             // the advance measurement stays meaningful.
-            current = start;
+            anchor = current;
         }
     }
 
-    qDebug() << "wait-playhead: playhead advanced" << (qulonglong)(current - start)
-             << "frames in" << timer.elapsed() << "ms (OK)";
+    qDebug() << "wait-playhead: playhead advanced" << (qulonglong)(current - anchor)
+             << "frames in" << timer.elapsed() << "ms, now at"
+             << (qulonglong)current << "(OK)";
     return {true, nullptr};
 }
 
@@ -89,11 +112,15 @@ void SWaitPlayheadAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("minAdvance", QString::number(minAdvance_));
     elem.setAttribute("timeoutMs", QString::number(timeoutMs_));
+    if (position_ != 0) {
+        elem.setAttribute("position", QString::number(position_));
+    }
 }
 
 bool SWaitPlayheadAction::readXml(const QDomElement &elem, int /*version*/)
 {
     minAdvance_ = elem.attribute("minAdvance", "0").toULongLong();
+    position_ = elem.attribute("position", "0").toULongLong();
     timeoutMs_ = elem.attribute("timeoutMs", "10000").toInt();
     return true;
 }

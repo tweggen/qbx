@@ -105,7 +105,10 @@ int STrack::seekTo( offset_t ofs )
 {
     for( int i=0; i<nBusses_; i++ ) {
         std::shared_ptr<twTrackMix> mix = cpTrackMixers_[i];
-        if( mix ) mix->seekTo( ofs );
+        // seek(): app model → engine component, an EXTERNAL seek (see
+        // twComponent::seek). The mix's own clip cascade below it stays on
+        // seekTo(), being internal to the mix.
+        if( mix ) mix->seek( ofs );
     }
     return 0;
 }

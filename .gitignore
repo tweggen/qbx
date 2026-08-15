@@ -60,3 +60,8 @@ smaragd/test-output/
 # submodules), so it is a manual drop-in: unzip the SDK from steinberg.net to
 # smaragd/third_party/asiosdk. It must never be committed.
 smaragd/third_party/asiosdk/
+# Hand-made scratch audio at the repo root. Named individually ON PURPOSE: a
+# blanket *.wav / *.ogg would also match render.wav and test_sawtooth.wav, which
+# ARE tracked here and are fixtures the qxa cases depend on.
+/testspur.wav
+/testspur.ogg

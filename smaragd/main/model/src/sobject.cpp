@@ -13,6 +13,8 @@
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/Metadata/Export bits
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
+#include "tw/graph/twcomponent.h"
+#include "tw/pages/tw_output_page.h"
 #include "tw/sources/twrandomsource.h"
 #include "tw/schedule/capture_revalidator.h"
 
@@ -232,9 +234,9 @@ int SObject::getPreview( preview_t *dest,
 {
     // Default preview: if this object renders to a duration, produce peaks from
     // its rendered output. straightCalcPreviewData() reads a random source when
-    // there is one (samples) and otherwise pulls getRootComponent() live — so a
-    // container (a track/mixer sub-arrangement, i.e. a live asset) is previewable
-    // too. No duration -> no preview.
+    // there is one (samples) and otherwise reads getRootComponent()'s FROZEN
+    // PAGES — so a container (a track/mixer sub-arrangement, i.e. a live asset)
+    // is previewable too. No duration -> no preview.
     if( !hasDuration() ) return -1;
     return getStraightPreview( dest, start, length, nProbes );
 }
@@ -276,6 +278,68 @@ int SObject::straightCalcPreviewData()
     // that touches no play cursor and needs no lock, so preview rendering on the
     // UI thread can no longer race playback on the audio thread (proposal 07).
     twRandomSource *rs = getRandomSource();
+
+    // The CONTAINER case (no random source — the object's content is a
+    // track/mixer subtree) reads FROZEN PAGES instead. It used to seek the live
+    // component and pull calcOutputTo() per preview window, which wrote the
+    // shared play cursor from the paint path: the wrong-position-page race
+    // twComponent::seek()'s assert was installed to catch. requestPage() takes
+    // the freeze path everyone else takes (RenderSession, SCut::buildCapture_),
+    // where the component positions ITSELF under its own cursorMutex_.
+    //
+    // Page granularity is twOutputPage::FRAME_CAPACITY and the pages are chained
+    // (page N is handed to page N+1 as previousPage) so stateful DSP resumes
+    // instead of restarting — docs/contracts/FREEZE_PROTOCOL.md, "Sequential
+    // consumers"; RenderSession's loop is the canonical shape.
+    std::shared_ptr<twComponent> rootComp;
+    std::shared_ptr<twOutputPage> curPage;
+    int srate = 48000;
+    if( !rs ) {
+        rootComp = getRootComponent();
+        if( SProject *proj = getProjectSafe() ) srate = proj->getSRate();
+    }
+    const offset_t PAGE_FRAMES = (offset_t) twOutputPage::FRAME_CAPACITY;
+
+    // Fill `dest` with [at, at+n) of the container's frozen output; anything the
+    // component cannot produce (no page, short page, past the end) reads as
+    // silence, which is what the pulled render produced there too.
+    auto readContainerFrames = [&]( offset_t at, sample_t *dest, offset_t n ) {
+        offset_t done = 0;
+        while( done < n ) {
+            const offset_t pos       = at + done;
+            const offset_t pageStart = ( pos / PAGE_FRAMES ) * PAGE_FRAMES;
+            const offset_t inPage    = pos - pageStart;
+            offset_t chunk = n - done;
+            if( chunk > PAGE_FRAMES - inPage ) chunk = PAGE_FRAMES - inPage;
+
+            if( !rootComp ) {
+                for( offset_t k=0; k<chunk; ++k ) dest[done+k] = 0.f;
+                done += chunk;
+                continue;
+            }
+            if( !curPage || curPage->startPosition != pageStart ) {
+                // Chain ONLY across a contiguous step; a jump (or the first
+                // page) is a discontinuity and must reset, per the freeze
+                // protocol's sequential-rendering contract.
+                std::shared_ptr<twOutputPage> chainFrom;
+                if( curPage
+                    && curPage->startPosition + PAGE_FRAMES == pageStart ) {
+                    chainFrom = curPage;
+                }
+                curPage = rootComp->requestPage( pageStart, nullptr, 0, 0,
+                                                 srate, chainFrom );
+            }
+            const offset_t avail = curPage
+                ? (offset_t) curPage->validFrames - inPage : 0;
+            for( offset_t k=0; k<chunk; ++k ) {
+                dest[done+k] = ( k < avail && (size_t)( inPage + k ) < curPage->samples.size() )
+                             ? curPage->samples[ (size_t)( inPage + k ) ]
+                             : 0.f;
+            }
+            done += chunk;
+        }
+    };
+
     // Fill it up.
     for( offset_t i=0; i<(offset_t) previewForLength_; i+=previewSkip_ ) {
 	// Yes, this values are other way round. These are the defaults,
@@ -284,8 +348,7 @@ int SObject::straightCalcPreviewData()
         if( rs ) {
             rs->read( i, buffer, previewSkip_, 0 );
         } else {
-            getRootComponent()->seekTo( i );
-            getRootComponent()->calcOutputTo( buffer, previewSkip_, 0 );
+            readContainerFrames( i, buffer, previewSkip_ );
         }
         sample_t *p = buffer;
         for( offset_t j=0; j<previewSkip_; ++j ) {
@@ -371,7 +434,9 @@ void SObject::setDuration( length_t )
 
 int SObject::seekTo( offset_t ofs )
 {
-    return getRootComponent()->seekTo( ofs );
+    // seek(), not seekTo(): this is the app model crossing into the engine, the
+    // definition of an EXTERNAL seek, so it goes through the detector.
+    return getRootComponent()->seek( ofs );
 }
 
 int SObject::getNReferences() const

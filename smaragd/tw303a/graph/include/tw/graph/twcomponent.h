@@ -76,6 +76,47 @@ public:
     
     virtual bool isSeekable() const;
     virtual int seekTo( offset_t );
+
+    // The EXTERNAL seek entry point — and a regression detector.
+    //
+    // A component's play cursor is written from two places that take DIFFERENT
+    // locks: a page freeze serializes on cursorMutex_ and repositions the
+    // component itself (reset() + seekTo(page->startPosition)) just before
+    // renderFrames(); an outside seek takes only mutex(). An outside seek
+    // landing in that window rewrites the cursor the in-flight render is about
+    // to read, so the whole 65536-frame page comes out as the audio of the SEEK
+    // TARGET while being cached under, and served for, its original startPos.
+    // That is the wrong-position playback bug, and the cure was to delete the
+    // external cascades (play start, record start, capture rebuild, plugin
+    // chain producers) rather than to add a lock.
+    //
+    // seek() is what everything OUTSIDE the freeze machinery calls now. It is
+    // non-virtual on purpose: it asserts the window is clear and then dispatches
+    // to the virtual seekTo(). Freeze-internal repositioning (freezePage_nolock,
+    // twTrackMix::seekTo's clip walk, twView::seekTo, a chain seeking its own
+    // taps) keeps calling seekTo() directly — it is already inside the freeze
+    // that owns the cursor.
+    //
+    // NDEBUG is stripped from RelWithDebInfo in this repo, so the assert is live
+    // across the whole suite: any surviving or newly added external cascade
+    // announces itself instead of degrading into an occasional wrong page.
+    int seek( offset_t );
+
+    // RAII marker for "a freeze render is running on this component". Public
+    // because a subclass that overrides the WHOLE freeze rather than
+    // freezePage_nolock (twTrackMix) has to mark its own window.
+    class FreezeInFlight {
+    public:
+        explicit FreezeInFlight( twComponent &c ) : c_( c )
+        { c_.freezeInFlight_.fetch_add( 1, std::memory_order_acq_rel ); }
+        ~FreezeInFlight()
+        { c_.freezeInFlight_.fetch_sub( 1, std::memory_order_acq_rel ); }
+        FreezeInFlight( const FreezeInFlight & ) = delete;
+        FreezeInFlight &operator=( const FreezeInFlight & ) = delete;
+    private:
+        twComponent &c_;
+    };
+
     virtual offset_t tellPos() const;
     virtual void resetAllLatches();  // Reset all output latches to offset 0
 
@@ -342,14 +383,6 @@ public:
         }
     }
 
-    // Internal: mark a specific page as frozen and valid for given aspects.
-    // Called by revalidator after successful freezing.
-    void setPageAsFrozen(
-        offset_t startPos,
-        std::shared_ptr<twOutputPage> page,
-        uint32_t aspects = twAspectAll
-    );
-
     // Freeze component output into a page (Phase 2 - Gap 3)
     // Called by CaptureRevalidator worker threads to materialize frozen output.
     //
@@ -539,6 +572,11 @@ protected:
 
     // Readiness gate (see setRenderReady()); true = render normally.
     std::atomic<bool> renderReady_{true};
+
+    // How many freeze renders are inside their reset/seek/render window on this
+    // component right now (see seek() and FreezeInFlight). Only ever read by
+    // the seek() assert — it is a detector, not a lock, and nothing waits on it.
+    std::atomic<int> freezeInFlight_{0};
 
 private:
     mutable std::mutex stateMutex_;

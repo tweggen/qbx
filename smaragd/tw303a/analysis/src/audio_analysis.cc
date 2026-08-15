@@ -1,4 +1,5 @@
 #include "tw/analysis/audio_analysis.h"
+#include "tw/core/position_code.h"
 #include <sndfile.h>
 #include <cmath>
 #include <algorithm>
@@ -261,6 +262,84 @@ double estimateFundamental(const std::string &filename,
         return 0.0;
     }
     return rate / refined;
+}
+
+PositionDecode decodePositionAt(const std::string &filename,
+                                int64_t startFrame, int64_t frameCount,
+                                int channelIndex, std::string &error)
+{
+    PositionDecode out;
+
+    SF_INFO sfInfo;
+    std::memset(&sfInfo, 0, sizeof(sfInfo));
+    SNDFILE *infile = sf_open(filename.c_str(), SFM_READ, &sfInfo);
+    if (!infile) {
+        error = std::string("Failed to open WAV file: ") + sf_strerror(nullptr);
+        return out;
+    }
+    if (startFrame < 0) {
+        error = "Start frame must not be negative";
+        sf_close(infile);
+        return out;
+    }
+    if (frameCount <= 0) {
+        error = "Frame count must be positive";
+        sf_close(infile);
+        return out;
+    }
+
+    // Reading past the end is DELIBERATELY not an error: "nothing plays after
+    // the fixture ends" is one of the things this verb exists to assert, and a
+    // window entirely past the end must come back silent rather than refusing.
+    if (startFrame >= sfInfo.frames) {
+        sf_close(infile);
+        out.silent = true;
+        return out;
+    }
+
+    const int64_t endFrame = std::min(startFrame + frameCount,
+                                      (int64_t) sfInfo.frames);
+    const int64_t framesToRead = endFrame - startFrame;
+
+    sf_seek(infile, startFrame, SEEK_SET);
+    const int BUFFER_SIZE = 4096;
+    std::vector<float> buffer((size_t)(BUFFER_SIZE * sfInfo.channels));
+    std::vector<double> mono;
+    mono.reserve((size_t) framesToRead);
+
+    int64_t framesRead = 0;
+    while (framesRead < framesToRead) {
+        int64_t toRead = std::min((int64_t) BUFFER_SIZE, framesToRead - framesRead);
+        sf_count_t nRead = sf_readf_float(infile, buffer.data(), toRead);
+        if (nRead <= 0) break;
+        for (sf_count_t i = 0; i < nRead; ++i) {
+            double v = 0.0;
+            if (channelIndex >= 0 && channelIndex < sfInfo.channels) {
+                v = buffer[(size_t)(i * sfInfo.channels + channelIndex)];
+            } else {
+                for (int ch = 0; ch < sfInfo.channels; ++ch)
+                    v += buffer[(size_t)(i * sfInfo.channels + ch)];
+                v /= sfInfo.channels;
+            }
+            mono.push_back(v);
+        }
+        framesRead += nRead;
+    }
+    sf_close(infile);
+
+    if (mono.empty()) {
+        out.silent = true;
+        return out;
+    }
+
+    const tw::poscode::Decode d =
+        tw::poscode::decodeBuffer(mono.data(), (int64_t) mono.size());
+
+    out.silent      = d.silent;
+    out.confidence  = d.confidence;
+    out.blockIndex  = (int) d.blockIndex;
+    out.sourceFrame = d.sourceFrame;
+    return out;
 }
 
 }  // namespace audio

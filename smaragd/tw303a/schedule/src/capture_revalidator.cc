@@ -79,6 +79,17 @@ void CaptureRevalidator::shutdown() {
             thread.join();
         }
     }
+
+    // Stage 6 completeness metrics, once per run. Debug level: it is the only
+    // way to compare scheduler work across a change without instrumenting by
+    // hand (SMARAGD_LOG_LEVEL=debug), and it costs nothing when filtered.
+    TW_LOGD( "schedule",
+             "[SCHED] graph stats: nodesExecuted=%llu nodeRetries=%llu "
+             "missPages=%llu selfStale=%llu",
+             (unsigned long long)statNodesExecuted_.load(),
+             (unsigned long long)statNodeRetries_.load(),
+             (unsigned long long)statMissPages_.load(),
+             (unsigned long long)statSelfStale_.load() );
 }
 
 size_t CaptureRevalidator::jobsQueued() const {
@@ -91,6 +102,7 @@ CaptureRevalidator::GraphStats CaptureRevalidator::graphStats() const {
     s.nodesExecuted = statNodesExecuted_.load();
     s.nodeRetries   = statNodeRetries_.load();
     s.missPages     = statMissPages_.load();
+    s.selfStale     = statSelfStale_.load();
     return s;
 }
 
@@ -321,10 +333,17 @@ CaptureRevalidator::expandNode_(std::shared_ptr<twComponent> comp,
     // Plan OUTSIDE queueLock_ (takes the component's own mutex).
     twPagePlan plan = comp->planPage(pageStart);
 
+    // planPage() reads contentEpochNow() before it walks anything, and the
+    // counter starts at 1 — a zero here means a planner override forgot to
+    // stamp the plan, which would silently disable verify-at-publish for that
+    // component (the whole node would look permanently up to date).
+    assert(plan.epoch != 0 && "planPage() must stamp plan.epoch");
+
     auto node = std::make_shared<PageNode>();
     node->component = std::move(comp);
     node->pageStart = pageStart;
     node->priority = priority;
+    node->observedEpoch = plan.epoch;
     node->plan = std::move(plan);
 
     // Children first (recursion still under expansionMutex_, no queueLock_).
@@ -381,21 +400,36 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
     // Deps are Done (guaranteed by the counters); their results are immutable.
     twFrozenInputs inputs;
     for (auto &d : node->deps)
-        if (d->result) inputs.bind(d->component.get(), d->result);
+        if (d->result) inputs.bind(d->component.get(), d->pageStart, d->result);
     std::shared_ptr<twOutputPage> prev =
         node->predecessor ? node->predecessor->result : nullptr;
 
     std::shared_ptr<twOutputPage> page =
         node->component->freezePageWithInputs(node->pageStart, inputs, prev);
 
-    // Verify-at-publish: dep pages still current AND plan complete. One
-    // bounded retry with freshly frozen deps; content correctness holds
-    // regardless (the stage-2 legacy fallback inside the render), the retry
-    // improves cache quality after a mid-render edit.
+    // Verify-at-publish, part 1: are the deps' pages still current, and was the
+    // plan complete? One bounded retry with freshly frozen deps; content
+    // correctness holds regardless (the stage-2 legacy fallback inside the
+    // render), the retry improves cache quality after a mid-render edit.
+    //
+    // The comparison is LIKE FOR LIKE, in the dep component's OWN counter:
+    // `d->observedEpoch` is the epoch of `d->component` that the page d
+    // published corresponds to, versus that same component's epoch now. The
+    // page's own `contentEpoch` stamp cannot be used here — it is written by
+    // whichever component actually RENDERED the page, which is not always the
+    // dep: an insert-less twPluginChain forwards its track mix's page verbatim,
+    // so the page carries the MIX's counter while the CHAIN's counter is what
+    // gets compared. Two independent counters cannot be ordered at all, so the
+    // answer was noise in BOTH directions: whichever counter happened to run
+    // ahead decided it, permanently — a real edit went unnoticed, or (what the
+    // graph stats actually showed on the app's topology) the test stood
+    // permanently true and every such node retried for nothing. Same-counter
+    // is the only comparison that means anything, which is the rule
+    // twStreamingLatch already records: a remembered observation of ONE counter
+    // compared against itself cannot drift.
     bool staleDep = false;
     for (auto &d : node->deps) {
-        if (d->result &&
-            d->result->contentEpoch.load() < d->component->contentEpochNow()) {
+        if (d->result && d->observedEpoch < d->component->contentEpochNow()) {
             staleDep = true;
             break;
         }
@@ -408,7 +442,7 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
             auto p = d->component->requestPage(
                 d->pageStart, nullptr, 0,
                 (length_t)twOutputPage::FRAME_CAPACITY, 0, nullptr);
-            if (p) fresh.bind(d->component.get(), p);
+            if (p) fresh.bind(d->component.get(), d->pageStart, p);
         }
         // Drop what attempt 1 published FIRST, or the retry cannot do anything:
         // freezePageWithInputs() goes through twComponent::freezePage(), whose
@@ -421,7 +455,62 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
         node->component->invalidatePagesInRange(
             node->pageStart,
             node->pageStart + (offset_t)twOutputPage::FRAME_CAPACITY);
+        // That invalidate BUMPED this component's epoch. Re-observe before the
+        // re-render, or the scheduler's own bump would read back as an edit:
+        // the self-staleness test below would fire on every retrying node, and
+        // since it re-stales the page, the readahead would re-demand it, retry
+        // again, and livelock. Only an edit landing DURING the re-render may
+        // move the counter past this point.
+        node->observedEpoch = node->component->contentEpochNow();
         page = node->component->freezePageWithInputs(node->pageStart, fresh, prev);
+    }
+
+    // Verify-at-publish, part 2 — SELF staleness. The dep test above only
+    // covers the inputs; the node's own PLAN (which deps exist at all, and for
+    // twTrackMix which clip resolves to which component at which position) was
+    // captured by planPage() at expansion time. If this component's content
+    // changed since, the structure we just rendered is the PRE-EDIT
+    // arrangement — a moved clip rendered at its old position — and no amount
+    // of re-freezing the same dep set can fix it, because the dep set itself is
+    // the wrong one. So: do NOT retry here. Publish the page (a consumer that
+    // needs audio right now is better served by outdated audio than by
+    // silence — proposal 16's RT stale-page fallback exists for exactly this
+    // window), and immediately re-stale it so it reads outdated. The
+    // epoch-scoped readahead supersession in AudioEngine then re-demands the
+    // position, which runs expandNode_ again and re-plans against the edited
+    // graph. Terminating: the fresh plan's epoch is the current one, so the
+    // re-run publishes a current page unless yet another edit lands.
+    //
+    // The invalidate goes BEFORE completeGraphNode() on purpose: completing
+    // wakes the demand's waiters, and a waiter that observed the page as
+    // current in that window would consume exactly the outdated audio this
+    // check exists to reject.
+    if (node->observedEpoch < node->component->contentEpochNow()) {
+        statSelfStale_.fetch_add(1, std::memory_order_relaxed);
+        // Invalidate only when there is really a CACHED page here that would
+        // otherwise read as current. Two reasons, both load-bearing:
+        //   * Most components on a track cache nothing — twTrackMix mints a
+        //     fresh page per freeze and an insert-less twPluginChain forwards
+        //     its input's page — so there would be no page to re-stale, and
+        //   * invalidatePagesInRange() BUMPS the component's epoch, which is
+        //     shared by every page of that component. A bump nobody needs makes
+        //     the OTHER in-flight nodes of the same component (the readahead
+        //     demands several pages at once) read as self-stale in turn, and
+        //     that cascade is a re-demand loop, not a fix.
+        // getPagesInRange(), NOT getPageIfExists(): the latter is the audio
+        // thread's TRY-lock probe and answers "not right now" under contention,
+        // which here would silently skip a re-stale that was owed.
+        const offset_t pageEnd =
+            node->pageStart + (offset_t)twOutputPage::FRAME_CAPACITY;
+        bool readsCurrent = false;
+        for (const auto &cached :
+                 node->component->getPagesInRange(node->pageStart, pageEnd)) {
+            if (cached && cached->validAspects != 0 &&
+                cached->contentEpoch.load() >= node->component->contentEpochNow())
+                readsCurrent = true;
+        }
+        if (readsCurrent)
+            node->component->invalidatePagesInRange(node->pageStart, pageEnd);
     }
     statNodesExecuted_.fetch_add(1, std::memory_order_relaxed);
 

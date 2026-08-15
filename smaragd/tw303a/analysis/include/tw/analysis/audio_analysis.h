@@ -87,6 +87,47 @@ double estimateFundamental(const std::string &filename,
                            int64_t startFrame, int64_t frameCount,
                            int channelIndex, std::string &error);
 
+/**
+ * Result of decoding a position-coded window (tw/core/position_code.h).
+ */
+struct PositionDecode {
+    int64_t sourceFrame = -1;    ///< first frame of the decoded block, -1 = none
+    int     blockIndex  = -1;    ///< decoded block index, -1 = none
+    double  confidence  = 0.0;   ///< winning bin magnitude / runner-up's
+    bool    silent      = false; ///< window was below the silence floor
+};
+
+/**
+ * Decode WHERE a window of audio came from, using the integer-cycle tone
+ * staircase encoding (tw/core/position_code.h).
+ *
+ * The position gate. RMS, peak and f0 are all position-BLIND: a render that
+ * plays the right material from the wrong place passes every one of them. Fed
+ * audio that originates from the position-coded fixture (tests/test_position.wav,
+ * written by gen_position_fixture), this reports the SOURCE frame the window
+ * carries — so "the clip played, but 4096 frames late" becomes a failure with a
+ * number in it.
+ *
+ * `frameCount` should be kBlockFrames (4096); the encoding is designed so that
+ * any window of that length lying INSIDE one block decodes exactly, at any
+ * phase offset. A window straddling a block boundary lights two bins and comes
+ * back with a low `confidence` rather than an arbitrary pick of the two.
+ *
+ * Reading past the end of the file is not an error: the window is analysed
+ * short, and a window entirely past the end reports silent=true. That is what
+ * makes "nothing plays after the fixture ends" assertable.
+ *
+ * @param filename     Path to WAV file
+ * @param startFrame   Starting frame index (0-based)
+ * @param frameCount   Window length in frames (4096 recommended)
+ * @param channelIndex Channel to decode (-1 = all channels mixed)
+ * @param error        Output string for error messages
+ * @return Decode result; sourceFrame == -1 when nothing was decoded
+ */
+PositionDecode decodePositionAt(const std::string &filename,
+                                int64_t startFrame, int64_t frameCount,
+                                int channelIndex, std::string &error);
+
 }  // namespace audio
 
 #endif

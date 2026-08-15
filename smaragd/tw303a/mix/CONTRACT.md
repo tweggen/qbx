@@ -19,6 +19,15 @@ Invariants (normative detail in CLIP_MODEL.md and POSITION_DOMAINS.md):
 4. clip.previousPage chains per-clip DSP state across track pages.
 5. seekTo_nolock seeks ALL clips (not just nearby ones) so no stale cursors
    survive a jump.
+6. freezePage CLAMPS the requested length to twOutputPage::FRAME_CAPACITY.
+   Unlike the base twComponent::freezePage_nolock — which ignores inputLength
+   and always renders a full page — twTrackMix takes it at face value for both
+   the page fill and the endPos of the clip-overlap walk, so an over-long
+   length is a buffer overrun AND drags every clip in the track into one
+   page's mix. Callers do size it from content: SCut::buildCapture_ passes the
+   whole remaining capture length. inputLength == 0 means "no input data
+   supplied" (RenderSession pulls the graph root that way), never "render
+   nothing" — it maps to a full page.
 
 Threading: clips_ mutations (insert/update/remove) are UI-thread under the
 component mutex; render paths hold the same mutex during page assembly.

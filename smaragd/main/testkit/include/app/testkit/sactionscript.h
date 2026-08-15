@@ -53,6 +53,13 @@ public:
     QString baseDir() const { return baseDir_; }
 
 private:
+    // Opt-in strict attributes: warn (and under SMARAGD_STRICT_ATTRS=1, fail)
+    // when a case gives a verb an attribute the verb has declared it does not
+    // have. See the definition for why a silently-ignored attribute is worth a
+    // mechanism.
+    bool checkAttributes_(const QDomElement &elem, const SAction *action,
+                          QString &error) const;
+
     Setup setup_;
     QList<SAction*> actions_;
     QList<ActionMeta> actionsMeta_;

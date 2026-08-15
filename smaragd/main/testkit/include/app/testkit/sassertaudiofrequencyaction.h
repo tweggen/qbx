@@ -35,6 +35,11 @@ public:
                                          int channel = -1);
 
     QString name() const override { return QStringLiteral("assert-audio-frequency"); }
+    QStringList knownAttributes() const override {
+        return {QStringLiteral("filename"), QStringLiteral("minHz"),
+                QStringLiteral("maxHz"), QStringLiteral("startFrame"),
+                QStringLiteral("frameCount"), QStringLiteral("channel")};
+    }
     SApplyResult apply(SProject *project) override;
     void writeXml(QDomElement &elem) const override;
     bool readXml(const QDomElement &elem, int version) override;

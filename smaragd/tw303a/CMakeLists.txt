@@ -38,6 +38,7 @@ tw_module(core
         core/include/tw/core/generation_promise.h
         core/include/tw/core/twcontenthash.h
         core/include/tw/core/twwarpmap.h
+        core/include/tw/core/position_code.h
         core/src/twcontenthash.cc
         core/src/twwarpmap.cc
         core/src/generation_promise.cc
@@ -438,9 +439,11 @@ tw_module(devices
     SOURCES
         devices/include/tw/devices/audio_backend.h
         devices/include/tw/devices/null_backend.h
+        devices/include/tw/devices/capture_backend.h
         devices/include/tw/devices/audio_input.h
         devices/src/audio_backend.cc
         devices/src/null_backend.cc
+        devices/src/capture_backend.cc
         devices/src/audio_input.cc
         devices/src/null_input.cc
         devices/src/null_input.h
@@ -582,6 +585,21 @@ if(SMARAGD_WINDOWS)
     target_link_libraries(warp_ab PRIVATE SndFile::sndfile)
 else()
     target_link_libraries(warp_ab PRIVATE PkgConfig::SNDFILE)
+endif()
+
+# --- gen_position_fixture: writer + verifier for the position-coded fixture ----
+# NOT shipped, and NOT a ctest gate — an offline tool, like warp_ab. It writes
+# tests/test_position.wav (the "integer-cycle tone staircase" of
+# tw/core/position_code.h) and, in --verify mode, decodes every block of an
+# existing file back to its own position. That mode is why the fixture may be
+# committed: unlike test_sawtooth.wav, which nobody can regenerate or check,
+# this one is provable from source at any time.
+add_executable(gen_position_fixture analysis/tools/gen_position_fixture.cc)
+target_link_libraries(gen_position_fixture PRIVATE tw_analysis)
+if(SMARAGD_WINDOWS)
+    target_link_libraries(gen_position_fixture PRIVATE SndFile::sndfile)
+else()
+    target_link_libraries(gen_position_fixture PRIVATE PkgConfig::SNDFILE)
 endif()
 
 # --- Platform audio backends (devices only) --------------------------------------
@@ -801,5 +819,10 @@ tw_module_test(mix_test                     mix/tests/mix_test.cc               
 tw_module_test(schedule_test                schedule/tests/schedule_test.cc             tw_schedule tw_pages)
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)
 tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc             tw_sidecar)
-tw_module_test(playback_test                playback/tests/playback_test.cc             tw_playback)
+# tw_schedule + tw_pages are named EXPLICITLY (playback already depends on both,
+# so this is a link-line fact, not a new module edge — check_layering.py's DAG is
+# unchanged): the position-coded case constructs a CapturePagePool and a
+# CaptureRevalidator and hands the latter to AudioEngine::setScheduler, which is
+# the first time the demand scheduler is exercised from a unit test at all.
+tw_module_test(playback_test                playback/tests/playback_test.cc             tw_playback tw_schedule tw_pages)
 tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)

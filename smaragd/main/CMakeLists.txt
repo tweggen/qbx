@@ -258,7 +258,9 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudiofrequencyaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
+    testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
+    testkit/include/app/testkit/sdumpplaybackcaptureaction.h
     testkit/include/app/testkit/sgrouptrackaction.h
     testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
@@ -266,6 +268,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/ssidecartestactions.h
+    testkit/include/app/testkit/sslipclipaction.h
     testkit/include/app/testkit/stransporttestactions.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
@@ -273,7 +276,9 @@ set(APP_UI_FILES
     testkit/src/sassertaudiofrequencyaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
+    testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
+    testkit/src/sdumpplaybackcaptureaction.cpp
     testkit/src/sgrouptrackaction.cpp
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
@@ -281,6 +286,7 @@ set(APP_UI_FILES
     testkit/src/spluginuitestactions.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
+    testkit/src/sslipclipaction.cpp
     testkit/src/stransporttestactions.cpp
 )
 
@@ -537,4 +543,20 @@ target_link_libraries(filepathref_test
 )
 add_test(NAME filepathref_test COMMAND filepathref_test)
 set_tests_properties(filepathref_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The CONTAINER branch of SObject::straightCalcPreviewData(): a preview built
+# from a live sub-arrangement reads FROZEN PAGES (chained, page-aligned) rather
+# than seeking the live component per preview window. Values, page-boundary
+# indexing, state chaining and the reposition count are all asserted against a
+# synthetic component — the paint path is otherwise the only consumer, and a
+# screenshot cannot localise any of them. Needs a QApplication (offscreen) for
+# the app object libraries' static registrars, like the two tests above.
+add_executable(preview_container_test testkit/src/preview_container_test.cpp)
+target_link_libraries(preview_container_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME preview_container_test COMMAND preview_container_test)
+set_tests_properties(preview_container_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

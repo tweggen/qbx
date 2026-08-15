@@ -82,12 +82,22 @@ public:
     offset_t pos = 0;
     std::mutex logM;
     std::vector<offset_t> renderLog;   // start position of every real render
+    // Render gate (the playback_test ToneComponent::renderDelayMs idea, made
+    // deterministic instead of timed): a test can hold this component inside
+    // renderFrames and act while its CONSUMER's node is planned but not yet
+    // executed — the exact window a mid-render edit lands in.
+    std::atomic<bool> inRender{false};
+    std::atomic<bool> gateOpen{true};
 
     bool isSeekable() const override { return true; }
     int seekTo(offset_t p) override { pos = p; return 0; }
     void reset() override { pos = 0; }
     length_t renderFrames(sample_t *out, length_t n, const sample_t *,
                           length_t, idx_t) override {
+        inRender.store(true);
+        for (int i = 0; i < 5000 && !gateOpen.load(); ++i)
+            std::this_thread::sleep_for(1ms);
+        inRender.store(false);
         { std::lock_guard<std::mutex> l(logM); renderLog.push_back(pos); }
         for (length_t i = 0; i < n; ++i) out[i] = rampVal((long long)(pos + i));
         pos += (offset_t)n;
@@ -265,6 +275,98 @@ int main()
               "no bound-set misses across all scheduled renders");
         CHECK(stats.nodeRetries == 0,
               "no verify-at-publish retries across all scheduled renders");
+    }
+
+    // ---- Verify-at-publish: SELF staleness (an outdated PLAN) -------------
+    // A node's plan — which deps exist, and for a track mix which clip resolves
+    // to which component at which position — is captured by planPage() at
+    // expansion time. An edit landing between then and the node's execution
+    // means the node renders the PRE-EDIT arrangement. It must not be left
+    // readable as current: a page stamped with the epoch its render happened to
+    // read looks fresh to every consumer, and the moved clip stays audible at
+    // its old position until something unrelated invalidates it.
+    {
+        tw303aEnvironment env;
+        CapturePagePool pool(16);
+        CaptureRevalidator reval(&pool, 4);
+
+        auto src = std::make_shared<GraphSource>(env);
+        src->init();
+        auto pass = std::make_shared<GraphPass>(env);
+        pass->init();
+        pass->setInput(0, src->linkOutput(0));
+
+        // Hold the SOURCE inside its render. The consumer's node is planned
+        // (requestGraphPages expanded the whole DAG up front) but blocked on
+        // the dependency counter, so it cannot have executed yet.
+        src->gateOpen.store(false);
+        auto d = reval.requestGraphPages(pass, 0, 1);
+        bool entered = false;
+        for (int i = 0; i < 5000 && !(entered = src->inRender.load()); ++i)
+            std::this_thread::sleep_for(1ms);
+        CHECK(entered, "the dep is mid-render while the consumer node waits");
+
+        // THE EDIT: the consumer's own content changes after its plan was made.
+        const uint64_t planEpoch = pass->contentEpochNow();
+        pass->bumpContentEpoch();
+        src->gateOpen.store(true);
+        d->wait();
+
+        auto p = pass->getPageIfExists(0);
+        CHECK(p && p->validAspects != 0,
+              "the outdated-plan page is still PUBLISHED (no dropout: the RT "
+              "stale-page fallback serves it while the re-plan runs)");
+        CHECK(p && p->contentEpoch.load() < pass->contentEpochNow(),
+              "a page rendered from an outdated plan does NOT read as current");
+        CHECK(pass->contentEpochNow() > planEpoch + 1,
+              "publishing it re-staled the position, so the epoch-scoped "
+              "readahead supersession re-demands and re-plans it");
+
+        auto st = reval.graphStats();
+        CHECK(st.selfStale == 1, "exactly one self-stale publish was recorded");
+        CHECK(st.nodeRetries == 0,
+              "an outdated PLAN is not retried: the same dep set would rebuild "
+              "the same wrong structure");
+        CHECK(src->renders() == 1,
+              "and the dep was rendered exactly once (no extra work)");
+    }
+
+    // ---- Converse: no edit ⇒ published current, nothing over-invalidated --
+    // Guards the other direction. Self-staleness that fired on its own bumps
+    // would re-stale every page it published, and the readahead would re-demand
+    // them forever.
+    {
+        tw303aEnvironment env;
+        CapturePagePool pool(16);
+        CaptureRevalidator reval(&pool, 4);
+
+        auto src = std::make_shared<GraphSource>(env);
+        src->init();
+        auto pass = std::make_shared<GraphPass>(env);
+        pass->init();
+        pass->setInput(0, src->linkOutput(0));
+
+        const uint64_t before = pass->contentEpochNow();
+        auto d = reval.requestGraphPages(pass, 0, 3);
+        d->wait();
+
+        bool allCurrent = true;
+        for (int i = 0; i < 3; ++i) {
+            auto p = pass->getPageIfExists((offset_t)i * twOutputPage::FRAME_CAPACITY);
+            if (!p || p->validAspects == 0 ||
+                p->contentEpoch.load() < pass->contentEpochNow())
+                allCurrent = false;
+        }
+        CHECK(allCurrent, "with no edit, every published page reads as current");
+        CHECK(pass->contentEpochNow() == before,
+              "no edit ⇒ the scheduler bumped nothing (no over-invalidation)");
+
+        auto st = reval.graphStats();
+        CHECK(st.selfStale == 0, "no self-stale publishes without an edit");
+        CHECK(st.nodeRetries == 0 && st.missPages == 0,
+              "and no retries or bound-set misses");
+        CHECK(src->renders() == 3 && pass->renders.load() == 3,
+              "each page rendered exactly once");
     }
 
     if (failures == 0) { printf("all schedule tests passed\n"); return 0; }

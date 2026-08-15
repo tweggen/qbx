@@ -384,7 +384,16 @@ std::shared_ptr<twOutputPage> twTrackMix::freezePage(
     // Stamp with the epoch read BEFORE rendering; consumers (streaming latch,
     // downstream caches) reject pages from before the last edit.
     page->contentEpoch.store(contentEpochNow());
-    freezePage_nolock(page, startPos, inputLength, sampleRate, previousPage);
+    // A page holds exactly FRAME_CAPACITY frames, but inputLength arrives from
+    // callers that size it from CONTENT (SCut::buildCapture_ passes a whole
+    // capture length), so it must be clamped before it reaches any buffer
+    // arithmetic. inputLength == 0 means "no input data supplied", never
+    // "render nothing" — RenderSession pulls the graph root with 0 and expects
+    // a full page — so it maps to a full page here.
+    const length_t pageLength = std::min<length_t>(
+        inputLength ? inputLength : (length_t) twOutputPage::FRAME_CAPACITY,
+        (length_t) twOutputPage::FRAME_CAPACITY);
+    freezePage_nolock(page, startPos, pageLength, sampleRate, previousPage);
     // Snapshot track state for restoration at next page boundary (mutex already held)
     page->internalState = captureInternalState_nolock();
     return page;
@@ -442,10 +451,23 @@ length_t twTrackMix::freezePage_nolock(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
+    // twTrackMix overrides the WHOLE freeze rather than the base
+    // freezePage_nolock, so the base's freeze-window marker never runs for it —
+    // mark it here, or an external seek() of a track mix mid-freeze would go
+    // undetected (see twComponent::seek).
+    FreezeInFlight inFlight( *this );
+
     // Restore track-level state from previous page snapshot (mutex already held)
     if (previousPage) {
         restoreInternalState_nolock(previousPage->internalState);
     }
+
+    // Second line of defence (freezePage clamps too): every use of `length`
+    // below writes into or bounds a fixed-capacity page buffer, and endPos
+    // drives the clip-overlap walk — an over-long length both overruns the fill
+    // and drags every clip in the track into this page's mix.
+    if (length < 0) length = 0;
+    length = std::min<length_t>(length, (length_t) page->samples.size());
 
     // Initialize output buffer to silence
     std::fill(page->samples.begin(), page->samples.begin() + length, 0.0f);
