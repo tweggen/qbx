@@ -10247,9 +10247,17 @@ the lost updates leave records that no longer match, and the NEXT invocation's
 short cases re-probe and then race at static destruction. Recorded, not chased
 (ground rule 6: `tw/plugins` is outside this phase's module set).
 
-`midi_out_backend_reject` is the case most exposed to it because it is the
-shortest MIDI case in the suite — it never plays — so it finishes while the
-scan thread is still working. It is 12/12 clean standalone.
+It also reproduces STANDALONE once the cache is thrashing, and it is
+INDISCRIMINATE. Measured while `plugincache.json` was being re-probed on almost
+every launch: `midi_options_page` (P7b) hung at teardown in 3 of 5 runs in one
+round and 0 of 5 in the next, and `midi_clip_edit_verbs` (P1's, no options
+dialog, no MIDI-out port, no playback) hung in 1 of 5 in that same next round.
+Every single one of those 15 runs printed `PASS` first. With a warm cache
+`midi_out_backend_reject` is 12/12 clean.
+
+The short cases are the exposed ones simply because they finish while the scan
+thread is still working: `midi_out_backend_reject` never plays at all, which is
+why it was the first to show it.
 
 **One genuinely new observation**, from a case whose `.qxa` I had temporarily
 broken: a malformed script makes `main.cpp` call `std::exit(1)`, which runs
