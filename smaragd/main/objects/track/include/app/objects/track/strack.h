@@ -117,8 +117,29 @@ public:
     bool hasEventClips() const;
     /** Slot 0 of the plugin chain when it carries an instrument, else null. */
     SPluginSlot *instrumentSlot() const;
-    /** Whether this track sends its feed to a MIDI port (P7 wires the port). */
-    bool hasMidiOut() const { return false; }
+    /** Whether this track sends its feed to a MIDI port (proposal 36 P7b). */
+    bool hasMidiOut() const { return !midiOutPort_.isEmpty(); }
+
+    // --- MIDI output (D6 / P7b) -------------------------------------------
+    //
+    // A PORTABLE port NAME, never a machine-local device id: the id a WinMM
+    // index or a CoreMIDI uniqueID gives is meaningless on the next machine,
+    // so the project stores the name and `SSettings` resolves it per machine
+    // (the same split the audio device selection uses). Empty = no MIDI out.
+    //
+    // `midiOutChannel` is 0-BASED (0..15), matching `twEvent::channel` and the
+    // `add-note channel=` attribute, so the whole scripting API speaks one
+    // convention; -1 means "as authored" (each event keeps its own channel).
+    //
+    // `midiOutOffsetMs` is a signed per-track send offset, +-500 ms, POSITIVE =
+    // send EARLIER (the requester's outboard-gear case: gear whose audio return
+    // arrives late is compensated so its audio lands on the grid).
+    const QString &getMidiOutPort() const { return midiOutPort_; }
+    int getMidiOutChannel() const { return midiOutChannel_; }
+    int getMidiOutOffsetMs() const { return midiOutOffsetMs_; }
+    // ABSOLUTE, like every other track flag: all three at once, clamped.
+    void setMidiOutput( const QString &port, int channel, int offsetMs );
+    static constexpr int MIDI_OUT_MAX_OFFSET_MS = 500;
 
     /** How this track's events reach its parent (3.2.1). Serialized. */
     enum class MidiRouting { Auto = 0, Parent = 1, None = 2 };
@@ -219,6 +240,12 @@ private:
     std::shared_ptr<twEventClipSet> eventClips_;
     std::shared_ptr<twEventMerge>   eventFeed_;
     MidiRouting                     midiRouting_ = MidiRouting::Auto;
+    // MIDI output (P7b). Portable NAME + 0-based channel (-1 = as authored) +
+    // signed send offset in ms. Serialized only when non-default, so every
+    // project written before proposal 36 re-serializes byte-identically.
+    QString                         midiOutPort_;
+    int                             midiOutChannel_ = -1;
+    int                             midiOutOffsetMs_ = 0;
     
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;

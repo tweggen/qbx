@@ -111,6 +111,24 @@ int main( int argc, char *argv[] )
         if (qEnvironmentVariableIsEmpty("SMARAGD_AUDIO_BACKEND"))
             qputenv("SMARAGD_AUDIO_BACKEND", "capture");
 
+        // ... and the CAPTURE MIDI ports, for the same three reasons plus one
+        // (proposal 36 D6, P7b): it records {hostTimeNs, port, bytes} in memory
+        // so assert-midi-out has something to read; it keeps a headless suite
+        // from opening - and sending notes at - whatever synth the developer
+        // has plugged in; and it reports supportsTimestamps() == false ON
+        // PURPOSE, so the recorded instant is when the message reached the
+        // wire rather than when it was handed to a driver. The measurement is
+        // then made against the AUDIO capture backend's independent block log,
+        // never against the pump under test.
+        //
+        // Unlike the audio variable this one is read at every
+        // createMidiOutput() call rather than once, so it does not have to be
+        // set before SApplication - but it is set here anyway, next to its
+        // sibling, so the two defaults are one paragraph rather than two.
+        // Only when unset: an explicit SMARAGD_MIDI_BACKEND always wins.
+        if (qEnvironmentVariableIsEmpty("SMARAGD_MIDI_BACKEND"))
+            qputenv("SMARAGD_MIDI_BACKEND", "capture");
+
 #ifdef Q_OS_LINUX
         // Same intent as the previous argv rewrite, minus the undefined
         // behaviour: that version built `new char*[argc + 2]`, filled every slot

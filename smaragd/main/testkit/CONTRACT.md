@@ -136,6 +136,44 @@ Invariants:
       default: an underrun leaves a short zero gap that leaks energy into other
       bins, and the argmax is still the right block.
 
+MIDI-out assertions (proposal 36 P7b):
+  A --test-case run also selects the CAPTURE MIDI ports (main.cpp sets
+  SMARAGD_MIDI_BACKEND=capture unless it is already set), for the audio
+  backend's three reasons plus one: the capture port records
+  {hostTimeNs, port, bytes} and NOTHING ELSE — specifically not the due time it
+  was asked for, because the difference between the two IS the measurement.
+  It reports supportsTimestamps() == false on purpose, so the recorded instant
+  is when the message reached the wire rather than when a driver took it.
+   1. THE MEASUREMENT IS INDEPENDENT OF THE PUMP. assert-midi-out maps a
+      message's host time onto a project frame through the AUDIO capture
+      backend's block log (CaptureBackend::frameAtHostTime) — a log written by
+      a different thread that knows nothing of the pump. Asking the pump where
+      it thought it was would prove nothing.
+   2. `at` is SIGNED project frames since playback started, and it already has
+      the device output latency subtracted, so it reads "the project frame
+      whose audio was being HEARD when this left". An event with a positive
+      per-track offset legitimately lands at a NEGATIVE `at`.
+   3. SMARAGD_CAPTURE_SPEED must be 1. The audio log stays empirically correct
+      at other speeds, but a project frame then means something different in
+      wall-clock terms while the MIDI due times do not.
+   4. Tolerance 4096 frames (~85 ms at 48 kHz) is the budget the design sets.
+      Measured on this box the steady-state error is under 600 frames and the
+      first event of a run under 400; a case that needs more than 4096 has
+      found a bug, not a slow machine.
+   5. An event whose offset-shifted due time falls BEFORE the run start is
+      clamped — you cannot send a message before the transport started — so a
+      case asserting an offset must place its notes far enough in.
+   6. assert-midi-out REJECTS when the MIDI backend is not `capture`, rather
+      than reporting "0 messages, all good": a silently passing assertion would
+      make every MIDI-out case vacuous the moment someone ran the suite against
+      a real device. `midi_out_backend_reject` is that gate.
+   7. set-option writes the developer's REAL smaragd.ini. Only one case in the
+      suite may own any given key, and it must set it back:
+      midi_out_chase_and_stop owns `midi/chaseNoteOns`, midi_options_page owns
+      `midi/outOffsetMs`. Both are RUN_SERIAL, because the pump reads those
+      values at every transport start and a concurrent playback case would
+      inherit them.
+
 Event assertions (proposal 36 P1):
   assert-midi-events has TWO scopes and they are not the same object.
   scope="clip" reads the cut's own frame-domain snapshot - what the edit verbs

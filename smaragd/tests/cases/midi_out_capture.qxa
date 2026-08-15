@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 P7b, AC1. MIDI OUT reaches the wire, on time.
+
+  Three notes a second apart on one track with a MIDI-out port, played back
+  under the AUDIO capture backend at real-time pacing. What is asserted is not
+  "the pump thinks it sent them" but "they left for the wire at the instant the
+  audio at that position was audible" - and the two clocks are recorded by two
+  different threads that know nothing of each other (design D6, review #12):
+
+    - the CAPTURE MIDI port records {hostTimeNs, port, bytes}, and deliberately
+      NOT the due time it was asked for, because the difference between the two
+      IS the measurement;
+    - the AUDIO capture backend records {hostTimeNs, firstFrame} per delivered
+      block, and assert-midi-out maps every message through THAT log.
+
+  SMARAGD_CAPTURE_SPEED must be 1 here (the suite's default): the audio log
+  stays empirically right at other speeds, but a project frame would then mean
+  something different in wall-clock terms while the MIDI due times would not.
+
+  Timing: 120 BPM, PPQ 960, 48 kHz => 1920 ticks = 1 s = 48000 frames.
+  Notes at ticks 0 / 1920 / 3840, each 960 ticks (0.5 s) long.
+  Tolerance 4096 frames ~ 85 ms, the budget D6's brief sets.
+-->
+<SActionScript version="1" name="midi_out_capture">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="5760" name="notes"/>
+    <add-note clip="0,0" tick="0"    dur="960" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="1920" dur="960" key="64" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="3840" dur="960" key="67" velocity="100" channel="0"/>
+
+    <!-- The port is a portable NAME; "capture" is both the id and the name the
+         capture backend reports, so it resolves without any per-machine
+         mapping. channel is 0-BASED, like add-note's. -->
+    <set-track-midi-output trackPath="0" port="capture" channel="2" offsetMs="0"/>
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <!-- Real-time paced: 3.5 s of transport for 3 s of material, so the last
+         note-off is comfortably inside the run. -->
+    <wait-ms ms="3600"/>
+    <toggle-playback play="0"/>
+
+    <dump-midi-capture filename="midi_out.txt" minCount="6"/>
+
+    <!-- Every note-on landed where its audio did. -->
+    <assert-midi-out kind="noteon" key="60" channel="2" at="0"     tolerance="4096" count="1"/>
+    <assert-midi-out kind="noteon" key="64" channel="2" at="48000" tolerance="4096" count="1"/>
+    <assert-midi-out kind="noteon" key="67" channel="2" at="96000" tolerance="4096" count="1"/>
+
+    <!-- Three note-offs by 3 s, one per note. Their positions are the note
+         ends: 24000 / 72000 / 120000 frames. -->
+    <assert-midi-out kind="noteoff" key="60" channel="2" at="24000"  tolerance="4096" count="1"/>
+    <assert-midi-out kind="noteoff" key="64" channel="2" at="72000"  tolerance="4096" count="1"/>
+    <assert-midi-out kind="noteoff" key="67" channel="2" at="120000" tolerance="4096" count="1"/>
+
+    <!-- NOTHING before the play start. A pump that emitted against a static
+         playhead - before the device had delivered a single frame - would put
+         the first bar on the wire immediately, and this is the assertion that
+         catches it: a message at frame -20000 is a message sent 0.4 s early. -->
+    <assert-midi-out kind="noteon" at="-20000" tolerance="16000" count="0"/>
+
+    <!-- The transport stop panics every channel it used: CC64=0 then CC123=0
+         (D6). Only channel 2 was used, so only channel 2 is silenced. -->
+    <assert-midi-out kind="cc" cc="64"  value="0" channel="2" minCount="1"/>
+    <assert-midi-out kind="cc" cc="123" value="0" channel="2" minCount="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

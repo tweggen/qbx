@@ -25,6 +25,7 @@ class SLink;
 class SProject;
 class SActionHistory;
 class SAction;
+class SMidiOutPump;
 class QTimer;
 
 typedef QList<SLink*> SSelectionList;
@@ -122,6 +123,36 @@ public:
         setGlobalLocatorPosRealtime((offset_t) absPos);
     }
 
+    // How many times the RT thread has published a position in this process.
+    // The MIDI-out pump anchors its clock on a PUBLICATION rather than on a
+    // position CHANGE: twSpeaker defers the device start until the readahead is
+    // primed, so between "play" and the first callback the playhead sits still
+    // at the locator, and a due time hung on that static value would put the
+    // first bar on the wire before a single frame had been delivered. Written
+    // by the audio thread with a relaxed store (single writer, no signal, no
+    // Qt), read by the main thread.
+    std::uint64_t locatorPublishSeq() const {
+        return locatorPublishSeq_.load( std::memory_order_relaxed );
+    }
+
+    // Frames to subtract from the published locator so a consumer reads the
+    // audio that is being HEARD rather than the audio just handed to the
+    // device. 0 when the backend does not report a latency, or nothing is
+    // playing. Named for the meters (proposal 34) that first needed it; the
+    // MIDI-out pump reuses it verbatim, because the conversion from DEVICE
+    // frames at the DEVICE rate to PROJECT frames is the same conversion.
+    offset_t meterLatencyFrames() const;
+    // The device's buffer size, in PROJECT frames. twSpeaker publishes the
+    // position AFTER the pull, so the frame just handed to the device is
+    // `published - this`; the MIDI-out pump needs that correction and nothing
+    // else does. 0 when unknown.
+    offset_t outputBufferFramesProject() const;
+
+    // The MIDI-out pump (proposal 36 P7b). Never null after construction; the
+    // Options dialog asks it for the port lists rather than minting a
+    // MidiOutput of its own (see SMidiOutPump::outputPorts).
+    SMidiOutPump *midiOutPump() const { return midiOutPump_.get(); }
+
     // Test output directory for artifacts (screenshots, renders, etc.)
     void setTestOutputDir(const QString &path);
     QString testOutputDir() const override;
@@ -201,10 +232,6 @@ private slots:
 private:
     void initPluginRegistry();
 
-    // Frames to subtract from the published locator so a meter reads the audio
-    // that is being HEARD rather than the audio just handed to the device.
-    // 0 when the backend does not report a latency, or nothing is playing.
-    offset_t meterLatencyFrames() const;
     // Start (or re-arm) the metering pump. No-op during an offline render.
     void startMetering();
 
@@ -228,6 +255,9 @@ private:
     // Written by the audio thread (atomic store, no signal) and by the UI thread
     // (setGlobalLocatorPos, which also emits). Read by both.
     std::atomic<offset_t> globalLocatorPos_;
+    // Incremented by the AUDIO thread on every publishPosition (see
+    // locatorPublishSeq). Atomic store only - no signal, no QObject.
+    std::atomic<std::uint64_t> locatorPublishSeq_{ 0 };
     offset_t lastShownLocator_ = 0;   // last position the UI emitted (main thread only)
     offset_t recordingStartFrame_ = 0; // locator at record start (for the live region)
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
@@ -236,6 +266,7 @@ private:
     QElapsedTimer meterClock_;        // monotonic ms handed to the ballistics
     int meterTailTicks_ = 0;          // remaining decay ticks after a stop
     twLevelProbe masterProbe_;        // reads the mixer root's frozen pages
+    std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 36 P7b
     bool isPlaying_;
     SProject *currentProject_;
     QString statusMode_;

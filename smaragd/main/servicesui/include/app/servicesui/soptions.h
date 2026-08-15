@@ -57,6 +57,27 @@ inline constexpr const char *ShortcutClipProperties = "ui/shortcuts/clipProperti
 inline constexpr const char *PluginSearchPaths   = "plugins/searchPaths";
 inline constexpr const char *PluginScanOnStartup = "plugins/scanOnStartup";
 
+// MIDI (proposal 36 D6 / P7b). All three are per-user and machine-local, which
+// is exactly why they are here and not in the project: a port NAME travels with
+// the project, the id it resolves to does not (SSettings::midiPortId).
+//
+//   MidiOutOffsetMs   the GLOBAL send offset added to every track's own one,
+//                     signed, POSITIVE = send EARLIER. Compensates a whole rig
+//                     (an interface's MIDI jitter, a converter) rather than one
+//                     device.
+//   MidiChaseNoteOns  whether a chase at start/locate re-attacks the notes that
+//                     were already sounding. Default OFF for MIDI out: pushing
+//                     a note-on at a hardware synth on every locate is usually
+//                     a surprise. Controllers/program/bend are chased ALWAYS
+//                     and are not configurable - without them the receiving
+//                     device is simply in the wrong state.
+//   MidiInputPortIds  the input ports a future session will listen on. Listed
+//                     and persisted here from P7b; nothing reads them until P8
+//                     opens the input side.
+inline constexpr const char *MidiOutOffsetMs   = "midi/outOffsetMs";
+inline constexpr const char *MidiChaseNoteOns  = "midi/chaseNoteOns";
+inline constexpr const char *MidiInputPortIds  = "midi/inputPortIds";
+
 // Default value for a key (invalid QVariant if unknown). Scroll-first defaults.
 QVariant def( const QString &key );
 

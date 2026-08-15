@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 P7b, AC5. `assert-midi-out` REFUSES to measure what it cannot see.
+
+  This case runs with SMARAGD_MIDI_BACKEND=null (set on the CTest entry - see
+  smaragd/CMakeLists.txt), so the pump sends to a port that records nothing.
+  The verb must REJECT rather than report "0 messages, all good": a silently
+  passing assertion would turn every MIDI-out case vacuous the moment someone
+  ran the suite against a real device, which is exactly the sort of green that
+  hides a regression for months.
+
+  The notes and the port below are real - the run genuinely plays and genuinely
+  sends. Only the recorder is missing.
+-->
+<SActionScript version="1" name="midi_out_backend_reject">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="notes"/>
+    <add-note clip="0,0" tick="0" dur="960" key="60" velocity="100" channel="0"/>
+    <set-track-midi-output trackPath="0" port="default" channel="2" offsetMs="0"/>
+
+    <assert-midi-out count="0" expectReject="true"/>
+    <assert-midi-out kind="noteon" at="0" tolerance="4096" expectReject="true"/>
+    <dump-midi-capture filename="never_written.txt" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

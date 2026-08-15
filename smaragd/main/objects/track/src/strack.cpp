@@ -56,6 +56,16 @@ int STrack::serializeSelfAttributes( QTextStream &o )
     // proposal 36 re-serializes byte-identically (persistence invariant 4).
     if( midiRouting_ != MidiRouting::Auto )
         o << " midiRouting='" << midiRoutingToString( midiRouting_ ) << "'";
+    // MIDI output (proposal 36 P7b), each written only when it is not the
+    // default, for the same byte-identity reason as midiRouting above. The
+    // PORT is the portable NAME; the machine-local device id lives in
+    // SSettings, keyed by that name.
+    if( !midiOutPort_.isEmpty() )
+        o << " midiOutPort='" << midiOutPort_.toHtmlEscaped() << "'";
+    if( midiOutChannel_ >= 0 )
+        o << " midiOutChannel='" << midiOutChannel_ << "'";
+    if( midiOutOffsetMs_ != 0 )
+        o << " midiOutOffsetMs='" << midiOutOffsetMs_ << "'";
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -77,6 +87,28 @@ QString STrack::midiRoutingToString( MidiRouting r )
     case MidiRouting::None:   return QStringLiteral( "none" );
     default:                  return QStringLiteral( "auto" );
     }
+}
+
+void STrack::setMidiOutput( const QString &port, int channel, int offsetMs )
+{
+    if( channel < -1 )  channel = -1;
+    if( channel > 15 )  channel = 15;
+    if( offsetMs >  MIDI_OUT_MAX_OFFSET_MS ) offsetMs =  MIDI_OUT_MAX_OFFSET_MS;
+    if( offsetMs < -MIDI_OUT_MAX_OFFSET_MS ) offsetMs = -MIDI_OUT_MAX_OFFSET_MS;
+    if( port == midiOutPort_ && channel == midiOutChannel_
+        && offsetMs == midiOutOffsetMs_ ) return;
+
+    const bool hadOut = hasMidiOut();
+    midiOutPort_     = port;
+    midiOutChannel_  = channel;
+    midiOutOffsetMs_ = offsetMs;
+
+    // Gaining or losing a port changes `bubblesEventsUp()` under the `auto`
+    // rule ("consumed here, or bubbled up"), so the PARENT's feed - and with it
+    // its instrument - now sees a different stream. The class-1 consumer is
+    // never bounded on the right, hence the open-ended range.
+    if( hadOut != hasMidiOut() )
+        invalidateRenderPathRange( 0, EVENT_DIRTY_END );
 }
 
 void STrack::setMidiRouting( MidiRouting r )
@@ -809,6 +841,12 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     // means and what a track without a serialized routing should do.
     midiRouting_ = midiRoutingFromString(
         element.attribute( "midiRouting", "auto" ) );
+
+    // MIDI output (P7b). Absent = no output, which is what every project
+    // written before proposal 36 means.
+    setMidiOutput( element.attribute( "midiOutPort", "" ),
+                   element.attribute( "midiOutChannel", "-1" ).toInt(),
+                   element.attribute( "midiOutOffsetMs", "0" ).toInt() );
     
     return 0;
 }

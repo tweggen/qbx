@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 P7b, AC6. The Options -> MIDI page (design 6.3).
+
+  The page mirrors the Audio one - same build/load/apply triple, same rule that
+  the DEVICE LIST comes from the backend rather than from a hard-coded table -
+  so the assertion is that it lists exactly what the active MIDI backend
+  reports, and nothing else. Under a headless test run that backend is `capture`,
+  which reports exactly one synthetic endpoint on each side: an Options page
+  showing the machine's real MIDI ports while the capture backend was active
+  would be a lie, and this is where that lie would show.
+
+  Built OFF SCREEN and never shown (the house pattern): a qxa run on Windows
+  uses the real platform plugin, so a shown dialog would appear on the
+  developer's screen.
+
+  This case OWNS the midi/outOffsetMs setting - `set-option` writes the real
+  per-user smaragd.ini - and puts it back at the end. It is RUN_SERIAL for the
+  same reason: the MIDI-out pump reads that value at every transport start, so
+  a concurrent playback case would inherit it.
+-->
+<SActionScript version="1" name="midi_options_page">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Exactly the backend's own ports: one out, one in, no more. -->
+    <assert-midi-options outputPorts="1" inputPorts="1"
+                         contains="backend=capture"/>
+    <assert-midi-options contains="out[0]=Capture (in-memory test port)"/>
+    <assert-midi-options contains="in[0]=Capture (in-memory test port) id=capture"/>
+    <!-- The capture port CAN create a virtual port, so the offer is enabled.
+         On WinMM it would read virtual=no - gated on the capability the backend
+         reports, never on the platform (tw/devices CONTRACT inv. 18). -->
+    <assert-midi-options contains="virtual=yes"/>
+    <!-- No input is listened to yet: P7b lists and persists them, P8 opens
+         them. -->
+    <assert-midi-options contains="selected=0"/>
+
+    <!-- Defaults, straight out of SOpt::def. -->
+    <assert-midi-options contains="offsetMs=0"/>
+    <assert-midi-options contains="chaseNoteOns=0"/>
+
+    <!-- A written setting PERSISTS and the page reads it back. -->
+    <set-option key="midi/outOffsetMs" value="120"/>
+    <assert-midi-options contains="offsetMs=120"/>
+    <assert-midi-options absent="offsetMs=0"/>
+
+    <set-option key="midi/outOffsetMs" value="0"/>
+    <assert-midi-options contains="offsetMs=0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

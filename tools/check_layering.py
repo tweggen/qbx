@@ -145,9 +145,12 @@ APP_DEPS = {
     # testkit + objects/midi since proposal 36 P1: assert-midi-events reads a
     # cut's frame-domain snapshot and a track's event feed, which is the only
     # way to see mute / solo / midiRouting from a script.
+    # testkit + servicesui since proposal 36 P7b: assert-midi-options builds the
+    # REAL SOptionsDialog off screen and asserts on describeMidiPage(), the same
+    # shape as assert-plugin-strip reaching into pluginui.
     'testkit':        {'actions', 'model', 'objects/cut', 'objects/midi',
                        'objects/mixer', 'objects/track', 'objects/wave',
-                       'pluginui', 'shell'},
+                       'pluginui', 'servicesui', 'shell'},
 }
 
 # Which engine modules each app module may include (tw/<mod>/... paths).
@@ -199,9 +202,12 @@ APP_ENG = {
     # the background scan from a main-thread timer.
     # shell + metering since proposal 34: SApplication owns the metering pump and
     # the master level probe.
-    'shell':          _ENG_BASE | {'devices', 'dsp', 'metering', 'playback',
-                                   'plugins', 'record', 'render', 'schedule',
-                                   'sidecar'},
+    # shell + events since proposal 36 P7b: the MIDI-out pump slices a track's
+    # event FEED (twEventMerge/twEventBlock) on the main thread and hands the
+    # bytes to tw/devices' MidiOutScheduler.
+    'shell':          _ENG_BASE | {'devices', 'dsp', 'events', 'metering',
+                                   'playback', 'plugins', 'record', 'render',
+                                   'schedule', 'sidecar'},
     # testkit + sidecar + schedule since proposal 27 M1 test verbs:
     # assert-sidecar reads twQafReader/twSidecarStore, wait-analysis polls the
     # revalidator's jobsQueued().

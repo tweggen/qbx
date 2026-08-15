@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 P7b, AC3. THE LOOP WRAP (design D6).
+
+  A cycle is where MIDI-out goes wrong quietly: the transport jumps from the
+  cycle end back to the cycle start, and a note that was sounding across that
+  boundary has no note-off anywhere in the model - the clip does not end there,
+  the transport does. Left alone it hangs on the hardware for the rest of the
+  session. So the pump SPLITS its window at the cycle end, releases everything
+  it has sent and not released, re-issues the chase at the cycle start, and
+  carries on.
+
+  The other half of the assertion is "no doubled NoteOn": the pump's de-dup is
+  a monotone frontier plus the loop ITERATION it lives in, so a note inside the
+  cycle must be sent exactly once per pass and never twice in one.
+
+  120 BPM / PPQ 960 / 48 kHz: 1920 ticks = 1 s = 48000 frames.
+    cycle  0 .. 96000 frames  (0 .. 2 s)
+    note   tick 2880 .. 4800  (1.5 s .. 2.5 s) - it STRADDLES the cycle end
+
+  Elapsed frames on the wire (the recording is linear; the project position is
+  what wraps):
+    pass 0   NoteOn  at  72000    NoteOff at  96000  (the cycle end)
+    pass 1   NoteOn  at 168000    NoteOff at 192000
+  4.5 s of transport covers both passes and starts a third, whose note (at
+  elapsed 264000) is well past the 250 ms lookahead - hence exactly two of each.
+-->
+<SActionScript version="1" name="midi_out_loop_wrap">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <!-- The clip is 3 s long so the note is not clipped by the CLIP end; the
+         only boundary in play is the cycle's. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="5760" name="straddle"/>
+    <add-note clip="0,0" tick="2880" dur="1920" key="60" velocity="100" channel="0"/>
+
+    <set-track-midi-output trackPath="0" port="capture" channel="2" offsetMs="0"/>
+
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <cycle-enable/>
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-ms ms="4500"/>
+    <toggle-playback play="0"/>
+
+    <dump-midi-capture filename="loop_wrap.txt" minCount="4"/>
+
+    <!-- Pass 0. -->
+    <assert-midi-out kind="noteon"  key="60" channel="2" at="72000" tolerance="4096" count="1"/>
+    <assert-midi-out kind="noteoff" key="60" channel="2" at="96000" tolerance="4096" count="1"/>
+    <!-- Pass 1: the same note again, one cycle length later. -->
+    <assert-midi-out kind="noteon"  key="60" channel="2" at="168000" tolerance="4096" count="1"/>
+    <assert-midi-out kind="noteoff" key="60" channel="2" at="192000" tolerance="4096" count="1"/>
+
+    <!-- NO DOUBLED NOTE-ON: exactly one per pass over the whole run. A frontier
+         that forgot its loop iteration would re-emit the pass it had already
+         sent and this count would be 3 or 4. -->
+    <assert-midi-out kind="noteon"  key="60" count="2"/>
+    <assert-midi-out kind="noteoff" key="60" count="2"/>
+
+    <!-- The stop still silences the channel. -->
+    <assert-midi-out kind="cc" cc="123" value="0" channel="2" minCount="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

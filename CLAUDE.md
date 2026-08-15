@@ -607,6 +607,53 @@ BYTE-IDENTICAL; legitimate only because twSmf has one canonical spelling and
 regenerates it), `midi_clip_edit_verbs`, `midi_clip_tempo_remap`,
 `midi_clip_render_silent`, `midi_folder_feed`, plus `action_roundtrip_test`.
 
+## MIDI output (proposal 36 P7 — executed 2026-08-15)
+
+A track can send its event feed to a MIDI port. The device layer is
+`tw/devices` (P7a: `MidiOutput`/`MidiInput`, WinMM/CoreMIDI/ALSA-seq/capture/
+null, `MidiOutScheduler`); the app half is `SMidiOutPump` in `main/shell`
+(P7b). Design: `plan/proposed/36_MIDI_INSTRUMENTS_AUTOMATION.md` D6 and §4.6.
+Invariants: `tw303a/devices/CONTRACT.md` inv. 10-18, `main/shell/CONTRACT.md`
+inv. 7-8, `main/objects/track/CONTRACT.md` inv. 9-10.
+
+**Read this before touching MIDI-out — the obvious design is wrong, for exactly
+the reason the level meters' was.** MIDI is emitted from the PLAYHEAD, on the
+main thread, at PLAY time. Never at freeze time: pages are frozen ~1.4 s ahead
+of the playhead by the readahead, and by renders that have no playhead at all,
+so a freeze-time MIDI-out would spray a whole arrangement at the user's
+hardware synth with the transport stopped.
+
+| Thing to know | Why |
+|---|---|
+| `SMidiOutPump` is a 20 ms `QTimer` with a 250 ms lookahead, started by `setPlaying(true)` | It is a sibling of `meterTimer_`, never a fold into it: the meters keep ticking after a stop so the bars can decay, whereas MIDI-out must go silent — and send its all-notes-off — at the instant the transport does. |
+| The clock anchor is re-taken on every position PUBLICATION, not every position CHANGE | `twSpeaker` defers the device start until the readahead is primed, so before the first callback the playhead sits still at the locator. Measured: anchoring on a change put the first note of a run **59 ms early**. `SApplication::locatorPublishSeq()` is the counter the RT thread bumps next to the position store. |
+| The published position is one device buffer AHEAD of the frame just delivered | `twSpeaker` publishes `engine->currentPosition()` AFTER the pull, so the frame handed over at that instant is `published − bufferFrames`. Skipping the correction is ~21 ms at 1024 frames / 48 kHz. |
+| Output latency reuses `meterLatencyFrames()` verbatim | It already converts DEVICE frames at the DEVICE rate into PROJECT frames (proposal 34). `dueHostTime = hostTime(playhead) + deviceOutputLatency − midiOutLatency − globalOffset − trackOffset`. |
+| The pump reads the track FEED (`STrack::eventFeed()`), not its own clip set | So a folder parent's port carries its children's patterns, with the channel remapped to the parent's — the drum-machine-on-the-folder case (design §3.2.1). A child with its own port stops bubbling, by the same `auto` rule. |
+| De-dup is a monotone per-track FRONTIER plus its loop iteration | Windows are contiguous and never overlap, so it subsumes the design's `(clip key, event ordinal, loop iteration)` key set — and survives an edit that renumbers ordinals mid-flight, which a key set would not. |
+| `midiOutPort` is a portable NAME; `midiOutChannel` is 0-BASED | The id `open()` wants (a WinMM index, a CoreMIDI uniqueID) means nothing on the next machine, so `SSettings` maps `midi/portId/<name>`. The channel matches `twEvent::channel` and `add-note channel=`, so the scripting API speaks one convention; `-1` = "as authored". |
+| `offsetMs` is signed, ±500, POSITIVE = send EARLIER | Outboard gear whose audio return arrives late is compensated so its audio lands on the grid. An event whose shifted due time falls before the run start is CLAMPED — you cannot send before the transport started. |
+| Nothing below the ring may touch Qt | `MidiOutScheduler`'s sender is a plain `std::thread`; a Qt signal from it would make Qt adopt the thread and deadlock the join at teardown. The pump is the ring's SINGLE producer and it is the main thread. |
+
+**Measurement is independent of the thing measured** (design review #12), which
+is what makes the gates worth anything: the capture MIDI port records
+`{hostTimeNs, port, bytes}` and deliberately NOT the due time it was asked for,
+while the AUDIO capture backend records `{hostTimeNs, firstFrame}` per delivered
+block. `assert-midi-out` maps through the AUDIO log
+(`CaptureBackend::frameAtHostTime`) and subtracts the device latency, so `at` is
+"the project frame whose audio was being HEARD when this message left".
+`SMARAGD_CAPTURE_SPEED` must be 1.
+
+Gates: the qxa cases `midi_out_capture`, `midi_out_chase_and_stop`,
+`midi_out_loop_wrap`, `midi_out_offset_and_folder` (all `RUN_SERIAL` — they
+assert wall-clock latency), `midi_out_render_silent`, `midi_out_backend_reject`
+and `midi_options_page`, plus `devices_midi_test` and `action_roundtrip_test`.
+Measured error across the playback cases: **−98 … +581 frames** against a
+4096-frame budget. NOT gated: WinMM jitter against real hardware, CoreMIDI /
+ALSA-seq, virtual-port creation on Windows (WinMM has no such concept — a
+loopMIDI-style driver appears as an ordinary device), `CAPTURE_SPEED ≠ 1`,
+sysex (refused by the ring rather than truncated; P9).
+
 ## Recording Audio
 
 Smaragd supports recording from input devices (microphone, line-in, etc.) via **Record** button in the transport toolbar or **Ctrl-R** / **Cmd-R** keyboard shortcut. Recorded audio is automatically converted to clips and placed on armed tracks.
