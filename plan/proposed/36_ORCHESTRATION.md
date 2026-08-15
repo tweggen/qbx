@@ -623,7 +623,11 @@ P0b ──┬───────► P1   ├──► P7
 - **Orchestrator-reviewed:** the recorder's single-action commit; re-entrancy.
 
 ### P7 — MIDI output  *(engine `tw/devices`; app pump; options)*
-- **Entry:** P1 merged (P3 not required).
+> Executed as two PRs (2026-08-15): **P7a** = the `tw303a/devices` half (interfaces,
+> backends, capture + audio-capture host-time log, `MidiOutScheduler`, unit test) —
+> no P1 dependency, run in parallel with P1; **P7b** = the app half (pump, verbs,
+> options page, qxa) after P1.
+- **Entry:** P7a: none. P7b: P1 + P7a merged (P3 not required).
 - **Modules:** `tw303a/devices` (+ CONTRACT; also the audio capture backend's
   host-time-per-block log), `main/shell` (pump, panic, settings), `main/objects/
   track` (`midiOutPort/Channel`, `set-track-midi-output`), `main/servicesui`
