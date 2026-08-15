@@ -10443,8 +10443,8 @@ feature (D4 has it for instruments).
 ## 2026-08-16 - Plugin-scan vs TwLog teardown hang fixed
 
 Branch `fix/plugin-scan-teardown-hang`. The failure two earlier sessions
-characterised and deliberately did not chase (2026-08-15 "Proposal 36 P1",
-section "Found on the way", and "Proposal 36 P7a", section "One pre-existing
+characterised and deliberately did not chase (2026-08-15 "Proposal 37 P1",
+section "Found on the way", and "Proposal 37 P7a", section "One pre-existing
 failure"): a `--test-case` run prints `PASS` and then **never exits**, or dies
 with SIGSEGV after the PASS line. `qxa.takes_screenshot` is the case that hit it
 in the `-j4` suite (CTest Timeout, 600 s).
