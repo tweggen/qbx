@@ -117,6 +117,14 @@ public:
     int getXPosOfOffset( offset_t ) const;
     QRect getSLinkVisibRect( int trackIdx, const SLink & );
 
+    // The wheel gesture, factored out of wheelEvent() so the track-head column
+    // can run the very same scroll/zoom actions (see SStdMixerView::wheelFromHead).
+    // `anchorX` is the pointer's x in CANVAS coordinates, or -1 when the event
+    // came from a widget that has no time axis — a horizontal zoom then keeps
+    // the left edge instead of the (meaningless) time under the pointer.
+    // Returns true when the gesture was consumed.
+    bool applyWheel( QWheelEvent *ev, int anchorX );
+
     // Time-range selection (shown in the ruler band). Bounds are normalized
     // (start <= end). hasRange() is false when there is no selection.
     bool hasRange() const { return rangeValid_; }
@@ -465,6 +473,12 @@ public:
     void toggleTrackTakesExpanded( STrack * );
     void refreshTrackTree();   // rebuild rows + control column + relayout + repaint
     // --------------------------------------------------------------------
+
+    // Route a wheel event that landed on the track-head column (a head, one of
+    // its child widgets, or the blank area below the last head) into the
+    // arranger canvas, so the configured scroll/zoom gestures work there too.
+    // Returns true when the gesture was consumed.
+    bool wheelFromHead( QWheelEvent *ev );
 
     // Track-reorder drag, driven by a control's grip handle. beginTrackDrag()
     // arms the drag for the given control; updateTrackDrag()/endTrackDrag() take

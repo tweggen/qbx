@@ -806,6 +806,13 @@ bool SStdMixerView::eventFilter( QObject *watched, QEvent *event )
         return false;      // let the widget see its own resize too
     }
     if( ( watched == qTrackControlBoxHolder_ || watched == qTrackControlBox_ )
+        && event->type() == QEvent::Wheel ) {
+        // Blank area below the last head (a head forwards its own wheel events,
+        // see SSMVMixerControl::wheelEvent): same gestures as over the canvas.
+        if( wheelFromHead( static_cast<QWheelEvent*>( event ) ) )
+            return true;
+    }
+    if( ( watched == qTrackControlBoxHolder_ || watched == qTrackControlBox_ )
         && event->type() == QEvent::MouseButtonDblClick ) {
         QMouseEvent *me = static_cast<QMouseEvent*>( event );
         // Only the blank area below the last head adds a track. A double click
@@ -818,6 +825,14 @@ bool SStdMixerView::eventFilter( QObject *watched, QEvent *event )
         }
     }
     return QWidget::eventFilter( watched, event );
+}
+
+// The track heads have no time axis of their own, so a wheel over them is
+// simply the canvas' gesture: -1 as the anchor keeps the left edge on a
+// horizontal zoom (there is no time under the pointer to hold still).
+bool SStdMixerView::wheelFromHead( QWheelEvent *ev )
+{
+    return qContent_ ? qContent_->applyWheel( ev, -1 ) : false;
 }
 
 /**
@@ -3412,6 +3427,13 @@ QString SMVActualView::describeWheelActions() const
 
 void SMVActualView::wheelEvent( QWheelEvent *ev )
 {
+    // The pointer really is over the canvas here, so a time under it exists.
+    if( !applyWheel( ev, (int) ev->position().x() ) )
+        QWidget::wheelEvent( ev );
+}
+
+bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
+{
     int dy = ev->angleDelta().y();
     int dx = ev->angleDelta().x();
 
@@ -3428,12 +3450,11 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
     // it — leave that scroll to the OS. The app's own zoom is on ⌘+wheel, which is
     // Qt::ControlModifier here and falls through.
     if( ev->modifiers() & Qt::MetaModifier ) {
-        QWidget::wheelEvent( ev );
-        return;
+        return false;
     }
 #endif
 
-    if( dy == 0 ) { QWidget::wheelEvent( ev ); return; }
+    if( dy == 0 ) return false;
     int dir = (dy > 0) ? +1 : -1;   // +1 = wheel away from the user ("up")
 
     int action = wheelActionFor( ev->modifiers() );
@@ -3471,8 +3492,11 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
         bool in = (dir > 0);
         if( wheelInvertZoom_ ) in = !in;
         double newW = secondWidth_ * ( in ? 1.2 : 1.0 / 1.2 );
-        if( wheelZoomToCursor_ ) {
-            int mouseX = (int) ev->position().x();
+        // anchorX < 0 = the pointer is not over the canvas (the gesture came
+        // from the track-head column), so there is no time under it to hold
+        // still: fall back to keeping the left edge, as zoom-to-cursor-off does.
+        if( wheelZoomToCursor_ && anchorX >= 0 ) {
+            int mouseX = anchorX;
             offset_t t = getTimeOf( mouseX );          // time under cursor (pre-zoom)
             setSecondWidth( newW );
             int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
@@ -3496,8 +3520,7 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
 
     case SOpt::None:
     default:
-        QWidget::wheelEvent( ev );
-        return;
+        return false;
     }
     ev->accept();
 
@@ -3507,6 +3530,7 @@ void SMVActualView::wheelEvent( QWheelEvent *ev )
     if( mw ) {
         mw->postHint( describeWheelActions() );
     }
+    return true;
 }
 
 void SMVActualView::dragEnterEvent(QDragEnterEvent *e)

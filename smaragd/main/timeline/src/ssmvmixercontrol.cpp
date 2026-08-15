@@ -101,6 +101,21 @@ void SSMVMixerControl::applyVolume_( double newVolume )
 }
 
 /**
+ * Wheel over a track head = wheel over the arranger canvas. The head column is
+ * part of the same view, so scrolling/zooming there had to work; without this
+ * the event just died in the head (QWidget's default ignores it, and the column
+ * viewport is not in the canvas' parent chain).
+ *
+ * The fader is the one exception: it accepts the wheel itself (1.0 dB per
+ * notch, see its singleStep), so those events never reach here.
+ */
+void SSMVMixerControl::wheelEvent( QWheelEvent *ev )
+{
+    if( !smv_.wheelFromHead( ev ) )
+        QWidget::wheelEvent( ev );
+}
+
+/**
  * Double-clicking the fader resets it to unity gain (0.0 dB). We intercept the
  * event here rather than subclass QSlider; the slider would otherwise treat the
  * second press as the start of another drag.
@@ -413,6 +428,10 @@ SSMVMixerControl::SSMVMixerControl(
     qTrkLabel_ = new QLineEdit( tk_.getSName(), this );
     qTrkLabel_->setFrame( false );
     qTrkLabel_->setFont( smallFont );
+    // A QLineEdit asks for a fair minimum width. Beside the button row that
+    // would push the fixed-size buttons out of the head instead of squeezing
+    // the name, so let it be squeezed (placeLabel decides when it fits at all).
+    qTrkLabel_->setMinimumWidth( 24 );
     // Install event filter to pass mouse clicks through to parent for track selection
     qTrkLabel_->installEventFilter( this );
     // Lose focus when Enter/Return is pressed
@@ -512,15 +531,30 @@ SSMVMixerControl::SSMVMixerControl(
     // (STrack::buildComponents), so its identity is stable for this head's life.
     probe_.setTap( tk_.getRootComponent() );
 
-    // Mute/Solo column, then the fader column, then the meter; a trailing
-    // stretch keeps the group left-aligned.
+    // Fader column beside the meter (they lie down together in Compact).
+    qFaderRow_ = new QBoxLayout( QBoxLayout::LeftToRight );
+    qFaderRow_->setContentsMargins( 0, 0, 0, 0 );
+    qFaderRow_->setSpacing( 4 );
+    qFaderRow_->addLayout( qFaderCol_ );
+    qFaderRow_->addWidget( qMeter_ );
+    qFaderRow_->addStretch( 1 );
+
+    // The track name sits at the top of this column, i.e. next to the M/S/R/T/G
+    // buttons rather than on a full-width row of its own above the strip: at the
+    // minimal 120 px column there is no horizontal room for the name BESIDE the
+    // fader, so it takes the width above it instead.
+    qRightCol_ = new QBoxLayout( QBoxLayout::TopToBottom );
+    qRightCol_->setContentsMargins( 0, 0, 0, 0 );
+    qRightCol_->setSpacing( 2 );
+    qRightCol_->addWidget( qTrkLabel_, 0 );
+    qRightCol_->addLayout( qFaderRow_, 1 );
+
+    // Mute/Solo column, then the name + fader/meter column.
     qStripRow_ = new QBoxLayout( QBoxLayout::LeftToRight );
     qStripRow_->setContentsMargins( 0, 0, 0, 0 );
     qStripRow_->setSpacing( 4 );
-    qStripRow_->addLayout( qBtnCol_ );
-    qStripRow_->addLayout( qFaderCol_ );
-    qStripRow_->addWidget( qMeter_ );
-    qStripRow_->addStretch( 1 );
+    qStripRow_->addLayout( qBtnCol_, 0 );
+    qStripRow_->addLayout( qRightCol_, 1 );
 
     // The head is placed by the view at exactly its lane's size (which can be
     // small, and differs from lane to lane), so it must be free to take that
@@ -530,9 +564,8 @@ SSMVMixerControl::SSMVMixerControl(
     setMinimumHeight( 0 );
     setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Ignored );
 
-    qLayout_->addWidget( qTrkLabel_, 0, 0, Qt::AlignTop );
-    qLayout_->addLayout( qStripRow_, 1, 0 );
-    qLayout_->setRowStretch( 1, 1 );
+    qLayout_->addLayout( qStripRow_, 0, 0 );
+    qLayout_->setRowStretch( 0, 1 );
     qLayout_->setSizeConstraint( QLayout::SetNoConstraint );
 
     // Seed widgets from the current track state.
@@ -757,20 +790,21 @@ void SSMVMixerControl::applyDensity( Density d )
 
     switch( d ) {
     case Density::Full:
-        // Buttons in a column beside a tall fader with its dB readout.
+        // Buttons in a column beside the name + tall fader with its dB readout.
         qBtnCol_->setDirection( QBoxLayout::TopToBottom );
         qStripRow_->setDirection( QBoxLayout::LeftToRight );
+        qFaderRow_->setDirection( QBoxLayout::LeftToRight );
         qMute_->show(); qSolo_->show();
         qArm_->show(); qTakes_->show(); qGroup_->show();
         qVolume_->show();
         qVolLabel_->show();
         qMeter_->show();
+        placeLabel( LabelSpot::BesideButtons );
         break;
-    case Density::Compact:
-        // One row of small buttons above a horizontal fader; the dB readout
-        // only survives while there is room for a second row.
-        qBtnCol_->setDirection( QBoxLayout::LeftToRight );
-        qStripRow_->setDirection( QBoxLayout::TopToBottom );
+    case Density::Compact: {
+        // Small buttons beside a horizontal fader; the dB readout only survives
+        // while there is room for another row.
+        qFaderRow_->setDirection( QBoxLayout::TopToBottom );
         qMute_->show(); qSolo_->show();
         qArm_->show(); qTakes_->show(); qGroup_->show();
         qVolume_->show();
@@ -778,19 +812,40 @@ void SSMVMixerControl::applyDensity( Density d )
         // The meter is the first thing to go when the rows stack up: a fader you
         // cannot see is worse than a meter you cannot see.
         qMeter_->setVisible( height() >= 60 );
+        // The buttons stay a COLUMN as long as one fits vertically — that is
+        // what leaves the name a place beside them. Five 16 px buttons need 92
+        // px of the ~96 a default 100 px lane has; below that they lie down into
+        // a row, which fills the minimal 120 px column all by itself and pushes
+        // the name back onto a line of its own.
+        if( buttonColumnFits( btn, 5 ) ) {
+            qBtnCol_->setDirection( QBoxLayout::TopToBottom );
+            qStripRow_->setDirection( QBoxLayout::LeftToRight );
+            placeLabel( LabelSpot::BesideButtons );
+        } else {
+            qBtnCol_->setDirection( QBoxLayout::LeftToRight );
+            qStripRow_->setDirection( QBoxLayout::TopToBottom );
+            placeLabel( nameFitsInButtonRow( btn ) ? LabelSpot::InButtonRow
+                                                   : LabelSpot::OwnLine );
+        }
         break;
+    }
     case Density::Tiny:
         // Barely a lane: the name, and Mute/Solo beside it while a single
         // button row still fits under it. Hiding beats clipping — a
         // half-drawn fader reads as a rendering bug.
         qBtnCol_->setDirection( QBoxLayout::LeftToRight );
         qStripRow_->setDirection( QBoxLayout::TopToBottom );
+        qFaderRow_->setDirection( QBoxLayout::TopToBottom );
         qArm_->hide(); qTakes_->hide(); qGroup_->hide();
         qMute_->setVisible( height() >= 38 );
         qSolo_->setVisible( height() >= 38 );
         qVolume_->hide();
         qVolLabel_->hide();
         qMeter_->hide();
+        // Only M/S here, so the name usually does fit beside them — which is the
+        // whole strip on a lane this short.
+        placeLabel( nameFitsInButtonRow( btn ) ? LabelSpot::InButtonRow
+                                               : LabelSpot::OwnLine );
         break;
     }
 
@@ -806,6 +861,60 @@ void SSMVMixerControl::applyDensity( Density d )
 
     // In Tiny the name is the whole strip; keep it off the grip and readable.
     qTrkLabel_->setVisible( height() >= 14 );
+}
+
+// Move the name to the spot the current shape of the strip calls for. A no-op
+// when it is already there, because applyDensity() runs on every resize and
+// re-inserting a widget on each pixel of a drag would thrash the layout.
+void SSMVMixerControl::placeLabel( LabelSpot spot )
+{
+    if( labelSpot_ == spot ) return;
+    // removeWidget() is a no-op on the layouts that do not hold it.
+    qRightCol_->removeWidget( qTrkLabel_ );
+    qStripRow_->removeWidget( qTrkLabel_ );
+    qBtnCol_->removeWidget( qTrkLabel_ );
+
+    switch( spot ) {
+    case LabelSpot::BesideButtons:
+        qRightCol_->insertWidget( 0, qTrkLabel_, 0 );
+        break;
+    case LabelSpot::InButtonRow:
+        // Just before the trailing stretch, centred against the small buttons.
+        qBtnCol_->insertWidget( qBtnCol_->count()-1, qTrkLabel_, 1,
+                                Qt::AlignVCenter );
+        break;
+    case LabelSpot::OwnLine:
+        qStripRow_->insertWidget( 0, qTrkLabel_, 0 );
+        break;
+    }
+    // The name takes the row's slack when it is in it; otherwise the trailing
+    // stretch does (that is what keeps the buttons packed to the top/left).
+    qBtnCol_->setStretch( qBtnCol_->count()-1,
+                          spot == LabelSpot::InButtonRow ? 0 : 1 );
+    labelSpot_ = spot;
+}
+
+// Does a column of `nBtns` buttons of this size still fit the lane's height?
+// Below that the buttons have to lie down into a row.
+bool SSMVMixerControl::buttonColumnFits( int btn, int nBtns ) const
+{
+    const QMargins m = qLayout_->contentsMargins();
+    return height() - m.top() - m.bottom() >= nBtns*btn + (nBtns-1)*2;
+}
+
+// Does a name field wide enough to read still fit beside the visible buttons?
+// Purely a width question: the button row is fixed-size, so what is left over is
+// what the name would get.
+bool SSMVMixerControl::nameFitsInButtonRow( int btn ) const
+{
+    int nBtns = 0;
+    for( QPushButton *b : { qMute_, qSolo_, qArm_, qTakes_, qGroup_ } )
+        if( !b->isHidden() ) ++nBtns;
+    if( nBtns == 0 ) return false;      // no row to ride on
+    const QMargins m = qLayout_->contentsMargins();
+    int content = width() - m.left() - m.right();
+    int row = nBtns*btn + (nBtns-1)*2;  // qBtnCol_ spacing is 2
+    return content - row - 2 >= NAME_MIN_W;
 }
 
 void SSMVMixerControl::updateLayout()
