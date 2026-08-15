@@ -72,10 +72,10 @@
     <assert-audio-energy filename="group_deleted.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.05" maxRms="0.085"/>
-    <!-- ...and the tail's span is now silent. -->
-    <assert-audio-energy filename="group_deleted.wav"
-                         startFrame="96000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- ...and the tail is GONE: the arrangement — and so the render —
+         ends where the head does. -->
+    <assert-audio-length filename="group_deleted.wav"
+                         minFrames="96000" maxFrames="96000"/>
 
     <undo count="1"/>
 
@@ -110,9 +110,10 @@
     <redo count="1"/>
 
     <render filename="group_redone.wav" format="wav" quality="10"/>
-    <assert-audio-energy filename="group_redone.wav"
-                         startFrame="96000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- ...and the tail is GONE: the arrangement — and so the render —
+         ends where the head does. -->
+    <assert-audio-length filename="group_redone.wav"
+                         minFrames="96000" maxFrames="96000"/>
   </actions>
 
   <assertions>

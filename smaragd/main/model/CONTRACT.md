@@ -98,6 +98,18 @@ Invariants:
    verb. The per-kind wrap factory is registered from the slice that owns the
    window type (static initializer, OBJECT-library rule), so the model still
    names no concrete object type.
+12. There is ONE notion of how long the project is.
+    SProject::getDurationFrames() is the root container's content extent —
+    getRootComponent()->getDuration(), i.e. the same SObject::
+    getChildrenExtent() walk the arranger already draws through
+    SStdMixerView::contentDurationChanged. It is measured from position 0 to
+    the LAST end (not last-minus-first), so it is directly the extent of a
+    whole-project render, and it is the LAID-OUT extent: mute, solo, the
+    render gate and take selection change what is audible, never how long the
+    project is. An EMPTY container reports 1 frame, not 0 (SStdMixer/STrack
+    floor their extent), and that sentinel is normalized to 0 here. Do not
+    add a second traversal: a duration that disagreed with the one on screen
+    would be worse than the hardcoded 60 s constant this replaced.
 
 How to test: full qxa suite; action_roundtrip_test for serialization
 adjacency; filepathref_test (ctest) for the three path-storage rules and

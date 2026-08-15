@@ -3,6 +3,7 @@
 #define _SSMVMIXERCONTROL_H
 
 #include <qwidget.h>
+#include <QList>
 #include "app/model/sobjectrenderer.h"
 #include "tw/metering/tw_level_probe.h"
 
@@ -45,7 +46,16 @@ protected:
     void mousePressEvent( QMouseEvent * ) override;
     void mouseMoveEvent( QMouseEvent * ) override;
     void mouseReleaseEvent( QMouseEvent * ) override;
+    // Right-click on a head shows the arranger's track menu (see
+    // SStdMixerView::showTrackContextMenu) — the heads have none of their own.
+    void contextMenuEvent( QContextMenuEvent * ) override;
     void resizeEvent( QResizeEvent * ) override;
+    // A head has no time axis, so the wheel means what it means over the
+    // arranger canvas: the configured scroll / zoom gestures. Child widgets
+    // that ignore the wheel (buttons, labels, the meter) propagate here on
+    // their own; the FADER keeps its own wheel (1 dB per notch) and is the one
+    // deliberate exception.
+    void wheelEvent( QWheelEvent * ) override;
     // Watches the fader for a double-click, which resets it to 0.0 dB.
     bool eventFilter( QObject *, QEvent * ) override;
 
@@ -75,10 +85,16 @@ protected slots:
     void showChannelMenu();
     void setRecordingChannels( uint32_t channels );
 
-    // Track selection highlight
+    // Track selection highlight (the primary moved / the set changed).
     void onSelectedTrackChanged( STrack *track );
+    void onSelectionChanged();
 
 private:
+    // The tracks this head's M / S / R / G toggles act on: the whole selection
+    // when this lane is part of it, this lane alone otherwise. See
+    // SStdMixerView::selectionTargets.
+    QList<STrack *> toggleTargets() const;
+
     // Resolve this control's track index within the mixer model (-1 if gone).
 
     // Push the slider position to the value v (in dB) without re-submitting
@@ -95,10 +111,37 @@ private:
     // does not fit is hidden, never clipped.
     void updateLayout();
 
+    // Where the track name sits. The name belongs NEXT TO the M/S/R/T/G
+    // buttons; which layout that is depends on how the buttons are arranged and
+    // on whether the column is wide enough to hold both:
+    //   BesideButtons — Full density: the buttons are a column, so the name goes
+    //                   at the top of the right-hand column, beside them.
+    //   InButtonRow   — Compact/Tiny: the buttons are a row and the name rides
+    //                   at its end, taking the leftover width.
+    //   OwnLine       — the fallback when that leftover is too narrow to read
+    //                   (a five-button row already fills the 120 px column).
+    enum class LabelSpot { BesideButtons, InButtonRow, OwnLine };
+    void placeLabel( LabelSpot );
+    // Whether a readable name still fits beside `btn`-sized visible buttons.
+    bool nameFitsInButtonRow( int btn ) const;
+    // Whether a COLUMN of nBtns `btn`-sized buttons still fits this lane's
+    // height. It is what decides the strip's shape in Compact density.
+    bool buttonColumnFits( int btn, int nBtns ) const;
+    // The narrowest name field worth having; below it the name gets its own line.
+    static constexpr int NAME_MIN_W = 56;
+    LabelSpot labelSpot_ = LabelSpot::BesideButtons;   // where the ctor puts it
+
 public:
     // Test face for the meter (see SMainWindow::describeTrackMeter). Non-const
     // because it re-applies the density rules for the current size first.
     QString describeMeter();
+
+    // TEST ENTRY POINT: press one of this head's toggle buttons ("mute",
+    // "solo", "arm", "takes", "group") as a user does, driving the button's
+    // own signal — which is what makes the selection BROADCAST the thing under
+    // test rather than a re-spelling of it. No-op (true) when the button is
+    // already in the requested state; false for an unknown name.
+    bool tkClickToggle( const QString &which, bool on );
 
 private slots:
     // Proposal 34: one metering tick. Reads this track's frozen page at the
@@ -124,8 +167,10 @@ private:
     bool foldable_ = false;
     bool collapsed_ = false;
 
-    // Track selection state for styling
+    // Track selection state for styling: in the selection at all, and the
+    // PRIMARY of it (the lane the Track Detail dock follows).
     bool selected_ = false;
+    bool primary_ = false;
 
     // Track-reorder drag: armed on press in the grip strip, active once the
     // pointer moves past a small threshold.
@@ -140,7 +185,9 @@ private:
     // their direction instead of rebuilding the strip.
     QBoxLayout *qBtnCol_;    // M / S / R / T / G
     QBoxLayout *qFaderCol_;  // fader + dB readout
-    QBoxLayout *qStripRow_;  // buttons next to (or above) the fader
+    QBoxLayout *qFaderRow_;  // fader column next to (or above) the meter
+    QBoxLayout *qRightCol_;  // track name over the fader row
+    QBoxLayout *qStripRow_;  // buttons next to (or above) the right column
     QSlider *qVolume_;
     QLabel *qVolLabel_;
     QLineEdit *qTrkLabel_;

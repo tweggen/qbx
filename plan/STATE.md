@@ -9029,6 +9029,171 @@ fixes existed, so the pattern is not attributable to them — but neither has it
 been explained. A low-rate flake somewhere in the suite under sustained load is
 the working hypothesis and it remains unproven.
 
+## 2026-08-15 — Several tracks selected at once
+
+The arranger could select exactly one track. You can now select many — plain
+click, Ctrl-click to toggle, Shift-click for a lane range — and one gesture then
+applies to all of them: mute / solo / arm / record-channels / edit-group from a
+head's buttons, and remove / indent / outdent / group / ungroup / lane height /
+take lanes from the context menu, plus dragging the block into or out of a
+folder track.
+
+### The one rule
+
+**A gesture aimed at a track that is PART of the selection acts on the whole
+selection; a gesture aimed at any other track acts on that track alone.**
+`SStdMixerView::selectionTargets()` is its only implementation, and everything
+above goes through it. The alternative — "act on the selection, full stop" —
+means pressing M on an unselected lane silently mutes four lanes somewhere else
+on screen, which is the failure mode that makes multi-selection feel dangerous
+in a DAW.
+
+Two corollaries that are easy to miss:
+
+* A press on a head's GRIP does not collapse a selection it belongs to. A plain
+  click anywhere else on the head does (that is what "plain click" means), so
+  without the grip exception a multi-track drag could never start — the press
+  would have thrown the selection away before the drag armed.
+* The right-click that opens the menu SELECTS an unselected lane first, so the
+  menu can never appear over one lane while acting on others. Same rule the
+  clip-properties menu already followed.
+
+### Where the state lives
+
+The SET lives on the model (`SStdMixer`), the GESTURES on the view. The model
+holds `QPointer`s: `SRemoveTrackAction` keeps a removed track alive for undo but
+a discarded command finally deletes it, and a raw pointer in the selection would
+then dangle until the next click. One distinguished PRIMARY (the last lane
+touched) is what `getSelectedTrack()`, `activeLane()` and the Track Detail dock
+keep meaning, so nothing outside the arranger had to change. Two signals:
+`selectedTracksChanged()` for the set, `selectedTrackChanged()` for the primary —
+a head repaints on either, because a Ctrl-click on a third lane moves the set
+without moving the primary and the old single signal would not have fired.
+
+Selection is view state: not serialized, not an action, not undoable. (The
+existing `app/selection` module is about CLIPS — SLinks — and is untouched.)
+
+### What multi-track structural edits actually cost
+
+Every one of them is a LOOP over single-track actions, and three things decide
+whether the loop is correct:
+
+1. **Re-resolve the path between steps.** `submitAction` drains synchronously,
+   so each applied action has already shifted the indices the next one would
+   have used. Every step re-derives `pathOf()` from the live tree; nothing
+   pre-computes a list of paths.
+2. **Prune nested targets.** `pruneNestedTargets()` drops any track that has an
+   ancestor in the same target list — a folder carries its subtree, so acting on
+   a child as well either double-applies or tears the subtree apart.
+3. **Order, and it is opposite per operation.** Remove and outdent go BOTTOM-UP
+   (each outdented lane lands just after the folder it left, so promoting the
+   lowest first is what preserves the block's order); indent and the drag's
+   top-level insert go TOP-DOWN (the first lane nests under the lane above the
+   block, and the rest then find it as their preceding sibling — which is how a
+   contiguous block lands inside ONE folder). Group creates ONE folder for the
+   whole block, in the first target's slot, then reparents each target into it.
+
+Each broadcast is ONE undo step (a `QUndoStack` macro), because the user made
+one gesture. Targets get the ABSOLUTE value the pressed button now shows, not a
+per-lane toggle, so a mixed selection ends up uniform.
+
+### Gate
+
+`multitrack_selection.qxa`, driving the REAL widgets through three new testkit
+verbs — `select-track` (one head click with modifiers), `track-head-toggle`
+(presses the actual M/S/R button) and `drag-track` (grip-drag to a lane ROW, so
+the script does not encode the current zoom). A script that set the model's
+selection and submitted one `set-track-mute` per track would have tested the
+script, not the feature; same rationale as `drag-clip-edge` and `group-track`.
+It covers the click semantics including the Shift anchor, the mute broadcast
+being audible on the lane that was NOT pressed, a press OUTSIDE the selection
+staying on its own lane, single-step undo of the broadcast, the multi-track drag
+into a folder, and Group over a selection producing one folder — each structural
+step asserted by path resolution and each audio state by region RMS.
+
+**Not gated:** the highlight rendering (head colours, the tinted lane
+background), the head context menu popping at all, and the menu item labels that
+count the targets. Those are paint/menu-construction paths with no assertion
+hook, as elsewhere in the arranger.
+
+## 2026-08-15 — A render is as long as the arrangement (the 60 s constant is gone)
+
+`SProject::getDurationSeconds()` returned `60.0` behind a TODO, and it was the
+only thing deciding how long a whole-project render is. Every render was
+therefore exactly one minute: a three-minute arrangement was **truncated** at
+60 s without a word, and a ten-second one got fifty seconds of silence written
+after it. The qxa suite paid the same bill 153 times over — its fixtures hold
+about four seconds of content, so ~93% of every rendered sample was padding.
+
+### Where the duration comes from
+
+`getRootComponent()->getDuration()` — `SObject::getChildrenExtent()` through
+`SStdMixer`, the walk the model already maintains and the arranger already
+draws (`SStdMixerView::contentDurationChanged`). Deliberately **not** a new
+traversal: a second notion of "how long is this project" that disagreed with
+the one on screen would be worse than the constant it replaced.
+
+Three decisions, now written into `main/model/CONTRACT.md` (inv. 10) and
+`tw303a/render/CONTRACT.md` (inv. 5-6):
+
+* **Empty is zero, and renders as a valid zero-frame file.** An empty container
+  reports 1 frame (`SStdMixer`/`STrack` floor their extent); that sentinel is
+  normalized to 0. `RenderSession::start()` used to reject `end <= start`, which
+  produced *no file and no error* — and `SRenderAction` reported SUCCESS, because
+  `SAppContext::startRender` cannot report failure. It now rejects only an
+  INVERTED range, so an empty project writes a header-only WAV that says exactly
+  what is true.
+* **The extent is the LAID-OUT one.** Mute, solo, the render gate and take
+  selection decide what is AUDIBLE, never how long the project is — otherwise
+  muting the last track would silently shorten the export.
+* **Round, do not truncate.** The extent is now a frame count over a sample
+  rate; a ratio that is not exactly representable would land one frame short.
+
+### The fallout, and why it was not papered over
+
+31 cases (36 assertions) asserted silence at a frame that WAS the arrangement
+end. They only ever passed because of the pad — and the analyser rejects a
+window that starts past EOF, so they failed loudly rather than silently. Each
+now asserts the thing it was reaching for: the render ENDS there
+(`assert-audio-length`, min == max). Where a clip had been deleted this is
+strictly stronger — a clip restored as *silent* used to pass and now cannot.
+
+What genuinely left with the pad: "does the LAST clip bleed past its window"
+is no longer observable, because the file stops there. Bleeding is still
+covered wherever a clip is followed by more arrangement.
+
+### The tail question, answered with measurements
+
+Only a plugin insert can put audio past the arrangement end —
+`twTrackMix::freezePage_nolock` hard-clips every clip's contribution at
+`startTime + duration`, so no stretch, loop or source tail outlives its clip.
+Measured, not assumed: the 90 padded 60 s renders from the pre-fix suite were
+scanned for their last non-silent frame, and **not one of them has audio at or
+past where the new render ends** (tightest margin: 1 frame — content runs right
+up to the boundary, as it should). That covers every `grain_*`, `exact_*`,
+`plugin_*` and `asset_*` case.
+
+The remaining exposure is real but uncovered: a reverb or delay plugin on a
+project SHORTER than 60 s used to have its tail captured by the padding, and
+now does not. The correct fix is a plugin-declared tail (CLAP `clap.tail`,
+VST3 `getTailSamples`), not a blanket pad; until then the render dialog's
+time-selection extent is the user-facing workaround. Recorded, not done.
+
+### What it cost the gate
+
+For the 52 cases both a pre-fix and a post-fix run covered: **1955.7 s ->
+292.7 s (6.7x)**. The full suite is **495.85 s, 110 run, 100% pass, 3 disabled
+(macOS-only `au_*`)**. Render-heavy cases moved 7-16x (`plugin_bypass_and_param`
+105.7 -> 7.1, `exact_stretch_roundtrip` 70.4 -> 4.4); cases with no render moved
+1.1-2.2x, which is the machine-load noise floor — both runs were taken with
+other agents' suites running on the same box, so read the per-case deltas rather
+than the totals.
+
+New verb `assert-audio-length` (frames, read from the file HEADER — the RMS
+analysers reject an empty region, which is exactly the interesting case), and
+three cases pinning the three lengths: `render_duration_short`,
+`render_duration_past_60s` (the truncation half — a clip at 64 s, and its
+64 s render is now the most expensive case in the suite), `render_duration_empty`.
 ---
 
 ## 2026-08-15 — Proposal 36 P0a: loader tolerance + `SClipWindow` + verbs

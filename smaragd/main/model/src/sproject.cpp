@@ -224,11 +224,33 @@ void SProject::setCandidateRates( std::vector<std::uint32_t> rates )
     candidateRates_ = std::move( rates );
 }
 
+length_t SProject::getDurationFrames() const
+{
+    // ONE notion of "how long is this project": the root container's content
+    // extent, which the model already maintains and the arranger already draws
+    // (SStdMixer::getDuration() -> SObject::getChildrenExtent(), relayed to
+    // SStdMixerView::contentDurationChanged). No second traversal — a duration
+    // that disagreed with the one on screen would be worse than the old
+    // hardcoded constant.
+    //
+    // getChildrenExtent() reports the LAST END, not end-minus-first-start, so
+    // this is the arrangement end measured from position 0 — exactly what a
+    // whole-project render needs.
+    SObject *root = getRootComponent();
+    if( !root ) return 0;
+    length_t frames = root->getDuration();
+    // An EMPTY container reports 1, not 0: both SStdMixer::getDuration() and
+    // STrack::getDuration() floor their extent at 1 sample. Treat that sentinel
+    // as what it means — no content.
+    if( frames <= 1 ) return 0;
+    return frames;
+}
+
 double SProject::getDurationSeconds() const
 {
-    // TODO: Calculate from arrangement/track structure
-    // For now, return 60 seconds as a default
-    return 60.0;
+    const int rate = getSRate();
+    if( rate <= 0 ) return 0.0;
+    return (double) getDurationFrames() / (double) rate;
 }
 
 bool SProject::hasTimeSelection() const

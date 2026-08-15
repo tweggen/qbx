@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Multi-track selection: several tracks selected at once, then ONE gesture
+  applied to all of them.
+
+  Three things are under test here, and none of them is expressible as a
+  sequence of model actions — which is why this script drives the REAL widgets
+  (select-track / track-head-toggle / drag-track) instead of re-spelling what
+  they do:
+
+  * THE CLICK SEMANTICS. Plain click = select just this lane, Ctrl = toggle
+    membership, Shift = the lane range from the anchor. A script that wrote the
+    mixer's selection itself would prove only that the script can loop.
+  * THE BROADCAST. Pressing M on a head that is part of the selection has to
+    mute every selected lane — and as ONE undo step, because the user made one
+    gesture. The single <undo count="1"/> below is the whole point of the
+    macro: without it, undo would peel the lanes off one at a time.
+  * THE STRUCTURAL OPERATIONS. Dragging a selected head carries the whole
+    selection into the drop target, and Group wraps the whole block in ONE new
+    folder (not one folder each). Both re-resolve every path between steps,
+    since each move shifts the indices the next one would have used.
+
+  THE RULE the whole feature hangs on: a gesture aimed at a track that is part
+  of the selection acts on the selection; a gesture aimed at any other track
+  acts on that track alone. Anything else would let a mute reach lanes the
+  pointer is nowhere near.
+
+  Layout: one 4 s sawtooth clip per track, at 0 s / 4 s / 8 s, so each track
+  owns its own region of the render and "which tracks were muted" is directly
+  readable as energy. Fixture sec3 (the last second of each clip) is ~0.405.
+
+  STRUCTURE IS ASSERTED BY PATH RESOLUTION, as in group_nested_track:
+  assert-plugin-strip resolves a lane by index-path and REJECTS when the path
+  does not exist, so expectReject="true" asserts a lane is GONE.
+-->
+<SActionScript version="1" name="multitrack_selection">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0 -->
+    <add-track index="-1"/>            <!-- 1 -->
+    <add-track index="-1"/>            <!-- 2 -->
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="192000"/>
+    <add-sample trackPath="2" filePath="../test_sawtooth.wav" timePos="384000"/>
+
+    <!-- All three audible to begin with: this is the baseline every later
+         render is compared against. -->
+    <render filename="mts_base.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="mts_base.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="mts_base.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="mts_base.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- === click semantics =========================================== -->
+
+    <!-- Plain click replaces the selection. -->
+    <select-track trackPath="0"/>
+    <assert-track-selection paths="0" primary="0"/>
+
+    <!-- Ctrl-click adds, and the lane that joined becomes the primary. -->
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <assert-track-selection paths="0;1" primary="1"/>
+
+    <!-- Ctrl-click again removes it; the primary passes to what is left. -->
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <assert-track-selection paths="0" primary="0"/>
+
+    <!-- Shift-click selects the lane RANGE from the ANCHOR to this one, and
+         the lane in between comes along. The anchor is the last click without
+         Shift — a Ctrl-click moves it too, which is why track 0 is re-clicked
+         here rather than assumed to still be the pivot. -->
+    <select-track trackPath="0"/>
+    <select-track trackPath="2" modifiers="shift"/>
+    <assert-track-selection paths="0;1;2" primary="2"/>
+
+    <!-- The anchor does NOT move with a Shift-click, so the next one pivots on
+         the same lane instead of walking down the tree. -->
+    <select-track trackPath="1" modifiers="shift"/>
+    <assert-track-selection paths="0;1" primary="1"/>
+
+    <!-- === the broadcast ============================================= -->
+
+    <!-- Back to two lanes, then press M on ONE of their heads. -->
+    <select-track trackPath="0"/>
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <assert-track-selection paths="0;1" primary="1"/>
+    <track-head-toggle trackPath="0" control="mute" on="1"/>
+
+    <render filename="mts_muted.wav" format="wav" quality="10"/>
+    <!-- Tracks 0 and 1 are both silent — the press reached the lane that was
+         NOT pressed. -->
+    <assert-audio-energy filename="mts_muted.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="mts_muted.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <!-- Track 2 was never selected: untouched. -->
+    <assert-audio-energy filename="mts_muted.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- ONE undo step reverses the whole broadcast (the macro). -->
+    <undo count="1"/>
+    <render filename="mts_unmuted.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="mts_unmuted.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="mts_unmuted.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- A gesture aimed OUTSIDE the selection acts on that lane alone. Tracks
+         0 and 1 are selected; pressing M on track 2's head must mute only it. -->
+    <track-head-toggle trackPath="2" control="mute" on="1"/>
+    <render filename="mts_outside.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="mts_outside.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="mts_outside.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="mts_outside.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <undo count="1"/>
+
+    <!-- === dragging several tracks into a parent ===================== -->
+
+    <!-- Select tracks 1 and 2, then grip-drag ONE of their heads onto track 0's
+         lane. Both must land inside it, in order. -->
+    <select-track trackPath="1"/>
+    <select-track trackPath="2" modifiers="ctrl"/>
+    <drag-track trackPath="1" targetRow="0" mode="onto"/>
+
+    <!-- Both lanes are now inside track 0, and nothing is left beside it.
+         An index-path counts ALL of a lane's children, clips included, and
+         track 0 already holds its own clip at 0 — so the two lanes that just
+         arrived are 0,1 and 0,2. -->
+    <assert-plugin-strip trackPath="0,1" slotCount="0"/>
+    <assert-plugin-strip trackPath="0,2" slotCount="0"/>
+    <assert-plugin-strip trackPath="0,3" slotCount="0" expectReject="true"/>
+    <assert-plugin-strip trackPath="1" slotCount="0" expectReject="true"/>
+
+    <!-- Nesting is audibly transparent: the folder sums its children. -->
+    <render filename="mts_nested.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="mts_nested.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="mts_nested.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="mts_nested.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- ONE undo step brings both lanes back out. -->
+    <undo count="1"/>
+    <assert-plugin-strip trackPath="2" slotCount="0"/>
+    <assert-plugin-strip trackPath="0,1" slotCount="0" expectReject="true"/>
+
+    <!-- === Group, from the context menu, over a selection ============ -->
+
+    <!-- Tracks 0 and 1 selected: ONE new folder wraps both of them, and
+         track 2 stays where it is (one lane down, since the folder took a
+         top-level slot). -->
+    <select-track trackPath="0"/>
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <group-track trackPath="0"/>
+
+    <assert-plugin-strip trackPath="0,0" slotCount="0"/>
+    <assert-plugin-strip trackPath="0,1" slotCount="0"/>
+    <assert-plugin-strip trackPath="0,2" slotCount="0" expectReject="true"/>
+    <assert-plugin-strip trackPath="1" slotCount="0"/>
+    <assert-plugin-strip trackPath="2" slotCount="0" expectReject="true"/>
+
+    <render filename="mts_grouped.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="mts_grouped.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="mts_grouped.wav"
+                         startFrame="336000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="mts_grouped.wav"
+                         startFrame="528000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- And one undo step dissolves the whole grouping macro. -->
+    <undo count="1"/>
+    <assert-plugin-strip trackPath="2" slotCount="0"/>
+    <assert-plugin-strip trackPath="0,0" slotCount="0" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <!-- Every structural step was undone: three plain top-level lanes. -->
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

@@ -43,10 +43,10 @@
     <assert-audio-energy filename="warp_marker_a.wav"
                          startFrame="240000" frameCount="48000"
                          minRms="0.38" maxRms="0.48"/>
-    <!-- silence after the warped clip -->
-    <assert-audio-energy filename="warp_marker_a.wav"
-                         startFrame="288000" frameCount="48000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="warp_marker_a.wav"
+                         minFrames="288000" maxFrames="288000"/>
 
     <!-- Move the second marker: 192000 now lands at 240000 (2x -> 1.5x for
          source [2,4)s). Output is a 5 s span of audio; [5,6)s reads past the

@@ -32,9 +32,10 @@
     <assert-audio-energy filename="grain_pitch_reset_roundtrip.wav"
                          startFrame="0" frameCount="192000"
                          minRms="0.20" maxRms="0.32"/>
-    <assert-audio-energy filename="grain_pitch_reset_roundtrip.wav"
-                         startFrame="192000" frameCount="24000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="grain_pitch_reset_roundtrip.wav"
+                         minFrames="192000" maxFrames="192000"/>
   </actions>
 
   <assertions>

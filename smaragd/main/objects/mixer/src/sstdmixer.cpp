@@ -468,11 +468,95 @@ SStdMixer::SStdMixer( SProject *project )
     setNBusses( 1 );
 }
 
+// --- track selection --------------------------------------------------------
+//
+// One set, one primary. Every mutator funnels through setSelectedTracks() so
+// there is a single place that decides which signals fire, and a single place
+// that drops dead QPointers — a selection that outlived one of its tracks (a
+// removed-then-discarded track) must never hand a dangling pointer out.
+
+STrack *SStdMixer::getSelectedTrack() const
+{
+    return selectedTrack_.data();
+}
+
+QList<STrack *> SStdMixer::getSelectedTracks() const
+{
+    QList<STrack *> out;
+    for( const QPointer<STrack> &p : selectedTracks_ ) {
+        if( p ) out.append( p.data() );
+    }
+    return out;
+}
+
+int SStdMixer::nSelectedTracks() const
+{
+    return getSelectedTracks().size();
+}
+
+bool SStdMixer::isTrackSelected( STrack *track ) const
+{
+    if( !track ) return false;
+    for( const QPointer<STrack> &p : selectedTracks_ ) {
+        if( p.data() == track ) return true;
+    }
+    return false;
+}
+
 void SStdMixer::setSelectedTrack( STrack *track )
 {
-    if( selectedTrack_ != track ) {
-        selectedTrack_ = track;
-        emit selectedTrackChanged( track );
+    QList<STrack *> one;
+    if( track ) one.append( track );
+    setSelectedTracks( one, track );
+}
+
+void SStdMixer::setSelectedTracks( const QList<STrack *> &tracks, STrack *primary )
+{
+    // Normalize: drop nulls and duplicates, keeping the caller's order.
+    QList<QPointer<STrack> > next;
+    for( STrack *t : tracks ) {
+        if( !t ) continue;
+        bool dup = false;
+        for( const QPointer<STrack> &p : next ) if( p.data() == t ) { dup = true; break; }
+        if( !dup ) next.append( QPointer<STrack>( t ) );
+    }
+
+    STrack *nextPrimary = primary;
+    bool primaryIsMember = false;
+    for( const QPointer<STrack> &p : next ) if( p.data() == nextPrimary ) { primaryIsMember = true; break; }
+    if( !primaryIsMember ) {
+        nextPrimary = next.isEmpty() ? nullptr : next.last().data();
+    }
+
+    // Compare against the CURRENT live set (dead entries count as gone), so a
+    // selection that lost a track still reports a change once.
+    const QList<STrack *> before = getSelectedTracks();
+    QList<STrack *> after;
+    for( const QPointer<STrack> &p : next ) after.append( p.data() );
+
+    const bool setChanged     = ( before != after );
+    const bool primaryChanged = ( selectedTrack_.data() != nextPrimary );
+    if( !setChanged && !primaryChanged ) return;
+
+    selectedTracks_ = next;
+    selectedTrack_  = nextPrimary;
+
+    // Set first, then primary: a view that repaints on the set signal and a
+    // panel that rebinds on the primary signal both see the settled state.
+    if( setChanged )     emit selectedTracksChanged();
+    if( primaryChanged ) emit selectedTrackChanged( nextPrimary );
+}
+
+void SStdMixer::toggleTrackSelection( STrack *track )
+{
+    if( !track ) return;
+    QList<STrack *> next = getSelectedTracks();
+    if( next.removeAll( track ) > 0 ) {
+        // Left the selection: the primary passes to whoever is left.
+        setSelectedTracks( next, next.isEmpty() ? nullptr : next.last() );
+    } else {
+        next.append( track );
+        setSelectedTracks( next, track );
     }
 }
 

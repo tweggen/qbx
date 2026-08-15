@@ -53,10 +53,10 @@
                          startFrame="432000" frameCount="48000"
                          minRms="0.26" maxRms="0.33"/>
 
-    <!-- 10-11 s: past the asset's window; silence. -->
-    <assert-audio-energy filename="asset_window_shifted.wav"
-                         startFrame="480000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="asset_window_shifted.wav"
+                         minFrames="480000" maxFrames="480000"/>
   </actions>
 
   <assertions>

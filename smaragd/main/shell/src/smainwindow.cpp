@@ -1292,6 +1292,12 @@ void SMainWindow::runSetTimeSelection()
 
     // Set time selection to first half of project duration
     double duration = currentProject_->getDurationSeconds();
+    // The duration is the ARRANGEMENT's now, so an empty project really is 0 —
+    // and half of nothing is not a range anything can render.
+    if (duration <= 0.0) {
+        statusBar()->showMessage("Nothing in the arrangement to select", 3000);
+        return;
+    }
     currentProject_->setTimeSelection(0.0, duration / 2.0);
     statusBar()->showMessage(
         QString("Time selection set: 0.0 - %1 seconds").arg(duration / 2.0, 0, 'f', 2), 3000);
@@ -1832,6 +1838,47 @@ bool SMainWindow::groupTrackGesture( const QString &trackPath, bool ungroup )
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) return false;
     return v->groupGesture( track, ungroup );
+}
+
+// Resolve an index-path from the root mixer to a track, for the testkit
+// entry points below. NULL when the path names no lane.
+static STrack *trackAtPath_( const QString &trackPath )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    SObject *root = splacements::rootContainer( proj );
+    if( !root ) return nullptr;
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    return dynamic_cast<STrack *>( lane );
+}
+
+bool SMainWindow::selectTrackGesture( const QString &trackPath,
+                                      Qt::KeyboardModifiers mods )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkClickTrackHead( track, mods );
+}
+
+bool SMainWindow::toggleTrackHead( const QString &trackPath,
+                                   const QString &which, bool on )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkToggleTrackHead( track, which, on );
+}
+
+bool SMainWindow::dragTrackHead( const QString &trackPath, int targetRow,
+                                 bool nestOnto )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkDragTrackHead( track, targetRow, nestOnto );
 }
 
 QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeight )

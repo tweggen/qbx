@@ -7,6 +7,27 @@
 
 namespace audio {
 
+bool readAudioFileInfo(const std::string &filename, AudioFileInfo &info,
+                       std::string &error)
+{
+    info = AudioFileInfo{0, 0, 0};
+
+    SF_INFO sfInfo;
+    std::memset(&sfInfo, 0, sizeof(sfInfo));
+
+    SNDFILE *infile = sf_open(filename.c_str(), SFM_READ, &sfInfo);
+    if (!infile) {
+        error = std::string("Failed to open audio file: ") + sf_strerror(nullptr);
+        return false;
+    }
+
+    info.frameCount   = (int64_t) sfInfo.frames;
+    info.channelCount = sfInfo.channels;
+    info.sampleRate   = sfInfo.samplerate;
+    sf_close(infile);
+    return true;
+}
+
 AcousticMetrics analyzeWavFile(const std::string &filename, std::string &error)
 {
     SF_INFO sfInfo;

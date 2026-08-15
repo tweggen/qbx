@@ -296,7 +296,10 @@ audio::RenderParams SRenderDialog::getRenderParams() const {
     } else {
         params.extent = audio::RenderParams::Extent::EntireProject;
         params.startTimeSec = 0.0;
-        params.endTimeSec = project_ ? project_->getDurationSeconds() : 60.0;
+        // No project ⇒ nothing to render (0), not a minute of silence: the old
+        // 60.0 here was the second copy of SProject::getDurationSeconds()'s
+        // hardcoded constant.
+        params.endTimeSec = project_ ? project_->getDurationSeconds() : 0.0;
         TW_LOGD( "ui.services", "[SRenderDialog] EntireProject: startTimeSec=%.6f, endTimeSec=%.6f",
                 params.startTimeSec, params.endTimeSec );
     }

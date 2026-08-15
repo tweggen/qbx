@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A render is exactly as long as the arrangement — the EMPTY case.
+
+  An empty project is zero seconds long, and the decision recorded here is that
+  rendering it writes a VALID, WELL-FORMED, ZERO-FRAME file rather than a slab
+  of silence or nothing at all:
+
+    * padding it to a fixed length (what the 60 s constant did) invents audio
+      the project does not contain;
+    * writing no file at all is what the old RenderSession guard did, and
+      SRenderAction still reported SUCCESS — a silent lie that surfaces later
+      as a confusing assertion against a missing file.
+
+  A header-only WAV is openable by libsndfile and by anything that reads RIFF,
+  and it says exactly what is true: this project has no audio in it.
+
+  Both shapes of "empty" are covered: no tracks at all, and a track the user
+  created but never put a clip on.
+-->
+<SActionScript version="1" name="render_duration_empty">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- (a) no tracks -->
+    <render filename="rd_empty_notracks.wav" format="wav" quality="10"/>
+    <assert-audio-length filename="rd_empty_notracks.wav"
+                         minFrames="0" maxFrames="0"/>
+
+    <!-- (b) a track, but no clips on it -->
+    <add-track index="-1"/>
+    <render filename="rd_empty_track.wav" format="wav" quality="10"/>
+    <assert-audio-length filename="rd_empty_track.wav"
+                         minFrames="0" maxFrames="0"/>
+
+    <!-- (c) and the moment content exists, the render has content again —
+         the empty answer is a measurement, not a special case. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <render filename="rd_empty_then_clip.wav" format="wav" quality="10"/>
+    <assert-audio-length filename="rd_empty_then_clip.wav"
+                         minFrames="192000" maxFrames="192000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
