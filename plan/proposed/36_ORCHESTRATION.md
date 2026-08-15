@@ -327,8 +327,9 @@ P0b ──┬───────► P1   ├──► P7
   `MusicDeviceMIDIEvent` before render, `AudioUnitScheduleParameters`, output
   elements); `tw.test.clap.sine`, `tw.test.clap.arp`, VST3 `TestSine` (split
   component/controller), `twNativeInstrument` (`format="tw"`, `tw.native.303`,
-  registered like `twPassThrough`); **`tw.test.clap.gain` gains param id 1
-  `clipThreshold` (default 0 = off; > 0 = hard clip at ±threshold AFTER the gain)**
+  registered like `twPassThrough`); **`tw.test.clap.gain` gains a `Clip Threshold` param (landed as id 2 — id 1 was
+  already `Report Block Size`; default 0 = off; > 0 = hard clip at ±threshold
+  AFTER the gain)**
   — the order-sensitive fixture P3a needs; scanner `kScannerVersion` 2 + descriptor fields
   + probe JSON; `plugins_test` extensions driving `twPlugin::process` directly on
   instances. **Explicitly out:** `twPluginSlotProcessor`, `twPluginInsert`,
@@ -385,7 +386,7 @@ P0b ──┬───────► P1   ├──► P7
     `tw.test.clap.gain` at 2.0 → RMS of the first second within ±1 % of 0.0667
     (the product commutes); bypassed → within ±1 % of 0.0333; `assert-meter` at
     0.5 s reads the post-fader level. (b) ORDER: `set-track-volume −6.02` and
-    `tw.test.clap.gain` gain 1.0, `clipThreshold` 0.5, on a fixture whose peak is
+    `tw.test.clap.gain` gain 1.0, `Clip Threshold` (param id 2) 0.5, on a fixture whose peak is
     ≥ 0.9 in its loudest second: pre-FX gain would leave that second unclipped
     (RMS = 0.5 × unprocessed), post-FX gain clips first (RMS strictly below that,
     against a closed form computed from the fixture and written into the test
