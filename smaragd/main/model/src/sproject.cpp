@@ -67,6 +67,10 @@ int SProject::serialize( QTextStream &o )
 
 int SProject::serializeSelfAttributes( QTextStream &o )
 {
+    // Wire-format version (proposal 36 D8a). Written unconditionally, read
+    // with a default of 1, never a reason to refuse a document — see
+    // SProject::FORMAT_VERSION.
+    o << " formatVersion='" << FORMAT_VERSION << "'";
     o << " bpmTempo='" << (double) getBPMTempo() << "'";
     o << " sampleRate='" << sampleRate_ << "'";
     o << " posFactor='" << QString::fromStdString( posFactor_.toString() ) << "'";
@@ -87,6 +91,23 @@ int SProject::serializeSelfAttributes( QTextStream &o )
 int SProject::readPreChildrenAttributes( QDomElement &element )
 {
     QString data;
+
+    // Wire-format version. Absent = 1 (every project written before proposal
+    // 36). A HIGHER version is warned about and then read anyway: the document
+    // is still XML we know how to walk, an element we do not know is already
+    // skipped by name, and refusing would strand a user's file on the build
+    // they happen to have installed.
+    bool fvOk = false;
+    const int fv = element.attribute( "formatVersion", "1" ).toInt( &fvOk );
+    formatVersion_ = ( fvOk && fv > 0 ) ? fv : 1;
+    if( formatVersion_ > FORMAT_VERSION ) {
+        qWarning() << QString( "Project declares formatVersion '%1', newer than "
+                               "this build understands (%2); loading it anyway — "
+                               "anything it describes that we do not know will be "
+                               "skipped with its own warning." )
+                          .arg( formatVersion_ ).arg( (int) FORMAT_VERSION );
+    }
+
     data = element.attribute( "bpmTempo", "120.0" );
     setBPMTempo( data.toDouble() );
 

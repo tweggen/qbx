@@ -24,10 +24,23 @@ SProjectLoader::sObjectRegistry()
     return registry;
 }
 
+QHash<QString, SElementKind> &SProjectLoader::sObjectKinds()
+{
+    static QHash<QString, SElementKind> kinds;
+    return kinds;
+}
+
 void SProjectLoader::registerSObjectClass(
-    const QString &name, SProjectLoader::instantiateFromDomElement_f creator )
+    const QString &name, SProjectLoader::instantiateFromDomElement_f creator,
+    SElementKind kind )
 {
     sObjectRegistry().insert( name, creator );
+    sObjectKinds().insert( name, kind );
+}
+
+SElementKind SProjectLoader::elementKind( const QString &name )
+{
+    return sObjectKinds().value( name, SElementKind::Plain );
 }
 
 SLink *SProjectLoader::instantiateSObjectFromDomElement( 
@@ -194,33 +207,23 @@ int SProjectLoader::createObjects( SProject &project )
         } while( !n.isNull() );
 
         if( !progress ) {
-            // Nothing left is resolvable. Name what dangles — the id in the
-            // warning is the object the file expected to exist — then drop the
-            // survivors so the rest of the project (already instantiated above)
-            // survives. Dropping beats both alternatives: spinning forever, and
-            // discarding a whole project over one lost reference.
+            // Nothing left is resolvable by rescanning. PRUNE, then RETRY
+            // (proposal 36 D8a): the repair is per element KIND, and each
+            // repair can unblock elements the next pass CAN consume — a
+            // container that loses one dangling link becomes instantiable, and
+            // dropping a dead window turns its own placement into a dangling
+            // link that the container rule then handles. Iterate to a fixed
+            // point.
+            //
+            // The historic behaviour (drop every leftover at once) is what a
+            // Plain element still gets, and is the backstop when a pass
+            // repairs nothing at all — the loop must always terminate.
+            if( pruneUnresolvable_( docElem ) ) {
+                continue;
+            }
             QDomNode leftover = docElem.firstChild();
             while( !leftover.isNull() ) {
-                QDomElement le = leftover.toElement();
                 QDomNode next = leftover.nextSibling();
-                if( !le.isNull() ) {
-                    QStringList missing;
-                    for( QDomNode c = le.firstChild(); !c.isNull();
-                         c = c.nextSibling() ) {
-                        if( c.isElement() && c.nodeName() == "SLink" ) {
-                            const QString oid =
-                                c.toElement().attribute( "objectId" );
-                            if( !objectDict_.value( oid ) ) missing << oid;
-                        }
-                    }
-                    qWarning() << QString( "Project child of type \"%1\" (id \"%2\") "
-                                           "references object(s) [%3] that the file "
-                                           "does not contain; DROPPED so the rest of "
-                                           "the project can load." )
-                                      .arg( le.tagName(),
-                                            le.attribute( "id" ),
-                                            missing.join( ", " ) );
-                }
                 docElem.removeChild( leftover );
                 leftover = next;
             }
@@ -237,11 +240,17 @@ int SProjectLoader::createObjects( SProject &project )
     {
         SLink *rootLink = objectDict_.value( rootId );
         if( !rootLink ) {
-            qWarning( "Root component of project was not found.\n" );
-            // TODO: Allow user to select display root id.
-        } else {
-            project_.setRootComponent( &rootLink->getSObject() );
+            // The one loss there is no recovery from: everything the document
+            // describes hangs off the root, so a project without one is not a
+            // damaged project, it is no project. FAIL the load (proposal 36
+            // D8a) instead of handing the caller an empty shell that looks
+            // like a successful open and would overwrite the file on save.
+            qWarning() << QString( "Root component of project (rootId \"%1\") was "
+                                   "not found; the project cannot be loaded." )
+                              .arg( rootId );
+            return -1;
         }
+        project_.setRootComponent( &rootLink->getSObject() );
     }
 
     // LAST: attribute-carried references (proposal 08 M4). See deferResolve().
@@ -251,6 +260,80 @@ int SProjectLoader::createObjects( SProject &project )
     runDeferredResolvers();
 
     return 0;
+}
+
+// One prune pass over what the instantiation loop could not consume. Every
+// leftover element has at least one <SLink objectId='…'> naming an object the
+// document does not contain (an element whose link children all resolved would
+// have been instantiated), so the policy below always has something to name.
+//
+// Returns true if the document changed — createObjects() then RETRIES the
+// instantiation loop, because a repair here routinely makes another element
+// resolvable.
+bool SProjectLoader::pruneUnresolvable_( QDomElement &docElem )
+{
+    bool changed = false;
+    QDomNode leftover = docElem.firstChild();
+    while( !leftover.isNull() ) {
+        QDomElement le = leftover.toElement();
+        QDomNode next = leftover.nextSibling();
+        if( le.isNull() ) {
+            leftover = next;
+            continue;
+        }
+
+        // This element's dangling link children.
+        QList<QDomNode> dangling;
+        QStringList missing;
+        for( QDomNode c = le.firstChild(); !c.isNull(); c = c.nextSibling() ) {
+            if( c.isElement() && c.nodeName() == "SLink" ) {
+                const QString oid = c.toElement().attribute( "objectId" );
+                if( !objectDict_.value( oid ) ) {
+                    dangling.append( c );
+                    missing << oid;
+                }
+            }
+        }
+        if( dangling.isEmpty() ) {
+            leftover = next;
+            continue;
+        }
+
+        const SElementKind kind = elementKind( le.tagName() );
+        if( kind == SElementKind::Container ) {
+            // Drop the LINK, keep the container: a track that lost one clip is
+            // still the user's track. One warning per lost child — a silent
+            // recovery would be worse than the abort it replaces.
+            for( QDomNode &d : dangling ) {
+                qWarning() << QString( "Project child of type \"%1\" (id \"%2\") "
+                                       "links object \"%3\", which the file does "
+                                       "not contain; the LINK was dropped and the "
+                                       "rest of the container loads." )
+                                  .arg( le.tagName(), le.attribute( "id" ),
+                                        d.toElement().attribute( "objectId" ) );
+                le.removeChild( d );
+            }
+            changed = true;
+        } else {
+            // Window: its content is gone, so there is nothing left to window
+            // and it goes. Plain: the historic drop. Either way the element
+            // leaves, and any container that linked it meets the rule above on
+            // the next pass.
+            qWarning() << QString( "Project child of type \"%1\" (id \"%2\") "
+                                   "references object(s) [%3] that the file does "
+                                   "not contain; %4 DROPPED so the rest of the "
+                                   "project can load." )
+                              .arg( le.tagName(), le.attribute( "id" ),
+                                    missing.join( ", " ),
+                                    kind == SElementKind::Window
+                                        ? QString( "the window object was" )
+                                        : QString( "it was" ) );
+            docElem.removeChild( leftover );
+            changed = true;
+        }
+        leftover = next;
+    }
+    return changed;
 }
 
 void SProjectLoader::deferResolve( std::function<void()> resolver )

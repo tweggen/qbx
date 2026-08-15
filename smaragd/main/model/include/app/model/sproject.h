@@ -35,6 +35,26 @@ public:
     SProject();
     virtual ~SProject();
 
+    /**
+     * Wire-format version written into <SProject formatVersion='...'>.
+     *
+     * 1 = every project written before proposal 36 (the attribute is absent
+     *     there, so a reader that finds nothing must assume 1).
+     * 2 = the loader's prune-and-retry recovery per element kind (D8a): a
+     *     document written by this build may rely on a reader that keeps a
+     *     container whose child is missing.
+     *
+     * A reader NEVER refuses a higher version. Refusing would make a project
+     * unopenable by the very builds a user is most likely to have, and every
+     * element is skippable by name anyway (an unknown element is warned about
+     * and dropped); it warns instead, so a load that then looks odd has a
+     * printed reason.
+     */
+    static constexpr int FORMAT_VERSION = 2;
+
+    /** The version this document declared (1 when the attribute was absent). */
+    int formatVersion() const { return formatVersion_; }
+
     const QString &getFileName();
 
     // Where this project lives on disk (absolute, '/'-separated; empty for an
@@ -208,6 +228,9 @@ private:
     SLink *soRoot_;
     double bpmTempo_;
     int sampleRate_;
+    // Declared wire-format version of the document that was loaded; 1 for a
+    // file with no formatVersion attribute (see FORMAT_VERSION).
+    int formatVersion_ = FORMAT_VERSION;
     Fraction posFactor_;  // Time coordinate scaling (default: 1/sampleRate)
     std::vector<std::uint32_t> candidateRates_;
     QVariantMap properties_;
