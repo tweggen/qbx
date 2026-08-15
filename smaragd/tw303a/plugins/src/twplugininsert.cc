@@ -214,6 +214,12 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
     std::shared_ptr<twOutputPage> previousPage )
 {
     if( state_.load( std::memory_order_acquire ) == ComponentState::ZOMBIE ) {
+        // WIDTH (proposal 36, for B4): this override allocates its own pages
+        // (here and in the preview path below) and so bypasses the width
+        // wiring in twComponent::freezePage. Correct while twPluginInsert
+        // declares the default 1; when B4 makes the insert a wide component
+        // with a renderPageWide(), these allocations must carry
+        // getOutputChannels() too.
         auto silencePage = std::make_shared<twOutputPage>();
         silencePage->setValidFrames( 0 );
         return silencePage;

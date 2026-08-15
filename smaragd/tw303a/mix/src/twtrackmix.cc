@@ -379,6 +379,17 @@ std::shared_ptr<twOutputPage> twTrackMix::freezePage(
 )
 {
     std::lock_guard<std::mutex> lock(mutex());
+    // WIDTH, for whoever widens this component (proposal 36 B4). This override
+    // allocates its OWN page and therefore BYPASSES the one place a page learns
+    // its width — twComponent::freezePage's `make_shared<twOutputPage>(
+    // getOutputChannels())`. Correct today only because twTrackMix declares the
+    // default 1. The day it declares more, this line must pass the same
+    // getOutputChannels() and the mixing loop must fill every channel:
+    // freezePage_nolock forks on the width of the PAGE, so a width-4 component
+    // handing itself a width-1 page renders channel 0 and publishes it without
+    // the base renderPageWide() refusal ever firing. (§4.5's width check then
+    // reads it as a miss downstream — silence plus one log line — which is a
+    // loud enough failure to find, but not one to spend a day on.)
     auto page = std::make_shared<twOutputPage>();
     page->startPosition = startPos;
     // Stamp with the epoch read BEFORE rendering; consumers (streaming latch,
