@@ -2,6 +2,7 @@
 #define _TWPLUGINSLOTPROC_H_
 
 #include "tw/core/twtypes.h"
+#include "tw/events/twautomationcurve.h"
 #include "tw/events/tweventsource.h"
 #include "tw/events/twtempomap.h"
 #include "tw/plugins/twplugin.h"
@@ -9,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -185,6 +187,33 @@ public:
     // above is the only cache, and this is now just "stale the insert".
     void bumpParamEpoch();
 
+    // --- automation (proposal 37 P5, design D5 / §4.5) ----------------------
+
+    // How often a CONTINUOUS segment is re-stated inside a chunk. 64 frames is
+    // 1.33 ms at 48 kHz: fine enough that a plugin which does NOT interpolate
+    // between parameter points still sounds like a ramp, coarse enough that a
+    // 4096-frame chunk costs 64 events per automated parameter and stays well
+    // inside twEventLimits::kMaxEventsPerBlock.
+    static constexpr length_t kAutoRampFrames = 64;
+
+    // The lanes, by parameter id, in the plugin's HOST-FACING domain (native
+    // for CLAP/AU, normalized for VST3 — plugins inv. 26, the same domain
+    // set-plugin-param writes). Swapped WHOLE under mutex_; a render already
+    // running keeps the map it started with.
+    //
+    // THE EPOCH IS THE HASH (design D5). Every swap bumps automationEpoch_ AND
+    // stales the insert's pages through bumpParamEpoch_nolock() — an automated
+    // parameter is not observable in any other way, so a curve that changed
+    // without a bump would be served from cache and be completely inaudible.
+    void setParamCurves(
+        std::map<std::uint32_t, std::shared_ptr<const twAutomationCurve> > curves );
+    bool hasParamCurves() const;
+    /// Monotonic; enters the insert's page stamp by way of bumpParamEpoch().
+    std::uint64_t automationEpoch() const
+    {
+        return automationEpoch_.load( std::memory_order_acquire );
+    }
+
     // --- the render --------------------------------------------------------
 
     // Process `len` frames of every channel. `in` and `out` are channelCount()
@@ -212,7 +241,19 @@ private:
     void  rebuild_nolock();
     void  ensureScratch_nolock();
     void  resetInstances_nolock();
-    void  runChunked_nolock( const sample_t *const *in, sample_t **out, length_t len );
+    // `startPos` and `positional` are what let an automated EFFECT place its
+    // parameter events: a chunk's events are chunk-relative, but which values
+    // they carry depends on where the chunk IS.
+    void  runChunked_nolock( const sample_t *const *in, sample_t **out, length_t len,
+                             offset_t startPos, bool positional );
+
+    // Fill autoEvents_ with this chunk's ParamValue events, times relative to
+    // the chunk: the value AT the chunk start ("chase" — pages render out of
+    // order, so a plugin can never be assumed to already hold it), then one
+    // event per breakpoint inside the chunk, then a kAutoRampFrames grid over
+    // continuous stretches. Redundant repeats are dropped, which is what makes
+    // a STEP lane cost two events per chunk instead of sixty-four.
+    void  buildAutomationChunk_nolock( offset_t chunkStart, length_t n );
 
     // --- the generator half (proposal 37 P3b) -------------------------------
     // All of these require mutex_.
@@ -259,6 +300,13 @@ private:
     std::vector<sample_t *>       outPtrs_;
 
     std::atomic<bool> bypass_{ false };
+
+    // --- automation (proposal 37 P5) ---------------------------------------
+    std::map<std::uint32_t, std::shared_ptr<const twAutomationCurve> > paramCurves_;
+    std::atomic<std::uint64_t> automationEpoch_{ 0 };
+    // Per-chunk scratch; members so the render path allocates nothing.
+    std::vector<twEvent> autoEvents_;
+    twEventOut           autoSink_;
 
     // Position continuity: the plugin is stateful, so a page that does not
     // start exactly where the last one ended is a discontinuity and resets it.

@@ -202,8 +202,14 @@ Invariants:
    -- never raw freezePage(), so two drivers demanding the same producer page
    still collapse to one render (proposal 19 Phase 2a).
 15. Anything that changes what process() would produce must stale the insert's
-   pages. twPluginSlotProcessor::bumpParamEpoch() does it (bypass and
-   state-chunk changes route through it). Before proposal 36 B4 there were TWO
+   pages. twPluginSlotProcessor::bumpParamEpoch() does it (bypass, state-chunk
+   changes and -- since proposal 37 P5 -- AUTOMATION CURVES route through it).
+   THE EPOCH IS THE HASH (design D5): setParamCurves() bumps automationEpoch_
+   AND calls bumpParamEpoch_nolock(), so the curve enters the insert's page
+   STAMP by way of its content epoch. Post-B4 that is the whole of it -- the
+   processor caches nothing, so the component page cache above the insert is the
+   only cache there is, and automationEpoch_ is the monotonic counter that says
+   which generation of curves a page was frozen against. Before proposal 36 B4 there were TWO
    caches to move -- the processor's all-bus page cache and the taps'
    twComponent page caches -- and the processor's key had to be paramEpoch_
    plus the SUM of every tap's contentEpochNow() so that an UPSTREAM edit missed
@@ -802,3 +808,40 @@ Known debt:
 - The WideGen surplus channels are rendered and DROPPED (invariant 16). They are
   design 5.4's aux outputs and there is no return track to route them to until
   P9; the cost is one chunk buffer per surplus channel.
+
+## Parameter automation (proposal 37 P5, design D5 / §4.5)
+
+41. **A `param:` LANE BECOMES PER-CHUNK, SAMPLE-OFFSET `ParamValue` EVENTS, NOT
+    A setParam() CALL.** `setParamCurves(map<paramId, curve>)` swaps the whole
+    map under `mutex_`; `buildAutomationChunk_nolock(chunkStart, n)` produces
+    ONE sorted list per 4096-frame chunk:
+
+      * the value AT the chunk start, at offset 0 — the **chase**. Pages freeze
+        out of order and on any worker, so what the plugin instance currently
+        holds is unknown BY CONSTRUCTION and is stated rather than assumed;
+      * one event per breakpoint strictly inside the chunk, at its own offset;
+      * a `kAutoRampFrames` (64) grid along CONTINUOUS segments, for the many
+        plugins that do not interpolate between parameter points.
+
+    A value equal to the last one emitted is skipped, so a STEP lane costs two
+    events per chunk rather than sixty-four, and the whole list is capped at
+    `twEventLimits::kMaxEventsPerBlock`.
+
+42. **THE CURVE-ABSENT PATH IS THE LEGACY CALL, byte for byte.** With no curves
+    (and on the positionless legacy pull, which cannot place an event at all)
+    `runChunked_nolock` makes the same three-argument `process()` call it always
+    made — the same code, not an equivalent one. That is what keeps every render
+    without a lane byte-identical (P5 AC6). Only when a curve exists does it
+    switch to the event-aware overload.
+
+43. **ONE LANE AUTOMATES THE SLOT, NOT A CHANNEL.** Under `DualMono` every
+    instance is handed the SAME event list, exactly as `set-plugin-param` writes
+    every instance. The generator path merges the automation events into the
+    same per-chunk list as the notes and `stable_sort`s the result: the chase,
+    the automation grid and the window's events are three ordered streams and
+    only a final sort makes the non-decreasing sequence every backend requires.
+
+44. **THE VALUE DOMAIN IS THE PLUGIN'S HOST-FACING ONE** — native for CLAP/AU,
+    normalized [0,1] for VST3 (invariant 26), i.e. exactly what
+    `set-plugin-param` writes and `getParam()` returns. `twNormalizeForAbi()`
+    deliberately leaves `ParamValue` alone for the same reason.
