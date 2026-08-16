@@ -75,6 +75,54 @@ length_t twSampleReader::calcOutputTo( IOVector& dest, idx_t idx )
     return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), dest.length()), 0, dest.length());
 }
 
+idx_t twSampleReader::getOutputChannels() const
+{
+    // Exactly getNOutputs()'s number, for exactly this class's reason: a
+    // reader's ports ARE the source's channels. A source that reports 0 (an
+    // unloaded file) still owes its consumers a page, and a page must have at
+    // least one channel.
+    idx_t ch = src_.channels();
+    return ch > 0 ? ch : 1;
+}
+
+// The wide render path (proposal 36 §4.3). Called by freezePage_nolock exactly
+// when the page in hand carries more than one channel; at width 1 the component
+// still takes the pre-B3 renderFrames() → calcOutputTo() route, byte for byte.
+//
+// ONE seek (freezePage_nolock has already done it), ONE pass over the channels,
+// ONE cursor advance at the end. src_.read() is stateless and takes the channel
+// as an argument, so the whole page is read at the SAME position for every
+// channel — which is the property a per-channel loop over calcOutputTo() could
+// not have, and the property that makes the two channels of a stereo clip
+// coherent rather than one page apart.
+length_t twSampleReader::renderPageWide( twOutputPage &page, length_t frames,
+                                         const sample_t * /*input*/,
+                                         length_t /*inputLength*/ )
+{
+    if( state_.load( std::memory_order_acquire ) == ComponentState::ZOMBIE ) {
+        page.fillSilence();
+        return 0;
+    }
+
+    length_t n = frames;
+    if( n > (length_t) page.channelFrames() ) n = (length_t) page.channelFrames();
+    if( n <= 0 ) return 0;
+
+    std::lock_guard<std::mutex> lock( mutex() );
+
+    // The page in hand is the authority on how many channels to fill (§4.4),
+    // never getOutputChannels(). src_.read() clamps an out-of-range channel to
+    // the last one ("mono plays on every channel"), so a page wider than the
+    // source is filled rather than left holding whatever the allocation left.
+    const idx_t nCh = (idx_t) page.channels();
+    for( idx_t c = 0; c < nCh; ++c ) {
+        src_.read( pos_, page.channelPtr( c ), n, c );
+    }
+    pos_ += (offset_t) n;
+
+    return n;
+}
+
 void twSampleReader::createOutputLatches()
 {
     idx_t n = getNOutputs();

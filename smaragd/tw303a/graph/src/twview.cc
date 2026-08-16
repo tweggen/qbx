@@ -77,11 +77,21 @@ std::shared_ptr<twOutputPage> twView::freezePage(
     // pages.
     twResolvedClip r = resolve((offset_t) startPos);
     if (!r.component) {
-        auto page = std::make_shared<twOutputPage>();
+        // Nothing resolved: an empty page at THIS view's declared width, so the
+        // §4.5 width check reads it as "no audio" rather than as a second,
+        // unrelated width mismatch (proposal 36 B3).
+        auto page = std::make_shared<twOutputPage>((std::uint16_t)getOutputChannels());
         page->startPosition = startPos;
         page->validFrames = 0;
         return page;
     }
+    // WIDTH SURVIVES THE RESOLUTION CHAIN HERE, and it does so by construction:
+    // the resolved component allocates its OWN page inside freezePage(), at its
+    // own getOutputChannels(). A twView never re-wraps or re-allocates the page
+    // it forwards, so nothing between the clip and the reader can narrow it —
+    // which is why B3 needed no per-channel plumbing through twView/twLoopMap
+    // and why getOutputChannels() below only has to agree with what resolve()
+    // will hand back (proposal 36 AC B3.2).
     return r.component->freezePage((uint64_t) r.mappedPos, inputData, inputOffset, inputLength, sampleRate, previousPage);
 }
 
@@ -95,7 +105,7 @@ std::shared_ptr<twOutputPage> twView::freezePreviewPage(
 {
     twResolvedClip r = resolve((offset_t) startPos);
     if (!r.component) {
-        auto page = std::make_shared<twOutputPage>();
+        auto page = std::make_shared<twOutputPage>((std::uint16_t)getOutputChannels());
         page->startPosition = startPos;
         page->validFrames = 0;
         return page;
