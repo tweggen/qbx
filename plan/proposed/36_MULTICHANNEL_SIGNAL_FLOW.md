@@ -87,8 +87,15 @@ them. So the narrowing happens in four places, earliest first:
    mono page at `idx = 0`, so a stereo file's channel 1 is computed by nobody.
    This is the broadest destruction point and v2 missed it entirely.
 2. **The clip capture**, `SCut::buildCapture_`: reads channel `0` into a
-   `twCapturingSource(…, 1, …)` — so stretched, pitched and container-backed
-   clips are mono *a second time over*, independently of (1).
+   `twCapturingSource(…, 1, …)`. ~~so stretched, pitched and container-backed
+   clips are mono a second time over~~ — **only half true, corrected by B3**:
+   `rebuildReader` calls `buildCapture_` *only when there is no random source*,
+   i.e. for container/asset-backed clips. A **sample-backed** stretched or
+   pitched clip builds `twGrainSource` directly over the source and reads it
+   through a plain `twSampleReader`, with no capture on the playback path at
+   all; `buildCapture_`'s grained branch serves **preview**. So sample-backed
+   stretch and pitch went wide in B3, not B7, and B7's scope is narrower than
+   §5 first said: container/asset clips and the preview capture.
 3. **The master**, `SStdMixer::setNBusses(1)` (ctor, hard-coded, never
    serialized): the summing loop runs `bus < 1`, so every track's bus 1 is built,
    filtered, plugin-processed — and dropped. `getRootComponent()` still carries
@@ -517,7 +524,21 @@ plan for that.)* Byte-exactness gate green. Scheduler node count on the corpus
 unchanged — noting that at B2 nothing in production is wide, so this AC shows
 *"no regression"*, **not** B's central claim; that is B9.2's job.
 
-### B3 — The clip path goes wide (this is where a stereo file becomes audible)
+### B3 — The clip path goes wide ✅ **EXECUTED 2026-08-16** (`5fc51e0`)
+
+> Three components became wide and nothing else did: `twSampleReader`,
+> `twLoopReader` and `twWavInput`. Three things this milestone taught:
+> **(a)** `twLoopReader` needed its own `renderPageWide` — inheriting the linear
+> one would have turned a looping stereo clip into a single linear pass, audible
+> and *invisible to any width-1 gate*. **(b)** `twWavInput`'s hardcoded
+> `getNOutputs() → 4` mattered beyond tidiness: `SCut::resolveClip` falls back to
+> the CONTENT's root component until a reader exists, and that fallback was the
+> last narrowing point. **(c)** Width needed **no** threading through `twView` /
+> `twLoopMap` — it survives by construction — and B3.4 needed **no** version bump,
+> because `warp.pcm` already carries the channel count as field 3 of its params
+> blob and re-checks it before adopting. The gate forges two entries at the same
+> key differing only in that field: the right-shaped one must be adopted, the
+> wrong-shaped one must miss.
 
 Per §2's correction, this is the broadest narrowing point and it must come before
 the sink has anything true to say. `twSampleReader` renders all channels into one
@@ -607,7 +628,11 @@ render at the same positions.
 here — bus 1 is new audio, not a regression — with the change explained and
 re-frozen.
 
-### B7 — Capture-backed clips keep their channels
+### B7 — Container/asset clips and the preview capture keep their channels
+
+*(Rescoped by B3, which found that sample-backed stretch and pitch never touch
+`buildCapture_` at all — see §2 item 2. What is left here is genuinely
+capture-backed content plus the preview path.)*
 
 `SCut::buildCapture_` captures N channels; the container/asset render path
 renders per channel.
@@ -775,6 +800,23 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     allocation. Expect it; do not spend an afternoon on it.
 20. **`idx_t` is `short int` in this tree.** Relevant whenever a channel count is
     cast or compared.
+21. **A latent buffer overrun in the legacy pull, found by B3 and NOT fixed.**
+    `twComponent::calcOutputTo(sample_t*, length, idx)` calls
+    `resizeMonoScratch(length)` and then wraps the page with
+    `IOVector::CreateForPageOutput`, which **hard-codes `FRAME_CAPACITY`** as the
+    length. For any `length < FRAME_CAPACITY` the component is asked for a whole
+    page, its cursor advances a whole page, and the `memcpy` back **reads past
+    the scratch buffer**. Latent only because the freeze path calls it with a
+    full page every time; B3 hit it by asking for 4096 frames and re-aimed its
+    test at a full page rather than pin a bug it was not chartered to fix. Same
+    class as trap 18, and it will bite whoever widens the legacy pull.
+22. **`test_sawtooth.wav` is a TWO-CHANNEL file whose channels are byte-identical**
+    (found by B3), and 80 of the 89 pre-existing cases use it. So from B3 onward
+    **every clip in the suite freezes a width-2 page** — a far broader exercise of
+    the wide path than any new case could buy, and the reason the byte gate stays
+    green through it. It is also why a memory or page-count number moves at B3
+    without anything having gone wrong: the corpus went 12.25 → 14.0 MiB, exactly
+    7 of 49 resident pages now being 2 channels wide.
 
 ## 8. Non-goals (named, so they are not assumed)
 
