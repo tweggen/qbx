@@ -4,12 +4,14 @@
 // docs/contracts/CLIP_MODEL.md and POSITION_DOMAINS.md.
 #include "tw/mix/twtrackmix.h"
 #include "tw/mix/twrewire.h"
+#include "tw/mix/twgainstage.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/graph/tw_frozen_inputs.h"
 #include "tw/pages/io_vector.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <thread>
@@ -634,6 +636,115 @@ int main()
                 allCh0 = clamped->channelPtr(c)[i] == WideRampComponent::value(0, i);
         CHECK(allCh0, "rewire: a map naming a channel the producer lacks clamps to "
                       "its last one, never reads out of bounds");
+    }
+
+    // ---- twGainStage: THE FADER, post-FX (proposal 37 P3a / D5) -----------
+    //
+    // It is one wide component per track between the plugin chain and the
+    // rewire. What is pinned here is what the qxa cases cannot see: that unity
+    // is BIT-EXACT (the byte-identity argument for proposal 36's committed
+    // golden corpus rests on it), that a gain change stales the pages already
+    // rendered, and that the mute ramp is POSITION-DETERMINISTIC -- which is
+    // what makes the component class infinity and its range invalidation exact.
+    {
+        const idx_t W = 4;
+        const length_t CAP = (length_t)twOutputPage::FRAME_CAPACITY;
+
+        auto src = std::make_shared<WideRampComponent>(env, W);
+        src->init();
+        auto gs = std::make_shared<twGainStage>(env);
+        gs->init();
+        gs->setChannels(W);
+        gs->setInput(0, src->linkOutput(0));
+
+        auto unity = gs->freezePage(0, nullptr, 0, CAP, env.getSRate(), nullptr);
+        bool exact = unity != nullptr && unity->channels() == W;
+        for (idx_t c = 0; exact && c < W; ++c)
+            for (long long i = 0; exact && i < 4096; ++i)
+                exact = unity->channelPtr(c)[i] == WideRampComponent::value(c, i);
+        CHECK(exact, "gainstage: 0 dB is a BIT-EXACT pass-through of every channel");
+
+        // -6.0206 dB is 0.4999995..., the fader spelling of a half. Asserted as
+        // the exact float product, not as "about half": the render is ONE
+        // multiply, so anything else means a second operation crept in.
+        gs->setGainDb(-6.0206);
+        auto half = gs->freezePage(0, nullptr, 0, CAP, env.getSRate(), nullptr);
+        const sample_t g = (sample_t)std::pow(10., -6.0206 / 20.);
+        bool halved = half != nullptr && half->channels() == W;
+        for (idx_t c = 0; halved && c < W; ++c)
+            for (long long i = 0; halved && i < 4096; ++i)
+                halved = half->channelPtr(c)[i] == WideRampComponent::value(c, i) * g;
+        CHECK(halved, "gainstage: setGainDb scales every channel, and stales the "
+                      "page rendered at the old gain");
+
+        // Mute with no anchor is flat silence, everywhere.
+        gs->setGainDb(0.0);
+        gs->setMuted(true);
+        auto quiet = gs->freezePage(0, nullptr, 0, CAP, env.getSRate(), nullptr);
+        bool silent = quiet != nullptr;
+        for (idx_t c = 0; silent && c < W; ++c)
+            for (long long i = 0; silent && i < 4096; ++i)
+                silent = quiet->channelPtr(c)[i] == 0.0f;
+        CHECK(silent, "gainstage: an unanchored mute is silence on every channel");
+
+        // THE RAMP, and the reason it takes a POSITION rather than running a
+        // state machine: the anchor is placed in the SECOND page, and the second
+        // page is rendered BEFORE the first. A ramp that counted frames as it saw
+        // them would put the fade in the wrong place; a positional one cannot.
+        const offset_t anchor = (offset_t)CAP + 1000;
+        const length_t ramp = gs->muteRampFrames();
+        gs->setMuted(false);                       // clear, then re-arm anchored
+        gs->setMuted(true, anchor);
+
+        auto p1 = gs->freezePage((offset_t)CAP, nullptr, 0, CAP, env.getSRate(), nullptr);
+        auto p0 = gs->freezePage(0, nullptr, 0, CAP, env.getSRate(), nullptr);
+
+        bool beforeIsUntouched = p0 != nullptr;
+        for (long long i = 0; beforeIsUntouched && i < 4096; ++i)
+            beforeIsUntouched = p0->channelPtr(0)[i] == WideRampComponent::value(0, i);
+        CHECK(beforeIsUntouched, "gainstage: a page entirely before the mute anchor "
+                                 "is untouched, even when rendered after the one "
+                                 "holding the ramp");
+
+        // Flat 1.0 up to the anchor, flat 0.0 from anchor + ramp. Index i of
+        // page 1 is absolute frame CAP + i.
+        bool rampOk = p1 != nullptr && ramp > 1;
+        for (long long i = 0; rampOk && i < 1000; ++i)
+            rampOk = p1->channelPtr(0)[i] ==
+                     WideRampComponent::value(0, (long long)CAP + i);
+        for (long long i = 1000 + (long long)ramp;
+             rampOk && i < 1000 + (long long)ramp + 512; ++i)
+            rampOk = p1->channelPtr(0)[i] == 0.0f;
+        CHECK(rampOk, "gainstage: the mute ramp starts exactly at its anchor and is "
+                      "complete after muteRampFrames()");
+
+        bool monotone = p1 != nullptr;
+        double prev = 2.0;
+        for (long long i = 1000; monotone && i < 1000 + (long long)ramp; ++i) {
+            const double ref = WideRampComponent::value(0, (long long)CAP + i);
+            if (ref == 0.0) continue;              // ratio undefined, skip
+            const double f = p1->channelPtr(0)[i] / ref;
+            monotone = f <= prev + 1e-6 && f >= -1e-6 && f <= 1.0 + 1e-6;
+            prev = f;
+        }
+        CHECK(monotone, "gainstage: the mute ramp is monotone 1 -> 0 across its span");
+
+        // The NARROW path (width 1) is the legacy pull: the base renderFrames()
+        // forwards to calcOutputTo(), which reads the producer's plug and scales.
+        // That is the path assert-meter and every pre-scheduler pull take.
+        auto mono = std::make_shared<WideRampComponent>(env, 1);
+        mono->init();
+        auto gsm = std::make_shared<twGainStage>(env);
+        gsm->init();
+        gsm->setChannels(1);
+        gsm->setInput(0, mono->linkOutput(0));
+        gsm->setGainDb(-6.0206);
+        auto narrow = gsm->freezePage(0, nullptr, 0, CAP, env.getSRate(), nullptr);
+        bool narrowOk = narrow != nullptr && narrow->channels() == 1;
+        for (long long i = 0; narrowOk && i < 4096; ++i)
+            narrowOk = narrow->channelPtr(0)[i] == WideRampComponent::value(0, i) * g;
+        CHECK(narrowOk, "gainstage: the width-1 (legacy pull) path applies the same "
+                        "gain as the wide one");
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall mix tests passed\n",

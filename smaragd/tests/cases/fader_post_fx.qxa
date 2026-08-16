@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="fader_post_fx">
+
+  <!-- Proposal 37 P3a (design D5): THE TRACK FADER IS POST-FX.
+
+       Until this phase the fader was a per-page scalar inside
+       twTrackMix::freezePage_nolock, i.e. applied BEFORE the inserts (design
+       F6). It is now twGainStage, wired between the plugin chain and the
+       rewire:
+
+           twTrackMix -> twPluginChain -> twGainStage -> twRewire
+
+       WHY THIS CASE EXISTS AT ALL. The move cannot be gated by a byte compare:
+       no committed golden combines a non-unity fader with a plugin (verified by
+       reading tests/goldens/mc_{mono,stereo}.qxp - every `volume=` in both is
+       '0'), so every golden renders identically across the move BY
+       CONSTRUCTION, which proves nothing about the ordering. And a LINEAR
+       insert cannot tell the two orders apart either: gain and fader commute.
+       So the ordering is gated here, twice.
+
+       (a) VALUE. A -6.02 dB fader and tw.test.clap.gain at 2.0 must still
+           multiply out to unity, and the fader must still be in the metered
+           path. This is the half of the behaviour that must NOT change.
+
+       (b) ORDER. A -6.02 dB fader and a HARD CLIPPER (tw.test.clap.gain's
+           "Clip Threshold", param id 2 - see tw303a/plugins/tests/twtestclap.c;
+           the clipper runs after the plugin's own gain, which is left at 1.0).
+           Clipping does not commute with a scalar, so the two orders give
+           different audio, and the fixture is chosen to put the threshold
+           BETWEEN them:
+
+               pre-FX  (the OLD order):  fader first  -> peak 0.475 < 0.5,
+                                         the clipper never engages
+                                         -> rms = 0.5 * rms(source)
+               post-FX (the NEW order):  clipper first -> the 0.95-peak
+                                         sawtooth is clipped, THEN halved
+                                         -> a strictly lower rms
+
+       THE FIXTURE, and the closed form. ../test_clipsaw.wav (written by
+       tests/tools/gen_clip_fixture.py, which prints these numbers): 2.0 s,
+       48 kHz, 16-bit, a 100 Hz sawtooth of amplitude 0.95 - 480 samples per
+       period, so 480 divides 48000 exactly and EVERY one-second window has the
+       same rms. Computed over the fixture's own samples (x = int16/32768):
+
+           peak                             0.949982
+           rms, one second                  0.548468
+           pre-FX  0.5 * rms                0.274234     <- the old order
+           post-FX 0.5 * rms(clip(x, 0.5))  0.201419     <- the new order
+
+       The +/-1 % band around 0.201419 is [0.199405, 0.203433], which is 26 %
+       away from 0.274234 - so this case FAILS on a pre-move binary, and it was
+       verified to do so once (recorded in plan/STATE.md, 2026-08-16).
+
+       LAYOUT. Two tracks in DISJOINT time windows so one render answers both
+       questions and a byte offset attributes a difference to a path by itself
+       (the same discipline tools/gen_mc_corpus.qxa uses):
+
+           0.0 - 4.0 s   track 0   ../test_sawtooth.wav  + gain 2.0
+           4.0 - 6.0 s   track 1   ../test_clipsaw.wav   + clip 0.5
+
+       -6.0206 dB, not -6.02: it is 0.4999995, i.e. exactly half to seven
+       digits, which is what makes the +/-1 % bands honest. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <set-track-volume trackIndex="0" volume="-6.0206"/>
+    <set-track-volume trackIndex="1" volume="-6.0206"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_clipsaw.wav" timePos="192000"/>
+
+    <!-- (a) a plain gain of 2.0 ... -->
+    <insert-plugin trackPath="0" slotIndex="0" format="clap"
+                   uid="tw.test.clap.gain" name="Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="2.0"/>
+
+    <!-- (b) ... and a clipper at 0.5, with the plugin's own gain left at 1.0. -->
+    <insert-plugin trackPath="1" slotIndex="0" format="clap"
+                   uid="tw.test.clap.gain" name="Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="1" slotIndex="0" paramId="2" value="0.5"/>
+
+    <render filename="fpf_main.wav" format="wav" quality="10" durationSec="6.0"/>
+
+    <!-- (a) VALUE: 0.5 * 2.0 = 1.0, so the first second of test_sawtooth.wav
+         comes back at its unprocessed rms of 0.066650. +/-1 % = [0.065984,
+         0.067317]; widened by a hair on each side for the 16-bit round trip. -->
+    <assert-audio-energy filename="fpf_main.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.06598" maxRms="0.06732"/>
+
+    <!-- (b) ORDER: the clipper saw the UNFADED signal. 0.201419 +/-1 %.
+         The old, pre-FX order lands on 0.274234 and fails this band. -->
+    <assert-audio-energy filename="fpf_main.wav"
+                         startFrame="192000" frameCount="48000"
+                         channel="0" minRms="0.19940" maxRms="0.20344"/>
+
+    <!-- (a) continued: THE METER, at 0.5 s, reads the post-fader post-FX level.
+         twLevelProbe measures the 256-frame window ending at the position, and
+         over [23744, 24000) the raw fixture's rms is 0.058928. The fader and the
+         plugin are the only two things in the path, and they cancel - so this
+         band (+/-15 %) is passed ONLY if BOTH are in it: the plugin alone would
+         read 0.1179 and the fader alone 0.0295, and both are far outside. -->
+    <assert-meter trackIndex="0" position="24000"
+                  minRms="0.05010" maxRms="0.06780"/>
+
+    <!-- (a) continued: bypass the insert and the fader alone remains, so the
+         first second halves to 0.033325. +/-1 % = [0.032992, 0.033658]. -->
+    <set-plugin-bypass trackPath="0" slotIndex="0" bypassed="true"/>
+
+    <render filename="fpf_bypassed.wav" format="wav" quality="10" durationSec="6.0"/>
+    <assert-audio-energy filename="fpf_bypassed.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.03293" maxRms="0.03372"/>
+
+    <!-- ...and track 1, untouched, must not have moved. -->
+    <assert-audio-energy filename="fpf_bypassed.wav"
+                         startFrame="192000" frameCount="48000"
+                         channel="0" minRms="0.19940" maxRms="0.20344"/>
+
+    <!-- The bypass undoes exactly, which also re-proves that a chain edit made
+         after a position was first rendered reaches the render. -->
+    <undo count="1"/>
+
+    <render filename="fpf_undone.wav" format="wav" quality="10" durationSec="6.0"/>
+    <assert-audio-energy filename="fpf_undone.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.06598" maxRms="0.06732"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

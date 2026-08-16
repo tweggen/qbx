@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="meter_gain_after_probe">
+
+  <!-- Proposal 37 P3a, AC3: A FADER CHANGE MADE AFTER A POSITION WAS ALREADY
+       FROZEN IS OBSERVED BY assert-meter's PATH.
+
+       This case could not be written before P3a, and its absence is why
+       meter_postfader.qxa uses two tracks at two gains rather than one track
+       whose gain moves. The caveat it worked around, recorded in
+       smetertestactions.cpp and in CLAUDE.md's "Level meters" section:
+
+           the fader lived in twTrackMix, and the cached page between the chain
+           and the rewire was gated on the CHAIN's content epoch, so a gain set
+           after that position had been frozen once was not picked up here -
+           even though playback and the offline render, which go through the
+           scheduler and re-plan, both saw it.
+
+       The fader is now twGainStage, and the rewire's producer IS the gain
+       stage, so the epoch the cached page is gated on is the epoch
+       set-track-volume bumps. Hence: probe first, THEN set the gain, then probe
+       the SAME position again and require the new level.
+
+       Fixture: ../test_sawtooth.wav, whose 4th second has rms ~0.405
+       (testkit/CONTRACT.md inv. 3); position 168000 is inside it, and the
+       256-frame probe window ending there has rms 0.414548. The two bands are
+       meter_postfader.qxa's, unchanged, so the two cases are directly
+       comparable: 0.300-0.510 at unity, 0.150-0.255 at -6.02 dB. They do not
+       overlap, so "the second probe returned the first probe's number" fails. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- FIRST probe: freezes the page for this position at unity. -->
+    <assert-meter trackIndex="0" position="168000" minRms="0.300" maxRms="0.510"/>
+
+    <!-- The gain change comes AFTER that freeze. This is the whole case. -->
+    <set-track-volume trackIndex="0" volume="-6.0206"/>
+
+    <assert-meter trackIndex="0" position="168000" minRms="0.150" maxRms="0.255"/>
+
+    <!-- And back up again, so the direction is not what makes it work. -->
+    <set-track-volume trackIndex="0" volume="0"/>
+
+    <assert-meter trackIndex="0" position="168000" minRms="0.300" maxRms="0.510"/>
+
+    <!-- An undo must be audible to the meter too. NOTE WHAT IT UNDOES: the two
+         set-track-volume actions above have the same mergeKey (the lane path),
+         so the action system COALESCED them into one undo step whose inverse
+         carries the volume from before the FIRST of them. One undo therefore
+         lands on the project's original 0 dB, not on -6.02 dB - which is the
+         correct merge behaviour, not a bug, and is why nothing here asserts a
+         per-action undo. What is being gated is only that the inverse reaches
+         the audio at a position that has been frozen three times already. -->
+    <undo count="1"/>
+
+    <assert-meter trackIndex="0" position="168000" minRms="0.300" maxRms="0.510"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
