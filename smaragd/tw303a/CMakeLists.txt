@@ -159,9 +159,11 @@ tw_module(mix
         mix/include/tw/mix/twtrackmix.h
         mix/include/tw/mix/twmixer.h
         mix/include/tw/mix/twrewire.h
+        mix/include/tw/mix/twgainstage.h
         mix/src/twtrackmix.cc
         mix/src/twmixer.cc
         mix/src/twrewire.cc
+        mix/src/twgainstage.cc
     DEPS tw_core tw_pages tw_graph
 )
 
