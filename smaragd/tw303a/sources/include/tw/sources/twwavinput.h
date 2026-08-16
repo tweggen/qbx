@@ -44,7 +44,32 @@ public:
     virtual const char *getInputName( idx_t ) const override;
     virtual const char *getOutputName( idx_t ) const override;
     virtual idx_t getNInputs() const override;
+
+    // Proposal 36 B3, §7 trap 4: this returned a hardcoded **4** while
+    // createOutputLatches() built exactly one latch — a port count that was
+    // true of nothing. It is now the source's channel count (1 when nothing
+    // loaded), and createOutputLatches() builds that many. No production caller
+    // ever linked output > 0 of a wav input, so the 4 was pure misinformation:
+    // it is the entry §7 trap 8 cites for "getNOutputs() means three different
+    // things in three classes".
     virtual idx_t getNOutputs() const override;
+
+    // …and the page width, which is the SAME number here for the same reason it
+    // is on twSampleReader: a file input's ports are its channels. Fixing the
+    // port count without this would have left the clip-resolution fallback
+    // (SCut::resolveClip returns content_->getRootComponent() until a reader is
+    // built) narrowing a stereo file back to mono.
+    virtual idx_t getOutputChannels() const override;
+
+    // §4.3's one-pass wide render. NOTE the deliberate asymmetry with
+    // twSampleReader: this cursor does NOT auto-advance ("callers seek before
+    // every block" — the historical contract calcOutputTo() below keeps), so
+    // neither does this. freezePage_nolock seeks to the page start every time,
+    // which is what makes that safe.
+    virtual length_t renderPageWide( twOutputPage &page, length_t frames,
+                                     const sample_t *input,
+                                     length_t inputLength ) override;
+
     virtual void setBufferSize( length_t ) override;
     virtual void init() override;
 

@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AC B3.2 — a plain stereo clip's width SURVIVES THE RESOLUTION CHAIN.
+
+  B3 makes twSampleReader as wide as its source. The question this case answers
+  is a different one: does that width still exist at the component
+  twView::resolve() hands back for a real clip, after SCut::resolveClip has
+  folded the slip/loop mapping and picked the current reader generation? Width
+  is not threaded through that chain by hand — it survives because a twView
+  never re-wraps or re-allocates the page it forwards, and the resolved
+  component allocates its own page at its own getOutputChannels(). This case is
+  what makes that claim checkable rather than asserted in a comment.
+
+  THROUGH THE REAL SCHEDULER, which is the half a reader-level unit test cannot
+  give: assert-clip-channels declares a demand on the project's
+  CaptureRevalidator and waits, so the page is planned, dependency-counted and
+  frozen on a worker exactly as playback readahead and the offline render do.
+
+  NOT AT THE TRACK'S ROOT COMPONENT. That assertion is AC B4.7 and cannot be
+  made here: twTrackMix and twPluginChain still allocate their own width-1 pages
+  (§7 trap 19), and IOVector — the seam twTrackMix mixes through — is mono by
+  design (§4.6). The whole point of the milestone boundary is that a stereo clip
+  stays audible-as-mono until B4 widens the track and B5 widens the sink.
+
+  THE FIXTURE. ../test_stereo.wav is gen_channel_fixture at channels=2, the
+  same 6 dB ladder the 4-channel fixture uses: channel 0 is a 480 Hz sine at
+  amplitude 0.70710678 (rms exactly 0.5) and channel 1 the same sine at half
+  that (rms exactly 0.25). 144000 frames = 1440 whole cycles at 48 kHz, so a
+  page-length window measures the exact figure rather than "about" it, and it
+  spans three pages so a page-DISPLACED channel cannot pass. Regenerate and
+  re-verify with (XML comments may not contain a double hyphen, so read each
+  option below with the usual two leading dashes):
+
+      gen_channel_fixture  out tests/test_stereo.wav  channels 2  frames 144000
+      gen_channel_fixture  verify tests/test_stereo.wav
+-->
+<SActionScript version="1" name="mc_stereo_clip_width">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+
+    <!-- Track 1 carries the suite's usual material. test_sawtooth.wav is a
+         TWO-CHANNEL file whose channels are byte-identical, which is worth
+         knowing: since B3 every clip in this suite freezes a width-2 page, and
+         the byte gate stays green precisely because both channels hold the same
+         audio. It is also the control for the content discriminator below. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- And a genuinely MONO file, to pin that width follows the source rather
+         than being switched on globally. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="2" filePath="../test_position.wav" timePos="0"/>
+
+    <!-- ================= AC B3.2 ==================================== -->
+    <!-- Page 0. delta is 0.5 - 0.25 = 0.25, and rms(ch0 - ch1) is 0.25 as well
+         (the difference of a sine and half itself is a 0.35355 sine). -->
+    <assert-clip-channels clip="0,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1"
+                          minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- Page 1, i.e. a page whose content is NOT page 0's. A per-channel loop
+         over the reader's cursor would have filled channel 1 here with page 2's
+         audio; the levels would still be right, which is why the exact
+         comparison lives in wide_reader_test and this one asserts the ladder
+         at more than one position. -->
+    <assert-clip-channels clip="0,0" position="65536" expectChannels="2"
+                          channelA="0" channelB="1"
+                          minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- A position inside page 2 (the tail page, partly past the material). -->
+    <assert-clip-channels clip="0,0" position="140000" expectChannels="2"
+                          channelA="0" channelB="1"
+                          minRmsDelta="0.10" minDiffRms="0.10"/>
+
+    <!-- The bands must be able to fail, or they prove nothing: the ladder gives
+         delta 0.25 exactly, so 0.30 must be rejected. -->
+    <assert-clip-channels clip="0,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1" minRmsDelta="0.30"
+                          expectReject="true"/>
+
+    <!-- …and so must a wrong width. -->
+    <assert-clip-channels clip="0,0" position="0" expectChannels="1"
+                          channelA="0" channelB="1" minRmsDelta="0.0"
+                          expectReject="true"/>
+
+    <!-- ================= the two controls ============================ -->
+    <!-- test_sawtooth: two channels, same audio. The width assertion passes
+         (the page really is 2 wide) and BOTH discriminators reject, which is
+         what separates "the clip path is wide" from "the channels differ". -->
+    <assert-clip-channels clip="1,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1" minRmsDelta="0.0"
+                          minDiffRms="0.0001"
+                          expectReject="true"/>
+
+    <!-- test_position: genuinely mono, so the page is width 1 and channel 1
+         does not exist. An out-of-range channel is an ERROR here, never an
+         empty selection that reports rms 0 and reads like a silent render —
+         the same rule M0 had to fix in the file-reading verbs. -->
+    <assert-clip-channels clip="2,0" position="0" expectChannels="1"
+                          channelA="0" channelB="1" minRmsDelta="0.0"
+                          expectReject="true"/>
+
+    <!-- ================= the sink is still mono ====================== -->
+    <!-- B3 is NOT B5. The clip is two channels wide upstream, and the rendered
+         file's channels are still equal by construction (RenderSession
+         collapses to one bus and duplicates it). Asserting that here is what
+         keeps the milestone boundary honest: if this ever starts failing, the
+         sink went wide and it was B5 that did it, not B3. -->
+    <set-track-mute trackPath="1" muted="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <render filename="mc_stereo_clip_width.wav" format="wav" quality="10"
+            durationSec="3.0"/>
+    <assert-audio-energy filename="mc_stereo_clip_width.wav"
+                         startFrame="0" frameCount="128000"
+                         channel="0" minRms="0.40" maxRms="0.60"/>
+    <assert-channels-differ filename="mc_stereo_clip_width.wav"
+                            channelA="0" channelB="1" minRmsDelta="0.0"
+                            minDiffRms="0.0001"
+                            expectReject="true"/>
+
+    <report-page-memory label="mc_stereo_clip_width after render"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

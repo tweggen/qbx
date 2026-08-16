@@ -58,6 +58,12 @@ const Fixture kFixtures[] = {
       "<assert-channels-differ filename='r.wav' channelA='0' channelB='3'"
       " minRmsDelta='0.250000' minDiffRms='0.100000' startFrame='4000'"
       " frameCount='4000'/>" },
+    // Same shape (minDiffRms only written when >= 0), plus a clip path, which a
+    // default instance does not have.
+    { "assert-clip-channels",
+      "<assert-clip-channels clip='0,0' position='4096' expectChannels='2'"
+      " channelA='0' channelB='1' minRmsDelta='0.150000'"
+      " minDiffRms='0.150000'/>" },
     // expectSilence is only written when true, so it stays out of the fixture.
     { "assert-source-position",
       "<assert-source-position filename='r.wav' startFrame='40960'"

@@ -13,7 +13,15 @@
 
 void twWavInput::createOutputLatches()
 {
-    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 0 );
+    // One latch per CHANNEL, matching getNOutputs() (proposal 36 B3). Before
+    // this, getNOutputs() said 4 and exactly one latch existed — allocPlugs()
+    // sized the vector from the lie, so slots 1..3 were permanently null and a
+    // linkOutput(1) would have returned nothing. Nothing in the tree did that,
+    // which is why it survived; §4.4 rule (1) now gives each index a meaning.
+    idx_t n = getNOutputs();
+    for( idx_t i = 0; i < n; ++i ) {
+        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( shared_from_this(), i, 0 );
+    }
 }
 
 int twWavInput::setNOutputs( idx_t )
@@ -75,7 +83,56 @@ idx_t twWavInput::getNInputs() const
 
 idx_t twWavInput::getNOutputs() const
 {
-    return 4;
+    // The decoded source's channel count. Deliberately NOT getSource(), which
+    // would resolve viewAtRate() — a resampled view has the SAME channel count
+    // (rate conversion is per channel), and getOutputChannels() below is called
+    // once per page allocation, inside the component mutex. Asking the sample
+    // source for a rate view from there would put a second lock, and possibly a
+    // resampler construction, on that path for a number it cannot change.
+    // 1 when nothing loaded — a component with zero ports could not be wired.
+    idx_t ch = source_ ? source_->channels() : 1;
+    return ch > 0 ? ch : 1;
+}
+
+idx_t twWavInput::getOutputChannels() const
+{
+    return getNOutputs();
+}
+
+length_t twWavInput::renderPageWide( twOutputPage &page, length_t frames,
+                                     const sample_t * /*input*/,
+                                     length_t /*inputLength*/ )
+{
+    if( state_.load( std::memory_order_acquire ) == ComponentState::ZOMBIE ) {
+        page.fillSilence();
+        return 0;
+    }
+
+    length_t n = frames;
+    if( n > (length_t) page.channelFrames() ) n = (length_t) page.channelFrames();
+    if( n <= 0 ) return 0;
+
+    std::lock_guard<std::mutex> lock( mutex() );
+
+    if( !source_ ) {
+        page.fillSilence();
+        return 0;
+    }
+
+    // One view, one position, every channel — the §4.3 shape. viewAtRate() is
+    // resolved once so two channels of one page can never come from two
+    // different cached views.
+    twRandomSource *view = source_->viewAtRate( env.getSRate() );
+    if( !view ) {
+        page.fillSilence();
+        return 0;
+    }
+    const idx_t nCh = (idx_t) page.channels();
+    for( idx_t c = 0; c < nCh; ++c ) {
+        view->read( playOffset_, page.channelPtr( c ), n, c );
+    }
+    // NO advance: see the header. This cursor is positioned by its caller.
+    return n;
 }
 
 twRandomSource *twWavInput::getSource() const
