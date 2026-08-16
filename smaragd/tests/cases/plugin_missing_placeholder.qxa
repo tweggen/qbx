@@ -43,7 +43,7 @@
   <actions>
     <load-project path="../plugin_missing_placeholder.qxp"/>
 
-    <render filename="plugin_missing_placeholder.wav" format="wav" quality="10"/>
+    <render filename="plugin_missing_placeholder.wav" format="wav" quality="10" durationSec="2.5"/>
 
     <!-- 0-1 s of the sawtooth, unprocessed level: the placeholder is a copy. -->
     <assert-audio-energy filename="plugin_missing_placeholder.wav"

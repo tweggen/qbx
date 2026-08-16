@@ -71,6 +71,40 @@ private:
     float v_;
 };
 
+// A tap whose DECLARED width can change between freezes — the shape a project
+// width change gives every component (proposal 36 §4.5). It renders wide
+// properly, so a miss can only ever be the width rule, never a refusal.
+class WidthShiftComponent : public twComponent {
+public:
+    explicit WidthShiftComponent( tw303aEnvironment &e ) : twComponent( e ) {}
+    void setWidth( idx_t w ) { width_ = w; }
+    idx_t getOutputChannels() const override { return width_; }
+    bool isSeekable() const override { return true; }
+    int  seekTo( offset_t ) override { return 0; }
+    void reset() override {}
+    length_t renderFrames( sample_t *out, length_t n, const sample_t *,
+                           length_t, idx_t ) override {
+        for( length_t i = 0; i < n; ++i ) out[i] = 0.5f;
+        return n;
+    }
+    length_t renderPageWide( twOutputPage &page, length_t frames,
+                             const sample_t *, length_t ) override {
+        if( frames > (length_t)page.channelFrames() )
+            frames = (length_t)page.channelFrames();
+        for( idx_t c = 0; c < (idx_t)page.channels(); ++c )
+            for( length_t i = 0; i < frames; ++i )
+                page.channelPtr( c )[i] = 0.5f;
+        return frames;
+    }
+    void createOutputLatches() override {}
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName( idx_t ) const override { return nullptr; }
+    const char *getOutputName( idx_t ) const override { return "shift"; }
+private:
+    idx_t width_ = 1;
+};
+
 int main()
 {
     const offset_t CAP = (offset_t)twOutputPage::FRAME_CAPACITY;
@@ -222,7 +256,7 @@ int main()
         CHECK( probe.advanceTo( 5000, s ), "a frozen page mid-page reads" );
         // No history -> MIN_WINDOW: the span is [5000-256, 5000).
         {
-            twLevelSample expect = twScanSpan( &p0->samples[5000 - 256], 256 );
+            twLevelSample expect = twScanSpan( &p0->channelPtr(0)[5000 - 256], 256 );
             CHECK( near_( s.peak, expect.peak, 1e-6 ) && s.frames == 256,
                    "the first read measures MIN_WINDOW ending at the position" );
         }
@@ -231,7 +265,7 @@ int main()
         CHECK( probe.advanceTo( 6600, s ), "a continued read succeeds" );
         CHECK( s.frames == 1600, "the window is exactly what elapsed" );
         {
-            twLevelSample expect = twScanSpan( &p0->samples[5000], 1600 );
+            twLevelSample expect = twScanSpan( &p0->channelPtr(0)[5000], 1600 );
             CHECK( near_( s.peak, expect.peak, 1e-6 ),
                    "the continued window starts where the previous one ended" );
         }
@@ -304,6 +338,56 @@ int main()
         probe.reset();
         CHECK( probe.advanceTo( 5000, quiet ) && near_( quiet.peak, 0.25, 1e-4 ),
                "a re-frozen page is re-read, not served from the held page" );
+    }
+
+    // ------------------------------------ §4.5: WIDTH MISMATCH IS A MISS
+    // Proposal 36 §4.5, wired by B2. The probe deliberately accepts STALE pages
+    // (the block above), because playback is serving exactly those. A page from
+    // before a project WIDTH change is a different thing: not older audio, a
+    // different geometry. Reading it would mean reading channel 1 of a page that
+    // has only channel 0 — an out-of-bounds read, and on the RT path an
+    // out-of-bounds read on the audio thread. So it is a MISS, which decays the
+    // meter, which is the correct reading for a position being re-frozen.
+    //
+    // (The RT-path half of this rule is wired in AudioEngine::updateFrozenPage
+    // and is B4's AC B4.5 to prove; nothing in the production graph is wider
+    // than one channel at B2, so there is no width change to force there yet.)
+    {
+        auto src = std::make_shared<WidthShiftComponent>( env );
+        src->init();
+
+        twLevelProbe probe;
+        probe.setTap( src );
+
+        auto page = src->freezePage( 0, nullptr, 0, CAP, env.getSRate(), nullptr );
+        CHECK( page && page->channels() == 1,
+               "the page was frozen at the tap's width at the time" );
+
+        twLevelSample s;
+        CHECK( probe.advanceTo( 5000, s ),
+               "…and reads normally while the widths agree" );
+
+        const uint64_t missesBefore = probe.missCount();
+
+        // THE WIDTH CHANGE. The cached page keeps its geometry — channels is
+        // immutable after allocation — so the two now disagree.
+        src->setWidth( 2 );
+        probe.reset();
+        CHECK( !probe.advanceTo( 5000, s ),
+               "a cached page whose width no longer matches its producer is a "
+               "MISS, not audio" );
+        CHECK( probe.missCount() > missesBefore,
+               "…and it is counted as a miss, so the meter decays" );
+
+        // Not a permanent poisoning: re-freezing at the new width restores the
+        // reading (the epoch bump is what makes freezePage allocate again).
+        src->bumpContentEpoch();
+        auto wide = src->freezePage( 0, nullptr, 0, CAP, env.getSRate(), nullptr );
+        CHECK( wide && wide->channels() == 2,
+               "the re-freeze allocates at the NEW declared width" );
+        probe.reset();
+        CHECK( probe.advanceTo( 5000, s ),
+               "…and the position reads again once the widths agree" );
     }
 
     printf( failures ? "\n%d FAILURE(S)\n" : "\nall metering tests passed\n",

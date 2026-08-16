@@ -117,6 +117,15 @@ idx_t twView::getNOutputs() const
     return comp->getNOutputs();
 }
 
+idx_t twView::getOutputChannels() const
+{
+    std::shared_ptr<twComponent> comp = getComponent();
+    // No target resolves ⇒ the width of the empty pages freezePage() builds
+    // above, which is 1. Never 0: a page must have at least one channel.
+    if (!comp) return 1;
+    return comp->getOutputChannels();
+}
+
 const char *twView::getInputName(idx_t idx) const
 {
     std::shared_ptr<twComponent> comp = getComponent();

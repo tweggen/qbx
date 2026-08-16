@@ -158,6 +158,42 @@ public:
         return calcOutputTo(output, length, idx);
     }
 
+    // WIDE rendering: fill EVERY channel of `page` in ONE pass (proposal 36
+    // §4.3, milestone B2). Called by freezePage_nolock instead of renderFrames()
+    // exactly when the page in hand is wider than one channel.
+    //
+    // WHY THIS IS NOT A PER-CHANNEL LOOP OVER renderFrames(). v2 of the proposal
+    // specified that loop; it is wrong and must never be built.
+    // twSampleReader::calcOutputTo — the very component the loop was meant to
+    // serve — ADVANCES A CURSOR (pos_ += dest.length()), while freezePage_nolock
+    // seeks ONCE before rendering. A loop would render channel 0, advance the
+    // cursor a whole page, and fill channel 1 with the NEXT PAGE'S AUDIO — the
+    // "coherent page displaced by one page" bug this repo has already bled for.
+    // The same applies to every input-side plug cursor, and internalState is
+    // captured once after rendering, so a state chain would be meaningful for
+    // channel 0 only.
+    //
+    // So a wide component seeks once, fills every channel in that one pass, and
+    // advances its cursor once. `page.startPosition` is authoritative for the
+    // content (freezePage_nolock has already reset/restored state and seeked);
+    // `frames` bounds the write, and is never more than page.channelFrames().
+    //
+    // Returns frames rendered PER CHANNEL (every channel of a page covers the
+    // same time range), like renderFrames().
+    //
+    // The base implementation REFUSES: it reports, fills silence and returns 0.
+    // It never silently renders something plausible, and it is deliberately NOT
+    // a Q_ASSERT — §7 trap 9: Q_ASSERT_X is compiled out of the build everyone
+    // runs (Qt defines QT_NO_DEBUG even though CMake strips -DNDEBUG), so an
+    // assert here would vanish and leave a silent wrong render.
+    virtual length_t renderPageWide( twOutputPage &page, length_t frames,
+                                     const sample_t *input, length_t inputLength );
+
+    // How many times the base renderPageWide() has refused, process-wide. The
+    // refusal logs once (a freeze loop would otherwise emit thousands of
+    // records); this counter is what a test can assert on. AC B2.3.
+    static uint64_t wideRenderRefusals();
+
     // ========== Phase 3 Refactor: IOVector-based interface ==========
     // NEW: Type-safe interface using IOVector for bounds-checked rendering.
     // Default implementation wraps raw-pointer interface for compatibility.
@@ -211,6 +247,26 @@ public:
     virtual idx_t getNOutputs() const = 0;
     virtual const char *getInputName( idx_t idx ) const = 0;
     virtual const char *getOutputName( idx_t idx ) const = 0;
+
+    // --- Page width (proposal 36 §4.2, milestone B2) ----------------------
+    // How many CHANNELS this component's frozen page carries. AUTHORITATIVE for
+    // page width from B2 on: every page this component allocates is built at
+    // this width, and freezePage_nolock dispatches on the width of the page in
+    // its hand (§4.4 — a declared width is a promise about future pages; the
+    // page you hold is a fact).
+    //
+    // Deliberately NOT getNOutputs(), and the two must never be merged (§7 trap
+    // 8). getNOutputs() is the PATCH-BAY PORT COUNT and already means three
+    // different things in three classes: twRewire's N plugs are buses,
+    // twSampleReader's N outputs are channels, twWavInput returns a hardcoded 4
+    // with one latch built. Conflating them is how this stays broken.
+    //
+    // Default 1 ⇒ every existing component is unchanged and correct, and a
+    // width-1 page takes byte-for-byte today's render path.
+    //
+    // A component that returns > 1 MUST override renderPageWide(); the base
+    // implementation refuses (see below).
+    virtual idx_t getOutputChannels() const { return 1; }
 
     // --- Format negotiation (proposal 04 §3) -----------------------------
     // Seed capability domains for one port. Default: mono Float32 at any rate.
@@ -295,16 +351,16 @@ public:
     // keepAfterPos. keepAfterPos and startPos are both FRAME positions; the
     // page's own extent is FRAME_CAPACITY frames, NOT PAGE_SIZE (which is the
     // page's size in BYTES). See the note on the definition — this comparison
-    // was frames-against-bytes, which made the window four pages wide.
+    // was frames-against-bytes until proposal 36 B1a.
     //
-    // NOTE: nothing in the tree calls this. Page caches are pruned only by
+    // NOTE (B1a): nothing in the tree calls this. Page caches are pruned only by
     // invalidation and by component teardown, so a long session's outputPages_
-    // maps grow without bound. Retiring it or wiring it up is a separate
-    // question; the arithmetic is fixed here so that whoever does wire it up
-    // does not inherit a silently wrong retention window.
+    // maps grow without bound. Retiring or wiring it is proposal 36 B9's call;
+    // the arithmetic is fixed here because widening the page would have
+    // multiplied the error the day it did get wired.
     void releaseOldPages(offset_t keepAfterPos);
 
-    // --- Page-memory accounting ---------------------------------------------
+    // --- Page-memory accounting (proposal 36 B1a) ---------------------------
     //
     // The GLOBAL figures live in tw::pages::PageAccounting and are exact by
     // construction (they ride the page's own lifetime). These add the PER

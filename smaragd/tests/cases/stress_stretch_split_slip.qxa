@@ -37,7 +37,7 @@
     <resize-clip clip="0,1" startTime="24000" startOffset="12000" duration="12000" loopLength="0" stretch="1.5"/>
     <resize-clip clip="0,2" startTime="48000" startOffset="40000" duration="24000" loopLength="0" stretch="0.9"/>
 
-    <render filename="stress_final.wav" format="wav" quality="10"/>
+    <render filename="stress_final.wav" format="wav" quality="10" durationSec="2.5"/>
   </actions>
 
   <assertions>

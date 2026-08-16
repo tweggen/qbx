@@ -54,7 +54,7 @@
                    path="nosuchmodule.clap" nIn="2" nOut="2"/>
 
     <!-- The missing slot is transparent: the skew alone sets the level. -->
-    <render filename="pod_baseline.wav" format="wav" quality="10"/>
+    <render filename="pod_baseline.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pod_baseline.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>
@@ -68,7 +68,7 @@
 
     <!-- Reordering alone changes nothing audible (both are linear, and the
          placeholder is transparent) — this is the control for the next step. -->
-    <render filename="pod_reordered.wav" format="wav" quality="10"/>
+    <render filename="pod_reordered.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pod_reordered.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>
@@ -80,7 +80,7 @@
     <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
                          contains="state=Active"/>
 
-    <render filename="pod_after_remove.wav" format="wav" quality="10"/>
+    <render filename="pod_after_remove.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pod_after_remove.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>
@@ -91,7 +91,7 @@
     <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="0"
                          contains="state=Missing"/>
 
-    <render filename="pod_undone.wav" format="wav" quality="10"/>
+    <render filename="pod_undone.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pod_undone.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>
@@ -122,7 +122,7 @@
     <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
                          contains="state=Active"/>
 
-    <render filename="pod_front_insert_removed.wav" format="wav" quality="10"/>
+    <render filename="pod_front_insert_removed.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pod_front_insert_removed.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>
@@ -156,7 +156,7 @@
     <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
                          contains="state=Missing"/>
 
-    <render filename="pod_head_removed.wav" format="wav" quality="10"/>
+    <render filename="pod_head_removed.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="pod_head_removed.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.060" maxRms="0.073"/>

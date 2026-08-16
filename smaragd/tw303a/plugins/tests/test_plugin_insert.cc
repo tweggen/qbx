@@ -282,9 +282,9 @@ static int testChannelPolicy()
             auto p1 = freezeTap( r.taps[1], 0, rate );
             const float in0 = r.sources[0]->value( 100 );
             const float in1 = r.sources[1]->value( 100 );
-            check( p0 && nearly( p0->samples[100], in0 * 1.0f, 1e-6 ),
+            check( p0 && nearly( p0->channelPtr(0)[100], in0 * 1.0f, 1e-6 ),
                    "dual-mono bus 0 keeps its own gain" );
-            check( p1 && nearly( p1->samples[100], in1 * 3.0f, 1e-5 ),
+            check( p1 && nearly( p1->channelPtr(0)[100], in1 * 3.0f, 1e-5 ),
                    "dual-mono bus 1 uses its own instance's gain" );
         }
     }
@@ -298,7 +298,7 @@ static int testChannelPolicy()
         // MockPlugin scales channel c by (c+1), and both inputs see the same
         // mono wire, so the average of the two outputs is in * 1.5.
         const float in = r.sources[0]->value( 77 );
-        check( p && nearly( p->samples[77], in * 1.5f, 1e-5 ),
+        check( p && nearly( p->channelPtr(0)[77], in * 1.5f, 1e-5 ),
                "MonoFold feeds both inputs and averages the outputs" );
     }
 
@@ -311,8 +311,8 @@ static int testChannelPolicy()
                "...and the slot is Unsupported" );
         auto p0 = freezeTap( r.taps[0], 0, rate );
         auto p1 = freezeTap( r.taps[1], 0, rate );
-        check( p0 && nearly( p0->samples[5], r.sources[0]->value( 5 ), 1e-6 ) &&
-                   p1 && nearly( p1->samples[5], r.sources[1]->value( 5 ), 1e-6 ),
+        check( p0 && nearly( p0->channelPtr(0)[5], r.sources[0]->value( 5 ), 1e-6 ) &&
+                   p1 && nearly( p1->channelPtr(0)[5], r.sources[1]->value( 5 ), 1e-6 ),
                "...and it loads TRANSPARENT (input reaches the output unchanged)" );
     }
     {
@@ -376,8 +376,8 @@ static int testMissingAndReload()
     {
         auto p0 = freezeTap( taps[0], 0, rate );
         auto p1 = freezeTap( taps[1], 0, rate );
-        check( p0 && nearly( p0->samples[9], sources[0]->value( 9 ), 1e-6 ) &&
-                   p1 && nearly( p1->samples[9], sources[1]->value( 9 ), 1e-6 ),
+        check( p0 && nearly( p0->channelPtr(0)[9], sources[0]->value( 9 ), 1e-6 ) &&
+                   p1 && nearly( p1->channelPtr(0)[9], sources[1]->value( 9 ), 1e-6 ),
                "...the placeholder is bit-transparent on every bus" );
     }
 
@@ -396,9 +396,9 @@ static int testMissingAndReload()
         // proof the taps still reach the SAME processor after the swap.
         auto p0 = freezeTap( taps[0], 0, rate );
         auto p1 = freezeTap( taps[1], 0, rate );
-        check( p0 && nearly( p0->samples[9], sources[0]->value( 9 ) * 1.0f, 1e-6 ),
+        check( p0 && nearly( p0->channelPtr(0)[9], sources[0]->value( 9 ) * 1.0f, 1e-6 ),
                "...bus 0 is now processed" );
-        check( p1 && nearly( p1->samples[9], sources[1]->value( 9 ) * 2.0f, 1e-5 ),
+        check( p1 && nearly( p1->channelPtr(0)[9], sources[1]->value( 9 ) * 2.0f, 1e-5 ),
                "...bus 1 too, through the same taps as before" );
     }
 
@@ -409,7 +409,7 @@ static int testMissingAndReload()
     proc->bumpParamEpoch();
     {
         auto p0 = freezeTap( taps[0], 0, rate );
-        check( p0 && nearly( p0->samples[9], sources[0]->value( 9 ) * 4.0f, 1e-5 ),
+        check( p0 && nearly( p0->channelPtr(0)[9], sources[0]->value( 9 ) * 4.0f, 1e-5 ),
                "...and a parameter applied after the reload is audible" );
     }
 
@@ -426,7 +426,7 @@ static int testMissingAndReload()
     check( live.load() == 0, "...and releases the real instance" );
     {
         auto p0 = freezeTap( taps[0], 0, rate );
-        check( p0 && nearly( p0->samples[9], sources[0]->value( 9 ), 1e-6 ),
+        check( p0 && nearly( p0->channelPtr(0)[9], sources[0]->value( 9 ), 1e-6 ),
                "...transparent once more" );
     }
 
@@ -476,9 +476,9 @@ static int testChainAudio()
     for( length_t i = 0; i < 4096; ++i ) {
         const float wantL = r.sources[0]->value( i ) * 1.0f;
         const float wantR = r.sources[1]->value( i ) * 2.0f;
-        okL = okL && nearly( p0->samples[i], wantL, 1e-6 );
-        okR = okR && nearly( p1->samples[i], wantR, 1e-6 );
-        if( !nearly( p0->samples[i], p1->samples[i], 1e-9 ) ) differ = true;
+        okL = okL && nearly( p0->channelPtr(0)[i], wantL, 1e-6 );
+        okR = okR && nearly( p1->channelPtr(0)[i], wantR, 1e-6 );
+        if( !nearly( p0->channelPtr(0)[i], p1->channelPtr(0)[i], 1e-9 ) ) differ = true;
     }
     check( okL, "bus 0 carries its own upstream through the plugin" );
     check( okR, "bus 1 carries ITS OWN upstream through the plugin (not silence)" );
@@ -503,7 +503,7 @@ static int testChainAudio()
     // The next page in sequence must not reset the plugin (state continuity).
     auto n0 = freezeTap( r.taps[0], (offset_t)pageN, rate );
     if( check( n0 != nullptr, "the following page freezes" ) ) {
-        check( nearly( n0->samples[3], r.sources[0]->value( (offset_t)pageN + 3 ), 1e-6 ),
+        check( nearly( n0->channelPtr(0)[3], r.sources[0]->value( (offset_t)pageN + 3 ), 1e-6 ),
                "the following page carries the audio for ITS position" );
     }
 
@@ -511,11 +511,11 @@ static int testChainAudio()
     r.proc->setBypass( true );
     auto b0 = freezeTap( r.taps[0], 0, rate );
     check( b0 != p0, "toggling bypass stales the cached page" );
-    check( b0 && nearly( b0->samples[9], r.sources[0]->value( 9 ), 1e-6 ),
+    check( b0 && nearly( b0->channelPtr(0)[9], r.sources[0]->value( 9 ), 1e-6 ),
            "a bypassed slot passes its input straight through" );
     r.proc->setBypass( false );
     auto u0 = freezeTap( r.taps[0], 0, rate );
-    check( u0 && nearly( u0->samples[9], r.sources[0]->value( 9 ) * 1.0f, 1e-6 ),
+    check( u0 && nearly( u0->channelPtr(0)[9], r.sources[0]->value( 9 ) * 1.0f, 1e-6 ),
            "un-bypassing brings the plugin back" );
 
     // --- a parameter edit must invalidate pages too ------------------------
@@ -523,7 +523,7 @@ static int testChainAudio()
         ps[0]->setParam( 0, 4.0 );
         r.proc->bumpParamEpoch();
         auto g0 = freezeTap( r.taps[0], 0, rate );
-        check( g0 && nearly( g0->samples[9], r.sources[0]->value( 9 ) * 4.0f, 1e-5 ),
+        check( g0 && nearly( g0->channelPtr(0)[9], r.sources[0]->value( 9 ) * 4.0f, 1e-5 ),
                "a parameter edit is audible on the next freeze (pages invalidated)" );
     }
 
@@ -534,7 +534,7 @@ static int testChainAudio()
         auto pv = r.taps[0]->freezePage( 0, nullptr, 0, 1000, 1000, nullptr );
         check( mp->prepares_ == preparesBefore,
                "a preview freeze does NOT re-prepare the plugin (CONTRACT 6)" );
-        check( pv && nearly( pv->samples[3], r.sources[0]->value( 3 ), 1e-6 ),
+        check( pv && nearly( pv->channelPtr(0)[3], r.sources[0]->value( 3 ), 1e-6 ),
                "...and forwards the upstream envelope unprocessed" );
     }
 
@@ -586,7 +586,7 @@ static int testConcurrentTapFreeze()
             for( int bus = 0; bus < 2; ++bus ) {
                 if( !pages[bus] ) { mismatches.fetch_add( 1 ); continue; }
                 const float want = r.sources[bus]->value( pos + 11 ) * (float)( bus + 1 );
-                if( !nearly( pages[bus]->samples[11], want, 1e-5 ) )
+                if( !nearly( pages[bus]->channelPtr(0)[11], want, 1e-5 ) )
                     mismatches.fetch_add( 1 );
             }
         }

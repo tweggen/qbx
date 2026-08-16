@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 M1, AC 1.2 at the document level: a .qxp written before the
+  channels attribute existed opens, sounds exactly as it did, and comes back out
+  carrying channels='2'.
+
+  2 is the only defensible default: it is what every project this build has ever
+  written sounds like, and the loader WARNS about the substitution for the same
+  reason SProject warns about a missing sampleRate — a wrong channel count
+  corrupts a project as thoroughly as a wrong rate the day the signal flow goes
+  wide (B5). ("Exactly once" is asserted in project_channels_test, which can
+  count warnings; a .qxa cannot.)
+
+  ../project_channels_legacy.qxp is hand-written to be legacy in TWO ways at
+  once, because both were fixed by the same milestone:
+
+    * <SProject …> has no channels= attribute at all;
+    * one <STrack> omits nBusses= and another carries nBusses='1', while
+      STrack's constructor builds 2. The loader used to default that attribute
+      to "1", so it asked STrack::setNBusses for a SHRINK — which is
+      Q_ASSERT_X( false, … ), i.e. an abort in a Debug build and a SILENT
+      refusal in the RelWithDebInfo build the suite actually runs. No committed
+      fixture spelled it that way, so nothing had ever exercised it.
+
+  The audio is the transparency check. Track 1 plays source sec0 over frames
+  0..48000; track 2's cut starts at 48000 with startOffset 48000, so it plays
+  source sec1 there. A track that had come back with the wrong bus count, or a
+  document the loader had given up on, cannot produce that.
+-->
+<SActionScript version="1" name="project_channels_legacy_load">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../project_channels_legacy.qxp"/>
+
+    <render filename="legacy_load.wav" format="wav" quality="10" durationSec="3.5"/>
+
+    <!-- 0-1 s: track 1, source sec0 -->
+    <assert-audio-energy filename="legacy_load.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <!-- 1-2 s: track 2, source sec1 -->
+    <assert-audio-energy filename="legacy_load.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <!-- past both cuts: silence, so the case cannot pass on a smeared render -->
+    <assert-audio-energy filename="legacy_load.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Re-saving is where the substituted default becomes visible: the legacy
+         document had no channels= and the resave must carry one. -->
+    <save-project path="../../build/test-output/project_channels_legacy_load/resaved.qxp"/>
+    <assert-file-contains
+        path="../../build/test-output/project_channels_legacy_load/resaved.qxp"
+        text="channels='2'"/>
+
+    <!-- Both tracks come back at the constructor's width, including the one
+         that asked for 1. -->
+    <assert-file-contains
+        path="../../build/test-output/project_channels_legacy_load/resaved.qxp"
+        text="nBusses='1'" absent="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

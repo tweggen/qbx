@@ -665,7 +665,11 @@ uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint3
             // Copy frozen preview samples into CapturePageData
             size_t samplesToCopy = std::min((size_t)frozenPage->validFrames, (size_t)page.PAGE_SIZE / sizeof(float));
             if( samplesToCopy > 0 ) {
-                memcpy(page.data, frozenPage->samples.data(), samplesToCopy * sizeof(float));
+                // Channel 0 of the frozen preview page into the (mono)
+                // CapturePageData. Preview width is B8's question; note that
+                // CapturePageData is a DIFFERENT type from twOutputPage and did
+                // not grow a channel dimension here (4.1; B7 decides).
+                memcpy(page.data, frozenPage->channelPtr(0), samplesToCopy * sizeof(float));
                 page.validAspects |= Preview;
                 succeeded |= Preview;
             }

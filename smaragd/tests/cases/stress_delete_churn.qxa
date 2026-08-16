@@ -46,7 +46,7 @@
     <!-- Keep one clip and render to keep workers alive to drain the queue -->
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
     <resize-clip clip="0,0" startTime="0" startOffset="0" duration="96000" loopLength="0" stretch="1.5"/>
-    <render filename="delete_churn_final.wav" format="wav" quality="10"/>
+    <render filename="delete_churn_final.wav" format="wav" quality="10" durationSec="2.5"/>
   </actions>
 
   <assertions>

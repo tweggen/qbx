@@ -70,7 +70,7 @@
     <reparent-track source="2" destParent="1" destIndex="-1"/>
 
     <!-- ============ Baseline: nothing soloed, everything sounds ============ -->
-    <render filename="solo_base.wav" format="wav" quality="10"/>
+    <render filename="solo_base.wav" format="wav" quality="10" durationSec="16.5"/>
     <assert-audio-energy filename="solo_base.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>   <!-- T1 -->
@@ -89,7 +89,7 @@
          baseline: all four lanes still audible. -->
     <set-track-solo trackPath="1,0" solo="1"/>
 
-    <render filename="solo_n1.wav" format="wav" quality="10"/>
+    <render filename="solo_n1.wav" format="wav" quality="10" durationSec="16.5"/>
     <assert-audio-energy filename="solo_n1.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.0" maxRms="0.001"/>   <!-- T1 silent -->
@@ -112,7 +112,7 @@
     <!-- ============ AC5: un-solo restores the previous state ============== -->
     <set-track-solo trackPath="1,0" solo="0"/>
 
-    <render filename="solo_off.wav" format="wav" quality="10"/>
+    <render filename="solo_off.wav" format="wav" quality="10" durationSec="16.5"/>
     <assert-audio-energy filename="solo_off.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
@@ -131,7 +131,7 @@
          which is the case that already worked and must keep working. -->
     <set-track-solo trackPath="1" solo="1"/>
 
-    <render filename="solo_folder.wav" format="wav" quality="10"/>
+    <render filename="solo_folder.wav" format="wav" quality="10" durationSec="16.5"/>
     <assert-audio-energy filename="solo_folder.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.0" maxRms="0.001"/>   <!-- T1 silent -->
@@ -152,7 +152,7 @@
          soloed its subtree would still be audible. -->
     <set-track-solo trackPath="0" solo="1"/>
 
-    <render filename="solo_t1.wav" format="wav" quality="10"/>
+    <render filename="solo_t1.wav" format="wav" quality="10" durationSec="16.5"/>
     <assert-audio-energy filename="solo_t1.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>   <!-- T1 audible -->
@@ -170,7 +170,7 @@
          directly until now, so it was neither undoable nor scriptable. -->
     <undo count="1"/>
 
-    <render filename="solo_undone.wav" format="wav" quality="10"/>
+    <render filename="solo_undone.wav" format="wav" quality="10" durationSec="16.5"/>
     <assert-audio-energy filename="solo_undone.wav"
                          startFrame="336000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
@@ -185,7 +185,7 @@
     <set-track-solo trackPath="1,0" solo="1"/>
     <set-track-solo trackPath="1,0" solo="0"/>
 
-    <render filename="solo_mute_kept.wav" format="wav" quality="10"/>
+    <render filename="solo_mute_kept.wav" format="wav" quality="10" durationSec="16.5"/>
     <assert-audio-energy filename="solo_mute_kept.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>   <!-- T1 back -->

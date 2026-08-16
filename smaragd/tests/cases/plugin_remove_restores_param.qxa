@@ -41,14 +41,14 @@
     <!-- Move the plugin off its default, so "restored" and "reset" differ. -->
     <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="2.0"/>
 
-    <render filename="prp_edited.wav" format="wav" quality="10"/>
+    <render filename="prp_edited.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="prp_edited.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.185" maxRms="0.215"/>
 
     <remove-plugin trackPath="0" slotIndex="0"/>
 
-    <render filename="prp_removed.wav" format="wav" quality="10"/>
+    <render filename="prp_removed.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="prp_removed.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.060" maxRms="0.073"/>
@@ -56,7 +56,7 @@
     <undo count="1"/>
 
     <!-- The load-bearing assertion: 0.2000, not 0.1000. -->
-    <render filename="prp_undone.wav" format="wav" quality="10"/>
+    <render filename="prp_undone.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="prp_undone.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.185" maxRms="0.215"/>

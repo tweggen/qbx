@@ -25,7 +25,7 @@
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="384000"/>
 
     <!-- FIRST render bakes both clips into the page caches -->
-    <render filename="same_track_pre_edit.wav" format="wav" quality="10"/>
+    <render filename="same_track_pre_edit.wav" format="wav" quality="10" durationSec="14.5"/>
     <assert-audio-energy filename="same_track_pre_edit.wav"
                          startFrame="384000" frameCount="48000"
                          minRms="0.05" maxRms="0.085"/>
@@ -34,7 +34,7 @@
     <move-clip clip="0,1" destTrack="0" startTime="576000"/>
 
     <!-- SECOND render -->
-    <render filename="same_track_post_edit.wav" format="wav" quality="10"/>
+    <render filename="same_track_post_edit.wav" format="wav" quality="10" durationSec="14.5"/>
 
     <!-- Clip A's region is untouched (served from surviving pages): sec0/sec1 -->
     <assert-audio-energy filename="same_track_post_edit.wav"

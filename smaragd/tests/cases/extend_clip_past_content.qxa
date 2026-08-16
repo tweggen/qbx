@@ -41,7 +41,7 @@
     <drag-clip-edge track="0" clip="0" edge="end" toTime="768000" half="lower"/>
     <drag-clip-edge track="1" clip="0" edge="end" toTime="768000" half="lower"/>
 
-    <render filename="extend_past_content.wav" format="wav" quality="10"/>
+    <render filename="extend_past_content.wav" format="wav" quality="10" durationSec="16.0"/>
 
     <!-- 12 s in: well past both clips' old clamp (4 s of content) and past the
          6 s the plain clip started at. The looping clip must still be tiling

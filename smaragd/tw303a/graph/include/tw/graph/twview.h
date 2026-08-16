@@ -69,6 +69,12 @@ public:
 
     virtual idx_t getNInputs() const override;
     virtual idx_t getNOutputs() const override;
+    // A view is a forwarder: its page width is the width of whatever it resolves
+    // to (proposal 36 §4.2). It allocates no page of its own on the freeze path
+    // — freezePage() hands the resolved component's page straight back — so this
+    // exists so that a CONSUMER asking "how wide is my producer" through a view
+    // gets the truth rather than the default 1.
+    virtual idx_t getOutputChannels() const override;
     virtual const char *getInputName(idx_t idx) const override;
     virtual const char *getOutputName(idx_t idx) const override;
 

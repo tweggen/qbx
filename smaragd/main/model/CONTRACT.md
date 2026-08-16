@@ -3,7 +3,7 @@
 Purpose: the document model core. SObject (the tree node: properties,
 ordered SLink children, aspect page cache, IRevalidatable implementation),
 SLink (placement: parent + startTime), SProject (root, sample rate,
-settings, revalidator), extern-file bookkeeping, and the SObjectRenderer
+channel count, settings, revalidator), extern-file bookkeeping, and the SObjectRenderer
 interface views implement.
 
 Public headers: app/model/{sobject,slink,sproject,sprojectprops,
@@ -132,9 +132,23 @@ Invariants:
     add a second traversal: a duration that disagreed with the one on screen
     would be worse than the hardcoded 60 s constant this replaced.
 
+10. SProject::channels() is PROJECT DATA AND NOTHING ELSE (proposal 36 M1).
+   It persists as <SProject channels='N'>, takes only 1/2/4/6/8, and reads
+   with the sampleRate warn-and-default idiom: missing (a legacy file) or
+   unsupported means 2 — today's audible width — plus exactly one warning,
+   because a wrong channel count corrupts a project as thoroughly as a wrong
+   rate, and because a project must never fail to OPEN over it. Nothing
+   connects it to a bus count, a mixer width or tw303aEnvironment: an undo of
+   6 -> 2 that reached STrack::setNBusses would hit the shrink
+   Q_ASSERT_X( false, ... ). The signal flow goes wide in proposal 36 B4/B5,
+   and only then does this become a consequence.
+
 How to test: full qxa suite; action_roundtrip_test for serialization
 adjacency; filepathref_test (ctest) for the three path-storage rules and
 sample_path_portable.qxa for the save -> reload -> render wiring;
+project_channels_test (ctest) for invariant 10 — including the assertion
+that set-project-channels and its undo make ZERO STrack::setNBusses calls,
+which is instrumented rather than reviewed because it is a negative;
 preview_container_test (ctest) for invariant 9 — probe values across page
 boundaries, one reset for four pages, one reposition per page.
 

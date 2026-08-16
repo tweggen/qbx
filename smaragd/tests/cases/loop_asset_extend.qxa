@@ -48,7 +48,7 @@
          clip showed becomes the loop segment, tiled across the new length. -->
     <drag-clip-edge track="1" clip="0" edge="end" toTime="768000" half="upper"/>
 
-    <render filename="loop_asset_extend.wav" format="wav" quality="10"/>
+    <render filename="loop_asset_extend.wav" format="wav" quality="10" durationSec="13.5"/>
 
     <!-- ~7 s in (frame 336000): far past the section's 2 s of content AND past
          track 0's own 4 s clip, so ONLY the tiled asset carries signal here.

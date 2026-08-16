@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Generator for the proposal 36 byte-exactness corpus (§5, executed by B1a).
+
+  NOT A TEST. It lives outside tests/cases/ so the CONFIGURE_DEPENDS glob never
+  registers it — running it REWRITES the two committed fixture projects, which
+  is the one thing a gate must not do. It is committed for the same reason
+  analysis/tools/gen_channel_fixture.cc is: a fixture nobody can regenerate is a
+  fixture nobody can reason about.
+
+  Run it from smaragd/tests/cases/ (relative paths resolve against the CWD, and
+  the sample fixture is addressed as ../test_sawtooth.wav exactly as every case
+  addresses it):
+
+    cd smaragd/tests/cases
+    ../../build/bin/smaragd.exe (dash)(dash)test-case ../tools/gen_mc_corpus.qxa
+                               (dash)(dash)test-output-dir ../../build/test-output/gen_mc_corpus
+
+  (XML forbids a double hyphen inside a comment, hence the spelling of the flags.)
+
+  Then re-freeze the golden WAVs by running qxa.mc_golden_mono and
+  qxa.mc_golden_stereo and copying THEIR renders into tests/goldens/ — never a
+  render produced here. The golden must be what the GATE produces from the
+  loaded project, or the gate is comparing two different code paths.
+
+  WHAT IS IN IT, and why each one is there (§5: "one of every path this proposal
+  touches"). Every element occupies its OWN time window inside ~4 s, so nothing
+  sums and a byte difference can be attributed to a path by its offset alone:
+
+    0.00-0.60 s  track 0   a PLAIN clip                — the reader/latch seam
+    0.65-1.28 s  track 1   a STRETCHED clip (x1.25)    — capture + vocoder
+    1.35-1.95 s  track 2   a PITCHED clip (+700 cents) — capture + vocoder
+    2.00-2.60 s  track 3   a CONTAINER/ASSET clip      — the asset capture path
+    2.70-3.30 s  track 4,0 a clip on a NESTED lane     — folder summing
+    3.35-3.95 s  track 5   a clip through a twtestclap — the plugin tap path
+
+  The nested lane is created as a top-level track and reparented LAST, and the
+  plugin is inserted BEFORE the reparent, so every trackPath in this script is
+  the index the track had when it was made. Reparenting first would renumber
+  everything after it, which is how these scripts go quietly wrong.
+
+  The two projects are written from ONE arrangement, differing only in
+  <SProject channels='N'>. That is deliberate: it makes "the width is the only
+  difference" a property of how the fixtures were built rather than a claim.
+
+  Note for whoever reads the two goldens at B5 and finds them byte-identical:
+  they are supposed to be, TODAY. RenderSession hard-codes config.channels = 2
+  and duplicates one mono bus into both, so a channels='1' project and a
+  channels='2' project render the same file. B5 is where they must diverge.
+
+  NOT built on a save -> load -> save round trip (§7 trap 10): load-project
+  deserializes INTO the current project rather than replacing it, so a reload
+  here would accumulate orphan mixers and plugin chains into the fixture.
+
+  ONE THING THIS SCRIPT CANNOT MAKE REPRODUCIBLE: object ids are pointer values
+  and track names are drawn at random, so a regenerated .qxp differs from the
+  committed one everywhere those appear even though the arrangement is identical.
+  Do not expect a clean diff — regenerate only when the arrangement itself must
+  change, and re-freeze the WAVs in the same breath.
+-->
+<SActionScript version="1" name="gen_mc_corpus">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- 0 plain | 1 stretched | 2 pitched | 3 asset | 4 folder | 5 lane | 6 fx -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- 1. PLAIN. 0.6 s straight out of the ramped sawtooth, taken from 3.0 s
+         in: the fixture RAMPS, and its first second is near silence, so a clip
+         at offset 0 would give every window an RMS of ~0.03 and make the
+         liveness assertions in the gate cases indistinguishable from a dropout.
+         Every window below takes the same loud stretch of source. -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav"
+                timePos="0" startOffset="144000" duration="28800"/>
+
+    <!-- 2. STRETCHED. 24000 source frames at x1.25 = 30000 output frames, so
+         the vocoder really runs (a stretch of 1.0 would take the plain path). -->
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav"
+                timePos="31200" startOffset="144000" duration="24000"/>
+    <resize-clip clip="1,0" startTime="31200" startOffset="144000"
+                 duration="30000" loopLength="0" stretch="1.25"/>
+
+    <!-- 3. PITCHED. +700 cents = a fifth up; pitch alone, no stretch, so the
+         two capture-backed paths are separable in the render. -->
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav"
+                timePos="64800" startOffset="144000" duration="28800"/>
+    <set-pitch clip="2,0" cents="700"/>
+
+    <!-- 4. CONTAINER / ASSET. Captured from track 0's live output and replayed
+         on track 3, well past track 0's own clip so it renders alone. -->
+    <create-asset container="0" startOffset="0" duration="28800"
+                  assetName="mcAsset"/>
+    <place-asset assetName="mcAsset" trackPath="3" timePos="96000"/>
+
+    <!-- 5. NESTED LANE. Track 5 becomes 4,0 by the reparent at the end. -->
+    <place-clip trackPath="5" filePath="../test_sawtooth.wav"
+                timePos="129600" startOffset="144000" duration="28800"/>
+
+    <!-- 6. PLUGIN INSERT. The stereo-skew entry point rather than the plain
+         gain: its cross-channel term (out[0] = in[0]*0.5 + in[1]) is what makes
+         a silent second input visible in a mono render, so this fixture keeps
+         its meaning when the sink goes wide at B5. -->
+    <place-clip trackPath="6" filePath="../test_sawtooth.wav"
+                timePos="160800" startOffset="144000" duration="28800"/>
+    <insert-plugin trackPath="6" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- LAST: 5 becomes 4,0; the fx track becomes 5. -->
+    <reparent-track source="5" destParent="4" destIndex="-1"/>
+
+    <!-- The mono fixture. -->
+    <set-project-channels channels="1"/>
+    <save-project path="../goldens/mc_mono.qxp"/>
+    <assert-file-contains path="../goldens/mc_mono.qxp" text="channels='1'"/>
+
+    <!-- …and the stereo one, from the SAME arrangement. -->
+    <set-project-channels channels="2"/>
+    <save-project path="../goldens/mc_stereo.qxp"/>
+    <assert-file-contains path="../goldens/mc_stereo.qxp" text="channels='2'"/>
+
+    <!-- Both fixtures must reference the sample PORTABLY, relative to their own
+         directory. An absolute path here would make the corpus unusable on any
+         other machine, and it is invisible in a render. -->
+    <assert-file-contains path="../goldens/mc_mono.qxp"
+                          text="filename='../test_sawtooth.wav'"/>
+    <assert-file-contains path="../goldens/mc_stereo.qxp"
+                          text="filename='../test_sawtooth.wav'"/>
+  </actions>
+
+  <assertions>
+    <!-- 6 top-level: plain, stretched, pitched, asset, folder, fx. -->
+    <assert-track-count equals="6"/>
+  </assertions>
+
+</SActionScript>

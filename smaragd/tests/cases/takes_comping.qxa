@@ -31,7 +31,7 @@
          silence (the slipped window runs past the source). -->
     <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
 
-    <render filename="takes_take1.wav" format="wav" quality="10"/>
+    <render filename="takes_take1.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="takes_take1.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.26" maxRms="0.33"/>
@@ -44,7 +44,7 @@
 
     <!-- comp back to take 0: the original material must render again -->
     <select-take clip="0,0" take="0"/>
-    <render filename="takes_take0.wav" format="wav" quality="10"/>
+    <render filename="takes_take0.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="takes_take0.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.05" maxRms="0.085"/>
@@ -54,7 +54,7 @@
 
     <!-- no take audible: the column stays, the audio does not -->
     <select-take clip="0,0" take="-1"/>
-    <render filename="takes_none.wav" format="wav" quality="10"/>
+    <render filename="takes_none.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="takes_none.wav"
                          startFrame="0" frameCount="192000"
                          minRms="0.0" maxRms="0.005"/>
@@ -69,7 +69,7 @@
     <select-take clip="0,0" take="0"/>
     <split-clip clip="0,0" splitTime="96000"/>
     <select-take clip="0,0" take="1"/>
-    <render filename="takes_comped.wav" format="wav" quality="10"/>
+    <render filename="takes_comped.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="takes_comped.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.26" maxRms="0.33"/>
@@ -86,7 +86,7 @@
     <!-- a removed take collapses the stack back to a plain cut; the tail
          column (still a 2-take stack) is untouched -->
     <remove-take clip="0,0" take="1"/>
-    <render filename="takes_removed.wav" format="wav" quality="10"/>
+    <render filename="takes_removed.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="takes_removed.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.05" maxRms="0.085"/>

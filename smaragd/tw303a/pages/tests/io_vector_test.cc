@@ -5,8 +5,11 @@ int main() {
     std::cout << "IOVector tests compiled successfully\n";
     
     // Basic test: create and validate
+    // A page is already FRAME_CAPACITY zeroed frames wide when it is
+    // constructed, so the resize() that used to stand here was a no-op that read
+    // like a fill (resize() only value-fills GROWTH). Nothing below inspects the
+    // values, so it is simply gone.
     auto page = std::make_shared<twOutputPage>();
-    page->samples.resize(twOutputPage::FRAME_CAPACITY, 1.0f);
     page->validFrames = twOutputPage::FRAME_CAPACITY;
     
     IOVector vec(page, 0, 1000);
@@ -19,7 +22,6 @@ int main() {
     
     // Test copy
     auto dstPage = std::make_shared<twOutputPage>();
-    dstPage->samples.resize(twOutputPage::FRAME_CAPACITY, 0.0f);
     
     IOVector dst(dstPage, 0, 1000);
     length_t copied = dst.copyFrom(vec, 0, 100);

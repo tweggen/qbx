@@ -880,6 +880,11 @@ tw_module_test(io_vector_test               pages/tests/io_vector_test.cc       
 # accounting regression would flake on the readahead. So they are pinned here,
 # against a page count the test controls exactly.
 tw_module_test(graph_test                   graph/tests/graph_test.cc                   tw_graph)
+# Proposal 36 B1b: the page's channel dimension. The ONLY gate that can see a
+# wrong `samples` -> `channelPtr()` conversion — at width 1, which is every page
+# in the tree today, a mistake and a correct conversion are the same instruction,
+# so neither the byte-exactness gate nor the grep can tell them apart.
+tw_module_test(page_channels_test           graph/tests/page_channels_test.cc           tw_graph)
 tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
@@ -952,6 +957,16 @@ target_compile_definitions(events_test PRIVATE
 # -j4 run's own load is what it reports.
 tw_module_test(devices_midi_test            devices/tests/midi_test.cc                  tw_devices)
 set_tests_properties(devices_midi_test PROPERTIES RUN_SERIAL TRUE)
+# Proposal 36 B2: components declare their width (getOutputChannels), the wide
+# render path exists (renderPageWide), the plug channel rule and the direct
+# bound-page read. It lives under schedule/tests because AC B2.1 requires the
+# wide page to travel THROUGH THE REAL SCHEDULER — B1b proved the page at unit
+# level only — and schedule is the module whose tests may link tw_schedule.
+tw_module_test(wide_graph_test              schedule/tests/wide_graph_test.cc           tw_schedule tw_pages)
+# The synthetic 4-channel component stays where B1b put it (graph/tests, in a
+# HEADER precisely so B2 could promote it without moving it); this is the one
+# include path that reaches it.
+target_include_directories(wide_graph_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/graph/tests)
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)
 tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc             tw_sidecar)
 # tw_schedule + tw_pages are named EXPLICITLY (playback already depends on both,

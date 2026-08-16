@@ -28,7 +28,7 @@
   <actions>
     <load-project path="../sample_missing_survives.qxp"/>
 
-    <render filename="sample_missing_survives.wav" format="wav" quality="10"/>
+    <render filename="sample_missing_survives.wav" format="wav" quality="10" durationSec="2.5"/>
 
     <!-- 0-1 s: good track plays source sec1 (slip offset via startOffset=48000) -->
     <assert-audio-energy filename="sample_missing_survives.wav"
