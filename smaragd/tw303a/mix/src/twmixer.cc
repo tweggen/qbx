@@ -7,6 +7,7 @@
 #include <math.h>
 
 #include "tw/mix/twmixer.h"
+#include <algorithm>
 #include <vector>
 #include "tw/pages/io_vector.h"
 #include "tw/core/twlog.h"
@@ -124,6 +125,88 @@ length_t twMixer::calcOutputTo( IOVector& dest, idx_t idx )
         }
     }
     return dest.copyFrom(IOVector::CreateFromBuffer(outputBuffer.data(), realRead), 0, realRead);
+}
+
+// --- Proposal 36 B4: the wide sum ------------------------------------------
+
+void twMixer::setChannels( idx_t n )
+{
+    if( n < 1 ) n = 1;
+    if( channels_.exchange( (int) n, std::memory_order_acq_rel ) == (int) n ) {
+        return;
+    }
+    // Every page we have cached is now the wrong shape. §4.5 would already treat
+    // them as misses (page->channels() != getOutputChannels()), so this bump is
+    // not what makes the change safe — it is what makes it FAST, by re-freezing
+    // instead of serving silence until something else invalidates us.
+    bumpContentEpoch();
+}
+
+// §4.3's shape: one pass, every channel filled, no per-channel loop over a
+// cursor-bearing render. A mixer has no cursor of its own — freezePage_nolock
+// has already seeked the input streams — so the whole job is: take each wired
+// input's PAGE (§4.4 rule 2, so a wide track arrives whole rather than one
+// channel at a time), and accumulate.
+//
+// BYTE-EXACTNESS. Channel 0 must come out of this identically to the pre-B4
+// readStreamingData path, which accumulated `out[i] += src[i] * factor` over
+// the inputs in ascending index order into a zeroed buffer. That is exactly the
+// loop below, in the same order, at the same precision — which is what lets the
+// stereo golden stay byte-identical while the whole graph goes wide underneath
+// it.
+length_t twMixer::renderPageWide( twOutputPage &page, length_t frames,
+                                  const sample_t * /*input*/,
+                                  length_t /*inputLength*/ )
+{
+    if( state_.load( std::memory_order_acquire ) == ComponentState::ZOMBIE ) {
+        page.fillSilence();
+        return 0;
+    }
+
+    length_t n = frames;
+    if( n > (length_t) page.channelFrames() ) n = (length_t) page.channelFrames();
+    if( n <= 0 ) return 0;
+
+    // Snapshot which inputs are wired and at what level, then RELEASE — the
+    // pulls below reach the whole upstream graph (fetchInputPage takes mutex()
+    // itself, briefly, and must not find it held).
+    struct InputSnap { bool wired; float factor; };
+    std::vector<InputSnap> snap;
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        snap.reserve( (size_t) mixerInputs_ );
+        for( idx_t ch = 0; ch < mixerInputs_; ++ch ) {
+            const bool wired = ( ch < (idx_t) pInputPlugs_.size() && pInputPlugs_[ch] );
+            const float f = inputProperties_ ? inputProperties_[ch].volumeFactor_ : 0.0f;
+            snap.push_back( { wired, f } );
+        }
+    }
+
+    const idx_t nCh = (idx_t) page.channels();
+    for( idx_t c = 0; c < nCh; ++c ) {
+        sample_t *dst = page.channelPtr( c );
+        std::fill( dst, dst + n, 0.0f );
+    }
+
+    for( idx_t i = 0; i < (idx_t) snap.size(); ++i ) {
+        if( !snap[i].wired ) continue;
+        std::shared_ptr<twOutputPage> src = fetchInputPage( i, page.startPosition );
+        if( !src || src->validAspects == 0 ) continue;
+
+        const length_t m = std::min<length_t>( n, (length_t) src->validFrames );
+        if( m <= 0 ) continue;
+
+        const float factor = snap[i].factor;
+        for( idx_t c = 0; c < nCh; ++c ) {
+            sample_t       *dst = page.channelPtr( c );
+            const sample_t *s   = src->channelPtr( twPageClampChannel( *src, c ) );
+            for( length_t k = 0; k < m; ++k ) {
+                dst[k] += s[k] * factor;
+            }
+        }
+    }
+
+    return n;
 }
 
 /**

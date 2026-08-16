@@ -96,8 +96,11 @@ of which a 4 s corpus render uses ONE. It is accounted separately
 this process's page memory. Proposal 36 B1 calls it "used in production
 nowhere"; that is wrong on both halves.
 
-IOVector is deliberately NOT channel-aware (proposal 36 §4.6): it is a mono view
-and reads channel 0 of whatever pages it holds. Wide mixing is a loop over
-channels of the same page pair, so the channel belongs to the loop, not to the
-view — but §4.6's own phrasing, "a view over one channelPtr(c)", implies a
-channel selector that B4 will have to add when it finally has a caller.
+IOVector is deliberately NOT WIDTH-aware (proposal 36 §4.6): it is a view over
+ONE CHANNEL of whatever pages it holds, named by a `channel` constructor
+parameter (default 0). Wide mixing is a loop over channels of the same page
+pair, so the width belongs to the loop, not to the view. B1b named the channel
+once as a constant so that this would be a parameter rather than another sweep;
+B4 is the milestone that added it, with twTrackMix's per-channel clip mix as its
+first caller. The §4.4 clamp for a NARROWER source (twPageClampChannel) is the
+caller's decision — a view may not implement a downmix policy.

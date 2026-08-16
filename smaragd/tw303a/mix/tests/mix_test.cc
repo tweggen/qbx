@@ -59,6 +59,55 @@ public:
     bool usesSerialCursor() const override { return true; }
 };
 
+// A WIDE source for the proposal 36 B4 tests: channel c carries val(pos) scaled
+// by (c + 1), so a channel that ended up holding another channel's audio — or
+// another page's — names itself.
+class WideRampComponent : public twComponent {
+public:
+    WideRampComponent(tw303aEnvironment &e, idx_t ch)
+        : twComponent(e), ch_(ch < 1 ? 1 : ch) {}
+    offset_t pos = 0;
+
+    static float value(idx_t c, long long p) { return val(p) * (float)(c + 1); }
+
+    idx_t getOutputChannels() const override { return ch_; }
+    bool isSeekable() const override { return true; }
+    int seekTo(offset_t p) override { pos = p; return 0; }
+    void reset() override { pos = 0; }
+    bool usesSerialCursor() const override { return true; }
+
+    length_t renderPageWide(twOutputPage &page, length_t frames,
+                            const sample_t *, length_t) override {
+        length_t n = frames;
+        if (n > (length_t)page.channelFrames()) n = (length_t)page.channelFrames();
+        for (idx_t c = 0; c < (idx_t)page.channels(); ++c) {
+            sample_t *dst = page.channelPtr(c);
+            for (length_t i = 0; i < n; ++i)
+                dst[i] = value(c, (long long)(pos + i));
+        }
+        pos += (offset_t)n;   // ONCE, not per channel (proposal 36 4.3)
+        return n;
+    }
+    // The narrow degradation (proposal 36 trap 18).
+    length_t renderFrames(sample_t *out, length_t n, const sample_t *,
+                          length_t, idx_t) override {
+        for (length_t i = 0; i < n; ++i) out[i] = value(0, (long long)(pos + i));
+        pos += (offset_t)n;
+        return n;
+    }
+    void createOutputLatches() override {
+        pOutputLatches_.resize(1);
+        pOutputLatches_[0] =
+            std::make_shared<twStreamingLatch>(shared_from_this(), 0, 0);
+    }
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName(idx_t) const override { return nullptr; }
+    const char *getOutputName(idx_t) const override { return "wideramp"; }
+private:
+    idx_t ch_;
+};
+
 int main()
 {
     tw303aEnvironment env;
@@ -519,6 +568,72 @@ int main()
         auto zero = trackL->freezePage(0, nullptr, 0, 0, env.getSRate(), nullptr);
         CHECK(zero && zero->validFrames == FULL,
               "inputLength == 0 renders a full page, not an empty one");
+    }
+
+    // ------------------------------------------------------------------
+    // PROPOSAL 36 B4: twRewire is a CHANNEL-MAPPING component.
+    //
+    // sstdmixer.cpp carried "FIXME: Generate a channel reassignment." over
+    // getRootComponent() from the beginning. B4 discharges it here: a wide
+    // rewire reads its input PAGE (4.4 rule 2) and publishes output channel c
+    // from that page's channel map[c] — identity by default, and CLAMPED
+    // against the page in hand. Nothing in production sets a non-identity map
+    // yet, so this is the only thing that makes the claim true rather than
+    // asserted in a comment.
+    {
+        const uint64_t CAP = twOutputPage::FRAME_CAPACITY;
+        const idx_t W = 4;
+        auto src = std::make_shared<WideRampComponent>(env, W);
+        src->init();
+        auto rew = std::make_shared<twRewire>(env);
+        rew->init();
+        rew->setNPlugs(1);                 // a wide rewire is single-plug
+        rew->setChannels(W);
+        rew->setInput(0, src->linkOutput(0));
+
+        auto page = rew->freezePage(0, nullptr, 0, (length_t)CAP,
+                                    env.getSRate(), nullptr);
+        CHECK(page && page->channels() == W,
+              "rewire: the page is the declared width");
+        bool identity = page != nullptr;
+        for (idx_t c = 0; identity && c < W; ++c)
+            for (long long i = 0; identity && i < 512; ++i)
+                identity = page->channelPtr(c)[i] == WideRampComponent::value(c, i);
+        CHECK(identity, "rewire: the default map is the identity");
+
+        // Reverse it. The map is OUTPUT-indexed, so out[0] must become in[3] —
+        // and the epoch bump inside setChannelMap is what makes the change
+        // visible instead of serving the page that is already cached.
+        rew->setChannelMap({3, 2, 1, 0});
+        auto rev = rew->freezePage(0, nullptr, 0, (length_t)CAP,
+                                   env.getSRate(), nullptr);
+        bool reversed = rev != nullptr && rev != page;
+        for (idx_t c = 0; reversed && c < W; ++c)
+            for (long long i = 0; reversed && i < 512; ++i)
+                reversed = rev->channelPtr(c)[i] ==
+                           WideRampComponent::value((idx_t)(W - 1 - c), i);
+        CHECK(reversed, "rewire: setChannelMap reassigns channels, and stales the "
+                        "pages rendered under the old map");
+
+        // A map naming a channel the PRODUCER does not have degrades to that
+        // producer's LAST channel (4.4's clamp) instead of reading out of
+        // bounds. A mono producer under the map {3,3,3,3} is the extreme case.
+        auto mono = std::make_shared<WideRampComponent>(env, 1);
+        mono->init();
+        auto rew2 = std::make_shared<twRewire>(env);
+        rew2->init();
+        rew2->setNPlugs(1);
+        rew2->setChannels(W);
+        rew2->setChannelMap({3, 3, 3, 3});
+        rew2->setInput(0, mono->linkOutput(0));
+        auto clamped = rew2->freezePage(0, nullptr, 0, (length_t)CAP,
+                                        env.getSRate(), nullptr);
+        bool allCh0 = clamped != nullptr && clamped->channels() == W;
+        for (idx_t c = 0; allCh0 && c < W; ++c)
+            for (long long i = 0; allCh0 && i < 512; ++i)
+                allCh0 = clamped->channelPtr(c)[i] == WideRampComponent::value(0, i);
+        CHECK(allCh0, "rewire: a map naming a channel the producer lacks clamps to "
+                      "its last one, never reads out of bounds");
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall mix tests passed\n",

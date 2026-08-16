@@ -46,9 +46,20 @@ only carries across a contiguous page chain.
 
 ## Page geometry
 
-- `twOutputPage::PAGE_SIZE` = 256 KiB, `FRAME_CAPACITY` = 65536 mono
-  frames (≈1.365 s @ 48 kHz). Pages are FULL units: callers should request
+- `twOutputPage::PAGE_SIZE` = 256 KiB, `FRAME_CAPACITY` = 65536 frames
+  PER CHANNEL (≈1.365 s @ 48 kHz). Pages are FULL units: callers should request
   page-aligned positions and extract sub-ranges (RenderSession does).
+- A page is PLANAR and carries its own channel count (proposal 36 §4.1): channel
+  *c* occupies `[c * CHANNEL_STRIDE, …)` of the buffer, `CHANNEL_STRIDE` is the
+  constant `FRAME_CAPACITY`, and `channels` is IMMUTABLE after allocation. This
+  paragraph said "65536 **mono** frames" until proposal 36 B4, which is the
+  milestone where a production component first freezes a wider one: the track
+  path (`twTrackMix` → `twPluginChain` → `twPluginInsert` → `twRewire`) and the
+  master (`twMixer` → `twRewire`) are all `SProject::channels()` wide. A
+  component's width is `getOutputChannels()`; `freezePage_nolock` forks on the
+  width of the PAGE IN HAND, and a page whose width disagrees with its
+  producer's declared width is a MISS, never audio (§4.5). The remaining
+  contract sweep is proposal 36 B9.
 - A page always carries a full page of the component's material; consumers
   that represent a bounded window (a clip!) must clamp what they mix out of
   it (see CLIP_MODEL.md — the clip-end-bleed bug).

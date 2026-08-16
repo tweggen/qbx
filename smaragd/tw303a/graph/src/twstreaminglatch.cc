@@ -64,6 +64,116 @@ void twStreamingLatch::init( length_t bufSize0 )
 #endif
 }
 
+// The page-acquisition step, extracted by proposal 36 B4 so that copyData (the
+// MONO plug seam, §4.4 rule 1) and fetchPageForReader (the WIDE page seam, rule
+// 2) cannot disagree about staleness. The body below is copyData's, moved
+// verbatim: the bound-page branch, the cycle guard, the chain-hint rule and the
+// deliberate heldEpoch = 0 for a bound page are all unchanged, and both callers
+// pass the same reader-owned `held`/`heldEpoch` pair.
+std::shared_ptr<twOutputPage> twStreamingLatch::acquirePage(
+	offset_t pageStart,
+	std::shared_ptr<twOutputPage> &held,
+	uint64_t &heldEpoch,
+	uint64_t epochNow )
+{
+	// The held page must be frozen AND from the current content epoch —
+	// an edit (clip move/split/stretch, mute, rewiring) makes every page
+	// rendered before it stale, even though its validAspects are still set.
+	if (held && held->startPosition == pageStart && held->validAspects != 0 &&
+	    heldEpoch == epochNow) {
+		return held;
+	}
+
+	// Need a different page than the one we hold.
+
+	// Proposal 19 dataflow stage 1: a leaf render in progress on this
+	// thread may have BOUND this producer's page (see
+	// tw/graph/tw_frozen_inputs.h) — serve it with NO recursive pull.
+	// Bound pages are trusted (no epoch re-check): epoch validity is
+	// the scheduler's verify-at-publish job, which is what lets a
+	// planned node render from exactly the pages it was planned
+	// against. An installed-but-missing binding is recorded (stage >1
+	// turns that into "node not ready") and falls through to the
+	// legacy pull below, unchanged.
+	if (const twFrozenInputs *fi = twFrozenInputScope::active()) {
+		std::shared_ptr<twOutputPage> bound =
+			fi->find(getComponent().get(), pageStart);
+		if (bound && bound->validAspects != 0 &&
+		    bound->startPosition == pageStart) {
+			held = bound;
+			// Deliberately NOT observed-at-epochNow. A bound page is
+			// trusted only for the render that bound it (epoch validity
+			// is the scheduler's verify-at-publish job); recording it as
+			// current would let a LATER call reuse it off the reader
+			// hint, outside any binding, with nothing left to validate
+			// it. 0 forces the next call to re-validate — which is what
+			// mix_test's "empty set falls back to the legacy pull"
+			// control asserts.
+			heldEpoch = 0;
+			return bound;
+		}
+		fi->noteMiss(getComponent().get(), pageStart);
+	}
+
+	// Cycle guard: if the producer is already being frozen on this
+	// thread, recursing into freezePage() would loop forever.
+	if (FreezeContext::isComponentInStack(getComponent())) {
+		return nullptr;
+	}
+
+	// Chain state only from the immediate predecessor page; anything
+	// else is a discontinuity the producer must reset+seek for.
+	// A stale-epoch predecessor is also a discontinuity: its DSP state
+	// was computed against pre-edit audio.
+	// Same like-for-like rule as the reuse gate above: `heldEpoch` is
+	// the epoch we OBSERVED when we took `held`, so it is comparable
+	// with epochNow; the page's own stamp is not (see copyData).
+	std::shared_ptr<twOutputPage> chainFrom;
+	if (held && held->validAspects != 0 &&
+	    heldEpoch == epochNow &&
+	    held->startPosition + held->validFrames == pageStart) {
+		chainFrom = held;
+	}
+
+	std::shared_ptr<twOutputPage> page = getComponent()->freezePage(
+		pageStart,
+		nullptr,                                       // no pre-prepared input
+		0,
+		(length_t)twOutputPage::FRAME_CAPACITY,         // full page
+		sampleRate_,
+		chainFrom);
+
+	if (!page || page->validAspects == 0) {
+		return nullptr;   // producer could not materialize this page
+	}
+	held = page;
+	heldEpoch = epochNow;
+	return page;
+}
+
+// Proposal 36 §4.4 rule (2): the WIDE seam. Same acquisition, same reader hint
+// bookkeeping as copyData — the only difference is that the caller receives the
+// page instead of a copy of one of its channels.
+std::shared_ptr<twOutputPage> twStreamingLatch::fetchPageForReader(
+	offset_t pageStart,
+	std::shared_ptr<twOutputPage>& readerPrevPage,
+	std::atomic<uint64_t>& readerPrevEpoch )
+{
+	std::shared_ptr<twComponent> comp = getComponent();
+	if (!comp) return nullptr;
+
+	const uint64_t epochNow = comp->contentEpochNow();
+	std::shared_ptr<twOutputPage> held = std::atomic_load(&readerPrevPage);
+	uint64_t heldEpoch = readerPrevEpoch.load();
+
+	std::shared_ptr<twOutputPage> page =
+		acquirePage( pageStart, held, heldEpoch, epochNow );
+
+	std::atomic_store(&readerPrevPage, held);
+	readerPrevEpoch.store(heldEpoch);
+	return page;
+}
+
 length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, length_t maxLength,
                                      std::shared_ptr<twOutputPage>& readerPrevPage,
                                      std::atomic<uint64_t>& readerPrevEpoch )
@@ -119,81 +229,10 @@ length_t twStreamingLatch::copyData( offset_t startOffset, sample_t *pDest, leng
 		// data, so pos can be negative (proposal 23).
 		const offset_t pageStart = twFloorAlign( pos, (offset_t)pageSize );
 
-		// The held page must be frozen AND from the current content epoch —
-		// an edit (clip move/split/stretch, mute, rewiring) makes every page
-		// rendered before it stale, even though its validAspects are still set.
-		std::shared_ptr<twOutputPage> page = held;
-		if (!page || page->startPosition != pageStart || page->validAspects == 0 ||
-		    heldEpoch != epochNow) {
-			// Need a different page than the one we hold.
-
-			// Proposal 19 dataflow stage 1: a leaf render in progress on this
-			// thread may have BOUND this producer's page (see
-			// tw/graph/tw_frozen_inputs.h) — serve it with NO recursive pull.
-			// Bound pages are trusted (no epoch re-check): epoch validity is
-			// the scheduler's verify-at-publish job, which is what lets a
-			// planned node render from exactly the pages it was planned
-			// against. An installed-but-missing binding is recorded (stage >1
-			// turns that into "node not ready") and falls through to the
-			// legacy pull below, unchanged.
-			bool boundServed = false;
-			if (const twFrozenInputs *fi = twFrozenInputScope::active()) {
-				std::shared_ptr<twOutputPage> bound =
-					fi->find(getComponent().get(), pageStart);
-				if (bound && bound->validAspects != 0 &&
-				    bound->startPosition == pageStart) {
-					held = bound;
-					page = bound;
-					// Deliberately NOT observed-at-epochNow. A bound page is
-					// trusted only for the render that bound it (epoch validity
-					// is the scheduler's verify-at-publish job); recording it as
-					// current would let a LATER call reuse it off the reader
-					// hint, outside any binding, with nothing left to validate
-					// it. 0 forces the next call to re-validate — which is what
-					// mix_test's "empty set falls back to the legacy pull"
-					// control asserts.
-					heldEpoch = 0;
-					boundServed = true;
-				} else {
-					fi->noteMiss(getComponent().get(), pageStart);
-				}
-			}
-
-			if (!boundServed) {
-			// Cycle guard: if the producer is already being frozen on this
-			// thread, recursing into freezePage() would loop forever.
-			if (FreezeContext::isComponentInStack(getComponent())) {
-				break;
-			}
-
-			// Chain state only from the immediate predecessor page; anything
-			// else is a discontinuity the producer must reset+seek for.
-			// A stale-epoch predecessor is also a discontinuity: its DSP state
-			// was computed against pre-edit audio.
-			// Same like-for-like rule as the reuse gate above: `heldEpoch` is
-			// the epoch we OBSERVED when we took `held`, so it is comparable
-			// with epochNow; the page's own stamp is not (see above).
-			std::shared_ptr<twOutputPage> chainFrom;
-			if (held && held->validAspects != 0 &&
-			    heldEpoch == epochNow &&
-			    held->startPosition + held->validFrames == pageStart) {
-				chainFrom = held;
-			}
-
-			page = getComponent()->freezePage(
-				pageStart,
-				nullptr,                // no pre-prepared input (pull model)
-				0,
-				(length_t)pageSize,     // full page
-				sampleRate_,
-				chainFrom);
-
-			if (!page || page->validAspects == 0) {
-				break;  // producer could not materialize this page
-			}
-			held = page;
-			heldEpoch = epochNow;
-			} // !boundServed (legacy pull)
+		std::shared_ptr<twOutputPage> page =
+			acquirePage( pageStart, held, heldEpoch, epochNow );
+		if (!page) {
+			break;  // producer could not materialize this page
 		}
 
 		const uint64_t inPage = pos - pageStart;

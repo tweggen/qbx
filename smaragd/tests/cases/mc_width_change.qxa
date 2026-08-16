@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 B4, AC B4.2: a RUNTIME width change 2 -> 8 -> 2 renders correctly
+  and does not assert, crash or leak.
+
+  WHY THIS IS THE MILESTONE'S SHARPEST CASE. Before B4 a width change could not
+  survive one: STrack::setNBusses() built N parallel width-1 twTrackMix +
+  twPluginChain pairs, could only GROW (a shrink was Q_ASSERT_X( false, ... ),
+  which the shipped build compiles out — so it returned SILENTLY and left stale
+  wiring, §7 trap 9), and each growth had to back-fill every clip into the new
+  mixers without double-inserting them. After B4 there is one component of each
+  kind and a width is a number: 2 -> 8 -> 2 creates and destroys nothing.
+
+  WHAT IS ACTUALLY CHECKED, given that the SINK IS STILL MONO until B5:
+
+    * the render still produces the SAME audio at every width. That is not a
+      weak assertion here — it is the whole safety claim. At width 8 the entire
+      track path freezes 2 MiB pages, the mix loops eight channels, the plugin
+      slot re-derives its mismatch mapping against 8 and every cached page in
+      the project is the wrong shape and must be re-frozen. Channel 0 coming
+      back identical through all of that is what "does not crash and does not
+      corrupt" means in a form a script can assert.
+    * the TRACK'S page really is 8 channels wide afterwards, so the render being
+      unchanged is not because nothing happened.
+    * the master still equals the sum of the tracks at the new width.
+    * and the undo direction — the SHRINK — is exercised twice: once by
+      set-project-channels back to 2, once through the undo stack.
+
+  Page memory is reported at each width rather than bounded: 8 channels is 8x
+  the page bytes by construction (§4.1), so a bound would be a restatement of
+  arithmetic. Making it visible is the point.
+-->
+<SActionScript version="1" name="mc_width_change">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- ================ width 2 (the project default) ================ -->
+    <assert-track-channels trackPath="0" position="0" expectChannels="2"
+                           channelA="0" channelB="1"
+                           minRms="0.40" minRmsDelta="0.20" minDiffRms="0.20"/>
+    <assert-master-sums position="0" tolerance="0.0005" stride="97" minRms="0.10"/>
+    <render filename="w2.wav" format="wav" quality="10" durationSec="3.0"/>
+    <report-page-memory label="mc_width_change at 2"/>
+
+    <!-- ================ 2 to 8 ======================================= -->
+    <set-project-channels channels="8"/>
+
+    <!-- The width really moved, all the way down to the track's root page. -->
+    <assert-track-channels trackPath="0" position="0" expectChannels="8"
+                           channelA="0" channelB="1"
+                           minRms="0.40" minRmsDelta="0.20" minDiffRms="0.20"/>
+    <!-- §4.4's clamp at work: channels 2..7 of a 2-channel source are its LAST
+         channel, so channel 7 must match channel 1 and not channel 0. -->
+    <assert-track-channels trackPath="0" position="0" expectChannels="8"
+                           channelA="0" channelB="7"
+                           minRmsDelta="0.20" minDiffRms="0.20"/>
+    <assert-track-channels trackPath="0" position="0" expectChannels="8"
+                           channelA="1" channelB="7" minRmsDelta="0.0"
+                           minDiffRms="0.0001" expectReject="true"/>
+    <assert-master-sums position="0" tolerance="0.0005" stride="97" minRms="0.10"/>
+    <assert-master-sums position="65536" tolerance="0.0005" stride="97" minRms="0.10"/>
+
+    <render filename="w8.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="w8.wav" expected="w2.wav"/>
+    <report-page-memory label="mc_width_change at 8"/>
+
+    <!-- ================ 8 to 2, THE SHRINK ============================ -->
+    <set-project-channels channels="2"/>
+    <assert-track-channels trackPath="0" position="0" expectChannels="2"
+                           channelA="0" channelB="1"
+                           minRms="0.40" minRmsDelta="0.20" minDiffRms="0.20"/>
+    <assert-master-sums position="0" tolerance="0.0005" stride="97" minRms="0.10"/>
+    <render filename="w2b.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="w2b.wav" expected="w2.wav"/>
+
+    <!-- ================ and again, through the UNDO stack ============= -->
+    <!-- 2 -> 4, then undo it: the undo is a shrink reached from the action
+         layer rather than from a script verb, which is the path M1 could not
+         allow to run at all. -->
+    <set-project-channels channels="4"/>
+    <assert-track-channels trackPath="0" position="0" expectChannels="4"
+                           channelA="0" channelB="3"
+                           minRmsDelta="0.20" minDiffRms="0.20"/>
+    <undo count="1"/>
+    <assert-track-channels trackPath="0" position="0" expectChannels="2"
+                           channelA="0" channelB="1"
+                           minRms="0.40" minRmsDelta="0.20" minDiffRms="0.20"/>
+    <redo count="1"/>
+    <assert-track-channels trackPath="0" position="0" expectChannels="4"
+                           channelA="0" channelB="3"
+                           minRmsDelta="0.20" minDiffRms="0.20"/>
+    <undo count="1"/>
+
+    <render filename="w2c.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="w2c.wav" expected="w2.wav"/>
+    <report-page-memory label="mc_width_change back at 2"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

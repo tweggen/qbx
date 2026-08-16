@@ -13,6 +13,7 @@
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/core/position_code.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -55,6 +56,51 @@ public:
     idx_t getNOutputs() const override { return 1; }
     const char *getInputName(idx_t) const override { return nullptr; }
     const char *getOutputName(idx_t) const override { return "tone"; }
+};
+
+// A WIDE tone whose declared width can be changed at runtime, for AC B4.5's
+// RT half. `widestPageSeen` records the widest page it was ever asked to fill,
+// so a test can prove the re-freeze really happened at the new width rather
+// than merely that audio came back.
+class WidthTone : public twComponent {
+public:
+    explicit WidthTone(tw303aEnvironment &e) : twComponent(e) {}
+    std::atomic<int> width{2};
+    std::atomic<float> amp{0.25f};
+    std::atomic<int> widestPageSeen{0};
+
+    idx_t getOutputChannels() const override { return (idx_t)width.load(); }
+
+    bool isSeekable() const override { return true; }
+    int seekTo(offset_t) override { return 0; }
+    void reset() override {}
+
+    length_t renderPageWide(twOutputPage &page, length_t frames,
+                            const sample_t *, length_t) override {
+        length_t n = frames;
+        if (n > (length_t)page.channelFrames()) n = (length_t)page.channelFrames();
+        const int nCh = (int)page.channels();
+        int seen = widestPageSeen.load();
+        while (nCh > seen && !widestPageSeen.compare_exchange_weak(seen, nCh)) {}
+        const float a = amp.load();
+        for (idx_t c = 0; c < (idx_t)nCh; ++c) {
+            sample_t *dst = page.channelPtr(c);
+            for (length_t i = 0; i < n; ++i) dst[i] = a;
+        }
+        return n;
+    }
+    // The narrow degradation (proposal 36 §7 trap 18).
+    length_t renderFrames(sample_t *out, length_t n, const sample_t *,
+                          length_t, idx_t) override {
+        const float a = amp.load();
+        for (length_t i = 0; i < n; ++i) out[i] = a;
+        return n;
+    }
+    void createOutputLatches() override {}
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName(idx_t) const override { return nullptr; }
+    const char *getOutputName(idx_t) const override { return "widetone"; }
 };
 
 // Position-identifying, never-zero sample value (the mix_test pattern), so a
@@ -202,6 +248,76 @@ int main()
         }
         CHECK(!dropout, "no dropout between the edit and the re-freeze");
         CHECK(freshHeard, "post-edit content becomes audible after re-freeze");
+
+        engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
+    // AC B4.5 (proposal 36), THE RT HALF: a stale page of the WRONG WIDTH must
+    // be a MISS on the audio thread, never audio.
+    //
+    // Why this half had to wait for B4. §4.5's rule is wired at three places —
+    // twLevelProbe (proven in metering_test since B2), and the fast path plus
+    // both stale fallbacks in AudioEngine::updateFrozenPage. The probe half
+    // could be forced with a synthetic component; the RT half could not, because
+    // "a page reaches the RT callback" needs a real engine, and until B4 nothing
+    // the engine could be pointed at was ever wider than one channel. It is now.
+    //
+    // WHAT MAKES THIS A REAL FORCING, not a staged one: the width changes with
+    // NO content-epoch bump. So every cached page is still CURRENT by the epoch
+    // rule and by validAspects — proposal 16's stale fallback would happily
+    // serve it — and the width check is the only thing standing between the
+    // audio thread and reading channelPtr(1) of a page that has one channel.
+    {
+        auto src = std::make_shared<WidthTone>(env);
+        src->width.store(2);
+        src->init();
+
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
+        engine.startReadahead();
+
+        constexpr length_t BLOCK = 512;
+        std::vector<float> L(BLOCK), R(BLOCK);
+
+        bool audible = false;
+        for (int i = 0; i < 500 && !audible; ++i) {
+            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) { audible = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(audible, "width: a 2-channel graph plays");
+
+        // THE WIDTH CHANGE, with no epoch bump: the frozen pages stay valid and
+        // current, and only their geometry is now wrong.
+        src->width.store(4);
+
+        bool servedOldWidth = false, sawSilence = false;
+        for (int i = 0; i < 40; ++i) {
+            std::fill(L.begin(), L.end(), -1.0f);
+            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) { servedOldWidth = true; break; }
+            if (n == 0 || L[0] == 0.0f) sawSilence = true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(!servedOldWidth,
+              "AC B4.5 (RT): a page whose width no longer matches its producer is "
+              "NOT served to the audio thread");
+        CHECK(sawSilence,
+              "AC B4.5 (RT): the RT path falls back to silence for that page");
+
+        // And it is not a permanent poisoning: bumping the epoch lets the
+        // readahead re-freeze at the new width, and audio returns.
+        src->bumpContentEpoch();
+        bool recovered = false;
+        for (int i = 0; i < 500 && !recovered; ++i) {
+            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) { recovered = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(recovered,
+              "AC B4.5 (RT): re-freezing at the new width restores audio");
+        CHECK(src->widestPageSeen.load() == 4,
+              "…and the pages the readahead froze really were 4 channels wide");
 
         engine.stopReadahead();
     }

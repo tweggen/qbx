@@ -137,6 +137,22 @@ foreach(_case ${_QXA_CASES})
     )
 endforeach()
 
+# mc_legacy_pull_wide is proposal 36 AC B4.6: the LEGACY PULL path, exercised
+# wide. SMARAGD_REVAL_WORKERS=0 disables the revalidator entirely, so there is no
+# scheduler, no plan and no bound input pages -- every page is materialised by
+# the recursive freeze through twStreamingLatch::copyData. That is the path
+# assert-meter drives and the one no other AC in the proposal covers, and it is
+# the configuration in which B4's extraction of copyData's page acquisition into
+# a shared acquirePage() could be wrong with nothing else noticing. It has to be
+# set HERE rather than in the .qxa, because the runner reads it before any script
+# is parsed. The render timeout is re-stated because set_tests_properties REPLACES
+# the ENVIRONMENT property rather than appending to it.
+if(TEST qxa.mc_legacy_pull_wide)
+    set_tests_properties(qxa.mc_legacy_pull_wide PROPERTIES
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_REVAL_WORKERS=0"
+    )
+endif()
+
 # legacy_project_recovery guards a loader bug whose symptom is a HANG, not a
 # failure (an element that can never resolve made createObjects() rescan
 # forever). Without a timeout a regression would keep ctest running until

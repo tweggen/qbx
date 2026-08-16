@@ -14,31 +14,29 @@ twPluginSlotProcessor::twPluginSlotProcessor( tw303aEnvironment &env,
                                              const twPluginIoLayout &declaredIo )
     : env_( env ), factory_( std::move( factory ) ), declaredIo_( declaredIo )
 {
-    cache_.resize( kCacheEntries );
 }
 
 twPluginSlotProcessor::~twPluginSlotProcessor() = default;
 
 // ---------------------------------------------------------------- configuration
 
-void twPluginSlotProcessor::setBusCount( idx_t nBuses )
+void twPluginSlotProcessor::setChannelCount( idx_t nChannels )
 {
-    if( nBuses < 0 ) nBuses = 0;
+    if( nChannels < 0 ) nChannels = 0;
 
     std::lock_guard<std::mutex> lock( mutex_ );
-    if( nBuses == nBuses_ && !instances_.empty() ) return;
+    if( nChannels == nChannels_ && !instances_.empty() ) return;
 
-    nBuses_ = nBuses;
-    if( (idx_t)taps_.size() < nBuses_ ) taps_.resize( nBuses_ );
+    nChannels_ = nChannels;
     rebuild_nolock();
 }
 
-// Re-resolution after a rescan (proposal 08 M4). The taps hold this processor by
-// shared_ptr and the DSP chains hold the taps, so a slot whose plugin appeared
-// on disk must NOT be rebuilt by swapping the processor — that would mean
-// re-wiring every twPluginChain. Handing it a new factory instead re-runs
-// exactly the derivation setBusCount() does, keeps the graph untouched, and
-// stales both caches through rebuild_nolock()'s bumpParamEpoch_nolock().
+// Re-resolution after a rescan (proposal 08 M4). The insert holds this processor
+// by shared_ptr and the DSP chain holds the insert, so a slot whose plugin
+// appeared on disk must NOT be rebuilt by swapping the processor — that would
+// mean re-wiring the chain. Handing it a new factory instead re-runs exactly
+// what setChannelCount() derives, keeps the graph untouched, and stales the
+// insert's pages through rebuild_nolock()'s bumpParamEpoch_nolock().
 void twPluginSlotProcessor::setFactory( Factory factory )
 {
     std::lock_guard<std::mutex> lock( mutex_ );
@@ -49,19 +47,16 @@ void twPluginSlotProcessor::setFactory( Factory factory )
     rebuild_nolock();
 }
 
-idx_t twPluginSlotProcessor::busCount() const
+idx_t twPluginSlotProcessor::channelCount() const
 {
     std::lock_guard<std::mutex> lock( mutex_ );
-    return nBuses_;
+    return nChannels_;
 }
 
-void twPluginSlotProcessor::attachTap( idx_t bus,
-                                       const std::shared_ptr<twPluginInsert> &tap )
+void twPluginSlotProcessor::attachTap( const std::shared_ptr<twPluginInsert> &tap )
 {
-    if( bus < 0 ) return;
     std::lock_guard<std::mutex> lock( mutex_ );
-    if( (idx_t)taps_.size() <= bus ) taps_.resize( bus + 1 );
-    taps_[bus] = tap;
+    tap_ = tap;
 }
 
 twPluginSlotMode twPluginSlotProcessor::mode() const
@@ -90,18 +85,14 @@ void twPluginSlotProcessor::bumpParamEpoch()
     bumpParamEpoch_nolock();
 }
 
-// Caller must hold mutex_. Two things have to move together: the cache key
-// (or the processor serves the page it rendered before the edit) and every
-// tap's content epoch (or the taps serve THEIR cached pages instead of asking
-// again). twComponent::bumpContentEpoch() is a lock-free atomic increment, so
+// Caller must hold mutex_. The insert's frozen pages bake in what process()
+// produced, so an edit that changes process() has to stale them or it is
+// inaudible. twComponent::bumpContentEpoch() is a lock-free atomic increment, so
 // calling it under mutex_ introduces no lock ordering.
 void twPluginSlotProcessor::bumpParamEpoch_nolock()
 {
-    paramEpoch_.fetch_add( 1, std::memory_order_acq_rel );
-    for( const std::weak_ptr<twPluginInsert> &w : taps_ ) {
-        if( std::shared_ptr<twPluginInsert> t = w.lock() )
-            t->bumpContentEpoch();
-    }
+    if( std::shared_ptr<twPluginInsert> t = tap_.lock() )
+        t->bumpContentEpoch();
 }
 
 twPlugin *twPluginSlotProcessor::plugin() const
@@ -124,6 +115,12 @@ std::vector<twPlugin *> twPluginSlotProcessor::plugins() const
 
 // Caller must hold mutex_. Derives the channel-mismatch mapping of proposal 08
 // §Layer 3 and materializes exactly the instances it needs.
+//
+// PROPOSAL 36 B4 CHANGED THE NUMBER, NOT THE POLICY. nBuses_ became nChannels_
+// — the width of the page the insert is handed rather than the count of
+// parallel mono components a track was built from — and every branch below is
+// otherwise the one proposal 08 settled. A user must not be able to hear this
+// milestone through a mismatched plugin.
 void twPluginSlotProcessor::rebuild_nolock()
 {
     instances_.clear();
@@ -131,10 +128,9 @@ void twPluginSlotProcessor::rebuild_nolock()
     mode_         = twPluginSlotMode::Transparent;
     state_        = twPluginSlotState::Active;
     haveLastEnd_  = false;
-    std::fill( cache_.begin(), cache_.end(), std::shared_ptr<const Output>{} );
     bumpParamEpoch_nolock();
 
-    if( nBuses_ <= 0 ) return;
+    if( nChannels_ <= 0 ) return;
 
     // No backend, no module, or a refused descriptor: SUBSTITUTE the placeholder
     // (proposal 08 M4) rather than leaving the slot instance-less. The
@@ -167,25 +163,25 @@ void twPluginSlotProcessor::rebuild_nolock()
     const idx_t nIn  = (idx_t)io.audioInputs;
     const idx_t nOut = (idx_t)io.audioOutputs;
 
-    if( nIn == nBuses_ && nOut == nBuses_ ) {
+    if( nIn == nChannels_ && nOut == nChannels_ ) {
         // N -> N: the normal case (2->2 on a stereo track, 1->1 on a mono one).
         mode_ = twPluginSlotMode::Direct;
         instances_.push_back( std::move( first ) );
-    } else if( nIn == 1 && nOut == 1 && nBuses_ > 1 ) {
-        // Dual-mono: run the plugin independently per bus (L->L, R->R). The
+    } else if( nIn == 1 && nOut == 1 && nChannels_ > 1 ) {
+        // Dual-mono: run the plugin independently per channel (L->L, R->R). The
         // image survives; channel-linked internal state is NOT shared, which is
         // correct for EQ/filter/distortion and is why this needs N instances —
         // and therefore a factory rather than a single instance.
         mode_ = twPluginSlotMode::DualMono;
         instances_.push_back( std::move( first ) );
-        for( idx_t b = 1; b < nBuses_; ++b ) {
+        for( idx_t b = 1; b < nChannels_; ++b ) {
             // makeInstance() never returns null (it falls back to the
             // placeholder), so a PARTIAL dual-mono chain — which used to silence
-            // whole buses — is no longer reachable. A factory that produces one
-            // real instance and then fails marks the whole slot Missing.
+            // whole channels — is no longer reachable. A factory that produces
+            // one real instance and then fails marks the whole slot Missing.
             instances_.push_back( makeInstance() );
         }
-    } else if( nIn == 2 && nOut == 2 && nBuses_ == 1 ) {
+    } else if( nIn == 2 && nOut == 2 && nChannels_ == 1 ) {
         // A stereo plugin on a mono wire: feed the one input to both plugin
         // inputs and average the two outputs back down.
         mode_ = twPluginSlotMode::MonoFold;
@@ -203,16 +199,16 @@ void twPluginSlotProcessor::rebuild_nolock()
         if( !loggedUnsupported_ ) {
             loggedUnsupported_ = true;
             TW_LOGW( "plugins", "[slot] no defined mapping for a %d-in / %d-out plugin on "
-                     "%d bus(es) (proposal 08 §Layer 3); the slot is UNSUPPORTED and "
-                     "loads transparent", (int)nIn, (int)nOut, (int)nBuses_ );
+                     "%d channel(s) (proposal 08 §Layer 3); the slot is UNSUPPORTED and "
+                     "loads transparent", (int)nIn, (int)nOut, (int)nChannels_ );
         }
         return;
     }
 
     if( substituted ) state_ = twPluginSlotState::Missing;
 
-    // prepare() is reached from setBusCount(), i.e. from the UI thread — which
-    // is where CLAP says activate() belongs.
+    // prepare() is reached from setChannelCount(), i.e. from the UI thread —
+    // which is where CLAP says activate() belongs.
     const int rate = env_.getSRate();
     if( rate > 0 ) {
         for( const std::unique_ptr<twPlugin> &p : instances_ )
@@ -223,21 +219,18 @@ void twPluginSlotProcessor::rebuild_nolock()
 
 // ----------------------------------------------------------------- scratch
 
-void twPluginSlotProcessor::ensureScratch_nolock( length_t len )
+// Caller must hold mutex_. The per-channel gather/result buffers used to live
+// here (busIn_/busOut_, one page each per bus); B4 moved them to the caller,
+// which now hands in its upstream page's channels and its own page's channels
+// directly. What is left is the MonoFold fold-down pair — one CHUNK each,
+// because the fold happens inside the chunk loop — and the pointer arrays
+// process() is handed.
+void twPluginSlotProcessor::ensureScratch_nolock()
 {
-    const std::size_t want = (std::size_t)std::max<length_t>( len, kChunkFrames );
-
-    if( (idx_t)busIn_.size()  != nBuses_ ) busIn_.resize( nBuses_ );
-    if( (idx_t)busOut_.size() != nBuses_ ) busOut_.resize( nBuses_ );
-    for( std::vector<sample_t> &b : busIn_ )
-        if( b.size() < want ) b.resize( want );
-    for( std::vector<sample_t> &b : busOut_ )
-        if( b.size() < want ) b.resize( want );
-
     if( mode_ == twPluginSlotMode::MonoFold ) {
         if( foldOut_.size() != 2 ) foldOut_.resize( 2 );
         for( std::vector<sample_t> &b : foldOut_ )
-            if( b.size() < want ) b.resize( want );
+            if( b.size() < (std::size_t)kChunkFrames ) b.resize( (std::size_t)kChunkFrames );
     }
 
     const std::size_t nIn  = instances_.empty() ? 0
@@ -256,19 +249,20 @@ void twPluginSlotProcessor::resetInstances_nolock()
 
 // ------------------------------------------------------------- the DSP core
 
-// Caller must hold mutex_. busIn_ holds len frames per bus; busOut_ receives
-// len frames per bus. Chunked to kChunkFrames, advancing through the SAME
+// Caller must hold mutex_. `in` and `out` are nChannels_ planar buffers of at
+// least `len` frames. Chunked to kChunkFrames, advancing through the SAME
 // buffers so plugin DSP state carries across chunks exactly as it would across
 // callbacks in a live host (CONTRACT invariant 5).
-void twPluginSlotProcessor::runChunked_nolock( length_t len )
+void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
+                                               sample_t **out, length_t len )
 {
-    if( len <= 0 ) return;
+    if( len <= 0 || !in || !out ) return;
 
     if( mode_ == twPluginSlotMode::Transparent || instances_.empty() ||
         bypass_.load( std::memory_order_acquire ) ) {
-        for( idx_t b = 0; b < nBuses_; ++b )
-            std::copy( busIn_[b].begin(), busIn_[b].begin() + len,
-                       busOut_[b].begin() );
+        for( idx_t c = 0; c < nChannels_; ++c ) {
+            if( in[c] && out[c] ) std::copy( in[c], in[c] + len, out[c] );
+        }
         return;
     }
 
@@ -277,32 +271,32 @@ void twPluginSlotProcessor::runChunked_nolock( length_t len )
 
         switch( mode_ ) {
         case twPluginSlotMode::Direct: {
-            for( idx_t c = 0; c < nBuses_; ++c ) {
-                inPtrs_[c]  = busIn_[c].data()  + off;
-                outPtrs_[c] = busOut_[c].data() + off;
+            for( idx_t c = 0; c < nChannels_; ++c ) {
+                inPtrs_[c]  = in[c]  + off;
+                outPtrs_[c] = out[c] + off;
             }
             instances_[0]->process( inPtrs_.data(), outPtrs_.data(), (std::uint32_t)n );
             break;
         }
         case twPluginSlotMode::DualMono: {
-            for( idx_t b = 0; b < nBuses_; ++b ) {
-                inPtrs_[0]  = busIn_[b].data()  + off;
-                outPtrs_[0] = busOut_[b].data() + off;
+            for( idx_t b = 0; b < nChannels_; ++b ) {
+                inPtrs_[0]  = in[b]  + off;
+                outPtrs_[0] = out[b] + off;
                 instances_[b]->process( inPtrs_.data(), outPtrs_.data(),
                                         (std::uint32_t)n );
             }
             break;
         }
         case twPluginSlotMode::MonoFold: {
-            // Both plugin inputs read the one bus. Aliasing two const input
+            // Both plugin inputs read the one channel. Aliasing two const input
             // pointers at one buffer is safe by the twPlugin contract: process()
             // never writes through `in`.
-            inPtrs_[0]  = busIn_[0].data() + off;
-            inPtrs_[1]  = busIn_[0].data() + off;
-            outPtrs_[0] = foldOut_[0].data() + off;
-            outPtrs_[1] = foldOut_[1].data() + off;
+            inPtrs_[0]  = in[0] + off;
+            inPtrs_[1]  = in[0] + off;
+            outPtrs_[0] = foldOut_[0].data();
+            outPtrs_[1] = foldOut_[1].data();
             instances_[0]->process( inPtrs_.data(), outPtrs_.data(), (std::uint32_t)n );
-            sample_t *dst = busOut_[0].data() + off;
+            sample_t *dst = out[0] + off;
             for( length_t i = 0; i < n; ++i )
                 dst[i] = 0.5f * ( outPtrs_[0][i] + outPtrs_[1][i] );
             break;
@@ -313,56 +307,17 @@ void twPluginSlotProcessor::runChunked_nolock( length_t len )
     }
 }
 
-// ------------------------------------------------------------------- caching
+// ---------------------------------------------------------------- the render
 
-std::uint64_t twPluginSlotProcessor::stampNow_nolock() const
+void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
+                                    length_t len, offset_t startPos,
+                                    bool positional, int sampleRate )
 {
-    // The key must move when EITHER the processor changes (bypass, parameter,
-    // bus count) or any bus's upstream audio changes. The taps' own content
-    // epochs carry the latter; both counters are monotonic, so their sum is too
-    // and cannot alias.
-    std::uint64_t stamp = paramEpoch_.load( std::memory_order_acquire );
-    for( const std::weak_ptr<twPluginInsert> &w : taps_ ) {
-        if( std::shared_ptr<twPluginInsert> t = w.lock() )
-            stamp += t->contentEpochNow();
-    }
-    return stamp;
-}
+    if( len <= 0 ) return;
 
-std::shared_ptr<const twPluginSlotProcessor::Output>
-twPluginSlotProcessor::findCached_nolock( offset_t startPos, length_t len,
-                                          std::uint64_t stamp ) const
-{
-    for( const std::shared_ptr<const Output> &o : cache_ ) {
-        if( o && o->startPos == startPos && o->frames == len && o->stamp == stamp )
-            return o;
-    }
-    return nullptr;
-}
-
-void twPluginSlotProcessor::publish_nolock( const std::shared_ptr<const Output> &out )
-{
-    cache_[cacheNext_] = out;
-    cacheNext_ = ( cacheNext_ + 1 ) % cache_.size();
-}
-
-// ---------------------------------------------------------------- freeze path
-
-std::shared_ptr<const twPluginSlotProcessor::Output>
-twPluginSlotProcessor::pageFor( idx_t bus, offset_t startPos, length_t len,
-                                int sampleRate )
-{
     std::lock_guard<std::mutex> lock( mutex_ );
 
-    if( len < 0 ) len = 0;
-    const std::uint64_t stamp = stampNow_nolock();
-
-    if( std::shared_ptr<const Output> hit = findCached_nolock( startPos, len, stamp ) )
-        return hit;
-
-    (void)bus;   // every bus is rendered; which one asked does not matter
-
-    ensureScratch_nolock( len );
+    ensureScratch_nolock();
 
     // The plugin was activated for a sample rate. A genuine project rate change
     // must re-prepare it; this is observed from whichever thread renders next
@@ -374,96 +329,24 @@ twPluginSlotProcessor::pageFor( idx_t bus, offset_t startPos, length_t len,
         haveLastEnd_  = false;
     }
 
-    // Gather every bus's upstream audio through the sibling taps. This is where
-    // CONTRACT invariant 13 lives: pullUpstreamPage() must not take the tap's
-    // own component mutex, and no tap may hold its own mutex across pageFor(),
-    // or bus 0 gathering bus 1 deadlocks against bus 1's own freeze.
-    for( idx_t b = 0; b < nBuses_; ++b ) {
-        sample_t *dst = busIn_[b].data();
-        length_t  got = 0;
-        if( b < (idx_t)taps_.size() ) {
-            if( std::shared_ptr<twPluginInsert> t = taps_[b].lock() )
-                got = t->pullUpstreamPage( startPos, len, sampleRate, dst );
+    if( positional ) {
+        // Stateful DSP: a page that does not start exactly where the last one
+        // ended is a discontinuity the plugin cannot continue from.
+        if( haveLastEnd_ && startPos != lastEnd_ ) {
+            TW_LOGD( "plugins", "[slot] non-sequential page at %lld (expected %lld); "
+                     "resetting plugin state",
+                     (long long)startPos, (long long)lastEnd_ );
+            resetInstances_nolock();
         }
-        if( got < len )
-            std::fill( dst + std::max<length_t>( got, 0 ), dst + len, 0.0f );
+        lastEnd_     = startPos + (offset_t)len;
+        haveLastEnd_ = true;
+    } else {
+        // The legacy pull has no page identity, so it cannot claim continuity
+        // with anything. Forget where we were rather than pretend.
+        haveLastEnd_ = false;
     }
 
-    // Stateful DSP: a page that does not start exactly where the last one ended
-    // is a discontinuity the plugin cannot continue from.
-    if( haveLastEnd_ && startPos != lastEnd_ ) {
-        TW_LOGD( "plugins", "[slot] non-sequential page at %lld (expected %lld); "
-                 "resetting plugin state",
-                 (long long)startPos, (long long)lastEnd_ );
-        resetInstances_nolock();
-    }
-
-    runChunked_nolock( len );
-
-    lastEnd_     = startPos + (offset_t)len;
-    haveLastEnd_ = true;
-
-    auto out = std::make_shared<Output>();
-    out->startPos = startPos;
-    out->frames   = len;
-    out->stamp    = stamp;
-    out->bus.resize( nBuses_ );
-    for( idx_t b = 0; b < nBuses_; ++b ) {
-        out->bus[b].assign( busOut_[b].begin(), busOut_[b].begin() + len );
-    }
-
-    std::shared_ptr<const Output> ro = out;
-    publish_nolock( ro );
-    return ro;
-}
-
-// ------------------------------------------------------------ legacy pull path
-
-void twPluginSlotProcessor::resetBlock()
-{
-    std::lock_guard<std::mutex> lock( mutex_ );
-    blockProduced_ = false;
-}
-
-length_t twPluginSlotProcessor::blockFor( idx_t bus, sample_t *dst, length_t len )
-{
-    if( !dst || len <= 0 ) return 0;
-
-    std::lock_guard<std::mutex> lock( mutex_ );
-    if( bus < 0 || bus >= nBuses_ ) return 0;
-
-    ensureScratch_nolock( len );
-
-    if( !blockProduced_ ) {
-        if( sampleRateChangedForPull_nolock() ) haveLastEnd_ = false;
-        for( idx_t b = 0; b < nBuses_; ++b ) {
-            sample_t *in  = busIn_[b].data();
-            length_t  got = 0;
-            if( b < (idx_t)taps_.size() ) {
-                if( std::shared_ptr<twPluginInsert> t = taps_[b].lock() )
-                    got = t->pullInputStreaming( in, len );
-            }
-            if( got < len )
-                std::fill( in + std::max<length_t>( got, 0 ), in + len, 0.0f );
-        }
-        runChunked_nolock( len );
-        blockProduced_ = true;
-    }
-
-    std::copy( busOut_[bus].begin(), busOut_[bus].begin() + len, dst );
-    return len;
-}
-
-// Caller must hold mutex_. The pull path carries no sample rate of its own, so
-// it uses the environment's — and re-prepares if the project rate moved.
-bool twPluginSlotProcessor::sampleRateChangedForPull_nolock()
-{
-    const int rate = env_.getSRate();
-    if( rate <= 0 || rate == preparedRate_ || instances_.empty() ) return false;
-    for( const std::unique_ptr<twPlugin> &p : instances_ )
-        p->prepare( (std::uint32_t)rate, (std::uint32_t)kChunkFrames );
-    preparedRate_ = rate;
-    return true;
+    runChunked_nolock( in, out, len );
 }
 
 }  // namespace audio

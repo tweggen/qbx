@@ -4,6 +4,8 @@
 
 #include "tw/graph/twcomponent.h"
 
+#include <atomic>
+
 class tw303aEnvironment;
 
 class twMixer : public twComponent {
@@ -11,6 +13,7 @@ class twMixer : public twComponent {
     virtual void teardown() override;
 private:
     idx_t mixerInputs_;
+    std::atomic<int> channels_{ 1 };   // see setChannels()
     struct InputProperties {
         double volume_;
         sample_t volumeFactor_;
@@ -28,6 +31,28 @@ protected:
 public:
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
+
+    // --- Page width (proposal 36 §4.2 / B4) -------------------------------
+    //
+    // The master sum. Its INPUTS (mixerInputs_) are tracks and have nothing to
+    // do with its CHANNELS — the two numbers were conflated by the old "one
+    // twMixer per bus" arrangement, in which SStdMixer built N mixers and
+    // summed each track's bus n into mixer n. Now there is ONE mixer of width
+    // N: input t contributes its page's channel twPageClampChannel(page, c) to
+    // output channel c, so a narrower track still reaches every channel (§4.4)
+    // and AC B4.1's "master channel k == the sum of the tracks' channel k"
+    // holds by construction rather than by wiring.
+    void setChannels( idx_t n );
+    virtual idx_t getOutputChannels() const override
+    {
+        return (idx_t) channels_.load( std::memory_order_acquire );
+    }
+
+    // The wide render (§4.3): read every wired input's PAGE (§4.4 rule 2), sum
+    // channel-wise, one pass, no cursor of our own to advance.
+    virtual length_t renderPageWide( twOutputPage &page, length_t frames,
+                                     const sample_t *input,
+                                     length_t inputLength ) override;
 
     void createOutputLatches( void ) override;
 

@@ -119,6 +119,25 @@ public:
     // property of the track's own output, so a capture of the track includes it.
     void setTrackGain(double gainDb);
 
+    // --- Page width (proposal 36 §4.2 / B4) -------------------------------
+    //
+    // ONE twTrackMix of width N replaces the N parallel width-1 mixers STrack
+    // used to build. The clips are unchanged: a clip resolves to ONE component
+    // whose page has ITS OWN width (a mono file freezes width 1, a stereo file
+    // width 2), and freezePage_nolock mixes channel twPageClampChannel(child, c)
+    // into channel c — §4.4's "mono plays on every channel", which is what the
+    // N-mixer arrangement achieved by rendering the same channel-0 page N times.
+    //
+    // Settable at RUNTIME (a project width change). The width itself is atomic
+    // because getOutputChannels() is read from freeze threads; the invalidation
+    // that makes old-width pages unreachable is the CALLER's (STrack bumps the
+    // whole render chain), for the same reason every other edit's is.
+    void setChannels( idx_t n );
+    idx_t getOutputChannels() const override
+    {
+        return (idx_t) channels_.load( std::memory_order_acquire );
+    }
+
 public:
     virtual void setBufferSize( length_t ) override;
 
@@ -183,6 +202,7 @@ private:
     std::vector<ClipEntry> clips_;            // Timeline entries (sorted by startTime)
     std::atomic<offset_t> playOffset_{ 0 };   // Atomic: protects race between UI seek and audio render
     double trackGainDb_{ 0.0 };                // Track gain in dB
+    std::atomic<int> channels_{ 1 };           // see setChannels()
 
 };
 

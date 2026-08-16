@@ -64,6 +64,16 @@ const Fixture kFixtures[] = {
       "<assert-clip-channels clip='0,0' position='4096' expectChannels='2'"
       " channelA='0' channelB='1' minRmsDelta='0.150000'"
       " minDiffRms='0.150000'/>" },
+    // Proposal 36 B4. minDiffRms/minRms are only written when >= 0, and the
+    // driver is always written (its default is meaningful: "scheduler" and
+    // "pull" exercise two different halves of the engine).
+    { "assert-track-channels",
+      "<assert-track-channels trackPath='0' position='65536' expectChannels='2'"
+      " channelA='0' channelB='1' minRmsDelta='0.150000'"
+      " minDiffRms='0.150000' minRms='0.100000' driver='pull'/>" },
+    { "assert-master-sums",
+      "<assert-master-sums position='65536' tolerance='0.001' stride='97'"
+      " minRms='0.010000'/>" },
     // expectSilence is only written when true, so it stays out of the fixture.
     { "assert-source-position",
       "<assert-source-position filename='r.wav' startFrame='40960'"

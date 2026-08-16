@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 B4, ACs B4.1 and B4.7 at document level.
+
+  AC B4.7 — a plain stereo clip yields two distinct channels AT THE TRACK'S ROOT
+  COMPONENT. B3 could only assert this at the component twView::resolve returns
+  for the clip, because twTrackMix and twPluginChain were still one channel wide
+  and IOVector had no channel selector. Everything between those two assertion
+  points is B4's code: the mix's per-channel IOVector loop with §4.4's clamp on
+  the SOURCE, the collapsed plugin chain, and twRewire's channel map. The tap is
+  STrack::getRootComponent() — the same twRewire the level meters read and the
+  master sums — so this is a statement about what is heard, not about an
+  internal stage.
+
+  AC B4.1 — MASTER CHANNEL k IS THE SUM OF THE TRACKS' CHANNEL k. Pre-B4 the
+  master ran ONE bus and its summing loop was `bus < 1`, so every track's second
+  channel was built, filtered, plugin-processed and then dropped
+  (proposal 36 §2 item 3). assert-master-sums re-derives the sum itself, per
+  channel, per frame, and compares — so "channel 1 of the master is channel 0 of
+  everything" fails it, which is precisely the pre-B4 behaviour.
+
+  THE FIXTURES, and why three tracks rather than one:
+
+    track 0  ../test_stereo.wav    — the 6 dB ladder: channel 0 is a 480 Hz sine
+                                     at rms exactly 0.5, channel 1 the same sine
+                                     at rms exactly 0.25. This is the only clip
+                                     whose channels DIFFER, so it is what makes
+                                     B4.7 assertable at all.
+    track 1  ../test_sawtooth.wav  — two channels, byte-identical (§7 trap 22).
+                                     The control: the page really is 2 wide and
+                                     both discriminators must REJECT.
+    track 2  ../test_position.wav  — genuinely MONO. §4.4's clamp is what makes
+                                     it audible on both channels of a stereo
+                                     track, and the master sum has to account
+                                     for that (which is why the verb clamps the
+                                     source channel exactly as twMixer does).
+
+  Three tracks is also what makes B4.1 non-trivial: a one-track sum would pass
+  for a master that merely FORWARDED its single input.
+-->
+<SActionScript version="1" name="mc_track_width">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="2" filePath="../test_position.wav" timePos="0"/>
+
+    <!-- ================= AC B4.7 ==================================== -->
+    <!-- Page 0. The ladder gives rms 0.5 vs 0.25, so delta is 0.25, and
+         rms(ch0 - ch1) is 0.25 as well (the difference of a sine and half
+         itself is a 0.35355 sine, rms 0.25). -->
+    <assert-track-channels trackPath="0" position="0" expectChannels="2"
+                           channelA="0" channelB="1"
+                           minRms="0.40" minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- Page 1 — a page whose content is NOT page 0's. A per-channel loop over
+         a cursor-bearing render would have filled channel 1 here with page 2's
+         audio; the levels would still be right, which is why this is asserted
+         at more than one position. -->
+    <assert-track-channels trackPath="0" position="65536" expectChannels="2"
+                           channelA="0" channelB="1"
+                           minRms="0.40" minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- Page 2, the tail page, partly past the material. -->
+    <assert-track-channels trackPath="0" position="140000" expectChannels="2"
+                           channelA="0" channelB="1"
+                           minRmsDelta="0.10" minDiffRms="0.10"/>
+
+    <!-- The bands must be able to FAIL, or they prove nothing. -->
+    <assert-track-channels trackPath="0" position="0" expectChannels="2"
+                           channelA="0" channelB="1" minRmsDelta="0.30"
+                           expectReject="true"/>
+    <assert-track-channels trackPath="0" position="0" expectChannels="1"
+                           channelA="0" channelB="1" minRmsDelta="0.0"
+                           expectReject="true"/>
+
+    <!-- The two controls: a two-channel page whose channels are the SAME, and a
+         mono source that reaches both channels through §4.4's clamp. Both are
+         two channels wide at the track root — the width follows the PROJECT —
+         and both must fail the content discriminator. -->
+    <assert-track-channels trackPath="1" position="0" expectChannels="2"
+                           channelA="0" channelB="1" minRmsDelta="0.0"
+                           minDiffRms="0.0001" expectReject="true"/>
+    <assert-track-channels trackPath="2" position="0" expectChannels="2"
+                           channelA="0" channelB="1" minRmsDelta="0.0"
+                           minDiffRms="0.0001" expectReject="true"/>
+
+    <!-- ================= AC B4.1 ==================================== -->
+    <!-- minRms guards the degenerate pass: a silent master sums to a silent sum
+         no matter how the channels are wired. -->
+    <assert-master-sums position="0" tolerance="0.0005" stride="97" minRms="0.10"/>
+    <assert-master-sums position="65536" tolerance="0.0005" stride="97" minRms="0.10"/>
+    <assert-master-sums position="131072" tolerance="0.0005" stride="97" minRms="0.02"/>
+
+    <!-- …and with a track MUTED, because the mixer excludes an inaudible lane by
+         nulling its input plug and the sum has to follow that, not the track
+         list. This is the assertion that would fail if mute stopped reaching the
+         master while the channels were being rearranged. -->
+    <set-track-mute trackPath="1" muted="1"/>
+    <assert-master-sums position="0" tolerance="0.0005" stride="97" minRms="0.10"/>
+    <set-track-mute trackPath="1" muted="0"/>
+
+    <!-- …and with a non-unity track gain, which twTrackMix bakes into EVERY
+         channel of its page (the per-channel gain loop), so the sum still
+         holds. -->
+    <set-track-volume trackPath="0" volume="-6.0"/>
+    <assert-master-sums position="0" tolerance="0.0005" stride="97" minRms="0.05"/>
+    <assert-track-channels trackPath="0" position="0" expectChannels="2"
+                           channelA="0" channelB="1"
+                           minRmsDelta="0.08" minDiffRms="0.08"/>
+
+    <report-page-memory label="mc_track_width after the assertions"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>
