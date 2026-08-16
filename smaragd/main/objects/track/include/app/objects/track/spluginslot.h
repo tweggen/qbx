@@ -2,8 +2,11 @@
 #define _SPLUGINSLOT_H_
 
 #include "app/model/sobject.h"
+#include "tw/events/tweventsource.h"
+#include "tw/events/twtempomap.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/plugins/twpluginslotproc.h"
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -113,6 +116,35 @@ public:
     // edited from outside. Stales every cached page of this slot AND the render
     // path above it, without which the edit is inaudible.
     void notifyPluginEdited();
+
+    // --- the instrument slot (proposal 37 P3b) ------------------------------
+    //
+    // A slot is an instrument because its DESCRIPTOR says so, which is what
+    // keeps a track looking like an instrument track on a machine where the
+    // plugin is not installed (the placeholder reports the declared event shape
+    // for the same reason it reports the declared I/O).
+    bool isInstrument() const { return descriptor_.isInstrument; }
+
+    // THE FEED. The track hands its twEventSource (its own event clip set
+    // merged with the feeds of the children that bubble up, design 3.2.1) to
+    // slot 0 when slot 0 is an instrument, and takes it away from every other
+    // slot. The processor cannot tell a merge from a plain clip set.
+    void setEventSource( std::shared_ptr<const twEventSource> source );
+    // The transport half of twProcessContext, from the project's tempo map.
+    void setTempoMap( const twTempoMap &map );
+
+    // How long the plugin keeps producing after its last event. 0 when the slot
+    // has no processor yet - this NEVER materializes one, because it is read
+    // from STrack::getDuration(), which a render thread may call and which must
+    // not be able to instantiate a plugin.
+    std::uint32_t tailFrames() const;
+
+    // Forget the processor's page continuity (design D4). The P3c run barrier
+    // calls this on every instrument slot before a render or a play start: an
+    // epoch bump does NOT clear lastEnd_, so a run whose first page starts
+    // exactly where the previous one stopped would continue its voices instead
+    // of chasing them.
+    void forgetContinuity();
 
 signals:
     void bypassChanged( bool );

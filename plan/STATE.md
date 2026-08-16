@@ -10326,6 +10326,13 @@ only `set-tempo`'s apply and the loader. AC7: the golden compare above.
 binary and expect the MIDI clip dropped and the audio intact). The fixture it
 needs is produced by the suite: `smaragd/build/midi_clip_roundtrip.qxp`.
 
+One process note worth keeping: `check_layering.py` must be run FROM THE REPO
+ROOT. Run from `smaragd/` it reported "layering clean" over a testkit file that
+was directly including `tw/plugins/twpluginslotproc.h` — a real violation the
+root-relative run caught. The fix was to drop the include: `app/objects/track/
+spluginslot.h` is the sanctioned route, because every question the verb asks is
+asked of the APP model, which quotes those engine types in its own public API.
+
 ### Deviations, and what is NOT gated
 
 - **`objects/midi`'s engine deps are `{core, graph, events}`, not `{events,
@@ -11060,3 +11067,152 @@ legacy pull of a wide track is channel 0 only — unchanged in kind from
 `twPluginInsert`, and no app path reaches it. The 20-WAV pre/post `cmp` corpus
 was chosen for fader/mute/plugin relevance, not exhaustively; the committed
 goldens are the standing gate.
+
+## 2026-08-16 — Proposal 37 P3b: instrument slot + event feed
+
+**Branch:** `feat/36-p3b-instrument-slot` (from the integration tip `aad5cb8`).
+**Status:** ✅ COMPLETE — a MIDI clip is audible.
+
+### What landed
+
+`twPluginSlotProcessor` grew the **generator half** of the channel-mismatch
+table. A 0-input plugin used to fall straight through to `Unsupported`, which is
+exactly why an instrument produced nothing; on a C-channel page it now maps
+
+| plugin | page | mode | what it does |
+|---|---|---|---|
+| `0 → C`  | C | `DirectGen`  | one instance, channel for channel, straight into the page |
+| `0 → 1`  | C>1 | `MonoSpread` | the one voice copied to every channel (centre-panned) |
+| `0 → 2`  | 1 | `GenFold`    | average the pair down |
+| `0 → M`  | C<M | `WideGen`    | outs 0..C-1 to the page; the surplus into the slot's own buffer for §5.4's aux taps (P9) |
+| `0 → M`  | 1<M<C | `Transparent`/Unsupported | no defined spread — refuse rather than guess |
+
+**The pass-through sum (D3).** The head insert keeps its audio input plug —
+`twPluginChain::rebuildWiring_nolock` never asked what slot 0 was, so nothing
+there changed — and for a generator the processor does not hand that input to
+the plugin at all: it **adds** it to the plugin's output. That is what keeps an
+audio clip on an instrument track audible with no track kind, no second graph
+shape and no change to any invalidation walk. `x + 0.0f == x`, so "instrument
+present, no notes" is byte-identical to the render with no instrument — gated,
+and green first try.
+
+**The feed.** `STrack::syncInstrumentSlot()` hands slot 0 the track's
+`twEventMerge` (its own event clip set + the feeds of every child that bubbles
+up, §3.2.1) and takes it away from every other slot. The processor holds a
+`shared_ptr<const twEventSource>` and never walks the model; the merge's SOURCE
+list is rebuilt on the main thread by `refreshInstrumentFeed()`, called from
+`bumpRenderChainEpoch()` / `bumpRenderChainEpochRange()` — the points every model
+change reaching the track already passes through — and guarded on there being an
+instrument at all, so a project without one pays two pointer hops.
+
+**Per page:** `collect(startPos, len)` once, then per 4096-frame chunk the slice
+with times in `[off, off+n)`, rebased to `0..n-1`, clamped (never dropped) at the
+end, into ONE sorted list with a `twProcessContext` built from the page position
+and the project's `twTempoMap`. The UI's `setParam` ring is **not** merged here:
+each backend already drains its own at offset 0 ahead of the host events, so
+there is exactly one ring and one non-decreasing stream.
+
+**Continuity (D4).** A page whose `startPos` is not `lastEnd_` is a REPOSITION:
+`reset()` → chase `stateAt(P−K)` as events at offset 0 → pre-roll K frames with
+the real events at their real offsets and the output discarded → then the page,
+which never re-issues its own chase (it has just been rebuilt into the DSP).
+
+    K = min( max(4096, tailFrames(), P − start(earliest note held at P)), 4 s ),  clamped to P
+
+`forgetContinuity()` is exposed through `SPluginSlot` for the P3c barrier: an
+epoch bump deliberately does NOT clear `lastEnd_`.
+
+**Bypass** is silence, not a short circuit: `process()` still gets every event
+and the audio is discarded, so a note-off inside a bypassed span is delivered and
+un-bypassing cannot resurrect a voice. **Instruments are freeze-path only**:
+`positional=false` (the legacy pull, `calcOutputTo`) renders silence and logs
+once, so `SMARAGD_REVAL_WORKERS=0` makes an instrument track silent BY DESIGN.
+
+**Project end** = last event clip end + `tailFrames()` (`STrack::eventEndTime()`,
+which excludes mute/solo — a project must not shorten because a lane is muted).
+
+**Slot rules (D3):** an instrument descriptor lands at slot 0 whatever
+`slotIndex` says; a second is refused; an effect asking for slot 0 is clamped to
+1; `reorder-plugin` across slot 0 is refused both ways.
+
+**UI minimum:** browser Kind filter (All / Instruments / Effects), "+ Add
+Instrument" on the FX strip (hidden once the track has one), an instrument-first
+tinted non-draggable row, `describeSlot kind=instrument|effect`, and P4's head
+"I" glyph — already derived, now non-empty and gated for the first time.
+
+### Two things that were NOT in the brief and had to be decided
+
+1. **The velocity domain.** `tw/events` is MODEL data in the MIDI domain
+   (`SMidiSequence` stores `velocity='100'` verbatim; `SMidiOutPump` sends
+   `clamp7(e.value)` onto the wire; the piano roll draws `value/127`), while the
+   plugin ABI is normalized (CLAP and VST3 both are, and the native 303's accent
+   threshold is `100/127`). The conversion had to exist somewhere and it landed
+   in the processor, at the one seam where a feed becomes an ABI list
+   (`twNormalizeForAbi`: /127 for velocity, CC, poly/channel pressure; /8192 for
+   bend; ProgramChange and ParamValue untouched). Normalizing in `tw/events`
+   instead would force the pump to multiply back up and round-trip a project
+   through a lossy scale. Written into plugins/CONTRACT.md as invariant 39.
+2. **`insert-plugin` did not carry `isInstrument`.** It reconstructs the
+   descriptor from format/uid/name/vendor/path/nIn/nOut, so the flag was lost and
+   every inserted instrument looked like an effect. It is now an attribute
+   written ONLY when true (every pre-P3b script re-serializes byte-identically);
+   omitted means "ask the registry", which is how `uid='tw.native.303'` works
+   with no ceremony, while a module that was never scanned has to say so.
+
+### Gates
+
+`./build.sh` clean; `python tools/check_layering.py` clean;
+`python tools/check_logging.py` clean.
+
+**`ctest --test-dir smaragd/build -j4`: 157/157 run passed, 160 registered**, 3
+`au_*` disabled (macOS only). 153 registered before, +7 new `instrument_*` cases.
+No flakes, no teardown crashes in the run.
+
+| AC | case | numbers |
+|---|---|---|
+| AC1 | `instrument_sine_render` | CLAP `tw.test.clap.sine`: 261.613 / 329.615 / 391.970 Hz (±1 Hz bands), rms 0.556689 / 0.556707 / 0.556780 against the closed form (100/127)/√2 = 0.556769, ±3 %; second 4 rms exactly 0. VST3 `TestSine`: identical numbers. `tw.native.303`: 261.556 / 329.534 / 391.891 Hz (±2 Hz), rms 0.178 / 0.185 / 0.190 (> 0.05). |
+| AC2 | `instrument_mixed_track` | audio second 0.0666501 (band [0.06598, 0.06732]); note second 0.556689; **`assert-file-identical` 576044 bytes**, instrument-present-no-notes vs no-instrument. |
+| AC3 | `instrument_edit_reaches_render` | A vs B identical over frames [0, 96000); B gains 0.556707 at 329.615 Hz in [96000,144000) where A has 0; `undo count="1"` → C byte-identical to A over all 768044 bytes. |
+| AC4 | `instrument_transpose_and_velocity` | `transpose="12"` → 523.251 Hz (from 261.613); `velocityScale="0.5"` → 0.278386 (from 0.556689); undo byte-identical. |
+| AC5 | `instrument_bypass_keeps_voices` + `plugins_test` | bypassed: note second rms 0, audio second byte-identical, undo byte-identical. **The resurrection discriminator is in `plugins_test::testGeneratorSlot`, not in the qxa** — see the deviation below. |
+| AC6 | `instrument_slot_rules` | `kind=instrument` on row 0; second instrument `expectReject`s (logged "already has an instrument in slot 0; refusing"); an effect asking for slot 0 lands at 1; `reorder-plugin` 1→0 and 0→1 both `expectReject`; `undo count="2"` empties the strip and `I=1` → `I=0`. |
+| AC7 | `instrument_slot_rules` | 303 with Decay = 0.5 s → `tailFrames()` exactly 24000; last MIDI clip ends at 3 s; render with no `durationSec` is **168000 frames = 3.5 s** exactly. |
+| AC7b | `instrument_folder_drums` | one instrument on the folder, two children with none: 261.613 Hz / 329.615 Hz in their seconds; `set-track-mute` on child 0 → second 0 rms 0 and second 1 **byte-identical**; both children on the same key at the same time → 0.445352 vs one voice 0.222676, i.e. 2.0000×; undo byte-identical. |
+| AC8 | sweeps | `repeat_test.sh` N=50 × workers {1,4,8,16} on `instrument_sine_render` and `instrument_mixed_track`: **8 × 50/50 = 400/400**, "deterministic: PASS" on every one. Worker count 0 excluded by design (invariant 42). |
+| AC9 | goldens | `tests/goldens/` untouched (`git status` clean there); `mc_golden_mono` / `mc_golden_stereo` green; all nine `plugin_*` cases green. |
+| AC10 | docs | plugins/CONTRACT.md (header, inv. 5/6/16 amended, new 37–42, three known-debt entries), FREEZE_PROTOCOL.md (a "class-1 consumers" section), objects/track/CONTRACT.md (inv. 11–13), testkit/CONTRACT.md (9b), pluginui/CONTRACT.md, docs/ACTIONS.md. |
+
+### Deviations, and what is NOT gated
+
+- **AC5's mid-render bypass is gated at unit level, not in a qxa, and that is
+  structural.** The correct implementation and the wrong one (short-circuit,
+  skip `process()`) differ only when the flag moves between two CONTIGUOUS page
+  renders of one run. A script cannot express that: a render always starts at
+  the range start, and every non-contiguous page is a reposition, which rebuilds
+  the voices from the feed whatever the bypass history was — so a render-based
+  assertion would pass on the buggy code. `plugins_test::testGeneratorSlot`
+  drives `twPluginSlotProcessor::render()` at three consecutive positions with
+  the flag flipped in the middle, which is the only place the difference exists.
+  There is no in-app automation of a bypass until P5. The qxa case gates what a
+  render CAN see (silence, the pass-through surviving, the undo).
+- **Stereo is not gated** — the sink is still mono until 36-B5. Every assertion
+  is on channel 0 and none is of the form `L != R`.
+- **Real third-party instruments** are not gated (in-repo fixtures only).
+- **Render-vs-playback identity** is not gated and is not claimed: they are
+  different runs, so different first pages.
+- **Arp → instrument in-app** is P9; `twEventOut` storage exists and is drained
+  by nobody.
+- **Concurrency of the feed swap** has no bespoke gate beyond the 400-run sweep.
+  `setEventSource` swaps under `mutex_` and the merge copies its source list
+  under its own, so a render in flight keeps a coherent view; a timing assertion
+  tight enough to separate the orderings would be flaky.
+
+### Known cost, recorded rather than hidden
+
+A generator pre-rolls on every reposition, and the scheduler currently renders
+each instrument page **twice** under a render (two demand paths converging), so a
+page at P with a note held since 0 pays 2 × P frames of discarded DSP. It is
+correct and deterministic — every generator page is a pure function of its
+position and the feed, which is what lets AC3 byte-compare — but it is O(P) per
+page. A 4 s render of three notes takes ~0.9 s. The double demand is the thing to
+de-duplicate first; it is in plugins/CONTRACT.md's known debt.

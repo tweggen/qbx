@@ -1,5 +1,7 @@
 #include "tw/plugins/twplugininsert.h"
 #include "tw/plugins/twpluginslotproc.h"
+#include "tw/events/tweventsource.h"
+#include "tw/events/twtempomap.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
 #include "tw/plugins/twplugindescriptor.h"
@@ -1342,6 +1344,407 @@ static void checkInstrument( twPlugin &plugin, const char *label, bool sineLike 
                         ).c_str() );
 }
 
+// ===========================================================================
+// PROPOSAL 37 P3b — the instrument slot: generator modes, the pass-through sum,
+// the continuity protocol and the bypass rule.
+//
+// These drive twPluginSlotProcessor::render() DIRECTLY, at chosen positions and
+// with the bypass flag flipped BETWEEN calls. That is deliberate and it is the
+// only place the bypass rule can be gated at all: a qxa render always starts
+// from the range start, and a page that does not start where the last one ended
+// is a REPOSITION (reset + chase + pre-roll), which rebuilds the voices from
+// the feed whatever the bypass history was. So "an un-bypass must not resurrect
+// stale voices" is only observable across CONTIGUOUS calls with the flag moving
+// in between — which a script cannot express and this can. Recorded in the P3b
+// PR body as an AC5 deviation, and in plugins/CONTRACT.md.
+// ===========================================================================
+
+namespace {
+
+// A 0-in / N-out generator: every note-on adds a DC level of `velocity` to
+// every output channel and every note-off takes it away again. DC rather than a
+// sine because the questions here are "did the event arrive", "did the sum
+// happen" and "was the note-off delivered" — all of which a constant answers
+// exactly, with no window, no phase and no tolerance.
+class MockGenerator : public twPlugin {
+public:
+    explicit MockGenerator( int nOut )
+    {
+        io_.audioInputs  = 0;
+        io_.audioOutputs = (std::uint16_t)nOut;
+    }
+
+    const twPluginIoLayout &ioLayout() const override { return io_; }
+    void prepare( std::uint32_t rate, std::uint32_t maxBlock ) override
+    {
+        rate_ = rate;
+        maxBlock_ = maxBlock;
+    }
+    void reset() override { level_ = 0.0; notes_ = 0; ++resets_; }
+
+    void process( const float *const *in, float *const *out,
+                  std::uint32_t nframes ) override
+    {
+        const twEventList      none{};
+        twEventOut             sink;
+        const twProcessContext ctx{};
+        float *const *const    buses[1] = { out };
+        process( in, buses, nframes, none, sink, ctx );
+    }
+
+    void process( const float *const * /*in*/, float *const *const *outBuses,
+                  std::uint32_t nframes, const twEventList &events,
+                  twEventOut & /*eventsOut*/, const twProcessContext &ctx ) override
+    {
+        ++calls_;
+        lastCtx_ = ctx;
+        eventsSeen_ += events.count;
+        std::uint32_t ev = 0;
+        float *const *out = ( outBuses ? outBuses[0] : nullptr );
+        for( std::uint32_t i = 0; i < nframes; ++i ) {
+            while( ev < events.count && events.events[ev].time <= (std::int64_t)i ) {
+                const twEvent &e = events.events[ev];
+                if( e.kind == twEventKind::NoteOn )  { level_ += e.value; ++notes_; }
+                if( e.kind == twEventKind::NoteOff ) {
+                    if( notes_ > 0 ) { --notes_; }
+                    level_ -= 1.0 * lastOnVelocity_;
+                    if( notes_ == 0 ) level_ = 0.0;
+                }
+                if( e.kind == twEventKind::NoteOn ) lastOnVelocity_ = e.value;
+                ++ev;
+            }
+            if( out ) {
+                for( std::uint32_t c = 0; c < io_.audioOutputs; ++c )
+                    if( out[c] ) out[c][i] = (float)level_;
+            }
+        }
+        for( ; ev < events.count; ++ev ) {
+            const twEvent &e = events.events[ev];
+            if( e.kind == twEventKind::NoteOn )  { level_ += e.value; ++notes_; lastOnVelocity_ = e.value; }
+            if( e.kind == twEventKind::NoteOff ) { if( notes_ > 0 ) --notes_; if( notes_ == 0 ) level_ = 0.0; }
+        }
+    }
+
+    std::size_t       paramCount() const override { return 0; }
+    twPluginParamInfo paramInfo( std::size_t ) const override { return {}; }
+    double            getParam( std::uint32_t ) const override { return 0.0; }
+    void              setParam( std::uint32_t, double ) override {}
+    std::vector<std::uint8_t> saveState() const override { return {}; }
+    bool loadState( const std::vector<std::uint8_t> & ) override { return true; }
+
+    twPluginCapabilities capabilities() const override
+    {
+        twPluginCapabilities c;
+        c.acceptsNotes = true;
+        c.isInstrument = true;
+        c.notePortsIn  = 1;
+        return c;
+    }
+    std::uint32_t tailFrames() const override { return tail_; }
+    void setTail( std::uint32_t t ) { tail_ = t; }
+
+    int  calls() const { return calls_; }
+    int  resets() const { return resets_; }
+    std::uint32_t eventsSeen() const { return eventsSeen_; }
+    const twProcessContext &lastCtx() const { return lastCtx_; }
+
+private:
+    twPluginIoLayout io_{};
+    std::uint32_t    rate_ = 48000, maxBlock_ = 4096, tail_ = 0;
+    double           level_ = 0.0, lastOnVelocity_ = 0.0;
+    int              notes_ = 0, calls_ = 0, resets_ = 0;
+    std::uint32_t    eventsSeen_ = 0;
+    twProcessContext lastCtx_{};
+};
+
+// A twEventSource over one hand-built note list, in the MODEL's MIDI domain
+// (velocity 0..127) — which is what a real feed carries and what the processor
+// has to normalize on its way to the ABI.
+class MockEventSource : public twEventSource {
+public:
+    struct Note {
+        std::int64_t start, duration;
+        std::int16_t key;
+        double       velocity;      // MIDI domain, 0..127
+    };
+
+    void add( std::int64_t start, std::int64_t dur, std::int16_t key, double vel )
+    {
+        notes_.push_back( { start, dur, key, vel } );
+    }
+
+    void collect( std::int64_t startPos, std::int64_t len,
+                  twEventBlock &out ) const override
+    {
+        out.clear();
+        if( len <= 0 ) return;
+        const std::int64_t end = startPos + len;
+        for( std::size_t i = 0; i < notes_.size(); ++i ) {
+            const Note &n = notes_[i];
+            const std::int64_t nEnd = n.start + n.duration;
+            // (a) the chase: already sounding at startPos
+            if( n.start < startPos && nEnd > startPos ) {
+                twHeldNote h;
+                h.key = n.key; h.channel = 0; h.velocity = n.velocity;
+                h.noteId = (std::int32_t)i; h.start = n.start;
+                h.duration = n.duration; h.srcIndex = (std::int64_t)i;
+                out.chase.notes.push_back( h );
+            }
+            // (b) the window's own events, at PAGE-RELATIVE times
+            if( n.start >= startPos && n.start < end ) {
+                twEvent e;
+                e.time = n.start - startPos;
+                e.kind = twEventKind::NoteOn;
+                e.channel = 0; e.key = n.key; e.noteId = (std::int32_t)i;
+                e.value = n.velocity;
+                out.events.push_back( e );
+            }
+            if( nEnd >= startPos && nEnd < end ) {
+                twEvent e;
+                e.time = nEnd - startPos;
+                e.kind = twEventKind::NoteOff;
+                e.channel = 0; e.key = n.key; e.noteId = (std::int32_t)i;
+                out.events.push_back( e );
+            }
+        }
+        out.chase.sortNotes();
+        out.sortEvents();
+    }
+
+private:
+    std::vector<Note> notes_;
+};
+
+// One processor over a MockGenerator, with planar in/out buffers the caller
+// owns. No twComponent, no page: render() is the seam under test.
+struct GenRig {
+    std::shared_ptr<twPluginSlotProcessor> proc;
+    MockGenerator                         *gen = nullptr;
+    std::shared_ptr<MockEventSource>       feed;
+};
+
+GenRig buildGenRig( tw303aEnvironment &env, int nChannels, int nOut )
+{
+    GenRig r;
+    MockGenerator **slot = new MockGenerator *( nullptr );
+    r.proc = std::make_shared<twPluginSlotProcessor>(
+        env,
+        [nOut, slot]() -> std::unique_ptr<twPlugin> {
+            MockGenerator *g = new MockGenerator( nOut );
+            *slot = g;
+            return std::unique_ptr<twPlugin>( g );
+        },
+        twPluginIoLayout{ 0, (std::uint16_t)nOut } );
+    r.proc->setChannelCount( (idx_t)nChannels );
+    r.gen = *slot;
+    delete slot;
+    r.feed = std::make_shared<MockEventSource>();
+    r.proc->setEventSource( r.feed );
+    return r;
+}
+
+// Render `len` frames at `pos`, summing `inLevel` in on every channel.
+std::vector<std::vector<float>> renderGen( twPluginSlotProcessor &proc, int nCh,
+                                           offset_t pos, length_t len,
+                                           float inLevel, int rate,
+                                           bool positional = true )
+{
+    std::vector<std::vector<float>> in( (std::size_t)nCh,
+                                        std::vector<float>( (std::size_t)len, inLevel ) );
+    std::vector<std::vector<float>> out( (std::size_t)nCh,
+                                         std::vector<float>( (std::size_t)len, -99.0f ) );
+    std::vector<const float *> inP( (std::size_t)nCh );
+    std::vector<float *>       outP( (std::size_t)nCh );
+    for( int c = 0; c < nCh; ++c ) {
+        inP[(std::size_t)c]  = in[(std::size_t)c].data();
+        outP[(std::size_t)c] = out[(std::size_t)c].data();
+    }
+    proc.render( inP.data(), outP.data(), len, pos, positional, rate );
+    return out;
+}
+
+}  // namespace
+
+static int testGeneratorSlot()
+{
+    std::cout << "=== P3b instrument slot: generator modes + continuity ===" << std::endl;
+
+    tw303aEnvironment env;
+    env.setSRate( 48000 );
+    const int rate = env.getSRate();
+
+    // --- the mapping rows --------------------------------------------------
+    {
+        GenRig r = buildGenRig( env, 2, 2 );
+        check( r.proc->mode() == twPluginSlotMode::DirectGen,
+               "0-in/2-out on 2 channels is DirectGen" );
+        check( r.proc->isGenerator(), "...and the slot knows it is a generator" );
+    }
+    {
+        GenRig r = buildGenRig( env, 2, 1 );
+        check( r.proc->mode() == twPluginSlotMode::MonoSpread,
+               "0-in/1-out on 2 channels is MonoSpread" );
+    }
+    {
+        GenRig r = buildGenRig( env, 1, 2 );
+        check( r.proc->mode() == twPluginSlotMode::GenFold,
+               "0-in/2-out on 1 channel is GenFold" );
+    }
+    {
+        GenRig r = buildGenRig( env, 2, 4 );
+        check( r.proc->mode() == twPluginSlotMode::WideGen,
+               "0-in/4-out on 2 channels is WideGen (the surplus is aux, P9)" );
+    }
+    {
+        // Narrower than the page but not mono: no defined spread, so refuse.
+        GenRig r = buildGenRig( env, 4, 2 );
+        check( r.proc->mode() == twPluginSlotMode::Transparent,
+               "0-in/2-out on 4 channels has no mapping" );
+        check( !r.proc->isGenerator(), "...and is not treated as a generator" );
+    }
+
+    // --- the pass-through sum, and its `x + 0.0f == x` corner --------------
+    {
+        GenRig r = buildGenRig( env, 2, 2 );
+        // No notes at all: the output must be the INPUT, bit for bit.
+        auto out = renderGen( *r.proc, 2, 0, 8192, 0.25f, rate );
+        bool exact = true;
+        for( int c = 0; c < 2; ++c )
+            for( std::size_t i = 0; i < 8192; ++i )
+                if( out[(std::size_t)c][i] != 0.25f ) exact = false;
+        check( exact, "an instrument with no notes passes its audio input through "
+                      "UNCHANGED (x + 0.0f == x)" );
+
+        // One note at velocity 127 -> 1.0 at the ABI -> level 1.0 on top.
+        r.feed->add( 0, 4096, 60, 127.0 );
+        r.proc->forgetContinuity();
+        out = renderGen( *r.proc, 2, 0, 8192, 0.25f, rate );
+        check( nearly( out[0][100], 1.25f, 1e-6 ),
+               "...and SUMS the generator onto it while a note sounds" );
+        check( nearly( out[1][100], 1.25f, 1e-6 ), "...on every channel" );
+        check( nearly( out[0][6000], 0.25f, 1e-6 ),
+               "...and only the input remains after the note-off" );
+    }
+
+    // --- MonoSpread puts the one voice on every channel --------------------
+    {
+        GenRig r = buildGenRig( env, 2, 1 );
+        r.feed->add( 0, 4096, 60, 127.0 );
+        auto out = renderGen( *r.proc, 2, 0, 4096, 0.0f, rate );
+        check( nearly( out[0][10], 1.0f, 1e-6 ) && nearly( out[1][10], 1.0f, 1e-6 ),
+               "MonoSpread writes the single voice to every page channel" );
+    }
+
+    // --- the MIDI -> ABI velocity domain -----------------------------------
+    {
+        GenRig r = buildGenRig( env, 2, 2 );
+        r.feed->add( 0, 4096, 60, 100.0 );      // the model's MIDI domain
+        auto out = renderGen( *r.proc, 2, 0, 4096, 0.0f, rate );
+        check( nearly( out[0][10], (float)( 100.0 / 127.0 ), 1e-6 ),
+               "velocity reaches the ABI NORMALIZED (100 -> 100/127)" );
+    }
+
+    // --- the transport context ---------------------------------------------
+    {
+        GenRig r = buildGenRig( env, 2, 2 );
+        twTempoMap map;
+        // 150, not 140: tempo is STORED as an integer microseconds-per-quarter
+        // (twTempoMap - SMF's own unit), so only a bpm that divides 6e7 exactly
+        // comes back exactly. 6e7/150 = 400000. A test that used 140 would be
+        // asserting the rounding, not the plumbing.
+        map.setBpm( 150.0 );
+        r.proc->setTempoMap( map, true );
+        renderGen( *r.proc, 2, 96000, 4096, 0.0f, rate );
+        const twProcessContext &ctx = r.gen->lastCtx();
+        check( ctx.has( twCtxPosition ), "the plugin is told WHERE it is" );
+        check( ctx.has( twCtxTempo ) && nearly( ctx.tempoBpm, 150.0, 1e-9 ),
+               "...and the project's tempo, because the host actually knows it" );
+        check( ctx.has( twCtxPpqPosition ), "...and the quarter-note position" );
+    }
+
+    // --- freeze-path only: the legacy pull renders silence ------------------
+    {
+        GenRig r = buildGenRig( env, 2, 2 );
+        r.feed->add( 0, 48000, 60, 127.0 );
+        auto out = renderGen( *r.proc, 2, 0, 4096, 0.25f, rate, /*positional=*/false );
+        check( out[0][10] == 0.0f,
+               "an instrument on the LEGACY PULL is silent by design "
+               "(SMARAGD_REVAL_WORKERS=0)" );
+    }
+
+    // --- continuity: a reposition rebuilds what a continuous run produced ---
+    {
+        // A note held from frame 0 to 200000. Render page 2 ([131072, 196608))
+        // two ways: continuously from 0, and cold. reset + chase(P-K) + pre-roll
+        // must land on the same audio.
+        GenRig cont = buildGenRig( env, 2, 2 );
+        cont.feed->add( 0, 200000, 60, 127.0 );
+        renderGen( *cont.proc, 2, 0, 65536, 0.0f, rate );
+        renderGen( *cont.proc, 2, 65536, 65536, 0.0f, rate );
+        auto a = renderGen( *cont.proc, 2, 131072, 65536, 0.0f, rate );
+        check( cont.gen->resets() == 1,
+               "a CONTIGUOUS run resets the plugin exactly once (at its start)" );
+
+        GenRig cold = buildGenRig( env, 2, 2 );
+        cold.feed->add( 0, 200000, 60, 127.0 );
+        auto b = renderGen( *cold.proc, 2, 131072, 65536, 0.0f, rate );
+        bool same = true;
+        for( std::size_t i = 0; i < 65536; ++i )
+            if( a[0][i] != b[0][i] ) same = false;
+        check( same, "a COLD page at 131072 is byte-identical to the continuous "
+                     "one: reset + chase + pre-roll rebuilt the held note" );
+        check( b[0][0] == a[0][0] && b[0][0] != 0.0f,
+               "...and the chased note is sounding from frame 0 of that page" );
+    }
+
+    // --- INSTRUMENT BYPASS IS SILENCE, NOT A SHORT-CIRCUIT ------------------
+    {
+        // A note over [0, 8192). Three CONTIGUOUS 4096-frame calls:
+        //   [0, 4096)      unbypassed  -> the note sounds
+        //   [4096, 8192)   BYPASSED    -> silent, but the note-off at 8192...
+        //   [8192, 12288)  unbypassed  -> ...must have been delivered, so silent
+        //
+        // A short-circuit bypass (return the input and skip process()) passes
+        // the first two and FAILS the third: the voice would still be held.
+        GenRig r = buildGenRig( env, 2, 2 );
+        r.feed->add( 0, 8192, 60, 127.0 );
+
+        auto a = renderGen( *r.proc, 2, 0, 4096, 0.0f, rate );
+        check( nearly( a[0][10], 1.0f, 1e-6 ), "the note sounds before the bypass" );
+
+        r.proc->setBypass( true );
+        auto b = renderGen( *r.proc, 2, 4096, 4096, 0.25f, rate );
+        check( nearly( b[0][10], 0.25f, 1e-6 ),
+               "a bypassed instrument contributes SILENCE - and still passes the "
+               "track's own audio through" );
+
+        r.proc->setBypass( false );
+        auto c = renderGen( *r.proc, 2, 8192, 4096, 0.0f, rate );
+        check( nearly( c[0][10], 0.0f, 1e-6 ),
+               "un-bypassing does NOT resurrect the voice: the note-off inside "
+               "the bypassed span was delivered" );
+        check( r.gen->resets() == 1,
+               "...and none of the three calls was a reposition" );
+    }
+
+    // --- forgetContinuity() is what the P3c barrier will call ---------------
+    {
+        GenRig r = buildGenRig( env, 2, 2 );
+        r.feed->add( 0, 200000, 60, 127.0 );
+        renderGen( *r.proc, 2, 0, 65536, 0.0f, rate );
+        const int before = r.gen->resets();
+        renderGen( *r.proc, 2, 65536, 65536, 0.0f, rate );
+        check( r.gen->resets() == before,
+               "a contiguous page does not reset" );
+        r.proc->forgetContinuity();
+        renderGen( *r.proc, 2, 131072, 65536, 0.0f, rate );
+        check( r.gen->resets() == before + 1,
+               "forgetContinuity() turns the next page into a reposition (D4)" );
+    }
+
+    return gFailures;
+}
+
 static int testEventAbi()
 {
     using namespace ev36;
@@ -1628,6 +2031,7 @@ int testPluginInsert()
     testChainAudio();
     testConcurrentSlotFreeze();
     testEventAbi();
+    testGeneratorSlot();
 #ifdef TW_TESTCLAP_PATH
     testClapBackend();
 #else

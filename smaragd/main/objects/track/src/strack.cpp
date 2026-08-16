@@ -191,6 +191,36 @@ std::shared_ptr<twEventMerge> STrack::eventFeed()
     return eventFeed_;
 }
 
+// Design 4.3: the instrument reads the track's FEED through a twEventSource
+// pointer, and the feed is 3.2.1's merge - this track's own event clips plus
+// the feeds of every child that bubbles up. Slot 0 gets it; every other slot
+// has it taken away, so a demoted slot cannot keep sounding notes.
+void STrack::syncInstrumentSlot()
+{
+    if( !cpPluginChain_ ) return;
+    SPluginSlot *instr = instrumentSlot();
+    const int n = cpPluginChain_->getSlotCount();
+    for( int i = 0; i < n; ++i ) {
+        SPluginSlot *slot = cpPluginChain_->getSlotAt( i );
+        if( !slot ) continue;
+        if( slot == instr ) {
+            slot->setEventSource( eventFeed() );
+            if( SProject *p = getProjectSafe() ) slot->setTempoMap( p->tempoMap() );
+        } else {
+            slot->setEventSource( nullptr );
+        }
+    }
+}
+
+void STrack::refreshInstrumentFeed()
+{
+    // Guarded, so a project with no instrument anywhere pays nothing for this
+    // on an ordinary clip edit: instrumentSlot() is two pointer hops.
+    if( !instrumentSlot() ) return;
+    // The processor already holds the merge OBJECT; this rebuilds its sources.
+    eventFeed();
+}
+
 QWidget *STrack::getDetailEditWidget( QWidget * )
 {
     return NULL;
@@ -218,9 +248,42 @@ bool STrack::hasDuration() const
     return true;
 }
 
+// The end of the last EVENT material reaching this track's feed. Own Event
+// children plus the same question of every child that bubbles up - the same
+// walk eventFeed() makes, minus the mute/solo resolution: the PROJECT END must
+// not shrink because a lane happens to be muted right now.
+offset_t STrack::eventEndTime() const
+{
+    offset_t end = 0;
+    for( SLink *lk : childLinks() ) {
+        if( !lk ) continue;
+        SObject &obj = lk->getSObject();
+        if( STrack *child = dynamic_cast<STrack *>( &obj ) ) {
+            if( !child->bubblesEventsUp() ) continue;
+            const offset_t childEnd = child->eventEndTime();
+            if( childEnd <= 0 ) continue;
+            const offset_t at = ( lk->hasStartTime() ? lk->getStartTime() : 0 ) + childEnd;
+            if( at > end ) end = at;
+            continue;
+        }
+        if( obj.contentKind() != SContentKind::Event ) continue;
+        if( !lk->hasStartTime() ) continue;
+        const offset_t at = lk->getStartTime()
+                          + ( obj.hasDuration() ? (offset_t)obj.getDuration() : 0 );
+        if( at > end ) end = at;
+    }
+    return end;
+}
+
 /**
  * We define a track's duration as the ending point of the last terminated event,
  * otherwise 1.
+ *
+ * PROPOSAL 37 P3b adds the instrument's TAIL (design 3.1): the project end of a
+ * track whose slot 0 is an instrument is `last event clip end + tailFrames()`,
+ * because the notes stop at the clip end and the sound does not. The tail is
+ * added to the EVENT extent only - an audio clip must not gain a synth release,
+ * and the max with the audio extent below keeps a longer audio clip winning.
  */
 length_t STrack::getDuration() const
 {
@@ -229,6 +292,15 @@ length_t STrack::getDuration() const
         int nUndefStart, nUndefDuration;
         getChildrenExtent( first, last, nUndefStart, nUndefDuration );
 	//	qWarning( "STrack::getDuration(): last = %d.\n", (int) last );
+        if( SPluginSlot *slot = instrumentSlot() ) {
+            const offset_t evEnd = eventEndTime();
+            // tailFrames() never materializes a plugin (see SPluginSlot): this
+            // runs from getChildrenExtent(), which a render can reach.
+            if( evEnd > 0 ) {
+                const offset_t withTail = evEnd + (offset_t)slot->tailFrames();
+                if( withTail > last ) last = withTail;
+            }
+        }
         if( last>0 ) {
             lastDuration_ = last;
         } else {
@@ -255,6 +327,10 @@ int STrack::seekTo( offset_t ofs )
 
 void STrack::bumpRenderChainEpoch()
 {
+    // Every model change that reaches this track passes through here on the
+    // MAIN thread, which is the one place the feed's source list can be rebuilt
+    // safely (see refreshInstrumentFeed).
+    refreshInstrumentFeed();
     if( cpTrackMix_ )
         cpTrackMix_->bumpContentEpoch();
     if( cpDspChain_ )
@@ -269,6 +345,7 @@ void STrack::bumpRenderChainEpoch()
 // speaks the same timeline positions, so one range fits all of them.
 void STrack::bumpRenderChainEpochRange( offset_t start, offset_t end )
 {
+    refreshInstrumentFeed();
     if( cpTrackMix_ )
         cpTrackMix_->invalidatePagesInRange(start, end);
     if( cpDspChain_ )
@@ -964,6 +1041,10 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
         if( cpDspChain_ ) {
             cpDspChain_->addPlugin( insert );
         }
+        // Slot 0 may just have become (or stopped being) the instrument.
+        syncInstrumentSlot();
+        // The project end moves with the instrument's tail (design 3.1).
+        lastDurationValid_ = false;
         invalidateRenderPath();
     }
 }
@@ -983,11 +1064,19 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
     if( cpDspChain_ ) {
         cpDspChain_->removePlugin( slot.peekInsert() );
     }
+    // Take the feed away from the slot that is leaving, and hand it to whatever
+    // slot 0 is now. A departing instrument must not keep a live source.
+    slot.setEventSource( nullptr );
+    syncInstrumentSlot();
+    lastDurationValid_ = false;
     invalidateRenderPath();
 }
 
 void STrack::onPluginSlotAudioInvalidated()
 {
+    // A parameter edit can move tailFrames() (the 303's Decay knob does), and
+    // with it the project end of an instrument track.
+    lastDurationValid_ = false;
     // Exactly what the insert/remove/reorder handlers do: bumpRenderChainEpoch()
     // on us (the twTrackMix + twPluginChain + the rewire) and on every
     // container above us, via the root's walk.
@@ -1003,6 +1092,7 @@ void STrack::onPluginSlotsReordered( int fromIndex, int toIndex )
     if( cpDspChain_ ) {
         cpDspChain_->reorderPlugin( fromIndex, toIndex );
     }
+    syncInstrumentSlot();
     invalidateRenderPath();
 }
 
@@ -1068,8 +1158,12 @@ void STrack::applyChildTrackAudibility()
     // chain above us has to be staled the same way, or the summed pages we
     // already froze keep serving the pre-edit mix (AC6 / the mute precedent).
     if( !affected.empty() ) {
-        invalidateRenderPathRange( (offset_t) affected.start,
-                                   (offset_t) affected.end );
+        // A muted lane stops contributing EVENTS as well as audio (3.2.1), and
+        // an instrument is a class-1 consumer - a change at `a` can be heard at
+        // any later position - so the range is open-ended when we hold one.
+        const offset_t end = instrumentSlot() ? EVENT_DIRTY_END
+                                              : (offset_t) affected.end;
+        invalidateRenderPathRange( (offset_t) affected.start, end );
     }
 }
 

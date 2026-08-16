@@ -73,4 +73,46 @@ private:
     int           expectValueRow_ = 0;
 };
 
+// assert-instrument-slot — the MODEL side of the instrument slot (proposal 37
+// P3b). Nothing here builds a widget: it asks STrack::instrumentSlot() the same
+// question the engine, the head glyph and the FX strip all ask, so a case can
+// pin "this track has an instrument, it is THIS one, and the processor mapped
+// it THIS way" without going through a render.
+//
+//   trackPath  = ""      index-path from the root mixer ("2", "0,1")
+//   trackIndex = "0"     legacy top-level index, used when trackPath is absent
+//   present    = "1"     0 asserts there is NO instrument on the track
+//   uid        = ""      the stored descriptor's uid, when given
+//   format     = ""      the stored descriptor's format, when given
+//   mode       = ""      the processor's channel mapping: DirectGen /
+//                        MonoSpread / GenFold / WideGen (or Transparent for a
+//                        layout with no defined spread)
+//   state      = ""      Active / Missing / Unsupported
+//   minTailFrames = "-1" if >= 0, twPlugin::tailFrames() must be at least this
+//   maxTailFrames = "-1" if >= 0, it must be at most this
+//   hasFeed    = "-1"    if >= 0, whether the processor holds an event source —
+//                        the one thing that decides whether notes reach it
+class SAssertInstrumentSlotAction : public SAction {
+public:
+    QString name() const override
+    {
+        return QStringLiteral( "assert-instrument-slot" );
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_;
+    int     trackIndex_ = 0;
+    int     present_    = 1;
+    QString uid_;
+    QString format_;
+    QString mode_;
+    QString state_;
+    long long minTailFrames_ = -1;
+    long long maxTailFrames_ = -1;
+    int       hasFeed_       = -1;
+};
+
 #endif  // SPLUGINUITESTACTIONS_H

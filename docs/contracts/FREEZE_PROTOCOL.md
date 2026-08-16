@@ -81,6 +81,48 @@ seek a live component — app/model/CONTRACT.md inv. 9). A page the component
 cannot produce reads as silence; the preview never waits and never declares a
 demand.
 
+## Class-1 consumers: an instrument is not "reset and carry on"
+
+Proposal 19's execution-class analysis calls a component CLASS 1 when its DSP
+state at a position depends on material that is not in the page being rendered.
+An effect is class 1 in a mild way — a reverb tail, a filter's poles — and its
+answer to a discontinuity has always been the one above: `reset()`, then render
+what the page's own input gives.
+
+An INSTRUMENT (proposal 37 P3b: `twPluginSlotProcessor` in a generator mode) is
+class 1 in a way that reset alone cannot serve, because the note sounding at P
+had its note-on pages ago and there is no upstream page to read it from — the
+note lives in MODEL data (a `twEventSource`), not in the dataflow. A page whose
+`startPos` is not the processor's `lastEnd_` therefore runs the full D4
+protocol instead:
+
+    reset()                       all notes off
+    chase stateAt(P - K)          held notes + every controller that shaped them,
+                                  as events at offset 0
+    pre-roll K frames             the real events at their real offsets, OUTPUT
+                                  DISCARDED
+    render the page               without ever re-issuing the page's own chase
+
+    K = min( max(4096, tailFrames(), P - start(earliest note held at P)), 4 s )
+
+Three things follow, and they matter to anyone touching the scheduler:
+
+- **No new plan.** An instrument needs no upstream page for its pre-roll, so it
+  needs no `planPage` override (plugins inv. 14 stands). The pre-roll is
+  entirely inside one `freezePage`.
+- **Every instrument page is a pure function** of its position and the feed.
+  Out-of-order freezing, a re-render after an invalidation and a cold first
+  page all produce the same bytes — which is what lets an event edit be gated
+  by a byte compare of the region before it (`instrument_edit_reaches_render`).
+- **An epoch bump does not clear `lastEnd_`.** Only a rebuild, a rate change
+  and `forgetContinuity()` do. The RUN BARRIER of design D4 (built in P3c) is
+  what calls the last of those: without it a render whose first page starts
+  exactly where a previous run stopped would CONTINUE that run's voices.
+
+The cost is real: `K` grows with P for a long held note, and a page is a
+reposition whenever it is not contiguous. It is bounded at four seconds and is
+recorded as known debt in `tw303a/plugins/CONTRACT.md`.
+
 ## Preview variant
 
 `freezePreviewPage(startPos, length, previewRate, fullRate, prev)` renders

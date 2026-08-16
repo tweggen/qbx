@@ -87,6 +87,20 @@ Invariants:
    FAIL as well as pass, in each of its three shapes — size, content, missing
    reference — which is what file_identical_gate.qxa does; a gate never seen to
    fail is not known to be a gate.
+9b. INSTRUMENTS ARE SILENT UNDER SMARAGD_REVAL_WORKERS=0, BY DESIGN (proposal
+   37 P3b). `0` disables the revalidator and every consumer falls back to the
+   LEGACY PULL, which is positionless — and an instrument cannot place a single
+   event without a position, so `twPluginSlotProcessor::render(positional=false)`
+   answers silence and logs once (`tw303a/plugins/CONTRACT.md` inv. 42). Two
+   consequences for a case author:
+     - an instrument case must never be run at worker count 0, and the race
+       sweeps for `instrument_*` are over {1,4,8,16};
+     - a verb that drives the legacy pull (assert-meter) reads SILENCE on an
+       instrument track and is therefore not a way to measure one; use a render
+       plus assert-audio-energy / assert-audio-frequency.
+   `assert-instrument-slot` itself asks the MODEL and needs no render at all, so
+   it works at any worker count including 0.
+
 9. report-page-memory REPORTS; it does not gate. Resident page count is a
    function of the readahead, the worker count and scheduler timing, so a bound
    tight enough to catch a regression would flake. render_duration_and_pages.qxa

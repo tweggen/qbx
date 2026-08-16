@@ -56,6 +56,10 @@ public:
     //   reload=0|tooltip=<row tooltip>
     QString describeSlot( int slotIndex ) const;
 
+    // Is there an "Add Instrument" affordance right now? It is hidden once the
+    // track has an instrument, because a second one is refused.
+    bool addInstrumentEnabled() const;
+
     // Drive the parameter editor for `slotIndex` the way a user drag does, WITHOUT
     // showing a window (a qxa run on Windows uses the real platform plugin, and a
     // test must never pop a dialog onto the user's screen or steal focus).
@@ -69,6 +73,10 @@ public:
 
 protected slots:
     void onAddPluginClicked();
+    // The instrument half of Add (proposal 37 6.1): the same browser, opened on
+    // the Instruments filter, and the same insert-plugin action - which is what
+    // puts the slot at index 0 and refuses a second one (design D3).
+    void onAddInstrumentClicked();
     void onRemovePluginClicked( int slotIndex );
     void onPluginBypassToggled( int slotIndex, bool bypassed );
     void onReloadPluginClicked( int slotIndex );
@@ -106,6 +114,7 @@ private:
     STrack       *track_;
     SPluginChain *pluginChain_;
     QVBoxLayout  *pluginsLayout_;
+    QPushButton  *addInstrumentBtn_ = nullptr;
     std::vector<PluginWidget> pluginWidgets_;
     int dragSourceIndex_ = -1;
 

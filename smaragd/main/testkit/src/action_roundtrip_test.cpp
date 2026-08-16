@@ -120,6 +120,13 @@ const Fixture kFixtures[] = {
       " uid='tw.test.clap.stereoskew' name='Skew' vendor='Smaragd'"
       " path='twtestclap.clap' nIn='2' nOut='2'"
       " state='VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA'/>" },
+    // The INSTRUMENT flag (proposal 37 P3b) is written only when true, so it
+    // needs a fixture of its own: the effect row above cannot cover an
+    // attribute it correctly never emits.
+    { "insert-plugin",
+      "<insert-plugin trackPath='0' slotIndex='0' format='clap'"
+      " uid='tw.test.clap.sine' name='Sine' vendor='Smaragd'"
+      " path='twtestclap.clap' nIn='0' nOut='2' isInstrument='true'/>" },
     { "remove-plugin",
       "<remove-plugin trackPath='0' slotIndex='1' format='clap'"
       " uid='tw.test.clap.stereoskew' name='Skew' vendor='Smaragd'"
@@ -166,6 +173,12 @@ const Fixture kFixtures[] = {
     { "plugin-editor-set-param",
       "<plugin-editor-set-param trackIndex='0' slotIndex='0' paramId='1'"
       " value='0.25'/>" },
+
+    // --- the P3b instrument verb -------------------------------------------
+    { "assert-instrument-slot",
+      "<assert-instrument-slot trackPath='0,1' trackIndex='0' present='1'"
+      " uid='tw.native.303' format='tw' mode='MonoSpread' state='Active'"
+      " minTailFrames='24000' maxTailFrames='24000' hasFeed='1'/>" },
 
     // --- the multi-track selection verbs ------------------------------------
     // Two-level paths and a modifier COMBINATION deliberately: the modifier

@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_slot_rules">
+
+  <!-- Proposal 37 P3b, AC6 + AC7: THE SLOT RULES AND THE PROJECT END.
+
+       AC6 - "an instrument is a slot with a role" (design D3) only holds while
+       the role and the POSITION agree, so three rules are enforced by the
+       actions rather than by convention:
+
+         - an instrument descriptor lands in slot 0, whatever slotIndex says;
+         - a SECOND instrument is REFUSED (there is one event feed per track, so
+           a second one would either duplicate every note or silently take none);
+         - reorder-plugin across slot 0 is REFUSED, in both directions.
+
+       And the head/strip glyphs are DERIVED from the descriptor, never stored:
+       the FX strip's row 0 says kind=instrument and the arranger head shows its
+       "I" button, both from `slot->getDescriptor().isInstrument`.
+
+       AC7 - the project end of an instrument track is "last event clip end +
+       tailFrames()" (design 3.1): the notes stop at the clip end and the SOUND
+       does not. `tw.native.303` reports its filter DECAY as its tail, so
+       setting Decay (param id 3) to 0.5 s makes tailFrames() exactly 24000 at
+       48 kHz. With the last MIDI clip ending at 3 s the render - which takes
+       its length from the arrangement when no durationSec is given - must be
+       3.5 s, i.e. 168000 frames exactly. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- ==================== slot 0 is the instrument ==================== -->
+    <!-- Deliberately asks for slot 3 on an empty chain: the action puts it at
+         0 anyway. -->
+    <insert-plugin trackPath="0" slotIndex="3"
+                   format="tw" uid="tw.native.303"
+                   name="Smaragd 303" vendor="Smaragd"
+                   path="" nIn="0" nOut="1" isInstrument="true"/>
+    <assert-instrument-slot trackPath="0" present="1" uid="tw.native.303"
+                            mode="MonoSpread" state="Active" hasFeed="1"/>
+    <assert-plugin-strip trackPath="0" slotCount="1" slotIndex="0"
+                         contains="kind=instrument"/>
+    <!-- The arranger head's "I" glyph is on, and it is derived: nothing was
+         told about it. 720 px of head is Full density, which is where the
+         second button pair lives (proposal 37 6.1). -->
+    <assert-track-head trackPath="0" headHeight="720" contains="I=1"/>
+
+    <!-- ==================== a second one is refused ===================== -->
+    <insert-plugin trackPath="0" slotIndex="1"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true" expectReject="true"/>
+    <assert-plugin-strip trackPath="0" slotCount="1"/>
+    <assert-instrument-slot trackPath="0" present="1" uid="tw.native.303"/>
+
+    <!-- =============== an effect lands AFTER it, never before ============ -->
+    <!-- Asks for slot 0; gets slot 1, because nothing may come in front of the
+         instrument. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <assert-plugin-strip trackPath="0" slotCount="2" slotIndex="0"
+                         contains="kind=instrument"/>
+    <assert-plugin-strip trackPath="0" slotIndex="1" contains="kind=effect"/>
+
+    <!-- ================ reorder across slot 0 is refused ================= -->
+    <reorder-plugin trackPath="0" fromIndex="1" toIndex="0" expectReject="true"/>
+    <reorder-plugin trackPath="0" fromIndex="0" toIndex="1" expectReject="true"/>
+    <assert-plugin-strip trackPath="0" slotIndex="0" contains="kind=instrument"/>
+
+    <!-- ============ undo of the FIRST insert removes the row ============= -->
+    <!-- Two undos: the effect insert, then the instrument insert. (The two
+         REFUSED actions above entered no undo stack - a rejected action has no
+         inverse.) -->
+    <undo count="2"/>
+    <assert-plugin-strip trackPath="0" slotCount="0"/>
+    <assert-instrument-slot trackPath="0" present="0"/>
+    <assert-track-head trackPath="0" headHeight="720" contains="I=0"/>
+
+    <!-- ==================== AC7: the project end ======================== -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.303"
+                   name="Smaragd 303" vendor="Smaragd"
+                   path="" nIn="0" nOut="1" isInstrument="true"/>
+    <!-- Decay = 0.5 s -> tailFrames() = 0.5 * 48000 = 24000. -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="3" value="0.5"/>
+    <assert-instrument-slot trackPath="0" present="1"
+                            minTailFrames="24000" maxTailFrames="24000"/>
+
+    <!-- The last MIDI clip ends at 3 s (5760 ticks at 120 BPM / ppq 960). -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="5760" name="Three"/>
+    <add-note clip="0,0" tick="3840" dur="1920" key="60" velocity="100" channel="0"/>
+
+    <!-- No durationSec: the ARRANGEMENT decides, and it must say 3.5 s. -->
+    <render filename="isl_end.wav" format="wav" quality="10"/>
+    <assert-audio-length filename="isl_end.wav" minFrames="168000" maxFrames="168000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
