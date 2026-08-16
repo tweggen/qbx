@@ -115,8 +115,11 @@ public:
     // lanes here as ordinary clip entries.
     twEditRange setClipMuted(const void *key, bool muted);
 
-    // Track intrinsic gain — applied to all output. Unlike mute this IS a
-    // property of the track's own output, so a capture of the track includes it.
+    // RETIRED BY PROPOSAL 37 P3a (D5) — A NO-OP, kept until P5 deletes it and
+    // trackGainDb_ together. The fader is twGainStage, POST-FX, between the
+    // plugin chain and the rewire; applying it here would put it ahead of the
+    // inserts, which is exactly the order the proposal moved away from. See the
+    // definition in twtrackmix.cc.
     void setTrackGain(double gainDb);
 
     // --- Page width (proposal 36 §4.2 / B4) -------------------------------

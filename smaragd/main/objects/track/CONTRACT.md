@@ -62,7 +62,22 @@ Invariants (normative detail: CLIP_MODEL.md):
    channel-mismatch mapping — then one insert per slot appended to the track's
    twPluginChain in slot order.
 
-9. A TRACK IS ONE twTrackMix + ONE twPluginChain + ONE twRewire, N CHANNELS
+8b. VOLUME REACHES THE POST-FX GAIN STAGE, MUTE STAYS STRUCTURAL (proposal 37
+   P3a / D5). onTrackVolumeChanged() targets cpGainStage_, the twGainStage
+   STrack wires between cpDspChain_ and cpRewire_, so the fader is applied AFTER
+   the inserts; twTrackMix::setTrackGain is a no-op until P5 deletes it. The
+   gain stage is part of the render chain like any other component:
+   setChannels() sets its width, bumpRenderChainEpoch()/…Range() must include
+   it, and ~STrack drops it. Missing it from either bump makes a fader change
+   inaudible until some unrelated edit invalidates.
+   MUTE IS NOT ROUTED THERE. onTrackMuteChanged/solo keep nulling the parent's
+   input plug (twMixer) and skipping the clip entry (twTrackMix, for folder
+   lanes), because mute belongs to the summing CHANNEL — an asset windowing a
+   muted track must still capture its material. twGainStage HAS a ramped audio
+   mute; nothing calls it until P5's `self:Muted` lane does.
+
+9. A TRACK IS ONE twTrackMix + ONE twPluginChain + ONE twGainStage + ONE
+   twRewire, N CHANNELS
    WIDE, AND N IS THE PROJECT'S (proposal 36 B4). It used to be N parallel
    width-1 twTrackMix + twPluginChain pairs, one per "bus", built by
    setNBusses() — which could only GROW (a shrink was Q_ASSERT_X( false, ... ),

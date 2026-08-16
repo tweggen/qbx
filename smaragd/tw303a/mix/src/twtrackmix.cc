@@ -265,13 +265,21 @@ twEditRange twTrackMix::setClipMuted(const void *key, bool muted)
     return r;
 }
 
-void twTrackMix::setTrackGain(double gainDb)
+// FORCED TO 0 dB SINCE PROPOSAL 37 P3a (D5): THE FADER MOVED POST-FX.
+//
+// It is now twGainStage, which STrack wires between the plugin chain and the
+// rewire; twTrackMix's own scalar would apply BEFORE the inserts, which is the
+// order the proposal retired (an instrument's output must be under the fader,
+// and post-insert faders are what every reference DAW does).
+//
+// The setter is kept, and kept a NO-OP, deliberately: P5 removes both it and
+// trackGainDb_ together with the rest of the pre-FX gain path, and until then a
+// call that silently re-introduced a pre-FX multiply would be far worse than
+// one that does nothing. trackGainDb_ therefore stays 0.0 for the process'
+// lifetime, so the `factor != 1.0` guards in freezePage_nolock and
+// calcOutputTo never fire and no arithmetic touches the samples at all.
+void twTrackMix::setTrackGain(double /*gainDb*/)
 {
-    std::lock_guard<std::mutex> lock(mutex());
-    if( trackGainDb_ != gainDb ) {
-        trackGainDb_ = gainDb;
-        bumpContentEpoch();  // Gain is baked into frozen pages
-    }
 }
 
 // Proposal 36 B4. A twTrackMix caches no pages of its own (freezePage allocates

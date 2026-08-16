@@ -99,13 +99,23 @@ Invariants:
   about (`requestPage` — legal off the RT thread, deduped, the same call the
   offline render makes) and runs the production twLevelProbe. That keeps it
   deterministic under SMARAGD_REVAL_WORKERS=0 and independent of
-  toggle-playback, which segfaults in scripts. CAVEAT: it drives the LEGACY
-  PULL path, where twStreamingLatch::copyData gates on the twPluginChain's
-  content epoch — which STrack::invalidateRenderPath() does not reach. So a
-  track's gain must be set BEFORE the position is first probed; changing it
-  afterwards is not observed here (playback and render both see it, because
-  they go through the scheduler). meter_postfader.qxa therefore uses two tracks
-  at different gains rather than changing one track's gain twice.
+  toggle-playback, which segfaults in scripts. It drives the LEGACY PULL path,
+  which is what the following used to say, and no longer does:
+
+      CAVEAT (RETIRED by proposal 37 P3a): twStreamingLatch::copyData gates on
+      the twPluginChain's content epoch, which STrack::invalidateRenderPath()
+      does not reach, so a track's gain had to be set BEFORE the position was
+      first probed — meter_postfader.qxa uses two tracks at two gains for
+      exactly that reason.
+
+  The fader is now twGainStage, sitting between the chain and the rewire, so the
+  epoch the rewire's cached input page is gated on IS the one set-track-volume
+  bumps: a gain change after a position was frozen is observed here. Gate:
+  meter_gain_after_probe.qxa, which probes, sets the gain, and probes the same
+  position again. (Measured honestly: that case also passes on the pre-move
+  binary at the 36-B4 integration tip, so the caveat was already inert there —
+  P3a is what makes it structurally impossible rather than accidentally absent.)
+  meter_postfader.qxa keeps its two-track shape; it is a good case regardless.
 
   assert-file-identical is the byte-`cmp` determinism gate, inside a case.
   Until it existed that compare could only be run by hand from a shell, so no

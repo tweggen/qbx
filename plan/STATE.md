@@ -10916,3 +10916,147 @@ rows. Nothing in the proposal-37 code needed adapting. Gate: build clean, layeri
 logging clean; `ctest -j4` run 1: 147/148 (`clip_properties_actions` SEGFAULT after
 PASS — the known dangling-`SLink` teardown family; 5/5 in isolation), run 2:
 **148/148 in 211 s** (151 registered, 3 `au_*` disabled). P3a started.
+## 2026-08-16 — Proposal 37 P3a: fader post-FX (twGainStage)
+
+The track fader moved out of `twTrackMix` (pre-FX, design F6) into a new
+`twGainStage` between the plugin chain and the rewire (design D5 / §4.5). A
+track's chain is now
+
+    twTrackMix(N) -> twPluginChain(N) -> twGainStage(N) -> twRewire(N)
+
+so an insert sees the UNFADED signal — which is what an instrument's output
+needs in P3b, and what every reference DAW does.
+
+**What landed.** `tw/mix/twgainstage.{h,cc}`: one wide component per track,
+1 port in / 1 port out, scalar `gainDb` in `sfadercurve.h`'s dB, and a ramped
+audio mute. Both render paths are implemented — `renderPageWide()` (the
+authoritative wide render: one `fetchInputPage`, one pass, every channel scaled
+with §4.4's clamp) and `calcOutputTo()`, which is the legacy streaming pull AND,
+through the base `renderFrames()`, the width-1 render. Class ∞ and PURE: a
+frame's output is a function of that frame's input, the scalar and the frame's
+POSITION, so `reset()` is empty and range invalidation over it is exact.
+`teardown()` cascades upstream, because `twRewire::teardown()` reaching the
+chain is how a track's graph is torn down and the new component stands in that
+path. App side: `STrack::setChannels()` builds and wires it and follows the
+track's width, `onTrackVolumeChanged()` targets it, and it is in
+`bumpRenderChainEpoch()`, `bumpRenderChainEpochRange()` and `~STrack`.
+`twTrackMix::setTrackGain()` is now a NO-OP (kept, with a comment, until P5
+deletes it and `trackGainDb_` together), so the `factor != 1.0` guards it fed
+can never fire.
+
+**AT 0 dB THE STAGE DOES NO ARITHMETIC AT ALL** — the render is a copy. That is
+the byte-identity argument, and it is why the fader move is gated by a closed
+form rather than by a `cmp`.
+
+**AC1 — goldens byte-identical, verified rather than asserted.** The claim "no
+golden combines a non-unity fader with a plugin" was checked by reading the
+fixture projects: every `volume=` attribute in `tests/goldens/mc_mono.qxp` and
+`mc_stereo.qxp` is `'0'` (23 occurrences each, across `STrack`, `SCut`,
+`SPluginChain`, `SPluginSlot`, `SStdMixer`, `SPlainWave`), and neither
+`mc_golden_*.qxa` nor `tools/gen_mc_corpus.qxa` ever calls `set-track-volume`.
+`qxa.mc_golden_mono` and `qxa.mc_golden_stereo` (which `assert-file-identical`
+against the committed WAVs) pass. Widened beyond the brief: the 10 fader/mute/
+plugin-sensitive cases — `volume_nested_track`, `grain_with_volume_control`,
+`mute_silences_track`, `mute_nested_track`, `mute_invalidates_cache`,
+`mute_survives_reload`, `solo_nested_track`, `asset_over_muted_container`,
+`render_sawtooth_with_effects`, `plugin_stereo_chain` — were rendered on a
+binary built from the branch tip WITHOUT the change and again with it: **20/20
+rendered WAVs `cmp`-identical, 0 differing.** Two of those carry a NON-UNITY
+fader, which is the interesting case: pre-move the trackmix computed `sum × g`,
+post-move the gain stage computes `sum × g` one component later — the same IEEE
+operation on the same values. A fader AND a plugin together would NOT be
+byte-safe (`(a*g)*p` and `(a*p)*g` may differ in the last bit); no golden and no
+existing case has that combination.
+
+**AC2 — new `qxa.fader_post_fx`, both halves green.**
+- (a) VALUE, on `../test_sawtooth.wav`: `set-track-volume -6.0206` +
+  `tw.test.clap.gain` gain 2.0 → first-second RMS **0.0666501** against the
+  unprocessed 0.066650 (±1 % band [0.06598, 0.06732]); bypassed → **0.0333249**
+  against 0.033325 (band [0.03293, 0.03372]); undo restores it. `assert-meter`
+  at 0.5 s reads 0.0589-ish through a ±15 % band around the raw window RMS
+  0.058928, which passes only if BOTH the fader and the insert are in the metered
+  path (the insert alone would read 0.1179, the fader alone 0.0295).
+- (b) ORDER, on a NEW committed fixture `tests/test_clipsaw.wav` (2.0 s, 48 kHz,
+  16-bit, a 100 Hz sawtooth of amplitude 0.95 — 480 samples per period, so every
+  one-second window has the same RMS; generator committed as
+  `tests/tools/gen_clip_fixture.py`). Fader -6.0206 dB + `tw.test.clap.gain` at
+  gain 1.0 with **`Clip Threshold` param id 2 = 0.5**. Closed forms computed from
+  the fixture's own samples: unprocessed RMS 0.548468, peak 0.949982; pre-FX
+  order (fader first, threshold never reached at peak 0.475) **0.274234**;
+  post-FX order (clip then halve) **0.201419**. The case asserts ±1 % around
+  0.201419, i.e. [0.19940, 0.20344].
+  **PRE-MOVE VERIFICATION (done once, as required):** the branch-tip source was
+  stashed, `./build.sh` rebuilt the base binary, and `fader_post_fx.qxa` was run
+  on it. Result: assertion #13 (and #18) **FAILED with exactly 0.274234**, the
+  predicted pre-FX value, while both VALUE assertions passed (0.0666501 /
+  0.0333249) — the linear product commutes, the clipper does not. The stash was
+  then popped and the tree rebuilt.
+
+**AC3 — the `assert-meter` workaround is gone.** New `qxa.meter_gain_after_probe`
+probes position 168000, THEN sets the gain, then probes the SAME position again
+and requires the new level (bands 0.300–0.510 at unity, 0.150–0.255 at
+-6.02 dB, from `meter_postfader.qxa` so the two are comparable); it goes back up
+and asserts unity again, and asserts the undo. `meter_levels`, `meter_postfader`
+and every other `assert-meter`-driven case are green.
+**REPORTED HONESTLY:** the new case also PASSES on the pre-move binary at this
+integration tip. So the "the legacy pull does not observe a gain change made
+after a position was first frozen" caveat (CLAUDE.md, `smetertestactions.cpp`,
+`testkit/CONTRACT.md`) was already inert here — 36-B4's collapse to one wide
+chain, and `STrack::bumpRenderChainEpoch()` already bumping `cpDspChain_`, had
+removed the mechanism. P3a is what makes it structurally impossible rather than
+accidentally absent: the rewire's producer is now the component `set-track-volume`
+writes. All three documents were rewritten to say that, with the retired text
+quoted rather than deleted. No stale-epoch gating was found anywhere else; one
+thing that looked like it was not — `<undo count="1"/>` after two consecutive
+`set-track-volume` actions undoes BOTH, because they share a `mergeKey` and the
+action system coalesced them. Correct behaviour; written into the case.
+
+**AC4 — mute unchanged.** `set-track-mute` still nulls the plug: nothing in the
+app calls `twGainStage::setMuted()`. `mute_silences_track`, `mute_nested_track`,
+`mute_invalidates_cache`, `mute_survives_reload`, `solo_nested_track`,
+`asset_over_muted_container` and `group_nested_track` are green, and a four-render
+script that toggles mute between renders spanning page boundaries (two tracks,
+the second starting exactly at frame 65536, 5 s renders) is **`cmp`-identical
+pre- vs post-move on all four WAVs**.
+
+**Standing gate.** `./build.sh` clean; `tools/check_layering.py` and
+`tools/check_logging.py` clean; **`ctest -j4`: 150/150 run passed in 138 s, 153
+registered, 3 `au_*` disabled off macOS** — reconciled: 125 `.qxa` files on disk
+(123 at HEAD + the 2 added here), 151 registered before, 153 after. **No flakes
+at all in that run** — the known `clip_properties_actions` / `split_plain_screenshot`
+teardown-segfault family did not appear.
+
+**Flake sweep.** `repeat_test.sh` over `SMARAGD_REVAL_WORKERS` {1, 4, 8, 16}:
+`fader_post_fx` 10/10 and `meter_gain_after_probe` 20/20 at every worker count —
+**120/120, and `deterministic: PASS` on all eight sweeps** (the script also
+byte-compares the outputs across runs). The full suite was run twice at `-j4`
+(150/150 in 138 s and in 133 s) with no failure and no teardown crash in either.
+
+**`mix_test` gained a `twGainStage` block** (7 assertions), because the qxa
+cases cannot see any of it: 0 dB is BIT-EXACT on every channel; `setGainDb`
+produces the exact float product and stales the page rendered at the old gain;
+an unanchored mute is silence; a page entirely before the mute anchor is
+untouched EVEN WHEN RENDERED AFTER the page holding the ramp (the
+position-determinism that makes the component class ∞); the ramp starts exactly
+at its anchor, completes after `muteRampFrames()` and is monotone; and the
+width-1 (legacy pull) path applies the same gain as the wide one.
+
+**Docs.** `tw303a/mix/CONTRACT.md` invariant 8 (+ purpose, headers, threading,
+how-to-test, known debt); `tw303a/metering/CONTRACT.md` invariant 0;
+`main/testkit/CONTRACT.md` and `main/testkit/src/smetertestactions.cpp` (the
+caveat retired, quoted); `main/objects/track/CONTRACT.md` invariant 8b + inv. 9's
+chain spelling; CLAUDE.md's "Level meters" section (the hole is closed; the
+fader move recorded); `meter_postfader.qxa`'s header. `docs/ACTIONS.md` is
+UNTOUCHED — P3a adds no verb.
+
+**NOT gated, deliberately.** The mute ramp is implemented, unit-tested and
+UNWIRED: P5's `self:Muted` lane is its only intended caller, so there is no
+end-to-end coverage of a ramped mute and none is claimed. Nothing here asserts a
+concurrency or latency property of the live playback path — one extra component
+in every track's chain means one extra page copy per track per page, which was
+not measured. `twGainStage::calcOutputTo` carries the same MONO NARROWING every
+plug pull has (§4.4 rule 1): only channel 0 crosses a streaming seam, so the
+legacy pull of a wide track is channel 0 only — unchanged in kind from
+`twPluginInsert`, and no app path reaches it. The 20-WAV pre/post `cmp` corpus
+was chosen for fader/mute/plugin relevance, not exhaustively; the committed
+goldens are the standing gate.

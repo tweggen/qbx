@@ -541,7 +541,7 @@ whole feature needed **zero edits to any existing engine file** — just the new
 
 | Thing to know | Why |
 |---|---|
-| The tap is a track's ROOT component (`STrack::getRootComponent()` → its `twRewire`) | It is the only per-track component that CACHES pages: `twTrackMix::freezePage` allocates a fresh page every call, `twPluginChain::freezePage` forwards to its last insert. Content there is post-fader, post-FX, pre-summing. Consequence: a pre-fader meter is not available without new engine work. |
+| The tap is a track's ROOT component (`STrack::getRootComponent()` → its `twRewire`) | It is the only per-track component that CACHES pages: `twTrackMix::freezePage` allocates a fresh page every call, `twPluginChain::freezePage` forwards to its last insert. Content there is post-fader, post-FX, pre-summing — and since proposal 37 P3a the rewire's PRODUCER is `twGainStage`, the fader itself. Consequence: a pre-fader meter is not available without new engine work. |
 | Its page is N CHANNELS WIDE since proposal 36 B4, and the probe reads channel 0 | `twLevelSample` / `twScanSpan` / `SLevelMeter` are scalar **by type**, so a per-channel meter is a widget and probe change, not a config one — that is B8. What B4 did add is §4.5's width check in `twLevelProbe::resolvePage_`: a cached page whose `channels()` no longer matches its producer's declared width is a MISS (the meter decays), never audio, because reading `channelPtr(1)` of a stale one-channel page is an out-of-bounds read. |
 | `outputLatencyFrames` is in DEVICE frames at the DEVICE rate | The locator counts PROJECT frames. `SApplication::meterLatencyFrames()` scales by `projectRate/deviceRate`; skipping that is a ~9% error for 44.1 k on a 48 k device. Applied ONCE in the pump so all meters share one position. |
 | Ballistics live on the UI thread, driven by wall-clock dt | Frame-rate independence (one 1 s step == 100 × 10 ms steps) is asserted by `metering_test` and is the reason they are not in the engine. |
@@ -551,21 +551,39 @@ whole feature needed **zero edits to any existing engine file** — just the new
 | Mono at the SINK, not in the graph | Since proposal 36 B4 the whole track and master path is N channels wide and a stereo clip really does carry two different channels at the track root (`qxa.mc_track_width`). The SINK is still mono — `RenderSession` and `AudioEngine` collapse to one page and duplicate it, which B5 fixes — so a rendered WAV's channels are still equal BY CONSTRUCTION. Never assert `L != R` on a FILE; do assert it on a page, with `assert-track-channels`. |
 | `twAspectMetadata` stays unclaimed | `freezePage` already stores `validAspects = twAspectAll`, so that "peak levels" bit is already set and already meaningless. Claiming it would drag metering into the demand system for nothing. |
 
-**One engine hole this exposed** (not a product bug, but it shapes tests): the
-LEGACY PULL path does not observe a track-gain change made after a position was
-first frozen — `twStreamingLatch::copyData` gates its cached page on the
-**`twPluginChain`'s** content epoch, which `STrack::invalidateRenderPath()` does
-not reach (the same "an `SPluginChain` is not an `SLink` child of its track"
-pitfall `plugins/CONTRACT.md` records for slots). Playback and render both go
-through the scheduler, which re-plans and re-binds, so both see it. `assert-meter`
-drives the legacy pull, so set a gain BEFORE first probing a position —
-`meter_postfader.qxa` uses two tracks at different gains rather than changing one
-track's gain twice.
+**The "legacy pull does not see a gain change" hole is CLOSED** (proposal 37
+P3a). It used to read: the legacy pull does not observe a track-gain change made
+after a position was first frozen, because `twStreamingLatch::copyData` gates its
+cached page on the **`twPluginChain`'s** content epoch — so a gain had to be set
+BEFORE first probing a position, and `meter_postfader.qxa` uses two tracks at
+different gains rather than changing one track's gain twice.
+
+The fader is no longer inside `twTrackMix`. It is **`twGainStage`**, wired
+between the plugin chain and the rewire (`twTrackMix → twPluginChain →
+twGainStage → twRewire`), so the epoch that guards the rewire's cached input page
+is exactly the one `set-track-volume` bumps, and a gain change after a freeze is
+observed on every path. Gate: `meter_gain_after_probe.qxa` (probe, set the gain,
+probe the same position again). `meter_postfader.qxa` keeps its two-track shape,
+which is a good case either way. Measured honestly: the new case also passes on
+the pre-move binary at the 36-B4 integration tip, so B4's collapse had already
+made the caveat inert in practice — P3a is what makes it structurally impossible.
 
 There is now ONE volume-fader curve, `app/timeline/sfadercurve.h`. The Track
 Detail dock's slider used to be wired to nothing and to map `value = dB*10`,
 disagreeing with the arranger's `VOLUME_CURVE_EXPONENT = 0.5`; both now share the
 curve and commit through `SSetTrackVolumeAction`.
+
+**And the fader is POST-FX** (proposal 37 P3a, design D5). `twGainStage`
+(`tw/mix/twgainstage.h`) is one wide component per track between the last insert
+and the rewire; `twTrackMix::setTrackGain` is a no-op kept until P5. An insert
+therefore sees the UNFADED signal, which is what an instrument's output needs and
+what every reference DAW does. A linear insert cannot tell the two orders apart,
+so the ordering is gated by a hard CLIPPER (`tw.test.clap.gain` param id 2) in
+`fader_post_fx.qxa` against a closed form, never by a byte compare — and the
+committed goldens are byte-identical across the move by construction, because at
+0 dB the stage does no arithmetic at all and no golden combines a non-unity fader
+with a plugin. Mute stays STRUCTURAL (the parent nulls the plug); the gain
+stage's ramped audio mute exists but is unwired until P5's `self:Muted` lane.
 
 Gates: `ctest -R metering_test` and the qxa cases `meter_levels` (per-second RMS
 of the ramped-sawtooth fixture, the miss/silence path, the density rules via the

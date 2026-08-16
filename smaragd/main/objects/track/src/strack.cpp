@@ -13,6 +13,7 @@
 
 #include "tw/mix/twtrackmix.h"
 #include "tw/mix/twrewire.h"
+#include "tw/mix/twgainstage.h"
 #include "tw/plugins/twpluginchain.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
@@ -258,6 +259,8 @@ void STrack::bumpRenderChainEpoch()
         cpTrackMix_->bumpContentEpoch();
     if( cpDspChain_ )
         cpDspChain_->bumpContentEpoch();   // forwards to its inserts
+    if( cpGainStage_ )
+        cpGainStage_->bumpContentEpoch();
     if( cpRewire_ )
         cpRewire_->bumpContentEpoch();
 }
@@ -270,6 +273,8 @@ void STrack::bumpRenderChainEpochRange( offset_t start, offset_t end )
         cpTrackMix_->invalidatePagesInRange(start, end);
     if( cpDspChain_ )
         cpDspChain_->invalidatePagesInRange(start, end);   // forwards to its inserts
+    if( cpGainStage_ )
+        cpGainStage_->invalidatePagesInRange(start, end);
     if( cpRewire_ )
         cpRewire_->invalidatePagesInRange(start, end);
 }
@@ -539,15 +544,26 @@ void STrack::setChannels( int n )
         cpDspChain_ = std::make_shared<twPluginChain>( *env, (idx_t) n );
         cpDspChain_->init();
 
+        // THE FADER (proposal 37 P3a / D5), POST-FX and pre-rewire. It was a
+        // scalar inside twTrackMix until this phase, i.e. ahead of the inserts.
+        cpGainStage_ = std::make_shared<twGainStage>( *env );
+        cpGainStage_->init();
+
         cpRewire_ = std::make_shared<twRewire>( *env );
         cpRewire_->init();
         // ONE plug: a wide rewire is single-plug (see twRewire's class note).
         cpRewire_->setNPlugs( 1 );
 
-        // trackmix -> chain -> rewire
+        // trackmix -> chain -> gain -> rewire
         cpDspChain_->setInput( 0, cpTrackMix_->linkOutput( 0 ) );
         cpDspChain_->rebuildWiring();
-        cpRewire_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+        cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+        cpRewire_->setInput( 0, cpGainStage_->linkOutput( 0 ) );
+
+        // A track built after its volume was already set (the loader sets the
+        // attribute before setChannels() runs for a re-parented lane) must not
+        // silently start at unity.
+        cpGainStage_->setGainDb( getVolume() );
     }
 
     channels_ = n;
@@ -557,6 +573,7 @@ void STrack::setChannels( int n )
     // collapse.
     cpTrackMix_->setChannels( (idx_t) n );
     cpDspChain_->setChannels( (idx_t) n );
+    cpGainStage_->setChannels( (idx_t) n );
     cpRewire_->setChannels( (idx_t) n );
 
     // The slots have to re-derive the channel-mismatch mapping (proposal 08
@@ -743,6 +760,7 @@ STrack::~STrack()
 
     cpDspChain_.reset();
     cpTrackMix_.reset();
+    cpGainStage_.reset();
     cpRewire_.reset();
 }
 
@@ -1057,13 +1075,15 @@ void STrack::applyChildTrackAudibility()
 
 void STrack::onTrackVolumeChanged( double gainDb )
 {
-    // Forward volume change to all track mixers
-    {
-        if( cpTrackMix_ ) {
-            cpTrackMix_->setTrackGain(gainDb);
-        }
+    // THE FADER IS POST-FX (proposal 37 D5, executed by P3a). It used to be
+    // twTrackMix::setTrackGain(), which applied the scalar BEFORE the inserts;
+    // twGainStage sits between the last insert and the rewire, so an insert now
+    // sees the unfadered signal and the track's root -- the metering tap and the
+    // mixer's input alike -- sees the faded one.
+    if( cpGainStage_ ) {
+        cpGainStage_->setGainDb( gainDb );
     }
-    // Gain is baked into frozen pages downstream of the track mixer
+    // Gain is baked into frozen pages from the gain stage downstream.
     invalidateRenderPath();
 }
 

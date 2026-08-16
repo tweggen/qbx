@@ -3,16 +3,21 @@
   Proposal 34: the meter tap is POST-FADER.
 
   This matters because it decides what the meter MEANS. The tap is a track's root
-  component (its twRewire), which sits downstream of twTrackMix's gain, so the
-  reading is the track's actual contribution to the mix rather than the raw clip
-  level. Pull the fader down and the meter must follow.
+  component (its twRewire), which sits downstream of the fader, so the reading is
+  the track's actual contribution to the mix rather than the raw clip level. Pull
+  the fader down and the meter must follow. (Since proposal 37 P3a the fader is
+  twGainStage, the rewire's own producer, applied AFTER the inserts; before that
+  it was a scalar inside twTrackMix, further upstream still. The reading was
+  post-fader either way, which is what this case is about.)
 
   Two tracks carrying the SAME sample at different gains, rather than one track
-  whose gain is changed twice: each track's page is frozen once, after its gain is
-  set, so the assertion does not depend on re-freezing a page that already exists.
-  (assert-meter drives the legacy pull path, where a post-freeze gain change is
-  not observed — documented in smetertestactions.cpp. Playback and render go
-  through the scheduler and do see it.)
+  whose gain is changed twice. That WAS a requirement: assert-meter drives the
+  legacy pull, where a gain change made after the position had been frozen once
+  was not observed. Proposal 37 P3a retired that caveat: the epoch the rewire's
+  cached input page is gated on is now the one set-track-volume bumps, and
+  meter_gain_after_probe.qxa is the case that proves it. This shape is kept
+  because it is a good one - two tracks, one difference, no ordering to reason
+  about.
 
   Fixture: ../test_sawtooth.wav, whose 4th second has RMS ~0.405
   (testkit/CONTRACT.md inv. 3). Position 168000 is inside that second.

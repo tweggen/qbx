@@ -17,6 +17,7 @@ class SPluginChain;
 class SPluginSlot;
 class twTrackMix;
 class twRewire;
+class twGainStage;
 class twPluginChain;
 class SLink;
 class SProjectLoader;
@@ -237,6 +238,10 @@ private:
     STrackRendererInline *inlineRenderer_;
     int channels_;                                  // see setChannels()
     std::shared_ptr<twTrackMix> cpTrackMix_;        // ONE, channels_ wide
+    // THE FADER (proposal 37 P3a). Sits between the DSP chain and the rewire,
+    // so the scalar is applied POST-FX: trackmix -> chain -> gain -> rewire.
+    // It used to be a scalar inside twTrackMix, i.e. PRE-FX (design F6).
+    std::shared_ptr<twGainStage> cpGainStage_;      // ONE, channels_ wide
     std::shared_ptr<twRewire> cpRewire_;            // the track's ROOT component
     SPluginChain *cpPluginChain_;  // Model object for effects inserts
     // Our REFERENCE to that chain, not a child link (a chain is not an SLink
