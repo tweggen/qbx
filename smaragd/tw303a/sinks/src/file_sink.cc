@@ -21,13 +21,13 @@ int64_t FileSink::getCurrentTimeMs() const {
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
 
-bool FileSink::isFrameReady(const FrameEntry& entry) const {
-    // Frame is ready if:
+bool FileSink::isBlockReady(const BlockEntry& entry) const {
+    // A block is ready if:
     // 1. Generation is stable (future resolved), OR
-    // 2. Frame is old enough (age-based fallback)
+    // 2. It is old enough (age-based fallback)
 
     int64_t now = getCurrentTimeMs();
-    int64_t frameAge = now - entry.createdTimeMs;
+    int64_t age = now - entry.createdTimeMs;
 
     // Non-blocking check on future (0ms timeout)
     if (entry.readyFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
@@ -35,55 +35,51 @@ bool FileSink::isFrameReady(const FrameEntry& entry) const {
     }
 
     // Fallback: write stale data if aged
-    if (frameAge >= ageTimeoutMs_) {
+    if (age >= ageTimeoutMs_) {
         return true;
     }
 
     return false;
 }
 
-void FileSink::flushReady() {
-    std::lock_guard<std::mutex> lock(bufferMutex_);
-
-    // Write all ready frames from the front of the buffer
-    while (!buffer_.empty()) {
-        if (isFrameReady(buffer_.front())) {
-            const FrameEntry& entry = buffer_.front();
-            if (writer_) {
-                writer_->write(&entry.frame.channels[0], 1);  // Write stereo frame
-            }
-            buffer_.pop_front();
-        } else {
-            break;  // Stop at first non-ready frame
-        }
+// Caller holds bufferMutex_ and has already established that the front block is
+// ready. Writes it out and pops it.
+void FileSink::writeFront_locked() {
+    const BlockEntry& entry = buffer_.front();
+    if (writer_ && entry.frames > 0) {
+        writer_->write(entry.samples.data(), entry.frames);
     }
+    bufferedFrames_ -= entry.frames;
+    buffer_.pop_front();
 }
 
-bool FileSink::writeFrame(const AudioFrame& frame) {
+bool FileSink::writeFrames(const float *interleaved, std::size_t nFrames,
+                           unsigned channels) {
+    if (!interleaved || nFrames == 0 || channels == 0) return true;
+
     std::lock_guard<std::mutex> lock(bufferMutex_);
 
     // Get the promise for the current generation
     auto promise = GenerationRegistry::instance().getOrCreate(currentGeneration_);
 
-    FrameEntry entry{
-        frame,
-        currentGeneration_,
-        promise->getFuture(),
-        getCurrentTimeMs()
-    };
+    BlockEntry entry;
+    entry.samples.assign(interleaved, interleaved + nFrames * (std::size_t) channels);
+    entry.frames        = nFrames;
+    entry.channels      = channels;
+    entry.generation    = currentGeneration_;
+    entry.readyFuture   = promise->getFuture();
+    entry.createdTimeMs = getCurrentTimeMs();
 
-    buffer_.push_back(entry);
+    bufferedFrames_ += nFrames;
+    buffer_.push_back(std::move(entry));
 
-    // Drain ready frames when buffer reaches drain threshold to prevent data loss.
-    // For rendering (generation 0), frames are ready immediately after writeFrame returns,
-    // so this flushes all queued frames to disk before the buffer cap is hit.
-    while (!buffer_.empty() && buffer_.size() > maxBufferFrames_ / 2) {
-        if (isFrameReady(buffer_.front())) {
-            const FrameEntry& drainEntry = buffer_.front();
-            if (writer_) {
-                writer_->write(&drainEntry.frame.channels[0], 1);
-            }
-            buffer_.pop_front();
+    // Drain ready blocks when the buffer reaches the drain threshold, to prevent
+    // unbounded growth. For rendering (generation 0) blocks are ready as soon as
+    // the generation's promise resolves, so this flushes to disk well before any
+    // cap is hit.
+    while (!buffer_.empty() && bufferedFrames_ > maxBufferFrames_ / 2) {
+        if (isBlockReady(buffer_.front())) {
+            writeFront_locked();
         } else {
             break;
         }
@@ -99,14 +95,11 @@ void FileSink::flush() {
     {
         std::lock_guard<std::mutex> lock(bufferMutex_);
 
-        // Write all buffered frames
-        for (auto& entry : buffer_) {
-            if (writer_) {
-                writer_->write(&entry.frame.channels[0], 1);
-            }
+        // Write all buffered blocks
+        while (!buffer_.empty()) {
+            writeFront_locked();
         }
-
-        buffer_.clear();
+        bufferedFrames_ = 0;
     }
 
     // Forget old generations (cleanup)
@@ -122,7 +115,7 @@ void FileSink::setGeneration(uint32_t generation) {
 
 size_t FileSink::occupancy() const {
     std::lock_guard<std::mutex> lock(bufferMutex_);
-    return buffer_.size();
+    return bufferedFrames_;
 }
 
 }  // namespace audio

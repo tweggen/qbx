@@ -182,8 +182,38 @@ void twSpeaker::startOutput()
                 return frames;
             }
 
-            std::vector<float> bufL(frames), bufR(frames);
-            std::size_t outFrames = engine->pullBlock(bufL.data(), bufR.data(), frames);
+            // THE PROJECT IS NOT THE DEVICE (proposal 36 B5). twSpeaker already
+            // owns the RATE mismatch at this boundary, so the CHANNEL mismatch
+            // belongs here too, and it is a stated rule rather than an
+            // off-by-one:
+            //
+            //   * A MONO project fans out to EVERY device channel. That is the
+            //     §4.4 clamp ("mono plays on every channel") and it is what
+            //     keeps a mono project audible on both speakers — the one thing
+            //     the old `(c % 2 == 0) ? sL : sR` got right.
+            //   * Otherwise the mapping is POSITIONAL: device channel c carries
+            //     project channel c.
+            //   * Project channels the device does not have are DROPPED, not
+            //     folded down. A fold-down needs channel ROLES and a fold law,
+            //     which §8 names as an explicit non-goal — summing 6 channels
+            //     into 2 without one would change the level and could clip.
+            //   * Device channels the project does not have are SILENT. Copying
+            //     channel 0 into the surrounds of a 6-channel device for a
+            //     stereo project would put the left channel behind the listener,
+            //     which is worse than silence and much harder to notice.
+            //
+            // So: pull min(projectWidth, deviceChannels) channels, or 1 fanned
+            // out, and zero the rest.
+            const std::size_t projectWidth = std::max<std::size_t>(1, engine->graphChannels());
+            const std::size_t devCh        = std::max<std::size_t>(1, channels);
+            const bool  fanOutMono         = (projectWidth == 1);
+            const std::size_t pullCh       = fanOutMono ? 1 : std::min(projectWidth, devCh);
+
+            std::vector<float> buf(pullCh * frames);
+            std::vector<float *> chans(pullCh);
+            for (std::size_t c = 0; c < pullCh; ++c) chans[c] = buf.data() + c * frames;
+
+            std::size_t outFrames = engine->pullBlock(chans.data(), pullCh, frames);
 
             if (outFrames == 0) {
                 std::fill_n(out, frames * channels, 0.0f);
@@ -193,10 +223,11 @@ void twSpeaker::startOutput()
             }
 
             for (std::size_t i = 0; i < outFrames; ++i) {
-                float sL = bufL[i];
-                float sR = bufR[i];
                 for (std::uint32_t c = 0; c < channels; ++c) {
-                    out[i * channels + c] = (c % 2 == 0) ? sL : sR;
+                    float s = 0.0f;
+                    if (fanOutMono)             s = chans[0][i];
+                    else if ((std::size_t) c < pullCh) s = chans[c][i];
+                    out[i * channels + c] = s;
                 }
             }
 

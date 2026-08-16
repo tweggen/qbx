@@ -7,7 +7,9 @@ PlaybackSink::PlaybackSink(AudioBackend* backend)
 {
 }
 
-bool PlaybackSink::writeFrame(const AudioFrame& frame) {
+bool PlaybackSink::writeFrames(const float * /*interleaved*/,
+                               std::size_t /*nFrames*/,
+                               unsigned /*channels*/) {
     // For real-time playback, frames are consumed by the audio callback
     // as it pulls from AudioEngine. This method is a no-op in Phase 5b
     // since twspeaker.cc directly interleaves frames into the output buffer.

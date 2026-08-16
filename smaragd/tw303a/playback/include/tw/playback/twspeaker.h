@@ -114,7 +114,17 @@ public:
 
     virtual const char *getInputName(idx_t)  const override { return nullptr; }
     virtual const char *getOutputName(idx_t) const override { return nullptr; }
-    virtual idx_t getNInputs()  const override { return 2; }
+    // ONE input plug (proposal 36 B5). It was two, and neither carried audio:
+    // the speaker's callback reads frozen pages through AudioEngine, which asks
+    // the ROOT COMPONENT directly, so the plugs have only ever supplied the
+    // WIRE FORMAT — startOutput() reads pInputPlugs_[0]->getFormat().sampleRate
+    // to open the device, and the rate diagnostic prints it. Plug 1 was read by
+    // nobody at all. It was there because a track used to be N parallel mono
+    // wires; since B4 the graph is ONE wire N channels wide (twRewire is
+    // single-plug above width 1), so a second plug could not be wired even in
+    // principle. Keeping it would have been a port that says "the sink is
+    // stereo" on the milestone that stops the sink being stereo.
+    virtual idx_t getNInputs()  const override { return 1; }
     virtual idx_t getNOutputs() const override { return 0; }
 
     void setBufferSize(length_t) override {}

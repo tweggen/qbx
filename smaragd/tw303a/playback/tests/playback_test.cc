@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -28,6 +29,16 @@ static int failures = 0;
         if (cond) { printf("ok   %s\n", msg); }                             \
         else      { printf("FAIL %s\n", msg); ++failures; }                 \
     } while (0)
+
+// pullBlock() takes N planar buffers since proposal 36 B5. Almost every case
+// below wants exactly two, so the L/R shape stays here as a test-local shim
+// rather than as an engine API that pins the sink at stereo.
+static length_t pullLR(audio::AudioEngine &e, std::vector<float> &L,
+                       std::vector<float> &R, length_t n)
+{
+    float *chans[2] = { L.data(), R.data() };
+    return e.pullBlock(chans, 2, n);
+}
 
 // Constant-amplitude source whose renders can be made artificially slow, so a
 // test can observe the window while a stale page's replacement is rendering.
@@ -68,6 +79,10 @@ public:
     std::atomic<int> width{2};
     std::atomic<float> amp{0.25f};
     std::atomic<int> widestPageSeen{0};
+    // With `ladder` set, channel c carries amp/(c+1) — a 6 dB step per channel,
+    // so a pull can tell WHICH channel it got rather than only that it got one
+    // (proposal 36 B5). Off by default: the B4 cases below assert amp exactly.
+    std::atomic<bool> ladder{false};
 
     idx_t getOutputChannels() const override { return (idx_t)width.load(); }
 
@@ -83,9 +98,11 @@ public:
         int seen = widestPageSeen.load();
         while (nCh > seen && !widestPageSeen.compare_exchange_weak(seen, nCh)) {}
         const float a = amp.load();
+        const bool  lad = ladder.load();
         for (idx_t c = 0; c < (idx_t)nCh; ++c) {
             sample_t *dst = page.channelPtr(c);
-            for (length_t i = 0; i < n; ++i) dst[i] = a;
+            const float v = lad ? (a / (float)(c + 1)) : a;
+            for (length_t i = 0; i < n; ++i) dst[i] = v;
         }
         return n;
     }
@@ -217,7 +234,7 @@ int main()
         // Wait for the readahead to buffer; then audio flows
         bool audible = false;
         for (int i = 0; i < 500 && !audible; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] == 0.25f) { audible = true; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -230,7 +247,7 @@ int main()
         src->renderDelayMs.store(300);
         src->bumpContentEpoch();
 
-        length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+        length_t n = pullLR(engine, L, R, BLOCK);
         CHECK(n == BLOCK,
               "pullBlock immediately after an edit still produces frames");
         CHECK(n == BLOCK && L[0] == 0.25f && L[BLOCK - 1] == 0.25f,
@@ -241,7 +258,7 @@ int main()
         src->renderDelayMs.store(0);
         bool freshHeard = false, dropout = false;
         for (int i = 0; i < 500 && !freshHeard && !dropout; ++i) {
-            length_t got = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t got = pullLR(engine, L, R, BLOCK);
             if (got != BLOCK) { dropout = true; break; }
             if (L[0] == 0.5f) { freshHeard = true; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -281,7 +298,7 @@ int main()
 
         bool audible = false;
         for (int i = 0; i < 500 && !audible; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] == 0.25f) { audible = true; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -294,7 +311,7 @@ int main()
         bool servedOldWidth = false, sawSilence = false;
         for (int i = 0; i < 40; ++i) {
             std::fill(L.begin(), L.end(), -1.0f);
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] == 0.25f) { servedOldWidth = true; break; }
             if (n == 0 || L[0] == 0.0f) sawSilence = true;
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -310,7 +327,7 @@ int main()
         src->bumpContentEpoch();
         bool recovered = false;
         for (int i = 0; i < 500 && !recovered; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] == 0.25f) { recovered = true; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -318,6 +335,83 @@ int main()
               "AC B4.5 (RT): re-freezing at the new width restores audio");
         CHECK(src->widestPageSeen.load() == 4,
               "…and the pages the readahead froze really were 4 channels wide");
+
+        engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
+    // Proposal 36 B5 — pullBlock() serves N CHANNELS, and applies the §4.4
+    // clamp when asked for more than the page has.
+    //
+    // This is the playback half of "the sink goes wide". Until B5 pullBlock
+    // took (outL, outR) and filled BOTH from channelPtr(0), so a 4-channel
+    // graph and a mono one produced the same two buffers. The three assertions
+    // below separate the three things that could still be wrong: that the
+    // channels arrive at all, that they arrive in the RIGHT ORDER (a ladder,
+    // not merely "different"), and that a request wider than the page degrades
+    // by the clamp rather than by reading out of bounds.
+    {
+        auto src = std::make_shared<WidthTone>(env);
+        src->width.store(4);
+        src->ladder.store(true);          // channel c == amp/(c+1)
+        src->init();
+
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
+        engine.startReadahead();
+
+        CHECK(engine.graphChannels() == 4,
+              "B5: the engine reports the graph's width (4)");
+
+        constexpr length_t BLOCK = 512;
+        // Ask for SIX buffers from a four-channel page: channels 4 and 5 must
+        // come back as channel 3 (the clamp), not as garbage and not as zero.
+        constexpr std::size_t ASK = 6;
+        std::vector<std::vector<float>> bufs(ASK, std::vector<float>(BLOCK, -1.0f));
+        std::vector<float *> chans(ASK);
+        for (std::size_t c = 0; c < ASK; ++c) chans[c] = bufs[c].data();
+
+        bool audible = false;
+        for (int i = 0; i < 500 && !audible; ++i) {
+            length_t n = engine.pullBlock(chans.data(), ASK, BLOCK);
+            if (n == BLOCK && bufs[0][0] == 0.25f) { audible = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(audible, "B5: a 4-channel graph plays");
+
+        const float want[4] = { 0.25f, 0.125f, 0.25f / 3.0f, 0.0625f };
+        bool ladderOk = audible;
+        for (std::size_t c = 0; c < 4 && ladderOk; ++c)
+            for (length_t i = 0; i < BLOCK && ladderOk; ++i)
+                ladderOk = std::fabs(bufs[c][i] - want[c]) < 1e-6f;
+        CHECK(ladderOk,
+              "B5: destination channel c carries PAGE channel c (a 6 dB ladder, "
+              "in order) — not channel 0 four times");
+
+        bool clampOk = audible;
+        for (std::size_t c = 4; c < ASK && clampOk; ++c)
+            for (length_t i = 0; i < BLOCK && clampOk; ++i)
+                clampOk = std::fabs(bufs[c][i] - want[3]) < 1e-6f;
+        CHECK(clampOk,
+              "B5: asking for more channels than the page has yields its LAST "
+              "channel (the §4.4 clamp), never an out-of-bounds read");
+
+        // …and a MONO page asked for two buffers gives the same audio on both:
+        // "mono plays on every channel", which is what keeps a mono project
+        // audible on a stereo device.
+        src->ladder.store(false);
+        src->width.store(1);
+        src->bumpContentEpoch();
+        std::vector<float> L(BLOCK, -1.0f), R(BLOCK, -1.0f);
+        bool mono = false;
+        for (int i = 0; i < 500 && !mono; ++i) {
+            length_t n = pullLR(engine, L, R, BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) { mono = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        bool bothOk = mono;
+        for (length_t i = 0; i < BLOCK && bothOk; ++i) bothOk = (L[i] == R[i]);
+        CHECK(mono && bothOk,
+              "B5: a width-1 graph fans out to every destination channel");
 
         engine.stopReadahead();
     }
@@ -339,11 +433,11 @@ int main()
         // Prime playback so the position has advanced away from 0.
         bool audible = false;
         for (int i = 0; i < 500 && !audible; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] == 0.25f) audible = true;
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        for (int i = 0; i < 8; ++i) engine.pullBlock(L.data(), R.data(), BLOCK);
+        for (int i = 0; i < 8; ++i) pullLR(engine, L, R, BLOCK);
         CHECK(audible && engine.currentPosition() > 0,
               "seek: playback running and advanced before the seek");
 
@@ -352,7 +446,7 @@ int main()
         engine.requestSeek(TARGET);
         // The very next pull adopts it (the RT pull is the sole writer of
         // currentPos_), even before any page at TARGET is frozen.
-        engine.pullBlock(L.data(), R.data(), BLOCK);
+        pullLR(engine, L, R, BLOCK);
         uint64_t after = engine.currentPosition();
         CHECK(after >= TARGET && after < TARGET + 4 * BLOCK,
               "seek: RT pull adopts the requested position");
@@ -360,7 +454,7 @@ int main()
         // Playback resumes from the new position (tone flows again).
         bool resumed = false;
         for (int i = 0; i < 500 && !resumed; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] == 0.25f) resumed = true;
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -369,7 +463,7 @@ int main()
 
         // A backward live seek repositions just the same.
         engine.requestSeek(0);
-        engine.pullBlock(L.data(), R.data(), BLOCK);
+        pullLR(engine, L, R, BLOCK);
         CHECK(engine.currentPosition() < TARGET,
               "seek: backward live seek repositions too");
 
@@ -409,7 +503,7 @@ int main()
         // Prime: wait for the readahead to freeze the first page.
         bool audible = false;
         for (int i = 0; i < 500 && !audible; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] != 0.0f) audible = true;
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -424,7 +518,7 @@ int main()
         bool preWrapExact = true;
         int preWrapShort = 0;
         for (int b = 0; b < BLOCKS_TO_END; ++b) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n != BLOCK) { ++preWrapShort; break; }
             const uint64_t base = (uint64_t)b * BLOCK;
             for (length_t j = 0; j < BLOCK; ++j) {
@@ -445,7 +539,7 @@ int main()
         // THE WRAP. loopStart is inside the page still held, so this is the
         // fast path of updateFrozenPage — the branch that used to return
         // without re-deriving the cursor.
-        length_t nWrap = engine.pullBlock(L.data(), R.data(), BLOCK);
+        length_t nWrap = pullLR(engine, L, R, BLOCK);
         CHECK(nWrap == BLOCK, "cycle: the wrapping block still produces frames");
 
         char msg[224];
@@ -555,7 +649,7 @@ int main()
 
         bool audible = false;
         for (int i = 0; i < 1000 && !audible; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && !decodeFloats(L.data(), n).silent) audible = true;
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -564,7 +658,7 @@ int main()
         int checked = 0, wrongPosition = 0, ambiguous = 0;
         for (int i = 0; i < 200 && checked < 8; ++i) {
             const uint64_t before = engine.currentPosition();
-            const length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            const length_t n = pullLR(engine, L, R, BLOCK);
             if (n != BLOCK) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
@@ -615,7 +709,7 @@ int main()
         double lastConfidence = 0.0;
         for (int i = 0; i < 1000 && !seekAudioCorrect; ++i) {
             const uint64_t before = engine.currentPosition();
-            const length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            const length_t n = pullLR(engine, L, R, BLOCK);
             if (n != BLOCK || before < TARGET
                 || before % (uint64_t)tw::poscode::kBlockFrames != 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));

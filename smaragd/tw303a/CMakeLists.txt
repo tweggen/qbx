@@ -34,7 +34,6 @@ tw_module(core
         core/include/tw/core/exc.h
         core/include/tw/core/twsyslog.h
         core/include/tw/core/twlog.h
-        core/include/tw/core/audio_frame.h
         core/include/tw/core/generation_promise.h
         core/include/tw/core/twcontenthash.h
         core/include/tw/core/twwarpmap.h
@@ -471,16 +470,14 @@ tw_module(sinks
     DEPS tw_core
 )
 
-# --- E12 playback: speaker, engine pump, readahead ----------------------------
+# --- E12 playback: speaker, engine pump --------------------------------------
 tw_module(playback
     SOURCES
         playback/include/tw/playback/twspeaker.h
         playback/include/tw/playback/audio_engine.h
-        playback/include/tw/playback/audio_readahead.h
         playback/include/tw/playback/playback_context.h
         playback/src/twspeaker.cc
         playback/src/audio_engine.cc
-        playback/src/audio_readahead.cc
     DEPS tw_core tw_pages tw_graph tw_devices tw_sources tw_schedule
 )
 

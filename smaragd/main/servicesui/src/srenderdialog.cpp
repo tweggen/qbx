@@ -266,6 +266,13 @@ bool SRenderDialog::validateInputs() {
 audio::RenderParams SRenderDialog::getRenderParams() const {
     audio::RenderParams params;
 
+    // Channels come from the PROJECT, not from this dialog (proposal 36 B5).
+    // §6 of the proposal is explicit that the render dialog must not expose a
+    // channel control before B8 — a control that changes the file's width
+    // without changing what the graph produces would just be a downmix nobody
+    // designed. 0 (no project) means "ask the graph", RenderSession's default.
+    params.channels = project_ ? project_->channels() : 0;
+
     // Format
     if (wavRadio_->isChecked()) {
         params.format = audio::AudioFormat::WAV;

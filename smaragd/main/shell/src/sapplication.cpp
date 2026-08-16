@@ -65,16 +65,19 @@ void SApplication::rewireSpeaker()
 {
     // Drop any prior wiring first.
     getSpeaker()->setInput( 0, NULL );
-    getSpeaker()->setInput( 1, NULL );
     if( !currentProject_ || !currentProject_->getRootComponent() ) return;
 
+    // ONE plug (proposal 36 B5). There used to be a second, wired to
+    // root->linkOutput(1) when the root reported more than one output, from the
+    // days when a track was N parallel mono wires. Since B4 the graph is one
+    // wire N channels wide, and the speaker's plug carries no audio in any case
+    // — it supplies the WIRE FORMAT that startOutput() opens the device with.
+    //
     // twRewire (the rewire root inside SStdMixer) returns NULL from
     // linkOutput() when nothing has been wired into it yet, so this call
-    // is only meaningful once the graph has at least one track / bus.
+    // is only meaningful once the graph has at least one track.
     std::shared_ptr<twComponent> root = currentProject_->getRootComponent()->getRootComponent();
     getSpeaker()->setInput( 0, root->linkOutput( 0 ) );
-    if( root->getNOutputs() > 1 )
-        getSpeaker()->setInput( 1, root->linkOutput( 1 ) );
 }
 
 bool SApplication::isPlaying() const

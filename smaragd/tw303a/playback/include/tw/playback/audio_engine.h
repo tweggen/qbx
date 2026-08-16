@@ -1,7 +1,7 @@
 #ifndef AUDIO_ENGINE_H
 #define AUDIO_ENGINE_H
 
-#include "tw/core/audio_frame.h"
+#include "tw/core/twtypes.h"
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -40,8 +40,15 @@ enum class PlaybackState {
  * Handles:
  * - Component graph traversal with frozen pages (no seekTo corruption)
  * - Position management (playhead tracking, loop cycling)
- * - Stereo wiring (L/R channel synthesis)
+ * - Channel wiring: N planar output buffers, one per PROJECT channel
  * - Loop cycling with state preservation
+ *
+ * WIDTH (proposal 36 B5). pullBlock() takes N destination buffers, not
+ * (outL, outR): the width of a pull is the width of the page the graph froze,
+ * and the caller decides how that maps onto its device (twSpeaker owns that
+ * rule, exactly as it already owns the rate mismatch). A channel the page does
+ * not have is served by the §4.4 clamp — "mono plays on every channel" — so a
+ * caller may always ask for as many channels as it has buffers for.
  */
 class AudioEngine {
 public:
@@ -55,28 +62,26 @@ public:
     ~AudioEngine();
 
     /**
-     * Pull one stereo audio frame from the component graph.
+     * Pull a block of audio from the component graph into N planar buffers.
      *
-     * Uses frozen pages for state-continuous rendering.
-     * Safe to call from realtime thread (callback) or render thread.
+     * Safe to call from realtime thread (callback) or render thread. Every
+     * buffer is written for the full nFrames on every path, including the miss
+     * paths (which zero it) — a caller never has to clear its own scratch.
      *
-     * \param outFrame  Output: stereo frame (L, R channels)
-     * \return          True if a valid frame was produced; false on error/underrun
+     * \param outChannels  nChannels pointers, each holding at least nFrames floats
+     * \param nChannels    How many destination buffers (>= 1)
+     * \param nFrames      Number of frames to pull
+     * \return             Number of frames actually produced (0 on error)
      */
-    bool pullFrame(AudioFrame& outFrame);
+    length_t pullBlock(float* const* outChannels, std::size_t nChannels,
+                       length_t nFrames);
 
     /**
-     * Pull a block of stereo audio frames from the component graph.
-     *
-     * More efficient than calling pullFrame() repeatedly.
-     * Safe to call from realtime thread (callback) or render thread.
-     *
-     * \param outL      Output: L channel samples (must hold at least nFrames floats)
-     * \param outR      Output: R channel samples (must hold at least nFrames floats)
-     * \param nFrames   Number of frames to pull
-     * \return          Number of frames actually produced (0 on error)
+     * The width the graph is currently producing — synthOutput_'s declared
+     * channel count. A caller sizes its buffers from this; it may still ask
+     * pullBlock() for more or fewer (see the §4.4 clamp above).
      */
-    length_t pullBlock(float* outL, float* outR, length_t nFrames);
+    std::size_t graphChannels() const;
 
     /**
      * Seek to an absolute position in the component graph.
@@ -186,12 +191,23 @@ private:
     uint64_t currentPageGeneration_{0};  // Track page generation to detect invalidation
     uint32_t cachedPageValidFrames_{0};  // Phase 2 perf: Cache validFrames to avoid repeated loads
 
-    // Resampling
-    twResampler resamplerL_;
-    twResampler resamplerR_;
+    // Resampling. ONE twResampler PER CHANNEL: the class documents itself as
+    // "a single mono channel" and carries per-channel interpolation state, so a
+    // shared one would smear the channels together the moment the device rate
+    // differs from the project rate (proposal 36 B5). The vector is sized in
+    // configureResampling() from the graph's declared width and never resized
+    // on the RT path.
+    std::vector<twResampler> resamplers_;
+    bool passthrough_ = true;         // cached: resamplers_ are all identity
     double rateRatio_;  // output / input sample rate
-    std::vector<float> resampleBufL_;  // Pre-allocated resampling buffers (Phase 1 perf optimization)
-    std::vector<float> resampleBufR_;  // Allocated once in configureResampling(), reused per block
+    // Pre-allocated per-channel resampling buffers (Phase 1 perf optimization),
+    // allocated in configureResampling() and reused per block. Flat storage plus
+    // a stride, so growing them is one allocation rather than N.
+    std::vector<float> resampleBuf_;
+    std::size_t resampleStride_ = 0;
+    std::size_t resampleChannels_ = 0;
+    void ensureResampleBuffers(std::size_t channels, std::size_t frames);
+    void resetResamplers();
 
     // Playback state management (Phase 6b: minimum buffering before playback)
     std::atomic<PlaybackState> playbackState_{PlaybackState::STOPPED};
