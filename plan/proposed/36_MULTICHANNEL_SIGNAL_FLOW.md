@@ -222,10 +222,27 @@ process by ~40×. Two consequences this proposal must carry: **(a)** `releaseOld
 **has no caller anywhere in the tree**, so component page caches are pruned only
 by invalidation and teardown and `outputPages_` grows unbounded across a session
 — at width 8 each retained page is 2 MiB, so what is untidy today is a real
-problem at width 8; **(b)** `CapturePageData` (the pool's element, and the
-preview/capture page type) is a *different* type from `twOutputPage`, and B7 must
-decide explicitly whether it widens too — an eager 528 MiB pool multiplied by
-width is not something to discover late.
+problem at width 8; **(b)** ~~`CapturePageData` (the pool's element, and the
+preview/capture page type) is a different type from `twOutputPage`, and B7 must
+decide whether it widens too — an eager 528 MiB pool multiplied by width is not
+something to discover late.~~
+
+**(b) was aimed at the wrong object, and B7 settled it: `CapturePageData` does
+NOT widen, and the pool is untouched.** *The pool is not the capture — the name
+is the only thing they share.* `CapturePagePool`'s element is an **aspect page**
+(a 1 kHz preview waveform, or a metadata/export blob), reached through
+`getDataPtr()`, with **no frame, stride or channel anywhere in its type**, and
+nothing on the audio path ever allocates one. Measured: 528 MiB reserved eagerly
+per project, against a **peak occupancy of ONE page** across the whole corpus
+(0.049 % of the reservation), nine at the busiest.
+
+What actually multiplies by width is **`twCapturingSource`'s planar buffer**,
+allocated on demand per clip — the corpus asset capture went 115,200 B → 230,400
+B, exactly ×N. Whether the pool should be smaller or lazier is a real question
+and **not a width question**: 528 MiB for one page in use is as wrong at width 1
+as at width 8, and it is what every `-j` headroom figure in `CLAUDE.md` is
+written against. Left to B9 (see trap 25 for where a width-8 memory problem would
+actually come from).
 
 ### 4.2 A component declares its width
 
@@ -712,7 +729,23 @@ MonoFold correction. Two licensed re-freezes of one file in two milestones is
 exactly why each needs its reason recorded beside the case, not only in a commit
 message.)*
 
-### B7 — Container/asset clips and the preview capture keep their channels
+### B7 — Container/asset clips and the preview capture keep their channels ✅ **EXECUTED 2026-08-16** (`ac4824a`)
+
+> `SCut::buildCapture_` had built its `twCapturingSource` with a hard-coded **1
+> channel** since proposal 07 — the last narrowing point in the clip path. Both
+> branches now capture every channel: the container branch clamps against **the
+> page in hand** (§4.4) with width from the container's own
+> `getOutputChannels()`, so a mono container still yields a mono capture; the
+> grained *preview* branch reads one plane per channel at the same offset, which
+> is safe precisely because a grain source is random-access and has no cursor to
+> displace. `twCapturingSource` itself needed **no change** — it has taken
+> `channels` since proposal 07 and its planar arithmetic had simply never been
+> executed above width 1.
+>
+> **AC B7.4 landed on B3's arithmetic target to the byte**: +262,144 B = exactly
+> one 256 KiB channel plane. Eight reader pages, seven already wide, the eighth
+> now wide. The mono project not moving **at all** is the independent signal that
+> nothing else did.
 
 *(Rescoped by B3, which found that sample-backed stretch and pitch never touch
 `buildCapture_` at all — see §2 item 2. What is left here is genuinely
@@ -963,6 +996,30 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     `smaragd/build/bin` (where the fixtures are). Real fix: unify the version
     across worktrees, or land the teardown fix — an unmerged
     `fix/plugin-scan-teardown-hang` branch already exists.
+25. **Where a width-8 memory problem would ACTUALLY come from** (found by B7, and
+    it is not the pool). Two pre-existing multipliers, both of which width scales:
+    a capture is **rebuilt far more often than once and each rebuild is retained**
+    (the corpus's asset capture is built **17 times** in a single golden run, and
+    resident capture count sits at 2-3 rather than 1 because `oldReader_` holds
+    `captureRef`); and captures are **per placement, not shared** — proposal 06
+    §7's content-addressed capture cache does not exist, so ten placements of one
+    asset are ten full captures. At width 8 over a long container that is ~3× an
+    already-×8 buffer. Fix the sharing before blaming the page model.
+26. **A type confusion on the aspect page — unrelated to channels, and squarely in
+    B8's path** (found by B7). `CaptureRevalidator::dispatchRecomputation` writes
+    **float samples** into `CapturePageData::data` and sets
+    `validAspects |= Preview`; `SPlainWave::getPreview` reads that same buffer as
+    `preview_t*` (2-byte signed min/max pairs). **One of the two is wrong about
+    what a preview page contains.** Not confirmed to produce a visibly wrong
+    waveform, because `getStraightPreview` runs whenever the page is absent, which
+    may be always in headless runs. **B8 must settle what a preview page IS before
+    deciding how wide one should be.**
+27. **`twCapturingSource`'s six-argument constructor has ZERO callers** (found by
+    B7) — the one already-N-channel capture API, and it is dead. Its body is a
+    per-channel loop that `seekTo`s a cursor-bearing component and pulls
+    `calcOutputTo` once per channel: **exactly the shape §4.3 forbids**. Harmless
+    while dead, a live trap the moment anyone wires it. B9: delete it, or rewrite
+    it around one wide pass.
 
 ## 8. Non-goals (named, so they are not assumed)
 
