@@ -77,7 +77,7 @@ public:
     // added, busses inserted, etc.) so that playback uses the current
     // wiring rather than the snapshot taken at project-creation time.
     void rewireSpeaker() override;
-    offset_t getGlobalLocatorPos() const;
+    offset_t getGlobalLocatorPos() const override;   // SAppContext (proposal 37 P5)
     // Store the playback position from the REALTIME AUDIO THREAD. This only does
     // an atomic store — it must NOT emit any Qt signal or otherwise touch QObject
     // machinery, because doing so from the raw render std::thread makes Qt adopt

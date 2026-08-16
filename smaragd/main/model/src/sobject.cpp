@@ -10,6 +10,7 @@
 #include <QThread>
 
 #include "app/model/sobject.h"
+#include "tw/core/twlog.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/Metadata/Export bits
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
@@ -200,7 +201,7 @@ int SObject::readPreChildrenAttributes( QDomElement &element )
 
 int SObject::readPostChildrenAttributes( QDomElement &element )
 {
-    (void) element;
+    readAutomation( element );
     return 0;
 }
 
@@ -212,12 +213,126 @@ int SObject::serialize( QTextStream &o )
     if( res<0 ) return res;
     o  << ">\n";
 
+    serializeAutomation( o );
+
     for( SLink *lk : childLinks() ) {
         int res = lk->serialize( o );
         if( res<0 ) break;
     }
 
     o << "</" << metaObject()->className() << ">\n";
+    return 0;
+}
+
+// --- automation lanes (proposal 37 P5, design 3.3) ---------------------------
+//
+// Inline, and a NON-SLink child on purpose: the loader orders and resolves on
+// <SLink> children only, so an older build reads this element, finds nothing it
+// recognises, and ignores it. That tolerance is the whole reason lanes are not
+// top-level objects (design 3.3).
+
+SAutomationLane *SObject::automationLane( const QString &target ) const
+{
+    const QString norm = SParamRef::parse( target ).toString();
+    const QString key  = norm.isEmpty() ? target : norm;
+    for( const std::unique_ptr<SAutomationLane> &l : automationLanes_ )
+        if( l && l->target() == key ) return l.get();
+    return nullptr;
+}
+
+SAutomationLane *SObject::ensureAutomationLane( const QString &target )
+{
+    if( SAutomationLane *l = automationLane( target ) ) return l;
+    if( !SParamRef::parse( target ).isValid() ) return nullptr;
+    automationLanes_.push_back(
+        std::unique_ptr<SAutomationLane>( new SAutomationLane( target ) ) );
+    return automationLanes_.back().get();
+}
+
+bool SObject::removeAutomationLane( const QString &target )
+{
+    const QString norm = SParamRef::parse( target ).toString();
+    const QString key  = norm.isEmpty() ? target : norm;
+    for( auto it = automationLanes_.begin(); it != automationLanes_.end(); ++it ) {
+        if( *it && ( *it )->target() == key ) {
+            automationLanes_.erase( it );
+            return true;
+        }
+    }
+    return false;
+}
+
+QList<SAutomationLane *> SObject::automationLanes() const
+{
+    QList<SAutomationLane *> out;
+    for( const std::unique_ptr<SAutomationLane> &l : automationLanes_ )
+        if( l ) out.append( l.get() );
+    return out;
+}
+
+std::shared_ptr<const twAutomationCurve>
+SObject::automationCurve( const QString &target ) const
+{
+    SAutomationLane *l = automationLane( target );
+    return l ? l->snapshot() : nullptr;
+}
+
+// The DEFAULT is the invalidation and nothing else. Correct for an owner with
+// no engine component of its own to push into; the four real owners override.
+void SObject::onAutomationChanged( SAutomationLane &lane, offset_t start, offset_t end )
+{
+    (void) lane;
+    if( end <= start ) return;
+    invalidateRenderPathRange( start, end );
+}
+
+void SObject::copyAutomationFrom( const SObject &src )
+{
+    automationLanes_.clear();
+    for( const std::unique_ptr<SAutomationLane> &l : src.automationLanes_ ) {
+        if( !l ) continue;
+        std::unique_ptr<SAutomationLane> copy( new SAutomationLane( l->target() ) );
+        copy->setParamName( l->paramName() );
+        copy->setMode( l->mode() );
+        copy->setPoints( l->points() );
+        automationLanes_.push_back( std::move( copy ) );
+    }
+    applyAutomationToEngine();
+}
+
+int SObject::serializeAutomation( QTextStream &o )
+{
+    if( automationLanes_.empty() ) return 0;
+    // A lane with no points is still WRITTEN: its mode is user state (an armed
+    // Write lane that has recorded nothing yet must survive a save).
+    o << "<automation>\n";
+    for( const std::unique_ptr<SAutomationLane> &l : automationLanes_ )
+        if( l ) l->serialize( o );
+    o << "</automation>\n";
+    return 0;
+}
+
+int SObject::readAutomation( const QDomElement &element )
+{
+    const QDomElement autoEl = element.firstChildElement( "automation" );
+    if( autoEl.isNull() ) return 0;
+
+    for( QDomNode n = autoEl.firstChild(); !n.isNull(); n = n.nextSibling() ) {
+        if( !n.isElement() ) continue;
+        const QDomElement laneEl = n.toElement();
+        if( laneEl.tagName() != QLatin1String( "lane" ) ) continue;
+        const QString target = laneEl.attribute( "target" );
+        SAutomationLane *lane = ensureAutomationLane( target );
+        if( !lane ) {
+            TW_LOGW( "model", "automation: ignoring lane with unknown target '%s'",
+                     target.toUtf8().constData() );
+            continue;
+        }
+        lane->readFrom( laneEl );
+    }
+    // The engine components do not necessarily exist yet on the load path; the
+    // owner re-pushes from applyAutomationToEngine() once its chain is up.
+    applyAutomationToEngine();
     return 0;
 }
 

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <mutex>
 #include <memory>
+#include "app/model/sautomationlane.h"
 #include "tw/events/tweventclipset.h"
 #include "tw/pages/capture_page_pool.h"
 #include "tw/schedule/revalidatable.h"
@@ -225,6 +226,55 @@ public:
      */
     virtual SClipWindow *windowTakeAt( int index ) const
     { (void) index; return nullptr; }
+
+    // --- automation lanes (proposal 37 P5, design §3.3) --------------------
+    //
+    // OWNER-HELD, NEVER AN SLink CHILD. They live on SObject rather than on the
+    // four owner types (STrack / SPluginSlot / SCut / SMidiCut) for the same
+    // reason resolveEventClip() does: a verb, the serializer and the testkit
+    // must reach a lane without knowing which slice its owner belongs to, and
+    // `main/actions` may not depend on `objects/*` at all. WHICH targets are
+    // legal on WHICH owner is validated by the verbs, not by the storage.
+    //
+    // The lanes vector is only ever touched on the MAIN thread (every verb, the
+    // loader and the serializer run there); what crosses to a freeze thread is
+    // the immutable twAutomationCurve SNAPSHOT, handed to the consuming
+    // component under ITS mutex (THREADING rule 2).
+
+    /// The lane for `target` (ParamRef spelling), or null.
+    SAutomationLane *automationLane( const QString &target ) const;
+    /// The lane for `target`, creating it if absent. Null only when the target
+    /// does not parse.
+    SAutomationLane *ensureAutomationLane( const QString &target );
+    /// Drop the lane. Returns true when one was there.
+    bool removeAutomationLane( const QString &target );
+    /// Every lane, in insertion order.
+    QList<SAutomationLane *> automationLanes() const;
+    bool hasAutomationLanes() const { return !automationLanes_.empty(); }
+
+    /// The snapshot a consumer should use for `target`: null when the lane is
+    /// absent, empty or Off — and "null" is the SCALAR path, which is what keeps
+    /// a project with no lanes byte-identical (P5 AC6).
+    std::shared_ptr<const twAutomationCurve>
+        automationCurve( const QString &target ) const;
+
+    /// Called AFTER a lane mutation, with the affected range in THIS object's
+    /// own time domain. Owners override to push the new snapshot into their
+    /// engine components and to stale exactly that range
+    /// (invalidateRenderPathRange). The default does the invalidation only —
+    /// correct for an owner with nothing to push.
+    virtual void onAutomationChanged( SAutomationLane &lane,
+                                      offset_t start, offset_t end );
+
+    /// Copy `src`'s lanes onto this object, replacing whatever is here. Used by
+    /// the window CLONE path (duplicate-clip, add-take): a clip envelope lives
+    /// on the window and therefore travels with every copy of it (design §3.3).
+    void copyAutomationFrom( const SObject &src );
+
+    /// Push every lane's current snapshot into the engine. Called after a load
+    /// (the lanes are read before the components exist) and after any rebuild
+    /// of the owner's chain. Default: nothing to push.
+    virtual void applyAutomationToEngine() {}
 
     /**
      * Ordered view of this container's SLink children. Prefer this and the
@@ -625,6 +675,15 @@ protected:
 
     virtual int serializeSelfAttributes( QTextStream &o );
 
+    // Emit `<automation>…</automation>` (nothing at all when there are no
+    // lanes, so every project written before P5 is byte-unchanged). Called
+    // from SObject::serialize() and from every serialize() override that
+    // writes its own children (SPluginSlot's `<state>`).
+    int serializeAutomation( QTextStream &o );
+    // Read the inline `<automation>` child. Tolerant: an unparsable target is
+    // skipped with a warning, never a load failure.
+    int readAutomation( const QDomElement &element );
+
     int getChildIndex( SObject & ) const;
 
 protected:
@@ -632,6 +691,9 @@ protected:
     // Mutable so const methods can lock. Protected by mutex() accessor.
     // All derived classes should protect their state with this mutex.
     mutable std::mutex stateMutex_;
+
+    // Main-thread only (see the automation block above).
+    std::vector<std::unique_ptr<SAutomationLane> > automationLanes_;
 
     // Phase 5e: Page cache infrastructure (unified across all SObjects).
     // Two-page buffer model (Unix page cache pattern):
