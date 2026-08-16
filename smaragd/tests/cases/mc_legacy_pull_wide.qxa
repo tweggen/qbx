@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 B4, AC B4.6: THE LEGACY PULL PATH, EXERCISED WIDE.
+
+  This case is registered with SMARAGD_REVAL_WORKERS=0 (see smaragd/CMakeLists.txt),
+  which disables the revalidator ENTIRELY. There is then no scheduler, no plan,
+  no dependency counting and no bound input pages — every page is materialised by
+  the recursive freeze through twStreamingLatch::copyData, which is the path
+  assert-meter drives and which no other acceptance criterion in this proposal
+  covers.
+
+  WHY IT NEEDS ITS OWN CASE. Almost everything B4 wrote is reached from
+  freezePage_nolock, which both paths share. What is NOT shared is how a wide
+  component obtains its inputs: §4.4 rule (2) added
+  twLatchStreamingOutput::fetchPage, and its page acquisition (the bound-page
+  branch, the cycle guard, the chain hint, the epoch comparison) was EXTRACTED
+  from copyData so the mono seam and the wide seam cannot disagree. With the
+  scheduler off, the bound-page branch is never taken and the legacy pull is the
+  only thing under test — which is exactly the configuration in which that
+  extraction could be wrong and nothing else would notice.
+
+  A second reason: the legacy pull is where the repo's "coherent page displaced
+  by one page" class of bug lives, because it is the path that advances plug
+  cursors. Asserting a stereo clip's channels at MORE THAN ONE PAGE here is what
+  makes a displacement visible — the levels alone would still look right.
+
+  driver="pull" is mandatory, not decoration: with no revalidator there is
+  nothing for the scheduler driver to demand from.
+
+  Known caveat this case deliberately does not paper over, recorded in
+  CLAUDE.md's metering section: on this path twStreamingLatch::copyData gates its
+  cached page on the twPluginChain's content epoch, which
+  STrack::invalidateRenderPath() does not reach. So a gain change made AFTER a
+  position has been frozen is not observed here. Nothing below changes a gain
+  after probing.
+-->
+<SActionScript version="1" name="mc_legacy_pull_wide">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- ================ AC B4.6: the track root, pulled ================ -->
+    <!-- Page 0: the 6 dB ladder survives the whole track path with no
+         scheduler involved. -->
+    <assert-track-channels trackPath="0" position="0" expectChannels="2"
+                           channelA="0" channelB="1" driver="pull"
+                           minRms="0.40" minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- Page 1 and page 2. Two further pages, because a plug cursor advanced
+         once per channel instead of once per page would put page 2's audio in
+         page 1's channel 1 — same levels, wrong content, and only a second
+         position can see it. -->
+    <assert-track-channels trackPath="0" position="65536" expectChannels="2"
+                           channelA="0" channelB="1" driver="pull"
+                           minRms="0.40" minRmsDelta="0.20" minDiffRms="0.20"/>
+    <assert-track-channels trackPath="0" position="140000" expectChannels="2"
+                           channelA="0" channelB="1" driver="pull"
+                           minRmsDelta="0.10" minDiffRms="0.10"/>
+
+    <!-- The control: byte-identical channels must still REJECT the content
+         discriminator on this path too. -->
+    <assert-track-channels trackPath="1" position="0" expectChannels="2"
+                           channelA="0" channelB="1" driver="pull"
+                           minRmsDelta="0.0" minDiffRms="0.0001"
+                           expectReject="true"/>
+
+    <!-- ================ and the meter, which IS this path ============== -->
+    <!-- assert-meter freezes through tap->requestPage() and reads the page with
+         twLevelProbe. It is the production consumer of the legacy pull, and it
+         now reads a two-channel page. rms of a 480 Hz sine at amplitude
+         0.70710678 is 0.5; the probe measures a short window, so the band is
+         loose enough not to be a frequency assertion in disguise. -->
+    <assert-meter trackPath="0" position="24000" minRms="0.35" maxRms="0.65"/>
+    <assert-meter trackPath="1" position="24000" minRms="0.03" maxRms="0.25"/>
+
+    <!-- ================ and it still renders =========================== -->
+    <render filename="legacy_wide.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="legacy_wide.wav"
+                         startFrame="0" frameCount="120000"
+                         channel="0" minRms="0.40" maxRms="0.70"/>
+
+    <report-page-memory label="mc_legacy_pull_wide after render"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

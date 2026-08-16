@@ -261,6 +261,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sassertchannelsdifferaction.h
     testkit/include/app/testkit/sassertclipchannelsaction.h
+    testkit/include/app/testkit/sasserttrackchannelsaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sassertfileidenticalaction.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
@@ -286,6 +287,7 @@ set(APP_UI_FILES
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sassertchannelsdifferaction.cpp
     testkit/src/sassertclipchannelsaction.cpp
+    testkit/src/sasserttrackchannelsaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sassertfileidenticalaction.cpp
     testkit/src/sassertsourcepositionaction.cpp

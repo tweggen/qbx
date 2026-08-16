@@ -75,6 +75,34 @@
     <assert-audio-energy filename="plugin_stereo_chain.wav"
                          startFrame="144000" frameCount="48000"
                          channel="0" minRms="0.001" maxRms="0.900"/>
+
+    <!-- PROPOSAL 36 AC B4.3, at the track's ROOT COMPONENT rather than in the
+         rendered file. The comment above says the file's two channels are equal
+         BY CONSTRUCTION and that the distinctness is gated at engine level in
+         plugins_test; B4 makes it assertable from a script for the first time,
+         because the whole track path is now one N-channel wire and the insert
+         renders every channel in ONE process() call.
+
+         The fixture is cross-channel by design:
+             out[0] = in[0] * 0.5 + in[1]
+             out[1] = in[1] * 0.5
+         Both inputs carry the same sawtooth here, so channel 0 leaves at 1.5x
+         and channel 1 at 0.5x — a ratio of 3, which is what the level
+         discriminator below measures. All three failure modes are excluded: a
+         silent input 1 gives 0.5x/0.5x (delta 0, rejected), a plugin outside the
+         path gives 1x/1x (delta 0, rejected), and a per-channel loop over a
+         cursor-bearing render would displace channel 1 by a page (caught by
+         asserting at two positions).
+
+         driver="pull" deliberately: this is the seam a wide insert uses to
+         reach its upstream page, and it is the one the plugin layer's own
+         contract (invariant 13's lock rule) is written about. -->
+    <assert-track-channels trackPath="0" position="0" expectChannels="2"
+                           channelA="0" channelB="1" driver="pull"
+                           minRms="0.05" minRmsDelta="0.02" minDiffRms="0.02"/>
+    <assert-track-channels trackPath="0" position="65536" expectChannels="2"
+                           channelA="0" channelB="1" driver="pull"
+                           minRms="0.02" minRmsDelta="0.01" minDiffRms="0.01"/>
   </actions>
 
   <assertions>
