@@ -13,7 +13,7 @@
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- Render to WAV file (minimal render test) -->
-    <render filename="render_minimal.wav" format="wav" quality="10"/>
+    <render filename="render_minimal.wav" format="wav" quality="10" durationSec="4.5"/>
   </actions>
 
   <assertions>

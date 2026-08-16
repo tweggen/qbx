@@ -241,7 +241,7 @@ int main()
         CHECK(p0 && p0->validAspects != 0 &&
                   pass->renders.load() == 2 && src->renders() == 2,
               "scheduled pages serve the legacy pull as cache hits");
-        CHECK(p0->samples[100] == rampVal(100), "scheduled content is correct");
+        CHECK(p0->channelPtr(0)[100] == rampVal(100), "scheduled content is correct");
 
         // S3-2: overlapping re-demands — dedup + cache hits, no re-renders.
         auto d2 = reval.requestGraphPages(pass, 0, 2);

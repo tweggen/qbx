@@ -379,6 +379,17 @@ std::shared_ptr<twOutputPage> twTrackMix::freezePage(
 )
 {
     std::lock_guard<std::mutex> lock(mutex());
+    // WIDTH, for whoever widens this component (proposal 36 B4). This override
+    // allocates its OWN page and therefore BYPASSES the one place a page learns
+    // its width — twComponent::freezePage's `make_shared<twOutputPage>(
+    // getOutputChannels())`. Correct today only because twTrackMix declares the
+    // default 1. The day it declares more, this line must pass the same
+    // getOutputChannels() and the mixing loop must fill every channel:
+    // freezePage_nolock forks on the width of the PAGE, so a width-4 component
+    // handing itself a width-1 page renders channel 0 and publishes it without
+    // the base renderPageWide() refusal ever firing. (§4.5's width check then
+    // reads it as a miss downstream — silence plus one log line — which is a
+    // loud enough failure to find, but not one to spend a day on.)
     auto page = std::make_shared<twOutputPage>();
     page->startPosition = startPos;
     // Stamp with the epoch read BEFORE rendering; consumers (streaming latch,
@@ -467,10 +478,16 @@ length_t twTrackMix::freezePage_nolock(
     // drives the clip-overlap walk — an over-long length both overruns the fill
     // and drags every clip in the track into this page's mix.
     if (length < 0) length = 0;
-    length = std::min<length_t>(length, (length_t) page->samples.size());
+    length = std::min<length_t>(length, (length_t) page->channelFrames());
 
-    // Initialize output buffer to silence
-    std::fill(page->samples.begin(), page->samples.begin() + length, 0.0f);
+    // Initialize output buffer to silence. Per channel: at width 1 this is the
+    // single fill it always was, and at width > 1 (B4) it is still the right
+    // thing rather than a hard-coded channel 0 that would leave the other
+    // channels holding whatever the allocation left there.
+    for (idx_t c = 0; c < (idx_t) page->channels(); ++c) {
+        sample_t *dst = page->channelPtr(c);
+        std::fill(dst, dst + length, 0.0f);
+    }
 
     offset_t endPos = startPos + length;
 
@@ -542,12 +559,16 @@ length_t twTrackMix::freezePage_nolock(
     // Apply track gain, not mute (same as calcOutputTo_nolock — see there).
     double factor = pow( 10., trackGainDb_/20. );
     if( factor != 1.0 ) {
-        for( size_t i = 0; i < length && i < page->samples.size(); ++i ) {
-            page->samples[i] *= (sample_t) factor;
+        const size_t n = std::min<size_t>( (size_t) length, page->channelFrames() );
+        for( idx_t c = 0; c < (idx_t) page->channels(); ++c ) {
+            sample_t *dst = page->channelPtr( c );
+            for( size_t i = 0; i < n; ++i ) {
+                dst[i] *= (sample_t) factor;
+            }
         }
     }
 
-    page->validFrames = std::min((uint32_t)length, (uint32_t)page->samples.size());
+    page->validFrames = std::min((uint32_t)length, (uint32_t)page->channelFrames());
     page->validAspects = twAspectPlayback;  // We've computed playback data
     return page->validFrames;
 }

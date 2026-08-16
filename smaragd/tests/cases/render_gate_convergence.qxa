@@ -19,14 +19,14 @@
 
     <!-- Gate CLOSED: the clip must freeze silence. -->
     <set-render-gate clip="0,0" ready="false"/>
-    <render filename="gate_off.wav" format="wav" quality="10"/>
+    <render filename="gate_off.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="gate_off.wav"
                          startFrame="0" frameCount="192000"
                          minRms="0.0" maxRms="0.001"/>
 
     <!-- Gate OPEN: same project, no restart — audio converges. -->
     <set-render-gate clip="0,0" ready="true"/>
-    <render filename="gate_on.wav" format="wav" quality="10"/>
+    <render filename="gate_on.wav" format="wav" quality="10" durationSec="4.5"/>
     <assert-audio-energy filename="gate_on.wav"
                          startFrame="0" frameCount="192000"
                          minRms="0.20" maxRms="0.32"/>

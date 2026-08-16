@@ -30,7 +30,7 @@
     <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="192000"/>
 
     <!-- FIRST render: bakes the UN-MUTED timeline into every page cache. -->
-    <render filename="mute_cache_pre.wav" format="wav" quality="10"/>
+    <render filename="mute_cache_pre.wav" format="wav" quality="10" durationSec="8.5"/>
 
     <!-- Sanity: both tracks audible before the mute. -->
     <assert-audio-energy filename="mute_cache_pre.wav"
@@ -43,7 +43,7 @@
     <!-- THE EDIT: mute track 0, whose audio is already sitting in the caches. -->
     <set-track-mute trackIndex="0" muted="1"/>
 
-    <render filename="mute_cache_post.wav" format="wav" quality="10"/>
+    <render filename="mute_cache_post.wav" format="wav" quality="10" durationSec="8.5"/>
 
     <!-- 0-4 s: must now be silent. Serving the pre-mute cached pages fails
          here with the un-muted sec0/sec3 levels. -->
@@ -65,7 +65,7 @@
     <!-- And un-muting must bring it back, not leave a cached silence behind. -->
     <set-track-mute trackIndex="0" muted="0"/>
 
-    <render filename="mute_cache_unmuted.wav" format="wav" quality="10"/>
+    <render filename="mute_cache_unmuted.wav" format="wav" quality="10" durationSec="8.5"/>
 
     <assert-audio-energy filename="mute_cache_unmuted.wav"
                          startFrame="0" frameCount="48000"

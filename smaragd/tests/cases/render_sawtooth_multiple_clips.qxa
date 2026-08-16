@@ -17,7 +17,7 @@
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000/48000"/>
 
     <!-- Render the project (3 seconds of audio: three copies of sawtooth start concatenated) -->
-    <render filename="render_multiple_clips.wav" format="wav" quality="10"/>
+    <render filename="render_multiple_clips.wav" format="wav" quality="10" durationSec="6.5"/>
 
     <!-- Screenshot showing all three clips on the timeline -->
     <screenshot filename="render_multiple_clips_timeline.png" resolution="50%"/>

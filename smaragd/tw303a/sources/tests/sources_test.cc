@@ -30,7 +30,7 @@ static std::vector<float> pull(twComponent &c, length_t n)
     auto page = std::make_shared<twOutputPage>();
     IOVector dest(page, 0, n);
     c.calcOutputTo(dest, 0);
-    return std::vector<float>(page->samples.begin(), page->samples.begin() + n);
+    return std::vector<float>(page->channelPtr(0), page->channelPtr(0) + n);
 }
 
 int main()

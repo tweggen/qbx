@@ -38,7 +38,7 @@
   <actions>
     <load-project path="../plugin_slot_roundtrip.qxp"/>
 
-    <render filename="plugin_slot_roundtrip.wav" format="wav" quality="10"/>
+    <render filename="plugin_slot_roundtrip.wav" format="wav" quality="10" durationSec="1.5"/>
 
     <assert-audio-energy filename="plugin_slot_roundtrip.wav"
                          startFrame="0" frameCount="48000"
@@ -72,14 +72,14 @@
          1.0x, and the undo puts it back. -->
     <set-plugin-bypass trackPath="0" slotIndex="0" bypassed="true"/>
 
-    <render filename="plugin_slot_loaded_bypassed.wav" format="wav" quality="10"/>
+    <render filename="plugin_slot_loaded_bypassed.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="plugin_slot_loaded_bypassed.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.060" maxRms="0.073"/>
 
     <undo count="1"/>
 
-    <render filename="plugin_slot_loaded_unbypassed.wav" format="wav" quality="10"/>
+    <render filename="plugin_slot_loaded_unbypassed.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="plugin_slot_loaded_unbypassed.wav"
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.185" maxRms="0.215"/>

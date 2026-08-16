@@ -366,7 +366,7 @@ int main()
         auto oldPage = src->freezePage(0, nullptr, 0, FULL, env.getSRate(),
                                        nullptr);
         CHECK(oldPage && oldPage->validAspects != 0 &&
-                  oldPage->samples[0] == 0.25f,
+                  oldPage->channelPtr(0)[0] == 0.25f,
               "initial page freezes with the original content");
 
         src->amp.store(0.75f);
@@ -399,7 +399,7 @@ int main()
 
         rerender.join();
         CHECK(freshPage && freshPage->validAspects != 0 &&
-                  freshPage->samples[0] == 0.75f,
+                  freshPage->channelPtr(0)[0] == 0.75f,
               "re-frozen page carries the post-edit content");
         CHECK(freshPage &&
                   std::atomic_load(&freshPage->stalePredecessor) == nullptr,
@@ -622,7 +622,7 @@ int main()
                 if (off + (int64_t)tw::poscode::kBlockFrames > (int64_t)p->validFrames)
                     continue;
                 const tw::poscode::Decode d = decodeFloats(
-                    p->samples.data() + off, (int64_t)tw::poscode::kBlockFrames);
+                    p->channelPtr(0) + off, (int64_t)tw::poscode::kBlockFrames);
                 if (d.silent || d.confidence < 100.0) { ++ambiguous; continue; }
                 ++decoded;
                 const int64_t expect = (int64_t)p->startPosition + off;

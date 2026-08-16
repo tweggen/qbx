@@ -331,9 +331,13 @@ int SObject::straightCalcPreviewData()
             }
             const offset_t avail = curPage
                 ? (offset_t) curPage->validFrames - inPage : 0;
+            // Channel 0: the preview lane is scalar all the way to the sidecar
+            // key (which asserts channels = 1) -- widening it is B8.
+            const sample_t *pageData  = curPage ? curPage->channelPtr( 0 ) : nullptr;
+            const offset_t  pageFrames = curPage ? (offset_t) curPage->channelFrames() : 0;
             for( offset_t k=0; k<chunk; ++k ) {
-                dest[done+k] = ( k < avail && (size_t)( inPage + k ) < curPage->samples.size() )
-                             ? curPage->samples[ (size_t)( inPage + k ) ]
+                dest[done+k] = ( k < avail && ( inPage + k ) < pageFrames )
+                             ? pageData[ (size_t)( inPage + k ) ]
                              : 0.f;
             }
             done += chunk;

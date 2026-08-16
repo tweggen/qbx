@@ -221,6 +221,15 @@ std::shared_ptr<twOutputPage> twPluginChain::freezePage(
     std::shared_ptr<twOutputPage> previousPage )
 {
     if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
+        // WIDTH (proposal 36, for B4). Every page this override builds for
+        // itself — this one and the three below — is width 1 because
+        // twPluginChain declares the default 1. They BYPASS the allocation in
+        // twComponent::freezePage, which is where a page normally learns
+        // getOutputChannels(), so widening this component means widening these
+        // four lines with it. Note also that the FORWARDING path launders a page
+        // of the UPSTREAM component's width through verbatim, which is exactly
+        // why §4.4's rules are stated on page->channels() and never on a
+        // producer's declared width.
         auto silencePage = std::make_shared<twOutputPage>();
         silencePage->setValidFrames(0);
         return silencePage;

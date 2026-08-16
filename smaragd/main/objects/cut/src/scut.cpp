@@ -406,9 +406,13 @@ void SCut::buildCapture_()
             }
 
             // Copy frozen page samples to output buffer
+            // Channel 0: the capture this fills is built one channel wide
+            // (twCapturingSource(..., 1, ...)) -- a capture-backed clip keeping
+            // its channels is B7.
             size_t samplesToCopy = std::min((size_t)frozenPage->validFrames, remainingSamples);
-            for( size_t i = 0; i < samplesToCopy && i < frozenPage->samples.size(); ++i ) {
-                buf[bufOffset + i] = frozenPage->samples[i];
+            const sample_t *pageData = frozenPage->channelPtr( 0 );
+            for( size_t i = 0; i < samplesToCopy && i < frozenPage->channelFrames(); ++i ) {
+                buf[bufOffset + i] = pageData[i];
             }
 
             bufOffset += samplesToCopy;
@@ -416,7 +420,7 @@ void SCut::buildCapture_()
             pagePos += samplesToCopy;
 
             // Stop if we got fewer samples than requested (component can't produce more)
-            if( samplesToCopy < frozenPage->samples.size() ) {
+            if( samplesToCopy < frozenPage->channelFrames() ) {
                 break;
             }
         }

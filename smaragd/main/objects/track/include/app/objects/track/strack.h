@@ -69,6 +69,19 @@ public:
     
     virtual SLink *getTopMostSLinkAt( offset_t ) const;
     int getNBusses() const { return nBusses_; }
+
+    // TEST HOOK (proposal 36 M1). Every entry into setNBusses() is counted,
+    // process-wide, whether or not it changes anything.
+    //
+    // It exists because M1's central claim is a NEGATIVE one — the project's new
+    // channel count reaches no bus count — and a negative is exactly what code
+    // review is worst at: the next person to add a connection between
+    // SProject::channelsChanged and a track would pass every audio assertion in
+    // the suite and only discover the shrink Q_ASSERT_X on an undo. Counting the
+    // calls turns "we did not wire it" into something a test can fail on.
+    // Retire it when B4 makes bus width a real consequence of project width.
+    static long setNBussesCallCount();
+
     SPluginChain *getPluginChain() const { return cpPluginChain_; }
 
     // Adopt a plugin chain loaded from a project file (proposal 08 M4): drop the

@@ -12,7 +12,7 @@
 
     <!-- Render the first 100ms (4800 samples at 48kHz) -->
     <!-- This captures the very beginning of the sawtooth ramp -->
-    <render filename="render_first_100ms.wav" format="wav" quality="10"/>
+    <render filename="render_first_100ms.wav" format="wav" quality="10" durationSec="4.5"/>
 
     <!-- Take a screenshot to show the timeline -->
     <screenshot filename="render_first_100ms_timeline.png" resolution="50%"/>

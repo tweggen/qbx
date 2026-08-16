@@ -25,7 +25,7 @@
     <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
 
     <!-- FIRST render: bakes the summed pre-edit mix into the page caches -->
-    <render filename="siblings_pre_edit.wav" format="wav" quality="10"/>
+    <render filename="siblings_pre_edit.wav" format="wav" quality="10" durationSec="8.5"/>
 
     <!-- Sanity: coherent sum of two sec0 ramps ≈ 2 × 0.067 -->
     <assert-audio-energy filename="siblings_pre_edit.wav"
@@ -36,7 +36,7 @@
     <move-clip clip="0,0" destTrack="0" startTime="192000"/>
 
     <!-- SECOND render: 0-4 s = track 1 alone; 4-8 s = track 0's moved clip -->
-    <render filename="siblings_post_edit.wav" format="wav" quality="10"/>
+    <render filename="siblings_post_edit.wav" format="wav" quality="10" durationSec="8.5"/>
 
     <!-- 0-1 s: single sec0 (the cached SUM here would read ~0.134 and fail) -->
     <assert-audio-energy filename="siblings_post_edit.wav"

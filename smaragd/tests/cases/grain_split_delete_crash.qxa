@@ -31,7 +31,7 @@
                    filePath="../test_sawtooth.wav" timePos="24000"/>
 
     <!-- keep the app (and revalidator workers) running so the stale job lands -->
-    <render filename="grain_split_delete.wav" format="wav" quality="10"/>
+    <render filename="grain_split_delete.wav" format="wav" quality="10" durationSec="2.0"/>
   </actions>
 
   <assertions>

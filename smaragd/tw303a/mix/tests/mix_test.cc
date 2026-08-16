@@ -90,7 +90,7 @@ int main()
     auto page = track->freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
     CHECK(page && page->validFrames == PAGE, "track page freezes");
 
-    const auto &s = page->samples;
+    const float *s = page->channelPtr(0);
     CHECK(s[0] == 0.0f && s[(size_t)clipStart - 1] == 0.0f,
           "silence before the clip start");
     CHECK(s[(size_t)clipStart] == val(slip),
@@ -104,20 +104,20 @@ int main()
     // Key-based update: shrink the duration; a fresh page must honor it.
     track->updateClip(&dummyKeyA, clipStart, 500);
     auto page2 = track->freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
-    CHECK(page2->samples[(size_t)clipStart + 499] != 0.0f
-              && page2->samples[(size_t)clipStart + 500] == 0.0f,
+    CHECK(page2->channelPtr(0)[(size_t)clipStart + 499] != 0.0f
+              && page2->channelPtr(0)[(size_t)clipStart + 500] == 0.0f,
           "updateClip(key) changes the audible window");
 
     // Key-based removal: the WRONG key must remove nothing.
     const int wrongKey = 0;
     track->removeClip(&wrongKey);
     auto page3 = track->freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
-    CHECK(page3->samples[(size_t)clipStart] != 0.0f,
+    CHECK(page3->channelPtr(0)[(size_t)clipStart] != 0.0f,
           "removeClip with a different key leaves the clip alone");
 
     track->removeClip(&dummyKeyA);
     auto page4 = track->freezePage(0, nullptr, 0, PAGE, env.getSRate(), nullptr);
-    CHECK(page4->samples[(size_t)clipStart] == 0.0f,
+    CHECK(page4->channelPtr(0)[(size_t)clipStart] == 0.0f,
           "removeClip with the right key silences the clip");
 
     // ------------------------------------------------------------------
@@ -155,7 +155,7 @@ int main()
         auto b1 = rewB->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
         CHECK(a1 && a1->validAspects != 0 && b1 && b1->validAspects != 0,
               "both rewires freeze their first page");
-        CHECK(a1->samples[(size_t)clipStart] != 0.0f,
+        CHECK(a1->channelPtr(0)[(size_t)clipStart] != 0.0f,
               "rewire A's page carries track A's clip");
 
         auto a1again = rewA->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
@@ -170,8 +170,8 @@ int main()
         auto a2 = rewA->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
         CHECK(a2.get() != a1.get(),
               "edited path re-renders into a fresh page object");
-        CHECK(a2->samples[(size_t)clipStart + 499] != 0.0f
-                  && a2->samples[(size_t)clipStart + 500] == 0.0f,
+        CHECK(a2->channelPtr(0)[(size_t)clipStart + 499] != 0.0f
+                  && a2->channelPtr(0)[(size_t)clipStart + 500] == 0.0f,
               "re-rendered page reflects the edit (shrunk clip window)");
 
         auto b2 = rewB->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
@@ -215,7 +215,7 @@ int main()
         auto q2 = rew->freezePage(2 * CAP, nullptr, 0, FULL, env.getSRate(), nullptr);
         CHECK(q0 && q0->validAspects != 0 && q2 && q2->validAspects != 0,
               "both rewire pages of the two-clip track freeze");
-        CHECK(q0->samples[(size_t)cStart] != 0.0f && q2->samples[1000] != 0.0f,
+        CHECK(q0->channelPtr(0)[(size_t)cStart] != 0.0f && q2->channelPtr(0)[1000] != 0.0f,
               "page 0 carries clip C, page 2 carries clip D");
 
         // Edit clip D only (shrink). The mutator reports the affected
@@ -233,7 +233,7 @@ int main()
         auto q2b = rew->freezePage(2 * CAP, nullptr, 0, FULL, env.getSRate(), nullptr);
         CHECK(q2b.get() != q2.get(),
               "page INSIDE the edit range re-renders");
-        CHECK(q2b->samples[1000 + 499] != 0.0f && q2b->samples[1000 + 500] == 0.0f,
+        CHECK(q2b->channelPtr(0)[1000 + 499] != 0.0f && q2b->channelPtr(0)[1000 + 500] == 0.0f,
               "re-rendered page reflects the shrunk clip D");
 
         // Stale-page protection: stale page 0 via an edit at clip C, then
@@ -247,8 +247,8 @@ int main()
         auto q0c = rew->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
         CHECK(q0c.get() != q0b.get(),
               "a stale page is NOT re-blessed by a disjoint later edit");
-        CHECK(q0c->samples[(size_t)cStart + 499] != 0.0f
-                  && q0c->samples[(size_t)cStart + 500] == 0.0f,
+        CHECK(q0c->channelPtr(0)[(size_t)cStart + 499] != 0.0f
+                  && q0c->channelPtr(0)[(size_t)cStart + 500] == 0.0f,
               "page 0's re-render reflects clip C's edit");
     }
 
@@ -280,7 +280,7 @@ int main()
 
         // 1) Baseline: classic pull path.
         auto base = rewS->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
-        CHECK(base && base->validFrames == FULL && base->samples[1000] != 0.0f,
+        CHECK(base && base->validFrames == FULL && base->channelPtr(0)[1000] != 0.0f,
               "leaf-renderer test: pull baseline freezes");
 
         // Take the TRACK page to bind (twTrackMix mints a page per call).
@@ -311,7 +311,7 @@ int main()
               "no misses recorded when the input set covers the render");
         bool same = true;
         for (size_t i = 0; i < (size_t)FULL; ++i)
-            if (boundPage->samples[i] != base->samples[i]) { same = false; break; }
+            if (boundPage->channelPtr(0)[i] != base->channelPtr(0)[i]) { same = false; break; }
         CHECK(same, "bound-input render is byte-identical to the pull baseline");
 
         // 3) Control: EMPTY set falls back to the legacy pull, which must
@@ -381,7 +381,7 @@ int main()
 
         // C) End-to-end: baseline pull render, then plan-driven render.
         auto baseT = trackP->freezePage(0, nullptr, 0, FULL, env.getSRate(), nullptr);
-        CHECK(baseT && baseT->samples[(size_t)pStart] == val(pSlip),
+        CHECK(baseT && baseT->channelPtr(0)[(size_t)pStart] == val(pSlip),
               "planner test: pull baseline renders the slipped clip");
 
         //    Freeze the planned dep exactly as planned, bind it.
@@ -404,7 +404,7 @@ int main()
               "a complete plan records no misses");
         bool sameT = true;
         for (size_t i = 0; i < (size_t)FULL; ++i)
-            if (planPage0->samples[i] != baseT->samples[i]) { sameT = false; break; }
+            if (planPage0->channelPtr(0)[i] != baseT->channelPtr(0)[i]) { sameT = false; break; }
         CHECK(sameT, "plan-driven render is byte-identical to the pull baseline");
     }
 
@@ -459,7 +459,7 @@ int main()
                 }
                 const size_t probes[] = { 0, 1234, (size_t)FULL - 1 };
                 for (size_t k : probes) {
-                    if (p->samples[k] != val((long long)pos + (long long)k)) {
+                    if (p->channelPtr(0)[k] != val((long long)pos + (long long)k)) {
                         ++bad;
                         break;
                     }
@@ -506,11 +506,11 @@ int main()
                                        env.getSRate(), nullptr);
         CHECK(huge && huge->validFrames == FULL,
               "an over-long inputLength is clamped to one page of valid frames");
-        CHECK(huge && huge->samples.size() == (size_t)CAP,
+        CHECK(huge && huge->channelFrames() == (size_t)CAP,
               "the page buffer is not grown or overrun by an over-long length");
         bool sameL = huge && ref;
         for (size_t i = 0; sameL && i < (size_t)FULL; ++i)
-            if (huge->samples[i] != ref->samples[i]) sameL = false;
+            if (huge->channelPtr(0)[i] != ref->channelPtr(0)[i]) sameL = false;
         CHECK(sameL, "the clamped render is identical to the full-page render");
 
         // inputLength == 0 means "no input data supplied", not "render

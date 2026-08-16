@@ -33,7 +33,7 @@
          is no longer a mixer child, so no trackIndex names it. -->
     <set-track-mute trackPath="0,1" muted="1"/>
 
-    <render filename="mute_nested_track.wav" format="wav" quality="10"/>
+    <render filename="mute_nested_track.wav" format="wav" quality="10" durationSec="8.5"/>
 
     <!-- 0-4 s: only the nested track had material here; it is muted. -->
     <assert-audio-energy filename="mute_nested_track.wav"

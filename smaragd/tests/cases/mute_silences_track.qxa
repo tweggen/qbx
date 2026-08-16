@@ -26,7 +26,7 @@
 
     <set-track-mute trackIndex="0" muted="1"/>
 
-    <render filename="mute_silences_track.wav" format="wav" quality="10"/>
+    <render filename="mute_silences_track.wav" format="wav" quality="10" durationSec="8.5"/>
 
     <!-- 0-4 s: the muted track's material. Must be digital silence throughout,
          including the loud tail (sec3 ~0.405) that would be unmissable. -->

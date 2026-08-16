@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 36 M1, ACs 1.1 / 1.3 / 1.4 at the document level.
+
+  M1 makes the channel count PROJECT DATA and nothing else, so this case is
+  deliberately shaped around the two things that can go wrong with that:
+
+    * IT MUST PERSIST. channels='6' has to survive save -> load -> save on a
+      project with NESTED tracks — nesting because the loader's ordering is
+      where a project-level attribute is most likely to be read before or after
+      the thing that overwrites it. Both saves are checked, so a value that
+      only survived the first write (i.e. was never read back) fails.
+
+    * IT MUST BE INAUDIBLE. Renders bracket the channel change, and the second
+      one is asserted to the same bounds as the first. Nothing is supposed to
+      widen until B4/B5; a channel count that reached STrack::setNBusses would
+      change the graph here, and its UNDO (6 -> 2, a shrink) would abort the app
+      outright. The exact statement of that — zero setNBusses calls, and the
+      byte-identical render — is project_channels_test / the `cmp` in the PR
+      body: a .qxa can bound the energy but cannot compare two files.
+
+  Fixture sec1 is ~0.15..0.21 and sec3 ~0.37..0.44 (the ramped sawtooth).
+-->
+<SActionScript version="1" name="project_channels_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0: becomes the folder -->
+    <add-track index="-1"/>            <!-- 1: nested into it below -->
+
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+    <assert-plugin-strip trackPath="0,0" slotCount="0"/>
+
+    <!-- BEFORE the channel change. -->
+    <render filename="chan_before.wav" format="wav" quality="10" durationSec="4.5"/>
+    <assert-audio-energy filename="chan_before.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="chan_before.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <set-project-channels channels="6"/>
+
+    <!-- AFTER: identical bounds. The two files are also byte-compared outside
+         the harness (see the PR body) — chan_before.wav and chan_after.wav are
+         left in the test output directory precisely so that is possible. -->
+    <render filename="chan_after.wav" format="wav" quality="10" durationSec="4.5"/>
+    <assert-audio-energy filename="chan_after.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="chan_after.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- The undo is the dangerous direction: 6 -> 2 is a SHRINK, and shrink is
+         what STrack::setNBusses refuses. It must be an ordinary undo step. -->
+    <undo count="1"/>
+    <save-project path="../../build/test-output/project_channels_roundtrip/undone.qxp"/>
+    <assert-file-contains
+        path="../../build/test-output/project_channels_roundtrip/undone.qxp"
+        text="channels='2'"/>
+
+    <!-- …and the render is still the same after the undo. -->
+    <render filename="chan_undone.wav" format="wav" quality="10" durationSec="4.5"/>
+    <assert-audio-energy filename="chan_undone.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- An unsupported width is REJECTED, not clamped. Without this the verb
+         could accept 3, store 2, and look correct from every other angle. -->
+    <set-project-channels channels="3" expectReject="true"/>
+    <set-project-channels channels="16" expectReject="true"/>
+
+    <set-project-channels channels="6"/>
+
+    <!-- SAVE -> LOAD -> SAVE, the AC 1.1 / AC 1.3 shape.
+
+         Read save_b.qxp with one pre-existing fact in mind: `load-project`
+         deserializes INTO the current project rather than replacing it (the
+         GUI's File->Open builds a fresh SProject and swaps; SLoadProjectAction
+         does not), so the second save contains the first arrangement as well as
+         the reloaded one. It is why only the ATTRIBUTE is asserted here and not
+         the file as a whole. Nothing about this is M1's: the delta is entirely
+         mixers and plugin chains. -->
+    <save-project path="../../build/test-output/project_channels_roundtrip/save_a.qxp"/>
+    <load-project path="../../build/test-output/project_channels_roundtrip/save_a.qxp"/>
+    <save-project path="../../build/test-output/project_channels_roundtrip/save_b.qxp"/>
+
+    <assert-file-contains
+        path="../../build/test-output/project_channels_roundtrip/save_a.qxp"
+        text="channels='6'"/>
+    <assert-file-contains
+        path="../../build/test-output/project_channels_roundtrip/save_b.qxp"
+        text="channels='6'"/>
+
+    <!-- The nesting survived too, so the width was not carried by a project
+         that quietly lost its structure. -->
+    <assert-plugin-strip trackPath="0,0" slotCount="0"/>
+
+    <!-- And the RELOADED 6-channel project still renders exactly as the
+         2-channel one did: M1 is inaudible on both sides of the file. -->
+    <render filename="chan_reloaded.wav" format="wav" quality="10" durationSec="4.5"/>
+    <assert-audio-energy filename="chan_reloaded.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="chan_reloaded.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

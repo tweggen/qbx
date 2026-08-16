@@ -1,0 +1,89 @@
+<SProject fileName='' rootId='2740413922688' bpmTempo='120' sampleRate='48000' channels='1' posFactor='1/48000' candidateRates='44100,48000,88200,96000' properties='{"cycle":false,"gridVisible":true,"metronome":false,"rangeEnd":0,"rangeStart":0,"rangeValid":false,"rulerMode":"bars","snapToGrid":true}'>
+<SStdMixer id='2740413922688' nRefs='1' hasDuration='1' durationSec='3.95' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='2740436748416' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='2740437194768' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='2740437197360' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='2740437199088' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='2740437199520' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='2740437200384' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+<STrack nBusses='2' pluginChainId='2740437023600' id='2740436748416' nRefs='2' hasDuration='1' durationSec='0.6' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='GrumpyNarwhal'>
+<SLink objectId='2740437067920' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='2740437023600' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack nBusses='2' pluginChainId='2740437025904' id='2740437194768' nRefs='1' hasDuration='1' durationSec='1.275' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='SoggyNarwhal'>
+<SLink objectId='2740437068848' hasStartTime='1' startTime='31200'>
+</SLink>
+</STrack>
+<SPluginChain id='2740437025904' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack nBusses='2' pluginChainId='2740437026480' id='2740437197360' nRefs='1' hasDuration='1' durationSec='1.95' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='VelvetNarwhal'>
+<SLink objectId='2740437066992' hasStartTime='1' startTime='64800'>
+</SLink>
+</STrack>
+<SPluginChain id='2740437026480' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack nBusses='2' pluginChainId='2740437023888' id='2740437199088' nRefs='1' hasDuration='1' durationSec='2.6' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='SneakyNarwhal'>
+<SLink objectId='2740437064208' hasStartTime='1' startTime='96000'>
+</SLink>
+</STrack>
+<SPluginChain id='2740437023888' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack nBusses='2' pluginChainId='2740437023312' id='2740437199520' nRefs='1' hasDuration='1' durationSec='3.3' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='CosmicNarwhal'>
+<SLink objectId='2740437200816' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='2740437023312' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack nBusses='2' pluginChainId='2741462253040' id='2740437200816' nRefs='1' hasDuration='1' durationSec='3.3' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='WobblyNarwhal'>
+<SLink objectId='2741486353808' hasStartTime='1' startTime='129600'>
+</SLink>
+</STrack>
+<SPluginChain id='2741462253040' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack nBusses='2' pluginChainId='2741462249008' id='2740437200384' nRefs='1' hasDuration='1' durationSec='3.95' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='SpicyNarwhal'>
+<SLink objectId='2741486350096' hasStartTime='1' startTime='160800'>
+</SLink>
+</STrack>
+<SPluginChain id='2741462249008' nRefs='1' hasDuration='1' durationSec='4.16667e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+<SLink objectId='2741464914304' hasStartTime='1' startTime='0'>
+</SLink>
+</SPluginChain>
+<SPlainWave filename='../test_sawtooth.wav' id='2740437641280' nRefs='5' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+</SPlainWave>
+<SCut srcStart='144000' startOffset='144000' cutDuration='28800' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='2740437067920' nRefs='1' hasDuration='1' durationSec='0.6' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='2740437641280' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SCut srcStart='115200' startOffset='144000' cutDuration='30000' loopLength='0' stretch='5/4' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='2740437068848' nRefs='1' hasDuration='1' durationSec='0.625' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='2740437641280' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SCut srcStart='144000' startOffset='144000' cutDuration='28800' loopLength='0' stretch='1' pitchCents='700' grainSizeMs='42.6667' crossfadeMs='10.6667' id='2740437066992' nRefs='1' hasDuration='1' durationSec='0.6' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='2740437641280' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SCut srcStart='0' startOffset='0' cutDuration='28800' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='2740437064208' nRefs='2' hasDuration='1' durationSec='0.6' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='mcAsset'>
+<SLink objectId='2740436748416' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SCut srcStart='144000' startOffset='144000' cutDuration='28800' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='2741486353808' nRefs='1' hasDuration='1' durationSec='0.6' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='2740437641280' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SCut srcStart='144000' startOffset='144000' cutDuration='28800' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='2741486350096' nRefs='1' hasDuration='1' durationSec='0.6' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='2740437641280' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SPluginSlot id='2741464914304' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Smaragd Test Stereo Skew' bypassed='false' format='clap' uid='tw.test.clap.stereoskew' name='Smaragd Test Stereo Skew' vendor='Smaragd' path='twtestclap.clap' nIn='2' nOut='2' isInstrument='false'>
+<state encoding='base64'>VFdDUAEAAAAAAAAAAADwPwAAAAAAAAAA</state>
+</SPluginSlot>
+</SProject>

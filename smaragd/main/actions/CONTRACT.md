@@ -3,8 +3,8 @@
 Purpose: the command framework — SAction (apply → SApplyResult{applied,
 inverse}), the string-keyed registry, submission queue, undo history
 (rejectedCount included), QUndoStack bridge — plus generic verbs
-(set-property, grid/cycle/metronome/snap toggles, toggle-playback,
-load-project, render).
+(set-property, set-project-channels, grid/cycle/metronome/snap toggles,
+toggle-playback, load-project, render).
 
 Public headers: app/actions/*.h. The verb reference is docs/ACTIONS.md.
 

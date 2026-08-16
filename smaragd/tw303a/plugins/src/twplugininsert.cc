@@ -165,7 +165,7 @@ length_t twPluginInsert::pullUpstreamPage( offset_t startPos, length_t len,
 
     const length_t n = std::min<length_t>( len, (length_t)page->validFrames );
     if( n > 0 )
-        std::memcpy( dst, page->samples.data(), (std::size_t)n * sizeof( sample_t ) );
+        std::memcpy( dst, page->channelPtr( 0 ), (std::size_t)n * sizeof( sample_t ) );
     return n;
 }
 
@@ -214,6 +214,12 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
     std::shared_ptr<twOutputPage> previousPage )
 {
     if( state_.load( std::memory_order_acquire ) == ComponentState::ZOMBIE ) {
+        // WIDTH (proposal 36, for B4): this override allocates its own pages
+        // (here and in the preview path below) and so bypasses the width
+        // wiring in twComponent::freezePage. Correct while twPluginInsert
+        // declares the default 1; when B4 makes the insert a wide component
+        // with a renderPageWide(), these allocations must carry
+        // getOutputChannels() too.
         auto silencePage = std::make_shared<twOutputPage>();
         silencePage->setValidFrames( 0 );
         return silencePage;
@@ -252,7 +258,7 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
                     std::min<length_t>( inputLength,
                                         (length_t)twOutputPage::FRAME_CAPACITY ) );
                 if( n > 0 )
-                    std::memcpy( page->samples.data(), up->samples.data(),
+                    std::memcpy( page->channelPtr( 0 ), up->channelPtr( 0 ),
                                  (std::size_t)n * sizeof( sample_t ) );
                 page->setValidFrames( (uint32_t)std::max<length_t>( n, 0 ) );
             }

@@ -29,7 +29,7 @@
     <!-- 15.96 s of position-coded audio, source frame 0 at render frame 0. -->
     <add-sample trackIndex="0" filePath="../test_position.wav" timePos="0"/>
 
-    <render filename="position_roundtrip.wav" format="wav" quality="10"/>
+    <render filename="position_roundtrip.wav" format="wav" quality="10" durationSec="17.0"/>
 
     <!-- Block 0: the render's first block carries source frame 0. -->
     <assert-source-position filename="position_roundtrip.wav"

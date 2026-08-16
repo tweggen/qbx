@@ -27,7 +27,7 @@
     <save-project path="../../build/test-output/mute_survives_reload/roundtrip.qxp"/>
     <load-project path="../../build/test-output/mute_survives_reload/roundtrip.qxp"/>
 
-    <render filename="mute_survives_reload.wav" format="wav" quality="10"/>
+    <render filename="mute_survives_reload.wav" format="wav" quality="10" durationSec="8.5"/>
 
     <!-- 0-4 s: the muted track. Must still be silent after the reload. -->
     <assert-audio-energy filename="mute_survives_reload.wav"

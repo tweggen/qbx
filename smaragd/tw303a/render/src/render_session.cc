@@ -246,7 +246,9 @@ void RenderSession::renderThreadMain() {
             // Extract L/R samples from frozen page
             // Page stores all channels interleaved or per-output
             // For now, treat as mono per output; scale to stereo by duplicating
-            const sample_t *pageData = frozenPage->samples.data();
+            // Channel 0 explicitly: the page's buffer is private now, and the
+            // sink is still mono (B5 is what makes this a loop over channels).
+            const sample_t *pageData = frozenPage->channelPtr(0);
             for (std::size_t i = 0; i < toRender; ++i) {
                 float sample = pageData[pageOffset + i];
                 bufL[i] = sample;
