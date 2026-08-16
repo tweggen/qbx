@@ -672,9 +672,31 @@ clips are explicitly excluded here and covered by B7.
 energies in band.
 **AC B5.4** `dump-playback-capture` shows the same asymmetry as the offline
 render at the same positions.
-**AC B5.5** Mono byte-exactness holds. The `channels=2` golden may change **once**
-here — bus 1 is new audio, not a regression — with the change explained and
-re-frozen.
+**AC B5.5** ~~Mono byte-exactness holds. The `channels=2` golden may change once
+here.~~ **Both goldens change here, and both are licensed** — corrected before B5
+started, because as written this AC contradicted **AC B5.3**: if a 6-channel
+project renders a 6-channel file then `RenderParams.channels` comes from the
+project, and a `channels='1'` project therefore renders a **one-channel** file.
+`mc_golden_mono.wav` is a *two*-channel file today (the sink hardcodes 2 and
+duplicates), so its size roughly halves and byte-exactness is arithmetically
+impossible. Do not preserve it by keeping a mono project's file stereo — that
+would be the sink still lying, which is the whole thing this milestone removes.
+
+Expected, and each to be **verified rather than assumed**, in B4's manner:
+
+- **`mc_golden_mono.wav`: a SHAPE change.** 2 channels → 1. Assert the new file's
+  channel count and that its samples equal the old file's channel 0 — if the
+  surviving channel is not exactly what channel 0 was, something else moved.
+- **`mc_golden_stereo.wav`: a CONTENT change.** Channel 0 byte-identical to the
+  old file's channel 0; channel 1 becomes real bus-1 audio instead of a duplicate.
+  Report where it first differs and confirm channel 0 did not.
+- Determinism first: render twice into separate output dirs and confirm the two
+  agree **before** freezing either, as B1a and B4 both did.
+
+*(Note the mono golden is being re-frozen a second time — B4 re-froze it for the
+MonoFold correction. Two licensed re-freezes of one file in two milestones is
+exactly why each needs its reason recorded beside the case, not only in a commit
+message.)*
 
 ### B7 — Container/asset clips and the preview capture keep their channels
 
