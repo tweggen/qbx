@@ -66,13 +66,43 @@ Invariants:
    any set of consecutive windows (any worker, any order) equals rendering it
    in one call — the vocoder_test property gate. This is what makes the
    streaming grain safe under the page scheduler.
+8. **PAGE WIDTH IS THE SOURCE'S CHANNEL COUNT** (proposal 36 B3).
+   `twSampleReader`, `twLoopReader` and `twWavInput` return it from
+   `getOutputChannels()`, so `twComponent::freezePage` allocates their pages
+   that wide. These are the FIRST production components in the tree that are
+   ever wider than one channel; everything else still declares the default 1.
+   A mono source declares 1 and takes byte-for-byte the pre-B3 path.
+9. **A wide render is ONE seek, ONE pass, ONE cursor advance** (§4.3). Each of
+   the three fills every channel of the page from the SAME position and
+   advances its cursor once (`twWavInput` does not advance at all — its
+   historic contract is that callers seek before every block). A per-channel
+   loop over `calcOutputTo()` would advance a whole page per channel and fill
+   channel 1 with the NEXT page's audio; `wide_reader_test` compares every
+   page channel against `twRandomSource::read()` at the same position, which
+   is the only assertion shape that can see that failure. **A subclass that
+   changes WHERE frames come from must override `renderPageWide()` too** —
+   `twLoopReader` does, and inheriting the linear version would silently turn
+   a looping stereo clip into a single linear pass.
+10. **`renderFrames()` stays un-overridden on purpose** (§7 trap 18). Base
+   `renderFrames()` calls `calcOutputTo()` and base `calcOutputTo()` calls
+   `renderFrames()`; a component overriding NEITHER recurses until the stack
+   ends. These classes override `calcOutputTo(IOVector&)`, so a mono scratch
+   page still renders channel 0 through the narrow path.
+11. `getNOutputs()` and `getOutputChannels()` agree in these three classes and
+   ONLY here — a file cursor's ports really are its channels. They must not be
+   merged (§7 trap 8): `twRewire`'s ports are buses. `twWavInput::getNOutputs()`
+   returned a hardcoded 4 with one latch built until B3; it now builds one
+   latch per channel, which is what gives §4.4 rule (1)'s plug clamp something
+   to select.
 
 Threading: sources are immutable after load; readers are single-consumer
 cursors (one per clip placement). The streaming grain's block LRU is the one
 mutable, mutex-guarded exception (invariant 6).
 
 How to test: `ctest -R sources_test` (reader absolute seeks, loop window,
-zero-fill, grain stretch — sources/tests/); grain_*.qxa for the audible
+zero-fill, grain stretch — sources/tests/); `ctest -R wide_reader_test`
+(invariants 8-11 over the committed `tests/test_stereo.wav`, plus the
+`warp.pcm` channel-count key check of proposal 36 AC B3.4); grain_*.qxa for the audible
 grain path; qxa.render_split_slip_offset for offset semantics end-to-end;
 qxa.mp3_sample_import for the libsndfile decode path (RMS discriminator over a
 committed MP3 fixture — never a byte-cmp, since mpg123 decode is not

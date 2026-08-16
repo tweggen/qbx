@@ -28,6 +28,16 @@ public:
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
 
+    // Proposal 36 B3: the loop tiling has to be applied to EVERY channel, so
+    // this class must override renderPageWide() as well as calcOutputTo().
+    // Inheriting twSampleReader's wide render would silently turn a looping
+    // stereo clip into a single linear pass — audible, and invisible to any
+    // width-1 gate. getOutputChannels() IS inherited, and correctly: a loop
+    // window does not change how many channels the source has.
+    virtual length_t renderPageWide( twOutputPage &page, length_t frames,
+                                     const sample_t *input,
+                                     length_t inputLength ) override;
+
 private:
     offset_t loopBase_;
     length_t loopLen_;

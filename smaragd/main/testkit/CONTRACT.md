@@ -64,6 +64,23 @@ Invariants:
    against: 4 channels of a 480 Hz sine on a 6 dB RMS ladder
    (0.5 / 0.25 / 0.125 / 0.0625, pooled 0.28810), written and re-checked by
    tw303a/analysis/tools/gen_channel_fixture.cc (`--verify`).
+7b. assert-clip-channels (proposal 36 B3) asserts a CLIP's page width, because
+   no rendered file can show it before B5: the sink collapses the graph to one
+   bus and duplicates it, so `assert-channels-differ` on a render measures the
+   sink, not the clip. It resolves the clip through `SCut::resolveClip` — the
+   same one-snapshot component+position fold `twView::freezePage` uses — and
+   reads the page the RESOLVED component published, which is exactly the seam
+   AC B3.2 is about. Two things separate it from assert-meter: it declares a
+   demand on the project's `CaptureRevalidator` and waits (the SCHEDULER path,
+   the one playback and render take) rather than driving the legacy pull, and
+   it therefore needs a live revalidator — it REJECTS under
+   `SMARAGD_REVAL_WORKERS=0` rather than quietly measuring something else. Same
+   two discriminators as assert-channels-differ, same expectReject idiom, and
+   an out-of-range channel is an ERROR (channelPtr clamps to 0, so accepting it
+   would compare a channel with itself and read as "identical").
+   ../test_stereo.wav is its asymmetric fixture: the 2-channel member of the
+   same gen_channel_fixture ladder (rms 0.5 / 0.25), 144000 frames so it spans
+   three pages and a page-DISPLACED channel cannot pass.
 8. assert-file-identical is the byte gate. Render exactness has been `cmp`'d
    between runs since the beginning of this repo and never by the suite, so
    "byte-identical" could be claimed and not enforced. It must be proved to

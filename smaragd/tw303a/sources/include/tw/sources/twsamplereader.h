@@ -53,6 +53,36 @@ public:
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     virtual length_t calcOutputTo( IOVector& dest, idx_t idx ) override;
 
+    // --- Page width (proposal 36 §4.2 / §4.3, milestone B3) ----------------
+    //
+    // THE FIRST PRODUCTION COMPONENT THAT IS EVER WIDER THAN ONE CHANNEL. Its
+    // width is the SOURCE's channel count — the same number getNOutputs() has
+    // always reported and the same number createOutputLatches() has always
+    // built latches for. Until B3 only latch 0 was ever frozen, so a stereo
+    // file's channel 1 was computed by nobody; §4.4 rule (1) in
+    // twStreamingLatch::copyData is what finally gives those latches meaning.
+    //
+    // getOutputChannels() and getNOutputs() agree HERE and only here, and that
+    // is a coincidence of this class rather than a licence to merge them (§7
+    // trap 8): a reader's ports ARE its channels, twRewire's are buses, and
+    // twWavInput's were a hardcoded 4.
+    virtual idx_t getOutputChannels() const override;
+
+    // Fill EVERY channel of the page in ONE pass, from ONE seek, with ONE
+    // cursor advance (§4.3). A per-channel loop over calcOutputTo() would
+    // advance pos_ by a whole page per channel and fill channel 1 with the NEXT
+    // page's audio — the page-displacement bug this repo has already bled for,
+    // and the reason the proposal forbids a generic default loop.
+    //
+    // TRAP 18: renderFrames() is deliberately NOT overridden. The base
+    // renderFrames() routes to calcOutputTo(), which this class DOES override,
+    // so a mono scratch page handed to this component still renders channel 0
+    // through the narrow path instead of falling into the base
+    // renderFrames()/calcOutputTo() mutual recursion.
+    virtual length_t renderPageWide( twOutputPage &page, length_t frames,
+                                     const sample_t *input,
+                                     length_t inputLength ) override;
+
     // Teardown protocol
     virtual void teardown() override;
 

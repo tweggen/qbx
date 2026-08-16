@@ -938,6 +938,16 @@ if(_tw_have_au)
     target_compile_definitions(au_test PRIVATE TW_HAVE_AU=1)
 endif()
 tw_module_test(sources_test                 sources/tests/sources_test.cc               tw_sources)
+# Proposal 36 B3: the clip path goes wide. The one gate that reads a REAL STEREO
+# FILE through the reader seam and compares every page channel sample-for-sample
+# against the source at the same position — an RMS check cannot see the failure
+# §4.3 exists to prevent (channel 1 holding the next page's audio). It lives in
+# sources/tests because tw_sources is what it needs and what the module DAG
+# allows; the scheduler half of AC B3.2 is the qxa case mc_stereo_clip_width.
+tw_module_test(wide_reader_test             sources/tests/wide_reader_test.cc           tw_sources)
+target_compile_definitions(wide_reader_test PRIVATE
+    TW_STEREO_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_stereo.wav"
+    TW_MONO_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_position.wav")
 tw_module_test(vocoder_test                 sources/tests/vocoder_test.cc               tw_sources)
 # NOT a gate: timing benchmark for the W5 SIMD work (run manually).
 add_executable(warp_bench sources/tests/warp_bench.cc)
