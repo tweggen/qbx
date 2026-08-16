@@ -10893,3 +10893,14 @@ the teardown fix, PRs #34–#37, renumbered 36 → 37): `./build.sh` clean; laye
 logging clean; **`ctest -j4`: 135/135 passed in 117.7 s** (138 registered, 3 `au_*`
 disabled off macOS). Remaining phases P3a/P3b/P3c (then P5/P6) wait for the
 multichannel proposal (now 36, `feat/multichannel`) to land B4 on `main`.
+
+## 2026-08-16 — Proposal 37: merged main incl. PR #39 (multichannel M0/M1/B1/B2)
+
+`docs/midi-instruments-automation` at `212d926`: `origin/main` merged (PR #39
+brought the multichannel proposal — now numbered 36 — with M0, M1, B1a/b and B2
+executed; five keep-both conflicts: `sproject.h` members, `strack.cpp` nBusses
+clamp + MIDI attributes, `tw303a/CMakeLists.txt` test targets, ACTIONS.md rows,
+STATE.md). References to the multichannel proposal in the 37 docs repointed
+35 → 36. Gate on the merged tree: build clean, layering + logging clean,
+**`ctest -j4`: 143/143 passed in 132 s** (146 registered, 3 `au_*` disabled).
+P3a/P3b remain gated on 36-B4 (B3–B9 still open on main).
