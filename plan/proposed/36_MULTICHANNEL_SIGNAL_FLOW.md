@@ -579,10 +579,10 @@ proven by a test that forces one — including on the RT path and in `twLevelPro
 **AC B4.6** The **legacy pull path** is exercised wide at least once
 (`SMARAGD_REVAL_WORKERS=0`), since `assert-meter` drives it and no AC elsewhere
 covers it.
-**AC B4.6** A plain stereo clip yields two distinct channels **at the track's
+**AC B4.7** A plain stereo clip yields two distinct channels **at the track's
 root component** — the assertion B3 could not make, because the track path was
 still width 1 there.
-**AC B4.7** Width-1 projects byte-exact throughout.
+**AC B4.8** Width-1 projects byte-exact throughout.
 
 ### B5 — The sink goes wide *(first audible multichannel)*
 
