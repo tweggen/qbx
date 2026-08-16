@@ -93,11 +93,44 @@ SApplyResult SRenderAction::apply(SProject *project)
     // For now, start and hope it completes before the test ends (ideally sync would be better).
     app.startRender(params);
 
-    // Poll until rendering completes (with timeout). The budget scales with the
-    // arrangement now that the extent is not a fixed minute: a case may legally
-    // render several minutes of audio, and a fixed 30 s ceiling would turn that
-    // into a spurious failure.
-    int maxWaitMs = 30000 + static_cast<int>(params.endTimeSec * 2000.0);
+    // Poll until rendering completes, under a watchdog.
+    //
+    // The watchdog exists to stop a HUNG render from hanging the run forever --
+    // it is not an assertion about how fast a render is. But it is a WALL-CLOCK
+    // budget for the whole render, so it doubles as exactly such an assertion
+    // the moment the machine is busy, and `ctest -j` makes the machine busy by
+    // construction. Measured under `-j8`: a render advanced steadily, a page
+    // every ~1.6 s instead of the usual ~0.03 s, and was killed at 96 % done
+    // (2 764 800 of 2 880 000 samples) about a second from finishing. That is a
+    // false failure on a working render, and with <render> appearing 147 times
+    // across the qxa suite it is the single thing that decides how high `-j` can
+    // go.
+    //
+    // So the budget is overridable. The default is unchanged, which keeps the
+    // app's behaviour and any hand-run case exactly as before; the qxa suite
+    // raises it (see smaragd/CMakeLists.txt) and relies on CTest's own per-test
+    // TIMEOUT as the real hang guard -- a bound that is about the test, not
+    // about one action inside it.
+    // Two independent corrections, and BOTH are needed — they answer different
+    // questions and neither subsumes the other:
+    //
+    //   * how much audio is there?  The budget scales with the arrangement, now
+    //     that the extent is not a fixed minute (a case may legally render
+    //     several minutes, and a flat ceiling would fail it for being long);
+    //   * how slow is this machine?  The base is overridable, because scaling
+    //     with the CONTENT does nothing about a box that is ten times slower
+    //     than usual.
+    //
+    // Keep only the scaling and `-j8` still kills short renders on a busy box;
+    // keep only the override and a five-minute render needs an absurd constant.
+    int maxWaitMs = 30000;  // base: the machine-speed half
+    {
+        const QByteArray env = qgetenv("SMARAGD_RENDER_TIMEOUT_MS");
+        bool ok = false;
+        const int v = env.toInt(&ok);
+        if (ok && v > 0) maxWaitMs = v;
+    }
+    maxWaitMs += static_cast<int>(params.endTimeSec * 2000.0);  // the content half
     auto start = std::chrono::steady_clock::now();
     while (app.isRenderingActive()) {
         auto now = std::chrono::steady_clock::now();

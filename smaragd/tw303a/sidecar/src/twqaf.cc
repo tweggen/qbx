@@ -7,15 +7,21 @@
 
 #ifdef _WIN32
 #  include <io.h>       // _commit
+#  include <process.h>  // _getpid
 #  define TW_FSYNC( f )   _commit( _fileno( f ) )
 #  define TW_FSEEK64( f, off, whence )  _fseeki64( ( f ), ( off ), ( whence ) )
 #  define TW_FTELL64( f )              _ftelli64( f )
+#  define TW_GETPID()     ( (long)_getpid() )
 #else
-#  include <unistd.h>   // fsync, fileno
+#  include <unistd.h>   // fsync, fileno, getpid
 #  define TW_FSYNC( f )   ::fsync( ::fileno( f ) )
 #  define TW_FSEEK64( f, off, whence )  ::fseeko( ( f ), ( off ), ( whence ) )
 #  define TW_FTELL64( f )              ::ftello( f )
+#  define TW_GETPID()     ( (long)::getpid() )
 #endif
+
+#include <atomic>
+#include <string>
 
 namespace {
 
@@ -153,9 +159,31 @@ bool twQafWriter::write( const std::filesystem::path &path,
         }
     }
 
-    // Write atomically: "<path>.tmp", flush + fsync, then rename over.
+    // Write atomically: to a PRIVATE temp, flush + fsync, then rename over.
+    //
+    // The temp name must be unique per WRITER, not just per key. The sidecar
+    // root is shared by every process on the machine (one per-user cache
+    // location, and `ctest -j` runs the whole suite against it concurrently),
+    // and every case that inserts the same fixture derives the same content
+    // hash -> the same aspect key -> the same target path. With a fixed
+    // "<path>.tmp" two processes open the SAME temp with "wb" (truncate), write
+    // interleaved through independent file positions, and one of them renames
+    // the result over the target. Only the QAF *header* is CRC-protected; the
+    // payload is merely bounds-checked against the file size, so a torn write
+    // of the right length is accepted by the reader and feeds wrong analysis
+    // data (onsets / f0 / warp.pcm) into the engine. That breaks the "sidecars
+    // alter latency, never output" invariant, which holds only for a well-formed
+    // sidecar.
+    //
+    // pid + a process-local counter: distinct across processes AND across any
+    // two concurrent writes within one (twSidecarStore serializes its own
+    // stores, but twQafWriter is public API and callers need not).
+    // ".tmp" stays the EXTENSION so eviction keeps ignoring it (it takes only
+    // ".qaf") and a future sweep can still glob "*.tmp".
+    static std::atomic<uint64_t> s_tmpSeq{ 0 };
     fs::path tmp = path;
-    tmp += ".tmp";
+    tmp += ( "." + std::to_string( TW_GETPID() )
+             + "." + std::to_string( s_tmpSeq.fetch_add( 1 ) ) + ".tmp" );
 
 #ifdef _WIN32
     FILE *f = _wfopen( tmp.wstring().c_str(), L"wb" );
