@@ -60,6 +60,32 @@ twFormatCaps twComponent::getInputCaps( idx_t /*idx*/ ) const
     return c;
 }
 
+// --- §4.4 rule (2): the wide input read (proposal 36, milestone B4) ---------
+//
+// See the declaration. The one thing worth restating at the definition is the
+// LOCK DISCIPLINE: snapshot the plug under mutex(), release, then pull. A
+// component holding its own mutex across a call into a producer is the exact
+// shape of the deadlock plugins/CONTRACT.md invariant 13 records, and every
+// wide component B4 writes (twMixer, twRewire, twPluginInsert) reaches a
+// producer from inside its render.
+std::shared_ptr<twOutputPage> twComponent::fetchInputPage( idx_t plugIdx,
+                                                           offset_t pageStart )
+{
+    std::shared_ptr<twLatchOutput> plug;
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        if( plugIdx >= 0 && plugIdx < (idx_t) pInputPlugs_.size() ) {
+            plug = pInputPlugs_[plugIdx];
+        }
+    }                                  // <-- released BEFORE the pull
+    if( !plug ) return nullptr;
+
+    // Every producing latch in the freeze graph is a twStreamingLatch, so its
+    // outputs are twLatchStreamingOutputs — the same static_cast every
+    // readStreamingData() call site in the tree already makes.
+    return static_cast<twLatchStreamingOutput *>( plug.get() )->fetchPage( pageStart );
+}
+
 // --- The wide render path (proposal 36 §4.3, milestone B2) ------------------
 //
 // A width > 1 page can only be filled by a component that knows how; there is no

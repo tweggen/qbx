@@ -189,6 +189,27 @@ public:
     virtual length_t renderPageWide( twOutputPage &page, length_t frames,
                                      const sample_t *input, length_t inputLength );
 
+    // PROPOSAL 36 §4.4 RULE (2), added by B4 — "a wide component reads its
+    // bound input PAGES directly and picks channels itself".
+    //
+    // Returns the page of input plug `plugIdx`'s producer covering pageStart,
+    // through exactly the seam the mono plug pull uses: a page bound by the
+    // dataflow scheduler is served with no rendering, otherwise the legacy
+    // recursive pull runs, and either way THIS reader's page-chain hint is
+    // maintained so a stateful producer still continues across page boundaries.
+    // nullptr = unwired input, or the producer could not materialise the page;
+    // the caller renders silence for that input.
+    //
+    // The plug is SNAPSHOTTED under mutex() and the lock RELEASED before the
+    // pull — the rule twPluginInsert::pullUpstreamPage already had to obey
+    // (plugins/CONTRACT.md invariant 13): a component's own mutex must never be
+    // held across a call into a producer.
+    //
+    // The CALLER picks the channel, with twPageClampChannel. This deliberately
+    // does not, because the page's width is a fact and the consumer's is only a
+    // promise (§4.4), and because a downmix policy is never a seam's business.
+    std::shared_ptr<twOutputPage> fetchInputPage( idx_t plugIdx, offset_t pageStart );
+
     // How many times the base renderPageWide() has refused, process-wide. The
     // refusal logs once (a freeze loop would otherwise emit thousands of
     // records); this counter is what a test can assert on. AC B2.3.
