@@ -11567,3 +11567,12 @@ P3b's and the change is P5's.
 - **`cut:VelocityScale` / `cut:Transpose`** are implemented and round-trip, but
   have no dedicated qxa case — they are event transforms and their audible half
   needs an instrument, which makes them a natural P6/P9 case.
+
+## 2026-08-16 — Proposal 37: P3a, P3b, P3c, P5 merged; tip verified
+
+`docs/midi-instruments-automation` at `c5be5a9` = everything above + P3a (fader
+post-FX), P3b (instrument slot + feed — MIDI audible), P3c (render barrier +
+determinism gates), P5 (automation model + engine). Gate on the merged tree:
+build clean, layering + logging clean, **`ctest -j4`: 165/165 passed in 156 s**
+(168 registered, 3 `au_*` disabled). P6 (automation UI) started; after it, only
+P8 (gated on proposal 21) and the P9 follow-ups remain.
