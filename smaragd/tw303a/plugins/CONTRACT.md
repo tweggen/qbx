@@ -16,18 +16,32 @@ event-aware process() overload, capabilities()/audioOutBus*/tailFrames(), the
 CLAP/VST3/AU translation behind them, scanner version 2, and twNativeInstrument
 (the in-repo 303, format "tw", uid tw.native.303, registered like
 twPassThrough). It changed NOTHING in twPluginSlotProcessor, twPluginInsert or
-twPluginChain — the hosting components were reshaped by proposal 36-B4 (below) and the
-generator modes are proposal 37 P3b, so today NOTHING in the app calls the new
-overload and every rendered byte is unchanged.
+twPluginChain — the hosting components were reshaped by proposal 36-B4 (below).
+
+Proposal 37 P3b made a MIDI clip audible: twPluginSlotProcessor grew the
+GENERATOR modes (a 0-input plugin is no longer Unsupported — invariant 16), the
+PASS-THROUGH SUM (invariant 37), an event feed read through a twEventSource*
+with a per-page collect and a per-chunk rebase (invariant 38), the MIDI -> ABI
+value domain (invariant 39), the reset + chase + pre-roll continuity protocol of
+design D4 (invariant 40), forgetContinuity() for the P3c run barrier, an
+instrument bypass that keeps feeding events (invariant 41), and the rule that an
+instrument is FREEZE-PATH ONLY (invariant 42). twPluginChain and twPluginInsert
+are UNCHANGED: the head insert always had one input port, and what P3b did was
+write down that the processor — not the chain — decides whether the plugin sees
+it.
 
 Shape of a slot (proposal 08 M3, RESHAPED BY PROPOSAL 36 B4). ONE
 twPluginInsert per slot: a twComponent with one port in, one port out and N
 CHANNELS, which renders every channel of its page in one process() sweep per
 chunk. Behind it one twPluginSlotProcessor (plain C++, not a twComponent) owns
 the twPlugin instance(s), the bypass flag, the prepare() state, the block
-chunking, the channel-mismatch mapping and the position-continuity reset —
-plugin LIFETIME and STATE, not graph machinery. STrack builds ONE twPluginChain
-per track, N channels wide, holding one insert per slot in slot order.
+chunking, the channel-mismatch mapping, the position-continuity protocol and —
+for an instrument — the track's event feed; plugin LIFETIME and STATE, not graph
+machinery. STrack builds ONE twPluginChain per track, N channels wide, holding
+one insert per slot in slot order. SLOT 0 MAY BE AN INSTRUMENT (proposal 37 P3b,
+design D3): the model decides that (STrack::instrumentSlot(), the descriptor's
+isInstrument), the processor merely sees a plugin with no audio input and an
+event source, and every other slot is an effect exactly as before.
 
   Until B4 the page was one MONO channel, so N channels were N parallel
   component instances and a stereo-linked plugin could not be a component at
@@ -75,6 +89,16 @@ Invariants:
    are the CALLER's — the insert's zero-padded gather of its upstream page, and
    its own output page's channels — so the whole page's worth of per-bus
    scratch the processor used to own is gone.
+   AMENDED BY PROPOSAL 37 P3b: a GENERATOR gets ONE SORTED EVENT LIST PER CHUNK
+   along with the audio. The processor collects the whole page from its
+   twEventSource once (times page-relative), then per chunk takes the slice with
+   times in [off, off+n), rebases them to 0..n-1 and clamps anything past the end
+   into the last frame — never drops it. The UI's setParam ring is NOT merged
+   here: each backend already drains its own ring at offset 0 AHEAD of the host
+   events (twClapPlugin::drainEditsIntoEvents then appendHostEvents), so the
+   plugin still sees exactly one non-decreasing stream and there is only ever one
+   ring. A chase set (invariant 40) is the only thing this host inserts itself,
+   at offset 0 of the first chunk of a PRE-ROLL.
 6. Preview freezes do not touch the plugin. freezePreviewPage() renders the
    graph at a REDUCED rate (1 kHz) for a waveform envelope; honouring that in
    twPluginInsert would re-prepare() — for CLAP, re-activate and reallocate —
@@ -86,6 +110,13 @@ Invariants:
    exact rather than a heuristic. The preview page is deliberately NOT entered
    into the component's outputPages_ either -- it is at the wrong rate for any
    other consumer.
+   CONSEQUENCE FOR INSTRUMENTS (proposal 37 P3b): an instrument track's AUDIO
+   WAVEFORM PREVIEW IS EMPTY, because the tap forwards its upstream page and an
+   instrument's upstream is the track mix, which holds no audio clips. That is
+   deliberate: the alternative is rendering a synth at 1 kHz from a redraw. The
+   MIDI clip's own thumbnail is app-side (design 6.1), and a level envelope can
+   later be read from cached PLAYBACK pages by position, which is proposal 34's
+   pattern.
 7. CLAP parameter edits never call the plugin from the editing thread.
    twClapPlugin::setParam() updates a host-side mirror (what getParam() reads)
    and pushes into a lock-free single-producer ring that process() drains into
@@ -198,6 +229,21 @@ Invariants:
    channel is MonoFold (feed both inputs, average the outputs); anything else is
    Unsupported -- the slot loads TRANSPARENT and logs ONCE per slot, never once
    per page.
+   PROPOSAL 37 P3b ADDED THE GENERATOR ROWS. A 0-input plugin used to fall
+   straight through to Unsupported, which is why an instrument was inaudible
+   rather than merely unsupported. On a C-channel page:
+
+     0 -> C            DirectGen    one instance, channel for channel
+     0 -> 1  (C > 1)   MonoSpread   the one voice on every channel (centre-panned
+                                    until clips carry a pan and the sink is wide)
+     0 -> 2  (C == 1)  GenFold      average the pair down
+     0 -> M  (M > C)   WideGen      outs 0..C-1 to the page; the surplus into the
+                                    slot's own buffer, which is where design 5.4's
+                                    aux taps will read it (P9)
+     0 -> M  (1 < M < C)            no defined spread: Unsupported, as before
+
+   The row is chosen from the INSTANCE's ioLayout() like every other row, so a
+   descriptor that lies about being an instrument changes nothing about the DSP.
    PROPOSAL 36 B4 CHANGED THE NUMBER, NOT THE POLICY: it is the PAGE WIDTH the
    insert is handed (the project's channels=), not the count of parallel mono
    components a track was built from. One consequence is audible and is the only
@@ -448,6 +494,94 @@ Invariants:
    must be installed BEFORE `AudioUnitInitialize`, which is a lifecycle change
    this phase did not make.
 
+37. THE HEAD INSERT ALWAYS HAS ONE AUDIO INPUT; THE PROCESSOR DECIDES WHETHER
+   THE PLUGIN SEES IT (proposal 37 P3b, design D3). twPluginChain's head-input
+   wiring is unconditional — it does not ask what slot 0 is — and for a
+   GENERATOR the processor does not hand that input to the plugin at all: it
+   ADDS it to the plugin's output ("the pass-through sum"). That is what keeps
+   an audio clip on an instrument track audible with no track kind, no second
+   graph shape and no change to any invalidation walk.
+   `x + 0.0f == x`, so an instrument with NO NOTES leaves the render BYTE-
+   IDENTICAL to the render with no instrument at all — which is the sharp gate
+   (qxa.instrument_mixed_track) and the reason the sum is stated as an
+   invariant rather than left as an implementation detail. The sum is centre-
+   panned mono into a stereo instrument's outputs until clips carry channels
+   (design D3, accepted and stated).
+
+38. AN INSTRUMENT READS A twEventSource*, AND NEVER THE MODEL (proposal 37 P3b).
+   The processor holds a shared_ptr<const twEventSource> swapped under mutex_,
+   so a render already holding one keeps a live source for its whole duration.
+   The APP sets it (SPluginSlot::setEventSource <- STrack::syncInstrumentSlot)
+   and the APP refreshes what the merge CONTAINS on the main thread
+   (STrack::eventFeed(), driven from bumpRenderChainEpoch/Range — every model
+   change that reaches the track passes through there). Nothing in tw/plugins
+   walks childLinks(), resolves solo, or touches Qt. The source is a track's
+   FEED (its own clip set merged with the feeds of the children that bubble up,
+   design 3.2.1) and the processor cannot tell a merge from a plain clip set.
+
+39. THE FEED SPEAKS MIDI, THE ABI SPEAKS [0,1], AND twNormalizeForAbi() IS THE
+   ONLY PLACE THEY MEET (proposal 37 P3b). tw/events is MODEL data: SMidiSequence
+   stores `add-note velocity='100'` verbatim, SMidiOutPump sends clamp7(e.value)
+   onto the wire, and the piano roll draws value/127. The plugin ABI is
+   normalized, because CLAP and VST3 both are (and twNativeInstrument's accent
+   threshold is 100/127). So the processor divides note velocity, CC,
+   poly/channel pressure by 127 and pitch bend by 8192 on the way into a chunk
+   list — and leaves ProgramChange (an index) and ParamValue (already the
+   plugin's own domain, invariant 26) alone. Normalizing in tw/events instead
+   would force the pump to multiply back up and would round-trip a project
+   through a lossy scale.
+
+40. A GENERATOR PAGE THAT IS NOT CONTIGUOUS IS A REPOSITION: reset + chase +
+   PRE-ROLL, NOT A BARE RESET (proposal 37 P3b, design D4). An effect resets and
+   carries on; an instrument cannot, because the note that is sounding at P had
+   its note-on pages ago. So a page whose startPos is not lastEnd_ runs:
+   reset() (all notes off) -> chase stateAt(P-K) as events at offset 0 (held
+   notes with their velocities, plus every controller value that got them there)
+   -> K frames rendered with the events at their real offsets and the OUTPUT
+   DISCARDED -> then the page.
+
+       K = min( max(4096, tailFrames(), P - start(earliest note held at P)), 4 s )
+
+   K reaches back to the HELD NOTES because that is the only way an envelope
+   arrives at P in the state a continuous run would have given it; the 4 s cap
+   bounds the cost, and a note held longer than that has converged. K is also
+   clamped to P — there is nothing before frame 0 to pre-roll.
+   TWO CONSEQUENCES WORTH KNOWING. (a) The page render NEVER re-issues the
+   page's own chase set: it has just been rebuilt into the DSP, and re-attacking
+   it would double every held note. The chase is consumed by the PRE-ROLL only.
+   (b) Every generator page is therefore a PURE FUNCTION of its position and the
+   feed, which is why an instrument re-render is byte-identical and why
+   qxa.instrument_edit_reaches_render can byte-compare the untouched region.
+   An epoch bump does NOT clear lastEnd_ — only rebuild_nolock(), a rate change
+   and forgetContinuity() do. That is exactly why the P3c run barrier has to
+   call forgetContinuity() explicitly: a render whose first page starts where the
+   previous run stopped would otherwise CONTINUE that run's voices.
+
+41. AN INSTRUMENT BYPASS IS SILENCE, NOT A SHORT CIRCUIT (proposal 37 P3b). An
+   effect's bypass copies the input and skips process(). A generator's must NOT:
+   the events would never arrive, the note-offs inside the bypassed span would
+   be lost, and un-bypassing would resurrect voices that should long since have
+   ended. So process() is still called with every event and the AUDIO is
+   discarded; the pass-through sum still runs, so the track's own clips stay
+   audible through a bypassed instrument.
+   Gated in plugins_test (testGeneratorSlot), NOT in a qxa case, and that is
+   structural rather than laziness: the difference is only observable when the
+   flag moves between two CONTIGUOUS page renders of one run, and a script
+   cannot express that — a render always starts at the range start and every
+   non-contiguous page is a reposition (invariant 40), which rebuilds the voices
+   from the feed whatever the bypass history was. There is no in-app automation
+   of a bypass until proposal 37 P5.
+
+42. AN INSTRUMENT IS FREEZE-PATH ONLY (proposal 37 P3b, design 4.3).
+   twPluginSlotProcessor::render( positional = false ) — the legacy streaming
+   pull, twPluginInsert::calcOutputTo — has no page identity and therefore no
+   position, so it cannot place a single event. A generator answers SILENCE
+   there and logs once per slot. The consequence is deliberate and is written
+   down in main/testkit/CONTRACT.md as well: SMARAGD_REVAL_WORKERS=0 (legacy
+   pull everywhere) makes instrument tracks silent BY DESIGN, so an instrument
+   race sweep runs over workers {1,4,8,16} and never 0. The legacy pull is on
+   proposal 20's retirement list.
+
 36. THE SCAN IS STOPPED FROM THE APP'S ORDERLY TEARDOWN, NOT FROM A
    DESTRUCTOR. twPluginRegistry::stopScan() sets a flag the scan loop reads
    BETWEEN two modules and then joins the thread; SApplication's destructor and
@@ -653,3 +787,18 @@ Known debt:
 - Plugin output events (the plugin reporting a moved parameter, gestures) are
   accepted and dropped; no host extensions are offered (get_extension returns
   nullptr for everything). Insert latency is reported, never compensated.
+- A GENERATOR PRE-ROLLS ON EVERY REPOSITION, and the scheduler currently renders
+  each instrument page twice under a render (once per demand path), so a page at
+  P with a note held since 0 pays 2 x P frames of discarded DSP. Correct and
+  deterministic — every page is a pure function of its position (invariant 40) —
+  but it is O(P) per page rather than O(1), and it is the first thing to look at
+  if an instrument render is slow. The obvious fix (keep the pre-rolled state
+  when the NEXT page turns out to be contiguous) is what lastEnd_ already does;
+  what is missing is de-duplicating the double demand.
+- twProcessContext::playing is always true on the freeze path. A freeze
+  represents a moving timeline whether it came from playback or an offline
+  render, and there is no third state to report; a plugin that wanted "stopped"
+  has nothing to distinguish it from a readahead page.
+- The WideGen surplus channels are rendered and DROPPED (invariant 16). They are
+  design 5.4's aux outputs and there is no return track to route them to until
+  P9; the cost is one chunk buffer per surplus channel.
