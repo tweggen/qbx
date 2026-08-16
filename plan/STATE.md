@@ -11543,6 +11543,34 @@ insertion with the same `public slots:` it interrupted — which is what
 bisect back to the base commit to find, because the two failing cases are
 P3b's and the change is P5's.
 
+### A shared-environment collision, not a regression
+
+The first full run came back **166/168 with `automation_plugin_param` and
+`fader_post_fx` failing**, and neither has anything to do with P6. The
+per-user `smaragd.ini` had `plugins/searchPaths` pointing at ANOTHER
+worktree's `build/bin`, so both cases resolved `tw.test.clap.gain` by uid to
+that worktree's `twtestclap.clap` — a build without proposal 37 P2's
+`Clip Threshold` (param id 2) and without P2's four entry points. The plugin
+cache is likewise one shared file. Pointing the search path back at this
+worktree and clearing `plugincache.json` made both pass immediately, and the
+second full run was green.
+
+Worth recording because the failure looks exactly like a real regression and
+because the ini and the cache are the two pieces of state that concurrent
+sessions in different worktrees genuinely share. `plugins/searchPaths` is
+written by `set-option` in a case, which is why those cases carry
+`RUN_SERIAL` — but `RUN_SERIAL` bounds one ctest invocation, not two.
+
+### Repeat check
+
+`automation_write_pass`, `automation_lane_gestures` and
+`automation_head_mode`, 5 runs each, judged by EXIT CODE rather than by
+grepping for PASS (a teardown crash after a pass counts as a pass to the
+grep): **0 failures in 15**. Not a `repeat_test.sh` sweep over
+`SMARAGD_REVAL_WORKERS` — P6 touches no scheduler seam, no class-1 processor
+and no readahead — but `automation_write_pass` drives a real real-time
+transport twice, so it is the one that could have been timing-fragile.
+
 ### What is NOT gated
 
 - **Mode UI and Touch/Latch/Write RECORDING** are P6. The four recorder modes
@@ -11684,7 +11712,7 @@ run. No P5 case wrote two points on one frame, which is why it survived.
 | `./build.sh` | clean |
 | `python tools/check_layering.py` | clean |
 | `python tools/check_logging.py` | clean |
-| `ctest -j4` | see the numbers in the PR body / tracker row |
+| `ctest -j4` | **168/168 run passed, 0 failed, 171 registered** (139 -> 142 qxa files + the xproc driver = 143 `qxa.*` tests, plus 28 unit tests), 3 `au_*` Not Run (Disabled), in 158 s. No crashes, no flakes. |
 | `action_roundtrip_test` | **132 actions**, all green (130 at P5 + the two new verbs) |
 | `wc -l smaragd/main/timeline/src/sstdmixerview.cpp` | **4458 → 4494, +36** vs `c5be5a9` (AC4, budget 100) |
 
