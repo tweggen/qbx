@@ -8,6 +8,7 @@
 // every TU including this header (e.g. the moc jumbo file).
 #include "tw/plugins/twplugindescriptor.h"
 
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QTreeWidget;
@@ -23,13 +24,21 @@ class QTreeWidgetItem;
 class SPluginBrowserDialog : public QDialog {
     Q_OBJECT
 public:
-    SPluginBrowserDialog(QWidget *parent = nullptr);
+    // What the browser is being opened FOR (proposal 37 6.1). The FX strip's
+    // "Add Instrument" opens it on Instruments, "+ Add Effect" on Effects; the
+    // user can still widen it to All from the combo, because refusing to SHOW a
+    // plugin is not the same as refusing to insert it (the insert rules live in
+    // the action, design D3).
+    enum class Kind { All = 0, Instruments = 1, Effects = 2 };
+
+    SPluginBrowserDialog(QWidget *parent = nullptr, Kind kind = Kind::All);
 
     // Returns the selected plugin descriptor, or null if cancelled
     const audio::twPluginDescriptor *selectedPlugin() const;
 
 protected slots:
     void onSearchTextChanged(const QString &text);
+    void onKindFilterChanged(int index);
     void onPluginActivated(QTreeWidgetItem *item, int column);
     // A background scan finished: refresh, keeping the filter and the selection.
     void onPluginScanFinished();
@@ -40,6 +49,7 @@ private:
     void takeSelection();          // resolve the current row into selectedDescriptor_
 
     QLineEdit   *searchEdit_;
+    QComboBox   *kindCombo_;
     QTreeWidget *pluginList_;
     QLabel      *statusLabel_;
     std::unique_ptr<audio::twPluginDescriptor> selectedDescriptor_;

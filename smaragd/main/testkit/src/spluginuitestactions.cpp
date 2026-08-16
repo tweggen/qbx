@@ -7,7 +7,10 @@
 #include "app/model/sobjectpath.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
+#include "app/objects/track/spluginchain.h"
+#include "app/objects/track/spluginslot.h"
 #include "app/pluginui/splugineffectstrip.h"
+#include "tw/plugins/twpluginslotproc.h"
 
 #include <QDebug>
 #include <QDomElement>
@@ -33,6 +36,38 @@ std::unique_ptr<SPluginEffectStrip> makeStrip( SProject *project, int trackIndex
     STrack *track = trackAt( project, trackIndex );
     if( !track ) return nullptr;
     return std::make_unique<SPluginEffectStrip>( track, nullptr );
+}
+
+STrack *trackAtPath( SProject *project, const QString &trackPath )
+{
+    SObject *root = splacements::rootContainer( project );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    return dynamic_cast<STrack *>( lane );
+}
+
+const char *slotModeName( audio::twPluginSlotMode m )
+{
+    switch( m ) {
+        case audio::twPluginSlotMode::Transparent: return "Transparent";
+        case audio::twPluginSlotMode::Direct:      return "Direct";
+        case audio::twPluginSlotMode::DualMono:    return "DualMono";
+        case audio::twPluginSlotMode::MonoFold:    return "MonoFold";
+        case audio::twPluginSlotMode::DirectGen:   return "DirectGen";
+        case audio::twPluginSlotMode::MonoSpread:  return "MonoSpread";
+        case audio::twPluginSlotMode::GenFold:     return "GenFold";
+        case audio::twPluginSlotMode::WideGen:     return "WideGen";
+    }
+    return "Transparent";
+}
+
+const char *slotStateName( audio::twPluginSlotState st )
+{
+    switch( st ) {
+        case audio::twPluginSlotState::Active:      return "Active";
+        case audio::twPluginSlotState::Missing:     return "Missing";
+        case audio::twPluginSlotState::Unsupported: return "Unsupported";
+    }
+    return "Active";
 }
 
 // Path-addressed variant: the only way to reach a track nested in a folder.
@@ -166,6 +201,123 @@ bool SPluginEditorSetParamAction::readXml( const QDomElement &elem,
     expectValueRow_  = elem.attribute( "expectValueRow", "0" ).toInt();
     return true;
 }
+
+// --- assert-instrument-slot (proposal 37 P3b) ------------------------------
+
+SApplyResult SAssertInstrumentSlotAction::apply( SProject *project )
+{
+    STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
+                                         : trackAtPath( project, trackPath_ );
+    if( !track ) {
+        qWarning() << "assert-instrument-slot: no track"
+                   << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
+                                             : trackPath_ );
+        return { false, nullptr };
+    }
+
+    SPluginSlot *slot = track->instrumentSlot();
+    if( present_ == 0 ) {
+        if( slot ) {
+            qWarning() << "assert-instrument-slot FAILED: expected NO instrument,"
+                       << "found" << QString::fromStdString( slot->getDescriptor().uid );
+            return { false, nullptr };
+        }
+        return { true, nullptr };
+    }
+    if( !slot ) {
+        qWarning() << "assert-instrument-slot FAILED: slot 0 of the track is not"
+                      " an instrument (or the chain is empty)";
+        return { false, nullptr };
+    }
+
+    const audio::twPluginDescriptor &d = slot->getDescriptor();
+    if( !uid_.isEmpty() && QString::fromStdString( d.uid ) != uid_ ) {
+        qWarning() << "assert-instrument-slot FAILED: uid is"
+                   << QString::fromStdString( d.uid ) << "expected" << uid_;
+        return { false, nullptr };
+    }
+    if( !format_.isEmpty() && QString::fromStdString( d.format ) != format_ ) {
+        qWarning() << "assert-instrument-slot FAILED: format is"
+                   << QString::fromStdString( d.format ) << "expected" << format_;
+        return { false, nullptr };
+    }
+    if( !mode_.isEmpty() ) {
+        const QString have = QLatin1String( slotModeName( slot->getSlotMode() ) );
+        if( have != mode_ ) {
+            qWarning() << "assert-instrument-slot FAILED: mode is" << have
+                       << "expected" << mode_;
+            return { false, nullptr };
+        }
+    }
+    if( !state_.isEmpty() ) {
+        const QString have = QLatin1String( slotStateName( slot->getSlotState() ) );
+        if( have != state_ ) {
+            qWarning() << "assert-instrument-slot FAILED: state is" << have
+                       << "expected" << state_;
+            return { false, nullptr };
+        }
+    }
+    if( minTailFrames_ >= 0 || maxTailFrames_ >= 0 ) {
+        const long long tail = (long long) slot->tailFrames();
+        if( minTailFrames_ >= 0 && tail < minTailFrames_ ) {
+            qWarning() << "assert-instrument-slot FAILED: tailFrames" << tail
+                       << "<" << minTailFrames_;
+            return { false, nullptr };
+        }
+        if( maxTailFrames_ >= 0 && tail > maxTailFrames_ ) {
+            qWarning() << "assert-instrument-slot FAILED: tailFrames" << tail
+                       << ">" << maxTailFrames_;
+            return { false, nullptr };
+        }
+    }
+    if( hasFeed_ >= 0 ) {
+        const std::shared_ptr<audio::twPluginSlotProcessor> &proc = slot->getProcessor();
+        const bool have = proc && proc->hasEventSource();
+        if( have != ( hasFeed_ != 0 ) ) {
+            qWarning() << "assert-instrument-slot FAILED: hasFeed is" << have
+                       << "expected" << ( hasFeed_ != 0 );
+            return { false, nullptr };
+        }
+    }
+    return { true, nullptr };   // an assertion has nothing to undo
+}
+
+void SAssertInstrumentSlotAction::writeXml( QDomElement &elem ) const
+{
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "trackIndex", trackIndex_ );
+    elem.setAttribute( "present", present_ );
+    if( !uid_.isEmpty() )    elem.setAttribute( "uid", uid_ );
+    if( !format_.isEmpty() ) elem.setAttribute( "format", format_ );
+    if( !mode_.isEmpty() )   elem.setAttribute( "mode", mode_ );
+    if( !state_.isEmpty() )  elem.setAttribute( "state", state_ );
+    if( minTailFrames_ >= 0 )
+        elem.setAttribute( "minTailFrames", QString::number( minTailFrames_ ) );
+    if( maxTailFrames_ >= 0 )
+        elem.setAttribute( "maxTailFrames", QString::number( maxTailFrames_ ) );
+    if( hasFeed_ >= 0 ) elem.setAttribute( "hasFeed", hasFeed_ );
+}
+
+bool SAssertInstrumentSlotAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_  = elem.attribute( "trackPath" );
+    trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
+    present_    = elem.attribute( "present", "1" ).toInt();
+    uid_        = elem.attribute( "uid" );
+    format_     = elem.attribute( "format" );
+    mode_       = elem.attribute( "mode" );
+    state_      = elem.attribute( "state" );
+    minTailFrames_ = elem.attribute( "minTailFrames", "-1" ).toLongLong();
+    maxTailFrames_ = elem.attribute( "maxTailFrames", "-1" ).toLongLong();
+    hasFeed_    = elem.attribute( "hasFeed", "-1" ).toInt();
+    return true;
+}
+
+static const bool s_reg_assertinstrumentslot =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-instrument-slot" ),
+          [] { return new SAssertInstrumentSlotAction; } ),
+      true );
 
 static const bool s_reg_assertpluginstrip =
     ( SActionRegistry::instance().registerType(

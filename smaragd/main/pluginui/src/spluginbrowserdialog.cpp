@@ -2,6 +2,7 @@
 #include "app/shell/sapplication.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include <QVBoxLayout>
+#include <QComboBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLineEdit>
@@ -17,13 +18,16 @@ namespace {
 // display name — a scanner can legitimately find the same name twice.
 constexpr int kUidRole    = Qt::UserRole;
 constexpr int kFormatRole = Qt::UserRole + 1;
+// Whether the row is an INSTRUMENT, kept on the item so the Kind filter never
+// has to go back to the registry (a background scan may have replaced it).
+constexpr int kInstrRole  = Qt::UserRole + 2;
 
 }  // namespace
 
-SPluginBrowserDialog::SPluginBrowserDialog(QWidget *parent)
+SPluginBrowserDialog::SPluginBrowserDialog(QWidget *parent, Kind kind)
     : QDialog(parent)
 {
-    setWindowTitle("Insert Plugin");
+    setWindowTitle(kind == Kind::Instruments ? "Add Instrument" : "Insert Plugin");
     setMinimumSize(520, 340);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
@@ -35,6 +39,17 @@ SPluginBrowserDialog::SPluginBrowserDialog(QWidget *parent)
     searchEdit_->setPlaceholderText("name, vendor or format");
     searchEdit_->setClearButtonEnabled(true);
     searchLayout->addWidget(searchEdit_);
+
+    // The KIND filter (proposal 37 6.1). An instrument and an effect are the
+    // same kind of object with a different role, so they live in one list and
+    // this narrows it - rather than two browsers that would drift apart.
+    searchLayout->addWidget(new QLabel("Kind:"));
+    kindCombo_ = new QComboBox();
+    kindCombo_->addItem("All");
+    kindCombo_->addItem("Instruments");
+    kindCombo_->addItem("Effects");
+    kindCombo_->setCurrentIndex((int) kind);
+    searchLayout->addWidget(kindCombo_);
     mainLayout->addLayout(searchLayout);
 
     // Plugin list
@@ -67,6 +82,8 @@ SPluginBrowserDialog::SPluginBrowserDialog(QWidget *parent)
 
     // Connect signals
     connect(searchEdit_, &QLineEdit::textChanged, this, &SPluginBrowserDialog::onSearchTextChanged);
+    connect(kindCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SPluginBrowserDialog::onKindFilterChanged);
     connect(pluginList_, &QTreeWidget::itemDoubleClicked, this, &SPluginBrowserDialog::onPluginActivated);
     connect(okBtn, &QPushButton::clicked, this, [this]() {
         takeSelection();
@@ -108,6 +125,7 @@ void SPluginBrowserDialog::populatePlugins()
         }
         item->setData(0, kUidRole,    QString::fromStdString(desc.uid));
         item->setData(0, kFormatRole, QString::fromStdString(desc.format));
+        item->setData(0, kInstrRole,  desc.isInstrument);
     }
     for (int c = 1; c < pluginList_->columnCount(); ++c)
         pluginList_->resizeColumnToContents(c);
@@ -118,16 +136,20 @@ void SPluginBrowserDialog::populatePlugins()
 
 void SPluginBrowserDialog::filterPlugins(const QString &searchText)
 {
+    const int kind = kindCombo_ ? kindCombo_->currentIndex() : 0;
     int shown = 0;
     for (int i = 0; i < pluginList_->topLevelItemCount(); ++i) {
         QTreeWidgetItem *item = pluginList_->topLevelItem(i);
+        const bool isInstr = item->data(0, kInstrRole).toBool();
         bool matches = searchText.isEmpty();
         for (int c = 0; !matches && c < pluginList_->columnCount(); ++c)
             matches = item->text(c).contains(searchText, Qt::CaseInsensitive);
+        if (kind == 1 && !isInstr) matches = false;
+        if (kind == 2 && isInstr)  matches = false;
         item->setHidden(!matches);
         if (matches) ++shown;
     }
-    if (!searchText.isEmpty()) {
+    if (!searchText.isEmpty() || kind != 0) {
         statusLabel_->setText(QString("%1 of %2 plugin(s)")
                                   .arg(shown)
                                   .arg(pluginList_->topLevelItemCount()));
@@ -135,6 +157,11 @@ void SPluginBrowserDialog::filterPlugins(const QString &searchText)
         statusLabel_->setText(
             QString("%1 plugin(s)").arg(pluginList_->topLevelItemCount()));
     }
+}
+
+void SPluginBrowserDialog::onKindFilterChanged(int)
+{
+    filterPlugins(searchEdit_->text());
 }
 
 void SPluginBrowserDialog::onSearchTextChanged(const QString &text)
