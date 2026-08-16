@@ -12089,3 +12089,14 @@ CONSTRUCTION — nothing here is reachable from `freezePage`, `RenderSession` or
 before the process exits, so it never dereferences the freed track; it is a
 latent hole in the same family, and closing it means giving the action history
 a project-scoped lifetime, which is not a local change.
+
+## 2026-08-16 — Proposal 37: merged trunk through PR #45 (multichannel B4–B8); teardown segfault fixed
+
+`docs/midi-instruments-automation` at the tip above: `origin/main` merged (PRs
+#40–#45: multichannel B3, B4, B5, B7, B8 + docs), two hunk-seam fixes in
+`smainwindow.cpp` (B8's meter grabs vs P4/P6's head grabs), and the
+`clip_properties_actions` teardown SEGFAULT root-caused and fixed (pre-existing
+family: `~SProject`'s survivor pass missed `STrack`'s owned-but-unparented
+`cpPluginChainRef_` link — see the entry above). Gate: build clean, layering +
+logging clean, `ctest -j4` 171/171 twice (174 registered, 3 `au_*` disabled),
+`clip_properties_actions` 40/40 at workers 16 and 8, siblings 20/20.
