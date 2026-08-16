@@ -92,6 +92,12 @@ Three properties of the current code make this tractable rather than a rewrite:
    output ports**, one port per channel — exactly the de‑interleaved layout VST3
    and CLAP want internally. No interleaving rework is needed in the graph.
 
+   > **REVERSED by proposal 36 (2026-08-16).** The page carries N planar
+   > channels, so channels are no longer parallel *component instances*. The
+   > channel-mismatch policy this premise supports (Direct / DualMono / MonoFold /
+   > Unsupported) is **preserved semantically** and re-derived from page width —
+   > only where the number comes from changed.
+
 3. **There is a precedent to copy verbatim.** The audio‑driver layer (proposal
    02) is a plain `AudioBackend` interface with per‑platform implementations and
    a `createAudioBackend()` factory, *hosted* by the `twSpeaker` component. The
