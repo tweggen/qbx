@@ -9194,3 +9194,174 @@ analysers reject an empty region, which is exactly the interesting case), and
 three cases pinning the three lengths: `render_duration_short`,
 `render_duration_past_60s` (the truncation half — a clip at 64 s, and its
 64 s render is now the most expensive case in the suite), `render_duration_empty`.
+
+---
+
+## 2026-08-15 — Test-kit gates: `channel=` was being ignored, plus a byte gate, page accounting and a units bug
+
+Five pieces of general-purpose test and engine infrastructure. One of them is a
+live defect on `main`; the rest are instruments the suite did not have.
+
+### `channel=` was silently dropped on every whole-file assertion
+
+`assert-audio-energy` and `assert-audio-peak` branched on `frameCount == -1`
+into `audio::analyzeWavFile`, a separate whole-file path that hard-coded
+`channelIndex = -1`. So any assertion that named a channel WITHOUT also naming
+a frameCount measured the ALL-CHANNELS-POOLED figure instead — the pooled RMS
+for energy, the max-over-channels for peak.
+
+It has cost nothing to date only because the sink duplicates one mono bus into
+every channel, which makes the pooled figure equal each channel's. It would
+have begun silently mis-passing the day that stops being true.
+
+There is no second path now: a whole file IS a region with `frameCount < 0`,
+`analyzeWavFile` only forwards, and one call serves both spellings.
+`assert-audio-frequency` and `assert-source-position` were checked for the same
+shape and do not have it — `estimateFundamental` has always handled
+`frameCount < 0` itself and honoured the channel, and `decodePositionAt`
+requires a positive window.
+
+All 33 pre-existing `channel=` users also pass `frameCount=`, so the fix is
+behaviour-preserving for every one of them.
+
+Two adjacent holes closed with it:
+
+* A `channelIndex` at or past the file's channel count selected NOTHING and
+  reported RMS 0 / peak 0 — indistinguishable from "the render came out
+  silent". It is an error now.
+* The assert verbs resolved `filename` only against the test output dir, so a
+  committed fixture was unaddressable. `resolveTestFilePath`
+  (`app/testkit/stestfilepath.h`) tries the output dir, then the `.qxa`'s own
+  directory, then the cwd, and falls back to the output-dir spelling so a
+  missing render fails exactly the way it always did.
+
+### assert-channels-differ, and a fixture whose channels are known
+
+"These two channels are genuinely different audio" was only ever INFERRABLE —
+by asserting a per-channel band on each and reading the results against each
+other. `assert-channels-differ` makes it assertable, measuring two things in
+one pass because they fail differently: `|rms(A) - rms(B)|` (`minRmsDelta`) is
+what a duplicated bus fails, and `rms(A - B)` (`minDiffRms`, off by default) is
+what catches two channels sitting at the same LEVEL while holding different
+audio. Same channel twice, or a channel the file lacks, is rejected rather than
+trivially satisfied.
+
+`tests/test_channels4.wav` (96 KB) is the fixture: 4 channels of a 480 Hz sine,
+12000 frames = 120 whole cycles at 48 kHz, amplitudes 0.7071/2^c, so each
+channel's RMS is exactly amplitude/sqrt(2) — a 6 dB ladder 0.5 / 0.25 / 0.125 /
+0.0625 against a pooled 0.28810. Written by
+`analysis/tools/gen_channel_fixture`, which also VERIFIES an existing file
+against the ladder; that `--verify` mode is why the `.wav` may be committed at
+all, exactly as for `gen_position_fixture`.
+
+### assert-file-identical — the byte gate the repo had claimed but not enforced
+
+Render exactness has been gated by `cmp` since the beginning, but only ever
+BETWEEN RUNS, by hand, outside the harness. There was no verb, so
+"byte-identical" could be written in a PR body and never checked again.
+
+`<assert-file-identical actual= expected= [maxReportedDiffs=]>` resolves both
+paths through `resolveTestFilePath`. On mismatch it reports both sizes, the
+offset and byte values of the first difference, how many bytes differ, and the
+first few offsets: a truncated render and a re-rendered one are both "not
+identical" and have nothing else in common.
+
+### `render durationSec=`
+
+An explicit bound on how much audio a case renders (default `-1` = unchanged).
+It only ever NARROWS a render — a case that asserts the first two seconds of an
+arrangement need not write, byte-compare or wait for the rest. It is
+deliberately not a fix for `SProject::getDurationSeconds()`; that is its own
+question, and PR #34 is answering it.
+
+### Page-memory accounting
+
+There is NO `twOutputPage` pool to instrument. Pages are `make_shared` on
+demand into unbounded per-component maps, so "how much page memory is resident"
+had no answer at all. The instrument is therefore the page's own lifetime:
+`tw::pages::PageAccounting` counts sample bytes from `twOutputPage`'s
+constructor and destructor, which is exact no matter who owns the page —
+including one bound into a scheduler node, held by an audio callback, or
+hanging off a `stalePredecessor` chain, all of which a pool-side counter would
+have missed.
+
+Every live `twComponent` registers in a process-wide raw-pointer registry so
+the report can break the total down per component type. The registry lock is
+held for the WHOLE walk — `~twComponent` takes it first thing, so no component
+can get past the top of its base destructor while a walk runs, which is what
+makes the raw pointers safe — and `pageStatsTry()` uses a try-lock so the walk
+never waits on a component mutex while holding it.
+
+`<report-page-memory label= [maxPages=] [maxBytes=]>` is the test hook. Both
+bounds default OFF: resident page count depends on the readahead and the worker
+count, so a tight bound would be a flake generator rather than a gate; making
+the number visible is the deliverable.
+
+Measured on a one-track two-render case: 0 pages after load; 136 pages /
+35 651 584 B after a 2 s render and a full-length one (135 in component caches,
+1 elsewhere), with `twRewire` holding 88 over 2 instances, `twMixer` 44 and
+`twSampleReader` 3 — while 2 `twTrackMix` and 2 `twPluginChain` instances hold
+zero between them, which is the caching split proposal 34 documented, now
+measured.
+
+And the number that dwarfs them: `CapturePagePool` pre-allocates its whole
+vector in its constructor and `SProject` asks for 2048 pages — 553 648 128
+bytes, 528 MiB, reserved eagerly per project, of which the case uses NONE. The
+reservation and its occupancy are now in the same report, or a 35 MB figure
+would be a true number telling a lie.
+
+### The units bug
+
+`releaseOldPages` compared `it->first + twOutputPage::PAGE_SIZE < keepAfterPos`
+— `PAGE_SIZE` is 262 144 BYTES while both other terms are FRAME positions — so
+the retention window was four pages wide instead of one. It is `FRAME_CAPACITY`
+now, pinned frame-exactly from both sides by the new `graph_test` (a page whose
+end equals `keepAfterPos` is retained; one frame later it is released).
+
+But NOTHING IN THE TREE CALLS `releaseOldPages`. Component caches are pruned
+only by invalidation and by teardown, so `outputPages_` grows without bound over
+a session. The fix therefore changed no measured number — the value of fixing it
+is that whoever wires the function up does not inherit a silently wrong window.
+Wiring or retiring it is a separate question.
+
+The rest of the frames-vs-bytes sweep: `render_session.cc` named a FRAME count
+`PAGE_SIZE` (value right, name one identifier from the bug) — now `PAGE_FRAMES`
+off `FRAME_CAPACITY`; and `twcomponent.h` documented a page's extent as
+`[0..PAGE_SIZE]`. Everything else dividing `PAGE_SIZE` by an element size is a
+correct bytes-to-elements conversion, and `PageBase::getPageSize()` returns
+bytes and has no callers at all.
+
+### Gates
+
+`ctest -R graph_test` (the retention boundary and the accounting arithmetic,
+against a page count the test controls exactly) and four qxa cases:
+
+* `channel_assert_fixture` — every verb with `frameCount` both given and
+  omitted, against the 4-channel ladder. Every band in it EXCLUDES the pooled
+  figure, so the pre-fix code fails it. Half its actions are
+  `expectReject="true"` — a wrong channel selection must fail, or the right one
+  proves nothing.
+* `channel_assert_dupmono` — renders through the ordinary path and asserts, via
+  `expectReject`, that the two channels are the same audio by level AND sample
+  for sample. This case is SUPPOSED to fail the day the sink goes wide; it is
+  the signal, not a regression to loosen.
+* `file_identical_gate` — two renders of one unchanged project must agree byte
+  for byte, and the gate is proved to fail in each of its three shapes: SIZE (a
+  shorter render), CONTENT (a fader move: same size, first difference at offset
+  292, 94.9% of bytes differ), and MISSING (naming a reference that does not
+  exist, which must not read as "the render is wrong"). A MUTED track was tried
+  for the content case and turned out to write a header-only 44-byte file —
+  another size difference, which would have left the content branch untested.
+* `render_duration_and_pages` — `durationSec="2"` bounds the render to
+  384 044 B against the unbounded 11 520 044 B; a region at 3.0 s is rejected in
+  the bounded file and present in the unbounded one (3.0 s is inside the 4 s
+  ARRANGEMENT, so the assertion survives whatever the unbounded render's length
+  is); the two files are not byte-identical. Plus `report-page-memory` at load
+  and after the renders, with a loose order-of-magnitude ceiling and a
+  `maxPages="0"` rejection proving the bound is a real bound.
+
+**Not gated, said plainly:** the accounting is a diagnostic — no case asserts a
+tight page-count ceiling, because one would flake on the readahead.
+`releaseOldPages` has no production caller, so its retention window is proven by
+a unit test and never by the suite.
+

@@ -24,8 +24,17 @@
  * - minRms: Minimum acceptable RMS energy (0.0 to 1.0)
  * - maxRms: Maximum acceptable RMS energy (0.0 to 1.0)
  * - startFrame: Frame to start analysis (default: 0)
- * - frameCount: Number of frames to analyze (-1 = entire file)
- * - channel: Channel to analyze (-1 = all channels mixed, 0+ = specific channel)
+ * - frameCount: Number of frames to analyze (-1 = to the end of the file)
+ * - channel: Channel to analyze (-1 = all channels pooled, 0+ = that channel)
+ *
+ * `channel` applies WITH OR WITHOUT `frameCount`. It used to be dropped
+ * whenever frameCount was omitted, because that took a separate whole-file code
+ * path which hard-coded the pooled figure — invisible while every channel of
+ * every render is equal, and a silent mis-pass the day the sink goes wide.
+ * A channel the file does not have is REJECTED rather than
+ * measured as an empty selection, which would report RMS 0 and read like a
+ * silent render. `filename` resolves via resolveTestFilePath, so a committed
+ * fixture is addressable as well as a render.
  */
 class SAssertAudioEnergyAction : public SAction {
 public:

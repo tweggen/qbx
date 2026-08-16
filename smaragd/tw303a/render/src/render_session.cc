@@ -166,7 +166,12 @@ void RenderSession::renderThreadMain() {
         // freezePage() orchestrates reset/restore/render/capture without seekTo()
         const std::size_t BLOCK_SIZE = 2048;
         // Phase 5 Gap 11: Use unified page size constant
-        const uint64_t PAGE_SIZE = twOutputPage::PAGE_SIZE / sizeof(sample_t);  // Pages from unified constant
+        // FRAMES, not bytes — twOutputPage::PAGE_SIZE is the page's size in
+        // BYTES and this arithmetic is all positions. The value was right and
+        // the NAME was one identifier away from the units bug that really did
+        // land in releaseOldPages. twOutputPage::FRAME_CAPACITY is the same
+        // value spelled unambiguously.
+        const uint64_t PAGE_FRAMES = (uint64_t) twOutputPage::FRAME_CAPACITY;
 
         std::vector<float> bufL(BLOCK_SIZE), bufR(BLOCK_SIZE);
         std::shared_ptr<twOutputPage> prevPage;
@@ -193,7 +198,7 @@ void RenderSession::renderThreadMain() {
             // the range start plus what we've written so far — not just the
             // written count (that rendered the wrong region for ranges > 0).
             uint64_t currentPos = startOffsetSamples_ + samplesWrittenVal;
-            offset_t pageStartPos = (currentPos / PAGE_SIZE) * PAGE_SIZE;
+            offset_t pageStartPos = (currentPos / PAGE_FRAMES) * PAGE_FRAMES;
 
             // Stage 4: wait for the scheduler to have this page frozen — a
             // single-page demand that dedups onto the in-flight full-range
@@ -225,7 +230,7 @@ void RenderSession::renderThreadMain() {
             }
 
             // How many frames to extract from this frozen page
-            std::size_t pageOffset = (currentPos % PAGE_SIZE);
+            std::size_t pageOffset = (currentPos % PAGE_FRAMES);
             std::size_t framesAvailable = frozenPage->validFrames - pageOffset;
             std::size_t toRender = std::min({
                 BLOCK_SIZE,
