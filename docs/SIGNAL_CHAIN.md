@@ -47,20 +47,25 @@ Every SObject exposes a `twComponent` subgraph via `getRootComponent()`. These c
 
 1. **SProject::setRootComponent(SStdMixer\*)**
    - SStdMixer creates its twComponent subgraph
-2. **SStdMixer::setNBusses(n)** — creates per-bus infrastructure
-   - Creates `twMixer[0..n-1]` (one per audio bus: e.g., stereo = 2)
-   - Creates `twRewire` (output multiplexer)
-   - Wires: `twMixer[i]->linkOutput(0)` → `twRewire->setInput(i, ...)`
+2. **SStdMixer::setChannels(n)** — n from `SProject::channels()`
+   - ONE `twMixer` (the bus sum) and ONE `twRewire` (the graph ROOT), each **n
+     channels wide**. A bus is not a channel: there is one bus, and the channel
+     dimension lives inside the page (proposal 36 B4). Before B4 the mixer ran
+     `bus < 1` and every track's second channel was built and then dropped.
+   - Wires: `twMixer->linkOutput(0)` → `twRewire->setInput(0, ...)`
 3. **SStdMixer::reconnectTracksToMixer()** — for each track
    - Gets track's root component: `STrack::getRootComponent()` → twRewire
-   - Wires: `twRewire[track]->linkOutput(bus)` → `twMixer[bus]->setInput(track, ...)`
-4. **STrack::setNBusses(n)** — per-track infrastructure
-   - Creates `twTrackMix[0..n-1]` (clips mixer per bus)
-   - Creates `twPluginChain[0..n-1]` (effect inserts per bus)
-   - Creates `twRewire` (output multiplexer)
-   - Wires: `twTrackMix[i]` → `twPluginChain[i]` → `twRewire->setInput(i, ...)`
+   - Wires: `twRewire[track]->linkOutput(0)` → `twMixer->setInput(track, ...)`
+   - `twMixer`'s INPUTS are tracks; its CHANNELS are channels. It sums channel
+     *c* of every input into channel *c*, clamping a narrower track's last
+     channel up (§4.4, "mono plays on every channel").
+4. **STrack::setChannels(n)** — per-track infrastructure, same n
+   - Creates ONE `twTrackMix`, ONE `twPluginChain`, ONE `twRewire`, all n wide
+   - Wires: `twTrackMix` → `twPluginChain` → `twRewire->setInput(0, ...)`
+   - Called again on `SProject::channelsChanged`; a later call only re-widths,
+     creating and destroying nothing (so a shrink is ordinary)
 5. **STrack::trackChildWasAdded(SLink)** — when clip added
-   - Calls `twTrackMix[bus]->insertClip(startTime, duration, getComponentFn)`
+   - Calls `twTrackMix->insertClip(startTime, duration, getComponentFn)`
    - `getComponentFn` is a lambda capturing the SLink, invoked dynamically
 6. **twTrackMix::insertClip()** — adds clip to timeline
    - Creates `twView` (stable wrapper)
@@ -200,15 +205,15 @@ Page Cache & State Continuity
 |------|-----------|------|---------|---|
 | 1 | SStdMixer created | main/src/smainwindow.cpp | ~217 | `fileNew()` → `SProject::setRootComponent(new SStdMixer(...))` |
 | 2 | Speaker wired to root | main/src/sapplication.cpp | 51–63 | `rewireSpeaker()` → `getSpeaker()->setInput(0, root.linkOutput(0))` |
-| 3a | SStdMixer twMixer[] created | main/src/sstdmixer.cpp | 219–286 | `setNBusses()` → `new twMixer` × N |
-| 3b | SStdMixer twRewire created | main/src/sstdmixer.cpp | 276 | `new twRewire(env)` |
-| 3c | Mixer→Rewire wiring | main/src/sstdmixer.cpp | 283–285 | `cpRewire_->setInput(i, mix->linkOutput(0))` |
-| 4 | Tracks → Mixer wiring | main/src/sstdmixer.cpp | 134–169 | `reconnectTracksToMixer()` → `mix->setInput(bus, track_rewire.linkOutput(bus))` |
-| 5a | STrack twTrackMix[] created | main/src/strack.cpp | 244 | `setNBusses()` → `new twTrackMix(env)` |
-| 5b | STrack twPluginChain[] created | main/src/strack.cpp | 262 | `new twPluginChain(env, 1)` |
-| 5c | STrack twRewire created | main/src/strack.cpp | 276 | `new twRewire(env)` |
-| 5d | TrackMix→Chain→Rewire wiring | main/src/strack.cpp | 282–288 | `cpPluginChains_[i]->setInput(0, cpTrackMixers_[i]->linkOutput(0))` etc. |
-| 6 | Clips inserted into twTrackMix | main/src/strack.cpp | 175–200 | `trackChildWasAdded()` → `cpTrackMixers_[i]->insertClip(startTime, duration, getComponentFn)` |
+| 3a | SStdMixer twMixer created | main/objects/mixer/src/sstdmixer.cpp | — | `setNBusses(1)` → ONE `twMixer`, `setChannels(n)` → n channels wide |
+| 3b | SStdMixer twRewire created | main/objects/mixer/src/sstdmixer.cpp | — | `new twRewire(env)`, `setNPlugs(1)`, `setChannels(n)` |
+| 3c | Mixer→Rewire wiring | main/objects/mixer/src/sstdmixer.cpp | — | `cpRewire_->setInput(0, mix->linkOutput(0))` |
+| 4 | Tracks → Mixer wiring | main/objects/mixer/src/sstdmixer.cpp | — | `reconnectTracksToMixer()` → `mix->setInput(trackIndex, track_rewire.linkOutput(0))` |
+| 5a | STrack twTrackMix created | main/objects/track/src/strack.cpp | — | `setChannels()` → ONE `twTrackMix(env)`, n channels wide |
+| 5b | STrack twPluginChain created | main/objects/track/src/strack.cpp | — | `new twPluginChain(env, n)` — ONE, one port each way |
+| 5c | STrack twRewire created | main/objects/track/src/strack.cpp | — | `new twRewire(env)`, `setNPlugs(1)` |
+| 5d | TrackMix→Chain→Rewire wiring | main/objects/track/src/strack.cpp | — | `cpDspChain_->setInput(0, cpTrackMix_->linkOutput(0))` etc. |
+| 6 | Clips inserted into twTrackMix | main/objects/track/src/strack.cpp | — | `trackChildWasAdded()` → `cpTrackMix_->insertClip(startTime, duration, getComponentFn)` |
 | 7 | twView created for clip | tw303a/src/twtrackmix.cc | 88–106 | `insertClip()` → `twView *view = new twView(env, getComponentFn)` |
 | 8 | SCut reader built | main/src/scut.cpp | 469–481 | `getRootComponent()` → builds or returns `twSampleReader`, `twLoopReader`, etc. |
 | 9 | SPlainWave reader created | main/src/splainwave.cpp | 65–68 | `getRootComponent()` → returns `cpWave_` (twWavInput) |

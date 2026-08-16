@@ -127,6 +127,20 @@ Invariants:
     silence pages are width 1). A wide consumer may instead read its bound
     input PAGES directly and pick channels itself (rule 2), which is why no
     channel argument is threaded through readStreamingData/copyData.
+13. RULE 2 IS twComponent::fetchInputPage(), AND IT SHARES ITS ACQUISITION WITH
+    THE MONO SEAM (proposal 36 B4). A wide component (twMixer, twRewire,
+    twPluginInsert) takes its producer's whole PAGE through
+    twLatchStreamingOutput::fetchPage, which calls the same
+    twStreamingLatch::acquirePage() copyData does — the bound-page branch, the
+    cycle guard, the chain-hint rule and the deliberate heldEpoch = 0 for a
+    bound page, all one implementation. Two copies of that staleness rule is
+    precisely how the "held page stamped 9, chain epoch 7" bug got written.
+    fetchInputPage() snapshots the plug under mutex() and RELEASES it before
+    pulling: a component's own mutex held across a call into a producer is the
+    lock-order inversion tw/plugins CONTRACT invariant 13 is about. It does NOT
+    advance the reader's stream offset — a wide consumer is inside
+    freezePage_nolock, which has already seekInputStreams()ed, and a page is the
+    unit there.
 
 Threading: THREADING.md rules 2-3; one mutex per component, _nolock suffix
 convention.

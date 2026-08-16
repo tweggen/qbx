@@ -531,12 +531,13 @@ whole feature needed **zero edits to any existing engine file** — just the new
 | Thing to know | Why |
 |---|---|
 | The tap is a track's ROOT component (`STrack::getRootComponent()` → its `twRewire`) | It is the only per-track component that CACHES pages: `twTrackMix::freezePage` allocates a fresh page every call, `twPluginChain::freezePage` forwards to its last insert. Content there is post-fader, post-FX, pre-summing. Consequence: a pre-fader meter is not available without new engine work. |
+| Its page is N CHANNELS WIDE since proposal 36 B4, and the probe reads channel 0 | `twLevelSample` / `twScanSpan` / `SLevelMeter` are scalar **by type**, so a per-channel meter is a widget and probe change, not a config one — that is B8. What B4 did add is §4.5's width check in `twLevelProbe::resolvePage_`: a cached page whose `channels()` no longer matches its producer's declared width is a MISS (the meter decays), never audio, because reading `channelPtr(1)` of a stale one-channel page is an out-of-bounds read. |
 | `outputLatencyFrames` is in DEVICE frames at the DEVICE rate | The locator counts PROJECT frames. `SApplication::meterLatencyFrames()` scales by `projectRate/deviceRate`; skipping that is a ~9% error for 44.1 k on a 48 k device. Applied ONCE in the pump so all meters share one position. |
 | Ballistics live on the UI thread, driven by wall-clock dt | Frame-rate independence (one 1 s step == 100 × 10 ms steps) is asserted by `metering_test` and is the reason they are not in the engine. |
 | `meterTimer_` is NOT a fold into `pumpLocator` | `pumpLocator` only works when the position changed and stops the instant playback stops. Meters need a tick at a static position (to decay) plus a ~8 s tail, or the bars freeze mid-level. Not started during an offline render; started while recording. |
 | A page miss must DECAY the meter | `advanceTo()` returning false → `idle()`. A dropout then reads as a fast fall, never as a frozen bar. Nothing here may block, wait, or create a demand. |
 | Stale-but-frozen pages are deliberately ACCEPTED | Playback serves exactly those (proposal 16), so rejecting them would make the meter disagree with the ear while an edit is absorbed. |
-| Mono | `SStdMixer` runs one bus and `freezePage_nolock` renders `idx = 0`. Never assert `L != R`. |
+| Mono at the SINK, not in the graph | Since proposal 36 B4 the whole track and master path is N channels wide and a stereo clip really does carry two different channels at the track root (`qxa.mc_track_width`). The SINK is still mono — `RenderSession` and `AudioEngine` collapse to one page and duplicate it, which B5 fixes — so a rendered WAV's channels are still equal BY CONSTRUCTION. Never assert `L != R` on a FILE; do assert it on a page, with `assert-track-channels`. |
 | `twAspectMetadata` stays unclaimed | `freezePage` already stores `validAspects = twAspectAll`, so that "peak levels" bit is already set and already meaningless. Claiming it would drag metering into the demand system for nothing. |
 
 **One engine hole this exposed** (not a product bug, but it shapes tests): the
@@ -679,39 +680,59 @@ qualitative RMS discriminator (AULowpass), never a byte-`cmp`.
 | AU backend (macOS) | `plugins/src/twaumodule.{h,cc}`, `twauplugin.cc` | Plain C AudioUnit API, no Obj-C. NOT directory-scanned — enumerated from the OS component registry (`AudioComponentFindNext`); a "module" is one component keyed `au:<type>-<subtype>-<manufacturer>` and a descriptor's `path` is EMPTY. |
 | Scanner + cache | `plugins/src/twpluginregistry.cc`, `twpluginsearchpaths.cc`, `twpluginscancache.cc` | Search paths, `plugincache.json`, mtime/size/version keying, sticky `failed`/`timeout` records, background scan. |
 | Crash isolation | `plugins/tools/plugin_probe.cc` → `smaragd_pluginprobe` | One module per child process, driven by `QProcess` with a timeout. A crash becomes a cache record, not a dead app. |
-| Slot DSP | `plugins/include/tw/plugins/twpluginslotproc.h` + `src/twplugininsert.cc` | **One processor + N per-bus taps.** See below. |
+| Slot DSP | `plugins/include/tw/plugins/twpluginslotproc.h` + `src/twplugininsert.cc` | **One wide `twPluginInsert` + one processor** (the plugin's lifetime/state holder). See below; the pre-B4 per-bus tap split is described there too. |
 | Placeholder | `plugins/src/twnullplugin.cc` (`createNullPlugin`) | Inert pass-through with the *declared* I/O of a missing plugin, so the graph shape is already the one the real plugin will get. |
 | Model | `main/objects/track/spluginchain.cpp`, `spluginslot.cpp` | `SPluginChain` (ordered container) + `SPluginSlot` (descriptor, state chunk, bypass, `reloadPlugin()`). |
 | Actions | `main/objects/track/s{insert,remove,reorder}plugin*.cpp`, `ssetplugin{bypass,param}action.cpp` | `insert-plugin`, `remove-plugin`, `reorder-plugin`, `set-plugin-bypass`, `set-plugin-param` — see `docs/ACTIONS.md`. |
 | UI | `main/pluginui/` | Browser dialog, FX strip (mounted from `main/timeline/src/strackdetailpanel.cpp`), generic parameter editor. |
 | Options | `main/servicesui/src/soptionsdialog.cpp` | The Plugins page: directory list, Rescan now, scan status. |
 
-### The processor / tap split (why a slot is not one component)
+### One slot, one component, N channels (proposal 36 B4 — the tap split retired)
 
-The frozen-page model is **one mono page per component**
-(`twComponent::freezePage_nolock` renders `idx = 0` only), so N parallel mono
-wires are N parallel component *instances* — which is why `STrack` builds one
-`twTrackMix` and one `twPluginChain` **per bus**. But a stereo-linked plugin has
-to see all its channels in one `process()` call, which no single mono component
-can express. Hence: one `twPluginSlotProcessor` per slot (plain C++, not a
-`twComponent`) owning the plugin instance(s), the bypass flag, the block
-chunking (4096 frames out of a 65536-frame page), the channel-mismatch mapping
-and a small all-bus page cache; plus one `twPluginInsert` **tap** per bus, each
-strictly 1-in/1-out. The first tap to ask renders every bus; the rest hit the
-cache. Channel-mismatch mapping is derived once from the plugin's *own* reported
-layout: `N→N` Direct, `1→1` on N buses DualMono (N instances — hence a *factory*,
-not one instance), `2→2` on one bus MonoFold, anything else `Unsupported` and
-transparent.
+A slot is **one `twPluginInsert`**: one port in, one port out, N *channels*, and
+one `process()` sweep per chunk over every channel. `STrack` builds **one**
+`twTrackMix` and **one** `twPluginChain` of that width — not one of each per
+bus. Channel-mismatch mapping is derived once from the plugin's *own* reported
+layout, against the **page width**: `N→N` Direct, `1→1` on N channels DualMono
+(N instances — hence a *factory*, not one instance), `2→2` on one channel
+MonoFold (feed both inputs, average the outputs), anything else `Unsupported`
+and transparent. That is proposal 08's table unchanged; only where the number
+comes from moved.
 
-**Two caches sit in front of a plugin edit**, and a third thing above it: the
-processor's all-bus cache, each tap's frozen pages, and the components
-downstream. A parameter write must be followed by
+**What this replaced, and why it existed**, because the shape is still visible
+in the git history and in `plan/proposed/08_PLUGIN_HOSTING.md`. Until proposal
+36 the frozen page was one *mono* page per component, so N channels had to be N
+parallel component *instances*, and a stereo-linked plugin — which must see all
+its channels in one `process()` call — could not be expressed by any single one
+of them ("a component that wrote interleaved stereo into one page produced
+garbage the engine then read as mono"). The slot was therefore split into N
+per-bus **taps** around one out-of-band `twPluginSlotProcessor` with a private
+all-bus page cache: the first tap to ask rendered every bus by reaching
+*sideways* through its siblings, and the rest hit the cache. That sideways
+gather is what `plugins/CONTRACT.md` invariant 13's deadlock rule was about, and
+it is gone.
+
+**`twPluginSlotProcessor` remains, deliberately, and is no longer graph
+machinery.** It owns the plugin **lifetime and state**: the instance(s), the
+`prepare()`/activate bookkeeping, the mismatch mapping, the block chunking (4096
+frames out of a 65536-frame page) and the position-continuity reset. Proposal 08
+invariant 18 depends on exactly that — a slot's identity in the graph *is* its
+processor, so a rescan that finds a missing plugin hands the same processor a new
+factory rather than re-wiring every chain from the UI. Folding it into the
+insert would put a plugin's lifetime inside a component's.
+
+**One cache now sits in front of a plugin edit**, and the components downstream
+above it. A parameter write must be followed by
 `SPluginSlot::notifyPluginEdited()`, and a bypass must go through
 `SPluginSlot::setBypass()`; both emit `SPluginSlot::audioInvalidated()`, which
 the owning `STrack` turns into `invalidateRenderPath()`. The slot cannot do that
 last step itself — an `SPluginChain` is deliberately *not* an `SLink` child of
 its track, so `SObject::invalidateRenderPath()`'s root-down walk never reaches a
-slot. Skip any of the three and the edit is completely inaudible.
+slot. Skip either and the edit is completely inaudible. (Before B4 there were
+*two* caches here, the processor's all-bus one and each tap's frozen pages; the
+first retired with the tap fan-out, because with one insert there are no
+siblings to dedup for and the component page cache above is the only cache
+there is.)
 
 ### Serialization
 
@@ -782,11 +803,15 @@ Gates: `ctest -R "plugins_test|plugins_scan_test"` and the qxa cases
 `plugin_remove_restores_param`, `plugin_ui_strip_and_editor`,
 `render_sawtooth_with_effects`.
 
-**Known gap that is not the plugin layer's:** the audio sink is still mono.
-`RenderSession` and `AudioEngine` collapse the graph's buses to one page and
-duplicate it, so bus 1 cannot reach a file or a device — a rendered WAV's two
-channels are equal *by construction*. Never write a qxa assertion of the form
-`L != R`; use a cross-channel fixture or an RMS discriminator.
+**Known gap that is not the plugin layer's:** the audio SINK is still mono.
+The graph is N channels wide end to end since proposal 36 B4 — a plugin sees
+every channel in one `process()` call and the track's root page really carries
+them — but `RenderSession` and `AudioEngine` still collapse to one page and
+duplicate it, so channel 1 cannot reach a file or a device and a rendered WAV's
+two channels are equal *by construction*. That is proposal 36 B5. Never write a
+qxa assertion of the form `L != R` **on a file**; assert it on a PAGE with
+`assert-track-channels` / `assert-clip-channels`, or use a cross-channel fixture
+and an RMS discriminator on the file.
 
 ## Dependencies
 
