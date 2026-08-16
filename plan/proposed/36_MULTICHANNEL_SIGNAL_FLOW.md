@@ -573,7 +573,18 @@ yet. The track-root assertion moves to B4.6.)*
 encode channel count are bumped so no old entry is a wrong-shape hit (assert a
 **miss**, not a wrong hit).
 
-### B4 — The whole track path goes wide, plugins included
+### B4 — The whole track path goes wide, plugins included ✅ **EXECUTED 2026-08-16**
+
+> A track is now **one `twTrackMix` + one `twPluginChain` + one `twRewire`, N
+> channels wide**, and a slot is **one `twPluginInsert`**. Gone with the per-bus
+> instantiation: the `setNBusses` grow-crash, the shrink-assert, the processor's
+> all-bus cache and the sideways sibling gather. `nBusses='2'` retires from the
+> writer and is read-and-ignored — a track has no bus count, it has the
+> project's width, and a derived per-track copy would be the second authority
+> whose drift already cost this project once. `twPluginSlotProcessor` **stays**,
+> as the plugin lifetime/state holder only: proposal 08 inv. 18 depends on a
+> slot's graph identity *being* its processor, so a rescan hands it a new factory
+> rather than re-wiring every chain.
 
 v2 split this from the plugin work and the split was incoherent: the tap
 architecture *requires* one chain per bus (`twpluginchain.cc:65-66, 161-212`;
@@ -631,6 +642,16 @@ path and not the width plumbing.*
 
 *Note this is a **user-visible behaviour change**, and a corrective one: a mono
 project with a stereo plugin used to be rendered as if it were stereo.*
+
+*And the re-freeze turned up the same finding from the other side: 970 of the
+57 600 samples deviate from exactly 2/3 because **the old render was clipped at
+full scale** — `1.5·g·x` overflows 16-bit where MonoFold's `1.0·g·x` does not.
+The pre-B4 mono golden was not merely a different mapping; it was a
+**saturating** one. Confinement was checked rather than assumed: 114 222 bytes
+differ, first at 643 244 and last at 758 443 — the documented plugin window to
+the byte at both ends — with the header and the plain / stretched / pitched /
+container-asset / nested-lane windows byte-identical, and 56 630 of 57 600
+samples within 0.333 LSB of `old·2/3`.*
 
 ### B5 — The sink goes wide *(first audible multichannel)*
 
@@ -787,6 +808,17 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     mono bus, so a width-1 and a width-2 project produce the same file. That is
     correct *now* — and it is a second gate that is **supposed to break at B5**,
     alongside `channel_assert_dupmono.qxa`. When they diverge, the sink is real.
+    **⚠ SPENT AT B4 — DO NOT USE THIS INFERENCE.** The goldens diverged at B4
+    (114 222 bytes, all inside the `twtestclap` window) **while the sink was
+    still mono**, because channel 0 *itself* now differs between a mono and a
+    stereo project: the mismatch table folds a 2-in/2-out plugin on a width-1
+    project and does not on a width-2 one. Divergence therefore no longer implies
+    anything about the sink. **B5 needs different evidence**;
+    `channel_assert_dupmono.qxa`'s `expectReject` is untouched and still serves.
+    *(The general lesson is worth more than the instance: a gate whose meaning is
+    "these two things are equal for a reason" quietly expires when the reason
+    changes, and it expires silently — the gate still passes, or still fails, for
+    a different reason than the one written down.)*
 15. **A missing `qoffscreen.dll` costs 600 s, not a fast failure** (found by B1b).
     `preview_container_test` and `project_channels_test` both set
     `QT_QPA_PLATFORM=offscreen` and both construct a `QApplication`;
