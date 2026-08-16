@@ -2238,7 +2238,6 @@ bool SMainWindow::virtualKey( int key, double velocity, qint64 durationTicks )
     return virtualKeys_->pressNote( key, velocity, durationTicks );
 }
 
-bool SMainWindow::grabLevelMeter( const QString &path, double peak, double rms,
 bool SMainWindow::grabLevelMeter( const QString &path, const twLevelSampleSet &s,
                                   bool vertical, int w, int h )
 {
