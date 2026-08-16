@@ -11781,3 +11781,11 @@ pure reader. Stated rather than re-`cmp`-ed.
   handled by the same flags `SClipPropertiesPanel` uses (timeline inv. 9) but
   has no bespoke gate; a timing assertion tight enough to separate the
   behaviours would be flaky.
+
+## 2026-08-16 — Proposal 37: every executable phase landed; tip verified
+
+`docs/midi-instruments-automation` at `f3f603b`: P0a, P0b, P1, P2, P3a, P3b, P3c,
+P4, P5, P6, P7a+P7b, the teardown fix, on top of `main` + multichannel B3/B4.
+Only P8 (gated on proposal 21's live lane) and the P9 follow-ups remain. Gate:
+build clean, layering + logging clean, **`ctest -j4`: 168/168 passed in 152 s**
+(171 registered, 3 `au_*` disabled off macOS).
