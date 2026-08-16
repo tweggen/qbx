@@ -16,11 +16,11 @@
   CaptureRevalidator and waits, so the page is planned, dependency-counted and
   frozen on a worker exactly as playback readahead and the offline render do.
 
-  NOT AT THE TRACK'S ROOT COMPONENT. That assertion is AC B4.7 and cannot be
-  made here: twTrackMix and twPluginChain still allocate their own width-1 pages
-  (§7 trap 19), and IOVector — the seam twTrackMix mixes through — is mono by
-  design (§4.6). The whole point of the milestone boundary is that a stereo clip
-  stays audible-as-mono until B4 widens the track and B5 widens the sink.
+  NOT AT THE TRACK'S ROOT COMPONENT — when B3 wrote this case. That assertion
+  is AC B4.7, made by mc_track_width once B4 widened twTrackMix and
+  twPluginChain. The last block of this case has since been INVERTED by B5: it
+  used to assert that the rendered file's channels were equal by construction,
+  and it now carries AC B5.2. See the comment there.
 
   THE FIXTURE. ../test_stereo.wav is gen_channel_fixture at channels=2, the
   same 6 dB ladder the 4-channel fixture uses: channel 0 is a 480 Hz sine at
@@ -104,12 +104,24 @@
                           channelA="0" channelB="1" minRmsDelta="0.0"
                           expectReject="true"/>
 
-    <!-- ================= the sink is still mono ====================== -->
-    <!-- B3 is NOT B5. The clip is two channels wide upstream, and the rendered
-         file's channels are still equal by construction (RenderSession
-         collapses to one bus and duplicates it). Asserting that here is what
-         keeps the milestone boundary honest: if this ever starts failing, the
-         sink went wide and it was B5 that did it, not B3. -->
+    <!-- ================= AC B5.2: THE SINK IS WIDE ==================== -->
+    <!-- THIS BLOCK IS INVERTED FROM WHAT B3 WROTE, and the inversion is the
+         signal. B3 asserted `expectReject="true"` here — the clip was two
+         channels wide upstream while the rendered file's channels were equal BY
+         CONSTRUCTION (RenderSession collapsed the graph to one page and
+         duplicated it), and pinning that was how the B3/B5 milestone boundary
+         was kept honest. Its comment said: "if this ever starts failing, the
+         sink went wide and it was B5 that did it". It did, and this is it.
+
+         AC B5.2 asks for a PLAIN stereo clip — not a plugin's cross-channel
+         term, which is what plugin_stereo_chain gates. Tracks 1 and 2 are muted
+         so the only thing in the file is test_stereo.wav's own two channels,
+         which is the whole signal flow the milestone chain B3 -> B4 -> B5 was
+         built to carry: reader -> trackmix -> chain -> rewire -> mixer -> file.
+
+         The numbers are the fixture's 6 dB ladder, surviving intact: channel 0
+         rms 0.5, channel 1 rms 0.25, delta 0.25, and rms(ch0 - ch1) 0.25 as
+         well (the difference of a sine and half itself is a 0.35355 sine). -->
     <set-track-mute trackPath="1" muted="1"/>
     <set-track-mute trackPath="2" muted="1"/>
     <render filename="mc_stereo_clip_width.wav" format="wav" quality="10"
@@ -117,9 +129,25 @@
     <assert-audio-energy filename="mc_stereo_clip_width.wav"
                          startFrame="0" frameCount="128000"
                          channel="0" minRms="0.40" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_stereo_clip_width.wav"
+                         startFrame="0" frameCount="128000"
+                         channel="1" minRms="0.20" maxRms="0.30"/>
     <assert-channels-differ filename="mc_stereo_clip_width.wav"
-                            channelA="0" channelB="1" minRmsDelta="0.0"
-                            minDiffRms="0.0001"
+                            channelA="0" channelB="1"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- Region-scoped as well, so a difference confined to one stretch of the
+         file could not hide behind a whole-file average — and vice versa, a
+         whole-file difference that a single page dropped could not pass. The
+         window sits inside page 1, past the first page boundary. -->
+    <assert-channels-differ filename="mc_stereo_clip_width.wav"
+                            channelA="0" channelB="1"
+                            startFrame="70000" frameCount="48000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- The bands must be able to fail. 0.30 is above the ladder's 0.25. -->
+    <assert-channels-differ filename="mc_stereo_clip_width.wav"
+                            channelA="0" channelB="1" minRmsDelta="0.30"
                             expectReject="true"/>
 
     <report-page-memory label="mc_stereo_clip_width after render"/>
