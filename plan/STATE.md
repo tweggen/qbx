@@ -10904,3 +10904,15 @@ STATE.md). References to the multichannel proposal in the 37 docs repointed
 35 → 36. Gate on the merged tree: build clean, layering + logging clean,
 **`ctest -j4`: 143/143 passed in 132 s** (146 registered, 3 `au_*` disabled).
 P3a/P3b remain gated on 36-B4 (B3–B9 still open on main).
+
+## 2026-08-16 — Proposal 37: merged multichannel B3 (PR #40 via main) and B4 (PR #41, via `feat/multichannel-b3`)
+
+`docs/midi-instruments-automation` at `cd2d573`. B4 reached `origin/feat/multichannel-b3`,
+not `main` (PR #41's base was the b3 branch), so it was merged from there. Four
+conflicts: `strack.h` (B4's single wide `cpDspChain_` replaces the per-bus chains,
+alongside the event/MIDI members), `test_plugin_insert.cc` (both test entries),
+`plugins/CONTRACT.md` (P2 paragraph + B4's reshaped "Shape of a slot"), ACTIONS.md
+rows. Nothing in the proposal-37 code needed adapting. Gate: build clean, layering +
+logging clean; `ctest -j4` run 1: 147/148 (`clip_properties_actions` SEGFAULT after
+PASS — the known dangling-`SLink` teardown family; 5/5 in isolation), run 2:
+**148/148 in 211 s** (151 registered, 3 `au_*` disabled). P3a started.
