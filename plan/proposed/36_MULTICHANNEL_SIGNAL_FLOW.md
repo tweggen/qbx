@@ -721,10 +721,32 @@ capture-backed content plus the preview path.)*
 `SCut::buildCapture_` captures N channels; the container/asset render path
 renders per channel.
 
-**AC B7.1** A stereo file stretched 1.25× still has distinct channels at the sink
-(RMS discriminator).
-**AC B7.2** Same for a pitched clip and a container/asset clip.
+**What is ALREADY true, and must not be re-implemented:** sample-backed stretch
+and pitch went wide in **B3** (§2 item 2), and the sink went wide in **B5**. So
+B7.1 and the pitched half of B7.2 are **regression assertions**, not new work —
+though they are worth writing, because until B5 they could only be asserted at a
+component and now they can be asserted **in the file**. The genuinely new work is
+container/asset-backed clips and the preview capture.
+
+**The decision this milestone owns (§4.1).** `CapturePageData` is a *different
+type* from `twOutputPage`, and `SProject` builds a `CapturePagePool` of 2048
+pages — **528 MiB, eagerly, per project**. Multiplying that by width would be
+~4.2 GiB at width 8, which is not a thing to discover after the fact. Decide,
+with measured numbers, whether the capture page widens, whether the pool becomes
+lazy or smaller, or whether capture stays narrow and the width is carried some
+other way. **State the decision and the numbers; do not let it fall out of a
+`* channels` that happens to compile.**
+
+**AC B7.1** *(regression, newly assertable at the sink)* A stereo file stretched
+1.25× still has distinct channels **in the rendered file**.
+**AC B7.2** The same for a pitched clip *(regression)* — **and for a
+container/asset clip**, which is the new one.
 **AC B7.3** `grain_*`/`warp_*`/`exact_*` green; mono byte-exact.
+**AC B7.4** The capture-pool decision is made **with measured numbers**, and the
+corpus's resident page memory is reported before and after. B3 measured the
+corpus at 14.0 MiB with exactly one `twSampleReader` page still mono — the
+container/asset clip's, "B7 expressed as one number". That page going wide is
+this milestone's arithmetic proof; a 4 GiB pool is its failure mode.
 
 ### B8 — Metering, preview, UI stop lying
 
