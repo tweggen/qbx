@@ -6,6 +6,7 @@
 #include "tw/events/twtempomap.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/plugins/twpluginslotproc.h"
+#include <QVector>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -81,6 +82,21 @@ public:
     void setChannelCount( int nChannels );
 
     const audio::twPluginDescriptor &getDescriptor() const { return descriptor_; }
+
+    // One row per parameter the LIVE plugin declares, in the plugin's own
+    // order, in APP types. It exists so a caller that may not include
+    // tw/plugins (app/timeline: the automation lane picker and the lane's value
+    // scale, tools/check_layering.py) can still ask what this slot's knobs are
+    // called and what range they span. Empty for a Missing/Unsupported slot.
+    struct ParamRow {
+        std::uint32_t id = 0;
+        QString       name;
+        double        minValue = 0.0;
+        double        maxValue = 1.0;
+        double        defaultValue = 0.0;
+        bool          isStepped = false;
+    };
+    QVector<ParamRow> paramRows() const;
 
     // The descriptor actually used to instantiate: the registry's own record for
     // (format, uid) when the scan knows it, otherwise the stored one.

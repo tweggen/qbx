@@ -240,6 +240,29 @@ SApplyResult SAssertTrackHeadAction::apply( SProject * )
                    << absent_;
         return { false, nullptr };
     }
+    // Coverage of the head's paint path, including the automation button's
+    // per-mode colour (proposal 37 P6). Never an oracle.
+    if( !grabPng_.isEmpty() ) {
+        if( grabPng_.contains( '/' ) || grabPng_.contains( '\\' )
+            || grabPng_.contains( ".." ) ) {
+            qWarning() << "assert-track-head: grabPng contains path separators:"
+                       << grabPng_;
+            return { false, nullptr };
+        }
+        SApplication &app = SApplication::app();
+        if( app.testOutputDir().isEmpty() || !app.ensureOutputDirExists() ) {
+            qWarning() << "assert-track-head FAILED: no usable test output"
+                          " directory";
+            return { false, nullptr };
+        }
+        const QString out = QDir( app.testOutputDir() ).filePath( grabPng_ );
+        if( !win->grabTrackHead( out, trackPath_, headHeight_, grabWidth_,
+                                 grabHeight_ ) ) {
+            qWarning() << "assert-track-head FAILED: could not grab the head"
+                          " into" << out;
+            return { false, nullptr };
+        }
+    }
     return { true, nullptr };
 }
 
@@ -249,6 +272,11 @@ void SAssertTrackHeadAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "headHeight", headHeight_ );
     elem.setAttribute( "contains", contains_ );
     elem.setAttribute( "absent", absent_ );
+    if( !grabPng_.isEmpty() ) {
+        elem.setAttribute( "grabPng", grabPng_ );
+        if( grabWidth_ > 0 )  elem.setAttribute( "grabWidth", grabWidth_ );
+        if( grabHeight_ > 0 ) elem.setAttribute( "grabHeight", grabHeight_ );
+    }
 }
 
 bool SAssertTrackHeadAction::readXml( const QDomElement &elem, int )
@@ -257,6 +285,9 @@ bool SAssertTrackHeadAction::readXml( const QDomElement &elem, int )
     headHeight_ = elem.attribute( "headHeight", "160" ).toInt();
     contains_   = elem.attribute( "contains" );
     absent_     = elem.attribute( "absent" );
+    grabPng_    = elem.attribute( "grabPng", "" );
+    grabWidth_  = elem.attribute( "grabWidth", "0" ).toInt();
+    grabHeight_ = elem.attribute( "grabHeight", "0" ).toInt();
     return true;
 }
 

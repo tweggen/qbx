@@ -241,6 +241,8 @@ set(APP_UI_FILES
     timeline/include/app/timeline/slevelmeter.h
     timeline/include/app/timeline/strackheaderresizer.h
     timeline/include/app/timeline/szoomscrollbar.h
+    timeline/src/sautomationlane.h
+    timeline/src/sautomationlane.cpp
     timeline/src/sclippropertiespanel.cpp
     timeline/src/sgridtoolbar.cpp
     timeline/src/sobjecttreeview.cpp
@@ -287,9 +289,11 @@ set(APP_UI_FILES
     servicesui/src/srenderprogress.cpp
     # --- app/shell
     shell/include/app/shell/sapplication.h
+    shell/include/app/shell/sautomationrecorder.h
     shell/include/app/shell/smidioutpump.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssettings.h
+    shell/src/sautomationrecorder.cpp
     shell/src/sapplication.cpp
     shell/src/smidioutpump.cpp
     shell/src/smainwindow.cpp
@@ -299,6 +303,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sactionscript.h
     testkit/include/app/testkit/sassertaudioenergyaction.h
     testkit/include/app/testkit/sassertautomationvalueaction.h
+    testkit/include/app/testkit/sautomationuitestactions.h
     testkit/include/app/testkit/sassertaudiofrequencyaction.h
     testkit/include/app/testkit/sassertaudiolengthaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
@@ -330,6 +335,7 @@ set(APP_UI_FILES
     testkit/src/sactionscript.cpp
     testkit/src/sassertaudioenergyaction.cpp
     testkit/src/sassertautomationvalueaction.cpp
+    testkit/src/sautomationuitestactions.cpp
     testkit/src/sassertaudiofrequencyaction.cpp
     testkit/src/sassertaudiolengthaction.cpp
     testkit/src/sassertaudiopeakaction.cpp

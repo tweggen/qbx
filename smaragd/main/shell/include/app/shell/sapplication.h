@@ -26,6 +26,7 @@ class SProject;
 class SActionHistory;
 class SAction;
 class SMidiOutPump;
+class SAutomationRecorder;
 class QTimer;
 
 typedef QList<SLink*> SSelectionList;
@@ -204,6 +205,13 @@ public:
     // "N plugins, M modules scanned (K cached, S skipped)" for the options page.
     QString pluginScanStatusText() const;
 
+    // Proposal 37 P6: the Touch/Latch/Write recorder. One per app, because a
+    // pass is a transport-wide thing and only one control can be held at a
+    // time; it lives here rather than in a view because BOTH the arranger's
+    // fader (app/timeline) and the plugin parameter editor (app/pluginui) feed
+    // it, and the shell is the only module both may reach.
+    SAutomationRecorder &automationRecorder() const { return *automationRecorder_; }
+
     // App-wide status/mode line shown in the main window's status bar. Views
     // push the active (or hover-telegraphed) gesture here; the main window
     // reflects it. Empty string means "no special mode" (idle).
@@ -302,6 +310,7 @@ private:
     int meterTailTicks_ = 0;          // remaining decay ticks after a stop
     twLevelProbe masterProbe_;        // reads the mixer root's frozen pages
     std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 37 P7b
+    std::unique_ptr<SAutomationRecorder> automationRecorder_;  // proposal 37 P6
     bool isPlaying_;
     SProject *currentProject_;
     QString statusMode_;

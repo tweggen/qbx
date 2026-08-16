@@ -2054,6 +2054,85 @@ QString SMainWindow::describeTrackHead( const QString &trackPath,
     return head.describeHead();
 }
 
+
+// --- proposal 37 P6 test seams -------------------------------------------
+
+bool SMainWindow::grabTrackHead( const QString &path, const QString &trackPath,
+                                 int headHeight, int w, int h )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+
+    // Same off-screen head describeTrackHead builds - parentless, never shown -
+    // so what is painted is the widget under test at the size under test.
+    SSMVMixerControl head( nullptr, *v, *track );
+    head.resize( w > 0 ? w : SMV_TRACK_CTRL_WIDTH,
+                 h > 0 ? h : ( headHeight > 0 ? headHeight : 160 ) );
+    if( head.layout() ) head.layout()->activate();
+    head.describeHead();          // re-applies the density rules for this size
+    const QPixmap pm = head.grab();
+    if( pm.isNull() ) return false;
+    return pm.save( path, "PNG" );
+}
+
+bool SMainWindow::dragAutomationPoint( const QString &owner, const QString &target,
+                                       int slotIndex, int take, offset_t time,
+                                       double value, offset_t toTime,
+                                       double toValue, Qt::KeyboardModifiers mods )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    return v->dragAutomationPoint( owner, target, slotIndex, take, time, value,
+                                   toTime, toValue, mods );
+}
+
+bool SMainWindow::showAutomationLane( const QString &trackPath,
+                                      const QString &target, int slotIndex,
+                                      bool show )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->showAutomationLane( track, target, slotIndex, show );
+}
+
+bool SMainWindow::setClipEnvelopeEdit( bool on )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    v->setClipEnvelopeEdit( on );
+    return true;
+}
+
+bool SMainWindow::grabArrangerLanes( const QString &path, int w, int h )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() ) return false;
+    SMVActualView *canvas = v->contentView();
+    // The canvas is inside a never-shown window, so it has whatever size the
+    // hidden layout gave it - 150x240 on this machine, which is not a picture
+    // of anything. Its PARENT owns its geometry (the same trap grabEventEditor
+    // hit with the dock), so the view has to be sized first and its layout
+    // activated; resizing only the child is undone before grab() renders.
+    if( w > 0 && h > 0 ) {
+        // The canvas is inside a never-shown window, so it has whatever size
+        // the hidden layout gave it - 150x240 on this machine, which is not a
+        // picture of anything. Its geometry belongs to its parents all the way
+        // up (the same trap grabEventEditor hit with the dock), so the WINDOW
+        // is what has to be resized; resizing the child alone is undone before
+        // grab() renders. The extra room is the scrollbars and the toolbars.
+        resize( w + v->getTrackControlWidth() + 48, h + 160 );
+        if( layout() ) layout()->activate();
+        if( v->layout() ) v->layout()->activate();
+    }
+    const QPixmap pm = canvas->grab();
+    if( pm.isNull() ) return false;
+    return pm.save( path, "PNG" );
+}
+
 QString SMainWindow::describeEventEditor( const QString &clipPath,
                                           const QString &kind )
 {

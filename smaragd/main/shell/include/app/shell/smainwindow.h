@@ -98,6 +98,35 @@ public:
     // and here for the same reason: testkit may not include app/timeline
     // (testkit CONTRACT inv. 5). Empty string when the path names no lane.
     QString describeTrackHead( const QString &trackPath, int headHeight );
+    // ...and paint that same off-screen head into a PNG. Coverage, not oracle
+    // (proposal 37 P6 AC3): the describe() assertions check the maths, nothing
+    // else proves the strip - and now the automation button's mode colour -
+    // actually draws.
+    bool grabTrackHead( const QString &path, const QString &trackPath,
+                        int headHeight, int w, int h );
+
+    // TEST ENTRY POINTS for automation (proposal 37 P6). All four go through
+    // the shell for the usual reason: testkit may not include app/timeline
+    // (tools/check_layering.py, testkit CONTRACT inv. 5).
+    //
+    //   dragAutomationPoint  — one REAL press/move/release on an automation
+    //                          sub-lane (or, while envelopes are armed, on a
+    //                          clip's `cut:Gain` overlay). The drag-clip-edge
+    //                          twin.
+    //   showAutomationLane   — show/hide one lane on a track, i.e. what the
+    //                          "Show automation >" picker does.
+    //   setClipEnvelopeEdit  — arm clip-envelope editing (OFF by default, so
+    //                          every clip-body gesture is untouched until a
+    //                          case says otherwise).
+    //   grabArrangerLanes    — paint the arranger CANVAS into a PNG.
+    bool dragAutomationPoint( const QString &owner, const QString &target,
+                              int slotIndex, int take, offset_t time,
+                              double value, offset_t toTime, double toValue,
+                              Qt::KeyboardModifiers mods );
+    bool showAutomationLane( const QString &trackPath, const QString &target,
+                             int slotIndex, bool show );
+    bool setClipEnvelopeEdit( bool on );
+    bool grabArrangerLanes( const QString &path, int w, int h );
 
     // TEST ENTRY POINTS for the event editor (proposal 37 P4). The dock is
     // built in the ctor and never shown in a headless run, so these drive the
