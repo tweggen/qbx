@@ -1292,6 +1292,12 @@ void SMainWindow::runSetTimeSelection()
 
     // Set time selection to first half of project duration
     double duration = currentProject_->getDurationSeconds();
+    // The duration is the ARRANGEMENT's now, so an empty project really is 0 —
+    // and half of nothing is not a range anything can render.
+    if (duration <= 0.0) {
+        statusBar()->showMessage("Nothing in the arrangement to select", 3000);
+        return;
+    }
     currentProject_->setTimeSelection(0.0, duration / 2.0);
     statusBar()->showMessage(
         QString("Time selection set: 0.0 - %1 seconds").arg(duration / 2.0, 0, 'f', 2), 3000);

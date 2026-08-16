@@ -22,6 +22,28 @@ struct AcousticMetrics {
 };
 
 /**
+ * Header-only facts about an audio file: how long it is, and in what format.
+ */
+struct AudioFileInfo {
+    int64_t frameCount;      // Frames in the file (0 is legal and meaningful)
+    int channelCount;
+    int sampleRate;
+};
+
+/**
+ * Read an audio file's header without decoding it.
+ *
+ * Deliberately separate from analyzeWavFile(): the analysers refuse an empty
+ * region ("Start frame out of bounds"), which is the right answer for an RMS
+ * question and the wrong one for "how long is this file" — a zero-frame render
+ * (an empty arrangement) is a valid file whose length is exactly 0.
+ *
+ * @return false on a file that cannot be opened; `error` then says why.
+ */
+bool readAudioFileInfo(const std::string &filename, AudioFileInfo &info,
+                       std::string &error);
+
+/**
  * Read a WAV file and analyze acoustic properties.
  *
  * `channelIndex` defaults to -1 (all channels pooled), which is what this

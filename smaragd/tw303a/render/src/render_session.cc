@@ -47,7 +47,13 @@ bool RenderSession::start(std::shared_ptr<twComponent> synthOutput, const Render
         return false;
     }
 
-    if (params.endTimeSec <= params.startTimeSec) {
+    // An INVERTED range is an error; an EMPTY one is not. A project with no
+    // content has a zero-length arrangement, and the honest render of it is a
+    // valid, well-formed, zero-frame file — which is what falling through here
+    // produces (the writer opens, writes its header, and closes with 0 frames).
+    // Rejecting it instead used to make SRenderAction report SUCCESS with no
+    // file on disk at all, because startRender()'s failure is not propagated.
+    if (params.endTimeSec < params.startTimeSec) {
         lastError_ = "Invalid time range";
         return false;
     }
@@ -56,12 +62,19 @@ bool RenderSession::start(std::shared_ptr<twComponent> synthOutput, const Render
     params_ = params;
     sampleRate_ = sampleRate;
 
-    // Calculate total samples to render
+    // Calculate total samples to render. ROUND, do not truncate: the extent now
+    // comes from a frame count divided by the sample rate, and a ratio that is
+    // not exactly representable (190001/48000, say) truncates one frame short of
+    // the arrangement. Rounding is a no-op for the exact values (a whole number
+    // of seconds) the existing callers pass.
     double durationSec = params_.endTimeSec - params_.startTimeSec;
-    totalSamples_ = static_cast<std::size_t>(durationSec * sampleRate_);
+    if (durationSec < 0.0) durationSec = 0.0;
+    totalSamples_ = static_cast<std::size_t>(
+        std::llround(durationSec * static_cast<double>(sampleRate_)));
 
     // Calculate start offset in samples
-    startOffsetSamples_ = static_cast<std::size_t>(params_.startTimeSec * sampleRate_);
+    startOffsetSamples_ = static_cast<std::size_t>(
+        std::llround(params_.startTimeSec * static_cast<double>(sampleRate_)));
 
     // Create writer for the selected format
     writer_ = createAudioFileWriter(params_.format);

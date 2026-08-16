@@ -44,6 +44,9 @@ const Fixture kFixtures[] = {
     { "assert-audio-peak",
       "<assert-audio-peak filename='r.wav' maxPeak='0.5' startFrame='1024'"
       " frameCount='2048' channel='0'/>" },
+    { "assert-audio-length",
+      "<assert-audio-length filename='r.wav' minFrames='190000'"
+      " maxFrames='200000'/>" },
     // No startFrame: these writers omit their default-valued optional
     // attributes, and a fixture must only declare what comes back.
     { "assert-audio-frequency",

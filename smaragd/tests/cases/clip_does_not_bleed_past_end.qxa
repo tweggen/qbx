@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A clip's audio stops at the clip's end.
+
+  This is the property the 60 s render pad used to reveal by accident, in 31
+  cases at once: each asserted silence past the last clip, which only existed
+  because every render was padded to a minute. With the render ending at the
+  arrangement end, a trailing clip has no room left to bleed INTO, so the
+  property became unobservable — and it is a real bug class here
+  (twTrackMix::freezePage_nolock is what clamps a clip's contribution to
+  [startTime, startTime + duration), and a slip/trim/stretch edit that gets the
+  window wrong shows up as source data sounding past the clip).
+
+  So one case buys the room back explicitly, and the cost is one 10 s render
+  instead of ninety 60 s ones:
+
+    track 0, clip A : source [0 s, 2 s) placed at 0        -> ends at  96000
+    track 0, clip B : the full 4 s fixture placed at 6 s   -> ends at 480000
+
+  Clip A is TRIMMED, so its source has two more seconds of loud data (sec2
+  ~0.291, sec3 ~0.405 RMS) sitting immediately past the window. If the window
+  is not honoured, that data lands in the 2 s .. 6 s gap, where this case
+  asserts silence. Clip B exists only to make the arrangement — and therefore
+  the render — long enough for the gap to be inside the file.
+
+  Note for anyone reaching for the OTHER way to buy room: setting a time
+  selection past the last clip does NOT work from a script. SRenderAction
+  hardcodes Extent::EntireProject and never reads SProject::getTimeSelection();
+  only SRenderDialog (which has no headless coverage) offers that choice.
+
+  Fixture: test_sawtooth.wav, 4 s, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+-->
+<SActionScript version="1" name="clip_does_not_bleed_past_end">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- Clip A, then trimmed to its first 2 s: source data continues past it. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="96000" loopLength="0" stretch="1.0"/>
+
+    <!-- Clip B at 6 s: the anchor that keeps the arrangement (and the render)
+         running past the gap. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="288000"/>
+
+    <render filename="no_bleed.wav" format="wav" quality="10"/>
+
+    <!-- The render covers the whole arrangement, so the gap is INSIDE it. -->
+    <assert-audio-length filename="no_bleed.wav"
+                         minFrames="480000" maxFrames="480000"/>
+
+    <!-- Clip A sounds: source sec0 + sec1. -->
+    <assert-audio-energy filename="no_bleed.wav"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.10" maxRms="0.17"/>
+
+    <!-- THE ASSERTION THIS CASE EXISTS FOR: the 4 s between the clips is
+         silent. Source sec2/sec3 are what would appear here if clip A's
+         window were not honoured, and they are the loudest seconds in the
+         fixture — a bleed cannot hide in the noise floor. -->
+    <assert-audio-energy filename="no_bleed.wav"
+                         startFrame="96000" frameCount="192000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- Clip B sounds, in full: the gap is a gap, not a dead render. -->
+    <assert-audio-energy filename="no_bleed.wav"
+                         startFrame="288000" frameCount="192000"
+                         minRms="0.22" maxRms="0.32"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

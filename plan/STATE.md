@@ -9116,6 +9116,85 @@ background), the head context menu popping at all, and the menu item labels that
 count the targets. Those are paint/menu-construction paths with no assertion
 hook, as elsewhere in the arranger.
 
+## 2026-08-15 — A render is as long as the arrangement (the 60 s constant is gone)
+
+`SProject::getDurationSeconds()` returned `60.0` behind a TODO, and it was the
+only thing deciding how long a whole-project render is. Every render was
+therefore exactly one minute: a three-minute arrangement was **truncated** at
+60 s without a word, and a ten-second one got fifty seconds of silence written
+after it. The qxa suite paid the same bill 153 times over — its fixtures hold
+about four seconds of content, so ~93% of every rendered sample was padding.
+
+### Where the duration comes from
+
+`getRootComponent()->getDuration()` — `SObject::getChildrenExtent()` through
+`SStdMixer`, the walk the model already maintains and the arranger already
+draws (`SStdMixerView::contentDurationChanged`). Deliberately **not** a new
+traversal: a second notion of "how long is this project" that disagreed with
+the one on screen would be worse than the constant it replaced.
+
+Three decisions, now written into `main/model/CONTRACT.md` (inv. 10) and
+`tw303a/render/CONTRACT.md` (inv. 5-6):
+
+* **Empty is zero, and renders as a valid zero-frame file.** An empty container
+  reports 1 frame (`SStdMixer`/`STrack` floor their extent); that sentinel is
+  normalized to 0. `RenderSession::start()` used to reject `end <= start`, which
+  produced *no file and no error* — and `SRenderAction` reported SUCCESS, because
+  `SAppContext::startRender` cannot report failure. It now rejects only an
+  INVERTED range, so an empty project writes a header-only WAV that says exactly
+  what is true.
+* **The extent is the LAID-OUT one.** Mute, solo, the render gate and take
+  selection decide what is AUDIBLE, never how long the project is — otherwise
+  muting the last track would silently shorten the export.
+* **Round, do not truncate.** The extent is now a frame count over a sample
+  rate; a ratio that is not exactly representable would land one frame short.
+
+### The fallout, and why it was not papered over
+
+31 cases (36 assertions) asserted silence at a frame that WAS the arrangement
+end. They only ever passed because of the pad — and the analyser rejects a
+window that starts past EOF, so they failed loudly rather than silently. Each
+now asserts the thing it was reaching for: the render ENDS there
+(`assert-audio-length`, min == max). Where a clip had been deleted this is
+strictly stronger — a clip restored as *silent* used to pass and now cannot.
+
+What genuinely left with the pad: "does the LAST clip bleed past its window"
+is no longer observable, because the file stops there. Bleeding is still
+covered wherever a clip is followed by more arrangement.
+
+### The tail question, answered with measurements
+
+Only a plugin insert can put audio past the arrangement end —
+`twTrackMix::freezePage_nolock` hard-clips every clip's contribution at
+`startTime + duration`, so no stretch, loop or source tail outlives its clip.
+Measured, not assumed: the 90 padded 60 s renders from the pre-fix suite were
+scanned for their last non-silent frame, and **not one of them has audio at or
+past where the new render ends** (tightest margin: 1 frame — content runs right
+up to the boundary, as it should). That covers every `grain_*`, `exact_*`,
+`plugin_*` and `asset_*` case.
+
+The remaining exposure is real but uncovered: a reverb or delay plugin on a
+project SHORTER than 60 s used to have its tail captured by the padding, and
+now does not. The correct fix is a plugin-declared tail (CLAP `clap.tail`,
+VST3 `getTailSamples`), not a blanket pad; until then the render dialog's
+time-selection extent is the user-facing workaround. Recorded, not done.
+
+### What it cost the gate
+
+For the 52 cases both a pre-fix and a post-fix run covered: **1955.7 s ->
+292.7 s (6.7x)**. The full suite is **495.85 s, 110 run, 100% pass, 3 disabled
+(macOS-only `au_*`)**. Render-heavy cases moved 7-16x (`plugin_bypass_and_param`
+105.7 -> 7.1, `exact_stretch_roundtrip` 70.4 -> 4.4); cases with no render moved
+1.1-2.2x, which is the machine-load noise floor — both runs were taken with
+other agents' suites running on the same box, so read the per-case deltas rather
+than the totals.
+
+New verb `assert-audio-length` (frames, read from the file HEADER — the RMS
+analysers reject an empty region, which is exactly the interesting case), and
+three cases pinning the three lengths: `render_duration_short`,
+`render_duration_past_60s` (the truncation half — a clip at 64 s, and its
+64 s render is now the most expensive case in the suite), `render_duration_empty`.
+
 ---
 
 ## 2026-08-15 — Test-kit gates: `channel=` was being ignored, plus a byte gate, page accounting and a units bug
@@ -9285,3 +9364,4 @@ against a page count the test controls exactly) and four qxa cases:
 tight page-count ceiling, because one would flake on the readahead.
 `releaseOldPages` has no production caller, so its retention window is proven by
 a unit test and never by the suite.
+

@@ -20,6 +20,16 @@ Invariants:
    Qt-free (THREADING.md rule 1).
 4. start() rejects overlapping renders; requestCancel() is safe from any
    thread; the file is closed even on cancel/error.
+5. An INVERTED range is rejected; an EMPTY one (end == start) is not. A
+   zero-length render opens the writer, writes its header and closes with 0
+   frames — a valid, well-formed, empty file. That is the honest render of an
+   empty arrangement, and it is why the caller cannot mistake "nothing to
+   render" for "the render failed" (it used to get neither a file nor an
+   error, because start()'s failure is not propagated through
+   SAppContext::startRender).
+6. The frame count is ROUNDED from the extent, not truncated: the extent is a
+   frame count divided by the sample rate, and a ratio that is not exactly
+   representable would otherwise land one frame short of the arrangement.
 
 How to test: `ctest -R render_test` (absolute-range content, onPosition,
 page-boundary continuity against a scripted component — render/tests/);
