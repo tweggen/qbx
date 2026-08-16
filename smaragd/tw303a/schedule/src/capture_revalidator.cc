@@ -665,10 +665,19 @@ uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint3
             // Copy frozen preview samples into CapturePageData
             size_t samplesToCopy = std::min((size_t)frozenPage->validFrames, (size_t)page.PAGE_SIZE / sizeof(float));
             if( samplesToCopy > 0 ) {
-                // Channel 0 of the frozen preview page into the (mono)
-                // CapturePageData. Preview width is B8's question; note that
-                // CapturePageData is a DIFFERENT type from twOutputPage and did
-                // not grow a channel dimension here (4.1; B7 decides).
+                // Channel 0 of the frozen preview page into the CapturePageData,
+                // as FLOAT SAMPLES. That is what a Preview aspect page contains
+                // -- see the doc comment on CapturePageData, and proposal 36
+                // trap 26, settled at B8: the one reader that treated this
+                // buffer as preview_t probes (SPlainWave::getPreview) was
+                // unreachable and has been removed rather than "fixed", because
+                // this page carries no probe geometry to fix it against.
+                //
+                // Channel 0 and not a fold: nothing reads the payload at all,
+                // so a wider or folded preview page would be width for its own
+                // sake. The waveform the user SEES is the "preview.peaks"
+                // probe array, which since B8 folds every channel -- computed
+                // in SObject::straightCalcPreviewData, not here.
                 memcpy(page.data, frozenPage->channelPtr(0), samplesToCopy * sizeof(float));
                 page.validAspects |= Preview;
                 succeeded |= Preview;

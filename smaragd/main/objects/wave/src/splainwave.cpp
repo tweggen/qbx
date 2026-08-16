@@ -48,29 +48,37 @@ int SPlainWave::getPreview( preview_t *dest,
                              offset_t start, length_t length,
                              offset_t nProbes )
 {
-    // Phase 5e: Use page cache for preview (async revalidation model)
-    // Try to get cached preview first, fall back to live preview if unavailable
+    if( !cpWave_ ) return -1;
 
-    if (!cpWave_) return -1;
-
-    // Try page cache first (may be stale or invalid, which is acceptable)
-    auto page = getCapture(Preview);
-    if (page) {
-        std::lock_guard<std::mutex> pageLock(page->pageMutex);
-        if (page->validAspects & Preview) {
-            // Cache has valid preview; copy from page into dest
-            const preview_t* pagePreview = reinterpret_cast<const preview_t*>(page->data);
-            const offset_t previewCount = CapturePageData::PAGE_SIZE / sizeof(preview_t);
-
-            // Calculate how much preview data to copy into dest
-            offset_t copyCount = std::min((offset_t)nProbes, previewCount);
-            memcpy(dest, pagePreview, copyCount * sizeof(preview_t));
-            return copyCount;
-        }
-    }
-
-    // Cache not ready; fall back to live preview
-    return getStraightPreview(dest, start, length, nProbes);
+    // A wave previews from its own PCM, through the shared straight-preview
+    // path (sidecar-backed, see fetchPreviewSidecar below).
+    //
+    // WHAT USED TO BE HERE, and why it is gone (proposal 36 trap 26, settled by
+    // B8). This function first asked getCapture(Preview) for an aspect page and,
+    // when one existed, reinterpret_cast<const preview_t*> its 256 kB buffer and
+    // memcpy'd the head of it into `dest`. That was a TYPE CONFUSION: the only
+    // writer of a Preview aspect page, CaptureRevalidator::dispatchRecomputation,
+    // memcpys FLOAT SAMPLES there (freezePreviewPage at ~1 kHz, channel 0) --
+    // 4-byte IEEE-754, not 2-byte {int8 min, int8 max} probes. Read the wrong
+    // way, one full-scale sample (1.0f = 0x3F800000 LE) becomes the two probes
+    // {0,0} and {-128,63}: a comb of fixed-height ticks, not a waveform.
+    //
+    // It was never reached. An SObject's currentPage_ is written only by
+    // swapPages_nolock(), i.e. only from CaptureRevalidator::processRevalidationJob,
+    // i.e. only for an object handed to scheduleRevalidation() -- whose only two
+    // call sites in the tree are SCut members passing `this`. An SPlainWave is
+    // not an SCut, so getCapture() here could only ever return nullptr and this
+    // fell through to getStraightPreview() on every call. Deleting it is
+    // therefore behaviour-preserving, and preferable to "fixing" the cast:
+    // a CapturePageData carries no probe count, hop or duration, so even with
+    // the right element type it could not answer a (start, length, nProbes)
+    // question -- it ignored all three and copied the head of the buffer.
+    //
+    // A Preview aspect page IS: float samples of the object's output, decimated
+    // to ~1 kHz, channel 0, with no geometry attached. Its only consumer,
+    // SCut::getPreview, uses the page's EXISTENCE as a readiness signal and
+    // never reads data. See tw/pages/capture_page_pool.h.
+    return getStraightPreview( dest, start, length, nProbes );
 }
 
 

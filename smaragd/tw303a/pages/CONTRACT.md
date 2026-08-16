@@ -100,10 +100,23 @@ CAPTUREPAGEDATA DOES NOT CARRY CHANNELS, and that is a decision, not an
 omission (proposal 36 §4.1, decided and measured at B7 — AC B7.4). Widening it
 naively would have made SProject's eager pool 4.2 GiB at width 8. It stays one
 plane wide because IT IS NOT AUDIO STORAGE: its 256 KiB payload is an ASPECT
-page — a 1 kHz preview waveform written by
-CaptureRevalidator::dispatchRecomputation, or a Metadata/Export blob — reached
-through getDataPtr(), with no notion of a frame, a stride or a channel anywhere
-in its type. Nothing on the audio path allocates one. Measured: 2048 pages ×
+page — FLOAT SAMPLES of the object's output decimated to ~1 kHz (channel 0,
+from position 0) written by CaptureRevalidator::dispatchRecomputation, or a
+Metadata/Export blob — reached through getDataPtr(), with no notion of a frame,
+a stride or a channel anywhere in its type. Nothing on the audio path allocates
+one.
+
+SAY "FLOAT SAMPLES", NOT "PREVIEW WAVEFORM": the loose wording is what proposal
+36 trap 26 was. The waveform the user sees is a preview_t {int8 min, int8 max}
+PROBE ARRAY, a different thing entirely, computed by
+SObject::straightCalcPreviewData / SCut::ensureCapturePeaks and persisted in the
+"preview.peaks" sidecar — it never travels through a CapturePageData.
+SPlainWave::getPreview nonetheless reinterpret_cast this buffer to preview_t*
+until B8 removed it; that branch was unreachable (only SCut ever schedules a
+revalidation, so a non-SCut object's currentPage_ is always null), which is why
+it never drew anything wrong. A Preview aspect page's payload has NO reader in
+the tree: its only consumer, SCut::getPreview, uses the page's existence as a
+readiness signal. Before giving it one, give it a geometry. Measured: 2048 pages ×
 270 336 B = 553 648 128 B reserved per project, against a peak occupancy of ONE
 page across the whole 4 s corpus and 9 in the busiest capture-heavy case. The
 name is the trap — CapturePagePool and SCut::buildCapture_ share a word and
