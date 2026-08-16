@@ -7,8 +7,7 @@ files, or the app.
 Public headers: twtypes.h (sample_t/offset_t/length_t/idx_t, preview_t,
 SAMPLE_NORM_*), twformat.h (twFormat + capability domains), twfraction.h
 (exact rational arithmetic for positions), twconvert.h (twConvertFrames —
-format conversion, NO rate change), audio_frame.h (AudioFrame — shared
-currency of playback pullFrame and sinks writeFrame), generation_promise.h
+format conversion, NO rate change), generation_promise.h
 (std::future-based generation gate), exc.h, twsyslog.h, twlog.h (TwLog — the
 process-wide log sink and the TW_LOG* macros; proposal 24).
 

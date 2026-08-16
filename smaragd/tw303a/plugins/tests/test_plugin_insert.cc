@@ -74,6 +74,22 @@ public:
     {
         if( nframes > maxBlock_ ) ++overruns_;
         if( nframes > maxSeen_ )  maxSeen_ = nframes;
+
+        // AC B4.4: how many of this plugin's inputs carried actual SIGNAL in
+        // this one call. Counted on the way IN, because two silent channels are
+        // indistinguishable from "the host only wired one" once they have been
+        // multiplied by a gain and written out.
+        {
+            std::uint16_t liveIn = 0;
+            for( std::uint16_t c = 0; c < io_.audioInputs; ++c ) {
+                bool any = false;
+                for( std::uint32_t i = 0; i < nframes && !any; ++i )
+                    any = ( in[c][i] != 0.0f );
+                if( any ) ++liveIn;
+            }
+            if( liveIn > maxChannelsSeen_ ) maxChannelsSeen_ = liveIn;
+        }
+
         for( std::uint16_t c = 0; c < io_.audioOutputs; ++c ) {
             const float *src = ( c < io_.audioInputs ) ? in[c] : nullptr;
             const float  g   = gain_ * (float)( c + 1 );
@@ -96,6 +112,7 @@ public:
     bool loadState( const std::vector<std::uint8_t> & ) override { return true; }
 
     std::uint32_t maxSeen_  = 0;
+    std::uint16_t maxChannelsSeen_ = 0;   // see process(); AC B4.4
     int           overruns_ = 0;
     int           prepares_ = 0;
     int           resets_   = 0;
@@ -108,16 +125,25 @@ private:
     std::atomic<int> *live_     = nullptr;
 };
 
-// A position-deterministic mono source: value(p) depends only on the absolute
-// frame position, so a page's contents can be predicted exactly and a page
-// served for the wrong position is detectable.
+// A position-deterministic WIDE source: value(c, p) depends only on the channel
+// and the absolute frame position, so a page's contents can be predicted
+// exactly and a page served for the wrong position — or a channel filled from
+// the wrong page, the "coherent page displaced by one page" bug — is
+// detectable.
+//
+// Proposal 36 B4: this used to be N separate MONO sources, one per bus, because
+// a page was mono and a track was N parallel component instances. One wide
+// source with an asymmetric per-channel signal is the same test at the shape
+// the engine now has, and value(c, p) reproduces exactly what the old
+// `TestSource(base = c+1)->value(p)` produced for bus c.
 class TestSource : public twComponent {
 public:
-    TestSource( tw303aEnvironment &env, float base )
-        : twComponent( env ), base_( base ) {}
+    TestSource( tw303aEnvironment &env, idx_t channels )
+        : twComponent( env ), channels_( channels < 1 ? 1 : channels ) {}
 
     idx_t getNInputs() const override  { return 0; }
     idx_t getNOutputs() const override { return 1; }
+    idx_t getOutputChannels() const override { return channels_; }
     const char *getInputName( idx_t ) const override  { return nullptr; }
     const char *getOutputName( idx_t ) const override { return nullptr; }
 
@@ -134,31 +160,50 @@ public:
     bool usesSerialCursor() const override { return true; }
     int  seekTo( offset_t o ) override { pos_ = o; return 0; }
 
+    // §4.3's shape: seek once, fill every channel in one pass, advance once.
+    length_t renderPageWide( twOutputPage &page, length_t frames,
+                             const sample_t *, length_t ) override
+    {
+        length_t n = frames;
+        if( n > (length_t)page.channelFrames() ) n = (length_t)page.channelFrames();
+        const idx_t nCh = (idx_t)page.channels();
+        for( idx_t c = 0; c < nCh; ++c ) {
+            sample_t *dst = page.channelPtr( c );
+            for( length_t i = 0; i < n; ++i ) dst[i] = value( c, pos_ + i );
+        }
+        pos_ += n;
+        return n;
+    }
+
+    // The narrow degradation (§7 trap 18): channel 0, and it must exist or the
+    // base renderFrames/calcOutputTo pair recurses until the stack ends.
     length_t renderFrames( sample_t *out, length_t len, const sample_t *,
                            length_t, idx_t ) override
     {
-        for( length_t i = 0; i < len; ++i ) out[i] = value( pos_ + i );
+        for( length_t i = 0; i < len; ++i ) out[i] = value( 0, pos_ + i );
+        pos_ += len;
         return len;
     }
 
-    float value( offset_t p ) const
+    float value( idx_t c, offset_t p ) const
     {
-        return base_ * (float)( ( p % 17 ) + 1 ) * 0.01f;
+        return (float)( c + 1 ) * (float)( ( p % 17 ) + 1 ) * 0.01f;
     }
 
 private:
-    float    base_;
+    idx_t    channels_;
     offset_t pos_ = 0;
 };
 
-// Build a slot: one processor + nBuses taps, each fed by its own TestSource.
+// Build a slot: one processor, one wide source, ONE insert (proposal 36 B4 —
+// there used to be one tap per bus, each with its own mono source).
 struct Rig {
-    std::shared_ptr<twPluginSlotProcessor>       proc;
-    std::vector<std::shared_ptr<TestSource>>     sources;
-    std::vector<std::shared_ptr<twPluginInsert>> taps;
+    std::shared_ptr<twPluginSlotProcessor> proc;
+    std::shared_ptr<TestSource>            source;
+    std::shared_ptr<twPluginInsert>        insert;
 };
 
-Rig buildRig( tw303aEnvironment &env, int nBuses, int pluginIn, int pluginOut,
+Rig buildRig( tw303aEnvironment &env, int nChannels, int pluginIn, int pluginOut,
               std::atomic<int> *live = nullptr )
 {
     Rig r;
@@ -168,25 +213,21 @@ Rig buildRig( tw303aEnvironment &env, int nBuses, int pluginIn, int pluginOut,
             return std::make_unique<MockPlugin>( pluginIn, pluginOut, live );
         },
         twPluginIoLayout{ (std::uint16_t)pluginIn, (std::uint16_t)pluginOut } );
-    r.proc->setBusCount( (idx_t)nBuses );
+    r.proc->setChannelCount( (idx_t)nChannels );
 
-    for( int b = 0; b < nBuses; ++b ) {
-        auto src = std::make_shared<TestSource>( env, (float)( b + 1 ) );
-        src->init();
-        auto tap = std::make_shared<twPluginInsert>( env, r.proc, (idx_t)b );
-        tap->init();
-        tap->setInput( 0, src->linkOutput( 0 ) );
-        r.sources.push_back( std::move( src ) );
-        r.taps.push_back( std::move( tap ) );
-    }
+    r.source = std::make_shared<TestSource>( env, (idx_t)nChannels );
+    r.source->init();
+    r.insert = std::make_shared<twPluginInsert>( env, r.proc );
+    r.insert->init();
+    r.insert->setInput( 0, r.source->linkOutput( 0 ) );
     return r;
 }
 
-std::shared_ptr<twOutputPage> freezeTap( const std::shared_ptr<twPluginInsert> &tap,
-                                        offset_t pos, int rate )
+std::shared_ptr<twOutputPage> freezeInsert( const std::shared_ptr<twPluginInsert> &insert,
+                                            offset_t pos, int rate )
 {
-    return tap->requestPage( pos, nullptr, 0,
-                             (length_t)twOutputPage::FRAME_CAPACITY, rate, nullptr );
+    return insert->requestPage( pos, nullptr, 0,
+                                (length_t)twOutputPage::FRAME_CAPACITY, rate, nullptr );
 }
 
 }  // namespace
@@ -245,6 +286,13 @@ static int testBuiltinPlugin()
 
 // ---------------------------------------------------------------------------
 // M3: the channel-mismatch table of proposal 08 §Layer 3.
+//
+// PROPOSAL 36 B4 PRESERVED THIS POLICY SEMANTICALLY AND CHANGED ONLY WHERE THE
+// NUMBER COMES FROM: it is the PAGE WIDTH the slot's single insert is handed,
+// not the count of parallel mono components a track was built out of. Every
+// verdict below — Direct, DualMono with its instance count, MonoFold's average,
+// Unsupported staying transparent — is the one proposal 08 settled, and the
+// levels asserted are the same numbers the per-bus version asserted.
 static int testChannelPolicy()
 {
     std::cout << "=== M3 channel-mismatch policy ===" << std::endl;
@@ -258,46 +306,48 @@ static int testChannelPolicy()
         std::atomic<int> live{ 0 };
         Rig r = buildRig( env, 2, 2, 2, &live );
         check( r.proc->mode() == twPluginSlotMode::Direct,
-               "2-in/2-out on 2 buses is Direct" );
+               "2-in/2-out on 2 channels is Direct" );
         check( r.proc->state() == twPluginSlotState::Active, "...and Active" );
         check( live.load() == 1, "...served by exactly ONE plugin instance" );
+        check( r.insert->getOutputChannels() == 2,
+               "...and the insert declares the slot's width" );
     }
 
-    // --- 1 -> 1 on N buses: dual-mono -------------------------------------
+    // --- 1 -> 1 on N channels: dual-mono ----------------------------------
     {
         std::atomic<int> live{ 0 };
         Rig r = buildRig( env, 2, 1, 1, &live );
         check( r.proc->mode() == twPluginSlotMode::DualMono,
-               "1-in/1-out on 2 buses is DualMono" );
+               "1-in/1-out on 2 channels is DualMono" );
         check( live.load() == 2,
-               "...served by ONE INSTANCE PER BUS (why the processor takes a factory)" );
+               "...served by ONE INSTANCE PER CHANNEL (why the processor takes a factory)" );
 
-        // Prove the instances are genuinely independent: give bus 1's its own
-        // gain and watch only bus 1 change.
+        // Prove the instances are genuinely independent: give channel 1's its
+        // own gain and watch only channel 1 change.
         std::vector<twPlugin *> ps = r.proc->plugins();
         if( check( ps.size() == 2, "both dual-mono instances are reachable" ) ) {
             ps[1]->setParam( 0, 3.0 );
             r.proc->bumpParamEpoch();
-            auto p0 = freezeTap( r.taps[0], 0, rate );
-            auto p1 = freezeTap( r.taps[1], 0, rate );
-            const float in0 = r.sources[0]->value( 100 );
-            const float in1 = r.sources[1]->value( 100 );
-            check( p0 && nearly( p0->channelPtr(0)[100], in0 * 1.0f, 1e-6 ),
-                   "dual-mono bus 0 keeps its own gain" );
-            check( p1 && nearly( p1->channelPtr(0)[100], in1 * 3.0f, 1e-5 ),
-                   "dual-mono bus 1 uses its own instance's gain" );
+            auto p = freezeInsert( r.insert, 0, rate );
+            const float in0 = r.source->value( 0, 100 );
+            const float in1 = r.source->value( 1, 100 );
+            check( p && p->channels() == 2, "the slot's page is two channels wide" );
+            check( p && nearly( p->channelPtr(0)[100], in0 * 1.0f, 1e-6 ),
+                   "dual-mono channel 0 keeps its own gain" );
+            check( p && nearly( p->channelPtr(1)[100], in1 * 3.0f, 1e-5 ),
+                   "dual-mono channel 1 uses its own instance's gain" );
         }
     }
 
-    // --- 2 -> 2 on ONE bus: feed both inputs, average the outputs ---------
+    // --- 2 -> 2 on ONE channel: feed both inputs, average the outputs -----
     {
         Rig r = buildRig( env, 1, 2, 2 );
         check( r.proc->mode() == twPluginSlotMode::MonoFold,
-               "2-in/2-out on 1 bus is MonoFold" );
-        auto p = freezeTap( r.taps[0], 0, rate );
+               "2-in/2-out on 1 channel is MonoFold" );
+        auto p = freezeInsert( r.insert, 0, rate );
         // MockPlugin scales channel c by (c+1), and both inputs see the same
         // mono wire, so the average of the two outputs is in * 1.5.
-        const float in = r.sources[0]->value( 77 );
+        const float in = r.source->value( 0, 77 );
         check( p && nearly( p->channelPtr(0)[77], in * 1.5f, 1e-5 ),
                "MonoFold feeds both inputs and averages the outputs" );
     }
@@ -306,19 +356,54 @@ static int testChannelPolicy()
     {
         Rig r = buildRig( env, 2, 3, 3 );
         check( r.proc->mode() == twPluginSlotMode::Transparent,
-               "3-in/3-out on 2 buses has no mapping" );
+               "3-in/3-out on 2 channels has no mapping" );
         check( r.proc->state() == twPluginSlotState::Unsupported,
                "...and the slot is Unsupported" );
-        auto p0 = freezeTap( r.taps[0], 0, rate );
-        auto p1 = freezeTap( r.taps[1], 0, rate );
-        check( p0 && nearly( p0->channelPtr(0)[5], r.sources[0]->value( 5 ), 1e-6 ) &&
-                   p1 && nearly( p1->channelPtr(0)[5], r.sources[1]->value( 5 ), 1e-6 ),
-               "...and it loads TRANSPARENT (input reaches the output unchanged)" );
+        auto p = freezeInsert( r.insert, 0, rate );
+        check( p && nearly( p->channelPtr(0)[5], r.source->value( 0, 5 ), 1e-6 ) &&
+                   nearly( p->channelPtr(1)[5], r.source->value( 1, 5 ), 1e-6 ),
+               "...and it loads TRANSPARENT (input reaches the output unchanged, "
+               "on every channel)" );
     }
     {
         Rig r = buildRig( env, 1, 1, 2 );
         check( r.proc->state() == twPluginSlotState::Unsupported,
                "an asymmetric 1-in/2-out plugin is Unsupported" );
+    }
+
+    // --- AC B4.4: the table still holds at width 6 ------------------------
+    //
+    // Six is the width nothing in this repo had ever run a plugin at, and it is
+    // where "the mapping is derived from the page width" earns its keep: a 2->2
+    // plugin that is Direct on a stereo track must be UNSUPPORTED here, and a
+    // 1->1 plugin must produce six independent instances.
+    {
+        std::atomic<int> live{ 0 };
+        Rig r = buildRig( env, 6, 6, 6, &live );
+        check( r.proc->mode() == twPluginSlotMode::Direct,
+               "6-in/6-out on 6 channels is Direct" );
+        check( live.load() == 1, "...one instance" );
+        auto p = freezeInsert( r.insert, 0, rate );
+        bool ok = p && p->channels() == 6;
+        for( idx_t c = 0; ok && c < 6; ++c ) {
+            ok = nearly( p->channelPtr(c)[13],
+                         r.source->value( c, 13 ) * (float)( c + 1 ), 1e-5 );
+        }
+        check( ok, "...and all six channels went through the plugin coherently" );
+    }
+    {
+        std::atomic<int> live{ 0 };
+        Rig r = buildRig( env, 6, 1, 1, &live );
+        check( r.proc->mode() == twPluginSlotMode::DualMono,
+               "1-in/1-out on 6 channels is DualMono" );
+        check( live.load() == 6, "...with six independent instances" );
+    }
+    {
+        Rig r = buildRig( env, 6, 2, 2 );
+        check( r.proc->mode() == twPluginSlotMode::Transparent &&
+               r.proc->state() == twPluginSlotState::Unsupported,
+               "2-in/2-out on 6 channels is Unsupported (no routing matrix — "
+               "proposal 36 §8 non-goal)" );
     }
 
     return 0;
@@ -331,7 +416,7 @@ static int testChannelPolicy()
 // reach: a slot whose factory produces NOTHING must still have the graph shape
 // its DESCRIPTOR declared (so installing the plugin later changes only what
 // process() computes), and setFactory() must be able to turn it Active in place
-// — the taps and the twPluginChains holding them are never rebuilt, because a
+// — the insert and the twPluginChain holding it are never rebuilt, because a
 // slot's identity in the graph is its processor.
 static int testMissingAndReload()
 {
@@ -353,19 +438,13 @@ static int testMissingAndReload()
 
     auto proc = std::make_shared<twPluginSlotProcessor>(
         env, factory, twPluginIoLayout{ 2, 2 } );   // the DECLARED layout
-    proc->setBusCount( 2 );
+    proc->setChannelCount( 2 );
 
-    std::vector<std::shared_ptr<TestSource>>     sources;
-    std::vector<std::shared_ptr<twPluginInsert>> taps;
-    for( int b = 0; b < 2; ++b ) {
-        auto src = std::make_shared<TestSource>( env, (float)( b + 1 ) );
-        src->init();
-        auto tap = std::make_shared<twPluginInsert>( env, proc, (idx_t)b );
-        tap->init();
-        tap->setInput( 0, src->linkOutput( 0 ) );
-        sources.push_back( std::move( src ) );
-        taps.push_back( std::move( tap ) );
-    }
+    auto source = std::make_shared<TestSource>( env, 2 );
+    source->init();
+    auto insert = std::make_shared<twPluginInsert>( env, proc );
+    insert->init();
+    insert->setInput( 0, source->linkOutput( 0 ) );
 
     check( proc->state() == twPluginSlotState::Missing,
            "a factory that produces nothing leaves the slot MISSING" );
@@ -374,11 +453,10 @@ static int testMissingAndReload()
            "(so a reload does not change the graph's shape)" );
     check( live.load() == 0, "...and no real plugin instance exists" );
     {
-        auto p0 = freezeTap( taps[0], 0, rate );
-        auto p1 = freezeTap( taps[1], 0, rate );
-        check( p0 && nearly( p0->channelPtr(0)[9], sources[0]->value( 9 ), 1e-6 ) &&
-                   p1 && nearly( p1->channelPtr(0)[9], sources[1]->value( 9 ), 1e-6 ),
-               "...the placeholder is bit-transparent on every bus" );
+        auto p = freezeInsert( insert, 0, rate );
+        check( p && nearly( p->channelPtr(0)[9], source->value( 0, 9 ), 1e-6 ) &&
+                   nearly( p->channelPtr(1)[9], source->value( 1, 9 ), 1e-6 ),
+               "...the placeholder is bit-transparent on every channel" );
     }
 
     // The rescan found it. Same processor, new factory.
@@ -389,17 +467,16 @@ static int testMissingAndReload()
     } );
 
     check( proc->state() == twPluginSlotState::Active,
-           "setFactory() turns a MISSING slot Active without touching the taps" );
+           "setFactory() turns a MISSING slot Active without touching the insert" );
     check( live.load() == 1, "...with exactly one real instance for Direct" );
     {
-        // MockPlugin scales channel c by gain * (c + 1) — so bus 1 at 2x is the
-        // proof the taps still reach the SAME processor after the swap.
-        auto p0 = freezeTap( taps[0], 0, rate );
-        auto p1 = freezeTap( taps[1], 0, rate );
-        check( p0 && nearly( p0->channelPtr(0)[9], sources[0]->value( 9 ) * 1.0f, 1e-6 ),
-               "...bus 0 is now processed" );
-        check( p1 && nearly( p1->channelPtr(0)[9], sources[1]->value( 9 ) * 2.0f, 1e-5 ),
-               "...bus 1 too, through the same taps as before" );
+        // MockPlugin scales channel c by gain * (c + 1) — so channel 1 at 2x is
+        // the proof the insert still reaches the SAME processor after the swap.
+        auto p = freezeInsert( insert, 0, rate );
+        check( p && nearly( p->channelPtr(0)[9], source->value( 0, 9 ) * 1.0f, 1e-6 ),
+               "...channel 0 is now processed" );
+        check( p && nearly( p->channelPtr(1)[9], source->value( 1, 9 ) * 2.0f, 1e-5 ),
+               "...channel 1 too, through the same insert as before" );
     }
 
     // A state chunk re-applied after the reload has to be audible, which is what
@@ -408,8 +485,8 @@ static int testMissingAndReload()
     for( twPlugin *p : proc->plugins() ) p->setParam( 0, 4.0 );
     proc->bumpParamEpoch();
     {
-        auto p0 = freezeTap( taps[0], 0, rate );
-        check( p0 && nearly( p0->channelPtr(0)[9], sources[0]->value( 9 ) * 4.0f, 1e-5 ),
+        auto p = freezeInsert( insert, 0, rate );
+        check( p && nearly( p->channelPtr(0)[9], source->value( 0, 9 ) * 4.0f, 1e-5 ),
                "...and a parameter applied after the reload is audible" );
     }
 
@@ -425,8 +502,8 @@ static int testMissingAndReload()
            "losing the plugin again returns the slot to MISSING" );
     check( live.load() == 0, "...and releases the real instance" );
     {
-        auto p0 = freezeTap( taps[0], 0, rate );
-        check( p0 && nearly( p0->channelPtr(0)[9], sources[0]->value( 9 ), 1e-6 ),
+        auto p = freezeInsert( insert, 0, rate );
+        check( p && nearly( p->channelPtr(0)[9], source->value( 0, 9 ), 1e-6 ),
                "...transparent once more" );
     }
 
@@ -436,7 +513,7 @@ static int testMissingAndReload()
         auto p = std::make_shared<twPluginSlotProcessor>(
             env, []() -> std::unique_ptr<twPlugin> { return nullptr; },
             twPluginIoLayout{ 3, 3 } );
-        p->setBusCount( 2 );
+        p->setChannelCount( 2 );
         check( p->state() == twPluginSlotState::Missing,
                "an unmappable DECLARED layout with no plugin reports MISSING, not "
                "Unsupported" );
@@ -450,10 +527,12 @@ static int testMissingAndReload()
 // ---------------------------------------------------------------------------
 // M3: real audio through a slot. This is what the pre-M3 code could not do —
 // twPluginInsert::freezePage wrote INTERLEAVED stereo into a page the engine
-// reads as mono, and a 2-in plugin's second input was never wired at all.
+// read as mono, and a 2-in plugin's second input was never wired at all. Since
+// proposal 36 B4 it is ONE page, genuinely two channels wide, which is the
+// shape M3's comment was describing as impossible.
 static int testChainAudio()
 {
-    std::cout << "=== M3 audio through a two-bus slot ===" << std::endl;
+    std::cout << "=== audio through a two-channel slot ===" << std::endl;
 
     tw303aEnvironment env;
     env.setSRate( 48000 );
@@ -462,27 +541,26 @@ static int testChainAudio()
 
     Rig r = buildRig( env, 2, 2, 2 );
 
-    auto p0 = freezeTap( r.taps[0], 0, rate );
-    auto p1 = freezeTap( r.taps[1], 0, rate );
-    if( !check( p0 && p1, "both taps produced a page" ) ) return 1;
+    auto p0 = freezeInsert( r.insert, 0, rate );
+    if( !check( p0 != nullptr, "the insert produced a page" ) ) return 1;
 
-    check( p0->validFrames == (uint32_t)pageN && p1->validFrames == (uint32_t)pageN,
-           "each tap's page is a full mono page" );
+    check( p0->channels() == 2, "...two channels wide" );
+    check( p0->validFrames == (uint32_t)pageN, "...and a full page of frames" );
 
-    // MockPlugin: out[c] = in[c] * (c+1). Bus 0 is its own source at gain 1,
-    // bus 1 is its own source at gain 2 — so a silent right input, a swapped
-    // pair or an interleaved write all show up here.
+    // MockPlugin: out[c] = in[c] * (c+1), and the source's channel c carries
+    // (c+1) * f(pos) — so a silent second input, a swapped pair or an
+    // interleaved write all show up here.
     bool okL = true, okR = true, differ = false;
     for( length_t i = 0; i < 4096; ++i ) {
-        const float wantL = r.sources[0]->value( i ) * 1.0f;
-        const float wantR = r.sources[1]->value( i ) * 2.0f;
+        const float wantL = r.source->value( 0, i ) * 1.0f;
+        const float wantR = r.source->value( 1, i ) * 2.0f;
         okL = okL && nearly( p0->channelPtr(0)[i], wantL, 1e-6 );
-        okR = okR && nearly( p1->channelPtr(0)[i], wantR, 1e-6 );
-        if( !nearly( p0->channelPtr(0)[i], p1->channelPtr(0)[i], 1e-9 ) ) differ = true;
+        okR = okR && nearly( p0->channelPtr(1)[i], wantR, 1e-6 );
+        if( !nearly( p0->channelPtr(0)[i], p0->channelPtr(1)[i], 1e-9 ) ) differ = true;
     }
-    check( okL, "bus 0 carries its own upstream through the plugin" );
-    check( okR, "bus 1 carries ITS OWN upstream through the plugin (not silence)" );
-    check( differ, "the two buses are genuinely different audio" );
+    check( okL, "channel 0 carries its own upstream through the plugin" );
+    check( okR, "channel 1 carries ITS OWN upstream through the plugin (not silence)" );
+    check( differ, "the two channels are genuinely different audio" );
 
     // Chunking (CONTRACT invariant 5): the plugin never sees more than it was
     // activated for, and it really does see the declared block size.
@@ -493,37 +571,43 @@ static int testChainAudio()
         check( mp->maxSeen_ == (std::uint32_t)twPluginSlotProcessor::kChunkFrames,
                "a 65536-frame page reaches the plugin as kChunkFrames blocks" );
         check( mp->prepares_ == 1, "prepare() ran exactly once for the slot" );
+        check( mp->maxChannelsSeen_ == 2,
+               "AC B4.4: the plugin saw BOTH channels in one process() call" );
     }
 
-    // A second page at the same position must be served from the caches, not
+    // A second page at the same position must be served from the cache, not
     // re-rendered.
-    auto p0b = freezeTap( r.taps[0], 0, rate );
+    auto p0b = freezeInsert( r.insert, 0, rate );
     check( p0b == p0, "re-requesting the same page hits the component cache" );
 
     // The next page in sequence must not reset the plugin (state continuity).
-    auto n0 = freezeTap( r.taps[0], (offset_t)pageN, rate );
+    auto n0 = freezeInsert( r.insert, (offset_t)pageN, rate );
     if( check( n0 != nullptr, "the following page freezes" ) ) {
-        check( nearly( n0->channelPtr(0)[3], r.sources[0]->value( (offset_t)pageN + 3 ), 1e-6 ),
+        check( nearly( n0->channelPtr(0)[3], r.source->value( 0, (offset_t)pageN + 3 ), 1e-6 ),
                "the following page carries the audio for ITS position" );
+        check( nearly( n0->channelPtr(1)[3],
+                       r.source->value( 1, (offset_t)pageN + 3 ) * 2.0f, 1e-6 ),
+               "...on channel 1 as well, i.e. not displaced by a page (§4.3)" );
     }
 
     // --- bypass must invalidate pages, or the toggle is inaudible ----------
     r.proc->setBypass( true );
-    auto b0 = freezeTap( r.taps[0], 0, rate );
+    auto b0 = freezeInsert( r.insert, 0, rate );
     check( b0 != p0, "toggling bypass stales the cached page" );
-    check( b0 && nearly( b0->channelPtr(0)[9], r.sources[0]->value( 9 ), 1e-6 ),
-           "a bypassed slot passes its input straight through" );
+    check( b0 && nearly( b0->channelPtr(0)[9], r.source->value( 0, 9 ), 1e-6 ) &&
+               nearly( b0->channelPtr(1)[9], r.source->value( 1, 9 ), 1e-6 ),
+           "a bypassed slot passes its input straight through, on every channel" );
     r.proc->setBypass( false );
-    auto u0 = freezeTap( r.taps[0], 0, rate );
-    check( u0 && nearly( u0->channelPtr(0)[9], r.sources[0]->value( 9 ) * 1.0f, 1e-6 ),
+    auto u0 = freezeInsert( r.insert, 0, rate );
+    check( u0 && nearly( u0->channelPtr(0)[9], r.source->value( 0, 9 ) * 1.0f, 1e-6 ),
            "un-bypassing brings the plugin back" );
 
     // --- a parameter edit must invalidate pages too ------------------------
     if( !ps.empty() ) {
         ps[0]->setParam( 0, 4.0 );
         r.proc->bumpParamEpoch();
-        auto g0 = freezeTap( r.taps[0], 0, rate );
-        check( g0 && nearly( g0->channelPtr(0)[9], r.sources[0]->value( 9 ) * 4.0f, 1e-5 ),
+        auto g0 = freezeInsert( r.insert, 0, rate );
+        check( g0 && nearly( g0->channelPtr(0)[9], r.source->value( 0, 9 ) * 4.0f, 1e-5 ),
                "a parameter edit is audible on the next freeze (pages invalidated)" );
     }
 
@@ -531,10 +615,10 @@ static int testChainAudio()
     if( !ps.empty() ) {
         MockPlugin *mp = static_cast<MockPlugin *>( ps[0] );
         const int preparesBefore = mp->prepares_;
-        auto pv = r.taps[0]->freezePage( 0, nullptr, 0, 1000, 1000, nullptr );
+        auto pv = r.insert->freezePage( 0, nullptr, 0, 1000, 1000, nullptr );
         check( mp->prepares_ == preparesBefore,
                "a preview freeze does NOT re-prepare the plugin (CONTRACT 6)" );
-        check( pv && nearly( pv->channelPtr(0)[3], r.sources[0]->value( 3 ), 1e-6 ),
+        check( pv && nearly( pv->channelPtr(0)[3], r.source->value( 0, 3 ), 1e-6 ),
                "...and forwards the upstream envelope unprocessed" );
     }
 
@@ -542,15 +626,30 @@ static int testChainAudio()
 }
 
 // ---------------------------------------------------------------------------
-// M3 hard invariant 1: two taps of one slot freezing CONCURRENTLY must not
-// deadlock. Tap 0 renders holding the processor mutex and gathers bus 1 through
-// tap 1's pullUpstreamPage(); if that took tap 1's own component mutex — or if a
-// tap held its mutex across pageFor() — this hangs. A hang is reported as a
-// failure and the process is aborted, because a deadlocked thread cannot be
-// joined.
-static int testConcurrentTapFreeze()
+// CONCURRENT FREEZES OF ONE SLOT.
+//
+// What this gate used to be, and why it changed. Proposal 08 M3's hard
+// invariant 1 was about two TAPS of one slot freezing at once: tap 0 rendered
+// holding the processor mutex and gathered bus 1 SIDEWAYS through tap 1's
+// pullUpstreamPage(), so a tap that held its own component mutex there
+// deadlocked against tap 1's own freeze. Proposal 36 B4 retired the sideways
+// gather — there is one insert, it reads its own upstream page, and no lock is
+// ever taken across a sibling — so that particular deadlock is not reachable
+// any more.
+//
+// What IS still reachable, and is what this now gates, is the other hazard the
+// same slot has: two drivers (a revalidation worker, the playback readahead, an
+// offline render) freezing the SAME insert at DIFFERENT positions at the same
+// time. The insert has a streaming input, so its freeze serializes on
+// cursorMutex_ (twComponent::freezePage), and the processor serializes its own
+// state; if either failed, one thread's page would come back carrying the other
+// thread's position — the "coherent page displaced by a whole page" bug this
+// repo has already bled for. A hang is reported as a failure and the process is
+// aborted, because a deadlocked thread cannot be joined.
+static int testConcurrentSlotFreeze()
 {
-    std::cout << "=== M3 concurrent two-tap freeze (deadlock gate) ===" << std::endl;
+    std::cout << "=== concurrent freezes of one slot (race + deadlock gate) ==="
+              << std::endl;
 
     tw303aEnvironment env;
     env.setSRate( 48000 );
@@ -565,17 +664,19 @@ static int testConcurrentTapFreeze()
     auto body = [&]() {
         const int kIters = 120;
         for( int it = 0; it < kIters; ++it ) {
-            // Force BOTH taps to actually render this round.
+            // Force a real render this round.
             r.proc->bumpParamEpoch();
-            const offset_t pos = (offset_t)( ( it % 3 ) * pageN );
+            const offset_t posA = (offset_t)( ( it % 3 ) * pageN );
+            const offset_t posB = (offset_t)( ( ( it + 1 ) % 3 ) * pageN );
+            const offset_t pos[2] = { posA, posB };
 
             std::atomic<int> ready{ 0 };
             std::shared_ptr<twOutputPage> pages[2];
 
-            auto worker = [&]( int bus ) {
+            auto worker = [&]( int which ) {
                 ready.fetch_add( 1 );
                 while( ready.load() < 2 ) { /* line the two threads up */ }
-                pages[bus] = freezeTap( r.taps[bus], pos, rate );
+                pages[which] = freezeInsert( r.insert, pos[which], rate );
             };
 
             std::thread t0( worker, 0 );
@@ -583,11 +684,15 @@ static int testConcurrentTapFreeze()
             t0.join();
             t1.join();
 
-            for( int bus = 0; bus < 2; ++bus ) {
-                if( !pages[bus] ) { mismatches.fetch_add( 1 ); continue; }
-                const float want = r.sources[bus]->value( pos + 11 ) * (float)( bus + 1 );
-                if( !nearly( pages[bus]->channelPtr(0)[11], want, 1e-5 ) )
-                    mismatches.fetch_add( 1 );
+            for( int which = 0; which < 2; ++which ) {
+                if( !pages[which] ) { mismatches.fetch_add( 1 ); continue; }
+                if( pages[which]->channels() != 2 ) { mismatches.fetch_add( 1 ); continue; }
+                for( idx_t c = 0; c < 2; ++c ) {
+                    const float want =
+                        r.source->value( c, pos[which] + 11 ) * (float)( c + 1 );
+                    if( !nearly( pages[which]->channelPtr(c)[11], want, 1e-5 ) )
+                        mismatches.fetch_add( 1 );
+                }
             }
         }
         done.store( true );
@@ -595,7 +700,7 @@ static int testConcurrentTapFreeze()
 
     std::future<void> fut = std::async( std::launch::async, body );
     if( fut.wait_for( std::chrono::seconds( 60 ) ) != std::future_status::ready ) {
-        check( false, "concurrent two-tap freezes complete without deadlocking" );
+        check( false, "concurrent slot freezes complete without deadlocking" );
         std::cerr << "=== DEADLOCK: aborting (a hung thread cannot be joined) ==="
                   << std::endl;
         std::cerr.flush();
@@ -604,13 +709,12 @@ static int testConcurrentTapFreeze()
     }
     fut.get();
 
-    check( done.load(), "concurrent two-tap freezes complete without deadlocking" );
+    check( done.load(), "concurrent slot freezes complete without deadlocking" );
     check( mismatches.load() == 0,
-           "every concurrently frozen page carries the right bus at the right position" );
+           "every concurrently frozen page carries every channel at the right position" );
 
     return 0;
 }
-
 #ifdef TW_TESTCLAP_PATH
 
 // The real CLAP load path, against the in-repo fixture module (twtestclap.c).
@@ -942,7 +1046,7 @@ int testPluginInsert()
     testChannelPolicy();
     testMissingAndReload();
     testChainAudio();
-    testConcurrentTapFreeze();
+    testConcurrentSlotFreeze();
 #ifdef TW_TESTCLAP_PATH
     testClapBackend();
 #else

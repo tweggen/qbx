@@ -48,6 +48,42 @@ public:
     const char *getOutputName(idx_t) const override { return "ramp"; }
 };
 
+// A SIX-channel source whose channel c is the constant 0.6 - 0.1*c (proposal
+// 36 B5). Constants rather than a ramp on purpose: a per-channel level is
+// exactly what a render must not smear, and a wrong channel is then off by a
+// whole 0.1 instead of by a phase.
+class WideRampComponent : public twComponent {
+public:
+    static constexpr idx_t kChannels = 6;
+    explicit WideRampComponent(tw303aEnvironment &e) : twComponent(e) {}
+    bool isSeekable() const override { return true; }
+    int seekTo(offset_t) override { return 0; }
+    void reset() override {}
+    idx_t getOutputChannels() const override { return kChannels; }
+    length_t renderPageWide(twOutputPage &page, length_t frames,
+                            const sample_t *, length_t) override {
+        length_t n = frames;
+        if (n > (length_t)page.channelFrames()) n = (length_t)page.channelFrames();
+        for (idx_t c = 0; c < (idx_t)page.channels(); ++c) {
+            sample_t *dst = page.channelPtr(c);
+            const float v = 0.6f - 0.1f * (float)c;
+            for (length_t i = 0; i < n; ++i) dst[i] = v;
+        }
+        return n;
+    }
+    // The narrow degradation (proposal 36 §7 trap 18).
+    length_t renderFrames(sample_t *out, length_t n, const sample_t *,
+                          length_t, idx_t) override {
+        for (length_t i = 0; i < n; ++i) out[i] = 0.6f;
+        return n;
+    }
+    void createOutputLatches() override {}
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName(idx_t) const override { return nullptr; }
+    const char *getOutputName(idx_t) const override { return "wideramp"; }
+};
+
 // Minimal RIFF/WAV reader: PCM16 or float32, returns interleaved floats.
 static bool readWavFloat(const char *path, std::vector<float> &out,
                          int &channels)
@@ -138,7 +174,14 @@ int main(int argc, char **argv)
     std::vector<float> samples;
     int channels = 0;
     CHECK(readWavFloat(outPath, samples, channels), "output WAV parses");
-    CHECK(channels == 2, "output is stereo (duplicated mono)");
+    // ONE channel, because the graph declares one (proposal 36 B5). This
+    // asserted `channels == 2` until B5: RenderSession hard-coded
+    // config.channels = 2 and duplicated the graph's single mono page into
+    // both. RampComponent's getOutputChannels() is the default 1, so the honest
+    // file is mono, and RenderParams::channels defaulting to 0 ("ask the
+    // graph") is what makes that the default rather than something a caller has
+    // to remember.
+    CHECK(channels == 1, "output width is the GRAPH's width (mono here)");
     long long frames = (long long)samples.size() / channels;
     CHECK(frames == total, "frame count matches the requested range");
 
@@ -159,6 +202,55 @@ int main(int argc, char **argv)
     CHECK(boundaryOk, "no discontinuity at the page boundary");
 
     std::remove(outPath);
+
+    // ------------------------------------------------------------------
+    // Proposal 36 B5 — a SIX-channel graph renders a SIX-channel file, and
+    // every channel carries its own audio.
+    //
+    // The unit-level half of AC B5.3 (the project-level half is the qxa case
+    // mc_six_channel). What it pins that the qxa case cannot: the exact
+    // per-channel values, from a source whose channel c is a constant
+    // 0.6 - 0.1*c, so a channel served from the wrong page channel is off by a
+    // full 0.1 rather than by a level band. Six because it is the width the AC
+    // names and because it is past every hard-coded 2 in the old sink.
+    {
+        auto wide = std::make_shared<WideRampComponent>(env);
+        wide->init();
+
+        const char *widePath = "render_module_wide_test.wav";
+        audio::RenderParams wp;
+        wp.outputPath  = widePath;
+        wp.format      = audio::AudioFormat::WAV;
+        wp.startTimeSec = 0.0;
+        wp.endTimeSec   = 0.5;
+
+        std::atomic<bool> wdone{false}, wok{false};
+        audio::RenderSession wsession;
+        wsession.onComplete = [&](bool ok2, const char *) { wok = ok2; wdone = true; };
+        CHECK(wsession.start(std::static_pointer_cast<twComponent>(wide), wp, rate),
+              "B5: wide render session starts");
+        for (int i = 0; i < 600 && !wdone; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        CHECK(wdone && wok, "B5: wide render completes");
+
+        std::vector<float> ws;
+        int wch = 0;
+        CHECK(readWavFloat(widePath, ws, wch), "B5: wide output WAV parses");
+        CHECK(wch == 6, "AC B5.3: a 6-channel graph renders a SIX-channel file");
+
+        bool laddersOk = (wch == 6) && !ws.empty();
+        const long long wframes = wch ? (long long)ws.size() / wch : 0;
+        for (int c = 0; c < wch && laddersOk; ++c) {
+            const float want = 0.6f - 0.1f * (float)c;
+            for (long long i = 0; i < wframes && laddersOk; i += 331)
+                laddersOk = std::fabs(ws[(size_t)(i * wch + c)] - want) < 2e-4f;
+        }
+        CHECK(laddersOk,
+              "AC B5.3: file channel c is GRAPH channel c, at its own level");
+
+        std::remove(widePath);
+    }
+
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall render tests passed\n",
            failures);
     return failures ? 1 : 0;

@@ -182,8 +182,41 @@ void twSpeaker::startOutput()
                 return frames;
             }
 
-            std::vector<float> bufL(frames), bufR(frames);
-            std::size_t outFrames = engine->pullBlock(bufL.data(), bufR.data(), frames);
+            // THE DEVICE MONITORING RULE — stated in full at the top of
+            // twspeaker.h and in playback/CONTRACT.md inv. 9:
+            //     L = ch0;  R = (projectWidth >= 2) ? ch1 : ch0
+            // and that pair meets the device's channel count as it always has.
+            // A project wider than two is monitored on its FIRST TWO channels;
+            // the rest are computed and dropped HERE, at the device, and never
+            // in a file (that is RenderSession, which shares no code with this).
+            const std::size_t projectWidth = std::max<std::size_t>(1, engine->graphChannels());
+            const std::size_t pullCh       = twmonitor::pullChannels(projectWidth);
+
+            // ONE log line per width, not per callback: the exchange returns the
+            // width we last reported, so this fires on the first callback of a
+            // session and again only if the project's width changes underneath
+            // it. Someone hearing four of their six channels missing can find
+            // out why without reading source.
+            if ((int) projectWidth != monitorWidthLogged_.exchange((int) projectWidth,
+                                                                   std::memory_order_relaxed)) {
+                if (projectWidth > 2)
+                    TWSPK_LOG("monitoring a %u-channel project on the device's FIRST TWO "
+                              "channels (L=ch0, R=ch1); channels 2..%u are rendered and "
+                              "dropped at the device. A render still gets all %u.",
+                              (unsigned) projectWidth, (unsigned) (projectWidth - 1),
+                              (unsigned) projectWidth);
+                else
+                    TWSPK_LOG("monitoring a %u-channel project (L=ch0, R=%s)",
+                              (unsigned) projectWidth,
+                              projectWidth >= 2 ? "ch1" : "ch0");
+            }
+
+            std::vector<float> buf(pullCh * frames);
+            std::vector<float *> chans(pullCh);
+            for (std::size_t c = 0; c < pullCh; ++c) chans[c] = buf.data() + c * frames;
+
+            const std::size_t outFrames =
+                (std::size_t) engine->pullBlock(chans.data(), pullCh, frames);
 
             if (outFrames == 0) {
                 std::fill_n(out, frames * channels, 0.0f);
@@ -192,20 +225,12 @@ void twSpeaker::startOutput()
                 return frames;
             }
 
-            for (std::size_t i = 0; i < outFrames; ++i) {
-                float sL = bufL[i];
-                float sR = bufR[i];
-                for (std::uint32_t c = 0; c < channels; ++c) {
-                    out[i * channels + c] = (c % 2 == 0) ? sL : sR;
-                }
-            }
+            twmonitor::interleave(out, outFrames, channels,
+                                  const_cast<const float *const *>(chans.data()), pullCh);
 
             if (outFrames < frames) {
-                for (std::size_t i = outFrames; i < frames; ++i) {
-                    for (std::uint32_t c = 0; c < channels; ++c) {
-                        out[i * channels + c] = 0.0f;
-                    }
-                }
+                std::fill_n(out + outFrames * channels,
+                            (frames - outFrames) * channels, 0.0f);
             }
 
             if (context_ && !context_->locatorHeldElsewhere())

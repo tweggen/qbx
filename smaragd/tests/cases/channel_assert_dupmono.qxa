@@ -1,18 +1,40 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The other half of the discriminator gate: what assert-channels-differ says
-  about a render produced by TODAY's sink.
+  WHAT assert-channels-differ SAYS ABOUT A REAL RENDER — and, since proposal 36
+  B5, WHY it says it.
 
-  The sink is mono. RenderSession pulls one page and writes it to both channels
-  ("Duplicate to stereo (temporary; proper multi-channel TBD)"), so a rendered
-  WAV's two channels are equal BY CONSTRUCTION — which is exactly why
-  plugins/CONTRACT.md forbids `L != R` assertions. This case pins that: the
-  channels of a real render are the same audio, by level AND sample for sample.
+  THIS CASE WAS WRITTEN AS A GATE THAT WAS SUPPOSED TO BREAK AT B5, and it is
+  worth recording that IT DID NOT. Its original form rendered the 4 s ramped
+  sawtooth and asserted, via expectReject, that the file's two channels were
+  identical — pinning the duplicated-mono sink ("RenderSession pulls one page
+  and writes it to both channels"). The prediction was that widening the sink
+  would make those rejections stop rejecting.
 
-  It is written as `expectReject="true"` rather than as a "channels are equal"
-  verb on purpose. The day the sink goes wide this case is SUPPOSED to fail, and
-  a failure here is the signal that it did. Update it then; do not loosen it
-  before then.
+  It didn't, because of §7 trap 22: ../test_sawtooth.wav is a TWO-channel file
+  whose channels are BYTE-IDENTICAL. Its two channels are equal after B5 for the
+  same reason they are equal in the source, so every assertion below still
+  passes, unchanged, and would have passed a sink that still duplicated. A gate
+  whose fixture cannot distinguish the two states is not a gate for that
+  distinction, however loudly it says it is.
+
+  So the case is now a PAIR, and the pair is the discriminator:
+
+    A. the sawtooth        — channels equal, because the SOURCE's are equal.
+                             This is content, not construction, and it is the
+                             control that keeps the verb honest (a verb that
+                             reported "differ" for everything would fail here).
+    B. ../test_stereo.wav  — channels genuinely different, in the same project,
+                             through the same render path.
+
+  Neither half alone means anything about the sink. A duplicating sink passes A
+  and fails B; a verb that always answers "differ" fails A and passes B; only
+  the real thing passes both. The equality in A is a statement about the FIXTURE
+  from here on, and that is exactly what the comment it replaced could not say.
+
+  (The plain-stereo-clip AC itself is B5.2, gated by mc_stereo_clip_width, which
+  asserts the fixture's exact 6 dB ladder. This case is about the VERB and about
+  the pair; keeping it is what stops the sawtooth's equality from silently
+  becoming evidence again.)
 -->
 <SActionScript version="1" name="channel_assert_dupmono">
 
@@ -20,11 +42,18 @@
 
   <actions>
     <add-track index="-1"/>
+    <add-track index="-1"/>
 
-    <!-- The 4 s ramped sawtooth: ordinary material, ordinary render path. -->
+    <!-- Track 0: the 4 s ramped sawtooth, two byte-identical channels. -->
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <!-- Track 1: the 3 s asymmetric stereo fixture (ch0 rms 0.5, ch1 rms
+         0.25). Muted for half A, unmuted for half B. -->
+    <add-sample trackIndex="1" filePath="../test_stereo.wav" timePos="0"/>
 
-    <render filename="channel_assert_dupmono.wav" format="wav" quality="10"/>
+    <!-- ================= A. equal channels, from an equal SOURCE ======== -->
+    <set-track-mute trackPath="1" muted="1"/>
+    <render filename="channel_assert_dupmono.wav" format="wav" quality="10"
+            durationSec="4.5"/>
 
     <!-- The render really does carry audio (so the rejections below are about
          the CHANNELS being equal, not about the file being silent). -->
@@ -55,10 +84,23 @@
                             startFrame="96000" frameCount="48000"
                             minRmsDelta="0.0" minDiffRms="0.0001"
                             expectReject="true"/>
+
+    <!-- ================= B. different channels, same render path ======== -->
+    <set-track-mute trackPath="0" muted="1"/>
+    <set-track-mute trackPath="1" muted="0"/>
+    <render filename="channel_assert_stereo.wav" format="wav" quality="10"
+            durationSec="2.5"/>
+
+    <!-- Both assertions that rejected in half A must now PASS. Level: the
+         ladder's 0.25 delta. Content: rms(ch0 - ch1) is 0.25 as well. -->
+    <assert-channels-differ filename="channel_assert_stereo.wav"
+                            channelA="0" channelB="1"
+                            startFrame="0" frameCount="96000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
   </actions>
 
   <assertions>
-    <assert-track-count equals="1"/>
+    <assert-track-count equals="2"/>
   </assertions>
 
 </SActionScript>

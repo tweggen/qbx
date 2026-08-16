@@ -31,7 +31,21 @@ using namespace std;
 
 int STrack::serializeSelfAttributes( QTextStream &o )
 {
-    o << " nBusses='" << getNBusses() << "'";
+    // nBusses= IS DELIBERATELY NOT WRITTEN ANY MORE (proposal 36 B4).
+    //
+    // A track no longer HAS a bus count: it has one twTrackMix and one
+    // twPluginChain, N channels wide, and N is the PROJECT's channels= — one
+    // authority, read on construction and on SProject::channelsChanged. Keeping
+    // a derived copy in every <STrack> would be a second authority that agrees
+    // with the first only until someone edits a file by hand, and this exact
+    // drift has already cost this project once: the loader defaulted the
+    // attribute to "1" while the constructor built 2, so a .qxp that omitted it
+    // asked for a SHRINK, which Q_ASSERT_X(false) "handled" by returning
+    // silently in the build everyone runs (§7 trap 9).
+    //
+    // The read side stays TOLERANT — see readPreChildrenAttributes — so every
+    // existing project still loads. What it does not do any more is decide
+    // anything.
     // Which <SPluginChain> is OURS (proposal 08 M4). Every SObject is a child of
     // the project and is serialized from there, so a chain lands in the file
     // whether or not anyone claims it; before M4 nothing did, and a loaded chain
@@ -104,24 +118,19 @@ std::shared_ptr<twComponent> STrack::getRootComponent()
 
 int STrack::seekTo( offset_t ofs )
 {
-    for( int i=0; i<nBusses_; i++ ) {
-        std::shared_ptr<twTrackMix> mix = cpTrackMixers_[i];
-        // seek(): app model → engine component, an EXTERNAL seek (see
-        // twComponent::seek). The mix's own clip cascade below it stays on
-        // seekTo(), being internal to the mix.
-        if( mix ) mix->seek( ofs );
-    }
+    // seek(): app model -> engine component, an EXTERNAL seek (see
+    // twComponent::seek). The mix's own clip cascade below it stays on
+    // seekTo(), being internal to the mix.
+    if( cpTrackMix_ ) cpTrackMix_->seek( ofs );
     return 0;
 }
 
 void STrack::bumpRenderChainEpoch()
 {
-    for( int i=0; i<nBusses_; ++i ) {
-        if( cpTrackMixers_[i] )
-            cpTrackMixers_[i]->bumpContentEpoch();
-        if( cpPluginChains_[i] )
-            cpPluginChains_[i]->bumpContentEpoch();   // forwards to inserts
-    }
+    if( cpTrackMix_ )
+        cpTrackMix_->bumpContentEpoch();
+    if( cpDspChain_ )
+        cpDspChain_->bumpContentEpoch();   // forwards to its inserts
     if( cpRewire_ )
         cpRewire_->bumpContentEpoch();
 }
@@ -130,12 +139,10 @@ void STrack::bumpRenderChainEpoch()
 // speaks the same timeline positions, so one range fits all of them.
 void STrack::bumpRenderChainEpochRange( offset_t start, offset_t end )
 {
-    for( int i=0; i<nBusses_; ++i ) {
-        if( cpTrackMixers_[i] )
-            cpTrackMixers_[i]->invalidatePagesInRange(start, end);
-        if( cpPluginChains_[i] )
-            cpPluginChains_[i]->invalidatePagesInRange(start, end);   // forwards to inserts
-    }
+    if( cpTrackMix_ )
+        cpTrackMix_->invalidatePagesInRange(start, end);
+    if( cpDspChain_ )
+        cpDspChain_->invalidatePagesInRange(start, end);   // forwards to its inserts
     if( cpRewire_ )
         cpRewire_->invalidatePagesInRange(start, end);
 }
@@ -186,12 +193,10 @@ void STrack::trackChildDurationChanged( length_t newLength )
         twEditRange affected;
         for( SLink *lk : childLinks() ) {
             if( !lk || &lk->getSObject() != obj ) continue;
-            for( int i=0; i<nBusses_; ++i ) {
-                if( cpTrackMixers_[i] ) {
-                    twEditRange r = cpTrackMixers_[i]->updateClip(
-                        lk, lk->getStartTime(), newLength);
-                    affected.unite(r.start, r.end);
-                }
+            if( cpTrackMix_ ) {
+                twEditRange r = cpTrackMix_->updateClip(
+                    lk, lk->getStartTime(), newLength);
+                affected.unite(r.start, r.end);
             }
         }
         // AFTER the engine mutation: stale this chain and every container up
@@ -213,11 +218,9 @@ void STrack::trackChildWasMoved( offset_t newTime )
         // window wrongly via updateClip (same class as the insert-path fix).
         length_t duration = slink->getSObject().getDurationBlocking();
         twEditRange affected;
-        for( int i=0; i<nBusses_; ++i ) {
-            if( cpTrackMixers_[i] ) {
-                twEditRange r = cpTrackMixers_[i]->updateClip(slink, newTime, duration);
-                affected.unite(r.start, r.end);
-            }
+        if( cpTrackMix_ ) {
+            twEditRange r = cpTrackMix_->updateClip(slink, newTime, duration);
+            affected.unite(r.start, r.end);
         }
         // Union of the old and new placements (the mix knew the old one).
         invalidateRenderPathRange( (offset_t) affected.start,
@@ -257,12 +260,10 @@ void STrack::trackChildWasAdded( SLink &child )
                 return child.getSObject().resolveClip( off );
             };
             twEditRange affected;
-            for( int i=0; i<nBusses_; ++i ) {
-                if( cpTrackMixers_[i] ) {
-                    twEditRange r = cpTrackMixers_[i]->insertClip(
-                        &child, startTime, duration, getComponentFn, resolveFn);
-                    affected.unite(r.start, r.end);
-                }
+            if( cpTrackMix_ ) {
+                twEditRange r = cpTrackMix_->insertClip(
+                    &child, startTime, duration, getComponentFn, resolveFn);
+                affected.unite(r.start, r.end);
             }
 
             // We are the summing parent for a child TRACK (a folder lane), so
@@ -287,12 +288,9 @@ void STrack::trackChildWasAdded( SLink &child )
                                   Qt::UniqueConnection );
                 SObject *root = splacements::rootContainer( getProjectSafe() );
                 if( !ssolo::isLaneAudible( root, childTrack ) ) {
-                    for( int i=0; i<nBusses_; ++i ) {
-                        if( cpTrackMixers_[i] ) {
-                            twEditRange r =
-                                cpTrackMixers_[i]->setClipMuted( &child, true );
-                            affected.unite(r.start, r.end);
-                        }
+                    if( cpTrackMix_ ) {
+                        twEditRange r = cpTrackMix_->setClipMuted( &child, true );
+                        affected.unite(r.start, r.end);
                     }
                 }
             }
@@ -312,11 +310,9 @@ void STrack::trackChildWasRemoved( SLink &child )
         if( child.getSObject().hasDuration() ) {
             // Remove the clip from all track mixers, keyed by the link itself.
             twEditRange affected;
-            for( int i=0; i<nBusses_; ++i ) {
-                if( cpTrackMixers_[i] ) {
-                    twEditRange r = cpTrackMixers_[i]->removeClip(&child);
-                    affected.unite(r.start, r.end);
-                }
+            if( cpTrackMix_ ) {
+                twEditRange r = cpTrackMix_->removeClip(&child);
+                affected.unite(r.start, r.end);
             }
             // Only the removed clip's extent went silent (proposal 18 Phase 5).
             invalidateRenderPathRange( (offset_t) affected.start,
@@ -328,155 +324,117 @@ void STrack::trackChildWasRemoved( SLink &child )
     }
 }
 
-// See STrack::setNBussesCallCount() in the header for why this exists.
-// std::atomic because setNBusses() is a UI-thread slot but the counter is read
-// from a test's main thread; relaxed because only the total matters.
-static std::atomic<long> s_setNBussesCalls{ 0 };
-
-long STrack::setNBussesCallCount()
+// PROPOSAL 36 B4: ONE twTrackMix + ONE twPluginChain, N CHANNELS WIDE.
+//
+// What this replaces is STrack::setNBusses(), which built N parallel width-1
+// twTrackMix + twPluginChain pairs and could only ever GROW — a shrink was
+// Q_ASSERT_X( false, ... ), i.e. an abort in a Debug build and a SILENT return
+// in the RelWithDebInfo build everyone runs (§7 trap 9), leaving stale wiring.
+// Growing had its own hazard: the new mixers had to be back-filled with every
+// existing clip and re-wired to the slots' per-bus taps, and getting the
+// "which ones are new" bookkeeping wrong duplicated clip entries.
+//
+// None of that exists any more. There is one component of each kind, its width
+// is a number, and changing the number creates and destroys nothing:
+//
+//     twTrackMix(N) -> twPluginChain(N) -> twRewire(N)      [the track root]
+//
+// So the whole grow/shrink asymmetry is gone, and with it the reason
+// project_channels_test had to prove M1 reached no bus count: the project's
+// channels= now REACHES this, deliberately, and 6 -> 2 on an undo is ordinary.
+//
+// This is called from the constructor (with the project's width), from
+// SProject::channelsChanged, and by nothing else.
+void STrack::setChannels( int n )
 {
-    return s_setNBussesCalls.load( std::memory_order_relaxed );
-}
+    if( n < 1 ) n = 1;
 
-void STrack::setNBusses( int nBusses )
-{
-    s_setNBussesCalls.fetch_add( 1, std::memory_order_relaxed );
+    const bool firstTime = !cpTrackMix_;
+    if( !firstTime && n == channels_ ) return;
 
-    // Hoisted: the initial-sync loop at the end needs to know which mixers
-    // are NEW, so it does not re-insert clips into ones that already hold them.
-    int oldMixerCount = 0;
-    if( nBusses==nBusses_ ) return;
-    int oldNBusses = nBusses_;
-    if( nBusses<oldNBusses ) {
-        // Shrink not yet implemented; refuse rather than leaving stale wiring
-        // that would cause a use-after-free on the next render.
-        Q_ASSERT_X( false, "STrack::setNBusses", "bus count shrink not supported" );
-        return;
-    } else {
-        // The number of busses is about to grow. Base the growth start index on
-        // the actual container size, not nBusses_: the constructor sets
-        // nBusses_==1 while leaving this vector empty, so trusting nBusses_ here
-        // would skip creating bus 0 and leave a null shared_ptr behind.
-        oldMixerCount = (int)cpTrackMixers_.size();
-        cpTrackMixers_.resize(nBusses);
-        // Create the new ones.
-        for( int i=oldMixerCount; i<nBusses; ++i ) {
-            cpTrackMixers_[i] = std::make_shared<twTrackMix>(
-                *(SAppContext::get().get303aEnvironment()) );
-            cpTrackMixers_[i]->init();
-        }
-    }
-    // Grow plugin chain array: keep existing chains, create new ones for added buses.
-    int oldChainCount = (int)cpPluginChains_.size();
-    {
-        cpPluginChains_.resize(nBusses);
+    tw303aEnvironment *env = SAppContext::get().get303aEnvironment();
 
-        // Create new plugin chain components for added buses only
-        for( int i=oldChainCount; i<nBusses; ++i ) {
-            cpPluginChains_[i] = std::make_shared<twPluginChain>(
-                *(SAppContext::get().get303aEnvironment()), 1 );
-            cpPluginChains_[i]->init();
-        }
-    }
+    if( firstTime ) {
+        cpTrackMix_ = std::make_shared<twTrackMix>( *env );
+        cpTrackMix_->init();
 
-    // Reset rewirer.
-    if( cpRewire_ ) {
-        for( int i=0;i<oldNBusses;++i ) {
-            cpRewire_->setInput( i, NULL );
-        }
-    } else {
-        cpRewire_ = std::make_shared<twRewire>( *(SAppContext::get().get303aEnvironment()) );
+        cpDspChain_ = std::make_shared<twPluginChain>( *env, (idx_t) n );
+        cpDspChain_->init();
+
+        cpRewire_ = std::make_shared<twRewire>( *env );
         cpRewire_->init();
-    }
-    cpRewire_->setNPlugs( nBusses );
+        // ONE plug: a wide rewire is single-plug (see twRewire's class note).
+        cpRewire_->setNPlugs( 1 );
 
-    // Wire: track mixer → plugin chain → rewire
-    for( int i=0; i<nBusses; ++i ) {
-        cpPluginChains_[i]->setInput( 0, cpTrackMixers_[i]->linkOutput( 0 ) );
-        // If this chain already has plugins, rebuildWiring() so it picks up the
-        // (possibly new) input latch after setInput changed pInputPlugs[0].
-        cpPluginChains_[i]->rebuildWiring();
-        cpRewire_->setInput( i, cpPluginChains_[i]->linkOutput( 0 ) );
+        // trackmix -> chain -> rewire
+        cpDspChain_->setInput( 0, cpTrackMix_->linkOutput( 0 ) );
+        cpDspChain_->rebuildWiring();
+        cpRewire_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
     }
 
-    // Populate the NEWLY created chains with the existing slots' taps
-    // (proposal 08 M3).
-    //
-    // This is the other half of the "a 2-in/2-out plugin gets silence on input
-    // 1" fix. Before M3 each bus got its OWN plugin instance and a chain built
-    // with nBusses_ == 1, whose rebuildWiring() could only ever wire port 0 —
-    // so a stereo plugin's second input was never connected to anything. Now a
-    // slot owns ONE processor and one 1-in/1-out TAP per bus, so a new bus needs
-    // its own tap in its own chain, in slot order, and the processor gathers all
-    // of them coherently. Slots also have to learn the final bus count BEFORE
-    // any tap is built, because the count is what selects the channel-mismatch
-    // mapping (direct / dual-mono / mono-fold / unsupported).
+    channels_ = n;
+
+    // Width is a property of each component, set independently — there is no
+    // rewiring to do and nothing to back-fill, which is the entire point of the
+    // collapse.
+    cpTrackMix_->setChannels( (idx_t) n );
+    cpDspChain_->setChannels( (idx_t) n );
+    cpRewire_->setChannels( (idx_t) n );
+
+    // The slots have to re-derive the channel-mismatch mapping (proposal 08
+    // §Layer 3): a 2->2 plugin is Direct on a stereo track and Unsupported on a
+    // 6-channel one, and the verdict is only correct if it is taken against the
+    // width the insert will actually be handed. setChannelCount()
+    // re-instantiates, so it also re-applies bypass and the saved state chunk.
     if( cpPluginChain_ ) {
         const int nSlots = cpPluginChain_->getSlotCount();
         for( int s = 0; s < nSlots; ++s ) {
             if( SPluginSlot *slot = cpPluginChain_->getSlotAt( s ) )
-                slot->setBusCount( nBusses );
-        }
-        for( int i = oldChainCount; i < nBusses; ++i ) {
-            if( !cpPluginChains_[i] ) continue;
-            for( int s = 0; s < nSlots; ++s ) {
-                SPluginSlot *slot = cpPluginChain_->getSlotAt( s );
-                if( !slot ) continue;
-                if( auto tap = slot->getInsertForBus( i ) )
-                    cpPluginChains_[i]->addPlugin( tap );
-            }
+                slot->setChannelCount( n );
         }
     }
 
-    // Populate clip list in the NEW track mixers with existing children (initial
-    // sync). This runs on the UI thread, so it's safe to populate before audio
-    // starts.
-    //
-    // Only the mixers created by this call (index >= oldMixerCount): the ones
-    // that already existed already hold every entry, and re-inserting would give
-    // one SLink* two entries in the same mixer — a duplicate that only
-    // removeClip cleaned up correctly, and that would otherwise stay frozen at
-    // its pre-edit extent and clip the sum there.
-    for( SLink *lk : childLinks() ) {
-        if( !lk || !lk->hasStartTime() ) continue;
-        offset_t startTime = lk->getStartTime();
-        // Blocking read — same stale try-lock hazard as trackChildWasAdded.
-        length_t duration = lk->getSObject().hasDuration() ? lk->getSObject().getDurationBlocking() : 0;
-        // Create a callback that returns the component dynamically
-        auto getComponentFn = [lk]() { return lk->getRootComponent(); };
-        // Inv-1: single resolver — component + slip-folded position from ONE
-        // clip snapshot, so the freeze can't straddle a lazy reader build.
-        auto resolveFn = [lk]( offset_t off ) {
-            return lk->getSObject().resolveClip( off );
-        };
-        for( int i=oldMixerCount; i<nBusses; ++i ) {
-            if( !cpTrackMixers_[i] ) continue;
-            cpTrackMixers_[i]->insertClip(lk, startTime, duration, getComponentFn, resolveFn);
+    if( firstTime ) {
+        // Initial sync: populate the mix with the clips we already carry. Only
+        // reachable on the FIRST call — a later width change touches no clip
+        // list at all, which is what retired the "which mixers are new"
+        // bookkeeping that used to double-insert entries.
+        for( SLink *lk : childLinks() ) {
+            if( !lk || !lk->hasStartTime() ) continue;
+            // Blocking read — same stale try-lock hazard as trackChildWasAdded.
+            length_t duration = lk->getSObject().hasDuration()
+                                ? lk->getSObject().getDurationBlocking() : 0;
+            auto getComponentFn = [lk]() { return lk->getRootComponent(); };
+            // Inv-1: single resolver — component + slip-folded position from ONE
+            // clip snapshot, so the freeze can't straddle a lazy reader build.
+            auto resolveFn = [lk]( offset_t off ) {
+                return lk->getSObject().resolveClip( off );
+            };
+            cpTrackMix_->insertClip( lk, lk->getStartTime(), duration,
+                                     getComponentFn, resolveFn );
+            QObject::connect( lk, SIGNAL( startTimeChanged( offset_t ) ),
+                              this, SLOT( trackChildWasMoved( offset_t ) ),
+                              Qt::UniqueConnection );
+            QObject::connect( &(lk->getSObject()), SIGNAL( durationChanged( length_t ) ),
+                              this, SLOT( trackChildDurationChanged( length_t ) ),
+                              Qt::UniqueConnection );
         }
-        // ...and give those entries the same live wiring trackChildWasAdded
-        // makes, or a later move/resize of the clip would never reach the mixers
-        // created here: the clip would stay at the extent it had at bus-growth
-        // time. UniqueConnection because a child adopted the normal way is
-        // already connected.
-        QObject::connect( lk, SIGNAL( startTimeChanged( offset_t ) ),
-                          this, SLOT( trackChildWasMoved( offset_t ) ),
-                          Qt::UniqueConnection );
-        QObject::connect( &(lk->getSObject()), SIGNAL( durationChanged( length_t ) ),
-                          this, SLOT( trackChildDurationChanged( length_t ) ),
-                          Qt::UniqueConnection );
+    } else {
+        // Every page in this track's chain is now the wrong shape. §4.5 already
+        // treats an old-width page as a MISS, so this is not what makes the
+        // change safe — it is what makes it converge instead of playing silence
+        // until some other edit invalidates us.
+        invalidateRenderPath();
     }
 
-    nBusses_ = nBusses;
-    emit nChannelsChanged( nBusses );
+    emit nChannelsChanged( n );
 }
 
 STrack::STrack( SProject *project )
     : SObject( project ),
       inlineRenderer_( 0 ),
-      nBusses_( 1 ),
-      cpTrackMixers_( 0 ),
+      channels_( 0 ),
       cpPluginChain_( 0 ),
-      cpPluginChains_( 0 ),
       lastDuration_( 1 ),
       lastDurationValid_( true )
 {
@@ -501,9 +459,17 @@ STrack::STrack( SProject *project )
     QObject::connect( this, SIGNAL( volumeChanged( double ) ),
                       this, SLOT( onTrackVolumeChanged( double ) ) );
 
-    // Set the number of busses. This initial request will allocate
-    // the track mixer objects and DSP plugin chains.
-    setNBusses( 2 );
+    // WIDTH COMES FROM THE PROJECT (proposal 36 B4), and follows it. There is
+    // exactly one authority — SProject::channels(), the attribute M1 added —
+    // and this is where it reaches the graph for the first time. The fallback
+    // is 2 for a track built without a project, which is the width every
+    // project this build has ever written carries.
+    setChannels( project ? project->channels() : 2 );
+    if( project ) {
+        QObject::connect( project, SIGNAL( channelsChanged( int ) ),
+                          this, SLOT( setChannels( int ) ),
+                          Qt::UniqueConnection );
+    }
 }
 
 // Signals + the reference + the component provider, in one place so the
@@ -520,11 +486,11 @@ void STrack::connectPluginChain( SPluginChain *chain )
     QObject::connect( chain, SIGNAL( slotsReordered( int, int ) ),
                       this, SLOT( onPluginSlotsReordered( int, int ) ) );
 
-    // Bus 0's DSP chain answers SPluginChain::getRootComponent(). Captured by
-    // `this` and read lazily, so it follows a later setNBusses().
+    // The track's DSP chain answers SPluginChain::getRootComponent(). Captured
+    // by `this` and read lazily, so it follows a later rebuild.
     chain->setComponentProvider( [this]() -> std::shared_ptr<twComponent> {
-        if( cpPluginChains_.empty() || !cpPluginChains_[0] ) return nullptr;
-        return std::static_pointer_cast<twComponent>( cpPluginChains_[0] );
+        if( !cpDspChain_ ) return nullptr;
+        return std::static_pointer_cast<twComponent>( cpDspChain_ );
     } );
 
     // See the member's declaration: without a reference of our own, an adopted
@@ -569,15 +535,14 @@ void STrack::adoptPluginChain( SPluginChain *chain )
         QObject::connect( slot, SIGNAL( audioInvalidated() ),
                           this, SLOT( onPluginSlotAudioInvalidated() ),
                           Qt::UniqueConnection );
-        slot->setBusCount( nBusses_ );
+        slot->setChannelCount( channels_ );
     }
-    for( int i = 0; i < nBusses_; ++i ) {
-        if( !cpPluginChains_[i] ) continue;
+    if( cpDspChain_ ) {
         for( int s = 0; s < nSlots; ++s ) {
             SPluginSlot *slot = chain->getSlotAt( s );
             if( !slot ) continue;
-            if( auto tap = slot->getInsertForBus( i ) )
-                cpPluginChains_[i]->addPlugin( tap );
+            if( auto insert = slot->getInsert() )
+                cpDspChain_->addPlugin( insert );
         }
     }
     invalidateRenderPath();
@@ -595,8 +560,8 @@ STrack::~STrack()
     // to avoid double-delete crashes during project destruction.
     // (Historically it was manually managed, but current design makes it a project child.)
 
-    cpPluginChains_.resize(0);
-    cpTrackMixers_.resize(0);
+    cpDspChain_.reset();
+    cpTrackMix_.reset();
     cpRewire_.reset();
 }
 
@@ -643,34 +608,30 @@ SStartTimeList::~SStartTimeList()
 int STrack::readPreChildrenAttributes( QDomElement &element )
 {
     SObject::readPreChildrenAttributes( element );
-    
-    QString data;
-    // The default is the CONSTRUCTOR's width, not 1 (proposal 36 M1).
+
+    // nBusses= IS READ AND IGNORED (proposal 36 B4).
     //
-    // It read "1" while STrack() builds 2 busses, so a .qxp that omitted the
-    // attribute asked for a SHRINK — and shrink is Q_ASSERT_X( false, ... ).
-    // Note WHICH failure that is here: the default RelWithDebInfo build strips
-    // NDEBUG (to keep the engine's own asserts) but Qt still defines
-    // QT_NO_DEBUG, so Q_ASSERT_X compiles out and the branch returned SILENTLY,
-    // leaving the ctor's 2. Only an explicit -DCMAKE_BUILD_TYPE=Debug aborts.
-    // Either way it has never been noticed, because every project this build
-    // has ever WRITTEN carries nBusses='2'; a hand-written fixture, a file from
-    // an older build, or any of it once width is a real variable finds it.
+    // It used to decide how many parallel width-1 mixers the track built, and
+    // it was a second authority on a number the project already owns. B4
+    // retired the concept: a track is ONE twTrackMix and ONE twPluginChain, N
+    // channels wide, and N is SProject::channels(). Every .qxp ever written by
+    // this build carries nBusses='2' and every one of them still loads — the
+    // attribute simply no longer says anything, and the writer no longer emits
+    // it (see serializeSelfAttributes).
     //
-    // A file that genuinely asks for FEWER busses than we already built is
-    // clamped, loudly, for the same reason: shrink lands in proposal 36 B4,
-    // together with the wide track path that makes it meaningful. Until then
-    // keeping the wider wiring is inaudible (the extra bus is summed nowhere
-    // today), whereas asserting would cost the user their project.
-    data = element.attribute( "nBusses", QString::number( getNBusses() ) );
-    int wanted = data.toInt();
-    if( wanted < getNBusses() ) {
-        qWarning() << "STrack: project asks for" << wanted
-                   << "busses but the track already has" << getNBusses()
-                   << "- keeping" << getNBusses()
-                   << "(bus-count shrink lands with proposal 36 B4).";
-    } else {
-        setNBusses( wanted );
+    // Warning once when a file disagrees with the project's width is worth it:
+    // it is the only signal a user would get that an old document meant
+    // something different, and it costs one line per track on a file that will
+    // not carry the attribute again after the next save.
+    const QString data = element.attribute( "nBusses" );
+    if( !data.isEmpty() ) {
+        bool ok = false;
+        const int wanted = data.toInt( &ok );
+        if( ok && wanted != channels_ ) {
+            qWarning() << "STrack: ignoring legacy nBusses=" << wanted
+                       << "- channel width comes from the project ("
+                       << channels_ << ") since proposal 36 B4.";
+        }
     }
 
     return 0;
@@ -756,29 +717,20 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
     // Sync the model change to all DSP plugin chains
     // Pre-allocate inserts for all buses to ensure they're fully initialized
     // before the audio thread accesses them
-    if( nBusses_ > 0 ) {
-        // Tell the slot the bus count FIRST: it is what selects the
-        // channel-mismatch mapping (proposal 08 §Layer 3), so deriving it once
-        // here avoids re-instantiating the plugin per bus as the taps appear.
-        slot.setBusCount( nBusses_ );
+    if( channels_ > 0 ) {
+        // Tell the slot the CHANNEL count FIRST: it is what selects the
+        // channel-mismatch mapping (proposal 08 §Layer 3, re-derived from page
+        // width by proposal 36 B4), and the insert must not be built against
+        // the wrong one.
+        slot.setChannelCount( channels_ );
 
-        // Then ensure all taps exist and are fully initialized
-        for( int i = 0; i < nBusses_; ++i ) {
-            std::shared_ptr<audio::twPluginInsert> insert = slot.getInsertForBus(i);
-            if( !insert ) {
-                // Insert creation failed - the slot will handle the error
-                return;
-            }
+        std::shared_ptr<audio::twPluginInsert> insert = slot.getInsert();
+        if( !insert ) {
+            // Insert creation failed - the slot will handle the error
+            return;
         }
-
-        // Now that all inserts are safely created, add them to the chains
-        for( int i = 0; i < nBusses_; ++i ) {
-            if( cpPluginChains_[i] ) {
-                std::shared_ptr<audio::twPluginInsert> insert = slot.getInsertForBus(i);
-                if( insert ) {
-                    cpPluginChains_[i]->addPlugin( insert );
-                }
-            }
+        if( cpDspChain_ ) {
+            cpDspChain_->addPlugin( insert );
         }
         invalidateRenderPath();
     }
@@ -793,13 +745,11 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
     // being deleted: the model dropped the right slot, the audio path dropped
     // the wrong one, and nothing reported it. Identity cannot miss.
     //
-    // peekInsertForBus (not getInsertForBus) because this is a teardown path —
-    // it must never INSTANTIATE a plugin just to look up what to erase.
+    // peekInsert (not getInsert) because this is a teardown path — it must
+    // never INSTANTIATE a plugin just to look up what to erase.
     (void)index;
-    for( int i = 0; i < nBusses_; ++i ) {
-        if( cpPluginChains_[i] ) {
-            cpPluginChains_[i]->removePlugin( slot.peekInsertForBus( i ) );
-        }
+    if( cpDspChain_ ) {
+        cpDspChain_->removePlugin( slot.peekInsert() );
     }
     invalidateRenderPath();
 }
@@ -807,7 +757,7 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
 void STrack::onPluginSlotAudioInvalidated()
 {
     // Exactly what the insert/remove/reorder handlers do: bumpRenderChainEpoch()
-    // on us (every bus's twTrackMix + twPluginChain + the rewire) and on every
+    // on us (the twTrackMix + twPluginChain + the rewire) and on every
     // container above us, via the root's walk.
     invalidateRenderPath();
 }
@@ -818,10 +768,8 @@ void STrack::onPluginSlotsReordered( int fromIndex, int toIndex )
     // alone wires plugins_ in ITS existing order, so the reorder was inaudible
     // AND it left plugins_ permanently out of step with the model — which is
     // what made a later removal target the wrong insert.
-    for( int i = 0; i < nBusses_; ++i ) {
-        if( cpPluginChains_[i] ) {
-            cpPluginChains_[i]->reorderPlugin( fromIndex, toIndex );
-        }
+    if( cpDspChain_ ) {
+        cpDspChain_->reorderPlugin( fromIndex, toIndex );
     }
     invalidateRenderPath();
 }
@@ -875,9 +823,9 @@ void STrack::applyChildTrackAudibility()
         STrack *child = dynamic_cast<STrack*>( &lk->getSObject() );
         if( !child ) continue;
         const bool audible = ssolo::isLaneAudible( root, child, anySolo );
-        for( int i=0; i<nBusses_; ++i ) {
-            if( cpTrackMixers_[i] ) {
-                twEditRange r = cpTrackMixers_[i]->setClipMuted( lk, !audible );
+        {
+            if( cpTrackMix_ ) {
+                twEditRange r = cpTrackMix_->setClipMuted( lk, !audible );
                 affected.unite( r.start, r.end );
             }
         }
@@ -896,9 +844,9 @@ void STrack::applyChildTrackAudibility()
 void STrack::onTrackVolumeChanged( double gainDb )
 {
     // Forward volume change to all track mixers
-    for( int i=0; i<nBusses_; ++i ) {
-        if( cpTrackMixers_[i] ) {
-            cpTrackMixers_[i]->setTrackGain(gainDb);
+    {
+        if( cpTrackMix_ ) {
+            cpTrackMix_->setTrackGain(gainDb);
         }
     }
     // Gain is baked into frozen pages downstream of the track mixer

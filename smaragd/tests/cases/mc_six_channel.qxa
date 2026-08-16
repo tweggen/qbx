@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AC B5.3 (proposal 36) — A SIX-CHANNEL PROJECT RENDERS A SIX-CHANNEL FILE, with
+  per-channel energies in band.
+
+  This is the first case in the suite whose OUTPUT FILE is wider than two
+  channels, and it is the one that proves RenderParams::channels really comes
+  from the project rather than from a constant. Before B5 the sink hard-coded
+  config.channels = 2, so a channels='6' project rendered a stereo file; M1 had
+  already made the count project DATA, and everything between then and here was
+  about getting a six-channel PAGE to the sink.
+
+  ================================================================== the ladder
+
+  ../test_channels4.wav is gen_channel_fixture at channels=4 (the same generator
+  and the same 6 dB ladder mc_stereo_clip_width's stereo fixture uses): a 480 Hz
+  sine at 0.7071 / 2^c, 12000 frames = 120 whole cycles at 48 kHz, so
+
+      ch 0  rms 0.50000    ch 1  rms 0.25000
+      ch 2  rms 0.12500    ch 3  rms 0.06250
+
+  A FOUR-channel clip in a SIX-channel project is the interesting case, not an
+  accident of the fixture list: it exercises the §4.4 read clamp at the width
+  seam, so file channels 4 and 5 must carry the clip's LAST channel (0.0625) —
+  "mono plays on every channel", generalised. A sink that zero-filled the
+  channels the page does not have, or that wrapped around to channel 0, fails
+  here and nowhere else in the suite.
+
+  The assertion window is frames 1000..8000 — 7000 frames = 70 whole cycles at
+  480 Hz, so each band measures the exact figure rather than "about" it, and it
+  sits clear of both ends of the 12000-frame clip.
+
+  WHY THE WIDTH ASSERTION IS "channel=5 passes, channel=6 rejects": M0 made an
+  out-of-range channel= an ERROR rather than a silent rms 0. That turns the pair
+  into an exact channel-count assertion without a verb that reads a WAV header.
+-->
+<SActionScript version="1" name="mc_six_channel">
+
+  <setup project="new"/>
+
+  <actions>
+    <set-project-channels channels="6"/>
+
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_channels4.wav" timePos="0"/>
+
+    <render filename="mc_six.wav" format="wav" quality="10" durationSec="0.2"/>
+
+    <!-- ================= the file really is six channels ================ -->
+    <assert-audio-energy filename="mc_six.wav"
+                         startFrame="1000" frameCount="7000"
+                         channel="5" minRms="0.0570" maxRms="0.0680"/>
+    <!-- …and no wider. Channel 6 does not exist, which is an ERROR, not 0. -->
+    <assert-audio-energy filename="mc_six.wav"
+                         startFrame="1000" frameCount="7000"
+                         channel="6" minRms="0.0" maxRms="1.0"
+                         expectReject="true"/>
+
+    <!-- ================= per-channel energies, in band ================== -->
+    <assert-audio-energy filename="mc_six.wav"
+                         startFrame="1000" frameCount="7000"
+                         channel="0" minRms="0.470" maxRms="0.530"/>
+    <assert-audio-energy filename="mc_six.wav"
+                         startFrame="1000" frameCount="7000"
+                         channel="1" minRms="0.235" maxRms="0.265"/>
+    <assert-audio-energy filename="mc_six.wav"
+                         startFrame="1000" frameCount="7000"
+                         channel="2" minRms="0.117" maxRms="0.133"/>
+    <assert-audio-energy filename="mc_six.wav"
+                         startFrame="1000" frameCount="7000"
+                         channel="3" minRms="0.0570" maxRms="0.0680"/>
+    <!-- The clamp: channel 4 is the clip's channel 3, not silence and not
+         channel 0. -->
+    <assert-audio-energy filename="mc_six.wav"
+                         startFrame="1000" frameCount="7000"
+                         channel="4" minRms="0.0570" maxRms="0.0680"/>
+
+    <!-- The bands must be able to fail, or the ladder proves nothing: channel 1
+         is not at channel 0's level, and channel 4 is not at channel 0's. -->
+    <assert-audio-energy filename="mc_six.wav"
+                         startFrame="1000" frameCount="7000"
+                         channel="1" minRms="0.470" maxRms="0.530"
+                         expectReject="true"/>
+    <assert-audio-energy filename="mc_six.wav"
+                         startFrame="1000" frameCount="7000"
+                         channel="4" minRms="0.470" maxRms="0.530"
+                         expectReject="true"/>
+
+    <!-- ================= the ladder is ORDERED ========================== -->
+    <!-- Levels alone would pass a permutation. These say which is which. -->
+    <assert-channels-differ filename="mc_six.wav"
+                            channelA="0" channelB="1"
+                            startFrame="1000" frameCount="7000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+    <assert-channels-differ filename="mc_six.wav"
+                            channelA="2" channelB="3"
+                            startFrame="1000" frameCount="7000"
+                            minRmsDelta="0.050" minDiffRms="0.050"/>
+    <!-- …and channels 3, 4 and 5 are the SAME audio (the clamp), which no
+         level band could establish. -->
+    <assert-channels-differ filename="mc_six.wav"
+                            channelA="3" channelB="4"
+                            startFrame="1000" frameCount="7000"
+                            minRmsDelta="0.0" minDiffRms="0.0001"
+                            expectReject="true"/>
+    <assert-channels-differ filename="mc_six.wav"
+                            channelA="4" channelB="5"
+                            startFrame="1000" frameCount="7000"
+                            minRmsDelta="0.0" minDiffRms="0.0001"
+                            expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

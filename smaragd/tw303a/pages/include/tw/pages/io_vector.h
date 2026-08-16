@@ -27,6 +27,16 @@
  * 2. Mixing clips in twTrackMix::freezePage_nolock: Type-safe offset arithmetic
  * 3. Preview rendering: Page-backed instead of separate arrays
  * 4. Format conversion: Known bounds prevent overflow
+ *
+ * CHANNELS (proposal 36 §4.6). An IOVector is a view over ONE CHANNEL of its
+ * pages, and it stays that way: making the vector itself channel-aware was
+ * considered and rejected, because wide mixing is a LOOP over channels of the
+ * same page pair and a channel-aware vector would have had to answer "what does
+ * copyFrom do when the widths differ" in every operation. B1b named the channel
+ * once as a constant; B4 turns that constant into this parameter, so a wide
+ * twTrackMix mixing channel c is `IOVector(page, 0, len, c)` and nothing else
+ * about the class changes. The §4.4 read clamp (a narrower SOURCE) is the
+ * caller's, via twPageClampChannel — a view cannot decide a downmix policy.
  */
 class IOVector {
 public:
@@ -38,10 +48,13 @@ public:
      * @param page        Shared reference to output page
      * @param startOffset Offset within page's sample buffer (0 = beginning)
      * @param length      Logical length (frames); clamped to available
+     * @param channel     Which CHANNEL of the page this view addresses
+     *                    (proposal 36 §4.6, added by B4 — see the class note)
      */
     IOVector(std::shared_ptr<twOutputPage> page,
              offset_t startOffset,
-             length_t length);
+             length_t length,
+             idx_t channel = 0);
 
     /**
      * Create an IOVector from multiple pages (for future multi-page buffers).
@@ -58,8 +71,11 @@ public:
      * Create a writable IOVector for destination rendering.
      * Typical use: output of a clip's freezePage call.
      * Starts at offset 0, uses full page size.
+     *
+     * @param channel Which channel of the page to address (default 0).
      */
-    static IOVector CreateForPageOutput(std::shared_ptr<twOutputPage> page);
+    static IOVector CreateForPageOutput(std::shared_ptr<twOutputPage> page,
+                                        idx_t channel = 0);
 
     /**
      * Create an IOVector from a contiguous buffer (legacy interop).
@@ -103,6 +119,9 @@ public:
 
     /// Starting offset within first page
     offset_t startOffset() const { return startOffset_; }
+
+    /// Which channel of the backing pages this view addresses.
+    idx_t channel() const { return channel_; }
 
     /// Available frames from startOffset to end of backing pages
     length_t availableFrames() const;
@@ -218,6 +237,7 @@ private:
     std::vector<std::shared_ptr<twOutputPage>> pages_;
     offset_t startOffset_;
     length_t length_;
+    idx_t    channel_ = 0;
 
     // Internal helper: map logical offset to (page_index, offset_in_page)
     struct LogicalToPhysical {

@@ -18,12 +18,47 @@ AudioEngine::AudioEngine(std::shared_ptr<twComponent> synthOutput, uint32_t samp
       pageFrameOffset_(0),
       rateRatio_(1.0)
 {
-    // Resamplers start in identity config (will be updated via configureResampling)
-    resamplerL_.configure(sampleRate, sampleRate);
-    resamplerR_.configure(sampleRate, sampleRate);
-    resamplerL_.reset();
-    resamplerR_.reset();
+    // Resamplers start in identity config (will be updated via configureResampling).
+    // One per channel of whatever the graph declares; configureResampling() is
+    // what re-sizes the vector if the project's width changed.
+    resamplers_.resize(std::max<std::size_t>(1, graphChannels()));
+    for (auto &r : resamplers_) {
+        r.configure(sampleRate, sampleRate);
+        r.reset();
+    }
+    passthrough_ = true;
 }
+
+std::size_t AudioEngine::graphChannels() const {
+    if (!synthOutput_) return 1;
+    const idx_t n = synthOutput_->getOutputChannels();
+    return (n > 0) ? (std::size_t) n : (std::size_t) 1;
+}
+
+void AudioEngine::resetResamplers() {
+    for (auto &r : resamplers_) r.reset();
+}
+
+void AudioEngine::ensureResampleBuffers(std::size_t channels, std::size_t frames) {
+    if (channels == 0) channels = 1;
+    if (resampleChannels_ >= channels && resampleStride_ >= frames) return;
+    resampleChannels_ = std::max(resampleChannels_, channels);
+    resampleStride_   = std::max(resampleStride_, frames);
+    resampleBuf_.assign(resampleChannels_ * resampleStride_, 0.0f);
+}
+
+namespace {
+
+// Every miss path in pullBlock() must leave EVERY destination buffer defined —
+// a caller (the RT callback, a test) hands us scratch it has not cleared.
+inline void zeroChannels(float* const* out, std::size_t nChannels,
+                         std::size_t offset, std::size_t count) {
+    for (std::size_t c = 0; c < nChannels; ++c) {
+        if (out[c]) std::memset(out[c] + offset, 0, count * sizeof(float));
+    }
+}
+
+}  // namespace
 
 AudioEngine::~AudioEngine() {
     // Ensure read-ahead thread is stopped before destruction
@@ -34,26 +69,22 @@ AudioEngine::~AudioEngine() {
     }
 }
 
-bool AudioEngine::pullFrame(AudioFrame& outFrame) {
-    // One frame is just the smallest possible block. This used to be its own
-    // cursor implementation (pullStereoFrameFrozen), which duplicated the page
-    // walk and got it subtly wrong: its page advance recomputed the position
-    // from currentPageStartPos_, discarding the playhead, and it honoured
-    // neither the live-seek adoption nor the cycle wrap. Routing through
-    // pullBlock leaves exactly one cursor in this class to be correct.
-    float l = 0.0f, r = 0.0f;
-    const length_t n = pullBlock(&l, &r, 1);   // every miss path zeroes l/r
-    outFrame.channels[0] = l;
-    outFrame.channels[1] = r;
-    outFrame.numChannels = 2;
-    outFrame.sampleRate = engineSampleRate_;
-    return n == 1;
-}
+// Pull nFrames into nChannels planar destination buffers.
+//
+// WIDTH (proposal 36 B5). This used to be pullBlock(outL, outR, n) — two named
+// buffers, both fed from channelPtr(0), which is where playback's half of the
+// mono sink lived. It now serves destination channel c from the frozen page's
+// channel twPageClampChannel(page, c): the §4.4 read clamp, so a narrower page
+// (a mono project, or a stale narrow page under proposal 16's fallback) plays
+// on every destination channel exactly as before, and a wider one is read
+// honestly. Nothing here decides how the destination channels map onto a DEVICE
+// — that is twSpeaker's rule, next to the sample-rate mismatch it already owns.
+length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels,
+                                length_t nFrames) {
+    if (!outChannels || nChannels == 0) return 0;
 
-length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
     if (!synthOutput_ || nFrames == 0) {
-        std::memset(outL, 0, nFrames * sizeof(float));
-        std::memset(outR, 0, nFrames * sizeof(float));
+        zeroChannels(outChannels, nChannels, 0, (std::size_t) nFrames);
         return 0;
     }
 
@@ -69,23 +100,22 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         prevFrozenPage_ = nullptr;
         pageFrameOffset_ = 0;
         cachedPageValidFrames_ = 0;
-        resamplerL_.reset();
-        resamplerR_.reset();
+        resetResamplers();
     }
 
     // Tier 1 Enhancement: Use frozen pages for state-continuous rendering
     // If resampling needed (engine rate != output rate), pull more frames and resample
-    if (!resamplerL_.isPassthrough()) {
+    if (!passthrough_) {
         // Pull at engine rate, then resample to output rate
         // rateRatio_ = outputRate / inputRate (e.g., 44100/48000 = 0.9187)
         // We need more input frames when downsampling: inFrames = outFrames / rateRatio_
         double invRatio = 1.0 / rateRatio_;  // inputRate / outputRate (e.g., 48000/44100 = 1.0884)
         length_t inFramesNeeded = (length_t)std::ceil(nFrames * invRatio);
-        // Phase 1 perf: Use pre-allocated buffers instead of malloc per block
-        if (inFramesNeeded > resampleBufL_.size()) {
-            resampleBufL_.resize(inFramesNeeded);
-            resampleBufR_.resize(inFramesNeeded);
-        }
+        // Phase 1 perf: Use pre-allocated buffers instead of malloc per block.
+        // One flat allocation of nChannels * stride, so a width change costs one
+        // resize rather than N (and, in the steady state, none).
+        ensureResampleBuffers(nChannels, (std::size_t) inFramesNeeded);
+        const std::size_t stride = resampleStride_;
 
         // Phase 3 Optimization: Batch input pulling for resampling path (same as passthrough)
         // Instead of per-sample pullStereoFrameFrozen calls, use batching with cached state
@@ -148,20 +178,17 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
                 length_t dataFrames = (pageFrameOffset_ < cachedPageValidFrames_)
                     ? std::min(batchSize, (length_t)(cachedPageValidFrames_ - pageFrameOffset_))
                     : 0;
-                // Channel 0, duplicated to both device channels below: the sink
-                // is still mono (proposal 36 B5 widens it). channelPtr() bounds-
-                // checks the channel index only -- nothing here reads the page's
-                // width, so a page of any width is safe to serve, which matters
-                // on THIS path because proposal 16 deliberately hands the RT
-                // callback stale pages.
-                const float *pageData = currentFrozenPage_->channelPtr(0) + pageFrameOffset_;
-                std::copy(pageData, pageData + dataFrames, resampleBufL_.data() + inOffset);
-                std::copy(pageData, pageData + dataFrames, resampleBufR_.data() + inOffset);
-                if (dataFrames < batchSize) {
-                    std::fill(resampleBufL_.data() + inOffset + dataFrames,
-                              resampleBufL_.data() + inOffset + batchSize, 0.0f);
-                    std::fill(resampleBufR_.data() + inOffset + dataFrames,
-                              resampleBufR_.data() + inOffset + batchSize, 0.0f);
+                // §4.4: the width we may act on is the width of the page IN HAND,
+                // never the producer's declared width — this path is exactly the
+                // one on which proposal 16 hands the RT callback a stale page.
+                for (std::size_t c = 0; c < nChannels; ++c) {
+                    const idx_t src = twPageClampChannel(*currentFrozenPage_, (idx_t) c);
+                    const float *pageData = currentFrozenPage_->channelPtr(src) + pageFrameOffset_;
+                    float *dst = resampleBuf_.data() + c * stride + inOffset;
+                    std::copy(pageData, pageData + dataFrames, dst);
+                    if (dataFrames < batchSize) {
+                        std::fill(dst + dataFrames, dst + batchSize, 0.0f);
+                    }
                 }
 
                 // Step 5: Update state ONCE per batch
@@ -194,8 +221,7 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
                         (unsigned long long)loopEnd_.load(std::memory_order_relaxed) );
             }
             // Caller's buffers must be large enough to hold nFrames
-            std::memset(outL, 0, nFrames * sizeof(float));
-            std::memset(outR, 0, nFrames * sizeof(float));
+            zeroChannels(outChannels, nChannels, 0, (std::size_t) nFrames);
             return 0;
         }
 
@@ -203,22 +229,25 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
         // For output sample i, read from input at position i * invRatio
         double step = invRatio;  // inputRate / outputRate
         length_t outProduced = 0;
-        for (length_t i = 0; i < nFrames; ++i) {
-            double pos = (double)i * step;
-            length_t k = (length_t)pos;
-            double frac = pos - (double)k;
+        for (std::size_t c = 0; c < nChannels; ++c) {
+            const float *in = resampleBuf_.data() + c * stride;
+            float *out = outChannels[c];
+            if (!out) continue;
+            for (length_t i = 0; i < nFrames; ++i) {
+                double p = (double)i * step;
+                length_t k = (length_t)p;
+                double frac = p - (double)k;
 
-            if (k + 1 < inProduced) {
-                outL[i] = resampleBufL_[k] + (resampleBufL_[k+1] - resampleBufL_[k]) * (float)frac;
-                outR[i] = resampleBufR_[k] + (resampleBufR_[k+1] - resampleBufR_[k]) * (float)frac;
-            } else if (k < inProduced) {
-                outL[i] = resampleBufL_[k];
-                outR[i] = resampleBufR_[k];
-            } else {
-                outL[i] = outR[i] = 0.0f;
+                if (k + 1 < inProduced) {
+                    out[i] = in[k] + (in[k+1] - in[k]) * (float)frac;
+                } else if (k < inProduced) {
+                    out[i] = in[k];
+                } else {
+                    out[i] = 0.0f;
+                }
             }
-            outProduced++;
         }
+        outProduced = nFrames;
 
         // currentPos_ was already advanced by exactly the input frames consumed
         // (Step 5 stores per batch). It must NOT be rewritten from outProduced:
@@ -231,8 +260,12 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
 
         // Diagnostic: check if output is silence
         bool isSilent = true;
-        for (length_t i = 0; i < outProduced && isSilent; ++i) {
-            if (outL[i] != 0.0f || outR[i] != 0.0f) isSilent = false;
+        for (std::size_t c = 0; c < nChannels && isSilent; ++c) {
+            const float *out = outChannels[c];
+            if (!out) continue;
+            for (length_t i = 0; i < outProduced && isSilent; ++i) {
+                if (out[i] != 0.0f) isSilent = false;
+            }
         }
         if (isSilent && outProduced > 0) {
             static int silenceCount = 0;
@@ -275,8 +308,8 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
 
         // If page not available, output silence and stop
         if (!currentFrozenPage_ || currentFrozenPage_->validAspects == 0) {
-            std::memset(outL + outOffset, 0, (nFrames - produced) * sizeof(float));
-            std::memset(outR + outOffset, 0, (nFrames - produced) * sizeof(float));
+            zeroChannels(outChannels, nChannels, (std::size_t) outOffset,
+                         (std::size_t) (nFrames - produced));
             readaheadCv_.notify_one();  // Wake readahead to fetch page
             return produced;
         }
@@ -301,8 +334,8 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             batchSize = std::min(batchSize, (length_t)readaheadGap);
         } else {
             // Serious underrun: output silence
-            std::memset(outL + outOffset, 0, (nFrames - produced) * sizeof(float));
-            std::memset(outR + outOffset, 0, (nFrames - produced) * sizeof(float));
+            zeroChannels(outChannels, nChannels, (std::size_t) outOffset,
+                         (std::size_t) (nFrames - produced));
             return produced;
         }
 
@@ -313,13 +346,16 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             length_t dataFrames = (pageFrameOffset_ < cachedPageValidFrames_)
                 ? std::min(batchSize, (length_t)(cachedPageValidFrames_ - pageFrameOffset_))
                 : 0;
-            const float *pageData = currentFrozenPage_->channelPtr(0) + pageFrameOffset_;
-            // Duplicate mono frozen output to stereo
-            std::copy(pageData, pageData + dataFrames, outL + outOffset);
-            std::copy(pageData, pageData + dataFrames, outR + outOffset);
-            if (dataFrames < batchSize) {
-                std::memset(outL + outOffset + dataFrames, 0, (batchSize - dataFrames) * sizeof(float));
-                std::memset(outR + outOffset + dataFrames, 0, (batchSize - dataFrames) * sizeof(float));
+            for (std::size_t c = 0; c < nChannels; ++c) {
+                float *out = outChannels[c];
+                if (!out) continue;
+                const idx_t src = twPageClampChannel(*currentFrozenPage_, (idx_t) c);
+                const float *pageData = currentFrozenPage_->channelPtr(src) + pageFrameOffset_;
+                std::copy(pageData, pageData + dataFrames, out + outOffset);
+                if (dataFrames < batchSize) {
+                    std::memset(out + outOffset + dataFrames, 0,
+                                (batchSize - dataFrames) * sizeof(float));
+                }
             }
 
             // Step 5: Update state ONCE per batch (not per-sample)
@@ -332,8 +368,8 @@ length_t AudioEngine::pullBlock(float* outL, float* outR, length_t nFrames) {
             currentPos_.store(pos, std::memory_order_relaxed);
         } else {
             // Safety: batchSize is 0, output remainder and exit
-            std::memset(outL + outOffset, 0, (nFrames - produced) * sizeof(float));
-            std::memset(outR + outOffset, 0, (nFrames - produced) * sizeof(float));
+            zeroChannels(outChannels, nChannels, (std::size_t) outOffset,
+                         (std::size_t) (nFrames - produced));
             return produced;
         }
     }
@@ -401,7 +437,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
             page->contentEpoch.load() >= epochNow &&
             twPageWidthUsable(page.get(), widthNow) &&
             // Trust the page's OWN startPosition, never the map key it was
-            // found under (cf. twPluginInsert::pullUpstreamPage).
+            // found under (cf. twPluginInsert's upstream page read).
             page->startPosition == pageStartPos) {
             // Page is ready; switch to it
             prevFrozenPage_ = currentFrozenPage_;
@@ -519,8 +555,7 @@ void AudioEngine::seekTo(uint64_t offsetSamples) {
     readaheadComputedUpTo_ = 0;
 
     // Reconfigure resamplers for new position
-    resamplerL_.reset();
-    resamplerR_.reset();
+    resetResamplers();
 }
 
 void AudioEngine::requestSeek(uint64_t offsetSamples) {
@@ -541,10 +576,26 @@ void AudioEngine::setLoopBoundaries(bool enabled, uint64_t start, uint64_t end) 
 }
 
 void AudioEngine::configureResampling(uint32_t inRate, uint32_t outRate) {
-    resamplerL_.configure(inRate, outRate);
-    resamplerR_.configure(inRate, outRate);
-    resamplerL_.reset();
-    resamplerR_.reset();
+    // ONE RESAMPLER PER CHANNEL (proposal 36 B5). twResampler is documented as
+    // a converter "for a single mono channel" and carries interpolation phase
+    // plus an input history buffer, so a shared instance across channels would
+    // be a cross-channel smear the day this path stops doing its interpolation
+    // inline. The vector is sized here, on the setup path, and never on the RT
+    // path — pullBlock only reads it.
+    //
+    // Honest note for whoever profiles this: the per-block linear interpolation
+    // in pullBlock is STATELESS (it recomputes the phase from the block index),
+    // so today these objects supply only the rate pair and the passthrough
+    // decision. They are the right place for the state the moment the
+    // interpolation moves into twResampler::process(), and one object per
+    // channel costs a few hundred bytes.
+    const std::size_t width = std::max<std::size_t>(1, graphChannels());
+    if (resamplers_.size() != width) resamplers_.resize(width);
+    for (auto &r : resamplers_) {
+        r.configure(inRate, outRate);
+        r.reset();
+    }
+    passthrough_ = resamplers_.empty() ? true : resamplers_[0].isPassthrough();
     rateRatio_ = (inRate > 0) ? ((double)outRate / (double)inRate) : 1.0;
 
     // Phase 1 perf: Pre-allocate resampling buffers once (avoid malloc per block)
@@ -553,8 +604,9 @@ void AudioEngine::configureResampling(uint32_t inRate, uint32_t outRate) {
     constexpr length_t maxOutputFrames = 4096;
     double invRatio = (rateRatio_ > 0.0) ? (1.0 / rateRatio_) : 1.0;
     length_t maxInputFrames = (length_t)std::ceil(maxOutputFrames * invRatio) + 16;  // +16 for safety
-    resampleBufL_.resize(maxInputFrames);
-    resampleBufR_.resize(maxInputFrames);
+    resampleChannels_ = 0;
+    resampleStride_   = 0;
+    ensureResampleBuffers(width, (std::size_t) maxInputFrames);
 }
 
 PlaybackState AudioEngine::startPlayback() {

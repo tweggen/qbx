@@ -2,6 +2,7 @@
 #define _TWPLUGINCHAIN_H_
 
 #include "tw/graph/twcomponent.h"
+#include <atomic>
 #include <memory>
 #include <vector>
 #include <mutex>
@@ -10,17 +11,39 @@ namespace audio {
 class twPluginInsert;
 }
 
-// Internal DSP component that threads audio through a sequence of plugin inserts.
-// Each insert is wired in series: plugin0 output → plugin1 input, etc.
-// Channels are preserved (each input channel threads independently).
+// Internal DSP component that threads audio through a sequence of plugin
+// inserts, wired in series: insert0 output -> insert1 input, etc.
+//
+// ONE CHAIN PER TRACK, N CHANNELS WIDE (proposal 36 B4). It used to be one
+// chain per BUS, each 1 port wide, because a page was mono and N channels were
+// N parallel component instances; the chain's `nBusses_` was that port count
+// and its rebuildWiring() looped over it. Now the channel dimension lives in
+// the page, so a chain is a single wire: one input port, one output port, N
+// channels, and one insert per slot instead of one per (slot, bus).
 class twPluginChain : public twComponent {
 public:
-    twPluginChain( tw303aEnvironment &env, idx_t nBusses );
+    twPluginChain( tw303aEnvironment &env, idx_t channels );
     ~twPluginChain();
 
-    // twComponent interface
-    idx_t getNInputs() const override { return nBusses_; }
-    idx_t getNOutputs() const override { return nBusses_; }
+    // twComponent interface. ONE PORT each way — see the class note, and §7
+    // trap 8: the port count and the channel count must never be merged.
+    idx_t getNInputs() const override { return 1; }
+    idx_t getNOutputs() const override { return 1; }
+
+    // §4.2. A chain has no page cache of its own — it FORWARDS its last
+    // insert's page, or its producer's when it has no inserts — so this is a
+    // promise about what those forwarded pages will be, and the silence pages
+    // it builds itself have to honour it.
+    idx_t getOutputChannels() const override
+    {
+        return (idx_t) channels_.load( std::memory_order_acquire );
+    }
+
+    // Runtime width change. Forwards to nothing: the inserts learn their width
+    // from their processors (SPluginSlot::setChannelCount) and the trackmix
+    // from its own setChannels(). What this does is stale the pages of the old
+    // width, ours and every insert's.
+    void setChannels( idx_t n );
 
     // Phase 3: IOVector-based interface (type-safe, page-backed)
     length_t calcOutputTo( IOVector& dest, idx_t port ) override;
@@ -79,7 +102,7 @@ private:
     // Caller must hold pluginsMutex_.
     void rebuildWiring_nolock();
 
-    idx_t nBusses_;
+    std::atomic<int> channels_;
     mutable std::mutex pluginsMutex_;  // protects plugins_ vector from concurrent access
     std::vector<std::shared_ptr<twComponent> > plugins_;  // not owned; managed by SPluginSlot
 };

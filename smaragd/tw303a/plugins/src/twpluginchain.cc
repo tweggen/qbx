@@ -6,19 +6,32 @@
 #include <algorithm>
 #include <vector>
 
-twPluginChain::twPluginChain( tw303aEnvironment &env, idx_t nBusses )
-    : twComponent( env ), nBusses_( nBusses )
+twPluginChain::twPluginChain( tw303aEnvironment &env, idx_t channels )
+    : twComponent( env ), channels_( channels < 1 ? 1 : (int) channels )
 {
     // allocPlugs() and createOutputLatches() are called by init()
+}
+
+// Proposal 36 B4. The chain owns no pages of its own -- it forwards its last
+// insert's, or its producer's when it holds no inserts -- so widening it is
+// purely an invalidation: pages of the old width, ours and every insert's, must
+// stop being served. bumpContentEpoch() already forwards to the inserts.
+void twPluginChain::setChannels( idx_t n )
+{
+    if( n < 1 ) n = 1;
+    if( channels_.exchange( (int) n, std::memory_order_acq_rel ) == (int) n ) {
+        return;
+    }
+    bumpContentEpoch();
 }
 
 twPluginChain::~twPluginChain() = default;
 
 void twPluginChain::createOutputLatches()
 {
-    pOutputLatches_.resize(nBusses_);
-    for( idx_t i = 0; i < nBusses_; ++i )
-        pOutputLatches_[i] = std::make_shared<twStreamingLatch>( shared_from_this(), i, 4096 );
+    // ONE port. The channel dimension is in the page.
+    pOutputLatches_.resize(1);
+    pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 4096 );
 }
 
 // Snapshot the ordered insert list. Every path below works on the snapshot and
@@ -57,15 +70,11 @@ length_t twPluginChain::calcOutputTo( IOVector& dest, idx_t port )
         return dest.fillSilence(0, dest.length());
     }
 
-    // New block: reset all inserts so each processes fresh audio this callback.
-    for( std::shared_ptr<twComponent> plugin : plugins_ )
-        std::static_pointer_cast<audio::twPluginInsert>(plugin)->resetBlock();
-
     // Pull from the last insert's output (wiring established in rebuildWiring).
-    // Every insert is a 1-in/1-out bus tap, so port is always 0 here: this chain
-    // IS one bus (STrack builds one twPluginChain per bus).
+    // Every insert is 1 port in / 1 port out, so port is always 0 here: a chain
+    // IS one wire (STrack builds exactly one twPluginChain per track).
     std::shared_ptr<twComponent> lastPlugin = plugins_.back();
-    if( lastPlugin && port < lastPlugin->getNOutputs() ) {
+    if( lastPlugin && port == 0 ) {
         return lastPlugin->calcOutputTo( dest, port );
     }
 
@@ -163,19 +172,21 @@ void twPluginChain::rebuildWiring_nolock()
     // Set up wiring: input → insert0 → insert1 → ... → output.
     // Called when inserts are added/removed/reordered, not per sample block.
     //
-    // Since proposal 08 M3 every insert is a 1-in/1-out BUS TAP and every chain
-    // serves exactly one bus, so this is a plain series wiring of port 0. The
-    // pre-M3 loop over `port < nBusses_` was the bug that fed a 2-in plugin bus
-    // audio on input 0 and SILENCE on input 1: a chain built with nBusses_ == 1
-    // could only ever wire one of the plugin's two inputs. Channel coherence is
-    // now the shared twPluginSlotProcessor's job, which gathers every bus
-    // through the sibling taps.
+    // Every insert is 1 port in / 1 port out, and a chain is ONE wire, so this
+    // is a plain series wiring of port 0. Two bugs are buried here and both are
+    // worth keeping in view: the pre-M3 loop over the bus count fed a 2-in
+    // plugin bus audio on input 0 and SILENCE on input 1 (a chain built with
+    // one bus could only wire one of the plugin's two inputs), and M3 fixed it
+    // with per-bus taps that gathered sideways through their siblings.
+    // Proposal 36 B4 retired both: the page is N channels wide, so one insert
+    // sees every channel in one process() call and there is one port to wire.
 
     if( plugins_.empty() ) {
         return;
     }
 
-    for( idx_t port = 0; port < nBusses_; ++port ) {
+    {
+        const idx_t port = 0;
         // First insert gets the track input
         std::shared_ptr<twComponent> firstPlugin = plugins_[0];
         if( firstPlugin && port < firstPlugin->getNInputs() && port < (idx_t)pInputPlugs_.size() && pInputPlugs_[port] ) {
@@ -221,16 +232,17 @@ std::shared_ptr<twOutputPage> twPluginChain::freezePage(
     std::shared_ptr<twOutputPage> previousPage )
 {
     if (state_.load(std::memory_order_acquire) == ComponentState::ZOMBIE) {
-        // WIDTH (proposal 36, for B4). Every page this override builds for
-        // itself — this one and the three below — is width 1 because
-        // twPluginChain declares the default 1. They BYPASS the allocation in
-        // twComponent::freezePage, which is where a page normally learns
-        // getOutputChannels(), so widening this component means widening these
-        // four lines with it. Note also that the FORWARDING path launders a page
-        // of the UPSTREAM component's width through verbatim, which is exactly
-        // why §4.4's rules are stated on page->channels() and never on a
-        // producer's declared width.
-        auto silencePage = std::make_shared<twOutputPage>();
+        // WIDTH (proposal 36 §7 trap 19, fixed by B4). Every page this override
+        // builds for itself -- this one and the three below -- BYPASSES the
+        // allocation in twComponent::freezePage, which is where a page normally
+        // learns getOutputChannels(); all four now carry it explicitly. Note
+        // that the FORWARDING paths launder a page of the UPSTREAM component's
+        // width through verbatim, which is exactly why 4.4's rules are stated
+        // on page->channels() and never on a producer's declared width -- a
+        // consumer must keep clamping even where the widths agree by
+        // construction, as they do here.
+        auto silencePage =
+            std::make_shared<twOutputPage>( (std::uint16_t) getOutputChannels() );
         silencePage->setValidFrames(0);
         return silencePage;
     }
@@ -256,7 +268,8 @@ std::shared_ptr<twOutputPage> twPluginChain::freezePage(
                 return comp->requestPage( startPos, inputData, inputOffset,
                                           inputLength, sampleRate, previousPage );
         }
-        auto silencePage = std::make_shared<twOutputPage>();
+        auto silencePage =
+            std::make_shared<twOutputPage>( (std::uint16_t) getOutputChannels() );
         silencePage->setValidFrames(0);
         return silencePage;
     }
@@ -274,7 +287,8 @@ std::shared_ptr<twOutputPage> twPluginChain::freezePage(
     // bookkeeping.
     std::shared_ptr<twComponent> last = snapshot.back();
     if( !last ) {
-        auto silencePage = std::make_shared<twOutputPage>();
+        auto silencePage =
+            std::make_shared<twOutputPage>( (std::uint16_t) getOutputChannels() );
         silencePage->setValidFrames(0);
         return silencePage;
     }
@@ -282,7 +296,7 @@ std::shared_ptr<twOutputPage> twPluginChain::freezePage(
     std::shared_ptr<twOutputPage> page = last->requestPage(
         startPos, nullptr, 0, inputLength, sampleRate, nullptr );
     if( !page ) {
-        page = std::make_shared<twOutputPage>();
+        page = std::make_shared<twOutputPage>( (std::uint16_t) getOutputChannels() );
         page->setValidFrames(0);
     }
     return page;

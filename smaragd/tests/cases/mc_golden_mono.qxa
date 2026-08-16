@@ -20,7 +20,13 @@
     2.70-3.30 s   clip on a NESTED lane      offset 518444 .. 633644
     3.35-3.95 s   clip through a twtestclap  offset 643244 .. 758444
 
-  (16-bit stereo PCM, 44-byte header: offset = 44 + frame * 4.)
+  (Those offsets are the ORIGINAL, two-channel ones — 16-bit stereo PCM, 44-byte
+  header, offset = 44 + frame * 4. Since proposal 36 B5 this file is 16-bit MONO
+  PCM, so an offset is 44 + frame * 2 and every number above HALVES its distance
+  from the header: the plugin window now begins at 44 + 160800*2 = 321644 and
+  the file is 384044 bytes rather than 768044. The frame boundaries — 0, 31200,
+  64800, 96000, 129600, 160800, 189600 — are the durable statement of the
+  windows and are unchanged; work from those.)
 
   It is LOADED into a freshly-new project, never built by a save-load-save round
   trip: §7 trap 10 — load-project deserializes INTO the current project instead
@@ -30,6 +36,100 @@
   Regenerate the .qxp with tests/tools/gen_mc_corpus.qxa. Re-freezing the .wav
   requires an AC that licenses it and a written explanation of why the bytes
   moved (§5).
+
+  ==================================================================
+  RE-FROZEN A SECOND TIME, at proposal 36 B5 (2026-08-16), under AC B5.5.
+  Two licensed re-freezes of one file in two milestones is exactly why each
+  reason is recorded here, beside the case, and not only in a commit message.
+  The B4 reason follows this one; both are kept.
+
+  WHAT MOVED: THE SHAPE, and only the shape. 2 channels -> 1. The file goes
+  from 768044 to 384044 bytes and from 192000 stereo frames to 192000 mono
+  frames, and its samples are EXACTLY, sample for sample, the old file's
+  CHANNEL 0. That was verified rather than assumed before freezing — all
+  192000 frames compared, zero differences — and it is the whole check the AC
+  asks for: if the surviving channel were not precisely what channel 0 was,
+  something other than the sink had moved and this re-freeze would have been
+  hiding it. (For completeness: the old file's channel 1 was byte-identical to
+  its channel 0, which is what "duplicated mono" means.)
+
+  WHY. RenderParams::channels now comes from the PROJECT (0 = ask the graph,
+  and the graph's root width IS SProject::channels()). This project is
+  channels='1', so the honest render of it is a ONE-channel file. Before B5
+  the sink hard-coded config.channels = 2 and wrote the graph's single page
+  into both, so byte-exactness here is not merely inconvenient to preserve, it
+  is arithmetically impossible: the file is half the size.
+
+  AND IT MUST NOT BE PRESERVED. Keeping a mono project's file stereo to save a
+  golden would be the sink still lying, which is the one thing this milestone
+  exists to remove. The proposal says so explicitly in AC B5.5.
+
+  DETERMINISM, again: rendered twice into separate output directories and
+  byte-compared before either was frozen. Identical. The muted and unmuted
+  variants below were checked the same way.
+
+  ==================================================================
+  RE-FROZEN ONCE BEFORE THAT, at proposal 36 B4 (2026-08-16), under a licence
+  added to AC B4.8. The reason lives here, next to the file, because a golden
+  that changed needs its explanation where the next reader will be standing.
+
+  WHAT MOVED. Only the last window, 3.35-3.95 s, the one clip that goes
+  through a twtestclap insert: offsets 643244..758443 inclusive. Everything
+  else — the 44-byte header and the plain, stretched, pitched,
+  container/asset and nested-lane windows — is byte-identical to the
+  pre-B4 golden. That was checked before freezing, and it is the evidence
+  that nothing but the plugin path moved.
+
+  WHY. B4's third bullet re-derives proposal 08's channel-mismatch table
+  from PAGE WIDTH instead of bus count. This project is channels='1', and
+  tw.test.clap.stereoskew is 2-in/2-out, so the slot now takes MONOFOLD —
+  feed the one channel to both plugin inputs, average the two outputs —
+  which is exactly what proposal 08 §Layer 3 settled for a stereo plugin on
+  a mono wire.
+
+  THE OLD BYTES WERE NEVER A MONO PROJECT'S OUTPUT. Before B4 the project's
+  channel count reached no track at all — M1's defining constraint was that
+  it must NOT — so every track ran two buses regardless, and the master
+  discarded one of them. channels='1' was an inert attribute, not a signal
+  path. The golden froze that state. It was never the answer a mono project
+  should have given; it was the answer a project whose width did nothing
+  gave.
+
+  THE NUMBERS, because "it changed for a good reason" is worth less than an
+  arithmetic identity. The fixture's default is out[0] = in[0]*0.5 + in[1],
+  out[1] = in[1]*0.5, and both inputs see the same material, so:
+
+      Direct on 2 buses, take bus 0 :  1.5 * g * x     (the old golden)
+      MonoFold                      :  0.5 * (1.5*g*x + 0.5*g*x) = 1.0*g*x
+
+  a ratio of exactly 2/3. Measured over the window: 56630 of 57600 samples
+  land within 0.333 LSB of old*2/3, i.e. pure 16-bit rounding. The other
+  970 are the same finding seen from the other side — the OLD render was
+  CLIPPED at full scale there, because 1.5*g*x overflowed 16-bit and
+  MonoFold's 1.0*g*x does not.
+
+  DETERMINISM. The replacement was rendered twice, independently, and the
+  two renders were byte-identical before either was frozen — so this gate
+  is pinned to a deterministic result and not to one sample of a
+  nondeterministic one.
+
+  INDEPENDENT SIGNAL. mc_golden_stereo did NOT move. A change confined to
+  the mismatch path should leave a channels='2' project alone, because 2->2
+  on 2 channels is still Direct, and it did.
+
+  CONSEQUENCE FOR §7 TRAP 14, which B5 must not misread: the two goldens
+  were byte-identical to each other, and the proposal treats their
+  divergence as a second gate "supposed to break at B5 — when they diverge,
+  the sink is real". They diverge NOW, at B4, and the sink is still mono.
+  They differ only in this same plugin window, because channel 0 itself now
+  differs between a mono and a stereo project. That inference is spent; B5
+  needs different evidence.
+
+  (B5 did not use it. Its evidence is per-file and positive: this file's
+  CHANNEL COUNT, and mc_stereo's channel 1 carrying audio its channel 0 does
+  not. The two goldens are now different SHAPES as well as different bytes,
+  which makes "they differ" weaker still than it was at B4.)
+  ==================================================================
 
   DEPENDENCY, stated rather than assumed: the last window needs twtestclap.clap
   next to the binary, i.e. the clap submodule present at configure time. Without
@@ -55,6 +155,20 @@
 
     <!-- THE GATE. -->
     <assert-file-identical actual="mc_mono.wav" expected="../goldens/mc_mono.wav"/>
+
+    <!-- THE SHAPE, asserted rather than left to the byte compare (AC B5.5).
+         `cmp` would also pass if BOTH the render and the golden regressed to
+         two channels together, and re-freezing is exactly the moment that
+         could happen unnoticed. Channel 0 exists; channel 1 does not, and an
+         out-of-range channel is an ERROR rather than a silent rms 0 (M0), so
+         the pair pins the count at exactly one. -->
+    <assert-audio-energy filename="mc_mono.wav"
+                         startFrame="2000" frameCount="24000"
+                         channel="0" minRms="0.05" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_mono.wav"
+                         startFrame="2000" frameCount="24000"
+                         channel="1" minRms="0.0" maxRms="1.0"
+                         expectReject="true"/>
 
     <!-- Every window carries audio, so a golden that went silent could not pass
          by matching a silent render. These bands are wide on purpose: they are

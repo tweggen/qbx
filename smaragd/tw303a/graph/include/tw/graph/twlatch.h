@@ -144,7 +144,34 @@ public:
                        std::shared_ptr<twOutputPage>& readerPrevPage,
                        std::atomic<uint64_t>& readerPrevEpoch );
 
+    // PROPOSAL 36 §4.4 RULE (2), added by B4: hand the CALLING READER the
+    // producer's whole PAGE for pageStart, so a WIDE consumer can pick its own
+    // channels instead of receiving one channel's worth of samples.
+    //
+    // It is the same acquisition copyData does — the bound-page seam of the
+    // dataflow scheduler first (proposal 19), then the legacy recursive pull,
+    // with the reader's own chain hint so a stateful producer still continues
+    // across page boundaries — and it shares the implementation (acquirePage)
+    // rather than restating it, because two copies of the staleness rule is
+    // exactly how the "held page stamped 9, chain epoch 7" bug got written.
+    // Returns nullptr when the producer could not materialise the page; the
+    // caller then renders silence, never garbage.
+    std::shared_ptr<twOutputPage> fetchPageForReader(
+                       offset_t pageStart,
+                       std::shared_ptr<twOutputPage>& readerPrevPage,
+                       std::atomic<uint64_t>& readerPrevEpoch );
+
     static const int bufSizeDefault;
+
+private:
+    // The page-acquisition step both seams share. `held`/`heldEpoch` are the
+    // caller's live copies of the reader hint and are UPDATED in place; the
+    // caller publishes them back. Returns the page to read (which may be
+    // `held` itself), or nullptr if none could be obtained.
+    std::shared_ptr<twOutputPage> acquirePage( offset_t pageStart,
+                       std::shared_ptr<twOutputPage> &held,
+                       uint64_t &heldEpoch,
+                       uint64_t epochNow );
 };
 
 class twLatchStreamingOutput
@@ -171,6 +198,17 @@ public:
         : twLatchOutput((twLatch &) latch) {}
 
     length_t readStreamingData( sample_t * pDest, length_t maxLength );
+
+    // The WIDE read (proposal 36 §4.4 rule 2, B4): the producer's PAGE for
+    // pageStart, acquired through the same seam readStreamingData uses and
+    // advancing this reader's own chain hint. The caller picks channels off it
+    // — with twPageClampChannel, because the page's width is a fact and the
+    // consumer's is only a wish. nullptr = no page; render silence.
+    //
+    // Unlike readStreamingData this does NOT advance the reader's stream
+    // offset: a wide consumer is inside freezePage_nolock, which has already
+    // seekInputStreams()ed to the page start, and a page IS the unit here.
+    std::shared_ptr<twOutputPage> fetchPage( offset_t pageStart );
     inline length_t readData( sample_t * pDest, length_t maxLength )
         { return readStreamingData( pDest, maxLength ); }
 

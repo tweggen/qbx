@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AC B5.4 (proposal 36) — PLAYBACK AND RENDER AGREE about the channels.
+
+  The two are different consumers of the same graph and they always have been:
+  RenderSession walks pages itself, while playback goes AudioEngine::pullBlock ->
+  twSpeaker's interleave -> the backend callback. B5 widened both, separately,
+  and the failure this case exists for is the one where only one of them got it
+  right — a stereo file that is genuinely two channels while the speakers still
+  hear channel 0 twice, or the reverse.
+
+  So the case asserts THE SAME THING, WITH THE SAME NUMBERS, AT THE SAME
+  POSITIONS, on two files: the offline render, and the recording the CAPTURE
+  backend made of real playback. Any assertion that holds for one and not the
+  other is exactly the divergence.
+
+  ================================================================== the fixture
+
+  ../test_stereo.wav is gen_channel_fixture at channels=2: a 480 Hz sine,
+  144000 frames = 3 s at 48 kHz, channel 0 at rms 0.5 and channel 1 at rms 0.25
+  (a 6 dB ladder). Constant amplitude, so an assertion window means the same
+  thing wherever it sits — which matters here, because the capture backend is
+  paced by a REAL-TIME clock that does not wait for the readahead, so a window's
+  exact alignment cannot be assumed to the frame.
+
+  ============================================================== the tolerances
+
+  Deliberately looser on the capture than on the render, and stated rather than
+  tuned: a momentary underrun leaves a short zero gap inside a window, which
+  lowers BOTH channels' RMS. A 20 % dropout would put channel 0 at 0.447 and
+  channel 1 at 0.224, so the bands are opened to cover that and the
+  discriminating assertion is the DIFFERENCE, which a dropout scales but cannot
+  invert: 0.12 is far above any dropout's residue and far above the 0.0 a
+  duplicating sink would give.
+
+  CAPTURE ALIGNMENT. The recording begins when the pump starts, i.e. at playback
+  start with the locator at 0, so captured frame f is timeline frame f. The
+  windows start 8192 frames in, which absorbs two blocks of startup slop
+  explicitly rather than by luck (the same budget playback_start_after_edit_-
+  position uses and measured).
+
+  DEVICE WIDTH. Monitoring is stereo by rule (playback/CONTRACT.md inv. 9):
+  L = ch0, R = ch1 for any project two channels or wider, and that pair meets
+  the device's own channel count. This project is 2 channels and CaptureBackend
+  opens 2, so the recording is L = ch0 and R = ch1 — the case that makes the
+  comparison with the render meaningful. The other widths of the rule (mono
+  fan-out; a 6-channel project reduced to its first two) are unit-gated in
+  playback_test against the pure `twmonitor::` functions, because a headless
+  case cannot change the device's channel count and because those are exactly
+  the cases where a stretched integration test would prove least.
+-->
+<SActionScript version="1" name="mc_playback_channels">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+
+    <!-- ================= the offline render ============================ -->
+    <render filename="mc_pb_render.wav" format="wav" quality="10"
+            durationSec="2.5"/>
+
+    <assert-audio-energy filename="mc_pb_render.wav"
+                         startFrame="8192" frameCount="48000"
+                         channel="0" minRms="0.40" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_pb_render.wav"
+                         startFrame="8192" frameCount="48000"
+                         channel="1" minRms="0.20" maxRms="0.30"/>
+    <assert-channels-differ filename="mc_pb_render.wav"
+                            channelA="0" channelB="1"
+                            startFrame="8192" frameCount="48000"
+                            minRmsDelta="0.12" minDiffRms="0.12"/>
+    <!-- The second window, later in the clip, so "the same positions" below is
+         two positions and not one. -->
+    <assert-channels-differ filename="mc_pb_render.wav"
+                            channelA="0" channelB="1"
+                            startFrame="65536" frameCount="48000"
+                            minRmsDelta="0.12" minDiffRms="0.12"/>
+
+    <!-- ================= real playback, into memory ===================== -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="122880" minAdvance="4096" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+
+    <!-- minFrames is the last window's end: a short recording must be reported
+         as a transport failure here, not measured as a quiet channel below. -->
+    <dump-playback-capture filename="mc_pb_playback.wav" minFrames="113536"/>
+
+    <!-- ================= THE SAME ASSERTIONS, SAME POSITIONS =========== -->
+    <assert-audio-energy filename="mc_pb_playback.wav"
+                         startFrame="8192" frameCount="48000"
+                         channel="0" minRms="0.35" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_pb_playback.wav"
+                         startFrame="8192" frameCount="48000"
+                         channel="1" minRms="0.17" maxRms="0.32"/>
+    <assert-channels-differ filename="mc_pb_playback.wav"
+                            channelA="0" channelB="1"
+                            startFrame="8192" frameCount="48000"
+                            minRmsDelta="0.12" minDiffRms="0.12"/>
+    <assert-channels-differ filename="mc_pb_playback.wav"
+                            channelA="0" channelB="1"
+                            startFrame="65536" frameCount="48000"
+                            minRmsDelta="0.12" minDiffRms="0.12"/>
+
+    <!-- The band must be able to fail, on the PLAYBACK file specifically: if
+         playback were still duplicating channel 0, channel 1 would sit at 0.5
+         and this rejection would stop rejecting. -->
+    <assert-audio-energy filename="mc_pb_playback.wav"
+                         startFrame="8192" frameCount="48000"
+                         channel="1" minRms="0.40" maxRms="0.60"
+                         expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

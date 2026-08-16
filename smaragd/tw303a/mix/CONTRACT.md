@@ -29,13 +29,41 @@ Invariants (normative detail in CLIP_MODEL.md and POSITION_DOMAINS.md):
    supplied" (RenderSession pulls the graph root that way), never "render
    nothing" — it maps to a full page.
 
+7. ALL THREE COMPONENTS ARE N CHANNELS WIDE, AND N IS setChannels()'s
+   (proposal 36 B4). A track is ONE twTrackMix and the master ONE twMixer; the
+   N-parallel-width-1 arrangement they replaced is gone, and with it the idea
+   that a "bus" and a "channel" are the same thing.
+   - twTrackMix::freezePage allocates its OWN page and therefore BYPASSES the
+     width wiring in twComponent::freezePage — it must pass getOutputChannels()
+     by hand (§7 trap 19). Its clip mix is a LOOP over the page's channels, one
+     IOVector per channel, and the SOURCE channel is twPageClampChannel'd: a
+     clip's page carries the width of ITS source, so a mono file plays on every
+     channel (§4.4). That clamp is exactly what the retired N-mixer arrangement
+     achieved by rendering the same channel-0 page into each bus.
+   - twMixer's INPUTS are tracks and its CHANNELS are channels. renderPageWide()
+     accumulates `out[c] += src[clamp(c)] * factor` over the inputs in ASCENDING
+     index order into a zeroed buffer — the same order and precision as the
+     readStreamingData path it replaces, which is what keeps channel 0
+     byte-identical while the graph widens underneath it.
+   - twRewire is the channel-mapping component (`setChannelMap`): output channel
+     c is input channel map[c], identity by default, clamped against the page in
+     hand. A WIDE rewire is SINGLE-PLUG — that is the collapse — while the
+     N-plug patch bay is untouched at width 1.
+   - setChannels() bumps the content epoch. That is not what makes a runtime
+     width change safe (§4.5 already reads an old-width page as a miss); it is
+     what makes it converge instead of serving silence until some other edit
+     invalidates.
+
 Threading: clips_ mutations (insert/update/remove) are UI-thread under the
 component mutex; render paths hold the same mutex during page assembly.
 
 How to test: `ctest -R mix_test` (clip windows, MapPosFn, clamp, key-based
 update/remove against a scripted component — mix/tests/);
 qxa.render_split_slip_offset and qxa.render_sawtooth_multiple_clips
-end-to-end.
+end-to-end; for invariant 7, qxa.mc_track_width (distinct channels at the track
+root, and the master equalling the per-channel sum of its tracks),
+qxa.mc_width_change (2 -> 8 -> 2) and qxa.mc_legacy_pull_wide (the same with no
+scheduler at all).
 
 Known debt: calcOutputTo allocates buffers per block; per-clip gain/pan not
 yet modeled (track-level only).

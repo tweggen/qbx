@@ -8,6 +8,7 @@
 #include "tw/mix/twrewire.h"
 #include "tw/mix/twmixer.h"
 
+#include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"   // upcast of the selected track
 #include "app/model/sdetaileditors.h"
@@ -124,8 +125,32 @@ SSMPerTrack *SStdMixer::findTrack( STrack &trk )
 
 std::shared_ptr<twComponent> SStdMixer::getRootComponent()
 {
-    // FIXME: Generate a channel reassignment.
+    // (The "FIXME: Generate a channel reassignment." that stood here since the
+    // beginning is discharged by proposal 36 B4: twRewire IS the channel
+    // reassignment now — output channel c is input channel map[c], identity by
+    // default — and this rewire is the graph ROOT that the render session and
+    // the playback readahead pull. Nothing here has to reassign anything; the
+    // component below does, on request.)
     return std::static_pointer_cast<twComponent>(cpRewire_);
+}
+
+// Proposal 36 B4. ONE bus, N channels: the bus count stays 1 forever and the
+// width is a separate number, because a bus and a channel were never the same
+// thing and conflating them is what dropped every track's second channel here.
+void SStdMixer::setChannels( int n )
+{
+    if( n < 1 ) n = 1;
+    if( n == channels_ ) return;
+    channels_ = n;
+
+    for( int bus = 0; bus < nBusses_; ++bus ) {
+        if( cpMixers_[bus] ) cpMixers_[bus]->setChannels( (idx_t) n );
+    }
+    if( cpRewire_ ) cpRewire_->setChannels( (idx_t) n );
+
+    // Pages of the old width read as misses (§4.5); bump so the master
+    // re-freezes instead of playing silence until some other edit does it.
+    bumpRenderChainEpoch();
 }
 
 void SStdMixer::bumpRenderChainEpoch()
@@ -334,6 +359,7 @@ int SStdMixer::setNBusses( int n )
         if( nc<1 ) nc = 1;
         std::shared_ptr<twMixer> mix = std::make_shared<twMixer>( *(SAppContext::get().get303aEnvironment()), nc );
         mix->init();
+        mix->setChannels( (idx_t) channels_ );
         cpRewire_->setInput( i, mix->linkOutput( 0 ) );
         cpMixers_[i] = mix;
     }
@@ -453,8 +479,19 @@ SStdMixer::SStdMixer( SProject *project )
       lastDuration_( 1 ),
       lastDurationValid_( true )
 {
+    // WIDTH COMES FROM THE PROJECT (proposal 36 B4) and is read BEFORE the
+    // components exist, so the first twMixer and the rewire are built at the
+    // right width rather than widened a moment later.
+    channels_ = project ? project->channels() : 2;
     cpRewire_ = std::make_shared<twRewire>( *(SAppContext::get().get303aEnvironment()) );
     cpRewire_->init();
+    cpRewire_->setChannels( (idx_t) channels_ );
+    cpRewire_->setNPlugs( 1 );   // a wide rewire is single-plug
+    if( project ) {
+        QObject::connect( project, SIGNAL( channelsChanged( int ) ),
+                          this, SLOT( setChannels( int ) ),
+                          Qt::UniqueConnection );
+    }
     QObject::connect( this, SIGNAL( trackInserted( int, STrack & ) ),
                       this, SLOT( mixerUpdateTrackAdded( int, STrack & ) ) );
     QObject::connect( this, SIGNAL( trackRemoved( int, STrack & ) ),

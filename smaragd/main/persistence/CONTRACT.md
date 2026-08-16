@@ -25,11 +25,12 @@ Invariants:
    PROJECT's channels attribute reads the same way and defaults to 2 — see
    app/model/CONTRACT.md inv. 10 for why the two defaults differ (the rate's
    legacy value is historical, the width's is today's audible behaviour).
-   An STrack's nBusses attribute defaults to the CONSTRUCTOR's width, not 1:
-   it read 1 while STrack() builds 2, so a document omitting it asked
-   setNBusses for a shrink, which it refuses. A file asking for fewer busses
-   than the track already has is clamped with a warning until proposal 36 B4
-   makes shrink real.
+   An STrack's nBusses attribute is NO LONGER WRITTEN and is read and IGNORED
+   (proposal 36 B4): a track's width is the project's channels attribute, and a
+   per-track copy was a second authority that had already drifted once (the
+   loader defaulted it to 1 while STrack() built 2, so a document omitting it
+   asked for a shrink). A file that still carries one warns once per track and
+   changes nothing.
 4. Loaded projects must re-serialize byte-equivalently modulo volatile
    attributes (serialization_roundtrip_test guards the Fraction layer and the
    base64 state-chunk layer; plugin_slot_roundtrip.qxa /

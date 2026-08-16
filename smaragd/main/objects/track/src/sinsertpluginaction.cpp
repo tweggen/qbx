@@ -73,10 +73,10 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     slot->setSName(pluginName_);
 
     // The state chunk goes in BEFORE the link is parented. setParent() is what
-    // fires slotInserted -> STrack::onPluginSlotInserted -> setBusCount(), which
-    // is the moment the plugin instances are created; restoreState() on a slot
-    // with no processor yet stores the blob, and ensureBuses() replays it onto
-    // every instance as they appear. That is exactly the project-load ordering,
+    // fires slotInserted -> STrack::onPluginSlotInserted -> setChannelCount(),
+    // which is the moment the plugin instances are created; restoreState() on a
+    // slot with no processor yet stores the blob, and ensureChannels() replays
+    // it onto every instance as they appear. That is exactly the project-load ordering,
     // so undo-of-a-removal and a file load take the same path.
     if (!state_.isEmpty()) {
         const QByteArray decoded = QByteArray::fromBase64(state_.toLatin1());
@@ -102,12 +102,11 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
         chain->reorderSlot(landingIndex, actualIndex);
     }
 
-    // The slot may only need one bus, but STrack builds one chain per bus and
-    // the channel-mismatch mapping (proposal 08 §Layer 3) is chosen from the bus
-    // count — so the slot has to learn it before any tap is built. The
-    // slotInserted signal above already did this for the normal path; doing it
-    // again is idempotent and covers a track whose bus count grew.
-    slot->setBusCount(track->getNBusses());
+    // The channel-mismatch mapping (proposal 08 §Layer 3) is chosen from the
+    // track's CHANNEL count — so the slot has to learn it before its insert is
+    // built. The slotInserted signal above already did this for the normal
+    // path; doing it again is idempotent and covers a track whose width moved.
+    slot->setChannelCount(track->getChannels());
 
     // Create inverse action
     SAction *inverse = new SRemovePluginAction(trackPath_, actualIndex);

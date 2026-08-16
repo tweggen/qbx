@@ -1,6 +1,7 @@
 #ifndef PLAYBACK_SINK_H
 #define PLAYBACK_SINK_H
 
+#include <cstddef>
 #include <memory>
 #include <atomic>
 #include <cstdint>
@@ -17,7 +18,7 @@ class AudioBackend;
  * Streams frames directly to the audio backend's callback interface.
  * Non-buffered: frames flow immediately to the device with minimal latency.
  *
- * Thread-safe: writeFrame() can be called from the audio callback thread.
+ * Thread-safe: writeFrames() can be called from the audio callback thread.
  *
  * Integrated with twspeaker.cc for Phase 5b unification.
  */
@@ -32,15 +33,18 @@ public:
     ~PlaybackSink() override = default;
 
     /**
-     * Write one stereo frame to the device output buffer.
+     * Write a block of interleaved frames to the device output buffer.
      *
      * Non-blocking: frames are queued for the realtime callback.
      * If the callback can't keep up, frames may be dropped (underrun).
      *
-     * \param frame  Stereo audio frame
-     * \return       Always true (accepts all frames, may drop on underrun)
+     * \param interleaved  nFrames * channels floats, channel-minor
+     * \param nFrames      Frames in the block
+     * \param channels     Channels per frame
+     * \return             Always true (accepts all frames, may drop on underrun)
      */
-    bool writeFrame(const AudioFrame& frame) override;
+    bool writeFrames(const float *interleaved, std::size_t nFrames,
+                     unsigned channels) override;
 
     /**
      * Flush any buffered data (no-op for realtime playback).

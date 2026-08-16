@@ -6,6 +6,7 @@
 // a placeholder replacing a stale-frozen page keeps it reachable via
 // stalePredecessor until the replacement is stamped frozen.
 #include "tw/playback/audio_engine.h"
+#include "tw/playback/twspeaker.h"   // twmonitor:: — the device rule, as a pure function
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/tw_output_page.h"
@@ -13,8 +14,10 @@
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/core/position_code.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -27,6 +30,16 @@ static int failures = 0;
         if (cond) { printf("ok   %s\n", msg); }                             \
         else      { printf("FAIL %s\n", msg); ++failures; }                 \
     } while (0)
+
+// pullBlock() takes N planar buffers since proposal 36 B5. Almost every case
+// below wants exactly two, so the L/R shape stays here as a test-local shim
+// rather than as an engine API that pins the sink at stereo.
+static length_t pullLR(audio::AudioEngine &e, std::vector<float> &L,
+                       std::vector<float> &R, length_t n)
+{
+    float *chans[2] = { L.data(), R.data() };
+    return e.pullBlock(chans, 2, n);
+}
 
 // Constant-amplitude source whose renders can be made artificially slow, so a
 // test can observe the window while a stale page's replacement is rendering.
@@ -55,6 +68,57 @@ public:
     idx_t getNOutputs() const override { return 1; }
     const char *getInputName(idx_t) const override { return nullptr; }
     const char *getOutputName(idx_t) const override { return "tone"; }
+};
+
+// A WIDE tone whose declared width can be changed at runtime, for AC B4.5's
+// RT half. `widestPageSeen` records the widest page it was ever asked to fill,
+// so a test can prove the re-freeze really happened at the new width rather
+// than merely that audio came back.
+class WidthTone : public twComponent {
+public:
+    explicit WidthTone(tw303aEnvironment &e) : twComponent(e) {}
+    std::atomic<int> width{2};
+    std::atomic<float> amp{0.25f};
+    std::atomic<int> widestPageSeen{0};
+    // With `ladder` set, channel c carries amp/(c+1) — a 6 dB step per channel,
+    // so a pull can tell WHICH channel it got rather than only that it got one
+    // (proposal 36 B5). Off by default: the B4 cases below assert amp exactly.
+    std::atomic<bool> ladder{false};
+
+    idx_t getOutputChannels() const override { return (idx_t)width.load(); }
+
+    bool isSeekable() const override { return true; }
+    int seekTo(offset_t) override { return 0; }
+    void reset() override {}
+
+    length_t renderPageWide(twOutputPage &page, length_t frames,
+                            const sample_t *, length_t) override {
+        length_t n = frames;
+        if (n > (length_t)page.channelFrames()) n = (length_t)page.channelFrames();
+        const int nCh = (int)page.channels();
+        int seen = widestPageSeen.load();
+        while (nCh > seen && !widestPageSeen.compare_exchange_weak(seen, nCh)) {}
+        const float a = amp.load();
+        const bool  lad = ladder.load();
+        for (idx_t c = 0; c < (idx_t)nCh; ++c) {
+            sample_t *dst = page.channelPtr(c);
+            const float v = lad ? (a / (float)(c + 1)) : a;
+            for (length_t i = 0; i < n; ++i) dst[i] = v;
+        }
+        return n;
+    }
+    // The narrow degradation (proposal 36 §7 trap 18).
+    length_t renderFrames(sample_t *out, length_t n, const sample_t *,
+                          length_t, idx_t) override {
+        const float a = amp.load();
+        for (length_t i = 0; i < n; ++i) out[i] = a;
+        return n;
+    }
+    void createOutputLatches() override {}
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName(idx_t) const override { return nullptr; }
+    const char *getOutputName(idx_t) const override { return "widetone"; }
 };
 
 // Position-identifying, never-zero sample value (the mix_test pattern), so a
@@ -171,7 +235,7 @@ int main()
         // Wait for the readahead to buffer; then audio flows
         bool audible = false;
         for (int i = 0; i < 500 && !audible; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] == 0.25f) { audible = true; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -184,7 +248,7 @@ int main()
         src->renderDelayMs.store(300);
         src->bumpContentEpoch();
 
-        length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+        length_t n = pullLR(engine, L, R, BLOCK);
         CHECK(n == BLOCK,
               "pullBlock immediately after an edit still produces frames");
         CHECK(n == BLOCK && L[0] == 0.25f && L[BLOCK - 1] == 0.25f,
@@ -195,7 +259,7 @@ int main()
         src->renderDelayMs.store(0);
         bool freshHeard = false, dropout = false;
         for (int i = 0; i < 500 && !freshHeard && !dropout; ++i) {
-            length_t got = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t got = pullLR(engine, L, R, BLOCK);
             if (got != BLOCK) { dropout = true; break; }
             if (L[0] == 0.5f) { freshHeard = true; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -204,6 +268,229 @@ int main()
         CHECK(freshHeard, "post-edit content becomes audible after re-freeze");
 
         engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
+    // AC B4.5 (proposal 36), THE RT HALF: a stale page of the WRONG WIDTH must
+    // be a MISS on the audio thread, never audio.
+    //
+    // Why this half had to wait for B4. §4.5's rule is wired at three places —
+    // twLevelProbe (proven in metering_test since B2), and the fast path plus
+    // both stale fallbacks in AudioEngine::updateFrozenPage. The probe half
+    // could be forced with a synthetic component; the RT half could not, because
+    // "a page reaches the RT callback" needs a real engine, and until B4 nothing
+    // the engine could be pointed at was ever wider than one channel. It is now.
+    //
+    // WHAT MAKES THIS A REAL FORCING, not a staged one: the width changes with
+    // NO content-epoch bump. So every cached page is still CURRENT by the epoch
+    // rule and by validAspects — proposal 16's stale fallback would happily
+    // serve it — and the width check is the only thing standing between the
+    // audio thread and reading channelPtr(1) of a page that has one channel.
+    {
+        auto src = std::make_shared<WidthTone>(env);
+        src->width.store(2);
+        src->init();
+
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
+        engine.startReadahead();
+
+        constexpr length_t BLOCK = 512;
+        std::vector<float> L(BLOCK), R(BLOCK);
+
+        bool audible = false;
+        for (int i = 0; i < 500 && !audible; ++i) {
+            length_t n = pullLR(engine, L, R, BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) { audible = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(audible, "width: a 2-channel graph plays");
+
+        // THE WIDTH CHANGE, with no epoch bump: the frozen pages stay valid and
+        // current, and only their geometry is now wrong.
+        src->width.store(4);
+
+        bool servedOldWidth = false, sawSilence = false;
+        for (int i = 0; i < 40; ++i) {
+            std::fill(L.begin(), L.end(), -1.0f);
+            length_t n = pullLR(engine, L, R, BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) { servedOldWidth = true; break; }
+            if (n == 0 || L[0] == 0.0f) sawSilence = true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(!servedOldWidth,
+              "AC B4.5 (RT): a page whose width no longer matches its producer is "
+              "NOT served to the audio thread");
+        CHECK(sawSilence,
+              "AC B4.5 (RT): the RT path falls back to silence for that page");
+
+        // And it is not a permanent poisoning: bumping the epoch lets the
+        // readahead re-freeze at the new width, and audio returns.
+        src->bumpContentEpoch();
+        bool recovered = false;
+        for (int i = 0; i < 500 && !recovered; ++i) {
+            length_t n = pullLR(engine, L, R, BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) { recovered = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(recovered,
+              "AC B4.5 (RT): re-freezing at the new width restores audio");
+        CHECK(src->widestPageSeen.load() == 4,
+              "…and the pages the readahead froze really were 4 channels wide");
+
+        engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
+    // Proposal 36 B5 — pullBlock() serves N CHANNELS, and applies the §4.4
+    // clamp when asked for more than the page has.
+    //
+    // This is the playback half of "the sink goes wide". Until B5 pullBlock
+    // took (outL, outR) and filled BOTH from channelPtr(0), so a 4-channel
+    // graph and a mono one produced the same two buffers. The three assertions
+    // below separate the three things that could still be wrong: that the
+    // channels arrive at all, that they arrive in the RIGHT ORDER (a ladder,
+    // not merely "different"), and that a request wider than the page degrades
+    // by the clamp rather than by reading out of bounds.
+    {
+        auto src = std::make_shared<WidthTone>(env);
+        src->width.store(4);
+        src->ladder.store(true);          // channel c == amp/(c+1)
+        src->init();
+
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
+        engine.startReadahead();
+
+        CHECK(engine.graphChannels() == 4,
+              "B5: the engine reports the graph's width (4)");
+
+        constexpr length_t BLOCK = 512;
+        // Ask for SIX buffers from a four-channel page: channels 4 and 5 must
+        // come back as channel 3 (the clamp), not as garbage and not as zero.
+        constexpr std::size_t ASK = 6;
+        std::vector<std::vector<float>> bufs(ASK, std::vector<float>(BLOCK, -1.0f));
+        std::vector<float *> chans(ASK);
+        for (std::size_t c = 0; c < ASK; ++c) chans[c] = bufs[c].data();
+
+        bool audible = false;
+        for (int i = 0; i < 500 && !audible; ++i) {
+            length_t n = engine.pullBlock(chans.data(), ASK, BLOCK);
+            if (n == BLOCK && bufs[0][0] == 0.25f) { audible = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(audible, "B5: a 4-channel graph plays");
+
+        const float want[4] = { 0.25f, 0.125f, 0.25f / 3.0f, 0.0625f };
+        bool ladderOk = audible;
+        for (std::size_t c = 0; c < 4 && ladderOk; ++c)
+            for (length_t i = 0; i < BLOCK && ladderOk; ++i)
+                ladderOk = std::fabs(bufs[c][i] - want[c]) < 1e-6f;
+        CHECK(ladderOk,
+              "B5: destination channel c carries PAGE channel c (a 6 dB ladder, "
+              "in order) — not channel 0 four times");
+
+        bool clampOk = audible;
+        for (std::size_t c = 4; c < ASK && clampOk; ++c)
+            for (length_t i = 0; i < BLOCK && clampOk; ++i)
+                clampOk = std::fabs(bufs[c][i] - want[3]) < 1e-6f;
+        CHECK(clampOk,
+              "B5: asking for more channels than the page has yields its LAST "
+              "channel (the §4.4 clamp), never an out-of-bounds read");
+
+        // …and a MONO page asked for two buffers gives the same audio on both:
+        // "mono plays on every channel", which is what keeps a mono project
+        // audible on a stereo device.
+        src->ladder.store(false);
+        src->width.store(1);
+        src->bumpContentEpoch();
+        std::vector<float> L(BLOCK, -1.0f), R(BLOCK, -1.0f);
+        bool mono = false;
+        for (int i = 0; i < 500 && !mono; ++i) {
+            length_t n = pullLR(engine, L, R, BLOCK);
+            if (n == BLOCK && L[0] == 0.25f) { mono = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        bool bothOk = mono;
+        for (length_t i = 0; i < BLOCK && bothOk; ++i) bothOk = (L[i] == R[i]);
+        CHECK(mono && bothOk,
+              "B5: a width-1 graph fans out to every destination channel");
+
+        engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
+    // Proposal 36 B5 — THE DEVICE MONITORING RULE, asserted without a device.
+    //
+    //     L = ch0;  R = (projectWidth >= 2) ? ch1 : ch0
+    //
+    // and that pair meets the device's channel count as it always has. The rule
+    // is a pure function in twspeaker.h for exactly this reason: "a width-6
+    // graph reaching a stereo device yields exactly ch0 and ch1" is a one-line
+    // assertion here and would need a real backend, a PlaybackContext and a
+    // paced pump anywhere else.
+    //
+    // What this stops: a future refactor quietly fanning project channel 2 into
+    // the right output, or a "positional" mapping that silently starts feeding
+    // a 6-channel device six project channels. Monitoring is stereo, on
+    // purpose; the DROPPING of channels 2..N is the decision, not an accident,
+    // and it is confined to the device — a render still writes all N (that is
+    // RenderSession, which shares no code with this, and render_test's
+    // 6-channel case is where it is asserted).
+    {
+        const std::size_t N = 8;
+        std::vector<std::vector<float>> src(6, std::vector<float>(N));
+        std::vector<const float *> ptr(6);
+        for (std::size_t c = 0; c < 6; ++c) {
+            for (std::size_t i = 0; i < N; ++i)
+                src[c][i] = 0.1f * (float)(c + 1);      // channel c == 0.1*(c+1)
+            ptr[c] = src[c].data();
+        }
+
+        CHECK(twmonitor::pullChannels(1) == 1 &&
+              twmonitor::pullChannels(2) == 2 &&
+              twmonitor::pullChannels(6) == 2 &&
+              twmonitor::pullChannels(8) == 2,
+              "B5 device rule: monitoring pulls 1 channel from a mono project "
+              "and exactly 2 from every wider one");
+
+        // width 6 -> a STEREO device: L = ch0 (0.1), R = ch1 (0.2). Channels
+        // 2..5 (0.3..0.6) must appear nowhere.
+        std::vector<float> dev2(N * 2, -1.0f);
+        twmonitor::interleave(dev2.data(), N, 2, ptr.data(), twmonitor::pullChannels(6));
+        bool ok2 = true;
+        for (std::size_t i = 0; i < N && ok2; ++i)
+            ok2 = (dev2[i * 2] == 0.1f) && (dev2[i * 2 + 1] == 0.2f);
+        CHECK(ok2,
+              "AC B5 device rule: a 6-channel project on a STEREO device is "
+              "exactly ch0/ch1; channels 2..5 are dropped at the device");
+
+        // width 6 -> a SIX-channel device: still the pair, alternating, which
+        // is what the device mapping has always done. NOT ch0..ch5.
+        std::vector<float> dev6(N * 6, -1.0f);
+        twmonitor::interleave(dev6.data(), N, 6, ptr.data(), twmonitor::pullChannels(6));
+        bool ok6 = true;
+        for (std::size_t i = 0; i < N && ok6; ++i)
+            for (unsigned c = 0; c < 6 && ok6; ++c)
+                ok6 = (dev6[i * 6 + c] == ((c % 2 == 0) ? 0.1f : 0.2f));
+        CHECK(ok6,
+              "AC B5 device rule: a 6-channel project on a 6-channel device is "
+              "STILL the ch0/ch1 pair — monitoring is stereo, so channel 2 does "
+              "not reach output 2");
+
+        // width 1 -> stereo device: standard mono-to-stereo, L == R == ch0.
+        std::vector<float> devMono(N * 2, -1.0f);
+        twmonitor::interleave(devMono.data(), N, 2, ptr.data(), twmonitor::pullChannels(1));
+        bool okM = true;
+        for (std::size_t i = 0; i < N && okM; ++i)
+            okM = (devMono[i * 2] == 0.1f) && (devMono[i * 2 + 1] == 0.1f);
+        CHECK(okM, "AC B5 device rule: a MONO project is L = R = ch0");
+
+        // width 2 -> stereo device: itself.
+        std::vector<float> devSt(N * 2, -1.0f);
+        twmonitor::interleave(devSt.data(), N, 2, ptr.data(), twmonitor::pullChannels(2));
+        bool okS = true;
+        for (std::size_t i = 0; i < N && okS; ++i)
+            okS = (devSt[i * 2] == 0.1f) && (devSt[i * 2 + 1] == 0.2f);
+        CHECK(okS, "AC B5 device rule: a STEREO project is L = ch0, R = ch1");
     }
 
     // ------------------------------------------------------------------
@@ -223,11 +510,11 @@ int main()
         // Prime playback so the position has advanced away from 0.
         bool audible = false;
         for (int i = 0; i < 500 && !audible; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] == 0.25f) audible = true;
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        for (int i = 0; i < 8; ++i) engine.pullBlock(L.data(), R.data(), BLOCK);
+        for (int i = 0; i < 8; ++i) pullLR(engine, L, R, BLOCK);
         CHECK(audible && engine.currentPosition() > 0,
               "seek: playback running and advanced before the seek");
 
@@ -236,7 +523,7 @@ int main()
         engine.requestSeek(TARGET);
         // The very next pull adopts it (the RT pull is the sole writer of
         // currentPos_), even before any page at TARGET is frozen.
-        engine.pullBlock(L.data(), R.data(), BLOCK);
+        pullLR(engine, L, R, BLOCK);
         uint64_t after = engine.currentPosition();
         CHECK(after >= TARGET && after < TARGET + 4 * BLOCK,
               "seek: RT pull adopts the requested position");
@@ -244,7 +531,7 @@ int main()
         // Playback resumes from the new position (tone flows again).
         bool resumed = false;
         for (int i = 0; i < 500 && !resumed; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] == 0.25f) resumed = true;
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -253,7 +540,7 @@ int main()
 
         // A backward live seek repositions just the same.
         engine.requestSeek(0);
-        engine.pullBlock(L.data(), R.data(), BLOCK);
+        pullLR(engine, L, R, BLOCK);
         CHECK(engine.currentPosition() < TARGET,
               "seek: backward live seek repositions too");
 
@@ -293,7 +580,7 @@ int main()
         // Prime: wait for the readahead to freeze the first page.
         bool audible = false;
         for (int i = 0; i < 500 && !audible; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && L[0] != 0.0f) audible = true;
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -308,7 +595,7 @@ int main()
         bool preWrapExact = true;
         int preWrapShort = 0;
         for (int b = 0; b < BLOCKS_TO_END; ++b) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n != BLOCK) { ++preWrapShort; break; }
             const uint64_t base = (uint64_t)b * BLOCK;
             for (length_t j = 0; j < BLOCK; ++j) {
@@ -329,7 +616,7 @@ int main()
         // THE WRAP. loopStart is inside the page still held, so this is the
         // fast path of updateFrozenPage — the branch that used to return
         // without re-deriving the cursor.
-        length_t nWrap = engine.pullBlock(L.data(), R.data(), BLOCK);
+        length_t nWrap = pullLR(engine, L, R, BLOCK);
         CHECK(nWrap == BLOCK, "cycle: the wrapping block still produces frames");
 
         char msg[224];
@@ -439,7 +726,7 @@ int main()
 
         bool audible = false;
         for (int i = 0; i < 1000 && !audible; ++i) {
-            length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            length_t n = pullLR(engine, L, R, BLOCK);
             if (n == BLOCK && !decodeFloats(L.data(), n).silent) audible = true;
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -448,7 +735,7 @@ int main()
         int checked = 0, wrongPosition = 0, ambiguous = 0;
         for (int i = 0; i < 200 && checked < 8; ++i) {
             const uint64_t before = engine.currentPosition();
-            const length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            const length_t n = pullLR(engine, L, R, BLOCK);
             if (n != BLOCK) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
@@ -499,7 +786,7 @@ int main()
         double lastConfidence = 0.0;
         for (int i = 0; i < 1000 && !seekAudioCorrect; ++i) {
             const uint64_t before = engine.currentPosition();
-            const length_t n = engine.pullBlock(L.data(), R.data(), BLOCK);
+            const length_t n = pullLR(engine, L, R, BLOCK);
             if (n != BLOCK || before < TARGET
                 || before % (uint64_t)tw::poscode::kBlockFrames != 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));

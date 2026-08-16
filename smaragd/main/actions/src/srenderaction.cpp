@@ -80,6 +80,11 @@ SApplyResult SRenderAction::apply(SProject *project)
     params.format = audioFormat;
     params.quality = quality_;
     params.extent = audio::RenderParams::Extent::EntireProject;
+    // The FILE's channel count is the PROJECT's (proposal 36 B5). The graph's
+    // root declares the same number — SStdMixer takes its width from
+    // SProject::channels() — so passing it explicitly here is a cross-check
+    // rather than a second authority: RenderSession warns if the two disagree.
+    params.channels = project->channels();
     params.startTimeSec = 0.0;
     // The ARRANGEMENT decides how long this render is (it used to be a hardcoded
     // 60 s, which truncated anything longer and padded everything shorter) —

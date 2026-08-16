@@ -1,12 +1,8 @@
 #ifndef AUDIO_SINK_H
 #define AUDIO_SINK_H
 
+#include <cstddef>
 #include <memory>
-
-namespace audio {
-}
-
-#include "tw/core/audio_frame.h"
 
 namespace audio {
 
@@ -16,27 +12,39 @@ namespace audio {
  * Decouples the audio engine from specific output targets.
  * Both playback (device) and render (file) use the same sink interface.
  *
- * Sinks are non-blocking: writeFrame() queues/buffers data and returns
+ * Sinks are non-blocking: writeFrames() queues/buffers data and returns
  * immediately. FileSink handles buffering and disk writes internally.
+ *
+ * WIDTH (proposal 36 B5). A sink is N-channel and the width is carried by the
+ * CALL, not by a fixed frame type. It used to be an `AudioFrame` — a struct
+ * with `float channels[MAX_CHANNELS]`, `MAX_CHANNELS == 2` — passed one frame
+ * per call, which put a hard stereo cap in `tw/core` and made the sink the last
+ * place in the engine that could not represent what the graph produces. The
+ * interface is a BLOCK of interleaved frames instead: it carries any width, and
+ * it is one call per block rather than one per frame.
  */
 class AudioSink {
 public:
     virtual ~AudioSink() = default;
 
     /**
-     * Write one stereo audio frame to the sink.
+     * Write a block of INTERLEAVED frames to the sink.
      *
      * Implementation may:
-     * - Queue the frame for output (playback sink)
+     * - Queue the block for output (playback sink)
      * - Buffer it (file sink, waiting for completeness)
      * - Drop it (network sink under load)
      *
      * Must be thread-safe (called from audio callback or render thread).
      *
-     * \param frame  Stereo audio frame to write
-     * \return       True if frame was accepted; false on error/overflow
+     * \param interleaved  nFrames * channels floats, channel-minor
+     * \param nFrames      Frames in the block
+     * \param channels     Channels per frame; must match what the sink's
+     *                     writer was opened with
+     * \return             True if the block was accepted; false on error
      */
-    virtual bool writeFrame(const AudioFrame& frame) = 0;
+    virtual bool writeFrames(const float *interleaved, std::size_t nFrames,
+                             unsigned channels) = 0;
 
     /**
      * Flush any buffered/queued data.
@@ -52,32 +60,8 @@ public:
     /**
      * Get human-readable sink description (for diagnostics).
      */
-    virtual const char* name() const = 0;
+    virtual const char *name() const = 0;
 };
-
-/**
- * PlaybackSink: Real-time audio output to device.
- *
- * Frames flow immediately to the audio backend with no buffering.
- * If the render callback can't keep up (underrun), frames are dropped.
- *
- * Not implemented in Phase 5a; twspeaker.cc remains the playback sink
- * until Phase 5b unifies the playback path.
- */
-// class PlaybackSink : public AudioSink { ... };  // Phase 5b
-
-/**
- * FileSink: Buffered audio output to file with futures-based completion.
- *
- * Buffers incoming frames and waits for:
- * 1. Revalidation completeness (future resolved), OR
- * 2. Data age timeout (500ms, prevents forever-wait on stale captures)
- *
- * Then writes complete buffers to disk via AudioFileWriter.
- *
- * Integrated in Phase 5c.
- */
-// class FileSink : public AudioSink { ... };  // Phase 5c
 
 }  // namespace audio
 

@@ -35,9 +35,10 @@ Invariants:
    pluginReloaded(). Any editor showing that slot's parameters must re-read
    them on that signal. It is NOT an action: it mutates no document state (a
    re-save produces the same bytes), so there is nothing to undo.
-6. An edit is inaudible unless the slot is told. Two caches sit in front of the
-   plugin — twPluginSlotProcessor's all-bus page cache and each per-bus tap's
-   frozen pages — so a parameter write must be followed by
+6. An edit is inaudible unless the slot is told. A cache sits in front of the
+   plugin — the slot's single twPluginInsert's frozen pages (before proposal 36
+   B4 there were two, because the processor also kept an all-bus page cache for
+   its sibling taps) — so a parameter write must be followed by
    SPluginSlot::notifyPluginEdited(), and a bypass must go through
    SPluginSlot::setBypass(). Both then invalidate UPWARDS by emitting
    SPluginSlot::audioInvalidated(), which the owning STrack turns into
