@@ -210,7 +210,15 @@ Also in M1, because they are prerequisites for hearing anything correct:
 
 The frozen-page model is **one mono page per component** (`twComponent::freezePage_nolock` renders
 `idx = 0` only). Parallel mono wires are therefore modelled as parallel *component instances* —
-which is why `STrack` builds one `twTrackMix` and one `twPluginChain` per bus. Keeping that
+which is why `STrack` builds one `twTrackMix` and one `twPluginChain` per bus.
+
+> **SUPERSEDED by proposal 36 (2026-08-16).** The frozen page carries N planar
+> channels now, so a track is **one** `twTrackMix` + **one** `twPluginChain` of
+> width N, and a slot is one `twPluginInsert`. The processor/tap split described
+> below existed *because* of the mono-page rule; with that rule gone, the all-bus
+> cache and the per-bus tap fan-out retired. `twPluginSlotProcessor` itself
+> survives as the plugin lifetime/state holder (inv. 18 depends on it). The text
+> below is kept as the record of why it was built this way. Keeping that
 invariant, split the slot into **one shared processor + N per-bus tap components**:
 
 - **`twPluginSlotProcessor`** (new, plain C++, not a `twComponent`): owns the `twPlugin`

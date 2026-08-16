@@ -57,6 +57,25 @@ public:
     bool advanceTo( offset_t pos, twLevelSample &out,
                     float clipThreshold = TW_METER_CLIP_THRESHOLD );
 
+    // The N-lane form (proposal 36 B8). Measures the SAME span, once per lane,
+    // and reports how many lanes it actually found:
+    //
+    //     out.lanes = min( wantLanes, page->channels(), MAX_LANES )
+    //
+    // ACT ON THE WIDTH OF THE PAGE IN HAND (§4.4), never on a declared width:
+    // an insert-less twPluginChain forwards its input page verbatim and its
+    // silence pages are default-constructed width 1, so a caller asking for six
+    // lanes can legitimately be handed one. A caller that wants a stable lane
+    // count must clamp the meter it draws, not this. (The producer's DECLARED
+    // width is still consulted, in resolvePage_, but for a different question:
+    // §4.5's "a page whose width no longer matches its producer is a MISS".)
+    //
+    // wantLanes <= 0 is read as 1. The scalar overload above is exactly this
+    // with wantLanes == 1, and both share one window/page/clamp computation, so
+    // a scalar caller can never disagree with a lane-0 reading.
+    bool advanceTo( offset_t pos, twLevelSampleSet &out, int wantLanes,
+                    float clipThreshold = TW_METER_CLIP_THRESHOLD );
+
     // Diagnostics: how many advanceTo() calls found no page to read.
     uint64_t missCount() const { return misses_; }
 

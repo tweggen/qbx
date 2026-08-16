@@ -9,15 +9,18 @@
  * expected width, with genuinely different channels — proposal 36 AC B3.2.
  *
  * WHY THIS IS NOT assert-channels-differ. That verb reads a rendered WAV, and
- * the sink still collapses the graph to one bus and duplicates it (B5 fixes
- * that), so no file on disk can show a clip's second channel before B5. B3
- * widens the CLIP PATH, and the only place its result is observable is the page
- * the resolved component publishes. This verb reads exactly that.
+ * when B3 wrote this one the sink still collapsed the graph to one bus and
+ * duplicated it, so no file on disk could show a clip's second channel. B5 has
+ * since widened the sink, so a file CAN show one — but it shows the audio after
+ * the track mix, the plugin chain, the rewire and the master sum. This verb
+ * still reads the page the RESOLVED CLIP COMPONENT publishes, which is the only
+ * place a clip's own width is observable without everything downstream in the
+ * way, and it is what makes a failure name the clip path rather than the sink.
  *
- * WHY NOT THE TRACK'S ROOT COMPONENT. Because it does not exist yet at width 2:
- * twTrackMix and twPluginChain allocate their own width-1 pages until B4, and
- * IOVector — the seam twTrackMix mixes through — is mono by design (§4.6). The
- * track-root assertion is AC B4.7.
+ * WHY NOT THE TRACK'S ROOT COMPONENT. Because it did not exist at width 2 when
+ * B3 wrote this: twTrackMix and twPluginChain allocated their own width-1 pages
+ * until B4. The track-root assertion is AC B4.7, and it is
+ * assert-track-channels.
  *
  * THROUGH THE REAL SCHEDULER, not a hand-rolled freeze. It declares a demand on
  * the project's CaptureRevalidator (requestGraphPages) and waits, which is the

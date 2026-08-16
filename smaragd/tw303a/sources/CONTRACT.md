@@ -94,13 +94,29 @@ Invariants:
    returned a hardcoded 4 with one latch built until B3; it now builds one
    latch per channel, which is what gives §4.4 rule (1)'s plug clamp something
    to select.
+12. **A CAPTURE IS AS WIDE AS THE THING IT CAPTURED** (proposal 36 B7).
+   `twCapturingSource` has taken a `channels` parameter since proposal 07 and
+   every caller passed 1, so its planar `channels * nFrames` arithmetic had
+   never been executed above width 1. `SCut::buildCapture_` now passes the
+   container's declared width (or, for the grained preview capture, the grain
+   source's) and a `twSampleReader` over the capture is wide by invariant 8 —
+   which is the whole of how a container/asset clip keeps its channels. NOTE
+   the buffer is the ONE allocation in the engine that multiplies by channel
+   width, and it is per placement rather than shared (proposal 06 §7's
+   content-addressed capture cache does not exist yet): it is accounted by
+   `PageAccounting::onCaptureAllocated` and printed as `captureBuffers=` by
+   `<report-page-memory>`. Do not confuse it with `CapturePagePool`, which is
+   an unrelated pool of an unrelated type and does NOT widen (pages/CONTRACT.md).
 
 Threading: sources are immutable after load; readers are single-consumer
 cursors (one per clip placement). The streaming grain's block LRU is the one
 mutable, mutex-guarded exception (invariant 6).
 
 How to test: `ctest -R sources_test` (reader absolute seeks, loop window,
-zero-fill, grain stretch — sources/tests/); `ctest -R wide_reader_test`
+zero-fill, grain stretch, and the width-4 capture round trip of invariant 12 —
+sources/tests/); `qxa.mc_capture_clip_width` (invariant 12 end to end: a
+stretched, a pitched and a container/asset clip over `tests/test_stereo.wav`,
+each asserted at the clip AND in the rendered file); `ctest -R wide_reader_test`
 (invariants 8-11 over the committed `tests/test_stereo.wav`, plus the
 `warp.pcm` channel-count key check of proposal 36 AC B3.4); grain_*.qxa for the audible
 grain path; qxa.render_split_slip_offset for offset semantics end-to-end;

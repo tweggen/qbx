@@ -52,10 +52,125 @@
     <assert-meter trackIndex="0" position="168000" grabPng="meter_h.png"
                   grabVertical="false"/>
     <assert-meter trackIndex="0" position="24000"  grabPng="meter_quiet.png"/>
+
+    <!-- ==================================================================
+         AC B8.2 — THE METER HAS LANES, AND THEY READ DIFFERENTLY.
+
+         NOT test_sawtooth. Its two channels are byte-identical (proposal 36
+         trap 22), so no lane comparison over it can ever fail, and a gate whose
+         fixture cannot distinguish the two states is not a gate for that
+         distinction — the defect that made channel_assert_dupmono incapable of
+         detecting B5. ../test_stereo.wav is the 6 dB ladder: channel 0 is a
+         480 Hz sine at amplitude 0.70710678 (rms exactly 0.5), channel 1 the
+         same sine at half that (rms 0.25).
+
+         The probe measures MIN_WINDOW = 256 frames, i.e. 2.56 cycles of a
+         480 Hz sine, so a partial-cycle ripple of a few percent sits on top of
+         the exact figures. The bands allow for it and are still nowhere near
+         each other.
+         ================================================================== -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_stereo.wav" timePos="0"/>
+
+    <!-- The width first. A page that quietly stayed mono would pass every level
+         bound on lane 0, so pin the lane count before believing any level. -->
+    <assert-meter trackIndex="1" position="24000" expectLanes="2"
+                  lane="0" minRms="0.42" maxRms="0.58"/>
+    <assert-meter trackIndex="1" position="24000" expectLanes="2"
+                  lane="1" minRms="0.21" maxRms="0.29"/>
+
+    <!-- …and now the claim: the two lanes are genuinely different audio. -->
+    <assert-meter trackIndex="1" position="24000" laneA="0" laneB="1"
+                  minLaneRmsDelta="0.20"/>
+    <assert-meter trackIndex="1" position="100000" laneA="0" laneB="1"
+                  minLaneRmsDelta="0.20"/>
+    <!-- Past the first page boundary (65536), so a lane that read the wrong
+         page could not hide behind the fixture being periodic. -->
+    <assert-meter trackIndex="1" position="70000" laneA="0" laneB="1"
+                  minLaneRmsDelta="0.20"/>
+
+    <!-- The band must be able to fail: the ladder's delta is 0.25 exactly. -->
+    <assert-meter trackIndex="1" position="24000" laneA="0" laneB="1"
+                  minLaneRmsDelta="0.30" expectReject="true"/>
+
+    <!-- Lane 2 does not exist on a two-channel page. An out-of-range lane is an
+         ERROR, never an empty selection reporting rms 0 that reads like a silent
+         render — the rule M0 had to fix in the file-reading verbs. -->
+    <assert-meter trackIndex="1" position="24000" lane="2" minRms="0.0"
+                  expectReject="true"/>
+
+    <!-- THE CONTROL, and it is the half that makes the pair mean something.
+         The sawtooth track's page is genuinely TWO channels wide (every clip in
+         this suite has frozen a width-2 page since B3) — so `expectLanes` passes
+         — while its channels hold the same audio, so the delta assertion must be
+         rejected. Only a real per-channel meter passes both. -->
+    <assert-meter trackIndex="0" position="72000" expectLanes="2"
+                  lane="1" minRms="0.130" maxRms="0.225"/>
+    <assert-meter trackIndex="0" position="72000" laneA="0" laneB="1"
+                  minLaneRmsDelta="0.001" expectReject="true"/>
+
+    <!-- Painted, two lanes at their own heights: the picture of AC B8.2. -->
+    <assert-meter trackIndex="1" position="24000" lanes="2"
+                  grabPng="meter_stereo_v.png"/>
+    <assert-meter trackIndex="1" position="24000" lanes="2"
+                  grabPng="meter_stereo_h.png" grabVertical="false"/>
+
+    <!-- ==================================================================
+         AC B8.4 — THE TRACK HEAD AT FOUR LANE HEIGHTS AND BOTH COLUMN WIDTHS.
+
+         Heights straddle every threshold: 150 is Full (>= 132), 100 and 60 are
+         Compact (>= 46; the meter itself needs >= 60), 40 is Tiny. Widths are
+         the minimal column (120) and a wide one (200 > WIDE_MODE_THRESHOLD 156,
+         which lays the fader and the meter down even at Full density).
+
+         `contains` pins what the density rules DECIDED; the grabs are what they
+         look like, which is the half a string cannot carry. Nothing is asserted
+         about clipping directly — Qt clips silently — so the rules are stated as
+         "the meter is hidden when it does not fit" and the pictures are the
+         evidence that nothing is drawn half.
+         ================================================================== -->
+    <assert-meter trackIndex="1" position="24000" headHeight="150" headWidth="120"
+                  contains="vis=1|orient=v" grabHead="head_h150_w120.png"/>
+    <assert-meter trackIndex="1" position="24000" headHeight="150" headWidth="200"
+                  contains="vis=1|orient=h" grabHead="head_h150_w200.png"/>
+    <assert-meter trackIndex="1" position="24000" headHeight="100" headWidth="120"
+                  contains="vis=1|orient=h" grabHead="head_h100_w120.png"/>
+    <assert-meter trackIndex="1" position="24000" headHeight="100" headWidth="200"
+                  contains="vis=1|orient=h" grabHead="head_h100_w200.png"/>
+    <assert-meter trackIndex="1" position="24000" headHeight="60"  headWidth="120"
+                  contains="vis=1|orient=h" grabHead="head_h60_w120.png"/>
+    <assert-meter trackIndex="1" position="24000" headHeight="60"  headWidth="200"
+                  contains="vis=1|orient=h" grabHead="head_h60_w200.png"/>
+    <!-- Tiny: hiding beats clipping. -->
+    <assert-meter trackIndex="1" position="24000" headHeight="40"  headWidth="120"
+                  contains="vis=0" grabHead="head_h40_w120.png"/>
+    <assert-meter trackIndex="1" position="24000" headHeight="40"  headWidth="200"
+                  contains="vis=0" grabHead="head_h40_w200.png"/>
+
+    <!-- The head shows TWO lanes on a two-channel project, and says so. -->
+    <assert-meter trackIndex="1" position="24000" headHeight="150" headWidth="120"
+                  contains="lanes=2|width=2"/>
+
+    <!-- ==================================================================
+         DECISION 2 — how many lanes a track head shows above stereo.
+
+         TWO, whatever the width, following the device rule the requester
+         settled at B5 (twSpeaker: L = ch0, R = ch1, the rest computed in full
+         and dropped at the device). Six lanes in the ~13 px of slack a 120 px
+         column has would be 1 px each, which is not a meter. The cap is
+         ANNOUNCED, not hidden: describe() reports `lanes` and `width`
+         separately, the tooltip names the width and points at the Track Detail
+         dock, and the dock meters every channel (SLevelMeter Grow mode).
+         ================================================================== -->
+    <set-project-channels channels="6"/>
+    <assert-meter trackIndex="1" position="24000" headHeight="150" headWidth="120"
+                  contains="lanes=2|width=6" grabHead="head_6ch_w120.png"/>
+    <assert-meter trackIndex="1" position="24000" headHeight="150" headWidth="200"
+                  contains="lanes=2|width=6" grabHead="head_6ch_w200.png"/>
   </actions>
 
   <assertions>
-    <assert-track-count equals="1"/>
+    <assert-track-count equals="2"/>
   </assertions>
 
 </SActionScript>

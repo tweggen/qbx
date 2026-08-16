@@ -54,7 +54,13 @@ oldest-mtime `*.qaf` files past the cap while skipping locked ones.
 
 Known debt:
 - The aspect registry (twaspects.h) now carries the shipped aspects:
-  preview.peaks v1, onsets v2 (NORMALIZED spectral flux — v1's absolute flux
+  preview.peaks v2 (proposal 36 B8: the probe envelope folds EVERY channel
+  rather than channel 0, and the header's `channels` carries the real source
+  width instead of a hard-coded 1; v1 files orphan on sight, because their bytes
+  are only accidentally right — they agree with the all-channel fold exactly
+  when channel 0 dominates, which every fixture in this repo happens to
+  satisfy, and would therefore have been adopted silently), onsets v2
+  (NORMALIZED spectral flux — v1's absolute flux
   fired spurious onsets on steady loud material; v1 files orphan on sight),
   loudness v1, and warp.pcm v2 (params blob gained an onsetsHash so warps
   built before/after the onsets sidecar occupy different keys). The `stft.if`

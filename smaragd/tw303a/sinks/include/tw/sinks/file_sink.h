@@ -7,6 +7,7 @@
 #include <chrono>
 #include <future>
 #include <mutex>
+#include <vector>
 
 #include "tw/sinks/audio_sink.h"
 
@@ -18,13 +19,21 @@ class GenerationPromise;
 /**
  * FileSink: Buffered file output with futures-based completeness tracking.
  *
- * Buffers incoming AudioFrames and writes them to disk only when:
+ * Buffers incoming blocks and writes them to disk only when:
  * 1. Revalidation is complete (future resolved), OR
  * 2. Data is old enough (age-based fallback, prevents forever-wait)
  *
  * This is the render-specific sink (Phase 5c). Playback uses device callback directly.
  *
- * Thread-safe: writeFrame() and flush() can be called from render thread.
+ * WIDTH (proposal 36 B5). The buffer holds INTERLEAVED BLOCKS, not frames. It
+ * used to hold one `AudioFrame` per entry — a two-float struct written to the
+ * file one frame per `AudioFileWriter::write()` call — which is why the sink
+ * could not have been widened without also making it a block sink: `AudioFrame`
+ * WAS the 2-channel cap. Entries carry their own width so a mixed-width buffer
+ * is impossible to write out wrongly, though in practice one render is one
+ * width.
+ *
+ * Thread-safe: writeFrames() and flush() can be called from render thread.
  */
 class FileSink : public AudioSink {
 public:
@@ -45,15 +54,17 @@ public:
     ~FileSink() override = default;
 
     /**
-     * Write one frame to the buffer (non-blocking).
+     * Buffer a block of interleaved frames (non-blocking).
      *
-     * Frame is buffered with its generation ID and ready future.
-     * If buffer is full, oldest frame is dropped (shouldn't happen in normal operation).
+     * The block is buffered with its generation ID and ready future.
      *
-     * \param frame  Audio frame to buffer
-     * \return       True if frame was buffered; false on error
+     * \param interleaved  nFrames * channels floats, channel-minor
+     * \param nFrames      Frames in the block
+     * \param channels     Channels per frame
+     * \return             True if the block was buffered; false on error
      */
-    bool writeFrame(const AudioFrame& frame) override;
+    bool writeFrames(const float *interleaved, std::size_t nFrames,
+                     unsigned channels) override;
 
     /**
      * Flush buffered frames to disk.
@@ -80,16 +91,18 @@ public:
     void setGeneration(uint32_t generation);
 
     /**
-     * Get current buffer occupancy (for diagnostics).
+     * Get current buffer occupancy in FRAMES (for diagnostics).
      */
     size_t occupancy() const;
 
 private:
-    struct FrameEntry {
-        AudioFrame frame;
+    struct BlockEntry {
+        std::vector<float> samples;   // interleaved, frames * channels
+        std::size_t frames;
+        unsigned channels;
         uint32_t generation;
         std::shared_future<void> readyFuture;
-        int64_t createdTimeMs;  // When frame was pushed (for age-based fallback)
+        int64_t createdTimeMs;  // When the block was pushed (age-based fallback)
     };
 
     AudioFileWriter* writer_;
@@ -98,12 +111,13 @@ private:
     uint32_t currentGeneration_;
 
     mutable std::mutex bufferMutex_;
-    std::deque<FrameEntry> buffer_;
+    std::deque<BlockEntry> buffer_;
+    size_t bufferedFrames_ = 0;
 
     // Helpers
     int64_t getCurrentTimeMs() const;
-    bool isFrameReady(const FrameEntry& entry) const;
-    void flushReady();
+    bool isBlockReady(const BlockEntry& entry) const;
+    void writeFront_locked();
 };
 
 }  // namespace audio

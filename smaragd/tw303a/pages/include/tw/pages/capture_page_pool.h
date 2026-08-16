@@ -36,10 +36,30 @@
  * - Aligns nicely with typical I/O buffer sizes (4096, 8192, etc.)
  *
  * Content varies by aspect:
- * - Preview: waveform peaks (small, resampled)
+ * - Preview: FLOAT SAMPLES of the object's output, decimated to ~1 kHz,
+ *   CHANNEL 0 ONLY, starting at position 0, with NO geometry attached (no probe
+ *   count, no hop, no duration, no channel count). Written by exactly one
+ *   place, CaptureRevalidator::dispatchRecomputation, from
+ *   twComponent::freezePreviewPage.
  * - Playback: reader chain data (twSampleReader with grain params, etc.)
  * - Metadata: duration, peak levels, RMS
  * - Export: resampled/normalized buffer
+ *
+ * The Preview line above used to read "waveform peaks (small, resampled)", and
+ * that wording is what proposal 36 trap 26 was: it invited a reader to treat
+ * `data` as an array of preview_t {int8 min, int8 max} probes, which is what
+ * SPlainWave::getPreview did (unreachably -- see the note there). It is NOT
+ * that. The waveform probe array is a different thing entirely, computed by
+ * SObject::straightCalcPreviewData / SCut::ensureCapturePeaks and persisted in
+ * the "preview.peaks" sidecar; it never travels through a CapturePageData.
+ *
+ * A Preview aspect page's ONLY consumer today is SCut::getPreview, which uses
+ * its EXISTENCE as a readiness signal and never reads `data`. Nothing in the
+ * tree reads the float payload. Before giving it a reader, give it a geometry.
+ *
+ * NOT WIDENED BY PROPOSAL 36 (settled at B7, restated at B8): this type has no
+ * frame, stride or channel field, and nothing on the audio path allocates one.
+ * A page's audio width lives in twOutputPage::channels(), a different type.
  */
 struct CapturePageData : public PageBase {
     // Phase 5 Gap 11: Unified page size with twOutputPage

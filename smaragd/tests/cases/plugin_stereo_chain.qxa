@@ -26,16 +26,13 @@
            1.0x  the plugin is not in the signal path at all
            0.5x  input 1 is silent  <- the pre-M3 bug
 
-       NOTE on channel 1. The offline render still collapses the graph's buses to
-       ONE mono page and duplicates it (tw303a/render/src/render_session.cc:
-       "bufR[i] = sample;  // Duplicate to stereo (temporary; proper
-       multi-channel TBD)"), and playback does the same. So bus 1's audio cannot
-       reach a file today and the file's two channels are equal BY CONSTRUCTION —
-       which is why the cross-channel term above exists, and why the channel-1
-       band below is wide. When the sink becomes genuinely multi-channel, tighten
-       channel 1 to [0.030, 0.037] (0.5x) and channel 0 stays as it is. That
-       distinctness IS gated today, at engine level, by plugins_test's
-       "the two buses are genuinely different audio".
+       CHANNEL 1 IS REAL AUDIO SINCE PROPOSAL 36 B5, and this case is where that
+       first became assertable from a FILE. Until B5 the offline render collapsed
+       the graph to one mono page and duplicated it ("bufR[i] = sample; //
+       Duplicate to stereo"), and playback did the same, so channel 1 could only
+       ever be a copy of channel 0 and the band here had to be wide enough to
+       admit both 1.5x and 0.5x. It is now 0.5x exactly — the note this case has
+       carried since M3, honoured. Channel 0 is unchanged.
 
        path="twtestclap.clap" is relative: SInsertPluginAction resolves it
        against this .qxa's directory first and then against the application
@@ -63,11 +60,28 @@
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>
 
-    <!-- Channel 1 must carry real audio, whether it is bus 1 (0.5x, once the
-         sink is multi-channel) or today's duplicate of bus 0 (1.5x). -->
+    <!-- AC B5.1 — CHANNEL 1 IS BUS 1, and the band is now the one this case
+         has documented for the day since M3: [0.030, 0.037], i.e. 0.5x of the
+         unprocessed 0.0667. It used to read minRms="0.028" maxRms="0.110",
+         wide enough to admit BOTH 0.5x and the sink's duplicate of channel 0 at
+         1.5x, because until B5 the file's two channels were equal by
+         construction and the wide band was the honest way to say so.
+
+         Tightening it is the whole point: 0.110 would still have passed a sink
+         that duplicated channel 0, and 0.037 does not. This one number is what
+         makes "the cross-channel term reaches the FILE" checkable rather than
+         inferred from plugins_test's engine-level assertion. -->
     <assert-audio-energy filename="plugin_stereo_chain.wav"
                          startFrame="0" frameCount="48000"
-                         channel="1" minRms="0.028" maxRms="0.110"/>
+                         channel="1" minRms="0.030" maxRms="0.037"/>
+
+    <!-- …and channel 0 is unchanged, at 1.5x, so the case still separates the
+         three M3 outcomes on channel 0 while channel 1 separates the sink. The
+         two together are the asymmetry: 1.5x against 0.5x, in one file. -->
+    <assert-channels-differ filename="plugin_stereo_chain.wav"
+                            channelA="0" channelB="1"
+                            startFrame="0" frameCount="48000"
+                            minRmsDelta="0.050" minDiffRms="0.050"/>
 
     <!-- A quiet stretch late in the sawtooth, to prove the relation holds across
          pages (a 65536-frame page boundary falls inside the clip, so this also

@@ -415,10 +415,35 @@ int SObject::straightCalcPreviewData()
     }
     const offset_t PAGE_FRAMES = (offset_t) twOutputPage::FRAME_CAPACITY;
 
-    // Fill `dest` with [at, at+n) of the container's frozen output; anything the
+    // THE CHANNEL FOLD (proposal 36 B8). A preview probe is the signed envelope
+    // of its window over ALL CHANNELS: the smallest min and the largest max
+    // across every channel, i.e. the union of the per-channel envelopes.
+    //
+    // It used to be channel 0 alone, which was harmless while nothing above
+    // width 1 reached the sink and is a lie now: a clip whose channel 1 carries
+    // the loud material would draw as the quiet one, or as silence. A drawn
+    // waveform has to describe what is audible.
+    //
+    // It stays ONE LANE, deliberately, and that is a decision rather than an
+    // omission: preview_t, swaveformdraw, SCut::getPreview and every inline
+    // renderer are single-envelope by type, an arranger clip lane has no room to
+    // stack six waveforms, and a per-channel waveform is a feature (with its own
+    // density rules) rather than a fold. The METER is where per-channel level
+    // lives; see SLevelMeter.
+    //
+    // For width 1, and for any file whose channels are identical (test_sawtooth)
+    // or nested (test_stereo's 6 dB ladder), the fold produces exactly the bytes
+    // channel 0 produced -- which is why no committed waveform moves here. The
+    // fold is still key material: twAspect::PreviewPeaksVersion went to 2 so a
+    // v1 sidecar written under the channel-0 rule cannot be adopted under this
+    // one.
+
+    // Scan [at, at+n) of the CONTAINER's frozen output into the running signed
+    // envelope (mn/mx), across every channel of each page. Anything the
     // component cannot produce (no page, short page, past the end) reads as
     // silence, which is what the pulled render produced there too.
-    auto readContainerFrames = [&]( offset_t at, sample_t *dest, offset_t n ) {
+    auto scanContainerEnvelope = [&]( offset_t at, offset_t n,
+                                      sample_t &mn, sample_t &mx ) {
         offset_t done = 0;
         while( done < n ) {
             const offset_t pos       = at + done;
@@ -428,7 +453,8 @@ int SObject::straightCalcPreviewData()
             if( chunk > PAGE_FRAMES - inPage ) chunk = PAGE_FRAMES - inPage;
 
             if( !rootComp ) {
-                for( offset_t k=0; k<chunk; ++k ) dest[done+k] = 0.f;
+                if( mn > 0.f ) mn = 0.f;
+                if( mx < 0.f ) mx = 0.f;
                 done += chunk;
                 continue;
             }
@@ -444,20 +470,35 @@ int SObject::straightCalcPreviewData()
                 curPage = rootComp->requestPage( pageStart, nullptr, 0, 0,
                                                  srate, chainFrom );
             }
-            const offset_t avail = curPage
+            offset_t avail = curPage
                 ? (offset_t) curPage->validFrames - inPage : 0;
-            // Channel 0: the preview lane is scalar all the way to the sidecar
-            // key (which asserts channels = 1) -- widening it is B8.
-            const sample_t *pageData  = curPage ? curPage->channelPtr( 0 ) : nullptr;
-            const offset_t  pageFrames = curPage ? (offset_t) curPage->channelFrames() : 0;
-            for( offset_t k=0; k<chunk; ++k ) {
-                dest[done+k] = ( k < avail && ( inPage + k ) < pageFrames )
-                             ? pageData[ (size_t)( inPage + k ) ]
-                             : 0.f;
+            const offset_t pageFrames =
+                curPage ? (offset_t) curPage->channelFrames() : 0;
+            if( avail > pageFrames - inPage ) avail = pageFrames - inPage;
+            if( avail < 0 ) avail = 0;
+            if( avail > chunk ) avail = chunk;
+
+            // ACT ON THE WIDTH OF THE PAGE IN HAND (§4.4), never on a declared
+            // width: an insert-less twPluginChain forwards its input page
+            // verbatim and its silence pages are default-constructed width 1.
+            const idx_t nc = curPage ? (idx_t) curPage->channels() : (idx_t) 0;
+            for( idx_t c = 0; c < nc; ++c ) {
+                const sample_t *d = curPage->channelPtr( c ) + (size_t) inPage;
+                for( offset_t k = 0; k < avail; ++k ) {
+                    const sample_t a = d[k];
+                    if( a < mn ) mn = a;
+                    if( a > mx ) mx = a;
+                }
+            }
+            if( avail < chunk || nc == 0 ) {     // the tail reads as silence
+                if( mn > 0.f ) mn = 0.f;
+                if( mx < 0.f ) mx = 0.f;
             }
             done += chunk;
         }
     };
+
+    const idx_t rsChannels = rs ? rs->channels() : (idx_t) 0;
 
     // Fill it up.
     for( offset_t i=0; i<(offset_t) previewForLength_; i+=previewSkip_ ) {
@@ -465,15 +506,22 @@ int SObject::straightCalcPreviewData()
 	// we want to calc the overall range.
         sample_t min=SAMPLE_NORM_MAX, max = SAMPLE_NORM_MIN;
         if( rs ) {
-            rs->read( i, buffer, previewSkip_, 0 );
+            // One read per channel, folded into one envelope. twRandomSource is
+            // stateless (proposal 07) so repeating the window per channel costs
+            // reads and nothing else -- no cursor to displace, unlike the
+            // per-channel loop §4.3 forbids on the freeze path.
+            for( idx_t c = 0; c < rsChannels; ++c ) {
+                rs->read( i, buffer, previewSkip_, c );
+                sample_t *p = buffer;
+                for( offset_t j=0; j<previewSkip_; ++j ) {
+                    sample_t a = *p++;
+                    if( a<min ) min = a;
+                    if( a>max ) max = a;
+                }
+            }
+            if( rsChannels <= 0 ) { min = 0.f; max = 0.f; }
         } else {
-            readContainerFrames( i, buffer, previewSkip_ );
-        }
-        sample_t *p = buffer;
-        for( offset_t j=0; j<previewSkip_; ++j ) {
-            sample_t a = *p++;
-            if( a<min ) min = a;
-            if( a>max ) max = a;
+            scanContainerEnvelope( i, previewSkip_, min, max );
         }
 	// Now clip to signed 8 bit.
         max = (max*127.) / SAMPLE_NORM_MAX;

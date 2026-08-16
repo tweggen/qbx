@@ -26,6 +26,19 @@ struct RenderParams {
     AudioFormat format = AudioFormat::WAV;
     int quality = 6;  // 0-10 for OGG
     std::string outputPath;
+
+    // Channels in the OUTPUT FILE (proposal 36 B5). This was hard-coded 2 in
+    // RenderSession::start, with the graph's single mono page duplicated into
+    // both — the render half of the mono sink.
+    //
+    // 0 means "ask the graph", which is what every caller should normally want:
+    // the root component's declared width IS the project's width (SStdMixer
+    // takes it from SProject::channels()), so deriving it cannot drift from the
+    // project the way a copied number can. A caller may still pin a number; a
+    // pinned count that exceeds the graph's width gets the §4.4 clamp per
+    // channel ("mono plays on every channel"), and one below it drops the
+    // channels above — the same rule twSpeaker states for a device.
+    int channels = 0;
 };
 
 class RenderSession {
@@ -71,6 +84,7 @@ private:
     std::shared_ptr<twComponent> synthOutput_;
     RenderParams params_;
     std::uint32_t sampleRate_ = 48000;
+    unsigned renderChannels_ = 1;   // resolved in start(); what the file carries
     std::size_t totalSamples_ = 0;
     std::size_t startOffsetSamples_ = 0;
     std::atomic<std::size_t> samplesWritten_{0};

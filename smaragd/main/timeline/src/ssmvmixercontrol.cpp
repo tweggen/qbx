@@ -629,6 +629,7 @@ SSMVMixerControl::SSMVMixerControl(
     // Bind ONCE: the track's twRewire is created only when null
     // (STrack::buildComponents), so its identity is stable for this head's life.
     probe_.setTap( tk_.getRootComponent() );
+    syncMeterLanes();
 
     // Fader column beside the meter (they lie down together in Compact).
     qFaderRow_ = new QBoxLayout( QBoxLayout::LeftToRight );
@@ -892,9 +893,38 @@ void SSMVMixerControl::onMeterTick( offset_t pos, qint64 nowMs, bool live )
     // one comparison.
     probe_.setTap( tk_.getRootComponent() );
 
-    twLevelSample s;
-    if( probe_.advanceTo( pos, s ) ) qMeter_->pushLevel( s, nowMs );
-    else                             qMeter_->pushIdle( nowMs );
+    const int shown = syncMeterLanes();
+
+    twLevelSampleSet s;
+    if( probe_.advanceTo( pos, s, shown ) ) qMeter_->pushLevel( s, nowMs );
+    else                                    qMeter_->pushIdle( nowMs );
+}
+
+// Proposal 36 B8 — how many lanes this head's meter draws.
+//
+// The width is the TAP's declared width. For a track that IS the project's,
+// since B4 built one twTrackMix / twPluginChain / twRewire of the project's
+// width rather than a per-track bus count; asking the component rather than
+// SProject keeps the meter and the audio reading one number, and it is the same
+// number §4.5's width-mismatch rule compares a cached page against.
+//
+// The drawn count is capped at SLevelMeter::MONITOR_LANES — see the constant for
+// why the head follows the device rule rather than growing.
+int SSMVMixerControl::syncMeterLanes()
+{
+    std::shared_ptr<twComponent> tap = tk_.getRootComponent();
+    const int width = tap ? (int) tap->getOutputChannels() : 1;
+    const int shown = qMin( width > 0 ? width : 1, SLevelMeter::MONITOR_LANES );
+    if( qMeter_ ) qMeter_->setLanes( shown, width );   // no-op when unchanged
+    return shown;
+}
+
+int SSMVMixerControl::tkPushMeterLevel( const twLevelSampleSet &s, qint64 nowMs )
+{
+    const int shown = syncMeterLanes();
+    updateLayout();
+    if( qMeter_ ) qMeter_->pushLevel( s, nowMs );
+    return shown;
 }
 
 bool SSMVMixerControl::tkClickToggle( const QString &which, bool on )
@@ -1008,6 +1038,8 @@ QString SSMVMixerControl::describeMeter()
     // Apply the density rules for the CURRENT size before describing them: Qt
     // does not deliver a resizeEvent to a widget that was never shown, so a
     // headless caller's resize() alone would describe the previous layout.
+    // Same reason for the lane sync: a headless head never receives a meterTick.
+    syncMeterLanes();
     updateLayout();
     return qMeter_->describe();
 }

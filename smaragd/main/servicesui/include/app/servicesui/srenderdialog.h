@@ -34,6 +34,7 @@ private slots:
 private:
     void createFormatGroup();
     void createQualityGroup();
+    void createChannelsRow();
     void createExtentGroup();
     void createOutputGroup();
     void updateQualityUI();
@@ -53,6 +54,10 @@ private:
     QSpinBox *wavBitDepthSpinBox_ = nullptr;  // 16, 24, 32
     QSlider *oggQualitySlider_ = nullptr;     // 0-10
     QSpinBox *mp3BitrateSpinBox_ = nullptr;   // 128-320
+
+    // Channel count: a READ-ONLY display of the project's width (proposal 36
+    // B8 decision 3), never a control — see createChannelsRow().
+    QLabel *channelsLabel_ = nullptr;
 
     // Extent selection
     QButtonGroup *extentGroup_ = nullptr;

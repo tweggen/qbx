@@ -83,10 +83,31 @@ bool RenderSession::start(std::shared_ptr<twComponent> synthOutput, const Render
         return false;
     }
 
+    // WIDTH (proposal 36 B5). This used to be `config.channels = 2;` with the
+    // graph's mono page duplicated into both channels. The file now carries the
+    // project's channels: params.channels when a caller pinned one, otherwise —
+    // and normally — the root component's declared width, which SStdMixer takes
+    // from SProject::channels(). Deriving it is what makes AC B5.3 ("a
+    // 6-channel project renders a 6-channel file") true by construction rather
+    // than by a number copied at the UI.
+    {
+        const idx_t graphWidth = synthOutput_->getOutputChannels();
+        unsigned resolved = (params_.channels > 0)
+                              ? (unsigned) params_.channels
+                              : (unsigned) ((graphWidth > 0) ? graphWidth : 1);
+        if (resolved == 0) resolved = 1;
+        renderChannels_ = resolved;
+        if (params_.channels > 0 && (idx_t) params_.channels != graphWidth) {
+            TW_LOGW( "render", "[RenderSession] requested %d channels but the graph declares %d;"
+                               " the file gets %u (narrower channels are clamped, wider ones dropped)",
+                     params_.channels, (int) graphWidth, renderChannels_ );
+        }
+    }
+
     // Open file
     AudioFileConfig config;
     config.sampleRate = sampleRate_;
-    config.channels = 2;  // Stereo output
+    config.channels = renderChannels_;
     config.sampleType = twSampleType::Float32;
 
     if (!writer_->open(params_.outputPath, config)) {
@@ -134,10 +155,6 @@ const char *RenderSession::errorMessage() const {
 }
 
 void RenderSession::renderThreadMain() {
-    const std::size_t RENDER_BUFFER_FRAMES = 2048;
-    const std::size_t RENDER_BUFFER_SAMPLES = RENDER_BUFFER_FRAMES * 2;  // Stereo
-    std::vector<float> buffer(RENDER_BUFFER_SAMPLES);
-
     bool success = true;
     std::string errorMsg;
 
@@ -173,7 +190,9 @@ void RenderSession::renderThreadMain() {
         // value spelled unambiguously.
         const uint64_t PAGE_FRAMES = (uint64_t) twOutputPage::FRAME_CAPACITY;
 
-        std::vector<float> bufL(BLOCK_SIZE), bufR(BLOCK_SIZE);
+        // One interleaved block, sized for the file's width.
+        const std::size_t nCh = (std::size_t) renderChannels_;
+        std::vector<float> block(BLOCK_SIZE * nCh);
         std::shared_ptr<twOutputPage> prevPage;
 
         // Proposal 19 dataflow stage 4: as a watermark consumer the render
@@ -243,24 +262,24 @@ void RenderSession::renderThreadMain() {
                 break;
             }
 
-            // Extract L/R samples from frozen page
-            // Page stores all channels interleaved or per-output
-            // For now, treat as mono per output; scale to stereo by duplicating
-            // Channel 0 explicitly: the page's buffer is private now, and the
-            // sink is still mono (B5 is what makes this a loop over channels).
-            const sample_t *pageData = frozenPage->channelPtr(0);
-            for (std::size_t i = 0; i < toRender; ++i) {
-                float sample = pageData[pageOffset + i];
-                bufL[i] = sample;
-                bufR[i] = sample;  // Duplicate to stereo (temporary; proper multi-channel TBD)
+            // INTERLEAVE FROM ONE WIDE PAGE (proposal 36 B5). This used to read
+            // channelPtr(0) and write it to both of two buffers — "Duplicate to
+            // stereo (temporary; proper multi-channel TBD)". The page is planar
+            // and carries its own width, so file channel c is page channel
+            // twPageClampChannel(page, c): the §4.4 read clamp, which serves a
+            // narrower page (a mono project rendered to a pinned wider file) on
+            // every file channel and never reads out of bounds.
+            for (std::size_t c = 0; c < nCh; ++c) {
+                const idx_t src = twPageClampChannel(*frozenPage, (idx_t) c);
+                const sample_t *pageData = frozenPage->channelPtr(src) + pageOffset;
+                for (std::size_t i = 0; i < toRender; ++i) {
+                    block[i * nCh + c] = pageData[i];
+                }
             }
 
-            // Write to sink
-            for (std::size_t i = 0; i < toRender; ++i) {
-                AudioFrame frame(bufL[i], bufR[i], sampleRate_);
-                fileSink_->writeFrame(frame);
-                samplesWrittenVal++;
-            }
+            // Write to sink — one block, not one call per frame.
+            fileSink_->writeFrames(block.data(), toRender, renderChannels_);
+            samplesWrittenVal += toRender;
 
             samplesWritten_.store(samplesWrittenVal);
             if (onPosition) onPosition(startOffsetSamples_ + samplesWrittenVal);

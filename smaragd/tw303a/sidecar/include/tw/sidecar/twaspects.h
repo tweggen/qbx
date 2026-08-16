@@ -36,11 +36,21 @@ namespace twAspect {
  * cross-check: a stored preview is only adopted when it matches the
  * object's current duration exactly. Header sourceRate likewise carries the
  * PROJECT rate for this aspect — every geometry field here is expressed at
- * the rate the preview was computed at. Header channels = 1 (the straight
- * preview folds channel 0 only).
+ * the rate the preview was computed at.
+ *
+ * Header channels = the SOURCE's channel count, and it is an adoption
+ * cross-check: the payload is ONE envelope folded over ALL of them (the
+ * smallest min and the largest max across channels), so the same material
+ * read at a different width is a different preview and must not be adopted.
  */
 constexpr const char *PreviewPeaks        = "preview.peaks";
-constexpr uint32_t    PreviewPeaksVersion = 1;
+constexpr uint32_t    PreviewPeaksVersion = 2;
+// v2 (proposal 36 B8): the probe envelope folds EVERY channel, not channel 0
+// alone, and header channels carries the real source width instead of a
+// hard-coded 1. A v1 file was written under the channel-0 rule and its bytes
+// are only accidentally right (they agree whenever channel 0 dominates, which
+// every fixture in this repo happens to satisfy) — so it orphans on sight
+// rather than being adopted. The record layout is unchanged from v1.
 
 /**
  * "onsets" — transient/onset positions (proposal 27 M1), the prerequisite

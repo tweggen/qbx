@@ -76,6 +76,30 @@ Invariants:
    twComponent::seek()'s detector was installed for), from the paint path.
    One probe means the same thing either way: the signed min/max envelope
    of its previewSkip_ window, scaled to [-128,127].
+9a. **A preview probe folds EVERY CHANNEL** (proposal 36 B8): the smallest min
+   and the largest max across the channels, i.e. the union of the per-channel
+   envelopes. It was channel 0 alone, which was harmless while nothing above
+   width 1 reached a sink and is a lie now — a clip whose loud material sits on
+   channel 1 would draw as the quiet one. The CONTAINER branch folds the
+   channels OF THE PAGE IN HAND (§4.4), never a declared width, because an
+   insert-less twPluginChain forwards its input page verbatim and its silence
+   pages are width 1. The waveform stays ONE LANE and that is a decision:
+   preview_t, swaveformdraw, SCut::getPreview and every inline renderer are
+   single-envelope by type, and an arranger clip lane has no room to stack six
+   waveforms. Per-channel LEVEL is the meter's job (SLevelMeter). The fold is
+   key material: twAspect::PreviewPeaksVersion is 2, so a v1 sidecar cannot be
+   adopted under the new rule.
+9b. **A Preview ASPECT PAGE is not a probe array.** CapturePageData::data holds
+   float samples at ~1 kHz written by CaptureRevalidator::dispatchRecomputation,
+   with no probe count, hop or duration attached; its only consumer
+   (SCut::getPreview) uses the page's EXISTENCE as a readiness signal and never
+   reads the payload. SPlainWave::getPreview used to reinterpret_cast it to
+   preview_t* — proposal 36 trap 26, settled at B8. It was UNREACHABLE (an
+   SObject's currentPage_ is written only by the revalidator, and only SCut ever
+   calls scheduleRevalidation), so removing it changed no behaviour; it was not
+   "fixed", because a page with no geometry cannot answer a
+   (start, length, nProbes) question whatever its element type.
+10. There is ONE notion of how long the project is.
 10. `SObject::contentKind()` says what an object's material IS (Audio or
    Event, proposal 37 D8b); the default is Audio, because everything that
    existed before event clips is. It is NOT a track kind — a track holds
@@ -147,8 +171,11 @@ Invariants:
    hit its shrink Q_ASSERT_X( false, ... ). B4 retired both the per-bus
    instantiation and the counter: a width change creates and destroys nothing,
    so the shrink is ordinary. Nothing connects it to tw303aEnvironment, which
-   still has no channel state. The SINK is still mono until B5, so a width
-   change is inaudible in a rendered FILE — visible in the pages.
+   still has no channel state. Since B5 the width also reaches the FILE and the
+   DEVICE: `RenderParams::channels` derives from the project (via the root's
+   declared width), so a channels='6' project renders a 6-channel file
+   (`qxa.mc_six_channel`). B4's note here said a width change was inaudible;
+   that was true for B4 and is not true now.
 
 How to test: full qxa suite; action_roundtrip_test for serialization
 adjacency; filepathref_test (ctest) for the three path-storage rules and

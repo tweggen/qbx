@@ -156,6 +156,23 @@ Invariants:
   two in a row examine the same action). Counting the whole run instead would
   make "twice" depend on everything that came before.
 
+  assert-meter's LANE assertions (proposal 36 B8) are only meaningful in PAIRS.
+  `expectLanes` pins the WIDTH and `laneA`/`laneB`/`minLaneRmsDelta` pin that
+  the lanes hold DIFFERENT audio; either alone is passable by the wrong thing —
+  a duplicated-mono meter satisfies every per-lane level bound, and a page that
+  quietly stayed mono satisfies every bound on lane 0. Never make the delta
+  claim over test_sawtooth.wav, whose two channels are byte-identical (proposal
+  36 trap 22): meter_levels.qxa uses it as the negative CONTROL (two lanes,
+  delta rejected) beside test_stereo.wav's 6 dB ladder. An out-of-range lane is
+  an ERROR, never a silent rms 0.
+
+  grabHead paints the REAL track head at a named lane height and column width.
+  It pushes the measured level into the head's meter DIRECTLY
+  (SSMVMixerControl::tkPushMeterLevel) rather than emitting a tick: a head built
+  for a grab is never SHOWN, so onMeterTick's isVisible() gate — the first layer
+  of the repaint-storm defence — would make every tick a no-op and the artifact
+  would picture the layout with the thing under test sitting at the floor.
+
   dump-playback-capture is the only verb that asserts on the PLAYBACK path.
   Everything else in this suite reads a RENDER, which is a different consumer
   of the same graph, so nothing about AudioEngine::pullBlock, the readahead

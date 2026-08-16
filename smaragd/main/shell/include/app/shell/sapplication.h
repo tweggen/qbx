@@ -99,6 +99,10 @@ public:
     // Consequence of reading the graph rather than the device: an underrun reads
     // as normal level, not as a dip.
     bool masterLevel( offset_t pos, twLevelSample &out );
+    // N-lane form (proposal 36 B8) plus the width to ask for: the mixer root's
+    // declared channel count, i.e. the project's.
+    bool masterLevel( offset_t pos, twLevelSampleSet &out, int wantLanes );
+    int  masterChannels();
     // Locator position captured when the current recording began. The view uses
     // it (with the live locator) to draw the growing in-progress capture region.
     offset_t recordingStartFrame() const { return recordingStartFrame_; }

@@ -5,6 +5,7 @@
 #include <qmainwindow.h>
 #include <qmenubar.h>
 #include "tw/graph/tw303aenv.h"   // offset_t (used in the signatures below)
+#include "tw/metering/tw_level_scan.h"   // twLevelSampleSet (grabLevelMeter)
 #include <QString>
 #include <QVariant>
 #include <QDoubleSpinBox>
@@ -66,7 +67,16 @@ public:
     // trackPath is an index-path from the root mixer ("2", "0,1"), so a track
     // NESTED inside a folder can be described. A one-element path is exactly the
     // old top-level index, which is what keeps existing callers spelling-compatible.
-    QString describeTrackMeter( const QString &trackPath, int headHeight );
+    // headWidth <= 0 uses SMV_TRACK_CTRL_WIDTH, the minimal column. Proposal 36
+    // B8 needs BOTH widths: the head reshapes on width as well as height
+    // (wideMode_ lays the fader and the meter down), so a density claim made at
+    // one column width is half a claim.
+    QString describeTrackMeter( const QString &trackPath, int headHeight,
+                                int headWidth = 0 );
+    // TEST ENTRY POINT: paint that same head into a PNG (AC B8.4's evidence).
+    bool grabTrackHead( const QString &trackPath, const QString &path,
+                        int headHeight, int headWidth,
+                        const twLevelSampleSet &level );
     // Testkit: drive the arranger's Group/Ungroup gestures on a lane addressed
     // by index-path, so a NESTED lane can be exercised.
     bool groupTrackGesture( const QString &trackPath, bool ungroup );
@@ -88,7 +98,9 @@ public:
     // The ONLY coverage of SLevelMeter::paintEvent — the describe() assertions
     // check the geometry maths, but nothing else proves the widget draws. Returns
     // false if the grab or the save fails.
-    bool grabLevelMeter( const QString &path, double peak, double rms,
+    // The set form paints one bar PER LANE (proposal 36 B8), so a stereo grab
+    // shows two bars at their own heights rather than one folded one.
+    bool grabLevelMeter( const QString &path, const twLevelSampleSet &s,
                          bool vertical, int w, int h );
 
     // TEST ENTRY POINT (proposal 37 P4): build the REAL track head at

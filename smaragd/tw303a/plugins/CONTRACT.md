@@ -693,18 +693,23 @@ re-saves its descriptor and state chunk verbatim) and
 qxa.render_sawtooth_with_effects (chain in the signal path); the plugin browser
 lists exactly the registry contents.
 
+THE SINK IS NO LONGER MONO (proposal 36 B5), and the entry that stood here for
+five milestones is retired. It said: the graph carries N channels but both
+output stages collapse to one page and duplicate it, so channel 1's audio cannot
+reach a file or a device, and therefore a rendered WAV's two channels are equal
+BY CONSTRUCTION and `L != R` must never be asserted on a file. All of that is
+now false. RenderSession interleaves from one wide root page into a file of the
+project's width, and AudioEngine::pullBlock fills N planar buffers.
+
+  plugin_stereo_chain.qxa consequently bounds CHANNEL 1 OF THE FILE at
+  [0.030, 0.037] -- 0.5x, the skew fixture's own second output -- against
+  channel 0's 1.5x, which is the assertion that case documented as its future
+  from M3 onward. It also keeps B4's assert-track-channels assertion at the
+  track's root component: ch0/ch1 = exactly 3, the same ratio one stage
+  earlier. Both are worth having; a file assertion and a page assertion fail
+  for different reasons.
+
 Known debt:
-- THE SINK IS STILL MONO, and that is not the plugin layer's doing. The graph
-  carries N channels correctly end to end -- since proposal 36 B4 in ONE page
-  per component rather than N parallel wires -- but both output stages collapse
-  to one page and duplicate it: RenderSession ("bufR[i] = sample;  // Duplicate
-  to stereo (temporary; proper multi-channel TBD)") and AudioEngine's page pull.
-  Channel 1's audio therefore cannot reach a file or a device yet; that is
-  proposal 36 B5. plugin_stereo_chain.qxa still bounds the FILE with a fixture
-  whose channel 0 depends on channel 1's INPUT (which proves input 1 is wired),
-  and since B4 it ALSO asserts the distinctness directly at the track's root
-  component with assert-track-channels -- measured ch0/ch1 = exactly 3, the
-  skew fixture's own ratio.
 - twPluginInsert::calcOutputTo() -- the streaming pull -- can feed the plugin
   only CHANNEL 0 of its input, because a plug pull is mono by construction
   (§4.4 rule 1) and an insert has one plug. Before B4 it had one plug per bus
@@ -759,7 +764,9 @@ Known debt:
   registered, and the `au_*.qxa` cases are registered macOS-only. Never assert a
   byte-`cmp` or a tight RMS on a stock AU — its DSP varies by OS version; use a
   QUALITATIVE RMS discriminator (au_effect_audible drives AULowpass to near-total
-  attenuation) or a serialization round-trip, never `L != R`.
+  attenuation) or a serialization round-trip. (`L != R` on a file is legitimate
+  since proposal 36 B5, but it says nothing about a stock AU's DSP, which is what
+  this bullet is about.)
 - The scan is all-or-nothing per run: there is no incremental "this directory
   changed" trigger and no filesystem watcher, so picking up a plugin installed
   while the app is running needs the Options page's Rescan (or a restart).

@@ -76,7 +76,29 @@ Invariants:
    comparison against what was last PAINTED (not last computed), sub-rect
    update(), and zero work at all when hidden. 30 heads x 30 Hz is otherwise a
    repaint storm, and a 20 dB/s decay moves a 48 px bar by well under a pixel
-   per tick.
+   per tick. The sub-rect path is kept for the ONE-LANE case specifically (every
+   head on a mono or stereo project); a multi-lane meter still tests before
+   repainting, but repaints the widget, because the lanes move on both axes and
+   a union of per-lane rects would buy nothing on the handful that exist.
+
+11a. **How many lanes a meter shows is the MOUNT's decision** (proposal 36 B8),
+   and `SLevelMeter` implements both answers rather than choosing:
+   - The **track head** and the **transport master meter** show
+     `min(width, SLevelMeter::MONITOR_LANES)` = at most TWO, dividing a fixed
+     8 px `BAR_THICKNESS` among them. This follows the device rule twSpeaker
+     states (`L = ch0; R = (width >= 2) ? ch1 : ch0`, the rest computed in full
+     and dropped at the device): a 120 px control column has ~13 px of slack
+     (proposal 34's measurement), six lanes in it would be 1 px each, and
+     capping at the pair you can actually HEAR is the one reduction the product
+     already commits to.
+   - The **Track Detail dock** shows EVERY channel and grows its short axis to
+     do it (`setGrowWithLanes`). It is the answer to "where do I see channel 4".
+   The cap is ANNOUNCED, never silent: `describe()` reports `lanes` and `width`
+   as separate fields, and the tooltip names the project's width and points at
+   the dock. A user seeing two bars on a six-channel project can find out why.
+   The width comes from the TAP's `getOutputChannels()`, not from `SProject`, so
+   the meter and the audio read one number — the same number §4.5's
+   width-mismatch rule compares a cached page against.
 12. **A track-level gesture acts on the SELECTION when it is aimed into it,
    and on the clicked track alone otherwise.** That is the single rule behind
    multi-track mute/solo/arm, the structural operations (remove / indent /

@@ -80,6 +80,30 @@ Invariants:
    of the earlier part is still reported, and a second page lookup per tick is not
    worth it.
 
+10. **A page whose `channels()` no longer matches its producer's declared width
+    is a MISS** (proposal 36 §4.5), on every rung of the ladder. Rungs 2-4 all
+    serve deliberately STALE pages, and a page frozen before a project width
+    change is not older audio — it is a different geometry, and reading
+    `channelPtr(1)` of a one-channel page is an out-of-bounds read. A miss decays
+    the meter, which is the right reading for a position being re-frozen.
+
+11. **A LANE IS A CHANNEL OF THE PAGE IN HAND** (proposal 36 §4.4, B8). The
+    N-lane `advanceTo` reports `min(wantLanes, page->channels(), MAX_LANES)`
+    lanes — never the tap's declared width, because an insert-less
+    `twPluginChain` forwards its input page verbatim and its silence pages are
+    default-constructed width 1, so a caller asking for six lanes can legitimately
+    be handed one. Lanes the page does not carry stay `frames == 0`, i.e. "no
+    measurement" (inv. 6), never silence-at-0. A caller wanting a stable lane
+    count clamps the meter it draws, not this.
+
+12. **The scalar and N-lane `advanceTo` are ONE implementation.** The scalar form
+    delegates with `wantLanes == 1`, so the window arithmetic, the acceptance
+    ladder and the clamps exist once and a scalar reading is exactly lane 0.
+    `twLevelSample` and `twScanSpan` stay scalar BY TYPE — a lane *is* one span,
+    and a `twLevelSampleSet` is N of them. Nothing below the set (the scan, the
+    ballistics) knows that channels exist, which is why inv. 5's frame-rate
+    independence is a per-lane property for free.
+
 Deliberately NOT done: `twRenderAspect::twAspectMetadata` ("Duration, peak
 levels", `tw/pages/tw_output_page.h`) is left untouched and still unclaimed.
 `twComponent::freezePage` already stores `validAspects = twAspectAll`
@@ -96,7 +120,15 @@ is `qxa.meter_levels`, which asserts against the ramped-sawtooth fixture's known
 per-second RMS.
 
 Known debt:
-- Mono only. `twComponent::freezePage_nolock` renders `idx = 0`, and `SStdMixer`
-  runs one bus, so there is no second channel to meter yet. When the mixer grows
-  to two busses a stereo meter is two probes; nothing here needs to change.
+- ~~Mono only.~~ **Closed by proposal 36 B8.** The prediction recorded here
+  ("a stereo meter is two probes") was wrong in a useful way: it is ONE probe
+  reporting N lanes, because a page is one object carrying every channel and two
+  probes would have scanned it twice and resolved it twice. Invariants 11-12.
+- **`MAX_LANES` is 8**, tracking the widest project M1 accepts (1/2/4/6/8). It is
+  a fixed array in `twLevelSampleSet` on purpose: the set is built on the UI
+  thread every 33 ms per meter, and a heap allocation there is the thing that
+  would show up.
 - No K-weighted / LUFS loudness, only sample peak and RMS.
+- Still **post-fader, post-FX, pre-summing** only — the tap is a track's root
+  `twRewire`, the one per-track component that caches pages. A pre-fader meter
+  needs new engine work, not a new lane.

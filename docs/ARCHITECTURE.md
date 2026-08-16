@@ -33,7 +33,7 @@ it has no place in the dataflow DAG at all — and it must stay core-only becaus
 
 | Module | One-liner | Contract |
 |---|---|---|
-| tw/core | value types, format, fraction, AudioFrame | tw303a/core/CONTRACT.md |
+| tw/core | value types, format, fraction, exact rationals, TwLog | tw303a/core/CONTRACT.md |
 | tw/pages | frozen pages, IOVector, page pool | tw303a/pages/CONTRACT.md |
 | tw/graph | **the component contract**, latches, twView, env | tw303a/graph/CONTRACT.md |
 | tw/sources | sample data, readers, grain, resampling | tw303a/sources/CONTRACT.md |

@@ -9,6 +9,7 @@
 #include <QTimer>
 
 #include "tw/core/twfraction.h"
+#include "tw/core/twlog.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/sources/twrandomsource.h"
 #include "tw/sources/twsamplereader.h"
@@ -367,6 +368,20 @@ void SCut::buildCapture_()
     std::vector<sample_t> buf;
     length_t captureLen = n;
 
+    // THE CAPTURE'S WIDTH (proposal 36 B7). A twCapturingSource has been able to
+    // hold N planar channels since proposal 07 — every caller just asked for 1.
+    // From here on a capture is exactly as wide as the thing it captures, and
+    // the width is decided per branch below (a container's declared width; a
+    // grain source's source width). It is NOT the project's width: a capture of
+    // a mono file is mono, and twSampleReader/twTrackMix already clamp a narrow
+    // producer onto a wider consumer (§4.4).
+    //
+    // Nothing here touches CapturePagePool. That pool's element is
+    // CapturePageData — a different type on the preview/metadata ASPECT path,
+    // carrying a 1 kHz preview waveform rather than audio channels — and it does
+    // not widen; see the note in the header and AC B7.4.
+    idx_t captureChannels = 1;
+
     if( isContainerBacked ) {
         // Container-backed: Phase 3 - use freezePage for page-based rendering
         // Instead of recursive offline rendering (renderObjectInto), call freezePage
@@ -380,7 +395,17 @@ void SCut::buildCapture_()
         // under the component's own cursorMutex_.
         std::shared_ptr<twComponent> rootComp = c.getRootComponent();
 
-        buf.resize( (size_t) n, 0.0f );
+        // The container's DECLARED width is what the pages it is about to freeze
+        // will carry (twComponent::freezePage allocates at getOutputChannels()),
+        // and it is the only width available before the first page exists. Each
+        // page is still read through the §4.4 clamp below, so a page that turns
+        // out narrower than this is copied rather than trusted.
+        if( rootComp ) {
+            idx_t declared = rootComp->getOutputChannels();
+            if( declared > 1 ) captureChannels = declared;
+        }
+
+        buf.resize( (size_t) captureChannels * (size_t) n, 0.0f );
 
         // Freeze the component's output to pages and copy samples to buffer
         // Page at a time to avoid huge allocations.
@@ -405,14 +430,20 @@ void SCut::buildCapture_()
                 break;
             }
 
-            // Copy frozen page samples to output buffer
-            // Channel 0: the capture this fills is built one channel wide
-            // (twCapturingSource(..., 1, ...)) -- a capture-backed clip keeping
-            // its channels is B7.
+            // Copy EVERY channel of the frozen page into its own plane of the
+            // capture. The read is clamped against the page in hand (§4.4), not
+            // against the declared width: a container whose root re-declared a
+            // wider output between the resize above and this page would
+            // otherwise read past the page's last channel.
             size_t samplesToCopy = std::min((size_t)frozenPage->validFrames, remainingSamples);
-            const sample_t *pageData = frozenPage->channelPtr( 0 );
-            for( size_t i = 0; i < samplesToCopy && i < frozenPage->channelFrames(); ++i ) {
-                buf[bufOffset + i] = pageData[i];
+            const size_t copyN = std::min( samplesToCopy, frozenPage->channelFrames() );
+            for( idx_t ch = 0; ch < captureChannels; ++ch ) {
+                const sample_t *pageData =
+                    frozenPage->channelPtr( twPageClampChannel( *frozenPage, ch ) );
+                sample_t *plane = buf.data() + (size_t) ch * (size_t) n;
+                for( size_t i = 0; i < copyN; ++i ) {
+                    plane[bufOffset + i] = pageData[i];
+                }
             }
 
             bufOffset += samplesToCopy;
@@ -438,6 +469,21 @@ void SCut::buildCapture_()
         auto grainSource = std::make_shared<twGrainSource>( *rs, snap.grainParams );
         length_t grainedLen = grainSource->length();
 
+        // A grain source is as wide as the file under it (twGrainSource copies
+        // src.channels()), and the width is bounded by that file — never by the
+        // project's, which is why this plane count cannot run away with width.
+        // NOTE this branch is the PREVIEW capture: rebuildReader calls
+        // buildCapture_ only when there is no random source, so a sample-backed
+        // stretched/pitched clip's PLAYBACK goes straight through twGrainSource
+        // and a plain twSampleReader (wide since B3) and never reads this
+        // buffer. It is widened anyway so that "a capture carries its source's
+        // channels" holds without an exception nobody would remember, and so
+        // that B8 finds a wide preview source rather than a re-narrowing.
+        {
+            idx_t gch = grainSource->channels();
+            if( gch > 1 ) captureChannels = gch;
+        }
+
         // startOffset already lives in the grain OUTPUT (warped) domain, the
         // domain the grain source is addressed in — unwrap at the seam. A
         // negative slip anchor (dragging the content start before 0) makes this
@@ -459,9 +505,17 @@ void SCut::buildCapture_()
         length_t toRead = wantFrames > availFromOffset ? availFromOffset : wantFrames;
         if( toRead < 0 ) toRead = 0;
 
-        buf.resize( (size_t) toRead, 0.0f );
+        buf.resize( (size_t) captureChannels * (size_t) toRead, 0.0f );
         if( toRead > 0 ) {
-            grainSource->read( grainOffset, buf.data(), toRead, 0 );
+            // One read per plane at the SAME offset. twGrainSource::read is
+            // random-access and takes the channel as an argument, so there is no
+            // cursor to displace between the planes — the per-channel loop that
+            // is forbidden in a component's render (§4.3) is exactly right here.
+            for( idx_t ch = 0; ch < captureChannels; ++ch ) {
+                grainSource->read( grainOffset,
+                                   buf.data() + (size_t) ch * (size_t) toRead,
+                                   toRead, ch );
+            }
         }
         captureLen = toRead;
     }
@@ -469,7 +523,17 @@ void SCut::buildCapture_()
     {
         // Publish under the object mutex: readers (getPreview's null check,
         // invalidateCapture's reset) synchronize on the same lock.
-        auto newCapture = std::make_shared<twCapturingSource>( std::move( buf ), captureLen, 1, env.getSRate() );
+        // One line per capture built, because a capture is the one allocation in
+        // the engine that multiplies by channel width and there was previously
+        // no way to see one being made (proposal 36 B7 / AC B7.4). TW_LOG, not
+        // qDebug: this runs on a revalidator worker, where Qt calls are banned.
+        TW_LOGD( "cut", "buildCapture_: %s capture channels=%d frames=%lld bytes=%lld",
+                 isContainerBacked ? "container" : "grained",
+                 (int) captureChannels, (long long) captureLen,
+                 (long long)( (size_t) captureChannels * (size_t) captureLen
+                              * sizeof( sample_t ) ) );
+        auto newCapture = std::make_shared<twCapturingSource>(
+            std::move( buf ), captureLen, captureChannels, env.getSRate() );
         std::lock_guard<std::mutex> lock( mutex() );
         capture_ = newCapture;
     }
@@ -556,15 +620,24 @@ bool SCut::ensureCapturePeaks()
     sample_t *buf = (sample_t *) ::malloc( skip * sizeof( sample_t ) );
     if( !buf ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; return false; }
 
+    // ALL CHANNELS folded into one signed envelope (proposal 36 B8), matching
+    // SObject::straightCalcPreviewData: the smallest min and the largest max
+    // over every channel of the capture. A capture has been N channels wide
+    // since B7, and reading channel 0 alone would draw the wrong waveform for
+    // any clip whose loud material is not on channel 0.
+    const idx_t nCh = cap->channels();
     for( offset_t i = 0; i < (offset_t) len; i += skip ) {
         offset_t chunk = ( i + skip <= (offset_t) len ) ? skip : ( (offset_t) len - i );
-        cap->read( i, buf, chunk, 0 );
         sample_t mn = SAMPLE_NORM_MAX, mx = SAMPLE_NORM_MIN;
-        for( offset_t j = 0; j < chunk; ++j ) {
-            sample_t a = buf[j];
-            if( a < mn ) mn = a;
-            if( a > mx ) mx = a;
+        for( idx_t c = 0; c < nCh; ++c ) {
+            cap->read( i, buf, chunk, c );
+            for( offset_t j = 0; j < chunk; ++j ) {
+                sample_t a = buf[j];
+                if( a < mn ) mn = a;
+                if( a > mx ) mx = a;
+            }
         }
+        if( nCh <= 0 ) { mn = 0.f; mx = 0.f; }
         // Signed envelope, matching SObject::straightCalcPreviewData()'s
         // convention: .max is the upper (positive) edge, .min the lower
         // (negative) edge, each in [-128,127]. (Clamping to [0,127] here was the

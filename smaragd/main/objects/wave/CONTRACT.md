@@ -17,8 +17,18 @@ Invariants:
    own readers (never share the twWavInput cursor).
 3. setWave() registers with the project's extern-file list; the destructor
    deregisters via its OWN project (not the app's current one).
-4. Preview goes through the page cache with live fallback
-   (getStraightPreview) — never block painting on revalidation.
+4. Preview is getStraightPreview (sidecar-backed), and its probes fold EVERY
+   CHANNEL of the source — the union of the per-channel signed envelopes
+   (proposal 36 B8; app/model/CONTRACT.md inv. 9a). fetchPreviewSidecar
+   cross-checks the stored header's `channels` against the source's, and
+   twAspect::PreviewPeaksVersion is 2, so a v1 file (written under the
+   channel-0 rule) orphans rather than being adopted.
+   It does NOT go through the aspect page cache any more, and never did in
+   practice: the old page branch reinterpret_cast a CapturePageData's FLOAT
+   payload to preview_t* (proposal 36 trap 26) and was unreachable, because
+   only SCut ever calls scheduleRevalidation so a wave's currentPage_ is
+   always null. Removing it was behaviour-preserving; "fixing" the cast would
+   not have been, since that page carries no probe geometry to fix it against.
 5. fileName_ is ABSOLUTE; only the serializer sees the portable spelling.
    serializeSelfAttributes() runs SFilePathRef::toStored() against the
    project's own path, and instantiateFromDomElement() runs fromStored()

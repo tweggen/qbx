@@ -64,6 +64,14 @@ SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
 
     mainLayout->addSpacing(12);
 
+    // Channels (proposal 36 B8 decision 3): a READ-ONLY DISPLAY of the width
+    // the file will have, never a control. See getRenderParams() for why.
+    createChannelsRow();
+    mainLayout->addWidget(new QLabel("Channels:"));
+    mainLayout->addWidget(channelsLabel_);
+
+    mainLayout->addSpacing(12);
+
     // Extent group
     createExtentGroup();
     mainLayout->addWidget(new QLabel("Render extent:"));
@@ -160,6 +168,27 @@ void SRenderDialog::createQualityGroup() {
     mp3BitrateSpinBox_->setSingleStep(16);
     mp3BitrateSpinBox_->setValue(192);
     mp3BitrateSpinBox_->setSuffix(" kbps");
+}
+
+// Proposal 36 B8 decision 3 — the render dialog DISPLAYS the project's channel
+// count; it does not override it. The reasoning is in getRenderParams().
+void SRenderDialog::createChannelsRow() {
+    const int n = project_ ? project_->channels() : 0;
+    static const char *kNames[] = { "", "mono", "stereo", "", "4 channels",
+                                    "", "6 channels", "", "8 channels" };
+    const QString name = ( n >= 1 && n <= 8 && *kNames[n] )
+                             ? QString( " (%1)" ).arg( kNames[n] )
+                             : QString();
+    channelsLabel_ = new QLabel(
+        n > 0 ? QString( "%1%2 — from the project" ).arg( n ).arg( name )
+              : QString( "from the project" ) );
+    channelsLabel_->setToolTip(
+        "The rendered file has the project's channel count. There is no\n"
+        "per-render override: reducing 6 channels to 2 needs channel roles and\n"
+        "a fold law, which this release does not have — the monitor path's\n"
+        "\"first two channels\" rule is a listening compromise, not something to\n"
+        "silently apply to a delivered file.\n"
+        "Change the width with the set-project-channels action." );
 }
 
 void SRenderDialog::createExtentGroup() {
@@ -265,6 +294,27 @@ bool SRenderDialog::validateInputs() {
 
 audio::RenderParams SRenderDialog::getRenderParams() const {
     audio::RenderParams params;
+
+    // Channels come from the PROJECT, not from this dialog. B8 exposed the
+    // number (createChannelsRow) and DELIBERATELY exposed it read-only —
+    // decision 3 of the milestone, recorded here because "display or override"
+    // is exactly the kind of thing that must not be discovered after the fact:
+    //
+    //   * An override is a real feature with real semantics, and the semantics
+    //     are the part that does not exist. Rendering a 6-channel project to 2
+    //     needs channel roles (L/R/C/LFE/Ls/Rs) and a fold law, which proposal
+    //     36 §8 names as a non-goal.
+    //   * The obvious candidate reduction — the device rule, "the first two
+    //     channels, the rest dropped" — is defensible for MONITORING, where the
+    //     user still has the full render, and indefensible for a delivered
+    //     FILE, where it silently throws four channels away.
+    //   * An override upward would have to invent channels the graph never
+    //     produced.
+    //
+    // So the width has ONE authority, the project, and RenderParams::channels
+    // keeps meaning exactly what B5 built: a number, or 0 for "ask the graph"
+    // when there is no project.
+    params.channels = project_ ? project_->channels() : 0;
 
     // Format
     if (wavRadio_->isChecked()) {

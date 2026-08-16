@@ -50,6 +50,18 @@ std::atomic<uint64_t> &poolBytes()
     return v;
 }
 
+std::atomic<uint64_t> &captureCount()
+{
+    static std::atomic<uint64_t> v{ 0 };
+    return v;
+}
+
+std::atomic<uint64_t> &captureBytes()
+{
+    static std::atomic<uint64_t> v{ 0 };
+    return v;
+}
+
 }  // namespace
 
 void PageAccounting::onPageAllocated( size_t sampleBytes )
@@ -112,6 +124,26 @@ PageMemoryStats PageAccounting::poolReserved()
     PageMemoryStats s;
     s.pages = poolPages().load( std::memory_order_relaxed );
     s.bytes = poolBytes().load( std::memory_order_relaxed );
+    return s;
+}
+
+void PageAccounting::onCaptureAllocated( size_t bytes )
+{
+    captureCount().fetch_add( 1, std::memory_order_relaxed );
+    captureBytes().fetch_add( (uint64_t) bytes, std::memory_order_relaxed );
+}
+
+void PageAccounting::onCaptureReleased( size_t bytes )
+{
+    captureCount().fetch_sub( 1, std::memory_order_relaxed );
+    captureBytes().fetch_sub( (uint64_t) bytes, std::memory_order_relaxed );
+}
+
+PageMemoryStats PageAccounting::capturesResident()
+{
+    PageMemoryStats s;
+    s.pages = captureCount().load( std::memory_order_relaxed );
+    s.bytes = captureBytes().load( std::memory_order_relaxed );
     return s;
 }
 

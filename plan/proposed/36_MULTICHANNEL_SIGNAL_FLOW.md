@@ -222,10 +222,27 @@ process by ~40×. Two consequences this proposal must carry: **(a)** `releaseOld
 **has no caller anywhere in the tree**, so component page caches are pruned only
 by invalidation and teardown and `outputPages_` grows unbounded across a session
 — at width 8 each retained page is 2 MiB, so what is untidy today is a real
-problem at width 8; **(b)** `CapturePageData` (the pool's element, and the
-preview/capture page type) is a *different* type from `twOutputPage`, and B7 must
-decide explicitly whether it widens too — an eager 528 MiB pool multiplied by
-width is not something to discover late.
+problem at width 8; **(b)** ~~`CapturePageData` (the pool's element, and the
+preview/capture page type) is a different type from `twOutputPage`, and B7 must
+decide whether it widens too — an eager 528 MiB pool multiplied by width is not
+something to discover late.~~
+
+**(b) was aimed at the wrong object, and B7 settled it: `CapturePageData` does
+NOT widen, and the pool is untouched.** *The pool is not the capture — the name
+is the only thing they share.* `CapturePagePool`'s element is an **aspect page**
+(a 1 kHz preview waveform, or a metadata/export blob), reached through
+`getDataPtr()`, with **no frame, stride or channel anywhere in its type**, and
+nothing on the audio path ever allocates one. Measured: 528 MiB reserved eagerly
+per project, against a **peak occupancy of ONE page** across the whole corpus
+(0.049 % of the reservation), nine at the busiest.
+
+What actually multiplies by width is **`twCapturingSource`'s planar buffer**,
+allocated on demand per clip — the corpus asset capture went 115,200 B → 230,400
+B, exactly ×N. Whether the pool should be smaller or lazier is a real question
+and **not a width question**: 528 MiB for one page in use is as wrong at width 1
+as at width 8, and it is what every `-j` headroom figure in `CLAUDE.md` is
+written against. Left to B9 (see trap 25 for where a width-8 memory problem would
+actually come from).
 
 ### 4.2 A component declares its width
 
@@ -653,7 +670,21 @@ the byte at both ends — with the header and the plain / stretched / pitched /
 container-asset / nested-lane windows byte-identical, and 56 630 of 57 600
 samples within 0.333 LSB of `old·2/3`.*
 
-### B5 — The sink goes wide *(first audible multichannel)*
+### B5 — The sink goes wide ✅ **EXECUTED 2026-08-16** *(first audible multichannel)*
+
+> `AudioFrame` is **deleted** — `float channels[2]` in `tw/core` was the hard
+> stereo cap every sink and the engine saw; `AudioSink` is a block interface now
+> (`writeFrames(interleaved, nFrames, channels)`), so width travels with the
+> call. `pullBlock` takes N planar buffers with the §4.4 clamp per channel, one
+> resampler per channel; `RenderSession` interleaves from one wide root page.
+>
+> **The device rule (requester decision):** `L = ch0; R = (width >= 2) ? ch1 :
+> ch0` — mono-to-stereo at or below two channels, **first two only** above it,
+> the rest computed and dropped at the device. It is the **device path only**;
+> render and monitor share no code, so a 6-channel project renders six channels
+> *and* monitors in stereo, and neither can move the other. Logged once per
+> width, not per callback; asserted at width 6 → a 6-channel *device* too, which
+> is the assertion that stops a later refactor fanning channel 2 into output 2.
 
 `AudioEngine::pullBlock` takes N buffers; per-channel resamplers; `AudioFrame`'s
 2-cap and `FileSink`'s frame-at-a-time write retired; `RenderSession` interleaves
@@ -672,11 +703,49 @@ clips are explicitly excluded here and covered by B7.
 energies in band.
 **AC B5.4** `dump-playback-capture` shows the same asymmetry as the offline
 render at the same positions.
-**AC B5.5** Mono byte-exactness holds. The `channels=2` golden may change **once**
-here — bus 1 is new audio, not a regression — with the change explained and
-re-frozen.
+**AC B5.5** ~~Mono byte-exactness holds. The `channels=2` golden may change once
+here.~~ **Both goldens change here, and both are licensed** — corrected before B5
+started, because as written this AC contradicted **AC B5.3**: if a 6-channel
+project renders a 6-channel file then `RenderParams.channels` comes from the
+project, and a `channels='1'` project therefore renders a **one-channel** file.
+`mc_golden_mono.wav` is a *two*-channel file today (the sink hardcodes 2 and
+duplicates), so its size roughly halves and byte-exactness is arithmetically
+impossible. Do not preserve it by keeping a mono project's file stereo — that
+would be the sink still lying, which is the whole thing this milestone removes.
 
-### B7 — Container/asset clips and the preview capture keep their channels
+Expected, and each to be **verified rather than assumed**, in B4's manner:
+
+- **`mc_golden_mono.wav`: a SHAPE change.** 2 channels → 1. Assert the new file's
+  channel count and that its samples equal the old file's channel 0 — if the
+  surviving channel is not exactly what channel 0 was, something else moved.
+- **`mc_golden_stereo.wav`: a CONTENT change.** Channel 0 byte-identical to the
+  old file's channel 0; channel 1 becomes real bus-1 audio instead of a duplicate.
+  Report where it first differs and confirm channel 0 did not.
+- Determinism first: render twice into separate output dirs and confirm the two
+  agree **before** freezing either, as B1a and B4 both did.
+
+*(Note the mono golden is being re-frozen a second time — B4 re-froze it for the
+MonoFold correction. Two licensed re-freezes of one file in two milestones is
+exactly why each needs its reason recorded beside the case, not only in a commit
+message.)*
+
+### B7 — Container/asset clips and the preview capture keep their channels ✅ **EXECUTED 2026-08-16** (`ac4824a`)
+
+> `SCut::buildCapture_` had built its `twCapturingSource` with a hard-coded **1
+> channel** since proposal 07 — the last narrowing point in the clip path. Both
+> branches now capture every channel: the container branch clamps against **the
+> page in hand** (§4.4) with width from the container's own
+> `getOutputChannels()`, so a mono container still yields a mono capture; the
+> grained *preview* branch reads one plane per channel at the same offset, which
+> is safe precisely because a grain source is random-access and has no cursor to
+> displace. `twCapturingSource` itself needed **no change** — it has taken
+> `channels` since proposal 07 and its planar arithmetic had simply never been
+> executed above width 1.
+>
+> **AC B7.4 landed on B3's arithmetic target to the byte**: +262,144 B = exactly
+> one 256 KiB channel plane. Eight reader pages, seven already wide, the eighth
+> now wide. The mono project not moving **at all** is the independent signal that
+> nothing else did.
 
 *(Rescoped by B3, which found that sample-backed stretch and pitch never touch
 `buildCapture_` at all — see §2 item 2. What is left here is genuinely
@@ -685,28 +754,107 @@ capture-backed content plus the preview path.)*
 `SCut::buildCapture_` captures N channels; the container/asset render path
 renders per channel.
 
-**AC B7.1** A stereo file stretched 1.25× still has distinct channels at the sink
-(RMS discriminator).
-**AC B7.2** Same for a pitched clip and a container/asset clip.
-**AC B7.3** `grain_*`/`warp_*`/`exact_*` green; mono byte-exact.
+**What is ALREADY true, and must not be re-implemented:** sample-backed stretch
+and pitch went wide in **B3** (§2 item 2), and the sink went wide in **B5**. So
+B7.1 and the pitched half of B7.2 are **regression assertions**, not new work —
+though they are worth writing, because until B5 they could only be asserted at a
+component and now they can be asserted **in the file**. The genuinely new work is
+container/asset-backed clips and the preview capture.
 
-### B8 — Metering, preview, UI stop lying
+**The decision this milestone owns (§4.1).** `CapturePageData` is a *different
+type* from `twOutputPage`, and `SProject` builds a `CapturePagePool` of 2048
+pages — **528 MiB, eagerly, per project**. Multiplying that by width would be
+~4.2 GiB at width 8, which is not a thing to discover after the fact. Decide,
+with measured numbers, whether the capture page widens, whether the pool becomes
+lazy or smaller, or whether capture stays narrow and the width is carried some
+other way. **State the decision and the numbers; do not let it fall out of a
+`* channels` that happens to compile.**
+
+**AC B7.1** *(regression, newly assertable at the sink)* A stereo file stretched
+1.25× still has distinct channels **in the rendered file**.
+**AC B7.2** The same for a pitched clip *(regression)* — **and for a
+container/asset clip**, which is the new one.
+**AC B7.3** `grain_*`/`warp_*`/`exact_*` green; mono byte-exact.
+**AC B7.4** The capture-pool decision is made **with measured numbers**, and the
+corpus's resident page memory is reported before and after. B3 measured the
+corpus at 14.0 MiB with exactly one `twSampleReader` page still mono — the
+container/asset clip's, "B7 expressed as one number". That page going wide is
+this milestone's arithmetic proof; a 4 GiB pool is its failure mode.
+
+### B8 — Metering, preview, UI stop lying ✅ **EXECUTED 2026-08-16**
+
+> **The three decisions, as made.** *(1)* A Preview aspect page holds **float
+> samples decimated to ~1 kHz, channel 0, no geometry attached** — and its float
+> payload has **zero readers in the tree**. The disagreeing reader was proven
+> unreachable twice over (statically: `currentPage_` is only ever written for
+> objects passed to `scheduleRevalidation()`, whose only call sites pass an
+> `SCut`, and an `SPlainWave` is not one; at runtime: an instrumented build
+> recorded **0** calls across four cases). **Deleted, not "fixed"** — even with
+> the right element type it ignored `start`/`length`/`nProbes` against a buffer
+> carrying no probe geometry. The version bump came *afterwards*, in its own
+> commit, and earns itself: preview probes now fold **every** channel (union of
+> the per-channel signed envelopes). The waveform stays one lane deliberately —
+> per-channel *level* is the meter's job. *(2)* **Two lanes on the track head,
+> following the device rule**: capping at the pair you can actually hear keeps
+> the head honest about the monitor path rather than inventing a second reduction
+> for the eye. The **Track Detail dock shows every channel** and grows to do it;
+> the cap is announced (`describe()` reports `lanes=` and `width=` separately,
+> and the tooltip points at the dock). *(3)* The render dialog **displays** the
+> width. An override's semantics are the part that does not exist: 6→2 needs
+> channel roles and a fold law (a §8 non-goal), and "first two, rest dropped" is
+> defensible for monitoring — where the user still has the full render — and
+> indefensible for a delivered file.
 
 N-lane metering (`twLevelSample`/`twScanSpan`/`SLevelMeter` are scalar **by
 type** — a widget and probe change, not config), fitted into the track head's
-density rules (the 120 px column has ~13 px of slack: a second lane is a layout
-decision, not a squeeze); render-dialog channel control; preview per-channel or
-an explicitly documented fold — either way bump `twAspect::PreviewPeaksVersion`,
-because the sidecar key asserts `qi.channels = 1` today and every existing
-sidecar would otherwise mis-hit.
+density rules; render-dialog channel control; preview per-channel or an
+explicitly documented fold — either way bump `twAspect::PreviewPeaksVersion`.
+~~because the sidecar key asserts `qi.channels = 1` today and every existing
+sidecar would otherwise mis-hit~~ — **the mechanism in that sentence is wrong
+(B8):** `channels` is *not* key material (`twSidecarStore` keys on
+contentHash/aspectId/paramsHash and validates aspectVersion), and
+`SPlainWave::fetchPreviewSidecar` did not cross-check it at all. Old sidecars
+would have mis-hit because **nothing checked** — not because the key asserted
+anything. The bump is still required; B8 added the missing cross-check too.
 
+**Three things to settle before writing code, added after B7 handed the first
+one over:**
+
+1. **What IS a preview page?** (trap 26.) `CaptureRevalidator::dispatchRecomputation`
+   writes **float samples** into `CapturePageData::data` and flags `Preview`;
+   `SPlainWave::getPreview` reads that same buffer as `preview_t*` (2-byte
+   signed min/max pairs). One of the two is wrong. Bumping a version on a page
+   whose *contents* are disputed would carve the confusion into the cache key.
+   Settle it with evidence first — including whether it currently produces a
+   visibly wrong waveform, which B7 could not confirm because
+   `getStraightPreview` runs whenever the page is absent.
+2. **How many lanes does a track head show at width > 2?** Six lanes do not fit
+   a 120 px column, so this is a decision, not a layout outcome. There is a
+   precedent to follow or consciously reject: the **device rule** shows the
+   first two channels above stereo. Whatever is chosen, a user must be able to
+   find out *why* they are not seeing six meters.
+3. **Does the render dialog's channel control OVERRIDE the project width, or
+   display it?** An override is a real feature with real semantics — what a
+   6-channel project rendered to 2 channels *is*. If it overrides, define the
+   reduction (the device rule is the obvious candidate); if it displays, say so
+   and leave `RenderParams.channels = 0` meaning "ask the graph", which is what
+   B5 built.
+
+**AC B8.0** Trap 26 is settled: what a preview page contains is stated, the
+disagreement is either fixed or proven harmless with evidence, and the version
+bump happens **after** that — not on top of it.
 **AC B8.1** `metering_test` extended; per-lane ballistics stay frame-rate
-independent.
-**AC B8.2** `meter_levels` asserts a wide project's lanes read *differently*, with
-PNG grabs.
-**AC B8.3** Old sidecars miss rather than mis-read after the version bump.
-**AC B8.4** Track head at 150/100/60/40 px and both column widths renders without
-clipping — grabs attached to the PR.
+independent (one 1 s step == 100 × 10 ms steps, which is why they live on the UI
+thread at all).
+**AC B8.2** `meter_levels` asserts a wide project's lanes read *differently*,
+with PNG grabs. **Use `test_stereo.wav` or `test_channels4.wav`** — never
+`test_sawtooth.wav`, whose channels are byte-identical and therefore cannot gate
+a channel claim (trap 22, the defect that made `channel_assert_dupmono`
+incapable of detecting B5).
+**AC B8.3** Old sidecars **miss** rather than mis-read after the version bump —
+assert the miss, not merely a changed key.
+**AC B8.4** Track head at 150/100/60/40 px and both column widths renders
+without clipping — grabs attached to the PR.
 
 ### B9 — Contracts, cleanup, and the report
 
@@ -880,11 +1028,68 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     green through it. It is also why a memory or page-count number moves at B3
     without anything having gone wrong: the corpus went 12.25 → 14.0 MiB, exactly
     7 of 49 resident pages now being 2 channels wide.
+    **Consequence found at B5:** this is *also* why `channel_assert_dupmono`
+    could never be the B5 signal it was designed as. Its render's channels are
+    equal **after** the sink went wide, for the same reason they are equal in the
+    source. A gate whose fixture cannot distinguish the two states is not a gate
+    for that distinction — it is now a *pair* (sawtooth equal / `test_stereo`
+    different, one project, one render), and only the real thing passes both.
 23. **`twPluginInsert::calcOutputTo` can feed a plugin only channel 0** (found by
     B4). A plug pull is mono by construction and an insert now has one plug, so
     the streaming-pull path cannot present a wide input. **Nothing in the app
     reaches it** — which is the difference between debt and a bug — and it is
     recorded in `plugins/CONTRACT.md` known debt.
+24. **Plugin scanning is CROSS-WORKTREE state, and a rescan can hang the whole
+    suite** (found by B5). `kScannerVersion` lives in the source while
+    `plugincache.json` lives once per USER, so a worktree carrying a bumped
+    version invalidates the cache for every other worktree — which then re-probes
+    every installed plugin on every start. On a machine with real plugins that is
+    slow enough to reach static destruction with the scan thread alive, and
+    `~twPluginRegistry` → `waitForScan()` → `QThread::wait()` then blocks
+    forever: every `--test-case` run passes and **hangs at exit**, dying on
+    CTest's 600 s timeout. Reproduced with none of B5's changes. Same shape as
+    trap 15: an environmental fact that costs whole gate runs and reads as a
+    suite problem. Workaround: point `[plugins] searchPaths` at
+    `smaragd/build/bin` (where the fixtures are). Real fix: unify the version
+    across worktrees, or land the teardown fix — an unmerged
+    `fix/plugin-scan-teardown-hang` branch already exists.
+25. **Where a width-8 memory problem would ACTUALLY come from** (found by B7, and
+    it is not the pool). Two pre-existing multipliers, both of which width scales:
+    a capture is **rebuilt far more often than once and each rebuild is retained**
+    (the corpus's asset capture is built **17 times** in a single golden run, and
+    resident capture count sits at 2-3 rather than 1 because `oldReader_` holds
+    `captureRef`); and captures are **per placement, not shared** — proposal 06
+    §7's content-addressed capture cache does not exist, so ten placements of one
+    asset are ten full captures. At width 8 over a long container that is ~3× an
+    already-×8 buffer. Fix the sharing before blaming the page model.
+26. **A type confusion on the aspect page — unrelated to channels, and squarely in
+    B8's path** (found by B7). `CaptureRevalidator::dispatchRecomputation` writes
+    **float samples** into `CapturePageData::data` and sets
+    `validAspects |= Preview`; `SPlainWave::getPreview` reads that same buffer as
+    `preview_t*` (2-byte signed min/max pairs). **One of the two is wrong about
+    what a preview page contains.** Not confirmed to produce a visibly wrong
+    waveform, because `getStraightPreview` runs whenever the page is absent, which
+    may be always in headless runs. **B8 must settle what a preview page IS before
+    deciding how wide one should be.** **SETTLED AT B8, and "one of the two is
+    wrong" was not the shape of it:** both were internally consistent — *the
+    reader was never a reader*. The producer is right about the payload, the
+    consumer was dead code, and the aspect page's float payload has **zero
+    readers in the tree**. "May be always in headless runs" was also understated:
+    it is always, everywhere, and for a stronger reason than the fallback — a
+    non-`SCut` `SObject` can never own a capture page at all. Headless runs also
+    never paint a clip waveform, so this whole area is **unreachable by the qxa
+    suite**, which is a coverage fact worth knowing.
+28. **`SObject::getCapture` never schedules revalidation** (found by B8; its own
+    TODO says "Phase 5e.5 — unify CaptureRevalidator to work with `SObject*`").
+    That is *why* only an `SCut` can own an aspect page, and that asymmetry is
+    what kept trap 26 latent for as long as it was. **Anyone wiring a second
+    revalidatable object makes it live.** B9 candidate.
+27. **`twCapturingSource`'s six-argument constructor has ZERO callers** (found by
+    B7) — the one already-N-channel capture API, and it is dead. Its body is a
+    per-channel loop that `seekTo`s a cursor-bearing component and pulls
+    `calcOutputTo` once per channel: **exactly the shape §4.3 forbids**. Harmless
+    while dead, a live trap the moment anyone wires it. B9: delete it, or rewrite
+    it around one wide pass.
 
 ## 8. Non-goals (named, so they are not assumed)
 

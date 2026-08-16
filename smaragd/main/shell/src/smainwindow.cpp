@@ -1009,13 +1009,21 @@ SMainWindow::SMainWindow()
     qMasterMeter_->setOrientation( Qt::Horizontal );
     qMasterMeter_->setMinimumWidth( 96 );
     qMasterMeter_->setMaximumWidth( 96 );
-    qMasterMeter_->setToolTip( "Master level — click to clear the clip indicator" );
+    qMasterMeter_->setMeterLabel( QStringLiteral( "Master level" ) );
     qTBTransport_->addWidget( qMasterMeter_ );
     QObject::connect( &SApplication::app(), &SApplication::meterTick, this,
                       [this]( offset_t pos, qint64 nowMs, bool live ) {
                           if( !qMasterMeter_ || !qMasterMeter_->isVisible() ) return;
-                          twLevelSample s;
-                          if( live && SApplication::app().masterLevel( pos, s ) )
+                          // Capped at the monitored pair, like a track head and
+                          // like the device (proposal 36 B8): a toolbar row is
+                          // the most space-constrained mount there is, and the
+                          // master meter is the one place where "what leaves the
+                          // building" and "what you hear" are the same question.
+                          const int width = SApplication::app().masterChannels();
+                          const int shown = qMin( width, SLevelMeter::MONITOR_LANES );
+                          qMasterMeter_->setLanes( shown, width );
+                          twLevelSampleSet s;
+                          if( live && SApplication::app().masterLevel( pos, s, shown ) )
                               qMasterMeter_->pushLevel( s, nowMs );
                           else
                               qMasterMeter_->pushIdle( nowMs );
@@ -2000,7 +2008,23 @@ bool SMainWindow::dragTrackHead( const QString &trackPath, int targetRow,
     return v->tkDragTrackHead( track, targetRow, nestOnto );
 }
 
-QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeight )
+// Build the REAL head off screen at the given lane geometry. Parentless and
+// never shown, so no native window appears (a qxa run on Windows uses the real
+// platform plugin). resize() runs the real updateLayout()/applyDensity(), which
+// is the thing under test.
+static std::unique_ptr<SSMVMixerControl> buildHeadForTest_( SStdMixerView &v,
+                                                            STrack &track,
+                                                            int headHeight,
+                                                            int headWidth )
+{
+    auto head = std::make_unique<SSMVMixerControl>( nullptr, v, track );
+    head->resize( headWidth > 0 ? headWidth : SMV_TRACK_CTRL_WIDTH,
+                  headHeight > 0 ? headHeight : 1 );
+    return head;
+}
+
+QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeight,
+                                         int headWidth )
 {
     SStdMixerView *v = ensureArranger_();
     if( !v ) return QString();
@@ -2018,13 +2042,8 @@ QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeigh
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) return QString();
 
-    // A head built for the assertion and thrown away — parentless and never
-    // shown, so no native window appears (a qxa run on Windows uses the real
-    // platform plugin). resize() runs the real updateLayout()/applyDensity(),
-    // which is the thing under test.
-    SSMVMixerControl head( nullptr, *v, *track );
-    head.resize( SMV_TRACK_CTRL_WIDTH, headHeight > 0 ? headHeight : 1 );
-    return head.describeMeter();
+    auto head = buildHeadForTest_( *v, *track, headHeight, headWidth );
+    return head->describeMeter();
 }
 
 // --- proposal 37 P4 test seams -------------------------------------------
@@ -2073,6 +2092,26 @@ bool SMainWindow::grabTrackHead( const QString &path, const QString &trackPath,
     if( head.layout() ) head.layout()->activate();
     head.describeHead();          // re-applies the density rules for this size
     const QPixmap pm = head.grab();
+bool SMainWindow::grabTrackHead( const QString &trackPath, const QString &path,
+                                 int headHeight, int headWidth,
+                                 const twLevelSampleSet &level )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return false;
+    SObject *root = splacements::rootContainer( proj );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) return false;
+
+    auto head = buildHeadForTest_( *v, *track, headHeight, headWidth );
+    // Applies the density rules to THIS size (Qt does not deliver a resizeEvent
+    // to a widget that was never shown, so the grab would otherwise picture the
+    // previous layout) AND puts the measured level in the bars, so the meter is
+    // visible in the artifact rather than sitting at the floor.
+    head->tkPushMeterLevel( level, 0 );
+    const QPixmap pm = head->grab();
     if( pm.isNull() ) return false;
     return pm.save( path, "PNG" );
 }
@@ -2196,24 +2235,24 @@ bool SMainWindow::virtualKey( int key, double velocity, qint64 durationTicks )
 }
 
 bool SMainWindow::grabLevelMeter( const QString &path, double peak, double rms,
+bool SMainWindow::grabLevelMeter( const QString &path, const twLevelSampleSet &s,
                                   bool vertical, int w, int h )
 {
     SLevelMeter meter( nullptr );
+    const int lanes = s.lanes > 0 ? s.lanes : 1;
+    meter.setLanes( lanes, lanes );
     meter.setOrientation( vertical ? Qt::Vertical : Qt::Horizontal );
     meter.resize( w, h );
 
     // Two pushes a simulated second apart: the first sets the peak and arms the
     // hold, the second lets the peak decay away from it so the held tick is drawn
     // in a DIFFERENT place than the bar top — otherwise the grab could not tell
-    // the two apart.
-    twLevelSample s;
-    s.peak       = (float) peak;
-    s.meanSquare = (float) ( rms * rms );
-    s.frames     = 1024;
-    s.clipped    = ( peak >= TW_METER_CLIP_THRESHOLD );
+    // the two apart. Every lane decays together, so a multi-lane grab shows the
+    // held ticks at their own heights.
     meter.pushLevel( s, 0 );
-    s.peak = (float) ( peak * 0.5 );
-    meter.pushLevel( s, 250 );
+    twLevelSampleSet decayed = s;
+    for( int i = 0; i < lanes; ++i ) decayed.lane[i].peak *= 0.5f;
+    meter.pushLevel( decayed, 250 );
 
     const QPixmap pm = meter.grab();
     if( pm.isNull() ) return false;

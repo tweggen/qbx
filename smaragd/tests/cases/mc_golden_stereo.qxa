@@ -31,13 +31,41 @@
   requires an AC that licenses it and a written explanation of why the bytes
   moved (§5).
 
-  TODAY THIS RENDERS THE SAME BYTES AS mc_golden_mono, and that is not a
-  mistake in the corpus. RenderSession hard-codes config.channels = 2 and
-  duplicates one mono bus into both, so a channels='1' project and a
-  channels='2' project produce identical files (M1 made the count DATA ONLY).
-  The two goldens are kept apart anyway because B5 is where they must diverge —
-  and a corpus that only acquired its second half at the milestone that needs it
-  would be re-frozen exactly when the gate was supposed to be holding still.
+  ==================================================================
+  RE-FROZEN ONCE, at proposal 36 B5 (2026-08-16), under AC B5.5. The reason
+  lives here, next to the file, because a golden that changed needs its
+  explanation where the next reader will be standing.
+
+  WHAT MOVED: THE CONTENT OF CHANNEL 1, and nothing else. The file is the same
+  shape (2 channels, 192000 frames, 768044 bytes) and its CHANNEL 0 is
+  byte-identical to the pre-B5 golden's channel 0 — all 192000 frames compared,
+  zero differences. Channel 1 differs in 28776 frames, and they are exactly
+  frames 160800..189599: the twtestclap window, 3.35-3.95 s, to the frame at
+  both ends. First differing byte 643246 (= 44 + 160800*4 + 2, i.e. channel 1
+  of the first frame of that window). Verified before freezing, not assumed.
+
+  WHY. Until B5 the sink collapsed the graph to one page and duplicated it, so
+  channel 1 could only ever be a copy of channel 0. It is now bus 1's own
+  audio. Per-window RMS in the new file, channel 0 / channel 1:
+
+      plain   0.38155 / 0.38155        asset   0.38155 / 0.38155
+      stretch 0.29429 / 0.29429        nested  0.38155 / 0.38155
+      pitch   0.37056 / 0.37056        fx      0.57153 / 0.19077
+
+  FIVE OF THE SIX WINDOWS ARE STILL EQUAL BETWEEN THE CHANNELS, and that is
+  correct rather than a partial result: they are all fed from
+  ../test_sawtooth.wav, whose own two channels are byte-identical (§7 trap 22).
+  The only cross-channel content the corpus contains is the twtestclap
+  fixture's deliberate skew — out[0] = in[0]*0.5 + in[1] against
+  out[1] = in[1]*0.5, a ratio of 3 — and 0.57153/0.19077 = 2.996 is that ratio
+  arriving in a FILE for the first time. A corpus that could show more would
+  need a stereo fixture in every window; that is not what this corpus is for,
+  and plugin_stereo_chain / mc_stereo_clip_width / mc_six_channel are where the
+  per-path channel assertions live.
+
+  DETERMINISM: rendered twice into separate output directories and byte-compared
+  before either was frozen. Identical, including the muted and unmuted variants.
+  ==================================================================
 
   DEPENDENCY, stated rather than assumed: the last window needs twtestclap.clap
   next to the binary, i.e. the clap submodule present at configure time. Without
@@ -63,6 +91,32 @@
 
     <!-- THE GATE. -->
     <assert-file-identical actual="mc_stereo.wav" expected="../goldens/mc_stereo.wav"/>
+
+    <!-- THE SHAPE and the asymmetry, asserted rather than left to the byte
+         compare: `cmp` also passes if BOTH the render and the golden regress
+         together, and re-freezing is the moment that could happen unnoticed.
+         Two channels exist, a third does not (an out-of-range channel is an
+         ERROR, not a silent rms 0 — M0), and the fx window's channels carry
+         genuinely different audio while the plain window's do not. -->
+    <assert-audio-energy filename="mc_stereo.wav"
+                         startFrame="2000" frameCount="24000"
+                         channel="1" minRms="0.05" maxRms="0.60"/>
+    <assert-audio-energy filename="mc_stereo.wav"
+                         startFrame="2000" frameCount="24000"
+                         channel="2" minRms="0.0" maxRms="1.0"
+                         expectReject="true"/>
+    <!-- fx window (3.35-3.95 s): ch0 0.5715, ch1 0.1908 — the skew fixture's
+         ratio of 3, in a file. -->
+    <assert-channels-differ filename="mc_stereo.wav"
+                            channelA="0" channelB="1"
+                            startFrame="162000" frameCount="26000"
+                            minRmsDelta="0.25" minDiffRms="0.25"/>
+    <!-- plain window: equal, because test_sawtooth's own channels are. -->
+    <assert-channels-differ filename="mc_stereo.wav"
+                            channelA="0" channelB="1"
+                            startFrame="2000" frameCount="24000"
+                            minRmsDelta="0.0" minDiffRms="0.0001"
+                            expectReject="true"/>
 
     <!-- Every window carries audio, so a golden that went silent could not pass
          by matching a silent render. These bands are wide on purpose: they are

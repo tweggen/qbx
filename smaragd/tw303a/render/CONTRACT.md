@@ -35,5 +35,19 @@ How to test: `ctest -R render_test` (absolute-range content, onPosition,
 page-boundary continuity against a scripted component — render/tests/);
 every render_*.qxa and grain_*.qxa case end-to-end.
 
-Known debt: output is duplicated-mono stereo (proper multi-channel TBD);
-Extent enum in RenderParams is advisory (start/end seconds are what counts).
+7. The output file's CHANNEL COUNT is the graph's, not a constant
+   (proposal 36 B5). `RenderParams::channels` is 0 by default, meaning "ask
+   `synthOutput->getOutputChannels()`", and the root's declared width IS
+   `SProject::channels()` — so a channels='6' project renders a 6-channel file
+   and a channels='1' project a mono one. A caller may pin a number; the
+   render then warns if it disagrees with the graph, clamps a channel the page
+   does not have to the page's last (the §4.4 read clamp) and drops the rest.
+   It used to be `config.channels = 2` with the single mono page written into
+   both channels ("Duplicate to stereo (temporary; proper multi-channel TBD)").
+8. Frames reach the sink as INTERLEAVED BLOCKS, one call per render block —
+   `AudioSink::writeFrames(interleaved, nFrames, channels)`. The old
+   frame-at-a-time `writeFrame(AudioFrame&)` is retired along with `AudioFrame`
+   itself, whose `MAX_CHANNELS == 2` was the hard stereo cap.
+
+Known debt: Extent enum in RenderParams is advisory (start/end seconds are what
+counts).

@@ -74,16 +74,19 @@ void SApplication::rewireSpeaker()
 {
     // Drop any prior wiring first.
     getSpeaker()->setInput( 0, NULL );
-    getSpeaker()->setInput( 1, NULL );
     if( !currentProject_ || !currentProject_->getRootComponent() ) return;
 
+    // ONE plug (proposal 36 B5). There used to be a second, wired to
+    // root->linkOutput(1) when the root reported more than one output, from the
+    // days when a track was N parallel mono wires. Since B4 the graph is one
+    // wire N channels wide, and the speaker's plug carries no audio in any case
+    // — it supplies the WIRE FORMAT that startOutput() opens the device with.
+    //
     // twRewire (the rewire root inside SStdMixer) returns NULL from
     // linkOutput() when nothing has been wired into it yet, so this call
-    // is only meaningful once the graph has at least one track / bus.
+    // is only meaningful once the graph has at least one track.
     std::shared_ptr<twComponent> root = currentProject_->getRootComponent()->getRootComponent();
     getSpeaker()->setInput( 0, root->linkOutput( 0 ) );
-    if( root->getNOutputs() > 1 )
-        getSpeaker()->setInput( 1, root->linkOutput( 1 ) );
 }
 
 bool SApplication::isPlaying() const
@@ -356,6 +359,23 @@ bool SApplication::masterLevel( offset_t pos, twLevelSample &out )
     // keep in step.
     masterProbe_.setTap( rootComponent() );
     return masterProbe_.advanceTo( pos, out );
+}
+
+bool SApplication::masterLevel( offset_t pos, twLevelSampleSet &out, int wantLanes )
+{
+    masterProbe_.setTap( rootComponent() );
+    return masterProbe_.advanceTo( pos, out, wantLanes );
+}
+
+int SApplication::masterChannels()
+{
+    // The mixer root's declared width IS the project's (SStdMixer takes it from
+    // SProject::channels() since B4), so deriving it here cannot drift from what
+    // the graph actually produces the way a copied number can — the same reason
+    // RenderParams::channels = 0 means "ask the graph".
+    std::shared_ptr<twComponent> root = rootComponent();
+    const int n = root ? (int) root->getOutputChannels() : 1;
+    return n > 0 ? n : 1;
 }
 
 void SApplication::pumpMeters()
