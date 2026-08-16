@@ -830,6 +830,16 @@ void STrack::adoptPluginChain( SPluginChain *chain )
     invalidateRenderPath();
 }
 
+QList<SLink *> STrack::ownedRefLinks() const
+{
+    // See the declaration: the chain reference is an owned link that is NOT a
+    // child link, so it has to be published here to be part of the reference
+    // graph at all.
+    QList<SLink *> out;
+    if( cpPluginChainRef_ ) out.append( cpPluginChainRef_ );
+    return out;
+}
+
 STrack::~STrack()
 {
     DTOR_DEL( inlineRenderer_ );

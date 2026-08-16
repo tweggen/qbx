@@ -282,6 +282,24 @@ public:
      * matters, so call sites stay decoupled from the storage.
      */
     SChildLinks childLinks() const { return SChildLinks( childOrder_ ); }
+
+    /**
+     * SLinks this object OWNS but which are NOT its ordered SLink children —
+     * the references a container holds outside the document tree. Empty for
+     * almost everything; STrack's reference to its SPluginChain is the one
+     * case today, and it is deliberate (objects/track/CONTRACT.md 7: a chain
+     * in childLinks() would be read as a clip).
+     *
+     * They are edges of the reference graph all the same, so anything that
+     * reasons about WHO REFERENCES WHOM has to ask here as well as at
+     * childLinks(). SProject::~SProject's survivor ordering is why this
+     * exists: blind to this edge it deleted a referent before its referrer,
+     * and the referrer's ~SLink then ran removeRef() on freed memory — the
+     * "destroyed with N live reference(s)" teardown segfault.
+     *
+     * Main thread only, like every other lifetime operation (THREADING rule 1).
+     */
+    virtual QList<SLink *> ownedRefLinks() const { return QList<SLink *>(); }
     int childCount() const { return childOrder_.size(); }
     SLink *childAt( int index ) const;
     int indexOfChild( const SLink *child ) const;

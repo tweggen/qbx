@@ -105,6 +105,10 @@ Invariants (normative detail: CLIP_MODEL.md):
    project, which is what lets a save/load/save comparison be byte-equivalent.
    Dropping the old reference is also what retires the empty chain the
    constructor made.
+   Because it is NOT a child link, STrack publishes it from
+   ownedRefLinks() (model/CONTRACT.md 6b) — the track -> chain edge is
+   otherwise invisible to anything walking the reference graph, and
+   ~SProject's survivor ordering then freed the chain before the track.
 8. A slot's wire schema is descriptor_ VERBATIM, never effective_
    (spluginslot.cpp). effective_ carries the registry's resolved module path;
    serializing it would silently absolutize a relative path and make the

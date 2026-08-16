@@ -65,6 +65,16 @@ public:
 
     virtual std::shared_ptr<twComponent> getRootComponent() override;
 
+    /**
+     * Our reference to the plugin chain (cpPluginChainRef_) is an owned SLink
+     * that is deliberately NOT a child link, so childLinks() cannot see the
+     * track -> chain edge. Publish it here or the reference graph is wrong for
+     * everyone who walks it — ~SProject's survivor ordering deleted the chain
+     * first and ~STrack's `delete cpPluginChainRef_` then removeRef()'d freed
+     * memory.
+     */
+    QList<SLink *> ownedRefLinks() const override;
+
     virtual int readPreChildrenAttributes( QDomElement &element ) override;
 
     virtual QWidget *getDetailEditWidget( QWidget *parent ) override;

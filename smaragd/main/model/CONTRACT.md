@@ -53,6 +53,15 @@ Invariants:
    setParent() as their last step, and SObject::childEvent qobject_casts
    (a non-SLink child of an SObject is ignored, never type-confused into
    childOrder_).
+6b. An SLink an object OWNS but does NOT parent (STrack's reference to its
+   SPluginChain is the only one) MUST be published by overriding
+   SObject::ownedRefLinks(). childLinks() cannot see it, so without the
+   override the reference graph is simply wrong for every walker of it —
+   ~SProject's survivor ordering then put a referent in the SAME batch as
+   its referrer, deleted the referent first, and the referrer's ~SLink ran
+   removeRef() on freed memory (the teardown SEGFAULT after a passing
+   headless run, 2026-08-16).
+
 7. An external file reference is PORTABLE ON DISK and ABSOLUTE IN MEMORY.
    SFilePathRef::toStored/fromStored are the only encoders, and they pick
    project-relative first, "~/..." when the climb lands exactly on the home

@@ -584,12 +584,20 @@ SProject::~SProject()
     while( !remaining.isEmpty() ) {
         QHash<SObject*,int> inDegree;
         for( SObject *so : remaining ) inDegree.insert( so, 0 );
+        auto countEdge = [&inDegree]( SLink *lk ) {
+            if( !lk ) return;
+            auto it = inDegree.find( &lk->getSObject() );
+            if( it != inDegree.end() ) ++it.value();
+        };
         for( SObject *so : remaining ) {
-            for( SLink *lk : so->childLinks() ) {
-                if( !lk ) continue;
-                auto it = inDegree.find( &lk->getSObject() );
-                if( it != inDegree.end() ) ++it.value();
-            }
+            for( SLink *lk : so->childLinks() )     countEdge( lk );
+            // Owned-but-not-child links are edges too, and missing one is not a
+            // near miss: STrack's reference to its SPluginChain is invisible to
+            // childLinks(), so this pass used to put the chain in the SAME batch
+            // as its track, delete the chain first, and leave ~STrack's
+            // `delete cpPluginChainRef_` calling removeRef() on freed memory —
+            // the teardown SEGFAULT after a passing headless run.
+            for( SLink *lk : so->ownedRefLinks() ) countEdge( lk );
         }
         QList<SObject*> batch;
         for( SObject *so : remaining ) {

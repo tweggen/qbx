@@ -12022,3 +12022,70 @@ P4, P5, P6, P7a+P7b, the teardown fix, on top of `main` + multichannel B3/B4.
 Only P8 (gated on proposal 21's live lane) and the P9 follow-ups remain. Gate:
 build clean, layering + logging clean, **`ctest -j4`: 168/168 passed in 152 s**
 (171 registered, 3 `au_*` disabled off macOS).
+
+## 2026-08-16 — clip_properties_actions teardown segfault: a reference-graph edge ~SProject could not see
+
+Branch `integration-check` (the proposal-37 integration tip merged with trunk).
+`qxa.clip_properties_actions` printed `PASS` and then SEGFAULTed at process
+teardown — roughly 2 of 3 full `ctest -j4` runs, ~1/15 in isolation at
+`SMARAGD_REVAL_WORKERS=16` and `=8`, 0/15 at `=4`.
+
+**It was never a race, and it was never intermittent.** Measured over 20
+isolated runs at 16 workers on the tip: 20 of 20 printed
+
+    SProject::~SProject(): 'Effects' outlived the refcount cascade with 1 reference(s) …
+    SObject::~SObject(): 'Effects' destroyed with 1 live reference(s) — a referencing SLink now dangles!
+
+and 2 of 20 then died on it. The use-after-free happens EVERY run; whether the
+freed block is still benignly readable is what the worker count moves. That is
+why the case looked worker-sensitive and why it "did not reproduce in
+isolation" — the warning always did.
+
+**Root cause.** `~SProject`'s survivor pass (`main/model/src/sproject.cpp`,
+the `remaining` loop) deletes referrers BEFORE referents, by in-degree over the
+reference graph — and it built that graph from `SObject::childLinks()` alone.
+`STrack::cpPluginChainRef_` (`strack.cpp:777`) is an SLink the track OWNS but
+deliberately does NOT parent — a chain in `childLinks()` would be read as a
+clip (objects/track/CONTRACT.md 7) — so the track → chain edge was invisible.
+Both objects therefore landed in the SAME batch with in-degree 0, the chain
+('Effects') was deleted first, and `~STrack`'s `delete cpPluginChainRef_`
+(`strack.cpp:838`) then ran `object_.removeRef()` on freed memory:
+
+    #0 SObject::removeRef (this=<freed SPluginChain>)  sobject.cpp:668
+    #1 SLink::~SLink                                   slink.cpp:195
+    #2 STrack::~STrack                                 strack.cpp:838
+    #3 SProject::~SProject                             sproject.cpp:611
+    #4 SActionRunner::run                              sactionrunner.cpp:140
+
+Main thread, single-threaded, no worker involved. `~SProject` and
+`cpPluginChainRef_` are byte-identical to `origin/main`, so this is the
+PRE-EXISTING dangling-`SLink` family, not a proposal-37 interaction: none of
+P1's event clip set, P5's lanes, P3a's `twGainStage`, P7b's pump or the scan
+stop is on the path. The case reaches the survivor pass at all because
+`verify-undo` leaves an undo-stack pin on the track (the "usual case" the code
+comment already names), which is what keeps the track out of the refcount
+cascade and hands it to the survivor ordering.
+
+**Fix — the missing edge, not an imposed order.** New virtual
+`SObject::ownedRefLinks()` (default empty) publishes SLinks an object owns but
+does not parent; `STrack` overrides it with `cpPluginChainRef_`; the survivor
+pass counts those edges alongside `childLinks()`. The existing algorithm is now
+correct rather than being told which object to delete first, so it stays right
+for any future owner-held link. Recorded as model/CONTRACT.md invariant 6b.
+
+**Gates.** `repeat_test.sh clip_properties_actions` 40/40 at
+`SMARAGD_REVAL_WORKERS=16` and 40/40 at `=8` (was 18/20 by exit code at 16
+before the change); `exact_stretch_roundtrip`, `lane_alignment`,
+`warp_anchors_roundtrip`, `split_plain_screenshot` 20/20 each at 16;
+**`ctest -j4`: 171/171 passed, twice** (174 registered,
+3 `au_*` disabled off macOS; 59.1 s and 58.3 s). Build, layering and logging clean. Goldens are unchanged BY
+CONSTRUCTION — nothing here is reachable from `freezePage`, `RenderSession` or
+`AudioEngine`; the only code that changed runs after the last render, inside
+`~SProject`.
+
+**What is NOT fixed.** The track itself still ends the run as
+`'…' destroyed with 1 live reference(s)` — an undo-stack pin held by an
+`SActionHistory` that outlives the project. Nothing destroys that referrer
+before the process exits, so it never dereferences the freed track; it is a
+latent hole in the same family, and closing it means giving the action history
+a project-scoped lifetime, which is not a local change.
