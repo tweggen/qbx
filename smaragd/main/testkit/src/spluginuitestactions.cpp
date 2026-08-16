@@ -8,9 +8,14 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/spluginchain.h"
+// The slot's own header is the sanctioned route to the engine's
+// twPluginSlotMode / twPluginSlotState / twPluginSlotProcessor: testkit has no
+// edge to tw/plugins (check_layering.py), and it does not need one — every
+// question below is asked of the APP model, which quotes those types in its own
+// public API. Including tw/plugins/… directly here is a layering violation even
+// though it would compile.
 #include "app/objects/track/spluginslot.h"
 #include "app/pluginui/splugineffectstrip.h"
-#include "tw/plugins/twpluginslotproc.h"
 
 #include <QDebug>
 #include <QDomElement>

@@ -248,10 +248,6 @@ bool STrack::hasDuration() const
     return true;
 }
 
-/**
- * We define a track's duration as the ending point of the last terminated event,
- * otherwise 1.
- */
 // The end of the last EVENT material reaching this track's feed. Own Event
 // children plus the same question of every child that bubbles up - the same
 // walk eventFeed() makes, minus the mute/solo resolution: the PROJECT END must

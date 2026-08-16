@@ -479,6 +479,13 @@ void twPluginSlotProcessor::ensureGenScratch_nolock( length_t frames )
         outArena_.resize( twEventLimits::kMaxPayloadBytes );
     if( chunkEvents_.capacity() < twEventLimits::kMaxEventsPerBlock )
         chunkEvents_.reserve( twEventLimits::kMaxEventsPerBlock );
+    // The per-chunk payload arena is RESERVED, not resized: a sysex or a text
+    // event would otherwise allocate on the render path the first time one
+    // appeared (CONTRACT invariant 2). clear() keeps the capacity.
+    if( chunkArena_.capacity() < twEventLimits::kMaxPayloadBytes )
+        chunkArena_.reserve( twEventLimits::kMaxPayloadBytes );
+    if( chaseEvents_.capacity() < twEventLimits::kMaxEventsPerBlock )
+        chaseEvents_.reserve( twEventLimits::kMaxEventsPerBlock );
 }
 
 // The chase set, as the events that put a plugin INTO that state. Controllers

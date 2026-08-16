@@ -172,6 +172,13 @@ std::shared_ptr<audio::twPluginInsert> SPluginSlot::peekInsert() const
 
 void SPluginSlot::setEventSource( std::shared_ptr<const twEventSource> source )
 {
+    if( !source ) {
+        // TAKING the feed away must never INSTANTIATE a plugin: this is also the
+        // teardown path (STrack::onPluginSlotRemoved), which is the same reason
+        // that path uses peekInsert() rather than getInsert().
+        if( proc_ ) proc_->setEventSource( nullptr );
+        return;
+    }
     // ensureChannels(), not proc_ directly: a slot may still be waiting for its
     // width when the track wires the feed (project load orders the chain before
     // setChannels), and the source must not be dropped on the floor.
