@@ -237,6 +237,38 @@ const Fixture kFixtures[] = {
     { "set-midi-cut",
       "<set-midi-cut clip='1,0' transpose='-12' velocityScale='0.5'"
       " channel='3' take='1' broadcast='0'/>" },
+    // --- automation (proposal 37 P5) ------------------------------------
+    // `owner` is an index path; the TARGET's space decides whether it names a
+    // lane, a slot's track, or a placement — so every row below carries a
+    // target and, where it is a slot, a slotIndex.
+    { "add-automation-lane",
+      "<add-automation-lane owner='0' target='self:Volume' mode='read'>"
+      "<p t='0' v='-60' c='linear'/>"
+      "<p t='192000' v='0' c='linear'/>"
+      "</add-automation-lane>" },
+    { "remove-automation-lane",
+      "<remove-automation-lane owner='0,1' target='cut:Gain' take='1'/>" },
+    { "set-automation-mode",
+      "<set-automation-mode owner='0' target='param:7' slotIndex='2'"
+      " mode='latch'/>" },
+    { "add-automation-point",
+      "<add-automation-point owner='0' target='self:Volume' time='96000'"
+      " value='-30' curve='exp' tension='2.5'/>" },
+    { "remove-automation-point",
+      "<remove-automation-point owner='0' target='self:Muted' time='48000'"
+      " value='1'/>" },
+    { "move-automation-point",
+      "<move-automation-point owner='0' target='param:0' slotIndex='1'"
+      " time='96000' value='2' toTime='120000' toValue='1.5'/>" },
+    { "set-automation-points",
+      "<set-automation-points owner='0,1' target='cut:Gain' from='0'"
+      " to='192000' take='1'>"
+      "<p t='0' v='1' c='linear'/>"
+      "<p t='192000' v='0' c='linear'/>"
+      "</set-automation-points>" },
+    { "assert-automation-value",
+      "<assert-automation-value owner='0' target='self:Volume' time='96000'"
+      " value='-30' tolerance='1e-9' mode='read' pointCount='2'/>" },
     { "set-tempo", "<set-tempo bpm='132.5'/>" },
     { "set-link-timebase",
       "<set-link-timebase clip='1,0' timebase='time'/>" },
