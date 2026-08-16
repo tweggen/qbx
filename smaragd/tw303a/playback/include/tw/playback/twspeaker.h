@@ -14,6 +14,56 @@
 #include <thread>
 #include <vector>
 
+// ============================================================================
+// THE DEVICE MONITORING RULE (proposal 36 B5) — requester decision, 2026-08-16.
+//
+// twSpeaker already owns the SAMPLE-RATE mismatch at the device boundary, so it
+// owns the CHANNEL mismatch too. The rule is deliberately one line rather than a
+// general N-to-M mapping, because monitoring is a stereo activity and a
+// fold-down needs channel ROLES and a fold law that proposal 36 §8 names as an
+// explicit non-goal:
+//
+//     L = ch0;   R = (projectWidth >= 2) ? ch1 : ch0;
+//
+// so a MONO project is standard mono-to-stereo, a stereo project is itself, and
+// a project WIDER than two is monitored on its FIRST TWO CHANNELS — the rest
+// are computed in full and DROPPED AT THE DEVICE, deliberately. That pair then
+// meets the device's own channel count exactly as it always has, alternating
+// across however many outputs the device has.
+//
+// THIS IS THE DEVICE PATH ONLY AND IT MUST NOT TOUCH THE FILE. A render is
+// RenderSession, in tw/render, which shares no code with this: it writes the
+// project's FULL width (AC B5.3 — a 6-channel project renders a 6-channel
+// file). A 6-channel project that is monitored in stereo still renders six
+// channels.
+//
+// It is a pure free function so it can be asserted without opening a device;
+// playback_test does exactly that.
+// ============================================================================
+namespace twmonitor {
+
+// How many channels to pull from the engine for monitoring: 1 or 2, never more.
+inline std::size_t pullChannels( std::size_t projectWidth )
+{
+    return ( projectWidth >= 2 ) ? 2u : 1u;
+}
+
+// `src` holds pullChannels(projectWidth) planar buffers of `frames` frames.
+// Writes frames * deviceChannels interleaved floats into `out`.
+inline void interleave( float *out, std::size_t frames, unsigned deviceChannels,
+                        const float *const *src, std::size_t srcChannels )
+{
+    if( !out || deviceChannels == 0 || srcChannels == 0 ) return;
+    for( std::size_t i = 0; i < frames; ++i ) {
+        const float l = src[0][i];
+        const float r = ( srcChannels >= 2 ) ? src[1][i] : l;
+        for( unsigned c = 0; c < deviceChannels; ++c )
+            out[i * deviceChannels + c] = ( c % 2 == 0 ) ? l : r;
+    }
+}
+
+}  // namespace twmonitor
+
 // Playback output state machine (Phase 6b: deferred backend startup until buffer ready)
 enum class OutputState {
     STOPPED = 0,    // No output, no engine
@@ -89,6 +139,12 @@ private:
     std::atomic<OutputState> outputState_{OutputState::STOPPED};
     std::thread bufferingTask_;          // Background thread monitoring readahead progress
     std::atomic<bool> bufferingTaskRunning_{false};  // Signal to stop buffering task
+    // The project width the render callback last REPORTED (twmonitor rule
+    // above). 0 = nothing reported yet, so the first callback of a session
+    // always logs. An exchange per callback, a log line only when it changes —
+    // the alternative is either a per-callback log or a decision the user
+    // cannot discover.
+    std::atomic<int> monitorWidthLogged_{0};
 
     // Helper: Background task that waits for readahead buffer, then starts backend output
     void monitorReadaheadBuffer();

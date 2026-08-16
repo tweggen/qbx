@@ -39,11 +39,15 @@
   explicitly rather than by luck (the same budget playback_start_after_edit_-
   position uses and measured).
 
-  DEVICE WIDTH. CaptureBackend opens 2 channels, and the project is 2 channels,
-  so twSpeaker's rule is the positional mapping — device channel c carries
-  project channel c. The mono fan-out and the truncation halves of that rule are
-  unit-gated in playback_test rather than here; a headless case cannot change
-  the device's channel count.
+  DEVICE WIDTH. Monitoring is stereo by rule (playback/CONTRACT.md inv. 9):
+  L = ch0, R = ch1 for any project two channels or wider, and that pair meets
+  the device's own channel count. This project is 2 channels and CaptureBackend
+  opens 2, so the recording is L = ch0 and R = ch1 — the case that makes the
+  comparison with the render meaningful. The other widths of the rule (mono
+  fan-out; a 6-channel project reduced to its first two) are unit-gated in
+  playback_test against the pure `twmonitor::` functions, because a headless
+  case cannot change the device's channel count and because those are exactly
+  the cases where a stretched integration test would prove least.
 -->
 <SActionScript version="1" name="mc_playback_channels">
 

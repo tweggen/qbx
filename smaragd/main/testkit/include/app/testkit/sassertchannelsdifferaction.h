@@ -10,9 +10,12 @@
  * different" could only be INFERRED — by asserting a per-channel RMS
  * band on each and reading the two results against each other, which needs the
  * expected numbers to be known in advance and says nothing when they happen to
- * coincide. Worse, the sink duplicates one bus into every channel today
- * (plugins/CONTRACT.md, "never write an L != R assertion"), so any case that
- * appeared to prove a difference was proving nothing.
+ * coincide. Worse, when this verb was written the sink duplicated one bus into
+ * every channel, so any case that appeared to prove a difference was proving
+ * nothing. That is no longer true — proposal 36 B5 widened both output stages,
+ * and this verb's positive direction is now the load-bearing one
+ * (mc_stereo_clip_width, mc_six_channel, mc_playback_channels,
+ * plugin_stereo_chain).
  *
  * Two measurements, one pass:
  *
@@ -41,9 +44,10 @@
  * - frameCount: frames to analyse (-1 = to the end of the file)
  *
  * Pair it with `expectReject="true"` to assert the OPPOSITE — that two channels
- * are the same audio. That is the shape of today's duplicated-mono sink, and
- * the day the sink goes wide such a case is supposed to fail — that is the
- * signal it exists to give, not a regression to loosen.
+ * are the same audio. Since B5 that is a statement about CONTENT, not about the
+ * sink: it is how a case pins a §4.4 clamp (channels 2..7 of a 2-channel source
+ * are its last channel), or a fixture whose own channels are equal
+ * (test_sawtooth.wav — §7 trap 22).
  */
 class SAssertChannelsDifferAction : public SAction {
 public:

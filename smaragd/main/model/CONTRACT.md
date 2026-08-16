@@ -101,8 +101,11 @@ Invariants:
    hit its shrink Q_ASSERT_X( false, ... ). B4 retired both the per-bus
    instantiation and the counter: a width change creates and destroys nothing,
    so the shrink is ordinary. Nothing connects it to tw303aEnvironment, which
-   still has no channel state. The SINK is still mono until B5, so a width
-   change is inaudible in a rendered FILE — visible in the pages.
+   still has no channel state. Since B5 the width also reaches the FILE and the
+   DEVICE: `RenderParams::channels` derives from the project (via the root's
+   declared width), so a channels='6' project renders a 6-channel file
+   (`qxa.mc_six_channel`). B4's note here said a width change was inaudible;
+   that was true for B4 and is not true now.
 
 How to test: full qxa suite; action_roundtrip_test for serialization
 adjacency; filepathref_test (ctest) for the three path-storage rules and

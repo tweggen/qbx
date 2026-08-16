@@ -6,6 +6,7 @@
 // a placeholder replacing a stale-frozen page keeps it reachable via
 // stalePredecessor until the replacement is stamped frozen.
 #include "tw/playback/audio_engine.h"
+#include "tw/playback/twspeaker.h"   // twmonitor:: — the device rule, as a pure function
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/tw_output_page.h"
@@ -414,6 +415,82 @@ int main()
               "B5: a width-1 graph fans out to every destination channel");
 
         engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
+    // Proposal 36 B5 — THE DEVICE MONITORING RULE, asserted without a device.
+    //
+    //     L = ch0;  R = (projectWidth >= 2) ? ch1 : ch0
+    //
+    // and that pair meets the device's channel count as it always has. The rule
+    // is a pure function in twspeaker.h for exactly this reason: "a width-6
+    // graph reaching a stereo device yields exactly ch0 and ch1" is a one-line
+    // assertion here and would need a real backend, a PlaybackContext and a
+    // paced pump anywhere else.
+    //
+    // What this stops: a future refactor quietly fanning project channel 2 into
+    // the right output, or a "positional" mapping that silently starts feeding
+    // a 6-channel device six project channels. Monitoring is stereo, on
+    // purpose; the DROPPING of channels 2..N is the decision, not an accident,
+    // and it is confined to the device — a render still writes all N (that is
+    // RenderSession, which shares no code with this, and render_test's
+    // 6-channel case is where it is asserted).
+    {
+        const std::size_t N = 8;
+        std::vector<std::vector<float>> src(6, std::vector<float>(N));
+        std::vector<const float *> ptr(6);
+        for (std::size_t c = 0; c < 6; ++c) {
+            for (std::size_t i = 0; i < N; ++i)
+                src[c][i] = 0.1f * (float)(c + 1);      // channel c == 0.1*(c+1)
+            ptr[c] = src[c].data();
+        }
+
+        CHECK(twmonitor::pullChannels(1) == 1 &&
+              twmonitor::pullChannels(2) == 2 &&
+              twmonitor::pullChannels(6) == 2 &&
+              twmonitor::pullChannels(8) == 2,
+              "B5 device rule: monitoring pulls 1 channel from a mono project "
+              "and exactly 2 from every wider one");
+
+        // width 6 -> a STEREO device: L = ch0 (0.1), R = ch1 (0.2). Channels
+        // 2..5 (0.3..0.6) must appear nowhere.
+        std::vector<float> dev2(N * 2, -1.0f);
+        twmonitor::interleave(dev2.data(), N, 2, ptr.data(), twmonitor::pullChannels(6));
+        bool ok2 = true;
+        for (std::size_t i = 0; i < N && ok2; ++i)
+            ok2 = (dev2[i * 2] == 0.1f) && (dev2[i * 2 + 1] == 0.2f);
+        CHECK(ok2,
+              "AC B5 device rule: a 6-channel project on a STEREO device is "
+              "exactly ch0/ch1; channels 2..5 are dropped at the device");
+
+        // width 6 -> a SIX-channel device: still the pair, alternating, which
+        // is what the device mapping has always done. NOT ch0..ch5.
+        std::vector<float> dev6(N * 6, -1.0f);
+        twmonitor::interleave(dev6.data(), N, 6, ptr.data(), twmonitor::pullChannels(6));
+        bool ok6 = true;
+        for (std::size_t i = 0; i < N && ok6; ++i)
+            for (unsigned c = 0; c < 6 && ok6; ++c)
+                ok6 = (dev6[i * 6 + c] == ((c % 2 == 0) ? 0.1f : 0.2f));
+        CHECK(ok6,
+              "AC B5 device rule: a 6-channel project on a 6-channel device is "
+              "STILL the ch0/ch1 pair — monitoring is stereo, so channel 2 does "
+              "not reach output 2");
+
+        // width 1 -> stereo device: standard mono-to-stereo, L == R == ch0.
+        std::vector<float> devMono(N * 2, -1.0f);
+        twmonitor::interleave(devMono.data(), N, 2, ptr.data(), twmonitor::pullChannels(1));
+        bool okM = true;
+        for (std::size_t i = 0; i < N && okM; ++i)
+            okM = (devMono[i * 2] == 0.1f) && (devMono[i * 2 + 1] == 0.1f);
+        CHECK(okM, "AC B5 device rule: a MONO project is L = R = ch0");
+
+        // width 2 -> stereo device: itself.
+        std::vector<float> devSt(N * 2, -1.0f);
+        twmonitor::interleave(devSt.data(), N, 2, ptr.data(), twmonitor::pullChannels(2));
+        bool okS = true;
+        for (std::size_t i = 0; i < N && okS; ++i)
+            okS = (devSt[i * 2] == 0.1f) && (devSt[i * 2 + 1] == 0.2f);
+        CHECK(okS, "AC B5 device rule: a STEREO project is L = ch0, R = ch1");
     }
 
     // ------------------------------------------------------------------

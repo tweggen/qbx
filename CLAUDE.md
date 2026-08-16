@@ -537,7 +537,7 @@ whole feature needed **zero edits to any existing engine file** — just the new
 | `meterTimer_` is NOT a fold into `pumpLocator` | `pumpLocator` only works when the position changed and stops the instant playback stops. Meters need a tick at a static position (to decay) plus a ~8 s tail, or the bars freeze mid-level. Not started during an offline render; started while recording. |
 | A page miss must DECAY the meter | `advanceTo()` returning false → `idle()`. A dropout then reads as a fast fall, never as a frozen bar. Nothing here may block, wait, or create a demand. |
 | Stale-but-frozen pages are deliberately ACCEPTED | Playback serves exactly those (proposal 16), so rejecting them would make the meter disagree with the ear while an edit is absorbed. |
-| Mono at the SINK, not in the graph | Since proposal 36 B4 the whole track and master path is N channels wide and a stereo clip really does carry two different channels at the track root (`qxa.mc_track_width`). The SINK is still mono — `RenderSession` and `AudioEngine` collapse to one page and duplicate it, which B5 fixes — so a rendered WAV's channels are still equal BY CONSTRUCTION. Never assert `L != R` on a FILE; do assert it on a page, with `assert-track-channels`. |
+| The METER is channel 0; the signal path is not | Since proposal 36 B4 the whole track and master path is N channels wide, and since B5 the SINK is too — a rendered WAV and the device both carry the project's channels, so `L != R` IS assertable on a file now (`assert-channels-differ`), and `qxa.mc_stereo_clip_width` / `mc_six_channel` / `mc_playback_channels` do exactly that. What is still single-lane is the METER: `twLevelProbe` reads `channelPtr(0)` and `twLevelSample` / `twScanSpan` / `SLevelMeter` are scalar BY TYPE. Per-channel metering is B8, a widget and probe change. |
 | `twAspectMetadata` stays unclaimed | `freezePage` already stores `validAspects = twAspectAll`, so that "peak levels" bit is already set and already meaningless. Claiming it would drag metering into the demand system for nothing. |
 
 **One engine hole this exposed** (not a product bug, but it shapes tests): the
@@ -803,15 +803,39 @@ Gates: `ctest -R "plugins_test|plugins_scan_test"` and the qxa cases
 `plugin_remove_restores_param`, `plugin_ui_strip_and_editor`,
 `render_sawtooth_with_effects`.
 
-**Known gap that is not the plugin layer's:** the audio SINK is still mono.
-The graph is N channels wide end to end since proposal 36 B4 — a plugin sees
-every channel in one `process()` call and the track's root page really carries
-them — but `RenderSession` and `AudioEngine` still collapse to one page and
-duplicate it, so channel 1 cannot reach a file or a device and a rendered WAV's
-two channels are equal *by construction*. That is proposal 36 B5. Never write a
-qxa assertion of the form `L != R` **on a file**; assert it on a PAGE with
-`assert-track-channels` / `assert-clip-channels`, or use a cross-channel fixture
-and an RMS discriminator on the file.
+**The mono-sink gap is CLOSED (proposal 36 B5).** It was recorded here for
+five milestones: the graph carried N channels but `RenderSession` and
+`AudioEngine` collapsed to one page and duplicated it, so a rendered WAV's two
+channels were equal *by construction* and `L != R` was forbidden as a file
+assertion. Both stages are now N-channel — `RenderSession` interleaves from one
+wide root page into a file of `RenderParams::channels` (the project's), and
+`AudioEngine::pullBlock` fills N planar buffers that `twSpeaker` maps onto the
+device. `L != R` on a FILE is now a legitimate assertion and
+`qxa.plugin_stereo_chain` makes it, bounding channel 1 at 0.5x against channel
+0's 1.5x — the skew fixture's cross-channel term reaching a file at last.
+
+**MONITORING IS STEREO, rendering is not.** `twSpeaker` owns the channel
+mismatch at the device boundary — the same seam it already owned the
+sample-rate mismatch at — and the rule is one line:
+
+```
+L = ch0;   R = (projectWidth >= 2) ? ch1 : ch0
+```
+
+after which that pair meets the device's own channel count as it always has. A
+mono project is standard mono-to-stereo; a stereo project is itself; a project
+**wider than two is monitored on its first two channels**, and the rest are
+computed in full and **dropped at the device**, deliberately — a fold-down needs
+channel roles and a fold law, which proposal 36 §8 names as a non-goal. The
+callback logs the reduction **once per width** (never per callback), so somebody
+hearing four of their six channels missing can find out why.
+
+**This is the device path only.** A render is `RenderSession`, which shares no
+code with it and writes the project's full width: a 6-channel project renders a
+6-channel file (`qxa.mc_six_channel`) *and* is monitored in stereo. The rule
+lives as a pure function (`twmonitor::pullChannels` / `twmonitor::interleave`)
+so `playback_test` can assert it at widths 1/2/6 against 2- and 6-channel
+devices without opening one.
 
 ## Dependencies
 
