@@ -9974,7 +9974,7 @@ which this branch does not carry.
 Branch `feat/36-p2-plugin-events`, off P0b. The plugin layer learns about events
 at the `twPlugin` level ONLY: the ABI, the three format backends, the scanner,
 the in-repo fixtures and the in-house 303. **Nothing in `twPluginSlotProcessor`,
-`twPluginInsert` or `twPluginChain` was touched** — proposal 35-B4 rewrites those
+`twPluginInsert` or `twPluginChain` was touched** — proposal 36-B4 rewrites those
 and P3b owns the generator modes — so nothing in the app calls the new path yet
 and no rendered byte moves.
 

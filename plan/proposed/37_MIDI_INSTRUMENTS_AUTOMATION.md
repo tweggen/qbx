@@ -37,7 +37,7 @@
 > §8 "Instrument plugins — gated"), `smaragd/tw303a/plugins/CONTRACT.md`,
 > `smaragd/main/objects/track/CONTRACT.md`, `34_LEVEL_METERS.md` (the
 > "read by position, never at freeze time" lesson — reused twice here),
-> `35_MULTICHANNEL_SIGNAL_FLOW.md` (on `feat/multichannel`; §9.1 below is a
+> `36_MULTICHANNEL_SIGNAL_FLOW.md` (on `feat/multichannel`; §9.1 below is a
 > hard sequencing dependency).
 
 ---
@@ -715,7 +715,7 @@ Rejected: a `twInstrumentTrackMix` component (would grow its own processor/tap
 split) and "instrument replaces the track's content component" (changes the graph
 shape every invalidation walk assumes).
 
-- **Sequenced after 35-B4 (§9.1):** by then a track has ONE N-channel page per
+- **Sequenced after 36-B4 (§9.1):** by then a track has ONE N-channel page per
   component, one wide head tap, and no per-bus chains; the processor's "all-bus"
   cache is moot. Mapping rows (plugins inv. 16 amended): `0→C on a C-channel page`
   DirectGen (one instance); `0→1` MonoSpread; `0→2 on a 1-channel page` fold;
@@ -761,7 +761,7 @@ publish self-staleness re-stales it (schedule inv. 8), so the wrong page is neve
 *current*.
 
 ### 4.5 `twGainStage` and automation consumption — D5
-- `twGainStage` (tw/mix): one wide component per track (post-35) between the last
+- `twGainStage` (tw/mix): one wide component per track (post-36) between the last
   tap and the rewire; scalar `gainDb` (the fader) × optional `twAutomationCurve`
   (Volume, dB-linear in fader space, `sfadercurve.h`) × mute (0 with a 1–2 ms
   ramp; NOT the parent's plug-nulling, which stays the *structural* mute for solo
@@ -985,8 +985,8 @@ corpus** unless an AC licenses a re-freeze with a written justification.
 | **P0b** `tw/events` leaf | `twEvent` (the one), `twEventSeq`, `twTempoMap`, `TickPos`, `twSmf`, `twAutomationCurve`, `twEventClipSet` + `twEventSource` + `twEventMerge`, `events_test` | — | event-table-equal SMF round-trip (byte-identical for twSmf-authored files); `stateAt` vs brute force; tick↔frame exact at 3 rates; `collect` clamps + synthesised note-offs; layering leaf |
 | **P1** Event clips in the model | `SMidiSequence`, `SMidiCut` (tick window), `SLink::timebase`, `objects/midi`, verbs, `STrack` → event clip set + folder feed (`twEventMerge`, mute/solo, `midiRouting`), thumbnail, Clip Properties page, `assert-midi-events/-file`, `set-tempo` as the only tempo write | P0a, P0b | import → save → load → export equal; non-destructive split; stretch/loop/slip/take verbs; `set-tempo` moves beat-timebase MIDI links and re-maps notes, moves no audio; explicit undo asserts; MIDI-only project renders silent without a `twview` warning (`assert-log`) |
 | **P2** Plugin ABI events + fixtures + native 303 (`twPlugin` level only) | `twpluginevents.h`, `process()` overload, capabilities, tail, aux-out discovery; CLAP/VST3/AU translation; `tw.test.clap.sine/arp` + a `clipThreshold` param on `tw.test.clap.gain`, VST3 `TestSine`, `twNativeInstrument`; scanner v2 | P0b (`twevent.h`) | `plugins_test` at the `twPlugin` level: notes → sine RMS + frequency per format; mid-block gain step at the offset; unactivated-bus teeth; arp event-out; effect goldens byte-identical; **no processor / chain change** |
-| **P3a** Fader post-FX | `twGainStage` (freeze + legacy pull), fader/mute wiring, trackmix gain forced to 0 dB, docs | 35-B4, P2 (clipper) | all goldens byte-identical (by construction, P4); new `fader_post_fx.qxa` value case + ORDER case (clipper) that fails on the pre-move binary; `meter_*` green |
-| **P3b** Instrument slot + event feed | generator modes (post-35 wide), pass-through sum, `twEventSource` feed (the track FEED incl. bubbling children), reset+chase+pre-roll, slot rules, browser/strip/head minimum, project end + tail | P1, P2, P3a, 35-B4 | `instrument_sine_render` (freq/RMS per note), `instrument_mixed_track` (no-notes ⇒ byte-equal), `instrument_folder_drums` (parent instrument plays two children; child mute drops its part), edit reaches the render, native 303 presence; `repeat_test` sweep |
+| **P3a** Fader post-FX | `twGainStage` (freeze + legacy pull), fader/mute wiring, trackmix gain forced to 0 dB, docs | 36-B4, P2 (clipper) | all goldens byte-identical (by construction, P4); new `fader_post_fx.qxa` value case + ORDER case (clipper) that fails on the pre-move binary; `meter_*` green |
+| **P3b** Instrument slot + event feed | generator modes (post-36 wide), pass-through sum, `twEventSource` feed (the track FEED incl. bubbling children), reset+chase+pre-roll, slot rules, browser/strip/head minimum, project end + tail | P1, P2, P3a, 36-B4 | `instrument_sine_render` (freq/RMS per note), `instrument_mixed_track` (no-notes ⇒ byte-equal), `instrument_folder_drums` (parent instrument plays two children; child mute drops its part), edit reaches the render, native 303 presence; `repeat_test` sweep |
 | **P3c** Render barrier + determinism | `beginRun` main-thread walk (path invalidation + `forgetContinuity()`) at render start and play start | P3b | `instrument_render_determinism` (`cmp` two in-process renders around a playback + one fresh process); `instrument_locate_continuity` (303 warmth + sine chase after `set-locator`); playback seek splices stated as NOT gated |
 | **P4** Event editor (piano roll) + virtual keyboard | `main/eventui`, dock, view base + kind registry, piano roll + velocity/CC lanes, time axis link, grid/quantize, `virtual-key`, `drag-note`, `assert-event-editor`, `describeTrackHead` | P1 (P3b for audible checks) | explicit undo per editor op; off-screen `describe()`; PNGs; `virtual-key` → render → `assert-audio-frequency` |
 | **P5** Automation model + engine | `SAutomationLane`, `ParamRef`, verbs, curve snapshots, gain-stage ramps, processor param events + `automationEpoch_`, clip gain envelope, range invalidation | P0b, P3b | `automation_volume_ramp` (per-second RMS; render `cmp`), `automation_mute_step` (ramp windows between levels), `automation_plugin_param` (step at a mid-page-1 offset, CLAP + VST3), `automation_clip_gain`, `assert-automation-value`; goldens without lanes byte-identical |
@@ -996,24 +996,24 @@ corpus** unless an AC licenses a re-freeze with a written justification.
 | **P9** Follow-ups *(outline)* | multi-out → return tracks; tempo segments (37); MIDI-FX routing (arp → instrument in-app); score/tab/tracker views; `split-notes-at`; generic `widget-gesture`; PDC | P3/P5 | own proposals |
 
 Parallelism: P0a ∥ P0b at the start; P1 (after P0a+P0b) ∥ P2 (after P0b); P3a
-after 35-B4 + P2; P3b after P1+P2+P3a; P3c after P3b; P4 ∥ P5 after P3b; P6 after
-P5; P7 after P1. Critical path: P0 → P1/P2 → (35-B4) → P3a → P3b → P3c → P5 → P6.
+after 36-B4 + P2; P3b after P1+P2+P3a; P3c after P3b; P4 ∥ P5 after P3b; P6 after
+P5; P7 after P1. Critical path: P0 → P1/P2 → (36-B4) → P3a → P3b → P3c → P5 → P6.
 
 ---
 
 ## 9. Dependencies on other proposals
 
-### 9.1 Proposal 35 — configurable multichannel signal flow (on `feat/multichannel`) — HARD sequencing
-35-B1 is "the big sweep" over every `freezePage` override, the latch seam, capture
-and metering; 35-B4 retires per-bus taps, per-bus chains and the processor's
+### 9.1 Proposal 36 — configurable multichannel signal flow (on `feat/multichannel`) — HARD sequencing
+36-B1 is "the big sweep" over every `freezePage` override, the latch seam, capture
+and metering; 36-B4 retires per-bus taps, per-bus chains and the processor's
 all-bus cache. **P2 therefore touches no processor, chain or tap code** (ABI,
 backends, fixtures, scanner, the native instrument only), and **P3a/P3b start
-only after 35-B4 has merged** — the gain stage and the generator head tap are
-written once, as wide components. If 35 stalls, the orchestrator may re-cut P3
+only after 36-B4 has merged** — the gain stage and the generator head tap are
+written once, as wide components. If 36 (multichannel) stalls, the orchestrator may re-cut P3
 against the per-bus world explicitly (both variants are described in §4.3/§4.5),
-and 35 rebases; that is a decision recorded in STATE.md, never a drift. Until
-35-B5 lands the sink is mono, so P3's audio assertions read channel 0 only and
-**never assert `L != R`**. Pan automation (`self:Pan`) is unlocked by 35-B5 and is
+and 36 rebases; that is a decision recorded in STATE.md, never a drift. Until
+36-B5 lands the sink is mono, so P3's audio assertions read channel 0 only and
+**never assert `L != R`**. Pan automation (`self:Pan`) is unlocked by 36-B5 and is
 explicitly out of P5.
 
 ### 9.2 Proposal 21 — real-time dataflow (live lane)
@@ -1048,13 +1048,13 @@ param editor into the native editor.
 | `sstdmixerview.cpp` grows again | Automation lane painting and gestures go into new files; the event editor is a new module; a line-count AC |
 | WinMM has no timestamps and no virtual ports | Send-at-due-time in the scheduler thread; virtual ports offered only where the OS supports them; jitter reported as not gated |
 | Legacy pull path (`assert-meter`) does not see event/automation edits | Documented; disappears with proposal 20; the gain caveat is retired by the gain stage |
-| Proposal 35 stalls | §9.1's explicit re-cut option |
+| Proposal 36 (multichannel) stalls | §9.1's explicit re-cut option |
 
 ## 11. Decisions taken in v2 (requester accepted all six on 2026-08-15; v2.2 adds 7–8 from the requester's own challenges)
 
 1. **Pass-through sum** on an instrument track (audio clips audible; REAPER
    overwrites, Cubase/Logic disallow) — chosen for a kind-less track; centre-panned
-   mono into a stereo instrument until 35 gives clips channels.
+   mono into a stereo instrument until 36 (multichannel) gives clips channels.
 2. **Note-on chase on locate**: instruments ON (pre-roll makes it inaudible),
    MIDI-out OFF by default (setting).
 3. **Trim/Read** as the default automation mode (REAPER); the fader value stays
@@ -1076,7 +1076,7 @@ param editor into the native editor.
 Tempo segments/ramps (37); return tracks / multi-out UI (P9); MIDI-FX chains
 between slots (P9); score/tab/tracker views (P9); MPE editing; MIDI clock/MTC;
 external-instrument audio return; PDC; placement-scope envelopes (32); pan
-automation (35-B5); live input/monitoring/recording (21 + P8); metronome engine;
+automation (36-B5); live input/monitoring/recording (21 + P8); metronome engine;
 a playback-run barrier (would need an RT page-boundary swap policy).
 
 ## 13. Adversarial review (v1 → v2)
@@ -1090,7 +1090,7 @@ a playback-run barrier (would need an RT page-boundary swap policy).
 | 5 | BLOCKER | Log-file ACs; the loader already warns twice | `assert-log` over the in-process ring (P0a); "≥ 1", never "exactly one" |
 | 6 | MAJOR | A playback barrier adds a mid-page RT switch on every seek (F14) | Render + play-start only; playback splices accepted and NOT gated |
 | 7 | MAJOR | Fader-move byte-identity claimed on fixtures that don't combine fader + plugin; float non-associativity; legacy pull | P4; new closed-form fixture; gain stage implements `calcOutputTo`; docs caveat retired |
-| 8 | MAJOR | P2/P3 rewrite what 35-B1/B4 rewrite | §9.1: P2 = ABI/backends/fixtures/scanner only; P3a/b after 35-B4; explicit re-cut option |
+| 8 | MAJOR | P2/P3 rewrite what 36-B1/B4 rewrite | §9.1: P2 = ABI/backends/fixtures/scanner only; P3a/b after 36-B4; explicit re-cut option |
 | 9 | MAJOR | verify-undo compares track counts only | Every AC asserts undo explicitly |
 | 10 | MAJOR | "Split cuts a straddling note" edits shared content; rounding | Non-destructive split by window gating; `split-notes-at` later |
 | 11 | MAJOR | Byte-identical SMF round-trip of a foreign corpus impossible with duration-paired notes | Event-table equality; byte-identity for twSmf-authored files |

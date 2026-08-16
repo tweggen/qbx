@@ -6,7 +6,7 @@
 > phase by phase. v2 re-cuts the phases per the adversarial review (design §13):
 > P0a gains the two testkit verbs everyone leans on; P2 is ABI/backends/fixtures
 > only and depends on P0b's event header; P3 is three PRs (fader move, instrument
-> slot + feed, render barrier) sequenced after proposal 35-B4; every "undo" AC is
+> slot + feed, render barrier) sequenced after proposal 36-B4; every "undo" AC is
 > explicit; no AC reads a log file.
 >
 > Each phase is implemented by **one Opus 5 sub-agent** in its own worktree/branch,
@@ -60,9 +60,9 @@
 6. **A task names one module set** (`docs/ARCHITECTURE.md` working agreement).
    Each brief lists the modules it may touch; touching another escalates. Public
    header / invariant changes are called out in the PR body as their own item.
-7. **Proposal 35 is in flight on `feat/multichannel`.** Before P3a/P3b, read
-   `git log main -- plan/proposed/35_MULTICHANNEL_SIGNAL_FLOW.md` and its tracker;
-   they start only after 35-B4 has merged (design §9.1). If the orchestrator
+7. **Proposal 36 (multichannel) landed on `main` with PR #39 at B2.** Before P3a/P3b, read
+   `git log main -- plan/proposed/36_MULTICHANNEL_SIGNAL_FLOW.md` and its tracker;
+   they start only after 36-B4 has merged (design §9.1). If the orchestrator
    decides to re-cut against the per-bus world instead, that decision is written
    into STATE.md and the P3 briefs are re-issued — never drifted into.
 
@@ -107,21 +107,21 @@ python tools/check_layering.py
 python tools/check_logging.py
 ctest --test-dir smaragd/build --output-on-failure   # reconcile registered/run/skipped vs main
 ```
-plus **byte-identical renders of the golden corpus**. Until proposal 35's
+plus **byte-identical renders of the golden corpus**. Until proposal 36's
 committed `smaragd/tests/goldens/` is on `main`, the corpus for 36 is: every
 existing `render_*`, `grain_*`, `exact_*`, `warp_*`, `plugin_*` and `meter_*` qxa
 case rendered on the pre-phase `main` binary and compared with `assert-file-
 identical` (P0a) — or `cmp` — against the phase binary in the same worktree
-(store the pre-phase WAVs in the scratchpad, never in the repo, unless 35's
+(store the pre-phase WAVs in the scratchpad, never in the repo, unless 36's
 committed-goldens rule is on `main` — then use it). A re-freeze needs an AC that
 licenses it and a written justification.
 
-Dependency graph (P3a needs 35-B4 + P2; P3b needs P1 + P2 + P3a):
+Dependency graph (P3a needs 36-B4 + P2; P3b needs P1 + P2 + P3a):
 ```
 P0a ──────────► P1 ──┬──► P4 (audible AC needs P3b)
 P0b ──┬───────► P1   ├──► P7
       └──► P2 ──┬────┤
-(35-B4) ────────┴► P3a ┴──► P3b ──► P3c ──► P5 ──► P6
+(36-B4) ────────┴► P3a ┴──► P3b ──► P3c ──► P5 ──► P6
 ```
 
 ---
@@ -334,7 +334,7 @@ P0b ──┬───────► P1   ├──► P7
   — the order-sensitive fixture P3a needs; scanner `kScannerVersion` 2 + descriptor fields
   + probe JSON; `plugins_test` extensions driving `twPlugin::process` directly on
   instances. **Explicitly out:** `twPluginSlotProcessor`, `twPluginInsert`,
-  `twPluginChain` (35-B4 rewrites them; P3b owns the generator modes).
+  `twPluginChain` (36-B4 rewrites them; P3b owns the generator modes).
 - **Gate (ACs):**
   - AC1 `plugins_test`: for each of {native 303, CLAP sine, VST3 TestSine, AU (macOS,
     stock `aumu` — qualitative only)}: a NoteOn(60, vel 100) at offset 1000 of a
@@ -367,8 +367,8 @@ P0b ──┬───────► P1   ├──► P7
 - **Orchestrator-reviewed:** `twpluginevents.h`; the VST3 host support list.
 
 ### P3a — Fader post-FX  *(engine `tw/mix`; app wiring; docs)*
-- **Entry:** 35-B4 merged (one wide page per component; per-bus chains retired)
-  and P2 merged (the `clipThreshold` fixture). Read 35's tracker first (rule 7).
+- **Entry:** 36-B4 merged (one wide page per component; per-bus chains retired)
+  and P2 merged (the `clipThreshold` fixture). Read 36's tracker first (rule 7).
 - **Modules:** `tw303a/mix` (+ CONTRACT), `main/objects/track` (fader/mute wiring),
   `main/testkit`, `docs/contracts/THREADING.md` (none), CLAUDE.md "Level meters"
   paragraph, `tw303a/metering/CONTRACT.md` note.
@@ -404,7 +404,7 @@ P0b ──┬───────► P1   ├──► P7
   `calcOutputTo`.
 
 ### P3b — Instrument slot + event feed  *(engine ↔ app)*
-- **Entry:** P1, P2, P3a merged; 35-B4 merged.
+- **Entry:** P1, P2, P3a merged; 36-B4 merged.
 - **Modules:** `main/objects/track` (+ CONTRACT: `SPluginChain`/`SPluginSlot` slot-0
   rules, `STrack::instrumentSlot()`, event feed wiring, project end + tail),
   `tw303a/plugins` (processor generator modes, pass-through sum, chain head rule,
@@ -463,7 +463,7 @@ P0b ──┬───────► P1   ├──► P7
   - AC10 CONTRACT/docs: plugins inv. 5/6/16 amended, discontinuity paragraph
     rewritten, "instruments freeze-only" + `REVAL_WORKERS=0` note in testkit
     CONTRACT; FREEZE_PROTOCOL class-1 paragraph; track CONTRACT instrument rules.
-  - **Not gated (PR body):** stereo (sink mono until 35-B5; channel 0 only); real
+  - **Not gated (PR body):** stereo (sink mono until 36-B5; channel 0 only); real
     third-party instruments (demo only); render-vs-playback identity; arp →
     instrument in-app (P9).
 - **Orchestrator-reviewed:** the continuity protocol; the pass-through wiring;
@@ -728,8 +728,8 @@ read §6, STATE.md tail, `git log --oneline -15`, the branch's open PR, then cod
 | P0b `tw/events` leaf | ☑ | 2026-08-15 | 88c6758 (branch `feat/36-p0b-events-leaf`) | events_test 96 assertions / 0 failures; layering + logging clean; registered ctest 109 → 110. Full qxa reconciliation NOT completed — stopped by requester instruction pending suite parallelization; best partial run 43/110 green, the 5 failures in a second partial run were all 30 s render TIMEOUTS under six concurrent suites and had passed in the first. |
 | P1 event clips in the model | ☑ | 2026-08-15 | `feat/36-p1-event-clips` — `e2fb1df`, `d7cdbae`, `402ef68`, `cd89d24` | AC1-AC4b, AC6, AC7 green. **ctest -j4: 124/124** (127 registered, 3 `au_*` disabled), goldens 69/69 byte-identical. AC5 is orchestrator-run — the fixture is `smaragd/build/midi_clip_roundtrip.qxp`. Two extra testkit verbs (`assert-clip-window`, the `noteoff*` kinds) and `events`+`objects/midi` also granted to testkit; `mode="channels"` and MIDI-out attributes deferred. See STATE.md 2026-08-15 |
 | P2 plugin ABI events + fixtures + native 303 | ☑ | 2026-08-15 | `feat/36-p2-plugin-events` | AC1–AC8 green. `clipThreshold` is param id **2**, not 1 (id 1 was already the block-size reporter). AU implemented but UNVERIFIED (Windows). Full ctest NOT run — requester instruction. |
-| P3a fader post-FX | ☐ | | | after 35-B4 |
-| P3b instrument slot + event feed | ☐ | | | after 35-B4 |
+| P3a fader post-FX | ☐ | | | after 36-B4 |
+| P3b instrument slot + event feed | ☐ | | | after 36-B4 |
 | P3c render barrier + determinism | ☐ | | | |
 | P4 event editor + virtual keyboard | ☑ | 2026-08-15 | `feat/36-p4-event-editor` | AC1/AC2/AC3/AC5 green; **AC4 (audible) SKIPPED - it needs P3b**, and belongs in a P3b case. ctest -j4: **128/128 run green** (131 registered, 3 `au_*` disabled); layering + logging clean. New module `main/eventui` at the rank of `pluginui` with NO edge to `timeline` (the axis link lives in the shell). Cases `piano_roll_edits`, `event_editor_dock`, `track_head_density`. CC lanes are draw-one-point (curve drawing is P6) and the `A` button is the seam only. See STATE.md 2026-08-15 |
 | P5 automation model + engine | ☐ | | | |

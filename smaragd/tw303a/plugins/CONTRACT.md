@@ -16,7 +16,7 @@ event-aware process() overload, capabilities()/audioOutBus*/tailFrames(), the
 CLAP/VST3/AU translation behind them, scanner version 2, and twNativeInstrument
 (the in-repo 303, format "tw", uid tw.native.303, registered like
 twPassThrough). It changed NOTHING in twPluginSlotProcessor, twPluginInsert or
-twPluginChain — the hosting components are rewritten by proposal 35-B4 and the
+twPluginChain — the hosting components are rewritten by proposal 36-B4 and the
 generator modes are proposal 37 P3b, so today NOTHING in the app calls the new
 overload and every rendered byte is unchanged.
 
