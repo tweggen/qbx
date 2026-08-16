@@ -82,8 +82,9 @@ SApplyResult SRenderAction::apply(SProject *project)
     params.extent = audio::RenderParams::Extent::EntireProject;
     params.startTimeSec = 0.0;
     // The ARRANGEMENT decides how long this render is (it used to be a hardcoded
-    // 60 s, which truncated anything longer and padded everything shorter),
-    // unless the case pins an explicit durationSec.
+    // 60 s, which truncated anything longer and padded everything shorter) —
+    // unless the case explicitly asks for LESS with durationSec=, which is the
+    // only thing that attribute is for now that the default is honest.
     params.endTimeSec = ( durationSec_ > 0.0 ) ? durationSec_
                                                : project->getDurationSeconds();
 
@@ -110,16 +111,26 @@ SApplyResult SRenderAction::apply(SProject *project)
     // raises it (see smaragd/CMakeLists.txt) and relies on CTest's own per-test
     // TIMEOUT as the real hang guard -- a bound that is about the test, not
     // about one action inside it.
-    // The default budget scales with the arrangement now that the extent is
-    // not a fixed minute (PR #34): a case may legally render several minutes
-    // of audio. SMARAGD_RENDER_TIMEOUT_MS, when set, replaces it outright.
-    int maxWaitMs = 30000 + static_cast<int>(params.endTimeSec * 2000.0);
+    // Two independent corrections, and BOTH are needed — they answer different
+    // questions and neither subsumes the other:
+    //
+    //   * how much audio is there?  The budget scales with the arrangement, now
+    //     that the extent is not a fixed minute (a case may legally render
+    //     several minutes, and a flat ceiling would fail it for being long);
+    //   * how slow is this machine?  The base is overridable, because scaling
+    //     with the CONTENT does nothing about a box that is ten times slower
+    //     than usual.
+    //
+    // Keep only the scaling and `-j8` still kills short renders on a busy box;
+    // keep only the override and a five-minute render needs an absurd constant.
+    int maxWaitMs = 30000;  // base: the machine-speed half
     {
         const QByteArray env = qgetenv("SMARAGD_RENDER_TIMEOUT_MS");
         bool ok = false;
         const int v = env.toInt(&ok);
         if (ok && v > 0) maxWaitMs = v;
     }
+    maxWaitMs += static_cast<int>(params.endTimeSec * 2000.0);  // the content half
     auto start = std::chrono::steady_clock::now();
     while (app.isRenderingActive()) {
         auto now = std::chrono::steady_clock::now();
