@@ -74,9 +74,16 @@ construction.
    consistent and `twSpeaker`/`AudioEngine`/the RT callback are **not touched at
    all**. Accepted consequence: an underrun reads as normal level, not as a dip.
 
-5. **Mono.** `STrack` does `setNBusses(2)` but `SStdMixer` runs one bus
+5. **Mono.** ~~`STrack` does `setNBusses(2)` but `SStdMixer` runs one bus
    (`sstdmixer.cpp:433`) and `freezePage_nolock` renders `idx = 0` only, so there
-   is no second channel to meter. Never write an `L != R` assertion.
+   is no second channel to meter. Never write an `L != R` assertion.~~
+   **SUPERSEDED by proposal 36 (2026-08-16).** Meters are N-lane: one
+   `twLevelProbe` reports N lanes, and `L != R` on a file is now a legitimate
+   assertion. Note this entry's *other* prediction was wrong in a useful way — a
+   stereo meter is **not** "two probes", because two would scan and resolve the
+   same page twice. The design this entry got right is the one that survived
+   untouched: levels are read from frozen pages **by position**, which is why
+   making them N-lane moved no rendered byte.
 
 ## Design
 

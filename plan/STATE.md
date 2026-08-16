@@ -9593,3 +9593,236 @@ separately and is green. Both new qxa cases pinned with `repeat_test.sh` FROM
 `tests/cases/` (§7 trap 11) over `SMARAGD_REVAL_WORKERS` {1,4,8,16}: 10/10 each,
 80/80 in total, and the harness's own byte-identical-render check green on every
 run. No flake was seen anywhere in this session.
+
+---
+
+## 2026-08-15 — Proposal 36 M1: the channel count becomes project data (inaudible)
+
+`SProject::channels()` + `<SProject … channels='N'>`, read with the `sampleRate`
+**warn-and-default** idiom: missing ⇒ 2 (today's audible behaviour) plus exactly
+one warning, and an unsupported value (3, 16, `abc`, negative) is warned-and-
+defaulted rather than refusing the document. Valid widths 1/2/4/6/8 are gated in
+one place; `set-project-channels` rejects rather than clamps. The `nBusses`
+loader/ctor drift was fixed at the same time (the attribute defaulted to `"1"`
+while the ctor built 2, so a file omitting it asked for a shrink).
+
+**The milestone's defining constraint was that NOTHING propagates**, and an AC
+proved it by instrumentation rather than inspection: `STrack::setNBussesCallCount()`
+is unchanged across the action and its undo, and renders before/after/undone/
+reloaded are byte-identical.
+
+Two findings worth more than the code:
+
+- **`Q_ASSERT_X` is compiled OUT of the build everyone runs.** `smaragd/CMakeLists.txt`
+  strips `-DNDEBUG` from RelWithDebInfo to keep the engine's asserts, but Qt still
+  defines `QT_NO_DEBUG`. So `STrack::setNBusses`'s shrink did not "assert the app
+  dead" — it returned **silently**, leaving stale wiring. That is the worse
+  failure, and it is why the `nBusses` drift stayed invisible: the resulting count
+  was right by accident.
+- **`load-project` deserializes INTO the current project instead of replacing it**,
+  so a `.qxa` save→load→save accumulates orphan mixers and chains (2157 → 4186
+  bytes). Pre-existing, contradicts `objects/track/CONTRACT.md` inv. 7, and it is
+  why the golden corpus must not be built on a round trip.
+
+Also: `serialization_roundtrip_test` is a `tw_core` test over `Fraction` and
+base64 — **it never sees a `.qxp`** — so it is not evidence about document
+round-tripping, whatever an AC says.
+
+## 2026-08-15 — Proposal 36 B1b: the frozen page grows a channel dimension
+
+`twOutputPage` gains `channels()` (const, immutable after allocation), planar
+storage with a **constant `CHANNEL_STRIDE == FRAME_CAPACITY`** — not a
+`validFrames`-relative stride, which would change as tails shorten — and
+`channelPtr(c)` / `channelFrames()`. The sample buffer is now **private**, which
+is what turns "every consumer was converted" from a grep result into something
+the compiler checks: 19 consumer files converted, and a grep for the raw buffer
+returns only the lines inside the page class.
+
+**Every page in the tree stayed one channel wide**, which is the whole point of
+the ordering: the phase is pure mechanism, so any golden that moved would be a
+mistake rather than a feature. Both goldens byte-identical; page residency
+identical to the byte (49 pages / 12,845,056 B).
+
+The new `page_channels_test` is the only gate that can see a wrong
+`samples` → `channelPtr()` conversion — at width 1 a mistake and a correct
+conversion are the same instruction, so neither the byte gate nor the grep can
+tell them apart. Proven able to fail: a deliberately broken stride reports 10
+failures, first at *channel 0 frame 65535*.
+
+Findings: **`getDataPtr()` has zero callers in the entire tree** (dead
+polymorphic API), and **`sampleCount() == channels * FRAME_CAPACITY` is not
+universally true** — a pre-existing mono-scratch path resizes a page's buffer to
+an arbitrary length, so `channelFrames()` is the only honest frame bound.
+
+## 2026-08-15 — Proposal 36 B2: components declare width; the wide render path exists
+
+`getOutputChannels()` (default 1, **deliberately not** `getNOutputs()`, which
+already means three different things in three classes) is authoritative for page
+width from here on. `renderPageWide()` forks on **`page->channels()`**, so width 1
+makes byte-for-byte the same call as before; a width > 1 component that does not
+override it **refuses and reports** — a real runtime check plus `TW_LOGE`, never a
+`Q_ASSERT`, which this build compiles out.
+
+§4.4's plug rule landed as one clamp in `twStreamingLatch::copyData`
+(`min(getIndex(), page->channels()-1)`), which is what finally gave
+`twSampleReader`'s per-channel latches a meaning. §4.5's
+width-mismatch-is-a-miss gates every acceptance in `AudioEngine::updateFrozenPage`
+and every rung of `twLevelProbe`'s ladder.
+
+**The gates were mutation-tested**: hardcoding channel 0 back into `copyData` → 2
+failures; width-blind allocation → 17; a "helpful" base `renderPageWide` → exactly
+the 3 refusal checks.
+
+Two corrections that mattered more than the code. **§4.3's sketched
+`renderPageWide(out, const twFrozenInputs&, …)` is not buildable** —
+`freezePage_nolock` has no `twFrozenInputs` in hand (the set is thread-scoped),
+and threading it in would have changed the width-**1** path's signature, the one
+thing that must not move. And **§4.5 had to be restated against the producer's
+declared width**, not "what the consumer expects": the latter is undefined without
+new plumbing, and a narrow consumer of a correctly-wide page would have read as a
+mismatch — silencing playback for the entire gap between B4 and B5.
+
+## 2026-08-16 — Proposal 36 B3: the clip path goes wide
+
+`twSampleReader`, `twLoopReader` and `twWavInput` become wide; nothing else does.
+A stereo file's channel 1 is computed for the first time — and narrowed to channel
+0 at the track boundary by the plug rule, which is exactly how a stereo clip stays
+audible-as-mono until B4.
+
+- **`twLoopReader` needed its own `renderPageWide`.** Inheriting the linear one
+  would have turned a looping stereo clip into a single linear pass — audible, and
+  **invisible to any width-1 gate**.
+- **`twWavInput`'s hardcoded `getNOutputs() → 4`** (with one latch built) mattered
+  beyond tidiness: `SCut::resolveClip` falls back to the *content's* root component
+  until a reader exists, and that fallback was the last narrowing point.
+- Width needed **no** threading through `twView`/`twLoopMap` (it survives by
+  construction), and **no** sidecar version bump — `warp.pcm` already carries the
+  channel count as field 3 and re-checks it, so the gate forges two entries at one
+  key and asserts adopt-vs-miss.
+
+`wide_reader_test` compares every page channel **sample-for-sample** against
+`twRandomSource::read()`, because an RMS check cannot see the failure §4.3 exists
+to prevent — channel 1 holding the next page's audio has perfectly plausible RMS.
+
+Two findings: **`test_sawtooth.wav` is a two-channel file with byte-identical
+channels**, used by 80 of 89 cases, so from B3 every clip in the suite freezes a
+width-2 page; and **§2 was half wrong about capture** — `rebuildReader` calls
+`buildCapture_` only when there is no random source, so sample-backed stretch and
+pitch went wide here, not in B7.
+
+## 2026-08-16 — Proposal 36 B4: the whole track path goes wide, plugins included
+
+A track is now **one `twTrackMix` + one `twPluginChain` + one `twRewire`, N
+channels wide**, and a slot is **one `twPluginInsert`**. Retired with the per-bus
+instantiation: the `setNBusses` grow-crash, the shrink-assert, the processor's
+all-bus cache, the sideways sibling gather. `SStdMixer` takes its width from
+`SProject::channels()`; `twRewire` becomes the channel-mapping component its FIXME
+asked for.
+
+`twPluginSlotProcessor` **stays**, as the plugin lifetime/state holder only:
+proposal 08 inv. 18 depends on a slot's graph identity *being* its processor, so a
+rescan hands it a new factory rather than re-wiring every chain. `nBusses='2'`
+retires from the writer and is read-and-ignored — a track has no bus count, it has
+the project's width, and a derived per-track copy is the second authority whose
+drift already cost this project once (M1).
+
+**AC B4.8 could not be made true, and the agent stopped rather than choosing.**
+A `channels='1'` project running a 2-in/2-out plugin now takes **MonoFold** —
+proposal 08's settled table, re-derived from page width. The mono golden was
+re-frozen under licence, because **the old bytes were never a mono project's
+output**: until B4 the project's width reached no track at all, so every track ran
+two buses and the master discarded one. Confinement was checked rather than
+assumed — 114,222 bytes differ, first at 643,244 and last at 758,443, the
+`twtestclap` window to the byte at both ends, with 56,630 of 57,600 samples within
+0.333 LSB of `old·2/3`. The remaining 970 are the same finding from the other
+side: **the old render was clipping**, `1.5·g·x` overflowing 16-bit where
+MonoFold's `1.0·g·x` does not.
+
+## 2026-08-16 — Proposal 36 B5: the sink goes wide (first audible multichannel)
+
+**`AudioFrame` is deleted.** `float channels[MAX_CHANNELS]` with `MAX_CHANNELS == 2`,
+in `tw/core` where every sink and the engine saw it, *was* the hard stereo cap.
+`AudioSink` is a block interface now — `writeFrames(interleaved, nFrames, channels)`
+— so width travels with the call, which also retires `FileSink`'s frame-at-a-time
+write. `pullBlock` takes N planar buffers, each read through the §4.4 clamp so a
+stale narrow page under proposal 16 can never be an OOB read on the audio thread;
+one resampler per channel. `RenderSession` interleaves from one wide root page.
+
+**The device rule (requester decision):** `L = ch0; R = (width >= 2) ? ch1 : ch0` —
+mono-to-stereo at or below two channels, **first two only** above it, the rest
+computed and dropped at the device. **Device path only**: render and monitor share
+no code, so a 6-channel project renders six channels *and* monitors in stereo.
+Logged once per width, and asserted at width 6 into a **6-channel device** as well
+as a stereo one — the case that stops a later refactor fanning channel 2 into
+output 2.
+
+Both goldens re-frozen under licence: mono a **shape** change (2 ch → 1, 768,044 →
+384,044 bytes, samples exactly the old channel 0 across all 192,000 frames), stereo
+a **content** change (channel 0 byte-identical; channel 1 differs in exactly frames
+160,800–189,599 at ratio 2.996, the skew fixture's 3, in a file).
+
+**Two gates could never have done their job.** `channel_assert_dupmono` was built
+as *the* signal that the sink went wide — it did not break, and could not have,
+because its fixture's channels are byte-identical, so its render's channels are
+equal *after* the sink went wide for the same reason they are equal in the source.
+**A gate whose fixture cannot distinguish the two states is not a gate for that
+distinction.** It is now a pair (sawtooth equal / `test_stereo` different).
+`mc_width_change` had the same defect from the other side. Trap 14's inference —
+"when the goldens diverge, the sink is real" — is **spent**: they diverged at B4
+while the sink was still mono.
+
+## 2026-08-16 — Proposal 36 B7: container/asset clips keep their channels
+
+`SCut::buildCapture_` had built its `twCapturingSource` with a hard-coded **1
+channel** since proposal 07 — the last narrowing point in the clip path. Both
+branches now capture every channel, clamped against **the page in hand**;
+`twCapturingSource` itself needed no change, having taken `channels` since
+proposal 07 with planar arithmetic that had simply never run above width 1.
+
+**The capture-pool question was aimed at the wrong object.** `CapturePagePool`'s
+element is an **aspect page** (a 1 kHz preview waveform or a metadata blob) with
+no frame, stride or channel anywhere in its type, and nothing on the audio path
+allocates one: 528 MiB reserved eagerly per project against a **peak occupancy of
+one page** across the whole corpus. What multiplies by width is
+`twCapturingSource`'s planar buffer — 115,200 → 230,400 B, exactly ×N. The pool's
+size is a real problem and **not a width problem**.
+
+AC B7.4 landed on B3's arithmetic target **to the byte**: +262,144 B = exactly one
+256 KiB channel plane, the eighth and last mono reader page going wide, with the
+mono project not moving at all as the control. The new gate was proven able to
+fail: against the pre-change binary the container window read delta **0.000000**
+with one channel reported, while the stretched and pitched windows were bit-for-bit
+identical.
+
+## 2026-08-16 — Proposal 36 B8: metering, preview and the UI stop lying
+
+Meters go N-lane (`twLevelSample`/`SLevelMeter` were scalar **by type**), preview
+probes fold **every** channel, and the render dialog stops being silent about
+width. Both goldens stay byte-identical — the sharpest check available that
+proposal 34's read-by-position design survived being made N-lane.
+
+**Trap 26 settled, and it was not the shape it was recorded as.** A Preview aspect
+page holds float samples decimated to ~1 kHz, channel 0, no geometry — and its
+payload has **zero readers in the tree**. The disagreeing reader was proven
+unreachable two independent ways (statically: `currentPage_` is only written for
+objects passed to `scheduleRevalidation()`, whose only call sites pass an `SCut`;
+at runtime: an instrumented build recorded **0** calls across four cases). It was
+**deleted, not fixed** — even with the right element type it ignored
+`start`/`length`/`nProbes` against a buffer carrying no probe geometry. The version
+bump came afterwards, in its own commit.
+
+Decisions: **two lanes on the track head**, following the device rule, because
+capping at the pair you can actually hear keeps the head honest about the monitor
+path rather than inventing a second reduction for the eye — the **Track Detail dock
+shows every channel**, and the cap is announced (`describe()` reports `lanes=` and
+`width=`; the tooltip points at the dock). The **render dialog displays** the
+width rather than overriding it: an override needs channel roles and a fold law,
+a stated non-goal.
+
+Corrections: the bump's stated reason was wrong in mechanism (`channels` is *not*
+key material; old sidecars would have mis-hit because **nothing checked**), and
+proposal 34's "a stereo meter is two probes" is wrong — it is **one** probe
+reporting N lanes, since two would scan and resolve the same page twice.
+
+**New debt:** `SObject::getCapture` never schedules revalidation, which is *why*
+only an `SCut` can own an aspect page — the asymmetry that kept trap 26 latent.
