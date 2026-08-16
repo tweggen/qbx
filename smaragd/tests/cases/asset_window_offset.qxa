@@ -39,7 +39,7 @@
          4-6 s carries the asset alone and no summing can mask a wrong offset. -->
     <place-asset assetName="Section" trackPath="1" timePos="192000"/>
 
-    <render filename="asset_window_offset.wav" format="wav" quality="10" durationSec="7.5"/>
+    <render filename="asset_window_offset.wav" format="wav" quality="10"/>
 
     <!-- 0-1 s: track 0's own clip, source sec0. Guards the baseline. -->
     <assert-audio-energy filename="asset_window_offset.wav"
@@ -59,9 +59,10 @@
 
     <!-- 6-7 s: past the asset's 2 s window; silence (catches a capture that
          over-runs its window, and page bleed). -->
-    <assert-audio-energy filename="asset_window_offset.wav"
-                         startFrame="288000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="asset_window_offset.wav"
+                         minFrames="288000" maxFrames="288000"/>
   </actions>
 
   <assertions>

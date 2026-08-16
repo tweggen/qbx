@@ -30,7 +30,7 @@
     <assert-warp-anchor clip="0,0" src="96000" warped="96000" count="2"/>
     <assert-warp-anchor clip="0,0" src="192000" warped="288000"/>
 
-    <render filename="warp_marker_a.wav" format="wav" quality="10" durationSec="7.5"/>
+    <render filename="warp_marker_a.wav" format="wav" quality="10"/>
     <!-- unwarped first half: source second 1 lands at output second 1 -->
     <assert-audio-energy filename="warp_marker_a.wav"
                          startFrame="48000" frameCount="48000"
@@ -43,10 +43,10 @@
     <assert-audio-energy filename="warp_marker_a.wav"
                          startFrame="240000" frameCount="48000"
                          minRms="0.38" maxRms="0.48"/>
-    <!-- silence after the warped clip -->
-    <assert-audio-energy filename="warp_marker_a.wav"
-                         startFrame="288000" frameCount="48000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="warp_marker_a.wav"
+                         minFrames="288000" maxFrames="288000"/>
 
     <!-- Move the second marker: 192000 now lands at 240000 (2x -> 1.5x for
          source [2,4)s). Output is a 5 s span of audio; [5,6)s reads past the
@@ -54,7 +54,7 @@
     <move-warp-marker clip="0,0" src="192000" newWarped="240000"/>
     <assert-warp-anchor clip="0,0" src="192000" warped="240000"/>
 
-    <render filename="warp_marker_b.wav" format="wav" quality="10" durationSec="7.5"/>
+    <render filename="warp_marker_b.wav" format="wav" quality="10"/>
     <!-- 1.5x interior: output second 4 reads source [3.33,4.0)s (wide band;
          the orchestrator pins it after the first run) -->
     <assert-audio-energy filename="warp_marker_b.wav"

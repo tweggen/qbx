@@ -69,6 +69,19 @@ public:
     // by index-path, so a NESTED lane can be exercised.
     bool groupTrackGesture( const QString &trackPath, bool ungroup );
 
+    // Testkit: the multi-track selection. selectTrackGesture() is one REAL
+    // head click with modifiers (plain / ctrl / shift), so the click semantics
+    // themselves are what runs; toggleTrackHead() presses a head's M/S/R
+    // button, so a broadcast over the selection is what runs. Both address the
+    // lane by index-path and go through the shell because testkit may not
+    // include app/timeline (testkit CONTRACT inv. 5).
+    bool selectTrackGesture( const QString &trackPath, Qt::KeyboardModifiers mods );
+    bool toggleTrackHead( const QString &trackPath, const QString &which, bool on );
+    // ...and a grip-drag of a head onto a lane row (nest) or onto its top
+    // boundary (reorder / pop out), which is the only route to the multi-track
+    // move arithmetic in endTrackDrag.
+    bool dragTrackHead( const QString &trackPath, int targetRow, bool nestOnto );
+
     // TEST ENTRY POINT: paint a level meter carrying a known level into a PNG.
     // The ONLY coverage of SLevelMeter::paintEvent — the describe() assertions
     // check the geometry maths, but nothing else proves the widget draws. Returns

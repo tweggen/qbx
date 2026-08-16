@@ -33,7 +33,7 @@
          1 s, so the clip should snap to start at exactly 1 s and run 1 s .. 6 s. -->
     <drag-clip-edge track="0" clip="0" edge="start" toTime="48000" half="upper"/>
 
-    <render filename="loop_start_edge_drag.wav" format="wav" quality="10" durationSec="7.5"/>
+    <render filename="loop_start_edge_drag.wav" format="wav" quality="10"/>
 
     <!-- Before the new start: still silence. -->
     <assert-audio-energy filename="loop_start_edge_drag.wav"
@@ -61,10 +61,10 @@
                          startFrame="244000" frameCount="40000"
                          minRms="0.055" maxRms="0.080"/>
 
-    <!-- Past the clip end at 6 s: silence. -->
-    <assert-audio-energy filename="loop_start_edge_drag.wav"
-                         startFrame="292000" frameCount="40000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="loop_start_edge_drag.wav"
+                         minFrames="288000" maxFrames="288000"/>
   </actions>
 
   <assertions>

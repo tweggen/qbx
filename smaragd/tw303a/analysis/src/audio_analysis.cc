@@ -7,13 +7,34 @@
 
 namespace audio {
 
+bool readAudioFileInfo(const std::string &filename, AudioFileInfo &info,
+                       std::string &error)
+{
+    info = AudioFileInfo{0, 0, 0};
+
+    SF_INFO sfInfo;
+    std::memset(&sfInfo, 0, sizeof(sfInfo));
+
+    SNDFILE *infile = sf_open(filename.c_str(), SFM_READ, &sfInfo);
+    if (!infile) {
+        error = std::string("Failed to open audio file: ") + sf_strerror(nullptr);
+        return false;
+    }
+
+    info.frameCount   = (int64_t) sfInfo.frames;
+    info.channelCount = sfInfo.channels;
+    info.sampleRate   = sfInfo.samplerate;
+    sf_close(infile);
+    return true;
+}
+
 AcousticMetrics analyzeWavFile(const std::string &filename, std::string &error,
                                int channelIndex)
 {
     // The whole file IS a region: frameCount < 0 means "to the end". This used
     // to open the file itself only to pass sfInfo.frames back down, and passed
     // a hard-coded -1 for the channel — so `channel=` was silently dropped on
-    // every whole-file assertion (proposal 36 M0).
+    // every whole-file assertion.
     return analyzeWavFileRegion(filename, 0, -1, channelIndex, error);
 }
 

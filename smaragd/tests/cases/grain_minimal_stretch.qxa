@@ -21,17 +21,17 @@
                  duration="240000" loopLength="0" stretch="1.25"/>
 
     <!-- Render the grain-processed audio -->
-    <render filename="grain_minimal_stretch.wav" format="wav" quality="10" durationSec="6.5"/>
+    <render filename="grain_minimal_stretch.wav" format="wav" quality="10"/>
 
     <!-- Clip region: healthy stretched-ramp energy -->
     <assert-audio-energy filename="grain_minimal_stretch.wav"
                          startFrame="0" frameCount="240000"
                          minRms="0.20" maxRms="0.32"/>
 
-    <!-- Past the stretched clip end: silence -->
-    <assert-audio-energy filename="grain_minimal_stretch.wav"
-                         startFrame="240000" frameCount="48000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="grain_minimal_stretch.wav"
+                         minFrames="240000" maxFrames="240000"/>
 
     <!-- Peak amplitude should not clip (ramp tops out at 0.8) -->
     <!-- Full-scale allowed (proposal 26): Rubber Band preserves RMS but can

@@ -39,29 +39,30 @@
     <set-formant-preserve clip="0,0" on="1"/>
     <set-pitch clip="0,0" cents="1200"/>
 
-    <render filename="clip_properties_a.wav" format="wav" quality="10" durationSec="5.0"/>
+    <render filename="clip_properties_a.wav" format="wav" quality="10"/>
 
     <!-- One octave up: 439.x Hz -> ~878 Hz (±3%) -->
     <assert-audio-frequency filename="clip_properties_a.wav"
                             startFrame="48000" frameCount="24000"
                             minHz="852" maxHz="905"/>
-    <!-- Same length: the clip still ends at 192000 frames -->
-    <assert-audio-energy filename="clip_properties_a.wav"
-                         startFrame="192000" frameCount="24000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="clip_properties_a.wav"
+                         minFrames="192000" maxFrames="192000"/>
 
     <!-- Serialization roundtrip: the clip properties survive save/load -->
     <save-project path="../../build/clip_properties_actions.qxp"/>
     <load-project path="../../build/clip_properties_actions.qxp"/>
 
-    <render filename="clip_properties_b.wav" format="wav" quality="10" durationSec="5.0"/>
+    <render filename="clip_properties_b.wav" format="wav" quality="10"/>
 
     <assert-audio-frequency filename="clip_properties_b.wav"
                             startFrame="48000" frameCount="24000"
                             minHz="852" maxHz="905"/>
-    <assert-audio-energy filename="clip_properties_b.wav"
-                         startFrame="192000" frameCount="24000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="clip_properties_b.wav"
+                         minFrames="192000" maxFrames="192000"/>
   </actions>
 
   <assertions>

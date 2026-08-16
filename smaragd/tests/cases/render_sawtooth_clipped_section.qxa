@@ -25,7 +25,7 @@
                  duration="48000" loopLength="0" stretch="1.0"/>
 
     <!-- Render the project (two clips of 1 second each) -->
-    <render filename="render_clipped_section.wav" format="wav" quality="10" durationSec="3.5"/>
+    <render filename="render_clipped_section.wav" format="wav" quality="10"/>
 
     <!-- 0-1 s: head clip = source sec0 -->
     <assert-audio-energy filename="render_clipped_section.wav"
@@ -37,10 +37,10 @@
                          startFrame="48000" frameCount="48000"
                          minRms="0.15" maxRms="0.21"/>
 
-    <!-- 2-3 s: past the trimmed tail; must be silence -->
-    <assert-audio-energy filename="render_clipped_section.wav"
-                         startFrame="96000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="render_clipped_section.wav"
+                         minFrames="96000" maxFrames="96000"/>
 
     <!-- Capture the timeline showing the two clips -->
     <screenshot filename="render_clipped_timeline.png" resolution="50%"/>

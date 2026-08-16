@@ -21,7 +21,7 @@
                  duration="288000" loopLength="0" stretch="1"
                  warpAnchors="96000:96000|192000:288000"/>
 
-    <render filename="warp_anchors_a.wav" format="wav" quality="10" durationSec="7.5"/>
+    <render filename="warp_anchors_a.wav" format="wav" quality="10"/>
     <!-- unwarped first half: source second 1 lands at output second 1 -->
     <assert-audio-energy filename="warp_anchors_a.wav"
                          startFrame="48000" frameCount="48000"
@@ -34,15 +34,15 @@
     <assert-audio-energy filename="warp_anchors_a.wav"
                          startFrame="240000" frameCount="48000"
                          minRms="0.38" maxRms="0.48"/>
-    <!-- silence after the warped clip -->
-    <assert-audio-energy filename="warp_anchors_a.wav"
-                         startFrame="288000" frameCount="48000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="warp_anchors_a.wav"
+                         minFrames="288000" maxFrames="288000"/>
 
     <!-- Serialization roundtrip: exact anchors survive save/load -->
     <save-project path="../../build/warp_anchors_roundtrip.qxp"/>
     <load-project path="../../build/warp_anchors_roundtrip.qxp"/>
-    <render filename="warp_anchors_b.wav" format="wav" quality="10" durationSec="7.5"/>
+    <render filename="warp_anchors_b.wav" format="wav" quality="10"/>
     <assert-audio-energy filename="warp_anchors_b.wav"
                          startFrame="48000" frameCount="48000"
                          minRms="0.155" maxRms="0.20"/>

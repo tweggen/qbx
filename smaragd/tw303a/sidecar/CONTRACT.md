@@ -22,9 +22,20 @@ Invariants:
    means the consumer recomputes and (optionally) re-stores. The store is a
    cache, never a source of truth.
 2. A failed or partial file is never observable and is never "repaired".
-   Writers produce files atomically (write to "<path>.tmp", fsync, rename over
-   the target); any validation failure on open (magic, format version, header
-   CRC, ascending region bounds vs. file size) makes the file count as ABSENT.
+   Writers produce files atomically (write to a PRIVATE temp
+   "<path>.<pid>.<seq>.tmp", fsync, rename over the target); any validation
+   failure on open (magic, format version, header CRC, ascending region bounds
+   vs. file size) makes the file count as ABSENT.
+   The temp name is unique per WRITER, not per key, and that is load-bearing:
+   one store root is shared by every process on the machine, so several
+   processes routinely stage the same key at once (`ctest -j` runs the whole
+   suite against one store, and every case using the same fixture derives the
+   same content hash → the same key). A shared "<path>.tmp" would let two
+   writers truncate and interleave into one file, and only the header carries a
+   CRC — a torn payload of the right length passes the region-bounds check and
+   would be read back as valid analysis data, breaking invariant 4. Eviction
+   only ever considers `*.qaf`, so temps are never evicted; a temp leaked by a
+   crash between open and rename is collected by deleting the store (inv. 1).
 3. Identity match is total: aspect id + aspect version + content hash + params
    hash must all agree for a load hit. A file whose aspectVersion no longer
    matches is orphaned — deleted on sight (it can never become valid again).

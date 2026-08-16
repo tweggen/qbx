@@ -75,6 +75,10 @@ option(ENABLE_PULSEAUDIO "Enable PulseAudio audio backend (Linux)"    OFF)
 option(ENABLE_JACK       "Enable JACK audio backend (cross-platform)" OFF)
 option(ENABLE_WASAPI     "Enable WASAPI audio backend (Windows)"      ${SMARAGD_WINDOWS})
 option(ENABLE_COREAUDIO  "Enable CoreAudio audio backend (macOS)"     ${SMARAGD_MACOS})
+# ASIO additionally needs the Steinberg ASIO SDK dropped into
+# smaragd/third_party/asiosdk (license forbids redistributing it as a
+# submodule); without the SDK the option is inert and configure warns once.
+option(ENABLE_ASIO       "Enable ASIO audio backend (Windows)"        ${SMARAGD_WINDOWS})
 
 if(MSVC)
     add_compile_options(/W3 /permissive-)
@@ -112,6 +116,25 @@ foreach(_case ${_QXA_CASES})
                 --test-output-dir ${CMAKE_BINARY_DIR}/test-output/${_name}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/cases
     )
+    # Two properties that together make the suite safe to run with `ctest -j`:
+    #
+    # SMARAGD_RENDER_TIMEOUT_MS -- SRenderAction's watchdog is a WALL-CLOCK budget
+    #   for one render, defaulting to 30 s. It is meant to catch a hung render,
+    #   but on a busy machine it fires on a perfectly healthy one, and `-j` makes
+    #   the machine busy by construction. Measured under `-j8`: a render advancing
+    #   steadily (a page every ~1.6 s rather than ~0.03 s) was killed at 96 % done,
+    #   about a second short. <render> appears 147 times across these cases, so
+    #   that one constant is what caps the usable -j. Raise it here and let the
+    #   TIMEOUT below be the hang guard instead.
+    # TIMEOUT -- and it has to BE a guard, or raising the budget would trade a
+    #   fast false failure for a slow real one. CTest's default is 1500 s; 600 s
+    #   bounds every case (the slowest observed is ~130 s, and that was under an
+    #   8-way run plus three other suites on the box). legacy_project_recovery
+    #   overrides it below with something tighter still.
+    set_tests_properties(qxa.${_name} PROPERTIES
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000"
+        TIMEOUT 600
+    )
 endforeach()
 
 # legacy_project_recovery guards a loader bug whose symptom is a HANG, not a
@@ -136,6 +159,52 @@ if(NOT APPLE)
     endforeach()
 endif()
 
+# --- Running the suite in parallel (`ctest -jN`) ------------------------------
+#
+# The suite is safe to run concurrently. That is a property of the tests, not an
+# accident, and it rests on four things that were audited rather than assumed:
+#
+#  * Per-case artifacts. Every case gets its own --test-output-dir
+#    (${CMAKE_BINARY_DIR}/test-output/<case>), and renders, screenshots, capture
+#    dumps and sidecar-root all resolve THROUGH it (SApplication::testOutputDir).
+#    Nothing a case writes lands in the shared WORKING_DIRECTORY.
+#  * Project save targets. The handful of cases that save a .qxp write to
+#    ../../build/<name>.qxp, i.e. the build root. Those names are unique per case
+#    (au_missing_resave, au_slot_resave, clip_properties_actions,
+#    exact_stretch_roundtrip, plugin_missing_resave, plugin_remove_restores_param,
+#    plugin_slot_resave, takes_roundtrip, warp_anchors_roundtrip) and each is
+#    written and read back by ITS OWN case only. Everything under tests/ that a
+#    case loads is a committed, read-only fixture.
+#  * The derived-data sidecar store. One shared per-user directory, and cases
+#    using the same fixture derive the same key, so concurrent stores of one key
+#    are routine. They are safe because each writer stages its own temp file --
+#    see tw303a/sidecar/CONTRACT.md inv. 2, which is exactly the invariant that
+#    had to be repaired to make `-j` sound.
+#  * The per-user config (smaragd.ini, plugincache.json). Qt's QSettings takes a
+#    QLockFile, and the plugin cache is written through QSaveFile, so a
+#    concurrent write is a lost update at worst, never a torn file. Headless
+#    --test-case runs take no file log sink at all (see main.cpp), so the
+#    rotating smaragd.log is not shared either.
+#
+# RUN_SERIAL is for the opposite kind of test: ones whose assertion is about
+# WALL-CLOCK LATENCY, so a loaded machine changes the answer. They are not
+# isolation failures -- they measure the box, and under `-j` the rest of the
+# suite IS the load. RUN_SERIAL gives them the machine to themselves; it does not
+# make them immune to load from outside this ctest invocation.
+#
+# qxa.log_dock_scale -- log-stress asserts NO SINGLE event-loop pump exceeds
+#     maxStallMs=50 while the log dock drains 300k records. A stall cap is a
+#     latency bound on the GUI thread, so background load moves it directly.
+#
+# The other one, twlog_test, is marked in tw303a/CMakeLists.txt instead:
+# set_tests_properties() only reaches tests added in the SAME directory scope, so
+# marking it from here silently does nothing (`if(TEST twlog_test)` is false
+# here) -- which is exactly how it was missed the first time.
+if(TEST qxa.log_dock_scale)
+    set_tests_properties(qxa.log_dock_scale PROPERTIES RUN_SERIAL TRUE)
+endif()
+
 message(STATUS "smaragd: ALSA=${ENABLE_ALSA} PipeWire=${ENABLE_PIPEWIRE} "
                "PulseAudio=${ENABLE_PULSEAUDIO} JACK=${ENABLE_JACK} "
-               "WASAPI=${ENABLE_WASAPI} CoreAudio=${ENABLE_COREAUDIO}")
+               "WASAPI=${ENABLE_WASAPI} CoreAudio=${ENABLE_COREAUDIO} "
+               "ASIO=${ENABLE_ASIO}")

@@ -4,15 +4,15 @@
 #include <cstddef>
 #include <cstdint>
 
-// Process-wide accounting for frozen page memory (proposal 36 B1a).
+// Process-wide accounting for frozen page memory.
 //
 // There is NO twOutputPage pool to instrument. Pages are make_shared on demand
 // (twcomponent.cc getOrAllocatePage / freezePage, twtrackmix.cc) into unbounded
 // per-component std::map<offset_t, page> caches; CapturePagePool is a DIFFERENT
-// type (CapturePageData) and is used in production nowhere. So "how much page
-// memory is resident" had no answer at all, and every later phase of proposal 36
-// makes a memory claim that needs one — B1b multiplies a page's bytes by its
-// channel count and B9.2 has to publish the 8-channel figure.
+// type (CapturePageData), on the preview/metadata capture path, and is
+// accounted separately below. So "how much page memory is resident" had no
+// answer at all — not for a memory regression, and not for a design change that
+// would like to claim it costs nothing.
 //
 // The instrument is therefore the page's own lifetime, not a pool's free list:
 // twOutputPage's constructor adds its sample bytes and its destructor removes
@@ -27,7 +27,8 @@
 // Deliberately NOT counted: sizeof(twOutputPage) itself (~200 bytes of header
 // beside 262144 bytes of samples), the std::map nodes, and the std::any internal
 // state snapshot, whose size is a component's private business. The number this
-// reports is SAMPLE BYTES, which is the number that grows with channel width.
+// reports is SAMPLE BYTES, which is the one that dominates by three orders of
+// magnitude.
 
 namespace tw {
 namespace pages {

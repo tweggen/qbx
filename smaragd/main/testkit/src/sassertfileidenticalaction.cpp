@@ -17,8 +17,8 @@ SAssertFileIdenticalAction::SAssertFileIdenticalAction( const QString &actual,
 
 namespace {
 
-// Read whole files. A golden in this corpus is ~750 KB; the alternative — a
-// streaming compare in fixed chunks — buys nothing at that size and would make
+// Read whole files. A rendered WAV in this suite is a few hundred KB to a few
+// MB; a streaming compare in fixed chunks buys nothing there and would make
 // the "how many bytes differ in total" figure harder to get right, which is the
 // part of the diagnosis a hash could not give.
 bool readAll( const QString &path, QByteArray &out, QString &err )
@@ -61,10 +61,10 @@ SApplyResult SAssertFileIdenticalAction::apply( SProject *project )
         return { false, nullptr };
     }
     if( !readAll( pathE, e, err ) ) {
-        // A missing GOLDEN is a different failure from a missing render, and the
-        // one place this verb gets used wrong: naming a golden that was never
-        // committed would otherwise read as "the render is wrong".
-        qWarning() << "SAssertFileIdenticalAction: expected (the golden):" << err
+        // A missing REFERENCE is a different failure from a missing render, and
+        // the one place this verb gets used wrong: naming a reference that was
+        // never produced would otherwise read as "the render is wrong".
+        qWarning() << "SAssertFileIdenticalAction: expected (the reference):" << err
                    << "- tried" << triedE;
         return { false, nullptr };
     }

@@ -6,8 +6,8 @@
 /**
  * Assertion action: verify that two channels of a WAV carry DIFFERENT audio.
  *
- * The discriminator proposal 36 M0 exists to add. Until it, "these channels are
- * genuinely different" could only be INFERRED — by asserting a per-channel RMS
+ * Before this verb, "these channels are genuinely
+ * different" could only be INFERRED — by asserting a per-channel RMS
  * band on each and reading the two results against each other, which needs the
  * expected numbers to be known in advance and says nothing when they happen to
  * coincide. Worse, the sink duplicates one bus into every channel today
@@ -42,7 +42,8 @@
  *
  * Pair it with `expectReject="true"` to assert the OPPOSITE — that two channels
  * are the same audio. That is the shape of today's duplicated-mono sink, and
- * the day the sink goes wide (M3) such a case is supposed to fail.
+ * the day the sink goes wide such a case is supposed to fail — that is the
+ * signal it exists to give, not a regression to loosen.
  */
 class SAssertChannelsDifferAction : public SAction {
 public:

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   The channel-selecting assert verbs, gated against a fixture whose channels are
-  KNOWN to differ (proposal 36 M0).
+  KNOWN to differ.
 
   ../test_channels4.wav is written by gen_channel_fixture (tw303a/analysis/tools):
   four channels of a 480 Hz sine, 12000 frames = 120 whole cycles at 48 kHz, at
@@ -56,7 +56,7 @@
                          expectReject="true"/>
 
     <!-- ================= assert-audio-energy, frameCount OMITTED ========== -->
-    <!-- THE BUG. Before M0 every one of these measured the pooled 0.28810. -->
+    <!-- THE BUG. Every one of these used to measure the pooled 0.28810. -->
     <assert-audio-energy filename="../test_channels4.wav"
                          channel="0" minRms="0.495" maxRms="0.505"/>
     <assert-audio-energy filename="../test_channels4.wav"

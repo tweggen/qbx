@@ -44,6 +44,9 @@ const Fixture kFixtures[] = {
     { "assert-audio-peak",
       "<assert-audio-peak filename='r.wav' maxPeak='0.5' startFrame='1024'"
       " frameCount='2048' channel='0'/>" },
+    { "assert-audio-length",
+      "<assert-audio-length filename='r.wav' minFrames='190000'"
+      " maxFrames='200000'/>" },
     // No startFrame: these writers omit their default-valued optional
     // attributes, and a fixture must only declare what comes back.
     { "assert-audio-frequency",
@@ -63,15 +66,20 @@ const Fixture kFixtures[] = {
     { "assert-file-contains",
       "<assert-file-contains path='p.qxp' text='uid=&apos;x&apos;'"
       " absent='true'/>" },
-    // proposal 36 B1a. maxReportedDiffs is written only when it is NOT the
-    // default 8, so the fixture gives it another value to keep it in the audit.
+    // maxReportedDiffs is written only when it is NOT the default 8, so the
+    // fixture gives it another value to keep it in the audit.
     { "assert-file-identical",
-      "<assert-file-identical actual='r.wav' expected='../goldens/mc_mono.wav'"
+      "<assert-file-identical actual='r.wav' expected='../ref.wav'"
       " maxReportedDiffs='3'/>" },
     // Same shape: maxPages/maxBytes are written only when >= 0.
     { "report-page-memory",
       "<report-page-memory label='after render' maxPages='4096'"
       " maxBytes='1073741824'/>" },
+    // durationSec is written only when > 0, so a fixture must give it one — it
+    // is the only optional attribute `render` has.
+    { "render",
+      "<render filename='r.wav' format='wav' quality='10'"
+      " durationSec='2.5'/>" },
     // minFrames is only written when non-zero, so a fixture must give it one.
     { "dump-playback-capture",
       "<dump-playback-capture filename='playback.wav' minFrames='315392'/>" },
@@ -125,7 +133,6 @@ const Fixture kFixtures[] = {
     { "set-track-volume",
       "<set-track-volume trackPath='1,0' volume='-6'/>" },
 
-    // --- proposal 36 M1 -----------------------------------------------------
     // A NON-default width, deliberately: the default (2) is what an unread
     // attribute also produces, so a fixture of 2 would round-trip through a
     // readXml that ignored the attribute entirely.
@@ -139,6 +146,19 @@ const Fixture kFixtures[] = {
     { "plugin-editor-set-param",
       "<plugin-editor-set-param trackIndex='0' slotIndex='0' paramId='1'"
       " value='0.25'/>" },
+
+    // --- the multi-track selection verbs ------------------------------------
+    // Two-level paths and a modifier COMBINATION deliberately: the modifier
+    // string is re-derived from parsed flags on write, so a single-modifier
+    // fixture would not catch a dropped one.
+    { "select-track",
+      "<select-track trackPath='1,0' modifiers='ctrl+shift'/>" },
+    { "track-head-toggle",
+      "<track-head-toggle trackPath='1,0' control='solo' on='0'/>" },
+    { "drag-track",
+      "<drag-track trackPath='1,0' targetRow='2' mode='before'/>" },
+    { "assert-track-selection",
+      "<assert-track-selection paths='0;1,0' primary='1,0'/>" },
 };
 
 const char *fixtureFor(const QString &verb)

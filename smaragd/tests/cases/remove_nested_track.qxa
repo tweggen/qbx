@@ -48,7 +48,7 @@
          lands at index 1 => the nested lane is path 0,1. -->
     <reparent-track source="1" destParent="0" destIndex="-1"/>
 
-    <render filename="rmtrk_pre.wav" format="wav" quality="10" durationSec="8.5"/>
+    <render filename="rmtrk_pre.wav" format="wav" quality="10"/>
     <assert-audio-energy filename="rmtrk_pre.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
@@ -59,21 +59,21 @@
     <!-- Remove the NESTED lane. Unexpressible before the fix. -->
     <remove-track trackPath="0,1"/>
 
-    <render filename="rmtrk_gone.wav" format="wav" quality="10" durationSec="8.5"/>
+    <render filename="rmtrk_gone.wav" format="wav" quality="10"/>
     <!-- The folder and its own clip survive... -->
     <assert-audio-energy filename="rmtrk_gone.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
-    <!-- ...and only the nested lane's span went silent. -->
-    <assert-audio-energy filename="rmtrk_gone.wav"
-                         startFrame="336000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- ...and only the nested lane's span went away: the arrangement
+         ends at the surviving lane's clip. -->
+    <assert-audio-length filename="rmtrk_gone.wav"
+                         minFrames="192000" maxFrames="192000"/>
 
     <undo count="1"/>
 
     <!-- Restored under its ORIGINAL parent at its ORIGINAL index, with its whole
          subtree (the clip is part of the pinned track, not re-created). -->
-    <render filename="rmtrk_back.wav" format="wav" quality="10" durationSec="8.5"/>
+    <render filename="rmtrk_back.wav" format="wav" quality="10"/>
     <assert-audio-energy filename="rmtrk_back.wav"
                          startFrame="336000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
@@ -85,10 +85,11 @@
          lane, which a mixer-relative index would not have after the round trip. -->
     <redo count="1"/>
 
-    <render filename="rmtrk_redone.wav" format="wav" quality="10" durationSec="8.5"/>
-    <assert-audio-energy filename="rmtrk_redone.wav"
-                         startFrame="336000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <render filename="rmtrk_redone.wav" format="wav" quality="10"/>
+    <!-- ...and only the nested lane's span went away: the arrangement
+         ends at the surviving lane's clip. -->
+    <assert-audio-length filename="rmtrk_redone.wav"
+                         minFrames="192000" maxFrames="192000"/>
     <assert-audio-energy filename="rmtrk_redone.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>

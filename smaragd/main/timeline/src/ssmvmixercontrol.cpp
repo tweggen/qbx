@@ -101,6 +101,21 @@ void SSMVMixerControl::applyVolume_( double newVolume )
 }
 
 /**
+ * Wheel over a track head = wheel over the arranger canvas. The head column is
+ * part of the same view, so scrolling/zooming there had to work; without this
+ * the event just died in the head (QWidget's default ignores it, and the column
+ * viewport is not in the canvas' parent chain).
+ *
+ * The fader is the one exception: it accepts the wheel itself (1.0 dB per
+ * notch, see its singleStep), so those events never reach here.
+ */
+void SSMVMixerControl::wheelEvent( QWheelEvent *ev )
+{
+    if( !smv_.wheelFromHead( ev ) )
+        QWidget::wheelEvent( ev );
+}
+
+/**
  * Double-clicking the fader resets it to unity gain (0.0 dB). We intercept the
  * event here rather than subclass QSlider; the slider would otherwise treat the
  * second press as the start of another drag.
@@ -121,10 +136,9 @@ bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
     if( watched == qTrkLabel_ && ev->type() == QEvent::MouseButtonPress ) {
         QMouseEvent *me = static_cast<QMouseEvent *>( ev );
         if( me->button() == Qt::LeftButton ) {
-            SStdMixer *mixer = smv_.getModel();
-            if( mixer ) {
-                mixer->setSelectedTrack( &tk_ );
-            }
+            // Modifiers off the EVENT, so Ctrl/Shift work here exactly as they
+            // do on the strip itself.
+            smv_.applyTrackSelectionClick( &tk_, me->modifiers() );
             return false;  // Let the label still handle it for editing
         }
     }
@@ -173,8 +187,13 @@ static inline int gripLeft( int depth ) { return depth*SMV_TRACK_INDENT + SMV_FO
 // Draw the indented grip strip and, for parents, a fold triangle to its left.
 void SSMVMixerControl::paintEvent( QPaintEvent *ev )
 {
-    // Determine base color (depends on selection state)
-    QColor baseColor = selected_ ? QColor( 64, 100, 140 ) : QColor( 48, 70, 100 );
+    // Base colour by selection state. The PRIMARY (the lane the Track Detail
+    // dock follows) is the brightest, other selected lanes sit between it and
+    // an unselected one — so a multi-selection is visible as a block without
+    // losing which lane is the anchor.
+    QColor baseColor = primary_  ? QColor( 64, 100, 140 )
+                     : selected_ ? QColor( 56, 86, 122 )
+                                 : QColor( 48, 70, 100 );
 
     // Apply track state modifiers (muted, solo, armed for recording)
     STrackColorModifier mod = STrackColorModifier::fromTrackState( tk_ );
@@ -230,6 +249,13 @@ void SSMVMixerControl::mousePressEvent( QMouseEvent *ev )
     }
     // A left press on the grip strip arms a track-reorder drag.
     if( ev->button()==Qt::LeftButton && x>=gx && x<gx+HANDLE_W ) {
+        // Grabbing the grip of a lane that is ALREADY part of the selection
+        // must not collapse it — that is what makes dragging several tracks at
+        // once possible. Grabbing any other lane selects it first, so the drag
+        // and the highlight agree.
+        SStdMixer *mixer = smv_.getModel();
+        if( mixer && !mixer->isTrackSelected( &tk_ ) )
+            smv_.applyTrackSelectionClick( &tk_, ev->modifiers() );
         dragArmed_ = true;
         dragging_ = false;
         dragPressPos_ = ev->pos();
@@ -237,15 +263,23 @@ void SSMVMixerControl::mousePressEvent( QMouseEvent *ev )
         return;
     }
 
-    // Select this track for the detail panel on click
+    // Select this track for the detail panel on click. Plain = just this one,
+    // Ctrl = toggle, Shift = extend the lane range (see
+    // SStdMixerView::applyTrackSelectionClick).
     if( ev->button()==Qt::LeftButton ) {
-        SStdMixer *mixer = smv_.getModel();
-        if( mixer ) {
-            mixer->setSelectedTrack( &tk_ );
-        }
+        smv_.applyTrackSelectionClick( &tk_, ev->modifiers() );
     }
 
     QWidget::mousePressEvent( ev );
+}
+
+// Right-clicking a head shows the arranger's TRACK menu — the same one the
+// timeline canvas offers, so the multi-track operations are reachable from the
+// place the multi-selection is made.
+void SSMVMixerControl::contextMenuEvent( QContextMenuEvent *ev )
+{
+    smv_.showTrackContextMenu( &tk_, ev->globalPos() );
+    ev->accept();
 }
 
 void SSMVMixerControl::mouseMoveEvent( QMouseEvent *ev )
@@ -293,25 +327,55 @@ void SSMVMixerControl::mouseReleaseEvent( QMouseEvent *ev )
     QWidget::mouseReleaseEvent( ev );
 }
 
+// The tracks this head's toggles act on: the whole selection when this lane is
+// part of it, otherwise this lane alone (SStdMixerView::selectionTargets holds
+// the rule). Pressing M on an UNSELECTED lane therefore never reaches a lane
+// the user is not pointing at.
+QList<STrack *> SSMVMixerControl::toggleTargets() const
+{
+    return smv_.selectionTargets( &tk_ );
+}
+
 // Mute and solo go through the action system (path-addressed, so a nested lane
 // is nameable) rather than writing the model directly: that is what makes them
 // undoable, scriptable — and testable, which is why nested solo could break and
 // stay broken. The model write itself is unchanged; setMuted()/setSolo() still
 // do the lazy invalidation (proposal 06), so no notifyArrangementChanged() here.
+//
+// Broadcasting over a selection is ONE undo step (a macro), because the user
+// made one gesture. Each target gets its own absolute value — `on`, the state
+// the pressed button now shows — so a mixed selection ends up uniform rather
+// than inverted lane by lane.
 void SSMVMixerControl::muteToggled( bool on )
 {
     SStdMixer *mixer = smv_.getModel();
     if( !mixer ) { tk_.setMuted( on ); return; }
-    SApplication::app().submitAction(
-        new SSetTrackMuteAction( strackpath::pathOf( mixer, &tk_ ), on ) );
+    const QList<STrack *> targets = toggleTargets();
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Mute tracks" ) );
+    for( STrack *t : targets ) {
+        if( t->isMuted() == on ) continue;      // nothing to undo for this one
+        SApplication::app().submitAction(
+            new SSetTrackMuteAction( strackpath::pathOf( mixer, t ), on ) );
+    }
+    if( macro ) stack->endMacro();
 }
 
 void SSMVMixerControl::soloToggled( bool on )
 {
     SStdMixer *mixer = smv_.getModel();
     if( !mixer ) { tk_.setSolo( on ); return; }
-    SApplication::app().submitAction(
-        new SSetTrackSoloAction( strackpath::pathOf( mixer, &tk_ ), on ) );
+    const QList<STrack *> targets = toggleTargets();
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Solo tracks" ) );
+    for( STrack *t : targets ) {
+        if( t->isSolo() == on ) continue;
+        SApplication::app().submitAction(
+            new SSetTrackSoloAction( strackpath::pathOf( mixer, t ), on ) );
+    }
+    if( macro ) stack->endMacro();
 }
 
 void SSMVMixerControl::onMutedChanged( bool on )
@@ -346,12 +410,18 @@ void SSMVMixerControl::groupToggled( bool /*checked*/ )
         for( SObject *m : members )
             assignments.append( qMakePair( strackpath::pathOf( root, m ), 0 ) );
     } else {
+        // A multi-selection locks into ONE group: that is the gesture's whole
+        // point, and the per-track shortcut is just its one-element case.
         const int freshId = seditgroups::maxEditGroupId( root ) + 1;
         QList<SObject *> lanes;
-        seditgroups::collectSubtreeLanes( &tk_, lanes );
-        for( SObject *l : lanes )
-            assignments.append(
-                qMakePair( strackpath::pathOf( root, l ), freshId ) );
+        for( STrack *t : toggleTargets() )
+            seditgroups::collectSubtreeLanes( t, lanes );
+        for( SObject *l : lanes ) {
+            const QList<int> p = strackpath::pathOf( root, l );
+            bool dup = false;
+            for( const auto &a : assignments ) if( a.first == p ) { dup = true; break; }
+            if( !dup ) assignments.append( qMakePair( p, freshId ) );
+        }
     }
 
     const bool macro = assignments.size() > 1 && stack;
@@ -368,16 +438,24 @@ void SSMVMixerControl::onEditGroupChanged( int id )
     qGroup_->setChecked( id != 0 );
 }
 
-void SSMVMixerControl::takesToggled( bool /*checked*/ )
+void SSMVMixerControl::takesToggled( bool on )
 {
     // View-level UI state; triggers refreshTrackTree(), which rebuilds the
     // control column (this control dies via deleteLater — safe from here).
-    smv_.toggleTrackTakesExpanded( &tk_ );
+    // Over the selection like the other toggles, and driven TO the pressed
+    // button's state rather than toggled per lane, so a mixed selection ends
+    // up uniform. The target list is captured before the first rebuild.
+    const QList<STrack *> targets = toggleTargets();
+    for( STrack *t : targets ) {
+        if( smv_.isTrackTakesExpanded( t ) != on ) smv_.toggleTrackTakesExpanded( t );
+    }
 }
 
+// Arm has no SAction of its own (it is transport state, not project state), so
+// this is a direct model write — over the selection like the other two.
 void SSMVMixerControl::armToggled( bool on )
 {
-    tk_.setArmedForRecording( on );
+    for( STrack *t : toggleTargets() ) t->setArmedForRecording( on );
 }
 
 void SSMVMixerControl::onArmedChanged( bool on )
@@ -413,6 +491,10 @@ SSMVMixerControl::SSMVMixerControl(
     qTrkLabel_ = new QLineEdit( tk_.getSName(), this );
     qTrkLabel_->setFrame( false );
     qTrkLabel_->setFont( smallFont );
+    // A QLineEdit asks for a fair minimum width. Beside the button row that
+    // would push the fixed-size buttons out of the head instead of squeezing
+    // the name, so let it be squeezed (placeLabel decides when it fits at all).
+    qTrkLabel_->setMinimumWidth( 24 );
     // Install event filter to pass mouse clicks through to parent for track selection
     qTrkLabel_->installEventFilter( this );
     // Lose focus when Enter/Return is pressed
@@ -512,15 +594,30 @@ SSMVMixerControl::SSMVMixerControl(
     // (STrack::buildComponents), so its identity is stable for this head's life.
     probe_.setTap( tk_.getRootComponent() );
 
-    // Mute/Solo column, then the fader column, then the meter; a trailing
-    // stretch keeps the group left-aligned.
+    // Fader column beside the meter (they lie down together in Compact).
+    qFaderRow_ = new QBoxLayout( QBoxLayout::LeftToRight );
+    qFaderRow_->setContentsMargins( 0, 0, 0, 0 );
+    qFaderRow_->setSpacing( 4 );
+    qFaderRow_->addLayout( qFaderCol_ );
+    qFaderRow_->addWidget( qMeter_ );
+    qFaderRow_->addStretch( 1 );
+
+    // The track name sits at the top of this column, i.e. next to the M/S/R/T/G
+    // buttons rather than on a full-width row of its own above the strip: at the
+    // minimal 120 px column there is no horizontal room for the name BESIDE the
+    // fader, so it takes the width above it instead.
+    qRightCol_ = new QBoxLayout( QBoxLayout::TopToBottom );
+    qRightCol_->setContentsMargins( 0, 0, 0, 0 );
+    qRightCol_->setSpacing( 2 );
+    qRightCol_->addWidget( qTrkLabel_, 0 );
+    qRightCol_->addLayout( qFaderRow_, 1 );
+
+    // Mute/Solo column, then the name + fader/meter column.
     qStripRow_ = new QBoxLayout( QBoxLayout::LeftToRight );
     qStripRow_->setContentsMargins( 0, 0, 0, 0 );
     qStripRow_->setSpacing( 4 );
-    qStripRow_->addLayout( qBtnCol_ );
-    qStripRow_->addLayout( qFaderCol_ );
-    qStripRow_->addWidget( qMeter_ );
-    qStripRow_->addStretch( 1 );
+    qStripRow_->addLayout( qBtnCol_, 0 );
+    qStripRow_->addLayout( qRightCol_, 1 );
 
     // The head is placed by the view at exactly its lane's size (which can be
     // small, and differs from lane to lane), so it must be free to take that
@@ -530,9 +627,8 @@ SSMVMixerControl::SSMVMixerControl(
     setMinimumHeight( 0 );
     setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Ignored );
 
-    qLayout_->addWidget( qTrkLabel_, 0, 0, Qt::AlignTop );
-    qLayout_->addLayout( qStripRow_, 1, 0 );
-    qLayout_->setRowStretch( 1, 1 );
+    qLayout_->addLayout( qStripRow_, 0, 0 );
+    qLayout_->setRowStretch( 0, 1 );
     qLayout_->setSizeConstraint( QLayout::SetNoConstraint );
 
     // Seed widgets from the current track state.
@@ -576,13 +672,18 @@ SSMVMixerControl::SSMVMixerControl(
     QObject::connect( &tk_, SIGNAL( armedForRecordingChanged( bool ) ),
                       this, SLOT( onArmedChanged( bool ) ) );
 
-    // Connect to mixer's track selection changes for highlighting
+    // Connect to mixer's track selection changes for highlighting. BOTH
+    // signals: the set moves without the primary moving (Ctrl-click on a third
+    // lane) and the primary moves without the set changing, and each has to
+    // repaint this head.
     SStdMixer *mixer = smv_.getModel();
     if( mixer ) {
         QObject::connect( mixer, SIGNAL( selectedTrackChanged( STrack * ) ),
                           this, SLOT( onSelectedTrackChanged( STrack * ) ) );
-        // Check if this track is currently selected
-        onSelectedTrackChanged( mixer->getSelectedTrack() );
+        QObject::connect( mixer, SIGNAL( selectedTracksChanged() ),
+                          this, SLOT( onSelectionChanged() ) );
+        // Seed from the selection as it stands.
+        onSelectionChanged();
     }
 
     // Seed the density from the size we start at, in case the first geometry
@@ -667,7 +768,9 @@ void SSMVMixerControl::showChannelMenu()
 
 void SSMVMixerControl::setRecordingChannels( uint32_t channels )
 {
-    tk_.setRecordingChannels( channels );
+    // Like ARM itself, this follows the selection: picking the input channels
+    // for one armed lane out of several selected ones is never what was meant.
+    for( STrack *t : toggleTargets() ) t->setRecordingChannels( channels );
 
     // Update the ARM button tooltip to show selected channels
     QString tooltip = "Arm for Recording\n(Right-click to select input channels)";
@@ -684,11 +787,23 @@ void SSMVMixerControl::setRecordingChannels( uint32_t channels )
     qArm_->setToolTip( tooltip );
 }
 
-void SSMVMixerControl::onSelectedTrackChanged( STrack *track )
+// Highlight follows the selection SET, not just the primary: with several
+// tracks selected every one of their heads is lit, which is the only way the
+// user can see what a broadcast toggle is about to hit. `track` is unused —
+// this is wired to both selection signals.
+void SSMVMixerControl::onSelectedTrackChanged( STrack * )
 {
-    bool wasSelected = selected_;
-    selected_ = (track == &tk_);
-    if( wasSelected != selected_ ) {
+    onSelectionChanged();
+}
+
+void SSMVMixerControl::onSelectionChanged()
+{
+    SStdMixer *mixer = smv_.getModel();
+    const bool wasSelected = selected_;
+    const bool wasPrimary  = primary_;
+    selected_ = mixer && mixer->isTrackSelected( &tk_ );
+    primary_  = mixer && mixer->getSelectedTrack() == &tk_;
+    if( wasSelected != selected_ || wasPrimary != primary_ ) {
         update();  // Repaint to update background color
     }
 }
@@ -729,6 +844,21 @@ void SSMVMixerControl::onMeterTick( offset_t pos, qint64 nowMs, bool live )
     else                             qMeter_->pushIdle( nowMs );
 }
 
+bool SSMVMixerControl::tkClickToggle( const QString &which, bool on )
+{
+    QPushButton *b = nullptr;
+    if(      which == QStringLiteral( "mute" ) )  b = qMute_;
+    else if( which == QStringLiteral( "solo" ) )  b = qSolo_;
+    else if( which == QStringLiteral( "arm" ) )   b = qArm_;
+    else if( which == QStringLiteral( "takes" ) ) b = qTakes_;
+    else if( which == QStringLiteral( "group" ) ) b = qGroup_;
+    if( !b ) return false;
+    // click() and not setChecked(): the point is to go through the button's
+    // own toggled() signal, which is the wire the broadcast hangs off.
+    if( b->isChecked() != on ) b->click();
+    return true;
+}
+
 QString SSMVMixerControl::describeMeter()
 {
     if( !qMeter_ ) return QStringLiteral( "vis=0" );
@@ -757,20 +887,21 @@ void SSMVMixerControl::applyDensity( Density d )
 
     switch( d ) {
     case Density::Full:
-        // Buttons in a column beside a tall fader with its dB readout.
+        // Buttons in a column beside the name + tall fader with its dB readout.
         qBtnCol_->setDirection( QBoxLayout::TopToBottom );
         qStripRow_->setDirection( QBoxLayout::LeftToRight );
+        qFaderRow_->setDirection( QBoxLayout::LeftToRight );
         qMute_->show(); qSolo_->show();
         qArm_->show(); qTakes_->show(); qGroup_->show();
         qVolume_->show();
         qVolLabel_->show();
         qMeter_->show();
+        placeLabel( LabelSpot::BesideButtons );
         break;
-    case Density::Compact:
-        // One row of small buttons above a horizontal fader; the dB readout
-        // only survives while there is room for a second row.
-        qBtnCol_->setDirection( QBoxLayout::LeftToRight );
-        qStripRow_->setDirection( QBoxLayout::TopToBottom );
+    case Density::Compact: {
+        // Small buttons beside a horizontal fader; the dB readout only survives
+        // while there is room for another row.
+        qFaderRow_->setDirection( QBoxLayout::TopToBottom );
         qMute_->show(); qSolo_->show();
         qArm_->show(); qTakes_->show(); qGroup_->show();
         qVolume_->show();
@@ -778,19 +909,40 @@ void SSMVMixerControl::applyDensity( Density d )
         // The meter is the first thing to go when the rows stack up: a fader you
         // cannot see is worse than a meter you cannot see.
         qMeter_->setVisible( height() >= 60 );
+        // The buttons stay a COLUMN as long as one fits vertically — that is
+        // what leaves the name a place beside them. Five 16 px buttons need 92
+        // px of the ~96 a default 100 px lane has; below that they lie down into
+        // a row, which fills the minimal 120 px column all by itself and pushes
+        // the name back onto a line of its own.
+        if( buttonColumnFits( btn, 5 ) ) {
+            qBtnCol_->setDirection( QBoxLayout::TopToBottom );
+            qStripRow_->setDirection( QBoxLayout::LeftToRight );
+            placeLabel( LabelSpot::BesideButtons );
+        } else {
+            qBtnCol_->setDirection( QBoxLayout::LeftToRight );
+            qStripRow_->setDirection( QBoxLayout::TopToBottom );
+            placeLabel( nameFitsInButtonRow( btn ) ? LabelSpot::InButtonRow
+                                                   : LabelSpot::OwnLine );
+        }
         break;
+    }
     case Density::Tiny:
         // Barely a lane: the name, and Mute/Solo beside it while a single
         // button row still fits under it. Hiding beats clipping — a
         // half-drawn fader reads as a rendering bug.
         qBtnCol_->setDirection( QBoxLayout::LeftToRight );
         qStripRow_->setDirection( QBoxLayout::TopToBottom );
+        qFaderRow_->setDirection( QBoxLayout::TopToBottom );
         qArm_->hide(); qTakes_->hide(); qGroup_->hide();
         qMute_->setVisible( height() >= 38 );
         qSolo_->setVisible( height() >= 38 );
         qVolume_->hide();
         qVolLabel_->hide();
         qMeter_->hide();
+        // Only M/S here, so the name usually does fit beside them — which is the
+        // whole strip on a lane this short.
+        placeLabel( nameFitsInButtonRow( btn ) ? LabelSpot::InButtonRow
+                                               : LabelSpot::OwnLine );
         break;
     }
 
@@ -806,6 +958,60 @@ void SSMVMixerControl::applyDensity( Density d )
 
     // In Tiny the name is the whole strip; keep it off the grip and readable.
     qTrkLabel_->setVisible( height() >= 14 );
+}
+
+// Move the name to the spot the current shape of the strip calls for. A no-op
+// when it is already there, because applyDensity() runs on every resize and
+// re-inserting a widget on each pixel of a drag would thrash the layout.
+void SSMVMixerControl::placeLabel( LabelSpot spot )
+{
+    if( labelSpot_ == spot ) return;
+    // removeWidget() is a no-op on the layouts that do not hold it.
+    qRightCol_->removeWidget( qTrkLabel_ );
+    qStripRow_->removeWidget( qTrkLabel_ );
+    qBtnCol_->removeWidget( qTrkLabel_ );
+
+    switch( spot ) {
+    case LabelSpot::BesideButtons:
+        qRightCol_->insertWidget( 0, qTrkLabel_, 0 );
+        break;
+    case LabelSpot::InButtonRow:
+        // Just before the trailing stretch, centred against the small buttons.
+        qBtnCol_->insertWidget( qBtnCol_->count()-1, qTrkLabel_, 1,
+                                Qt::AlignVCenter );
+        break;
+    case LabelSpot::OwnLine:
+        qStripRow_->insertWidget( 0, qTrkLabel_, 0 );
+        break;
+    }
+    // The name takes the row's slack when it is in it; otherwise the trailing
+    // stretch does (that is what keeps the buttons packed to the top/left).
+    qBtnCol_->setStretch( qBtnCol_->count()-1,
+                          spot == LabelSpot::InButtonRow ? 0 : 1 );
+    labelSpot_ = spot;
+}
+
+// Does a column of `nBtns` buttons of this size still fit the lane's height?
+// Below that the buttons have to lie down into a row.
+bool SSMVMixerControl::buttonColumnFits( int btn, int nBtns ) const
+{
+    const QMargins m = qLayout_->contentsMargins();
+    return height() - m.top() - m.bottom() >= nBtns*btn + (nBtns-1)*2;
+}
+
+// Does a name field wide enough to read still fit beside the visible buttons?
+// Purely a width question: the button row is fixed-size, so what is left over is
+// what the name would get.
+bool SSMVMixerControl::nameFitsInButtonRow( int btn ) const
+{
+    int nBtns = 0;
+    for( QPushButton *b : { qMute_, qSolo_, qArm_, qTakes_, qGroup_ } )
+        if( !b->isHidden() ) ++nBtns;
+    if( nBtns == 0 ) return false;      // no row to ride on
+    const QMargins m = qLayout_->contentsMargins();
+    int content = width() - m.left() - m.right();
+    int row = nBtns*btn + (nBtns-1)*2;  // qBtnCol_ spacing is 2
+    return content - row - 2 >= NAME_MIN_W;
 }
 
 void SSMVMixerControl::updateLayout()

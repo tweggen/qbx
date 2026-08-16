@@ -10,14 +10,13 @@
  * ever BETWEEN RUNS — two renders produced by the same session, or by two
  * builds, compared by hand outside the harness. There was no verb, so
  * "byte-identical to a committed golden" could be stated in a PR body and could
- * not be enforced by the suite. Proposal 36's whole safety argument depends on
- * that being enforceable across milestones, machines and weeks (§5), so B1a adds
- * it before the page grows a channel dimension.
+ * not be enforced by the suite. This verb makes it enforceable across machines
+ * and weeks, not just within one session.
  *
- * Both paths go through resolveTestFilePath (proposal 36 M0), so `actual` is
- * normally a render in the test output directory and `expected` is normally a
- * committed fixture addressed relative to the .qxa — e.g.
- * `expected="../goldens/mc_mono.wav"`.
+ * Both paths go through resolveTestFilePath, so `actual` is
+ * normally a render in the test output directory, and `expected` is either a
+ * second render beside it or a committed reference addressed relative to the
+ * .qxa — e.g. `expected="../test_sawtooth.wav"`.
  *
  * ON MISMATCH IT DIAGNOSES. "not identical" is not a finding: the message
  * carries both sizes, the offset of the FIRST differing byte, the two byte
@@ -27,7 +26,7 @@
  * hash.
  *
  * XML format:
- * <assert-file-identical actual="render.wav" expected="../goldens/mc_mono.wav"/>
+ * <assert-file-identical actual="render_a.wav" expected="render_b.wav"/>
  *
  * Parameters:
  * - actual:   the file under test (test output dir, else the .qxa's directory,
@@ -37,8 +36,8 @@
  *                     (default 8; 0 = just the summary)
  *
  * Pair it with `expectReject="true"` to assert that two files DIFFER — which is
- * how the corpus cases prove the gate can fail (a gate never seen to fail is not
- * known to be a gate).
+ * how a case proves the gate can fail (a gate never seen to fail is not known to
+ * be a gate).
  */
 class SAssertFileIdenticalAction : public SAction {
 public:

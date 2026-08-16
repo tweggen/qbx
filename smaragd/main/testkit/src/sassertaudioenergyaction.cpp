@@ -35,7 +35,7 @@ SApplyResult SAssertAudioEnergyAction::apply(SProject *project)
 
     // Analyze the audio file. ONE call, region or not: the whole-file path used
     // to be a separate call that hard-coded channel = -1, so `channel=` was
-    // silently ignored whenever frameCount was omitted (proposal 36 M0). A
+    // silently ignored whenever frameCount was omitted. A
     // negative frameCount now means "to the end of the file" inside the
     // analyzer, which is the only difference between the two cases.
     std::string error;

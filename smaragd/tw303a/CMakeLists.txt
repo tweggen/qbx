@@ -604,11 +604,11 @@ else()
     target_link_libraries(gen_position_fixture PRIVATE PkgConfig::SNDFILE)
 endif()
 
-# --- gen_channel_fixture: writer + verifier for the multichannel fixture -------
+# --- gen_channel_fixture: writer + verifier for the asymmetric-channel fixture -
 # Same deal as gen_position_fixture, for tests/test_channels4.wav: four channels
-# on a 6 dB RMS ladder, so a test can prove WHICH channel it measured
-# (proposal 36 M0). --verify measures every channel of an existing file against
-# the ladder, which is why that .wav may be committed. Offline tool, not a gate.
+# on a 6 dB RMS ladder, so a test can prove WHICH channel it measured. --verify
+# measures every channel of an existing file against the ladder, which is why
+# that .wav may be committed. Offline tool, not a gate.
 add_executable(gen_channel_fixture analysis/tools/gen_channel_fixture.cc)
 target_link_libraries(gen_channel_fixture PRIVATE tw_analysis)
 if(SMARAGD_WINDOWS)
@@ -665,6 +665,44 @@ if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
         devices/src/wasapi_input.h
     )
     message(STATUS "tw_devices: WASAPI backend and input (recording) enabled")
+endif()
+
+# --- ASIO backend (Windows) — proposal 35, Phase 1: SDK detection + probe -----
+# The Steinberg ASIO SDK is licensed but NOT redistributable, so unlike
+# clap/vst3_pluginterfaces it cannot be a submodule: the user unzips it to
+# third_party/asiosdk by hand and this block detects the sentinel header —
+# the same EXISTS-else-WARNING pattern as the VST3 block in this file. The
+# directory is gitignored; a build without it stays green with ASIO disabled.
+#
+# Phase 1 builds ONLY the asio_probe spike (the analog of vst3_probe): it has
+# to prove that this MinGW-built host can CoCreate an MSVC-built ASIO driver
+# and call through its C++ vtable (x64 has a single calling convention, the
+# same bet vst3_probe proved for VST3) BEFORE any backend architecture lands.
+# We compile ZERO SDK sources — headers only for the types; driver discovery
+# is our own registry scan (asio_driver_list.cc, pure advapi32), which is
+# what sidesteps the MSVC-isms in the SDK's host/pc/asiolist.cpp on MinGW.
+# Phase 2 promotes asio_driver_list into tw_devices and adds the backend.
+set(TW_ASIOSDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/asiosdk)
+if(SMARAGD_WINDOWS AND ENABLE_ASIO)
+    if(EXISTS ${TW_ASIOSDK_DIR}/common/iasiodrv.h)
+        add_executable(asio_probe
+            devices/tools/asio_probe.cc
+            devices/src/asio_driver_list.cc
+            devices/src/asio_driver_list.h
+        )
+        target_include_directories(asio_probe PRIVATE
+            ${TW_ASIOSDK_DIR}/common
+            ${CMAKE_CURRENT_SOURCE_DIR}/devices/src
+        )
+        # ole32: CoCreateInstance/CLSIDFromString; advapi32: the registry scan;
+        # user32: the HWND handed to IASIO::init (drivers park their control
+        # panel on it).
+        target_link_libraries(asio_probe PRIVATE ole32 advapi32 user32)
+        set_target_properties(asio_probe PROPERTIES AUTOMOC OFF)
+        message(STATUS "tw_devices: ASIO SDK found — asio_probe spike enabled (proposal 35 Phase 1)")
+    else()
+        message(WARNING "tw_devices: third_party/asiosdk not present; ASIO DISABLED. Download the Steinberg ASIO SDK and unzip it to smaragd/third_party/asiosdk (so that common/iasiodrv.h exists). It is deliberately not a submodule: Steinberg's license forbids redistribution.")
+    endif()
 endif()
 
 if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
@@ -734,9 +772,22 @@ tw_module_test(twfraction_test              core/tests/test_twfraction.cpp      
 tw_module_test(twwarpmap_test               core/tests/test_twwarpmap.cpp               tw_core)
 tw_module_test(timemap_test                 core/tests/test_timemap.cpp                 tw_core)
 tw_module_test(twlog_test                   core/tests/test_twlog.cpp                   tw_core)
+# twlog_test asserts a WALL-CLOCK LATENCY BOUND: one non-blocking TW_LOG call
+# from a pretend-RT thread must complete in < 2000 us while four threads contend
+# the logger lock. That is the whole point of the try_lock, but it means the test
+# measures the MACHINE as much as the code -- 137-191 us on an idle box, but
+# 4 000-51 000 us at ~100% CPU, failing 6 runs in 10 with no code change. Under
+# `ctest -j` the rest of the suite IS that load, so give it the box to itself.
+# It must be set HERE, not in ../CMakeLists.txt: set_tests_properties() only
+# reaches tests added in the same directory scope, and from the parent
+# `if(TEST twlog_test)` is simply false -- it fails silently, not loudly.
+set_tests_properties(twlog_test PROPERTIES RUN_SERIAL TRUE)
 tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)
-# Proposal 36 B1a: the releaseOldPages retention boundary (frames, not bytes) and
-# the page-memory accounting the later phases' memory claims rest on.
+# The releaseOldPages retention boundary (FRAMES, not bytes) and the page-memory
+# accounting. Both are unreachable from a .qxa case: releaseOldPages has no
+# production caller at all, and a page-count assertion tight enough to catch an
+# accounting regression would flake on the readahead. So they are pinned here,
+# against a page count the test controls exactly.
 tw_module_test(graph_test                   graph/tests/graph_test.cc                   tw_graph)
 # Proposal 36 B1b: the page's channel dimension. The ONLY gate that can see a
 # wrong `samples` -> `channelPtr()` conversion — at width 1, which is every page

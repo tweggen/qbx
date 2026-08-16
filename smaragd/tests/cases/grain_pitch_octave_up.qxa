@@ -21,7 +21,7 @@
 
     <set-pitch clip="0,0" cents="1200"/>
 
-    <render filename="grain_pitch_octave_up.wav" format="wav" quality="10" durationSec="5.0"/>
+    <render filename="grain_pitch_octave_up.wav" format="wav" quality="10"/>
 
     <!-- (a) One octave up: 439.x Hz -> ~878 Hz (±3%) -->
     <assert-audio-frequency filename="grain_pitch_octave_up.wav"
@@ -32,9 +32,10 @@
     <assert-audio-energy filename="grain_pitch_octave_up.wav"
                          startFrame="0" frameCount="192000"
                          minRms="0.20" maxRms="0.32"/>
-    <assert-audio-energy filename="grain_pitch_octave_up.wav"
-                         startFrame="192000" frameCount="24000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="grain_pitch_octave_up.wav"
+                         minFrames="192000" maxFrames="192000"/>
 
     <!-- Full-scale allowed (proposal 26): Rubber Band preserves RMS but can
          overshoot hot transients to full-scale (Gibbs); the 0.8-peak sawtooth

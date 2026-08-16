@@ -8,12 +8,15 @@
 #include "tw/core/twfraction.h"
 #include "tw/core/twwarpmap.h"
 #include "app/model/sobjectrenderer.h"
+// Complete type for the QPointer<STrack> selection anchor below.
+#include "app/objects/track/strack.h"
 //#include <qptrvector.h>
 #include <qtoolbutton.h>
 #include <QVector>
 #include <QSet>
 #include <QHash>
 #include <QList>
+#include <QPointer>
 
 class SStdMixer;
 class QGridLayout;
@@ -109,6 +112,11 @@ public:
     // Testkit only: the group/ungroup gestures act on the last-CLICKED track,
     // and a headless run never clicks. Lets group-track drive the real slots.
     void setLastClickTrack( STrack *t ) { lastClickTrack_ = t; }
+    // Show the arranger's context menu aimed at a TRACK (no clip), at a global
+    // position. Used by the track heads, which have no menu of their own —
+    // one menu means the track operations cannot drift apart between the two
+    // places a user right-clicks a track.
+    void popupTrackMenu( STrack *t, const QPoint &globalPos );
     SLink *getLastClickSLink() const { return lastClickSLink_; }
     void resetLastClickSLink() { lastClickSLink_ = NULL; }
     offset_t getLastClickOffset() const { return lastClickOffset_; }
@@ -116,6 +124,14 @@ public:
     offset_t getLastClickStartOffset() const { return lastClickSelStartOffset_; }
     int getXPosOfOffset( offset_t ) const;
     QRect getSLinkVisibRect( int trackIdx, const SLink & );
+
+    // The wheel gesture, factored out of wheelEvent() so the track-head column
+    // can run the very same scroll/zoom actions (see SStdMixerView::wheelFromHead).
+    // `anchorX` is the pointer's x in CANVAS coordinates, or -1 when the event
+    // came from a widget that has no time axis — a horizontal zoom then keeps
+    // the left edge instead of the (meaningless) time under the pointer.
+    // Returns true when the gesture was consumed.
+    bool applyWheel( QWheelEvent *ev, int anchorX );
 
     // Time-range selection (shown in the ruler band). Bounds are normalized
     // (start <= end). hasRange() is false when there is no selection.
@@ -409,6 +425,22 @@ public:
     bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
                        bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 
+    // TEST ENTRY POINTS for the multi-track selection. A headless run never
+    // clicks, and the two things worth covering are exactly the click
+    // semantics (plain / Ctrl / Shift) and the BROADCAST from a head's toggle
+    // button — a script that set the model's selection and called
+    // set-track-mute per track would test the script, not the feature. Same
+    // shape and rationale as drag-clip-edge and group-track.
+    bool tkClickTrackHead( STrack *t, Qt::KeyboardModifiers mods );
+    bool tkToggleTrackHead( STrack *t, const QString &which, bool on );
+    // Grip-drag `t`'s head and drop it on a LANE ROW: `nestOnto` drops on the
+    // middle of that row (nest into it), otherwise on its top boundary (insert
+    // above it; `targetRow` == rowCount() means "past the last lane"). Rows,
+    // not pixels, so the script does not encode the current zoom — but the
+    // real beginTrackDrag/updateTrackDrag/endTrackDrag run, which is where the
+    // multi-track move arithmetic lives.
+    bool tkDragTrackHead( STrack *t, int targetRow, bool nestOnto );
+
     // TEST ENTRY POINTS for the lane geometry. The heads are placed by
     // layoutControlColumn() while the lanes are drawn by the canvas; nothing
     // else can prove the two agree, and they only ever disagreed *after* some
@@ -465,6 +497,45 @@ public:
     void toggleTrackTakesExpanded( STrack * );
     void refreshTrackTree();   // rebuild rows + control column + relayout + repaint
     // --------------------------------------------------------------------
+
+    // --- multi-track selection -------------------------------------------
+    // The arranger owns the selection GESTURES; the set itself lives on the
+    // model (SStdMixer). One rule governs every track-level operation below:
+    //
+    //   a gesture aimed at a track that is PART of the selection acts on the
+    //   whole selection; a gesture aimed at any other track acts on that track
+    //   alone (and, for a click, replaces the selection with it).
+    //
+    // Otherwise "mute" on an unselected lane would silently hit lanes the user
+    // is not pointing at.
+    //
+    // Modifiers on a head click: plain = select just this one, Ctrl = toggle
+    // membership, Shift = select the lane range from the anchor (the last
+    // plainly-clicked or Ctrl-clicked head) to this one. Read from the EVENT,
+    // never from the live keyboard — same rule the clip gestures follow.
+    void applyTrackSelectionClick( STrack *t, Qt::KeyboardModifiers mods );
+    // Every visible lane's track between `a` and `b` inclusive, in lane order.
+    QList<STrack *> tracksBetween( STrack *a, STrack *b ) const;
+    // The tracks a gesture aimed at `clicked` acts on, in LANE ORDER (top
+    // down). Empty when `clicked` is NULL.
+    QList<STrack *> selectionTargets( STrack *clicked ) const;
+    // `in`, minus every track that already has an ancestor in `in`. Structural
+    // operations take the outermost track only — reparenting or removing a
+    // folder carries its subtree, so acting on a child as well would either
+    // double-apply or tear the subtree apart.
+    static QList<STrack *> pruneNestedTargets( const QList<STrack *> &in );
+    // Sort `in` by lane position. Order decides insertion slots, so every
+    // multi-track operation sequences by it rather than by click order.
+    QList<STrack *> orderByLane( const QList<STrack *> &in ) const;
+    // Pop the arranger's track context menu for `t` at a global position (the
+    // track heads have no menu of their own — this is the same menu the
+    // timeline canvas shows, aimed at a head).
+    void showTrackContextMenu( STrack *t, const QPoint &globalPos );
+    // Route a wheel event that landed on the track-head column (a head, one of
+    // its child widgets, or the blank area below the last head) into the
+    // arranger canvas, so the configured scroll/zoom gestures work there too.
+    // Returns true when the gesture was consumed.
+    bool wheelFromHead( QWheelEvent *ev );
 
     // Track-reorder drag, driven by a control's grip handle. beginTrackDrag()
     // arms the drag for the given control; updateTrackDrag()/endTrackDrag() take
@@ -685,6 +756,18 @@ private:
     SSMVMixerControl *dragControl_;
     QWidget *dropIndicator_;
     int insertSlotAt( int yInControlBox ) const;
+
+    // Pivot for Shift-click range selection: the last head clicked WITHOUT
+    // Shift. Kept here rather than on the model because it is a gesture
+    // detail — the model only knows the resulting set and its primary.
+    QPointer<STrack> selectionAnchor_;
+
+    // One structural step of the grouping gestures, applied to a single track
+    // and re-resolving its path first (each step shifts the indices the next
+    // one would have used). Return false when the step does not apply.
+    bool indentOne_( STrack *t, const QList<STrack *> &alsoMoving );
+    bool outdentOne_( STrack *t );
+    void ungroupOne_( STrack *t );
 };
 
 

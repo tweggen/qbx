@@ -44,7 +44,9 @@ Invariants:
    counted in droppedFrames rather than silently discarded.
 
 How to test: WASAPI is the only regularly exercised backend (manual GUI
-playback); Null backend keeps headless/CI paths honest. The CAPTURE backend is
+playback); Null backend keeps headless/CI paths honest. devices/tools/
+asio_probe (Windows, needs the drop-in ASIO SDK — proposal 35) triages an
+installed ASIO driver end to end without starting the app. The CAPTURE backend is
 what makes the playback path assertable at all — it is the headless default, so
 every qxa case with a <toggle-playback> runs through it, and
 playback_start_after_edit_position decodes its recording position by position.

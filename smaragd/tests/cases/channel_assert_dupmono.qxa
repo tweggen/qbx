@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The other half of the discriminator gate (proposal 36 M0): what
-  assert-channels-differ says about a render produced by TODAY's sink.
+  The other half of the discriminator gate: what assert-channels-differ says
+  about a render produced by TODAY's sink.
 
   The sink is mono. RenderSession pulls one page and writes it to both channels
   ("Duplicate to stereo (temporary; proper multi-channel TBD)"), so a rendered
@@ -10,9 +10,9 @@
   channels of a real render are the same audio, by level AND sample for sample.
 
   It is written as `expectReject="true"` rather than as a "channels are equal"
-  verb on purpose. The day the sink goes wide (M3) this case is SUPPOSED to
-  fail, and a failure here is the signal that the payoff landed. Update it then;
-  do not loosen it before then.
+  verb on purpose. The day the sink goes wide this case is SUPPOSED to fail, and
+  a failure here is the signal that it did. Update it then; do not loosen it
+  before then.
 -->
 <SActionScript version="1" name="channel_assert_dupmono">
 

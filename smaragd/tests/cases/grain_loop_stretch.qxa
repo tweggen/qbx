@@ -37,7 +37,7 @@
     <resize-clip clip="0,0" startTime="0" startOffset="24000"
                  duration="96000" loopLength="24000" stretch="0.5"/>
 
-    <render filename="grain_loop_stretch.wav" format="wav" quality="10" durationSec="3.0"/>
+    <render filename="grain_loop_stretch.wav" format="wav" quality="10"/>
 
     <!-- rep 0, first half = source [1.0,1.5) s, RMS ~0.145 -->
     <assert-audio-energy filename="grain_loop_stretch.wav"
@@ -72,10 +72,10 @@
                          startFrame="84000" frameCount="12000"
                          minRms="0.175" maxRms="0.23"/>
 
-    <!-- past the clip end: silence -->
-    <assert-audio-energy filename="grain_loop_stretch.wav"
-                         startFrame="96000" frameCount="24000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="grain_loop_stretch.wav"
+                         minFrames="96000" maxFrames="96000"/>
 
     <assert-audio-peak filename="grain_loop_stretch.wav" maxPeak="0.995"/>
   </actions>

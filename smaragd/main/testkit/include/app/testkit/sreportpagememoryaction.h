@@ -4,14 +4,14 @@
 #include "app/actions/saction.h"
 
 /**
- * Test hook: report resident frozen-page memory (proposal 36 B1a).
+ * Test hook: report resident frozen-page memory.
  *
  * There is no twOutputPage pool to query — pages are make_shared on demand into
  * unbounded per-component maps — so "how much page memory does this project
- * hold" had no answer at all. B1a builds the accounting
- * (tw::pages::PageAccounting for the global figures, twComponent::pageStats for
- * the per-component breakdown); this verb is how a .qxa asks for it, which is
- * what makes the corpus measurable rather than merely renderable.
+ * hold" had no answer at all. The accounting lives in
+ * tw::pages::PageAccounting (global figures) and twComponent::pageStats (the
+ * per-component breakdown); this verb is how a .qxa asks for it, which is what
+ * makes a case's memory behaviour measurable rather than merely renderable.
  *
  * It logs, at Info level under category "pages":
  *

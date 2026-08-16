@@ -1,6 +1,6 @@
-// tw/graph module test (proposal 36 B1a).
+// tw/graph module test.
 //
-// Two things, both of which had no gate at all before this milestone:
+// Two things, neither of which had a gate before:
 //
 //   1. releaseOldPages()'s RETENTION BOUNDARY. It compared
 //      `it->first + twOutputPage::PAGE_SIZE < keepAfterPos` — PAGE_SIZE is the
@@ -12,10 +12,10 @@
 //
 //   2. PAGE-MEMORY ACCOUNTING. Resident pages and bytes, globally
 //      (tw::pages::PageAccounting, which rides the page's own lifetime) and per
-//      component (twComponent::pageStats / componentPageStats). This is the
-//      instrument every later phase's memory claim rests on, including B9.2's
-//      8-channel measurement, so its own arithmetic is checked here against
-//      pages whose count the test controls exactly.
+//      component (twComponent::pageStats / componentPageStats). It is the
+//      instrument any future memory claim about this engine has to rest on, so
+//      its own arithmetic is checked here against pages whose count the test
+//      controls exactly.
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/twlatch.h"
 #include "tw/graph/tw303aenv.h"
@@ -113,7 +113,7 @@ int main()
             CHECK(tw::pages::PageAccounting::global().pages == basePages + 1,
                   "a page constructed anywhere is counted");
             CHECK(tw::pages::PageAccounting::global().bytes == baseBytes + PAGE_BYTES,
-                  "…for its sample bytes (262144 at width 1)");
+                  "…for its sample bytes (65536 frames x 4 = 262144)");
             CHECK(p->accountedBytes() == PAGE_BYTES,
                   "the page reports the byte count it registered");
         }

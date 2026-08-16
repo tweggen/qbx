@@ -14,17 +14,17 @@
     <resize-clip clip="0,0" startTime="0" startOffset="0"
                  duration="288000" loopLength="0" stretch="1.5"/>
 
-    <render filename="grain_energy_verification.wav" format="wav" quality="10" durationSec="7.5"/>
+    <render filename="grain_energy_verification.wav" format="wav" quality="10"/>
 
     <!-- Clip region: stretched ramp keeps its RMS (~0.25-0.27) -->
     <assert-audio-energy filename="grain_energy_verification.wav"
                          startFrame="0" frameCount="288000"
                          minRms="0.20" maxRms="0.32"/>
 
-    <!-- Past the stretched clip end: silence -->
-    <assert-audio-energy filename="grain_energy_verification.wav"
-                         startFrame="288000" frameCount="48000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="grain_energy_verification.wav"
+                         minFrames="288000" maxFrames="288000"/>
 
     <!-- Full-scale allowed (proposal 26): Rubber Band preserves RMS but can
          overshoot hot transients to full-scale (Gibbs); the 0.8-peak sawtooth

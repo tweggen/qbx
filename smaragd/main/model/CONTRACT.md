@@ -73,6 +73,18 @@ Invariants:
    twComponent::seek()'s detector was installed for), from the paint path.
    One probe means the same thing either way: the signed min/max envelope
    of its previewSkip_ window, scaled to [-128,127].
+10. There is ONE notion of how long the project is.
+    SProject::getDurationFrames() is the root container's content extent —
+    getRootComponent()->getDuration(), i.e. the same SObject::
+    getChildrenExtent() walk the arranger already draws through
+    SStdMixerView::contentDurationChanged. It is measured from position 0 to
+    the LAST end (not last-minus-first), so it is directly the extent of a
+    whole-project render, and it is the LAID-OUT extent: mute, solo, the
+    render gate and take selection change what is audible, never how long the
+    project is. An EMPTY container reports 1 frame, not 0 (SStdMixer/STrack
+    floor their extent), and that sentinel is normalized to 0 here. Do not
+    add a second traversal: a duration that disagreed with the one on screen
+    would be worse than the hardcoded 60 s constant this replaced.
 
 10. SProject::channels() is PROJECT DATA AND NOTHING ELSE (proposal 36 M1).
    It persists as <SProject channels='N'>, takes only 1/2/4/6/8, and reads

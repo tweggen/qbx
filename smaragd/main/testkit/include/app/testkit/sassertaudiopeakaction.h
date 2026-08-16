@@ -26,7 +26,7 @@
  * - channel: Channel to analyze (-1 = all channels pooled, 0+ = that channel)
  *
  * `channel` applies WITH OR WITHOUT `frameCount` — see the longer note in
- * sassertaudioenergyaction.h; both verbs had the same bug (proposal 36 M0).
+ * sassertaudioenergyaction.h; both verbs had the same bug.
  * A peak hides it especially well: the pooled peak is the MAX over channels, so
  * dropping `channel=` can only ever report a QUIET channel as loud, never the
  * reverse.

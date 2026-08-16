@@ -35,7 +35,7 @@
   <actions>
     <load-project path="../legacy_idless_slot.qxp"/>
 
-    <render filename="legacy_project_recovery.wav" format="wav" quality="10" durationSec="3.5"/>
+    <render filename="legacy_project_recovery.wav" format="wav" quality="10"/>
 
     <!-- 0-1 s: cut plays source sec1 (slip offset via the loaded startOffset) -->
     <assert-audio-energy filename="legacy_project_recovery.wav"
@@ -47,10 +47,10 @@
                          startFrame="48000" frameCount="48000"
                          minRms="0.26" maxRms="0.33"/>
 
-    <!-- past the 2 s cut: silence -->
-    <assert-audio-energy filename="legacy_project_recovery.wav"
-                         startFrame="96000" frameCount="48000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="legacy_project_recovery.wav"
+                         minFrames="96000" maxFrames="96000"/>
   </actions>
 
   <assertions>

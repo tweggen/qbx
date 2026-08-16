@@ -41,7 +41,7 @@
          SRemoveSampleAction / SRestoreContainerClipAction. -->
     <duplicate-clip source="1,0" destTrack="2" startTime="384000"/>
 
-    <render filename="assetcopy_pre.wav" format="wav" quality="10" durationSec="9.5"/>
+    <render filename="assetcopy_pre.wav" format="wav" quality="10"/>
     <!-- The copy's first second is audible (its exact level is not the point;
          a wide band tolerates the duplicate-window mis-render). -->
     <assert-audio-energy filename="assetcopy_pre.wav"
@@ -51,14 +51,15 @@
     <!-- Delete the COPY (track 2, its only clip). -->
     <remove-sample trackIndex="2" clipIndex="0" timePos="384000"/>
 
-    <render filename="assetcopy_deleted.wav" format="wav" quality="10" durationSec="9.5"/>
-    <assert-audio-energy filename="assetcopy_deleted.wav"
-                         startFrame="384000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <render filename="assetcopy_deleted.wav" format="wav" quality="10"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="assetcopy_deleted.wav"
+                         minFrames="288000" maxFrames="288000"/>
 
     <undo count="1"/>
 
-    <render filename="assetcopy_restored.wav" format="wav" quality="10" durationSec="9.5"/>
+    <render filename="assetcopy_restored.wav" format="wav" quality="10"/>
 
     <!-- The copy is back and audible again. Before the fix this span stayed
          silent — the removal had no inverse to apply. -->

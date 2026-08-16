@@ -39,7 +39,7 @@
     <!-- Place at 4 s, past track 0's material, so the region is the asset alone. -->
     <place-asset assetName="Section" trackPath="1" timePos="192000"/>
 
-    <render filename="asset_over_muted.wav" format="wav" quality="10" durationSec="7.5"/>
+    <render filename="asset_over_muted.wav" format="wav" quality="10"/>
 
     <!-- 0-4 s: track 0 is muted, so its own material must be silent. This is
          the half of the contract that must NOT regress. -->
@@ -61,10 +61,10 @@
                          startFrame="240000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
 
-    <!-- 6-7 s: past the asset window; silence. -->
-    <assert-audio-energy filename="asset_over_muted.wav"
-                         startFrame="288000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="asset_over_muted.wav"
+                         minFrames="288000" maxFrames="288000"/>
   </actions>
 
   <assertions>

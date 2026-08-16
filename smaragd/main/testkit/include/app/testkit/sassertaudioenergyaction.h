@@ -30,8 +30,8 @@
  * `channel` applies WITH OR WITHOUT `frameCount`. It used to be dropped
  * whenever frameCount was omitted, because that took a separate whole-file code
  * path which hard-coded the pooled figure — invisible while every channel of
- * every render is equal, and a silent mis-pass the day the sink goes wide
- * (proposal 36 M0). A channel the file does not have is REJECTED rather than
+ * every render is equal, and a silent mis-pass the day the sink goes wide.
+ * A channel the file does not have is REJECTED rather than
  * measured as an empty selection, which would report RMS 0 and read like a
  * silent render. `filename` resolves via resolveTestFilePath, so a committed
  * fixture is addressable as well as a render.

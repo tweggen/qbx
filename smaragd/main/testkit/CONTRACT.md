@@ -23,12 +23,13 @@ Invariants:
    RMS (sec0 .067 / sec1 .176 / sec2 .291 / sec3 .405) so wrong-offset bugs
    are detectable by region RMS, and it is strongly periodic at ~440 Hz so
    assert-audio-frequency can measure a transposition on it.
-   The assert-audio-* verbs and assert-channels-differ resolve `filename=`
-   through resolveTestFilePath (app/testkit/stestfilepath.h): the test output
-   dir first — a render, the normal case — then the .qxa's own directory, then
-   the cwd. That is what lets an assertion be pointed at a committed FIXTURE
-   (`../test_channels4.wav`), which never appears in the output dir. A name
-   that exists nowhere still fails with the output-dir spelling, unchanged.
+   The assert-audio-* verbs, assert-channels-differ and assert-file-identical
+   resolve their path attributes through resolveTestFilePath
+   (app/testkit/stestfilepath.h): the test output dir first — a render, the
+   normal case — then the .qxa's own directory, then the cwd. That is what lets
+   an assertion be pointed at a committed FIXTURE (`../test_channels4.wav`),
+   which never appears in the output dir. A name that exists nowhere still
+   fails with the output-dir spelling, unchanged.
 4. Exit code: 0 iff all actions applied as expected AND <assertions> pass.
 5. drag-clip-edge is the ONLY route to clip-edge gesture code. Every clamp and
    snap of a trim / extend / loop / loop-marker drag lives in
@@ -48,12 +49,11 @@ Invariants:
 6. `channel=` means the channel, ALWAYS. It used to be dropped whenever
    `frameCount` was omitted (the whole-file path hard-coded the all-channels
    pooled figure), which was invisible while every channel of every render was
-   equal and would have started mis-passing the day the sink goes wide
-   (proposal 36 M0). A channel index the file does not have is now an ERROR,
-   not an empty selection reporting RMS 0 — that reads exactly like a silent
-   render. Gates: channel_assert_fixture.qxa (every band there is chosen to
-   EXCLUDE the pooled value, so the pre-fix code fails it) and
-   channel_assert_dupmono.qxa.
+   equal and would have started mis-passing the day the sink goes wide. A
+   channel index the file does not have is now an ERROR, not an empty selection
+   reporting RMS 0 — that reads exactly like a silent render. Gates:
+   channel_assert_fixture.qxa (every band there is chosen to EXCLUDE the pooled
+   value, so the pre-fix code fails it) and channel_assert_dupmono.qxa.
 7. assert-channels-differ measures two things in one pass — |rms(A) - rms(B)|
    (`minRmsDelta`, a LEVEL discriminator) and rms(A - B) (`minDiffRms`, a
    CONTENT one, off by default). The level test is what a duplicated bus fails;
@@ -64,73 +64,18 @@ Invariants:
    against: 4 channels of a 480 Hz sine on a 6 dB RMS ladder
    (0.5 / 0.25 / 0.125 / 0.0625, pooled 0.28810), written and re-checked by
    tw303a/analysis/tools/gen_channel_fixture.cc (`--verify`).
-8. THE GOLDEN CORPUS is tests/goldens/ (proposal 36 B1a): mc_mono.qxp
-   (channels='1') and mc_stereo.qxp (channels='2') — one arrangement, differing
-   only in the width attribute — plus their frozen 16-bit PCM renders
-   mc_mono.wav / mc_stereo.wav, 768 044 bytes each. Each project carries one of
-   every path proposal 36 touches (plain / stretched / pitched / asset / nested
-   lane / twtestclap insert), each in its OWN time window inside 4 s, so a byte
-   difference names its culprit by offset. assert-file-identical is the gate.
-   Four things about it are load-bearing:
-     * The projects are LOADED into a freshly-new project and never rebuilt by a
-       save->load->save round trip — §7 trap 10: load-project deserializes INTO
-       the current project, so a round trip accumulates orphan mixers and
-       chains.
-     * The renders are bounded with `durationSec="4.0"`, because
-       SProject::getDurationSeconds() is a hard-coded 60.0 and an unbounded
-       corpus render is 11.5 MB of mostly silence.
-     * Each gate case MUTES a track and asserts the comparison REJECTS. A gate
-       that has only ever passed is not known to be a gate, and the failure it
-       guards against is not "the verb is wrong" but "the verb is comparing the
-       render with itself".
-     * The two goldens are byte-identical to each other TODAY, on purpose: the
-       sink duplicates one mono bus, so a width-1 and a width-2 project render
-       the same file. B5 is where they must diverge, and re-freezing needs an AC
-       that licenses it plus a written explanation (§5).
-   Regenerate the .qxp pair with tests/tools/gen_mc_corpus.qxa (deliberately
-   OUTSIDE tests/cases/, so the CONFIGURE_DEPENDS glob never runs it); re-freeze
-   the .wav pair from the gate cases' own renders, never from the generator's.
-9. report-page-memory is the only window onto frozen-page memory, because there
-   is no page pool to query. Its two bounds (`maxPages`, `maxBytes`) default OFF
-   and the corpus cases leave them off: the resident page count depends on the
-   readahead and the worker count, so a tight bound would be a flake generator
-   rather than a gate. Making the number visible is the deliverable.
-10. EVERY RENDER IS BOUNDED with `durationSec=`, and the bound is DERIVED, never
-    guessed. `SProject::getDurationSeconds()` is a hard-coded `return 60.0;`
-    ("TODO: calculate from arrangement"), so an unbounded `<render>` synthesizes
-    60 s whatever the project holds — the fixtures hold about 4 s, so ~93% of
-    every rendered sample was silence and the suite's whole cost was 153 renders
-    x ~6.5 s. Until the arranged-duration fix lands (its own branch off main),
-    a case's bound is `max(startFrame + frameCount)` over EVERY audio assertion
-    it makes — plus 4096 for an `assert-source-position` block, plus the clip
-    extent for a smoke case that asserts no audio at all — converted at the
-    project rate and rounded up with ~0.5 s of margin. Three ways to get it
-    wrong:
-      * A SILENCE assertion after the content is asserting something real (the
-        clip really does end there); a silence assertion out past the arrangement
-        is asserting the padding. Both look identical in the .qxa — derive from
-        the frame number, not from the comment.
-      * `analyzeWavFileRegion` REJECTS `startFrame >= frames` but silently CLAMPS
-        the end, so a window that half-runs off the end still returns an RMS.
-        A too-short bound can therefore pass for the wrong reason. Leave margin.
-      * A whole-file assertion (`assert-audio-*` with no `frameCount`) pools the
-        ENTIRE file, so a length change moves what it measures. Today every one
-        of them on a RENDER is an `assert-audio-peak maxPeak=` — an UPPER bound
-        over a tail that is pure silence, so truncation can only lower the
-        observed peak and the bound survives (`grain_*`, `mp3_sample_import`,
-        `render_split_slip_stretch` are bounded on exactly that argument). A
-        whole-file `minRms`, or a `minPeak`, would NOT survive. The whole-file
-        asserts in `channel_assert_fixture` read a committed fixture rather than
-        a render and are not affected at all.
-    `channel_assert_dupmono` is deliberately left unbounded: it is expected to
-    break at B5 and its timing must stay comparable. So are the three macOS-only
-    `au_*` cases, which cannot be gated from Windows.
-    Bounding is also a ROBUSTNESS fix, not only a speed one: `SRenderAction`
-    gives a render 30 s of wall clock before it reports "failed to apply", and a
-    60 s unbounded render of a stretched project takes >30 s on a machine
-    running several suites at once — `grain_asset_stretch` and
-    `grain_loop_stretch` were observed failing exactly that way, with every one
-    of their own assertions still green.
+8. assert-file-identical is the byte gate. Render exactness has been `cmp`'d
+   between runs since the beginning of this repo and never by the suite, so
+   "byte-identical" could be claimed and not enforced. It must be proved to
+   FAIL as well as pass, in each of its three shapes — size, content, missing
+   reference — which is what file_identical_gate.qxa does; a gate never seen to
+   fail is not known to be a gate.
+9. report-page-memory REPORTS; it does not gate. Resident page count is a
+   function of the readahead, the worker count and scheduler timing, so a bound
+   tight enough to catch a regression would flake. render_duration_and_pages.qxa
+   keeps a loose order-of-magnitude ceiling and proves the bound can reject
+   (`maxPages="0"` after a render); the exact arithmetic is pinned by
+   `ctest -R graph_test`, against a page count a unit test controls exactly.
 
   assert-meter (proposal 34) needs NO transport, which is the point: levels are
   read from frozen pages BY POSITION, so the verb freezes the page it asks
@@ -171,7 +116,6 @@ How to test:
   ../../build/bin/smaragd.exe --test-case <case>.qxa --test-output-dir <dir>
   ../../build/bin/action_roundtrip_test.exe   # 2 pre-existing assert-action
                                               # serialization failures
-  ctest -R "qxa.mc_golden"                    # the proposal 36 byte gate
 
 Known debt: screenshots need the window (not truly headless on all
 platforms). The older "scripted toggle-playback segfaults" note is retired: two

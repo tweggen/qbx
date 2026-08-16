@@ -30,15 +30,15 @@ private:
     // Seconds to render, from 0. Negative (the default) = the project's
     // duration, which is what every existing case gets and is unchanged.
     //
-    // Added by proposal 36 B1a for the golden corpus, and the reason is worth
-    // stating: SProject::getDurationSeconds() is a hard-coded `return 60.0;`
-    // with a "TODO: calculate from arrangement" beside it, so EVERY render in
-    // this suite is 60 seconds long no matter what the project contains. A ~4 s
-    // corpus therefore renders to 11.5 MB, 93% of it silence, and §5 asks for
-    // goldens that are "a gate, not a demo". Bounding the render here keeps a
-    // committed golden at 768 KB and leaves the project-duration defect exactly
-    // where it was — fixing that would change the length of every render in the
-    // suite, which is not this milestone's to do.
+    // An EXPLICIT bound on how much audio a case renders, independent of what
+    // the project's own duration says. A case that only asserts the first two
+    // seconds of an arrangement should not have to write (and byte-compare, and
+    // wait for) the rest of it.
+    //
+    // Deliberately not a fix for SProject::getDurationSeconds(), which is its
+    // own question: this narrows a render, it never widens one. Setting it
+    // longer than the arrangement gets silence, exactly as rendering the whole
+    // project past its last clip does.
     double durationSec_ = -1.0;
 };
 

@@ -22,12 +22,34 @@ struct AcousticMetrics {
 };
 
 /**
+ * Header-only facts about an audio file: how long it is, and in what format.
+ */
+struct AudioFileInfo {
+    int64_t frameCount;      // Frames in the file (0 is legal and meaningful)
+    int channelCount;
+    int sampleRate;
+};
+
+/**
+ * Read an audio file's header without decoding it.
+ *
+ * Deliberately separate from analyzeWavFile(): the analysers refuse an empty
+ * region ("Start frame out of bounds"), which is the right answer for an RMS
+ * question and the wrong one for "how long is this file" — a zero-frame render
+ * (an empty arrangement) is a valid file whose length is exactly 0.
+ *
+ * @return false on a file that cannot be opened; `error` then says why.
+ */
+bool readAudioFileInfo(const std::string &filename, AudioFileInfo &info,
+                       std::string &error);
+
+/**
  * Read a WAV file and analyze acoustic properties.
  *
  * `channelIndex` defaults to -1 (all channels pooled), which is what this
  * signature meant before it had the parameter at all. It exists because the
  * whole-file path used to HARD-CODE -1: a caller that had a channel in hand
- * silently lost it (proposal 36 M0, trap 1). A whole-file analysis is just a
+ * silently lost it. A whole-file analysis is just a
  * region analysis with frameCount < 0, so this only forwards.
  *
  * @param filename Path to WAV file
@@ -61,7 +83,7 @@ AcousticMetrics analyzeWavFileRegion(const std::string &filename,
  * Per-channel RMS of a region, plus the RMS of the DIFFERENCE between two
  * channels.
  *
- * The discriminator behind `assert-channels-differ` (proposal 36 M0). Two
+ * The discriminator behind `assert-channels-differ`. Two
  * separate questions, because they fail differently:
  *
  *  - `rmsA` vs `rmsB` — do the channels carry different LEVELS? This is what
