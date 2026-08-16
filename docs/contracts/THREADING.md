@@ -88,3 +88,24 @@ For races, remove the latch/assumption so the system self-heals under ANY
 ordering — do not force a particular ordering (established project rule;
 see plan/STATE.md sessions and `feedback` memory). Tests that only pass
 for one interleaving are bugs.
+
+## Rule 5 — the run barrier is MAIN THREAD ONLY
+
+`SApplication::beginRun(pos)` (proposal 37 P3c, design D4 / 4.4) walks the
+model tree, clears every instrument processor's continuity and invalidates the
+render path from `pos` to infinity. It reads the model, which belongs to the
+main thread, and it must be ordered BEFORE the run's first demand — so it is
+called from `startRender()` before the render session's thread exists, and from
+every play-start path immediately before `twSpeaker::startOutput()`, which
+performs the engine's pre-readahead `seekTo` + `startReadahead()` on that same
+thread. There are three such play-start paths today (`SMainWindow::startPlaying`,
+`SApplication::setPlaybackRunning`, and the monitoring playback inside
+`SApplication::startRecording`) and each carries its own call: a barrier on one
+of them only would make determinism depend on which button was pressed.
+
+NEVER from the readahead thread, the RT callback or a scheduler worker. It is
+not issued on a seek during playback or on a loop wrap either — not for
+threading reasons but because the RT thread adopts a fresh page mid-page
+(proposal 16), so re-staling what is being served would be an audible switch.
+It is order-independent in rule 4's sense: a late barrier costs one re-render,
+never a wrong page served as current.

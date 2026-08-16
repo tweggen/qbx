@@ -123,6 +123,61 @@ The cost is real: `K` grows with P for a long held note, and a page is a
 reposition whenever it is not contiguous. It is bounded at four seconds and is
 recorded as known debt in `tw303a/plugins/CONTRACT.md`.
 
+## The run barrier (proposal 37 P3c, design D4 / 4.4)
+
+A RUN is one contiguous traversal of the graph by a consumer: an offline
+render, or a playback start. Runs are where class-1 state leaks between
+consumers, so every run opens with a barrier — and the barrier is an APP-SIDE,
+MAIN-THREAD act, not anything the freeze protocol or the scheduler does:
+
+    SApplication::beginRun(pos)
+        for every track whose slot 0 is an INSTRUMENT:
+            slot->forgetContinuity()                       // clears lastEnd_
+            track->invalidateRenderPathRange(pos, INT64_MAX)
+
+Five properties, each of which is a decision and not an accident:
+
+- **Full path, from the app.** `invalidatePagesInRange_nolock` does not
+  cascade: it bumps one component and re-blesses that component's own pages
+  (design F13). The consumers decide "current" against the ROOT's epoch, so the
+  only thing that carries a tap's change up to them is the `SObject`
+  invalidation walk on the main thread. A barrier issued anywhere in the engine
+  would reach nothing anyone looks at.
+- **Both halves.** An epoch bump does not clear `lastEnd_`, and clearing
+  `lastEnd_` does not stale a cached page. Either alone is a hole.
+- **In that order** — `forgetContinuity()` first, then the bump. A page
+  rendered after the bump is then guaranteed to have seen the cleared
+  continuity; one rendered in between is staled by the bump and re-rendered.
+- **Before the first demand, never inside a render.** `startRender()` issues it
+  before the session thread spawns; the play-start paths issue it immediately
+  before `twSpeaker::startOutput()`, which performs the engine's pre-readahead
+  `seekTo(locator)` + `startReadahead()` on the same thread. An epoch bump of a
+  component from inside its own render livelocks the scheduler (F10, schedule
+  inv. 8).
+- **Open-ended on the right.** `[pos, INT64_MAX)`: a class-1 consumer's change
+  at `a` can be heard at any later position, so a bounded range would re-bless
+  a continuation page rendered from pre-barrier state (F9).
+
+Where it is deliberately NOT issued, and what that costs:
+
+- **A locate while stopped** demands nothing — `requestSeek` only runs while
+  playing — so the barrier at the next play start covers it. That is why
+  `setGlobalLocatorPos` does not call it.
+- **A seek during playback, and a loop wrap.** Those keep today's
+  page-boundary splices. The RT thread adopts a fresh current-epoch page MID
+  PAGE as soon as it lands (F14, proposal 16), so re-staling what it is serving
+  would be an audible switch at an arbitrary offset — worse than the splice.
+  Chase + pre-roll already make the hole page approximately right. ACCEPTED and
+  NOT GATED; every PR body says so.
+- **Effects are not barriered at all.** Their splice at a page boundary is what
+  they have always done.
+
+Idempotent under any ordering: a late barrier costs one re-render, never a
+wrong page served as current (verify-at-publish self-staleness). Measured cost
+on the P3c gate project (one instrument track, playback starting on a page
+boundary the previous render had already frozen): TWO pages re-rendered per
+play start, ~20 ms — see STATE.md 2026-08-16.
+
 ## Preview variant
 
 `freezePreviewPage(startPos, length, previewRate, fullRate, prev)` renders

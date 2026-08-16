@@ -137,6 +137,31 @@ foreach(_case ${_QXA_CASES})
     )
 endforeach()
 
+# --- the cross-process determinism gate (proposal 37 P3c, AC1 + AC2c) --------
+#
+# The render-vs-render byte gate is a FRESH-PROCESS property (design F4), and a
+# .qxa case is one process with a private output directory, so no case can make
+# that compare on its own. This test drives two of them through one shared
+# output directory; the second case names the first's render as its reference
+# with the ordinary assert-file-identical verb, and the driver cmp's the files
+# again itself. Pass 2 lives in tests/cases/xproc/ so the CONFIGURE_DEPENDS glob
+# above cannot register it as a standalone case (it would fail looking for a
+# reference no one had rendered).
+add_test(NAME qxa.instrument_render_determinism_xproc
+    COMMAND ${CMAKE_COMMAND}
+            -DRUNNER=$<TARGET_FILE:smaragd>
+            -DCASE1=${CMAKE_CURRENT_SOURCE_DIR}/tests/cases/instrument_render_determinism.qxa
+            -DCASE2=${CMAKE_CURRENT_SOURCE_DIR}/tests/cases/xproc/instrument_render_determinism_xproc.qxa
+            -DOUTDIR=${CMAKE_BINARY_DIR}/test-output/instrument_render_determinism_xproc
+            -DWORKDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/cases
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_xproc_determinism.cmake
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/cases
+)
+set_tests_properties(qxa.instrument_render_determinism_xproc PROPERTIES
+    ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000"
+    TIMEOUT 900
+)
+
 # mc_legacy_pull_wide is proposal 36 AC B4.6: the LEGACY PULL path, exercised
 # wide. SMARAGD_REVAL_WORKERS=0 disables the revalidator entirely, so there is no
 # scheduler, no plan and no bound input pages -- every page is materialised by

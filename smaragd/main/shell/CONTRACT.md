@@ -99,8 +99,29 @@ Invariants:
    renders, and the first version of that grab produced whatever strip the
    hidden main window happened to allot.
 
+10. **`beginRun(pos)` is issued at EVERY run start and nowhere else**
+   (proposal 37 P3c, design D4 / 4.4; `docs/contracts/FREEZE_PROTOCOL.md` has
+   the full rule). A run is an offline render or a play start. The shell owns
+   the barrier because it is the only module that sees both the track tree and
+   every transport entry point. Three play-start paths call it immediately
+   before `twSpeaker::startOutput()` — `SMainWindow::startPlaying()` (the GUI
+   Play button and the `toggle-playback` verb reach the speaker through
+   different ones of these, so a barrier on only one would make determinism
+   depend on which was used), `SApplication::setPlaybackRunning()` and the
+   monitoring playback in `startRecording()` — and `startRender()` calls it
+   before the render session's thread exists. Adding a FOURTH way to start the
+   transport means adding a fourth call.
+   It is NOT called from `setGlobalLocatorPos()`: a locate while stopped
+   demands nothing (`requestSeek` is a no-op unless playing), and a locate
+   while PLAYING deliberately keeps today's page-boundary splice rather than
+   re-staling pages the RT thread is mid-way through serving.
+
 How to test: full qxa suite (headless boots the shell); startup-layout
-repro harness in STATE.md 2026-07-11.
+repro harness in STATE.md 2026-07-11. The barrier specifically:
+`qxa.instrument_render_determinism`, `qxa.instrument_render_determinism_xproc`
+(a CMake driver running two processes through one output directory — the only
+way to make the fresh-process byte compare the render gate rests on) and
+`qxa.instrument_locate_continuity`.
 
 Known debt: there is no UI for the per-track MIDI port — the verb and the serialized attributes exist, the arranger does not offer them yet (P4's track inspector work). Nor is there a UI for the `midi/portId/<name>` mapping: the Options page LISTS the machine's ports but a name that does not match one has to be mapped by editing `smaragd.ini`.
 

@@ -164,6 +164,7 @@ set(APP_OBJECTS_FILES
     objects/midi/src/smidisequence.cpp
     # --- app/objects/track
     objects/track/include/app/objects/track/sinsertpluginaction.h
+    objects/track/include/app/objects/track/sinstrumenttracks.h
     objects/track/include/app/objects/track/seteditgroupaction.h
     objects/track/include/app/objects/track/smoveclipaction.h
     objects/track/include/app/objects/track/spluginactionsupport.h
@@ -184,6 +185,7 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/strackrndrinline.h
     objects/track/src/seteditgroupaction.cpp
     objects/track/src/sinsertpluginaction.cpp
+    objects/track/src/sinstrumenttracks.cpp
     objects/track/src/smoveclipaction.cpp
     objects/track/src/spluginchain.cpp
     objects/track/src/spluginslot.cpp

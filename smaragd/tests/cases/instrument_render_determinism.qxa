@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_render_determinism">
+
+  <!-- Proposal 37 P3c, AC1: A RENDER IS ONE RUN, WHATEVER HAPPENED BEFORE IT.
+
+       An instrument is the only CLASS-1 component in the graph: a synth voice
+       carries its envelope, its filter poles and its portamento across page
+       boundaries, so what a page SOUNDS like can depend on what the processor
+       was doing when the page started. Playback and a render start at different
+       positions and freeze different pages, so a render made AFTER playback in
+       the same process could continue the playback run's voices and produce
+       different bytes from the same render in a fresh process (design F4, the
+       determinism hole). `SApplication::beginRun(pos)` closes it on the MAIN
+       thread, before the run's first demand: every instrument track gets
+       `forgetContinuity()` and `invalidateRenderPathRange(pos, INT64_MAX)`.
+
+       WHAT THIS CASE MEASURES TODAY, STATED HONESTLY. On the engine as it
+       stands the case ALSO passes with the barrier removed, and that was
+       verified rather than assumed (both call sites disabled; det_a and det_b
+       still compared byte-identical, 1 728 044 bytes). The reason is P3b's
+       recorded known debt: the scheduler renders each instrument page TWICE,
+       and the second call at the same position is never contiguous with the
+       first, so EVERY instrument page in every consumer is produced by the
+       reposition path - reset + chase + pre-roll K - which is a pure function
+       of the page's own start position and the events. Position-pure pages are
+       trivially run-independent, so nothing can leak between runs to be caught.
+       That is a property of a debt that proposal 20's pipelining work is meant
+       to remove; the moment an instrument page is served from a CONTINUOUS
+       chain, the run it chained from starts to matter and this case is what
+       says so. It is a REGRESSION gate on a guarantee, not a reproduction of a
+       live bug - which is why the PR body and STATE.md say the same thing.
+
+       THE FIXTURE is the in-repo `tw.native.303`: linked in, so this case runs
+       in a worktree with no submodules, and it is the STATEFUL instrument. The
+       CLAP/VST3 sine fixtures have no envelope at all, so a spliced run would
+       produce identical bytes and the case would be vacuous by construction.
+       The 303 has a decay envelope, a resonant ladder whose four poles are
+       integrators, a rectangular VCA with a 6 ms release and portamento, and it
+       is MONOPHONIC - the short notes below take the held note's voice over and
+       slide back to it on their note-offs. Every one of those is run state.
+
+       120 BPM / 960 ppq => 1920 ticks per second.
+
+           key 48 (C3)   tick     0  dur 11520   held, 0 - 6 s
+           key 60 (C4)   tick   960  dur   240   0.5   - 0.625 s
+           key 63 (D#4)  tick  2880  dur   240   1.5   - 1.625 s
+           key 67 (G4)   tick  4800  dur   240   2.5   - 2.625 s
+           key 55 (G3)   tick  9600  dur   240   5.0   - 5.125 s
+
+       PLAYBACK STARTS AT 262144 (5.461 s), which is a PAGE boundary and is
+       5.46 s into a note held since 0. Both halves matter: the pre-roll K is
+       min(max(4096, tailFrames, P - noteStart), 4 s) = 192000 there, i.e. the
+       four-second CAP bites and the chase rebuilds the held note 4 s before the
+       page instead of at its real note-on. That is the one configuration in
+       which a repositioned page is NOT the state a continuous run would have
+       had, so it is the configuration a leak would show in.
+
+       durationSec IS PINNED at 7.0 rather than left to the arrangement: the
+       303's tailFrames() follows its `decay` parameter, and a length that moved
+       with a parameter would turn a byte compare into a length compare.
+
+       NOT ASSERTED HERE: render-vs-playback byte identity. They are different
+       runs from different start positions and never were identical for a
+       stateful insert (F4); the barrier makes RENDERS agree, not renders and
+       playback.
+
+       The CROSS-PROCESS half of AC1 and all of AC2c are driven by
+       tests/run_xproc_determinism.cmake, which runs this case and then
+       tests/cases/xproc/instrument_render_determinism_xproc.qxa into the SAME
+       output directory, so the second process can name det_a.wav as its
+       reference. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.303"
+                   name="Smaragd 303" vendor="Smaragd"
+                   path="" nIn="0" nOut="1"/>
+    <assert-instrument-slot trackPath="0" present="1" format="tw"
+                            uid="tw.native.303" mode="MonoSpread"
+                            state="Active" hasFeed="1"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="11520" name="Held"/>
+    <add-note clip="0,0" tick="0"    dur="11520" key="48" velocity="90" channel="0"/>
+    <add-note clip="0,0" tick="960"  dur="240"   key="60" velocity="90" channel="0"/>
+    <add-note clip="0,0" tick="2880" dur="240"   key="63" velocity="90" channel="0"/>
+    <add-note clip="0,0" tick="4800" dur="240"   key="67" velocity="90" channel="0"/>
+    <add-note clip="0,0" tick="9600" dur="240"   key="55" velocity="90" channel="0"/>
+
+    <!-- A: the reference. A fresh process, nothing has played, the render is
+         the first run this process makes. -->
+    <render filename="det_a.wav" format="wav" quality="10" durationSec="7.0"/>
+
+    <!-- The project is AUDIBLE. Without this a barrier that silenced the
+         instrument outright would make every byte compare below pass. -->
+    <assert-audio-energy filename="det_a.wav" startFrame="0" frameCount="288000"
+                         channel="0" minRms="0.02" maxRms="1.0"/>
+
+    <!-- Real playback, on the capture backend, from a page boundary deep
+         inside the held note. This is what leaves the processor's lastEnd_
+         pointing somewhere the render does not start, and its voices in
+         mid-flight. -->
+    <set-locator position="262144"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="327680" minAdvance="4096" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+
+    <!-- B: the same render, same process, after that. -->
+    <render filename="det_b.wav" format="wav" quality="10" durationSec="7.0"/>
+
+    <assert-file-identical actual="det_b.wav" expected="det_a.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
