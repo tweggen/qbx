@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A render is exactly as long as the arrangement — short case.
+
+  One 4 s clip (192000 frames) at position 0, plus a second clip on another
+  track that ENDS EARLIER, so the render length is the LAST end and not the
+  sum, the first clip's end, or a per-track length.
+
+  Before the fix every render was a hardcoded 60 s (2880000 frames), i.e. 93%
+  padding for a fixture this size.
+-->
+<SActionScript version="1" name="render_duration_short">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Track 0: 4 s sawtooth at 0        -> ends at 192000 -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <!-- Track 1: the same clip trimmed to 1 s at 48000 -> ends at 96000 -->
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="48000"/>
+    <resize-clip clip="1,0" startTime="48000" startOffset="0"
+                 duration="48000" loopLength="0" stretch="1.0"/>
+
+    <render filename="rd_short.wav" format="wav" quality="10"/>
+
+    <!-- The arrangement ends at 192000, so the file is 192000 frames. -->
+    <assert-audio-length filename="rd_short.wav"
+                         minFrames="192000" maxFrames="192000"/>
+
+    <!-- And it is audio all the way to the end, not a padded file that was
+         trimmed: the last 4096 frames still carry the ramped sawtooth. -->
+    <assert-audio-energy filename="rd_short.wav"
+                         startFrame="187904" frameCount="4096"
+                         minRms="0.10" maxRms="0.60"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

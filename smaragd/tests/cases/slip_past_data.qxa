@@ -45,10 +45,10 @@
                          startFrame="148000" frameCount="40000"
                          minRms="0.160" maxRms="0.195"/>
 
-    <!-- The clip window did not move: nothing past 4 s. -->
-    <assert-audio-energy filename="slip_past_data.wav"
-                         startFrame="196000" frameCount="40000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="slip_past_data.wav"
+                         minFrames="192000" maxFrames="192000"/>
   </actions>
 
   <assertions>

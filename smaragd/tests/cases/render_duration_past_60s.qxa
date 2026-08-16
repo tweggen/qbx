@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A render is exactly as long as the arrangement — the TRUNCATION half of the
+  bug.
+
+  A clip placed at 64 s (3072000 frames) ends at 68 s (3264000). With the old
+  hardcoded 60 s project duration the render stopped at 2880000 frames and that
+  clip was never written at all: a user rendering a 3-minute arrangement got
+  the first minute, silently.
+
+  The assertion that matters is the energy at 65 s: it can only exist in a file
+  that is longer than the old constant.
+-->
+<SActionScript version="1" name="render_duration_past_60s">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s sawtooth at 0        -> ends at  192000 -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <!-- 4 s sawtooth at 64 s     -> ends at 3264000 -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="3072000"/>
+
+    <render filename="rd_past60.wav" format="wav" quality="10"/>
+
+    <assert-audio-length filename="rd_past60.wav"
+                         minFrames="3264000" maxFrames="3264000"/>
+
+    <!-- Content past the old 60 s ceiling (65 s = 3120000). -->
+    <assert-audio-energy filename="rd_past60.wav"
+                         startFrame="3120000" frameCount="48000"
+                         minRms="0.05" maxRms="0.60"/>
+
+    <!-- The gap between the two clips is silent, so the length is not coming
+         from a clip that bleeds across the arrangement. -->
+    <assert-audio-energy filename="rd_past60.wav"
+                         startFrame="1536000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

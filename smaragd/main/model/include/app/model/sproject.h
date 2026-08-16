@@ -16,6 +16,7 @@
 #include <memory>
 
 #include "tw/core/twfraction.h"
+#include "tw/core/twtypes.h"
 #include "tw/pages/capture_page_pool.h"
 
 class QDomElement;
@@ -92,7 +93,12 @@ public:
     void setPosFactor( const Fraction &factor ) { posFactor_ = factor; }
 
     // Render-related queries
-    // Total project duration in seconds (based on arrangement length)
+    // Total project duration (the arrangement's content extent, measured from
+    // position 0 to the end of the last placed clip). An empty arrangement is
+    // 0 — a render of it is a valid, well-formed, zero-frame file, not a fixed
+    // slab of silence. The frames variant is the primary one; the seconds
+    // variant is what the render extent is expressed in.
+    length_t getDurationFrames() const;
     double getDurationSeconds() const;
 
     // Time selection (locator in/out markers or arrangement selection)
