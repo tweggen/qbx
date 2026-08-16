@@ -274,6 +274,29 @@ void twTrackMix::setTrackGain(double gainDb)
     }
 }
 
+// Proposal 36 B4. A twTrackMix caches no pages of its own (freezePage allocates
+// a fresh page every call and never enters it into outputPages_), so widening
+// costs nothing here — but every page it has already HANDED OUT is now the wrong
+// shape, including the clip entries' previousPage state chain and everything
+// downstream. bumpContentEpoch() covers our own hand-outs; the render chain
+// above us is the caller's (STrack::bumpRenderChainEpoch), exactly as for any
+// other edit.
+void twTrackMix::setChannels( idx_t n )
+{
+    if( n < 1 ) n = 1;
+    if( channels_.exchange( (int) n, std::memory_order_acq_rel ) == (int) n ) {
+        return;
+    }
+    // Drop the per-clip DSP state chain: a previousPage of the old width would
+    // be handed to a child as its predecessor, and §4.5 would then read it as a
+    // miss for the rest of the session.
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        for( ClipEntry &c : clips_ ) c.previousPage.reset();
+    }
+    bumpContentEpoch();
+}
+
 void twTrackMix::createOutputLatches()
 {
     pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 0 );
@@ -379,18 +402,15 @@ std::shared_ptr<twOutputPage> twTrackMix::freezePage(
 )
 {
     std::lock_guard<std::mutex> lock(mutex());
-    // WIDTH, for whoever widens this component (proposal 36 B4). This override
-    // allocates its OWN page and therefore BYPASSES the one place a page learns
-    // its width — twComponent::freezePage's `make_shared<twOutputPage>(
-    // getOutputChannels())`. Correct today only because twTrackMix declares the
-    // default 1. The day it declares more, this line must pass the same
-    // getOutputChannels() and the mixing loop must fill every channel:
-    // freezePage_nolock forks on the width of the PAGE, so a width-4 component
-    // handing itself a width-1 page renders channel 0 and publishes it without
-    // the base renderPageWide() refusal ever firing. (§4.5's width check then
-    // reads it as a miss downstream — silence plus one log line — which is a
-    // loud enough failure to find, but not one to spend a day on.)
-    auto page = std::make_shared<twOutputPage>();
+    // WIDTH (proposal 36 §7 trap 19, fixed by B4). This override allocates its
+    // OWN page and therefore BYPASSES the one place a page normally learns its
+    // width — twComponent::freezePage's `make_shared<twOutputPage>(
+    // getOutputChannels())`. Because the render fork in freezePage_nolock is on
+    // the width of the PAGE, a component that declares 4 and hands itself a
+    // width-1 page would render channel 0 and publish it with NO refusal. So
+    // the declared width has to be passed here, by hand, and the mixing loop
+    // below has to fill every channel of what it gets.
+    auto page = std::make_shared<twOutputPage>( (std::uint16_t) getOutputChannels() );
     page->startPosition = startPos;
     // Stamp with the epoch read BEFORE rendering; consumers (streaming latch,
     // downstream caches) reject pages from before the last edit.
@@ -550,10 +570,24 @@ length_t twTrackMix::freezePage_nolock(
         offset_t framesToMix = std::min<offset_t>((offset_t) childPage->validFrames,
                                                   clipEnd > mixStart ? clipEnd - mixStart : 0);
 
-        // Type-safe mixing using IOVector (bounds-checked, zero-copy)
-        IOVector childVec = IOVector::CreateForPageOutput(childPage);
-        IOVector outputVec(page, 0, length);
-        outputVec.mixFrom(childVec, destOffset, (length_t) framesToMix);
+        // Type-safe mixing using IOVector (bounds-checked, zero-copy), ONE
+        // CHANNEL AT A TIME (proposal 36 §4.6: IOVector stays a single-channel
+        // view and wide mixing is a loop over channels of the same page pair).
+        //
+        // The source channel is CLAMPED, never assumed: a clip's page carries
+        // the width of ITS source (a mono file freezes width 1, a stereo file
+        // width 2, and nothing threads the track's width into a reader). §4.4 —
+        // "mono plays on every channel" — is what makes a mono clip audible on
+        // every channel of a wide track, and it is exactly the behaviour the
+        // retired N-parallel-mixer arrangement produced by rendering the same
+        // channel-0 page into each of its N buses.
+        const idx_t nCh = (idx_t) page->channels();
+        for( idx_t c = 0; c < nCh; ++c ) {
+            IOVector childVec = IOVector::CreateForPageOutput(
+                childPage, twPageClampChannel( *childPage, c ) );
+            IOVector outputVec(page, 0, length, c);
+            outputVec.mixFrom(childVec, destOffset, (length_t) framesToMix);
+        }
     }
 
     // Apply track gain, not mute (same as calcOutputTo_nolock — see there).
