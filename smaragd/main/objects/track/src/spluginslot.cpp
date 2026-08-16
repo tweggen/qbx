@@ -168,6 +168,34 @@ std::shared_ptr<audio::twPluginInsert> SPluginSlot::peekInsert() const
     return insert_;
 }
 
+// --- the instrument slot (proposal 37 P3b) ---------------------------------
+
+void SPluginSlot::setEventSource( std::shared_ptr<const twEventSource> source )
+{
+    // ensureChannels(), not proc_ directly: a slot may still be waiting for its
+    // width when the track wires the feed (project load orders the chain before
+    // setChannels), and the source must not be dropped on the floor.
+    ensureChannels( channels_ > 0 ? channels_ : 1 );
+    if( proc_ ) proc_->setEventSource( std::move( source ) );
+}
+
+void SPluginSlot::setTempoMap( const twTempoMap &map )
+{
+    if( proc_ ) proc_->setTempoMap( map );
+}
+
+std::uint32_t SPluginSlot::tailFrames() const
+{
+    // Deliberately does NOT ensureChannels(): see the header. An un-materialized
+    // slot reports no tail, and the first setChannelCount() makes it honest.
+    return proc_ ? proc_->tailFrames() : 0u;
+}
+
+void SPluginSlot::forgetContinuity()
+{
+    if( proc_ ) proc_->forgetContinuity();
+}
+
 audio::twPluginSlotState SPluginSlot::getSlotState() const
 {
     return proc_ ? proc_->state() : audio::twPluginSlotState::Missing;

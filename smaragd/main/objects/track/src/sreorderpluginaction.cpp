@@ -3,8 +3,29 @@
 #include "app/actions/sactionregistry.h"
 #include "app/objects/track/spluginactionsupport.h"
 
+#include "app/model/splacements.h"
+#include "app/objects/track/spluginchain.h"
+#include "app/objects/track/spluginslot.h"
+#include "app/objects/track/strack.h"
+#include "app/objects/track/strackpath.h"
+
 #include <QDebug>
 #include <QDomElement>
+
+namespace {
+
+// The instrument, resolved from the TRACK rather than from the chain: "slot 0
+// carries isInstrument" is STrack::instrumentSlot()'s definition and there must
+// not be a second spelling of it.
+bool instrumentAt0( SProject *project, const QString &trackPath )
+{
+    SObject *root = splacements::rootContainer( project );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack  *track = dynamic_cast<STrack *>( lane );
+    return track && track->instrumentSlot() != nullptr;
+}
+
+}  // namespace
 
 SReorderPluginAction::SReorderPluginAction( const QString &trackPath,
                                            int fromIndex, int toIndex )
@@ -30,6 +51,17 @@ SApplyResult SReorderPluginAction::apply( SProject *project )
                    << toIndex_ << "of" << n << "slots on track" << trackPath_;
         return { false, nullptr };
     }
+    // AN EFFECT CANNOT MOVE IN FRONT OF THE INSTRUMENT, and the instrument
+    // cannot move out of slot 0 (design D3). Both are the same refusal: the
+    // instrument's role and its position are one fact, and a chain whose slot 0
+    // is an effect fed by nothing would simply be silent.
+    if( ( fromIndex_ == 0 || toIndex_ == 0 ) && instrumentAt0( project, trackPath_ ) ) {
+        qWarning() << "reorder-plugin: slot 0 of track" << trackPath_
+                   << "is an instrument; it cannot be moved and nothing may move"
+                      " in front of it";
+        return { false, nullptr };
+    }
+
     if( fromIndex_ == toIndex_ ) {
         // A no-op is not a failure, but it must not enter the undo stack with a
         // pretend inverse either.

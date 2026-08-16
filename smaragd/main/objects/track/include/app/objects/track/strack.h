@@ -130,6 +130,17 @@ public:
     bool hasEventClips() const;
     /** Slot 0 of the plugin chain when it carries an instrument, else null. */
     SPluginSlot *instrumentSlot() const;
+    /**
+     * The end of the last EVENT material this track's feed carries, in timeline
+     * frames: our own Event children, plus the same question asked of every
+     * child track that bubbles events up. 0 when there is none.
+     *
+     * Separate from getDuration()'s audio extent because the project end of an
+     * instrument track is "last event clip end + tailFrames()" (design 3.1) —
+     * an audio clip must not gain a synth's release, and a MIDI clip must not
+     * lose it.
+     */
+    offset_t eventEndTime() const;
     /** Whether this track sends its feed to a MIDI port (proposal 37 P7b). */
     bool hasMidiOut() const { return !midiOutPort_.isEmpty(); }
 
@@ -229,6 +240,25 @@ protected:
     
 private:
     void checkDurationChanged();
+    /**
+     * Point slot 0's processor at THIS track's feed when slot 0 is an
+     * instrument, and take the feed away from every other slot (design 4.3).
+     * Also pushes the project's tempo map, which is the transport half of
+     * twProcessContext. Main thread only — it reaches twPlugin::prepare().
+     */
+    void syncInstrumentSlot();
+    /**
+     * Rebuild the feed's SOURCE LIST for an instrument we already wired.
+     *
+     * The processor holds the merge OBJECT, which is stable; what moves is
+     * which children feed it — a child added, re-parented, muted, solo-excluded
+     * or re-routed. STrack::eventFeed() rebuilds that list, and it must run on
+     * the MAIN thread (it walks childLinks() and resolves solo over the whole
+     * tree). The invalidation hooks below are exactly the main-thread points
+     * every such change already passes through, and they are guarded on there
+     * being an instrument at all, so a project without one pays nothing.
+     */
+    void refreshInstrumentFeed();
     // Wire a chain to this track: signals, our reference, the DSP component
     // provider. Used by the constructor and by adoptPluginChain().
     void connectPluginChain( SPluginChain *chain );

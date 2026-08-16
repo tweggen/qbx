@@ -127,6 +127,46 @@ Invariants (normative detail: CLIP_MODEL.md):
    invalidates `[0, inf)` on that transition and only on it; a channel or
    offset change moves no audio and invalidates nothing.
 
+11. THE INSTRUMENT IS SLOT 0 WITH A ROLE, AND THE ROLE AND THE POSITION ARE ONE
+   FACT (proposal 37 P3b, design D3). `STrack::instrumentSlot()` is the ONLY
+   definition: slot 0 of the plugin chain when `getDescriptor().isInstrument`,
+   else null. It reads the STORED descriptor, not the resolved one, so a track
+   whose instrument is not installed on this machine still looks like an
+   instrument track (the placeholder keeps the declared shape — plugins inv.
+   17). Everything derived hangs off it and nothing is stored twice: the head's
+   "I" glyph, the FX strip's `kind=instrument` row, `bubblesEventsUp()` ("an
+   instrument CONSUMES the events here, so they do not bubble"), and the tail in
+   `getDuration()`. The three rules the ACTIONS enforce: an instrument
+   descriptor lands at index 0 whatever `slotIndex` asked for; a SECOND
+   instrument is REFUSED (one event feed per track — a second one would either
+   duplicate every note or silently take none); `reorder-plugin` across slot 0
+   is refused in both directions.
+12. SLOT 0 GETS THE TRACK'S FEED; EVERY OTHER SLOT HAS IT TAKEN AWAY
+   (`syncInstrumentSlot`, proposal 37 P3b). The processor holds a
+   `twEventSource*` and never walks the model, so the merge's SOURCE LIST — which
+   moves when a child is added, re-parented, muted, solo-excluded or re-routed —
+   is rebuilt on the MAIN thread by `refreshInstrumentFeed()`, called from
+   `bumpRenderChainEpoch()` and `bumpRenderChainEpochRange()`. Those are exactly
+   the points every model change that reaches this track already passes through,
+   and the call is guarded on there BEING an instrument, so a project without one
+   pays two pointer hops. An event edit reaches the slot-0 insert's pages by the
+   same route a bypass does — the track's own `bumpRenderChainEpochRange` into
+   `cpDspChain_->invalidatePagesInRange`, because an `SPluginChain` is not an
+   `SLink` child and the root-down walk cannot find a slot (inv. 5's pitfall).
+   The range is OPEN-ENDED on the right for an event edit: the consumer is
+   class-1 (design F9), and `applyChildTrackAudibility()` widens to
+   `EVENT_DIRTY_END` too when this track holds an instrument, because a muted
+   child stops contributing EVENTS as well as audio.
+13. THE PROJECT END OF AN INSTRUMENT TRACK IS "LAST EVENT CLIP END +
+   tailFrames()" (proposal 37 P3b, design 3.1). `eventEndTime()` is the event
+   extent alone — own Event children plus the same question of every child that
+   bubbles up, WITHOUT the mute/solo resolution, because a project must not get
+   shorter because a lane happens to be muted right now — and `getDuration()`
+   takes the max of the audio extent and `eventEndTime() + tailFrames()`. The
+   tail is added to the EVENT extent only: an audio clip must not gain a synth's
+   release. `SPluginSlot::tailFrames()` never materializes a processor, because
+   `getDuration()` is reachable from a render thread.
+
 Self-registration (Phase 5): strack.cpp registers "STrack" and
 spluginslot.cpp registers "SPluginSlot" with SProjectLoader from a static
 initializer (spluginchain.cpp registers "SPluginChain").
@@ -140,6 +180,15 @@ master is their sum), mc_width_change.qxa (2 -> 8 -> 2 including the undo
 direction), mc_legacy_pull_wide.qxa (the same, with SMARAGD_REVAL_WORKERS=0 so
 there is no scheduler at all) and project_channels_test (the project's width
 reaches the track, and the legacy attribute does not).
+The instrument slot (proposal 37 P3b): instrument_sine_render.qxa (three
+formats, closed-form level and pitch per second), instrument_mixed_track.qxa
+(the pass-through sum, and `x + 0.0f == x` as a byte compare),
+instrument_edit_reaches_render.qxa (an event edit reaches the slot-0 insert's
+pages, and the reposition before it is inaudible),
+instrument_transpose_and_velocity.qxa, instrument_bypass_keeps_voices.qxa,
+instrument_slot_rules.qxa (the three slot rules, the derived glyphs and the
+project end) and instrument_folder_drums.qxa (one instrument on a folder playing
+its children's patterns, with mute and the two-overlapping-notes rule).
 
 Known debt: strackpath being here forces objects/track edges from every
 action slice — a path-resolution service extraction is a Phase 6 candidate.
