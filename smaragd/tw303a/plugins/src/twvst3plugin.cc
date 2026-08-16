@@ -526,7 +526,7 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
 
         // ioLayout() MUST NOT move after construction. twPluginSlotProcessor
         // derives the channel-mismatch mapping (Direct / DualMono / MonoFold)
-        // from it once, at setBusCount() — i.e. before this runs — and sizes its
+        // from it once, at setChannelCount() — i.e. before this runs — and sizes its
         // own buffers from it. A plugin that renegotiated its channel count here
         // would leave that mapping describing a shape the plugin no longer has,
         // and the mismatch would show up as silence or as reads past the end of

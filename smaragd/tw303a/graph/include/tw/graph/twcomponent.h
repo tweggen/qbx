@@ -201,7 +201,7 @@ public:
     // the caller renders silence for that input.
     //
     // The plug is SNAPSHOTTED under mutex() and the lock RELEASED before the
-    // pull — the rule twPluginInsert::pullUpstreamPage already had to obey
+    // pull — the rule twPluginInsert's upstream read already had to obey
     // (plugins/CONTRACT.md invariant 13): a component's own mutex must never be
     // held across a call into a producer.
     //

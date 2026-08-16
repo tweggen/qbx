@@ -401,7 +401,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
             page->contentEpoch.load() >= epochNow &&
             twPageWidthUsable(page.get(), widthNow) &&
             // Trust the page's OWN startPosition, never the map key it was
-            // found under (cf. twPluginInsert::pullUpstreamPage).
+            // found under (cf. twPluginInsert's upstream page read).
             page->startPosition == pageStartPos) {
             // Page is ready; switch to it
             prevFrozenPage_ = currentFrozenPage_;
