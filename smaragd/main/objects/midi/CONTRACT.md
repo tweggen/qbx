@@ -148,3 +148,19 @@ warning), `midi_folder_feed` (the track feed — that one lives in
   a window has no frame mapping of its own, and inventing a tempo in a painter
   would be worse than an empty rectangle. Every real placement is an
   `SMidiCut`.
+
+## Event automation lanes (proposal 37 P5, design D5)
+
+**`cut:VelocityScale` and `cut:Transpose` are applied when the SNAPSHOT is
+built, not at freeze time.** They change the EVENTS, and the events are what
+every consumer reads — the instrument slot, the MIDI-out pump, the piano roll —
+so `smidievents::buildSeq()` takes the two curves and evaluates each at the
+event's own CLIP-RELATIVE frame, which is the domain `twEvent::time` is already
+in by that point. They compose with the static modifiers the way Trim always
+does: the transpose lane ADDS semitones, the velocity lane MULTIPLIES.
+
+`SMidiCut::onAutomationChanged()` therefore REBUILDS (under the cut's own mutex,
+so a rebuild and an edit cannot interleave) and then invalidates open-endedly:
+the consumer of an event stream is class-1, so an event change is never bounded
+on the right (design F9). `cut:Gain` is inherited from `SObject` and means
+nothing on an event clip — the mix has no audio page of this cut's to scale.

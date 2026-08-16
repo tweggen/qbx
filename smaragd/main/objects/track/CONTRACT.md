@@ -192,3 +192,52 @@ its children's patterns, with mute and the two-overlapping-notes rule).
 
 Known debt: strackpath being here forces objects/track edges from every
 action slice — a path-resolution service extraction is a Phase 6 candidate.
+
+## Automation lanes (proposal 37 P5, design D5 / §3.3)
+
+11. **LANES ARE OWNER-HELD AND ARE NEVER `SLink` CHILDREN.** An `SAutomationLane`
+    is a plain `QObject` in a `std::vector<std::unique_ptr<>>` on `SObject`, and
+    it is serialized INLINE as `<automation><lane …><p …/></lane></automation>`.
+    That is the persistence contract, not a shortcut: the project loader orders
+    and resolves on `<SLink>` children only, so an older build reads the element,
+    recognises nothing and ignores it. A lane as an `SObject` would need an id, a
+    link, a place in the load order and a policy for what happens when its owner
+    is dropped — for a breakpoint table with no independent existence.
+
+12. **A TRACK OWNS `self:Volume` AND `self:Muted`, AND BOTH REACH `twGainStage`
+    (POST-FX).** `STrack::pushTrackAutomation()` is the only writer;
+    `onAutomationChanged()` pushes and then calls `invalidateRenderPathRange()`
+    with the EXACT range, because a gain stage is class infinity and pure.
+    `applyAutomationToEngine()` is the load-path replay, called once the chain
+    exists. `self:Pan` is deliberately absent until the sink is stereo (36-B5) —
+    a pan lane today would store a number nothing could hear.
+
+13. **A CLIP's `cut:Gain` REACHES THE MIX THROUGH THE TRACK, NOT THROUGH THE
+    CUT.** The curve lives on the WINDOW (an `SCut`), which is not allowed to
+    know its track, and it is consumed by the track's `twTrackMix` clip ENTRY.
+    `STrack::refreshClipGainCurves()` re-reads every child's lane and pushes it,
+    and it runs from `bumpRenderChainEpoch[Range]()` — the one place on the MAIN
+    thread that every model change already funnels through, exactly as
+    `refreshInstrumentFeed()` does and for the same reason. A take stack is
+    asked for its ACTIVE take (`windowTakeAt(-1)`), so an inactive take keeps
+    its own envelope and contributes nothing until it is selected.
+
+14. **A SLOT's `param:` LANE INVALIDATES `[a, INT64_MAX)`, AND IT NEEDS THE
+    TRACK TO DO THE WALK.** `SPluginSlot::onAutomationChanged()` pushes the
+    curves into the processor and emits `audioInvalidatedRange(start, end)`;
+    `STrack::onPluginSlotAudioInvalidatedRange()` turns that into
+    `invalidateRenderPathRange()`. `SObject::invalidateRenderPathRange()` FROM
+    THE SLOT is a no-op — the walk goes down from the project root through
+    `childLinks()` looking for `this`, and an `SPluginChain` is deliberately not
+    an `SLink` child of its track (the proposal 08 M5 finding, pluginui inv. 6).
+    The range is open-ended because a plugin is CLASS 1: its DSP state at any
+    position depends on everything before it (design F9).
+
+15. **A STATIC EDIT ON A READ-FAMILY LANE BECOMES A POINT AT THE LOCATOR.**
+    `set-track-volume` / `set-track-mute` on a track whose lane's mode is
+    read/touch/latch/write commit a one-point `set-automation-points` instead of
+    writing the static value, and return ITS inverse. Without that the fader
+    moves, the render does not, and the undo stack carries a step nobody can
+    hear. Trim and Off are NOT redirected — there the static value is still the
+    thing being edited (design §11 decision 3). The locator comes from
+    `SAppContext::getGlobalLocatorPos()`, which P5 added for exactly this.

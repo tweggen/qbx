@@ -11216,3 +11216,212 @@ correct and deterministic — every generator page is a pure function of its
 position and the feed, which is what lets AC3 byte-compare — but it is O(P) per
 page. A 4 s render of three notes takes ~0.9 s. The double demand is the thing to
 de-duplicate first; it is in plugins/CONTRACT.md's known debt.
+
+---
+
+## 2026-08-16 — Proposal 37 P5: automation model + engine
+
+Automation exists end to end: a lane on a track, a plugin slot or a clip window
+is edited by seven undoable verbs, persisted inline with its owner, snapshotted
+as an immutable `twAutomationCurve`, and consumed at freeze time by
+`twGainStage` (the post-FX fader) and by `twPluginSlotProcessor` (per-chunk,
+sample-offset `ParamValue` events). `twTrackMix`'s pre-FX gain — forced to 0 dB
+by P3a — is **deleted**, and the per-clip gain envelope that mix/CONTRACT.md has
+listed as debt since proposal 15 now exists in its place.
+
+Branch `feat/36-p5-automation`, on the P3b integration tip.
+
+### What landed
+
+**Model (`main/model`)** — `SAutomationLane` (`sautomationlane.{h,cpp}`): a
+plain owner-held `QObject`, NEVER an `SLink` child, holding a `SParamRef`
+target, a mode and a sorted point table, and rebuilding a
+`shared_ptr<const twAutomationCurve>` snapshot on every mutation. The lane
+vector lives on **`SObject`** rather than on the four owner types, for the same
+reason `contentKind()` and `resolveEventClip()` do: a verb, the serializer and
+the testkit must reach a lane without knowing which object slice owns it.
+`SObject::serialize()` emits `<automation><lane …><p …/></lane></automation>`
+and writes NOTHING when there are no lanes — which is what keeps every existing
+project file and every golden byte-unchanged.
+
+**Engine `tw/mix`** — `twGainStage::setVolumeCurve(curve, absolute)` /
+`setMuteCurve(curve)`, read once per page into a local (THREADING rule 2). Trim
+SUMS in dB (a dB sum is a gain product, which is exactly "static value ×
+curve"); Read replaces. A mute lane ramps ~1.5 ms at every transition and holds
+AUDIBLE before its first breakpoint. `twTrackMix::setTrackGain` and
+`trackGainDb_` removed; `ClipEntry::gainCurve` added and applied to the child's
+page before `mixFrom`, into a scratch buffer rather than through `childPage`
+(which is handed back as the child's DSP-state predecessor). `tw_mix` gained a
+dependency on `tw_events`, which is core-only and outside the dataflow DAG.
+
+**Engine `tw/plugins`** — `setParamCurves(map<paramId, curve>)` plus
+`automationEpoch_`, and `buildAutomationChunk_nolock()`: chase at offset 0, one
+event per breakpoint inside the chunk, a 64-frame grid on continuous segments,
+redundant repeats dropped. With no curves the call is the SAME legacy
+three-argument `process()` it always was — not an equivalent one — which is what
+makes AC6 true by construction.
+
+**Owners** — `STrack` (`self:Volume`, `self:Muted`, and the pull of every
+child's `cut:Gain` from `bumpRenderChainEpoch[Range]()`, the same main-thread
+funnel `refreshInstrumentFeed()` uses), `SPluginSlot` (`param:<id>`, invalidated
+through a new `audioInvalidatedRange` signal because the slot cannot walk to its
+own containers), `SCut` (`cut:Gain`, carried by `cloneWindowOver`), `SMidiCut`
+(`cut:VelocityScale` / `cut:Transpose`, applied when the snapshot is built).
+
+**Verbs** — `add-automation-lane`, `remove-automation-lane`,
+`set-automation-mode`, `add/move/remove-automation-point`,
+`set-automation-points` (batch, `mergeKey` = owner + target), all absolute and
+all undoable; plus the testkit's `assert-automation-value`. They live in
+`main/objects/track` rather than `main/actions`: only the `param:` owner needs a
+concrete type (`SPluginChain::getSlotAt`), everything else resolves through the
+model-level services, and putting them here keeps `main/actions` model-only.
+
+`set-track-volume` / `set-track-mute` on a track whose lane is in a Read-family
+mode now commit a one-point `set-automation-points` at the locator instead of
+writing the static value. `SAppContext` gained `getGlobalLocatorPos()` for it.
+
+### Gate results
+
+`./build.sh` clean; `check_layering.py` and `check_logging.py` clean;
+`action_roundtrip_test` **130 actions** (122 before, +8 fixture rows).
+
+**`ctest -j4`: 162 passed / 162 run, 0 failed, 165 registered, 3 Not Run (the
+macOS-only `au_*` trio) — 100 %, in 218 s.** 137 `.qxa` files on disk = 137
+`qxa.*` tests registered (132 + 5). `git status smaragd/tests/goldens/` clean
+throughout.
+
+**AC8, the race sweep**: `repeat_test.sh automation_plugin_param.qxa 50 <w>`
+over `SMARAGD_REVAL_WORKERS` {1, 4, 8, 16} — **50/50 at every worker count,
+200/200 overall, "deterministic: PASS" four times.** The case is the right
+subject: a curve swapped under `mutex_`, a per-chunk event list built on a
+freeze thread, and a byte-compare of two renders in the same process.
+
+An EARLIER full run came back 161/162 with `qxa.clip_properties_actions`
+(SEGFAULT) — the pre-existing crash flake CLAUDE.md already names ("1 of 2
+serial runs", never reproducible in isolation). Re-run 5× on its own: **5/5
+clean, exit 0**, and it passed in the final run. Not ours, not chased.
+
+New fixture `tests/test_autosaw.wav` + `tests/tools/gen_auto_fixture.py`: 4.0 s,
+48 kHz, 16-bit, two identical channels, a 480 Hz sawtooth of amplitude 0.4. The
+period is EXACTLY 100 frames, which is what every band in the five cases leans
+on — 100 divides 48000 (per-second windows), 69000/70000/71000 (the mid-chunk
+parameter step) and gives a whole cycle in the ~2 ms window at a mute edge. The
+existing fixtures could not serve: `test_sawtooth.wav` ramps in level, and
+`test_clipsaw.wav` is 2 s long with a 480-frame period.
+
+| AC | Case | Measured |
+|---|---|---|
+| AC1 | `automation_volume_ramp` | per-second RMS **0.000688109 / 0.00386725 / 0.0217461 / 0.122286** against the closed form 0.00068766 / 0.00386701 / 0.02174581 / 0.12228565 (±3 % bands; neighbours differ by 10^0.75 = 5.62×, so the bands are 46× narrower than the signal). Two renders byte-identical (768044 B). `assert-automation-value time=96000` = −30 dB exactly (tol 1e-9). Undo of the second point collapses the render to −60 dB, measured 0.000232194 |
+| AC2 | `automation_mute_step` | body [48096, 95904) RMS **0** (< 0.0001). Mute-on edge [48000, 48100) **0.13973** vs closed form 0.139723; mute-off edge [96000, 96100) **0.163803** vs 0.163802. Both bands (±25 %) exclude 0 and 0.230956, so a hard step fails both. Seconds 0 and 3 byte-identical to the no-lane render over their frame ranges; removing the lane restores the no-lane render byte for byte (768044 B); the removal's inverse carries the point list back and re-renders byte-identically |
+| AC3 | `automation_plugin_param` (also gates the slot lane's SAVE/LOAD, which found a real gap: the lanes are read before the processor exists, so `SPluginSlot::setChannelCount` re-pushes) | CLAP `tw.test.clap.gain` param 0, step 1.0→2.0 at frame 70000 (chunk starts 69632, so 368 frames in): [69000,70000) **0.230956**, [70000,71000) **0.461913** — both within ±1 %. VST3 `TW Test VST3 Gain` (normalized, clamped [0,1]) step 0.5→1.0: **0.115478** then **0.230956**. Two renders byte-identical for both (384044 B) |
+| AC4 | `automation_clip_gain` | linear 1.0→0.0 envelope: per-second **0.202775 / 0.145309 / 0.0881999 / 0.0333375** (±3 %). `move-clip` +1 s: silence before, then the same four numbers one second later. `duplicate-clip` copies the lane (asserted on the copy AND rendered). A take stack's new take renders byte-identical to the NO-LANE render and the original take byte-identical to the faded one — the inactive take keeps its own. Explicit `<undo count="1"/>` after each of the four steps, each re-asserted by a byte compare. Save → load → re-assert → byte-identical render |
+| AC5 | `automation_edit_invalidates` | `self:Volume` step lane 0 / −12 / 0 dB; render A, render A2 byte-identical; `move-automation-point` → second 2 **0.115754** (was 0.0580135), [0, 96000) and [144000, 192000) byte-identical to A, and the WHOLE file NOT identical (`expectReject`), so the ranged compares are not vacuous. `param:` half: identity asserted only BEFORE the edit; after it only the level (**0.346435** for 1.5×) |
+| AC6 | goldens | `git status smaragd/tests/goldens/` clean; every `meter_*`, `fader_post_fx` and `instrument_*` case green in the full run |
+| AC7 | docs | `action_roundtrip_test` rows for all 8 verbs; `docs/ACTIONS.md` rows (+ the Read-lane note on `set-track-volume` / `set-track-mute`); CONTRACT deltas in `tw303a/mix` (inv. 19–23), `tw303a/plugins` (inv. 15 amended, 41–44), `main/objects/track` (inv. 11–15), `main/objects/cut`, `main/objects/midi`, `main/model`, `main/testkit` |
+
+### Decisions taken, and why
+
+- **`self:Volume` interpolates linearly IN dB.** The design says "dB-linear in
+  fader space" (D5 / §4.5). `twAutomationCurve` is P0b ground truth and
+  interpolates the STORED value, and `tw/mix` may not include
+  `app/timeline/sfadercurve.h` (an app header). Read as "linear in dB, in the
+  fader's space" the sentence is implementable, consistent with the fader's own
+  domain and range, and it is the ONLY reading under which the brief's other
+  requirement — "Trim/Read = static fader value × curve (in dB: sum)" — is a
+  single number rather than two multiplies. Recorded here and in
+  `sautomationlane.h`; the P6 lane editor draws on the fader's curve, which is
+  where the other half of the phrase belongs.
+- **Point times are whole frames, not `Fraction`.** §3.3 says `Fraction t`, but
+  `twAutomationCurve`'s breakpoints are `int64` frames, so a fractional time
+  would be rounded at snapshot build and give false precision — and two points
+  0.4 frames apart could not both survive.
+- **`cut:Gain` is a LINEAR factor, not dB.** A fade-out has to reach exactly
+  zero. `self:Volume` stays dB because that is the fader's own unit and because
+  Trim's dB sum depends on it.
+- **A `self:Muted` lane holds AUDIBLE before its first point**, unlike every
+  other lane (which holds its first point's value there, the universal
+  convention). "Muted from frame 0" is what the structural mute says, and AC2's
+  "second 0 is byte-identical to the no-lane render" is only expressible this
+  way. Implemented as an explicit anchor point at frame 0 in the snapshot
+  builder, not as a special case in the consumer, so the model and the engine
+  cannot disagree about it.
+- **The automation verbs live in `main/objects/track`.** The brief's module list
+  names `main/actions` as well, but a lane owner is a track, a plugin SLOT or a
+  clip window, and only the slot needs a concrete type. Everything else resolves
+  through `splacements::laneAt` / `placementAt` / `SObject::windowTakeAt`, all
+  model-level, so this placement adds no coupling and keeps `main/actions`
+  model-only.
+- **`automationEpoch_` enters the STAMP by way of `bumpParamEpoch()`.** Post-36
+  B4 the processor caches nothing (`plugins/CONTRACT.md` inv. 15), so the
+  insert's content epoch IS the page stamp; `setParamCurves` bumps both the
+  counter and the epoch.
+
+### An environment collision worth naming (NOT a code bug)
+
+`automation_plugin_param` failed once, mid-session, reading **0.330928** where
+0.230956 was expected — a level consistent with the parameter step landing on
+the CHUNK boundary (69632) rather than on frame 70000. It was not the code. The
+per-user `%APPDATA%/Smaragd/smaragd.ini` had
+
+    [plugins]
+    searchPaths=…/.claude/worktrees/multichannel/smaragd/build/bin
+
+i.e. ANOTHER WORKTREE's build directory and nothing else, and a concurrent
+session there had just rewritten `plugincache.json` at scanner version 1, which
+this build discards and rescans. `SPluginSlot::resolveEffective()` prefers the
+REGISTRY's record for a (format, uid) over the stored descriptor's path, so
+`insert-plugin path='twtestclap.clap'` resolved to the *multichannel* branch's
+`twtestclap.clap` — a pre-P2 build that does not honour a `ParamValue`'s sample
+offset. Adding this worktree's `build/bin` to the FRONT of `searchPaths` made
+the case pass with the exact closed form again.
+
+**Both the plugin cache and the search-path setting are per-USER and shared
+across worktrees.** Any plugin case can therefore be silently answered by
+another branch's fixture, and the symptom is a plausible-looking wrong NUMBER
+rather than a load failure. If a `plugin_*` or `automation_plugin_param` case
+fails with a level that is nearly right, check which module the `[scan]` lines
+name before suspecting the code.
+
+### One bug found by the gate, worth naming
+
+The first full `-j4` run came back **160/162 with `instrument_edit_reaches_render`
+and `instrument_transpose_and_velocity` failing** — an event-clip edit no longer
+reached the render at all. Cause: adding the automation methods to `strack.h`
+*inside* its `public slots:` block. The `public:` / `private:` specifiers that
+scoped the new declarations ended the slots section, so
+`STrack::trackEventClipChanged` became a plain member — and it is connected by
+NAME through the `SIGNAL`/`SLOT` macros, which fail at RUNTIME with a warning
+nobody reads. Every `add-note` / `set-midi-cut` then silently stopped
+invalidating. Nothing about it is visible at compile time.
+
+**Rule, for the next person: never introduce an access specifier inside a
+`slots:` block.** Declare new members before it or after it, or close the
+insertion with the same `public slots:` it interrupted — which is what
+`strack.h` now does, with a comment saying why. It cost a stash-and-rebuild
+bisect back to the base commit to find, because the two failing cases are
+P3b's and the change is P5's.
+
+### What is NOT gated
+
+- **Mode UI and Touch/Latch/Write RECORDING** are P6. The four recorder modes
+  are stored, serialized and READ (they behave exactly like Read); nothing
+  writes points from a gesture yet, and there is no `automation-write-tick`.
+- **`self:Pan`** is deliberately unimplemented and unparsable until the sink is
+  stereo (36-B5) — a pan lane today would store a number nothing could hear.
+- **Placement-scope (per-`SLink`) envelopes** are deferred to proposal 32.
+- **The invalidation RANGE is not directly observable.** AC5 asserts byte
+  identity outside the edited span, but a render is deterministic, so a range
+  that is too WIDE also passes. What the case does have teeth against is the
+  failure that actually bites — an edit not observed at all, or observed at the
+  wrong position. There is no way to assert "page 1 was not re-frozen" from a
+  script.
+- **Concurrency of a curve swap racing a freeze** has no bespoke gate beyond the
+  AC8 sweep. The swap is a `shared_ptr` under the owner's mutex and the consumer
+  reads it once per page, so a page in flight keeps a coherent view; a timing
+  assertion tight enough to separate the orderings would be flaky.
+- **Playback** (as opposed to render) of an automated track is not separately
+  asserted; the gain stage is position-driven and both paths go through the
+  scheduler, but no case dumps a playback capture of a lane.
+- **`cut:VelocityScale` / `cut:Transpose`** are implemented and round-trip, but
+  have no dedicated qxa case — they are event transforms and their audible half
+  needs an instrument, which makes them a natural P6/P9 case.

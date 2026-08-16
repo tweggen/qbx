@@ -155,3 +155,21 @@ SCompositeAction; fan-out children carry broadcast=0. select-take comps the
 same take INDEX; resize syncs the slip to the corresponding take (an
 active-take anchor resolves its index first). Test:
 takes_group_broadcast.qxa.
+
+## The clip gain envelope (proposal 37 P5, design D5 / §3.3)
+
+**`cut:Gain` is an automation lane on the WINDOW, and it therefore travels with
+the window.** A `cut:` lane is stored in CLIP-RELATIVE frames on the `SCut`, so
+moving the clip moves the fade, `cloneWindowOver()` copies it (which is what
+makes `duplicate-clip` and `add-take` carry it), and a take stack's INACTIVE
+take keeps its own — each take is its own window object and the mix reads the
+active one. `SObject::copyAutomationFrom()` is the one copier; call it from any
+future `cloneWindowOver()`.
+
+The VALUE IS A LINEAR AMPLITUDE FACTOR (1.0 = unity), not dB, so a fade can
+reach EXACTLY zero — which is what a fade-out is. The consumer is
+`twTrackMix::freezePage_nolock`, which applies it to the child's page before
+`mixFrom` (see `tw303a/mix/CONTRACT.md` inv. 23).
+
+PLACEMENT-SCOPE envelopes (per-`SLink`) are deliberately deferred until proposal
+32 gives links identity: an `SLink` has no id to hang one on today.
