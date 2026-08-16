@@ -63,7 +63,22 @@ std::shared_ptr<twOutputPage> twLevelProbe::resolvePage_( offset_t pageStart )
 
 bool twLevelProbe::advanceTo( offset_t pos, twLevelSample &out, float clipThreshold )
 {
-    out = twLevelSample();
+    // ONE implementation, so a scalar reading and lane 0 of an N-lane reading
+    // can never diverge (window arithmetic, the page ladder and the clamps all
+    // live in the set form).
+    twLevelSampleSet set;
+    const bool ok = advanceTo( pos, set, 1, clipThreshold );
+    out = ok ? set.lane[0] : twLevelSample();
+    return ok;
+}
+
+bool twLevelProbe::advanceTo( offset_t pos, twLevelSampleSet &out, int wantLanes,
+                              float clipThreshold )
+{
+    out = twLevelSampleSet();
+    if( wantLanes < 1 ) wantLanes = 1;
+    if( wantLanes > twLevelSampleSet::MAX_LANES )
+        wantLanes = twLevelSampleSet::MAX_LANES;
 
     if( !tap_ ) { ++misses_; return false; }
 
@@ -119,9 +134,19 @@ bool twLevelProbe::advanceTo( offset_t pos, twLevelSample &out, float clipThresh
 
     if( from >= to ) { ++misses_; return false; }
 
-    // Channel 0. The meter is scalar BY TYPE (twLevelSample, twScanSpan,
-    // SLevelMeter) -- N-lane metering is B8, and until then reading anything but
-    // channel 0 would have nowhere to put the answer.
-    out = twScanSpan( page->channelPtr( 0 ) + (size_t)from, to - from, clipThreshold );
+    // ONE LANE PER CHANNEL OF THE PAGE IN HAND, up to what the caller asked for
+    // (§4.4). Never up to the tap's declared width: this page may be a forwarded
+    // or default-constructed narrower one, and reading channelPtr(1) of it would
+    // be out of bounds.
+    int lanes = (int) page->channels();
+    if( lanes > wantLanes ) lanes = wantLanes;
+    if( lanes > twLevelSampleSet::MAX_LANES ) lanes = twLevelSampleSet::MAX_LANES;
+    if( lanes < 1 ) lanes = 1;                 // a page always has channel 0
+
+    for( int c = 0; c < lanes; ++c ) {
+        out.lane[c] = twScanSpan( page->channelPtr( (idx_t) c ) + (size_t)from,
+                                  to - from, clipThreshold );
+    }
+    out.lanes = lanes;
     return true;
 }

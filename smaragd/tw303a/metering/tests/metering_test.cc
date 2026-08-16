@@ -105,6 +105,48 @@ private:
     idx_t width_ = 1;
 };
 
+// A wide component whose channels carry DIFFERENT, position-independent levels
+// (proposal 36 B8): channel c holds LADDER[c], a 6 dB ladder. A lane read from
+// the wrong channel is therefore a wrong LEVEL, not silence, and a probe that
+// quietly folded the channels together would land between the rungs.
+static const float LADDER[8] = { 0.8f, 0.4f, 0.2f, 0.1f,
+                                 0.05f, 0.025f, 0.0125f, 0.00625f };
+
+class LadderComponent : public twComponent {
+public:
+    LadderComponent( tw303aEnvironment &e, idx_t w ) : twComponent( e ), width_( w ) {}
+    void  setWidth( idx_t w ) { width_ = w; }
+    idx_t getOutputChannels() const override { return width_; }
+    bool isSeekable() const override { return true; }
+    int  seekTo( offset_t ) override { return 0; }
+    void reset() override {}
+    // Narrow degradation (trap 18): a wide-only component handed a mono scratch
+    // page must still render something rather than recurse into the base pair.
+    length_t renderFrames( sample_t *out, length_t n, const sample_t *,
+                           length_t, idx_t ) override {
+        for( length_t i = 0; i < n; ++i ) out[i] = LADDER[0];
+        return n;
+    }
+    length_t renderPageWide( twOutputPage &page, length_t frames,
+                             const sample_t *, length_t ) override {
+        if( frames > (length_t)page.channelFrames() )
+            frames = (length_t)page.channelFrames();
+        for( idx_t c = 0; c < (idx_t)page.channels(); ++c ) {
+            sample_t *d = page.channelPtr( c );
+            const float v = LADDER[ c < 8 ? c : 7 ];
+            for( length_t i = 0; i < frames; ++i ) d[i] = v;
+        }
+        return frames;
+    }
+    void createOutputLatches() override {}
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName( idx_t ) const override { return nullptr; }
+    const char *getOutputName( idx_t ) const override { return "ladder"; }
+private:
+    idx_t width_;
+};
+
 int main()
 {
     const offset_t CAP = (offset_t)twOutputPage::FRAME_CAPACITY;
@@ -388,6 +430,167 @@ int main()
         probe.reset();
         CHECK( probe.advanceTo( 5000, s ),
                "…and the position reads again once the widths agree" );
+    }
+
+    // ============================================================ proposal 36 B8
+    // N-LANE METERING. twLevelSample and twScanSpan stay scalar; a set is N of
+    // them, and the probe is the only thing that knows which channel is which.
+
+    // ------------------------------------------- the probe reads N real lanes
+    {
+        auto src = std::make_shared<LadderComponent>( env, 4 );
+        src->init();
+        src->freezePage( 0, nullptr, 0, CAP, env.getSRate(), nullptr );
+
+        twLevelProbe probe;
+        probe.setTap( src );
+
+        twLevelSampleSet set;
+        CHECK( probe.advanceTo( 5000, set, 4 ), "a wide tap reads" );
+        CHECK( set.lanes == 4, "four channels give four lanes" );
+
+        bool ladderOk = true;
+        for( int c = 0; c < 4; ++c ) {
+            if( !near_( set.lane[c].peak, LADDER[c], 1e-4 ) ) ladderOk = false;
+            if( !near_( std::sqrt( (double)set.lane[c].meanSquare ),
+                        LADDER[c], 1e-4 ) ) ladderOk = false;
+            if( set.lane[c].frames != (uint32_t)twLevelProbe::MIN_WINDOW )
+                ladderOk = false;
+        }
+        CHECK( ladderOk,
+               "each lane reads ITS OWN channel — a 6 dB ladder, in order" );
+
+        // A folded or duplicated read would make the lanes equal; say so
+        // separately, because the ladder check above could pass on a fold that
+        // happened to land on rung 0.
+        CHECK( set.lane[0].peak > set.lane[1].peak &&
+               set.lane[1].peak > set.lane[2].peak &&
+               set.lane[2].peak > set.lane[3].peak,
+               "the lanes are genuinely different, strictly descending" );
+
+        // The scalar overload and lane 0 are ONE implementation: they cannot
+        // disagree, and this is what pins that.
+        twLevelSample scalar;
+        probe.reset();
+        CHECK( probe.advanceTo( 5000, scalar ) &&
+               near_( scalar.peak, set.lane[0].peak, 1e-6 ) &&
+               near_( scalar.meanSquare, set.lane[0].meanSquare, 1e-9 ),
+               "the scalar advanceTo is exactly lane 0 of the set form" );
+
+        // §4.4 both ways. Asking for FEWER lanes than the page has stops at
+        // what was asked; asking for MORE stops at the page.
+        probe.reset();
+        CHECK( probe.advanceTo( 5000, set, 1 ) && set.lanes == 1 &&
+               near_( set.lane[0].peak, LADDER[0], 1e-4 ),
+               "a one-lane caller of a four-channel page reads channel 0 only" );
+        probe.reset();
+        CHECK( probe.advanceTo( 5000, set, 8 ) && set.lanes == 4,
+               "asking for more lanes than the page has yields the page's width" );
+        probe.reset();
+        CHECK( probe.advanceTo( 5000, set, 0 ) && set.lanes == 1,
+               "a non-positive lane request is read as one lane" );
+    }
+
+    // ------------------------- §4.4: THE PAGE IN HAND, not the declared width
+    {
+        // A width-1 producer asked for four lanes yields ONE. This is the rule
+        // that keeps channelPtr(1) of a mono page from ever being read: an
+        // insert-less twPluginChain forwards its input page verbatim and its
+        // silence pages are default-constructed width 1, so a wide consumer
+        // legitimately meets a narrow page.
+        auto narrow = std::make_shared<ConstComponent>( env, 0.5f );
+        narrow->init();
+        narrow->freezePage( 0, nullptr, 0, CAP, env.getSRate(), nullptr );
+
+        twLevelProbe probe;
+        probe.setTap( narrow );
+        twLevelSampleSet set;
+        CHECK( probe.advanceTo( 5000, set, 4 ) && set.lanes == 1 &&
+               near_( set.lane[0].peak, 0.5, 1e-4 ),
+               "a width-1 page gives ONE lane however many were asked for" );
+        CHECK( set.lane[1].frames == 0 && set.lane[3].frames == 0,
+               "lanes the page does not carry stay 'no measurement', not silence" );
+        CHECK( near_( set.first().peak, 0.5, 1e-4 ),
+               "first() answers lane 0" );
+
+        twLevelSampleSet empty;
+        CHECK( empty.lanes == 0 && empty.first().frames == 0,
+               "an empty set's first() is a non-measurement, not silence-at-0" );
+    }
+
+    // --------------------- PER-LANE ballistics stay frame-rate independent
+    // The load-bearing property of proposal 34, restated per lane: this is the
+    // whole reason ballistics live on the UI thread driven by wall-clock dt, and
+    // an N-lane meter is N of them stepped together, so it has to hold lane by
+    // lane. The lanes are fed DIFFERENT levels on purpose — an implementation
+    // that fed lane 0's sample to every lane would pass a same-level version of
+    // this test.
+    {
+        const int N = 4;
+        twMeterBallistics one[N], many[N];
+
+        twLevelSampleSet s;
+        s.lanes = N;
+        for( int c = 0; c < N; ++c ) {
+            s.lane[c].peak       = LADDER[c];
+            s.lane[c].meanSquare = LADDER[c] * LADDER[c];
+            s.lane[c].frames     = 100;
+        }
+
+        for( int c = 0; c < N; ++c ) { one[c].push( s.lane[c], 0.0 );
+                                       many[c].push( s.lane[c], 0.0 ); }
+
+        for( int c = 0; c < N; ++c ) one[c].idle( 1.0 );            // one 1 s step
+        for( int i = 1; i <= 100; ++i )                             // 100 x 10 ms
+            for( int c = 0; c < N; ++c ) many[c].idle( i * 0.01 );
+
+        bool peakOk = true, rmsOk = true, holdOk = true, distinct = true;
+        for( int c = 0; c < N; ++c ) {
+            if( !near_( one[c].peakDb(), many[c].peakDb(), 1e-4 ) ) peakOk = false;
+            if( !near_( one[c].rmsDb(),  many[c].rmsDb(),  1e-4 ) ) rmsOk  = false;
+            if( !near_( one[c].holdDb(), many[c].holdDb(), 1e-4 ) ) holdOk = false;
+            if( c > 0 && !( one[c].peakDb() < one[c-1].peakDb() - 1.0 ) )
+                distinct = false;
+        }
+        CHECK( peakOk, "per-lane peak decay is independent of tick rate" );
+        CHECK( rmsOk,  "per-lane RMS integration is independent of tick rate" );
+        CHECK( holdOk, "per-lane hold tick is independent of tick rate" );
+        CHECK( distinct,
+               "the lanes really did carry different levels (the test can fail)" );
+    }
+
+    // ------------------------- a wide tap ALSO obeys §4.5 (width is a miss)
+    {
+        auto src = std::make_shared<LadderComponent>( env, 4 );
+        src->init();
+        src->freezePage( 0, nullptr, 0, CAP, env.getSRate(), nullptr );
+
+        twLevelProbe probe;
+        probe.setTap( src );
+        twLevelSampleSet set;
+        CHECK( probe.advanceTo( 5000, set, 4 ) && set.lanes == 4,
+               "the four-lane read works before the width change" );
+
+        // Widen the PRODUCER without re-freezing. The cached page keeps its
+        // geometry (channels is immutable after allocation), so it now predates
+        // a width change — a MISS, never audio, on the N-lane path too. Reading
+        // channelPtr(4) of a four-channel page is the out-of-bounds read §4.5
+        // exists to forbid. The rule lives in resolvePage_, which both overloads
+        // share, and this is what pins that sharing.
+        src->setWidth( 6 );
+        probe.reset();
+        CHECK( !probe.advanceTo( 5000, set, 6 ),
+               "a page that predates a width change is a MISS in the set form too" );
+        CHECK( set.lanes == 0, "…and the set reports no measurement at all" );
+
+        src->bumpContentEpoch();
+        auto refrozen = src->freezePage( 0, nullptr, 0, CAP, env.getSRate(), nullptr );
+        CHECK( refrozen && refrozen->channels() == 6,
+               "the re-freeze allocates at the NEW declared width" );
+        probe.reset();
+        CHECK( probe.advanceTo( 5000, set, 6 ) && set.lanes == 6 &&
+               near_( set.lane[5].peak, LADDER[5], 1e-4 ),
+               "…and six lanes read, the sixth carrying rung 5" );
     }
 
     printf( failures ? "\n%d FAILURE(S)\n" : "\nall metering tests passed\n",

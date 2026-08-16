@@ -78,6 +78,10 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     volLayout->addWidget(volumeLabel_);
     // Level meter for the selected track (proposal 34), beside its fader.
     meter_ = new SLevelMeter(this);
+    // The dock is the ONE mount that grows with the project's width (proposal 36
+    // B8): unlike a 120 px track head it has the room, so it meters every
+    // channel at a readable thickness rather than dividing 8 px among six lanes.
+    meter_->setGrowWithLanes(true);
     meter_->setOrientation(Qt::Horizontal);
     meter_->setMinimumWidth(72);
     meter_->setMaximumWidth(72);
@@ -191,9 +195,18 @@ void STrackDetailPanel::onMeterTick(offset_t pos, qint64 nowMs, bool live)
         return;
     }
 
-    twLevelSample s;
-    if (probe_.advanceTo(pos, s)) meter_->pushLevel(s, nowMs);
-    else                          meter_->pushIdle(nowMs);
+    // EVERY CHANNEL (proposal 36 B8). This is the mount that does not cap: the
+    // dock has the room, so it is where a user sees all six lanes of a
+    // six-channel project — and it is what the track head's tooltip points at
+    // when it shows only the monitored pair.
+    std::shared_ptr<twComponent> tap = currentTrack_->getRootComponent();
+    probe_.setTap(tap);
+    const int width = tap ? (int) tap->getOutputChannels() : 1;
+    meter_->setLanes(width, width);            // no-op when unchanged
+
+    twLevelSampleSet s;
+    if (probe_.advanceTo(pos, s, width)) meter_->pushLevel(s, nowMs);
+    else                                 meter_->pushIdle(nowMs);
 }
 
 // Preferred height: 50% of screen height, but never more than 450px.
