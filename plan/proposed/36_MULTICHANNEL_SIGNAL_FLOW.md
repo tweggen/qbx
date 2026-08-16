@@ -781,14 +781,41 @@ corpus at 14.0 MiB with exactly one `twSampleReader` page still mono — the
 container/asset clip's, "B7 expressed as one number". That page going wide is
 this milestone's arithmetic proof; a 4 GiB pool is its failure mode.
 
-### B8 — Metering, preview, UI stop lying
+### B8 — Metering, preview, UI stop lying ✅ **EXECUTED 2026-08-16**
+
+> **The three decisions, as made.** *(1)* A Preview aspect page holds **float
+> samples decimated to ~1 kHz, channel 0, no geometry attached** — and its float
+> payload has **zero readers in the tree**. The disagreeing reader was proven
+> unreachable twice over (statically: `currentPage_` is only ever written for
+> objects passed to `scheduleRevalidation()`, whose only call sites pass an
+> `SCut`, and an `SPlainWave` is not one; at runtime: an instrumented build
+> recorded **0** calls across four cases). **Deleted, not "fixed"** — even with
+> the right element type it ignored `start`/`length`/`nProbes` against a buffer
+> carrying no probe geometry. The version bump came *afterwards*, in its own
+> commit, and earns itself: preview probes now fold **every** channel (union of
+> the per-channel signed envelopes). The waveform stays one lane deliberately —
+> per-channel *level* is the meter's job. *(2)* **Two lanes on the track head,
+> following the device rule**: capping at the pair you can actually hear keeps
+> the head honest about the monitor path rather than inventing a second reduction
+> for the eye. The **Track Detail dock shows every channel** and grows to do it;
+> the cap is announced (`describe()` reports `lanes=` and `width=` separately,
+> and the tooltip points at the dock). *(3)* The render dialog **displays** the
+> width. An override's semantics are the part that does not exist: 6→2 needs
+> channel roles and a fold law (a §8 non-goal), and "first two, rest dropped" is
+> defensible for monitoring — where the user still has the full render — and
+> indefensible for a delivered file.
 
 N-lane metering (`twLevelSample`/`twScanSpan`/`SLevelMeter` are scalar **by
 type** — a widget and probe change, not config), fitted into the track head's
 density rules; render-dialog channel control; preview per-channel or an
-explicitly documented fold — either way bump `twAspect::PreviewPeaksVersion`,
-because the sidecar key asserts `qi.channels = 1` today and every existing
-sidecar would otherwise mis-hit.
+explicitly documented fold — either way bump `twAspect::PreviewPeaksVersion`.
+~~because the sidecar key asserts `qi.channels = 1` today and every existing
+sidecar would otherwise mis-hit~~ — **the mechanism in that sentence is wrong
+(B8):** `channels` is *not* key material (`twSidecarStore` keys on
+contentHash/aspectId/paramsHash and validates aspectVersion), and
+`SPlainWave::fetchPreviewSidecar` did not cross-check it at all. Old sidecars
+would have mis-hit because **nothing checked** — not because the key asserted
+anything. The bump is still required; B8 added the missing cross-check too.
 
 **Three things to settle before writing code, added after B7 handed the first
 one over:**
@@ -1043,7 +1070,20 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     what a preview page contains.** Not confirmed to produce a visibly wrong
     waveform, because `getStraightPreview` runs whenever the page is absent, which
     may be always in headless runs. **B8 must settle what a preview page IS before
-    deciding how wide one should be.**
+    deciding how wide one should be.** **SETTLED AT B8, and "one of the two is
+    wrong" was not the shape of it:** both were internally consistent — *the
+    reader was never a reader*. The producer is right about the payload, the
+    consumer was dead code, and the aspect page's float payload has **zero
+    readers in the tree**. "May be always in headless runs" was also understated:
+    it is always, everywhere, and for a stronger reason than the fallback — a
+    non-`SCut` `SObject` can never own a capture page at all. Headless runs also
+    never paint a clip waveform, so this whole area is **unreachable by the qxa
+    suite**, which is a coverage fact worth knowing.
+28. **`SObject::getCapture` never schedules revalidation** (found by B8; its own
+    TODO says "Phase 5e.5 — unify CaptureRevalidator to work with `SObject*`").
+    That is *why* only an `SCut` can own an aspect page, and that asymmetry is
+    what kept trap 26 latent for as long as it was. **Anyone wiring a second
+    revalidatable object makes it live.** B9 candidate.
 27. **`twCapturingSource`'s six-argument constructor has ZERO callers** (found by
     B7) — the one already-N-channel capture API, and it is dead. Its body is a
     per-channel loop that `seekTo`s a cursor-bearing component and pulls
