@@ -166,6 +166,17 @@ Invariants (normative detail: CLIP_MODEL.md):
    tail is added to the EVENT extent only: an audio clip must not gain a synth's
    release. `SPluginSlot::tailFrames()` never materializes a processor, because
    `getDuration()` is reachable from a render thread.
+14. **The RUN BARRIER finds its instrument tracks by WALKING, not by a
+   registry** (proposal 37 P3c). `sinstruments::collectInstrumentTracks(root,
+   out)` (`app/objects/track/sinstrumenttracks.h`) is a depth-first walk of the
+   LANE tree — `isPathContainer()` only, exactly as `ssolo`'s walks do, so a
+   folder track's own instrument and a leaf's are both found. It lives here and
+   not in the shell because it is a fact about how a track tree is shaped.
+   Deliberately not a maintained list: a registry would have to be kept in step
+   with insert/remove/reorder-plugin, the undo of each, track add/remove/
+   reparent and project load — nine places, every one of them a chance to hand
+   the barrier a dangling pointer — and the walk runs once per transport start,
+   never per page, per block or per edit.
 
 Self-registration (Phase 5): strack.cpp registers "STrack" and
 spluginslot.cpp registers "SPluginSlot" with SProjectLoader from a static
@@ -189,6 +200,9 @@ instrument_transpose_and_velocity.qxa, instrument_bypass_keeps_voices.qxa,
 instrument_slot_rules.qxa (the three slot rules, the derived glyphs and the
 project end) and instrument_folder_drums.qxa (one instrument on a folder playing
 its children's patterns, with mute and the two-overlapping-notes rule).
+The run barrier's walk (proposal 37 P3c) is exercised by
+instrument_render_determinism.qxa, its cross-process driver
+instrument_render_determinism_xproc and instrument_locate_continuity.qxa.
 
 Known debt: strackpath being here forces objects/track edges from every
 action slice — a path-resolution service extraction is a Phase 6 candidate.

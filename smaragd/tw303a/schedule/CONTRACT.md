@@ -45,6 +45,21 @@ Invariants:
    page actually exists at that position (most per-track components cache
    nothing, and the epoch is shared by every page of the component).
 
+9. **The RUN BARRIER IS NOT A SCHEDULER FEATURE** (proposal 37 P3c, design D4
+   / 4.4). A render start and a play start invalidate the whole path from every
+   INSTRUMENT track up to the root, from the run's start position onward, and
+   clear the processor's `lastEnd_`. All of that happens in
+   `SApplication::beginRun()`, on the MAIN thread, before the consumer issues
+   its first demand — never here, and never from the readahead thread. Two
+   reasons it cannot live in this module: the invalidation that consumers
+   actually observe is the app-side `SObject` path walk (design F13 — a
+   component-local `invalidatePagesInRange` cascades nowhere), and invariant 8
+   above is exactly why a barrier issued from inside a running node would
+   livelock. If a worker is mid-render at the barrier position when it lands,
+   verify-at-publish self-staleness re-stales that result, so the wrong page is
+   never published as current; the barrier is idempotent under any ordering and
+   costs at most one re-render.
+
 How to test: `ctest -R schedule_test` (retireObject lifetime, the dependency-
 counting scheduler, and both directions of verify-at-publish self-staleness);
 `SMARAGD_LOG_LEVEL=debug` prints the run's `nodesExecuted / nodeRetries /
