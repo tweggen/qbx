@@ -785,19 +785,49 @@ this milestone's arithmetic proof; a 4 GiB pool is its failure mode.
 
 N-lane metering (`twLevelSample`/`twScanSpan`/`SLevelMeter` are scalar **by
 type** — a widget and probe change, not config), fitted into the track head's
-density rules (the 120 px column has ~13 px of slack: a second lane is a layout
-decision, not a squeeze); render-dialog channel control; preview per-channel or
-an explicitly documented fold — either way bump `twAspect::PreviewPeaksVersion`,
+density rules; render-dialog channel control; preview per-channel or an
+explicitly documented fold — either way bump `twAspect::PreviewPeaksVersion`,
 because the sidecar key asserts `qi.channels = 1` today and every existing
 sidecar would otherwise mis-hit.
 
+**Three things to settle before writing code, added after B7 handed the first
+one over:**
+
+1. **What IS a preview page?** (trap 26.) `CaptureRevalidator::dispatchRecomputation`
+   writes **float samples** into `CapturePageData::data` and flags `Preview`;
+   `SPlainWave::getPreview` reads that same buffer as `preview_t*` (2-byte
+   signed min/max pairs). One of the two is wrong. Bumping a version on a page
+   whose *contents* are disputed would carve the confusion into the cache key.
+   Settle it with evidence first — including whether it currently produces a
+   visibly wrong waveform, which B7 could not confirm because
+   `getStraightPreview` runs whenever the page is absent.
+2. **How many lanes does a track head show at width > 2?** Six lanes do not fit
+   a 120 px column, so this is a decision, not a layout outcome. There is a
+   precedent to follow or consciously reject: the **device rule** shows the
+   first two channels above stereo. Whatever is chosen, a user must be able to
+   find out *why* they are not seeing six meters.
+3. **Does the render dialog's channel control OVERRIDE the project width, or
+   display it?** An override is a real feature with real semantics — what a
+   6-channel project rendered to 2 channels *is*. If it overrides, define the
+   reduction (the device rule is the obvious candidate); if it displays, say so
+   and leave `RenderParams.channels = 0` meaning "ask the graph", which is what
+   B5 built.
+
+**AC B8.0** Trap 26 is settled: what a preview page contains is stated, the
+disagreement is either fixed or proven harmless with evidence, and the version
+bump happens **after** that — not on top of it.
 **AC B8.1** `metering_test` extended; per-lane ballistics stay frame-rate
-independent.
-**AC B8.2** `meter_levels` asserts a wide project's lanes read *differently*, with
-PNG grabs.
-**AC B8.3** Old sidecars miss rather than mis-read after the version bump.
-**AC B8.4** Track head at 150/100/60/40 px and both column widths renders without
-clipping — grabs attached to the PR.
+independent (one 1 s step == 100 × 10 ms steps, which is why they live on the UI
+thread at all).
+**AC B8.2** `meter_levels` asserts a wide project's lanes read *differently*,
+with PNG grabs. **Use `test_stereo.wav` or `test_channels4.wav`** — never
+`test_sawtooth.wav`, whose channels are byte-identical and therefore cannot gate
+a channel claim (trap 22, the defect that made `channel_assert_dupmono`
+incapable of detecting B5).
+**AC B8.3** Old sidecars **miss** rather than mis-read after the version bump —
+assert the miss, not merely a changed key.
+**AC B8.4** Track head at 150/100/60/40 px and both column widths renders
+without clipping — grabs attached to the PR.
 
 ### B9 — Contracts, cleanup, and the report
 
