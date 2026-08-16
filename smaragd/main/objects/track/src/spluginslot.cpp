@@ -45,8 +45,8 @@ SPluginSlot::SPluginSlot( SProject *project, const audio::twPluginDescriptor &de
 
     resolveEffective();
 
-    // The processor and its taps are created on demand (setBusCount / the first
-    // getInsertForBus), because the bus count is what decides the
+    // The processor and its insert are created on demand (setChannelCount / the
+    // first getInsert), because the channel count is what decides the
     // channel-mismatch mapping and only STrack knows it.
 }
 
@@ -107,9 +107,18 @@ audio::twPluginSlotProcessor::Factory SPluginSlot::makeFactory() const
     return [eff]() { return audio::pluginRegistry().instantiate( eff ); };
 }
 
-void SPluginSlot::ensureBuses( int nBuses ) const
+// Proposal 36 B4: ONE insert, N channels wide, where there used to be one tap
+// per bus. Two consequences worth naming, because both were awkward before:
+//
+//   * the width can go DOWN. ensureBuses() only ever grew, because shrinking
+//     meant destroying components that a twPluginChain still held; now nothing
+//     is created or destroyed and 8 -> 2 is one setChannelCount() call.
+//   * re-deriving the mapping RE-INSTANTIATES the plugin, so the bypass flag
+//     and the saved state chunk have to be re-applied every time the width
+//     moves, not only the first time.
+void SPluginSlot::ensureChannels( int nChannels ) const
 {
-    if( nBuses <= 0 ) return;
+    if( nChannels <= 0 ) return;
 
     SPluginSlot *self = const_cast<SPluginSlot *>( this );
 
@@ -118,12 +127,12 @@ void SPluginSlot::ensureBuses( int nBuses ) const
             *SAppContext::get().get303aEnvironment(), makeFactory(), effective_.io );
     }
 
-    if( nBuses > self->busCount_ ) {
-        // setBusCount() re-derives the mapping and prepare()s — this runs on the
-        // UI thread (insert-plugin action, project load, STrack::setNBusses),
-        // which is where CLAP says activate() belongs.
-        self->proc_->setBusCount( (idx_t) nBuses );
-        self->busCount_ = nBuses;
+    if( nChannels != self->channels_ ) {
+        // setChannelCount() re-derives the mapping and prepare()s -- this runs
+        // on the UI thread (insert-plugin action, project load,
+        // STrack::setChannels), which is where CLAP says activate() belongs.
+        self->proc_->setChannelCount( (idx_t) nChannels );
+        self->channels_ = nChannels;
         self->proc_->setBypass( self->bypass_ );
         if( !self->savedState_.empty() ) {
             for( audio::twPlugin *p : self->proc_->plugins() )
@@ -131,34 +140,32 @@ void SPluginSlot::ensureBuses( int nBuses ) const
         }
     }
 
-    while( (int) self->taps_.size() < nBuses ) {
-        const idx_t bus = (idx_t) self->taps_.size();
-        auto tap = std::make_shared<audio::twPluginInsert>(
-            *SAppContext::get().get303aEnvironment(), self->proc_, bus );
-        // init() allocates the plugs and the output latch AND registers the tap
-        // with the processor (which holds it weakly).
-        tap->init();
-        self->taps_.push_back( std::move( tap ) );
+    if( !self->insert_ ) {
+        self->insert_ = std::make_shared<audio::twPluginInsert>(
+            *SAppContext::get().get303aEnvironment(), self->proc_ );
+        // init() allocates the plugs and the output latch AND registers the
+        // insert with the processor (which holds it weakly).
+        self->insert_->init();
     }
 }
 
-void SPluginSlot::setBusCount( int nBuses )
+void SPluginSlot::setChannelCount( int nChannels )
 {
-    ensureBuses( nBuses );
+    ensureChannels( nChannels );
 }
 
-std::shared_ptr<audio::twPluginInsert> SPluginSlot::getInsertForBus( int busIndex ) const
+std::shared_ptr<audio::twPluginInsert> SPluginSlot::getInsert() const
 {
-    if( busIndex < 0 ) return nullptr;
-    ensureBuses( busIndex + 1 );
-    if( busIndex >= (int) taps_.size() ) return nullptr;
-    return taps_[busIndex];
+    // A slot that has never been told its width still owes its caller a
+    // component: default to mono, which the next setChannelCount() corrects
+    // without rebuilding anything.
+    ensureChannels( channels_ > 0 ? channels_ : 1 );
+    return insert_;
 }
 
-std::shared_ptr<audio::twPluginInsert> SPluginSlot::peekInsertForBus( int busIndex ) const
+std::shared_ptr<audio::twPluginInsert> SPluginSlot::peekInsert() const
 {
-    if( busIndex < 0 || busIndex >= (int) taps_.size() ) return nullptr;
-    return taps_[busIndex];
+    return insert_;
 }
 
 audio::twPluginSlotState SPluginSlot::getSlotState() const
@@ -200,11 +207,11 @@ bool SPluginSlot::reloadPlugin()
 
 std::shared_ptr<twComponent> SPluginSlot::getRootComponent()
 {
-    auto tap = getInsertForBus(0);
-    if( tap ) {
-        return std::static_pointer_cast<twComponent>(tap);
+    auto insert = getInsert();
+    if( insert ) {
+        return std::static_pointer_cast<twComponent>(insert);
     }
-    // Fallback (shouldn't happen - the tap exists even for a missing plugin;
+    // Fallback (shouldn't happen - the insert exists even for a missing plugin;
     // the processor simply runs the transparent placeholder).
     throw std::runtime_error( "SPluginSlot: no plugin insert available" );
 }

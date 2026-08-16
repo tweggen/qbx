@@ -138,6 +138,23 @@ public slots:
     int setNBusses( int n );
 
     /**
+     * Set the CHANNEL WIDTH of the master sum (proposal 36 B4).
+     *
+     * This is what fixes the drop the proposal names in §2 item 3: the ctor's
+     * hard-coded setNBusses(1) meant the summing loop ran `bus < 1`, so every
+     * track's bus 1 was built, filtered, plugin-processed — and dropped. It is
+     * not fixed by making the BUS count 2; a bus was never a channel. There is
+     * ONE bus mixer, N channels wide, and every track's page arrives whole.
+     *
+     * The width comes from SProject::channels() — read in the constructor and
+     * followed through SProject::channelsChanged — so it is PERSISTED where it
+     * always belonged, as one attribute on the project, rather than as a second
+     * copy on the mixer that could disagree with it.
+     */
+    void setChannels( int n );
+    int getChannels() const { return channels_; }
+
+    /**
      * Append a track to the mixer (QObject children are append-only; use
      * reorderTrack() to position it). Emits trackInserted() with the track's
      * actual landing index.
@@ -198,6 +215,7 @@ private:
     std::vector<std::shared_ptr<twMixer> > cpMixers_;
     std::shared_ptr<twRewire> cpRewire_;
     int nBusses_;
+    int channels_ = 1;      // see setChannels()
 
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;

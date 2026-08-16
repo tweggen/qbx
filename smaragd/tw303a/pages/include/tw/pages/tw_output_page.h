@@ -269,4 +269,25 @@ private:
 // the check and the null test as one condition.
 bool twPageWidthUsable(const twOutputPage *page, idx_t producerChannels);
 
+// THE §4.4 READ CLAMP, in one place (proposal 36, B4).
+//
+// A consumer that wants channel `c` of `page` must read channel
+// min(c, page.channels() - 1) — "mono plays on every channel", exactly what
+// twSampleSource::read has always done for an out-of-range channel and what
+// twStreamingLatch::copyData does for a plug index. B4 makes several WIDE
+// components (twTrackMix mixing narrower clips, twMixer summing narrower
+// tracks, twPluginInsert gathering a narrower upstream) do the same thing, and
+// spelling the clamp out in each of them is how the four copies drift apart.
+//
+// It is deliberately NOT inside twOutputPage::channelPtr(): channelPtr treats an
+// out-of-range channel as a PROGRAMMING ERROR and reports it, which is right for
+// a page-internal accessor. This is a POLICY, applied by a consumer that knows
+// it is reading a narrower producer on purpose.
+inline idx_t twPageClampChannel(const twOutputPage &page, idx_t c)
+{
+    if (c < 0) return 0;
+    const idx_t n = (idx_t) page.channels();
+    return (c > (idx_t)(n - 1)) ? (idx_t)(n - 1) : c;
+}
+
 #endif  // _TW_OUTPUT_PAGE_H_

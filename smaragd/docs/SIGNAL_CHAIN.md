@@ -51,17 +51,17 @@ The DSP engine creates a parallel graph from the SObject tree. Each SObject has 
     input[0]            input[1]              ...
          │                   │
          ▼                   ▼
-    ┌─────────┐          ┌─────────┐
-    │ twMixer │          │ twMixer │  (per-bus master mixer)
-    │ [bus 0] │          │ [bus 1] │
-    └────┬────┘          └────┬────┘
-         │                   │
-    input[0]             input[0]
+    ┌───────────────────────────────┐
+    │ twMixer  (ONE, N channels)    │  master sum: an INPUT is a TRACK,
+    │  input[t] = track t's root    │  a CHANNEL is a channel (prop 36 B4)
+    └────┬──────────────────┬───────┘
+    input[0]             input[1]
          │                   │
          ▼                   ▼
     ┌──────────────┐     ┌──────────────┐
     │ STrack[0]    │     │ STrack[1]    │  (per-track mixer)
     │ ::twRewire   │     │ ::twRewire   │  (STrack::getRootComponent())
+    │  N channels  │     │  N channels  │
     └──────┬───────┘     └──────┬───────┘
            │                    │
            └────────────────┬───┘
@@ -70,16 +70,16 @@ The DSP engine creates a parallel graph from the SObject tree. Each SObject has 
                             │
                             ▼
                     ┌───────────────────┐
-                    │ twPluginChain[0]  │  (effect insert chain)
-                    │ (per-track sends) │
+                    │ twPluginChain     │  (effect insert chain: ONE per
+                    │ (N channels)      │   track, N channels wide)
                     └───────────┬───────┘
                                 │
                            input[0]
                                 │
                                 ▼
                     ┌───────────────────┐
-                    │ twTrackMix[0]     │  (timeline mixer: clips + state)
-                    │ (STrack's clips)  │
+                    │ twTrackMix        │  (timeline mixer: clips + state;
+                    │ (N channels)      │   ONE per track, N channels wide)
                     └───────────┬───────┘
                                 │
           ┌─────────────────────┼─────────────────────┐
@@ -249,10 +249,10 @@ No forced ejection; clean bidirectional handoff.
 |------|------|----------|-------|
 | Create SStdMixer as project root | `main/src/smainwindow.cpp` | `fileNew()` | ~217 |
 | Connect root to speaker (twSpeaker) | `main/src/sapplication.cpp` | `rewireSpeaker()` | 51–63 |
-| Create twMixer + twRewire for master | `main/src/sstdmixer.cpp` | `setNBusses()` | 219–286 |
+| Create twMixer + twRewire for master | `main/objects/mixer/src/sstdmixer.cpp` | `setNBusses()` / `setChannels()` | — |
 | Wire tracks into mixer inputs | `main/src/sstdmixer.cpp` | `reconnectTracksToMixer()` | 134–169 |
-| Create per-track components (mix/chain/rewire) | `main/src/strack.cpp` | `setNBusses()` | 221–305 |
-| Wire twTrackMix → twPluginChain → twRewire | `main/src/strack.cpp` | (in setNBusses) | 282–288 |
+| Create per-track components (mix/chain/rewire) | `main/objects/track/src/strack.cpp` | `setChannels()` — ONE of each, N channels wide since proposal 36 B4 | — |
+| Wire twTrackMix → twPluginChain → twRewire | `main/objects/track/src/strack.cpp` | (in setChannels) | — |
 | Add clip to timeline | `main/src/strack.cpp` | `trackChildWasAdded()` | 175–200 |
 | Wrap clip in twView; insert into twTrackMix | `main/src/strack.cpp` | (in trackChildWasAdded) | (via insertClip) |
 | SCut wraps twSampleReader | `main/src/scut.cpp` | `getRootComponent()` | 469–481 |

@@ -40,6 +40,15 @@ length_t twLatchStreamingOutput::readStreamingData( sample_t * pDest, length_t m
 	return len;
 }
 
+// Proposal 36 §4.4 rule (2), B4: the WIDE read. Same reader hint, same
+// acquisition, whole page handed back. The stream offset is deliberately NOT
+// advanced — see the declaration.
+std::shared_ptr<twOutputPage> twLatchStreamingOutput::fetchPage( offset_t pageStart )
+{
+	return getParentStreamingLatch().fetchPageForReader(
+		pageStart, previousPage_, previousPageEpoch_ );
+}
+
 length_t twLatchStreamingOutput::readRaw( void * dest, length_t maxFrames )
 {
 	// twStreamingLatch stores canonical mono Float32, so native bytes are the

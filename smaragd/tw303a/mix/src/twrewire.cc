@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "tw/mix/twrewire.h"
+#include <algorithm>
 #include <vector>
 #include "tw/pages/io_vector.h"
 #include "tw/core/twlog.h"
@@ -78,6 +79,77 @@ length_t twRewire::calcOutputTo( IOVector& dest, idx_t idx )
 
     // Write to IOVector destination
     return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), readFrames), 0, readFrames);
+}
+
+// --- Proposal 36 B4: width and channel mapping ------------------------------
+
+void twRewire::setChannels( idx_t n )
+{
+    if( n < 1 ) n = 1;
+    if( channels_.exchange( (int) n, std::memory_order_acq_rel ) == (int) n ) {
+        return;
+    }
+    // Cached pages of the old width read as misses (§4.5); bump so they are
+    // re-frozen rather than left to be rejected for the rest of the session.
+    bumpContentEpoch();
+}
+
+void twRewire::setChannelMap( const std::vector<idx_t> &map )
+{
+    {
+        std::lock_guard<std::mutex> lock( mapMutex_ );
+        if( channelMap_ == map ) return;
+        channelMap_ = map;
+    }
+    bumpContentEpoch();
+}
+
+std::vector<idx_t> twRewire::channelMap() const
+{
+    std::lock_guard<std::mutex> lock( mapMutex_ );
+    return channelMap_;
+}
+
+// The wide render (§4.3). One input PAGE, one pass, every output channel filled
+// from the mapped input channel. Nothing is copied per channel that could be
+// aliased: `page` is ours and `src` is the producer's, always distinct pages.
+length_t twRewire::renderPageWide( twOutputPage &page, length_t frames,
+                                   const sample_t * /*input*/,
+                                   length_t /*inputLength*/ )
+{
+    if( state_.load( std::memory_order_acquire ) == ComponentState::ZOMBIE ) {
+        page.fillSilence();
+        return 0;
+    }
+
+    length_t n = frames;
+    if( n > (length_t) page.channelFrames() ) n = (length_t) page.channelFrames();
+    if( n <= 0 ) return 0;
+
+    const idx_t nCh = (idx_t) page.channels();
+
+    std::vector<idx_t> map = channelMap();
+    std::shared_ptr<twOutputPage> src = fetchInputPage( 0, page.startPosition );
+
+    if( !src || src->validAspects == 0 ) {
+        for( idx_t c = 0; c < nCh; ++c ) {
+            sample_t *dst = page.channelPtr( c );
+            std::fill( dst, dst + n, 0.0f );
+        }
+        return n;
+    }
+
+    const length_t m = std::min<length_t>( n, (length_t) src->validFrames );
+
+    for( idx_t c = 0; c < nCh; ++c ) {
+        sample_t *dst = page.channelPtr( c );
+        const idx_t want = ( c < (idx_t) map.size() ) ? map[c] : c;
+        const sample_t *s = src->channelPtr( twPageClampChannel( *src, want ) );
+        if( m > 0 ) std::copy( s, s + m, dst );
+        if( m < n ) std::fill( dst + m, dst + n, 0.0f );
+    }
+
+    return n;
 }
 
 int twRewire::setNPlugs( idx_t n )

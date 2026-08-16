@@ -71,19 +71,18 @@ public:
     virtual SObjectRenderer *getInlineRenderer() override;
     
     virtual SLink *getTopMostSLinkAt( offset_t ) const;
-    int getNBusses() const { return nBusses_; }
 
-    // TEST HOOK (proposal 36 M1). Every entry into setNBusses() is counted,
-    // process-wide, whether or not it changes anything.
+    // How many CHANNELS this track's components are wide (proposal 36 B4).
+    // There is no bus count any more: a track is ONE twTrackMix + ONE
+    // twPluginChain + ONE twRewire, and this is the width of the pages they
+    // freeze. It follows the PROJECT's channels= and nothing else.
     //
-    // It exists because M1's central claim is a NEGATIVE one — the project's new
-    // channel count reaches no bus count — and a negative is exactly what code
-    // review is worst at: the next person to add a connection between
-    // SProject::channelsChanged and a track would pass every audio assertion in
-    // the suite and only discover the shrink Q_ASSERT_X on an undo. Counting the
-    // calls turns "we did not wire it" into something a test can fail on.
-    // Retire it when B4 makes bus width a real consequence of project width.
-    static long setNBussesCallCount();
+    // (M1's setNBussesCallCount() test hook lived here, and its own comment
+    // said "retire it when B4 makes bus width a real consequence of project
+    // width". This is that milestone: the claim it guarded — that the project's
+    // channel count reaches no bus count — is now false on purpose, so a
+    // counter that could only ever read zero would be worse than nothing.)
+    int getChannels() const { return channels_; }
 
     SPluginChain *getPluginChain() const { return cpPluginChain_; }
 
@@ -192,7 +191,12 @@ public:
     void applyChildTrackAudibility();
 
 public slots:
-    void setNBusses( int n );
+    // Set the channel width of this track's chain. Connected to
+    // SProject::channelsChanged; also the constructor's first call, which is
+    // what builds the components. Creates and destroys nothing on a later
+    // call — which is why a shrink is now ordinary (the old setNBusses()
+    // refused one with a Q_ASSERT_X that the shipped build compiled out).
+    void setChannels( int n );
     void onPluginSlotInserted( int index, SPluginSlot &slot );
     void onPluginSlotRemoved( int index, SPluginSlot &slot );
     void onPluginSlotsReordered( int fromIndex, int toIndex );
@@ -231,9 +235,9 @@ private:
     SStartTimeList startTimeList_;
     SEndTimeList endTimeList_;
     STrackRendererInline *inlineRenderer_;
-    int nBusses_;
-    std::vector<std::shared_ptr<twTrackMix> > cpTrackMixers_;
-    std::shared_ptr<twRewire> cpRewire_;
+    int channels_;                                  // see setChannels()
+    std::shared_ptr<twTrackMix> cpTrackMix_;        // ONE, channels_ wide
+    std::shared_ptr<twRewire> cpRewire_;            // the track's ROOT component
     SPluginChain *cpPluginChain_;  // Model object for effects inserts
     // Our REFERENCE to that chain, not a child link (a chain is not an SLink
     // child of a track — SObject::childEvent only accepts SLinks, and a chain in
@@ -245,7 +249,7 @@ private:
     // refcount — a serialized attribute — identical between a new and a loaded
     // project. Deleted by ~STrack.
     SLink *cpPluginChainRef_ = nullptr;
-    std::vector<std::shared_ptr<twPluginChain> > cpPluginChains_;  // DSP components (one per bus)
+    std::shared_ptr<twPluginChain> cpDspChain_;     // DSP component, ONE, channels_ wide
 
     // The event twin of cpTrackMixers_ — ONE set per track, not one per bus:
     // events are not per bus (4.2). Held by shared_ptr because a parent's

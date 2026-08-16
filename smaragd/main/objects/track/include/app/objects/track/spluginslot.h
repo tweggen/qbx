@@ -60,19 +60,22 @@ public:
     // path is returned unchanged so the registry logs the real failure.
     static QString resolveModulePath( SProject *project, const QString &path );
 
-    // Plugin access (bus 0 for backward compatibility)
-    std::shared_ptr<audio::twPluginInsert> getInsert() const { return getInsertForBus(0); }
-    std::shared_ptr<audio::twPluginInsert> getInsertForBus( int busIndex ) const;
+    // The slot's ONE insert (proposal 36 B4 retired the per-bus taps: a slot is
+    // a single component N channels wide). Materializes it on demand.
+    std::shared_ptr<audio::twPluginInsert> getInsert() const;
 
-    // Like getInsertForBus, but NEVER materializes: null if the tap does not
+    // Like getInsert(), but NEVER materializes: null if the insert does not
     // already exist. For teardown paths (STrack::onPluginSlotRemoved), which
     // need the identity of what is in the chain and must not instantiate a
     // plugin on the way out.
-    std::shared_ptr<audio::twPluginInsert> peekInsertForBus( int busIndex ) const;
+    std::shared_ptr<audio::twPluginInsert> peekInsert() const;
 
-    // Declare how many parallel mono buses this slot serves. Called by STrack
-    // before the taps are wired; re-deriving the channel-mismatch mapping.
-    void setBusCount( int nBuses );
+    // Declare how many CHANNELS this slot processes — the width of the pages
+    // its insert is handed. Called by STrack before the insert is wired,
+    // because the count is what selects the channel-mismatch mapping. Shrinks
+    // as readily as it grows (B4 retired the per-bus instantiation that made a
+    // shrink a rewiring problem).
+    void setChannelCount( int nChannels );
 
     const audio::twPluginDescriptor &getDescriptor() const { return descriptor_; }
 
@@ -139,7 +142,7 @@ signals:
 
 private:
     // Materialize the processor (once) and grow the tap vector to nBuses.
-    void ensureBuses( int nBuses ) const;
+    void ensureChannels( int nChannels ) const;
     // bumpContentEpoch-style invalidation for everything above this slot: emits
     // audioInvalidated() AND calls SObject::invalidateRenderPath(), which is a
     // no-op today but stays correct if the chain is ever linked into the tree.
@@ -152,9 +155,9 @@ private:
     audio::twPluginDescriptor descriptor_;   // as stored / as given (VERBATIM)
     audio::twPluginDescriptor effective_;    // as resolved against the registry
 
-    std::shared_ptr<audio::twPluginSlotProcessor>          proc_;
-    std::vector<std::shared_ptr<audio::twPluginInsert> >   taps_;   // one per bus
-    int  busCount_ = 0;
+    std::shared_ptr<audio::twPluginSlotProcessor>  proc_;
+    std::shared_ptr<audio::twPluginInsert>        insert_;   // ONE, N channels wide
+    int  channels_ = 0;
     bool bypass_ = false;
     std::vector<std::uint8_t> savedState_;  // opaque plugin state chunk
 };

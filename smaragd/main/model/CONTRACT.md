@@ -132,23 +132,32 @@ Invariants:
     add a second traversal: a duration that disagreed with the one on screen
     would be worse than the hardcoded 60 s constant this replaced.
 
-10. SProject::channels() is PROJECT DATA AND NOTHING ELSE (proposal 36 M1).
+10. SProject::channels() IS THE ONE AUTHORITY ON CHANNEL WIDTH (proposal 36 M1
+   for the data, B4 for the consequence).
    It persists as <SProject channels='N'>, takes only 1/2/4/6/8, and reads
    with the sampleRate warn-and-default idiom: missing (a legacy file) or
    unsupported means 2 — today's audible width — plus exactly one warning,
    because a wrong channel count corrupts a project as thoroughly as a wrong
-   rate, and because a project must never fail to OPEN over it. Nothing
-   connects it to a bus count, a mixer width or tw303aEnvironment: an undo of
-   6 -> 2 that reached STrack::setNBusses would hit the shrink
-   Q_ASSERT_X( false, ... ). The signal flow goes wide in proposal 36 B4/B5,
-   and only then does this become a consequence.
+   rate, and because a project must never fail to OPEN over it.
+   Since B4 it REACHES THE GRAPH: channelsChanged is connected to
+   STrack::setChannels and SStdMixer::setChannels, and it is the width of every
+   page the track and master path freeze. M1's invariant here was the opposite
+   ("nothing connects it to a bus count") and was guarded by a call counter,
+   because an undo of 6 -> 2 that reached the old STrack::setNBusses would have
+   hit its shrink Q_ASSERT_X( false, ... ). B4 retired both the per-bus
+   instantiation and the counter: a width change creates and destroys nothing,
+   so the shrink is ordinary. Nothing connects it to tw303aEnvironment, which
+   still has no channel state. The SINK is still mono until B5, so a width
+   change is inaudible in a rendered FILE — visible in the pages.
 
 How to test: full qxa suite; action_roundtrip_test for serialization
 adjacency; filepathref_test (ctest) for the three path-storage rules and
 sample_path_portable.qxa for the save -> reload -> render wiring;
 project_channels_test (ctest) for invariant 10 — including the assertion
-that set-project-channels and its undo make ZERO STrack::setNBusses calls,
-which is instrumented rather than reviewed because it is a negative;
+that set-project-channels and its undo REACH the track's width in both
+directions, the 6 -> 2 undo included (M1's version of that check asserted the
+opposite and counted STrack::setNBusses calls, because M1's claim was a
+negative; proposal 36 B4 made it a positive and retired the counter);
 preview_container_test (ctest) for invariant 9 — probe values across page
 boundaries, one reset for four pages, one reposition per page.
 

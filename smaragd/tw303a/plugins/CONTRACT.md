@@ -16,17 +16,25 @@ event-aware process() overload, capabilities()/audioOutBus*/tailFrames(), the
 CLAP/VST3/AU translation behind them, scanner version 2, and twNativeInstrument
 (the in-repo 303, format "tw", uid tw.native.303, registered like
 twPassThrough). It changed NOTHING in twPluginSlotProcessor, twPluginInsert or
-twPluginChain — the hosting components are rewritten by proposal 36-B4 and the
+twPluginChain — the hosting components were reshaped by proposal 36-B4 (below) and the
 generator modes are proposal 37 P3b, so today NOTHING in the app calls the new
 overload and every rendered byte is unchanged.
 
-Shape of a slot (proposal 08 M3). ONE twPluginSlotProcessor per slot (plain
-C++, not a twComponent) owns the twPlugin instance(s), the bypass flag, the
-prepare() state, the block chunking, the channel-mismatch mapping and a small
-(startPos, len, stamp) -> all-bus page cache. Around it sit N twPluginInsert
-TAPS, one per track bus, each strictly 1 in / 1 out. The taps are what the
-graph sees; channel coherence is what the processor provides. STrack builds one
-twPluginChain per bus, and each chain holds that bus's taps in slot order.
+Shape of a slot (proposal 08 M3, RESHAPED BY PROPOSAL 36 B4). ONE
+twPluginInsert per slot: a twComponent with one port in, one port out and N
+CHANNELS, which renders every channel of its page in one process() sweep per
+chunk. Behind it one twPluginSlotProcessor (plain C++, not a twComponent) owns
+the twPlugin instance(s), the bypass flag, the prepare() state, the block
+chunking, the channel-mismatch mapping and the position-continuity reset —
+plugin LIFETIME and STATE, not graph machinery. STrack builds ONE twPluginChain
+per track, N channels wide, holding one insert per slot in slot order.
+
+  Until B4 the page was one MONO channel, so N channels were N parallel
+  component instances and a stereo-linked plugin could not be a component at
+  all. The slot was then one processor plus N per-bus TAPS plus a private
+  (startPos, len, stamp) -> all-bus page cache: the first tap to ask rendered
+  every bus by reaching SIDEWAYS through its siblings. That is what invariant
+  13 was written about; both the fan-out and the cache are gone.
 
 Public headers: twplugin.h, twpluginevents.h, twplugindescriptor.h,
 twpluginsearchpaths.h, twpluginchain.h, twplugininsert.h, twpluginslotproc.h.
@@ -58,12 +66,15 @@ Invariants:
    skew). Whole translation units are added conditionally in CMake instead —
    the same shape as the ALSA/WASAPI/CoreAudio source lists.
 5. The host declares the block size, and honours it. Pages are
-   twOutputPage::FRAME_CAPACITY (65536) frames, which no real plugin accepts
-   in one call. twPluginSlotProcessor::kChunkFrames (4096, re-exported as
-   twPluginInsert::kChunkFrames) is what prepare() promises and what the
-   processor's render actually hands to process(), advancing through the same
-   de-interleaved scratch so plugin DSP state carries across chunks exactly as
-   it would across callbacks in a live host.
+   twOutputPage::FRAME_CAPACITY (65536) frames PER CHANNEL, which no real
+   plugin accepts in one call. twPluginSlotProcessor::kChunkFrames (4096,
+   re-exported as twPluginInsert::kChunkFrames) is what prepare() promises and
+   what the processor's render actually hands to process(), advancing through
+   the same planar buffers so plugin DSP state carries across chunks exactly as
+   it would across callbacks in a live host. Since proposal 36 B4 those buffers
+   are the CALLER's — the insert's zero-padded gather of its upstream page, and
+   its own output page's channels — so the whole page's worth of per-bus
+   scratch the processor used to own is gone.
 6. Preview freezes do not touch the plugin. freezePreviewPage() renders the
    graph at a REDUCED rate (1 kHz) for a waveform envelope; honouring that in
    twPluginInsert would re-prepare() — for CLAP, re-activate and reallocate —
@@ -127,39 +138,47 @@ Invariants:
    and is EXPECTED to die on bad input. Observed, not theoretical: the M2
    verification pass raised three of these boxes on the user's desktop.
 
-13. A TAP NEVER HOLDS ITS OWN COMPONENT MUTEX ACROSS THE SHARED RENDER, and
-   pullUpstreamPage() takes it only to SNAPSHOT the producer. The first tap to
-   ask for a page renders every bus while holding the PROCESSOR mutex, and it
-   gathers the other buses through its sibling taps' pullUpstreamPage(). If a
-   tap held its own mutex() across pageFor() -- or if pullUpstreamPage() kept it
-   while calling into the producer -- then bus 0 (processor mutex held, wanting
-   bus 1's mutex) would deadlock against bus 1 (its own mutex held, wanting the
-   processor mutex). So: snapshot the producer shared_ptr under a brief lock,
-   RELEASE it, then requestPage(); and do the shared render from renderFrames(),
-   which twComponent::freezePage_nolock calls with no component lock held. Lock
-   order is always downstream slot -> upstream slot, which is acyclic because
-   the chain is. This is exactly the failure class this repo has hit before (the
-   input-cursor freeze race, the split-repaint vtable crash), which is why
-   plugins_test freezes two taps of one slot CONCURRENTLY -- 120 rounds, with a
-   forced re-render each round -- under a 60-second watchdog that aborts loudly
-   instead of hanging the suite.
-14. Page pulls go through requestPage(), never raw freezePage(), and taps
-   inherit the base planPage(). requestPage() is the proposal-19 Phase 2a dedup
-   front door: two drivers (revalidation worker, playback readahead, offline
-   render) demanding the same producer page collapse to one render. The base
-   planPage() gives each tap exactly one grid-aligned dep -- its own bus's
-   producer -- which is what the scheduler binds; the OTHER buses are gathered
-   inside the render and recorded as plan misses that fall back to the legacy
-   pull (correct, just not pre-scheduled). A tap must not override planPage() to
-   paper over that.
-15. Anything that changes what process() would produce must move the cache key
-   AND stale the taps' pages. twPluginSlotProcessor::bumpParamEpoch() does both
-   (bypass and state-chunk changes route through it), because there are TWO
-   caches in front of a plugin edit: the processor's all-bus page cache and each
-   tap's twComponent page cache. Its key is paramEpoch_ plus the SUM of every
-   tap's contentEpochNow(); both counters are monotonic, so the sum is too and
-   cannot alias -- and including the taps' epochs is what makes an UPSTREAM edit
-   (a clip moved) miss the processor cache as well. The app still owns the
+13. AN INSERT NEVER HOLDS ITS OWN COMPONENT MUTEX ACROSS A CALL INTO A
+   PRODUCER. The rule survives proposal 36 B4; the deadlock it was written for
+   does not. Before B4 the first TAP to ask rendered every bus while holding
+   the PROCESSOR mutex and gathered the other buses SIDEWAYS through its
+   sibling taps, so a tap holding its own mutex() across pageFor() -- or
+   keeping it while calling into a producer -- made bus 0 (processor mutex
+   held, wanting bus 1's mutex) deadlock against bus 1 (own mutex held, wanting
+   the processor mutex). One wide insert has no siblings to gather from, so
+   that cycle cannot form. What remains, and is why the rule stays: a
+   component's own mutex held across an upstream freeze is a lock-order
+   inversion against any concurrent edit, and twComponent::fetchInputPage
+   (§4.4 rule 2, the seam the insert reads its upstream page through) is
+   written to snapshot the plug under a brief lock and RELEASE it before
+   pulling. Lock order is always downstream slot -> upstream slot, which is
+   acyclic because the chain is.
+   The concurrency gate in plugins_test moved with the hazard: it now freezes
+   ONE slot at TWO DIFFERENT POSITIONS from two threads -- 120 rounds, forced
+   re-render each round, 60-second watchdog that aborts loudly rather than
+   hanging the suite -- which is the race that still exists (two drivers
+   demanding different pages of the same component, the "coherent page
+   displaced by a whole page" class).
+14. AN INSERT INHERITS THE BASE planPage(), AND ITS PLAN IS NOW COMPLETE.
+   The base gives it exactly one grid-aligned dep -- its single input plug's
+   producer -- which is what the scheduler binds, and since proposal 36 B4 that
+   is ALL the render consumes: one upstream page, every channel. Before B4 the
+   plan was deliberately incomplete (each tap planned its own bus and the
+   OTHER buses were gathered inside the render, recorded as plan misses that
+   fell back to the legacy pull -- correct, just not pre-scheduled). An insert
+   must still not override planPage(). Reads go through the §4.4 seams --
+   fetchInputPage() in the render, requestPage() where a whole page is wanted
+   -- never raw freezePage(), so two drivers demanding the same producer page
+   still collapse to one render (proposal 19 Phase 2a).
+15. Anything that changes what process() would produce must stale the insert's
+   pages. twPluginSlotProcessor::bumpParamEpoch() does it (bypass and
+   state-chunk changes route through it). Before proposal 36 B4 there were TWO
+   caches to move -- the processor's all-bus page cache and the taps'
+   twComponent page caches -- and the processor's key had to be paramEpoch_
+   plus the SUM of every tap's contentEpochNow() so that an UPSTREAM edit missed
+   it too. With one insert there are no siblings to dedup for, the processor
+   caches nothing, and the component page cache above it is the only cache
+   there is. The app still owns the
    downstream path — and proposal 08 M5 found that it was NOT actually doing it:
    SObject::invalidateRenderPath() called from an SPluginSlot is a no-op, because
    it walks DOWN from the project root through childLinks() looking for `this`
@@ -171,14 +190,22 @@ Invariants:
    invalidateRenderPath() on the TRACK (main/pluginui/CONTRACT.md invariant 6,
    gated by qxa.plugin_bypass_and_param).
 16. The channel-mismatch mapping is derived ONCE, from the plugin's OWN
-   reported layout, and never guessed per page. setBusCount() instantiates one
-   plugin first and reads ioLayout() from it, because a descriptor from a stale
-   project file or an out-of-date scan cache may disagree. N->N is Direct (one
-   instance); 1->1 on N buses is DualMono (N instances -- which is why the
-   processor takes an instantiation FACTORY, not one instance); 2->2 on one bus
-   is MonoFold (feed both inputs, average the outputs); anything else is
+   reported layout, and never guessed per page. setChannelCount() instantiates
+   one plugin first and reads ioLayout() from it, because a descriptor from a
+   stale project file or an out-of-date scan cache may disagree. N->N is Direct
+   (one instance); 1->1 on N channels is DualMono (N instances -- which is why
+   the processor takes an instantiation FACTORY, not one instance); 2->2 on one
+   channel is MonoFold (feed both inputs, average the outputs); anything else is
    Unsupported -- the slot loads TRANSPARENT and logs ONCE per slot, never once
-   per page. twPluginSlotState { Active, Missing, Unsupported } is declared with
+   per page.
+   PROPOSAL 36 B4 CHANGED THE NUMBER, NOT THE POLICY: it is the PAGE WIDTH the
+   insert is handed (the project's channels=), not the count of parallel mono
+   components a track was built from. One consequence is audible and is the only
+   one in the milestone: a channels='1' project running a 2-in/2-out plugin now
+   folds it, where before B4 the project's width reached no track at all and
+   every track ran two buses of which the master discarded one. setChannelCount()
+   also SHRINKS now -- nothing is created or destroyed by a width change -- so
+   re-deriving on a 6 -> 2 undo is ordinary. twPluginSlotState { Active, Missing, Unsupported } is declared with
    all three values from M3 so that M4 adds persistence to an existing type; M3
    itself produces Active, Unsupported, and Missing when instantiation fails.
 17. A SLOT WITH NO PLUGIN STILL HAS ITS DESCRIPTOR'S GRAPH SHAPE (M4). When the
@@ -197,13 +224,30 @@ Invariants:
    would lose their patch by opening the project on a machine without the plugin
    and saving it.
 18. RE-RESOLUTION IS setFactory(), NOT A NEW PROCESSOR (M4). A slot's identity in
-   the graph IS its twPluginSlotProcessor: the taps hold it by shared_ptr and
-   every twPluginChain holds the taps. So a rescan that finally found the plugin
+   the graph IS its twPluginSlotProcessor: the insert holds it by shared_ptr and
+   the twPluginChain holds the insert. So a rescan that finally found the plugin
    hands the SAME processor a new factory, which re-runs exactly what
-   setBusCount() derives and stales both caches through bumpParamEpoch_nolock().
-   Swapping the processor instead would mean re-wiring every chain of every bus,
-   from the UI, for what is not a structural change. The caller re-applies its
+   setChannelCount() derives and stales the insert's pages through
+   bumpParamEpoch_nolock(). Swapping the processor instead would mean re-wiring
+   the chain, from the UI, for what is not a structural change. This invariant
+   is also the reason proposal 36 B4 did NOT fold the processor into the insert
+   when it retired the tap split: a plugin's lifetime has to outlive any
+   particular component. The caller re-applies its
    stored state chunk afterwards (SPluginSlot::reloadPlugin).
+
+19b. AN INSERT IS N CHANNELS WIDE AND MUST KEEP A NARROW renderFrames()
+   (proposal 36 B4, §7 trap 18). twComponent's base renderFrames() calls
+   calcOutputTo() and its base calcOutputTo() calls renderFrames(), so a
+   component that overrides NEITHER recurses until the stack ends -- and a wide
+   component IS handed a width-1 page, by the mono-scratch path and by the
+   preview path, which no width fork can widen. renderPageWide() and
+   renderFrames() therefore share one core with nCh = page.channels() and
+   nCh = 1 respectively. The insert also allocates its own pages in freezePage()
+   (the ZOMBIE and preview branches), which BYPASSES the width wiring in
+   twComponent::freezePage -- both must pass getOutputChannels() explicitly,
+   because the render fork is on the width of the PAGE and a declared-N
+   component handing itself a width-1 page renders channel 0 and publishes it
+   with no refusal at all.
 
 19. EVERY CONSUMER OWNS ITS OWN twLatchOutput; PLUGS ARE NEVER SHARED. A
    twLatchOutput lives in its producing latch's outputList, and
@@ -510,15 +554,24 @@ qxa.render_sawtooth_with_effects (chain in the signal path); the plugin browser
 lists exactly the registry contents.
 
 Known debt:
-- THE SINK IS STILL MONO, and that is not M3's doing. The graph carries N buses
-  correctly end to end, but both output stages collapse to one page and
-  duplicate it: RenderSession ("bufR[i] = sample;  // Duplicate to stereo
-  (temporary; proper multi-channel TBD)") and AudioEngine's page pull. Bus 1's
-  audio therefore cannot reach a file or a device yet, so proposal 08's "hear it
-  in stereo" is blocked by tw_render / tw_playback, NOT by the plugin layer.
-  plugin_stereo_chain.qxa works around it with a fixture whose channel 0 depends
-  on channel 1's INPUT, which is enough to prove input 1 is wired; per-bus
-  DISTINCTNESS is gated at engine level in plugins_test instead.
+- THE SINK IS STILL MONO, and that is not the plugin layer's doing. The graph
+  carries N channels correctly end to end -- since proposal 36 B4 in ONE page
+  per component rather than N parallel wires -- but both output stages collapse
+  to one page and duplicate it: RenderSession ("bufR[i] = sample;  // Duplicate
+  to stereo (temporary; proper multi-channel TBD)") and AudioEngine's page pull.
+  Channel 1's audio therefore cannot reach a file or a device yet; that is
+  proposal 36 B5. plugin_stereo_chain.qxa still bounds the FILE with a fixture
+  whose channel 0 depends on channel 1's INPUT (which proves input 1 is wired),
+  and since B4 it ALSO asserts the distinctness directly at the track's root
+  component with assert-track-channels -- measured ch0/ch1 = exactly 3, the
+  skew fixture's own ratio.
+- twPluginInsert::calcOutputTo() -- the streaming pull -- can feed the plugin
+  only CHANNEL 0 of its input, because a plug pull is mono by construction
+  (§4.4 rule 1) and an insert has one plug. Before B4 it had one plug per bus
+  and could gather them all. Nothing in the app reaches that path (every
+  consumer of a chain goes through freezePage), and a channel-coherent plugin
+  driven from a mono seam has no better answer available, but it is a real
+  narrowing rather than a tidy-up.
 - CLAP and VST3 are directory-scanned; AU is not, and `.component` is
   deliberately absent from `formatForFile()` in twpluginsearchpaths.cc (AU is
   discovered differently — below). That table stays conservative on purpose: a

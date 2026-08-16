@@ -297,6 +297,13 @@ through `readStreamingData`/`copyData` for wide consumers: they already receive
 whole pages at the two seams (`twcomponent.cc:514-523` and the latch's bound
 path).
 
+**B4 correction: rule 2 needs a SHARED implementation, not a second one.**
+Reading "a wide component reads its bound pages directly" as independent of
+`copyData` would duplicate the staleness rule — and two copies of that rule is
+how the "held page stamped with one epoch against a chain at another" bug got
+written here once already. B4 extracted a single `acquirePage()` that both seams
+call.
+
 The clamp reproduces today's behaviour exactly — it is what
 `twSampleSource::read` already does (`if( ch >= channels_ ) ch = channels_ - 1;
 // mono plays on every channel`). Downmix policy (average vs. select) belongs to
@@ -566,7 +573,18 @@ yet. The track-root assertion moves to B4.6.)*
 encode channel count are bumped so no old entry is a wrong-shape hit (assert a
 **miss**, not a wrong hit).
 
-### B4 — The whole track path goes wide, plugins included
+### B4 — The whole track path goes wide, plugins included ✅ **EXECUTED 2026-08-16**
+
+> A track is now **one `twTrackMix` + one `twPluginChain` + one `twRewire`, N
+> channels wide**, and a slot is **one `twPluginInsert`**. Gone with the per-bus
+> instantiation: the `setNBusses` grow-crash, the shrink-assert, the processor's
+> all-bus cache and the sideways sibling gather. `nBusses='2'` retires from the
+> writer and is read-and-ignored — a track has no bus count, it has the
+> project's width, and a derived per-track copy would be the second authority
+> whose drift already cost this project once. `twPluginSlotProcessor` **stays**,
+> as the plugin lifetime/state holder only: proposal 08 inv. 18 depends on a
+> slot's graph identity *being* its processor, so a rescan hands it a new factory
+> rather than re-wiring every chain.
 
 v2 split this from the plugin work and the split was incoherent: the tap
 architecture *requires* one chain per bus (`twpluginchain.cc:65-66, 161-212`;
@@ -603,7 +621,37 @@ covers it.
 **AC B4.7** A plain stereo clip yields two distinct channels **at the track's
 root component** — the assertion B3 could not make, because the track path was
 still width 1 there.
-**AC B4.8** Width-1 projects byte-exact throughout.
+**AC B4.8** Width-1 projects byte-exact throughout — **with one licensed
+exception, `mc_golden_mono.wav`, re-frozen once here.**
+
+*This AC and B4's third bullet cannot both hold for a mono project containing a
+channel-mismatched plugin, and B4 stopped and said so rather than choosing.
+Licensed, with the explanation §5's standing gate requires:*
+
+*A `channels='1'` project running a 2-in/2-out plugin now takes **MonoFold** —
+proposal 08's settled channel-mismatch table, re-derived from page width exactly
+as B4 requires. The delta is **exactly 2/3 on every sample inside the
+`twtestclap` window and byte-identical everywhere else**:
+`0.5·(1.5gx + 0.5gx) = 1.0gx` against `1.5gx`. **The old bytes were never a mono
+project's output.** Until B4 the project's width reached no track at all — M1's
+defining constraint was that it must not — so every track ran two buses and the
+master discarded one; `channels='1'` was an inert attribute, not a signal path.
+The golden froze that state. `mc_golden_stereo` staying byte-identical while only
+the mono golden moved is the independent signal that what changed is the mismatch
+path and not the width plumbing.*
+
+*Note this is a **user-visible behaviour change**, and a corrective one: a mono
+project with a stereo plugin used to be rendered as if it were stereo.*
+
+*And the re-freeze turned up the same finding from the other side: 970 of the
+57 600 samples deviate from exactly 2/3 because **the old render was clipped at
+full scale** — `1.5·g·x` overflows 16-bit where MonoFold's `1.0·g·x` does not.
+The pre-B4 mono golden was not merely a different mapping; it was a
+**saturating** one. Confinement was checked rather than assumed: 114 222 bytes
+differ, first at 643 244 and last at 758 443 — the documented plugin window to
+the byte at both ends — with the header and the plain / stretched / pitched /
+container-asset / nested-lane windows byte-identical, and 56 630 of 57 600
+samples within 0.333 LSB of `old·2/3`.*
 
 ### B5 — The sink goes wide *(first audible multichannel)*
 
@@ -760,6 +808,17 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     mono bus, so a width-1 and a width-2 project produce the same file. That is
     correct *now* — and it is a second gate that is **supposed to break at B5**,
     alongside `channel_assert_dupmono.qxa`. When they diverge, the sink is real.
+    **⚠ SPENT AT B4 — DO NOT USE THIS INFERENCE.** The goldens diverged at B4
+    (114 222 bytes, all inside the `twtestclap` window) **while the sink was
+    still mono**, because channel 0 *itself* now differs between a mono and a
+    stereo project: the mismatch table folds a 2-in/2-out plugin on a width-1
+    project and does not on a width-2 one. Divergence therefore no longer implies
+    anything about the sink. **B5 needs different evidence**;
+    `channel_assert_dupmono.qxa`'s `expectReject` is untouched and still serves.
+    *(The general lesson is worth more than the instance: a gate whose meaning is
+    "these two things are equal for a reason" quietly expires when the reason
+    changes, and it expires silently — the gate still passes, or still fails, for
+    a different reason than the one written down.)*
 15. **A missing `qoffscreen.dll` costs 600 s, not a fast failure** (found by B1b).
     `preview_container_test` and `project_channels_test` both set
     `QT_QPA_PLATFORM=offscreen` and both construct a `QApplication`;
@@ -798,6 +857,10 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     refusal**. §4.5 catches it downstream as a miss — one log line and silence,
     not garbage — so it is findable, but it is B4's job to actually fix the
     allocation. Expect it; do not spend an afternoon on it.
+    **Fourth site, found by B4:** the *preview* branch of
+    `twPluginInsert::freezePage` allocates its own page too, and must copy
+    **every** channel with the clamp — copying only channel 0 leaves a wide
+    preview page carrying garbage past it.
 20. **`idx_t` is `short int` in this tree.** Relevant whenever a channel count is
     cast or compared.
 21. **A latent buffer overrun in the legacy pull, found by B3 and NOT fixed.**
@@ -817,6 +880,11 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     green through it. It is also why a memory or page-count number moves at B3
     without anything having gone wrong: the corpus went 12.25 → 14.0 MiB, exactly
     7 of 49 resident pages now being 2 channels wide.
+23. **`twPluginInsert::calcOutputTo` can feed a plugin only channel 0** (found by
+    B4). A plug pull is mono by construction and an insert now has one plug, so
+    the streaming-pull path cannot present a wide input. **Nothing in the app
+    reaches it** — which is the difference between debt and a bug — and it is
+    recorded in `plugins/CONTRACT.md` known debt.
 
 ## 8. Non-goals (named, so they are not assumed)
 
