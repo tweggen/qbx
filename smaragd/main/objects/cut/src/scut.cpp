@@ -1112,6 +1112,11 @@ SClipWindow *SCut::cloneWindowOver( SProject *project ) const
     // never the stale try-lock fallback.
     copy->setWindow( getSrcStart(), ClipLen( getDurationBlocking() ),
                      getLoopLength(), getStretchExact() );
+    // The clip GAIN ENVELOPE is part of the window, not of the placement, so
+    // every copy of the window carries it: duplicate-clip, add-take, an asset
+    // (design §3.3 - "travels with the window: every placement / take / asset
+    // of it").
+    copy->copyAutomationFrom( *this );
     return copy;
 }
 

@@ -56,6 +56,10 @@ public:
     virtual bool isRenderingActive() const = 0;
     // Start/stop transport playback (speaker output + playing flag).
     virtual void setPlaybackRunning( bool play ) = 0;
+    // The global locator, in project frames. Needed by proposal 37 P5: a
+    // set-track-volume / set-track-mute on a track that carries a READ lane
+    // becomes a point ON that lane, and "where" is the locator.
+    virtual offset_t getGlobalLocatorPos() const = 0;
 
     // Process-wide instance, set once by SApplication at startup.
     static void setInstance( SAppContext *ctx );

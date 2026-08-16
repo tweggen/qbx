@@ -3,7 +3,11 @@
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
+#include "app/model/sappcontext.h"
+#include "app/model/sautomationlane.h"
+#include "app/objects/track/sautomationactions.h"
 #include <QDebug>
+#include <memory>
 #include <QDomElement>
 
 using namespace strackpath;
@@ -28,6 +32,25 @@ SApplyResult SSetTrackMuteAction::apply( SProject *project )
                                              : pathToString( trackPath_ ) );
         return {false, nullptr};
     }
+    // A STATIC EDIT ON A READ LANE BECOMES A POINT (design §3.4 / D5). Without
+    // it the history and the lane disagree: the button would move, the render
+    // would not, and undo would carry a step nobody can hear. Trim and Off are
+    // deliberately NOT redirected — there the structural mute is still the thing
+    // being edited (§11 decision 3).
+    //
+    // The lane addresses the track by PATH, so the legacy index form is
+    // converted first; a track that has a lane is by definition one a script
+    // reached through the modern spelling anyway.
+    if( sautomation::readLaneFor( lane, QStringLiteral( "self:Muted" ) ) ) {
+        const QList<int> path = trackPath_.isEmpty() ? QList<int>{ trackIndex_ }
+                                                     : trackPath_;
+        const offset_t at = SAppContext::get().getGlobalLocatorPos();
+        std::unique_ptr<SAction> pt( sautomation::pointAtLocatorAction(
+            path, QStringLiteral( "self:Muted" ), at, muted_ ? 1.0 : 0.0 ) );
+        SApplyResult r = pt->apply( project );
+        if( r.applied ) return r;
+    }
+
     const bool old = lane->isMuted();
     // setMuted() emits mutedChanged(); the summing parent (root mixer, or the
     // folder track above a nested lane) enforces it — mute is a property of the

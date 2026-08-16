@@ -171,6 +171,20 @@ private:
     // Callers hold mutex(). Recomputes the frame-domain values AND the
     // frame-domain sequence from the ticks.
     void rebuild_nolock();
+
+public:
+    // --- automation (proposal 37 P5) ---------------------------------------
+    //
+    // `cut:VelocityScale` and `cut:Transpose` are applied when the SNAPSHOT is
+    // built (design D5), not at freeze time: they change the EVENTS, and the
+    // events are the thing every consumer - the instrument slot, the MIDI-out
+    // pump, the piano roll - reads. `cut:Gain` is inherited from SObject and
+    // consumed by the track's mix; it means nothing on an event clip.
+    virtual void onAutomationChanged( SAutomationLane &lane,
+                                      offset_t start, offset_t end ) override;
+    virtual void applyAutomationToEngine() override;
+
+private:
     // Publish: durationChanged when the length moved, eventsChanged always.
     void publish_( length_t oldDuration );
 

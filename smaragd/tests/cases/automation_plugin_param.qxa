@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_plugin_param">
+
+  <!-- Proposal 37 P5 (design D5 / §4.5): A PLUGIN PARAMETER LANE BECOMES
+       SAMPLE-OFFSET EVENTS, AND IT IS HEARD AT THE RIGHT FRAME.
+
+       A `param:<id>` lane on a slot is NOT applied by calling setParam() once
+       per page. The processor turns it into per-chunk `ParamValue` events with
+       CHUNK-RELATIVE sample offsets: the value at the chunk start (the "chase",
+       because pages freeze out of order and by any worker, so what the plugin
+       currently holds is unknown BY CONSTRUCTION), then one event per
+       breakpoint inside the chunk, then a 64-frame grid along continuous
+       segments for plugins that do not interpolate.
+
+       THE STEP IS PLACED MID-CHUNK ON PURPOSE. Chunks are 4096 frames out of a
+       65536-frame page, so page 1 chunks at 65536, 69632, 73728, ... The step
+       at frame 70000 lands 368 frames into the chunk that starts at 69632.
+       A host that applied the value at the CHUNK boundary would move the level
+       at 69632; one that applied it per PAGE would move it at 65536. Both are
+       excluded by measuring [69000, 70000) and [70000, 71000):
+
+           [69000, 70000)  is inside the same chunk, before the step
+           [70000, 71000)  crosses into the next chunk, after it
+
+       and both windows are whole periods of the 480 Hz fixture (100 frames per
+       period; 100 divides 69000, 70000 and 71000), so their rms is a closed
+       form: 0.230956 and, at gain 2.0, 0.461913.
+
+       BOTH FORMATS, because the sample-offset plumbing is per backend:
+
+         CLAP (tw.test.clap.gain, param id 0, range 0..4, default 1) - a step
+              1.0 -> 2.0.
+         VST3 (TW Test VST3 Gain, param id 0, NORMALIZED [0,1] and clamped
+              there - plugins inv. 26, which is why this half steps 0.5 -> 1.0
+              and not 1.0 -> 2.0). This fixture DELIBERATELY IGNORES
+              setParamNormalized, so a host that writes the controller and stops
+              there fails: only a correctly offset `inputParameterChanges` point
+              moves its gain at all.
+
+       THE EPOCH IS THE HASH. An automation edit stales the insert's pages
+       through twPluginSlotProcessor::bumpParamEpoch(); the app-side walk
+       (SPluginSlot::audioInvalidatedRange -> STrack) stales everything above.
+       Miss either and the second render below serves the first one's audio and
+       every band still passes - which is why the FIRST render here is made
+       BEFORE the lane exists, at the unautomated level.
+
+       Fixture: ../test_autosaw.wav - see tests/tools/gen_auto_fixture.py. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ===================== CLAP ======================================= -->
+    <insert-plugin trackPath="0" slotIndex="0" format="clap"
+                   uid="tw.test.clap.gain" name="Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- Unautomated: gain 1.0 everywhere. This render is made BEFORE the lane
+         exists, so it cannot be a cached answer to the automated question. -->
+    <render filename="app_clap_flat.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="app_clap_flat.wav" channel="0"
+                         startFrame="69000" frameCount="1000"
+                         minRms="0.22865" maxRms="0.23327"/>
+    <assert-audio-energy filename="app_clap_flat.wav" channel="0"
+                         startFrame="70000" frameCount="1000"
+                         minRms="0.22865" maxRms="0.23327"/>
+
+    <add-automation-lane owner="0" slotIndex="0" target="param:0" mode="read"
+                         name="Gain"/>
+    <add-automation-point owner="0" slotIndex="0" target="param:0"
+                          time="0" value="1.0" curve="step"/>
+    <add-automation-point owner="0" slotIndex="0" target="param:0"
+                          time="70000" value="2.0" curve="step"/>
+
+    <assert-automation-value owner="0" slotIndex="0" target="param:0"
+                             time="69999" value="1.0" tolerance="1e-9"
+                             mode="read" pointCount="2"/>
+    <assert-automation-value owner="0" slotIndex="0" target="param:0"
+                             time="70000" value="2.0" tolerance="1e-9"/>
+
+    <render filename="app_clap_a.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="app_clap_a.wav" channel="0"
+                         startFrame="69000" frameCount="1000"
+                         minRms="0.22865" maxRms="0.23327"/>
+    <assert-audio-energy filename="app_clap_a.wav" channel="0"
+                         startFrame="70000" frameCount="1000"
+                         minRms="0.45729" maxRms="0.46654"/>
+
+    <!-- Two renders, byte for byte. A per-chunk event list built from a
+         shared_ptr swapped under a mutex is exactly the thing that renders
+         differently the second time if the snapshot is not immutable. -->
+    <render filename="app_clap_b.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="app_clap_b.wav" expected="app_clap_a.wav"/>
+
+    <!-- A SLOT'S LANE SURVIVES A SAVE / LOAD. It is serialized inline in
+         <SPluginSlot>, next to <state> - and on the way back in it is read
+         LONG BEFORE the processor exists (readPostChildrenAttributes runs
+         before STrack declares the slot's width), so the push has to happen
+         again when the width arrives. Without that the lane round-trips in the
+         model and is inaudible, which is exactly the shape of bug this case
+         exists to catch. -->
+    <save-project path="../../build/automation_plugin_param.qxp"/>
+    <load-project path="../../build/automation_plugin_param.qxp"/>
+    <assert-automation-value owner="0" slotIndex="0" target="param:0"
+                             time="70000" value="2.0" tolerance="1e-9"
+                             mode="read" pointCount="2"/>
+    <render filename="app_clap_reloaded.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+    <assert-audio-energy filename="app_clap_reloaded.wav" channel="0"
+                         startFrame="69000" frameCount="1000"
+                         minRms="0.22865" maxRms="0.23327"/>
+    <assert-audio-energy filename="app_clap_reloaded.wav" channel="0"
+                         startFrame="70000" frameCount="1000"
+                         minRms="0.45729" maxRms="0.46654"/>
+
+    <!-- The lane dies with its slot, and the inverse of remove-plugin brings
+         both back - the slot's lanes are part of the slot (design §3.3). -->
+    <remove-plugin trackPath="0" slotIndex="0"/>
+    <render filename="app_noplugin.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="app_noplugin.wav" channel="0"
+                         startFrame="70000" frameCount="1000"
+                         minRms="0.22865" maxRms="0.23327"/>
+
+    <!-- ===================== VST3 ======================================= -->
+    <!-- A second slot on the SAME track, so one arrangement answers both
+         questions and neither render has to sum two tracks. -->
+    <insert-plugin trackPath="0" slotIndex="0" format="vst3"
+                   uid="455457545453535654334741494E0000"
+                   name="TW Test VST3 Gain" vendor="Smaragd"
+                   path="twtestvst3.vst3" nIn="2" nOut="2"/>
+
+    <add-automation-lane owner="0" slotIndex="0" target="param:0" mode="read"
+                         name="Gain"/>
+    <add-automation-point owner="0" slotIndex="0" target="param:0"
+                          time="0" value="0.5" curve="step"/>
+    <add-automation-point owner="0" slotIndex="0" target="param:0"
+                          time="70000" value="1.0" curve="step"/>
+
+    <render filename="app_vst3_a.wav" format="wav" quality="10" durationSec="2.0"/>
+    <!-- 0.5 x 0.230956 = 0.115478, then unity. -->
+    <assert-audio-energy filename="app_vst3_a.wav" channel="0"
+                         startFrame="69000" frameCount="1000"
+                         minRms="0.11432" maxRms="0.11663"/>
+    <assert-audio-energy filename="app_vst3_a.wav" channel="0"
+                         startFrame="70000" frameCount="1000"
+                         minRms="0.22865" maxRms="0.23327"/>
+
+    <render filename="app_vst3_b.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="app_vst3_b.wav" expected="app_vst3_a.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -163,3 +163,29 @@ boundaries, one reset for four pages, one reposition per page.
 
 Known debt: none of the former model→objects edges remain; the module is
 ready to become a real build target once its remaining consumers are.
+
+## Inline `<automation>` (proposal 37 P5, design §3.3)
+
+**`<automation>` is a sanctioned NON-`SLink` payload of a known element, and the
+loader ignores it for ordering.** `SObject` owns the lane vector, emits the
+element from `SObject::serialize()` (and every override that writes its own
+children must call `serializeAutomation()` itself — `SPluginSlot` does, next to
+`<state>`), and reads it back in `readPostChildrenAttributes()`. Writing NOTHING
+when there are no lanes is load-bearing: it is what keeps every project written
+before P5 byte-unchanged.
+
+- **Lanes live on `SObject`, not on the four owner types.** A verb, the
+  serializer and the testkit all have to reach a lane without knowing which
+  object slice its owner belongs to, and `main/actions` may not depend on
+  `objects/*` at all — the same argument that put `contentKind()` and
+  `resolveEventClip()` here. WHICH targets are legal on WHICH owner is validated
+  by the verbs, not by the storage.
+- **The lane vector is MAIN-THREAD ONLY.** Every verb, the loader and the
+  serializer run there. What crosses to a freeze thread is the immutable
+  `twAutomationCurve` SNAPSHOT, handed to the consuming component under ITS
+  mutex and read once per page into a local (THREADING rule 2).
+- **`onAutomationChanged(lane, start, end)`** is the hook an owner overrides to
+  push the new snapshot into its engine components and stale exactly that range;
+  the default does the `invalidateRenderPathRange` and nothing else.
+  **`applyAutomationToEngine()`** is the load-path replay, because the lanes are
+  read before the components exist.

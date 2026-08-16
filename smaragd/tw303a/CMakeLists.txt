@@ -153,20 +153,6 @@ tw_module(dsp
     DEPS tw_core tw_graph
 )
 
-# --- E6 mix: arrangement composition (track mix, mixer, rewire) --------------
-tw_module(mix
-    SOURCES
-        mix/include/tw/mix/twtrackmix.h
-        mix/include/tw/mix/twmixer.h
-        mix/include/tw/mix/twrewire.h
-        mix/include/tw/mix/twgainstage.h
-        mix/src/twtrackmix.cc
-        mix/src/twmixer.cc
-        mix/src/twrewire.cc
-        mix/src/twgainstage.cc
-    DEPS tw_core tw_pages tw_graph
-)
-
 # --- events: MIDI/event model leaf (proposal 37 P0b) ---------------------------
 # The one twEvent, the immutable event sequence, the tempo map (the ONLY
 # tick<->frame converter), the SMF reader/writer, the automation curve, and the
@@ -192,6 +178,20 @@ tw_module(events
         events/src/twsmf.cc
         events/src/twautomationcurve.cc
     DEPS tw_core
+)
+
+# --- E6 mix: arrangement composition (track mix, mixer, rewire) --------------
+tw_module(mix
+    SOURCES
+        mix/include/tw/mix/twtrackmix.h
+        mix/include/tw/mix/twmixer.h
+        mix/include/tw/mix/twrewire.h
+        mix/include/tw/mix/twgainstage.h
+        mix/src/twtrackmix.cc
+        mix/src/twmixer.cc
+        mix/src/twrewire.cc
+        mix/src/twgainstage.cc
+    DEPS tw_core tw_pages tw_graph tw_events
 )
 
 # --- E7 plugins: plugin ABI, registry, hosting chain --------------------------

@@ -318,6 +318,12 @@ int STakeStack::serializeSelfAttributes( QTextStream &o )
 
 int STakeStack::readPostChildrenAttributes( QDomElement &element )
 {
+    // The base call is not decoration: since proposal 37 P5 it is what reads
+    // the inline <automation> child. A stack carries no lane of its own today
+    // (a clip envelope lives on each TAKE), but an override that silently
+    // dropped a known payload is exactly the trap the next owner would fall in.
+    SObject::readPostChildrenAttributes( element );
+
     int at = element.attribute( "activeTake", "-1" ).toInt();
     if( at < -1 || at >= childCount() ) at = -1;
     activeTake_ = at;

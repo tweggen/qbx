@@ -279,3 +279,16 @@ cases now drive real playback through the capture backend
 observed over the repeat sweep. What still has NO bespoke gate is the capture
 backend's own pacing and the latency of the playback path — a wall-clock
 assertion tight enough to separate those behaviours would be flaky.
+
+## `assert-automation-value` (proposal 37 P5)
+
+It asks the SNAPSHOT the engine is handed (`SAutomationLane::valueAt`), never a
+re-implementation of the interpolation, so a case can pin the midpoint of a ramp
+as a closed form without also rendering it. That is deliberately a SECOND,
+independent view of one curve: the rendered RMS bands say the curve reached the
+audio, this says the curve is the one the script asked for, and a bug that moved
+both would have to move them consistently.
+
+A MISSING lane is REJECTED rather than reported as the target's default value —
+a typo in a `target` must never read as a passing assertion. Pair it with
+`expectReject="true"` to assert that a lane is ABSENT.

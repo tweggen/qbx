@@ -2,6 +2,7 @@
 #define _TWGAINSTAGE_H
 
 #include "tw/graph/twcomponent.h"
+#include "tw/events/twautomationcurve.h"
 
 #include <atomic>
 #include <cstdint>
@@ -82,6 +83,32 @@ public:
     /// Ramp length in frames at the environment's current rate (~1.5 ms).
     length_t muteRampFrames() const;
 
+    // --- automation (proposal 37 P5, design D5 / §4.5) ---------------------
+    //
+    // THE CURVE IS A SNAPSHOT, and it is swapped, never edited: the render
+    // reads the shared_ptr ONCE per page into a local (THREADING rule 2), so a
+    // page already being frozen finishes against the table it started with.
+    // A NULL curve is the SCALAR path — the same arithmetic, and at 0 dB the
+    // same pure copy, that every render without a lane has always taken. That
+    // is what keeps the golden corpus byte-identical across this phase.
+
+    /// The `self:Volume` lane, in dB (the fader's own space,
+    /// app/timeline/sfadercurve.h). `absolute` false is TRIM: the curve is
+    /// SUMMED with gainDb() — dB sum == gain product, which is exactly what
+    /// "static value x curve" means. `absolute` true is READ: the curve alone,
+    /// and the fader's stored value is not consumed.
+    void setVolumeCurve( std::shared_ptr<const twAutomationCurve> curve,
+                         bool absolute );
+    std::shared_ptr<const twAutomationCurve> volumeCurve() const;
+
+    /// The `self:Muted` lane: >= 0.5 is muted. A STEP table, and each
+    /// transition gets the SAME ~1.5 ms ramp setMuted() uses — an automated
+    /// mute must not click any more than a button-driven one. Before the first
+    /// breakpoint the track is AUDIBLE (the lane's own convention; "muted from
+    /// frame 0" is what the structural mute says).
+    void setMuteCurve( std::shared_ptr<const twAutomationCurve> curve );
+    std::shared_ptr<const twAutomationCurve> muteCurve() const;
+
     // --- width (proposal 36 §4.2) ----------------------------------------
 
     void setChannels( idx_t n );
@@ -125,9 +152,13 @@ private:
     // mutex() (THREADING rule 2) and then read lock-free.
     struct Envelope {
         double   base       = 1.0;            // the fader, linear
+        double   baseDb     = 0.0;            // ...and in dB, for the Trim sum
         bool     muted      = false;
         offset_t muteAnchor = kRampImmediate;
         length_t ramp       = 1;
+        std::shared_ptr<const twAutomationCurve> vol;    // dB
+        bool     volAbsolute = false;                    // Read (vs Trim)
+        std::shared_ptr<const twAutomationCurve> mute;   // >= 0.5 == muted
     };
     Envelope envelope() const;
 
@@ -144,10 +175,20 @@ private:
     static void applyGain( const sample_t *src, sample_t *dst, length_t n,
                            offset_t start, const Envelope &e );
 
-    mutable std::mutex   paramMutex_;      // guards the three fields below
+    // The multiplier a mute CURVE gives at `pos`, ramp included.
+    static double muteFactorFromCurve( const twAutomationCurve &c, offset_t pos,
+                                       length_t ramp );
+    // True when `c` yields ONE value for every frame of [start, start + n).
+    static bool curveIsFlatOver( const twAutomationCurve &c, offset_t start,
+                                 length_t n );
+
+    mutable std::mutex   paramMutex_;      // guards the fields below
     double               gainDb_{ 0.0 };
     bool                 muted_{ false };
     offset_t             muteAnchor_{ kRampImmediate };
+    std::shared_ptr<const twAutomationCurve> volCurve_;
+    bool                 volAbsolute_{ false };
+    std::shared_ptr<const twAutomationCurve> muteCurve_;
 
     std::atomic<int>     channels_{ 1 };
 

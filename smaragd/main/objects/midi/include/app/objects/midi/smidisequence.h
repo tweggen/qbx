@@ -10,6 +10,7 @@
 #include "app/model/sobject.h"
 #include "tw/core/twfraction.h"
 #include "tw/events/twevent.h"
+#include "tw/events/twautomationcurve.h"
 #include "tw/events/tweventseq.h"
 
 class QDomElement;
@@ -193,9 +194,18 @@ void writeEvent( QTextStream &o, const SEvent &e );
  * frame domain), `transpose`/`velocityScale`/`channelOverride` are SMidiCut's
  * per-clip modifiers, applied here so there is exactly one place that does it.
  */
+/**
+ * `transCurve` / `velCurve` are the clip's `cut:Transpose` / `cut:VelocityScale`
+ * AUTOMATION lanes (proposal 37 P5), in the clip's own frame domain — which is
+ * exactly the domain each event's converted `time` is already in. They compose
+ * with the static modifiers the way Trim always does: the transpose lane ADDS
+ * semitones, the velocity lane MULTIPLIES. Null is the untouched path.
+ */
 std::shared_ptr<const twEventSeq> buildSeq(
     const std::vector<SEvent> &events, const Fraction &scale,
-    int transpose = 0, double velocityScale = 1.0, int channelOverride = -1 );
+    int transpose = 0, double velocityScale = 1.0, int channelOverride = -1,
+    const twAutomationCurve *transCurve = nullptr,
+    const twAutomationCurve *velCurve = nullptr );
 
 }  // namespace smidievents
 

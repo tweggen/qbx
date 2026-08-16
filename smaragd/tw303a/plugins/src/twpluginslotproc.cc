@@ -86,6 +86,103 @@ void twPluginSlotProcessor::bumpParamEpoch()
     bumpParamEpoch_nolock();
 }
 
+// --- automation (proposal 37 P5, design D5) ---------------------------------
+
+void twPluginSlotProcessor::setParamCurves(
+    std::map<std::uint32_t, std::shared_ptr<const twAutomationCurve> > curves )
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    if( paramCurves_ == curves ) return;
+    paramCurves_ = std::move( curves );
+
+    // Sized HERE, on the UI thread, so the render path never allocates: the
+    // effect path needs a sink and a chunk list the moment a curve exists.
+    if( !paramCurves_.empty() ) {
+        if( autoEvents_.capacity() < twEventLimits::kMaxEventsPerBlock )
+            autoEvents_.reserve( twEventLimits::kMaxEventsPerBlock );
+        if( chunkEvents_.capacity() < twEventLimits::kMaxEventsPerBlock )
+            chunkEvents_.reserve( twEventLimits::kMaxEventsPerBlock );
+        if( outEvents_.size() < twEventLimits::kMaxEventsPerBlock )
+            outEvents_.resize( twEventLimits::kMaxEventsPerBlock );
+        if( outArena_.size() < twEventLimits::kMaxPayloadBytes )
+            outArena_.resize( twEventLimits::kMaxPayloadBytes );
+    }
+
+    automationEpoch_.fetch_add( 1, std::memory_order_acq_rel );
+    // THE EPOCH IS THE HASH: without this the insert serves the pages it froze
+    // against the old curve and the edit is inaudible (plugins inv. 15).
+    bumpParamEpoch_nolock();
+}
+
+bool twPluginSlotProcessor::hasParamCurves() const
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    return !paramCurves_.empty();
+}
+
+// Caller holds mutex_. One sorted, non-decreasing list of ParamValue events for
+// [chunkStart, chunkStart + n), times relative to chunkStart.
+void twPluginSlotProcessor::buildAutomationChunk_nolock( offset_t chunkStart,
+                                                         length_t n )
+{
+    autoEvents_.clear();
+    if( paramCurves_.empty() || n <= 0 ) return;
+
+    for( const auto &kv : paramCurves_ ) {
+        const twAutomationCurve *c = kv.second.get();
+        if( !c || c->empty() ) continue;
+        const std::uint32_t id = kv.first;
+
+        auto pushEv = [&]( std::int64_t t, double v ) {
+            if( autoEvents_.size() >= (std::size_t) twEventLimits::kMaxEventsPerBlock )
+                return;
+            twEvent e;
+            e.time    = t;
+            e.kind    = twEventKind::ParamValue;
+            e.paramId = id;
+            e.value   = v;
+            autoEvents_.push_back( e );
+        };
+
+        // THE CHASE. A page is frozen out of order and by any worker, so the
+        // plugin's own parameter state at the start of this chunk is unknown by
+        // construction — it is stated, never assumed.
+        double last = c->valueAt( chunkStart );
+        pushEv( 0, last );
+
+        const std::vector<twCurvePoint> &pts = c->points();
+        std::size_t bi = 0;
+        while( bi < pts.size() && pts[bi].frame <= chunkStart ) ++bi;
+
+        length_t nextRamp = kAutoRampFrames;
+        const offset_t kNone = std::numeric_limits<offset_t>::max();
+        for( ;; ) {
+            const offset_t bf = ( bi < pts.size() && pts[bi].frame < chunkStart + n )
+                                    ? pts[bi].frame : kNone;
+            const offset_t rf = ( nextRamp < n ) ? ( chunkStart + nextRamp ) : kNone;
+            if( bf == kNone && rf == kNone ) break;
+            const offset_t f = std::min( bf, rf );
+            const double   v = c->valueAt( f );
+            // A flat or STEP stretch says nothing new; skipping it is what
+            // keeps a step lane at two events per chunk.
+            if( v != last ) {
+                pushEv( f - chunkStart, v );
+                last = v;
+            }
+            if( f == bf ) ++bi;
+            if( f == rf ) nextRamp += kAutoRampFrames;
+        }
+    }
+
+    // CLAP and VST3 both require a non-decreasing list, and several lanes
+    // interleave. stable_sort so two parameters landing on one frame keep the
+    // order their ids gave them.
+    std::stable_sort( autoEvents_.begin(), autoEvents_.end(),
+                      []( const twEvent &a, const twEvent &b ) {
+                          return a.time < b.time;
+                      } );
+}
+
 // --------------------------------------------- the instrument slot (P3b)
 
 bool twPluginSlotProcessor::isGenerator() const
@@ -355,7 +452,8 @@ void twPluginSlotProcessor::resetInstances_nolock()
 // buffers so plugin DSP state carries across chunks exactly as it would across
 // callbacks in a live host (CONTRACT invariant 5).
 void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
-                                               sample_t **out, length_t len )
+                                               sample_t **out, length_t len,
+                                               offset_t startPos, bool positional )
 {
     if( len <= 0 || !in || !out ) return;
 
@@ -367,8 +465,28 @@ void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
         return;
     }
 
+    // AUTOMATION IS AN OPT-IN BRANCH, and deliberately so. With no curve the
+    // call below is the LEGACY three-argument process() this path has always
+    // made — the same code, not merely an equivalent one — which is what makes
+    // every render without a lane byte-identical (P5 AC6). A positionless pull
+    // cannot place an event at all, so it takes the scalar path too.
+    const bool automate = positional && !paramCurves_.empty();
+
     for( length_t off = 0; off < len; off += kChunkFrames ) {
         const length_t n = std::min<length_t>( kChunkFrames, len - off );
+
+        twEventList      list;
+        twProcessContext ctx;
+        if( automate ) {
+            buildAutomationChunk_nolock( startPos + off, n );
+            list.events = autoEvents_.empty() ? nullptr : autoEvents_.data();
+            list.count  = (std::uint32_t) autoEvents_.size();
+            ctx.position   = (std::int64_t)( startPos + off );
+            ctx.playing    = true;
+            ctx.validFlags = twCtxPosition;
+            autoSink_.setStorage( outEvents_.data(), (std::uint32_t) outEvents_.size(),
+                                  outArena_.data(), (std::uint32_t) outArena_.size() );
+        }
 
         switch( mode_ ) {
         case twPluginSlotMode::Direct: {
@@ -376,15 +494,29 @@ void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
                 inPtrs_[c]  = in[c]  + off;
                 outPtrs_[c] = out[c] + off;
             }
-            instances_[0]->process( inPtrs_.data(), outPtrs_.data(), (std::uint32_t)n );
+            if( automate ) {
+                float *const *const buses[1] = { outPtrs_.data() };
+                instances_[0]->process( inPtrs_.data(), buses, (std::uint32_t)n,
+                                        list, autoSink_, ctx );
+            } else {
+                instances_[0]->process( inPtrs_.data(), outPtrs_.data(), (std::uint32_t)n );
+            }
             break;
         }
         case twPluginSlotMode::DualMono: {
             for( idx_t b = 0; b < nChannels_; ++b ) {
                 inPtrs_[0]  = in[b]  + off;
                 outPtrs_[0] = out[b] + off;
-                instances_[b]->process( inPtrs_.data(), outPtrs_.data(),
-                                        (std::uint32_t)n );
+                if( automate ) {
+                    // Every instance gets the SAME list: one lane automates the
+                    // slot, not one of its channels.
+                    float *const *const buses[1] = { outPtrs_.data() };
+                    instances_[b]->process( inPtrs_.data(), buses, (std::uint32_t)n,
+                                            list, autoSink_, ctx );
+                } else {
+                    instances_[b]->process( inPtrs_.data(), outPtrs_.data(),
+                                            (std::uint32_t)n );
+                }
             }
             break;
         }
@@ -396,7 +528,13 @@ void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
             inPtrs_[1]  = in[0] + off;
             outPtrs_[0] = foldOut_[0].data();
             outPtrs_[1] = foldOut_[1].data();
-            instances_[0]->process( inPtrs_.data(), outPtrs_.data(), (std::uint32_t)n );
+            if( automate ) {
+                float *const *const buses[1] = { outPtrs_.data() };
+                instances_[0]->process( inPtrs_.data(), buses, (std::uint32_t)n,
+                                        list, autoSink_, ctx );
+            } else {
+                instances_[0]->process( inPtrs_.data(), outPtrs_.data(), (std::uint32_t)n );
+            }
             sample_t *dst = out[0] + off;
             for( length_t i = 0; i < n; ++i )
                 dst[i] = 0.5f * ( outPtrs_[0][i] + outPtrs_[1][i] );
@@ -631,6 +769,16 @@ void twPluginSlotProcessor::runGenerator_nolock( const sample_t *const *in,
             chunkEvents_.insert( chunkEvents_.end(), chaseEvents_.begin(),
                                  chaseEvents_.end() );
 
+        // AUTOMATION (proposal 37 P5). An instrument's parameters are automated
+        // exactly like an effect's; the events go into the SAME sorted list,
+        // ahead of the notes at any given offset because a chased parameter has
+        // to be in force before the note it shapes is attacked.
+        if( !paramCurves_.empty() ) {
+            buildAutomationChunk_nolock( startPos + off, n );
+            chunkEvents_.insert( chunkEvents_.end(), autoEvents_.begin(),
+                                 autoEvents_.end() );
+        }
+
         while( evIdx < block.events.size() ) {
             const twEvent &src = block.events[evIdx];
             if( !lastChunk && src.time >= (std::int64_t)( off + n ) ) break;
@@ -666,6 +814,15 @@ void twPluginSlotProcessor::runGenerator_nolock( const sample_t *const *in,
             }
             genPtrs_[(std::size_t)c] = dst;
         }
+
+        // The chase, the automation grid and the window's own events are three
+        // ordered streams merged into one list; only a final sort makes it the
+        // non-decreasing sequence every backend requires. stable_sort keeps the
+        // chase ahead of a note landing on the same frame.
+        std::stable_sort( chunkEvents_.begin(), chunkEvents_.end(),
+                          []( const twEvent &a, const twEvent &b ) {
+                              return a.time < b.time;
+                          } );
 
         const twEventList list{
             chunkEvents_.empty() ? nullptr : chunkEvents_.data(),
@@ -830,7 +987,7 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
         haveLastEnd_ = false;
     }
 
-    runChunked_nolock( in, out, len );
+    runChunked_nolock( in, out, len, startPos, positional );
 }
 
 }  // namespace audio

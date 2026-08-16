@@ -265,21 +265,24 @@ twEditRange twTrackMix::setClipMuted(const void *key, bool muted)
     return r;
 }
 
-// FORCED TO 0 dB SINCE PROPOSAL 37 P3a (D5): THE FADER MOVED POST-FX.
+// THE PER-CLIP GAIN ENVELOPE (proposal 37 P5, design §4.5).
 //
-// It is now twGainStage, which STrack wires between the plugin chain and the
-// rewire; twTrackMix's own scalar would apply BEFORE the inserts, which is the
-// order the proposal retired (an instrument's output must be under the fader,
-// and post-insert faders are what every reference DAW does).
-//
-// The setter is kept, and kept a NO-OP, deliberately: P5 removes both it and
-// trackGainDb_ together with the rest of the pre-FX gain path, and until then a
-// call that silently re-introduced a pre-FX multiply would be far worse than
-// one that does nothing. trackGainDb_ therefore stays 0.0 for the process'
-// lifetime, so the `factor != 1.0` guards in freezePage_nolock and
-// calcOutputTo never fire and no arithmetic touches the samples at all.
-void twTrackMix::setTrackGain(double /*gainDb*/)
+// Swapping the pointer under mutex() is the whole protocol: freezePage_nolock
+// reads it once per clip per page into a local, so a page already being frozen
+// finishes against the table it started with (THREADING rule 2). The entry's
+// previousPage is deliberately NOT dropped — the envelope changes what is
+// SUMMED, never the child's own DSP state, so the state chain across page
+// boundaries stays valid and a gain edit costs no re-render of the source.
+void twTrackMix::setClipGainCurve( const void *key,
+                                   std::shared_ptr<const twAutomationCurve> curve )
 {
+    std::lock_guard<std::mutex> lock( mutex() );
+    for( ClipEntry &c : clips_ ) {
+        if( c.key != key ) continue;
+        if( c.gainCurve == curve ) return;
+        c.gainCurve = std::move( curve );
+        return;
+    }
 }
 
 // Proposal 36 B4. A twTrackMix caches no pages of its own (freezePage allocates
@@ -383,16 +386,11 @@ length_t twTrackMix::calcOutputTo( IOVector& dest, idx_t idx )
         }
     }
 
-    // Apply track gain. NOT mute: mute belongs to the channel, so it is applied
-    // by whoever sums THIS track (the mixer nulls our input plug; a folder track
-    // skips our clip entry), never to our own output — otherwise a capture of
-    // this track (an asset window) would be silence. See setClipMuted().
-    double factor = pow( 10., trackGainDb_/20. );
-    if( factor != 1.0 ) {
-        for( offset_t i=0; i<(offset_t)dest.length(); i++ ) {
-            buffer.data()[i] *= (sample_t) factor;
-        }
-    }
+    // NO TRACK GAIN HERE (proposal 37 P5): the fader is twGainStage, one hop
+    // downstream. And still no mute — mute belongs to the channel, so it is
+    // applied by whoever sums THIS track (the mixer nulls our input plug; a
+    // folder track skips our clip entry), never to our own output, or a capture
+    // of this track (an asset window) would be silence. See setClipMuted().
 
     // Copy to IOVector destination
     return dest.copyFrom(IOVector::CreateFromBuffer(buffer.data(), dest.length()), 0, dest.length());
@@ -589,26 +587,41 @@ length_t twTrackMix::freezePage_nolock(
         // every channel of a wide track, and it is exactly the behaviour the
         // retired N-parallel-mixer arrangement produced by rendering the same
         // channel-0 page into each of its N buses.
+        // THE PER-CLIP GAIN ENVELOPE (proposal 37 P5, design §4.5), applied to
+        // the CHILD's page before it is summed. Read ONCE into a local: the
+        // model may swap the entry's curve while this page renders.
+        //
+        // It scales into a SCRATCH buffer rather than the child's page, which is
+        // not a micro-optimisation: childPage is handed straight back as
+        // clip.previousPage (the child's DSP-state predecessor) and may be a
+        // page the child itself has cached, so writing through it would corrupt
+        // both. Output frame destOffset+i always corresponds to child frame
+        // childPos+i (both branches of the destOffset/childPos pair above), so
+        // the curve is evaluated in the clip's OWN domain and therefore trims,
+        // slips and loops with the clip.
+        const std::shared_ptr<const twAutomationCurve> gainCurve = clip.gainCurve;
+
         const idx_t nCh = (idx_t) page->channels();
         for( idx_t c = 0; c < nCh; ++c ) {
-            IOVector childVec = IOVector::CreateForPageOutput(
-                childPage, twPageClampChannel( *childPage, c ) );
+            const idx_t srcCh = twPageClampChannel( *childPage, c );
+            IOVector childVec = IOVector::CreateForPageOutput( childPage, srcCh );
+            if( gainCurve && framesToMix > 0 ) {
+                if( (offset_t) clipGainScratch_.size() < framesToMix )
+                    clipGainScratch_.resize( (std::size_t) framesToMix );
+                const sample_t *src = childPage->channelPtr( srcCh );
+                for( offset_t i = 0; i < framesToMix; ++i ) {
+                    clipGainScratch_[(std::size_t) i] =
+                        src[i] * (sample_t) gainCurve->valueAt( childPos + i );
+                }
+                childVec = IOVector::CreateFromBuffer( clipGainScratch_.data(),
+                                                       (length_t) framesToMix );
+            }
             IOVector outputVec(page, 0, length, c);
             outputVec.mixFrom(childVec, destOffset, (length_t) framesToMix);
         }
     }
 
-    // Apply track gain, not mute (same as calcOutputTo_nolock — see there).
-    double factor = pow( 10., trackGainDb_/20. );
-    if( factor != 1.0 ) {
-        const size_t n = std::min<size_t>( (size_t) length, page->channelFrames() );
-        for( idx_t c = 0; c < (idx_t) page->channels(); ++c ) {
-            sample_t *dst = page->channelPtr( c );
-            for( size_t i = 0; i < n; ++i ) {
-                dst[i] *= (sample_t) factor;
-            }
-        }
-    }
+    // No track gain and no mute here (proposal 37 P5 / see calcOutputTo).
 
     page->validFrames = std::min((uint32_t)length, (uint32_t)page->channelFrames());
     page->validAspects = twAspectPlayback;  // We've computed playback data
@@ -669,8 +682,7 @@ twTrackMix::~twTrackMix()
 
 twTrackMix::twTrackMix( tw303aEnvironment &env )
     : twComponent( env ),
-      playOffset_( 0 ),
-      trackGainDb_( 0.0 )
+      playOffset_( 0 )
 {
 }
 

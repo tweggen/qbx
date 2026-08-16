@@ -32,7 +32,11 @@ DEPS = {
     # finished warp (warp.pcm) in the derived-data store.
     'sources':  ['core', 'pages', 'graph', 'sidecar'],
     'dsp':      ['core', 'graph'],
-    'mix':      ['core', 'pages', 'graph'],
+    # mix -> events since proposal 37 P5: twGainStage consumes a
+    # twAutomationCurve (the Volume/Mute lanes) and twTrackMix a per-clip gain
+    # envelope. tw/events is core-only and outside the dataflow DAG, so this
+    # adds no page dependency (design D5 / F15).
+    'mix':      ['core', 'pages', 'graph', 'events'],
     # plugins -> events since proposal 37 P2: the plugin ABI's event list quotes
     # tw/events/twevent.h. tw/events is core-only and NOT in the dataflow DAG,
     # so this adds no page dependency (design F15: plugins may not reach mix).
@@ -160,8 +164,12 @@ APP_ENG = {
     # model + events since proposal 37 P1: SProject owns the twTempoMap (the
     # single tempo authority, D2) and SLink's beats timebase converts through
     # it. No other app module may convert ticks to frames.
+    # model + events also covers proposal 37 P5's SAutomationLane, whose
+    # snapshot IS a twAutomationCurve.
     'model':          _ENG_BASE | {'events', 'pages', 'schedule', 'sources'},
-    'objects/cut':    _ENG_BASE | {'pages', 'schedule', 'sources'},
+    # objects/cut + events since proposal 37 P5: an SCut owns its `cut:Gain`
+    # envelope and hands the twAutomationCurve snapshot to the track's mix.
+    'objects/cut':    _ENG_BASE | {'events', 'pages', 'schedule', 'sources'},
     # objects/wave + sidecar since proposal 27 M0: SPlainWave persists its
     # straight preview through the derived-data sidecar store.
     'objects/wave':   _ENG_BASE | {'pages', 'schedule', 'sources', 'sidecar'},

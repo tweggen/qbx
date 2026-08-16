@@ -100,6 +100,46 @@ length_t twGainStage::muteRampFrames() const
     return n > 0 ? n : 1;
 }
 
+// --- automation (proposal 37 P5) --------------------------------------------
+
+void twGainStage::setVolumeCurve( std::shared_ptr<const twAutomationCurve> curve,
+                                  bool absolute )
+{
+    {
+        std::lock_guard<std::mutex> lock( paramMutex_ );
+        if( volCurve_ == curve && volAbsolute_ == absolute ) return;
+        volCurve_    = std::move( curve );
+        volAbsolute_ = absolute;
+    }
+    // Every page this component has published baked in the OLD curve. The
+    // EXACT range is the caller's business (the app knows which frames the edit
+    // moved and calls invalidatePagesInRange); this is the whole-component
+    // fallback for a curve that was swapped wholesale.
+    bumpContentEpoch();
+}
+
+std::shared_ptr<const twAutomationCurve> twGainStage::volumeCurve() const
+{
+    std::lock_guard<std::mutex> lock( paramMutex_ );
+    return volCurve_;
+}
+
+void twGainStage::setMuteCurve( std::shared_ptr<const twAutomationCurve> curve )
+{
+    {
+        std::lock_guard<std::mutex> lock( paramMutex_ );
+        if( muteCurve_ == curve ) return;
+        muteCurve_ = std::move( curve );
+    }
+    bumpContentEpoch();
+}
+
+std::shared_ptr<const twAutomationCurve> twGainStage::muteCurve() const
+{
+    std::lock_guard<std::mutex> lock( paramMutex_ );
+    return muteCurve_;
+}
+
 void twGainStage::setChannels( idx_t n )
 {
     if( n < 1 ) n = 1;
@@ -118,36 +158,124 @@ twGainStage::Envelope twGainStage::envelope() const
     Envelope e;
     {
         std::lock_guard<std::mutex> lock( paramMutex_ );
-        e.base       = std::pow( 10., gainDb_ / 20. );
-        e.muted      = muted_;
-        e.muteAnchor = muteAnchor_;
+        e.baseDb      = gainDb_;
+        e.base        = std::pow( 10., gainDb_ / 20. );
+        e.muted       = muted_;
+        e.muteAnchor  = muteAnchor_;
+        // ONE read of each shared_ptr, into the local the whole page then uses
+        // (THREADING rule 2). A swap racing this page is picked up by the NEXT
+        // one, which is exactly what the content-epoch bump makes happen.
+        e.vol         = volCurve_;
+        e.volAbsolute = volAbsolute_;
+        e.mute        = muteCurve_;
     }
     e.ramp = muteRampFrames();
     return e;
 }
 
+// The mute multiplier a STEP table gives at `pos`. The ramp starts AT the
+// breakpoint and runs forward, so the value is position-deterministic: a page
+// rendered out of order, twice, or on another thread produces the same samples.
+double twGainStage::muteFactorFromCurve( const twAutomationCurve &c, offset_t pos,
+                                         length_t ramp )
+{
+    const std::vector<twCurvePoint> &pts = c.points();
+    if( pts.empty() ) return 1.0;
+
+    // Last point at or below pos.
+    std::size_t lo = 0, hi = pts.size();
+    while( lo < hi ) {
+        const std::size_t mid = lo + ( hi - lo ) / 2;
+        if( pts[mid].frame <= pos ) lo = mid + 1; else hi = mid;
+    }
+    if( lo == 0 ) return 1.0;          // before the first point: AUDIBLE
+    const std::size_t i = lo - 1;
+
+    const double target = ( pts[i].value >= 0.5 ) ? 0.0 : 1.0;
+    const double prev   = ( i == 0 ) ? 1.0
+                                     : ( ( pts[i - 1].value >= 0.5 ) ? 0.0 : 1.0 );
+    if( prev == target ) return target;
+
+    const offset_t d = pos - pts[i].frame;
+    if( ramp <= 0 || d >= (offset_t) ramp ) return target;
+    const double t = (double) d / (double) ramp;
+    return prev + ( target - prev ) * t;
+}
+
+bool twGainStage::curveIsFlatOver( const twAutomationCurve &c, offset_t start,
+                                   length_t n )
+{
+    if( n <= 1 ) return true;
+    const std::vector<twCurvePoint> &pts = c.points();
+    if( pts.empty() ) return true;
+
+    const offset_t end = start + n;                       // exclusive
+    // A breakpoint strictly inside the span always breaks flatness.
+    for( const twCurvePoint &p : pts )
+        if( p.frame > start && p.frame < end ) return false;
+
+    // Which point governs the whole span?
+    std::size_t lo = 0, hi = pts.size();
+    while( lo < hi ) {
+        const std::size_t mid = lo + ( hi - lo ) / 2;
+        if( pts[mid].frame <= start ) lo = mid + 1; else hi = mid;
+    }
+    if( lo == 0 )            return true;                 // holds the first value
+    const std::size_t i = lo - 1;
+    if( i + 1 >= pts.size() ) return true;                // holds the last value
+    return pts[i].shape == twCurveShape::Step;
+}
+
 double twGainStage::factorAt( const Envelope &e, offset_t pos )
 {
-    if( e.muteAnchor == kRampImmediate ) {
-        return e.muted ? 0.0 : e.base;
-    }
-    const offset_t d = pos - e.muteAnchor;
-    double m;
-    if( d <= 0 ) {
-        m = e.muted ? 1.0 : 0.0;                        // before the change
-    } else if( d >= (offset_t) e.ramp ) {
-        m = e.muted ? 0.0 : 1.0;                        // after it
+    // 1. The fader, plus its lane. TRIM SUMS IN dB, which is the same thing as
+    //    multiplying the gains — the identity that makes "static value x curve"
+    //    a single number rather than two multiplies.
+    double g;
+    if( e.vol ) {
+        const double db = e.volAbsolute ? e.vol->valueAt( pos )
+                                        : ( e.baseDb + e.vol->valueAt( pos ) );
+        g = std::pow( 10., db / 20. );
     } else {
-        const double t = (double) d / (double) e.ramp;
-        m = e.muted ? ( 1.0 - t ) : t;
+        g = e.base;
     }
-    return e.base * m;
+
+    // 2. Mute. A LANE wins over the structural anchor: the anchor is the
+    //    button's one-shot transition, the curve is the whole arrangement's.
+    double m;
+    if( e.mute ) {
+        m = muteFactorFromCurve( *e.mute, pos, e.ramp );
+    } else if( e.muteAnchor == kRampImmediate ) {
+        m = e.muted ? 0.0 : 1.0;
+    } else {
+        const offset_t d = pos - e.muteAnchor;
+        if( d <= 0 ) {
+            m = e.muted ? 1.0 : 0.0;                    // before the change
+        } else if( d >= (offset_t) e.ramp ) {
+            m = e.muted ? 0.0 : 1.0;                    // after it
+        } else {
+            const double t = (double) d / (double) e.ramp;
+            m = e.muted ? ( 1.0 - t ) : t;
+        }
+    }
+    return g * m;
 }
 
 bool twGainStage::isFlat( const Envelope &e, offset_t start, length_t n )
 {
-    if( e.muteAnchor == kRampImmediate ) return true;
     if( n <= 0 ) return true;
+    // A curve is flat over the span only when one segment governs the whole of
+    // it AND that segment holds. Getting this right is what lets a STEP lane
+    // keep the pure-copy path over the stretches between its points.
+    if( e.vol && !curveIsFlatOver( *e.vol, start, n ) ) return false;
+    if( e.mute ) {
+        // The RAMP reaches `ramp` frames past a breakpoint, so a span that
+        // starts inside one is not flat either.
+        if( !curveIsFlatOver( *e.mute, start - (offset_t) e.ramp, n + e.ramp ) )
+            return false;
+        return true;
+    }
+    if( e.muteAnchor == kRampImmediate ) return true;
     // Flat iff the whole span sits entirely on one side of the ramp.
     const offset_t end = start + n;                              // exclusive
     if( end <= e.muteAnchor ) return true;                       // wholly before

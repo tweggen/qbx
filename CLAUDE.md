@@ -673,6 +673,42 @@ ALSA-seq, virtual-port creation on Windows (WinMM has no such concept — a
 loopMIDI-style driver appears as an ordinary device), `CAPTURE_SPEED ≠ 1`,
 sysex (refused by the ring rather than truncated; P9).
 
+## Automation (proposal 37 P5 — executed 2026-08-16)
+
+A lane on a track, a plugin slot or a clip window is edited by seven undoable
+verbs, persisted inline with its owner, snapshotted as an immutable
+`twAutomationCurve`, and consumed **at freeze time**. Design:
+`plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` D5 / §3.3 / §3.4 / §4.5.
+Invariants: `tw303a/mix/CONTRACT.md` inv. 19-23, `tw303a/plugins/CONTRACT.md`
+inv. 15 + 41-44, `main/objects/track/CONTRACT.md` inv. 11-15,
+`main/model/CONTRACT.md`.
+
+| Thing to know | Why |
+|---|---|
+| **A lane is a plain owner-held `QObject`, NEVER an `SLink` child**, serialized inline as `<automation><lane target= mode=><p t= v= c=/>…</lane></automation>` | The project loader orders and resolves on `<SLink>` children only, so an inline child of a known element is invisible to it and an OLDER build ignores it. A lane as an `SObject` would need an id, a link, a load order and a policy for what happens when its owner is dropped — for a breakpoint table with no independent existence. |
+| The lane vector lives on **`SObject`**, not on the four owner types | Same argument as `contentKind()` and `resolveEventClip()`: a verb, the serializer and the testkit must reach a lane without knowing which object slice owns it. WHICH targets are legal on WHICH owner is the verbs' business. |
+| **`SObject::serialize()` writes NOTHING when there are no lanes** | That is what keeps every project file written before P5 — and every committed golden — byte-unchanged. The same discipline runs through the engine: a NULL curve is the SCALAR path, and at 0 dB unmuted `twGainStage` still does no arithmetic at all. |
+| Value domains are the TARGET's own: `self:Volume` in **dB**, `self:Muted` 0/1, `param:<id>` in the plugin's **host-facing** domain (normalized for VST3), `cut:Gain` a **LINEAR** factor | dB for the fader because that is its unit and because Trim's "static value × curve" is then a dB SUM; linear for a clip envelope because a fade-out has to reach EXACTLY zero. `param:` matches `set-plugin-param` by construction. `Rate`/`Stretch` are not automatable (they change duration); `self:Pan` waits for a stereo sink (36-B5). |
+| A `Linear` segment on `self:Volume` interpolates **linearly in dB** | `twAutomationCurve` interpolates the STORED value and `tw/mix` may not include `app/timeline/sfadercurve.h`. The design's "dB-linear in fader space" is read as "linear in dB, in the fader's space" — the only reading that is implementable and the only one under which Trim is a sum. |
+| **A `self:Muted` lane holds AUDIBLE before its first point**, unlike every other lane | Every other lane holds its first point's value there (the universal convention). "Muted from frame 0" is what the STRUCTURAL mute says, and a lane drawn to mute a track at 1 s must not silence second 0. Implemented as an explicit anchor point at frame 0 in the snapshot builder, never as a special case in the consumer. |
+| Mute has TWO meanings and they are different mechanisms | The mute BUTTON is STRUCTURAL — the parent nulls the child's input plug — so a track's own output still carries its material and an asset capture of it is not silence. The `self:Muted` LANE is AUDIO: `twGainStage`, post-FX, with a ~1.5 ms ramp at every transition. |
+| A `param:` lane becomes **per-chunk, sample-offset `ParamValue` events**, not a `setParam()` call | Chase at offset 0 (pages freeze out of order and on any worker, so what the instance holds is unknown BY CONSTRUCTION), one event per breakpoint inside the chunk, a 64-frame grid on continuous segments for plugins that do not interpolate. With no curves the call is the SAME legacy `process()` it always was. |
+| **The invalidation range differs by consumer CLASS** | `twGainStage` is class infinity and pure, so the range is EXACT. A plugin is CLASS 1, so it is `[a, INT64_MAX)`. A `cut:` lane invalidates in the cut's own clip-relative domain and is mapped upward by the existing window walk. |
+| A `cut:Gain` envelope reaches the mix **through the track**, not through the cut | The curve lives on the WINDOW, which may not know its track. `STrack::refreshClipGainCurves()` re-reads every child's lane from `bumpRenderChainEpoch[Range]()` — the one main-thread funnel every model change already passes through, exactly as `refreshInstrumentFeed()` does. A take stack is asked for its ACTIVE take, so an inactive take keeps its own envelope. |
+| A slot's lane needs its TRACK to do the invalidation walk | `SObject::invalidateRenderPathRange()` from an `SPluginSlot` is a NO-OP: the walk goes down from the project root through `childLinks()`, and an `SPluginChain` is deliberately not an `SLink` child of its track. The slot emits `audioInvalidatedRange`; `STrack` walks. Same pitfall proposal 08 M5 found for a bypass. |
+| `set-track-volume` / `set-track-mute` on a **Read-family** lane write a POINT at the locator | Otherwise the fader moves, the render does not, and undo carries a step nobody can hear. Trim and Off are deliberately not redirected — there the static value is still the thing being edited. |
+| **Never put an access specifier inside a `slots:` block** | Adding the automation methods inside `strack.h`'s `public slots:` demoted `trackEventClipChanged` to a plain member. It is connected by NAME, so the connect failed at RUNTIME and every event-clip edit silently stopped reaching the render — invisible at compile time, and it cost a bisect back to the base commit. |
+
+Gates: the qxa cases `automation_volume_ramp`, `automation_mute_step`,
+`automation_plugin_param`, `automation_clip_gain`, `automation_edit_invalidates`
+plus `action_roundtrip_test`. The fixture is `tests/test_autosaw.wav`
+(`tests/tools/gen_auto_fixture.py`): 4 s of a 480 Hz sawtooth whose period is
+EXACTLY 100 frames, which is what makes every per-second, per-1000-frame and
+~2 ms window in those cases a closed form rather than a measurement. NOT gated:
+the mode UI and Touch/Latch/Write RECORDING (P6), pan (36-B5), placement-scope
+envelopes (32), and `cut:VelocityScale` / `cut:Transpose`, which are implemented
+and round-trip but have no dedicated case.
+
 ## Recording Audio
 
 Smaragd supports recording from input devices (microphone, line-in, etc.) via **Record** button in the transport toolbar or **Ctrl-R** / **Cmd-R** keyboard shortcut. Recorded audio is automatically converted to clips and placed on armed tracks.

@@ -108,3 +108,61 @@ yet modeled (track-level only). twTrackMix::setTrackGain and trackGainDb_ are
 dead weight until proposal 37 P5 removes them. twGainStage's mute ramp is
 implemented and unit-tested but UNWIRED — P5's `self:Muted` lane is its caller.
 Pan does not exist.
+
+## Automation (proposal 37 P5, design D5 / §4.5)
+
+**`twGainStage` is THE fader, and since P5 it is also where a `self:Volume` and
+a `self:Muted` automation lane are consumed.** `twTrackMix::setTrackGain()` and
+`trackGainDb_` are **DELETED** — P3a forced them to 0 dB, P5 removed them, and
+nothing in `twTrackMix` scales its own output any more. That is what makes a
+track's frozen page its MATERIAL rather than its mix level, which in turn is why
+an asset window over a faded track captures the unfaded audio.
+
+19. **A CURVE IS A SNAPSHOT, SWAPPED, NEVER EDITED.**
+    `setVolumeCurve(curve, absolute)` / `setMuteCurve(curve)` store a
+    `shared_ptr<const twAutomationCurve>` under `paramMutex_`; `envelope()`
+    reads each ONCE per page into a local (THREADING rule 2), so a page already
+    being frozen finishes against the table it started with and a page frozen
+    after the swap uses the new one. A swap bumps the content epoch, because the
+    old curve is baked into every page already published.
+
+20. **A NULL CURVE IS THE SCALAR PATH, and at 0 dB unmuted it is a PURE COPY
+    with no arithmetic at all.** That is not an optimisation, it is the reason
+    proposal 36's committed golden corpus is byte-identical across P5 by
+    construction: no golden carries a lane, so no golden's samples are touched.
+    `isFlat()` keeps the same property over the flat stretches of a STEP lane.
+
+21. **TRIM SUMS IN dB; READ REPLACES.** `absolute == false` (Trim, the default —
+    design §11 decision 3) evaluates `10^((gainDb + curve(pos))/20)`: a dB sum is
+    a gain product, which is exactly "static value × curve". `absolute == true`
+    (Read/Touch/Latch/Write) ignores the stored fader. The lane's VALUE DOMAIN is
+    the fader's own dB (`app/timeline/sfadercurve.h`), and a `Linear` segment
+    interpolates linearly IN dB — the design's "dB-linear in fader space" read as
+    "linear in dB, in the fader's space", which is the only reading available to
+    a module that may not include an app header.
+
+22. **A MUTE LANE RAMPS AT EVERY TRANSITION, and it holds AUDIBLE before its
+    first breakpoint.** `muteFactorFromCurve()` finds the last breakpoint at or
+    below the position and ramps from the previous state over
+    `muteRampFrames()` (~1.5 ms) starting AT that breakpoint — position-
+    deterministic, so a page rendered out of order, twice, or on another thread
+    produces the same samples and the component stays class infinity. Before the
+    first breakpoint the answer is 1.0 (audible): "muted from frame 0" is what
+    the STRUCTURAL mute says, and a lane drawn to mute a track at 1 s must not
+    silence everything before it. The lane wins over `setMuted()`'s one-shot
+    anchor, which remains for the button.
+
+23. **THE PER-CLIP GAIN ENVELOPE (`cut:Gain`) IS APPLIED TO THE CHILD'S PAGE
+    BEFORE `mixFrom`** — the "per-clip gain is not modeled" debt this file has
+    carried since proposal 15. `ClipEntry::gainCurve` is a linear amplitude
+    factor in CLIP-RELATIVE frames, swapped under `mutex()` by
+    `setClipGainCurve(key, curve)` and read once per clip per page into a local.
+    Output frame `destOffset + i` always corresponds to child frame
+    `childPos + i` (both branches of the pair `freezePage_nolock` computes), so
+    evaluating the curve at `childPos + i` makes it trim, slip and loop with the
+    clip for free. It scales into a member SCRATCH buffer, never through
+    `childPage`: that page is handed straight back as `clip.previousPage` (the
+    child's DSP-state predecessor) and may be a page the child itself cached, so
+    writing through it would corrupt both. The entry's `previousPage` is
+    deliberately NOT dropped on a curve change — the envelope changes what is
+    SUMMED, never the child's own state.

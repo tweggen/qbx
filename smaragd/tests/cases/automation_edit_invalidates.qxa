@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_edit_invalidates">
+
+  <!-- Proposal 37 P5 (design D5, F8/F10/F13): AN AUTOMATION EDIT REACHES THE
+       RENDER, AND ONLY WHERE IT SHOULD.
+
+       "The epoch is the hash." Nothing about a lane is visible to the scheduler
+       by itself - the lane is app-side model data, and a curve swapped without
+       bumping the CONSUMING component's content epoch is served from the pages
+       that baked in the old one. So every lane edit range-bumps its consumer
+       through the app-side path walk, and the RANGE differs by consumer class:
+
+         twGainStage is class INFINITY and PURE - a frame's output is a function
+         of that frame's input, the scalar and the frame's POSITION - so the
+         range is EXACT and everything outside it is untouched, byte for byte.
+
+         A plugin is CLASS 1 - its DSP state at any position depends on
+         everything before it - so the range is [a, INT64_MAX) and NOTHING after
+         the edit may be claimed to be identical. That half of this case
+         therefore asserts identity only BEFORE the edit, and asserts the edit's
+         AUDIBILITY after it.
+
+       THE FIXTURE IS A STEP LANE ON PURPOSE. A Step segment's value is its LEFT
+       point's alone, so changing the point at 96000 cannot move anything before
+       96000, and the next point at 144000 closes it on the right. That is what
+       makes "[0, 96000) and [144000, 192000) are byte-identical" a statement
+       about the invalidation range rather than a lucky rounding. A range
+       computed naively as [previous point, next point) would be [0, 144000) -
+       which would still PASS a byte compare, because the render is
+       deterministic - so the assertion here is deliberately the CHEAP one, and
+       the range arithmetic itself is what the comment above documents. What it
+       does have teeth against is the failure that actually bites: an edit that
+       is not observed at all (identical everywhere) or one that is observed too
+       late (second 2 unchanged).
+
+       Levels, from ../test_autosaw.wav's own 0.230956 rms per second
+       (tests/tools/gen_auto_fixture.py):
+
+           second 2 at -12 dB   0.058014       after the move, -6 dB   0.115752
+
+       The two +/-2 % bands are 50 % apart. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ============ the gain stage: EXACT range ======================== -->
+    <add-automation-lane owner="0" target="self:Volume" mode="read"/>
+    <add-automation-point owner="0" target="self:Volume"
+                          time="0" value="0" curve="step"/>
+    <add-automation-point owner="0" target="self:Volume"
+                          time="96000" value="-12" curve="step"/>
+    <add-automation-point owner="0" target="self:Volume"
+                          time="144000" value="0" curve="step"/>
+
+    <render filename="aei_a.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="aei_a.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.22403" maxRms="0.23788"/>
+    <assert-audio-energy filename="aei_a.wav" channel="0"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.05685" maxRms="0.05918"/>
+    <assert-audio-energy filename="aei_a.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.22403" maxRms="0.23788"/>
+
+    <!-- A second render with NO edit between: the baseline for "identical"
+         meaning something. -->
+    <render filename="aei_a2.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="aei_a2.wav" expected="aei_a.wav"/>
+
+    <!-- THE EDIT, inside second 2 and nowhere else. -->
+    <move-automation-point owner="0" target="self:Volume"
+                           time="96000" value="-12"
+                           toTime="96000" toValue="-6"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="120000" value="-6" tolerance="1e-9"
+                             pointCount="3"/>
+
+    <render filename="aei_b.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- (a) SECOND 2 MOVED. -->
+    <assert-audio-energy filename="aei_b.wav" channel="0"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.11344" maxRms="0.11807"/>
+
+    <!-- (b) SECONDS 0-1 AND 3 DID NOT, byte for byte. -->
+    <assert-file-identical actual="aei_b.wav" expected="aei_a.wav"
+                           startFrame="0" frameCount="96000"/>
+    <assert-file-identical actual="aei_b.wav" expected="aei_a.wav"
+                           startFrame="144000" frameCount="48000"/>
+
+    <!-- ...and the whole file is NOT identical, which is what says the compare
+         above is not vacuous. -->
+    <assert-file-identical actual="aei_b.wav" expected="aei_a.wav"
+                           expectReject="true"/>
+
+    <!-- ============ a plugin parameter: [a, INF) ======================= -->
+    <!-- Track 0 is structurally muted (the parent nulls its input plug) so one
+         render answers for track 1 alone. -->
+    <set-track-mute trackPath="0" muted="1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_autosaw.wav" timePos="0"/>
+    <insert-plugin trackPath="1" slotIndex="0" format="clap"
+                   uid="tw.test.clap.gain" name="Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <add-automation-lane owner="1" slotIndex="0" target="param:0" mode="read"/>
+    <add-automation-point owner="1" slotIndex="0" target="param:0"
+                          time="0" value="1.0" curve="step"/>
+    <add-automation-point owner="1" slotIndex="0" target="param:0"
+                          time="96000" value="2.0" curve="step"/>
+
+    <render filename="aei_p1.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="aei_p1.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.22865" maxRms="0.23327"/>
+    <assert-audio-energy filename="aei_p1.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.45729" maxRms="0.46654"/>
+
+    <!-- BEFORE the edit, and only before it, identity is assertable. -->
+    <render filename="aei_p1b.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="aei_p1b.wav" expected="aei_p1.wav"/>
+
+    <move-automation-point owner="1" slotIndex="0" target="param:0"
+                           time="96000" value="2.0"
+                           toTime="96000" toValue="1.5"/>
+
+    <render filename="aei_p2.wav" format="wav" quality="10" durationSec="4.0"/>
+    <!-- 1.5 x 0.230956 = 0.346434. No identity assertion here at all: the
+         consumer is class-1 and its range is open-ended by construction. -->
+    <assert-audio-energy filename="aei_p2.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.34297" maxRms="0.34990"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -1,5 +1,7 @@
 #include "app/objects/midi/smidisequence.h"
 
+#include <cmath>
+
 #include <QDebug>
 #include <QDomElement>
 #include <QStringList>
@@ -213,7 +215,8 @@ void smidievents::writeEvent( QTextStream &o, const SEvent &e )
 
 std::shared_ptr<const twEventSeq> smidievents::buildSeq(
     const std::vector<SEvent> &events, const Fraction &scale,
-    int transpose, double velocityScale, int channelOverride )
+    int transpose, double velocityScale, int channelOverride,
+    const twAutomationCurve *transCurve, const twAutomationCurve *velCurve )
 {
     twEventSeqBuilder b;
     b.reserve( events.size() );
@@ -232,13 +235,22 @@ std::shared_ptr<const twEventSeq> smidievents::buildSeq(
             // Transposition and velocity scaling are per-CLIP modifiers, so
             // they are applied HERE, when the clip re-expresses the shared
             // content - never written back into the sequence.
+            // The AUTOMATION lanes (proposal 37 P5) are evaluated at the
+            // event's own clip-relative frame - the domain te.time is already
+            // in - and compose with the static modifiers: transpose adds,
+            // velocity multiplies. This is a snapshot-time transform, not a
+            // freeze-time one, because these change the EVENTS rather than any
+            // audio; the rebuild is what an edit invalidates.
+            const int    autoTrans = transCurve
+                ? (int) std::lround( transCurve->valueAt( te.time ) ) : 0;
+            const double autoVel   = velCurve ? velCurve->valueAt( te.time ) : 1.0;
             if( te.key >= 0 ) {
-                int k = te.key + transpose;
+                int k = te.key + transpose + autoTrans;
                 if( k < 0 ) k = 0;
                 if( k > 127 ) k = 127;
                 te.key = (int16_t) k;
             }
-            double v = e.value * velocityScale;
+            double v = e.value * velocityScale * autoVel;
             if( v < 0.0 ) v = 0.0;
             if( v > 127.0 ) v = 127.0;
             te.value = v;
