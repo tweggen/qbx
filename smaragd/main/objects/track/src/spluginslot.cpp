@@ -515,3 +515,31 @@ void SPluginSlot::restoreState( const std::vector<std::uint8_t> &state )
     proc_->bumpParamEpoch();
     emit paramsChanged();
 }
+
+// --- proposal 37 P6: the knobs, in APP types ---------------------------------
+//
+// The automation lane picker (app/timeline) needs a parameter's name and its
+// declared range to label a lane and to scale it. It may not include
+// tw/plugins (tools/check_layering.py), and it should not have to: the slot
+// already owns the plugin, so the translation belongs here.
+QVector<SPluginSlot::ParamRow> SPluginSlot::paramRows() const
+{
+    QVector<ParamRow> out;
+    if( !proc_ ) return out;
+    audio::twPlugin *plugin = proc_->plugin();
+    if( !plugin ) return out;
+    const std::size_t n = plugin->paramCount();
+    out.reserve( (int) n );
+    for( std::size_t i = 0; i < n; ++i ) {
+        const audio::twPluginParamInfo info = plugin->paramInfo( i );
+        ParamRow r;
+        r.id           = info.id;
+        r.name         = QString::fromStdString( info.name );
+        r.minValue     = info.minValue;
+        r.maxValue     = info.maxValue;
+        r.defaultValue = info.defaultValue;
+        r.isStepped    = info.isStepped;
+        out.append( r );
+    }
+    return out;
+}

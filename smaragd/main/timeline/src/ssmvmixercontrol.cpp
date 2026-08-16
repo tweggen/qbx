@@ -46,6 +46,8 @@
 #include "app/pluginui/spluginparamereditor.h"
 #include "app/model/sobjectpath.h"
 #include "app/actions/sactionhistory.h"
+#include "app/objects/track/sautomationactions.h"
+#include "app/shell/sautomationrecorder.h"
 #include <QUndoStack>
 #include <QPair>
 
@@ -95,6 +97,16 @@ void SSMVMixerControl::applyVolume_( double newVolume )
     // pathOf() returns {} for "the root itself" as well as "not found", but tk_
     // is an STrack and can never BE the root, so empty means unresolvable.
     if( !trackPath.isEmpty() ) {
+        // A Touch/Latch/Write pass buffers on the UI thread and commits ONE
+        // set-automation-points when the gesture ends (proposal 37 P6, D5) - so
+        // a fader drag during playback must NOT submit an action per tick.
+        SAutomationRecorder::Target t;
+        t.ownerPath = trackPath;
+        t.target = QStringLiteral( "self:Volume" );
+        if( SApplication::app().isPlaying()
+            && SApplication::app().automationRecorder().writeTick(
+                   t, newVolume, SApplication::app().getGlobalLocatorPos() ) )
+            return;
         SApplication::app().submitAction(
             new SSetTrackVolumeAction( trackPath, newVolume ) );
     } else {
@@ -583,7 +595,7 @@ SSMVMixerControl::SSMVMixerControl(
     qAuto_ = new QPushButton( "A", this );
     qAuto_->setFixedSize( 20, 20 );
     qAuto_->setFont( btnFont );
-    qAuto_->setToolTip( "Automation mode (lanes land with proposal 37 P5/P6)" );
+    qAuto_->setContextMenuPolicy( Qt::CustomContextMenu );
 
     // Mute over Solo over Arm in a column. QBoxLayout (not QVBoxLayout) so the
     // compact density can lay the same buttons out in a row.
@@ -662,6 +674,7 @@ SSMVMixerControl::SSMVMixerControl(
     qArm_->setChecked( tk_.isArmedForRecording() );
     qTakes_->setChecked( smv_.isTrackTakesExpanded( &tk_ ) );
     qGroup_->setChecked( tk_.getEditGroup() != 0 );
+    refreshAutomationButton();
 
     // Metering: one app-wide tick drives every meter (proposal 34). Connecting
     // per head is deliberate — heads are deleteLater()'d on every
@@ -691,6 +704,13 @@ SSMVMixerControl::SSMVMixerControl(
                       this, SLOT( instrumentClicked() ) );
     QObject::connect( qAuto_, SIGNAL( clicked() ),
                       this, SLOT( automationClicked() ) );
+    QObject::connect( qAuto_, SIGNAL( customContextMenuRequested( const QPoint& ) ),
+                      this, SLOT( showAutomationModeMenu() ) );
+    // A write pass ends when the CONTROL is released (Touch commits there;
+    // Latch and Write hold to the transport stop) - proposal 37 P6.
+    QObject::connect( qVolume_, &QSlider::sliderReleased, this, []() {
+        SApplication::app().automationRecorder().releaseControl();
+    } );
     QObject::connect( &tk_, SIGNAL( editGroupChanged( int ) ),
                       this, SLOT( onEditGroupChanged( int ) ) );
     QObject::connect( &tk_, SIGNAL( mutedChanged( bool ) ),
@@ -839,6 +859,11 @@ void SSMVMixerControl::onSelectionChanged()
 // Proposal 34 — one metering tick for this track's meter.
 void SSMVMixerControl::onMeterTick( offset_t pos, qint64 nowMs, bool live )
 {
+    // The fader's READ display (proposal 37 P6) runs first and unconditionally:
+    // it is not the meter's business and it must keep working on a lane whose
+    // meter is hidden by the density rules.
+    pumpReadValue( pos );
+
     // A hidden meter does ZERO work: this is the first and cheapest layer of the
     // repaint-storm defence (30 heads x 30 Hz), and in Tiny density every meter
     // in the project is hidden.
@@ -926,16 +951,6 @@ void SSMVMixerControl::instrumentClicked()
     editor->show();
 }
 
-void SSMVMixerControl::automationClicked()
-{
-    // The seam, and nothing more (proposal 37 P4). Automation lanes, the mode
-    // cycle and the right-click picker are P5/P6; saying so beats a button that
-    // silently does nothing.
-    QToolTip::showText( QCursor::pos(),
-                        tr( "Automation lanes arrive with proposal 37 P5/P6" ),
-                        qAuto_ );
-}
-
 QString SSMVMixerControl::describeHead()
 {
     // Apply the density rules for the CURRENT size before describing them: Qt
@@ -972,14 +987,19 @@ QString SSMVMixerControl::describeHead()
     const char *spot = labelSpot_ == LabelSpot::BesideButtons ? "beside"
                      : labelSpot_ == LabelSpot::InButtonRow ? "inrow" : "ownline";
 
+    // `Amode` is the MODE GLYPH (proposal 37 P6): the track's automation mode,
+    // reported at EVERY density - the button hides on a short lane, the mode
+    // does not stop existing. Appended after `name=` on purpose, so every
+    // committed `contains=` written against the P4 string still matches.
     return QStringLiteral( "density=%1|w=%2|h=%3|btns=%4|I=%5|A=%6"
-                           "|fitW=%7|fitH=%8|name=%9" )
+                           "|fitW=%7|fitH=%8|name=%9|Amode=%10" )
         .arg( QLatin1String( dens ) ).arg( width() ).arg( height() )
         .arg( visible.join( QLatin1Char( ',' ) ) )
         .arg( ( qInstr_ && !qInstr_->isHidden() ) ? 1 : 0 )
         .arg( ( qAuto_ && !qAuto_->isHidden() ) ? 1 : 0 )
         .arg( fitW ? 1 : 0 ).arg( fitH ? 1 : 0 )
-        .arg( QLatin1String( spot ) );
+        .arg( QLatin1String( spot ) )
+        .arg( sAutomationModeToString( trackAutomationMode() ) );
 }
 
 QString SSMVMixerControl::describeMeter()
@@ -1156,4 +1176,174 @@ void SSMVMixerControl::updateLayout()
     wideMode_ = width() > WIDE_MODE_THRESHOLD;
     density_  = densityFor( height() );
     applyDensity( density_ );
+}
+
+// ---------------------------------------------------------------------------
+// The "A" button: the track's automation MODE (proposal 37 P6, design D5/6.1)
+// ---------------------------------------------------------------------------
+//
+// One button, one mode, EVERY lane the track owns. See the declaration in the
+// header for why that is the only unambiguous reading of a single head button.
+
+namespace {
+
+// One addressable lane of `track`: its own `self:` lanes plus every `param:`
+// lane on every plugin slot in its chain.
+struct LaneAddr {
+    QString target;
+    int     slotIndex = -1;
+    SAutomationLane *lane = nullptr;
+};
+
+QList<LaneAddr> lanesOfTrack( STrack &tk )
+{
+    QList<LaneAddr> out;
+    const QList<SAutomationLane *> own = tk.automationLanes();
+    for( SAutomationLane *l : own ) out.append( LaneAddr{ l->target(), -1, l } );
+    if( SPluginChain *chain = tk.getPluginChain() ) {
+        for( int i = 0; i < chain->getSlotCount(); ++i ) {
+            SPluginSlot *slot = chain->getSlotAt( i );
+            if( !slot ) continue;
+            const QList<SAutomationLane *> sl = slot->automationLanes();
+            for( SAutomationLane *l : sl )
+                out.append( LaneAddr{ l->target(), i, l } );
+        }
+    }
+    return out;
+}
+
+// The six modes in cycle order. Off first, so a fresh track's button reads
+// "nothing is being consumed" and the first click turns Trim on.
+const SAutomationMode kModeCycle[] = {
+    SAutomationMode::Off,  SAutomationMode::Trim,  SAutomationMode::Read,
+    SAutomationMode::Touch, SAutomationMode::Latch, SAutomationMode::Write
+};
+
+}  // namespace
+
+SAutomationMode SSMVMixerControl::trackAutomationMode() const
+{
+    const QList<LaneAddr> lanes = lanesOfTrack( const_cast<STrack &>( tk_ ) );
+    if( lanes.isEmpty() ) return SAutomationMode::Off;
+    const SAutomationMode first = lanes.first().lane->mode();
+    for( const LaneAddr &a : lanes )
+        if( a.lane->mode() != first ) return first;   // they disagree: report
+                                                      // the first, which is the
+                                                      // track's own Volume lane
+                                                      // whenever there is one
+    return first;
+}
+
+void SSMVMixerControl::setTrackAutomationMode( SAutomationMode m )
+{
+    SStdMixer *mixer = smv_.getModel();
+    if( !mixer ) return;
+    const QList<int> trackPath = strackpath::pathOf( mixer, &tk_ );
+    if( trackPath.isEmpty() ) return;
+
+    QList<LaneAddr> lanes = lanesOfTrack( tk_ );
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+
+    if( lanes.isEmpty() ) {
+        // Nothing to set a mode ON. Create the lane the head's own control
+        // writes to, so the button is never a silent no-op.
+        SApplication::app().submitAction(
+            new SAddAutomationLaneAction( trackPath,
+                                          QStringLiteral( "self:Volume" ), m,
+                                          -1, -1,
+                                          std::vector<SAutomationPoint>(),
+                                          QString() ) );
+        refreshAutomationButton();
+        return;
+    }
+
+    // ONE undo step for one gesture (timeline inv. 12's rule, applied to the
+    // lanes of a track rather than to a selection of tracks).
+    const bool macro = ( lanes.size() > 1 ) && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Automation mode" ) );
+    for( const LaneAddr &a : lanes )
+        SApplication::app().submitAction(
+            new SSetAutomationModeAction( trackPath, a.target, m,
+                                          a.slotIndex, -1 ) );
+    if( macro ) stack->endMacro();
+    refreshAutomationButton();
+}
+
+void SSMVMixerControl::automationClicked()
+{
+    const SAutomationMode cur = trackAutomationMode();
+    int i = 0;
+    for( int k = 0; k < 6; ++k ) if( kModeCycle[k] == cur ) { i = k; break; }
+    setTrackAutomationMode( kModeCycle[( i + 1 ) % 6] );
+}
+
+void SSMVMixerControl::showAutomationModeMenu()
+{
+    QMenu menu;
+    const SAutomationMode cur = trackAutomationMode();
+    for( SAutomationMode m : kModeCycle ) {
+        QString label = sAutomationModeToString( m );
+        if( !label.isEmpty() ) label[0] = label[0].toUpper();
+        QAction *a = menu.addAction( label );
+        a->setCheckable( true );
+        a->setChecked( m == cur );
+        QObject::connect( a, &QAction::triggered, &menu,
+                          [this, m]() { setTrackAutomationMode( m ); } );
+    }
+    menu.exec( QCursor::pos() );
+}
+
+void SSMVMixerControl::refreshAutomationButton()
+{
+    if( !qAuto_ ) return;
+    const SAutomationMode m = trackAutomationMode();
+    // The letter stays "A" at every density - three of the six modes start
+    // with a letter another button already uses (R/T/L/W vs Arm/Takes), and a
+    // 20 px square is not the place to introduce that ambiguity. The MODE is
+    // carried by colour and by the tooltip, and it is `Amode=` in
+    // describeHead(), which is what a test reads.
+    static const struct { SAutomationMode m; const char *css; } kPaint[] = {
+        { SAutomationMode::Off,   "background:#3a3a3a; color:#909090;" },
+        { SAutomationMode::Trim,  "background:#4a5a6a; color:white;" },
+        { SAutomationMode::Read,  "background:#3070b0; color:white;" },
+        { SAutomationMode::Touch, "background:#b08030; color:white;" },
+        { SAutomationMode::Latch, "background:#a05010; color:white;" },
+        { SAutomationMode::Write, "background:#c02020; color:white;" },
+    };
+    const char *css = kPaint[0].css;
+    for( const auto &k : kPaint ) if( k.m == m ) { css = k.css; break; }
+    qAuto_->setStyleSheet( QStringLiteral( "QPushButton { %1 }" )
+                               .arg( QLatin1String( css ) ) );
+    qAuto_->setToolTip( tr( "Automation mode: %1\n"
+                            "Click to cycle, right-click to pick.\n"
+                            "Applies to every automation lane on this track." )
+                            .arg( sAutomationModeToString( m ) ) );
+}
+
+// ---------------------------------------------------------------------------
+// The fader shows the READ value while a Read-family Volume lane exists
+// ---------------------------------------------------------------------------
+
+void SSMVMixerControl::pumpReadValue( offset_t pos )
+{
+    SAutomationLane *lane = tk_.automationLane( QStringLiteral( "self:Volume" ) );
+    if( !lane || !SAutomationRecorder::isReadFamily( lane->mode() ) ) {
+        lastReadDb_ = 1e30;
+        return;
+    }
+    // A pass being RECORDED on this very lane must show the hand, not the
+    // curve - otherwise the fader fights the finger that is dragging it.
+    SAutomationRecorder::Target t;
+    SStdMixer *mixer = smv_.getModel();
+    t.ownerPath = mixer ? strackpath::pathOf( mixer, &tk_ ) : QList<int>();
+    t.target = QStringLiteral( "self:Volume" );
+    if( SApplication::app().automationRecorder().isRecording( t ) ) return;
+
+    const double db = lane->valueAt( pos );
+    if( qAbs( db - lastReadDb_ ) < 0.05 ) return;    // sub-slider-step: nothing
+                                                     // would move on screen
+    lastReadDb_ = db;
+    applyingReadValue_ = true;
+    setSliderSilently( db );
+    applyingReadValue_ = false;
 }

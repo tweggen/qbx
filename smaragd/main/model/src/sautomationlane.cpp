@@ -145,18 +145,31 @@ int SAutomationLane::pointCount() const
 
 bool SAutomationLane::setPoints( std::vector<SAutomationPoint> pts )
 {
-    std::sort( pts.begin(), pts.end(),
-               []( const SAutomationPoint &a, const SAutomationPoint &b ) {
-                   return a.frame < b.frame;
-               } );
     // Two points on ONE frame cannot both be honoured by a breakpoint curve
     // (valueAt would have to be two-valued), so the LAST one wins — which is
-    // what a drag that lands a point on top of another means.
-    pts.erase( std::unique( pts.begin(), pts.end(),
-                            []( const SAutomationPoint &a, const SAutomationPoint &b ) {
-                                return a.frame == b.frame;
-                            } ),
-               pts.end() );
+    // what a drag that lands a point on top of another means, and what
+    // `add-automation-point` promises when it says an existing point on the
+    // frame is REPLACED.
+    //
+    // Both halves of that are load-bearing and both were wrong (found by
+    // proposal 37 P6's gate): std::sort is NOT stable, so the incoming order of
+    // two points on one frame was unspecified to begin with, and std::unique
+    // keeps the FIRST of each equal run, so the OLD point survived and the
+    // replacement was silently dropped. stable_sort fixes the first; the fold
+    // below fixes the second by overwriting rather than skipping.
+    std::stable_sort( pts.begin(), pts.end(),
+                      []( const SAutomationPoint &a, const SAutomationPoint &b ) {
+                          return a.frame < b.frame;
+                      } );
+    {
+        std::vector<SAutomationPoint> uniq;
+        uniq.reserve( pts.size() );
+        for( const SAutomationPoint &p : pts ) {
+            if( !uniq.empty() && uniq.back().frame == p.frame ) uniq.back() = p;
+            else                                                uniq.push_back( p );
+        }
+        pts.swap( uniq );
+    }
 
     {
         std::lock_guard<std::mutex> lock( mutex_ );

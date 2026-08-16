@@ -6,6 +6,7 @@
 #include <QList>
 #include "app/model/sobjectrenderer.h"
 #include "tw/metering/tw_level_probe.h"
+#include "app/model/sautomationlane.h"
 
 class SLevelMeter;
 class SStdMixer;
@@ -75,10 +76,20 @@ protected slots:
     // shown only when slot 0 IS an instrument, so this cannot be reached
     // otherwise; the native-editor route is proposal 33 M3.
     void instrumentClicked();
-    // "A": automation mode. The lanes and the modes land in proposal 37 P5/P6;
-    // at P4 this is the SEAM plus its density rule, and the button says so
-    // rather than pretending to cycle a mode that does not exist yet.
+    // "A": automation mode (proposal 37 P6, design D5/6.1). A LEFT click
+    // CYCLES Off -> Trim -> Read -> Touch -> Latch -> Write -> Off; a right
+    // click picks one from a menu.
+    //
+    // WHICH LANE IT GOVERNS: **every automation lane the track owns**, its own
+    // `self:` lanes and its plugin slots' `param:` lanes alike, in one undo
+    // macro. That is the reference-DAW reading of a per-track automation mode
+    // (a write pass records what the hand touches, whatever it touched), and
+    // it is the only reading under which a single button on the head is not
+    // ambiguous the moment a track owns two lanes. A track that owns NO lane
+    // yet gets a `self:Volume` lane created in the mode being cycled to, so
+    // the button always does something the user can see.
     void automationClicked();
+    void showAutomationModeMenu();
     // "G": edit-group shortcut — lock this track's subtree together, or
     // dissolve the whole group it belongs to (one undo macro of
     // set-edit-group actions).
@@ -156,6 +167,13 @@ public:
     // "hiding beats clipping" rule made assertable rather than eyeballed.
     QString describeHead();
 
+    // The track's automation mode: the common mode of every lane it owns, or
+    // the mode of the first one when they disagree, or Off when it owns none.
+    SAutomationMode trackAutomationMode() const;
+    // Set that mode on EVERY lane the track owns, as one undo macro. Creates a
+    // `self:Volume` lane when the track owns none.
+    void setTrackAutomationMode( SAutomationMode m );
+
     // TEST ENTRY POINT: press one of this head's toggle buttons ("mute",
     // "solo", "arm", "takes", "group") as a user does, driving the button's
     // own signal — which is what makes the selection BROADCAST the thing under
@@ -167,6 +185,12 @@ private slots:
     // Proposal 34: one metering tick. Reads this track's frozen page at the
     // (already latency-compensated) position and feeds the meter, or decays it.
     void onMeterTick( offset_t pos, qint64 nowMs, bool live );
+    // Proposal 37 P6: while a Read-family `self:Volume` lane exists, the fader
+    // DISPLAYS the curve's value at the position being heard. Driven off the
+    // metering tick because that is the one main-thread pump that keeps ticking
+    // at a static position and for a tail after the transport stops - a fader
+    // frozen at the value the curve had when playback stopped would be a lie.
+    void pumpReadValue( offset_t pos );
 
 private:
     static constexpr int WIDE_MODE_THRESHOLD = 156;  // ~130% of minimal width (120px)
@@ -218,6 +242,14 @@ private:
     QPushButton *qGroup_;   // "G": edit-group lock (proposal 17 phase 4)
     QPushButton *qInstr_;   // "I": instrument slot editor (proposal 37 6.1)
     QPushButton *qAuto_;    // "A": automation mode  (proposal 37 6.1)
+
+    // Paint the "A" button for the current mode and refresh its tooltip.
+    void refreshAutomationButton();
+    // True while pumpReadValue()/an external change writes the slider, so the
+    // resulting valueChanged never turns a DISPLAY into a new action.
+    bool applyingReadValue_ = false;
+    // The dB the read display last wrote, so a static position costs nothing.
+    double lastReadDb_ = 1e30;
 
     // Does this track carry an INSTRUMENT in slot 0? The one question the "I"
     // button's visibility turns on; asked of the model every time the density

@@ -129,6 +129,12 @@ private:
  *
  * `fitW`/`fitH` are the "hiding beats clipping" rule made assertable: the
  * VISIBLE strip must fit the lane height it was given.
+ *
+ * Since proposal 37 P6 the string ends `|Amode=<off|trim|read|touch|latch|
+ * write>` - the track's automation MODE, reported at EVERY density, because
+ * the "A" button hides on a short lane while the mode does not stop existing.
+ * `grabPng` paints that same off-screen head into the test output directory:
+ * coverage of the paint paths (the mode colour), never an oracle.
  */
 class SAssertTrackHeadAction : public SAction
 {
@@ -139,7 +145,9 @@ public:
     { return QStringLiteral( "assert-track-head" ); }
     QStringList knownAttributes() const override
     { return { QStringLiteral( "trackPath" ), QStringLiteral( "headHeight" ),
-               QStringLiteral( "contains" ), QStringLiteral( "absent" ) }; }
+               QStringLiteral( "contains" ), QStringLiteral( "absent" ),
+               QStringLiteral( "grabPng" ), QStringLiteral( "grabWidth" ),
+               QStringLiteral( "grabHeight" ) }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -149,6 +157,9 @@ private:
     int     headHeight_ = 160;
     QString contains_;
     QString absent_;
+    QString grabPng_;
+    int     grabWidth_ = 0;
+    int     grabHeight_ = 0;
 };
 
 #endif // _SEVENTUITESTACTIONS_H_

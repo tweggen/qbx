@@ -69,6 +69,20 @@ Invariants:
    `trackPath=` and `assert-plugin-strip` takes a `trackPath` attribute;
    `qxa.plugin_strip_nested_track` is the gate.
 
+9. **A slider write during a Touch/Latch/Write pass goes to the RECORDER, not
+   to `set-plugin-param`** (proposal 37 P6). `onParamSliderChanged` offers the
+   value to `SApplication::automationRecorder()` first and returns if it was
+   taken; the whole pass then lands as ONE `set-automation-points` when the
+   control is released or the transport stops. Its release is also the PUNCH-IN
+   signal: a plugin's own `ParamGestureBegin/End` reaches the host only inside
+   `process()`, on a worker thread, at freeze time, and there is no native
+   editor to raise one (proposal 33 M3) — so the app's slider is the gesture.
+   While a Read-family `param:` lane exists the slider DISPLAYS the curve at
+   the position being heard (pumped from `SApplication::meterTick`), except on
+   a control that is being recorded, which must show the hand and not the
+   curve.
+
+
 How to test:
 - `qxa.plugin_bypass_and_param` — a bypass toggle and a parameter edit each
   change the rendered level, and each undoes (invariants 3 and 6).

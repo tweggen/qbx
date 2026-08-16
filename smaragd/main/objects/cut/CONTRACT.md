@@ -136,6 +136,17 @@ Notes:
   collapse triggered with activeTake == -1 resurfaces the remaining take
   audible (plain cuts cannot be inaudible).
 
+9. **The clip GAIN envelope is drawn by the inline renderer, after
+   `drawWarpMarkers`** (proposal 37 P6, design 6.1). A `cut:Gain` lane lives on
+   the WINDOW and travels with it across placements and takes, so a lane of its
+   own on the track would be lying about what it belongs to. Nothing is drawn
+   when the cut has no envelope, which is what keeps every existing clip
+   looking exactly as it did. The curve is sampled per pixel through
+   `SAutomationLane::valueAt` — the same call the assertions make — over its
+   own [0, 1] linear-amplitude axis with unity at the top. The GESTURES for it
+   are not here: hit-testing is the arranger's business (app/timeline), and
+   objects/cut may not depend on it.
+
 How to test: takes_comping.qxa (audibility, comping per column, undo),
 takes_serialize_roundtrip.qxa (loader registration, per-column activeTake
 persistence incl. -1).

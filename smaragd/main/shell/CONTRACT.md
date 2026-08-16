@@ -116,6 +116,19 @@ Invariants:
    while PLAYING deliberately keeps today's page-boundary splice rather than
    re-staling pages the RT thread is mid-way through serving.
 
+11. **The automation recorder is ONE per app and lives here** (proposal 37 P6,
+   design D5). Touch/Latch/Write are UI recorders, not engine modes, and BOTH
+   the arranger's track fader (app/timeline) and the plugin parameter editor's
+   slider (app/pluginui) feed the same pass — those two modules cannot see each
+   other, so the shell is the only place the recorder can live. It is bounded
+   by the TRANSPORT: `setPlaying(true)` opens the run (Write's overwrite window
+   starts where the run did) and `setPlaying(false)` COMMITS whatever pass is
+   open, as ONE `set-automation-points`, on the main thread. Everything in it
+   runs on the main thread and nothing in it blocks; an action per tick — the
+   obvious implementation — would put thirty entries a second on the undo
+   stack.
+
+
 How to test: full qxa suite (headless boots the shell); startup-layout
 repro harness in STATE.md 2026-07-11. The barrier specifically:
 `qxa.instrument_render_determinism`, `qxa.instrument_render_determinism_xproc`

@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_write_pass">
+
+  <!-- Proposal 37 P6, AC2: A TOUCH PASS IS ONE UNDO STEP, AND IT IS HEARD.
+
+       Touch, Latch and Write are not engine modes — the engine reads a
+       Read-family lane and cannot tell them apart. They are UI RECORDERS
+       (design D5): a control feeds values in while the transport runs, the
+       recorder buffers them on the UI thread, and the WHOLE PASS lands as ONE
+       `set-automation-points` when the pass ends. That single-action property
+       is the thing most easily got wrong and the thing this case exists for —
+       a recorder that submitted an action per block would put thirty entries a
+       second on the undo stack and a single Ctrl-Z would peel one 33 ms sliver
+       off a four-second pass. Here THREE ticks are reverted by ONE `undo`.
+
+       The ticks arrive through `automation-write-tick`, which is the
+       `slip-clip` shape: it feeds the recorder and pushes no undo step of its
+       own, exactly as a fader moving mid-pass does. It REJECTS on a lane that
+       is not in touch/latch/write, so a case cannot pass by ticking into the
+       void.
+
+       THE TRANSPORT IS REAL. The capture audio backend is the default under
+       a test-case run and paces on a real-time clock (SMARAGD_CAPTURE_SPEED is
+       1 unless set, and this case needs it to be), so `wait-playhead` is
+       waiting on an actual playhead and the ticks land during actual
+       playback. The pass ends where the design says it does: at the TRANSPORT
+       STOP, from SApplication::setPlaying(false), on the main thread.
+
+       ================================================================ audio
+
+       Fixture ../test_autosaw.wav (tests/tools/gen_auto_fixture.py): 4.0 s,
+       48 kHz, a 480 Hz sawtooth of amplitude 0.4 whose period is EXACTLY 100
+       frames — so 100 divides 48000 and every whole second has the same rms,
+       0.230956, with no window-alignment term at all.
+
+       The pass writes, in dB and linear IN dB (P5's reading of the fader
+       space): (0 s, −60) already on the lane, then (0.5 s, −40), (1.0 s, −20),
+       (1.5 s, 0) and flat 0 dB afterwards. Integrating 10^(dB/10) over each
+       second and multiplying by the fixture's own rms gives
+
+           second 0   0.00760974
+           second 1   0.18001059
+           second 2   0.23095600
+           second 3   0.23095600
+
+       The bands below on seconds 0 and 1 are widened to cover a ±8192-frame
+       capture-alignment slop (the same budget playback_start_after_edit_position
+       measured and then paid for explicitly), which is why they are wide —
+       they are wide in the direction the RAMP moves, not in the direction the
+       feature would fail. They still separate everything that matters: with no
+       pass at all the lane holds −60 dB everywhere and second 1 reads
+       0.000231, a factor of 600 below its band; with the pass but no lane
+       consumption every second reads 0.230956, a factor of 12 above second 0's.
+
+       Seconds 2 and 3 are the flat 0 dB tail: after 1.5 s the curve IS unity,
+       so anything that leaked the ramp into the tail (an invalidation that
+       stopped at the last point instead of running to the end of time) shows
+       up there. Their band is −10 %/+3 %, asymmetric on purpose — a momentary
+       underrun leaves a zero gap and can only pull an rms DOWN, and the pump
+       is paced by a real-time clock that deliberately does not wait for the
+       readahead. −10 % still catches every leak worth catching: a tail left at
+       −20 dB reads 0.0231, a factor of ten below the floor.
+
+       MEASURED on this machine, first run: 0.00760879 / 0.18000646 /
+       0.23095626 / 0.23091878 against the closed form above — five significant
+       digits, and a capture-alignment slop of effectively zero frames. The
+       bands are therefore far wider than this machine needs; they are sized
+       for the machine that drops a block under `ctest -j4`, not for this one.
+  -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- The lane, in TOUCH. One point at 0 s so the state the undo returns to
+         is exact rather than "no lane". -->
+    <add-automation-lane owner="0" target="self:Volume" mode="touch">
+      <p t="0" v="-60" c="linear"/>
+    </add-automation-lane>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="0" value="-60" tolerance="1e-9"
+                             mode="touch" pointCount="1"/>
+
+    <!-- Before: the lane holds -60 dB at all three tick positions. These are
+         the assertions the undo at the end has to restore. -->
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="24000" value="-60" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="-60" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="72000" value="-60" tolerance="1e-9"/>
+
+    <!-- ==================== THE PASS ====================
+         Play from 0 and feed the recorder at 0.5 s, 1.0 s and 1.5 s. `time` is
+         given explicitly so the POINTS are exact while the transport is still
+         genuinely running (wait-playhead is what makes it so) — a tick that
+         took the live locator instead would make every number below a
+         measurement of this machine's scheduling. -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+
+    <wait-playhead position="24000" minAdvance="4096" timeoutMs="20000"/>
+    <automation-write-tick owner="0" target="self:Volume"
+                           time="24000" value="-40"/>
+
+    <wait-playhead position="48000" minAdvance="4096" timeoutMs="20000"/>
+    <automation-write-tick owner="0" target="self:Volume"
+                           time="48000" value="-20"/>
+
+    <wait-playhead position="72000" minAdvance="4096" timeoutMs="20000"/>
+    <automation-write-tick owner="0" target="self:Volume"
+                           time="72000" value="0"/>
+
+    <wait-playhead position="96000" minAdvance="4096" timeoutMs="20000"/>
+    <toggle-playback play="0"/>
+
+    <!-- The stop committed the pass. All three ticks are on the lane, plus the
+         point that was already there. -->
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="24000" value="-40" tolerance="1e-9"
+                             pointCount="4"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="-20" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="72000" value="0" tolerance="1e-9"/>
+    <!-- ...as a CURVE, not three isolated values: the midpoint of the
+         (0.5 s, -40) -> (1.0 s, -20) segment is -30 dB, and Touch released the
+         lane at the last tick, so the tail holds 0 dB rather than returning to
+         the -60 the lane started at. -->
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="36000" value="-30" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="180000" value="0" tolerance="1e-9"/>
+
+    <!-- ==================== ...AND IT IS HEARD ====================
+         A second real playback pass, from 0, all the way through. The capture
+         backend restarts its recording at every playback start, so the dump is
+         this pass and nothing else. -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="190000" minAdvance="4096" timeoutMs="40000"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="pass.wav" minFrames="184320"/>
+
+    <assert-audio-energy filename="pass.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0031" maxRms="0.0184"/>
+    <assert-audio-energy filename="pass.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.1375" maxRms="0.2236"/>
+    <assert-audio-energy filename="pass.wav" channel="0"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.20786" maxRms="0.23788"/>
+    <assert-audio-energy filename="pass.wav" channel="0"
+                         startFrame="144000" frameCount="40000"
+                         minRms="0.20786" maxRms="0.23788"/>
+
+    <!-- ==================== ONE UNDO ====================
+         THE headline: a single undo step takes back the entire pass. All three
+         ticks are gone and the lane is exactly what it was. -->
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="24000" value="-60" tolerance="1e-9"
+                             pointCount="1"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="-60" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="72000" value="-60" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="180000" value="-60" tolerance="1e-9"
+                             mode="touch"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

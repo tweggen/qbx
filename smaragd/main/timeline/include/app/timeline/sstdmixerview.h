@@ -54,6 +54,12 @@ class SSMVMixerControl;
 // per-row (a track may carry its own height scale, and sub-lanes may be sized
 // differently from the track lane they hang off). Never compute a lane's y as
 // `row * trackHeight` — ask SStdMixerView::rowTop() / SMVActualView::laneTop().
+// What a row IS. `None` is the track's own composite lane; everything else is
+// a SUB-LANE — it hangs off the track lane above it, carries no channel strip
+// of its own, and is covered by that track's head (laneGroupHeight).
+// Proposal 37 P6 (design 6.1) adds Automation beside proposal 17's Take.
+enum class SubLaneKind { None = 0, Take, Automation };
+
 struct STrackRow {
     STrack  *track;        // the track shown on this lane
     SLink   *link;         // the SLink wrapping it in its parent (timeline pos)
@@ -63,17 +69,22 @@ struct STrackRow {
     bool     collapsed;    // children hidden
     // Take lanes (proposal 17 phase 3): -1 = the track's normal (composite)
     // lane; k >= 0 = the row showing take k of every take stack on the track.
-    // Any row with takeRow >= 0 is a SUB-LANE: it hangs off the track lane
-    // above it, carries no channel strip of its own, and is covered by that
-    // track's head. Automation lanes will join it under the same rule.
     int      takeRow = -1;
+    // The KIND, which is what isSubLane() reads. Take rows also carry takeRow;
+    // Automation rows carry the ParamRef spelling of the lane they show and,
+    // for a `param:` lane, which plugin SLOT owns it.
+    SubLaneKind subKind = SubLaneKind::None;
+    QString  autoTarget;
+    int      autoSlotIndex = -1;
     // This lane's pixel height, filled by rebuildRows(). 0 until then.
     int      height = 0;
 
     // A sub-lane belongs to the track lane above it rather than standing on
     // its own (no head, not a reorder target of its own).
-    bool isSubLane() const { return takeRow >= 0; }
+    bool isSubLane() const { return subKind != SubLaneKind::None; }
 };
+
+class SAutomationLaneUi;
 
 class SMVActualView 
     : public QWidget
@@ -492,6 +503,11 @@ public:
     // "" when every head sits exactly on its lane (same top, same height as
     // the painter uses, full column width), otherwise the first mismatch.
     QString tkCheckLaneAlignment() const;
+    // The automation half of that check (proposal 37 P6), defined in
+    // sautomationlane.cpp: every Automation row must still name a lane the
+    // model can resolve. A row left behind by a removed lane paints an empty
+    // band indistinguishable from a flat one.
+    QString checkAutomationRows() const;
 
     offset_t alignTime( offset_t );
 
@@ -537,6 +553,38 @@ public:
     bool isTrackTakesExpanded( STrack *t ) const
         { return takesExpanded_.contains( t ); }
     void toggleTrackTakesExpanded( STrack * );
+
+    // --- automation lanes (proposal 37 P6, design 6.1) -------------------
+    // The painting, the gestures, the picker menu, the shown-lane set and the
+    // testkit driver all live in timeline/src/sautomationlane.{h,cpp}; so do
+    // the definitions of the five members below. That file is the whole
+    // feature, and sstdmixerview.cpp keeps only the CALL SITES — this file is
+    // already the largest in the app (CONTRACT, known debt).
+    SAutomationLaneUi &automationUi();
+    // ONE pruning walk for EVERY per-track UI-state set — the fold set, the
+    // take-lane set, the per-track height scales and the shown-automation set
+    // (proposal 30 section E.5). Called from rebuildRows(), so a removed track
+    // cannot leave a dangling STrack* key behind for a later track allocated
+    // at the same address to inherit.
+    void pruneUiState();
+    void appendAutomationRowsFor( STrack *tk, SLink *lk, SObject *container,
+                                  int depth );
+    // Show / hide one automation lane on a track (the picker's and the
+    // testkit's one entry point). Returns false only for a bad argument.
+    bool showAutomationLane( STrack *t, const QString &target, int slotIndex,
+                             bool show );
+    // Arm clip-envelope (`cut:Gain`) editing. OFF by default, and that is
+    // load-bearing: while it is off every clip-body gesture — move, slip,
+    // duplicate, stretch — behaves exactly as it always has.
+    void setClipEnvelopeEdit( bool on );
+    // Testkit: the drag-clip-edge twin for an automation breakpoint. `owner`
+    // is the index-path spelling every automation verb takes.
+    bool dragAutomationPoint( const QString &owner, const QString &target,
+                              int slotIndex, int take, offset_t time,
+                              double value, offset_t toTime, double toValue,
+                              Qt::KeyboardModifiers mods );
+    // --------------------------------------------------------------------
+
     void refreshTrackTree();   // rebuild rows + control column + relayout + repaint
     // --------------------------------------------------------------------
 
@@ -755,6 +803,9 @@ private:
     QSet<STrack*> collapsed_;
     QSet<STrack*> takesExpanded_;   // tracks showing their take lanes
     QHash<const STrack*, double> trackScale_;   // per-track lane height factor
+    // The automation UI (proposal 37 P6). Created lazily by automationUi() so
+    // a view that never shows a lane pays nothing.
+    SAutomationLaneUi *autoUi_ = nullptr;
     void rebuildRows();
     void rebuildRowGeometry();      // recompute row heights + rowTop_
     int  rowHeightOf( const STrackRow & ) const;

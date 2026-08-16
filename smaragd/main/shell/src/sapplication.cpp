@@ -22,6 +22,7 @@
 #include "app/model/sproject.h"
 #include "app/shell/ssettings.h"
 #include "app/shell/smidioutpump.h"
+#include "app/shell/sautomationrecorder.h"
 #include "app/servicesui/soptions.h"
 #include "app/actions/sactionhistory.h"
 #include "app/actions/saction.h"
@@ -118,6 +119,15 @@ void SApplication::setPlaying( bool f )
     if( midiOutPump_ ) {
         if( f ) midiOutPump_->start();
         else    midiOutPump_->stop();
+    }
+
+    // Automation write passes (proposal 37 P6) are bounded by the TRANSPORT:
+    // Write's overwrite window opens where the run did, and Latch holds its
+    // last value until the run ends. A stop therefore commits whatever pass is
+    // open - one action, here, on the main thread.
+    if( automationRecorder_ ) {
+        if( f ) automationRecorder_->transportStarted( getGlobalLocatorPos() );
+        else    automationRecorder_->transportStopped( getGlobalLocatorPos() );
     }
 }
 
@@ -502,6 +512,7 @@ SApplication::SApplication( int &argc, char **argv )
     // this process constructs (see SMidiOutPump's constructor). Its own timer
     // only runs between play and stop.
     midiOutPump_.reset( new SMidiOutPump( this ) );
+    automationRecorder_.reset( new SAutomationRecorder( this ) );
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
@@ -545,6 +556,7 @@ SApplication::~SApplication()
     // sink is still alive - not during static destruction, which is where this
     // repo has already recorded a teardown hang of exactly that shape.
     midiOutPump_.reset();
+    automationRecorder_.reset();
     DTOR_DEL( actionHistory_ );
     t3Speaker_.reset();
     DTOR_DEL( t3Env_ );

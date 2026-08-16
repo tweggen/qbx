@@ -310,7 +310,32 @@ const Fixture kFixtures[] = {
       " grabHeight='320'/>" },
     { "assert-track-head",
       "<assert-track-head trackPath='1,0' headHeight='132'"
-      " contains='density=Full' absent='I=1'/>" },
+      " contains='density=Full' absent='I=1' grabPng='head.png'"
+      " grabWidth='160' grabHeight='160'/>" },
+
+    // --- the automation UI verbs (proposal 37 P6) ---------------------------
+    // `take` rather than `slotIndex` here, because a `cut:` target is the one
+    // that has takes; the slot half is covered by the write-tick row below.
+    // toTime/toValue are written only when the element carried either, so the
+    // fixture must set both or the pair would legitimately not come back.
+    { "drag-automation-point",
+      "<drag-automation-point owner='0,1' target='cut:Gain' take='1'"
+      " time='48000' value='0.25' toTime='96000' toValue='0.75'"
+      " modifiers='ctrl+alt'/>" },
+    // `time` and `release` are both written only when set, so both are here.
+    { "automation-write-tick",
+      "<automation-write-tick owner='0' target='param:1' slotIndex='2'"
+      " value='0.5' time='24000' release='1'/>" },
+    // set-lane-view writes each half only when it was asked for, and the
+    // automation half needs its three attributes together.
+    { "set-lane-view",
+      "<set-lane-view trackHeight='140' topRow='2' laneScaleRow='0'"
+      " laneScale='2.5' toggleTakesRow='1' automationTrack='0,1'"
+      " automationTarget='param:3' automationSlot='2' showAutomation='1'"
+      " clipEnvelopes='1'/>" },
+    { "assert-lane-alignment",
+      "<assert-lane-alignment grabPng='lanes.png' grabWidth='900'"
+      " grabHeight='700'/>" },
 
     // timebase is written only when non-empty.
     // --- the MIDI-out verbs (proposal 37 P7b) -------------------------------

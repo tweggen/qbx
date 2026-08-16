@@ -37,6 +37,7 @@
 #include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
 #include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
+#include "sautomationlane.h"                   // proposal 37 P6: automation lanes
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
 #include "app/shell/ssettings.h"
@@ -332,7 +333,10 @@ void SMVActualView::paintEvent( QPaintEvent * )
         p.drawLine( 0, top, myRect.bottomRight().x(), top );
         p.drawLine( 0, top+lh-1,
                     myRect.bottomRight().x(), top+lh-1 );
-        if( row->isSubLane() ) {
+        if( row->subKind == SubLaneKind::Automation ) {
+            smv_.automationUi().drawAutomationLane(
+                p, *this, *row, QRect( 0, top+1, myRect.width(), lh-2 ) );
+        } else if( row->isSubLane() ) {
             // A take lane: take k of every stack on the track (phase 3).
             drawTakeLane( p, *row, i,
                           QRect( 0, top+1, myRect.width(), lh-2 ) );
@@ -499,6 +503,11 @@ void SStdMixerView::ctAddLink()
 
 void SStdMixerView::ctRemoveSample()
 {
+    // Delete/Backspace is this action's shortcut, and a shortcut outranks a
+    // keyPressEvent — so a marquee selection of automation points is deleted
+    // here, before the clip it would otherwise have removed (P6).
+    if( autoUi_ && autoUi_->deleteSelection() ) return;
+
     STrack *oldTrack = qContent_->getLastClickTrack();
     SLink *oldLink = qContent_->getLastClickSLink();
     if( !oldTrack || !oldLink ) {
@@ -757,6 +766,9 @@ void SMVActualView::ctGlobalShow()
                 a->setChecked( qFuzzyCompare( cur, a->data().toDouble() ) );
         }
         qGlobalPopup_->addMenu( qLaneHeightMenu_ );
+        // The automation picker (proposal 37 P6). Rebuilt per right-click
+        // because a track's plugin parameters change under it.
+        smv_.automationUi().buildPickerMenu( qGlobalPopup_, lastClickTrack_ );
         qGlobalPopup_->addSeparator();
         qGlobalPopup_->addAction( "Indent track (nest under above)" + sfx,
                                   &smv_, SLOT( ctIndentTrack() ) );
@@ -1411,6 +1423,9 @@ void SMVActualView::syncDuplicateGroup()
 
 void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 {
+    // ...and finishes it: revert the live preview, then commit ONE action (P6).
+    if( smv_.automationUi().release( *this, ev->pos() ) ) return;
+
     if( rangeDrag_ != RangeNone ) {
         endRangeDrag( ev->pos().x() );
         return;
@@ -1980,6 +1995,9 @@ void SMVActualView::updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers 
  */
 void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
 {
+    // An armed automation gesture (P6) consumes the move.
+    if( smv_.automationUi().move( *this, ev->pos() ) ) return;
+
     // Range selection drag takes precedence over clip editing.
     if( rangeDrag_ != RangeNone ) {
         updateRangeDrag( ev->pos().x() );
@@ -2595,6 +2613,16 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         }
     }
 
+    // Automation sub-lanes and (while armed) clip envelopes own the press
+    // before anything else does — proposal 37 P6. press() returns false for
+    // every row and modifier it does not claim, so the clip gestures below are
+    // untouched.
+    if( ( ev->buttons() & Qt::LeftButton )
+        && smv_.automationUi().press( *this, lastClickTrackIdx_, ev->pos(),
+                                      ev->modifiers(), false ) ) {
+        return;
+    }
+
     // Take-lane rows: a left click on a take ACTIVATES it — the comping
     // gesture (proposal 17 phase 3, undoable select-take). Take lanes host no
     // other gestures yet, so the click is consumed either way.
@@ -2830,9 +2858,12 @@ void SStdMixerView::appendRowsFor( SObject *container, int depth )
             const int mt = maxTakesOf( tk );
             for( int k = 0; k < mt; ++k ) {
                 rows_.append( STrackRow{ tk, lk, container, depth,
-                                         false, false, k } );
+                                         false, false, k, SubLaneKind::Take } );
             }
         }
+        // ...then this track's automation lanes, under the same sub-lane rule
+        // (proposal 37 P6): no head of their own, covered by the track's.
+        appendAutomationRowsFor( tk, lk, container, depth );
         if( kids && !col ) appendRowsFor( tk, depth+1 );   // recurse if expanded
     }
 }
@@ -2867,6 +2898,7 @@ void SStdMixerView::onArrangementChangedRows()
 
 void SStdMixerView::rebuildRows()
 {
+    pruneUiState();          // one walk, every per-track UI-state set (P6)
     rows_.clear();
     if( model_ ) appendRowsFor( model_, 0 );
     rebuildRowGeometry();
@@ -3398,6 +3430,9 @@ QString SStdMixerView::tkCheckLaneAlignment() const
                        .arg( want.width() ).arg( want.height() );
         ++c;
     }
+    const QString autoProblem = checkAutomationRows();
+    if( !autoProblem.isEmpty() ) return autoProblem;
+
     if( c != controlArray_->size() )
         return QString( "%1 heads for %2 track lanes" )
                    .arg( controlArray_->size() ).arg( c );
@@ -4445,6 +4480,7 @@ SStdMixerView::~SStdMixerView()
 {
     delete currentSnapSpec_;
     delete controlArray_;
+    delete autoUi_;
 }
 
 // Detail-editor registration (proposal 14, Phase 6): the model asks the

@@ -266,6 +266,65 @@ Event EDITOR gestures (proposal 37 P4):
   fitW/fitH fields are the "hiding beats clipping" density rule made
   assertable. PNG grabs are coverage of the paint paths, never oracles.
 
+Automation UI gestures (proposal 37 P6):
+
+  1. `drag-automation-point` extends inv. 5, it does not sidestep it. It goes
+     out through `SMainWindow::dragAutomationPoint` because testkit may not
+     include app/timeline, works out where the addressed breakpoint IS on
+     screen from the lane's own value scale, and sends REAL press/move/release
+     events into the arranger canvas. What runs is
+     `SAutomationLaneUi::press/move/release`, not a re-spelling of them.
+
+  2. It is NOT undoable itself. The gesture submits its own verb —
+     `add-automation-point` on a click over empty lane space, one
+     `move-automation-point` on a drag, `remove-automation-point` on a
+     primary-click, `set-automation-points` on an Alt-drag — and THAT is what
+     `<undo count="1"/>` reverses. A click that also submitted the move of the
+     drag it arms would be two steps; the release only submits a move when the
+     point actually moved, which is what keeps a click at exactly one.
+
+  3. The lane has to be SHOWN first (`set-lane-view showAutomation="1"`), and a
+     `cut:Gain` target additionally needs `clipEnvelopes="1"`. Both are VIEW
+     state and neither creates anything in the model — a shown-but-empty lane
+     draws its default value and the first gesture is what brings the model
+     lane into existence. A `cut:` gesture with envelopes disarmed is REJECTED
+     rather than silently claimed, because there the CLIP owns the press.
+
+  4. The drop is pixel-quantised and then grid-snapped, exactly as for
+     `drag-clip-edge` and `drag-note`. TIME is nevertheless exact when the case
+     aims at a grid multiple (24000 frames at the default 120 BPM); VALUE is
+     quantised to one pixel of the lane, so a value assertion needs a tolerance
+     and the case has to say what a pixel is worth on that lane. Do not fix a
+     value assertion by widening it past the point where a wrong SCALE would
+     still pass.
+
+  5. `automation-write-tick` is the `slip-clip` shape: it feeds
+     `SAutomationRecorder` and pushes no undo step, exactly as a fader moving
+     mid-pass does. The pass commits ONE `set-automation-points` when it ends,
+     and that single action is the undo step — which is the property
+     `automation_write_pass.qxa` exists to pin. It REJECTS on a lane that is
+     absent or not in touch/latch/write, so a case cannot pass by ticking into
+     the void, and `release="1"` on no open pass is likewise a reject.
+
+  6. Give `automation-write-tick` an explicit `time`. It defaults to the live
+     locator, which is what a real fader does, but a case that let it default
+     would be measuring this machine's scheduling rather than the recorder:
+     `wait-playhead` is what makes the tick land during genuine playback, and
+     `time` is what makes the resulting POINT exact.
+
+  7. `assert-lane-alignment` now covers automation sub-lanes for free (they are
+     sub-lanes by the same rule take lanes are) plus two things only an
+     automation row can get wrong: hanging off a lane group that is not its
+     track's, and naming an owner the model cannot resolve. Its `grabPng`, and
+     `assert-track-head`'s, are COVERAGE of the paint paths and never oracles —
+     the head grab is the only thing that paints the "A" button's per-mode
+     colour, and the canvas grab the only thing that paints a lane at all.
+
+  8. NOT reachable from a script: the Delete key over a marquee selection.
+     Delete is a QAction SHORTCUT (`actRemoveSample_`), not an event a case can
+     synthesise, so the marquee gesture is gated and the deletion it enables is
+     not. Recorded rather than papered over.
+
 How to test:
   cd smaragd/tests/cases
   ../../build/bin/smaragd.exe --test-case <case>.qxa --test-output-dir <dir>

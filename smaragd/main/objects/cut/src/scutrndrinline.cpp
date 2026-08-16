@@ -7,6 +7,7 @@
 #include <QGuiApplication>
 
 #include "app/model/slink.h"
+#include "app/model/sautomationlane.h"
 #include "app/model/sproject.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/scutrndrinline.h"
@@ -55,6 +56,66 @@ private:
 // other, so they are neither drawn nor grabbable. The arranger asks the same
 // question before hit-testing (SMVActualView::loopMarkerAt).
 const int LOOP_HANDLE_MIN_SEG_PX = 2*SCUT_LOOP_HANDLE_W;
+}
+
+// THE CLIP GAIN ENVELOPE (proposal 37 P6).
+//
+// It is drawn HERE, on the clip, rather than on a sub-lane of its own, because
+// a `cut:Gain` lane lives on the WINDOW and travels with it across placements
+// and takes (design D5) - a lane on the track would be lying about what it
+// belongs to. Nothing is drawn when the clip has no envelope, so every
+// existing clip looks exactly as it did.
+//
+// The curve is sampled per PIXEL through SAutomationLane::valueAt, the same
+// call assert-automation-value makes, so Step / Linear / Exp come out right by
+// construction. Its own value axis is [0, 1] (a linear amplitude factor, unity
+// at the TOP), which is why the unity line sits on the clip's top edge.
+//
+// The gestures for it live in app/timeline (sautomationlane.cpp): objects/cut
+// may not depend on the arranger, and a renderer has no business hit-testing.
+static void drawGainEnvelope( QPainter &p, const QRect &visibRect,
+                              SRenderContext &ctx, SLink &lk, SCut &cut )
+{
+    SAutomationLane *lane = cut.automationLane( QStringLiteral( "cut:Gain" ) );
+    if( !lane || lane->isEmpty() ) return;
+    const int span = visibRect.height() - 1;
+    if( span < 2 || visibRect.width() < 2 ) return;
+
+    const offset_t base = lk.getStartTime();
+    QVector<QPoint> poly;
+    poly.reserve( visibRect.width() + 1 );
+    for( int x = visibRect.left(); x <= visibRect.right(); ++x ) {
+        offset_t rel = ctx.getTimeOf( x ) - base;
+        if( rel < 0 ) rel = 0;
+        double v = lane->valueAt( rel );
+        if( v < 0.0 ) v = 0.0;
+        if( v > 1.0 ) v = 1.0;
+        poly.append( QPoint( x, visibRect.bottom() - (int) ( v * span + 0.5 ) ) );
+    }
+    p.setPen( QPen( QColor( 60, 220, 160 ), 2 ) );
+    if( poly.size() >= 2 ) p.drawPolyline( poly.constData(), poly.size() );
+
+    // The breakpoints, so they can be aimed at.
+    p.setPen( QColor( 10, 60, 40 ) );
+    const std::vector<SAutomationPoint> pts = lane->points();
+    for( const SAutomationPoint &pt : pts ) {
+        double v = pt.value;
+        if( v < 0.0 ) v = 0.0;
+        if( v > 1.0 ) v = 1.0;
+        // ctx maps x -> time; invert by scanning is wasteful, so use the same
+        // linear px<->time relation the loop above walks.
+        const double ta = (double) ctx.getTimeOf( visibRect.left() );
+        const double tb = (double) ctx.getTimeOf( visibRect.right() );
+        const double w = (double) ( visibRect.right() - visibRect.left() );
+        if( w < 1.0 || tb <= ta ) break;
+        const double x = visibRect.left()
+                       + ( (double) ( pt.frame + base ) - ta ) * w / ( tb - ta );
+        if( x < visibRect.left() - 3 || x > visibRect.right() + 3 ) continue;
+        const QRect r( (int) x - 3, visibRect.bottom() - (int) ( v * span + 0.5 ) - 3,
+                       7, 7 );
+        p.fillRect( r, QColor( 120, 255, 200 ) );
+        p.drawRect( r );
+    }
 }
 
 QRect scutLoopHandleRect( const QRect &clipRect, int x )
@@ -336,6 +397,10 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
 
     // Onset ticks + user warp-marker handles over the waveform (proposal 28 W2).
     drawWarpMarkers( p, visibRect, ctx, lk, cut );
+
+    // The clip GAIN envelope, over everything else (proposal 37 P6, design
+    // 6.1: "clip envelope = overlay in the cut renderer after drawWarpMarkers").
+    drawGainEnvelope( p, visibRect, ctx, lk, cut );
 
     // Container cuts show their asset name (bottom-right).
     if( container && !cut.getSName().isEmpty() ) {
