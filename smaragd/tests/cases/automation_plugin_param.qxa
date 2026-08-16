@@ -94,6 +94,27 @@
     <render filename="app_clap_b.wav" format="wav" quality="10" durationSec="2.0"/>
     <assert-file-identical actual="app_clap_b.wav" expected="app_clap_a.wav"/>
 
+    <!-- A SLOT'S LANE SURVIVES A SAVE / LOAD. It is serialized inline in
+         <SPluginSlot>, next to <state> - and on the way back in it is read
+         LONG BEFORE the processor exists (readPostChildrenAttributes runs
+         before STrack declares the slot's width), so the push has to happen
+         again when the width arrives. Without that the lane round-trips in the
+         model and is inaudible, which is exactly the shape of bug this case
+         exists to catch. -->
+    <save-project path="../../build/automation_plugin_param.qxp"/>
+    <load-project path="../../build/automation_plugin_param.qxp"/>
+    <assert-automation-value owner="0" slotIndex="0" target="param:0"
+                             time="70000" value="2.0" tolerance="1e-9"
+                             mode="read" pointCount="2"/>
+    <render filename="app_clap_reloaded.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+    <assert-audio-energy filename="app_clap_reloaded.wav" channel="0"
+                         startFrame="69000" frameCount="1000"
+                         minRms="0.22865" maxRms="0.23327"/>
+    <assert-audio-energy filename="app_clap_reloaded.wav" channel="0"
+                         startFrame="70000" frameCount="1000"
+                         minRms="0.45729" maxRms="0.46654"/>
+
     <!-- The lane dies with its slot, and the inverse of remove-plugin brings
          both back - the slot's lanes are part of the slot (design §3.3). -->
     <remove-plugin trackPath="0" slotIndex="0"/>

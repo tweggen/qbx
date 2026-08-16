@@ -153,6 +153,10 @@ void SPluginSlot::ensureChannels( int nChannels ) const
 void SPluginSlot::setChannelCount( int nChannels )
 {
     ensureChannels( nChannels );
+    // The lanes may have been READ before the processor existed - a load calls
+    // readPostChildrenAttributes() long before STrack declares the width - so
+    // this is where a project's stored automation actually reaches the DSP.
+    pushParamCurves();
 }
 
 std::shared_ptr<audio::twPluginInsert> SPluginSlot::getInsert() const
@@ -230,6 +234,10 @@ bool SPluginSlot::reloadPlugin()
 
     proc_->setFactory( makeFactory() );
     proc_->setBypass( bypass_ );
+    // setFactory() rebuilds the instances; the curves are the processor's own
+    // state and survive it, but re-pushing costs nothing and makes the two
+    // re-resolution paths (this and setChannelCount) say the same thing.
+    pushParamCurves();
     if( !savedState_.empty() ) {
         for( audio::twPlugin *p : proc_->plugins() )
             if( p ) p->loadState( savedState_ );
