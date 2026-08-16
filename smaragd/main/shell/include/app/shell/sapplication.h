@@ -107,6 +107,41 @@ public:
     audio::RenderSession *renderSession() const;
     void startRender(const audio::RenderParams &params) override;
 
+    // THE RUN BARRIER (proposal 37 D4 / 4.4). A "run" is one contiguous
+    // traversal of the graph by a consumer: an offline render, or a playback
+    // start. Instruments are the only CLASS-1 components in the graph whose
+    // state is not position-addressed - a synth voice carries its envelope
+    // across pages - so a run that inherits the previous run's continuity
+    // renders different audio for the same position. Two renders of the same
+    // project would then not be byte-identical, which is F4.
+    //
+    // The barrier is: for every track whose slot 0 is an INSTRUMENT,
+    //   1. slot->forgetContinuity()            - the processor stops believing
+    //      the next page continues the last one, so it repositions (reset +
+    //      chase + pre-roll K, D4) instead of continuing stale voices; and
+    //   2. invalidateRenderPathRange(pos, INT64_MAX) - the app-side path walk
+    //      up to the root, which is the ONLY thing that carries a change from a
+    //      tap up to the components the consumers ask (F13).
+    // In that ORDER: a page rendered after the epoch bump is then guaranteed to
+    // have seen the cleared continuity, and one rendered in between is staled by
+    // the bump and re-rendered. Effects are deliberately NOT barriered - their
+    // splice at a page boundary is what they do today.
+    //
+    // MAIN THREAD ONLY, and always BEFORE the run's first demand: from
+    // startRender() before the session thread spawns, and from every play-start
+    // path immediately before twSpeaker::startOutput() (which performs the
+    // engine's pre-readahead seekTo + startReadahead on this thread). NOT from
+    // setGlobalLocatorPos - a stopped locate demands nothing, and requestSeek
+    // only runs while playing. NEVER from the readahead thread, and never on a
+    // seek during playback or a loop wrap: those keep today's page-boundary
+    // splices (a mid-page re-stale would be an audible switch at an arbitrary
+    // offset, F14).
+    //
+    // Idempotent under any ordering: a late barrier costs one re-render, never
+    // a wrong page served as current (verify-at-publish self-staleness,
+    // schedule inv. 8). A project with no instrument does nothing at all.
+    void beginRun( offset_t pos );
+
     audio::RecordingSession *recordingSession() const;
     void startRecording(const audio::RecordingParams &params);
 

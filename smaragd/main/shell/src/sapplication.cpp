@@ -31,6 +31,13 @@
 #include "app/selection/sremovefromselectionaction.h"
 #include "app/selection/sclearselectionaction.h"
 #include "app/selection/stoggleselectionaction.h"
+#include "app/objects/track/sinstrumenttracks.h"
+#include "app/objects/track/strack.h"
+#include "app/objects/track/spluginslot.h"
+
+#include <cmath>
+#include <limits>
+#include <vector>
 
 SApplication *SApplication::singleton_ = NULL;
 
@@ -575,6 +582,31 @@ bool SApplication::isRenderingActive() const
     return renderSession_ && renderSession_->isRunning();
 }
 
+// Proposal 37 D4 / 4.4 - see the header for WHY and for the call-site rules.
+void SApplication::beginRun( offset_t pos )
+{
+    if( !currentProject_ ) return;
+    SObject *root = currentProject_->getRootComponent();
+    if( !root ) return;
+
+    std::vector<STrack *> tracks;
+    sinstruments::collectInstrumentTracks( root, tracks );
+    if( tracks.empty() ) return;      // no instrument => no barrier, no cost
+
+    int n = 0;
+    for( STrack *tr : tracks ) {
+        SPluginSlot *slot = tr->instrumentSlot();
+        if( !slot ) continue;
+        // ORDER MATTERS (header): forget first, bump second.
+        slot->forgetContinuity();
+        tr->invalidateRenderPathRange( pos,
+                                       std::numeric_limits<offset_t>::max() );
+        ++n;
+    }
+    TW_LOGI( "app", "run barrier at %lld: %d instrument track(s) reset and "
+                    "invalidated to the end", (long long) pos, n );
+}
+
 void SApplication::startRender(const audio::RenderParams &params)
 {
     // Always recreate for reproducibility
@@ -590,6 +622,20 @@ void SApplication::startRender(const audio::RenderParams &params)
     if (!synthOutput) {
         // TODO: Emit error signal to UI
         return;
+    }
+
+    // THE RUN BARRIER (proposal 37 D4), on the MAIN thread and BEFORE the
+    // render worker exists - so it is ordered ahead of the run's first demand
+    // by construction, not by a race we would have to reason about. This is the
+    // determinism hole F4: without it, a render started after in-process
+    // playback continues the playback run's synth voices and produces different
+    // bytes from the same render in a fresh process.
+    // The position is the render RANGE start, computed exactly as
+    // RenderSession does (llround of the seconds), so the barrier covers the
+    // first page the render will ask for.
+    {
+        const int rate = t3Env_ ? t3Env_->getSRate() : 48000;
+        beginRun( (offset_t) std::llround( params.startTimeSec * (double) rate ) );
     }
 
     // Playhead tracking: the render thread publishes positions through this
@@ -640,6 +686,10 @@ void SApplication::setPlaybackRunning( bool play )
 {
     if( !t3Speaker_ ) return;
     if( play ) {
+        // Run barrier immediately before startOutput(), which performs the
+        // engine's pre-readahead seekTo(locator) + startReadahead() on THIS
+        // thread - so the barrier precedes the readahead's first demand (D4).
+        beginRun( getGlobalLocatorPos() );
         t3Speaker_->startOutput();
         setPlaying( true );
     } else {
@@ -695,6 +745,11 @@ void SApplication::startRecording(const audio::RecordingParams &params)
             // monitoring playback starts at the locator because the engine
             // pulls pages BY POSITION, not because the graph's cursors were
             // moved.
+            //
+            // The monitoring playback is a RUN like any other (D4): it is the
+            // readahead reading the arrangement, instruments included, so it
+            // gets the same barrier immediately before startOutput().
+            beginRun( getGlobalLocatorPos() );
             t3Speaker_->startOutput();
             isPlaying_ = true;
         }

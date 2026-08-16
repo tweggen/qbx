@@ -708,6 +708,16 @@ void SMainWindow::startPlaying()
         // starts, so the loop region is honoured from the first buffer.
         syncCyclePlayback();
 
+        // THE RUN BARRIER (proposal 37 D4 / 4.4), on the main thread and
+        // immediately before startOutput() - which is what performs the
+        // engine's pre-readahead seekTo(locator) + startReadahead(), so the
+        // barrier is ordered ahead of the readahead's first demand. The GUI's
+        // Play button reaches the speaker here rather than through
+        // SApplication::setPlaybackRunning(), so it needs its own call: a
+        // barrier issued on only ONE of the two play paths would make
+        // determinism depend on which button was pressed.
+        SApplication::app().beginRun( SApplication::app().getGlobalLocatorPos() );
+
         qWarning() << "startPlaying(): About to call getSpeaker()->startOutput()" << Qt::endl;
         SApplication::app().getSpeaker()->startOutput();
         qWarning() << "startPlaying(): After getSpeaker()->startOutput()" << Qt::endl;
