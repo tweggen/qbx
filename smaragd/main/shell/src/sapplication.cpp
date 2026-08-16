@@ -308,6 +308,23 @@ bool SApplication::masterLevel( offset_t pos, twLevelSample &out )
     return masterProbe_.advanceTo( pos, out );
 }
 
+bool SApplication::masterLevel( offset_t pos, twLevelSampleSet &out, int wantLanes )
+{
+    masterProbe_.setTap( rootComponent() );
+    return masterProbe_.advanceTo( pos, out, wantLanes );
+}
+
+int SApplication::masterChannels()
+{
+    // The mixer root's declared width IS the project's (SStdMixer takes it from
+    // SProject::channels() since B4), so deriving it here cannot drift from what
+    // the graph actually produces the way a copied number can — the same reason
+    // RenderParams::channels = 0 means "ask the graph".
+    std::shared_ptr<twComponent> root = rootComponent();
+    const int n = root ? (int) root->getOutputChannels() : 1;
+    return n > 0 ? n : 1;
+}
+
 void SApplication::pumpMeters()
 {
     const bool live = isPlaying_ || isRecordingActive();

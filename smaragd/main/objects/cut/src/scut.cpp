@@ -620,15 +620,24 @@ bool SCut::ensureCapturePeaks()
     sample_t *buf = (sample_t *) ::malloc( skip * sizeof( sample_t ) );
     if( !buf ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; return false; }
 
+    // ALL CHANNELS folded into one signed envelope (proposal 36 B8), matching
+    // SObject::straightCalcPreviewData: the smallest min and the largest max
+    // over every channel of the capture. A capture has been N channels wide
+    // since B7, and reading channel 0 alone would draw the wrong waveform for
+    // any clip whose loud material is not on channel 0.
+    const idx_t nCh = cap->channels();
     for( offset_t i = 0; i < (offset_t) len; i += skip ) {
         offset_t chunk = ( i + skip <= (offset_t) len ) ? skip : ( (offset_t) len - i );
-        cap->read( i, buf, chunk, 0 );
         sample_t mn = SAMPLE_NORM_MAX, mx = SAMPLE_NORM_MIN;
-        for( offset_t j = 0; j < chunk; ++j ) {
-            sample_t a = buf[j];
-            if( a < mn ) mn = a;
-            if( a > mx ) mx = a;
+        for( idx_t c = 0; c < nCh; ++c ) {
+            cap->read( i, buf, chunk, c );
+            for( offset_t j = 0; j < chunk; ++j ) {
+                sample_t a = buf[j];
+                if( a < mn ) mn = a;
+                if( a > mx ) mx = a;
+            }
         }
+        if( nCh <= 0 ) { mn = 0.f; mx = 0.f; }
         // Signed envelope, matching SObject::straightCalcPreviewData()'s
         // convention: .max is the upper (positive) edge, .min the lower
         // (negative) edge, each in [-128,127]. (Clamping to [0,127] here was the

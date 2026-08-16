@@ -136,6 +136,14 @@ public:
     // because it re-applies the density rules for the current size first.
     QString describeMeter();
 
+    // TEST ENTRY POINT: push a measured level straight into this head's meter.
+    // A head built for a grab is never SHOWN, so onMeterTick's isVisible() gate
+    // (the first layer of the repaint-storm defence) would make every tick a
+    // no-op and the grab would show a meter sitting at the floor — a picture of
+    // the layout with the thing under test invisible in it. Returns the lanes
+    // the meter is drawing.
+    int tkPushMeterLevel( const twLevelSampleSet &s, qint64 nowMs );
+
     // TEST ENTRY POINT: press one of this head's toggle buttons ("mute",
     // "solo", "arm", "takes", "group") as a user does, driving the button's
     // own signal — which is what makes the selection BROADCAST the thing under
@@ -203,6 +211,13 @@ private:
     // reading is the track's actual contribution to the mix.
     SLevelMeter *qMeter_;
     twLevelProbe probe_;
+
+    // Proposal 36 B8 — tell the meter how many lanes to draw and how many the
+    // project has. Returns the drawn count, which is also what the probe is
+    // asked for. Called from the ctor, from every tick and from describeMeter(),
+    // because a headless caller never gets a tick and would otherwise describe a
+    // one-lane meter on a six-channel project.
+    int syncMeterLanes();
 };
 
 #endif
