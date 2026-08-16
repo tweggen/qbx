@@ -15,10 +15,14 @@
 //      2 with a warning; the project opens.
 //   4. THE ATTRIBUTE SURVIVES A ROUND TRIP, including the resave: serialize ->
 //      parse -> serialize is identical for every supported width.
-//   5. NOTHING PROPAGATES TO A BUS COUNT. This is AC 1.4 and the reason
-//      STrack::setNBussesCallCount() exists: applying set-project-channels and
-//      then its inverse must move that counter by ZERO. Reading the code proves
-//      it today; the counter proves it after the next person edits it.
+//   5. THE WIDTH REACHES THE TRACK, AND THE UNDO SURVIVES THE SHRINK. This is
+//      the one item proposal 36 B4 INVERTED. M1's claim here was the negative
+//      one — the project's channel count reaches no bus count, counted by
+//      STrack::setNBussesCallCount(), a hook whose own comment said "retire it
+//      when B4 makes bus width a real consequence of project width". It does
+//      now, so the assertion became: the track follows every width change, up
+//      and down, and 6 -> 2 on an undo is ordinary rather than a Q_ASSERT_X
+//      that the shipped build compiles out.
 //
 // The .qxp-level evidence (nested tracks, save/load/save, a byte-identical
 // render across the action) is in tests/cases/project_channels_roundtrip.qxa —
@@ -80,7 +84,7 @@ void countingHandler( QtMsgType type, const QMessageLogContext &ctx, const QStri
 // a rendered anything.
 class StubAppContext : public SAppContext {
 public:
-    // STrack::setNBusses builds twTrackMix / twPluginChain / twRewire against
+    // STrack::setChannels builds twTrackMix / twPluginChain / twRewire against
     // the environment, so this one is REAL. Everything else is inert.
     SProject *getCurrentProject() const override { return nullptr; }
     tw303aEnvironment *get303aEnvironment() const override { return &env_; }
@@ -218,18 +222,25 @@ void testRoundTrip( SProject &p )
     p.setChannels( 2 );
 }
 
-// AC 1.4: set-project-channels and its undo touch no setNBusses call.
-void testActionTouchesNoBusCount( SProject &project )
+// AC 1.4 was M1's; PROPOSAL 36 B4 INVERTS IT, deliberately.
+//
+// M1's central claim was a NEGATIVE one — the project's channel count reaches
+// no bus count — and it was guarded by STrack::setNBussesCallCount(), a hook
+// whose own comment said "retire it when B4 makes bus width a real consequence
+// of project width". This is that milestone. The width now DOES reach the
+// track, and the interesting question became the one M1 could not ask: does the
+// UNDO survive? 6 -> 2 is a SHRINK, which the old per-bus setNBusses() refused
+// with a Q_ASSERT_X( false, ... ) that the shipped build compiled out (leaving
+// stale wiring and saying nothing). One twTrackMix of width N creates and
+// destroys nothing, so a shrink is now an ordinary assignment — and this is
+// where that is checked.
+void testActionReachesTrackWidth( SProject &project )
 {
     SActionRegistry &registry = SActionRegistry::instance();
 
-    // A real track, so there IS a bus count to disturb. Its constructor calls
-    // setNBusses(2) — which is why the baseline is taken AFTER it exists.
     std::unique_ptr<STrack> track( new STrack( &project ) );
-    check( track->getNBusses() == 2, "a fresh STrack has 2 busses" );
-
-    const long baseline = STrack::setNBussesCallCount();
-    check( baseline > 0, "the setNBusses counter is live (the ctor moved it)" );
+    check( track->getChannels() == 2,
+           "a fresh STrack takes the project's width (2)" );
 
     std::unique_ptr<SAction> act(
         registry.create( QStringLiteral("set-project-channels") ) );
@@ -239,30 +250,33 @@ void testActionTouchesNoBusCount( SProject &project )
     QDomDocument doc;
     QDomElement el = doc.createElement( QStringLiteral("set-project-channels") );
     el.setAttribute( QStringLiteral("channels"), 6 );
-    check( act->readXml( el, act->formatVersion() ), "…and reads its own XML" );
+    check( act->readXml( el, act->formatVersion() ), "\u2026and reads its own XML" );
 
     SApplyResult res = act->apply( &project );
-    check( res.applied, "AC 1.4: applying 6 channels succeeds" );
-    check( project.channels() == 6, "AC 1.4: the project is 6 channels" );
-    check( res.inverse != nullptr, "AC 1.4: the action is undoable" );
+    check( res.applied, "applying 6 channels succeeds" );
+    check( project.channels() == 6, "the project is 6 channels" );
+    check( track->getChannels() == 6,
+           "B4: \u2026and the TRACK followed it (M1 asserted the opposite)" );
+    check( res.inverse != nullptr, "the action is undoable" );
 
     if( res.inverse ) {
         SApplyResult undone = res.inverse->apply( &project );
-        check( undone.applied, "AC 1.4: the undo applies" );
-        check( project.channels() == 2, "AC 1.4: the undo restores 2 channels" );
+        check( undone.applied, "the undo applies" );
+        check( project.channels() == 2, "the undo restores 2 channels" );
+        check( track->getChannels() == 2,
+               "B4: THE SHRINK IS ORDINARY \u2014 6 -> 2 on an undo neither asserts "
+               "nor leaves stale wiring" );
         delete undone.inverse;
         delete res.inverse;
     }
 
-    // THE ASSERTION THIS FILE EXISTS FOR. 6 -> 2 is a SHRINK, and
-    // STrack::setNBusses refuses a shrink with Q_ASSERT_X( false, ... ): had the
-    // undo reached it, a Debug build would have aborted above and this build
-    // (RelWithDebInfo, where Qt's QT_NO_DEBUG compiles Q_ASSERT_X out) would
-    // have gone on with a half-wired track and said nothing. Zero calls is the
-    // only answer that means "M1 is inaudible".
-    check( STrack::setNBussesCallCount() == baseline,
-           "AC 1.4: apply + undo made NO setNBusses call" );
-    check( track->getNBusses() == 2, "AC 1.4: the track is still 2 busses" );
+    // And it survives being driven repeatedly, in both directions, which is what
+    // AC B4.2's 2 -> 8 -> 2 does at document level.
+    for( int w : { 8, 1, 4, 2 } ) {
+        project.setChannels( w );
+        check( track->getChannels() == w,
+               "B4: the track follows every width change, up and down" );
+    }
 }
 
 void testActionRejectsUnsupportedWidth( SProject &project )
@@ -296,28 +310,30 @@ void testActionRejectsUnsupportedWidth( SProject &project )
     check( res.inverse == nullptr, "…with no undo step" );
 }
 
-// The other half of the M1 fix: STrack's loader default used to be "1" while
-// its constructor builds 2, so a .qxp that omitted nBusses (or carried 1) asked
-// for a shrink and hit the same Q_ASSERT_X.
-void testTrackBusCountLoad( SProject &project )
+// nBusses= IS NOW READ AND IGNORED (proposal 36 B4).
+//
+// M1 fixed a real drift here: STrack's loader default was "1" while its
+// constructor built 2, so a .qxp that omitted the attribute asked for a SHRINK
+// and hit a Q_ASSERT_X the shipped build compiles out — it returned silently
+// and the count was right by accident. B4 removes the drift by removing the
+// second authority: a track's width is SProject::channels(), the attribute is
+// no longer written, and a file that still carries one gets a warning and no
+// effect. This checks exactly that, because "ignored" is the kind of claim that
+// rots into "quietly honoured" the moment somebody re-adds a setter.
+void testTrackIgnoresLegacyBusCount( SProject &project )
 {
-    // The WARNING is the discriminator, not the resulting count. Q_ASSERT_X is
-    // compiled out under QT_NO_DEBUG — which this project's default
-    // RelWithDebInfo build defines, even though it strips NDEBUG to keep its own
-    // asserts — so the OLD code did not abort here: it hit the shrink branch and
-    // returned SILENTLY, leaving 2 busses. The count was therefore right by
-    // accident and would have stayed right through any regression. What is new
-    // is that a request the loader cannot honour now SAYS so, exactly once.
-    struct Case { const char *xml; int wantBusses; int wantWarnings; const char *what; };
+    project.setChannels( 2 );
+
+    struct Case { const char *xml; int wantWarnings; const char *what; };
     const Case cases[] = {
-        { "<STrack/>", 2, 0,
-          "a track with no nBusses= loads at the ctor's width, silently" },
-        { "<STrack nBusses='1'/>", 2, 1,
-          "a track asking to SHRINK to 1 keeps 2 and warns exactly once" },
-        { "<STrack nBusses='2'/>", 2, 0,
-          "a track asking for 2 (what every real fixture writes) is silent" },
-        { "<STrack nBusses='4'/>", 4, 0,
-          "a track can still GROW on load" },
+        { "<STrack/>", 0,
+          "a track with no nBusses= loads at the project's width, silently" },
+        { "<STrack nBusses='2'/>", 0,
+          "a track carrying the width it already has is silent" },
+        { "<STrack nBusses='1'/>", 1,
+          "a track asking for 1 keeps the project's 2 and warns exactly once" },
+        { "<STrack nBusses='4'/>", 1,
+          "a track asking for 4 ALSO keeps 2 \u2014 growth is not honoured either" },
     };
     for( const Case &c : cases ) {
         std::unique_ptr<STrack> t( new STrack( &project ) );
@@ -326,8 +342,7 @@ void testTrackBusCountLoad( SProject &project )
         QDomElement el = doc.documentElement();
         g_busWarnings = 0;
         t->readPreChildrenAttributes( el );
-        check( t->getNBusses() == c.wantBusses && g_busWarnings == c.wantWarnings,
-               c.what );
+        check( t->getChannels() == 2 && g_busWarnings == c.wantWarnings, c.what );
     }
 }
 
@@ -358,9 +373,9 @@ int main( int argc, char **argv )
         // project whose width is the default 2, so that 6 -> 2 really is the
         // shrink the undo has to survive.
         std::unique_ptr<SProject> p( new SProject );
-        testActionTouchesNoBusCount( *p );
+        testActionReachesTrackWidth( *p );
         testActionRejectsUnsupportedWidth( *p );
-        testTrackBusCountLoad( *p );
+        testTrackIgnoresLegacyBusCount( *p );
     }
 
     qInstallMessageHandler( g_prevHandler );
