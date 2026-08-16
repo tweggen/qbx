@@ -34,6 +34,28 @@
 //                           the only coverage of SLevelMeter::paintEvent, and a
 //                           human-checkable artifact of what the bar looks like
 //   grabVertical = "true"   orientation of that grab
+//
+// Proposal 36 B8 — N LANES. The bounds above apply to ONE lane (`lane`), and the
+// lane count itself is assertable, so a case can pin both "the meter sees the
+// project's channels" and "those channels read differently".
+//   lanes      = "1"        how many lanes to ask the probe for. The probe
+//                           answers min(lanes, page->channels()) — §4.4, act on
+//                           the width of the page in hand.
+//   expectLanes = "-1"      if >= 0, the lane count the probe must report. Use
+//                           it to pin a WIDTH: a page that quietly stayed mono
+//                           would otherwise pass every level bound on lane 0.
+//   lane       = "0"        which lane minRms/maxRms/minPeak/maxPeak bound
+//   laneA/laneB = "-1"      if both >= 0, compare those two lanes
+//   minLaneRmsDelta = "-1"  |rms(A) - rms(B)| must be at least this. THE channel
+//                           claim: without it a duplicated-mono meter passes
+//                           every per-lane bound (proposal 36 trap 22, the
+//                           defect that made channel_assert_dupmono blind).
+//   grabHead   = ""         if set, grab the REAL track head (built off screen at
+//                           headHeight x headWidth) into this PNG. AC B8.4's
+//                           evidence: the density rules are asserted through
+//                           describe(), and this is what a human can look at.
+//   headWidth  = "0"        column width for headHeight/grabHead; 0 = the
+//                           default SMV_TRACK_CTRL_WIDTH.
 class SAssertMeterAction : public SAction {
 public:
     QString name() const override { return QStringLiteral( "assert-meter" ); }
@@ -59,6 +81,16 @@ private:
     QString contains_;
     QString grabPng_;
     bool    grabVertical_ = true;
+
+    // Proposal 36 B8
+    int     lanes_       = 1;
+    int     expectLanes_ = -1;
+    int     lane_        = 0;
+    int     laneA_       = -1;
+    int     laneB_       = -1;
+    double  minLaneRmsDelta_ = -1.0;
+    QString grabHead_;
+    int     headWidth_   = 0;
 };
 
 #endif  // SMETERTESTACTIONS_H

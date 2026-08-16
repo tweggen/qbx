@@ -16,6 +16,15 @@ Invariants:
    (THREADING.md rule 1).
 2. The render dialog emits absolute start/end seconds; a marked range is
    passed through as-is (the session handles non-zero starts).
+2a. The render dialog DISPLAYS the channel count and does not override it
+   (proposal 36 B8 decision 3). RenderParams::channels comes from
+   SProject::channels(), or 0 = "ask the graph" when there is no project,
+   exactly as B5 built it. An override was considered and rejected: reducing
+   6 channels to 2 needs channel roles and a fold law, which proposal 36 §8
+   names as a non-goal, and the obvious candidate — the device rule's "first
+   two channels, the rest dropped" — is a listening compromise that must not
+   be applied silently to a delivered file. One authority for the width, and
+   a control that cannot lie about what the render will contain.
 3. Device ids chosen in options persist via SSettings and apply on next
    startOutput.
 4. SLogModel POLLS the TwLog ring on a timer and holds a cursor. It must not

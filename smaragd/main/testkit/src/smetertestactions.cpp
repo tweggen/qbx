@@ -100,13 +100,13 @@ SApplyResult SAssertMeterAction::apply( SProject *project )
         tap->requestPage( pageStart, nullptr, 0, CAP, project->getSRate(), nullptr );
     }
 
-    twLevelSample s;
-    const bool got = probe.advanceTo( pos, s );
+    twLevelSampleSet set;
+    const bool got = probe.advanceTo( pos, set, lanes_ );
 
     if( expectMiss_ ) {
         if( got ) {
             qWarning() << "assert-meter FAILED: expected a miss at" << pos
-                       << "but measured peak" << s.peak;
+                       << "but measured peak" << set.first().peak;
             return { false, nullptr };
         }
         return { true, nullptr };
@@ -118,6 +118,44 @@ SApplyResult SAssertMeterAction::apply( SProject *project )
         return { false, nullptr };
     }
 
+    // THE WIDTH, asserted before any level: a page that quietly stayed mono
+    // passes every bound on lane 0, which is precisely how a channel gate goes
+    // blind (proposal 36 trap 22).
+    if( expectLanes_ >= 0 && set.lanes != expectLanes_ ) {
+        qWarning() << "assert-meter FAILED: expected" << expectLanes_
+                   << "lanes at" << pos << "but the probe reported" << set.lanes;
+        return { false, nullptr };
+    }
+
+    if( lane_ < 0 || lane_ >= set.lanes ) {
+        // An out-of-range lane is an ERROR, never an empty selection reporting
+        // rms 0 — the same rule M0 had to fix in the file-reading verbs, where a
+        // typo could masquerade as a silent render.
+        qWarning() << "assert-meter FAILED: lane" << lane_
+                   << "out of range; the probe reported" << set.lanes << "lane(s)";
+        return { false, nullptr };
+    }
+
+    // Lane-vs-lane: the only assertion that can tell a genuinely wide meter from
+    // a duplicated-mono one.
+    if( laneA_ >= 0 && laneB_ >= 0 ) {
+        if( laneA_ >= set.lanes || laneB_ >= set.lanes ) {
+            qWarning() << "assert-meter FAILED: lanes" << laneA_ << "/" << laneB_
+                       << "out of range;" << set.lanes << "lane(s) measured";
+            return { false, nullptr };
+        }
+        const double ra = std::sqrt( (double) set.lane[laneA_].meanSquare );
+        const double rb = std::sqrt( (double) set.lane[laneB_].meanSquare );
+        const double delta = std::fabs( ra - rb );
+        if( minLaneRmsDelta_ >= 0.0 && delta < minLaneRmsDelta_ ) {
+            qWarning() << "assert-meter FAILED: lanes" << laneA_ << "and" << laneB_
+                       << "rms" << ra << "vs" << rb << "differ by" << delta
+                       << "which is below" << minLaneRmsDelta_ << "at" << pos;
+            return { false, nullptr };
+        }
+    }
+
+    const twLevelSample &s = set.lane[lane_];
     const double rms = std::sqrt( (double) s.meanSquare );
 
     if( minRms_ >= 0.0 && rms < minRms_ ) {
@@ -160,12 +198,43 @@ SApplyResult SAssertMeterAction::apply( SProject *project )
             return { false, nullptr };
         }
         const QString out = QDir( app.testOutputDir() ).filePath( grabPng_ );
-        const int longSide = 120, shortSide = 10;
-        if( !win->grabLevelMeter( out, s.peak, rms, grabVertical_,
+        // Wide enough for the lanes the probe actually measured, so the grab of
+        // a stereo project shows TWO bars at different heights (the picture that
+        // makes AC B8.2 checkable by eye as well as by number).
+        const int longSide = 120, shortSide = 10 + 4 * ( set.lanes - 1 );
+        if( !win->grabLevelMeter( out, set, grabVertical_,
                                   grabVertical_ ? shortSide : longSide,
                                   grabVertical_ ? longSide : shortSide ) ) {
             qWarning() << "assert-meter FAILED: could not paint the meter into"
                        << out;
+            return { false, nullptr };
+        }
+    }
+
+    // AC B8.4 — the REAL track head, at a named lane height and column width,
+    // painted into a PNG. describe() below says what the density rules decided;
+    // this says what it LOOKS like, which is the half a string cannot carry.
+    if( !grabHead_.isEmpty() ) {
+        SMainWindow *win = mainWindow();
+        if( !win ) {
+            qWarning() << "assert-meter FAILED: no main window for grabHead";
+            return { false, nullptr };
+        }
+        if( grabHead_.contains( '/' ) || grabHead_.contains( '\\' ) ||
+            grabHead_.contains( ".." ) ) {
+            qWarning() << "assert-meter: grabHead contains path separators:"
+                       << grabHead_;
+            return { false, nullptr };
+        }
+        SApplication &app = SApplication::app();
+        if( app.testOutputDir().isEmpty() || !app.ensureOutputDirExists() ) {
+            qWarning() << "assert-meter FAILED: no usable test output directory";
+            return { false, nullptr };
+        }
+        const QString out = QDir( app.testOutputDir() ).filePath( grabHead_ );
+        if( !win->grabTrackHead( lanePath, out, headHeight_, headWidth_, set ) ) {
+            qWarning() << "assert-meter FAILED: could not paint the track head"
+                       << lanePath << "into" << out;
             return { false, nullptr };
         }
     }
@@ -178,7 +247,8 @@ SApplyResult SAssertMeterAction::apply( SProject *project )
             qWarning() << "assert-meter FAILED: no main window for headHeight";
             return { false, nullptr };
         }
-        const QString desc = win->describeTrackMeter( lanePath, headHeight_ );
+        const QString desc =
+            win->describeTrackMeter( lanePath, headHeight_, headWidth_ );
         if( desc.isEmpty() ) {
             qWarning() << "assert-meter FAILED: no meter description for track"
                        << lanePath;
@@ -186,6 +256,7 @@ SApplyResult SAssertMeterAction::apply( SProject *project )
         }
         if( !desc.contains( contains_ ) ) {
             qWarning() << "assert-meter FAILED: head at height" << headHeight_
+                       << "width" << headWidth_
                        << "reports" << desc << "which lacks" << contains_;
             return { false, nullptr };
         }
@@ -206,6 +277,13 @@ void SAssertMeterAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "expectMiss", expectMiss_ ? "true" : "false" );
     elem.setAttribute( "headHeight", headHeight_ );
     elem.setAttribute( "contains", contains_ );
+    elem.setAttribute( "lanes", lanes_ );
+    elem.setAttribute( "expectLanes", expectLanes_ );
+    elem.setAttribute( "lane", lane_ );
+    elem.setAttribute( "laneA", laneA_ );
+    elem.setAttribute( "laneB", laneB_ );
+    elem.setAttribute( "minLaneRmsDelta", QString::number( minLaneRmsDelta_ ) );
+    elem.setAttribute( "headWidth", headWidth_ );
 }
 
 bool SAssertMeterAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -222,6 +300,19 @@ bool SAssertMeterAction::readXml( const QDomElement &elem, int /*version*/ )
     contains_   = elem.attribute( "contains" );
     grabPng_    = elem.attribute( "grabPng" );
     grabVertical_ = elem.attribute( "grabVertical", "true" ) != "false";
+    lanes_       = elem.attribute( "lanes", "1" ).toInt();
+    expectLanes_ = elem.attribute( "expectLanes", "-1" ).toInt();
+    lane_        = elem.attribute( "lane", "0" ).toInt();
+    laneA_       = elem.attribute( "laneA", "-1" ).toInt();
+    laneB_       = elem.attribute( "laneB", "-1" ).toInt();
+    minLaneRmsDelta_ = elem.attribute( "minLaneRmsDelta", "-1" ).toDouble();
+    grabHead_    = elem.attribute( "grabHead" );
+    headWidth_   = elem.attribute( "headWidth", "0" ).toInt();
+    // Asking for a lane comparison implies asking for at least that many lanes:
+    // a case that says laneA/laneB but forgets `lanes` would otherwise get one
+    // lane and fail with an out-of-range message instead of a comparison.
+    const int need = qMax( qMax( lane_, qMax( laneA_, laneB_ ) ) + 1, expectLanes_ );
+    if( need > lanes_ ) lanes_ = need;
     return true;
 }
 

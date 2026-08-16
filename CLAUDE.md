@@ -531,13 +531,14 @@ whole feature needed **zero edits to any existing engine file** — just the new
 | Thing to know | Why |
 |---|---|
 | The tap is a track's ROOT component (`STrack::getRootComponent()` → its `twRewire`) | It is the only per-track component that CACHES pages: `twTrackMix::freezePage` allocates a fresh page every call, `twPluginChain::freezePage` forwards to its last insert. Content there is post-fader, post-FX, pre-summing. Consequence: a pre-fader meter is not available without new engine work. |
-| Its page is N CHANNELS WIDE since proposal 36 B4, and the probe reads channel 0 | `twLevelSample` / `twScanSpan` / `SLevelMeter` are scalar **by type**, so a per-channel meter is a widget and probe change, not a config one — that is B8. What B4 did add is §4.5's width check in `twLevelProbe::resolvePage_`: a cached page whose `channels()` no longer matches its producer's declared width is a MISS (the meter decays), never audio, because reading `channelPtr(1)` of a stale one-channel page is an out-of-bounds read. |
+| Its page is N CHANNELS WIDE since proposal 36 B4, and the meter is N LANES since B8 | `twLevelSample` / `twScanSpan` / `twMeterBallistics` are still scalar **by type** — a lane IS one span, a `twLevelSampleSet` is N of them, and only the probe (which channel) and the widget (how to draw N bars) learned about channels. The probe reports `min(wantLanes, page->channels())` — the width of the PAGE IN HAND (§4.4), never the tap's declared width, because an insert-less `twPluginChain` forwards its input page verbatim and its silence pages are width 1. §4.5's width check in `twLevelProbe::resolvePage_` still applies to every rung: a cached page whose `channels()` no longer matches its producer's declared width is a MISS (the meter decays), never audio, because reading `channelPtr(1)` of a stale one-channel page is an out-of-bounds read. |
 | `outputLatencyFrames` is in DEVICE frames at the DEVICE rate | The locator counts PROJECT frames. `SApplication::meterLatencyFrames()` scales by `projectRate/deviceRate`; skipping that is a ~9% error for 44.1 k on a 48 k device. Applied ONCE in the pump so all meters share one position. |
 | Ballistics live on the UI thread, driven by wall-clock dt | Frame-rate independence (one 1 s step == 100 × 10 ms steps) is asserted by `metering_test` and is the reason they are not in the engine. |
 | `meterTimer_` is NOT a fold into `pumpLocator` | `pumpLocator` only works when the position changed and stops the instant playback stops. Meters need a tick at a static position (to decay) plus a ~8 s tail, or the bars freeze mid-level. Not started during an offline render; started while recording. |
 | A page miss must DECAY the meter | `advanceTo()` returning false → `idle()`. A dropout then reads as a fast fall, never as a frozen bar. Nothing here may block, wait, or create a demand. |
 | Stale-but-frozen pages are deliberately ACCEPTED | Playback serves exactly those (proposal 16), so rejecting them would make the meter disagree with the ear while an edit is absorbed. |
-| The METER is channel 0; the signal path is not | Since proposal 36 B4 the whole track and master path is N channels wide, and since B5 the SINK is too — a rendered WAV and the device both carry the project's channels, so `L != R` IS assertable on a file now (`assert-channels-differ`), and `qxa.mc_stereo_clip_width` / `mc_six_channel` / `mc_playback_channels` do exactly that. What is still single-lane is the METER: `twLevelProbe` reads `channelPtr(0)` and `twLevelSample` / `twScanSpan` / `SLevelMeter` are scalar BY TYPE. Per-channel metering is B8, a widget and probe change. |
+| HOW MANY LANES a meter shows is the MOUNT's decision (proposal 36 B8) | The **track head** and the **transport master meter** show at most **two** (`SLevelMeter::MONITOR_LANES`), dividing the fixed 8 px bar among them. That follows the device rule `twSpeaker` states — `L = ch0; R = (width >= 2) ? ch1 : ch0`, the rest computed in full and dropped at the device — because a 120 px control column has ~13 px of slack and six lanes in it would be 1 px each. The **Track Detail dock** shows EVERY channel and grows its short axis to do it (`setGrowWithLanes`); it is the answer to "where do I see channel 4". The cap is ANNOUNCED, never silent: `describe()` reports `lanes` and `width` as separate fields and the tooltip names the width and points at the dock. |
+| The width a meter uses comes from the TAP, not from `SProject` | `getRootComponent()->getOutputChannels()`. Since B4 a track has no bus count of its own — it has the project's width — so asking the component keeps the meter and the audio reading ONE number, and it is the same number §4.5 compares a cached page against. |
 | `twAspectMetadata` stays unclaimed | `freezePage` already stores `validAspects = twAspectAll`, so that "peak levels" bit is already set and already meaningless. Claiming it would drag metering into the demand system for nothing. |
 
 **One engine hole this exposed** (not a product bug, but it shapes tests): the
@@ -559,7 +560,47 @@ curve and commit through `SSetTrackVolumeAction`.
 Gates: `ctest -R metering_test` and the qxa cases `meter_levels` (per-second RMS
 of the ramped-sawtooth fixture, the miss/silence path, the density rules via the
 REAL head built off screen, plus PNG grabs — the only coverage of
-`SLevelMeter::paintEvent`) and `meter_postfader`.
+`SLevelMeter::paintEvent`) and `meter_postfader`. Since B8 `meter_levels` also
+carries the LANE gate, and it is a **pair**: `test_stereo.wav`'s 6 dB ladder must
+show two lanes that differ, and `test_sawtooth.wav` — two channels holding the
+SAME audio (trap 22) — must report two lanes whose delta assertion is REJECTED.
+Only a real per-channel meter passes both. Never make a lane claim over
+`test_sawtooth.wav` alone; that is the defect that made `channel_assert_dupmono`
+incapable of detecting the sink going wide. The head is also grabbed at 150/100/
+60/40 px lane heights against both the 120 px and a 200 px column.
+
+### Waveform previews fold every channel (proposal 36 B8)
+
+A preview probe is the signed min/max envelope of its window over **all**
+channels — the union of the per-channel envelopes — in
+`SObject::straightCalcPreviewData` and `SCut::ensureCapturePeaks` alike. It was
+channel 0 alone, which was harmless while nothing above width 1 reached a sink
+and is a lie now. The drawn waveform stays ONE lane on purpose: `preview_t`,
+`swaveformdraw`, `SCut::getPreview` and every inline renderer are single-envelope
+by type, and an arranger clip lane has no room for six stacked waveforms.
+Per-channel LEVEL is the meter's job. The fold is key material, so
+`twAspect::PreviewPeaksVersion` is **2** and every v1 sidecar orphans on sight
+(gated in `sidecar_test`: an old file must MISS and be deleted, not be adopted).
+
+**A Preview ASPECT PAGE is a different thing and is not a probe array.**
+`CapturePageData::data` holds float samples at ~1 kHz written by
+`CaptureRevalidator::dispatchRecomputation`, with no probe count, hop or duration
+attached, and **nothing in the tree reads that payload** — `SCut::getPreview`
+uses the page's existence as a readiness signal only. `SPlainWave::getPreview`
+used to `reinterpret_cast` it to `preview_t*` (proposal 36 trap 26); that branch
+was unreachable, because only `SCut` ever calls `scheduleRevalidation`, so a
+non-`SCut` object's `currentPage_` is always null. B8 removed it rather than
+"fixing" the cast: a page with no geometry cannot answer a
+`(start, length, nProbes)` question whatever its element type.
+
+### The render dialog DISPLAYS the channel count; it does not override it
+
+File → Render shows the project's width read-only. `RenderParams::channels` keeps
+meaning what B5 built — a number, or 0 for "ask the graph". An override was
+considered and rejected: reducing 6 channels to 2 needs channel roles and a fold
+law, which proposal 36 §8 names as a non-goal, and the obvious candidate (the
+device rule's "first two, rest dropped") is a listening compromise that must not
+be applied silently to a delivered file. One authority for the width: the project.
 
 ## Recording Audio
 
