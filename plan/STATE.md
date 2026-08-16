@@ -11216,3 +11216,146 @@ correct and deterministic — every generator page is a pure function of its
 position and the feed, which is what lets AC3 byte-compare — but it is O(P) per
 page. A 4 s render of three notes takes ~0.9 s. The double demand is the thing to
 de-duplicate first; it is in plugins/CONTRACT.md's known debt.
+
+## 2026-08-16 — Proposal 37 P3c: render barrier + determinism
+
+**Branch:** `feat/36-p3c-render-barrier` (from the integration tip `bb183b1`).
+**Status:** ✅ COMPLETE — every run starts from a known state, and it is gated.
+
+### What landed
+
+`SApplication::beginRun(pos)` (`main/shell`), the RUN BARRIER of design D4 /
+§4.4. A run is one contiguous traversal of the graph by a consumer: an offline
+render, or a playback start. For every track whose slot 0 is an INSTRUMENT it
+does two things, in this order:
+
+1. `slot->forgetContinuity()` — clears the processor's `lastEnd_/haveLastEnd_`,
+   so the next page is a REPOSITION (reset + chase + pre-roll K) instead of a
+   continuation of whatever the previous run was doing;
+2. `track->invalidateRenderPathRange(pos, INT64_MAX)` — the app-side path walk
+   up to the root, which per design F13 is the ONLY thing that carries a change
+   from a tap up to what the consumers actually observe.
+
+The ORDER is load-bearing: a page rendered after the epoch bump is then
+guaranteed to have seen the cleared continuity, and one rendered in between is
+staled by the bump. Effects are deliberately not barriered.
+
+The walk is `sinstruments::collectInstrumentTracks()`
+(`main/objects/track/sinstrumenttracks.{h,cpp}`) — depth-first over LANES only
+(`isPathContainer()`, the same rule `ssolo`'s walks use), so a folder's own
+instrument and a leaf's are both found. A WALK and not a maintained registry:
+a list would have to be kept in step with insert/remove/reorder-plugin, the undo
+of each, track add/remove/reparent and project load, and it runs once per
+transport start, never per page.
+
+**Call sites — four, all on the main thread, all before the run's first
+demand:**
+
+| site | position | ordering |
+|---|---|---|
+| `SApplication::startRender()` | `llround(startTimeSec × rate)`, computed exactly as `RenderSession` does | before the render session's thread exists — the ordering is structural, not a race |
+| `SMainWindow::startPlaying()` | the locator | immediately before `getSpeaker()->startOutput()` |
+| `SApplication::setPlaybackRunning()` | the locator | immediately before `t3Speaker_->startOutput()` |
+| `SApplication::startRecording()` (monitoring playback) | the locator | immediately before `t3Speaker_->startOutput()` |
+
+`twSpeaker::startOutput()` performs the engine's pre-readahead
+`seekTo(locator)` + `startReadahead()` on the calling thread, so a barrier
+immediately before it precedes the readahead's first demand. There are three
+play-start paths because the GUI Play button and `SApplication::setPlaybackRunning`
+(which is what the `toggle-playback` verb drives, via `SAppContext`) reach the
+speaker independently; a barrier on one only would make determinism depend on
+which was used.
+
+**Not called from `setGlobalLocatorPos()`**: a locate while stopped demands
+nothing (`requestSeek` is a no-op unless playing) and the next play start covers
+it; a locate while PLAYING keeps today's page-boundary splice on purpose (the RT
+thread adopts a fresh current-epoch page MID PAGE, design F14 / proposal 16, so
+re-staling what it is serving would be an audible switch at an arbitrary
+offset). Never from the readahead thread, a worker or the RT callback.
+
+### Docs
+
+`docs/contracts/FREEZE_PROTOCOL.md` gains a "The run barrier" section (the five
+properties, and where it is deliberately not issued); `docs/contracts/THREADING.md`
+gains rule 5 ("the run barrier is MAIN THREAD ONLY", with all four call sites);
+`tw303a/schedule/CONTRACT.md` gains invariant 9 ("the run barrier is NOT a
+scheduler feature", with the F13 and inv.-8 reasons it cannot be); `main/shell/CONTRACT.md`
+inv. 10 (every run start and nowhere else); `main/objects/track/CONTRACT.md`
+inv. 14 (walk, not registry).
+
+### Gates
+
+`./build.sh` clean; `python tools/check_layering.py` clean;
+`python tools/check_logging.py` clean.
+
+**`ctest --test-dir smaragd/build -j4`: 160/160 run passed, 163 registered**, 3
+`au_*` disabled (macOS only). 160 registered before, +3: the two new qxa cases
+and the cross-process CMake driver. 167 s wall. No flakes, no teardown crashes.
+
+| AC | case | numbers |
+|---|---|---|
+| AC1 | `instrument_render_determinism` | 303 fixture: key 48 held 0–6 s + four short notes; render A, playback from 262144 (a page boundary, 5.46 s into the held note, where the 4-second pre-roll CAP bites) for ~1.4 s on the capture backend, render B. **`assert-file-identical` A vs B: 1 728 044 bytes identical.** Audibility guard rms 0.02–1.0 over frames [0, 288000). |
+| AC1 (cross-process) | `instrument_render_determinism_xproc` | `tests/run_xproc_determinism.cmake` runs the AC1 case and then `tests/cases/xproc/instrument_render_determinism_xproc.qxa` into ONE `--test-output-dir`, so pass 2 can name pass 1's `det_a.wav` as its reference. det_c (fresh process, first run) == det_a, by the verb AND by `cmake -E compare_files`. 10.7 s. |
+| AC2 (a) | `instrument_locate_continuity` | sine, key 60 held 0–4 s, `set-locator` 96000 while STOPPED, play, `dump-playback-capture`: first 4096 captured frames read **261.687 Hz** (band 258.626–264.626) and rms **0.556769** (band 0.54007–0.57347, the closed form (100/127)/√2). The chase put the note there. |
+| AC2 (b) | `instrument_locate_continuity` | 303, key 84 held 0–4 s, cutoff 20 Hz / envMod 1.0 / decay 2.0 s, so the filter cutoff IS the envelope. Full render frames [96000, 98048) rms **0.388957**; capture frames [0, 2048) rms **0.388957** — identical to every digit, which also proves the capture is frame-aligned (recorded frame 0 IS timeline 96000, no leading silence). Band = ±10 % → [0.350061, 0.427853], asserted on BOTH windows. |
+| AC2 (b) falsification | one-off, by hand | A temporary `SMARAGD_PREROLL_MAX_FRAMES` cap in `twPluginSlotProcessor::preRoll_nolock` (NOT committed) forcing K = 4096: rms **0.215076** instead of 0.388957 — 45 % low, 39 % below the bottom of the band, ratio 1.81×. The reach-back to the note's own note-on is what sets the level at the locate. |
+| AC2c | `instrument_render_determinism_xproc` | det_d — a render in a FRESH process AFTER a play/stop cycle in that process — is byte-identical to det_a, by the verb and by `cmake -E compare_files`. |
+| AC3 | sweeps | `repeat_test.sh` N=50 × workers {1,4,8,16} on both new cases: **8 × 50/50 = 400/400**. Worker count 0 excluded by design (an instrument is silent on the legacy pull). |
+| AC4 | goldens | `tests/goldens/` untouched; `mc_golden_mono`, `mc_golden_stereo`, `fader_post_fx` and `midi_out_render_silent` green — no track without an instrument changes path, so the barrier cannot move a golden byte. |
+
+### The cost, measured
+
+On the AC1 project (one instrument track, playback starting at 262144 where the
+previous render had already frozen pages), counted with a temporary
+`[MEASURE]` log line in the generator branch of `twPluginSlotProcessor::render`:
+
+| phase | processor page renders, barrier ON | barrier OFF |
+|---|---|---|
+| render A | 12 (6 pages × 2) | 12 |
+| **playback start** | **8 (pages 262144, 327680, 393216, 458752)** | **4 (pages 393216, 458752 only)** |
+| render B | 12 | 12 |
+
+So the barrier costs **TWO re-rendered pages per play start** here — exactly the
+pages of the readahead window that the previous run had already frozen at or
+after the locator — about 20 ms of wall clock. The ×2 in every row is P3b's
+recorded double-render debt, not the barrier.
+
+### Deviations, and what is NOT gated
+
+- **The barrier is currently a GUARANTEE, not a fix, and the AC1 case cannot
+  fail today.** Verified rather than assumed: with both call sites disabled and
+  rebuilt, `instrument_render_determinism` still compares byte-identical. The
+  reason is P3b's double-render debt — the scheduler renders each instrument
+  page twice and the second call at a position is never contiguous with the
+  first, so EVERY instrument page in every consumer comes out of the reposition
+  path, which is a pure function of the page's own start position and the feed.
+  Position-pure pages are trivially run-independent, so there is nothing to
+  leak. The moment an instrument page is served from a CONTINUOUS chain (which
+  is what proposal 20's pipelining work is for), the run it chained from starts
+  to matter and these cases are what will say so. Both case headers say this in
+  full; neither pretends to reproduce a live bug.
+- **The same debt is why AC2's forced-K falsification moves the render and the
+  capture together** (both read 0.215076 with the knob on). It proves the
+  reach-back sets the absolute level; it does not prove capture and render can
+  drift apart.
+- **The debug knob was not committed.** A permanent `SMARAGD_PREROLL_MAX_FRAMES`
+  would be an engine change outside this phase's module set (`main/shell`,
+  `main/objects/track`, `main/testkit`, docs) and a lever for weakening the band
+  later. It was applied locally, measured once, reverted; the exact patch and
+  the number are in the case header.
+- **Seek during playback is not barriered**, and neither is a **loop wrap**.
+  Both keep today's page-boundary splices. NOT GATED — a timing assertion tight
+  enough to separate the behaviours would be flaky, and the alternative (a
+  mid-page re-stale that the RT thread adopts as soon as it lands) is audibly
+  worse than the splice.
+- **Effects are not barriered at all** — deliberate; their splice at a page
+  boundary is what they have always done.
+- **Render-vs-playback identity** is still not claimed: different runs, different
+  first pages.
+- **Stereo** is not gated (the sink is mono until 36-B5); channel 0 only.
+- **The cross-process gate is a CMake driver, not a qxa case.** The qxa
+  registration gives every case a private output directory, and the byte gate
+  this repo rests on is a FRESH-PROCESS compare — so the two cannot be expressed
+  in one `.qxa`. Pass 2 lives in `tests/cases/xproc/` precisely so the
+  `CONFIGURE_DEPENDS` glob cannot register it as a standalone case that would
+  fail looking for a reference nobody rendered.
