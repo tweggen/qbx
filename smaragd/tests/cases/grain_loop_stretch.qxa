@@ -72,10 +72,10 @@
                          startFrame="84000" frameCount="12000"
                          minRms="0.175" maxRms="0.23"/>
 
-    <!-- past the clip end: silence -->
-    <assert-audio-energy filename="grain_loop_stretch.wav"
-                         startFrame="96000" frameCount="24000"
-                         minRms="0.0" maxRms="0.005"/>
+    <!-- The render now ENDS here, so the file itself is the
+         boundary: this used to measure silence in the 60 s pad. -->
+    <assert-audio-length filename="grain_loop_stretch.wav"
+                         minFrames="96000" maxFrames="96000"/>
 
     <assert-audio-peak filename="grain_loop_stretch.wav" maxPeak="0.995"/>
   </actions>

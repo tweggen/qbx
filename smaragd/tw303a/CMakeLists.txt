@@ -55,7 +55,9 @@ tw_module(pages
         pages/include/tw/pages/page_interface.h
         pages/include/tw/pages/io_vector.h
         pages/include/tw/pages/capture_page_pool.h
+        pages/include/tw/pages/tw_page_accounting.h
         pages/src/tw_output_page.cc
+        pages/src/tw_page_accounting.cc
         pages/src/io_vector.cc
         pages/src/capture_page_pool.cc
     DEPS tw_core
@@ -602,6 +604,19 @@ else()
     target_link_libraries(gen_position_fixture PRIVATE PkgConfig::SNDFILE)
 endif()
 
+# --- gen_channel_fixture: writer + verifier for the asymmetric-channel fixture -
+# Same deal as gen_position_fixture, for tests/test_channels4.wav: four channels
+# on a 6 dB RMS ladder, so a test can prove WHICH channel it measured. --verify
+# measures every channel of an existing file against the ladder, which is why
+# that .wav may be committed. Offline tool, not a gate.
+add_executable(gen_channel_fixture analysis/tools/gen_channel_fixture.cc)
+target_link_libraries(gen_channel_fixture PRIVATE tw_analysis)
+if(SMARAGD_WINDOWS)
+    target_link_libraries(gen_channel_fixture PRIVATE SndFile::sndfile)
+else()
+    target_link_libraries(gen_channel_fixture PRIVATE PkgConfig::SNDFILE)
+endif()
+
 # --- Platform audio backends (devices only) --------------------------------------
 if(SMARAGD_LINUX AND ENABLE_ALSA)
     find_package(ALSA REQUIRED)
@@ -768,6 +783,12 @@ tw_module_test(twlog_test                   core/tests/test_twlog.cpp           
 # `if(TEST twlog_test)` is simply false -- it fails silently, not loudly.
 set_tests_properties(twlog_test PROPERTIES RUN_SERIAL TRUE)
 tw_module_test(io_vector_test               pages/tests/io_vector_test.cc               tw_pages)
+# The releaseOldPages retention boundary (FRAMES, not bytes) and the page-memory
+# accounting. Both are unreachable from a .qxa case: releaseOldPages has no
+# production caller at all, and a page-count assertion tight enough to catch an
+# accounting regression would flake on the readahead. So they are pinned here,
+# against a page count the test controls exactly.
+tw_module_test(graph_test                   graph/tests/graph_test.cc                   tw_graph)
 tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)

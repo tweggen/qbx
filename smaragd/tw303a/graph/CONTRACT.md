@@ -65,11 +65,36 @@ Invariants:
    start, the SCut capture rebuild and the plugin chain's producer seek were all
    deleted rather than locked, because position is carried BY THE PAGE.
 
+8. Page retention is stated in FRAMES. releaseOldPages(keepAfterPos) drops a
+   page whose [startPos, startPos + FRAME_CAPACITY) ends before keepAfterPos.
+   It compared against PAGE_SIZE — the page's size in BYTES — which made the
+   window four times wider than the comment beside it claimed. Note the second
+   half of the finding: NOTHING IN THE TREE CALLS releaseOldPages. Component
+   page caches are pruned only by invalidation and by teardown, so a long
+   session's outputPages_ maps grow without bound. Fixing the arithmetic
+   changed no measured number; it means whoever wires the function up does not
+   inherit a silently wrong window. Pinned frame-exactly by graph_test.
+9. Every live twComponent is in a process-wide registry, for the per-component
+   half of the page accounting. The registry holds RAW pointers and owns
+   nothing; it is a leaked singleton so that a component destroyed after static
+   destruction still has somewhere to deregister.
+   componentPageStats()/describePageMemory() hold the registry lock for the
+   WHOLE walk, and that is what makes the raw pointers safe: ~twComponent takes
+   the same lock as its first act, so no component can get past the top of its
+   base destructor while a walk is running, and the deleter frees the storage
+   only after that destructor returns. Snapshotting the pointers and releasing
+   the lock — the obvious alternative — would leave exactly the window in which
+   a worker dropping the last reference to a reader turns a diagnostic into a
+   use-after-free. The deadlock that arrangement would otherwise invite is
+   closed by pageStatsTry()'s TRY-lock: the walk never waits for a component
+   mutex while holding the registry lock, and reports how many it skipped.
+
 Threading: THREADING.md rules 2-3; one mutex per component, _nolock suffix
 convention.
 
 How to test: the full qxa suite exercises every sub-contract;
-render_split_slip_offset.qxa is the MapPosFn regression. Invariant 7 has a
+render_split_slip_offset.qxa is the MapPosFn regression; `ctest -R graph_test`
+pins invariants 8-9 (links only tw_graph). Invariant 7 has a
 dedicated stress case in playback_test ("seek storm"): four threads freezing
 position-coded pages while a fifth hammers AudioEngine::seekTo, then every
 produced page is decoded and must carry the audio of its own startPosition.

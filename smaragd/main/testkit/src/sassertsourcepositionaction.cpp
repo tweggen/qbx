@@ -1,4 +1,5 @@
 #include "app/testkit/sassertsourcepositionaction.h"
+#include "app/testkit/stestfilepath.h"
 #include "app/actions/sactionregistry.h"
 #include "app/shell/sapplication.h"
 #include "tw/analysis/audio_analysis.h"
@@ -21,7 +22,7 @@ QStringList SAssertSourcePositionAction::knownAttributes() const
     };
 }
 
-SApplyResult SAssertSourcePositionAction::apply(SProject * /*project*/)
+SApplyResult SAssertSourcePositionAction::apply(SProject *project)
 {
     if (filename_.isEmpty()) {
         qWarning() << "SAssertSourcePositionAction: no filename given";
@@ -34,7 +35,7 @@ SApplyResult SAssertSourcePositionAction::apply(SProject * /*project*/)
         qWarning() << "SAssertSourcePositionAction: no test output directory configured";
         return {false, nullptr};
     }
-    const QString fullPath = outputDir + "/" + filename_;
+    const QString fullPath = resolveTestFilePath(filename_, outputDir, project);
 
     std::string error;
     const audio::PositionDecode d =

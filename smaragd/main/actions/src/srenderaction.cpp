@@ -6,6 +6,7 @@
 #include "tw/render/render_session.h"
 #include <QDomElement>
 #include <QDebug>
+#include <QFileInfo>
 #include <thread>
 #include <chrono>
 
@@ -80,7 +81,12 @@ SApplyResult SRenderAction::apply(SProject *project)
     params.quality = quality_;
     params.extent = audio::RenderParams::Extent::EntireProject;
     params.startTimeSec = 0.0;
-    params.endTimeSec = project->getDurationSeconds();
+    // The ARRANGEMENT decides how long this render is (it used to be a hardcoded
+    // 60 s, which truncated anything longer and padded everything shorter) —
+    // unless the case explicitly asks for LESS with durationSec=, which is the
+    // only thing that attribute is for now that the default is honest.
+    params.endTimeSec = ( durationSec_ > 0.0 ) ? durationSec_
+                                               : project->getDurationSeconds();
 
     // Start rendering
     // Note: RenderSession is asynchronous. For test mode, we should wait for completion.
@@ -105,13 +111,26 @@ SApplyResult SRenderAction::apply(SProject *project)
     // raises it (see smaragd/CMakeLists.txt) and relies on CTest's own per-test
     // TIMEOUT as the real hang guard -- a bound that is about the test, not
     // about one action inside it.
-    int maxWaitMs = 30000;  // 30 second max wait
+    // Two independent corrections, and BOTH are needed — they answer different
+    // questions and neither subsumes the other:
+    //
+    //   * how much audio is there?  The budget scales with the arrangement, now
+    //     that the extent is not a fixed minute (a case may legally render
+    //     several minutes, and a flat ceiling would fail it for being long);
+    //   * how slow is this machine?  The base is overridable, because scaling
+    //     with the CONTENT does nothing about a box that is ten times slower
+    //     than usual.
+    //
+    // Keep only the scaling and `-j8` still kills short renders on a busy box;
+    // keep only the override and a five-minute render needs an absurd constant.
+    int maxWaitMs = 30000;  // base: the machine-speed half
     {
         const QByteArray env = qgetenv("SMARAGD_RENDER_TIMEOUT_MS");
         bool ok = false;
         const int v = env.toInt(&ok);
         if (ok && v > 0) maxWaitMs = v;
     }
+    maxWaitMs += static_cast<int>(params.endTimeSec * 2000.0);  // the content half
     auto start = std::chrono::steady_clock::now();
     while (app.isRenderingActive()) {
         auto now = std::chrono::steady_clock::now();
@@ -121,6 +140,15 @@ SApplyResult SRenderAction::apply(SProject *project)
             return {false, nullptr};
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // A render that never started leaves no file behind, and startRender() does
+    // not report that back — the action would otherwise report SUCCESS for a
+    // case whose output does not exist, and the failure would surface much later
+    // as a confusing assert against a missing WAV.
+    if (!QFileInfo::exists(fullPath)) {
+        qWarning() << "SRenderAction: no output file was produced:" << fullPath;
+        return {false, nullptr};
     }
 
     qDebug() << "SRenderAction: rendered to" << fullPath;
@@ -145,6 +173,10 @@ void SRenderAction::writeXml(QDomElement &elem) const
     }
     elem.setAttribute("format", formatStr);
     elem.setAttribute("quality", QString::number(quality_));
+    // Written only when set, so every existing case round-trips unchanged.
+    if (durationSec_ > 0.0) {
+        elem.setAttribute("durationSec", QString::number(durationSec_));
+    }
 }
 
 bool SRenderAction::readXml(const QDomElement &elem, int /*version*/)
@@ -168,6 +200,13 @@ bool SRenderAction::readXml(const QDomElement &elem, int /*version*/)
     quality_ = elem.attribute("quality", "10").toInt(&ok);
     if (!ok || quality_ < 0 || quality_ > 320) {
         qWarning() << "SRenderAction::readXml: invalid quality:" << elem.attribute("quality");
+        return false;
+    }
+
+    durationSec_ = elem.attribute("durationSec", "-1").toDouble(&ok);
+    if (!ok) {
+        qWarning() << "SRenderAction::readXml: invalid durationSec:"
+                   << elem.attribute("durationSec");
         return false;
     }
 

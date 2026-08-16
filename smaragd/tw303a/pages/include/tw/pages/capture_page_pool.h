@@ -117,7 +117,7 @@ public:
      */
     explicit CapturePagePool(size_t numPages = 2048);
 
-    ~CapturePagePool() = default;
+    ~CapturePagePool();
 
     /**
      * Allocate a page from the pool (O(1)).

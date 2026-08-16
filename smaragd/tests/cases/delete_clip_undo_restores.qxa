@@ -59,10 +59,11 @@
     <assert-audio-energy filename="undo_deleted.wav"
                          startFrame="0" frameCount="48000"
                          minRms="0.05" maxRms="0.085"/>
-    <!-- ...and the tail's span is now silent. -->
-    <assert-audio-energy filename="undo_deleted.wav"
-                         startFrame="96000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- ...and the tail is GONE, which the LENGTH now says outright: the
+         arrangement ends where the head does. Stronger than the old
+         "that span is silent", which a restored-but-silent clip passed. -->
+    <assert-audio-length filename="undo_deleted.wav"
+                         minFrames="96000" maxFrames="96000"/>
 
     <undo count="1"/>
 
@@ -88,9 +89,11 @@
     <redo count="1"/>
 
     <render filename="undo_redone.wav" format="wav" quality="10"/>
-    <assert-audio-energy filename="undo_redone.wav"
-                         startFrame="96000" frameCount="48000"
-                         minRms="0.0" maxRms="0.001"/>
+    <!-- ...and the tail is GONE, which the LENGTH now says outright: the
+         arrangement ends where the head does. Stronger than the old
+         "that span is silent", which a restored-but-silent clip passed. -->
+    <assert-audio-length filename="undo_redone.wav"
+                         minFrames="96000" maxFrames="96000"/>
   </actions>
 
   <assertions>
