@@ -219,6 +219,12 @@ public slots:
     // onPluginSlotInserted/Removed/Reordered already do.
     void onPluginSlotAudioInvalidated();
     void onTrackMuteChanged( bool muted );
+    // A slot's `param:` lane changed over [start, INT64_MAX): a plugin is
+    // class-1 (stateful), so an edit at `a` can change every page after it.
+    // Routed through a SIGNAL for the same reason audioInvalidated() is —
+    // SPluginChain is deliberately not an SLink child, so the slot cannot
+    // reach the containers above it on its own (pluginui inv. 6).
+    void onPluginSlotAudioInvalidatedRange( qint64 start, qint64 end );
     // A child track (folder lane) changed its mute; we are its summing parent.
     void childTrackMuteChanged( bool muted );
     // Somewhere in our subtree a lane's solo flag flipped. Solo is GLOBAL, so
@@ -228,6 +234,39 @@ public slots:
     // subtreeSoloChanged, so it works at any nesting depth.
     void childTrackSoloChanged();
     void onTrackVolumeChanged( double gainDb );
+
+public:
+    // --- automation (proposal 37 P5, design D5) ----------------------------
+    //
+    // A track owns the `self:Volume` and `self:Muted` lanes; both are consumed
+    // by twGainStage, POST-FX. Volume in TRIM is SUMMED with the fader's own
+    // dB (dB sum == gain product); in READ the curve is the whole value.
+    //
+    // The MUTE LANE is the audio mute and it is ramped. The mute BUTTON stays
+    // STRUCTURAL (the parent nulls our input plug / skips our clip entry) —
+    // they are different things, and an asset capture of a lane-muted track
+    // hears the lane exactly as a render does.
+    virtual void onAutomationChanged( SAutomationLane &lane,
+                                      offset_t start, offset_t end ) override;
+    virtual void applyAutomationToEngine() override;
+
+private:
+    // Push both lanes' current snapshots into the gain stage. Null curve ==
+    // the scalar path, which is what keeps an un-automated track byte-exact.
+    void pushTrackAutomation();
+    // Re-read every clip's `cut:Gain` envelope into its twTrackMix entry. The
+    // curve lives on the WINDOW (an SCut), and a window is not allowed to know
+    // its track — so this runs where every model change already funnels
+    // through on the MAIN thread: bumpRenderChainEpoch[Range](), the same hook
+    // refreshInstrumentFeed() uses and for the same reason.
+    void refreshClipGainCurves();
+
+// BACK INTO THE SLOTS SECTION. Everything from here to `signals:` was declared
+// under `public slots:` above and MUST stay there: trackEventClipChanged is
+// connected by NAME (SIGNAL/SLOT macros), so demoting it to a plain member
+// makes the connect fail at runtime with a warning nobody reads and every
+// event-clip edit silently stops reaching the render.
+public slots:
     /** An event clip of ours changed its content or its window (3.2). */
     void trackEventClipChanged( offset_t fromClipPos );
 

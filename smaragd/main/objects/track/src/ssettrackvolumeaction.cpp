@@ -5,13 +5,34 @@
 #include "app/actions/sactionregistry.h"
 #include "app/objects/track/strack.h"
 #include "app/model/slink.h"
+#include "app/model/sappcontext.h"
+#include "app/model/sautomationlane.h"
+#include "app/objects/track/sautomationactions.h"
 #include <QDomElement>
+#include <memory>
 
 using namespace strackpath;
 
 SSetTrackVolumeAction::SSetTrackVolumeAction(const QList<int> &trackPath, double newVolume)
     : trackPath_(trackPath), newVolume_(newVolume)
 {
+}
+
+
+// A STATIC EDIT ON A READ LANE BECOMES A POINT (design §3.4 / D5). Without this
+// the history and the lane disagree: the fader would move, the render would not,
+// and the undo stack would carry a step nobody can hear. Trim and Off are
+// deliberately NOT redirected — there the static value is still the thing being
+// edited (§11 decision 3).
+static SApplyResult redirectToReadLane( SProject *project, const QList<int> &path,
+                                        SObject *track, const QString &target,
+                                        double value )
+{
+    if( !sautomation::readLaneFor( track, target ) ) return { false, nullptr };
+    const offset_t at = SAppContext::get().getGlobalLocatorPos();
+    std::unique_ptr<SAction> pt(
+        sautomation::pointAtLocatorAction( path, target, at, value ) );
+    return pt->apply( project );
 }
 
 SApplyResult SSetTrackVolumeAction::apply(SProject *project)
@@ -29,6 +50,10 @@ SApplyResult SSetTrackVolumeAction::apply(SProject *project)
     if (!track) {
         return {false, nullptr};
     }
+
+    SApplyResult viaLane = redirectToReadLane(
+        project, trackPath_, track, QStringLiteral( "self:Volume" ), newVolume_ );
+    if( viaLane.applied ) return viaLane;
 
     // Capture pre-mutation state for the inverse, then mutate.
     // setVolume() emits volumeChanged(), which propagates to the audio mixer

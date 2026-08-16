@@ -22,6 +22,8 @@
 #include "app/model/splacements.h"
 #include "app/model/ssolorules.h"
 #include "app/objects/track/strack.h"
+#include "app/model/sautomationlane.h"
+#include "app/model/sclipwindow.h"
 #include "app/objects/track/strackrndrinline.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
@@ -331,6 +333,7 @@ void STrack::bumpRenderChainEpoch()
     // MAIN thread, which is the one place the feed's source list can be rebuilt
     // safely (see refreshInstrumentFeed).
     refreshInstrumentFeed();
+    refreshClipGainCurves();
     if( cpTrackMix_ )
         cpTrackMix_->bumpContentEpoch();
     if( cpDspChain_ )
@@ -346,6 +349,7 @@ void STrack::bumpRenderChainEpoch()
 void STrack::bumpRenderChainEpochRange( offset_t start, offset_t end )
 {
     refreshInstrumentFeed();
+    refreshClipGainCurves();
     if( cpTrackMix_ )
         cpTrackMix_->invalidatePagesInRange(start, end);
     if( cpDspChain_ )
@@ -810,6 +814,9 @@ void STrack::adoptPluginChain( SPluginChain *chain )
         QObject::connect( slot, SIGNAL( audioInvalidated() ),
                           this, SLOT( onPluginSlotAudioInvalidated() ),
                           Qt::UniqueConnection );
+        QObject::connect( slot, SIGNAL( audioInvalidatedRange( qint64, qint64 ) ),
+                          this, SLOT( onPluginSlotAudioInvalidatedRange( qint64, qint64 ) ),
+                          Qt::UniqueConnection );
         slot->setChannelCount( channels_ );
     }
     if( cpDspChain_ ) {
@@ -1022,6 +1029,9 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
     QObject::connect( &slot, SIGNAL( audioInvalidated() ),
                       this, SLOT( onPluginSlotAudioInvalidated() ),
                       Qt::UniqueConnection );
+    QObject::connect( &slot, SIGNAL( audioInvalidatedRange( qint64, qint64 ) ),
+                      this, SLOT( onPluginSlotAudioInvalidatedRange( qint64, qint64 ) ),
+                      Qt::UniqueConnection );
 
     // Sync the model change to all DSP plugin chains
     // Pre-allocate inserts for all buses to ensure they're fully initialized
@@ -1165,6 +1175,66 @@ void STrack::applyChildTrackAudibility()
                                               : (offset_t) affected.end;
         invalidateRenderPathRange( (offset_t) affected.start, end );
     }
+}
+
+// --- automation (proposal 37 P5, design D5) ---------------------------------
+
+void STrack::pushTrackAutomation()
+{
+    if( !cpGainStage_ ) return;
+
+    SAutomationLane *vol = automationLane( QStringLiteral( "self:Volume" ) );
+    // TRIM (the default, design §11 decision 3) keeps the fader meaningful: the
+    // curve is an OFFSET in dB. Every other consuming mode is absolute, i.e.
+    // the lane IS the value and the stored fader is not summed in.
+    const bool absolute = vol && vol->mode() != SAutomationMode::Trim;
+    cpGainStage_->setVolumeCurve( vol ? vol->snapshot() : nullptr, absolute );
+
+    SAutomationLane *mute = automationLane( QStringLiteral( "self:Muted" ) );
+    cpGainStage_->setMuteCurve( mute ? mute->snapshot() : nullptr );
+}
+
+void STrack::applyAutomationToEngine()
+{
+    pushTrackAutomation();
+    // Also the CLIPS': a load reads a cut's inline <automation> before the
+    // track's clip entries exist, so the pull has to happen from here too.
+    refreshClipGainCurves();
+}
+
+void STrack::onAutomationChanged( SAutomationLane &lane, offset_t start, offset_t end )
+{
+    pushTrackAutomation();
+    // twGainStage is class INFINITY and pure — the output of a frame depends on
+    // that frame's input, the scalar and the frame's position, never on how the
+    // component got there. So the invalidation is EXACT: only the pages the
+    // curve actually moved go stale (design §4.5).
+    (void) lane;
+    if( end > start ) invalidateRenderPathRange( start, end );
+}
+
+// The curve lives on the clip's WINDOW object; the entry that consumes it lives
+// in OUR twTrackMix. A take stack answers for its ACTIVE take, which is the one
+// the mix resolves to.
+void STrack::refreshClipGainCurves()
+{
+    if( !cpTrackMix_ ) return;
+    for( SLink *lk : childLinks() ) {
+        if( !lk || !lk->hasStartTime() ) continue;
+        SObject *obj = &lk->getSObject();
+        if( obj->isPathContainer() ) continue;          // a nested lane, not a clip
+        if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
+        cpTrackMix_->setClipGainCurve(
+            lk, obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );
+    }
+}
+
+void STrack::onPluginSlotAudioInvalidatedRange( qint64 start, qint64 end )
+{
+    // CLASS 1, so the range is open-ended by construction: the plugin's DSP
+    // state at any position depends on everything before it (design F9).
+    if( end <= start ) { invalidateRenderPath(); return; }
+    invalidateRenderPathRange( (offset_t) start, (offset_t) end );
 }
 
 void STrack::onTrackVolumeChanged( double gainDb )

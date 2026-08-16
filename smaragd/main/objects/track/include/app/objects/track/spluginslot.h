@@ -146,6 +146,17 @@ public:
     // of chasing them.
     void forgetContinuity();
 
+    // --- automation (proposal 37 P5, design D5 / §4.5) ----------------------
+    //
+    // A slot owns its `param:<id>` lanes. Their VALUE domain is the plugin's
+    // HOST-FACING one — native for CLAP/AU, normalized [0,1] for VST3 (plugins
+    // inv. 26) — i.e. exactly what set-plugin-param writes and getParam()
+    // returns, so a lane and a static edit are in the same units by
+    // construction.
+    virtual void onAutomationChanged( SAutomationLane &lane,
+                                      offset_t start, offset_t end ) override;
+    virtual void applyAutomationToEngine() override;
+
 signals:
     void bypassChanged( bool );
     // The slot was re-instantiated (reloadPlugin()): its state/mode may have
@@ -171,6 +182,15 @@ signals:
     // the twPluginChain / twTrackMix / mixer pages above them were not, and the
     // render served the audio it had already produced.
     void audioInvalidated();
+    // The RANGE-SCOPED twin (proposal 37 P5): an automation edit at `start`
+    // stales [start, end) rather than the whole chain. `end` is INT64_MAX for a
+    // parameter lane, because a plugin is CLASS 1 — its state at any position
+    // depends on everything before it, so an edit at `a` can change every page
+    // after it (design F9). The signal exists for the same reason
+    // audioInvalidated() does: SPluginChain is deliberately not an SLink child
+    // of its track, so SObject::invalidateRenderPathRange() from here is a
+    // NO-OP and the slot must ask its track to do the walk.
+    void audioInvalidatedRange( qint64 start, qint64 end );
 
 private:
     // Materialize the processor (once) and grow the tap vector to nBuses.
@@ -183,6 +203,8 @@ private:
     // its module path resolved.
     void resolveEffective();
     audio::twPluginSlotProcessor::Factory makeFactory() const;
+    // Collect every `param:` lane into the processor's curve map.
+    void pushParamCurves();
 
     audio::twPluginDescriptor descriptor_;   // as stored / as given (VERBATIM)
     audio::twPluginDescriptor effective_;    // as resolved against the registry

@@ -1,4 +1,7 @@
 #include "app/objects/midi/smidicut.h"
+#include "app/model/sautomationlane.h"
+
+#include <limits>
 
 #include <QDebug>
 #include <QDomElement>
@@ -101,9 +104,44 @@ void SMidiCut::rebuild_nolock()
 
     std::vector<SEvent> events;
     if( SMidiSequence *seq = sequence() ) events = seq->events();
+    // The lanes are read HERE, under the cut's own mutex, so a rebuild and an
+    // edit cannot interleave; the snapshot they produce is immutable and is what
+    // every consumer sees.
+    const std::shared_ptr<const twAutomationCurve> transCurve =
+        automationCurve( QStringLiteral( "cut:Transpose" ) );
+    const std::shared_ptr<const twAutomationCurve> velCurve =
+        automationCurve( QStringLiteral( "cut:VelocityScale" ) );
     snapshot_.framesSeq = smidievents::buildSeq(
         events, rate_ * framesPerTick, transpose_, velocityScale_,
-        channelOverride_ );
+        channelOverride_, transCurve.get(), velCurve.get() );
+}
+
+// --- automation (proposal 37 P5) --------------------------------------------
+
+void SMidiCut::applyAutomationToEngine()
+{
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        rebuild_nolock();
+    }
+    // Open-ended: the consumer of an event stream is class-1 (design F9), so an
+    // event change is never bounded on the right.
+    emit eventsChanged( 0 );
+}
+
+void SMidiCut::onAutomationChanged( SAutomationLane &lane, offset_t start, offset_t end )
+{
+    (void) end;
+    const bool eventLane = ( lane.ref().space == SParamRef::Space::Cut
+                             && lane.ref().prop != QLatin1String( "Gain" ) );
+    if( eventLane ) {
+        applyAutomationToEngine();
+        // The track turns eventsChanged into its own open-ended invalidation;
+        // this is the walk for the paths that do not go through the feed.
+        invalidateRenderPathRange( start, std::numeric_limits<offset_t>::max() );
+        return;
+    }
+    SObject::onAutomationChanged( lane, start, end );
 }
 
 void SMidiCut::publish_( length_t oldDuration )
@@ -384,6 +422,9 @@ SClipWindow *SMidiCut::cloneWindowOver( SProject *project ) const
     copy->setTranspose( getTranspose() );
     copy->setVelocityScale( getVelocityScale() );
     copy->setChannelOverride( getChannelOverride() );
+    // The clip's automation lanes are part of the WINDOW (design 3.3), so a
+    // duplicate or a new take carries them exactly as it carries the transpose.
+    copy->copyAutomationFrom( *this );
     return copy;
 }
 

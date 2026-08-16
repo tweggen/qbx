@@ -18,6 +18,7 @@
 set(APP_MODEL_FILES
     # --- app/model
     model/include/app/model/sappcontext.h
+    model/include/app/model/sautomationlane.h
     model/include/app/model/sclipwindow.h
     model/include/app/model/sdetaileditors.h
     model/include/app/model/sexternfile.h
@@ -34,6 +35,7 @@ set(APP_MODEL_FILES
     model/include/app/model/ssolorules.h
     model/include/app/model/ssortedobjlist.h
     model/src/sappcontext.cpp
+    model/src/sautomationlane.cpp
     model/src/sclipwindow.cpp
     model/src/sdetaileditors.cpp
     model/src/sexternfile.cpp
@@ -164,6 +166,7 @@ set(APP_OBJECTS_FILES
     objects/midi/src/smidisequence.cpp
     # --- app/objects/track
     objects/track/include/app/objects/track/sinsertpluginaction.h
+    objects/track/include/app/objects/track/sautomationactions.h
     objects/track/include/app/objects/track/seteditgroupaction.h
     objects/track/include/app/objects/track/smoveclipaction.h
     objects/track/include/app/objects/track/spluginactionsupport.h
@@ -182,6 +185,7 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/strackpath.h
     objects/track/include/app/objects/track/strackrenderer.h
     objects/track/include/app/objects/track/strackrndrinline.h
+    objects/track/src/sautomationactions.cpp
     objects/track/src/seteditgroupaction.cpp
     objects/track/src/sinsertpluginaction.cpp
     objects/track/src/smoveclipaction.cpp
@@ -292,6 +296,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sactionrunner.h
     testkit/include/app/testkit/sactionscript.h
     testkit/include/app/testkit/sassertaudioenergyaction.h
+    testkit/include/app/testkit/sassertautomationvalueaction.h
     testkit/include/app/testkit/sassertaudiofrequencyaction.h
     testkit/include/app/testkit/sassertaudiolengthaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
@@ -322,6 +327,7 @@ set(APP_UI_FILES
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
     testkit/src/sassertaudioenergyaction.cpp
+    testkit/src/sassertautomationvalueaction.cpp
     testkit/src/sassertaudiofrequencyaction.cpp
     testkit/src/sassertaudiolengthaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
