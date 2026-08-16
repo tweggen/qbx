@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_sine_render">
+
+  <!-- Proposal 37 P3b, AC1: A MIDI CLIP BECOMES AUDIBLE.
+
+       Three notes, one per second, through an instrument in slot 0:
+
+           C4 (key 60)  0 - 1 s   261.626 Hz
+           E4 (key 64)  1 - 2 s   329.628 Hz
+           G4 (key 67)  2 - 3 s   391.995 Hz
+
+       at 120 BPM / ppq 960, so one second is 1920 ticks and the three notes
+       are back to back with no gap - which is what lets EVERY frame of each
+       second be measured, rather than a window chosen to avoid an edge.
+
+       THE CLOSED FORM. `tw.test.clap.sine` is 16 envelope-less sine voices
+       with amp = velocity and instant on/off (tw303a/plugins/tests/twtestclap.c),
+       so a single held note is exactly
+
+           x(t) = velocity * gain * sin(2 pi f t)
+
+       and its rms over a whole second is velocity/sqrt(2) * gain. The ABI
+       carries velocity NORMALIZED, so `velocity="100"` (the model's MIDI
+       domain) is 100/127 at the plugin:
+
+           rms = (100/127) / sqrt(2) * 1.0 = 0.556769      +/-3 % = [0.54007, 0.57347]
+
+       That +/-3 % is the 16-bit round trip plus the two chunk boundaries per
+       second (4096-frame chunks do not divide 48000), nothing else - the sine
+       has no envelope to smear it.
+
+       SECOND 4 IS SILENT (maxRms 0.0001, i.e. below one 16-bit lsb): the sine
+       reports tailFrames() = 0 honestly, so nothing may sound after the last
+       note-off. A held voice that the note-off never reached would show here.
+
+       Three instruments, three formats, one property (design D7 / 5.3): the
+       in-repo CLAP fixture, the in-repo VST3 fixture with its SPLIT
+       component/controller, and the linked-in `tw.native.303` - which is the
+       one that is present in EVERY build and every worktree, with no submodule
+       and nothing installed.
+
+       The 303 is a filtered saw with a decay envelope, so it gets qualitative
+       bands: the fundamental within +/-2 Hz (the ladder shifts phase, not
+       pitch) and rms > 0.05 (the envelope decays inside the second, so the
+       closed form of the sine does not apply). It is also 0 -> 1 on a
+       2-channel page, which is the MonoSpread row; the two CLAP/VST3 fixtures
+       are 0 -> 2 on a 2-channel page, which is DirectGen.
+
+       STEREO IS NOT GATED (proposal 36 B5): the sink is still mono, so channel
+       0 is the only channel asserted and `L != R` is never claimed. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ==================== the CLAP instrument ========================= -->
+    <add-track index="-1"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+
+    <!-- The slot is an INSTRUMENT and it is wired to the track's feed. Without
+         the feed the render below would be silent and the frequency asserts
+         would fail with no explanation; this says which half broke. -->
+    <assert-instrument-slot trackPath="0" present="1" format="clap"
+                            uid="tw.test.clap.sine" mode="DirectGen"
+                            state="Active" hasFeed="1"/>
+    <!-- ...and the FX strip shows it as one, on row 0. -->
+    <assert-plugin-strip trackPath="0" slotCount="1" slotIndex="0"
+                         contains="kind=instrument"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="5760" name="Scale"/>
+    <add-note clip="0,0" tick="0"    dur="1920" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="1920" dur="1920" key="64" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="3840" dur="1920" key="67" velocity="100" channel="0"/>
+
+    <render filename="isr_clap.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <assert-audio-frequency filename="isr_clap.wav" startFrame="0" frameCount="48000"
+                            channel="0" minHz="260.626" maxHz="262.626"/>
+    <assert-audio-frequency filename="isr_clap.wav" startFrame="48000" frameCount="48000"
+                            channel="0" minHz="328.628" maxHz="330.628"/>
+    <assert-audio-frequency filename="isr_clap.wav" startFrame="96000" frameCount="48000"
+                            channel="0" minHz="390.995" maxHz="392.995"/>
+
+    <assert-audio-energy filename="isr_clap.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+    <assert-audio-energy filename="isr_clap.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+    <assert-audio-energy filename="isr_clap.wav" startFrame="96000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+
+    <!-- Nothing may sound after the last note-off. -->
+    <assert-audio-energy filename="isr_clap.wav" startFrame="144000" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+
+    <!-- ==================== the VST3 instrument ========================= -->
+    <add-track index="-1"/>
+
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="vst3" uid="4554575454535356543353494E450000"
+                   name="TW Test VST3 Sine" vendor="Smaragd"
+                   path="twtestvst3.vst3" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <assert-instrument-slot trackPath="1" present="1" format="vst3"
+                            mode="DirectGen" state="Active" hasFeed="1"/>
+
+    <insert-midi-clip trackPath="1" timePos="0" duration="5760" name="Scale"/>
+    <add-note clip="1,0" tick="0"    dur="1920" key="60" velocity="100" channel="0"/>
+    <add-note clip="1,0" tick="1920" dur="1920" key="64" velocity="100" channel="0"/>
+    <add-note clip="1,0" tick="3840" dur="1920" key="67" velocity="100" channel="0"/>
+
+    <!-- Mute the CLAP track so ONE render answers for the VST3 one alone; a
+         second lane at the same time would sum and the closed form would be
+         about the sum, not about this plugin. -->
+    <set-track-mute trackPath="0" muted="1"/>
+    <render filename="isr_vst3.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <assert-audio-frequency filename="isr_vst3.wav" startFrame="0" frameCount="48000"
+                            channel="0" minHz="260.626" maxHz="262.626"/>
+    <assert-audio-frequency filename="isr_vst3.wav" startFrame="48000" frameCount="48000"
+                            channel="0" minHz="328.628" maxHz="330.628"/>
+    <assert-audio-frequency filename="isr_vst3.wav" startFrame="96000" frameCount="48000"
+                            channel="0" minHz="390.995" maxHz="392.995"/>
+
+    <assert-audio-energy filename="isr_vst3.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+    <assert-audio-energy filename="isr_vst3.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+    <assert-audio-energy filename="isr_vst3.wav" startFrame="96000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+    <assert-audio-energy filename="isr_vst3.wav" startFrame="144000" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+
+    <!-- =================== the in-repo native 303 ======================= -->
+    <add-track index="-1"/>
+
+    <!-- No isInstrument attribute on purpose: `tw.native.303` is a BUILT-IN, so
+         the registry knows it and the action resolves the flag from there.
+         That is the shape a hand-written script should be able to use. -->
+    <insert-plugin trackPath="2" slotIndex="0"
+                   format="tw" uid="tw.native.303"
+                   name="Smaragd 303" vendor="Smaragd"
+                   path="" nIn="0" nOut="1"/>
+    <assert-instrument-slot trackPath="2" present="1" format="tw"
+                            uid="tw.native.303" mode="MonoSpread"
+                            state="Active" hasFeed="1"/>
+
+    <insert-midi-clip trackPath="2" timePos="0" duration="5760" name="Scale"/>
+    <add-note clip="2,0" tick="0"    dur="1920" key="60" velocity="100" channel="0"/>
+    <add-note clip="2,0" tick="1920" dur="1920" key="64" velocity="100" channel="0"/>
+    <add-note clip="2,0" tick="3840" dur="1920" key="67" velocity="100" channel="0"/>
+
+    <set-track-mute trackPath="1" muted="1"/>
+    <render filename="isr_native.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <assert-audio-frequency filename="isr_native.wav" startFrame="0" frameCount="48000"
+                            channel="0" minHz="259.626" maxHz="263.626"/>
+    <assert-audio-frequency filename="isr_native.wav" startFrame="48000" frameCount="48000"
+                            channel="0" minHz="327.628" maxHz="331.628"/>
+    <assert-audio-frequency filename="isr_native.wav" startFrame="96000" frameCount="48000"
+                            channel="0" minHz="389.995" maxHz="393.995"/>
+
+    <assert-audio-energy filename="isr_native.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.05" maxRms="1.0"/>
+    <assert-audio-energy filename="isr_native.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.05" maxRms="1.0"/>
+    <assert-audio-energy filename="isr_native.wav" startFrame="96000" frameCount="48000"
+                         channel="0" minRms="0.05" maxRms="1.0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>
