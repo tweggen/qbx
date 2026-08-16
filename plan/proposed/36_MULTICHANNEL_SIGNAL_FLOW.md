@@ -653,7 +653,21 @@ the byte at both ends — with the header and the plain / stretched / pitched /
 container-asset / nested-lane windows byte-identical, and 56 630 of 57 600
 samples within 0.333 LSB of `old·2/3`.*
 
-### B5 — The sink goes wide *(first audible multichannel)*
+### B5 — The sink goes wide ✅ **EXECUTED 2026-08-16** *(first audible multichannel)*
+
+> `AudioFrame` is **deleted** — `float channels[2]` in `tw/core` was the hard
+> stereo cap every sink and the engine saw; `AudioSink` is a block interface now
+> (`writeFrames(interleaved, nFrames, channels)`), so width travels with the
+> call. `pullBlock` takes N planar buffers with the §4.4 clamp per channel, one
+> resampler per channel; `RenderSession` interleaves from one wide root page.
+>
+> **The device rule (requester decision):** `L = ch0; R = (width >= 2) ? ch1 :
+> ch0` — mono-to-stereo at or below two channels, **first two only** above it,
+> the rest computed and dropped at the device. It is the **device path only**;
+> render and monitor share no code, so a 6-channel project renders six channels
+> *and* monitors in stereo, and neither can move the other. Logged once per
+> width, not per callback; asserted at width 6 → a 6-channel *device* too, which
+> is the assertion that stops a later refactor fanning channel 2 into output 2.
 
 `AudioEngine::pullBlock` takes N buffers; per-channel resamplers; `AudioFrame`'s
 2-cap and `FileSink`'s frame-at-a-time write retired; `RenderSession` interleaves
@@ -902,11 +916,31 @@ within noise of the width-1 count (B's central claim, now evidenced or refuted).
     green through it. It is also why a memory or page-count number moves at B3
     without anything having gone wrong: the corpus went 12.25 → 14.0 MiB, exactly
     7 of 49 resident pages now being 2 channels wide.
+    **Consequence found at B5:** this is *also* why `channel_assert_dupmono`
+    could never be the B5 signal it was designed as. Its render's channels are
+    equal **after** the sink went wide, for the same reason they are equal in the
+    source. A gate whose fixture cannot distinguish the two states is not a gate
+    for that distinction — it is now a *pair* (sawtooth equal / `test_stereo`
+    different, one project, one render), and only the real thing passes both.
 23. **`twPluginInsert::calcOutputTo` can feed a plugin only channel 0** (found by
     B4). A plug pull is mono by construction and an insert now has one plug, so
     the streaming-pull path cannot present a wide input. **Nothing in the app
     reaches it** — which is the difference between debt and a bug — and it is
     recorded in `plugins/CONTRACT.md` known debt.
+24. **Plugin scanning is CROSS-WORKTREE state, and a rescan can hang the whole
+    suite** (found by B5). `kScannerVersion` lives in the source while
+    `plugincache.json` lives once per USER, so a worktree carrying a bumped
+    version invalidates the cache for every other worktree — which then re-probes
+    every installed plugin on every start. On a machine with real plugins that is
+    slow enough to reach static destruction with the scan thread alive, and
+    `~twPluginRegistry` → `waitForScan()` → `QThread::wait()` then blocks
+    forever: every `--test-case` run passes and **hangs at exit**, dying on
+    CTest's 600 s timeout. Reproduced with none of B5's changes. Same shape as
+    trap 15: an environmental fact that costs whole gate runs and reads as a
+    suite problem. Workaround: point `[plugins] searchPaths` at
+    `smaragd/build/bin` (where the fixtures are). Real fix: unify the version
+    across worktrees, or land the teardown fix — an unmerged
+    `fix/plugin-scan-teardown-hang` branch already exists.
 
 ## 8. Non-goals (named, so they are not assumed)
 
