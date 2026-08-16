@@ -47,6 +47,15 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
    buildCapture_ only when there is no random source, so a sample-backed
    stretched/pitched clip's capture serves PREVIEW only (proposal 36 §2
    item 2, corrected by B3).
+5a. ensureCapturePeaks() folds EVERY CHANNEL of the capture into ONE signed
+   envelope per probe (proposal 36 B8) — the smallest min and the largest
+   max across the channels — matching SObject::straightCalcPreviewData. It
+   read channel 0 alone, which drew the wrong waveform for any clip whose
+   loud material is not on channel 0. The drawn waveform stays one lane by
+   design; per-channel LEVEL is the meter's job, not the waveform's.
+   SCut::getPreview reads capPeaks_, NEVER the aspect page's payload: it
+   uses getPreviewCapture() only as a readiness signal (see
+   app/model/CONTRACT.md inv. 9b, proposal 36 trap 26).
 6. A SLIP-ONLY edit (setStartOffset / setSrcStart / setLoopStart) must
    invalidateRenderPathRange(0, duration). Nothing else notices it: the
    clip's position and length do not change, so twTrackMix::updateClip is

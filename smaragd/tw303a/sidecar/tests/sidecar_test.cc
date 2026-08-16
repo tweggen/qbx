@@ -436,6 +436,49 @@ static void section4_store( const fs::path &pidDir ) {
                "re-store after orphaning succeeds" );
         CHECK( fs::exists( onDisk ), "file exists again after re-store" );
     }
+
+    // ----------------------------------------------------------------- B8.3
+    // THE PREVIEW BUMP, from the direction that matters. The check above orphans
+    // a file when the READER asks for a newer version than the file carries;
+    // this one is the shape a user's machine is actually in after the update —
+    // an OLD file on disk (written at PreviewPeaksVersion - 1, under the
+    // channel-0 fold) meeting the CURRENT reader. It must MISS, not be adopted:
+    // the v1 bytes are only accidentally right, agreeing with the all-channel
+    // fold exactly when channel 0 dominates.
+    //
+    // Asserted as a miss and a deletion, deliberately not as "the key changed":
+    // a changed key proves the two would not collide, and says nothing about
+    // what a reader does when it meets the old file.
+    {
+        twContentHash        oldCh   = hashOfInt( 0x0B8B8 );
+        twQafInfo            oldInfo = makePreviewInfo( oldCh, projectRate, 512 );
+        oldInfo.aspectVersion        = twAspect::PreviewPeaksVersion - 1;
+        oldInfo.channels             = 1;   // what v1 always wrote
+        std::vector<uint8_t> oldPayload = lcgBytes( 0xB8B8u, 1024 );
+        const uint64_t oldPh = twSidecarStore::hashParams(
+            oldInfo.params.data(), oldInfo.params.size() );
+
+        CHECK( store.store( oldInfo, oldPayload.data(), oldPayload.size() ),
+               "a v1 preview sidecar can be written (the pre-B8 state)" );
+        fs::path onDisk = store.pathFor( oldCh, twAspect::PreviewPeaks, oldPh );
+        CHECK( fs::exists( onDisk ), "…and it is on disk" );
+
+        auto rd = store.load( oldCh, twAspect::PreviewPeaks,
+                              twAspect::PreviewPeaksVersion, oldPh );
+        CHECK( rd == nullptr,
+               "an OLD preview sidecar MISSES after the B8 version bump" );
+        CHECK( !fs::exists( onDisk ),
+               "…and is orphaned off the disk rather than left to be re-read" );
+
+        // The same content at the CURRENT version is a hit, so the miss above is
+        // the version and not something broken about this key.
+        twQafInfo newInfo = makePreviewInfo( oldCh, projectRate, 512 );
+        CHECK( store.store( newInfo, oldPayload.data(), oldPayload.size() ),
+               "the same content re-stores at the current version" );
+        CHECK( store.load( oldCh, twAspect::PreviewPeaks,
+                           twAspect::PreviewPeaksVersion, oldPh ) != nullptr,
+               "…and now hits" );
+    }
 }
 
 // Sum of all *.qaf bytes under root (recursive; store uses <hh>/ subdirs).

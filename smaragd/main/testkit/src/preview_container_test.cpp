@@ -120,13 +120,97 @@ private:
     length_t duration_;
 };
 
+// The WIDE container fixture (proposal 36 B8). Channel 0 carries a QUARTER of
+// channel 1's signal, so a preview that folds only channel 0 — the pre-B8 rule —
+// draws a waveform a quarter the height of the audio it describes. That is the
+// exact lie B8's all-channel fold removes, and the fixtures in tests/ cannot
+// show it: test_sawtooth's channels are identical and test_stereo /
+// test_channels4 are descending ladders whose channel 0 dominates, so for all
+// three the fold is invisible. Hence a fixture built the other way up.
+class WideContainerComponent : public twComponent {
+public:
+    explicit WideContainerComponent( tw303aEnvironment &e ) : twComponent( e ) {}
+
+    offset_t pos = 0;
+
+    idx_t getOutputChannels() const override { return 2; }
+    bool  isSeekable() const override { return true; }
+    int   seekTo( offset_t p ) override { pos = p; return 0; }
+    void  reset() override { pos = 0; }
+
+    // Narrow degradation (proposal 36 trap 18): a wide-only component handed a
+    // mono scratch page walks into base renderFrames/calcOutputTo recursion.
+    length_t renderFrames( sample_t *out, length_t n, const sample_t *,
+                           length_t, idx_t ) override
+    {
+        for( length_t i = 0; i < n; ++i )
+            out[i] = 0.25f * val( (long long)( pos + i ) );
+        pos += (offset_t) n;
+        return n;
+    }
+
+    length_t renderPageWide( twOutputPage &page, length_t frames,
+                             const sample_t *, length_t ) override
+    {
+        if( frames > (length_t) page.channelFrames() )
+            frames = (length_t) page.channelFrames();
+        const idx_t nc = (idx_t) page.channels();
+        for( idx_t c = 0; c < nc; ++c ) {
+            sample_t *d = page.channelPtr( c );
+            const float gain = ( c == 0 ) ? 0.25f : 1.0f;
+            for( length_t i = 0; i < frames; ++i )
+                d[i] = gain * val( (long long)( pos + i ) );
+        }
+        // ONE cursor advance for the whole page, whatever its width (§4.3).
+        pos += (offset_t) frames;
+        return frames;
+    }
+
+    std::any captureInternalState() const override { return pos; }
+    void restoreInternalState( const std::any &s ) override
+    {
+        if( s.has_value() && s.type() == typeid( offset_t ) )
+            pos = std::any_cast<offset_t>( s );
+    }
+
+    void createOutputLatches() override {}
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName( idx_t ) const override { return nullptr; }
+    const char *getOutputName( idx_t ) const override { return "wide"; }
+};
+
+class WideContainerObject : public SObject {
+public:
+    WideContainerObject( tw303aEnvironment &env, length_t duration )
+        : SObject( nullptr ),
+          comp_( std::make_shared<WideContainerComponent>( env ) ),
+          duration_( duration )
+    {}
+
+    std::shared_ptr<twComponent> getRootComponent() override { return comp_; }
+    bool hasDuration() const override { return true; }
+    length_t getDuration() const override { return duration_; }
+    bool hasPreview() const override { return true; }
+
+    QWidget *getDetailEditWidget( QWidget * ) override { return nullptr; }
+    QWidget *getInlineEditWidget( QWidget * ) override { return nullptr; }
+    SObjectRenderer *getInlineRenderer() override { return nullptr; }
+
+private:
+    std::shared_ptr<WideContainerComponent> comp_;
+    length_t duration_;
+};
+
 // The preview's own scaling, restated here so the test asserts the CONTRACT
 // (signed envelope in [-128,127]) rather than re-running the implementation.
-preview_t expectedProbe( offset_t windowStart, offset_t skip )
+// `gain` scales the source before the envelope is taken, so the same helper
+// expresses "what channel 0 alone would have produced".
+preview_t expectedProbe( offset_t windowStart, offset_t skip, double gain = 1.0 )
 {
     double mn = SAMPLE_NORM_MAX, mx = SAMPLE_NORM_MIN;
     for( offset_t j = 0; j < skip; ++j ) {
-        double a = val( (long long)( windowStart + j ) );
+        double a = gain * val( (long long)( windowStart + j ) );
         if( a < mn ) mn = a;
         if( a > mx ) mx = a;
     }
@@ -224,6 +308,39 @@ int main( int argc, char **argv )
            "the component is repositioned per PAGE, not per preview window" );
     std::printf( "     (seekTo calls: %d; the live-cursor path made ~%d)\n",
                  obj.component().seeks, windows );
+
+    // ================================================ proposal 36 B8: the fold
+    // A preview probe is the signed envelope over ALL CHANNELS. The fixture puts
+    // the loud material on channel 1, so the pre-B8 channel-0 rule would draw a
+    // quarter-height waveform for full-scale audio.
+    {
+        WideContainerObject wide( env, DUR );
+
+        const offset_t at = CAP + SKIP * 7;      // deep inside page 1
+        preview_t got;
+        got.min = 0;
+        got.max = 0;
+        const int res = wide.getPreview( &got, at, SKIP, 1 );
+        check( res >= 0, "the wide container previews at all" );
+
+        const preview_t all = expectedProbe( at, SKIP, 1.0 );    // ch1 dominates
+        const preview_t ch0 = expectedProbe( at, SKIP, 0.25 );   // the old rule
+
+        check( got.min == all.min && got.max == all.max,
+               "a preview probe folds EVERY channel (the loud one is channel 1)" );
+        check( !( got.min == ch0.min && got.max == ch0.max ),
+               "…and is NOT what channel 0 alone would have given" );
+        std::printf( "     (all-channel min=%d max=%d; channel 0 only would be "
+                     "min=%d max=%d; got min=%d max=%d)\n",
+                     (int) all.min, (int) all.max, (int) ch0.min, (int) ch0.max,
+                     (int) got.min, (int) got.max );
+
+        // The two really are different, or the check above proves nothing.
+        // .max is the upper edge and .min the lower (negative) one, both signed,
+        // so a quarter-scale envelope is strictly INSIDE the full-scale one.
+        check( ch0.max < all.max && ch0.min > all.min,
+               "the fixture can tell the two folds apart" );
+    }
 
     if( g_failures ) {
         std::printf( "\n%d check(s) failed\n", g_failures );

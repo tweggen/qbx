@@ -117,7 +117,12 @@ bool SPlainWave::fetchPreviewSidecar( preview_t *dest, offset_t nProbes,
     if( qi.recordStride  != sizeof( preview_t )
         || qi.recordCount  != (uint64_t) nProbes
         || qi.hopFrames    != (uint64_t) skip
-        || qi.sourceFrames != (uint64_t) forLength ) return false;
+        || qi.sourceFrames != (uint64_t) forLength
+        // WIDTH is part of the geometry since B8: the probe envelope folds
+        // every channel, so a preview computed over a different channel count
+        // is a different preview. The version bump orphans v1 files; this
+        // catches a v2 file whose source has since changed width.
+        || qi.channels     != (uint32_t) src->channels() ) return false;
     return reader->readRecords( dest, 0, (uint64_t) nProbes );
 }
 
@@ -135,7 +140,9 @@ void SPlainWave::storePreviewSidecar( const preview_t *data, offset_t nProbes,
     // For this aspect all geometry is expressed at the PROJECT rate (the rate
     // the preview was computed at) — see twaspects.h.
     qi.sourceRate    = (uint32_t) src->sampleRate();
-    qi.channels      = 1;   // straight preview folds channel 0 only
+    // The SOURCE's width. The payload is one envelope folded over all of them
+    // (proposal 36 B8) — it was a hard-coded 1 while the fold was channel 0.
+    qi.channels      = (uint32_t) src->channels();
     qi.sourceFrames  = (uint64_t) forLength;
     qi.recordStride  = sizeof( preview_t );
     qi.recordCount   = (uint64_t) nProbes;
