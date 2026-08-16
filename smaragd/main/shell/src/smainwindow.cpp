@@ -2092,6 +2092,10 @@ bool SMainWindow::grabTrackHead( const QString &path, const QString &trackPath,
     if( head.layout() ) head.layout()->activate();
     head.describeHead();          // re-applies the density rules for this size
     const QPixmap pm = head.grab();
+    if( pm.isNull() ) return false;
+    return pm.save( path, "PNG" );
+}
+
 bool SMainWindow::grabTrackHead( const QString &trackPath, const QString &path,
                                  int headHeight, int headWidth,
                                  const twLevelSampleSet &level )
