@@ -705,9 +705,47 @@ plus `action_roundtrip_test`. The fixture is `tests/test_autosaw.wav`
 (`tests/tools/gen_auto_fixture.py`): 4 s of a 480 Hz sawtooth whose period is
 EXACTLY 100 frames, which is what makes every per-second, per-1000-frame and
 ~2 ms window in those cases a closed form rather than a measurement. NOT gated:
-the mode UI and Touch/Latch/Write RECORDING (P6), pan (36-B5), placement-scope
-envelopes (32), and `cut:VelocityScale` / `cut:Transpose`, which are implemented
-and round-trip but have no dedicated case.
+pan (36-B5), placement-scope envelopes (32), and `cut:VelocityScale` /
+`cut:Transpose`, which are implemented and round-trip but have no dedicated
+case. The mode UI and Touch/Latch/Write RECORDING landed in P6 — see below.
+
+### The automation UI (P6 — executed 2026-08-16)
+
+Automation lanes are on screen and editable. Invariants:
+`main/timeline/CONTRACT.md` inv. 17-20, `main/shell/CONTRACT.md` inv. 11,
+`main/pluginui/CONTRACT.md` inv. 9, `main/testkit/CONTRACT.md` ("Automation UI
+gestures").
+
+| Thing to know | Why |
+|---|---|
+| An automation lane is an `STrackRow` **SUB-LANE** (`subKind {None, Take, Automation}`), and the whole feature is ONE new file, `timeline/src/sautomationlane.{h,cpp}` | Being a sub-lane buys inv. 5's geometry, the track's single head spanning the group, and `assert-lane-alignment` for free. `sstdmixerview.cpp` is already the largest file in the app, so even the five `SStdMixerView` members that are automation code are DEFINED in the new file — the arranger keeps only the call sites (+36 lines for the feature). |
+| The curve is sampled **per pixel through `SAutomationLane::valueAt`** | The same call `assert-automation-value` makes. Step / Linear / Exp come out right by construction; a per-segment painter would be a second implementation of the interpolation and could disagree with the ear. |
+| Each target draws its **own** domain (`sAutoScaleFor`) | dB through THE fader curve for `self:Volume` (so a given dB sits at the same fraction of the lane as of the fader), 0/1 stepped for `self:Muted`, the plugin's DECLARED range for `param:<id>` (via the new `SPluginSlot::paramRows()`, because timeline may not include `tw/plugins`), a linear factor over [0,1] for `cut:Gain`. A shared 0..1 scale draws a −60 dB fade as a flat line on the floor. |
+| Gestures **revert, then act** | The live drag mutates the point table for feedback and pushes nothing; the release puts the pre-drag table back BEFORE submitting the verb. Skip the revert and the action finds nothing to change: its undo step is a no-op and a redo double-applies. |
+| ONE pruning walk for EVERY per-track UI-state set (`pruneUiState`) | Fold set, take-lane set, height scales, shown-automation set — all keyed by `STrack*`. There was NO pruning before P6, so a removed track left a dangling key for a later track at the same address to inherit. The walk is over the MODEL: a collapsed folder's children are alive and have no row. |
+| The head **"A" button governs EVERY lane the track owns** — its own and its slots' — in one undo macro | The only reading under which a single button is not ambiguous the moment a track owns two lanes. The button keeps the letter A at every density (three of the six modes start with a letter another 20 px square already uses); the mode is colour + tooltip on screen and `Amode=` in `describeHead()`, appended AFTER `name=` so every P4 `contains=` string still matches. |
+| **Touch/Latch/Write are UI recorders and commit ONE `set-automation-points` per gesture** | `SAutomationRecorder` in `main/shell` — both the arranger's fader (`app/timeline`) and the plugin parameter slider (`app/pluginui`) feed the same pass, and those two modules cannot see each other. Bounded by the TRANSPORT: `setPlaying(false)` commits. Touch releases at the control, Latch holds to the stop as ONE extra point, Write additionally opens its window where the RUN started. An action per tick would put thirty entries a second on the undo stack. |
+| A control write during a pass must NOT submit its ordinary verb | `applyVolume_` / `onParamSliderChanged` offer the value to the recorder first and return if it was taken. |
+| The fader and the parameter slider **display the READ value** while a Read-family lane exists | Pumped from `SApplication::meterTick` — the one main-thread tick that keeps running at a static position and for a tail after the transport stops (proposal 34). A control being RECORDED is exempt: it shows the hand, not the curve. |
+| The `cut:Gain` envelope is an **overlay on the clip**, drawn by the cut renderer after `drawWarpMarkers`, and its gestures are ARMED (off by default) | The curve lives on the WINDOW and travels with it across placements and takes, so a lane on the track would be lying about what it belongs to. Off by default is what keeps every clip-body gesture — move, slip, duplicate, stretch — exactly as it was. |
+| **Plugin-gesture punch-in is NOT wired** | `ParamGestureBegin/End` do come out of the CLAP and VST3 backends, but only into `twEventOut` inside `process()` — a worker thread, at freeze time — and nothing consumes that stream; there is no native plugin editor either (proposal 33 M3). The app's own slider press/release is the punch-in. |
+
+**A P5 bug this exposed, now fixed:** `SAutomationLane::setPoints()` used a
+non-stable `std::sort` plus `std::unique` (which keeps the FIRST of an equal
+run), so `add-automation-point` on a frame that already had a point silently
+DROPPED the new value — while its own comment and `docs/ACTIONS.md` both promise
+a REPLACE. `stable_sort` + a fold that overwrites. A click that lands a point on
+top of another is the commonest automation gesture there is.
+
+Gates: the qxa cases `automation_lane_gestures` (every gesture through the REAL
+mouse handlers, one undo step each, head/lane identity with two automation lanes
+plus a take lane, a canvas PNG), `automation_write_pass` (a Touch pass over a
+real transport, three ticks reverted by ONE undo, and the curve HEARD through
+the capture backend — measured to five significant digits of the closed form on
+the first run) and `automation_head_mode` (the mode at three densities, plus a
+head PNG), plus `action_roundtrip_test`. NOT gated: plugin-gesture punch-in,
+Delete over a marquee (a QAction shortcut, not synthesisable from a script),
+Latch/Write passes, the read-value display, pixel exactness.
 
 ## Recording Audio
 
