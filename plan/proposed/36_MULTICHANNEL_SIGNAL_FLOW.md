@@ -532,8 +532,14 @@ so B3's ACs are scoped to **plain** clips and must say so.
 
 **AC B3.1** A stereo WAV's page carries two distinct channels at the reader,
 asserted at engine level.
-**AC B3.2** A plain stereo clip on a track yields two distinct channels at the
-track's root component (not merely at the reader).
+**AC B3.2** A plain stereo clip's width **survives the resolution chain**: the
+component `twView::resolve` returns for the clip yields a two-channel page with
+distinct channels, asserted through the real scheduler — not merely at the
+reader. *(v3 asserted this at the TRACK'S ROOT component, which is not
+achievable in this milestone and would have forced whoever built it to either
+drag B4's work forward or quietly weaken the AC: `twTrackMix` and
+`twPluginChain` are width 1 until B4, so a two-channel page cannot exist there
+yet. The track-root assertion moves to B4.6.)*
 **AC B3.3** A mono WAV renders byte-identically; the corpus gate holds.
 **AC B3.4** `grain_*`, `warp_*`, `exact_*` green; content/sidecar keys that must
 encode channel count are bumped so no old entry is a wrong-shape hit (assert a
@@ -573,6 +579,9 @@ proven by a test that forces one — including on the RT path and in `twLevelPro
 **AC B4.6** The **legacy pull path** is exercised wide at least once
 (`SMARAGD_REVAL_WORKERS=0`), since `assert-meter` drives it and no AC elsewhere
 covers it.
+**AC B4.6** A plain stereo clip yields two distinct channels **at the track's
+root component** — the assertion B3 could not make, because the track path was
+still width 1 there.
 **AC B4.7** Width-1 projects byte-exact throughout.
 
 ### B5 — The sink goes wide *(first audible multichannel)*
