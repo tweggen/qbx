@@ -103,6 +103,63 @@ int main()
               "stretch 2.0 roughly doubles the material length");
     }
 
+    // --- a WIDE capture (proposal 36 B7) -------------------------------------
+    //
+    // twCapturingSource has carried a `channels` parameter since proposal 07 and
+    // every caller passed 1, so its planar arithmetic at width > 1 had never
+    // been executed by anything. B7 makes SCut::buildCapture_ pass the real
+    // width, which puts a multi-plane capture on the container/asset PLAYBACK
+    // path — so the stride is now load-bearing and gets a test.
+    {
+        const length_t M = 4096;
+        const idx_t CH = 4;
+        // Plane c holds val(p) scaled by (c+1): four distinguishable signals
+        // that a stride mistake mixes up rather than merely shifts.
+        std::vector<sample_t> planar((size_t)CH * (size_t)M);
+        for (idx_t c = 0; c < CH; ++c)
+            for (length_t i = 0; i < M; ++i)
+                planar[(size_t)c * (size_t)M + (size_t)i] = val(i) * (float)(c + 1);
+
+        twCapturingSource wide(std::move(planar), M, CH, env.getSRate());
+        CHECK(wide.channels() == CH && wide.length() == M,
+              "wide capture reports its channel count and length");
+
+        bool planesOk = true;
+        for (idx_t c = 0; c < CH; ++c) {
+            float buf[4];
+            wide.read(1000, buf, 4, c);
+            for (int k = 0; k < 4; ++k)
+                if (buf[k] != val(1000 + k) * (float)(c + 1)) planesOk = false;
+        }
+        CHECK(planesOk, "each capture plane reads its own signal at its own offset");
+
+        // "mono plays on every channel": an out-of-range channel clamps to the
+        // last one, exactly as twSampleSource::read has always done.
+        {
+            float buf[2];
+            wide.read(1000, buf, 2, (idx_t)(CH + 3));
+            CHECK(buf[0] == val(1000) * (float)CH,
+                  "out-of-range channel clamps to the last plane");
+        }
+
+        // The whole point: a reader over the capture is as wide as the capture,
+        // so the page a container/asset clip freezes carries every channel.
+        auto r = wide.acquireReader(env, 0);
+        CHECK(r->getOutputChannels() == CH,
+              "a reader over a wide capture declares the capture's width");
+
+        auto page = std::make_shared<twOutputPage>((std::uint16_t)CH);
+        r->seekTo(0);
+        length_t got = r->renderPageWide(*page, 512, nullptr, 0);
+        bool pageOk = (got == 512);
+        for (idx_t c = 0; c < CH && pageOk; ++c) {
+            const float *p = page->channelPtr(c);
+            if (p[0] != val(0) * (float)(c + 1) || p[511] != val(511) * (float)(c + 1))
+                pageOk = false;
+        }
+        CHECK(pageOk, "a wide page over a wide capture carries all four planes coherently");
+    }
+
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall sources tests passed\n",
            failures);
     return failures ? 1 : 0;

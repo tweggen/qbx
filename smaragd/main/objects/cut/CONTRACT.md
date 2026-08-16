@@ -34,6 +34,19 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
    capture bakes the grain params in, so every grain-param setter must
    invalidateCapture() or the waveform preview keeps drawing the previous
    transform (playback is unaffected - it grains the raw source).
+   THE CAPTURE IS AS WIDE AS WHAT IT CAPTURED (proposal 36 B7): the
+   container branch copies EVERY channel of each frozen page into its own
+   plane, through twPageClampChannel against the page in hand rather than
+   the declared width, and the grained branch reads one plane per channel
+   at the SAME offset (a grain source is random-access, so there is no
+   cursor to displace — the per-channel loop §4.3 forbids inside a
+   component's render is exactly right here). Width comes from the CONTENT,
+   never from the project: a mono container yields a mono capture, and
+   twTrackMix's §4.4 clamp spreads it. This is the only clip shape whose
+   playback runs through twCapturingSource at all — rebuildReader calls
+   buildCapture_ only when there is no random source, so a sample-backed
+   stretched/pitched clip's capture serves PREVIEW only (proposal 36 §2
+   item 2, corrected by B3).
 6. A SLIP-ONLY edit (setStartOffset / setSrcStart / setLoopStart) must
    invalidateRenderPathRange(0, duration). Nothing else notices it: the
    clip's position and length do not change, so twTrackMix::updateClip is
@@ -82,7 +95,11 @@ SProjectLoader from a static initializer.
 How to test: render_split_slip_offset.qxa (THE regression),
 render_sawtooth_clipped_section.qxa, grain_*.qxa (the grain_pitch_*.qxa
 cases assert the rendered f0 via assert-audio-frequency - energy alone
-cannot see a transposition).
+cannot see a transposition), mc_capture_clip_width.qxa (inv. 5's width half:
+a stretched, a pitched and a container/asset clip over the 6 dB stereo ladder
+of tests/test_stereo.wav, asserted at the clip through the real scheduler AND
+in the rendered file — test_sawtooth.wav cannot gate a channel claim, its two
+channels are byte-identical).
 
 Known debt: loop tiling of container captures deferred; FIXME bounds check
 in seekTo.

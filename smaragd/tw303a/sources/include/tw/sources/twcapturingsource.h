@@ -61,10 +61,18 @@ public:
     virtual bool     isReproducible() const { return true; }
 
 private:
+    // Report data_'s size to tw::pages::PageAccounting and remember what was
+    // reported, so the release in the destructor is exact even if the buffer was
+    // resized after construction (proposal 36 B7 — a capture is the one
+    // allocation in the engine that multiplies by channel width, and it had no
+    // instrument at all).
+    void accountBuffer_();
+
     int      sampleRate_;
     idx_t    channels_;
     length_t nFrames_;
     std::vector<sample_t> data_;   // planar Float32, size channels_ * nFrames_
+    size_t   accountedBytes_ = 0;
 };
 
 #endif

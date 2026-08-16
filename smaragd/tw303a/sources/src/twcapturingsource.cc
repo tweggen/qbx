@@ -4,6 +4,7 @@
 #include "tw/sources/twcapturingsource.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw303aenv.h"
+#include "tw/pages/tw_page_accounting.h"
 
 twCapturingSource::twCapturingSource( tw303aEnvironment &env, twComponent &source,
                                       offset_t captureStart, length_t nFrames,
@@ -14,10 +15,12 @@ twCapturingSource::twCapturingSource( tw303aEnvironment &env, twComponent &sourc
 {
     if( nFrames_ <= 0 || channels_ <= 0 ) {
         nFrames_ = ( nFrames_ < 0 ) ? 0 : nFrames_;
+        accountBuffer_();
         return;                       // nothing to build; read() will zero-fill
     }
 
     data_.assign( (size_t) channels_ * nFrames_, 0.0f );
+    accountBuffer_();
 
     length_t block = env.getBufferSize();
     if( block <= 0 ) block = 4096;
@@ -63,10 +66,18 @@ twCapturingSource::twCapturingSource( std::vector<sample_t> &&data, length_t nFr
     // Zero-pad (or size) the buffer to exactly channels_*nFrames_ so read()'s
     // bounds arithmetic holds regardless of what the caller handed us.
     data_.resize( (size_t) channels_ * (size_t) nFrames_, 0.0f );
+    accountBuffer_();
 }
 
 twCapturingSource::~twCapturingSource()
 {
+    tw::pages::PageAccounting::onCaptureReleased( accountedBytes_ );
+}
+
+void twCapturingSource::accountBuffer_()
+{
+    accountedBytes_ = data_.size() * sizeof( sample_t );
+    tw::pages::PageAccounting::onCaptureAllocated( accountedBytes_ );
 }
 
 length_t twCapturingSource::read( offset_t srcOffset, sample_t *dest,

@@ -74,6 +74,26 @@ public:
     static void onPoolReserved( uint64_t pages, uint64_t bytes );
     static void onPoolFreed( uint64_t pages, uint64_t bytes );
     static PageMemoryStats poolReserved();
+
+    // --- twCapturingSource buffers (proposal 36 B7) ------------------------
+    //
+    // A THIRD allocation, and the only one of the three that MULTIPLIES BY
+    // CHANNEL WIDTH. Named "capture" like the pool above and completely
+    // unrelated to it: this counts twCapturingSource's planar
+    // `channels * nFrames` float buffer — the resident audio behind a
+    // container/asset clip and behind a stretched clip's preview — while
+    // poolReserved() counts CapturePagePool's fixed reservation of
+    // CapturePageData aspect pages, which does not widen at all.
+    //
+    // B7 gave the capture the width of the thing it captures, so the number
+    // this reports is the one that has to be watched: a container's capture is
+    // projectWidth * containerFrames * 4 bytes, PER PLACEMENT (captures are not
+    // shared between two placements of the same asset yet — proposal 06 §7).
+    // `pages` counts live twCapturingSource objects, not pages; a capture is one
+    // buffer of arbitrary length, not a paged thing.
+    static void onCaptureAllocated( size_t bytes );
+    static void onCaptureReleased( size_t bytes );
+    static PageMemoryStats capturesResident();
 };
 
 }  // namespace pages
