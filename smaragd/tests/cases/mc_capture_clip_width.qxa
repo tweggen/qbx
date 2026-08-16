@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ACs B7.1 and B7.2 for proposal 36 — a CAPTURE-BACKED clip keeps its channels,
+  and it keeps them all the way into the RENDERED FILE.
+
+  Three clips, three windows, one render, and the same fixture in all three, so
+  the only variable is which path the audio took:
+
+    0.00-1.25 s   STRETCHED x1.25   AC B7.1   regression (B3 widened it)
+    1.50-2.50 s   PITCHED +700c     AC B7.2a  regression (B3 widened it)
+    3.00-4.00 s   CONTAINER/ASSET   AC B7.2b  NEW — this is what B7 built
+
+  WHY THE FIRST TWO ARE REGRESSIONS AND ARE HERE ANYWAY. Proposal 36 §2 item 2
+  was corrected by B3: SCut::rebuildReader calls buildCapture_ only when there is
+  NO random source, so a sample-backed stretched or pitched clip builds
+  twGrainSource straight over the file and reads it through a plain
+  twSampleReader — which went wide at B3, with no capture on the playback path at
+  all. Until B5 that could only be asserted AT A COMPONENT (assert-clip-channels,
+  mc_stereo_clip_width). The sink is wide now, so it can be asserted in the file,
+  which is a different claim: it says the width survived the track mix, the
+  plugin chain, the rewire, the master sum and the interleave, not just the
+  reader. That is worth a gate even though no B7 code produced it.
+
+  THE THIRD IS THE MILESTONE. A container/asset clip is the one clip shape that
+  really does go through SCut::buildCapture_ -> twCapturingSource, and that
+  capture was built `twCapturingSource( ..., 1, ... )` — one channel, hard-coded,
+  since proposal 07. It was the last mono page in the whole corpus (B3 measured
+  it: "14.0 MiB with exactly one twSampleReader page still mono"). The capture
+  now carries the container's declared width, so the reader over it is wide, so
+  the ladder below survives instead of being duplicated by twTrackMix's clamp.
+
+  THE FIXTURE, and why it can tell the two states apart (§7 trap 22). This case
+  uses ../test_stereo.wav, NOT ../test_sawtooth.wav. The sawtooth's two channels
+  are byte-identical, so a render made from it passes every channel assertion
+  whether the signal path is wide or duplicating — that is exactly how
+  channel_assert_dupmono turned out not to be the B5 gate it was designed as.
+  test_stereo is gen_channel_fixture at channels=2: a 480 Hz sine at rms exactly
+  0.5 on channel 0 and exactly 0.25 on channel 1 — a 6 dB ladder that a
+  duplicating path CANNOT produce, because a duplicate is 0.5/0.5.
+
+  MEASURED, on the build that introduced this case (all three windows):
+
+      window      ch0 rms   ch1 rms   ratio
+      stretched   0.4971    0.2486    2.000
+      pitched     0.4956    0.2478    2.000
+      asset       0.4999    0.2500    2.000
+
+  and BEFORE the change, with buildCapture_ still hard-coding 1 channel, the
+  asset window read 0.4999 / 0.4999 and the clip assertion reported 1 channel.
+  The stretched and pitched windows were unchanged — which is the independent
+  signal that what moved is the capture and not the width plumbing.
+
+  THE CONTAINER TRACK IS MUTED, deliberately, and it still works: mute belongs to
+  the mixer CHANNEL, not to the track (twtrackmix.h), so nobody sums track 2 into
+  the master while SCut::buildCapture_ freezes its component directly and
+  captures its material in full. That is what lets the asset have its own clean
+  window instead of sounding on top of its own source.
+
+  ASSET CLIP CHANNELS AT position 0 read 0.4279 / 0.2140, not 0.4999 / 0.2500,
+  and that is right rather than a leak: the capture is 48000 frames and the page
+  is 65536, so the trailing 17536 frames are silence and
+  0.5 * sqrt(48000/65536) = 0.4279. The ladder is intact; the window is not full.
+-->
+<SActionScript version="1" name="mc_capture_clip_width">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- 0 stretched | 1 pitched | 2 the asset's container (muted) | 3 the asset -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- 1. STRETCHED x1.25. 48000 source frames out at 60000, so the vocoder
+         really runs (a stretch of 1.0 would take the plain path). -->
+    <place-clip trackPath="0" filePath="../test_stereo.wav"
+                timePos="0" startOffset="0" duration="48000"/>
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="60000" loopLength="0" stretch="1.25"/>
+
+    <!-- 2. PITCHED +700 cents = a fifth up; pitch alone, no stretch, so the two
+         vocoder paths are separable by window in the render. -->
+    <place-clip trackPath="1" filePath="../test_stereo.wav"
+                timePos="72000" startOffset="0" duration="48000"/>
+    <set-pitch clip="1,0" cents="700"/>
+
+    <!-- 3. THE CONTAINER, and its ASSET placed well clear of it. -->
+    <place-clip trackPath="2" filePath="../test_stereo.wav"
+                timePos="0" startOffset="0" duration="48000"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <create-asset container="2" startOffset="0" duration="48000"
+                  assetName="mcCapAsset"/>
+    <place-asset assetName="mcCapAsset" trackPath="3" timePos="144000"/>
+
+    <!-- ============ at the CLIP, through the real scheduler ============= -->
+    <!-- assert-clip-channels resolves through SCut::resolveClip and declares a
+         demand on the project's CaptureRevalidator, so the page it reads was
+         planned, dependency-counted and frozen on a worker exactly as playback
+         readahead and the offline render do. Nothing downstream is in the way,
+         which is what separates "the clip is wide" from "the file is wide". -->
+    <assert-clip-channels clip="0,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1"
+                          minRmsDelta="0.20" minDiffRms="0.20"/>
+    <assert-clip-channels clip="1,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1"
+                          minRmsDelta="0.20" minDiffRms="0.20"/>
+    <!-- THE B7 ASSERTION. Before this milestone the capture was one channel
+         wide and this line reported 1. -->
+    <assert-clip-channels clip="3,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1"
+                          minRmsDelta="0.18" minDiffRms="0.18"/>
+
+    <!-- …and it must be able to fail, in both directions: a width of 1 is now
+         wrong, and the ladder's 0.214 at this position is below 0.30. -->
+    <assert-clip-channels clip="3,0" position="0" expectChannels="1"
+                          channelA="0" channelB="1" minRmsDelta="0.0"
+                          expectReject="true"/>
+    <assert-clip-channels clip="3,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1" minRmsDelta="0.30"
+                          expectReject="true"/>
+
+    <render filename="mc_capture_clip_width.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+
+    <!-- ================== AC B7.1 — in the FILE ======================== -->
+    <assert-audio-energy filename="mc_capture_clip_width.wav"
+                         startFrame="4000" frameCount="48000"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+    <assert-audio-energy filename="mc_capture_clip_width.wav"
+                         startFrame="4000" frameCount="48000"
+                         channel="1" minRms="0.20" maxRms="0.30"/>
+    <assert-channels-differ filename="mc_capture_clip_width.wav"
+                            channelA="0" channelB="1"
+                            startFrame="4000" frameCount="48000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- ================== AC B7.2a — pitched, in the FILE ============== -->
+    <assert-audio-energy filename="mc_capture_clip_width.wav"
+                         startFrame="76000" frameCount="40000"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+    <assert-audio-energy filename="mc_capture_clip_width.wav"
+                         startFrame="76000" frameCount="40000"
+                         channel="1" minRms="0.20" maxRms="0.30"/>
+    <assert-channels-differ filename="mc_capture_clip_width.wav"
+                            channelA="0" channelB="1"
+                            startFrame="76000" frameCount="40000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- ============ AC B7.2b — CONTAINER/ASSET, in the FILE ============ -->
+    <!-- The new one. 0.4999 / 0.2500 where a one-channel capture gave
+         0.4999 / 0.4999 and this assertion could not have been written. -->
+    <assert-audio-energy filename="mc_capture_clip_width.wav"
+                         startFrame="148000" frameCount="40000"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+    <assert-audio-energy filename="mc_capture_clip_width.wav"
+                         startFrame="148000" frameCount="40000"
+                         channel="1" minRms="0.20" maxRms="0.30"/>
+    <assert-channels-differ filename="mc_capture_clip_width.wav"
+                            channelA="0" channelB="1"
+                            startFrame="148000" frameCount="40000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- The band must be able to fail: the ladder gives delta 0.25 exactly. -->
+    <assert-channels-differ filename="mc_capture_clip_width.wav"
+                            channelA="0" channelB="1"
+                            startFrame="148000" frameCount="40000"
+                            minRmsDelta="0.30"
+                            expectReject="true"/>
+
+    <!-- A third channel does not exist — an out-of-range channel is an ERROR,
+         never a silent rms 0 (M0). -->
+    <assert-audio-energy filename="mc_capture_clip_width.wav"
+                         startFrame="148000" frameCount="40000"
+                         channel="2" minRms="0.0" maxRms="1.0"
+                         expectReject="true"/>
+
+    <report-page-memory label="mc_capture_clip_width after render"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="4"/>
+  </assertions>
+
+</SActionScript>

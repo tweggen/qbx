@@ -647,11 +647,17 @@ std::string twComponent::describePageMemory( const char *label )
 
     const tw::pages::PageMemoryStats g = tw::pages::PageAccounting::global();
     const tw::pages::PageMemoryStats pool = tw::pages::PageAccounting::poolReserved();
+    // The third allocation, and the only one that scales with channel width
+    // (proposal 36 B7). Reported beside the other two so nobody has to know
+    // that "capture pool" and "capture buffer" are unrelated things to read the
+    // line correctly.
+    const tw::pages::PageMemoryStats cap = tw::pages::PageAccounting::capturesResident();
 
     std::ostringstream os;
     os << "page-memory [" << (label ? label : "") << "]"
        << " global=" << g.pages << " pages/" << g.bytes << " B"
        << " capturePoolReserved=" << pool.pages << " pages/" << pool.bytes << " B"
+       << " captureBuffers=" << cap.pages << "/" << cap.bytes << " B"
        << " inComponents=" << total.pages << " pages/" << total.bytes << " B"
        << " frozen=" << total.frozen
        << " elsewhere=" << (g.pages >= total.pages ? g.pages - total.pages : 0)
