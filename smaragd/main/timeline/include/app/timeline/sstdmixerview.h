@@ -217,6 +217,15 @@ private:
     QString describeWheelActions() const;  // Human-readable hint for status bar
     int  wheelPlain_, wheelShift_, wheelCtrl_, wheelCtrlShift_;
     bool wheelZoomToCursor_, wheelInvertZoom_;
+    // SOpt::WheelSensitivityPct / 100, clamped, plus the three per-gesture
+    // constants loadWheelConfig() derives from it. They are cached rather than
+    // recomputed per event because a wheel event is a hot path, and derived in
+    // ONE place because "one notch" has to mean the same amount of gesture in
+    // all four. At 100 % each is bit-for-bit the value it was hard-coded to.
+    double wheelSensitivity_;
+    int    wheelVScrollStep_;   // angleDelta units per track lane
+    double wheelZoomHFactor_;   // px/second multiplier per notch
+    double wheelZoomVFactor_;   // track-height multiplier per notch
     // Accumulated vertical-scroll wheel delta (angleDelta units). A trackpad or a
     // Magic Mouse delivers many tiny sub-notch deltas; stepping a whole lane per
     // event made vertical scroll wildly over-sensitive. We accumulate and step one

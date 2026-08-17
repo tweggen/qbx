@@ -112,6 +112,22 @@ QWidget *SOptionsDialog::buildMousePage()
     form->addRow( "Ctrl + Wheel:", wheelCtrl_ );
     form->addRow( "Ctrl + Shift + Wheel:", wheelCtrlShift_ );
 
+    wheelSensitivity_ = new QSpinBox;
+    // Percent, not a raw factor: "150 %" is self-explanatory where "1.5" needs a
+    // legend. The floor is 10 % rather than 0 because a zero would stall every
+    // gesture and read as a broken wheel; the arranger clamps to this same range
+    // in case the INI was hand-edited.
+    wheelSensitivity_->setRange( 10, 500 );
+    wheelSensitivity_->setSingleStep( 10 );
+    wheelSensitivity_->setSuffix( " %" );
+    wheelSensitivity_->setToolTip(
+        "How far one wheel notch travels, for all four gestures at once. "
+        "Lower = less sensitive (more wheel per step), higher = more sensitive. "
+        "100 % is the shipped feel." );
+    form->addRow( "Wheel sensitivity:", wheelSensitivity_ );
+    form->addRow( QString(), new QLabel( "Lower = less sensitive, higher = more "
+                                         "sensitive. 100 % = default." ) );
+
     zoomToCursor_   = new QCheckBox( "Zoom toward the mouse cursor" );
     invertZoom_     = new QCheckBox( "Invert zoom direction" );
     followPlayhead_ = new QCheckBox( "Follow the playhead during playback" );
@@ -298,6 +314,8 @@ void SOptionsDialog::loadMousePage()
     selectByData( wheelShift_,     s.value( SOpt::WheelShift,     SOpt::def( SOpt::WheelShift ) ) );
     selectByData( wheelCtrl_,      s.value( SOpt::WheelCtrl,      SOpt::def( SOpt::WheelCtrl ) ) );
     selectByData( wheelCtrlShift_, s.value( SOpt::WheelCtrlShift, SOpt::def( SOpt::WheelCtrlShift ) ) );
+    wheelSensitivity_->setValue( s.value( SOpt::WheelSensitivityPct,
+                                          SOpt::def( SOpt::WheelSensitivityPct ) ).toInt() );
     zoomToCursor_->setChecked( s.value( SOpt::ZoomToCursor, SOpt::def( SOpt::ZoomToCursor ) ).toBool() );
     invertZoom_->setChecked(  s.value( SOpt::InvertZoom,   SOpt::def( SOpt::InvertZoom ) ).toBool() );
     followPlayhead_->setChecked( s.value( SOpt::FollowPlayhead, SOpt::def( SOpt::FollowPlayhead ) ).toBool() );
@@ -310,6 +328,7 @@ void SOptionsDialog::applyMousePage()
     s.setValue( SOpt::WheelShift,     wheelShift_->currentData() );
     s.setValue( SOpt::WheelCtrl,      wheelCtrl_->currentData() );
     s.setValue( SOpt::WheelCtrlShift, wheelCtrlShift_->currentData() );
+    s.setValue( SOpt::WheelSensitivityPct, wheelSensitivity_->value() );
     s.setValue( SOpt::ZoomToCursor,   zoomToCursor_->isChecked() );
     s.setValue( SOpt::InvertZoom,     invertZoom_->isChecked() );
     s.setValue( SOpt::FollowPlayhead, followPlayhead_->isChecked() );

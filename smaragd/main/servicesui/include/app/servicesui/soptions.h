@@ -26,6 +26,13 @@ inline constexpr const char *WheelCtrl      = "mouse/wheelCtrl";
 inline constexpr const char *WheelCtrlShift = "mouse/wheelCtrlShift";
 inline constexpr const char *ZoomToCursor   = "mouse/zoomToCursor";
 inline constexpr const char *InvertZoom     = "mouse/invertZoom";
+// How far ONE wheel notch travels, as a PERCENTAGE (100 = the shipped feel),
+// scaling all four wheel gestures together. One number rather than four because
+// the thing being compensated is the DEVICE — a jumpy trackpad or a stiff wheel
+// is wrong in every gesture at once, and tuning them independently is a fiddle
+// nobody wants. Stored in percent so the INI is readable and the spin box needs
+// no conversion; the arranger divides by 100 and clamps.
+inline constexpr const char *WheelSensitivityPct = "mouse/wheelSensitivityPercent";
 // Keep the playhead on screen: re-page the timeline when the cursor advances
 // (under playback/recording) toward the edge of the view. Default on.
 inline constexpr const char *FollowPlayhead = "view/followPlayhead";
