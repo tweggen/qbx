@@ -140,3 +140,66 @@ Known debt: there is no UI for the per-track MIDI port — the verb and the seri
 
 Known debt: SApplication is the app-wide service locator — the SCC hub;
 Phase 6 splits it into narrow context interfaces.
+
+## The live lane (proposal 21 L1b, design D3/D4/D5/D9)
+
+12. **`SLiveMonitor` is a sibling of `SMidiOutPump` and `SAutomationRecorder`,
+    and it OWNS THE ARM/DISARM ORDERING.** Constructed with the app, destroyed
+    FIRST in `~SApplication` (it joins a `std::thread` — the pump — and closes
+    the input device, and both must happen on the main thread while the log
+    sink is alive and before the speaker goes). A verb never does this work: it
+    raises `SAppContext::liveLanesChanged()` and the sequence happens here,
+    once, with the pump and the speaker in reach.
+
+    ARM: `retireComponentNodes(closure)` → `setLiveOwned(true)` → wire the
+    exclusion + invalidate PER MEMBER → read the ROOT REWIRE's
+    `contentEpochNow()` as `flipEpoch` → open the INPUT → `openLive()` →
+    publish the plan → `requestReposition()`.
+
+13. **DISARM RELEASES OWNERSHIP BEFORE THE RE-WIRE, and the other order is a
+    bug that looks like the right one.** `setLiveOwned(false)` runs while the
+    exclusion is STILL applied — so no freeze can reach the chain between the
+    two (`planPage` skips a nulled plug) — and only then are the flags cleared,
+    the wiring re-applied and `flipEpochPrime` read. Releasing ownership
+    afterwards lets the freeze path regain a still-live-owned chain, the next
+    root page is frozen as SILENCE for those tracks, and the epoch gate flips
+    the RT onto it: measured as a folder that went quiet for the whole 256 ms
+    tail and eight `liveOwnedRefusals`. The departing members keep being
+    rendered by the pump for `kDisarmTailMs` after that, carrying
+    `flipEpochPrime`, which is what covers the hole while the root re-freezes.
+
+14. **The tail only runs while the frozen lane is PLAYING.** With no root page
+    being served there is nothing for the ring to cover, and holding a
+    processor the freeze path is about to want would count refusals for no
+    benefit. `refresh()` therefore finishes the disarm synchronously when the
+    transport is stopped — and it must do so AFTER `current_` has been updated,
+    because `finishDisarm()` computes what is really gone as "departing minus
+    current" and closes the device when `current_` is empty.
+
+15. **A transport edge rebuilds BEFORE `twSpeaker::startOutput()`, not after.**
+    `setPlaybackRunning()` starts the readahead first and flips `isPlaying_`
+    last, so a rebuild driven by the flag alone leaves a track that monitor
+    Auto is about to release still live-owned while the readahead is already
+    freezing its chain. `SLiveMonitor::transportAboutToChange(playing)` is
+    called at the top of `setPlaybackRunning`; `transportChanged()` follows
+    from `setPlaying` and adds the one explicit reposition.
+
+16. **`SObject::invalidateRenderPath()` ON THE MIXER STALES THE MIXER AND THE
+    ROOT REWIRE AND NOTHING BELOW THEM.** It walks from the project root and
+    stales every chain CONTAINING the object it was called on. The exclusion
+    therefore invalidates PER CLOSURE MEMBER; one call on the mixer leaves the
+    members' own pages being served and is how a track stays silent after a
+    hand-back.
+
+17. **A render suspends every live lane and comes back as a FRESH ARM.**
+    `startRender()` calls `suspendForRender()` BEFORE `beginRun()`, so the run
+    barrier never meets a live-owned track; the session's `onComplete` posts a
+    QUEUED `resumeLiveAfterRender()` because that callback runs on the render
+    thread. "Fresh" is the point: the closure is recomputed from the model as
+    it then stands, never restored from a snapshot.
+
+18. **The app never touches the ring and never renders on the pump.** Plans are
+    built on the main thread and published with one `setPlan()`; the pump is
+    the only thread that reads them. The re-rooted horizon demands (one handle
+    per frozen input root, superseded by replacing the handle) are issued from
+    a main-thread 40 ms timer here, because the pump may not demand.

@@ -335,10 +335,29 @@ void SOptionsDialog::loadAudioPage()
     int i = audioDevice_->findData( cur );
     if( i >= 0 ) audioDevice_->setCurrentIndex( i );
 
-    // Load input devices
+    // Load input devices. REAL since proposal 21 L1b: the same
+    // createAudioInput() the live lane uses, so the list is the backend the
+    // env selected (a headless run sees the file or null backend, a desktop
+    // one sees WASAPI / ALSA / CoreAudio) rather than a hard-coded default.
+    // The probe device is opened and closed here and nowhere else; a failure
+    // to enumerate leaves just "System default", which is what it did before.
     audioInputDevice_->clear();
     audioInputDevice_->addItem( "System default", "default" );
-    // TODO: Phase 7: enumerate input devices via AudioInput factory for this platform
+    {
+        std::unique_ptr<audio::AudioInput> probe = audio::createAudioInput();
+        if( probe ) {
+            for( const audio::AudioInputDeviceInfo &d : probe->listDevices() ) {
+                const QString id   = QString::fromStdString( d.id );
+                const QString name = QString::fromStdString( d.name );
+                if( id.isEmpty() || id == QStringLiteral( "default" ) ) continue;
+                audioInputDevice_->addItem(
+                    name.isEmpty() ? id
+                                   : QStringLiteral( "%1 (%2 ch)" ).arg( name )
+                                         .arg( d.channels ),
+                    id );
+            }
+        }
+    }
     QString curIn = SSettings::instance().audioInputDeviceId();
     if( curIn.isEmpty() ) curIn = "default";
     int j = audioInputDevice_->findData( curIn );

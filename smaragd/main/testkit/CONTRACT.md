@@ -388,3 +388,33 @@ both would have to move them consistently.
 A MISSING lane is REJECTED rather than reported as the target's default value —
 a typo in a `target` must never read as a passing assertion. Pair it with
 `expectReject="true"` to assert that a lane is ABSENT.
+
+## The live-lane assertions (proposal 21 L1b)
+
+10. **The measurement is independent of the thing measured**, the same
+    discipline the MIDI-out assertions follow and the only reason any of these
+    are worth anything. The INPUT is a committed WAV replayed by
+    `FileAudioInput` through a real capture thread and ring
+    (`SMARAGD_AUDIO_INPUT_BACKEND=file:…`, set on the CTest entry because the
+    runner reads it long after the script is parsed); the OUTPUT is the audio
+    capture backend's own recording of what the device was handed. Nothing in
+    between is asked what it thinks it did.
+
+11. **`assert-monitor-latency` is a cross-correlation, not a position decode.**
+    `decodePositionAt` resolves 4096-frame blocks and the whole monitoring
+    budget is 8192, so the decoder could not tell a pass from a fail. The
+    correlation is NORMALISED — the peak is a similarity, so `minCorrelation`
+    means the same thing whatever the monitored level is — and the input index
+    WRAPS, because the file input loops.
+
+12. **`assert-render-policy` bounds are MAXIMA and default to 0.** A non-zero
+    bound is legal but must be spelled out in the case and justified there. All
+    five L1b cases assert 0/0, and that is a property of the arm/disarm
+    ordering (shell inv. 13), not luck: the wrong order measured 8.
+
+13. **A case that arms and disarms is a sequence of DEVICE SESSIONS.**
+    `CaptureBackend` clears its recording at device start (rule 1) and
+    disarming the last live lane closes the device, so a disarm between phases
+    makes frame 0 of the next dump the first frame of that phase — which is
+    what lets a monitoring case use absolute frame windows instead of
+    wall-clock guesses.

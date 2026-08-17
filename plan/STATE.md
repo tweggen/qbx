@@ -12611,3 +12611,98 @@ cannot adopt a rate (both in-repo backends adopt whatever they are opened with,
 so T4 reaches that branch by asking for a rate of 0 — stated rather than
 implied); the folder-closure and frozen-input pump paths (no producer until
 L1b); the crossfade end to end.
+
+## 2026-08-17 — Proposal 21 L1b: live lane app — monitoring through the chain
+
+The APP half of the live lane. An audio input is heard through the armed
+track's own insert chain, its folders and the master, while the rest of the
+arrangement keeps playing from frozen pages. New files: `main/shell/
+sliveplanbuilder.{h,cpp}` (the closure + the plan), `slivemonitor.{h,cpp}` (the
+lifecycle and the ordering), `sliveinputsource.{h,cpp}` (an `AudioInput` ring
+seen as a `twLiveInputSource`, allocation-free `pull`), `main/objects/track/
+sliveinputactions.{h,cpp}` (three verbs), `main/testkit/slivetestactions.{h,cpp}`
+(four assertions), and five qxa cases.
+
+**THE CLOSURE.** `sliveplan::computeClosure` walks the lane tree once, takes
+`{armed && monitorEffective} ∪ {monitor == on}` intersected with "has an
+`audio:` input", and closes it upward to the output — DEEPEST FIRST, which is
+what makes a parent's `liveChildren` indices strictly less than its own
+(`twLivePlan::finalize()` proves it). Per member: the slot processors in slot
+order, the `twGainStage::Envelope` snapshot, the `twRewire` channel map, the
+input source for a source track, and the unarmed children's ROOT components as
+`frozenInputs`. `twlive::checkMasterShape` is re-checked on every build; more
+than one top-level member — or a master that is not a unity sum with an identity
+map — gets a synthetic sum node shaped exactly like a folder, which is also how
+the `Closure` mode renders the master.
+
+**THREE THINGS THAT WERE WRONG AND ARE THE REASON THIS TOOK ITERATIONS.**
+
+1. **Ownership must be released BEFORE the re-wire, not after.** The brief's
+   order reads "un-wire → publish the tail → `setLiveOwned(false)` after the
+   plan retires", and taken literally it produces a folder that goes SILENT for
+   the whole tail: the freeze path regains a still-live-owned chain, the very
+   next root page is frozen as silence for those tracks, and the epoch gate
+   dutifully flips the RT onto it. Measured: a 256 ms hole in the sibling and
+   8 `liveOwnedRefusals`. Releasing ownership while the exclusion is still
+   applied is safe (a nulled plug is never planned) and makes the first
+   re-summed page carry real audio. With the correct order: an 8-frame gap and
+   0 refusals.
+
+2. **`SObject::invalidateRenderPath()` on the mixer stales the mixer and the
+   root rewire and NOTHING BELOW THEM** — it walks from the project root and
+   stales every chain CONTAINING the object it was called on. The exclusion
+   therefore invalidates per closure MEMBER. One call on the mixer left the
+   members' own (silent) pages being served and the folder never came back.
+
+3. **A transport edge must rebuild BEFORE `startOutput()`.**
+   `setPlaybackRunning` starts the readahead first and flips `isPlaying_` last,
+   so a rebuild driven by the flag alone left a track that monitor Auto was
+   about to release still live-owned while the readahead was already freezing
+   its chain — six refusals per Play. `transportAboutToChange(playing)` is now
+   called at the top of `setPlaybackRunning`.
+
+A fourth, smaller: `finishDisarm()` computes what is really gone as "departing
+minus current", so calling it before `current_` was updated released nothing and
+left the device open — which made every phase of a case share one capture
+session and every window point at the first phase.
+
+**MEASURED, per acceptance criterion.**
+
+- **AC1 `monitor_through_chain`** (four device sessions, four absolute-frame
+  windows): gain 0.5 → **0.115478** against the closed form 0.115470 (±3 % band);
+  bypassed → **0.230956** against 0.230940; monitor **Auto** + Play → **0.137769**
+  against the clip-alone closed form 0.137800, i.e. the input STOPPED exactly as
+  the tape rule says; monitor **On** + Play → **0.179799** against the
+  two-source form 0.179800. Input meter peak **0.399994** against the fixture's
+  0.4. `liveThreadRefusals` 0, `liveOwnedRefusals` 0.
+- **AC2 `monitor_latency`**: measured lag **5120 frames = 106.7 ms**, correlation
+  **1.000**, against a budget of 8192 (input block 1024 + ring depth 4096 + 3
+  output blocks 3072). Five 1024-frame blocks: one the input capture thread
+  holds, the pump's two-block lead, two on the RT side. Stable across runs.
+- **AC3 `monitor_folder_closure`**: live phase **0.134485** against 0.134500
+  (sibling read out of its own frozen pages by the pump + the input, both through
+  the folder's insert); after the mid-play hand-back **0.0688844** against
+  0.068900 — the same number by a completely different route; longest silent run
+  **8 frames** against a 1024 budget; refusals 0/0.
+- **AC4 `arm_during_playback`**: bystander RMS **0.576783 / 0.577287 / 0.550341**
+  across the three windows (before the arm, across the flip, after the release);
+  longest gap **1 frame**, largest sample step **1.896** against the source's own
+  reset of 1.9 and a bound of 3.8 — so nothing was doubled and nothing was
+  served twice. Refusals 0/0.
+- **AC5 `render_while_armed`**: the armed render is **byte-identical** to the
+  unarmed one (384 044 bytes) — and the armed track carries a CLIP on purpose,
+  because a track without one would render identically whether the suspension
+  worked or not. Monitoring comes back as a fresh arm: **0.115478** again.
+- **AC6**: every new case asserts `assert-render-policy liveThreadRefusals="0"
+  liveOwnedRefusals="0"`. Goldens byte-identical (`git status
+  smaragd/tests/goldens/` clean) — no live lane exists during a render.
+
+**NOT GATED**, and none of it is an oversight: real device latency and jitter
+(the numbers above are the capture backend's 1024-frame grid; WASAPI shared adds
+~100 ms of its own and proposal 35 is the prerequisite for a number a performer
+would call low), WASAPI shared under load, ASIO, and hearing an ARMED track's
+OWN clips (design §10.1 — it needs proposal 20 §2). Also not gated: the
+`midi:`/`keyboard` input spellings, which round-trip and are refused by nothing
+but render nothing until L2; the Options input combo and the arm menu, which are
+real but have no headless gesture; and the `Closure` master mode, which is
+implemented and unreachable while `SStdMixer` builds a unity sum.

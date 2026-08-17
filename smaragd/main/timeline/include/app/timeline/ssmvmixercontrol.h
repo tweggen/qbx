@@ -7,12 +7,14 @@
 #include "app/model/sobjectrenderer.h"
 #include "tw/metering/tw_level_probe.h"
 #include "app/model/sautomationlane.h"
+// STrack::MonitorMode appears in a member signature, so a forward
+// declaration will not do (proposal 21 L1b).
+#include "app/objects/track/strack.h"
 
 class SLevelMeter;
 class SStdMixer;
 class QGridLayout;
 class QBoxLayout;
-class STrack;
 class SStdMixerView;
 class SLink;
 class QPushButton;
@@ -103,6 +105,12 @@ protected slots:
     // Recording channel selection context menu
     void showChannelMenu();
     void setRecordingChannels( uint32_t channels );
+    // The two live-input verbs (proposal 21 L1b, design D9), over the
+    // selection like every other head toggle, plus the tooltip that
+    // ANNOUNCES the live state - including a refused rate.
+    void setTrackInput_( const QString &device, unsigned mask );
+    void setMonitorMode_( STrack::MonitorMode mode );
+    void refreshArmTooltip_();
 
     // Track selection highlight (the primary moved / the set changed).
     void onSelectedTrackChanged( STrack *track );

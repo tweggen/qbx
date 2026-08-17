@@ -20,6 +20,8 @@
 #include <QToolTip>
 
 #include "app/shell/sapplication.h"
+#include "app/shell/slivemonitor.h"
+#include "app/shell/slivemonitor.h"
 #include "tw/devices/audio_input.h"
 #include "app/shell/ssettings.h"
 #include "app/model/sproject.h"
@@ -28,6 +30,8 @@
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/sfadercurve.h"
 #include "app/objects/track/strack.h"
+#include "app/objects/track/sliveinputactions.h"
+#include "app/objects/track/sliveinputactions.h"
 #include "app/model/slink.h"
 #include "app/model/sobjectrenderer.h"
 #include "app/model/sproject.h"
@@ -469,11 +473,31 @@ void SSMVMixerControl::takesToggled( bool on )
     }
 }
 
-// Arm has no SAction of its own (it is transport state, not project state), so
-// this is a direct model write — over the selection like the other two.
+// ARM IS A VERB SINCE PROPOSAL 21 L1b. It used to be a direct model write on
+// the grounds that arming is transport state rather than project state; it is
+// now `arm-track`, for two reasons that outweigh that. It decides whether a
+// track is MONITORED, which re-wires the mixer and hands a plugin chain to
+// another thread - so it has to go through the one place that owns that
+// ordering (SAppContext::liveLanesChanged, raised by the verb) - and a user who
+// armed the wrong lane of a multi-selection has the same right to undo it as
+// one who muted it. Over the selection like the other two.
 void SSMVMixerControl::armToggled( bool on )
 {
-    for( STrack *t : toggleTargets() ) t->setArmedForRecording( on );
+    SStdMixer *mixer = smv_.getModel();
+    if( !mixer ) {
+        for( STrack *t : toggleTargets() ) t->setArmedForRecording( on );
+        return;
+    }
+    const QList<STrack *> targets = toggleTargets();
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Arm tracks" ) );
+    for( STrack *t : targets ) {
+        if( t->isArmedForRecording() == on ) continue;
+        SApplication::app().submitAction(
+            new SArmTrackAction( strackpath::pathOf( mixer, t ), on ) );
+    }
+    if( macro ) stack->endMacro();
 }
 
 void SSMVMixerControl::onArmedChanged( bool on )
@@ -563,7 +587,8 @@ SSMVMixerControl::SSMVMixerControl(
     qArm_->setCheckable( true );
     qArm_->setFixedSize( 20, 20 );
     qArm_->setFont( btnFont );
-    qArm_->setToolTip( "Arm for Recording\n(Right-click to select input channels)" );
+    qArm_->setToolTip( "Arm for Recording / Monitoring\n"
+                       "(Right-click for input, channels and monitor mode)" );
     qArm_->setStyleSheet( "QPushButton:checked { background:#c04040; color:white; }" );
     qArm_->setContextMenuPolicy( Qt::CustomContextMenu );
 
@@ -740,6 +765,12 @@ SSMVMixerControl::SSMVMixerControl(
     updateLayout();
 }
 
+// THE ARM BUTTON'S RIGHT-CLICK MENU IS THE INPUT SELECTOR (proposal 21 L1b,
+// design D9). One menu, three sections: which device, which channels of it,
+// and whether to monitor. The device and the mask are two halves of ONE
+// portable string ("audio:<device>:<mask>") so a project carries what the user
+// picked and SSettings carries only the machine-local id; the monitor mode is
+// its own verb because it is the thing a performer changes most often.
 void SSMVMixerControl::showChannelMenu()
 {
     // Get the selected input device from settings
@@ -767,6 +798,52 @@ void SSMVMixerControl::showChannelMenu()
 
     QMenu menu( "Input Channels" );
     uint32_t currentSelection = tk_.getRecordingChannels();
+
+    // --- MONITOR MODE, first: it is the switch a performer reaches for.
+    {
+        QMenu *mon = menu.addMenu( QStringLiteral( "Monitor" ) );
+        struct Row { const char *label; STrack::MonitorMode mode; const char *tip; };
+        static const Row rows[] = {
+            { "Auto (tape machine)", STrack::MonitorMode::Auto,
+              "Input while stopped or recording; the track's own material on Play" },
+            { "On",  STrack::MonitorMode::On,  "Always monitor the input" },
+            { "Off", STrack::MonitorMode::Off, "Never monitor the input" },
+        };
+        for( const Row &r : rows ) {
+            QAction *a = mon->addAction( QString::fromUtf8( r.label ) );
+            a->setCheckable( true );
+            a->setChecked( tk_.getMonitorMode() == r.mode );
+            a->setToolTip( QString::fromUtf8( r.tip ) );
+            const STrack::MonitorMode m = r.mode;
+            connect( a, &QAction::triggered, this, [this, m]() { setMonitorMode_( m ); } );
+        }
+    }
+
+    // --- THE INPUT DEVICE. "None" is a real choice and the default: a track
+    //     with no input is not a monitoring source however it is armed.
+    {
+        QMenu *dev = menu.addMenu( QStringLiteral( "Input device" ) );
+        QAction *none = dev->addAction( QStringLiteral( "None" ) );
+        none->setCheckable( true );
+        none->setChecked( !tk_.hasTrackInput() );
+        connect( none, &QAction::triggered, this,
+                 [this]() { setTrackInput_( QString(), 0u ); } );
+        dev->addSeparator();
+        const QString current = tk_.trackInputAudioDevice();
+        for( const audio::AudioInputDeviceInfo &d : input->listDevices() ) {
+            const QString id   = QString::fromStdString( d.id );
+            const QString name = QString::fromStdString( d.name );
+            QAction *a = dev->addAction( name.isEmpty() ? id : name );
+            a->setCheckable( true );
+            a->setChecked( tk_.hasTrackInput() && current == id );
+            connect( a, &QAction::triggered, this, [this, id]() {
+                unsigned mask = tk_.trackInputChannelMask();
+                if( mask == 0u ) mask = 1u;
+                setTrackInput_( id, mask );
+            } );
+        }
+    }
+    menu.addSeparator();
 
     // "All Channels" option
     QAction *allChannelsAction = menu.addAction( "All Channels" );
@@ -815,25 +892,78 @@ void SSMVMixerControl::showChannelMenu()
     menu.exec( QCursor::pos() );
 }
 
+// The two live-input verbs, over the SELECTION like every other head toggle.
+void SSMVMixerControl::setTrackInput_( const QString &device, unsigned mask )
+{
+    SStdMixer *mixer = smv_.getModel();
+    if( !mixer ) return;
+    const QString spec = device.isEmpty()
+        ? QStringLiteral( "none" )
+        : QStringLiteral( "audio:%1:%2" ).arg( device ).arg( mask, 0, 16 );
+    const QList<STrack *> targets = toggleTargets();
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Set track input" ) );
+    for( STrack *t : targets )
+        SApplication::app().submitAction(
+            new SSetTrackInputAction( strackpath::pathOf( mixer, t ), spec ) );
+    if( macro ) stack->endMacro();
+    refreshArmTooltip_();
+}
+
+void SSMVMixerControl::setMonitorMode_( STrack::MonitorMode mode )
+{
+    SStdMixer *mixer = smv_.getModel();
+    if( !mixer ) return;
+    const QList<STrack *> targets = toggleTargets();
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    const bool macro = targets.size() > 1 && stack;
+    if( macro ) stack->beginMacro( QStringLiteral( "Set monitor mode" ) );
+    for( STrack *t : targets ) {
+        if( t->getMonitorMode() == mode ) continue;
+        SApplication::app().submitAction(
+            new SSetMonitorModeAction( strackpath::pathOf( mixer, t ), mode ) );
+    }
+    if( macro ) stack->endMacro();
+    refreshArmTooltip_();
+}
+
+// The tooltip is where the live state is ANNOUNCED, including the one failure a
+// user cannot otherwise see: openLive() REFUSES a device whose rate is not the
+// project rate, because a ring entry is stamped in PROJECT frames and the RT
+// sums it straight into the device buffer. Monitoring then silently does not
+// happen, so it is said here as well as logged.
+void SSMVMixerControl::refreshArmTooltip_()
+{
+    QString tip = QStringLiteral(
+        "Arm for Recording / Monitoring\n"
+        "(Right-click for input, channels and monitor mode)" );
+    tip += QStringLiteral( "\nInput: %1" )
+               .arg( tk_.hasTrackInput() ? tk_.getTrackInput()
+                                         : QStringLiteral( "none" ) );
+    tip += QStringLiteral( "\nMonitor: %1" )
+               .arg( STrack::monitorModeToString( tk_.getMonitorMode() ) );
+    if( SLiveMonitor *mon = SApplication::app().liveMonitor() ) {
+        if( mon->rateRefusals() > 0 )
+            tip += QStringLiteral( "\nMONITORING OFF: the audio device will not "
+                                   "run at the project rate" );
+    }
+    qArm_->setToolTip( tip );
+}
+
 void SSMVMixerControl::setRecordingChannels( uint32_t channels )
 {
     // Like ARM itself, this follows the selection: picking the input channels
     // for one armed lane out of several selected ones is never what was meant.
     for( STrack *t : toggleTargets() ) t->setRecordingChannels( channels );
 
-    // Update the ARM button tooltip to show selected channels
-    QString tooltip = "Arm for Recording\n(Right-click to select input channels)";
-    if( channels != 0 ) {
-        QString channelStr;
-        for( uint32_t ch = 0; ch < 32; ++ch ) {
-            if( channels & (1U << ch) ) {
-                if( !channelStr.isEmpty() ) channelStr += ", ";
-                channelStr += QString::number( ch + 1 );
-            }
-        }
-        tooltip += QString( "\nSelected: %1" ).arg( channelStr );
-    }
-    qArm_->setToolTip( tooltip );
+    // And the same mask is the second half of `trackInput` (design D9): the
+    // recording path and the monitoring path must not be able to disagree about
+    // which channels of the device this track is listening to.
+    if( tk_.hasTrackInput() )
+        setTrackInput_( tk_.trackInputAudioDevice(), channels ? channels : 1u );
+
+    refreshArmTooltip_();
 }
 
 // Highlight follows the selection SET, not just the primary: with several
