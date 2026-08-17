@@ -151,9 +151,23 @@ bool SAudioRecorder::start()
     cycle_ = cycleRegion_( cycleIn_, cycleOut_ );
 
     // 1. THE INPUT. One pump, borrowed from the monitor (design D7).
-    deviceName_ = SSettings::instance().audioInputDeviceId();
-    if( deviceName_.isEmpty() ) deviceName_ = QStringLiteral( "default" );
+    //
+    // THE DEVICE NAME IS RESOLVED THE WAY THE MONITOR RESOLVES IT, and in the
+    // same order: the armed track's own `trackInput` device first, then
+    // whatever the monitor already has open, then the settings default. Asking
+    // for the settings default unconditionally is what the first draft did,
+    // and it CLOSED AND REOPENED THE DEVICE at every record start on a track
+    // whose input was named explicitly -- a monitoring gap in exactly the case
+    // "one input pump" exists to prevent, plus a device-change fight with the
+    // monitor for the rest of the take.
     SLiveMonitor *mon = app_->liveMonitor();
+    deviceName_.clear();
+    if( !armed_.empty() && armed_.front().track )
+        deviceName_ = armed_.front().track->trackInputAudioDevice();
+    if( deviceName_.isEmpty() && mon ) deviceName_ = mon->inputDeviceId();
+    if( deviceName_.isEmpty() )
+        deviceName_ = SSettings::instance().audioInputDeviceId();
+    if( deviceName_.isEmpty() ) deviceName_ = QStringLiteral( "default" );
     bridge_ = mon ? mon->acquireBridge( deviceName_ ) : nullptr;
     if( !bridge_ ) {
         error_ = QStringLiteral( "input device would not open" );
