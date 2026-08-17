@@ -394,7 +394,28 @@ std::vector<AudioInputDeviceInfo> WASAPIInput::listDevices() const {
         std::string deviceId(len - 1, 0);
         WideCharToMultiByte(CP_UTF8, 0, id, -1, &deviceId[0], len, nullptr, nullptr);
 
-        devices.push_back({deviceId, name, 2});  // TODO: Get actual channel count
+        // The endpoint's shared-mode mix format answers BOTH the channel count
+        // (which was hard-coded to 2, so a 16-input interface advertised two)
+        // and the mix RATE, which is the number that matters here: it is a
+        // per-endpoint Windows setting, and an input endpoint declared at a
+        // different rate from the output endpoint of the SAME interface makes
+        // the OS resample one side and misreport its clock.
+        std::uint32_t chans = 2;
+        std::uint32_t rate = 0;
+        {
+            IAudioClient *client = nullptr;
+            if (SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL,
+                                           nullptr, (void **)&client)) && client) {
+                WAVEFORMATEX *fmt = nullptr;
+                if (SUCCEEDED(client->GetMixFormat(&fmt)) && fmt) {
+                    if (fmt->nChannels > 0) chans = fmt->nChannels;
+                    rate = fmt->nSamplesPerSec;
+                    CoTaskMemFree(fmt);
+                }
+                client->Release();
+            }
+        }
+        devices.push_back({deviceId, name, chans, rate});
 
         PropVariantClear(&varName);
         props->Release();
