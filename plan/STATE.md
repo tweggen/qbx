@@ -12611,3 +12611,142 @@ cannot adopt a rate (both in-repo backends adopt whatever they are opened with,
 so T4 reaches that branch by asking for a rate of 0 — stated rather than
 implied); the folder-closure and frozen-input pump paths (no producer until
 L1b); the crossfade end to end.
+
+---
+
+## 2026-08-17 — Proposal 21 L3a: capture bridge engine
+
+- **Status:** ✅ COMPLETE (branch `feat/21-l3a-capture-bridge`, base `d034035`)
+- **Scope:** design D7's "one input pump, three sinks", the growing capture
+  source it publishes into, and `RecordingSession` refactored to be a consumer
+  of it. Engine only — the app is untouched (L3b rewires it).
+- **Modules:** `tw303a/sources` (+CONTRACT inv. 13), `tw303a/record`
+  (+CONTRACT, rewritten), `docs/contracts/THREADING.md`.
+
+### What landed
+
+**`twGrowingCaptureSource`** (`tw/sources`, not `tw/record`, because the DAG
+already says so: `record → sources` exists, `sources` is where every
+`twRandomSource` lives, and putting it in `record` would make the recording
+module the owner of a data type that L3b's `SRecordingContent` and the engine's
+readers both need). It is `twCapturingSource`'s counterpart for material that is
+still arriving: chunked planar storage (one chunk = `chunkFrames` frames of
+every channel; the default is `twOutputPage::FRAME_CAPACITY`, static_asserted),
+an atomic monotone `frontier()`, a width fixed at construction, a
+single-producer `append`/`appendPlanar`/`reserveThrough`, and a by-position
+reader API callable from any thread. Three properties are load-bearing:
+
+- **The frontier's release store is the ONLY publication.** Samples and the
+  chunk pointer holding them are written first; a reader acquires the frontier
+  and never touches a frame above it. That one pairing is the whole
+  synchronisation — no lock anywhere on either side.
+- **A read past the frontier is a SHORT READ, never a wait.** Live material has
+  no "not yet" to give, and a reader that blocked on one could deadlock the
+  audio thread. Hence `isReproducible() == false`.
+- **The chunk INDEX never reallocates** — a fixed array of atomic pointers sized
+  at construction (4096 chunks = 1.55 h at 48 kHz), because a `std::vector` that
+  reallocated would move the samples a concurrent reader is copying out. Which
+  is also why the storage is chunked at all. Appending past it is refused and
+  counted (`droppedFrames()`), never grown silently.
+
+`toCapturingSource()` is the handover to the fixed-size source and costs exactly
+ONE copy: the flat planar buffer `twCapturingSource` adopts is built straight
+out of the chunks and moved in.
+
+**`CaptureBridge`** (`tw/record`). Per active input: the device's SPSC ring (L0)
+gets exactly ONE consumer — the bridge thread — which pops, resamples if and
+only if the device rate is not the project rate, and fans out to (1) a live-lane
+`AudioRing` popped by `pullLive()`, (2) the growing capture source, (3) —
+deliberately not here — the WAV writers.
+
+**The WAV sink runs on its OWN thread and reads THE PAGES by position.** That is
+the whole of "backpressure that never stalls the ring": a writer that falls
+behind costs a backlog (`wavLate`, a high-water mark in frames) and nothing
+else, and at stop `finalizeFromPages()` completes every file out of the pages
+(`wavFinalized`). Putting the `write()` call on the bridge thread — the obvious
+shape — is exactly what would turn a slow disk into an input-ring overrun, and
+the gate is built to catch that.
+
+**Threading decision, stated because the brief asked:** the bridge consumer is
+its OWN thread, not the pump. The pump exists only while a live lane is armed,
+must be allocation-free and must not block, while the bridge allocates a chunk
+at a chunk boundary and must outlive any plan (recording with no live lane is
+the ordinary case). Steady state on the bridge thread is allocation-free — pop
+scratch, resampler output vector and per-sink interleave scratch are sized once
+in `start()` — EXCEPT one 512 KB chunk allocation per 65536 frames (1.37 s at
+48 kHz stereo), which is the one place allocation happens and is what
+`reserveThrough()` exists to move earlier.
+
+**The live-lane sink is `CaptureBridge::pullLive(out, channels, frames, pos)` —
+`twLiveInputSource::pull()`'s exact signature, but NOT a subclass of it.** That
+interface lives in `tw/playback`, and `record → playback` would be a new module
+edge carrying the whole playback library for one pure virtual; the app-side
+adapter L1b/L3b needs is ten lines. `pos` is accepted and ignored, which is what
+that interface already documents a device ring does.
+
+**`RecordingSession` is now a bridge consumer** with its public shape unchanged
+(the app compiles and behaves identically; `SMainWindow::onRecordingCompleted`
+was not touched). **The 1 ms poll is gone**: the session thread waits on a
+condition variable until the transport stops, waking at 100 ms only to emit
+progress, and the playhead comes from the bridge's per-batch callback as an
+atomic store. `requestStop()` still never blocks — the blocking finalisation
+(stop the device → drain the ring → complete the files from the pages) is what
+the session thread exists for. `bridge()` is the new accessor L3b reads the
+growing source through. `LinearResampler` moved verbatim to
+`record/src/linear_resampler.h`.
+
+### Gate
+
+`record_bridge_test` (new, `RUN_SERIAL`, drives a real-time-paced
+`FileAudioInput` over fixtures it generates itself, so both sides of every
+comparison come from one function):
+
+| Claim | Measured |
+|---|---|
+| growing source: odd appends across chunk boundaries, short read at the frontier, masked interleaved read, index-exhausted refusal, one-copy handover | 8/8 |
+| **2 ch**: pages == WAV == input file | **0 differences in 32 768 frames × 2 ch (65 536 samples) each**; live lane 0 differences |
+| 2 ch counters | `in=pages=live=wav=32768`, `ringOverruns=0`, `liveOverruns=0`, `pageDrops=0` |
+| channel mask | the second sink is a MONO file equal to channel 0, 0 differences |
+| **stalled writer** (150 ms per 4096-frame write ≈ 27 frames/ms against a device producing 48) | **`ringOverruns = 0` while `wavLate = 17 408` frames**; `wavFinalized = 19 456` frames written out of the pages after capture ended; `framesToWav = 32 768`; the file is STILL 0 differences from the input |
+| **6 ch**: pages == WAV == input file | 0 differences in 196 608 samples; source width 6 |
+| `RecordingSession` over `SMARAGD_AUDIO_INPUT_BACKEND=file:` | 2 files, track A exact (2 ch @ 48 kHz), track B channel 0 only, playhead == `startLocatorFrames + 32768`, pages survive the stop |
+
+Loop: **25/25 iterations** of `record_bridge_test`, judged on the EXIT CODE, not
+on a stdout grep (`repeat_test.sh` cannot see a teardown crash — CLAUDE.md says
+so, and this is a threaded test).
+
+Standing gate: `./build.sh` clean; `check_layering.py` clean (**no DAG change
+was needed** — `record → sources` and `sources → pages` already existed);
+`check_logging.py` clean; **`ctest -j4` 175/175 passed, 178 registered, 3 Not
+Run (Disabled)**, 81.3 s. `smaragd/tests/goldens/` byte-identical and
+`git status smaragd/tests/` clean — no render path was touched.
+
+Three full `-j4` runs were taken and the box was NOT idle (a sibling worktree
+was building and running its own suite throughout). Run 1: **175/175**, 81.3 s.
+Run 2: one failure, `qxa.instrument_stereo_render` — plugin-load shaped, the
+same family the L0 entry above records (a `plugincache` race between concurrent
+processes); it was green in runs 1 and 3 and **20/20 in isolation**. Run 3: one
+failure, `devices_midi_test` — **max |sent − due| = 6.962 ms against its 5 ms
+wall-clock bound**, which is the load artifact CLAUDE.md warns about (RUN_SERIAL
+excludes other tests in the same invocation, never another agent's suite); it
+passed immediately afterwards. Neither case touches `tw/sources` or `tw/record`
+and neither is caused by this branch — but both are named rather than averaged
+away. `record_bridge_test` was green in all three runs and 25/25 in the loop.
+
+### NOT gated
+
+Real capture hardware; ALSA and CoreAudio input (CoreAudio still returns
+silence — L0 debt); the app's placement of a recording (L3b); the live-lane sink
+being pulled by a REAL `LiveGraphPump` (L1b/L3b — here it is pulled by a test
+thread in the pump's shape, concurrently in one case and after the fact in the
+others); a device whose rate differs from the project's (the resampler path is
+carried over verbatim from the old loop and is still only exercised by a real
+driver that refuses auto-conversion); `SMARAGD_CAPTURE_SPEED ≠ 1`.
+
+### Known debt this leaves
+
+The bridge thread's wake is a block-paced condition-variable TIMEOUT (half a
+device block, clamped to 1–10 ms), not an event: `AudioInput` has no "wake me
+when frames arrive" ABI. It is bounded by the ring's 16-block depth so it cannot
+overrun, but it does add up to ~10 ms to the live lane's latency, which L1b's
+monitor-latency budget has to carry. Named in `tw/record/CONTRACT.md`.

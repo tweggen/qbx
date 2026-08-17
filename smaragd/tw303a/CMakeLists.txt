@@ -95,6 +95,7 @@ tw_module(sources
         sources/include/tw/sources/twresampledsource.h
         sources/include/tw/sources/twresampler.h
         sources/include/tw/sources/twcapturingsource.h
+        sources/include/tw/sources/twgrowingcapturesource.h
         sources/include/tw/sources/twloopreader.h
         sources/include/tw/sources/twgrainsource.h
         sources/include/tw/sources/twgrainparams.h
@@ -106,6 +107,7 @@ tw_module(sources
         sources/src/twresampledsource.cc
         sources/src/twresampler.cc
         sources/src/twcapturingsource.cc
+        sources/src/twgrowingcapturesource.cc
         sources/src/twloopreader.cc
         sources/src/twgrainsource.cc
         sources/src/twpagedvocoder.cc
@@ -564,7 +566,9 @@ tw_module(render
 # --- E11 record: capture from input devices -----------------------------------
 tw_module(record
     SOURCES
+        record/include/tw/record/capture_bridge.h
         record/include/tw/record/recording_session.h
+        record/src/capture_bridge.cc
         record/src/recording_session.cc
     DEPS tw_core tw_devices tw_sinks tw_sources
 )
@@ -1003,6 +1007,20 @@ set_tests_properties(devices_midi_test PROPERTIES RUN_SERIAL TRUE)
 tw_module_test(devices_input_test           devices/tests/input_test.cc                 tw_devices)
 target_include_directories(devices_input_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/devices/src)
 set_tests_properties(devices_input_test PROPERTIES RUN_SERIAL TRUE)
+# The CAPTURE BRIDGE gate (proposal 21 L3a): twGrowingCaptureSource as a data
+# structure, then the whole fan-out end to end over a paced FileAudioInput —
+# pages == WAV == the input file SAMPLE-EXACT at 2 and 6 channels, a
+# deliberately stalled WAV writer that must not cost a single ring overrun, the
+# live-lane pull, the per-sink channel mask, and RecordingSession as a bridge
+# consumer. It drives a REAL-TIME PACED device, so like devices_input_test it
+# measures the machine as well as the code: RUN_SERIAL. It reaches file_input.h
+# (PRIVATE to tw_devices) the same way devices_input_test does, and writes its
+# fixtures into the build tree rather than the source tree.
+tw_module_test(record_bridge_test           record/tests/record_bridge_test.cc          tw_record)
+target_include_directories(record_bridge_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/devices/src)
+set_tests_properties(record_bridge_test PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
+    ENVIRONMENT "TW_RECORD_TEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/record-test")
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/record-test)
 # Proposal 36 B2: components declare their width (getOutputChannels), the wide
 # render path exists (renderPageWide), the plug channel rule and the direct
 # bound-page read. It lives under schedule/tests because AC B2.1 requires the

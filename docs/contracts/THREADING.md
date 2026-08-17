@@ -8,7 +8,9 @@
 | Audio callback | platform backend (WASAPI/ALSA/CoreAudio) | `twSpeaker` render callback → `AudioEngine::pullBlock` | **NO** |
 | Readahead | `AudioEngine::startReadahead` | pre-buffers engine output | **NO** |
 | Render worker | `RenderSession::start` | sequential freezePage + file writing | **NO** |
-| Record worker | `RecordingSession::start` | POPS the input ring → resample → WAV writers | **NO** |
+| **Capture bridge** | `CaptureBridge::start` (proposal 21 L3a) | the input ring's ONE consumer: pop → resample → fan out to the live-lane ring, the `twGrowingCaptureSource` pages and (never a file) | **NO** |
+| **Capture WAV writer** | `CaptureBridge::start` | reads the capture pages BY POSITION and writes every WAV sink. May be LATE (`wavLate`); at stop it finalises the files out of the pages. Deliberately NOT the bridge thread — a slow file must never stall the ring | **NO** |
+| Record session | `RecordingSession::start` | waits for the transport to stop, then calls `CaptureBridge::stop()`; wakes at 100 ms only to emit progress (the old 1 ms device poll is gone) | **NO** |
 | **Input capture (one per open device)** | `AudioInput::startCapture` (WASAPI / ALSA / FileAudioInput; on CoreAudio the AVAudioEngine TAP plays this role and is not ours to create) | waits on the device's own event, pushes WHOLE packets into that device's SPSC ring (`tw/devices/audio_ring.h`) | **NO** |
 | Revalidator pool | `CaptureRevalidator` (N workers) | page recompute via `IRevalidatable` | **NO** |
 | Buffering monitor | `twSpeaker::startOutput` | polls readahead, starts backend | **NO** |
