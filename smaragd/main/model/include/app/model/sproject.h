@@ -10,6 +10,7 @@
 #include <QVariant>
 #include <QVariantMap>
 #include <QList>
+#include <QStringList>
 
 #include <cstdint>
 #include <vector>
@@ -17,6 +18,7 @@
 
 #include "tw/core/twfraction.h"
 #include "tw/core/twtypes.h"
+#include "tw/events/twtempomap.h"
 #include "tw/pages/capture_page_pool.h"
 
 class QDomElement;
@@ -35,6 +37,26 @@ class SProject
 public:
     SProject();
     virtual ~SProject();
+
+    /**
+     * Wire-format version written into <SProject formatVersion='...'>.
+     *
+     * 1 = every project written before proposal 37 (the attribute is absent
+     *     there, so a reader that finds nothing must assume 1).
+     * 2 = the loader's prune-and-retry recovery per element kind (D8a): a
+     *     document written by this build may rely on a reader that keeps a
+     *     container whose child is missing.
+     *
+     * A reader NEVER refuses a higher version. Refusing would make a project
+     * unopenable by the very builds a user is most likely to have, and every
+     * element is skippable by name anyway (an unknown element is warned about
+     * and dropped); it warns instead, so a load that then looks odd has a
+     * printed reason.
+     */
+    static constexpr int FORMAT_VERSION = 2;
+
+    /** The version this document declared (1 when the attribute was absent). */
+    int formatVersion() const { return formatVersion_; }
 
     const QString &getFileName();
 
@@ -71,12 +93,48 @@ public:
     typedef SExternFile *(*ExternFileFactory)( SProject *, QString &fileName );
     static void registerExternFileFactory( ExternFileFactory );
 
+    /**
+     * EXTENSION-DISPATCHED content factory (proposal 37 §6.1).
+     *
+     * `registerExternFileFactory` is the sample path: one factory, any
+     * extension, and the result is an SExternFile the project caches by
+     * absolute path so two clips of one file share it. An event file is not
+     * that shape — a `.mid` is IMPORTED and materialised inline (design §3.1),
+     * so it is a plain SObject with no file identity to cache and no reload.
+     * Hence a second, suffix-keyed registry rather than a widened one.
+     *
+     * `linkToFile` consults this registry FIRST (lower-cased suffix, no dot),
+     * and falls back to the extern-file factory. Registered by the slice that
+     * owns the type, from a static initializer, so the model still names no
+     * concrete object type.
+     */
+    typedef SObject *(*ContentFileFactory)( SProject *, QString &fileName );
+    static void registerContentFileFactory( const QStringList &suffixes,
+                                            ContentFileFactory );
+    /** The suffixes any content factory claims (lower case, no dot). */
+    static QStringList contentFileSuffixes();
+
     // Mark project as partial/corrupt so destructor skips risky cleanup
     void markAsPartialLoad();
     bool isPartialLoad() const { return isPartialLoad_; }
 
     virtual int serialize( QTextStream & );
-    double getBPMTempo() const { return bpmTempo_; }
+
+    /**
+     * THE tempo authority (proposal 37 D2). `twTempoMap` stores SMF's own
+     * unit — microseconds per quarter note, an integer — and BPM is a DERIVED
+     * view of it. There is deliberately no second tempo scalar on the project:
+     * a stored `60/bpm` seconds-per-beat and a stored µs/quarter disagree in
+     * the tenth microsecond, and that difference lands on a frame boundary in
+     * a long project.
+     *
+     * The map is the ONLY tick<->frame converter; everything positional in the
+     * app goes through it (SMidiCut, SLink's beats timebase, the ruler).
+     * Written by exactly one verb, `set-tempo`, plus the loader — see
+     * setTempoMap().
+     */
+    const twTempoMap &tempoMap() const { return tempoMap_; }
+    double getBPMTempo() const { return tempoMap_.bpm(); }
     int serializeSelfAttributes( QTextStream & );
     int readPreChildrenAttributes( QDomElement &element );
 
@@ -218,6 +276,15 @@ public slots:
     void setFileName( const QString & );
     void addExternObject( const SExternFile & );
     void removeExternObject( QString & );
+    /**
+     * Write the tempo map. The ONLY writers are `set-tempo` (the verb) and the
+     * loader — every other tempo edit is expressed as that action, so an
+     * inverse captured in frames is always re-applied at the tempo it was
+     * captured under (D2's LIFO undo argument). Emits bpmTempoChanged, which
+     * every derived view (the ruler's STimeGridSpec, the transport box,
+     * SMidiCut's frame-domain snapshot) already listens to.
+     */
+    void setTempoMap( const twTempoMap & );
     void setBPMTempo( double );
     void setSRate( int );
     // Refuses an invalid width (see isValidChannelCount) rather than clamping:
@@ -235,8 +302,11 @@ private:
     QString projectFilePath_; // see setProjectFilePath()
     QString sampleBaseDir_;   // see setSampleBaseDir()
     SLink *soRoot_;
-    double bpmTempo_;
+    twTempoMap tempoMap_;
     int sampleRate_;
+    // Declared wire-format version of the document that was loaded; 1 for a
+    // file with no formatVersion attribute (see FORMAT_VERSION).
+    int formatVersion_ = FORMAT_VERSION;
     int channels_;        // see channels(); 2 for a fresh project
     Fraction posFactor_;  // Time coordinate scaling (default: 1/sampleRate)
     std::vector<std::uint32_t> candidateRates_;

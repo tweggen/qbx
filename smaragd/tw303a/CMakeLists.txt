@@ -31,6 +31,8 @@ tw_module(core
         core/include/tw/core/twformat.h
         core/include/tw/core/twconvert.h
         core/include/tw/core/twfraction.h
+        core/include/tw/core/twdomains.h
+        core/include/tw/core/twframerange.h
         core/include/tw/core/exc.h
         core/include/tw/core/twsyslog.h
         core/include/tw/core/twlog.h
@@ -150,22 +152,52 @@ tw_module(dsp
     DEPS tw_core tw_graph
 )
 
+# --- events: MIDI/event model leaf (proposal 37 P0b) ---------------------------
+# The one twEvent, the immutable event sequence, the tempo map (the ONLY
+# tick<->frame converter), the SMF reader/writer, the automation curve, and the
+# event clip set + merge the instrument slot and the MIDI-out pump read through.
+# Declared BEFORE tw_plugins because the plugin ABI links it (proposal 37 P2).
+# CORE ONLY, and no place in the dataflow DAG: events are model data, not pages
+# (D1), and tw/plugins may not include tw/mix (F15) - which is why the clip set
+# lives here and returns a core twFrameRange. See events/CONTRACT.md.
+tw_module(events
+    SOURCES
+        events/include/tw/events/twevent.h
+        events/include/tw/events/tweventseq.h
+        events/include/tw/events/tweventsource.h
+        events/include/tw/events/tweventclipset.h
+        events/include/tw/events/tweventmerge.h
+        events/include/tw/events/twtempomap.h
+        events/include/tw/events/twsmf.h
+        events/include/tw/events/twautomationcurve.h
+        events/src/tweventseq.cc
+        events/src/tweventclipset.cc
+        events/src/tweventmerge.cc
+        events/src/twtempomap.cc
+        events/src/twsmf.cc
+        events/src/twautomationcurve.cc
+    DEPS tw_core
+)
+
 # --- E6 mix: arrangement composition (track mix, mixer, rewire) --------------
 tw_module(mix
     SOURCES
         mix/include/tw/mix/twtrackmix.h
         mix/include/tw/mix/twmixer.h
         mix/include/tw/mix/twrewire.h
+        mix/include/tw/mix/twgainstage.h
         mix/src/twtrackmix.cc
         mix/src/twmixer.cc
         mix/src/twrewire.cc
-    DEPS tw_core tw_pages tw_graph
+        mix/src/twgainstage.cc
+    DEPS tw_core tw_pages tw_graph tw_events
 )
 
 # --- E7 plugins: plugin ABI, registry, hosting chain --------------------------
 tw_module(plugins
     SOURCES
         plugins/include/tw/plugins/twplugin.h
+        plugins/include/tw/plugins/twpluginevents.h
         plugins/include/tw/plugins/twplugindescriptor.h
         plugins/include/tw/plugins/twpluginchain.h
         plugins/include/tw/plugins/twplugininsert.h
@@ -180,7 +212,8 @@ tw_module(plugins
         plugins/src/twpluginscancache.h
         plugins/src/twpluginscancache.cc
         plugins/src/twpluginsearchpaths.cc
-    DEPS tw_core tw_graph
+        plugins/src/twnativeinstrument.cc
+    DEPS tw_core tw_graph tw_events
 )
 
 # --- CLAP plugin backend (plugins only) ---------------------------------------
@@ -435,19 +468,31 @@ if(_tw_have_clap OR _tw_have_vst3 OR _tw_have_au)
     endif()
 endif()
 
-# --- E8 devices: platform audio I/O (backends + inputs) ----------------------
+# --- E8 devices: platform audio I/O (backends + inputs) + MIDI I/O ------------
+# The MIDI half (proposal 37 P7a) is the same shape as the audio half: one
+# interface pair (MidiOutput/MidiInput), a factory selected by an environment
+# variable ahead of the platform, and the platform backends added by the
+# per-platform blocks further down. tw_core only, exactly as before.
 tw_module(devices
     SOURCES
         devices/include/tw/devices/audio_backend.h
         devices/include/tw/devices/null_backend.h
         devices/include/tw/devices/capture_backend.h
         devices/include/tw/devices/audio_input.h
+        devices/include/tw/devices/midi_output.h
+        devices/include/tw/devices/midi_input.h
+        devices/include/tw/devices/midi_out_scheduler.h
+        devices/include/tw/devices/capture_midi.h
+        devices/include/tw/devices/null_midi.h
         devices/src/audio_backend.cc
         devices/src/null_backend.cc
         devices/src/capture_backend.cc
         devices/src/audio_input.cc
         devices/src/null_input.cc
         devices/src/null_input.h
+        devices/src/midi_factory.cc
+        devices/src/midi_out_scheduler.cc
+        devices/src/capture_midi.cc
     DEPS tw_core
 )
 
@@ -625,7 +670,17 @@ if(SMARAGD_LINUX AND ENABLE_ALSA)
         devices/src/alsa_input.cc
         devices/src/alsa_input.h
     )
-    message(STATUS "tw_devices: ALSA backend and input (recording) enabled")
+    # The MIDI half rides on the same libasound (proposal 37 P7a): the ALSA
+    # SEQUENCER, not raw MIDI, because that is where virtual ports and
+    # queue-scheduled delivery live. It is inside the ENABLE_ALSA block because
+    # it needs exactly the same library — a Linux build with ALSA off has no
+    # sound and no MIDI, which is the coherent outcome.
+    target_compile_definitions(tw_devices PRIVATE QBX_LINUX_ALSASEQ=1)
+    target_sources(tw_devices PRIVATE
+        devices/src/alsa_seq_midi.cc
+        devices/src/alsa_seq_midi.h
+    )
+    message(STATUS "tw_devices: ALSA backend, input (recording) and sequencer MIDI enabled (MIDI UNVERIFIED)")
 endif()
 
 if(SMARAGD_LINUX AND ENABLE_PIPEWIRE)
@@ -662,6 +717,44 @@ if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
         devices/src/wasapi_input.h
     )
     message(STATUS "tw_devices: WASAPI backend and input (recording) enabled")
+endif()
+
+# --- Platform MIDI backends (devices only) — proposal 37 P7a ------------------
+# Same shape as the audio backends above: a PRIVATE compile definition, PRIVATE
+# platform libraries, and the backend's own header under devices/src so no other
+# target can see a platform type. Nothing here is optional in the way CLAP/VST3
+# are — every one of these APIs ships with its OS — so there is no submodule to
+# detect and no build that silently loses MIDI: with none of the defines set,
+# createMidiOutput() returns the null port.
+if(SMARAGD_WINDOWS)
+    target_compile_definitions(tw_devices PRIVATE QBX_WIN_MIDI=1)
+    # winmm carries BOTH the MIDI API and timeBeginPeriod, which the scheduler
+    # thread needs for its 1 ms wait granularity. It is already on the link line
+    # when WASAPI is enabled; naming it again is free and keeps MIDI working
+    # with -DENABLE_WASAPI=OFF.
+    target_link_libraries(tw_devices PRIVATE winmm)
+    target_sources(tw_devices PRIVATE
+        devices/src/winmm_midi.cc
+        devices/src/winmm_midi.h
+    )
+    message(STATUS "tw_devices: WinMM MIDI in/out enabled")
+endif()
+
+if(SMARAGD_MACOS)
+    find_library(COREMIDI_LIBRARY CoreMIDI)
+    find_library(COREAUDIO_FOR_MIDI CoreAudio)      # AudioConvertNanosToHostTime
+    find_library(COREFOUNDATION_FOR_MIDI CoreFoundation)
+    target_compile_definitions(tw_devices PRIVATE QBX_MAC_COREMIDI=1)
+    target_link_libraries(tw_devices PRIVATE
+        ${COREMIDI_LIBRARY}
+        ${COREAUDIO_FOR_MIDI}
+        ${COREFOUNDATION_FOR_MIDI}
+    )
+    target_sources(tw_devices PRIVATE
+        devices/src/coremidi_midi.cc
+        devices/src/coremidi_midi.h
+    )
+    message(STATUS "tw_devices: CoreMIDI in/out enabled (UNVERIFIED — written on Windows)")
 endif()
 
 # --- ASIO backend (Windows) — proposal 35, Phase 1: SDK detection + probe -----
@@ -734,7 +827,7 @@ add_library(tw303a INTERFACE)
 target_link_libraries(tw303a INTERFACE
     tw_core tw_pages tw_graph tw_sources tw_dsp tw_mix tw_plugins
     tw_devices tw_sinks tw_playback tw_render tw_record tw_schedule tw_analysis
-    tw_sidecar tw_metering
+    tw_sidecar tw_metering tw_events
 )
 
 # --- DSP optimization flags (proposal 28 W5) ----------------------------------
@@ -860,6 +953,19 @@ add_executable(warp_bench sources/tests/warp_bench.cc)
 target_link_libraries(warp_bench PRIVATE tw_sources tw_sidecar)
 tw_module_test(mix_test                     mix/tests/mix_test.cc                       tw_mix)
 tw_module_test(schedule_test                schedule/tests/schedule_test.cc             tw_schedule tw_pages)
+tw_module_test(events_test                  events/tests/events_test.cc                 tw_events)
+# The committed SMF corpus (type 0 with running status, a multi-track type 1 with
+# meta + sysex, a 30k-event file, and the writer-authored ones the byte-identity
+# check needs) is read from the source tree, not copied - the test only reads.
+target_compile_definitions(events_test PRIVATE
+    TW_EVENTS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/events/tests/fixtures")
+# The MIDI device layer (proposal 37 P7a): the scheduler's timing and shutdown,
+# the capture port, the env-var selection, and the audio capture backend's
+# host-time -> frame map. It measures WALL-CLOCK LATENESS of a paced sender, so
+# like twlog_test it measures the machine as much as the code — RUN_SERIAL, or a
+# -j4 run's own load is what it reports.
+tw_module_test(devices_midi_test            devices/tests/midi_test.cc                  tw_devices)
+set_tests_properties(devices_midi_test PROPERTIES RUN_SERIAL TRUE)
 # Proposal 36 B2: components declare their width (getOutputChannels), the wide
 # render path exists (renderPageWide), the plug channel rule and the direct
 # bound-page read. It lives under schedule/tests because AC B2.1 requires the

@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_volume_ramp">
+
+  <!-- Proposal 37 P5 (design D5 / §4.5): A VOLUME LANE IS HEARD, EXACTLY.
+
+       A `self:Volume` lane on a track is consumed by twGainStage - the POST-FX
+       fader P3a introduced - as a PER-SAMPLE ramp, not as a per-page scalar.
+       Its value domain is the fader's own dB (app/timeline/sfadercurve.h), and
+       a `linear` segment interpolates linearly IN dB, which is the gain stage's
+       own space and the only reading under which Trim's "static value x curve"
+       is the dB SUM the design asks for.
+
+       THE FIXTURE. ../test_autosaw.wav (written by tests/tools/gen_auto_fixture.py,
+       which prints every number in this file): 4.0 s, 48 kHz, 16-bit, two
+       identical channels, a 480 Hz sawtooth of amplitude 0.4. The period is
+       EXACTLY 100 frames, so 100 divides 48000 and every one-second window has
+       the same rms, 0.230956. Without that the per-second bands below would be
+       a measurement of one particular window rather than a closed form.
+
+       THE CLOSED FORM. With g(t) = 10^((-60 + 15t)/20) the mean of g^2 over the
+       k-th second is
+
+           10^-6 * 10^(1.5k) * (10^1.5 - 1) / (1.5 * ln 10)
+
+       so consecutive seconds stand in the constant ratio 10^0.75 = 5.6234 - a
+       ramp, not a step and not a constant. Multiplied by the fixture's own
+       0.230956 that is:
+
+           second 0   0.00068766
+           second 1   0.00386701      (x 5.6234)
+           second 2   0.02174581      (x 5.6234)
+           second 3   0.12228565      (x 5.6234)
+
+       The +/-3 % bands below are 46 times narrower than the ratio between
+       neighbouring seconds, so nothing that is not this ramp passes them. A
+       flat lane at any value fails at least three of the four; no lane at all
+       (0.230956 everywhere) fails all four.
+
+       DETERMINISM. Two renders of the same arrangement are compared BYTE FOR
+       BYTE. A curve read per page from a shared_ptr swapped under a mutex is
+       exactly the kind of thing that would render differently on the second
+       pass if the snapshot were mutable or the read were not a single one. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- A reference render with NO lane: the fixture's own level, which is what
+         every band below is derived from. -->
+    <render filename="avr_nolane.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="avr_nolane.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.22403" maxRms="0.23788"/>
+    <assert-audio-energy filename="avr_nolane.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.22403" maxRms="0.23788"/>
+
+    <!-- The lane. `owner` is the index path from the root mixer, exactly like
+         `trackPath` elsewhere; the TARGET's space is what says it names a lane
+         rather than a placement. Mode `read`: the curve IS the value, so the
+         track's stored 0 dB fader plays no part and the closed form above is
+         the whole story. -->
+    <add-automation-lane owner="0" target="self:Volume" mode="read"/>
+    <add-automation-point owner="0" target="self:Volume"
+                          time="0" value="-60" curve="linear"/>
+    <add-automation-point owner="0" target="self:Volume"
+                          time="192000" value="0" curve="linear"/>
+
+    <!-- THE MIDPOINT, read out of the SNAPSHOT the engine is handed. -60 dB and
+         0 dB, linearly in dB, is -30 dB at 2 s. This and the rms bands are two
+         independent views of one curve: a bug that moved only the consumption
+         breaks the bands, one that moved only the model breaks this. -->
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="96000" value="-30" tolerance="1e-9"
+                             mode="read" pointCount="2"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="0" value="-60" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="192000" value="0" tolerance="1e-9"/>
+
+    <render filename="avr_a.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <assert-audio-energy filename="avr_a.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.00066703" maxRms="0.00070829"/>
+    <assert-audio-energy filename="avr_a.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.00375100" maxRms="0.00398302"/>
+    <assert-audio-energy filename="avr_a.wav" channel="0"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.02109343" maxRms="0.02239818"/>
+    <assert-audio-energy filename="avr_a.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.11861708" maxRms="0.12595422"/>
+
+    <!-- ...and it is REPEATABLE. -->
+    <render filename="avr_b.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="avr_b.wav" expected="avr_a.wav"/>
+
+    <!-- Undo the second point: the lane holds -60 dB everywhere (a curve holds
+         its first point's value before it and its last point's after it), so
+         the whole render collapses to one level far below every band above. -->
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="96000" value="-60" tolerance="1e-9"
+                             pointCount="1"/>
+
+    <render filename="avr_undone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="avr_undone.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.00022400" maxRms="0.00023790"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

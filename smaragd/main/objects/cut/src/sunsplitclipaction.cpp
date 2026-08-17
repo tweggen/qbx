@@ -4,7 +4,6 @@
 #include "app/objects/cut/ssplitclipaction.h"
 #include "app/model/sproject.h"
 #include "app/model/slink.h"
-#include "app/objects/cut/scut.h"
 #include "tw/core/twfraction.h"
 #include <QDomElement>
 
@@ -48,8 +47,9 @@ SApplyResult SUnsplitClipAction::apply(SProject *project)
         return {false, nullptr};
     }
     offset_t startTime = first->getStartTime();
-    // setDuration is virtual: SCut restores its window; a take stack
-    // (STakeStack) forwards to every take (setDurationAll).
+    // setDuration is virtual: a window object restores its window; a take
+    // stack (STakeStack) forwards to every take (setDurationAll). Generic on
+    // purpose — unsplit never needed to know the window TYPE.
     first->getSObject().setDuration(restoreDuration_);
 
     // Inverse: re-split at the same point.

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A missing sample under a PLACED clip must cost that clip, not the project.
+
+  sample_missing_survives.qxa already covers the easy half: there the cut over
+  the missing wave is referenced by nothing, so dropping it changes no
+  container. The hard half is this one — the dead clip is ON the track, at
+  96000, next to a good clip:
+
+      track1 -> cut1 -> wave1 (../test_sawtooth.wav)   good, audible
+             -> cut2 -> wave2 (nowhere on any machine) dead
+
+  Before proposal 37 D8a that lost EVERYTHING. wave2 could not be
+  instantiated, so cut2 could never resolve, so track1 could never resolve,
+  so the mixer could not either, and the load ended on "root component of
+  project was not found". The prune-and-retry sweep repairs by element kind
+  instead: an <SCut> is a WINDOW, and a window whose content is gone has
+  nothing to show, so cut2 is dropped; on the next pass track1 is a CONTAINER
+  whose link to cut2 dangles, so the LINK goes and the track stays — with its
+  other clip intact and audible.
+
+  The fixture ALSO declares formatVersion='99', i.e. it claims to come from a
+  build newer than this one. That belongs here rather than in a case of its
+  own: a reader must never refuse a document over its version (it would
+  strand a user's file on whichever build they happen to have installed), so
+  the correct behaviour is precisely the tolerance this case is about — warn,
+  then load. Both warnings are asserted; neither is visible in the audio.
+-->
+<SActionScript version="1" name="load_missing_sample_placed_survives">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../load_missing_sample_placed_survives.qxp"/>
+
+    <!-- The recovery named the file it could not find. -->
+    <assert-log contains="__missing_sample__.wav" minCount="1"/>
+
+    <!-- A newer formatVersion warns and loads anyway. -->
+    <assert-log contains="formatVersion '99'" minCount="1"/>
+
+    <render filename="load_missing_sample_placed_survives.wav"
+            format="wav" quality="10"/>
+
+    <!-- 0-1 s: the surviving clip plays source sec1 (startOffset=48000) -->
+    <assert-audio-energy filename="load_missing_sample_placed_survives.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- 1-2 s: source sec2 -->
+    <assert-audio-energy filename="load_missing_sample_placed_survives.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

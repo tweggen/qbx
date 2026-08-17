@@ -55,6 +55,21 @@ public:
         }
     };
 
+    // When one block of frames was handed to the "device". `firstFrame` is the
+    // recording-relative index of the block's first frame, so the pair is one
+    // sample of the map host time -> project frame.
+    //
+    // Why it exists (proposal 37 D6, review #12): the MIDI capture backend
+    // records the host time a message reached the wire and NOTHING else, so a
+    // MIDI-out assertion needs an INDEPENDENT way to say where the playhead was
+    // at that instant. This log is it — produced by the audio pump, from the
+    // same steady clock, with no knowledge of the pump under test. Asking the
+    // MIDI pump's own model where it thought it was would prove nothing.
+    struct BlockStamp {
+        std::int64_t hostTimeNs = 0;
+        std::int64_t firstFrame = 0;
+    };
+
     // Recording cap. Five minutes of stereo float at 48 kHz is ~275 MB, which is
     // far more than any case needs and still bounded — a runaway case truncates
     // and logs instead of eating the machine.
@@ -96,6 +111,25 @@ public:
     // do arithmetic over the first one.
     void clearCapture();
 
+    // A COPY of the block log, under the same lock and for the same reason as
+    // capturedAudio(). Cleared together with the recording.
+    std::vector<BlockStamp> capturedBlockLog() const;
+
+    // Which project frame was being delivered at `hostTimeNs`, by PIECEWISE
+    // LINEAR interpolation over the block log. Outside the log it extrapolates
+    // along the nearest segment (or, with a single stamp, along the nominal
+    // rate), so an event just before the first block or just after the last one
+    // still maps — it is a measurement, and clamping would silently turn a real
+    // offset into zero. Returns -1 only when there is no log at all.
+    std::int64_t frameAtHostTime(std::int64_t hostTimeNs) const;
+
+    // The same arithmetic over a caller-supplied log, so it can be tested
+    // against a synthetic one without a running pump. `nominalFramesPerSecond`
+    // is used only when a single stamp leaves no slope to read.
+    static std::int64_t frameAtHostTime(const std::vector<BlockStamp> &log,
+                                        std::int64_t hostTimeNs,
+                                        double nominalFramesPerSecond);
+
 private:
     void pumpLoop();
 
@@ -107,8 +141,9 @@ private:
     std::atomic<bool> running_{ false };
     std::atomic<bool> pumpRunning_{ false };
 
-    mutable std::mutex captureMutex_;    // guards capture_
+    mutable std::mutex captureMutex_;    // guards capture_ AND blockLog_
     CaptureBuffer     capture_;
+    std::vector<BlockStamp> blockLog_;
 
     // Real-time multiplier from SMARAGD_CAPTURE_SPEED, read once per instance.
     double            speed_ = 1.0;

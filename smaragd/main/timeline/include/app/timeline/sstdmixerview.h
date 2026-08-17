@@ -7,6 +7,7 @@
 
 #include "tw/core/twfraction.h"
 #include "tw/core/twwarpmap.h"
+#include "tw/events/twtempomap.h"
 #include "app/model/sobjectrenderer.h"
 // Complete type for the QPointer<STrack> selection anchor below.
 #include "app/objects/track/strack.h"
@@ -53,6 +54,12 @@ class SSMVMixerControl;
 // per-row (a track may carry its own height scale, and sub-lanes may be sized
 // differently from the track lane they hang off). Never compute a lane's y as
 // `row * trackHeight` — ask SStdMixerView::rowTop() / SMVActualView::laneTop().
+// What a row IS. `None` is the track's own composite lane; everything else is
+// a SUB-LANE — it hangs off the track lane above it, carries no channel strip
+// of its own, and is covered by that track's head (laneGroupHeight).
+// Proposal 37 P6 (design 6.1) adds Automation beside proposal 17's Take.
+enum class SubLaneKind { None = 0, Take, Automation };
+
 struct STrackRow {
     STrack  *track;        // the track shown on this lane
     SLink   *link;         // the SLink wrapping it in its parent (timeline pos)
@@ -62,17 +69,22 @@ struct STrackRow {
     bool     collapsed;    // children hidden
     // Take lanes (proposal 17 phase 3): -1 = the track's normal (composite)
     // lane; k >= 0 = the row showing take k of every take stack on the track.
-    // Any row with takeRow >= 0 is a SUB-LANE: it hangs off the track lane
-    // above it, carries no channel strip of its own, and is covered by that
-    // track's head. Automation lanes will join it under the same rule.
     int      takeRow = -1;
+    // The KIND, which is what isSubLane() reads. Take rows also carry takeRow;
+    // Automation rows carry the ParamRef spelling of the lane they show and,
+    // for a `param:` lane, which plugin SLOT owns it.
+    SubLaneKind subKind = SubLaneKind::None;
+    QString  autoTarget;
+    int      autoSlotIndex = -1;
     // This lane's pixel height, filled by rebuildRows(). 0 until then.
     int      height = 0;
 
     // A sub-lane belongs to the track lane above it rather than standing on
     // its own (no head, not a reorder target of its own).
-    bool isSubLane() const { return takeRow >= 0; }
+    bool isSubLane() const { return subKind != SubLaneKind::None; }
 };
+
+class SAutomationLaneUi;
 
 class SMVActualView 
     : public QWidget
@@ -148,7 +160,11 @@ public slots:
 
 signals:
     void trackHeightChanged( int x );
-    void secondWidthChanged( int x );
+    // Pixels per second. It was declared `int` and never emitted at all (a
+    // FIXME in setSecondWidth); proposal 37 P4 needs it, because the event
+    // editor's time axis follows the arranger's zoom and an int would quantise
+    // every zoom step below 1 px/s.
+    void secondWidthChanged( double x );
     void leftOffsetChanged( offset_t );
     void topOffsetChanged( offset_t );
     
@@ -375,6 +391,28 @@ public:
     int getSnapMethod() const;
     void setSampleRate( int srate ) { sampleRate_ = srate; }
 
+    /**
+     * GRID DIVISIONS (proposal 37 P4). The subdivision used to be an unexposed
+     * `beatSubDiv_` that alignTime never read; a division is now named the way
+     * the whole app names one - "1/1".."1/32", with a trailing `t` for triplets
+     * - and parsed by SQuantizeNotesAction::gridTicks(), the ONE parser, so
+     * `quantize-notes grid=`, the event editor's grid and the arranger's snap
+     * cannot mean different things by the same string.
+     *
+     * An empty division restores the pre-36 behaviour exactly (snap to the beat
+     * width the STimeGridSpec carries), which is what keeps every committed qxa
+     * case's snapped positions unchanged.
+     */
+    void setGridDivision( const QString &division );
+    QString gridDivision() const { return gridDivision_; }
+
+    /**
+     * The TEMPO MAP is the single tempo authority (D2), so a division is
+     * converted to frames through it and not by multiplying 60/bpm. Without
+     * one set, alignTime falls back to the grid spec's beat width.
+     */
+    void setTempoMap( const twTempoMap &map );
+
 signals:
     void snapMethodChanged( int );
     void beatSubDivChanged( idx_t );
@@ -384,10 +422,16 @@ public slots:
     void setSnapMethod( int );
 protected:
 private:
+    /** The snap step in frames, or 0 when there is no usable division. */
+    offset_t divisionFrames_() const;
+
     idx_t beatSubDiv_;
     int snapMethod_;
     int sampleRate_;
     STimeGridSpec &tgs_;
+    QString    gridDivision_;
+    twTempoMap tempoMap_;
+    bool       haveTempoMap_ = false;
 };
 
 class SStdMixerView
@@ -402,6 +446,15 @@ public:
         { return model_; }
 
     STimeGridSpec getTimeGridSpec() const { return timeGridSpec_; }
+
+    // The time-axis canvas. Exposed for the SHELL only (proposal 37 P4): the
+    // event editor's SEventTimeAxis follows this widget's zoom and scroll, and
+    // the shell is the one module that sees both app/timeline and app/eventui.
+    SMVActualView *contentView() const { return qContent_; }
+
+    // The snap spec (grid divisions since proposal 37 P4). Null before the
+    // view is fully constructed.
+    SSnapSpec *snapSpec() const { return currentSnapSpec_; }
 
     SLink *ensureSCut( SLink * );
 
@@ -450,6 +503,11 @@ public:
     // "" when every head sits exactly on its lane (same top, same height as
     // the painter uses, full column width), otherwise the first mismatch.
     QString tkCheckLaneAlignment() const;
+    // The automation half of that check (proposal 37 P6), defined in
+    // sautomationlane.cpp: every Automation row must still name a lane the
+    // model can resolve. A row left behind by a removed lane paints an empty
+    // band indistinguishable from a flat one.
+    QString checkAutomationRows() const;
 
     offset_t alignTime( offset_t );
 
@@ -495,6 +553,38 @@ public:
     bool isTrackTakesExpanded( STrack *t ) const
         { return takesExpanded_.contains( t ); }
     void toggleTrackTakesExpanded( STrack * );
+
+    // --- automation lanes (proposal 37 P6, design 6.1) -------------------
+    // The painting, the gestures, the picker menu, the shown-lane set and the
+    // testkit driver all live in timeline/src/sautomationlane.{h,cpp}; so do
+    // the definitions of the five members below. That file is the whole
+    // feature, and sstdmixerview.cpp keeps only the CALL SITES — this file is
+    // already the largest in the app (CONTRACT, known debt).
+    SAutomationLaneUi &automationUi();
+    // ONE pruning walk for EVERY per-track UI-state set — the fold set, the
+    // take-lane set, the per-track height scales and the shown-automation set
+    // (proposal 30 section E.5). Called from rebuildRows(), so a removed track
+    // cannot leave a dangling STrack* key behind for a later track allocated
+    // at the same address to inherit.
+    void pruneUiState();
+    void appendAutomationRowsFor( STrack *tk, SLink *lk, SObject *container,
+                                  int depth );
+    // Show / hide one automation lane on a track (the picker's and the
+    // testkit's one entry point). Returns false only for a bad argument.
+    bool showAutomationLane( STrack *t, const QString &target, int slotIndex,
+                             bool show );
+    // Arm clip-envelope (`cut:Gain`) editing. OFF by default, and that is
+    // load-bearing: while it is off every clip-body gesture — move, slip,
+    // duplicate, stretch — behaves exactly as it always has.
+    void setClipEnvelopeEdit( bool on );
+    // Testkit: the drag-clip-edge twin for an automation breakpoint. `owner`
+    // is the index-path spelling every automation verb takes.
+    bool dragAutomationPoint( const QString &owner, const QString &target,
+                              int slotIndex, int take, offset_t time,
+                              double value, offset_t toTime, double toValue,
+                              Qt::KeyboardModifiers mods );
+    // --------------------------------------------------------------------
+
     void refreshTrackTree();   // rebuild rows + control column + relayout + repaint
     // --------------------------------------------------------------------
 
@@ -570,7 +660,9 @@ public slots:
     void ctPitchDownFine() { nudgeClipPitch(  -10.0 ); }
     void ctAddLink();
     void setTimeGridSpec( const STimeGridSpec & );    
-    void setBPMTempo( double );
+    // The project's tempo moved (bpmTempoChanged): re-derive the ruler grid.
+    // A LISTENER, not a writer - the only tempo write is the set-tempo verb.
+    void onProjectTempoChanged( double );
     // void scrollTo( QPoint &x );
     
 signals:
@@ -711,6 +803,9 @@ private:
     QSet<STrack*> collapsed_;
     QSet<STrack*> takesExpanded_;   // tracks showing their take lanes
     QHash<const STrack*, double> trackScale_;   // per-track lane height factor
+    // The automation UI (proposal 37 P6). Created lazily by automationUi() so
+    // a view that never shows a lane pays nothing.
+    SAutomationLaneUi *autoUi_ = nullptr;
     void rebuildRows();
     void rebuildRowGeometry();      // recompute row heights + rowTop_
     int  rowHeightOf( const STrackRow & ) const;

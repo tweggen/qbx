@@ -11,11 +11,14 @@
 #include <atomic>
 #include <mutex>
 #include <memory>
+#include "app/model/sautomationlane.h"
+#include "tw/events/tweventclipset.h"
 #include "tw/pages/capture_page_pool.h"
 #include "tw/schedule/revalidatable.h"
 
 class QWidget;
 
+class SClipWindow;
 class twComponent;
 class twRandomSource;
 class SProject;
@@ -43,6 +46,21 @@ public:
     SLink *at( int i ) const { return list_.at( i ); }
 private:
     const QList<SLink*> &list_;
+};
+
+
+/**
+ * What an object's material IS, independent of what windows or plays it
+ * (proposal 37 D8b). Audio is sample data (and anything rendered from it);
+ * Event is note/controller data. It decides which window type wraps a content
+ * object (SClipWindow::wrapContent), and a take stack refuses to mix the two.
+ *
+ * Deliberately NOT a track kind: a track holds whatever clips it is given
+ * (design D3), so nothing above the clip needs to branch on this.
+ */
+enum class SContentKind {
+    Audio = 0,
+    Event = 1
 };
 
 
@@ -151,12 +169,35 @@ public:
     { return twResolvedClip{ getRootComponent(), mapTimelineToComponentPos( off ) }; }
 
     /**
+     * The EVENT twin of resolveClip (proposal 37 §4.2): the frame-domain event
+     * sequence this clip contributes, plus the clip-relative position map the
+     * track's twEventClipSet enumerates it through. The default returns an
+     * empty record, which the clip set reads as "nothing to collect".
+     *
+     * It lives on SObject, not on a MIDI type, so `app/objects/track` can route
+     * an event clip into its clip set without depending on `app/objects/midi`
+     * (design §3.5: the track consults MIDI-ness only through contentKind()).
+     * Resolved ONCE per collect, at the window start, exactly as twView::resolve
+     * is for audio.
+     */
+    virtual twEventClipResolved resolveEventClip( offset_t clipPos )
+    { (void) clipPos; return twEventClipResolved{}; }
+
+    /**
      * True for containers the index-path search may descend into (track
      * lanes). Path RESOLUTION follows explicit indices and needs no flag;
      * this only scopes the reverse search (pathOf) exactly as the historical
      * dynamic_cast<STrack*> did. STrack returns true.
      */
     virtual bool isPathContainer() const { return false; }
+
+    /**
+     * The kind of material this object carries (proposal 37 D8b). Audio by
+     * default — every object that existed before event clips is audio, and a
+     * container's kind is the kind of what it renders, which is audio too.
+     * An event content object (SMidiSequence) and the window over it override.
+     */
+    virtual SContentKind contentKind() const { return SContentKind::Audio; }
 
     /**
      * Volume (dB) snapshot safe to take while audio runs / UI sliders move:
@@ -174,11 +215,91 @@ public:
     virtual SObject *activeLane() const { return nullptr; }
 
     /**
+     * A column of ALTERNATIVE windows (a take stack) exposes its lanes here:
+     * the window at `index`, or the ACTIVE one when index < 0. Null for
+     * everything else, which is every object that is not a stack.
+     *
+     * It exists so a verb can address a take without naming STakeStack: a
+     * slice at the rank of objects/cut (objects/midi) has no edge to it, and
+     * the take rule is generic anyway - a stack is homogeneous by contentKind,
+     * so whoever asks already knows what it will get back.
+     */
+    virtual SClipWindow *windowTakeAt( int index ) const
+    { (void) index; return nullptr; }
+
+    // --- automation lanes (proposal 37 P5, design §3.3) --------------------
+    //
+    // OWNER-HELD, NEVER AN SLink CHILD. They live on SObject rather than on the
+    // four owner types (STrack / SPluginSlot / SCut / SMidiCut) for the same
+    // reason resolveEventClip() does: a verb, the serializer and the testkit
+    // must reach a lane without knowing which slice its owner belongs to, and
+    // `main/actions` may not depend on `objects/*` at all. WHICH targets are
+    // legal on WHICH owner is validated by the verbs, not by the storage.
+    //
+    // The lanes vector is only ever touched on the MAIN thread (every verb, the
+    // loader and the serializer run there); what crosses to a freeze thread is
+    // the immutable twAutomationCurve SNAPSHOT, handed to the consuming
+    // component under ITS mutex (THREADING rule 2).
+
+    /// The lane for `target` (ParamRef spelling), or null.
+    SAutomationLane *automationLane( const QString &target ) const;
+    /// The lane for `target`, creating it if absent. Null only when the target
+    /// does not parse.
+    SAutomationLane *ensureAutomationLane( const QString &target );
+    /// Drop the lane. Returns true when one was there.
+    bool removeAutomationLane( const QString &target );
+    /// Every lane, in insertion order.
+    QList<SAutomationLane *> automationLanes() const;
+    bool hasAutomationLanes() const { return !automationLanes_.empty(); }
+
+    /// The snapshot a consumer should use for `target`: null when the lane is
+    /// absent, empty or Off — and "null" is the SCALAR path, which is what keeps
+    /// a project with no lanes byte-identical (P5 AC6).
+    std::shared_ptr<const twAutomationCurve>
+        automationCurve( const QString &target ) const;
+
+    /// Called AFTER a lane mutation, with the affected range in THIS object's
+    /// own time domain. Owners override to push the new snapshot into their
+    /// engine components and to stale exactly that range
+    /// (invalidateRenderPathRange). The default does the invalidation only —
+    /// correct for an owner with nothing to push.
+    virtual void onAutomationChanged( SAutomationLane &lane,
+                                      offset_t start, offset_t end );
+
+    /// Copy `src`'s lanes onto this object, replacing whatever is here. Used by
+    /// the window CLONE path (duplicate-clip, add-take): a clip envelope lives
+    /// on the window and therefore travels with every copy of it (design §3.3).
+    void copyAutomationFrom( const SObject &src );
+
+    /// Push every lane's current snapshot into the engine. Called after a load
+    /// (the lanes are read before the components exist) and after any rebuild
+    /// of the owner's chain. Default: nothing to push.
+    virtual void applyAutomationToEngine() {}
+
+    /**
      * Ordered view of this container's SLink children. Prefer this and the
      * childAt()/childCount() accessors over QObject::children() everywhere order
      * matters, so call sites stay decoupled from the storage.
      */
     SChildLinks childLinks() const { return SChildLinks( childOrder_ ); }
+
+    /**
+     * SLinks this object OWNS but which are NOT its ordered SLink children —
+     * the references a container holds outside the document tree. Empty for
+     * almost everything; STrack's reference to its SPluginChain is the one
+     * case today, and it is deliberate (objects/track/CONTRACT.md 7: a chain
+     * in childLinks() would be read as a clip).
+     *
+     * They are edges of the reference graph all the same, so anything that
+     * reasons about WHO REFERENCES WHOM has to ask here as well as at
+     * childLinks(). SProject::~SProject's survivor ordering is why this
+     * exists: blind to this edge it deleted a referent before its referrer,
+     * and the referrer's ~SLink then ran removeRef() on freed memory — the
+     * "destroyed with N live reference(s)" teardown segfault.
+     *
+     * Main thread only, like every other lifetime operation (THREADING rule 1).
+     */
+    virtual QList<SLink *> ownedRefLinks() const { return QList<SLink *>(); }
     int childCount() const { return childOrder_.size(); }
     SLink *childAt( int index ) const;
     int indexOfChild( const SLink *child ) const;
@@ -372,6 +493,17 @@ signals:
     void durationChanged( length_t newDuration );
 
     /**
+     * This object's EVENT content changed from `fromClipPos` (clip-relative
+     * frames) onward — a note edit, a window edit, a tempo re-map. The owning
+     * container touches its event clip set and invalidates [from, INF) (design
+     * §3.2: the consumer is class-1, so a change is never bounded on the right).
+     *
+     * Declared here rather than on SMidiCut so `app/objects/track` can connect
+     * to it without an edge to `app/objects/midi`.
+     */
+    void eventsChanged( offset_t fromClipPos );
+
+    /**
      * Child object was added.
      */
     void childObjectAdded( SLink &child );
@@ -561,6 +693,15 @@ protected:
 
     virtual int serializeSelfAttributes( QTextStream &o );
 
+    // Emit `<automation>…</automation>` (nothing at all when there are no
+    // lanes, so every project written before P5 is byte-unchanged). Called
+    // from SObject::serialize() and from every serialize() override that
+    // writes its own children (SPluginSlot's `<state>`).
+    int serializeAutomation( QTextStream &o );
+    // Read the inline `<automation>` child. Tolerant: an unparsable target is
+    // skipped with a warning, never a load failure.
+    int readAutomation( const QDomElement &element );
+
     int getChildIndex( SObject & ) const;
 
 protected:
@@ -568,6 +709,9 @@ protected:
     // Mutable so const methods can lock. Protected by mutex() accessor.
     // All derived classes should protect their state with this mutex.
     mutable std::mutex stateMutex_;
+
+    // Main-thread only (see the automation block above).
+    std::vector<std::unique_ptr<SAutomationLane> > automationLanes_;
 
     // Phase 5e: Page cache infrastructure (unified across all SObjects).
     // Two-page buffer model (Unix page cache pattern):

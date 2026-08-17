@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_bypass_keeps_voices">
+
+  <!-- Proposal 37 P3b, AC5: BYPASSING AN INSTRUMENT IS SILENCE, NOT A
+       SHORT-CIRCUIT (design 4.3).
+
+       An EFFECT's bypass is a short circuit: skip process(), copy the input.
+       An INSTRUMENT's cannot be, because the events would then never arrive -
+       the note-offs inside the bypassed span would be lost and un-bypassing
+       would resurrect voices that should long since have ended. So the
+       processor keeps calling process() with every event and simply DISCARDS
+       the audio.
+
+       WHAT THIS CASE GATES, and what it cannot.
+
+       Gated here: the two things a render CAN see - a bypassed instrument
+       contributes exactly nothing, the track's own audio still passes through
+       it (the pass-through sum is not part of the plugin), and the toggle
+       undoes byte for byte.
+
+       NOT gated here, and gated in `plugins_test` (testGeneratorSlot) instead:
+       the resurrection itself. It needs the flag to move BETWEEN TWO
+       CONTIGUOUS page renders of one run, and a script cannot express that - a
+       qxa render always starts at the range start, and every page that does not
+       continue the last one is a REPOSITION (reset + chase + pre-roll) which
+       rebuilds the voices from the feed whatever the bypass history was. The
+       unit test drives twPluginSlotProcessor::render() at three consecutive
+       positions with the flag flipped in the middle, which is the only place
+       the difference exists. There is no in-app automation of a bypass until
+       proposal 37 P5. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- An audio clip AND a note, so the two halves of a bypass are separable:
+         the plugin's own output must vanish, the input must not. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <resize-clip clip="0,0" startTime="0" duration="48000" srcStart="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+
+    <!-- The note is in the SECOND second, next to (not on top of) the audio. -->
+    <insert-midi-clip trackPath="0" timePos="48000" duration="1920" name="One"/>
+    <add-note clip="0,1" tick="0" dur="1920" key="60" velocity="100" channel="0"/>
+
+    <render filename="ibkv_on.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="ibkv_on.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.06598" maxRms="0.06732"/>
+    <assert-audio-energy filename="ibkv_on.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+
+    <set-plugin-bypass trackPath="0" slotIndex="0" bypassed="true"/>
+
+    <render filename="ibkv_off.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- the instrument contributes NOTHING... -->
+    <assert-audio-energy filename="ibkv_off.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+    <!-- ...and the track's own audio is untouched, BYTE for byte: a bypass of
+         the instrument is not a bypass of the track. -->
+    <assert-file-identical actual="ibkv_off.wav" expected="ibkv_on.wav"
+                           startFrame="0" frameCount="48000"/>
+
+    <!-- ...and it undoes exactly. -->
+    <undo count="1"/>
+    <render filename="ibkv_undone.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="ibkv_undone.wav" expected="ibkv_on.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

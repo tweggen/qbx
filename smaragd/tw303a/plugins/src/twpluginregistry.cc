@@ -44,6 +44,7 @@ namespace audio {
 
 // Forward declare the PassThrough plugin factory.
 std::unique_ptr<twPlugin> createPassThroughPlugin();
+std::unique_ptr<twPlugin> createNativeInstrument();
 
 // Static registry instance.
 static twPluginRegistry gRegistry;
@@ -170,7 +171,14 @@ struct ScanFlagGuard {
 
 twPluginRegistry::~twPluginRegistry()
 {
-    waitForScan();
+    // Belt and braces: by the time a namespace-scope static is destroyed the
+    // app's orderly teardown has already called stopScan(), and this is a
+    // no-op. It stays because the registry must also be correct in a unit-test
+    // binary that has no orderly teardown at all -- and because stopScan()
+    // (not waitForScan()) is what bounds the wait: a scan that is still
+    // running here would otherwise be joined for however long the machine's
+    // remaining modules take to probe.
+    stopScan();
 }
 
 // ---------------------------------------------------------------- config ----
@@ -236,8 +244,32 @@ void twPluginRegistry::appendBuiltins_nolock()
     passThrough.vendor = "Smaragd";
     passThrough.io     = { 2, 2 };
     passThrough.isInstrument = false;
+    passThrough.nOutBuses = 1;
+    passThrough.outBusChannels = { 2 };
 
     plugins_.push_back( passThrough );
+
+    // The in-house 303 (proposal 37 D7). Linked in exactly like the pass-through
+    // and for the same reason: the instrument path must be reachable in EVERY
+    // build and every worktree, with no SDK, no submodule and nothing installed.
+    // It appears in the browser like any other plugin, and it is the fallback
+    // instrument every instrument gate can rely on being present.
+    twPluginDescriptor native;
+    native.format = "tw";
+    native.uid    = "tw.native.303";
+    native.path   = "";   // linked-in, not a separate module
+    native.name   = "Smaragd 303";
+    native.vendor = "Smaragd";
+    native.io     = { 0, 1 };   // a generator: no audio in, one mono out
+    native.isInstrument   = true;
+    native.acceptsNotes   = true;
+    native.emitsNotes     = false;
+    native.eventPortsIn   = 1;
+    native.eventPortsOut  = 0;
+    native.nOutBuses      = 1;
+    native.outBusChannels = { 1 };
+
+    plugins_.push_back( native );
 }
 
 std::vector<twPluginDescriptor> twPluginRegistry::plugins() const
@@ -278,6 +310,7 @@ bool twPluginRegistry::rescanAsync( bool force )
     }
     // Set BEFORE start(), so a caller that polls isScanning() immediately after
     // rescanAsync() cannot observe "already finished" before the thread runs.
+    stopRequested_.store( false, std::memory_order_release );
     scanning_.store( true, std::memory_order_release );
     scanThread_ = QThread::create( [this, force]() { this->rescan( force ); } );
     scanThread_->setObjectName( "smaragd-plugin-scan" );
@@ -292,6 +325,28 @@ void twPluginRegistry::waitForScan()
     scanThread_->wait();
     delete scanThread_;
     scanThread_ = nullptr;
+}
+
+void twPluginRegistry::stopScan()
+{
+    // Order-independent by construction (THREADING.md rule 4): the flag is
+    // only ever read by the scan loop between two modules, so setting it is
+    // safe whether the scan has not started, is mid-probe, or is already done.
+    stopRequested_.store( true, std::memory_order_release );
+    {
+        std::lock_guard<std::mutex> g( threadMutex_ );
+        if( scanThread_ ) {
+            // Bounded: the loop breaks at the next module boundary, so the
+            // worst case is the module currently being probed (probeTimeoutMs_,
+            // after which the probe process is killed).
+            scanThread_->wait();
+            delete scanThread_;
+            scanThread_ = nullptr;
+        }
+    }
+    // Cleared once the thread is gone, so a later rescan() -- the headless
+    // tests drive the synchronous one directly -- is not aborted on entry.
+    stopRequested_.store( false, std::memory_order_release );
 }
 
 void twPluginRegistry::rescan( bool force )
@@ -359,7 +414,22 @@ void twPluginRegistry::rescan( bool force )
     std::vector<twPluginDescriptor>            found;
     bool probeUsable = !probeExe.empty();
 
-    for( const twPluginModuleFile &m : mods ) {
+    // Indexed, not range-for, so an aborted scan knows where it stopped and can
+    // carry the modules it never reached over from the previous cache.
+    size_t mi      = 0;
+    bool   aborted = false;
+    for( ; mi < mods.size(); ++mi ) {
+        const twPluginModuleFile &m = mods[mi];
+
+        // The one abort point: BETWEEN modules, never inside a probe. The app's
+        // orderly teardown (SApplication's destructor / smaragdOrderlyShutdown)
+        // sets this and then joins, so the scan thread is gone before static
+        // destruction begins -- see plan/STATE.md 2026-08-16.
+        if( stopRequested_.load( std::memory_order_acquire ) ) {
+            aborted = true;
+            break;
+        }
+
         st.currentPath = m.path;
         {
             std::lock_guard<std::mutex> g( mutex_ );
@@ -432,6 +502,28 @@ void twPluginRegistry::rescan( bool force )
     st.currentPath.clear();
     st.running = false;
 
+    if( aborted ) {
+        // Everything already probed is still worth remembering, and so is every
+        // record for a module we never reached -- dropping those would restart
+        // the scan cold on the next run, forever. plugins_ is deliberately NOT
+        // replaced: a partial `found` is not the plugin table.
+        for( size_t j = mi; j < mods.size(); ++j ) {
+            const auto it = cache.find( mods[j].path );
+            if( it != cache.end() ) next[mods[j].path] = it->second;
+        }
+        savePluginScanCache( cachePath, kScannerVersion, next );
+        {
+            std::lock_guard<std::mutex> g( mutex_ );
+            cache_ = std::move( next );
+            stats_ = st;
+        }
+        TW_LOGI( "plugins", "[scan] stopped after %d of %d module(s) (%d probed, "
+                 "%d cached); the cache keeps what was learned",
+                 (int) mi, st.modulesFound, st.modulesProbed, st.modulesCached );
+        if( progress ) progress( st );
+        return;
+    }
+
     savePluginScanCache( cachePath, kScannerVersion, next );
 
     {
@@ -458,6 +550,9 @@ std::unique_ptr<twPlugin> twPluginRegistry::instantiate( const twPluginDescripto
 {
     if( desc.uid == "tw.passthrough" ) {
         return createPassThroughPlugin();
+    }
+    if( desc.uid == "tw.native.303" ) {
+        return createNativeInstrument();
     }
 
     if( desc.format == "clap" ) {

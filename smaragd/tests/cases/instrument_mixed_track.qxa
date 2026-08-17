@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_mixed_track">
+
+  <!-- Proposal 37 P3b, AC2: AN AUDIO CLIP AND A MIDI CLIP ON ONE TRACK.
+
+       There is no track KIND (design D3): a track takes whatever clips it is
+       given, and an instrument is slot 0 with a role. So an audio clip on an
+       instrument track has to stay audible, which it does because the head
+       insert KEEPS ITS AUDIO INPUT PLUG and the processor SUMS that input onto
+       the generator's output ("the head tap always has one input; the processor
+       decides whether the plugin sees it").
+
+       That sum is what this case gates, in the sharpest form available:
+
+         (a) `x + 0.0f == x`. With the instrument PRESENT and NO NOTES the
+             render must be BYTE-IDENTICAL to the render with no instrument at
+             all. Anything else - a gain, a copy through a different code path,
+             a page whose valid-frame count moved - shows up as a byte.
+         (b) Both halves audible: 0 - 1 s is the audio clip alone at its
+             unprocessed rms, 1 - 2 s is the note alone at velocity/sqrt(2).
+
+       LAYOUT. ../test_sawtooth.wav is 4 s long, so the clip is resized to
+       exactly 1 s: the two halves then occupy DISJOINT seconds and each band is
+       about one thing. (Overlapping them would make every number a statement
+       about the sum of a ramped sawtooth and a sine, which is a worse test of
+       both.) The first second of the fixture renders unprocessed at rms
+       0.066650 - the same number plugin_bypass_and_param and fader_post_fx
+       measure. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <resize-clip clip="0,0" startTime="0" duration="48000" srcStart="0"/>
+
+    <!-- (a) the reference: no instrument in the path at all. -->
+    <render filename="imt_plain.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="imt_plain.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.06598" maxRms="0.06732"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <assert-instrument-slot trackPath="0" present="1" mode="DirectGen"
+                            state="Active" hasFeed="1"/>
+
+    <!-- (a) An instrument with nothing to play adds exactly 0.0f per sample. -->
+    <render filename="imt_silent_instr.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="imt_silent_instr.wav" expected="imt_plain.wav"/>
+
+    <!-- (b) Now give it one note, in the second AFTER the audio clip ends. -->
+    <insert-midi-clip trackPath="0" timePos="48000" duration="1920" name="One"/>
+    <add-note clip="0,1" tick="0" dur="1920" key="60" velocity="100" channel="0"/>
+
+    <render filename="imt_both.wav" format="wav" quality="10" durationSec="3.0"/>
+
+    <!-- the audio clip, unchanged by the instrument sitting in front of it -->
+    <assert-audio-energy filename="imt_both.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.06598" maxRms="0.06732"/>
+    <!-- the note: (100/127)/sqrt(2) = 0.556769, +/-3 % -->
+    <assert-audio-energy filename="imt_both.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+    <assert-audio-frequency filename="imt_both.wav" startFrame="48000" frameCount="48000"
+                            channel="0" minHz="260.626" maxHz="262.626"/>
+    <!-- and nothing after either of them -->
+    <assert-audio-energy filename="imt_both.wav" startFrame="96000" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 37 P7b, AC4. A RENDER EMITS NOTHING (design D6).
+
+  This is the metering lesson (proposal 34) in its sharpest form. A render has
+  no playhead at all, and its pages are frozen as fast as the machine can
+  freeze them; a MIDI-out driven from the freeze path would spray a whole
+  arrangement of notes at the user's hardware synth, at whatever rate the CPU
+  managed, with the transport stopped. So the pump is driven by the PLAYHEAD
+  and started only by the transport - and never by SApplication::startRender,
+  which does not set isPlaying_.
+
+  The AC's other half is "the goldens are byte-identical", and that is asserted
+  the only honest way: this case renders through the SAME path as the audio
+  corpus while a MIDI-out track exists, and the whole render suite is run
+  unchanged. Nothing here touches a render path, and this case's own render is
+  the local proof that adding a port to a track changed no audio.
+-->
+<SActionScript version="1" name="midi_out_render_silent">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="notes"/>
+    <add-note clip="0,0" tick="0"    dur="960" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="1920" dur="960" key="64" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="3840" dur="960" key="67" velocity="100" channel="0"/>
+
+    <set-track-midi-output trackPath="0" port="capture" channel="2" offsetMs="0"/>
+
+    <render filename="midi_out_render.wav" format="wav" quality="10"/>
+
+    <!-- Same length and same silence as the P1 case that has no port: adding a
+         MIDI output changed the audio not at all. -->
+    <assert-audio-length filename="midi_out_render.wav"
+                         minFrames="192000" maxFrames="192000"/>
+    <assert-audio-energy filename="midi_out_render.wav" minRms="0" maxRms="0.0001"/>
+
+    <!-- And NOT ONE byte reached the wire. -->
+    <assert-midi-out count="0"/>
+    <dump-midi-capture filename="render_midi.txt" minCount="0"/>
+
+    <!-- ============ the verb is ABSOLUTE, and its UNDO is exact ==========
+
+         Gating an undo needs a STATE assertion, not the runner's verify-undo
+         pass (which compares track counts only). There is no
+         assert-track-midi-output verb, and there does not need to be: giving a
+         track a port CHANGES WHAT ITS PARENT HEARS, because `auto` routing
+         means "consumed here, or bubbled up". So the feed IS the observation,
+         and it gates the coupling as well as the undo.                      -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="childA"/>
+    <add-note clip="1,0" tick="0" dur="480" key="72" velocity="100" channel="0"/>
+    <insert-midi-clip trackPath="2" timePos="0" duration="3840" name="childB"/>
+    <add-note clip="2,0" tick="0" dur="480" key="76" velocity="100" channel="0"/>
+    <select-track trackPath="1"/>
+    <select-track trackPath="2" modifiers="ctrl"/>
+    <group-track trackPath="1"/>
+
+    <!-- Both children bubble: neither has a local consumer. -->
+    <assert-midi-events scope="feed" trackPath="1" kind="note" count="2"
+                        startFrame="0" frameCount="96000"/>
+
+    <!-- Give child 0 a port of its own and it stops bubbling. -->
+    <set-track-midi-output trackPath="1,0" port="capture" channel="3" offsetMs="-100"/>
+    <assert-midi-events scope="feed" trackPath="1" kind="note" count="1"
+                        key="76" startFrame="0" frameCount="96000"/>
+    <!-- ... and its events are still its own. -->
+    <assert-midi-events scope="feed" trackPath="1,0" kind="note" count="1"
+                        key="72" startFrame="0" frameCount="96000"/>
+
+    <!-- The inverse carries the WHOLE previous state (port, channel and
+         offset), so one undo puts the child back in the parent's feed. -->
+    <undo count="1"/>
+    <assert-midi-events scope="feed" trackPath="1" kind="note" count="2"
+                        startFrame="0" frameCount="96000"/>
+  </actions>
+
+  <assertions>
+    <!-- The MIDI-out track, plus the folder the routing block groups. -->
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

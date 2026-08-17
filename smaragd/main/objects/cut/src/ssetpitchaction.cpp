@@ -25,7 +25,9 @@ SCut *pitchTargetCut( SObject *root, const QList<int> &clipPath, int take,
 
     if( STakeStack *stack = dynamic_cast<STakeStack*>( &link->getSObject() ) ) {
         resolvedTake = ( take >= 0 ) ? take : stack->activeTakeIndex();
-        return stack->takeCutAt( resolvedTake );   // null when there is no such take
+        // Pitch is per-take and audio-only, so the audio window is what this
+        // verb wants; null when there is no such take, or it is not audio.
+        return dynamic_cast<SCut*>( stack->takeObjectAt( resolvedTake ) );
     }
     return dynamic_cast<SCut*>( &link->getSObject() );
 }

@@ -11,6 +11,11 @@
 | Record worker | `RecordingSession::start` | device capture → resample → WAV writers | **NO** |
 | Revalidator pool | `CaptureRevalidator` (N workers) | page recompute via `IRevalidatable` | **NO** |
 | Buffering monitor | `twSpeaker::startOutput` | polls readahead, starts backend | **NO** |
+| MIDI out scheduler | `MidiOutScheduler::start` | drains an SPSC ring, sends each message AT its due time (or hands it to a timestamping driver early) | **NO** |
+| MIDI device thread | the platform MIDI input (WinMM callback / CoreMIDI read proc / ALSA-seq poll) | delivers received bytes to `MidiInputCallback` | **NO** |
+| MIDI-out pump | `SApplication`'s `SMidiOutPump` QTimer (20 ms) | reads the playhead, slices each MIDI-out track's event FEED over a 250 ms window, enqueues `{dueHostTimeNs, bytes}` into `MidiOutScheduler` | yes (it IS the main thread) |
+
+The MIDI-out pump is on this list to make the SEAM explicit: it is the single producer into `MidiOutScheduler`'s lock-free ring, and it is on the main thread, so everything above the ring may use Qt freely and everything below it may not. MIDI-out is emitted at PLAY time and only at play time — never at freeze time (proposal 37 D6, the proposal-34 metering lesson verbatim: pages are frozen ~1.4 s ahead of the playhead, and by renders that have no playhead at all).
 
 ## Rule 1 — no Qt off the main thread. Ever.
 
@@ -83,3 +88,24 @@ For races, remove the latch/assumption so the system self-heals under ANY
 ordering — do not force a particular ordering (established project rule;
 see plan/STATE.md sessions and `feedback` memory). Tests that only pass
 for one interleaving are bugs.
+
+## Rule 5 — the run barrier is MAIN THREAD ONLY
+
+`SApplication::beginRun(pos)` (proposal 37 P3c, design D4 / 4.4) walks the
+model tree, clears every instrument processor's continuity and invalidates the
+render path from `pos` to infinity. It reads the model, which belongs to the
+main thread, and it must be ordered BEFORE the run's first demand — so it is
+called from `startRender()` before the render session's thread exists, and from
+every play-start path immediately before `twSpeaker::startOutput()`, which
+performs the engine's pre-readahead `seekTo` + `startReadahead()` on that same
+thread. There are three such play-start paths today (`SMainWindow::startPlaying`,
+`SApplication::setPlaybackRunning`, and the monitoring playback inside
+`SApplication::startRecording`) and each carries its own call: a barrier on one
+of them only would make determinism depend on which button was pressed.
+
+NEVER from the readahead thread, the RT callback or a scheduler worker. It is
+not issued on a seek during playback or on a loop wrap either — not for
+threading reasons but because the RT thread adopts a fresh page mid-page
+(proposal 16), so re-staling what is being served would be an audible switch.
+It is order-independent in rule 4's sense: a late barrier costs one re-render,
+never a wrong page served as current.

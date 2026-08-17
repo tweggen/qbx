@@ -5,6 +5,8 @@
 #include "tw/playback/twspeaker.h"
 #include "tw/devices/audio_backend.h"
 #include "tw/devices/audio_input.h"
+#include "tw/devices/midi_output.h"
+#include "app/shell/smidioutpump.h"
 #include "tw/core/twlog.h"
 
 #include <QTreeWidget>
@@ -18,7 +20,9 @@
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QLabel>
+#include <QAbstractItemView>
 #include <QListWidget>
+#include <QListWidgetItem>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStringList>
@@ -54,14 +58,16 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
     // maps by top-level index, nothing else.
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Mouse navigation" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Audio" ) ) );
+    tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "MIDI" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Log" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Plugins" ) ) );
 
     stack_ = new QStackedWidget;
     stack_->addWidget( buildMousePage() );   // index 0
     stack_->addWidget( buildAudioPage() );   // index 1
-    stack_->addWidget( buildLogPage() );     // index 2
-    stack_->addWidget( buildPluginsPage() ); // index 3
+    stack_->addWidget( buildMidiPage() );    // index 2
+    stack_->addWidget( buildLogPage() );     // index 3
+    stack_->addWidget( buildPluginsPage() ); // index 4
 
     QObject::connect( tree_, &QTreeWidget::currentItemChanged,
                       this, [this]( QTreeWidgetItem *cur, QTreeWidgetItem * ) {
@@ -86,6 +92,7 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
     // Populate from current settings.
     loadMousePage();
     loadAudioPage();
+    loadMidiPage();
 
     tree_->setCurrentItem( tree_->topLevelItem( 0 ) );
     resize( 520, 320 );
@@ -140,6 +147,148 @@ QWidget *SOptionsDialog::buildAudioPage()
                              "Requires restart of playback to take effect." ) );
 
     return page;
+}
+
+// ---------------------------------------------------------------- MIDI page
+
+QWidget *SOptionsDialog::buildMidiPage()
+{
+    QWidget *page = new QWidget;
+    QVBoxLayout *box = new QVBoxLayout( page );
+
+    midiStatusLabel_ = new QLabel;
+    box->addWidget( midiStatusLabel_ );
+
+    box->addWidget( new QLabel( "Output ports:" ) );
+    midiOutputs_ = new QListWidget;
+    // Informational, not a selection: a TRACK chooses its port, by the
+    // portable NAME shown here (set-track-midi-output port=...). The
+    // machine-local id each name resolves to lives in smaragd.ini, keyed by
+    // the name, so the same project follows a different device on the next
+    // machine without editing the project.
+    midiOutputs_->setSelectionMode( QAbstractItemView::NoSelection );
+    box->addWidget( midiOutputs_, 1 );
+
+    midiVirtualBtn_ = new QPushButton( "Create virtual port..." );
+    box->addWidget( midiVirtualBtn_ );
+
+    box->addWidget( new QLabel( "Input ports (listened to from a later release):" ) );
+    midiInputs_ = new QListWidget;
+    midiInputs_->setSelectionMode( QAbstractItemView::MultiSelection );
+    box->addWidget( midiInputs_, 1 );
+
+    QFormLayout *form = new QFormLayout;
+    midiOffsetMs_ = new QSpinBox;
+    // The same +-500 ms the per-track offset allows, and the same sign: a
+    // POSITIVE value sends EARLIER, which is what compensates outboard gear
+    // whose audio return arrives late.
+    midiOffsetMs_->setRange( -500, 500 );
+    midiOffsetMs_->setSuffix( " ms" );
+    form->addRow( "MIDI-out offset (+ = earlier):", midiOffsetMs_ );
+
+    midiChaseNoteOns_ = new QCheckBox(
+        "Re-attack sounding notes when starting or locating" );
+    form->addRow( QString(), midiChaseNoteOns_ );
+    form->addRow( new QLabel(
+        "Controllers, program changes and pitch bend are always chased." ) );
+    box->addLayout( form );
+
+    return page;
+}
+
+void SOptionsDialog::loadMidiPage()
+{
+    SMidiOutPump *pump = SApplication::app().midiOutPump();
+
+    midiOutputs_->clear();
+    midiInputs_->clear();
+    if( !pump ) {
+        midiStatusLabel_->setText( "MIDI is not available." );
+        midiVirtualBtn_->setEnabled( false );
+        return;
+    }
+
+    const std::vector<audio::MidiPortInfo> outs = pump->outputPorts();
+    for( const audio::MidiPortInfo &p : outs ) {
+        QString label = QString::fromStdString( p.name );
+        if( p.isVirtual ) label += "  (virtual)";
+        midiOutputs_->addItem( label );
+    }
+    if( outs.empty() )
+        midiOutputs_->addItem( "(no MIDI output ports on this machine)" );
+
+    const QStringList wanted = SSettings::instance().midiInputPortIds();
+    const std::vector<audio::MidiPortInfo> ins = pump->inputPorts();
+    for( const audio::MidiPortInfo &p : ins ) {
+        QListWidgetItem *item =
+            new QListWidgetItem( QString::fromStdString( p.name ), midiInputs_ );
+        item->setData( Qt::UserRole, QString::fromStdString( p.id ) );
+        if( wanted.contains( QString::fromStdString( p.id ) ) )
+            item->setSelected( true );
+    }
+    if( ins.empty() )
+        midiInputs_->addItem( "(no MIDI input ports on this machine)" );
+
+    // Gate the offer on the CAPABILITY, not on the platform: WinMM has no
+    // virtual-port concept at all (a loopMIDI-style driver shows up as an
+    // ordinary device instead), and a button that always failed would be worse
+    // than no button.
+    midiVirtualBtn_->setEnabled( pump->supportsVirtualPorts() );
+    if( !pump->supportsVirtualPorts() )
+        midiVirtualBtn_->setToolTip(
+            "This MIDI system has no virtual ports. Install a loopback driver "
+            "(loopMIDI) - its ports then appear in the list above." );
+
+    SSettings &s = SSettings::instance();
+    midiOffsetMs_->setValue( s.value( SOpt::MidiOutOffsetMs,
+                                      SOpt::def( SOpt::MidiOutOffsetMs ) ).toInt() );
+    midiChaseNoteOns_->setChecked(
+        s.value( SOpt::MidiChaseNoteOns,
+                 SOpt::def( SOpt::MidiChaseNoteOns ) ).toBool() );
+
+    midiStatusLabel_->setText(
+        QString( "MIDI system: %1 - %2 output port(s), %3 input port(s)." )
+            .arg( pump->backendName() )
+            .arg( (int) outs.size() )
+            .arg( (int) ins.size() ) );
+}
+
+void SOptionsDialog::applyMidiPage()
+{
+    SSettings &s = SSettings::instance();
+    s.setValue( SOpt::MidiOutOffsetMs, midiOffsetMs_->value() );
+    s.setValue( SOpt::MidiChaseNoteOns, midiChaseNoteOns_->isChecked() );
+
+    QStringList selected;
+    for( int i = 0; i < midiInputs_->count(); ++i ) {
+        QListWidgetItem *item = midiInputs_->item( i );
+        const QString id = item->data( Qt::UserRole ).toString();
+        if( item->isSelected() && !id.isEmpty() ) selected << id;
+    }
+    s.setMidiInputPortIds( selected );
+}
+
+QString SOptionsDialog::describeMidiPage() const
+{
+    QStringList lines;
+    lines << QString( "backend=%1 virtual=%2" )
+                 .arg( SApplication::app().midiOutPump()
+                           ? SApplication::app().midiOutPump()->backendName()
+                           : QStringLiteral( "none" ) )
+                 .arg( midiVirtualBtn_->isEnabled() ? "yes" : "no" );
+    lines << QString( "outputs=%1" ).arg( midiOutputs_->count() );
+    for( int i = 0; i < midiOutputs_->count(); ++i )
+        lines << QString( "  out[%1]=%2" ).arg( i ).arg( midiOutputs_->item( i )->text() );
+    lines << QString( "inputs=%1" ).arg( midiInputs_->count() );
+    for( int i = 0; i < midiInputs_->count(); ++i )
+        lines << QString( "  in[%1]=%2 id=%3 selected=%4" )
+                     .arg( i )
+                     .arg( midiInputs_->item( i )->text() )
+                     .arg( midiInputs_->item( i )->data( Qt::UserRole ).toString() )
+                     .arg( midiInputs_->item( i )->isSelected() ? 1 : 0 );
+    lines << QString( "offsetMs=%1" ).arg( midiOffsetMs_->value() );
+    lines << QString( "chaseNoteOns=%1" ).arg( midiChaseNoteOns_->isChecked() ? 1 : 0 );
+    return lines.join( "\n" );
 }
 
 void SOptionsDialog::loadMousePage()
@@ -298,6 +447,7 @@ void SOptionsDialog::apply()
 {
     applyMousePage();
     applyAudioPage();
+    applyMidiPage();
     applyLogPage();
     applyPluginsPage();
 }

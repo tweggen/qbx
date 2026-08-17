@@ -3,6 +3,9 @@
 #include "app/objects/track/spluginslot.h"
 #include "app/objects/track/ssetpluginparamaction.h"
 #include "app/shell/sapplication.h"
+#include "app/shell/sautomationrecorder.h"
+#include "app/model/sautomationlane.h"
+#include "app/model/sobjectpath.h"
 #include "tw/plugins/twplugin.h"
 #include "tw/plugins/twpluginslotproc.h"
 
@@ -54,6 +57,10 @@ SPluginParamEditor::SPluginParamEditor( SPluginSlot *slot,
         connect( slot_, &SPluginSlot::pluginReloaded,
                  this, &SPluginParamEditor::onPluginReloaded );
     }
+    // Proposal 37 P6: the READ display. Connected once per editor; the editor
+    // is destroyed with its window, so the connection drops itself.
+    connect( &SApplication::app(), &SApplication::meterTick,
+             this, &SPluginParamEditor::onMeterTick );
 }
 
 audio::twPlugin *SPluginParamEditor::livePlugin() const
@@ -143,6 +150,8 @@ void SPluginParamEditor::buildUI()
         const int paramIndex = (int) i;
         connect( slider, &QSlider::valueChanged, this,
                  [this, paramIndex]() { onParamSliderChanged( paramIndex ); } );
+        connect( slider, &QSlider::sliderReleased, this,
+                 &SPluginParamEditor::onSliderReleased );
 
         mainLayout->addLayout( paramLayout );
     }
@@ -161,6 +170,22 @@ void SPluginParamEditor::onParamSliderChanged( int sliderIndex )
     const double value = ticksToValue( info, pw.slider->value() );
 
     pw.valueLabel->setText( formatValue( info, value ) );
+
+    // A Touch/Latch/Write pass buffers on the UI thread and commits ONE
+    // set-automation-points when the gesture ends (proposal 37 P6, D5), so a
+    // slider drag during playback must not submit an action per tick. This is
+    // ALSO the plugin-gesture punch-in: the app's own slider press/release is
+    // the only gesture signal available, because a plugin's ParamGestureBegin/
+    // End reaches the host only inside process(), on a worker thread, at freeze
+    // time - and there is no native plugin editor to emit one (proposal 33 M3).
+    SAutomationRecorder::Target t;
+    t.ownerPath = strackpath::stringToPath( trackPath_ );
+    t.target = QStringLiteral( "param:%1" ).arg( info.id );
+    t.slotIndex = slotIndex_;
+    if( SApplication::app().isPlaying()
+        && SApplication::app().automationRecorder().writeTick(
+               t, value, SApplication::app().getGlobalLocatorPos() ) )
+        return;
 
     // THE action, not twPlugin::setParam(). The action broadcasts to every
     // instance, stales the slot's cached pages (without which the edit is
@@ -210,4 +235,50 @@ bool SPluginParamEditor::setParamFromUi( std::uint32_t paramId, double value )
         return true;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Automation (proposal 37 P6)
+// ---------------------------------------------------------------------------
+
+SAutomationLane *SPluginParamEditor::laneFor( std::uint32_t paramId ) const
+{
+    if( !slot_ ) return nullptr;
+    return slot_->automationLane( QStringLiteral( "param:%1" ).arg( paramId ) );
+}
+
+void SPluginParamEditor::onSliderReleased()
+{
+    // Touch commits here; Latch and Write hold their value to the transport
+    // stop. The recorder knows which - this is just "the hand let go".
+    SApplication::app().automationRecorder().releaseControl();
+}
+
+void SPluginParamEditor::onMeterTick( offset_t pos, qint64 /*nowMs*/,
+                                      bool /*live*/ )
+{
+    if( applyingExternal_ ) return;
+    audio::twPlugin *plugin = livePlugin();
+    if( !plugin ) return;
+
+    SAutomationRecorder::Target t;
+    t.ownerPath = strackpath::stringToPath( trackPath_ );
+    t.slotIndex = slotIndex_;
+
+    bool any = false;
+    for( ParamWidget &pw : params_ ) {
+        SAutomationLane *lane = laneFor( pw.info.id );
+        if( !lane || !SAutomationRecorder::isReadFamily( lane->mode() ) ) continue;
+        // A pass being RECORDED on this very lane shows the HAND, not the
+        // curve - otherwise the display fights the finger dragging the slider.
+        t.target = lane->target();
+        if( SApplication::app().automationRecorder().isRecording( t ) ) continue;
+        const double v = lane->valueAt( pos );
+        const int ticks = valueToTicks( pw.info, v );
+        if( pw.slider->value() == ticks ) continue;
+        if( !any ) { applyingExternal_ = true; any = true; }
+        pw.slider->setValue( ticks );
+        pw.valueLabel->setText( formatValue( pw.info, v ) );
+    }
+    if( any ) applyingExternal_ = false;
 }

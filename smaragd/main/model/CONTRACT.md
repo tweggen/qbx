@@ -7,9 +7,12 @@ channel count, settings, revalidator), extern-file bookkeeping, and the SObjectR
 interface views implement.
 
 Public headers: app/model/{sobject,slink,sproject,sprojectprops,
-ssortedobjlist,sexternfile,sexternfilelist,sfilepathref,sobjectrenderer}.h
+ssortedobjlist,sexternfile,sexternfilelist,sfilepathref,sobjectrenderer,
+sclipwindow}.h
 
-Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources.
+Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources,
+tw/events (SProject owns the twTempoMap — the single tempo authority — and
+SLink's beats timebase converts through it; nothing else in the app may).
 App edges: NONE — the model names no concrete object types (Phase 5) and
 hosts the Phase 6 decoupling seams: sappcontext.h (the ONLY way core
 modules reach the application), sdetaileditors.h (view-widget factory),
@@ -50,6 +53,15 @@ Invariants:
    setParent() as their last step, and SObject::childEvent qobject_casts
    (a non-SLink child of an SObject is ignored, never type-confused into
    childOrder_).
+6b. An SLink an object OWNS but does NOT parent (STrack's reference to its
+   SPluginChain is the only one) MUST be published by overriding
+   SObject::ownedRefLinks(). childLinks() cannot see it, so without the
+   override the reference graph is simply wrong for every walker of it —
+   ~SProject's survivor ordering then put a referent in the SAME batch as
+   its referrer, deleted the referent first, and the referrer's ~SLink ran
+   removeRef() on freed memory (the teardown SEGFAULT after a passing
+   headless run, 2026-08-16).
+
 7. An external file reference is PORTABLE ON DISK and ABSOLUTE IN MEMORY.
    SFilePathRef::toStored/fromStored are the only encoders, and they pick
    project-relative first, "~/..." when the climb lands exactly on the home
@@ -97,6 +109,50 @@ Invariants:
    "fixed", because a page with no geometry cannot answer a
    (start, length, nProbes) question whatever its element type.
 10. There is ONE notion of how long the project is.
+10. `SObject::contentKind()` says what an object's material IS (Audio or
+   Event, proposal 37 D8b); the default is Audio, because everything that
+   existed before event clips is. It is NOT a track kind — a track holds
+   whatever clips it is given — and nothing above the clip branches on it.
+   Two things consume it: `SClipWindow::wrapContent()` picks the window type
+   for a piece of content, and `STakeStack` refuses a take of a different
+   kind.
+11. `SClipWindow` (sclipwindow.h) is the WINDOW layer of CLIP_MODEL.md as an
+   INTERFACE, and it is what the windowed verbs address — split, resize,
+   duplicate, unsplit, set-clip-name and the take verbs all dispatch on it
+   rather than on a concrete window class (`ssplitclipaction.cpp` used to
+   compare the class NAME, which no second window type could ever have
+   satisfied). Two rules keep it implementable by a window whose content is
+   not measured in frames: the READ api is timeline FRAMES, and a setter
+   takes timeline frames and converts EXACTLY ONCE inside the implementation
+   — two callers converting independently is how a rounding difference
+   becomes an off-by-one clip edge. The exceptions are explicit
+   (`contentAnchorExact` / `setWindowExact`), because the slip anchor is
+   stored content-authoritative and must not drift under a stretch edit.
+   Pitch, formants, warp anchors and the grain params are deliberately NOT
+   on it: they are audio-specific, and a verb that edits one is an audio
+   verb. The per-kind wrap factory is registered from the slice that owns the
+   window type (static initializer, OBJECT-library rule), so the model still
+   names no concrete object type.
+11b. **`SLink::timebase` and the tempo map** (proposal 37 D2). `SProject`
+   holds ONE `twTempoMap`; `getBPMTempo()` is a derived view of it and there is
+   no second tempo scalar (a stored `60/bpm` and a stored µs/quarter disagree
+   in the tenth microsecond, which lands on a frame boundary in a long
+   project). It is written by exactly two callers — the `set-tempo` verb and
+   the loader. An `SLink` whose timebase is `beats` carries an exact
+   `startTicks` as the AUTHORITY and derives `startTime`; `setStartTime()`
+   converts once and stores ticks, and `set-tempo` re-derives frames from the
+   ticks, so no number is ever converted twice and repeated tempo edits cannot
+   drift. Serialized only when non-default for the object's content kind, so
+   every pre-36 project re-serializes byte-identically.
+
+11c. **`resolveEventClip()` and `eventsChanged()` live on `SObject`, not on a
+   MIDI type.** That is what lets `app/objects/track` route an event clip into
+   its `twEventClipSet` and react to a note edit without an edge to
+   `app/objects/midi` — the track consults MIDI-ness only through
+   `contentKind()`. `windowTakeAt()` is the same idea for a take column: a verb
+   can address a take without naming `STakeStack`.
+
+12. There is ONE notion of how long the project is.
     SProject::getDurationFrames() is the root container's content extent —
     getRootComponent()->getDuration(), i.e. the same SObject::
     getChildrenExtent() walk the arranger already draws through
@@ -143,3 +199,29 @@ boundaries, one reset for four pages, one reposition per page.
 
 Known debt: none of the former model→objects edges remain; the module is
 ready to become a real build target once its remaining consumers are.
+
+## Inline `<automation>` (proposal 37 P5, design §3.3)
+
+**`<automation>` is a sanctioned NON-`SLink` payload of a known element, and the
+loader ignores it for ordering.** `SObject` owns the lane vector, emits the
+element from `SObject::serialize()` (and every override that writes its own
+children must call `serializeAutomation()` itself — `SPluginSlot` does, next to
+`<state>`), and reads it back in `readPostChildrenAttributes()`. Writing NOTHING
+when there are no lanes is load-bearing: it is what keeps every project written
+before P5 byte-unchanged.
+
+- **Lanes live on `SObject`, not on the four owner types.** A verb, the
+  serializer and the testkit all have to reach a lane without knowing which
+  object slice its owner belongs to, and `main/actions` may not depend on
+  `objects/*` at all — the same argument that put `contentKind()` and
+  `resolveEventClip()` here. WHICH targets are legal on WHICH owner is validated
+  by the verbs, not by the storage.
+- **The lane vector is MAIN-THREAD ONLY.** Every verb, the loader and the
+  serializer run there. What crosses to a freeze thread is the immutable
+  `twAutomationCurve` SNAPSHOT, handed to the consuming component under ITS
+  mutex and read once per page into a local (THREADING rule 2).
+- **`onAutomationChanged(lane, start, end)`** is the hook an owner overrides to
+  push the new snapshot into its engine components and stale exactly that range;
+  the default does the `invalidateRenderPathRange` and nothing else.
+  **`applyAutomationToEngine()`** is the load-path replay, because the lanes are
+  read before the components exist.

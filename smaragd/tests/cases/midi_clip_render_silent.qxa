@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 37 P1, AC4. A project made only of MIDI renders SILENCE - quietly.
+
+  There is no instrument yet (that is P3b), so an event clip on a track is
+  INAUDIBLE, not rejected (D3: the same rule as a take stack with no active
+  take). Two things are asserted, and the second is the interesting one:
+
+  1. the render is silent, and it is exactly as long as the arrangement - the
+     event clip carries a real duration, so a MIDI-only project is not a
+     zero-frame render;
+
+  2. `twView::getComponent() returned nullptr` NEVER appears. That warning
+     (twview.cc:35) fires once per freeze, forever, for any clip whose resolved
+     component is null, and it is the symptom that the event clip was routed
+     into the BUS MIXERS. It must not be: STrack puts a contentKind()==Event
+     child into its event clip set instead (design 3.2), which is also what
+     stops a MIDI clip costing a dummy page freeze per page. The absence of a
+     log line is the only observable difference between "routed correctly" and
+     "routed as a silent audio clip", so assert-log is the gate.
+-->
+<SActionScript version="1" name="midi_clip_render_silent">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Silent"/>
+    <add-note clip="0,0" tick="0"    dur="960" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="1920" dur="960" key="64" velocity="100" channel="0"/>
+
+    <!-- 7680 ticks at 120 BPM / 48 kHz = 4 s = 192000 frames. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+
+    <render filename="midi_silent.wav" format="wav" quality="10"/>
+
+    <!-- A render is exactly as long as the arrangement, so this is also the
+         "no audio past the end" assertion - there is no past-the-end. -->
+    <assert-audio-length filename="midi_silent.wav"
+                         minFrames="192000" maxFrames="192000"/>
+    <assert-audio-energy filename="midi_silent.wav" minRms="0" maxRms="0.0001"/>
+
+    <assert-log contains="twView::getComponent() returned nullptr"
+                minCount="0" maxCount="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

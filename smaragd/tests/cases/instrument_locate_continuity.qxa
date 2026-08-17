@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_locate_continuity">
+
+  <!-- Proposal 37 P3c, AC2: LOCATE WHILE STOPPED, THEN PLAY - AND THE NOTE
+       THAT WAS ALREADY SOUNDING IS THERE, IN THE STATE IT WOULD HAVE BEEN IN.
+
+       A locate while the transport is stopped demands nothing (D4: the barrier
+       is not issued from setGlobalLocatorPos; requestSeek only runs while
+       playing), so the whole burden falls on the run barrier issued at the next
+       PLAY start plus the class-1 reposition protocol underneath it: the first
+       page the readahead asks for does not start where the last one ended, so
+       the processor RESETS, CHASES stateAt(P - K) and PRE-ROLLS K frames with
+       the events at their real offsets before it renders a single audible
+       sample, where
+
+           K = min( max( 4096, tailFrames(), P - start(earliest held note) ),
+                    4 s )
+
+       Both halves are measured here, on the PLAYBACK path, through the capture
+       backend - a render would not exercise the readahead's start at all.
+
+       (a) PRESENCE - the chase. tw.test.clap.sine holds key 60 from 0 to 4 s.
+       Locate to 96000 (2.0 s) while stopped, play, and the FIRST 4096 frames of
+       the recording have to be that note. Without a chase the page would open
+       with no voice at all and the estimator would be looking at silence; the
+       energy assertion next to it says which of the two failures happened. The
+       band is 261.626 +/- 3 Hz: a 4096-frame window is a coarse estimate and
+       the note is either there at its own pitch or it is not there at all, so
+       nothing is bought by making it tighter.
+
+       (b) STATE - the pre-roll's reach-back. tw.native.303 holds key 84
+       (1046.5 Hz) from 0 to 4 s with
+
+           cutoff  = 20 Hz     (paramId 0, the floor)
+           envMod  = 1.0       (paramId 2, the maximum)
+           decay   = 2.0 s     (paramId 3)
+
+       so the ONLY thing setting the filter cutoff is the decay envelope,
+       sweeping 8020 Hz down to 20 Hz with a 2-second time constant. Two seconds
+       in, a continuous run has env = exp(-1) = 0.368, i.e. a cutoff of 2963 Hz
+       - still sweeping, and a third of the way down; the note has not converged
+       and its sound at 2 s is a fact about the two seconds before it.
+
+       At P = 65536 (the page the playhead at 96000 sits in) the reach-back
+       gives K = min( max(4096, 96000, 65536), 192000 ) = 65536 = P, so the
+       pre-roll starts at the note's own note-on and the envelope arrives at the
+       page in the state a continuous run would have given it.
+
+       MEASURED, and the band is that measurement +/- 10 %:
+
+           full render,  frames [96000, 98048)   rms = 0.388957
+           capture,      frames [    0,  2048)   rms = 0.388957   (identical)
+           => band [0.350061, 0.427853]
+
+       The two windows agree to every digit, which also confirms the capture is
+       frame-aligned: recorded frame 0 IS timeline frame 96000, with no leading
+       silence to budget for (the device is not started until the readahead has
+       primed - twSpeaker::monitorReadaheadBuffer).
+
+       THE FALSIFICATION, run once by hand. With a debug knob capping K at 4096
+       frames (SMARAGD_PREROLL_MAX_FRAMES=4096, a temporary local patch to
+       twPluginSlotProcessor::preRoll_nolock, NOT committed), the chased note-on
+       restarts the envelope 85 ms before the page instead of 2 s, so env at the
+       measured window is exp(-4096/96000) = 0.958 instead of 0.368 and the
+       cutoff is 7686 Hz instead of 2963 Hz:
+
+           rms = 0.215076   -> 45 % below the measured value, 39 % below the
+                               bottom of the band. Ratio 1.81x.
+
+       Note what that number does and does NOT prove. It proves the reach-back
+       sets the absolute level at the locate, which is the property the band
+       pins. It does not prove the CAPTURE and the RENDER can drift apart: under
+       P3b's recorded double-render debt every instrument page in every consumer
+       is produced by the reposition path, so both windows move together (with
+       the knob on they both read 0.215076). That is written up in
+       instrument_render_determinism.qxa's header and in STATE.md.
+
+       WHY THE FIXTURE IS SHAPED LIKE THIS. A SHORT decay would have converged
+       by 2 s and a locate would be free, so nothing would be measured. And the
+       note is key 84 rather than a bass note because the discriminator is RMS,
+       and the RMS of a saw through a lowpass is dominated by its fundamental
+       unless the cutoff sweeps THROUGH it - at 1046.5 Hz the 2963 Hz cutoff
+       sits between the second and third harmonic, so the sweep shows up as
+       level and not only as timbre.
+
+       STEREO IS NOT GATED (the sink is mono until proposal 36 B5): channel 0
+       only, never L != R. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ===================== (a) the sine: presence ====================== -->
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <assert-instrument-slot trackPath="0" present="1" format="clap"
+                            uid="tw.test.clap.sine" mode="DirectGen"
+                            state="Active" hasFeed="1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Pad"/>
+    <add-note clip="0,0" tick="0" dur="7680" key="60" velocity="100" channel="0"/>
+
+    <!-- ===================== (b) the 303: state ========================== -->
+    <add-track index="-1"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.303"
+                   name="Smaragd 303" vendor="Smaragd"
+                   path="" nIn="0" nOut="1"/>
+    <assert-instrument-slot trackPath="1" present="1" format="tw"
+                            uid="tw.native.303" mode="MonoSpread"
+                            state="Active" hasFeed="1"/>
+    <set-plugin-param trackPath="1" slotIndex="0" paramId="0" value="20"/>
+    <set-plugin-param trackPath="1" slotIndex="0" paramId="2" value="1.0"/>
+    <set-plugin-param trackPath="1" slotIndex="0" paramId="3" value="2.0"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="7680" name="Pad"/>
+    <add-note clip="1,0" tick="0" dur="7680" key="84" velocity="90" channel="0"/>
+
+    <!-- ============ (a) locate while STOPPED, then play ================== -->
+    <!-- One lane at a time: two instruments playing at once would sum, and
+         both assertions below are about ONE voice. -->
+    <set-track-mute trackPath="1" muted="1"/>
+    <set-locator position="96000"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="144000" minAdvance="4096" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="sine_locate.wav" minFrames="32768"/>
+
+    <!-- The note is THERE (a chase happened) and it is at its own pitch. -->
+    <assert-audio-frequency filename="sine_locate.wav" startFrame="0" frameCount="4096"
+                            channel="0" minHz="258.626" maxHz="264.626"/>
+    <!-- ...and at full level. tw.test.clap.sine is envelope-less with
+         amp = velocity, so a held note is exactly velocity/sqrt(2) =
+         (100/127)/sqrt(2) = 0.556769; +/-3 % for the 16-bit round trip, the
+         same band instrument_sine_render uses. A chase that produced a voice at
+         the wrong velocity, or a fade-in, fails here rather than in the
+         frequency estimate. -->
+    <assert-audio-energy filename="sine_locate.wav" startFrame="0" frameCount="4096"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+
+    <!-- ============ (b) the reference render, then the same locate ======= -->
+    <set-track-mute trackPath="1" muted="0"/>
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <render filename="n303_full.wav" format="wav" quality="10" durationSec="5.0"/>
+    <!-- The reference window, asserted against the SAME literal band as the
+         capture below: if the fixture's own level ever moves, this says so
+         first, instead of letting a moved reference silently redefine what the
+         capture is being compared with. -->
+    <assert-audio-energy filename="n303_full.wav" startFrame="96000" frameCount="2048"
+                         channel="0" minRms="0.350061" maxRms="0.427853"/>
+
+    <set-locator position="96000"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="144000" minAdvance="4096" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="n303_locate.wav" minFrames="32768"/>
+
+    <assert-audio-energy filename="n303_locate.wav" startFrame="0" frameCount="2048"
+                         channel="0" minRms="0.350061" maxRms="0.427853"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

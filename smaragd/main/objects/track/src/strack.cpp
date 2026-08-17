@@ -13,6 +13,7 @@
 
 #include "tw/mix/twtrackmix.h"
 #include "tw/mix/twrewire.h"
+#include "tw/mix/twgainstage.h"
 #include "tw/plugins/twpluginchain.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
@@ -21,11 +22,21 @@
 #include "app/model/splacements.h"
 #include "app/model/ssolorules.h"
 #include "app/objects/track/strack.h"
+#include "app/model/sautomationlane.h"
+#include "app/model/sclipwindow.h"
 #include "app/objects/track/strackrndrinline.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
 #include "app/persistence/sprojectloader.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
+
+#include <limits>
+
+// An event edit is never bounded on the right: the consumer is class-1 (a
+// synth voice carries state across pages), so a change at `a` can be heard at
+// any later position (design 3.2, F9). Spelled once here.
+static constexpr offset_t EVENT_DIRTY_END =
+    std::numeric_limits<offset_t>::max();
 
 using namespace std;
 
@@ -59,8 +70,157 @@ int STrack::serializeSelfAttributes( QTextStream &o )
     if( cpPluginChain_ )
         o << " pluginChainId='"
           << reinterpret_cast<std::uintptr_t>( (SObject *) cpPluginChain_ ) << "'";
+    // Written only when it is not the default, so every project written before
+    // proposal 37 re-serializes byte-identically (persistence invariant 4).
+    if( midiRouting_ != MidiRouting::Auto )
+        o << " midiRouting='" << midiRoutingToString( midiRouting_ ) << "'";
+    // MIDI output (proposal 37 P7b), each written only when it is not the
+    // default, for the same byte-identity reason as midiRouting above. The
+    // PORT is the portable NAME; the machine-local device id lives in
+    // SSettings, keyed by that name.
+    if( !midiOutPort_.isEmpty() )
+        o << " midiOutPort='" << midiOutPort_.toHtmlEscaped() << "'";
+    if( midiOutChannel_ >= 0 )
+        o << " midiOutChannel='" << midiOutChannel_ << "'";
+    if( midiOutOffsetMs_ != 0 )
+        o << " midiOutOffsetMs='" << midiOutOffsetMs_ << "'";
     SObject::serializeSelfAttributes( o );
     return 0;
+}
+
+STrack::MidiRouting STrack::midiRoutingFromString( const QString &s, bool *ok )
+{
+    if( ok ) *ok = true;
+    if( s.compare( "parent", Qt::CaseInsensitive ) == 0 ) return MidiRouting::Parent;
+    if( s.compare( "none",   Qt::CaseInsensitive ) == 0 ) return MidiRouting::None;
+    if( s.compare( "auto",   Qt::CaseInsensitive ) == 0 ) return MidiRouting::Auto;
+    if( ok ) *ok = false;
+    return MidiRouting::Auto;
+}
+
+QString STrack::midiRoutingToString( MidiRouting r )
+{
+    switch( r ) {
+    case MidiRouting::Parent: return QStringLiteral( "parent" );
+    case MidiRouting::None:   return QStringLiteral( "none" );
+    default:                  return QStringLiteral( "auto" );
+    }
+}
+
+void STrack::setMidiOutput( const QString &port, int channel, int offsetMs )
+{
+    if( channel < -1 )  channel = -1;
+    if( channel > 15 )  channel = 15;
+    if( offsetMs >  MIDI_OUT_MAX_OFFSET_MS ) offsetMs =  MIDI_OUT_MAX_OFFSET_MS;
+    if( offsetMs < -MIDI_OUT_MAX_OFFSET_MS ) offsetMs = -MIDI_OUT_MAX_OFFSET_MS;
+    if( port == midiOutPort_ && channel == midiOutChannel_
+        && offsetMs == midiOutOffsetMs_ ) return;
+
+    const bool hadOut = hasMidiOut();
+    midiOutPort_     = port;
+    midiOutChannel_  = channel;
+    midiOutOffsetMs_ = offsetMs;
+
+    // Gaining or losing a port changes `bubblesEventsUp()` under the `auto`
+    // rule ("consumed here, or bubbled up"), so the PARENT's feed - and with it
+    // its instrument - now sees a different stream. The class-1 consumer is
+    // never bounded on the right, hence the open-ended range.
+    if( hadOut != hasMidiOut() )
+        invalidateRenderPathRange( 0, EVENT_DIRTY_END );
+}
+
+void STrack::setMidiRouting( MidiRouting r )
+{
+    if( r == midiRouting_ ) return;
+    midiRouting_ = r;
+    // The feed is rebuilt on read, so nothing to poke here — but the parent's
+    // instrument (and, from P7, its MIDI-out) hears a different stream from
+    // now on, and the class-1 consumer is never bounded on the right.
+    invalidateRenderPathRange( 0, EVENT_DIRTY_END );
+}
+
+SPluginSlot *STrack::instrumentSlot() const
+{
+    if( !cpPluginChain_ || cpPluginChain_->getSlotCount() <= 0 ) return nullptr;
+    SPluginSlot *slot = cpPluginChain_->getSlotAt( 0 );
+    // At most one instrument per track, always slot 0 (D3).
+    return ( slot && slot->getDescriptor().isInstrument ) ? slot : nullptr;
+}
+
+bool STrack::hasEventClips() const
+{
+    for( SLink *lk : childLinks() )
+        if( lk && lk->getSObject().contentKind() == SContentKind::Event )
+            return true;
+    return false;
+}
+
+bool STrack::bubblesEventsUp() const
+{
+    switch( midiRouting_ ) {
+    case MidiRouting::Parent: return true;      // explicit route (Cubase/Logic)
+    case MidiRouting::None:   return false;     // keep them local
+    default: break;
+    }
+    // auto: "consumed here, or bubbled up". REAPER's analogue is MIDI passing
+    // through a child's empty FX chain to the folder parent's input.
+    return instrumentSlot() == nullptr && !hasMidiOut();
+}
+
+std::shared_ptr<twEventMerge> STrack::eventFeed()
+{
+    if( !eventFeed_ ) eventFeed_ = std::make_shared<twEventMerge>();
+
+    // Rebuilt on every read (see the header): child add/remove/reparent, a
+    // mute, a solo ANYWHERE in the project and a routing change all move this
+    // list, and solo is global — a dirty flag would have to be poked from the
+    // whole tree, which is the coupling ssolorules.h exists to avoid.
+    std::vector<std::shared_ptr<const twEventSource>> sources;
+    sources.push_back( eventClips_ );
+
+    SObject *root = splacements::rootContainer( getProjectSafe() );
+    const bool anySolo = ssolo::anySoloInTree( root );
+    for( SLink *lk : childLinks() ) {
+        if( !lk ) continue;
+        STrack *child = dynamic_cast<STrack *>( &lk->getSObject() );
+        if( !child || !child->bubblesEventsUp() ) continue;
+        // A muted or solo-excluded child contributes nothing — the same rule
+        // the summing container applies to its audio (3.2.1).
+        if( !ssolo::isLaneAudible( root, child, anySolo ) ) continue;
+        sources.push_back( child->eventFeed() );
+    }
+    eventFeed_->setSources( std::move( sources ) );
+    return eventFeed_;
+}
+
+// Design 4.3: the instrument reads the track's FEED through a twEventSource
+// pointer, and the feed is 3.2.1's merge - this track's own event clips plus
+// the feeds of every child that bubbles up. Slot 0 gets it; every other slot
+// has it taken away, so a demoted slot cannot keep sounding notes.
+void STrack::syncInstrumentSlot()
+{
+    if( !cpPluginChain_ ) return;
+    SPluginSlot *instr = instrumentSlot();
+    const int n = cpPluginChain_->getSlotCount();
+    for( int i = 0; i < n; ++i ) {
+        SPluginSlot *slot = cpPluginChain_->getSlotAt( i );
+        if( !slot ) continue;
+        if( slot == instr ) {
+            slot->setEventSource( eventFeed() );
+            if( SProject *p = getProjectSafe() ) slot->setTempoMap( p->tempoMap() );
+        } else {
+            slot->setEventSource( nullptr );
+        }
+    }
+}
+
+void STrack::refreshInstrumentFeed()
+{
+    // Guarded, so a project with no instrument anywhere pays nothing for this
+    // on an ordinary clip edit: instrumentSlot() is two pointer hops.
+    if( !instrumentSlot() ) return;
+    // The processor already holds the merge OBJECT; this rebuilds its sources.
+    eventFeed();
 }
 
 QWidget *STrack::getDetailEditWidget( QWidget * )
@@ -90,9 +250,42 @@ bool STrack::hasDuration() const
     return true;
 }
 
+// The end of the last EVENT material reaching this track's feed. Own Event
+// children plus the same question of every child that bubbles up - the same
+// walk eventFeed() makes, minus the mute/solo resolution: the PROJECT END must
+// not shrink because a lane happens to be muted right now.
+offset_t STrack::eventEndTime() const
+{
+    offset_t end = 0;
+    for( SLink *lk : childLinks() ) {
+        if( !lk ) continue;
+        SObject &obj = lk->getSObject();
+        if( STrack *child = dynamic_cast<STrack *>( &obj ) ) {
+            if( !child->bubblesEventsUp() ) continue;
+            const offset_t childEnd = child->eventEndTime();
+            if( childEnd <= 0 ) continue;
+            const offset_t at = ( lk->hasStartTime() ? lk->getStartTime() : 0 ) + childEnd;
+            if( at > end ) end = at;
+            continue;
+        }
+        if( obj.contentKind() != SContentKind::Event ) continue;
+        if( !lk->hasStartTime() ) continue;
+        const offset_t at = lk->getStartTime()
+                          + ( obj.hasDuration() ? (offset_t)obj.getDuration() : 0 );
+        if( at > end ) end = at;
+    }
+    return end;
+}
+
 /**
  * We define a track's duration as the ending point of the last terminated event,
  * otherwise 1.
+ *
+ * PROPOSAL 37 P3b adds the instrument's TAIL (design 3.1): the project end of a
+ * track whose slot 0 is an instrument is `last event clip end + tailFrames()`,
+ * because the notes stop at the clip end and the sound does not. The tail is
+ * added to the EVENT extent only - an audio clip must not gain a synth release,
+ * and the max with the audio extent below keeps a longer audio clip winning.
  */
 length_t STrack::getDuration() const
 {
@@ -101,6 +294,15 @@ length_t STrack::getDuration() const
         int nUndefStart, nUndefDuration;
         getChildrenExtent( first, last, nUndefStart, nUndefDuration );
 	//	qWarning( "STrack::getDuration(): last = %d.\n", (int) last );
+        if( SPluginSlot *slot = instrumentSlot() ) {
+            const offset_t evEnd = eventEndTime();
+            // tailFrames() never materializes a plugin (see SPluginSlot): this
+            // runs from getChildrenExtent(), which a render can reach.
+            if( evEnd > 0 ) {
+                const offset_t withTail = evEnd + (offset_t)slot->tailFrames();
+                if( withTail > last ) last = withTail;
+            }
+        }
         if( last>0 ) {
             lastDuration_ = last;
         } else {
@@ -127,10 +329,17 @@ int STrack::seekTo( offset_t ofs )
 
 void STrack::bumpRenderChainEpoch()
 {
+    // Every model change that reaches this track passes through here on the
+    // MAIN thread, which is the one place the feed's source list can be rebuilt
+    // safely (see refreshInstrumentFeed).
+    refreshInstrumentFeed();
+    refreshClipGainCurves();
     if( cpTrackMix_ )
         cpTrackMix_->bumpContentEpoch();
     if( cpDspChain_ )
         cpDspChain_->bumpContentEpoch();   // forwards to its inserts
+    if( cpGainStage_ )
+        cpGainStage_->bumpContentEpoch();
     if( cpRewire_ )
         cpRewire_->bumpContentEpoch();
 }
@@ -139,10 +348,14 @@ void STrack::bumpRenderChainEpoch()
 // speaks the same timeline positions, so one range fits all of them.
 void STrack::bumpRenderChainEpochRange( offset_t start, offset_t end )
 {
+    refreshInstrumentFeed();
+    refreshClipGainCurves();
     if( cpTrackMix_ )
         cpTrackMix_->invalidatePagesInRange(start, end);
     if( cpDspChain_ )
         cpDspChain_->invalidatePagesInRange(start, end);   // forwards to its inserts
+    if( cpGainStage_ )
+        cpGainStage_->invalidatePagesInRange(start, end);
     if( cpRewire_ )
         cpRewire_->invalidatePagesInRange(start, end);
 }
@@ -189,6 +402,19 @@ void STrack::trackChildDurationChanged( length_t newLength )
     // clip's head kept sounding over its full pre-split span). Resolve every
     // link of ours that references the sender object and update each placement.
     SObject *obj = dynamic_cast<SObject *>( sender() );
+    if( obj && obj->contentKind() == SContentKind::Event ) {
+        twFrameRange affected;
+        for( SLink *lk : childLinks() ) {
+            if( !lk || &lk->getSObject() != obj ) continue;
+            if( !eventClips_->hasClip( lk ) ) continue;
+            affected.unite( eventClips_->updateClip( lk, lk->getStartTime(),
+                                                     newLength ) );
+        }
+        invalidateRenderPathRange( (offset_t) affected.start, EVENT_DIRTY_END );
+        lastDurationValid_ = false;
+        checkDurationChanged();
+        return;
+    }
     if( obj ) {
         twEditRange affected;
         for( SLink *lk : childLinks() ) {
@@ -217,6 +443,13 @@ void STrack::trackChildWasMoved( offset_t newTime )
         // Blocking read — a stale try-lock duration here would resize the clip
         // window wrongly via updateClip (same class as the insert-path fix).
         length_t duration = slink->getSObject().getDurationBlocking();
+        if( eventClips_->hasClip( slink ) ) {
+            twFrameRange r = eventClips_->updateClip( slink, newTime, duration );
+            invalidateRenderPathRange( (offset_t) r.start, EVENT_DIRTY_END );
+            lastDurationValid_ = false;
+            checkDurationChanged();
+            return;
+        }
         twEditRange affected;
         if( cpTrackMix_ ) {
             twEditRange r = cpTrackMix_->updateClip(slink, newTime, duration);
@@ -243,6 +476,30 @@ void STrack::trackChildWasAdded( SLink &child )
                               this, SLOT( trackChildWasMoved( offset_t ) ) );
             QObject::connect( &(child.getSObject()), SIGNAL( durationChanged( length_t ) ),
                               this, SLOT( trackChildDurationChanged( length_t ) ) );
+
+            // EVENT material goes into the event clip set and NOT into the bus
+            // mixers (design 3.2): a MIDI clip has no page to freeze, and
+            // inserting one as a clip entry would cost a dummy freeze per page
+            // per clip plus a twView warning per freeze (M5/F12).
+            if( child.getSObject().contentKind() == SContentKind::Event ) {
+                QObject::connect( &(child.getSObject()),
+                                  SIGNAL( eventsChanged( offset_t ) ),
+                                  this, SLOT( trackEventClipChanged( offset_t ) ) );
+                SLink *key = &child;
+                twFrameRange r = eventClips_->insertClip(
+                    key, child.getStartTime(),
+                    child.getSObject().getDurationBlocking(),
+                    [key]( offset_t clipPos ) {
+                        // Resolved ONCE per collect, at the window start - the
+                        // same coherence rule twView::resolve gives the audio
+                        // path (proposal 19 Inv-1).
+                        return key->getSObject().resolveEventClip( clipPos );
+                    } );
+                invalidateRenderPathRange( (offset_t) r.start, EVENT_DIRTY_END );
+                lastDurationValid_ = false;
+                checkDurationChanged();
+                return;
+            }
 
             // Insert the clip into all track mixers with a callback that gets the component
             offset_t startTime = child.getStartTime();
@@ -308,6 +565,13 @@ void STrack::trackChildWasRemoved( SLink &child )
 {
     if( child.hasStartTime() ) {
         if( child.getSObject().hasDuration() ) {
+            if( eventClips_->hasClip( &child ) ) {
+                twFrameRange r = eventClips_->removeClip( &child );
+                invalidateRenderPathRange( (offset_t) r.start, EVENT_DIRTY_END );
+                lastDurationValid_ = false;
+                checkDurationChanged();
+                return;
+            }
             // Remove the clip from all track mixers, keyed by the link itself.
             twEditRange affected;
             if( cpTrackMix_ ) {
@@ -361,15 +625,26 @@ void STrack::setChannels( int n )
         cpDspChain_ = std::make_shared<twPluginChain>( *env, (idx_t) n );
         cpDspChain_->init();
 
+        // THE FADER (proposal 37 P3a / D5), POST-FX and pre-rewire. It was a
+        // scalar inside twTrackMix until this phase, i.e. ahead of the inserts.
+        cpGainStage_ = std::make_shared<twGainStage>( *env );
+        cpGainStage_->init();
+
         cpRewire_ = std::make_shared<twRewire>( *env );
         cpRewire_->init();
         // ONE plug: a wide rewire is single-plug (see twRewire's class note).
         cpRewire_->setNPlugs( 1 );
 
-        // trackmix -> chain -> rewire
+        // trackmix -> chain -> gain -> rewire
         cpDspChain_->setInput( 0, cpTrackMix_->linkOutput( 0 ) );
         cpDspChain_->rebuildWiring();
-        cpRewire_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+        cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+        cpRewire_->setInput( 0, cpGainStage_->linkOutput( 0 ) );
+
+        // A track built after its volume was already set (the loader sets the
+        // attribute before setChannels() runs for a re-parented lane) must not
+        // silently start at unity.
+        cpGainStage_->setGainDb( getVolume() );
     }
 
     channels_ = n;
@@ -379,6 +654,7 @@ void STrack::setChannels( int n )
     // collapse.
     cpTrackMix_->setChannels( (idx_t) n );
     cpDspChain_->setChannels( (idx_t) n );
+    cpGainStage_->setChannels( (idx_t) n );
     cpRewire_->setChannels( (idx_t) n );
 
     // The slots have to re-derive the channel-mismatch mapping (proposal 08
@@ -445,6 +721,9 @@ STrack::STrack( SProject *project )
     // Instead, we manage the chain's lifetime manually via the destructor.
     cpPluginChain_ = new SPluginChain( project );
     connectPluginChain( cpPluginChain_ );
+
+    // The event twin of the bus mixers: ONE per track (events are not per bus).
+    eventClips_ = std::make_shared<twEventClipSet>();
 
     // Add a listener for added child objects.
     // We want to become noticed, if it is new.
@@ -535,6 +814,9 @@ void STrack::adoptPluginChain( SPluginChain *chain )
         QObject::connect( slot, SIGNAL( audioInvalidated() ),
                           this, SLOT( onPluginSlotAudioInvalidated() ),
                           Qt::UniqueConnection );
+        QObject::connect( slot, SIGNAL( audioInvalidatedRange( qint64, qint64 ) ),
+                          this, SLOT( onPluginSlotAudioInvalidatedRange( qint64, qint64 ) ),
+                          Qt::UniqueConnection );
         slot->setChannelCount( channels_ );
     }
     if( cpDspChain_ ) {
@@ -546,6 +828,16 @@ void STrack::adoptPluginChain( SPluginChain *chain )
         }
     }
     invalidateRenderPath();
+}
+
+QList<SLink *> STrack::ownedRefLinks() const
+{
+    // See the declaration: the chain reference is an owned link that is NOT a
+    // child link, so it has to be published here to be part of the reference
+    // graph at all.
+    QList<SLink *> out;
+    if( cpPluginChainRef_ ) out.append( cpPluginChainRef_ );
+    return out;
 }
 
 STrack::~STrack()
@@ -562,6 +854,7 @@ STrack::~STrack()
 
     cpDspChain_.reset();
     cpTrackMix_.reset();
+    cpGainStage_.reset();
     cpRewire_.reset();
 }
 
@@ -605,6 +898,27 @@ SStartTimeList::~SStartTimeList()
 {
 }
 
+// An event clip of ours changed its notes, its window, or was re-mapped by a
+// tempo edit. The clip set caches nothing about the content - it resolves per
+// collect - so all this owes is the epoch bump: touchClip reports the extent,
+// and the walk to the root stales it from there on (F13: the app-side walk is
+// the ONLY path that carries a change from a clip up to the root).
+void STrack::trackEventClipChanged( offset_t fromClipPos )
+{
+    SObject *obj = dynamic_cast<SObject *>( sender() );
+    if( !obj ) return;
+    twFrameRange affected;
+    for( SLink *lk : childLinks() ) {
+        if( !lk || &lk->getSObject() != obj ) continue;
+        if( !eventClips_->hasClip( lk ) ) continue;
+        affected.unite( eventClips_->touchClip( lk ) );
+        affected.unite( lk->getStartTime() + fromClipPos,
+                        lk->getStartTime() + fromClipPos + 1 );
+    }
+    if( affected.empty() ) return;
+    invalidateRenderPathRange( (offset_t) affected.start, EVENT_DIRTY_END );
+}
+
 int STrack::readPreChildrenAttributes( QDomElement &element )
 {
     SObject::readPreChildrenAttributes( element );
@@ -634,6 +948,18 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
         }
     }
 
+    
+    // Absent = auto, which is what every project written before proposal 37
+    // means and what a track without a serialized routing should do.
+    midiRouting_ = midiRoutingFromString(
+        element.attribute( "midiRouting", "auto" ) );
+
+    // MIDI output (P7b). Absent = no output, which is what every project
+    // written before proposal 37 means.
+    setMidiOutput( element.attribute( "midiOutPort", "" ),
+                   element.attribute( "midiOutChannel", "-1" ).toInt(),
+                   element.attribute( "midiOutOffsetMs", "0" ).toInt() );
+    
     return 0;
 }
 
@@ -713,6 +1039,9 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
     QObject::connect( &slot, SIGNAL( audioInvalidated() ),
                       this, SLOT( onPluginSlotAudioInvalidated() ),
                       Qt::UniqueConnection );
+    QObject::connect( &slot, SIGNAL( audioInvalidatedRange( qint64, qint64 ) ),
+                      this, SLOT( onPluginSlotAudioInvalidatedRange( qint64, qint64 ) ),
+                      Qt::UniqueConnection );
 
     // Sync the model change to all DSP plugin chains
     // Pre-allocate inserts for all buses to ensure they're fully initialized
@@ -732,6 +1061,10 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
         if( cpDspChain_ ) {
             cpDspChain_->addPlugin( insert );
         }
+        // Slot 0 may just have become (or stopped being) the instrument.
+        syncInstrumentSlot();
+        // The project end moves with the instrument's tail (design 3.1).
+        lastDurationValid_ = false;
         invalidateRenderPath();
     }
 }
@@ -751,11 +1084,19 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
     if( cpDspChain_ ) {
         cpDspChain_->removePlugin( slot.peekInsert() );
     }
+    // Take the feed away from the slot that is leaving, and hand it to whatever
+    // slot 0 is now. A departing instrument must not keep a live source.
+    slot.setEventSource( nullptr );
+    syncInstrumentSlot();
+    lastDurationValid_ = false;
     invalidateRenderPath();
 }
 
 void STrack::onPluginSlotAudioInvalidated()
 {
+    // A parameter edit can move tailFrames() (the 303's Decay knob does), and
+    // with it the project end of an instrument track.
+    lastDurationValid_ = false;
     // Exactly what the insert/remove/reorder handlers do: bumpRenderChainEpoch()
     // on us (the twTrackMix + twPluginChain + the rewire) and on every
     // container above us, via the root's walk.
@@ -771,6 +1112,7 @@ void STrack::onPluginSlotsReordered( int fromIndex, int toIndex )
     if( cpDspChain_ ) {
         cpDspChain_->reorderPlugin( fromIndex, toIndex );
     }
+    syncInstrumentSlot();
     invalidateRenderPath();
 }
 
@@ -836,20 +1178,86 @@ void STrack::applyChildTrackAudibility()
     // chain above us has to be staled the same way, or the summed pages we
     // already froze keep serving the pre-edit mix (AC6 / the mute precedent).
     if( !affected.empty() ) {
-        invalidateRenderPathRange( (offset_t) affected.start,
-                                   (offset_t) affected.end );
+        // A muted lane stops contributing EVENTS as well as audio (3.2.1), and
+        // an instrument is a class-1 consumer - a change at `a` can be heard at
+        // any later position - so the range is open-ended when we hold one.
+        const offset_t end = instrumentSlot() ? EVENT_DIRTY_END
+                                              : (offset_t) affected.end;
+        invalidateRenderPathRange( (offset_t) affected.start, end );
     }
+}
+
+// --- automation (proposal 37 P5, design D5) ---------------------------------
+
+void STrack::pushTrackAutomation()
+{
+    if( !cpGainStage_ ) return;
+
+    SAutomationLane *vol = automationLane( QStringLiteral( "self:Volume" ) );
+    // TRIM (the default, design §11 decision 3) keeps the fader meaningful: the
+    // curve is an OFFSET in dB. Every other consuming mode is absolute, i.e.
+    // the lane IS the value and the stored fader is not summed in.
+    const bool absolute = vol && vol->mode() != SAutomationMode::Trim;
+    cpGainStage_->setVolumeCurve( vol ? vol->snapshot() : nullptr, absolute );
+
+    SAutomationLane *mute = automationLane( QStringLiteral( "self:Muted" ) );
+    cpGainStage_->setMuteCurve( mute ? mute->snapshot() : nullptr );
+}
+
+void STrack::applyAutomationToEngine()
+{
+    pushTrackAutomation();
+    // Also the CLIPS': a load reads a cut's inline <automation> before the
+    // track's clip entries exist, so the pull has to happen from here too.
+    refreshClipGainCurves();
+}
+
+void STrack::onAutomationChanged( SAutomationLane &lane, offset_t start, offset_t end )
+{
+    pushTrackAutomation();
+    // twGainStage is class INFINITY and pure — the output of a frame depends on
+    // that frame's input, the scalar and the frame's position, never on how the
+    // component got there. So the invalidation is EXACT: only the pages the
+    // curve actually moved go stale (design §4.5).
+    (void) lane;
+    if( end > start ) invalidateRenderPathRange( start, end );
+}
+
+// The curve lives on the clip's WINDOW object; the entry that consumes it lives
+// in OUR twTrackMix. A take stack answers for its ACTIVE take, which is the one
+// the mix resolves to.
+void STrack::refreshClipGainCurves()
+{
+    if( !cpTrackMix_ ) return;
+    for( SLink *lk : childLinks() ) {
+        if( !lk || !lk->hasStartTime() ) continue;
+        SObject *obj = &lk->getSObject();
+        if( obj->isPathContainer() ) continue;          // a nested lane, not a clip
+        if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
+        cpTrackMix_->setClipGainCurve(
+            lk, obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );
+    }
+}
+
+void STrack::onPluginSlotAudioInvalidatedRange( qint64 start, qint64 end )
+{
+    // CLASS 1, so the range is open-ended by construction: the plugin's DSP
+    // state at any position depends on everything before it (design F9).
+    if( end <= start ) { invalidateRenderPath(); return; }
+    invalidateRenderPathRange( (offset_t) start, (offset_t) end );
 }
 
 void STrack::onTrackVolumeChanged( double gainDb )
 {
-    // Forward volume change to all track mixers
-    {
-        if( cpTrackMix_ ) {
-            cpTrackMix_->setTrackGain(gainDb);
-        }
+    // THE FADER IS POST-FX (proposal 37 D5, executed by P3a). It used to be
+    // twTrackMix::setTrackGain(), which applied the scalar BEFORE the inserts;
+    // twGainStage sits between the last insert and the rewire, so an insert now
+    // sees the unfadered signal and the track's root -- the metering tap and the
+    // mixer's input alike -- sees the faded one.
+    if( cpGainStage_ ) {
+        cpGainStage_->setGainDb( gainDb );
     }
-    // Gain is baked into frozen pages downstream of the track mixer
+    // Gain is baked into frozen pages from the gain stage downstream.
     invalidateRenderPath();
 }
 
@@ -858,4 +1266,7 @@ void STrack::onTrackVolumeChanged( double gainDb )
 // element name. Relies on the app being an OBJECT library (no TU elision).
 static const bool s_registered_strack =
     ( SProjectLoader::registerSObjectClass( "STrack",
-          STrack::instantiateFromDomElement ), true );
+          STrack::instantiateFromDomElement,
+          // A CONTAINER of clips and nested lanes: one unloadable clip costs
+          // its own link, never the track (proposal 37 D8a).
+          SElementKind::Container ), true );

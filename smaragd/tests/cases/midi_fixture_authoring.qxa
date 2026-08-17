@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  NOT A TEST. This script AUTHORS tests/midi_multitrack.mid, the committed SMF
+  fixture midi_clip_roundtrip.qxa imports. It lives here (rather than in a
+  throwaway program) so the fixture and the writer that has to reproduce it
+  byte for byte can never drift apart, exactly as events_test's
+  `author-fixtures` does for the engine corpus.
+
+  Run it by hand, copy build/test-output/_author_midi_fixture/midi_multitrack.mid
+  to smaragd/tests/, then delete nothing: the underscore keeps it out of the
+  ctest glob's meaningful names but it IS registered, so it must stay green.
+-->
+<SActionScript version="1" name="_author_midi_fixture">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Track 0: a conductor track. Tempo (meta 0x51), time signature (0x58)
+         and a track name (0x03) - metadata only, no notes. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Conductor"/>
+    <add-event clip="0,0" kind="tempo" tick="0" channel="-1" p="81"
+               v="500000" blob="07a120"/>
+    <add-event clip="0,0" kind="timesig" tick="0" channel="-1" p="88"
+               v="4" v2="4" blob="04021808"/>
+    <add-event clip="0,0" kind="text" tick="0" channel="-1" p="3"
+               blob="436f6e647563746f72"/>
+
+    <!-- Track 1: four quarter notes on channel 0, plus a CC 7. -->
+    <insert-midi-clip trackPath="1" timePos="0" duration="7680" name="Lead"/>
+    <add-event clip="1,0" kind="cc" tick="0" channel="0" p="7" v="100"/>
+    <add-note clip="1,0" tick="0"    dur="480" key="60" velocity="100" channel="0"/>
+    <add-note clip="1,0" tick="960"  dur="480" key="64" velocity="90"  channel="0"/>
+    <add-note clip="1,0" tick="1920" dur="480" key="67" velocity="80"  channel="0"/>
+    <add-note clip="1,0" tick="2880" dur="480" key="72" velocity="70"  channel="0"/>
+
+    <!-- Track 2: two long notes on channel 1, overlapping the lead. -->
+    <insert-midi-clip trackPath="2" timePos="0" duration="7680" name="Pad"/>
+    <add-note clip="2,0" tick="0"    dur="1920" key="48" velocity="64" channel="1"/>
+    <add-note clip="2,0" tick="1920" dur="1920" key="53" velocity="64" channel="1"/>
+
+    <export-midi-file filePath="../../build/author_midi_fixture.mid" type="1"/>
+    <assert-midi-file filename="../../build/author_midi_fixture.mid" trackCount="3"
+                      noteCount="6" ppq="960" format="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

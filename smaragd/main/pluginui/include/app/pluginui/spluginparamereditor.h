@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 #include "tw/plugins/twplugin.h"
+#include "tw/core/twtypes.h"
 
 class QSlider;
 class QLabel;
@@ -62,6 +63,13 @@ public:
 
 protected slots:
     void onParamSliderChanged( int sliderIndex );
+    // Proposal 37 P6: while a Read-family `param:` lane exists on this slot,
+    // the slider DISPLAYS the curve's value at the position being heard.
+    // Driven off SApplication::meterTick - the one main-thread pump that keeps
+    // ticking at a static position and for a tail after the transport stops.
+    void onMeterTick( offset_t pos, qint64 nowMs, bool live );
+    // A write pass ends when the control is released.
+    void onSliderReleased();
     // The model moved: re-read the sliders / rebuild them.
     void onParamsChanged();
     void onPluginReloaded();
@@ -86,6 +94,8 @@ private:
     // True while onParamsChanged() writes the sliders, so the resulting
     // valueChanged never turns an external change back into a new action.
     bool         applyingExternal_ = false;
+    // Proposal 37 P6: the slot's automation lane for `paramId`, or null.
+    class SAutomationLane *laneFor( std::uint32_t paramId ) const;
     std::vector<ParamWidget> params_;
 };
 

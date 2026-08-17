@@ -2,8 +2,8 @@
 
 Purpose: the headless test harness — SActionScript (.qxa parsing),
 SActionRunner (submit actions, per-action rejection accounting,
-assertions), assert-audio-energy/peak/frequency, screenshot action, and
-the roundtrip test main.
+assertions), assert-audio-energy/peak/frequency, assert-file-identical,
+assert-log, screenshot action, and the roundtrip test main.
 
 Public headers: app/testkit/*.h. Verb reference: docs/ACTIONS.md.
 
@@ -87,6 +87,20 @@ Invariants:
    FAIL as well as pass, in each of its three shapes — size, content, missing
    reference — which is what file_identical_gate.qxa does; a gate never seen to
    fail is not known to be a gate.
+9b. INSTRUMENTS ARE SILENT UNDER SMARAGD_REVAL_WORKERS=0, BY DESIGN (proposal
+   37 P3b). `0` disables the revalidator and every consumer falls back to the
+   LEGACY PULL, which is positionless — and an instrument cannot place a single
+   event without a position, so `twPluginSlotProcessor::render(positional=false)`
+   answers silence and logs once (`tw303a/plugins/CONTRACT.md` inv. 42). Two
+   consequences for a case author:
+     - an instrument case must never be run at worker count 0, and the race
+       sweeps for `instrument_*` are over {1,4,8,16};
+     - a verb that drives the legacy pull (assert-meter) reads SILENCE on an
+       instrument track and is therefore not a way to measure one; use a render
+       plus assert-audio-energy / assert-audio-frequency.
+   `assert-instrument-slot` itself asks the MODEL and needs no render at all, so
+   it works at any worker count including 0.
+
 9. report-page-memory REPORTS; it does not gate. Resident page count is a
    function of the readahead, the worker count and scheduler timing, so a bound
    tight enough to catch a regression would flake. render_duration_and_pages.qxa
@@ -99,13 +113,48 @@ Invariants:
   about (`requestPage` — legal off the RT thread, deduped, the same call the
   offline render makes) and runs the production twLevelProbe. That keeps it
   deterministic under SMARAGD_REVAL_WORKERS=0 and independent of
-  toggle-playback, which segfaults in scripts. CAVEAT: it drives the LEGACY
-  PULL path, where twStreamingLatch::copyData gates on the twPluginChain's
-  content epoch — which STrack::invalidateRenderPath() does not reach. So a
-  track's gain must be set BEFORE the position is first probed; changing it
-  afterwards is not observed here (playback and render both see it, because
-  they go through the scheduler). meter_postfader.qxa therefore uses two tracks
-  at different gains rather than changing one track's gain twice.
+  toggle-playback, which segfaults in scripts. It drives the LEGACY PULL path,
+  which is what the following used to say, and no longer does:
+
+      CAVEAT (RETIRED by proposal 37 P3a): twStreamingLatch::copyData gates on
+      the twPluginChain's content epoch, which STrack::invalidateRenderPath()
+      does not reach, so a track's gain had to be set BEFORE the position was
+      first probed — meter_postfader.qxa uses two tracks at two gains for
+      exactly that reason.
+
+  The fader is now twGainStage, sitting between the chain and the rewire, so the
+  epoch the rewire's cached input page is gated on IS the one set-track-volume
+  bumps: a gain change after a position was frozen is observed here. Gate:
+  meter_gain_after_probe.qxa, which probes, sets the gain, and probes the same
+  position again. (Measured honestly: that case also passes on the pre-move
+  binary at the 36-B4 integration tip, so the caveat was already inert there —
+  P3a is what makes it structurally impossible rather than accidentally absent.)
+  meter_postfader.qxa keeps its two-track shape; it is a good case regardless.
+
+  assert-file-identical is the byte-`cmp` determinism gate, inside a case.
+  Until it existed that compare could only be run by hand from a shell, so no
+  committed case carried it and every "the goldens did not move" claim in a PR
+  body was a human's word. Absolute paths are ALLOWED (unlike `render`'s output
+  name) precisely so a case can compare against a file another process wrote; a
+  bare name still resolves in the test output directory. A frame range parses
+  both files as RIFF/WAVE and compares only that slice of the `data` chunk —
+  the files are 16-bit PCM, so this is a byte compare, never a float
+  reinterpretation.
+
+  assert-log is the ONLY way to gate a recovery. A recovery is exactly the case
+  where the audio cannot tell you anything: a repaired project renders like a
+  project that never needed repairing, so the WARNING is the evidence. There is
+  no log file under `--test-case` (main.cpp skips the file sink deliberately —
+  the suite would otherwise append to the one smaragd.log in the user's config
+  dir and race over it under `ctest -j`), so the verb reads the in-process TwLog
+  ring, which every channel funnels into. Two rules make it dependable: a
+  `--test-case` run RAISES the ring capacity (a long render must not be able to
+  evict the line under test before the assertion reads it — and the capacity is
+  set exactly once, because setCapacity discards what is buffered), and the
+  window is the records logged since the PREVIOUS action started
+  (SActionRunner marks each boundary; an assert-log does not move the window, so
+  two in a row examine the same action). Counting the whole run instead would
+  make "twice" depend on everything that came before.
 
   assert-meter's LANE assertions (proposal 36 B8) are only meaningful in PAIRS.
   `expectLanes` pins the WIDTH and `laneA`/`laneB`/`minLaneRmsDelta` pin that
@@ -145,6 +194,154 @@ Invariants:
       default: an underrun leaves a short zero gap that leaks energy into other
       bins, and the argmax is still the right block.
 
+MIDI-out assertions (proposal 37 P7b):
+  A --test-case run also selects the CAPTURE MIDI ports (main.cpp sets
+  SMARAGD_MIDI_BACKEND=capture unless it is already set), for the audio
+  backend's three reasons plus one: the capture port records
+  {hostTimeNs, port, bytes} and NOTHING ELSE — specifically not the due time it
+  was asked for, because the difference between the two IS the measurement.
+  It reports supportsTimestamps() == false on purpose, so the recorded instant
+  is when the message reached the wire rather than when a driver took it.
+   1. THE MEASUREMENT IS INDEPENDENT OF THE PUMP. assert-midi-out maps a
+      message's host time onto a project frame through the AUDIO capture
+      backend's block log (CaptureBackend::frameAtHostTime) — a log written by
+      a different thread that knows nothing of the pump. Asking the pump where
+      it thought it was would prove nothing.
+   2. `at` is SIGNED project frames since playback started, and it already has
+      the device output latency subtracted, so it reads "the project frame
+      whose audio was being HEARD when this left". An event with a positive
+      per-track offset legitimately lands at a NEGATIVE `at`.
+   3. SMARAGD_CAPTURE_SPEED must be 1. The audio log stays empirically correct
+      at other speeds, but a project frame then means something different in
+      wall-clock terms while the MIDI due times do not.
+   4. Tolerance 4096 frames (~85 ms at 48 kHz) is the budget the design sets.
+      Measured on this box the steady-state error is under 600 frames and the
+      first event of a run under 400; a case that needs more than 4096 has
+      found a bug, not a slow machine.
+   5. An event whose offset-shifted due time falls BEFORE the run start is
+      clamped — you cannot send a message before the transport started — so a
+      case asserting an offset must place its notes far enough in.
+   6. assert-midi-out REJECTS when the MIDI backend is not `capture`, rather
+      than reporting "0 messages, all good": a silently passing assertion would
+      make every MIDI-out case vacuous the moment someone ran the suite against
+      a real device. `midi_out_backend_reject` is that gate.
+   7. set-option writes the developer's REAL smaragd.ini. Only one case in the
+      suite may own any given key, and it must set it back:
+      midi_out_chase_and_stop owns `midi/chaseNoteOns`, midi_options_page owns
+      `midi/outOffsetMs`. Both are RUN_SERIAL, because the pump reads those
+      values at every transport start and a concurrent playback case would
+      inherit them.
+
+Event assertions (proposal 37 P1):
+  assert-midi-events has TWO scopes and they are not the same object.
+  scope="clip" reads the cut's own frame-domain snapshot - what the edit verbs
+  move. scope="feed" runs STrack::eventFeed()->collect(), the merge of the
+  track's own clip set with every child track that bubbles events up, which is
+  the ONLY place mute, solo and midiRouting are observable and is what an
+  instrument will read in P3b.
+  A note-off is not in any table - notes are stored WITH their length - so a
+  kind="noteoff*" assertion runs a real collect, over the clip's window PLUS
+  ONE FRAME: windows are half-open and a release SYNTHESISED at the clip end
+  lands on the boundary, i.e. in the window that STARTS there (events/CONTRACT
+  inv. 8-9). kind="noteoff-synth" is what gates the non-destructive split.
+  assert-clip-window is the geometry assertion the tempo work needed: a clip's
+  placement and window in timeline frames, read through SClipWindow so it works
+  for any window type. Before it, a script could only see a clip's position by
+  rendering it, and a render cannot separate "the clip moved" from "the clip
+  moved and its content moved back".
+  assert-midi-file is counts and shape; byte identity of an SMF is
+  assert-file-identical's job and is only a legitimate gate for a file twSmf
+  AUTHORED (it has one canonical spelling, so a foreign file round-trips to an
+  equal event TABLE, not to equal bytes).
+  A .mid written by export-midi-file goes where the case says, verbatim: the
+  path is NOT resolved against the script directory, because nothing may write
+  into the shared tests/cases working directory (that is one of the properties
+  that make the suite safe under ctest -j). Cases name ../../build/<case>.mid.
+
+Event EDITOR gestures (proposal 37 P4):
+  virtual-key, drag-note, assert-event-editor and assert-track-head all go
+  through the SHELL (SMainWindow), because testkit may include neither
+  app/eventui nor app/timeline (inv. 5) - the same route drag-clip-edge and
+  assert-meter take to reach the arranger and the track head.
+  They drive the REAL widgets. virtual-key presses the virtual keyboard, which
+  submits `add-note` at the LOCATOR; drag-note synthesises press/move/release
+  on SPianoRollView, which submits `set-notes` on release. Neither verb is
+  undoable itself: the NESTED action is what lands on the stack, so
+  `<undo count="1"/>` after the verb reverses the gesture - exactly the shape
+  drag-clip-edge and plugin-editor-set-param already have.
+  A drag-note drop is PIXEL-QUANTISED and then grid-snapped. At the arranger's
+  default 30 px/s one pixel is 64 ticks and the 1/16 grid is 240, so a move of
+  a BAR lands on the slot it aimed at with margin either side while a move of
+  one division would not. Assert a grid position or a range, never an
+  arbitrary tick.
+  A note dragged ONTO the clip's window end disappears from the clip's
+  snapshot - windows are half-open. That is the window's rule, not the
+  gesture's; give the case a clip long enough that the destination is inside.
+  assert-event-editor's `contains` matches a CONTIGUOUS substring of
+  describe(), so the field ORDER of `kind=…|notes=…|grid=…|linked=…|empty=…`
+  is part of the contract. assert-track-head reads describeHead(), whose
+  fitW/fitH fields are the "hiding beats clipping" density rule made
+  assertable. PNG grabs are coverage of the paint paths, never oracles.
+
+Automation UI gestures (proposal 37 P6):
+
+  1. `drag-automation-point` extends inv. 5, it does not sidestep it. It goes
+     out through `SMainWindow::dragAutomationPoint` because testkit may not
+     include app/timeline, works out where the addressed breakpoint IS on
+     screen from the lane's own value scale, and sends REAL press/move/release
+     events into the arranger canvas. What runs is
+     `SAutomationLaneUi::press/move/release`, not a re-spelling of them.
+
+  2. It is NOT undoable itself. The gesture submits its own verb —
+     `add-automation-point` on a click over empty lane space, one
+     `move-automation-point` on a drag, `remove-automation-point` on a
+     primary-click, `set-automation-points` on an Alt-drag — and THAT is what
+     `<undo count="1"/>` reverses. A click that also submitted the move of the
+     drag it arms would be two steps; the release only submits a move when the
+     point actually moved, which is what keeps a click at exactly one.
+
+  3. The lane has to be SHOWN first (`set-lane-view showAutomation="1"`), and a
+     `cut:Gain` target additionally needs `clipEnvelopes="1"`. Both are VIEW
+     state and neither creates anything in the model — a shown-but-empty lane
+     draws its default value and the first gesture is what brings the model
+     lane into existence. A `cut:` gesture with envelopes disarmed is REJECTED
+     rather than silently claimed, because there the CLIP owns the press.
+
+  4. The drop is pixel-quantised and then grid-snapped, exactly as for
+     `drag-clip-edge` and `drag-note`. TIME is nevertheless exact when the case
+     aims at a grid multiple (24000 frames at the default 120 BPM); VALUE is
+     quantised to one pixel of the lane, so a value assertion needs a tolerance
+     and the case has to say what a pixel is worth on that lane. Do not fix a
+     value assertion by widening it past the point where a wrong SCALE would
+     still pass.
+
+  5. `automation-write-tick` is the `slip-clip` shape: it feeds
+     `SAutomationRecorder` and pushes no undo step, exactly as a fader moving
+     mid-pass does. The pass commits ONE `set-automation-points` when it ends,
+     and that single action is the undo step — which is the property
+     `automation_write_pass.qxa` exists to pin. It REJECTS on a lane that is
+     absent or not in touch/latch/write, so a case cannot pass by ticking into
+     the void, and `release="1"` on no open pass is likewise a reject.
+
+  6. Give `automation-write-tick` an explicit `time`. It defaults to the live
+     locator, which is what a real fader does, but a case that let it default
+     would be measuring this machine's scheduling rather than the recorder:
+     `wait-playhead` is what makes the tick land during genuine playback, and
+     `time` is what makes the resulting POINT exact.
+
+  7. `assert-lane-alignment` now covers automation sub-lanes for free (they are
+     sub-lanes by the same rule take lanes are) plus two things only an
+     automation row can get wrong: hanging off a lane group that is not its
+     track's, and naming an owner the model cannot resolve. Its `grabPng`, and
+     `assert-track-head`'s, are COVERAGE of the paint paths and never oracles —
+     the head grab is the only thing that paints the "A" button's per-mode
+     colour, and the canvas grab the only thing that paints a lane at all.
+
+  8. NOT reachable from a script: the Delete key over a marquee selection.
+     Delete is a QAction SHORTCUT (`actRemoveSample_`), not an event a case can
+     synthesise, so the marquee gesture is gated and the deletion it enables is
+     not. Recorded rather than papered over.
+
 How to test:
   cd smaragd/tests/cases
   ../../build/bin/smaragd.exe --test-case <case>.qxa --test-output-dir <dir>
@@ -158,3 +355,16 @@ cases now drive real playback through the capture backend
 observed over the repeat sweep. What still has NO bespoke gate is the capture
 backend's own pacing and the latency of the playback path — a wall-clock
 assertion tight enough to separate those behaviours would be flaky.
+
+## `assert-automation-value` (proposal 37 P5)
+
+It asks the SNAPSHOT the engine is handed (`SAutomationLane::valueAt`), never a
+re-implementation of the interpolation, so a case can pin the midpoint of a ramp
+as a closed form without also rendering it. That is deliberately a SECOND,
+independent view of one curve: the rendered RMS bands say the curve reached the
+audio, this says the curve is the one the script asked for, and a bug that moved
+both would have to move them consistently.
+
+A MISSING lane is REJECTED rather than reported as the target's default value —
+a typo in a `target` must never read as a passing assertion. Pair it with
+`expectReject="true"` to assert that a lane is ABSENT.

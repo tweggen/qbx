@@ -4,6 +4,7 @@
 
 #include <QAbstractSpinBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -33,6 +34,10 @@
 #include "app/objects/cut/ssetformantpreserveaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
 #include "app/objects/cut/stakestack.h"
+
+#include "app/objects/midi/smidicut.h"
+#include "app/objects/midi/smidiclipactions.h"
+#include "app/objects/midi/smidisequence.h"
 
 #include "tw/core/twfraction.h"
 
@@ -93,7 +98,7 @@ void SClipPropertiesPanel::buildUi()
     formLayout->setSpacing( 6 );
 
     // --- Source (read-only) ------------------------------------------------
-    QGroupBox *sourceGroup = new QGroupBox( tr( "Source" ), form );
+    QGroupBox *sourceGroup = sourceGroup_ = new QGroupBox( tr( "Source" ), form );
     QFormLayout *sourceForm = new QFormLayout( sourceGroup );
 
     sourceLabel_ = new QLabel( sourceGroup );
@@ -117,7 +122,7 @@ void SClipPropertiesPanel::buildUi()
     formLayout->addWidget( sourceGroup );
 
     // --- Clip --------------------------------------------------------------
-    QGroupBox *clipGroup = new QGroupBox( tr( "Clip" ), form );
+    QGroupBox *clipGroup = clipGroup_ = new QGroupBox( tr( "Clip" ), form );
     QFormLayout *clipForm = new QFormLayout( clipGroup );
 
     nameEdit_ = new QLineEdit( clipGroup );
@@ -139,7 +144,7 @@ void SClipPropertiesPanel::buildUi()
     formLayout->addWidget( clipGroup );
 
     // --- Source window -----------------------------------------------------
-    QGroupBox *windowGroup = new QGroupBox( tr( "Source window" ), form );
+    QGroupBox *windowGroup = windowGroup_ = new QGroupBox( tr( "Source window" ), form );
     QFormLayout *windowForm = new QFormLayout( windowGroup );
 
     slipSpin_ = new QSpinBox( windowGroup );
@@ -173,7 +178,7 @@ void SClipPropertiesPanel::buildUi()
     formLayout->addWidget( windowGroup );
 
     // --- Playback ----------------------------------------------------------
-    QGroupBox *playGroup = new QGroupBox( tr( "Playback" ), form );
+    QGroupBox *playGroup = playGroup_ = new QGroupBox( tr( "Playback" ), form );
     QFormLayout *playForm = new QFormLayout( playGroup );
 
     QWidget *loopRow = new QWidget( playGroup );
@@ -195,6 +200,57 @@ void SClipPropertiesPanel::buildUi()
     playForm->addRow( QString(), formantCheck_ );
 
     formLayout->addWidget( playGroup );
+
+    // --- MIDI clip (proposal 37 P1) ----------------------------------------
+    // Shown INSTEAD of the four audio groups when the selection is event
+    // material. The window itself (length, slip, loop, rate) is edited through
+    // the same generalized resize-clip the audio page uses, so there is no
+    // second window verb; what lives here is what only an event clip has.
+    midiGroup_ = new QGroupBox( tr( "MIDI clip" ), form );
+    QFormLayout *midiForm = new QFormLayout( midiGroup_ );
+
+    midiNameEdit_ = new QLineEdit( midiGroup_ );
+    midiForm->addRow( tr( "Name:" ), midiNameEdit_ );
+
+    midiStartSpin_ = new QSpinBox( midiGroup_ );
+    midiStartSpin_->setRange( 0, kMaxFrames );
+    midiStartSpin_->setGroupSeparatorShown( false );
+    midiStartSpin_->setToolTip(
+        tr( "Timeline position, in frames at the project rate. A beats-timebase "
+            "clip stores the equivalent musical position and follows the tempo." ) );
+    midiForm->addRow( tr( "Start (frames):" ), midiStartSpin_ );
+
+    midiDurationSpin_ = new QSpinBox( midiGroup_ );
+    midiDurationSpin_->setRange( 1, kMaxFrames );
+    midiDurationSpin_->setGroupSeparatorShown( false );
+    midiForm->addRow( tr( "Duration (frames):" ), midiDurationSpin_ );
+
+    transposeSpin_ = new QSpinBox( midiGroup_ );
+    transposeSpin_->setRange( -SMidiCut::TRANSPOSE_LIMIT,
+                              SMidiCut::TRANSPOSE_LIMIT );
+    transposeSpin_->setToolTip(
+        tr( "Semitones. A per-CLIP modifier: the shared sequence is untouched" ) );
+    midiForm->addRow( tr( "Transpose (st):" ), transposeSpin_ );
+
+    velScaleSpin_ = new QDoubleSpinBox( midiGroup_ );
+    velScaleSpin_->setRange( 0.0, 8.0 );
+    velScaleSpin_->setDecimals( 3 );
+    velScaleSpin_->setSingleStep( 0.05 );
+    midiForm->addRow( tr( "Velocity scale:" ), velScaleSpin_ );
+
+    midiChannelSpin_ = new QSpinBox( midiGroup_ );
+    midiChannelSpin_->setRange( -1, 15 );
+    midiChannelSpin_->setSpecialValueText( tr( "keep" ) );
+    midiChannelSpin_->setToolTip(
+        tr( "Force every event onto one channel; -1 keeps the recorded one" ) );
+    midiForm->addRow( tr( "Channel:" ), midiChannelSpin_ );
+
+    timebaseCombo_ = new QComboBox( midiGroup_ );
+    timebaseCombo_->addItem( tr( "Beats (follows tempo)" ), "beats" );
+    timebaseCombo_->addItem( tr( "Time (pinned to frames)" ), "time" );
+    midiForm->addRow( tr( "Timebase:" ), timebaseCombo_ );
+
+    formLayout->addWidget( midiGroup_ );
     formLayout->addStretch( 1 );
 
     scroll_->setWidget( form );
@@ -238,6 +294,23 @@ void SClipPropertiesPanel::buildUi()
     // interaction, so a refresh can never re-trigger a commit.
     connect( formantCheck_, &QCheckBox::clicked,
              this, &SClipPropertiesPanel::onFormantClicked );
+
+    connect( midiNameEdit_, &QLineEdit::textEdited,
+             this, [this]{ markEdited( midiNameEdit_ ); } );
+    connect( midiNameEdit_, &QLineEdit::editingFinished,
+             this, &SClipPropertiesPanel::commitMidiName );
+    wireSpin( midiStartSpin_,    &SClipPropertiesPanel::commitMidiStartTime );
+    wireSpin( midiDurationSpin_, &SClipPropertiesPanel::commitMidiDuration );
+    wireSpin( transposeSpin_,    &SClipPropertiesPanel::commitMidiCut );
+    wireSpin( midiChannelSpin_,  &SClipPropertiesPanel::commitMidiCut );
+    connect( velScaleSpin_, &QDoubleSpinBox::textChanged,
+             this, [this]{ markEdited( velScaleSpin_ ); } );
+    connect( velScaleSpin_, &QDoubleSpinBox::editingFinished,
+             this, &SClipPropertiesPanel::commitMidiCut );
+    // activated(), not currentIndexChanged(): only a real user choice commits,
+    // so a refresh can never turn into an edit (the panel's standing rule).
+    connect( timebaseCombo_, &QComboBox::activated,
+             this, &SClipPropertiesPanel::commitTimebase );
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +344,10 @@ QList<SClipPropertiesPanel::ClipRef> SClipPropertiesPanel::collectClips() const
             // per-clip action uses when take == -1).
             if( STakeStack *stack =
                     dynamic_cast<STakeStack*>( &link->getSObject() ) ) {
-                ref.cut       = stack->activeCut();
+                // A stack is a column of WINDOWS now (proposal 37 D8b); this
+                // panel edits audio window properties, so it asks for the
+                // audio one and simply skips a take that is not.
+                ref.cut       = dynamic_cast<SCut*>( stack->activeTakeObject() );
                 ref.takeIndex = stack->activeTakeIndex();
                 ref.nTakes    = stack->nTakes();
             }
@@ -369,6 +445,14 @@ void SClipPropertiesPanel::refresh()
     const QList<ClipRef> clips = collectClips();
 
     if( clips.isEmpty() ) {
+        // Event material gets its own page rather than an audio form full of
+        // blanks (see MidiClipRef).
+        const QList<MidiClipRef> midiClips = collectMidiClips();
+        if( !midiClips.isEmpty() ) {
+            refreshMidi( midiClips );
+            updating_ = false;
+            return;
+        }
         placeholder_->setVisible( true );
         scroll_->setVisible( false );
         edited_.clear();
@@ -377,6 +461,11 @@ void SClipPropertiesPanel::refresh()
     }
     placeholder_->setVisible( false );
     scroll_->setVisible( true );
+    sourceGroup_->setVisible( true );
+    clipGroup_->setVisible( true );
+    windowGroup_->setVisible( true );
+    playGroup_->setVisible( true );
+    midiGroup_->setVisible( false );
 
     const bool single = ( clips.size() == 1 );
 
@@ -701,6 +790,179 @@ void SClipPropertiesPanel::onFormantClicked( bool )
     for( const ClipRef &c : collectClips() ) {
         if( c.cut->getPreserveFormants() == on ) continue;
         composite->append( new SSetFormantPreserveAction( c.path, on ) );
+    }
+    submitComposite( composite );
+}
+
+// ---------------------------------------------------------------------------
+// The MIDI page (proposal 37 P1)
+// ---------------------------------------------------------------------------
+
+QList<SClipPropertiesPanel::MidiClipRef>
+SClipPropertiesPanel::collectMidiClips() const
+{
+    QList<MidiClipRef> out;
+
+    SApplication &app = SApplication::app();
+    SProject *project = app.getCurrentProject();
+    if( !project ) return out;
+    SObject *mixer = splacements::rootContainer( project );
+    if( !mixer ) return out;
+
+    // Paths, not cached links - the same rule as collectClips().
+    const QList<QList<int>> paths = app.getCurrentSelectionPaths();
+    for( const QList<int> &p : paths ) {
+        SLink *link = splacements::placementAt( mixer, p );
+        if( !link ) continue;
+        MidiClipRef ref;
+        ref.path = p;
+        ref.link = link;
+        SObject *obj = &link->getSObject();
+        // A stack presents its ACTIVE lane through the generic take seam; a
+        // stack is homogeneous by contentKind, so a MIDI stack yields a MIDI
+        // take or nothing.
+        if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
+        ref.cut = dynamic_cast<SMidiCut *>( obj );
+        if( !ref.cut ) continue;
+        out.append( ref );
+    }
+    return out;
+}
+
+void SClipPropertiesPanel::refreshMidi( const QList<MidiClipRef> &clips )
+{
+    placeholder_->setVisible( false );
+    scroll_->setVisible( true );
+    sourceGroup_->setVisible( false );
+    clipGroup_->setVisible( false );
+    windowGroup_->setVisible( false );
+    playGroup_->setVisible( false );
+    midiGroup_->setVisible( true );
+
+    const bool single = ( clips.size() == 1 );
+
+    QStringList names;
+    QList<qint64> starts, durations, transposes, channels;
+    QList<double> velScales;
+    bool allBeats = true, allTime = true;
+    for( const MidiClipRef &c : clips ) {
+        names      << c.cut->getSName();
+        starts     << (qint64) c.link->getStartTime();
+        durations  << (qint64) c.cut->getDuration();
+        transposes << (qint64) c.cut->getTranspose();
+        channels   << (qint64) c.cut->getChannelOverride();
+        velScales  << c.cut->getVelocityScale();
+        if( c.link->getTimebase() == SLink::Timebase::Beats ) allTime = false;
+        else                                                  allBeats = false;
+    }
+
+    // Name and start are IDENTITY, not shared quantities (the audio page's rule).
+    midiNameEdit_->setEnabled( single );
+    midiStartSpin_->setEnabled( single );
+    timebaseCombo_->setEnabled( single );
+
+    showValues( midiNameEdit_,     names );
+    showValues( midiStartSpin_,    starts );
+    showValues( midiDurationSpin_, durations );
+    showValues( transposeSpin_,    transposes );
+    showValues( midiChannelSpin_,  channels );
+    showValues( velScaleSpin_,     velScales );
+
+    {
+        QSignalBlocker block( timebaseCombo_ );
+        timebaseCombo_->setCurrentIndex( allBeats ? 0 : ( allTime ? 1 : -1 ) );
+    }
+}
+
+void SClipPropertiesPanel::commitMidiName()
+{
+    if( updating_ ) return;
+    if( !consumeEdited( midiNameEdit_ ) ) return;
+    const QString name = midiNameEdit_->text();
+    SCompositeAction *composite = new SCompositeAction;
+    for( const MidiClipRef &c : collectMidiClips() ) {
+        if( c.cut->getSName() == name ) continue;
+        composite->append( new SSetClipNameAction( c.path, name ) );
+    }
+    submitComposite( composite );
+}
+
+void SClipPropertiesPanel::commitMidiStartTime()
+{
+    if( updating_ ) return;
+    if( !consumeEdited( midiStartSpin_ ) ) return;
+    if( midiStartSpin_->text().trimmed().isEmpty() ) return;
+    const qint64 start = midiStartSpin_->value();
+    // The window itself is untouched: resize-clip carries the whole window
+    // through, and SMidiCut converts the frame values to ticks exactly once
+    // inside setWindowExact.
+    SCompositeAction *composite = new SCompositeAction;
+    for( const MidiClipRef &c : collectMidiClips() ) {
+        if( start == (qint64) c.link->getStartTime() ) continue;
+        composite->append( new SResizeClipAction(
+            c.path, (offset_t) start, c.cut->contentAnchorExact(),
+            (length_t) c.cut->getDuration(), (length_t) c.cut->loopLength(),
+            c.cut->stretchOrRate() ) );
+    }
+    submitComposite( composite );
+}
+
+void SClipPropertiesPanel::commitMidiDuration()
+{
+    if( updating_ ) return;
+    if( !consumeEdited( midiDurationSpin_ ) ) return;
+    if( midiDurationSpin_->text().trimmed().isEmpty() ) return;
+    const qint64 duration = midiDurationSpin_->value();
+    if( duration <= 0 ) return;
+    SCompositeAction *composite = new SCompositeAction;
+    for( const MidiClipRef &c : collectMidiClips() ) {
+        if( duration == (qint64) c.cut->getDuration() ) continue;
+        composite->append( new SResizeClipAction(
+            c.path, c.link->getStartTime(), c.cut->contentAnchorExact(),
+            (length_t) duration, (length_t) c.cut->loopLength(),
+            c.cut->stretchOrRate() ) );
+    }
+    submitComposite( composite );
+}
+
+void SClipPropertiesPanel::commitMidiCut()
+{
+    if( updating_ ) return;
+    const bool anyEdited = consumeEdited( transposeSpin_ )
+                         | consumeEdited( velScaleSpin_ )
+                         | consumeEdited( midiChannelSpin_ );
+    if( !anyEdited ) return;
+
+    SCompositeAction *composite = new SCompositeAction;
+    for( const MidiClipRef &c : collectMidiClips() ) {
+        // Blank means "mixed, leave alone" - each field falls back to what the
+        // clip already has, which is what makes a multi-selection edit of ONE
+        // field not overwrite the other two.
+        const int transpose = transposeSpin_->text().trimmed().isEmpty()
+                            ? c.cut->getTranspose() : transposeSpin_->value();
+        const double vel = velScaleSpin_->text().trimmed().isEmpty()
+                         ? c.cut->getVelocityScale() : velScaleSpin_->value();
+        const int channel = midiChannelSpin_->text().trimmed().isEmpty()
+                          ? c.cut->getChannelOverride() : midiChannelSpin_->value();
+        if( transpose == c.cut->getTranspose()
+         && vel == c.cut->getVelocityScale()
+         && channel == c.cut->getChannelOverride() ) continue;
+        composite->append( new SSetMidiCutAction( c.path, transpose, vel,
+                                                  channel, -1, false ) );
+    }
+    submitComposite( composite );
+}
+
+void SClipPropertiesPanel::commitTimebase( int index )
+{
+    if( updating_ || index < 0 ) return;
+    const QString want = timebaseCombo_->itemData( index ).toString();
+    SCompositeAction *composite = new SCompositeAction;
+    for( const MidiClipRef &c : collectMidiClips() ) {
+        const QString have =
+            ( c.link->getTimebase() == SLink::Timebase::Beats ) ? "beats" : "time";
+        if( have == want ) continue;
+        composite->append( new SSetLinkTimebaseAction( c.path, want ) );
     }
     submitComposite( composite );
 }

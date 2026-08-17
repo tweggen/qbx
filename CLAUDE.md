@@ -90,6 +90,17 @@ the plugin search paths. Gates: `filepathref_test` (ctest) and
   (`<dump-playback-capture>` writes the recording out as a 16-bit WAV and
   assert-source-position decodes it). It also stops a headless suite from
   opening the real output device ~90 times.
+- `SMARAGD_MIDI_BACKEND=winmm|coremidi|alsaseq|capture|null|default` picks the
+  MIDI ports the same way, ahead of the platform choice (proposal 37 P7a,
+  `tw/devices/midi_output.h`). **`capture` is the intended default for a
+  `--test-case` run** — it records `{hostTimeNs, port, bytes}` in memory and
+  nothing else, so a MIDI-out assertion is measured against the AUDIO capture
+  backend's independent block log (`CaptureBackend::frameAtHostTime`, host time
+  → project frame, piecewise linear) rather than against the pump under test.
+  Unlike the audio variable it is read at every `createMidiOutput()` call, and
+  `createMidiOutput("winmm")` names a backend explicitly. MIDI is emitted at
+  PLAY time by `MidiOutScheduler`'s Qt-free thread — never at freeze time, for
+  exactly the reason level meters are not computed there.
 - `SMARAGD_CAPTURE_SPEED=<float>` multiplies the capture backend's pacing (4.0 =
   four times faster than real time) for a smoke run. The pacing is real time by
   default ON PURPOSE — a clock that waited for the readahead would mask exactly
@@ -545,21 +556,39 @@ whole feature needed **zero edits to any existing engine file** — just the new
 | The width a meter uses comes from the TAP, not from `SProject` | `getRootComponent()->getOutputChannels()`. Since B4 a track has no bus count of its own — it has the project's width — so asking the component keeps the meter and the audio reading ONE number, and it is the same number §4.5 compares a cached page against. |
 | `twAspectMetadata` stays unclaimed | `freezePage` already stores `validAspects = twAspectAll`, so that "peak levels" bit is already set and already meaningless. Claiming it would drag metering into the demand system for nothing. |
 
-**One engine hole this exposed** (not a product bug, but it shapes tests): the
-LEGACY PULL path does not observe a track-gain change made after a position was
-first frozen — `twStreamingLatch::copyData` gates its cached page on the
-**`twPluginChain`'s** content epoch, which `STrack::invalidateRenderPath()` does
-not reach (the same "an `SPluginChain` is not an `SLink` child of its track"
-pitfall `plugins/CONTRACT.md` records for slots). Playback and render both go
-through the scheduler, which re-plans and re-binds, so both see it. `assert-meter`
-drives the legacy pull, so set a gain BEFORE first probing a position —
-`meter_postfader.qxa` uses two tracks at different gains rather than changing one
-track's gain twice.
+**The "legacy pull does not see a gain change" hole is CLOSED** (proposal 37
+P3a). It used to read: the legacy pull does not observe a track-gain change made
+after a position was first frozen, because `twStreamingLatch::copyData` gates its
+cached page on the **`twPluginChain`'s** content epoch — so a gain had to be set
+BEFORE first probing a position, and `meter_postfader.qxa` uses two tracks at
+different gains rather than changing one track's gain twice.
+
+The fader is no longer inside `twTrackMix`. It is **`twGainStage`**, wired
+between the plugin chain and the rewire (`twTrackMix → twPluginChain →
+twGainStage → twRewire`), so the epoch that guards the rewire's cached input page
+is exactly the one `set-track-volume` bumps, and a gain change after a freeze is
+observed on every path. Gate: `meter_gain_after_probe.qxa` (probe, set the gain,
+probe the same position again). `meter_postfader.qxa` keeps its two-track shape,
+which is a good case either way. Measured honestly: the new case also passes on
+the pre-move binary at the 36-B4 integration tip, so B4's collapse had already
+made the caveat inert in practice — P3a is what makes it structurally impossible.
 
 There is now ONE volume-fader curve, `app/timeline/sfadercurve.h`. The Track
 Detail dock's slider used to be wired to nothing and to map `value = dB*10`,
 disagreeing with the arranger's `VOLUME_CURVE_EXPONENT = 0.5`; both now share the
 curve and commit through `SSetTrackVolumeAction`.
+
+**And the fader is POST-FX** (proposal 37 P3a, design D5). `twGainStage`
+(`tw/mix/twgainstage.h`) is one wide component per track between the last insert
+and the rewire; `twTrackMix::setTrackGain` is a no-op kept until P5. An insert
+therefore sees the UNFADED signal, which is what an instrument's output needs and
+what every reference DAW does. A linear insert cannot tell the two orders apart,
+so the ordering is gated by a hard CLIPPER (`tw.test.clap.gain` param id 2) in
+`fader_post_fx.qxa` against a closed form, never by a byte compare — and the
+committed goldens are byte-identical across the move by construction, because at
+0 dB the stage does no arithmetic at all and no golden combines a non-unity fader
+with a plugin. Mute stays STRUCTURAL (the parent nulls the plug); the gain
+stage's ramped audio mute exists but is unwired until P5's `self:Muted` lane.
 
 Gates: `ctest -R metering_test` and the qxa cases `meter_levels` (per-second RMS
 of the ramped-sawtooth fixture, the miss/silence path, the density rules via the
@@ -649,6 +678,163 @@ at B4 (a mono project's stereo plugin now folds — the old bytes were a *satura
 render of a project whose width reached no track) and at B5 (mono became a
 one-channel file; stereo's channel 1 became real audio).
 
+## Event clips (proposal 37 P1 — executed 2026-08-15)
+
+MIDI is in the model: `SMidiSequence` (content) + `SMidiCut` (window) +
+`SLink::timebase` (placement), the verbs to edit them, and a per-track event
+feed the instrument slot will read in P3b. Nothing SOUNDS yet — an event clip
+on a track without an instrument is inaudible, not rejected (design D3).
+Design: `plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` §3.1–§3.4.
+Invariants: `main/objects/midi/CONTRACT.md` (11 of them), `main/objects/track/
+CONTRACT.md` inv. 5b/5c, `docs/contracts/POSITION_DOMAINS.md` rule 7.
+
+**Read this before touching anything positional — the obvious design is wrong.**
+Events are stored in MUSICAL TICKS (PPQ 960) and so is the window; frames are
+DERIVED. Two of the three code studies recommended frames-now and were
+overruled on industry evidence: recorded MIDI that does not follow a tempo
+change is a defect users hit in the first hour, and Ardour ≤ 6 is the
+cautionary tale that forced their 7.0 rewrite.
+
+| Thing to know | Why |
+|---|---|
+| `twTempoMap` (tw/events) is THE tempo authority; `SProject::getBPMTempo()` is a derived view and `bpmTempo_` is gone | Tempo is stored as SMF's own unit, µs per quarter (an integer), so BPM and the map cannot disagree. A stored `60/bpm` seconds-per-beat and a stored µs/quarter differ in the tenth microsecond, which lands on a frame boundary in a long project. |
+| The tick→frame conversion happens EXACTLY ONCE per value, inside `SMidiCut::rebuild_nolock()` | Two callers converting independently is how a rounding difference becomes an off-by-one clip edge. `getDuration()`, `loopLength()`, `startOffset()` and the frame-domain event table are all derived there, by multiplying an exact tick `Fraction` by the map's exact frames-per-tick and flooring once. |
+| `set-tempo` is the ONLY tempo write, and it is an ACTION | It re-derives `startTime` for every `timebase=beats` link in the project (nested containers and assets included) — so a MIDI clip at bar 5 stays at bar 5 while audio does not move — and being an action is what keeps undo exact by LIFO. The two direct `setBPMTempo()` writes (the ruler dialog, the transport box) are gone. Gate: `grep -rn "bpmTempo_ =\|setBPMTempo(" main/` hits only the verb and the loader. |
+| An event clip goes into `STrack`'s `twEventClipSet`, NEVER into the bus mixers | A MIDI clip has no page to freeze. Inserting one as a `ClipEntry` costs a dummy freeze per page per clip AND makes `twView::getComponent() returned nullptr` fire once per freeze forever. The absence of that log line is the only observable difference between the two routings — hence `assert-log … maxCount="0"` in `midi_clip_render_silent`. |
+| `objects/track` has NO edge to `objects/midi` | The track consults MIDI-ness through `SObject::contentKind()` and `SObject::resolveEventClip()` — both on the base class for exactly this reason. `objects/midi` sits at the RANK of `objects/cut`: a second window/content pair, not a layer above one. |
+| Split is NON-DESTRUCTIVE: the window gates, the sequence is never edited | A note straddling the split keeps its ORIGINAL duration in the head; the head's window end SYNTHESISES the note-off; the tail never re-attacks it (a note-on before the window reaches a consumer only through the chase set). A content-editing `split-notes-at` is a later verb. |
+| A note-off exists only inside a `collect` | Notes are stored WITH their length, so nothing in any table is a note-off. `assert-midi-events kind="noteoff-synth"` runs a real collect over the clip's window PLUS ONE FRAME — windows are half-open and a clip-end release lands on the boundary, i.e. in the window that STARTS there (events/CONTRACT inv. 8–9). |
+| The track FEED is rebuilt on every read | `STrack::eventFeed()` merges its own clip set with every child track that bubbles events up (design §3.2.1). Solo is GLOBAL, so a dirty flag would have to be poked from anywhere in the project — which is the coupling `ssolorules.h` exists to avoid. The merge OBJECT is stable; only its source list is recomputed. |
+| `serializeSelfAttributes` must not hold `mutex()` across the base call | `SObject::serializeSelfAttributes` calls `getDuration()`, which takes the same mutex, and `std::mutex` is not recursive. The failure is silent: the save simply never finishes. |
+| Notes are persisted INLINE (`<events><e …/></events>`), sorted on write | Note data must never be able to go missing the way a sample file can, so an imported `.mid` is materialised on the first save and the file is never consulted again. Unknown kinds — and every meta payload — round-trip verbatim. |
+
+Gates: `midi_clip_roundtrip` (import → save → load → export is
+BYTE-IDENTICAL; legitimate only because twSmf has one canonical spelling and
+`tests/midi_multitrack.mid` was authored by it — `midi_fixture_authoring`
+regenerates it), `midi_clip_edit_verbs`, `midi_clip_tempo_remap`,
+`midi_clip_render_silent`, `midi_folder_feed`, plus `action_roundtrip_test`.
+
+## MIDI output (proposal 37 P7 — executed 2026-08-15)
+
+A track can send its event feed to a MIDI port. The device layer is
+`tw/devices` (P7a: `MidiOutput`/`MidiInput`, WinMM/CoreMIDI/ALSA-seq/capture/
+null, `MidiOutScheduler`); the app half is `SMidiOutPump` in `main/shell`
+(P7b). Design: `plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` D6 and §4.6.
+Invariants: `tw303a/devices/CONTRACT.md` inv. 10-18, `main/shell/CONTRACT.md`
+inv. 7-8, `main/objects/track/CONTRACT.md` inv. 9-10.
+
+**Read this before touching MIDI-out — the obvious design is wrong, for exactly
+the reason the level meters' was.** MIDI is emitted from the PLAYHEAD, on the
+main thread, at PLAY time. Never at freeze time: pages are frozen ~1.4 s ahead
+of the playhead by the readahead, and by renders that have no playhead at all,
+so a freeze-time MIDI-out would spray a whole arrangement at the user's
+hardware synth with the transport stopped.
+
+| Thing to know | Why |
+|---|---|
+| `SMidiOutPump` is a 20 ms `QTimer` with a 250 ms lookahead, started by `setPlaying(true)` | It is a sibling of `meterTimer_`, never a fold into it: the meters keep ticking after a stop so the bars can decay, whereas MIDI-out must go silent — and send its all-notes-off — at the instant the transport does. |
+| The clock anchor is re-taken on every position PUBLICATION, not every position CHANGE | `twSpeaker` defers the device start until the readahead is primed, so before the first callback the playhead sits still at the locator. Measured: anchoring on a change put the first note of a run **59 ms early**. `SApplication::locatorPublishSeq()` is the counter the RT thread bumps next to the position store. |
+| The published position is one device buffer AHEAD of the frame just delivered | `twSpeaker` publishes `engine->currentPosition()` AFTER the pull, so the frame handed over at that instant is `published − bufferFrames`. Skipping the correction is ~21 ms at 1024 frames / 48 kHz. |
+| Output latency reuses `meterLatencyFrames()` verbatim | It already converts DEVICE frames at the DEVICE rate into PROJECT frames (proposal 34). `dueHostTime = hostTime(playhead) + deviceOutputLatency − midiOutLatency − globalOffset − trackOffset`. |
+| The pump reads the track FEED (`STrack::eventFeed()`), not its own clip set | So a folder parent's port carries its children's patterns, with the channel remapped to the parent's — the drum-machine-on-the-folder case (design §3.2.1). A child with its own port stops bubbling, by the same `auto` rule. |
+| De-dup is a monotone per-track FRONTIER plus its loop iteration | Windows are contiguous and never overlap, so it subsumes the design's `(clip key, event ordinal, loop iteration)` key set — and survives an edit that renumbers ordinals mid-flight, which a key set would not. |
+| `midiOutPort` is a portable NAME; `midiOutChannel` is 0-BASED | The id `open()` wants (a WinMM index, a CoreMIDI uniqueID) means nothing on the next machine, so `SSettings` maps `midi/portId/<name>`. The channel matches `twEvent::channel` and `add-note channel=`, so the scripting API speaks one convention; `-1` = "as authored". |
+| `offsetMs` is signed, ±500, POSITIVE = send EARLIER | Outboard gear whose audio return arrives late is compensated so its audio lands on the grid. An event whose shifted due time falls before the run start is CLAMPED — you cannot send before the transport started. |
+| Nothing below the ring may touch Qt | `MidiOutScheduler`'s sender is a plain `std::thread`; a Qt signal from it would make Qt adopt the thread and deadlock the join at teardown. The pump is the ring's SINGLE producer and it is the main thread. |
+
+**Measurement is independent of the thing measured** (design review #12), which
+is what makes the gates worth anything: the capture MIDI port records
+`{hostTimeNs, port, bytes}` and deliberately NOT the due time it was asked for,
+while the AUDIO capture backend records `{hostTimeNs, firstFrame}` per delivered
+block. `assert-midi-out` maps through the AUDIO log
+(`CaptureBackend::frameAtHostTime`) and subtracts the device latency, so `at` is
+"the project frame whose audio was being HEARD when this message left".
+`SMARAGD_CAPTURE_SPEED` must be 1.
+
+Gates: the qxa cases `midi_out_capture`, `midi_out_chase_and_stop`,
+`midi_out_loop_wrap`, `midi_out_offset_and_folder` (all `RUN_SERIAL` — they
+assert wall-clock latency), `midi_out_render_silent`, `midi_out_backend_reject`
+and `midi_options_page`, plus `devices_midi_test` and `action_roundtrip_test`.
+Measured error across the playback cases: **−98 … +581 frames** against a
+4096-frame budget. NOT gated: WinMM jitter against real hardware, CoreMIDI /
+ALSA-seq, virtual-port creation on Windows (WinMM has no such concept — a
+loopMIDI-style driver appears as an ordinary device), `CAPTURE_SPEED ≠ 1`,
+sysex (refused by the ring rather than truncated; P9).
+
+## Automation (proposal 37 P5 — executed 2026-08-16)
+
+A lane on a track, a plugin slot or a clip window is edited by seven undoable
+verbs, persisted inline with its owner, snapshotted as an immutable
+`twAutomationCurve`, and consumed **at freeze time**. Design:
+`plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` D5 / §3.3 / §3.4 / §4.5.
+Invariants: `tw303a/mix/CONTRACT.md` inv. 19-23, `tw303a/plugins/CONTRACT.md`
+inv. 15 + 41-44, `main/objects/track/CONTRACT.md` inv. 11-15,
+`main/model/CONTRACT.md`.
+
+| Thing to know | Why |
+|---|---|
+| **A lane is a plain owner-held `QObject`, NEVER an `SLink` child**, serialized inline as `<automation><lane target= mode=><p t= v= c=/>…</lane></automation>` | The project loader orders and resolves on `<SLink>` children only, so an inline child of a known element is invisible to it and an OLDER build ignores it. A lane as an `SObject` would need an id, a link, a load order and a policy for what happens when its owner is dropped — for a breakpoint table with no independent existence. |
+| The lane vector lives on **`SObject`**, not on the four owner types | Same argument as `contentKind()` and `resolveEventClip()`: a verb, the serializer and the testkit must reach a lane without knowing which object slice owns it. WHICH targets are legal on WHICH owner is the verbs' business. |
+| **`SObject::serialize()` writes NOTHING when there are no lanes** | That is what keeps every project file written before P5 — and every committed golden — byte-unchanged. The same discipline runs through the engine: a NULL curve is the SCALAR path, and at 0 dB unmuted `twGainStage` still does no arithmetic at all. |
+| Value domains are the TARGET's own: `self:Volume` in **dB**, `self:Muted` 0/1, `param:<id>` in the plugin's **host-facing** domain (normalized for VST3), `cut:Gain` a **LINEAR** factor | dB for the fader because that is its unit and because Trim's "static value × curve" is then a dB SUM; linear for a clip envelope because a fade-out has to reach EXACTLY zero. `param:` matches `set-plugin-param` by construction. `Rate`/`Stretch` are not automatable (they change duration); `self:Pan` waits for a stereo sink (36-B5). |
+| A `Linear` segment on `self:Volume` interpolates **linearly in dB** | `twAutomationCurve` interpolates the STORED value and `tw/mix` may not include `app/timeline/sfadercurve.h`. The design's "dB-linear in fader space" is read as "linear in dB, in the fader's space" — the only reading that is implementable and the only one under which Trim is a sum. |
+| **A `self:Muted` lane holds AUDIBLE before its first point**, unlike every other lane | Every other lane holds its first point's value there (the universal convention). "Muted from frame 0" is what the STRUCTURAL mute says, and a lane drawn to mute a track at 1 s must not silence second 0. Implemented as an explicit anchor point at frame 0 in the snapshot builder, never as a special case in the consumer. |
+| Mute has TWO meanings and they are different mechanisms | The mute BUTTON is STRUCTURAL — the parent nulls the child's input plug — so a track's own output still carries its material and an asset capture of it is not silence. The `self:Muted` LANE is AUDIO: `twGainStage`, post-FX, with a ~1.5 ms ramp at every transition. |
+| A `param:` lane becomes **per-chunk, sample-offset `ParamValue` events**, not a `setParam()` call | Chase at offset 0 (pages freeze out of order and on any worker, so what the instance holds is unknown BY CONSTRUCTION), one event per breakpoint inside the chunk, a 64-frame grid on continuous segments for plugins that do not interpolate. With no curves the call is the SAME legacy `process()` it always was. |
+| **The invalidation range differs by consumer CLASS** | `twGainStage` is class infinity and pure, so the range is EXACT. A plugin is CLASS 1, so it is `[a, INT64_MAX)`. A `cut:` lane invalidates in the cut's own clip-relative domain and is mapped upward by the existing window walk. |
+| A `cut:Gain` envelope reaches the mix **through the track**, not through the cut | The curve lives on the WINDOW, which may not know its track. `STrack::refreshClipGainCurves()` re-reads every child's lane from `bumpRenderChainEpoch[Range]()` — the one main-thread funnel every model change already passes through, exactly as `refreshInstrumentFeed()` does. A take stack is asked for its ACTIVE take, so an inactive take keeps its own envelope. |
+| A slot's lane needs its TRACK to do the invalidation walk | `SObject::invalidateRenderPathRange()` from an `SPluginSlot` is a NO-OP: the walk goes down from the project root through `childLinks()`, and an `SPluginChain` is deliberately not an `SLink` child of its track. The slot emits `audioInvalidatedRange`; `STrack` walks. Same pitfall proposal 08 M5 found for a bypass. |
+| `set-track-volume` / `set-track-mute` on a **Read-family** lane write a POINT at the locator | Otherwise the fader moves, the render does not, and undo carries a step nobody can hear. Trim and Off are deliberately not redirected — there the static value is still the thing being edited. |
+| **Never put an access specifier inside a `slots:` block** | Adding the automation methods inside `strack.h`'s `public slots:` demoted `trackEventClipChanged` to a plain member. It is connected by NAME, so the connect failed at RUNTIME and every event-clip edit silently stopped reaching the render — invisible at compile time, and it cost a bisect back to the base commit. |
+
+Gates: the qxa cases `automation_volume_ramp`, `automation_mute_step`,
+`automation_plugin_param`, `automation_clip_gain`, `automation_edit_invalidates`
+plus `action_roundtrip_test`. The fixture is `tests/test_autosaw.wav`
+(`tests/tools/gen_auto_fixture.py`): 4 s of a 480 Hz sawtooth whose period is
+EXACTLY 100 frames, which is what makes every per-second, per-1000-frame and
+~2 ms window in those cases a closed form rather than a measurement. NOT gated:
+pan (36-B5), placement-scope envelopes (32), and `cut:VelocityScale` /
+`cut:Transpose`, which are implemented and round-trip but have no dedicated
+case. The mode UI and Touch/Latch/Write RECORDING landed in P6 — see below.
+
+### The automation UI (P6 — executed 2026-08-16)
+
+Automation lanes are on screen and editable. Invariants:
+`main/timeline/CONTRACT.md` inv. 17-20, `main/shell/CONTRACT.md` inv. 11,
+`main/pluginui/CONTRACT.md` inv. 9, `main/testkit/CONTRACT.md` ("Automation UI
+gestures").
+
+| Thing to know | Why |
+|---|---|
+| An automation lane is an `STrackRow` **SUB-LANE** (`subKind {None, Take, Automation}`), and the whole feature is ONE new file, `timeline/src/sautomationlane.{h,cpp}` | Being a sub-lane buys inv. 5's geometry, the track's single head spanning the group, and `assert-lane-alignment` for free. `sstdmixerview.cpp` is already the largest file in the app, so even the five `SStdMixerView` members that are automation code are DEFINED in the new file — the arranger keeps only the call sites (+36 lines for the feature). |
+| The curve is sampled **per pixel through `SAutomationLane::valueAt`** | The same call `assert-automation-value` makes. Step / Linear / Exp come out right by construction; a per-segment painter would be a second implementation of the interpolation and could disagree with the ear. |
+| Each target draws its **own** domain (`sAutoScaleFor`) | dB through THE fader curve for `self:Volume` (so a given dB sits at the same fraction of the lane as of the fader), 0/1 stepped for `self:Muted`, the plugin's DECLARED range for `param:<id>` (via the new `SPluginSlot::paramRows()`, because timeline may not include `tw/plugins`), a linear factor over [0,1] for `cut:Gain`. A shared 0..1 scale draws a −60 dB fade as a flat line on the floor. |
+| Gestures **revert, then act** | The live drag mutates the point table for feedback and pushes nothing; the release puts the pre-drag table back BEFORE submitting the verb. Skip the revert and the action finds nothing to change: its undo step is a no-op and a redo double-applies. |
+| ONE pruning walk for EVERY per-track UI-state set (`pruneUiState`) | Fold set, take-lane set, height scales, shown-automation set — all keyed by `STrack*`. There was NO pruning before P6, so a removed track left a dangling key for a later track at the same address to inherit. The walk is over the MODEL: a collapsed folder's children are alive and have no row. |
+| The head **"A" button governs EVERY lane the track owns** — its own and its slots' — in one undo macro | The only reading under which a single button is not ambiguous the moment a track owns two lanes. The button keeps the letter A at every density (three of the six modes start with a letter another 20 px square already uses); the mode is colour + tooltip on screen and `Amode=` in `describeHead()`, appended AFTER `name=` so every P4 `contains=` string still matches. |
+| **Touch/Latch/Write are UI recorders and commit ONE `set-automation-points` per gesture** | `SAutomationRecorder` in `main/shell` — both the arranger's fader (`app/timeline`) and the plugin parameter slider (`app/pluginui`) feed the same pass, and those two modules cannot see each other. Bounded by the TRANSPORT: `setPlaying(false)` commits. Touch releases at the control, Latch holds to the stop as ONE extra point, Write additionally opens its window where the RUN started. An action per tick would put thirty entries a second on the undo stack. |
+| A control write during a pass must NOT submit its ordinary verb | `applyVolume_` / `onParamSliderChanged` offer the value to the recorder first and return if it was taken. |
+| The fader and the parameter slider **display the READ value** while a Read-family lane exists | Pumped from `SApplication::meterTick` — the one main-thread tick that keeps running at a static position and for a tail after the transport stops (proposal 34). A control being RECORDED is exempt: it shows the hand, not the curve. |
+| The `cut:Gain` envelope is an **overlay on the clip**, drawn by the cut renderer after `drawWarpMarkers`, and its gestures are ARMED (off by default) | The curve lives on the WINDOW and travels with it across placements and takes, so a lane on the track would be lying about what it belongs to. Off by default is what keeps every clip-body gesture — move, slip, duplicate, stretch — exactly as it was. |
+| **Plugin-gesture punch-in is NOT wired** | `ParamGestureBegin/End` do come out of the CLAP and VST3 backends, but only into `twEventOut` inside `process()` — a worker thread, at freeze time — and nothing consumes that stream; there is no native plugin editor either (proposal 33 M3). The app's own slider press/release is the punch-in. |
+
+**A P5 bug this exposed, now fixed:** `SAutomationLane::setPoints()` used a
+non-stable `std::sort` plus `std::unique` (which keeps the FIRST of an equal
+run), so `add-automation-point` on a frame that already had a point silently
+DROPPED the new value — while its own comment and `docs/ACTIONS.md` both promise
+a REPLACE. `stable_sort` + a fold that overwrites. A click that lands a point on
+top of another is the commonest automation gesture there is.
+
+Gates: the qxa cases `automation_lane_gestures` (every gesture through the REAL
+mouse handlers, one undo step each, head/lane identity with two automation lanes
+plus a take lane, a canvas PNG), `automation_write_pass` (a Touch pass over a
+real transport, three ticks reverted by ONE undo, and the curve HEARD through
+the capture backend — measured to five significant digits of the closed form on
+the first run) and `automation_head_mode` (the mode at three densities, plus a
+head PNG), plus `action_roundtrip_test`. NOT gated: plugin-gesture punch-in,
+Delete over a marquee (a QAction shortcut, not synthesisable from a script),
+Latch/Write passes, the read-value display, pixel exactness.
+
 ## Recording Audio
 
 Smaragd supports recording from input devices (microphone, line-in, etc.) via **Record** button in the transport toolbar or **Ctrl-R** / **Cmd-R** keyboard shortcut. Recorded audio is automatically converted to clips and placed on armed tracks.
@@ -719,7 +905,7 @@ inserted per track, heard in the signal path, saved with the project, and kept a
 a reloadable placeholder when the plugin is not installed. **Design:**
 `plan/proposed/08_PLUGIN_HOSTING.md`; **what was built and in what order:**
 `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`; **the invariants that matter:**
-`smaragd/tw303a/plugins/CONTRACT.md` (26 of them) and
+`smaragd/tw303a/plugins/CONTRACT.md` (36 of them) and
 `smaragd/main/pluginui/CONTRACT.md`. The milestone list is closed — remaining
 work is coverage, not capability.
 
@@ -869,21 +1055,44 @@ force-clear — which is exactly why `.vst3` stayed unreported until M6.
 
 ### Testing without installing anything
 
-`plugins/tests/twtestclap.c` is a real 2-in/2-out CLAP module built from this
-repo as `twtestclap.clap` and copied next to the binary. Two entry points:
+`plugins/tests/twtestclap.c` is a real CLAP module built from this repo as
+`twtestclap.clap` and copied next to the binary. Four entry points:
 `tw.test.clap.gain` (`out = in * gain`, plus a "report block size" mode that
-writes the frame count it actually saw) and `tw.test.clap.stereoskew`
+writes the frame count it actually saw, plus — since proposal 37 P2 — a
+`Clip Threshold` at **param id 2** that hard-clips AFTER the gain, which is the
+order-sensitive fixture the fader-move case needs); `tw.test.clap.stereoskew`
 (`out[0] = in[0]*0.5*gain + in[1]*gain`, `out[c>=1] = in[c]*0.5*gain`) — the
-cross-channel term is what makes a silent second input visible in a mono render.
+cross-channel term is what makes a silent second input visible in a mono render;
+`tw.test.clap.sine`, the reference INSTRUMENT (0 audio in, stereo main + mono aux
+out, a CLAP|MIDI note port preferring CLAP, 16 envelope-less voices so the RMS of
+a held note is `velocity/√2` in closed form and the silence either side is
+EXACT); and `tw.test.clap.arp` (note in/out on a fixed 4096-frame grid, so its
+output count has a closed form).
 
-`plugins/tests/twtestvst3.cpp` is the VST3 counterpart — a real 2-in/2-out VST3
-built as `twtestvst3.vst3`, one `Gain` parameter, unity by default. It is C++
-because VST3's ABI *is* a C++ vtable, and it links its own copies of the SDK
-sources (a module and its host are separate binaries). It **deliberately ignores
-`setParamNormalized`**, so a host that writes the controller and stops there
-fails the level assertion — the most common VST3 host bug, made into a
-regression test. It is a *single component*; the split component/controller
-shape has no automated coverage (recorded in `plugins/CONTRACT.md` known debt).
+`plugins/tests/twtestvst3.cpp` is the VST3 counterpart, built as
+`twtestvst3.vst3`. It is C++ because VST3's ABI *is* a C++ vtable, and it links
+its own copies of the SDK sources (a module and its host are separate binaries).
+`TW Test VST3 Gain` is a 2-in/2-out single component with one `Gain` parameter,
+unity by default, which **deliberately ignores `setParamNormalized`**, so a host
+that writes the controller and stops there fails the level assertion — the most
+common VST3 host bug, made into a regression test. `TW Test VST3 Sine`
+(proposal 37 P2) is a SPLIT component/controller instrument: it closes the
+"split pair untested" debt, maps CC 7 to Gain through `IMidiMapping` (the only
+route a CC has in VST3), honours `sampleOffset`, and **ignores an unactivated
+kEvent bus** — so a host that forgets `activateBus` renders silence rather than
+failing nothing.
+
+**Events (proposal 37 P2).** The ABI carries notes, CCs, note expressions and
+sample-accurate parameter points: `tw/plugins/twpluginevents.h` (`twEventList` /
+`twEventOut` / `twProcessContext`, all quoting the ONE `twEvent` from
+`tw/events`), plus `capabilities()`, `audioOutBusCount()/audioOutBus(i)` and
+`tailFrames()` on `twPlugin`. The new `process()` overload's default forwards to
+the legacy one and every backend's legacy overload forwards back with an empty
+list — the pre-36 path is the same instructions, which is why no golden moved.
+`twNativeInstrument` (`format="tw"`, uid `tw.native.303`) is an in-repo 303
+registered like `twPassThrough`, so an instrument is present in every build.
+**Nothing above the ABI consumes any of it yet** — the processor/tap split is
+untouched, and hosting an instrument is proposal 37 P3b.
 
 Gates: `ctest -R "plugins_test|plugins_scan_test"` and the qxa cases
 `plugin_stereo_chain`, `plugin_remove_and_undo`, `plugin_slot_roundtrip`,

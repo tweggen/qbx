@@ -85,18 +85,18 @@ SApplyResult SAssertMeterAction::apply( SProject *project )
         // exactly the call the offline render makes.
         // Freeze it ourselves rather than waiting for a transport.
         //
-        // CAVEAT this verb deliberately does not paper over: this is the LEGACY
-        // PULL path, and a track's twPluginChain sits between the trackmix and
-        // the rewire. twStreamingLatch::copyData gates its cached page on the
-        // CHAIN's content epoch, which STrack::invalidateRenderPath() does not
-        // reach (an SPluginChain is not an SLink child of its track — the same
-        // pitfall plugins/CONTRACT.md records for slots). So a gain change made
-        // AFTER this position was first frozen is not picked up here, even though
-        // playback and render both see it — they go through the scheduler, which
-        // re-plans and re-binds instead of consulting that cache.
-        // Consequence for tests: measure each gain setting at a position whose
-        // page has not been frozen yet (see meter_postfader.qxa, which uses two
-        // tracks rather than changing one track's gain twice).
+        // This is the LEGACY PULL path, and it used to carry a caveat this verb
+        // deliberately did not paper over: twStreamingLatch::copyData gates its
+        // cached page on the content epoch of the rewire's PRODUCER, which was
+        // the twPluginChain — so a gain change made after this position was
+        // first frozen was not picked up here, and a test had to measure each
+        // gain setting at a position whose page did not exist yet.
+        //
+        // RETIRED by proposal 37 P3a: the fader moved out of twTrackMix into
+        // twGainStage, which IS the rewire's producer, and set-track-volume
+        // bumps exactly the epoch that gate consults. meter_gain_after_probe.qxa
+        // is the case that would have been impossible to write before: probe,
+        // set the gain, probe the SAME position again.
         tap->requestPage( pageStart, nullptr, 0, CAP, project->getSRate(), nullptr );
     }
 

@@ -1,6 +1,8 @@
 #ifndef _TWPLUGIN_H_
 #define _TWPLUGIN_H_
 
+#include "tw/plugins/twpluginevents.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -57,7 +59,71 @@ public:
 
     // Capabilities — keep the core narrow; query for the rest.
     virtual bool supportsNativeEditor() const { return false; }
-    virtual bool acceptsNotes()         const { return false; } // future: instruments
+
+    // Kept as a FORWARDER for one release (proposal 37 §5.1). New code asks
+    // capabilities(); a backend overrides capabilities() and gets this for
+    // free, and the pre-36 call sites keep compiling and keep meaning what they
+    // meant. Do not override both in one backend.
+    virtual bool acceptsNotes() const { return capabilities().acceptsNotes; }
+
+    // --- events (proposal 37 P2) --------------------------------------------
+
+    // What this instance can do with events. Derived once at instantiation by
+    // every backend, never per call.
+    virtual twPluginCapabilities capabilities() const { return twPluginCapabilities{}; }
+
+    // AUDIO OUTPUT buses. Bus 0 is the main bus and always agrees with
+    // ioLayout().audioOutputs; buses above it are aux outputs, which the
+    // backends have read and discarded since proposal 08 and which nothing
+    // consumes yet (proposal 37 §5.4 routes them to return tracks in P9). A
+    // plugin with no audio output at all reports 0 buses.
+    virtual std::size_t audioOutBusCount() const
+    {
+        return ioLayout().audioOutputs > 0 ? 1u : 0u;
+    }
+    virtual twPluginBusInfo audioOutBus( std::size_t i ) const
+    {
+        twPluginBusInfo b;
+        if( i == 0 && ioLayout().audioOutputs > 0 ) {
+            b.channels = ioLayout().audioOutputs;
+            b.isMain   = true;
+        }
+        return b;
+    }
+
+    // How long the plugin keeps producing after its input goes silent (a
+    // reverb tail, a synth release). Frames, at the prepared rate. Used to size
+    // the instrument pre-roll and the project end (proposal 37 D4); 0 means
+    // "no tail" and is the honest answer for a pure gain.
+    virtual std::uint32_t tailFrames() const { return 0; }
+
+    // The EVENT-AWARE render call.
+    //
+    //   in        - de-interleaved inputs, ioLayout().audioInputs channels
+    //   outBuses  - outBuses[bus][channel], audioOutBusCount() buses
+    //   nframes   - <= the maxBlock passed to prepare()
+    //   events    - host-owned, SORTED, times CHUNK-RELATIVE (0..nframes-1)
+    //   eventsOut - host-owned sink; overflow is counted and dropped
+    //   ctx       - project position / transport, with validFlags to say which
+    //               fields are real
+    //
+    // The DEFAULT forwards to the legacy process() with the main bus, which is
+    // what keeps every pre-36 backend, the placeholder and the tests compiling
+    // and BYTE-IDENTICAL: the legacy path is not merely equivalent, it is the
+    // same code. A backend that overrides this must leave the legacy overload
+    // producing exactly what it produced before (the effect goldens compare
+    // bytes), which in practice means the legacy one delegates here with an
+    // empty list and an invalid context.
+    virtual void process( const float *const *in, float *const *const *outBuses,
+                          std::uint32_t nframes, const twEventList &events,
+                          twEventOut &eventsOut, const twProcessContext &ctx )
+    {
+        (void)events;
+        (void)eventsOut;
+        (void)ctx;
+        process( in, ( outBuses && audioOutBusCount() > 0 ) ? outBuses[0] : nullptr,
+                 nframes );
+    }
 };
 
 // The PLACEHOLDER a slot runs when its real plugin could not be instantiated
@@ -76,7 +142,13 @@ public:
 // on state is the app's stored blob, which must survive verbatim (a user must
 // not lose their settings by opening a project on a machine without the
 // plugin). SPluginSlot::saveState() therefore never reads a non-Active slot.
-std::unique_ptr<twPlugin> createNullPlugin( const twPluginIoLayout &io );
+// `caps` lets the placeholder also report the DECLARED event shape, for the same
+// reason it reports the declared I/O: a slot whose missing plugin was an
+// instrument must keep looking like one (proposal 37 P2). Defaulted, so every
+// pre-36 call site is unchanged and still gets an inert audio pass-through.
+std::unique_ptr<twPlugin> createNullPlugin( const twPluginIoLayout &io,
+                                            const twPluginCapabilities &caps
+                                                = twPluginCapabilities{} );
 
 }  // namespace audio
 

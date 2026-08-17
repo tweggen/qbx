@@ -86,7 +86,7 @@ const Fixture kFixtures[] = {
     // fixture gives it another value to keep it in the audit.
     { "assert-file-identical",
       "<assert-file-identical actual='r.wav' expected='../ref.wav'"
-      " maxReportedDiffs='3'/>" },
+      " maxReportedDiffs='3' startFrame='48000' frameCount='96000'/>" },
     // Same shape: maxPages/maxBytes are written only when >= 0.
     { "report-page-memory",
       "<report-page-memory label='after render' maxPages='4096'"
@@ -96,6 +96,10 @@ const Fixture kFixtures[] = {
     { "render",
       "<render filename='r.wav' format='wav' quality='10'"
       " durationSec='2.5'/>" },
+    // level is written only when non-empty; minCount/maxCount always are.
+    { "assert-log",
+      "<assert-log contains='SFutureThing' minCount='2' maxCount='4'"
+      " level='warn'/>" },
     // minFrames is only written when non-zero, so a fixture must give it one.
     { "dump-playback-capture",
       "<dump-playback-capture filename='playback.wav' minFrames='315392'/>" },
@@ -116,6 +120,13 @@ const Fixture kFixtures[] = {
       " uid='tw.test.clap.stereoskew' name='Skew' vendor='Smaragd'"
       " path='twtestclap.clap' nIn='2' nOut='2'"
       " state='VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA'/>" },
+    // The INSTRUMENT flag (proposal 37 P3b) is written only when true, so it
+    // needs a fixture of its own: the effect row above cannot cover an
+    // attribute it correctly never emits.
+    { "insert-plugin",
+      "<insert-plugin trackPath='0' slotIndex='0' format='clap'"
+      " uid='tw.test.clap.sine' name='Sine' vendor='Smaragd'"
+      " path='twtestclap.clap' nIn='0' nOut='2' isInstrument='true'/>" },
     { "remove-plugin",
       "<remove-plugin trackPath='0' slotIndex='1' format='clap'"
       " uid='tw.test.clap.stereoskew' name='Skew' vendor='Smaragd'"
@@ -163,6 +174,12 @@ const Fixture kFixtures[] = {
       "<plugin-editor-set-param trackIndex='0' slotIndex='0' paramId='1'"
       " value='0.25'/>" },
 
+    // --- the P3b instrument verb -------------------------------------------
+    { "assert-instrument-slot",
+      "<assert-instrument-slot trackPath='0,1' trackIndex='0' present='1'"
+      " uid='tw.native.303' format='tw' mode='MonoSpread' state='Active'"
+      " minTailFrames='24000' maxTailFrames='24000' hasFeed='1'/>" },
+
     // --- the multi-track selection verbs ------------------------------------
     // Two-level paths and a modifier COMBINATION deliberately: the modifier
     // string is re-derived from parsed flags on write, so a single-modifier
@@ -175,6 +192,171 @@ const Fixture kFixtures[] = {
       "<drag-track trackPath='1,0' targetRow='2' mode='before'/>" },
     { "assert-track-selection",
       "<assert-track-selection paths='0;1,0' primary='1,0'/>" },
+
+    // --- the event-clip verbs (proposal 37 P1) ------------------------------
+    // Two-level paths throughout, for the reason above. `duration` here is in
+    // TICKS (the clip's own unit); everything else positional is frames.
+    { "insert-midi-clip",
+      "<insert-midi-clip trackPath='1,0' timePos='96000' duration='3840'"
+      " name='Verse'/>" },
+    { "import-midi-file",
+      "<import-midi-file trackPath='1,0' filePath='../song.mid'"
+      " timePos='96000' mode='merged' newTracks='0'/>" },
+    // Both addressing attributes at once: each is written only when present,
+    // so a fixture naming one would leave the other untested.
+    { "export-midi-file",
+      "<export-midi-file filePath='out.mid' clip='1,0' trackPath='1'"
+      " type='0'/>" },
+    { "add-note",
+      "<add-note clip='1,0' tick='960' dur='480' key='64' velocity='90'"
+      " channel='2' releaseVelocity='32' take='1' broadcast='0'/>" },
+    { "remove-note",
+      "<remove-note clip='1,0' tick='960' key='64' channel='2' take='1'"
+      " broadcast='0'/>" },
+    // The batch verbs carry CHILD elements, so the round trip has to survive
+    // the children as well as the attributes.
+    { "set-notes",
+      "<set-notes clip='1,0' take='1' broadcast='0'>"
+      "<n tick='0' dur='480' key='60' velocity='100' channel='0'/>"
+      "<n tick='960' dur='240' key='67' velocity='80' channel='0'/>"
+      "</set-notes>" },
+    { "set-events",
+      "<set-events clip='1,0' take='1'>"
+      "<e k='cc' t='480' ch='0' p='7' v='64'/>"
+      "<e k='note' t='0' d='480' ch='0' key='60' v='100'/>"
+      "</set-events>" },
+    { "add-event",
+      "<add-event clip='1,0' kind='cc' tick='480' channel='2' key='64' p='7'"
+      " v='64' v2='2' text='hello' blob='07a120' take='1'/>" },
+    { "remove-event",
+      "<remove-event clip='1,0' kind='cc' tick='480' channel='2' p='7'"
+      " take='1'/>" },
+    { "quantize-notes",
+      "<quantize-notes clip='1,0' grid='1/8t' strength='0.75' swing='0.15'"
+      " take='1' broadcast='0'/>" },
+    { "set-midi-cut",
+      "<set-midi-cut clip='1,0' transpose='-12' velocityScale='0.5'"
+      " channel='3' take='1' broadcast='0'/>" },
+    // --- automation (proposal 37 P5) ------------------------------------
+    // `owner` is an index path; the TARGET's space decides whether it names a
+    // lane, a slot's track, or a placement — so every row below carries a
+    // target and, where it is a slot, a slotIndex.
+    { "add-automation-lane",
+      "<add-automation-lane owner='0' target='self:Volume' mode='read'>"
+      "<p t='0' v='-60' c='linear'/>"
+      "<p t='192000' v='0' c='linear'/>"
+      "</add-automation-lane>" },
+    { "remove-automation-lane",
+      "<remove-automation-lane owner='0,1' target='cut:Gain' take='1'/>" },
+    { "set-automation-mode",
+      "<set-automation-mode owner='0' target='param:7' slotIndex='2'"
+      " mode='latch'/>" },
+    { "add-automation-point",
+      "<add-automation-point owner='0' target='self:Volume' time='96000'"
+      " value='-30' curve='exp' tension='2.5'/>" },
+    { "remove-automation-point",
+      "<remove-automation-point owner='0' target='self:Muted' time='48000'"
+      " value='1'/>" },
+    { "move-automation-point",
+      "<move-automation-point owner='0' target='param:0' slotIndex='1'"
+      " time='96000' value='2' toTime='120000' toValue='1.5'/>" },
+    { "set-automation-points",
+      "<set-automation-points owner='0,1' target='cut:Gain' from='0'"
+      " to='192000' take='1'>"
+      "<p t='0' v='1' c='linear'/>"
+      "<p t='192000' v='0' c='linear'/>"
+      "</set-automation-points>" },
+    { "assert-automation-value",
+      "<assert-automation-value owner='0' target='self:Volume' time='96000'"
+      " value='-30' tolerance='1e-9' mode='read' pointCount='2'/>" },
+    { "set-tempo", "<set-tempo bpm='132.5'/>" },
+    { "set-link-timebase",
+      "<set-link-timebase clip='1,0' timebase='time'/>" },
+    { "set-track-midi-routing",
+      "<set-track-midi-routing trackPath='1,0' routing='parent'/>" },
+    // set-track-midi-output is ABSOLUTE, so every attribute is always written
+    // (an omitted channel would otherwise read back as "as authored" and undo
+    // would restore the wrong thing).
+    { "set-track-midi-output",
+      "<set-track-midi-output trackPath='1,0' port='capture' channel='2'"
+      " offsetMs='-200'/>" },
+
+    // --- the event test verbs ----------------------------------------------
+    // clip AND trackPath, kind, contains and velocityTolerance are each
+    // written only when set, so the fixture sets every one of them.
+    { "assert-midi-events",
+      "<assert-midi-events scope='feed' clip='1,0' trackPath='1' take='1'"
+      " kind='noteoff-synth' at='24000' tolerance='64' key='60'"
+      " velocity='100' velocityTolerance='2' channel='0' count='2'"
+      " minCount='1' maxCount='3' startFrame='48000' frameCount='96000'"
+      " contains='dur=48000'/>" },
+    { "assert-midi-file",
+      "<assert-midi-file filename='out.mid' trackCount='3' noteCount='6'"
+      " eventCount='10' firstTick='0' ppq='960' format='1'/>" },
+    // --- the event-editor verbs (proposal 37 P4) ---------------------------
+    // Every attribute is written unconditionally by these four, so a fixture
+    // declaring all of them keeps all of them in the audit.
+    { "virtual-key",
+      "<virtual-key key='67' velocity='90' durationTicks='480'/>" },
+    // edge='end' deliberately: with an empty edge and lane='notes', readXml
+    // DEFAULTS toKey to key (a move needs a destination, a resize does not),
+    // which would hide a dropped toKey.
+    { "drag-note",
+      "<drag-note clip='1,0' tick='960' key='64' channel='2' toTick='1920'"
+      " toKey='67' edge='end' lane='notes' toValue='90'/>" },
+    { "assert-event-editor",
+      "<assert-event-editor clip='1,0' kind='pianoroll' contains='notes=2'"
+      " absent='empty=1' grabPng='roll.png' grabWidth='640'"
+      " grabHeight='320'/>" },
+    { "assert-track-head",
+      "<assert-track-head trackPath='1,0' headHeight='132'"
+      " contains='density=Full' absent='I=1' grabPng='head.png'"
+      " grabWidth='160' grabHeight='160'/>" },
+
+    // --- the automation UI verbs (proposal 37 P6) ---------------------------
+    // `take` rather than `slotIndex` here, because a `cut:` target is the one
+    // that has takes; the slot half is covered by the write-tick row below.
+    // toTime/toValue are written only when the element carried either, so the
+    // fixture must set both or the pair would legitimately not come back.
+    { "drag-automation-point",
+      "<drag-automation-point owner='0,1' target='cut:Gain' take='1'"
+      " time='48000' value='0.25' toTime='96000' toValue='0.75'"
+      " modifiers='ctrl+alt'/>" },
+    // `time` and `release` are both written only when set, so both are here.
+    { "automation-write-tick",
+      "<automation-write-tick owner='0' target='param:1' slotIndex='2'"
+      " value='0.5' time='24000' release='1'/>" },
+    // set-lane-view writes each half only when it was asked for, and the
+    // automation half needs its three attributes together.
+    { "set-lane-view",
+      "<set-lane-view trackHeight='140' topRow='2' laneScaleRow='0'"
+      " laneScale='2.5' toggleTakesRow='1' automationTrack='0,1'"
+      " automationTarget='param:3' automationSlot='2' showAutomation='1'"
+      " clipEnvelopes='1'/>" },
+    { "assert-lane-alignment",
+      "<assert-lane-alignment grabPng='lanes.png' grabWidth='900'"
+      " grabHeight='700'/>" },
+
+    // timebase is written only when non-empty.
+    // --- the MIDI-out verbs (proposal 37 P7b) -------------------------------
+    // port/kind are written only when non-empty and `at` only when it was
+    // given, so the fixture sets all three plus every numeric attribute.
+    { "assert-midi-out",
+      "<assert-midi-out port='capture' kind='noteon' channel='2' key='60'"
+      " cc='7' value='100' at='-9600' tolerance='2048' count='1'"
+      " minCount='1' maxCount='2' index='0'/>" },
+    // minCount is written only when non-zero.
+    { "dump-midi-capture",
+      "<dump-midi-capture filename='midi_out.txt' minCount='6'/>" },
+    { "assert-midi-options",
+      "<assert-midi-options contains='backend=capture' absent='virtual=no'"
+      " outputPorts='1' inputPorts='1'/>" },
+    { "set-option", "<set-option key='midi/outOffsetMs' value='120'/>" },
+    { "wait-ms", "<wait-ms ms='3600'/>" },
+
+    { "assert-clip-window",
+      "<assert-clip-window clip='1,0' startTime='96000' duration='192000'"
+      " loopLength='24000' startOffset='4800' timebase='beats' take='1'/>" },
 };
 
 const char *fixtureFor(const QString &verb)

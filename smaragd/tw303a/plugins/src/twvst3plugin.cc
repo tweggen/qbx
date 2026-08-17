@@ -38,11 +38,17 @@
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
+#include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/ivstmidicontrollers.h"
+#include "pluginterfaces/vst/ivstnoteexpression.h"
+#include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "pluginterfaces/vst/vstspeaker.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -149,6 +155,9 @@ public:
     void prepare( std::uint32_t sampleRate, std::uint32_t maxBlock ) override;
     void process( const float *const *in, float *const *out,
                   std::uint32_t nframes ) override;
+    void process( const float *const *in, float *const *const *outBuses,
+                  std::uint32_t nframes, const twEventList &events,
+                  twEventOut &eventsOut, const twProcessContext &ctx ) override;
     void reset() override;
 
     std::size_t       paramCount() const override { return params_.size(); }
@@ -162,7 +171,11 @@ public:
 
     std::uint32_t reportedLatency() const override;
     bool supportsNativeEditor() const override { return hasGui_; }
-    bool acceptsNotes()         const override { return acceptsNotes_; }
+
+    twPluginCapabilities capabilities() const override { return caps_; }
+    std::size_t          audioOutBusCount() const override { return outBusShape_.size(); }
+    twPluginBusInfo      audioOutBus( std::size_t i ) const override;
+    std::uint32_t        tailFrames() const override;
 
 private:
     twVst3Plugin() = default;
@@ -171,8 +184,20 @@ private:
     void teardown();
     void deactivate();                 // hostMutex_ must be held
     void readBusLayout();
+    void readEventBuses();
+    void readMidiMap();
     void readParams();
     void refreshMirror();              // main thread
+
+    // Translate the host's twEvents into inEventList_ / paramChanges_.
+    void buildInputEvents( const twEventList &events, std::uint32_t nframes );
+    // The parameter a MIDI controller number was mapped to, or kNoParam.
+    static constexpr Steinberg::Vst::ParamID kNoParam = 0xFFFFFFFFu;
+    Steinberg::Vst::ParamID ccParam( std::uint32_t cc ) const;
+    void addParamPoint( Steinberg::Vst::ParamID id, Steinberg::int32 offset,
+                        double value, bool alreadyNormalized );
+    // Translate what the plugin pushed back into the host's sink.
+    void drainOutputEvents( twEventOut &eventsOut );
 
     struct BusShape {
         int32 channels = 0;
@@ -195,8 +220,16 @@ private:
 
     twPluginIoLayout io_{};
     std::string      uid_, path_;
-    bool             hasGui_       = false;
-    bool             acceptsNotes_ = false;
+    bool             hasGui_ = false;
+
+    twPluginCapabilities caps_{};
+    Steinberg::int32     eventBusesIn_ = 0, eventBusesOut_ = 0;
+    // The CC -> parameter map (proposal 37 §5.2). VST3 has NO event type for a
+    // control change: IMidiMapping::getMidiControllerAssignment is the only
+    // route, and an unmapped CC is dropped rather than invented. Read ONCE at
+    // prepare, per (bus, channel, cc) — the spec allows it to change only on a
+    // restartComponent, which we already record.
+    std::map<std::uint32_t, Steinberg::Vst::ParamID> ccToParam_;
 
     // Every declared bus, not just main: VST3's process() expects one
     // AudioBusBuffers per declared bus with a matching channel count, even for
@@ -224,6 +257,8 @@ private:
     std::atomic<bool>          resyncAll_{ false };
 
     twVst3ParamChanges paramChanges_;
+    twVst3EventList    inEventList_, outEventList_;
+    Steinberg::Vst::ProcessContext processCtx_{};
 
     // hostMutex_ serializes the activation TRANSITIONS. process() never takes
     // it — it only reads the flags, which is why they are atomic.
@@ -233,6 +268,8 @@ private:
     std::atomic<bool>          processFailed_{ false };
     std::atomic<std::uint32_t> preparedMax_{ 0 };
     std::uint32_t              preparedRate_ = 0;   // hostMutex_ only
+    // The same value, readable from process() (which never takes hostMutex_).
+    std::atomic<std::uint32_t> preparedRateA_{ 0 };
 };
 
 // --- construction -------------------------------------------------------------
@@ -369,10 +406,7 @@ bool twVst3Plugin::init( const std::string &path, const std::string &uid )
     readBusLayout();
     readParams();
 
-    // An instrument declares an event input bus. Notes are out of scope until
-    // the MIDI/note model exists (proposal 08 §Known deferrals), but reporting
-    // it honestly is what lets the UI say so.
-    acceptsNotes_ = component_->getBusCount( Vst::kEvent, Vst::kInput ) > 0;
+    readEventBuses();
 
     TW_LOGI( "plugins", "[vst3] instantiated '%s' (%u in / %u out, %llu params%s)",
              uid_.c_str(), (unsigned)io_.audioInputs, (unsigned)io_.audioOutputs,
@@ -450,6 +484,93 @@ void twVst3Plugin::readBusLayout()
 
     io_.audioInputs  = (std::uint16_t)( mainInBus_  >= 0 ? inBusShape_[(std::size_t)mainInBus_].channels : 0 );
     io_.audioOutputs = (std::uint16_t)( mainOutBus_ >= 0 ? outBusShape_[(std::size_t)mainOutBus_].channels : 0 );
+}
+
+// Event (note) buses + what the CONTROLLER offers (proposal 37 §5.2).
+//
+// VST3 puts the two halves of "can this thing take notes" in two places: the
+// COMPONENT declares kEvent buses, and the CONTROLLER declares the CC map and
+// the note expressions. A split pair therefore has to be asked twice, which is
+// exactly why the split shape had to become a real fixture in P2.
+void twVst3Plugin::readEventBuses()
+{
+    eventBusesIn_  = component_ ? component_->getBusCount( Vst::kEvent, Vst::kInput ) : 0;
+    eventBusesOut_ = component_ ? component_->getBusCount( Vst::kEvent, Vst::kOutput ) : 0;
+    if( eventBusesIn_ < 0 )  eventBusesIn_ = 0;
+    if( eventBusesOut_ < 0 ) eventBusesOut_ = 0;
+
+    caps_.acceptsNotes  = eventBusesIn_ > 0;
+    caps_.emitsNotes    = eventBusesOut_ > 0;
+    caps_.notePortsIn   = (std::uint16_t)eventBusesIn_;
+    caps_.notePortsOut  = (std::uint16_t)eventBusesOut_;
+    // VST3 notes are always structured and always carry a noteId; there is no
+    // raw-MIDI dialect to fall back to.
+    caps_.supportsNoteIds = eventBusesIn_ > 0;
+    caps_.wantsMidi1Raw   = false;
+    caps_.emitsParamChanges = controller_ != nullptr;
+    // An instrument is an audio-effect class whose subCategories say so; the
+    // MODULE scanner reads that. At instance level the honest proxy is
+    // "declares notes in and no main audio input".
+    caps_.isInstrument = eventBusesIn_ > 0 && io_.audioInputs == 0;
+
+    if( controller_ ) {
+        Vst::INoteExpressionController *nec = nullptr;
+        if( controller_->queryInterface( Vst::INoteExpressionController::iid,
+                                         (void **)&nec ) == kResultOk && nec ) {
+            caps_.supportsNoteExpression = nec->getNoteExpressionCount( 0, 0 ) > 0;
+            nec->release();
+        }
+    }
+}
+
+// The CC -> parameter map. Queried once, for the CCs we can actually produce.
+void twVst3Plugin::readMidiMap()
+{
+    ccToParam_.clear();
+    if( !controller_ || eventBusesIn_ <= 0 )
+        return;
+
+    Vst::IMidiMapping *mm = nullptr;
+    if( controller_->queryInterface( Vst::IMidiMapping::iid, (void **)&mm ) != kResultOk
+        || !mm )
+        return;
+
+    // Channel 0 of event bus 0 only. Per-channel maps exist in the spec but
+    // nothing above this layer has a channel-specific CC to send yet, and
+    // querying 16 channels x 130 controllers on every prepare would be 2080
+    // cross-boundary calls for one used entry.
+    for( Steinberg::int32 cc = 0; cc <= Vst::kCtrlProgramChange; ++cc ) {
+        Vst::ParamID pid = 0;
+        if( mm->getMidiControllerAssignment( 0, 0, (Vst::CtrlNumber)cc, pid ) == kResultOk )
+            ccToParam_[(std::uint32_t)cc] = pid;
+    }
+    mm->release();
+
+    if( !ccToParam_.empty() )
+        TW_LOGD( "plugins", "[vst3] '%s' maps %llu MIDI controller(s) to parameters",
+                 uid_.c_str(), (unsigned long long)ccToParam_.size() );
+}
+
+twPluginBusInfo twVst3Plugin::audioOutBus( std::size_t i ) const
+{
+    twPluginBusInfo b;
+    if( i >= outBusShape_.size() )
+        return b;
+    b.channels = (std::uint16_t)outBusShape_[i].channels;
+    b.isMain   = outBusShape_[i].isMain;
+    return b;
+}
+
+std::uint32_t twVst3Plugin::tailFrames() const
+{
+    if( !processor_ )
+        return 0;
+    const std::uint32_t t = processor_->getTailSamples();
+    // VST3 spells "infinite" as kInfiniteTail (0xFFFFFFFF) and "no tail" as 0.
+    // An infinite tail cannot size a pre-roll, so it is clamped to something a
+    // caller can budget for: 10 seconds at 48 kHz.
+    constexpr std::uint32_t kInfiniteCap = 480000;
+    return t > kInfiniteCap ? kInfiniteCap : t;
 }
 
 void twVst3Plugin::readParams()
@@ -562,6 +683,7 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
         return;
     }
     preparedRate_ = sampleRate;
+    preparedRateA_.store( sampleRate, std::memory_order_release );
     preparedMax_.store( maxBlock, std::memory_order_release );
     processFailed_.store( false, std::memory_order_release );
 
@@ -575,6 +697,31 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
     for( std::size_t i = 0; i < outBusShape_.size(); ++i )
         component_->activateBus( Vst::kAudio, Vst::kOutput, (int32)i,
                                  (int)i == mainOutBus_ );
+
+    // THE EVENT BUSES MUST BE ACTIVATED, AND UNTIL PROPOSAL 37 P2 THEY WERE NOT
+    // (plugins/CONTRACT.md invariant 29). Only AUDIO buses were switched on
+    // here, so a plugin that gates its note handling on activateBus — which the
+    // spec entitles it to do — received a perfectly well-formed IEventList and
+    // ignored every note in it. The symptom is total silence from an instrument
+    // with no error anywhere, which is why twtestvst3's TestSine reproduces it
+    // deliberately: it answers an unactivated event bus with silence.
+    //
+    // SMARAGD_VST3_NO_EVENT_BUS=1 SUPPRESSES the activation. It exists for one
+    // reason: an assertion that a host bug is fixed is worthless unless the
+    // assertion can still fail, and plugins_test uses this knob to run the
+    // SAME fixture down the broken path and watch it go silent (AC3). Read per
+    // prepare() rather than once per process, because the gate needs both
+    // behaviours inside one test run. Never set in production.
+    const char *noEventBus = std::getenv( "SMARAGD_VST3_NO_EVENT_BUS" );
+    const bool  activateEvents = !( noEventBus && noEventBus[0] == '1' );
+    if( !activateEvents )
+        TW_LOGW( "plugins", "[vst3] SMARAGD_VST3_NO_EVENT_BUS=1: NOT activating the "
+                 "event bus of '%s' — this is the deliberately broken host path",
+                 uid_.c_str() );
+    for( int32 i = 0; i < eventBusesIn_; ++i )
+        component_->activateBus( Vst::kEvent, Vst::kInput, i, activateEvents );
+    for( int32 i = 0; i < eventBusesOut_; ++i )
+        component_->activateBus( Vst::kEvent, Vst::kOutput, i, activateEvents );
 
     // --- buffers. Allocated here, never in process(). ------------------------
     //
@@ -616,8 +763,15 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
     mainOutPtrs_.assign( io_.audioOutputs, nullptr );
 
     // Worst case per drain is one point per parameter (last-value-wins within a
-    // block), plus headroom for a ring's worth landing on one parameter.
-    paramChanges_.reserve( params_.size(), 8 );
+    // block), plus headroom for a ring's worth landing on one parameter. Since
+    // proposal 37 P2 an automation slice can put MANY points on one parameter
+    // inside one block, so the per-parameter headroom is the block's event cap.
+    paramChanges_.reserve( params_.size(), twEventLimits::kMaxEventsPerBlock );
+    // Event storage, sized here and never grown in process() (invariant 2).
+    inEventList_.reserve( twEventLimits::kMaxEventsPerBlock );
+    outEventList_.reserve( twEventLimits::kMaxEventsPerBlock );
+
+    readMidiMap();
 
     // Documented order: setActive(true) first, then setProcessing(true).
     if( component_->setActive( true ) != kResultOk ) {
@@ -772,15 +926,205 @@ void twVst3Plugin::drainEditsIntoChanges()
     }
 }
 
+// --- events (proposal 37 P2) --------------------------------------------------
+
+Vst::ParamID twVst3Plugin::ccParam( std::uint32_t cc ) const
+{
+    auto it = ccToParam_.find( cc );
+    return it == ccToParam_.end() ? kNoParam : it->second;
+}
+
+void twVst3Plugin::addParamPoint( Vst::ParamID id, int32 offset, double value,
+                                  bool alreadyNormalized )
+{
+    if( id == kNoParam )
+        return;   // an unmapped controller is dropped, never guessed at
+    (void)alreadyNormalized;   // every value reaching here is already [0,1]
+    if( value < 0.0 ) value = 0.0;
+    if( value > 1.0 ) value = 1.0;
+
+    int32 qIndex = 0;
+    Vst::IParamValueQueue *q = paramChanges_.addParameterData( id, qIndex );
+    if( !q )
+        return;
+    int32 pIndex = 0;
+    q->addPoint( offset, value, pIndex );
+}
+
+
+// Translate the host's twEvents into ProcessData::inputEvents, and — for the
+// kinds VST3 has no event type for — into inputParameterChanges.
+//
+// THE CC GOTCHA. VST3 carries no control-change event at all. A CC reaches a
+// plugin ONLY as a parameter change at the CC's sample offset, through the map
+// IMidiMapping declared (readMidiMap). An unmapped CC is DROPPED — inventing a
+// parameter for it would move a control the plugin never associated with it.
+void twVst3Plugin::buildInputEvents( const twEventList &list, std::uint32_t nframes )
+{
+    inEventList_.clear();
+    if( list.count == 0 )
+        return;
+
+    // A plugin with no kEvent input bus can still receive PARAMETER points —
+    // an effect's automation is exactly that. Gating the whole translation on
+    // the event-bus count would have silently dropped every automation point
+    // for every effect, which is a much larger hole than the one it guards.
+    const bool notesWanted = eventBusesIn_ > 0;
+
+    for( std::uint32_t i = 0; i < list.count; ++i ) {
+        const twEvent &ev = list.events[i];
+        if( twEventIsMetadata( ev.kind ) )
+            continue;
+
+        std::int32_t t = ev.time < 0 ? 0 : (std::int32_t)ev.time;
+        if( nframes > 0 && t >= (std::int32_t)nframes )
+            t = (std::int32_t)nframes - 1;
+
+        Vst::Event e{};
+        e.busIndex     = 0;
+        e.sampleOffset = t;
+        e.ppqPosition  = 0.0;
+        e.flags        = ( ev.flags & twEventIsLive ) ? Vst::Event::kIsLive : 0;
+
+        switch( ev.kind ) {
+        case twEventKind::NoteOn:
+            if( !notesWanted ) continue;
+            e.type                = Vst::Event::kNoteOnEvent;
+            e.noteOn.channel      = ev.channel >= 0 ? ev.channel : 0;
+            e.noteOn.pitch        = ev.key >= 0 ? ev.key : 60;
+            e.noteOn.tuning       = 0.0f;
+            e.noteOn.velocity     = (float)ev.value;
+            e.noteOn.length       = 0;
+            e.noteOn.noteId       = ev.noteId;
+            break;
+        case twEventKind::NoteOff:
+            if( !notesWanted ) continue;
+            e.type                = Vst::Event::kNoteOffEvent;
+            e.noteOff.channel     = ev.channel >= 0 ? ev.channel : 0;
+            e.noteOff.pitch       = ev.key >= 0 ? ev.key : 60;
+            e.noteOff.velocity    = (float)ev.value;
+            e.noteOff.noteId      = ev.noteId;
+            e.noteOff.tuning      = 0.0f;
+            break;
+        case twEventKind::PolyPressure:
+            if( !notesWanted ) continue;
+            e.type                     = Vst::Event::kPolyPressureEvent;
+            e.polyPressure.channel     = ev.channel >= 0 ? ev.channel : 0;
+            e.polyPressure.pitch       = ev.key >= 0 ? ev.key : 60;
+            e.polyPressure.pressure    = (float)ev.value;
+            e.polyPressure.noteId      = ev.noteId;
+            break;
+        case twEventKind::NoteExpression:
+            if( !notesWanted || !caps_.supportsNoteExpression )
+                continue;
+            e.type                            = Vst::Event::kNoteExpressionValueEvent;
+            e.noteExpressionValue.typeId      = (Vst::NoteExpressionTypeID)ev.paramId;
+            e.noteExpressionValue.noteId      = ev.noteId;
+            e.noteExpressionValue.value       = ev.value;
+            break;
+
+        // --- the kinds that are parameter points, not events -----------------
+        case twEventKind::ControlChange:
+            addParamPoint( ccParam( (std::uint32_t)ev.paramId ), t, ev.value, true );
+            continue;
+        case twEventKind::PitchBend:
+            // -1..+1 here, normalized [0,1] at the VST3 interface.
+            addParamPoint( ccParam( Vst::kPitchBend ), t,
+                           ( ev.value + 1.0 ) * 0.5, true );
+            continue;
+        case twEventKind::ChannelPressure:
+            addParamPoint( ccParam( Vst::kAfterTouch ), t, ev.value, true );
+            continue;
+        case twEventKind::ProgramChange:
+            addParamPoint( ccParam( Vst::kCtrlProgramChange ), t,
+                           ev.value / 127.0, true );
+            continue;
+        case twEventKind::ParamValue:
+            addParamPoint( (Vst::ParamID)ev.paramId, t, ev.value, false );
+            continue;
+
+        // NoteChoke, NoteEnd, Sysex, Midi1, ParamMod and the gestures have no
+        // VST3 input representation we can produce honestly.
+        default:
+            continue;
+        }
+
+        inEventList_.append( e );
+    }
+}
+
+// Everything the plugin pushed into ProcessData::outputEvents, translated back.
+void twVst3Plugin::drainOutputEvents( twEventOut &eventsOut )
+{
+    for( std::size_t i = 0; i < outEventList_.size(); ++i ) {
+        const Vst::Event &e = outEventList_.at( i );
+        twEvent o;
+        o.time = e.sampleOffset;
+        o.port = (std::int16_t)e.busIndex;
+        switch( e.type ) {
+        case Vst::Event::kNoteOnEvent:
+            o.kind    = twEventKind::NoteOn;
+            o.channel = e.noteOn.channel;
+            o.key     = e.noteOn.pitch;
+            o.noteId  = e.noteOn.noteId;
+            o.value   = e.noteOn.velocity;
+            break;
+        case Vst::Event::kNoteOffEvent:
+            o.kind    = twEventKind::NoteOff;
+            o.channel = e.noteOff.channel;
+            o.key     = e.noteOff.pitch;
+            o.noteId  = e.noteOff.noteId;
+            o.value   = e.noteOff.velocity;
+            break;
+        case Vst::Event::kPolyPressureEvent:
+            o.kind    = twEventKind::PolyPressure;
+            o.channel = e.polyPressure.channel;
+            o.key     = e.polyPressure.pitch;
+            o.noteId  = e.polyPressure.noteId;
+            o.value   = e.polyPressure.pressure;
+            break;
+        case Vst::Event::kNoteExpressionValueEvent:
+            o.kind    = twEventKind::NoteExpression;
+            o.noteId  = e.noteExpressionValue.noteId;
+            o.paramId = (std::uint32_t)e.noteExpressionValue.typeId;
+            o.value   = e.noteExpressionValue.value;
+            break;
+        default:
+            continue;   // chords, scales, data blobs: no consumer
+        }
+        eventsOut.push( o );
+    }
+}
+
 // --- processing ---------------------------------------------------------------
 
+// The LEGACY overload — an empty event list, an unreachable sink and an
+// all-invalid context, so it executes exactly the instructions it executed
+// before proposal 37: no input events, no ProcessContext, no output events
+// collected. That identity is what the effect goldens' byte-`cmp` rests on.
 void twVst3Plugin::process( const float *const *in, float *const *out,
                             std::uint32_t nframes )
 {
+    const twEventList      noEvents{};
+    twEventOut             noSink;
+    const twProcessContext noCtx{};
+    float *const *const    outBuses[1] = { out };
+    process( in, outBuses, nframes, noEvents, noSink, noCtx );
+}
+
+void twVst3Plugin::process( const float *const *in, float *const *const *outBuses,
+                            std::uint32_t nframes, const twEventList &hostEvents,
+                            twEventOut &eventsOut, const twProcessContext &ctx )
+{
+    // Only the MAIN bus is wired; bus > 0 is aux output, which nothing consumes
+    // yet (proposal 37 §5.4).
+    float *const *out = ( outBuses && !outBusShape_.empty() ) ? outBuses[0] : nullptr;
+
     const std::uint32_t nIn  = io_.audioInputs;
     const std::uint32_t nOut = io_.audioOutputs;
 
     auto passThrough = [&]() {
+        if( !out ) return;
         for( std::uint32_t c = 0; c < nOut; ++c ) {
             if( !out[c] ) continue;
             if( c < nIn && in && in[c] )
@@ -808,6 +1152,8 @@ void twVst3Plugin::process( const float *const *in, float *const *out,
     }
 
     drainEditsIntoChanges();
+    buildInputEvents( hostEvents, nframes );
+    outEventList_.clear();
 
     // Point the main buses at the caller's de-interleaved buffers. The input
     // buffers are the host's own scratch (see twPluginInsert), so a plugin that
@@ -834,16 +1180,50 @@ void twVst3Plugin::process( const float *const *in, float *const *out,
     data.outputs                = outBufs_.empty() ? nullptr : outBufs_.data();
     data.inputParameterChanges  = &paramChanges_;
     data.outputParameterChanges = nullptr;
-    data.inputEvents            = nullptr;   // notes are a documented deferral
-    data.outputEvents           = nullptr;
-    data.processContext         = nullptr;   // free-running; no tempo map yet
+    data.inputEvents            = &inEventList_;
+    data.outputEvents           = eventBusesOut_ > 0 ? &outEventList_ : nullptr;
+
+    // ProcessContext, built only from what the caller CLAIMS to know
+    // (proposal 37 F5: before this, every plugin saw processContext == nullptr,
+    // so an arpeggiator could not sync to anything). An all-invalid context —
+    // which is what the legacy overload passes — leaves it nullptr, exactly as
+    // before.
+    data.processContext = nullptr;
+    if( ctx.validFlags != twCtxNone ) {
+        std::memset( &processCtx_, 0, sizeof( processCtx_ ) );
+        processCtx_.sampleRate = (double)preparedRateA_.load( std::memory_order_acquire );
+        processCtx_.state      = ctx.playing ? Vst::ProcessContext::kPlaying : 0;
+        if( ctx.has( twCtxPosition ) ) {
+            processCtx_.projectTimeSamples = (Vst::TSamples)ctx.position;
+            if( processCtx_.sampleRate > 0.0 )
+                processCtx_.systemTime =
+                    (Steinberg::int64)( (double)ctx.position / processCtx_.sampleRate * 1e9 );
+        }
+        if( ctx.has( twCtxTempo ) ) {
+            processCtx_.tempo = ctx.tempoBpm;
+            processCtx_.state |= Vst::ProcessContext::kTempoValid;
+        }
+        if( ctx.has( twCtxTimeSig ) ) {
+            processCtx_.timeSigNumerator   = ctx.tsNum;
+            processCtx_.timeSigDenominator = ctx.tsDen;
+            processCtx_.state |= Vst::ProcessContext::kTimeSigValid;
+        }
+        if( ctx.has( twCtxPpqPosition ) ) {
+            processCtx_.projectTimeMusic = ctx.ppqPos;
+            processCtx_.state |= Vst::ProcessContext::kProjectTimeMusicValid;
+        }
+        data.processContext = &processCtx_;
+    }
 
     if( processor_->process( data ) != kResultOk ) {
         TW_LOGE( "plugins", "[vst3] '%s' returned an error from process(); "
                  "disabling processing for this instance", uid_.c_str() );
         processFailed_.store( true, std::memory_order_release );
         passThrough();
+        return;
     }
+
+    drainOutputEvents( eventsOut );
 }
 
 // --- state --------------------------------------------------------------------

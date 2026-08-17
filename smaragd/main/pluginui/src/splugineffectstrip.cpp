@@ -47,6 +47,11 @@ const char *modeName( audio::twPluginSlotMode m )
         case audio::twPluginSlotMode::Direct:      return "Direct";
         case audio::twPluginSlotMode::DualMono:    return "DualMono";
         case audio::twPluginSlotMode::MonoFold:    return "MonoFold";
+        // The generator rows (proposal 37 P3b, design 4.3).
+        case audio::twPluginSlotMode::DirectGen:   return "DirectGen";
+        case audio::twPluginSlotMode::MonoSpread:  return "MonoSpread";
+        case audio::twPluginSlotMode::GenFold:     return "GenFold";
+        case audio::twPluginSlotMode::WideGen:     return "WideGen";
     }
     return "Transparent";
 }
@@ -125,12 +130,20 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
     // Add button
     QHBoxLayout *addLayout = new QHBoxLayout();
     addLayout->addStretch();
+    addInstrumentBtn_ = new QPushButton("+ Add Instrument");
+    addInstrumentBtn_->setMaximumWidth(200);
+    addInstrumentBtn_->setToolTip(
+        tr("Insert an instrument in slot 0. A track has at most one, and it is "
+           "what sounds the track's MIDI clips."));
+    addLayout->addWidget(addInstrumentBtn_);
     QPushButton *addBtn = new QPushButton("+ Add Effect");
     addBtn->setMaximumWidth(200);
     addLayout->addWidget(addBtn);
     mainLayout->addLayout(addLayout);
 
     connect(addBtn, &QPushButton::clicked, this, &SPluginEffectStrip::onAddPluginClicked);
+    connect(addInstrumentBtn_, &QPushButton::clicked, this,
+            &SPluginEffectStrip::onAddInstrumentClicked);
 
     // Connect chain signals if it exists
     if (pluginChain_) {
@@ -194,16 +207,31 @@ void SPluginEffectStrip::rebuildUI()
         const audio::twPluginSlotState state = slot->getSlotState();
         const bool active = ( state == audio::twPluginSlotState::Active );
 
+        // THE INSTRUMENT ROW COMES FIRST, and looks it (proposal 37 6.1). It is
+        // first because it IS slot 0 - the position is the role (design D3) -
+        // so this is a derived appearance, never a second ordering.
+        const bool isInstrumentRow = slot->isInstrument();
+
         // Create a container widget for drag support
         QWidget *container = new QWidget();
-        container->setStyleSheet("QWidget { border: 1px solid #ccc; border-radius: 2px; padding: 4px; }");
-        container->setCursor(Qt::OpenHandCursor);
+        container->setStyleSheet(
+            isInstrumentRow
+                ? "QWidget { border: 1px solid #6050a0; border-radius: 2px; "
+                  "padding: 4px; background: #efecf8; }"
+                : "QWidget { border: 1px solid #ccc; border-radius: 2px; padding: 4px; }");
+        // Not draggable: nothing may move in front of the instrument and the
+        // instrument may not leave slot 0, so reorder-plugin would refuse the
+        // drop anyway - better not to offer the grab.
+        container->setCursor(isInstrumentRow ? Qt::ArrowCursor : Qt::OpenHandCursor);
         container->setAcceptDrops(true);
         QHBoxLayout *rowLayout = new QHBoxLayout(container);
         rowLayout->setContentsMargins(0, 0, 0, 0);
 
         // Plugin name — the STORED one, so a missing plugin is identifiable.
         QString labelText = storedName(slot);
+        if (isInstrumentRow) {
+            labelText = tr("\xE2\x99\xAA ") + labelText;   // an eighth note
+        }
         if (state == audio::twPluginSlotState::Missing) {
             labelText += tr(" (missing)");
         } else if (state == audio::twPluginSlotState::Unsupported) {
@@ -218,7 +246,11 @@ void SPluginEffectStrip::rebuildUI()
         }
         rowLayout->addWidget(nameLabel);
 
-        const QString tooltip = reasonTooltip(slot);
+        QString tooltip = reasonTooltip(slot);
+        if (isInstrumentRow) {
+            tooltip = tr("Instrument (slot 0): it sounds this track's MIDI clips "
+                         "and its children's.\n") + tooltip;
+        }
         container->setToolTip(tooltip);
         nameLabel->setToolTip(tooltip);
 
@@ -317,6 +349,17 @@ void SPluginEffectStrip::rebuildUI()
     }
 
     pluginsLayout_->addStretch();
+
+    // Hidden once the track has one: a second instrument is refused, and an
+    // affordance that only ever fails is worse than none.
+    if (addInstrumentBtn_) addInstrumentBtn_->setVisible(addInstrumentEnabled());
+}
+
+bool SPluginEffectStrip::addInstrumentEnabled() const
+{
+    if (!pluginChain_ || pluginChain_->getSlotCount() <= 0) return true;
+    SPluginSlot *first = pluginChain_->getSlotAt(0);
+    return !(first && first->isInstrument());
 }
 
 QString SPluginEffectStrip::describeSlot(int slotIndex) const
@@ -333,8 +376,13 @@ QString SPluginEffectStrip::describeSlot(int slotIndex) const
     // visibly. It read empty for any track nested in a folder. Asserting the
     // resolved path is what makes that regression catchable.
     return QStringLiteral(
-               "name=%1|state=%2|mode=%3|bypass=%4|nameEnabled=%5|bypassEnabled=%6"
-               "|editEnabled=%7|reload=%8|trackPath=%9|tooltip=%10")
+               // `kind` sits between mode and bypass DELIBERATELY: the M5
+               // cases assert `name=...|state=...` and
+               // `nameEnabled=...|...|reload=...` as contiguous spans, and a
+               // field inserted inside either of those would break assertions
+               // that are about something else entirely.
+               "name=%1|state=%2|mode=%3|kind=%11|bypass=%4|nameEnabled=%5"
+               "|bypassEnabled=%6|editEnabled=%7|reload=%8|trackPath=%9|tooltip=%10")
         .arg(pw.nameLabel->text(),
              QString::fromLatin1(stateName(pw.slot->getSlotState())),
              QString::fromLatin1(modeName(pw.slot->getSlotMode())))
@@ -344,7 +392,10 @@ QString SPluginEffectStrip::describeSlot(int slotIndex) const
         .arg(pw.editBtn->isEnabled() ? 1 : 0)
         .arg(pw.reloadBtn ? 1 : 0)
         .arg(trackPathString())
-        .arg(pw.tooltip);
+        .arg(pw.tooltip)
+        // DERIVED from the descriptor, like everything else about the role.
+        .arg(pw.slot->isInstrument() ? QStringLiteral("instrument")
+                                     : QStringLiteral("effect"));
 }
 
 bool SPluginEffectStrip::eventFilter(QObject *watched, QEvent *event)
@@ -418,9 +469,23 @@ QString SPluginEffectStrip::editorValueText(int slotIndex, int row)
     return editor ? editor->valueLabelText(row) : QString();
 }
 
+void SPluginEffectStrip::onAddInstrumentClicked()
+{
+    SPluginBrowserDialog browser(this, SPluginBrowserDialog::Kind::Instruments);
+    if (browser.exec() != QDialog::Accepted) return;
+    const auto *descriptor = browser.selectedPlugin();
+    if (!descriptor) return;
+    const QString trackPath = trackPathString();
+    if (trackPath.isEmpty()) return;
+    // slotIndex 0 is what the caller MEANS; the action enforces it regardless
+    // (an instrument descriptor always lands at 0, and a second is refused).
+    SApplication::app().submitAction(
+        new SInsertPluginAction(trackPath, 0, *descriptor));
+}
+
 void SPluginEffectStrip::onAddPluginClicked()
 {
-    SPluginBrowserDialog browser(this);
+    SPluginBrowserDialog browser(this, SPluginBrowserDialog::Kind::Effects);
     if (browser.exec() == QDialog::Accepted) {
         const auto *descriptor = browser.selectedPlugin();
         if (descriptor) {

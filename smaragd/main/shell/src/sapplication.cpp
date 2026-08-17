@@ -21,6 +21,8 @@
 #include "app/shell/sapplication.h"
 #include "app/model/sproject.h"
 #include "app/shell/ssettings.h"
+#include "app/shell/smidioutpump.h"
+#include "app/shell/sautomationrecorder.h"
 #include "app/servicesui/soptions.h"
 #include "app/actions/sactionhistory.h"
 #include "app/actions/saction.h"
@@ -30,6 +32,13 @@
 #include "app/selection/sremovefromselectionaction.h"
 #include "app/selection/sclearselectionaction.h"
 #include "app/selection/stoggleselectionaction.h"
+#include "app/objects/track/sinstrumenttracks.h"
+#include "app/objects/track/strack.h"
+#include "app/objects/track/spluginslot.h"
+
+#include <cmath>
+#include <limits>
+#include <vector>
 
 SApplication *SApplication::singleton_ = NULL;
 
@@ -104,6 +113,25 @@ void SApplication::setPlaying( bool f )
     // Meters: start on play; on stop leave the pump running so the bars decay to
     // the floor (pumpMeters counts the tail down and stops itself).
     if( f ) startMetering();
+
+    // MIDI out (proposal 37 P7b). NOT a fold into the metering pump: the meters
+    // deliberately keep ticking after a stop so the bars can decay, whereas
+    // MIDI-out must go silent - and send its all-notes-off - at the instant the
+    // transport does. A render never gets here (it does not set isPlaying_),
+    // which is what makes "renders emit nothing" true by construction.
+    if( midiOutPump_ ) {
+        if( f ) midiOutPump_->start();
+        else    midiOutPump_->stop();
+    }
+
+    // Automation write passes (proposal 37 P6) are bounded by the TRANSPORT:
+    // Write's overwrite window opens where the run did, and Latch holds its
+    // last value until the run ends. A stop therefore commits whatever pass is
+    // open - one action, here, on the main thread.
+    if( automationRecorder_ ) {
+        if( f ) automationRecorder_->transportStarted( getGlobalLocatorPos() );
+        else    automationRecorder_->transportStopped( getGlobalLocatorPos() );
+    }
 }
 
 const SSelectionList &SApplication::getSelectionList() const
@@ -227,12 +255,23 @@ void SApplication::setGlobalLocatorPos( offset_t o )
     // spot. requestSeek is RT-safe and a no-op when nothing is playing.
     if( isPlaying_ && t3Speaker_ )
         t3Speaker_->requestSeek( o );
+
+    // A locate while running: the MIDI queue describes a playhead that no
+    // longer exists, so it is dropped, every sounding note is released and the
+    // chase is re-issued at the new position (D6). Told EXPLICITLY rather than
+    // inferred from a jump in the atomic - a forward seek of less than a tick
+    // is indistinguishable from ordinary advance.
+    if( isPlaying_ && midiOutPump_ ) midiOutPump_->locate( o );
 }
 
 void SApplication::setGlobalLocatorPosRealtime( offset_t o )
 {
-    // Audio-thread setter: atomic store ONLY. No emit (see header rationale).
+    // Audio-thread setter: atomic stores ONLY. No emit (see header rationale).
     globalLocatorPos_.store( o, std::memory_order_relaxed );
+    // The publication COUNTER, not just the value: a position that has not
+    // moved is still evidence that the device asked for a block, which is what
+    // the MIDI-out pump anchors its clock on (see locatorPublishSeq).
+    locatorPublishSeq_.fetch_add( 1, std::memory_order_relaxed );
 }
 
 void SApplication::pumpLocator()
@@ -282,6 +321,20 @@ offset_t SApplication::meterLatencyFrames() const
     if( devRate == 0 || projRate <= 0 ) return (offset_t) devLatency;
 
     return (offset_t) ( ( (double) devLatency * (double) projRate )
+                        / (double) devRate + 0.5 );
+}
+
+offset_t SApplication::outputBufferFramesProject() const
+{
+    if( !t3Speaker_ ) return 0;
+    audio::AudioBackend *backend = t3Speaker_->getBackend();
+    if( !backend ) return 0;
+    const std::uint32_t devBuffer = backend->getConfig().bufferFrames;
+    if( devBuffer == 0 ) return 0;
+    const std::uint32_t devRate  = backend->getConfig().sampleRate;
+    const int           projRate = t3Env_ ? t3Env_->getSRate() : 0;
+    if( devRate == 0 || projRate <= 0 ) return (offset_t) devBuffer;
+    return (offset_t) ( ( (double) devBuffer * (double) projRate )
                         / (double) devRate + 0.5 );
 }
 
@@ -474,6 +527,12 @@ SApplication::SApplication( int &argc, char **argv )
     meterTimer_ = new QTimer( this );
     meterTimer_->setInterval( 33 );
     connect( meterTimer_, &QTimer::timeout, this, &SApplication::pumpMeters );
+    // Proposal 37 P7b: the MIDI-out pump. Built here, before any project
+    // exists, because its enumeration probe port must be the FIRST MidiOutput
+    // this process constructs (see SMidiOutPump's constructor). Its own timer
+    // only runs between play and stop.
+    midiOutPump_.reset( new SMidiOutPump( this ) );
+    automationRecorder_.reset( new SAutomationRecorder( this ) );
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
@@ -506,9 +565,18 @@ SApplication::SApplication( int &argc, char **argv )
 
 SApplication::~SApplication()
 {
-    // Join the scan worker BEFORE anything else goes away: it holds a QProcess
-    // and writes the cache, and the registry outlives us (it is a static).
-    audio::pluginRegistry().waitForScan();
+    // Stop and join the scan worker BEFORE anything else goes away: it holds a
+    // QProcess and writes the cache, and the registry outlives us (it is a
+    // static). stopScan(), not waitForScan(): a scan still walking this
+    // machine's installed modules must not hold the process open for minutes,
+    // and it must not still be alive (and logging) once static destruction
+    // starts -- see plan/STATE.md 2026-08-16.
+    audio::pluginRegistry().stopScan();
+    // The MIDI scheduler threads join HERE, on the main thread, while the log
+    // sink is still alive - not during static destruction, which is where this
+    // repo has already recorded a teardown hang of exactly that shape.
+    midiOutPump_.reset();
+    automationRecorder_.reset();
     DTOR_DEL( actionHistory_ );
     t3Speaker_.reset();
     DTOR_DEL( t3Env_ );
@@ -546,6 +614,31 @@ bool SApplication::isRenderingActive() const
     return renderSession_ && renderSession_->isRunning();
 }
 
+// Proposal 37 D4 / 4.4 - see the header for WHY and for the call-site rules.
+void SApplication::beginRun( offset_t pos )
+{
+    if( !currentProject_ ) return;
+    SObject *root = currentProject_->getRootComponent();
+    if( !root ) return;
+
+    std::vector<STrack *> tracks;
+    sinstruments::collectInstrumentTracks( root, tracks );
+    if( tracks.empty() ) return;      // no instrument => no barrier, no cost
+
+    int n = 0;
+    for( STrack *tr : tracks ) {
+        SPluginSlot *slot = tr->instrumentSlot();
+        if( !slot ) continue;
+        // ORDER MATTERS (header): forget first, bump second.
+        slot->forgetContinuity();
+        tr->invalidateRenderPathRange( pos,
+                                       std::numeric_limits<offset_t>::max() );
+        ++n;
+    }
+    TW_LOGI( "app", "run barrier at %lld: %d instrument track(s) reset and "
+                    "invalidated to the end", (long long) pos, n );
+}
+
 void SApplication::startRender(const audio::RenderParams &params)
 {
     // Always recreate for reproducibility
@@ -561,6 +654,20 @@ void SApplication::startRender(const audio::RenderParams &params)
     if (!synthOutput) {
         // TODO: Emit error signal to UI
         return;
+    }
+
+    // THE RUN BARRIER (proposal 37 D4), on the MAIN thread and BEFORE the
+    // render worker exists - so it is ordered ahead of the run's first demand
+    // by construction, not by a race we would have to reason about. This is the
+    // determinism hole F4: without it, a render started after in-process
+    // playback continues the playback run's synth voices and produces different
+    // bytes from the same render in a fresh process.
+    // The position is the render RANGE start, computed exactly as
+    // RenderSession does (llround of the seconds), so the barrier covers the
+    // first page the render will ask for.
+    {
+        const int rate = t3Env_ ? t3Env_->getSRate() : 48000;
+        beginRun( (offset_t) std::llround( params.startTimeSec * (double) rate ) );
     }
 
     // Playhead tracking: the render thread publishes positions through this
@@ -611,6 +718,10 @@ void SApplication::setPlaybackRunning( bool play )
 {
     if( !t3Speaker_ ) return;
     if( play ) {
+        // Run barrier immediately before startOutput(), which performs the
+        // engine's pre-readahead seekTo(locator) + startReadahead() on THIS
+        // thread - so the barrier precedes the readahead's first demand (D4).
+        beginRun( getGlobalLocatorPos() );
         t3Speaker_->startOutput();
         setPlaying( true );
     } else {
@@ -666,6 +777,11 @@ void SApplication::startRecording(const audio::RecordingParams &params)
             // monitoring playback starts at the locator because the engine
             // pulls pages BY POSITION, not because the graph's cursors were
             // moved.
+            //
+            // The monitoring playback is a RUN like any other (D4): it is the
+            // readahead reading the arrangement, instruments included, so it
+            // gets the same barrier immediately before startOutput().
+            beginRun( getGlobalLocatorPos() );
             t3Speaker_->startOutput();
             isPlaying_ = true;
         }

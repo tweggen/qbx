@@ -24,6 +24,8 @@ class SLogView;
 class SLevelMeter;
 class STrackDetailPanel;
 class SClipPropertiesPanel;
+class SEventEditorDock;
+class SVirtualKeyboardDock;
 
 class SMainWindow
     : public QMainWindow
@@ -100,6 +102,63 @@ public:
     // shows two bars at their own heights rather than one folded one.
     bool grabLevelMeter( const QString &path, const twLevelSampleSet &s,
                          bool vertical, int w, int h );
+
+    // TEST ENTRY POINT (proposal 37 P4): build the REAL track head at
+    // `headHeight` and return SSMVMixerControl::describeHead() — the density
+    // rules for the instrument "I" and automation "A" buttons, and whether the
+    // strip still FITS the lane it was given. Sibling of describeTrackMeter,
+    // and here for the same reason: testkit may not include app/timeline
+    // (testkit CONTRACT inv. 5). Empty string when the path names no lane.
+    QString describeTrackHead( const QString &trackPath, int headHeight );
+    // ...and paint that same off-screen head into a PNG. Coverage, not oracle
+    // (proposal 37 P6 AC3): the describe() assertions check the maths, nothing
+    // else proves the strip - and now the automation button's mode colour -
+    // actually draws.
+    bool grabTrackHead( const QString &path, const QString &trackPath,
+                        int headHeight, int w, int h );
+
+    // TEST ENTRY POINTS for automation (proposal 37 P6). All four go through
+    // the shell for the usual reason: testkit may not include app/timeline
+    // (tools/check_layering.py, testkit CONTRACT inv. 5).
+    //
+    //   dragAutomationPoint  — one REAL press/move/release on an automation
+    //                          sub-lane (or, while envelopes are armed, on a
+    //                          clip's `cut:Gain` overlay). The drag-clip-edge
+    //                          twin.
+    //   showAutomationLane   — show/hide one lane on a track, i.e. what the
+    //                          "Show automation >" picker does.
+    //   setClipEnvelopeEdit  — arm clip-envelope editing (OFF by default, so
+    //                          every clip-body gesture is untouched until a
+    //                          case says otherwise).
+    //   grabArrangerLanes    — paint the arranger CANVAS into a PNG.
+    bool dragAutomationPoint( const QString &owner, const QString &target,
+                              int slotIndex, int take, offset_t time,
+                              double value, offset_t toTime, double toValue,
+                              Qt::KeyboardModifiers mods );
+    bool showAutomationLane( const QString &trackPath, const QString &target,
+                             int slotIndex, bool show );
+    bool setClipEnvelopeEdit( bool on );
+    bool grabArrangerLanes( const QString &path, int w, int h );
+
+    // TEST ENTRY POINTS for the event editor (proposal 37 P4). The dock is
+    // built in the ctor and never shown in a headless run, so these drive the
+    // REAL widget rather than a re-spelling of it.
+    //
+    //   describeEventEditor  — bind the dock to `clipPath` (empty = follow the
+    //                          selection) and return SEventEditorDock::
+    //                          describe(); `kind` switches the editor kind
+    //                          first when non-empty.
+    //   grabEventEditor      — paint the dock into a PNG. Coverage, not oracle.
+    //   dragNote             — one REAL press/move/release on the piano roll.
+    //   virtualKey           — one virtual-keyboard note at the locator, which
+    //                          submits `add-note`. False when there is no event
+    //                          clip to write into.
+    QString describeEventEditor( const QString &clipPath, const QString &kind );
+    bool grabEventEditor( const QString &path, int w, int h );
+    bool dragNote( const QString &clipPath, qint64 tick, int key, int channel,
+                   qint64 toTick, int toKey, const QString &edge,
+                   const QString &lane, double toValue );
+    bool virtualKey( int key, double velocity, qint64 durationTicks );
 
     // Log dock control, for the log-stress test action (testkit may not include
     // app/servicesui, so it reaches the dock through the shell — the same route
@@ -204,6 +263,15 @@ private:
     // the project's arrangementChanged rather than a signal of its own.
     void attachClipProperties();
     void detachClipProperties();
+    // Same lifecycle again for the event editor dock (proposal 37 P4): a
+    // selection follower, refreshed off arrangementChanged.
+    void attachEventEditor();
+    void detachEventEditor();
+    // Keep the editor's time axis on the arranger's zoom/scroll while the
+    // "Link" toggle is on. Wired HERE because the shell is the only module
+    // that sees both app/timeline and app/eventui — the editor deliberately
+    // does not depend on the arranger.
+    void linkEventEditorAxis();
     // Enable + sync the palette buttons to a project's properties (or disable
     // them when project == NULL), and connect to its propertyChanged signal.
     void syncPaletteToProject( SProject *project );
@@ -289,6 +357,15 @@ private:
     QDockWidget          *qDockClipProps_ = nullptr;
     SClipPropertiesPanel *clipPropsPanel_ = nullptr;
     QMetaObject::Connection clipPropsConn_;
+    QDockWidget          *qDockEventEditor_ = nullptr;
+    SEventEditorDock     *eventEditor_      = nullptr;
+    QMetaObject::Connection eventEditorConn_;
+    // The two axis links, kept so a re-link (a new project, a testkit call)
+    // replaces them instead of stacking a second lambda on the same signal.
+    QMetaObject::Connection axisZoomConn_;
+    QMetaObject::Connection axisScrollConn_;
+    QDockWidget          *qDockVirtualKeys_ = nullptr;
+    SVirtualKeyboardDock *virtualKeys_      = nullptr;
     QAction *actClipProps_ = nullptr;   // the F2 (default) binding
 
     // Permanent mode indicator on the right of the status bar.

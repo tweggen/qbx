@@ -56,6 +56,11 @@
     <!-- Direct is the 2->2-plugin-on-2-buses mapping; Transparent here would
          mean the plugin is not really in the path. -->
     <assert-plugin-strip trackIndex="0" slotIndex="0" contains="mode=Direct"/>
+    <!-- ...and it is an EFFECT, not an instrument (proposal 37 P3b): the row's
+         `kind` is derived from the descriptor, and every pre-P3b slot is an
+         effect, so this is the assertion that says the derivation did not
+         start calling everything an instrument. -->
+    <assert-plugin-strip trackIndex="0" slotIndex="0" contains="kind=effect"/>
 
     <!-- 2. Drive the editor's slider. The value LABEL must show the plugin's own
          value-to-text (the fixture formats value*100 as an integer), proving units

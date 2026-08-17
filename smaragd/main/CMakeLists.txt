@@ -18,6 +18,8 @@
 set(APP_MODEL_FILES
     # --- app/model
     model/include/app/model/sappcontext.h
+    model/include/app/model/sautomationlane.h
+    model/include/app/model/sclipwindow.h
     model/include/app/model/sdetaileditors.h
     model/include/app/model/sexternfile.h
     model/include/app/model/sexternfilelist.h
@@ -33,6 +35,8 @@ set(APP_MODEL_FILES
     model/include/app/model/ssolorules.h
     model/include/app/model/ssortedobjlist.h
     model/src/sappcontext.cpp
+    model/src/sautomationlane.cpp
+    model/src/sclipwindow.cpp
     model/src/sdetaileditors.cpp
     model/src/sexternfile.cpp
     model/src/sexternfilelist.cpp
@@ -145,8 +149,25 @@ set(APP_OBJECTS_FILES
     objects/wave/src/splainwave.cpp
     objects/wave/src/splainwaverndrinline.cpp
     objects/wave/src/swaveformdraw.cpp
+    # --- app/objects/midi
+    objects/midi/include/app/objects/midi/smidiactionsupport.h
+    objects/midi/include/app/objects/midi/smidiclipactions.h
+    objects/midi/include/app/objects/midi/smidicut.h
+    objects/midi/include/app/objects/midi/smidieventactions.h
+    objects/midi/include/app/objects/midi/smidifileactions.h
+    objects/midi/include/app/objects/midi/smidirndrinline.h
+    objects/midi/include/app/objects/midi/smidisequence.h
+    objects/midi/src/smidiactionsupport.cpp
+    objects/midi/src/smidiclipactions.cpp
+    objects/midi/src/smidicut.cpp
+    objects/midi/src/smidieventactions.cpp
+    objects/midi/src/smidifileactions.cpp
+    objects/midi/src/smidirndrinline.cpp
+    objects/midi/src/smidisequence.cpp
     # --- app/objects/track
     objects/track/include/app/objects/track/sinsertpluginaction.h
+    objects/track/include/app/objects/track/sinstrumenttracks.h
+    objects/track/include/app/objects/track/sautomationactions.h
     objects/track/include/app/objects/track/seteditgroupaction.h
     objects/track/include/app/objects/track/smoveclipaction.h
     objects/track/include/app/objects/track/spluginactionsupport.h
@@ -156,6 +177,7 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/sreorderpluginaction.h
     objects/track/include/app/objects/track/ssetpluginbypassaction.h
     objects/track/include/app/objects/track/ssetpluginparamaction.h
+    objects/track/include/app/objects/track/ssettrackmidiroutingaction.h
     objects/track/include/app/objects/track/ssettrackmuteaction.h
     objects/track/include/app/objects/track/ssettracksoloaction.h
     objects/track/include/app/objects/track/ssettrackvolumeaction.h
@@ -164,8 +186,10 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/strackpath.h
     objects/track/include/app/objects/track/strackrenderer.h
     objects/track/include/app/objects/track/strackrndrinline.h
+    objects/track/src/sautomationactions.cpp
     objects/track/src/seteditgroupaction.cpp
     objects/track/src/sinsertpluginaction.cpp
+    objects/track/src/sinstrumenttracks.cpp
     objects/track/src/smoveclipaction.cpp
     objects/track/src/spluginchain.cpp
     objects/track/src/spluginslot.cpp
@@ -173,6 +197,9 @@ set(APP_OBJECTS_FILES
     objects/track/src/sreorderpluginaction.cpp
     objects/track/src/ssetpluginbypassaction.cpp
     objects/track/src/ssetpluginparamaction.cpp
+    objects/track/include/app/objects/track/ssettrackmidioutputaction.h
+    objects/track/src/ssettrackmidioutputaction.cpp
+    objects/track/src/ssettrackmidiroutingaction.cpp
     objects/track/src/ssettrackmuteaction.cpp
     objects/track/src/ssettracksoloaction.cpp
     objects/track/src/ssettrackvolumeaction.cpp
@@ -214,6 +241,8 @@ set(APP_UI_FILES
     timeline/include/app/timeline/slevelmeter.h
     timeline/include/app/timeline/strackheaderresizer.h
     timeline/include/app/timeline/szoomscrollbar.h
+    timeline/src/sautomationlane.h
+    timeline/src/sautomationlane.cpp
     timeline/src/sclippropertiespanel.cpp
     timeline/src/sgridtoolbar.cpp
     timeline/src/sobjecttreeview.cpp
@@ -223,6 +252,19 @@ set(APP_UI_FILES
     timeline/src/slevelmeter.cpp
     timeline/src/strackheaderresizer.cpp
     timeline/src/szoomscrollbar.cpp
+    # --- app/eventui (proposal 37 P4)
+    eventui/include/app/eventui/seventeditordock.h
+    eventui/include/app/eventui/seventeditorview.h
+    eventui/include/app/eventui/seventtimeaxis.h
+    eventui/include/app/eventui/seventtimeruler.h
+    eventui/include/app/eventui/spianorollview.h
+    eventui/include/app/eventui/svirtualkeyboarddock.h
+    eventui/src/seventeditordock.cpp
+    eventui/src/seventeditorview.cpp
+    eventui/src/seventtimeaxis.cpp
+    eventui/src/seventtimeruler.cpp
+    eventui/src/spianorollview.cpp
+    eventui/src/svirtualkeyboarddock.cpp
     # --- app/pluginui
     pluginui/include/app/pluginui/spluginbrowserdialog.h
     pluginui/include/app/pluginui/splugineffectstrip.h
@@ -247,15 +289,21 @@ set(APP_UI_FILES
     servicesui/src/srenderprogress.cpp
     # --- app/shell
     shell/include/app/shell/sapplication.h
+    shell/include/app/shell/sautomationrecorder.h
+    shell/include/app/shell/smidioutpump.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssettings.h
+    shell/src/sautomationrecorder.cpp
     shell/src/sapplication.cpp
+    shell/src/smidioutpump.cpp
     shell/src/smainwindow.cpp
     shell/src/ssettings.cpp
     # --- app/testkit
     testkit/include/app/testkit/sactionrunner.h
     testkit/include/app/testkit/sactionscript.h
     testkit/include/app/testkit/sassertaudioenergyaction.h
+    testkit/include/app/testkit/sassertautomationvalueaction.h
+    testkit/include/app/testkit/sautomationuitestactions.h
     testkit/include/app/testkit/sassertaudiofrequencyaction.h
     testkit/include/app/testkit/sassertaudiolengthaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
@@ -263,14 +311,18 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertclipchannelsaction.h
     testkit/include/app/testkit/sasserttrackchannelsaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
+    testkit/include/app/testkit/sassertclipwindowaction.h
     testkit/include/app/testkit/sassertfileidenticalaction.h
+    testkit/include/app/testkit/sassertlogaction.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
+    testkit/include/app/testkit/seventuitestactions.h
     testkit/include/app/testkit/sdumpplaybackcaptureaction.h
     testkit/include/app/testkit/sgrouptrackaction.h
     testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
     testkit/include/app/testkit/smetertestactions.h
+    testkit/include/app/testkit/smiditestactions.h
     testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
@@ -282,6 +334,8 @@ set(APP_UI_FILES
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
     testkit/src/sassertaudioenergyaction.cpp
+    testkit/src/sassertautomationvalueaction.cpp
+    testkit/src/sautomationuitestactions.cpp
     testkit/src/sassertaudiofrequencyaction.cpp
     testkit/src/sassertaudiolengthaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
@@ -289,14 +343,20 @@ set(APP_UI_FILES
     testkit/src/sassertclipchannelsaction.cpp
     testkit/src/sasserttrackchannelsaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
+    testkit/src/sassertclipwindowaction.cpp
     testkit/src/sassertfileidenticalaction.cpp
+    testkit/src/sassertlogaction.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
+    testkit/src/seventuitestactions.cpp
     testkit/src/sdumpplaybackcaptureaction.cpp
     testkit/src/sgrouptrackaction.cpp
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
     testkit/src/smetertestactions.cpp
+    testkit/include/app/testkit/smidiouttestactions.h
+    testkit/src/smidiouttestactions.cpp
+    testkit/src/smiditestactions.cpp
     testkit/src/spluginuitestactions.cpp
     testkit/src/sreportpagememoryaction.cpp
     testkit/src/sscreenshotaction.cpp
@@ -313,7 +373,7 @@ add_library(app_model OBJECT ${APP_MODEL_FILES})
 target_include_directories(app_model PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/model/include)
 target_link_libraries(app_model
     PUBLIC
-        tw_core tw_graph tw_pages tw_schedule tw_sources
+        tw_core tw_graph tw_pages tw_schedule tw_sources tw_events
         Qt${QT_VERSION_MAJOR}::Core
         Qt${QT_VERSION_MAJOR}::Gui
         Qt${QT_VERSION_MAJOR}::Widgets
@@ -333,6 +393,7 @@ target_link_libraries(app_core PUBLIC app_model tw_render)
 add_library(app_objects OBJECT ${APP_OBJECTS_FILES})
 target_include_directories(app_objects PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/cut/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/objects/midi/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/wave/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/track/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/mixer/include
@@ -343,6 +404,7 @@ target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins tw_sidecar)
 add_library(app_ui OBJECT ${APP_UI_FILES})
 target_include_directories(app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/timeline/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/eventui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/pluginui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/servicesui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/shell/include

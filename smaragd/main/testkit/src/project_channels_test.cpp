@@ -100,6 +100,7 @@ public:
     void startRender( const audio::RenderParams & ) override {}
     bool isRenderingActive() const override { return false; }
     void setPlaybackRunning( bool ) override {}
+    offset_t getGlobalLocatorPos() const override { return 0; }
 
 private:
     mutable tw303aEnvironment env_;

@@ -47,6 +47,18 @@ QJsonObject descriptorToJson( const twPluginDescriptor &d )
     o["nIn"]          = (int) d.io.audioInputs;
     o["nOut"]         = (int) d.io.audioOutputs;
     o["isInstrument"] = d.isInstrument;
+    // Proposal 37 P2 (scanner version 2). Written unconditionally so a record
+    // is self-describing; a v1 file can never be read as a v2 one anyway
+    // (scannerVersion is part of the cache key, invariant 9).
+    o["acceptsNotes"]  = d.acceptsNotes;
+    o["emitsNotes"]    = d.emitsNotes;
+    o["eventPortsIn"]  = (int) d.eventPortsIn;
+    o["eventPortsOut"] = (int) d.eventPortsOut;
+    o["nOutBuses"]     = (int) d.nOutBuses;
+    QJsonArray buses;
+    for( std::uint16_t c : d.outBusChannels )
+        buses.append( (int) c );
+    o["outBusChannels"] = buses;
     return o;
 }
 
@@ -63,6 +75,21 @@ bool descriptorFromJson( const QJsonObject &o, twPluginDescriptor &d )
     d.io.audioInputs  = (std::uint16_t) o.value( "nIn"  ).toInt( 0 );
     d.io.audioOutputs = (std::uint16_t) o.value( "nOut" ).toInt( 0 );
     d.isInstrument = o.value( "isInstrument" ).toBool( false );
+
+    // Proposal 37 P2. Defaults are the pre-36 answers ("no events, one output
+    // bus if it has outputs at all"), so a record written by a probe that
+    // predates a field degrades to today's behaviour rather than to nonsense.
+    d.acceptsNotes  = o.value( "acceptsNotes" ).toBool( false );
+    d.emitsNotes    = o.value( "emitsNotes" ).toBool( false );
+    d.eventPortsIn  = (std::uint16_t) o.value( "eventPortsIn" ).toInt( d.acceptsNotes ? 1 : 0 );
+    d.eventPortsOut = (std::uint16_t) o.value( "eventPortsOut" ).toInt( d.emitsNotes ? 1 : 0 );
+    d.nOutBuses     = (std::uint16_t) o.value( "nOutBuses" )
+                          .toInt( d.io.audioOutputs > 0 ? 1 : 0 );
+    d.outBusChannels.clear();
+    for( const QJsonValue &bv : o.value( "outBusChannels" ).toArray() )
+        d.outBusChannels.push_back( (std::uint16_t) bv.toInt( 0 ) );
+    if( d.outBusChannels.empty() && d.nOutBuses > 0 )
+        d.outBusChannels.assign( d.nOutBuses, d.io.audioOutputs );
     return true;
 }
 

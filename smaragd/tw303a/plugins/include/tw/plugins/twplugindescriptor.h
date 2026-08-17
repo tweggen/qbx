@@ -23,6 +23,25 @@ struct twPluginDescriptor {
     std::string   name, vendor;
     twPluginIoLayout io;
     bool          isInstrument = false;
+
+    // --- proposal 37 P2: what the scanner learned about EVENTS ---------------
+    //
+    // Derived from a live instance's capabilities() at scan time, exactly like
+    // `io` is derived from its ioLayout(): none of it is a descriptor field in
+    // any format. They exist so the browser can offer a Kind filter and
+    // "Add Instrument" without instantiating every plugin in the list, and so a
+    // project that references a plugin this machine does not have still knows
+    // the SHAPE it will get (plugins/CONTRACT.md invariant 17).
+    bool          acceptsNotes  = false;
+    bool          emitsNotes    = false;
+    std::uint16_t eventPortsIn  = 0;
+    std::uint16_t eventPortsOut = 0;
+
+    // Audio OUTPUT buses. nOutBuses is >= 1 for anything that makes sound; bus
+    // 0 is the main bus and its channel count equals io.audioOutputs. The rest
+    // are aux outs (proposal 37 §5.4, built in P9).
+    std::uint16_t              nOutBuses = 0;
+    std::vector<std::uint16_t> outBusChannels;
 };
 
 // What the scanner learned about ONE module file (proposal 08 M2).
@@ -71,7 +90,11 @@ public:
     // (new descriptor field, changed I/O derivation, ...). It is part of the
     // cache key, so bumping it invalidates every record — including the
     // remembered failures.
-    static constexpr int kScannerVersion = 1;
+    // 1 -> 2 (proposal 37 P2): the descriptor gained acceptsNotes, emitsNotes,
+    // eventPortsIn/Out, nOutBuses and outBusChannels. A v1 record cannot supply
+    // them, so every record — including the remembered failures — is
+    // invalidated once and re-probed.
+    static constexpr int kScannerVersion = 2;
 
     twPluginRegistry() = default;
     ~twPluginRegistry();
@@ -114,6 +137,18 @@ public:
     bool isScanning() const { return scanning_.load( std::memory_order_acquire ); }
     void waitForScan();
 
+    // Ask a running scan to stop at the next module boundary, then join it.
+    // This is what the app's ORDERLY TEARDOWN calls (SApplication's destructor
+    // and main.cpp's smaragdOrderlyShutdown) so the scan thread is gone BEFORE
+    // static destruction begins: a --test-case run leaves through std::exit(),
+    // where no stack object is destroyed, and a scan thread still alive at that
+    // point used to log into an already-destroyed sink (see plan/STATE.md
+    // 2026-08-16). Whatever the aborted scan had already probed is still
+    // written to the cache, so successive runs converge instead of restarting
+    // cold every time. Safe to call when no scan is running, and safe to call
+    // twice.
+    void stopScan();
+
     twPluginScanStats scanStats() const;
 
     // --- results -----------------------------------------------------------
@@ -144,6 +179,7 @@ private:
     twPluginScanProgressFn          progress_;
 
     std::atomic<bool>               scanning_{ false };
+    std::atomic<bool>               stopRequested_{ false };  // set by stopScan()
     mutable std::mutex              threadMutex_;   // guards scanThread_ only
     QThread                        *scanThread_ = nullptr;
 };

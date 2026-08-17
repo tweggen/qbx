@@ -7,7 +7,7 @@
 
 class SProject;
 class SLink;
-class SCut;
+class SClipWindow;
 class SProjectLoader;
 class STakeStack;
 class QDomElement;
@@ -15,7 +15,7 @@ class QDomElement;
 /**
  * Inline renderer for a take stack: compact mode draws the ACTIVE take
  * exactly like a plain cut ("my link but his object" — the cut renderer
- * reads its window from its own SCut, the passed link only supplies the
+ * reads its window from its own window object, the passed link only supplies the
  * timeline start). No active take renders a dimmed hatch. A small
  * "active/count" badge marks multi-take clips.
  */
@@ -33,10 +33,12 @@ private:
  * STakeStack — a COLUMN of parallel takes (proposal 17).
  *
  * Placed on a track like any clip (SLink carries the timeline start), it
- * holds one child SLink per take, each wrapping an SCut over that take's
- * media. Exactly one take is audible at a time (activeTake_, -1 = none);
+ * holds one child SLink per take, each wrapping an SClipWindow over that
+ * take's media (an SCut for audio; proposal 37 D8b made the stack window-
+ * typed rather than SCut-typed, so an event take needs no change here).
+ * Exactly one take is audible at a time (activeTake_, -1 = none);
  * the stack delegates getRootComponent()/mapTimelineToComponentPos()/
- * preview to the active take's cut, so to twTrackMix a stack is ONE clip
+ * preview to the active take, so to twTrackMix a stack is ONE clip
  * whose component identity changes on take selection (twView resolves it
  * lazily). Switching takes emits durationChanged, which drives the
  * standard STrack sync (updateClip + invalidateRenderPath) — no engine
@@ -69,16 +71,31 @@ public:
     // --- takes ----------------------------------------------------------
     int nTakes() const { return childCount(); }
     int activeTakeIndex() const { return activeTake_; }
-    SCut *takeCutAt( int index ) const;
-    SCut *activeCut() const { return takeCutAt( activeTake_ ); }
+    /** The take at index as a WINDOW (null when out of range). */
+    SClipWindow *takeAt( int index ) const;
+    SClipWindow *activeTake() const { return takeAt( activeTake_ ); }
+    /** SObject: index < 0 means the ACTIVE take (the generic take seam). */
+    SClipWindow *windowTakeAt( int index ) const override
+    { return takeAt( index < 0 ? activeTake_ : index ); }
+    /** The take at index as the model OBJECT it also is (delegation target). */
+    SObject *takeObjectAt( int index ) const;
+    SObject *activeTakeObject() const { return takeObjectAt( activeTake_ ); }
 
     /**
-     * Add a take (an SCut, already windowed to the stack duration) at
-     * atIndex (-1 = append). Maintains the activeTake_ index. Does NOT
-     * activate the new take — callers decide (the actions do).
-     * Returns the new take link.
+     * Add a take (a window, already sized to the stack duration) at atIndex
+     * (-1 = append). Maintains the activeTake_ index. Does NOT activate the
+     * new take — callers decide (the actions do).
+     *
+     * HOMOGENEITY (proposal 37 D8b): a stack is a column of ALTERNATIVES for
+     * one region, so every take must carry the same kind of material. A take
+     * whose contentKind() differs from the takes already here is REFUSED and
+     * null is returned — the caller (add-take) turns that into a rejected
+     * action rather than a column that plays audio or notes depending on which
+     * lane is armed.
+     *
+     * Returns the new take link, or null if refused.
      */
-    SLink *insertTake( SCut &cut, int atIndex = -1 );
+    SLink *insertTake( SClipWindow &window, int atIndex = -1 );
 
     /**
      * Remove the take at index (the cut is released via its link refcount).
@@ -104,7 +121,14 @@ public:
     // --- SObject ---------------------------------------------------------
     std::shared_ptr<twComponent> getRootComponent() override;
     offset_t mapTimelineToComponentPos( offset_t off ) override;
-    // Inv-1: resolve component + mapped position via the active take's SCut in
+    /**
+     * A stack of EVENT takes resolves to its active take, exactly as the audio
+     * delegation does (proposal 37 P1). Without this the track would route the
+     * stack into its event clip set - contentKind() says Event - and get an
+     * empty record back, i.e. a silently mute column.
+     */
+    twEventClipResolved resolveEventClip( offset_t clipPos ) override;
+    // Inv-1: resolve component + mapped position via the active take in
     // ONE call, so a take switch or lazy reader build can't split them.
     twResolvedClip resolveClip( offset_t off ) override;
     // Range-scoped invalidation: only the ACTIVE take is audible, so
@@ -117,6 +141,8 @@ public:
     // Edit/signal-path duration (proposal 19 Phase 2b): blocking snapshot,
     // never the stale try-lock fallback. Used by durationChanged emitters.
     length_t getDurationBlocking() const override;
+    /** The column's kind is its takes' kind (Audio while it is empty). */
+    SContentKind contentKind() const override;
     bool hasPreview() const override;
     int getPreview( preview_t *dest, offset_t start, length_t length,
                     offset_t nProbes ) override;

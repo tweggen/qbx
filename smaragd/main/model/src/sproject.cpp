@@ -67,6 +67,10 @@ int SProject::serialize( QTextStream &o )
 
 int SProject::serializeSelfAttributes( QTextStream &o )
 {
+    // Wire-format version (proposal 37 D8a). Written unconditionally, read
+    // with a default of 1, never a reason to refuse a document — see
+    // SProject::FORMAT_VERSION.
+    o << " formatVersion='" << FORMAT_VERSION << "'";
     o << " bpmTempo='" << (double) getBPMTempo() << "'";
     o << " sampleRate='" << sampleRate_ << "'";
     o << " channels='" << channels_ << "'";
@@ -88,6 +92,23 @@ int SProject::serializeSelfAttributes( QTextStream &o )
 int SProject::readPreChildrenAttributes( QDomElement &element )
 {
     QString data;
+
+    // Wire-format version. Absent = 1 (every project written before proposal
+    // 36). A HIGHER version is warned about and then read anyway: the document
+    // is still XML we know how to walk, an element we do not know is already
+    // skipped by name, and refusing would strand a user's file on the build
+    // they happen to have installed.
+    bool fvOk = false;
+    const int fv = element.attribute( "formatVersion", "1" ).toInt( &fvOk );
+    formatVersion_ = ( fvOk && fv > 0 ) ? fv : 1;
+    if( formatVersion_ > FORMAT_VERSION ) {
+        qWarning() << QString( "Project declares formatVersion '%1', newer than "
+                               "this build understands (%2); loading it anyway — "
+                               "anything it describes that we do not know will be "
+                               "skipped with its own warning." )
+                          .arg( formatVersion_ ).arg( (int) FORMAT_VERSION );
+    }
+
     data = element.attribute( "bpmTempo", "120.0" );
     setBPMTempo( data.toDouble() );
 
@@ -215,10 +236,24 @@ void SProject::setRootComponent( SObject *obj )
     }
 }
 
+void SProject::setTempoMap( const twTempoMap &map )
+{
+    tempoMap_ = map;
+    // One signal for every tempo-derived view. bpmTempoChanged is what the
+    // ruler, the transport box and SMidiCut already listen to, and BPM is the
+    // map's derived view — a second signal would only let the two drift.
+    emit bpmTempoChanged( tempoMap_.bpm() );
+}
+
 void SProject::setBPMTempo( double newTempo )
 {
-    bpmTempo_ = newTempo;
-    emit bpmTempoChanged( newTempo );
+    // BPM is a VIEW of the map (D2): this stores round(6e7/bpm) µs per quarter
+    // and everything reads back through the map. Callers are the `set-tempo`
+    // verb and the loader; a direct call from a widget is the bug this
+    // proposal removed (the ruler dialog and the transport box both did it).
+    twTempoMap map = tempoMap_;
+    map.setBpm( newTempo );
+    setTempoMap( map );
 }
 
 void SProject::setSRate( int rate )
@@ -411,6 +446,27 @@ void SProject::registerExternFileFactory( ExternFileFactory f )
     externFileFactory() = f;
 }
 
+static QHash<QString, SProject::ContentFileFactory> &contentFileFactories()
+{
+    static QHash<QString, SProject::ContentFileFactory> factories;
+    return factories;
+}
+
+void SProject::registerContentFileFactory( const QStringList &suffixes,
+                                           ContentFileFactory f )
+{
+    if( !f ) return;
+    for( const QString &sfx : suffixes )
+        contentFileFactories().insert( sfx.toLower(), f );
+}
+
+QStringList SProject::contentFileSuffixes()
+{
+    QStringList out = contentFileFactories().keys();
+    out.sort();
+    return out;
+}
+
 SLink *SProject::linkToFile( QString &fileName )
 {
     // Resolve a relative path against the action-script directory when one is
@@ -426,6 +482,15 @@ SLink *SProject::linkToFile( QString &fileName )
         if( QFileInfo::exists( resolved ) ) {
             fileName = resolved;
         }
+    }
+
+    // Suffix-claimed content (a .mid) first: it is materialised inline and has
+    // no extern-file identity to cache (see registerContentFileFactory).
+    const QString suffix = QFileInfo( fileName ).suffix().toLower();
+    if( ContentFileFactory cf = contentFileFactories().value( suffix, nullptr ) ) {
+        SObject *obj = cf( this, fileName );
+        if( !obj ) return NULL;
+        return new SLink( *obj );
     }
 
     SExternFile *ef = externFileDict_.value( fileName );
@@ -519,12 +584,20 @@ SProject::~SProject()
     while( !remaining.isEmpty() ) {
         QHash<SObject*,int> inDegree;
         for( SObject *so : remaining ) inDegree.insert( so, 0 );
+        auto countEdge = [&inDegree]( SLink *lk ) {
+            if( !lk ) return;
+            auto it = inDegree.find( &lk->getSObject() );
+            if( it != inDegree.end() ) ++it.value();
+        };
         for( SObject *so : remaining ) {
-            for( SLink *lk : so->childLinks() ) {
-                if( !lk ) continue;
-                auto it = inDegree.find( &lk->getSObject() );
-                if( it != inDegree.end() ) ++it.value();
-            }
+            for( SLink *lk : so->childLinks() )     countEdge( lk );
+            // Owned-but-not-child links are edges too, and missing one is not a
+            // near miss: STrack's reference to its SPluginChain is invisible to
+            // childLinks(), so this pass used to put the chain in the SAME batch
+            // as its track, delete the chain first, and leave ~STrack's
+            // `delete cpPluginChainRef_` calling removeRef() on freed memory —
+            // the teardown SEGFAULT after a passing headless run.
+            for( SLink *lk : so->ownedRefLinks() ) countEdge( lk );
         }
         QList<SObject*> batch;
         for( SObject *so : remaining ) {
@@ -560,7 +633,6 @@ void SProject::markAsPartialLoad()
 
 SProject::SProject()
     : soRoot_( NULL ),
-      bpmTempo_( 120. ),
       sampleRate_( 48000 ),
       channels_( 2 ),
       posFactor_( 1, 48000 ),

@@ -45,6 +45,19 @@ public:
     uint32_t audioInputLatencyFrames( const QString &deviceId ) const;
     void     setAudioInputLatencyFrames( const QString &deviceId, uint32_t frames );
 
+    // MIDI ports (proposal 37 P7b). A project stores a PORTABLE port NAME
+    // (STrack::midiOutPort); the machine-local id the backend's open() wants -
+    // a WinMM device index, a CoreMIDI uniqueID, an ALSA "client:port" - lives
+    // HERE, keyed by that name. Empty means "not mapped on this machine", and
+    // the pump then falls back to matching the backend's own port list.
+    QString midiPortId( const QString &portName ) const;
+    void    setMidiPortId( const QString &portName, const QString &deviceId );
+
+    // Input ports a future session will listen on (proposal 37 P7b persists
+    // them; P8 opens them). Machine-local ids, like the audio input device.
+    QStringList midiInputPortIds() const;
+    void        setMidiInputPortIds( const QStringList &ids );
+
     // Last-used directory for a file dialog, keyed by a context string
     // ("project", "sample", ...). Returns `fallback` when nothing is stored.
     QString lastDir( const QString &context,
