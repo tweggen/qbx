@@ -135,7 +135,11 @@ L0 ─► L1a ─┬─► L1b ─┬─► L2 ─────────┐
   counters; **speaker lifecycle** device {CLOSED, OPEN} × frozen {IDLE,
   BUFFERING, PLAYING} × live {OFF, ON}, `out = frozen + ring`, `startOutput()`
   attaches the frozen lane to an open device, `stopOutput()` stops the lane
-  only while live is ON, `openLive()/closeLive()`; capture backend cleared at
+  only while live is ON, `openLive()/closeLive()`; the plan builder's **master-
+  shape precondition** (`twMixer(unity) → twRewire(identity)` ⇒ the linear split
+  `root(unarmed) + ring`; anything else ⇒ the master joins the closure and the RT
+  pops the ring only — a unit test flips the shape and sees the mode change);
+  capture backend cleared at
   DEVICE start; `twProcessContext.playing` truthful; the processor's SECOND
   event source `liveEvents_` (`setLiveEventSource`) collected alongside `events_`
   with namespaced note ids, `feedEnabled=false` skipping `events_` only,
