@@ -259,7 +259,7 @@ void twSpeaker::stopOutput()
         } else if (curState == OutputState::BUFFERING || curState == OutputState::OPENING) {
             TWSPK_LOG( "stopped before playback started (state=%d)", (int)curState );
         }
-        closeDeviceLocked();
+        closeDeviceNoLock();
     }
 
     // Phase 5: Destroy engine (handle cleared under engineMutex_, destructor runs unlocked)
@@ -349,7 +349,7 @@ void twSpeaker::monitorReadaheadBuffer()
                 // and ~AudioEngine joins the readahead thread. The DEVICE is closed
                 // only when the live lane does not own it.
                 engine.reset();
-                if (!liveActive()) closeDeviceLocked();
+                if (!liveActive()) closeDeviceNoLock();
                 releaseEngine();
                 std::lock_guard<std::mutex> stateLock(mutex());
                 outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
@@ -383,7 +383,7 @@ void twSpeaker::monitorReadaheadBuffer()
         }
 
         if (ownsTeardown) {
-            if (!liveActive()) closeDeviceLocked();
+            if (!liveActive()) closeDeviceNoLock();
             releaseEngine();
             std::lock_guard<std::mutex> stateLock(mutex());
             outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
@@ -472,7 +472,8 @@ int twSpeaker::ensureDeviceOpen(std::uint32_t rate)
     return 0;
 }
 
-void twSpeaker::closeDeviceLocked()
+// Caller must hold NO lock: closeDevice() waits for the render thread.
+void twSpeaker::closeDeviceNoLock()
 {
     backend_->closeDevice();
     deviceRunning_.store(false, std::memory_order_release);
@@ -513,7 +514,7 @@ int twSpeaker::openLive(std::uint32_t rate, idx_t channels)
     if (!deviceRunning_.load(std::memory_order_acquire)) {
         if (backend_->startOutput() != 0) {
             TWSPK_LOG( "openLive: backend->startOutput() FAILED" );
-            closeDeviceLocked();
+            closeDeviceNoLock();
             return -1;
         }
         deviceRunning_.store(true, std::memory_order_release);
@@ -542,7 +543,7 @@ void twSpeaker::closeLive()
     }
     if (closeDevice) {
         if (deviceRunning_.load(std::memory_order_acquire)) backend_->stopOutput();
-        closeDeviceLocked();
+        closeDeviceNoLock();
     }
 }
 

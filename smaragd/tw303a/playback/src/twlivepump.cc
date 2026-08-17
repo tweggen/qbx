@@ -232,14 +232,19 @@ bool LiveGraphPump::renderOneBlock()
     const twLiveTrackPlan &top = plan->tracks[(std::size_t)plan->outputTrack];
     const float *src = plan->scratch( plan->outputTrack, resultBuf_[(std::size_t)plan->outputTrack] );
     const std::size_t stride = plan->scratchStride();
-    const std::uint32_t ringCh = ring_.channels();
+    const std::uint32_t ringCh    = ring_.channels();
+    const std::size_t   ringFrames = (std::size_t)ring_.framesPerEntry();
+    // The ring was sized for the DEVICE block and the plan for the same number,
+    // but they are set by two different callers; clamping here is what makes a
+    // disagreement a short block rather than a write past the slot.
+    const std::size_t   n = std::min<std::size_t>( (std::size_t)block, ringFrames );
     for( std::uint32_t c = 0; c < ringCh; ++c ) {
         const idx_t sc = ( (idx_t)c < top.channels ) ? (idx_t)c : (idx_t)( top.channels - 1 );
         const float *s = src + (std::size_t)sc * stride;
-        float       *d = dest + (std::size_t)c * (std::size_t)ring_.framesPerEntry();
-        std::copy( s, s + (std::size_t)block, d );
+        float       *d = dest + (std::size_t)c * ringFrames;
+        std::copy( s, s + n, d );
     }
-    ring_.commit( (std::int64_t)pos, (std::uint32_t)block, plan->flipEpoch,
+    ring_.commit( (std::int64_t)pos, (std::uint32_t)n, plan->flipEpoch,
                   plan->flipEpochPrime, playing );
 
     nextPos_ = pos + (offset_t)block;

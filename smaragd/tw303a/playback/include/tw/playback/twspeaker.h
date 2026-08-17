@@ -326,8 +326,9 @@ private:
     // Returns 0 on success. Never starts the backend — the two lanes disagree
     // about when that should happen and each does it itself.
     int  ensureDeviceOpen( std::uint32_t rate );
-    // Close the device and drop the callback. Caller must have stopped it.
-    void closeDeviceLocked();
+    // Close the device. Caller must hold NO lock (closeDevice() waits for the
+    // render thread) and must have stopped the backend if it was running.
+    void closeDeviceNoLock();
 
     std::atomic<DeviceState>   deviceState_{ DeviceState::CLOSED };
     std::atomic<bool>          deviceRunning_{ false };   // backend_->startOutput() done
