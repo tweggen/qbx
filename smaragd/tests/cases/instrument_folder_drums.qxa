@@ -36,7 +36,11 @@
            at 1.575 and clip the 16-bit file, and a clipped sum is not 2 x
            anything. At 40 the peak is 0.630.
 
-       STEREO IS NOT GATED (proposal 36 B5): channel 0 only, never `L != R`. -->
+       THIS CASE reads channel 0 only, and that is now a choice rather than a
+       limit: the sink has been as wide as the project since proposal 36 B5, and
+       stereo is gated since 2026-08-17 by instrument_stereo_render.qxa (the
+       generator mapping rows, per channel). Nothing here needs a second
+       channel — the claim is about which NOTE sounds in which second. -->
 
   <setup project="new"/>
 

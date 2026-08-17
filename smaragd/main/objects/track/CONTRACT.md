@@ -208,6 +208,12 @@ instrument_transpose_and_velocity.qxa, instrument_bypass_keeps_voices.qxa,
 instrument_slot_rules.qxa (the three slot rules, the derived glyphs and the
 project end) and instrument_folder_drums.qxa (one instrument on a folder playing
 its children's patterns, with mute and the two-overlapping-notes rule).
+STEREO IS GATED SINCE 2026-08-17 -- the cases above read CHANNEL 0 only,
+because P3b predates the wide sink (36-B5): instrument_stereo_render.qxa walks
+the four generator mapping rows per channel out of a rendered file (DirectGen,
+GenFold, the refused narrow-generator row, and MonoSpread's deliberately EQUAL
+channels), and automation_stereo.qxa does the same for a self:Volume ramp and a
+slot param: step.
 The run barrier's walk (proposal 37 P3c) is exercised by
 instrument_render_determinism.qxa, its cross-process driver
 instrument_render_determinism_xproc and instrument_locate_continuity.qxa.
@@ -231,13 +237,15 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     `onAutomationChanged()` pushes and then calls `invalidateRenderPathRange()`
     with the EXACT range, because a gain stage is class infinity and pure.
     `applyAutomationToEngine()` is the load-path replay, called once the chain
-    exists. `self:Pan` is deliberately absent, and B9 re-states the reason
-    because the original one expired: it read "until the sink is stereo
-    (36-B5)", and the sink went wide at B5. What is still missing is not the
-    sink but the PANNER — proposal 36 §8 names panning as a non-goal, there is
-    no pan law and no pan stage in the graph, and `SObject::pan_` is still
-    serialized with zero consumers (§7 trap 3). A pan lane would still store a
-    number nothing could hear; it is now unblocked rather than impossible.
+    exists. `self:Pan` is deliberately absent, and the ORIGINAL reason has
+    expired: it read "until the sink is stereo (36-B5)", and the sink went wide
+    at B5 — `automation_stereo.qxa` now asserts a volume lane on both channels,
+    so there IS somewhere to hear one. What is missing is the pan itself: no pan
+    law and no pan stage in the graph, no clip/track model carrying one, and
+    `SObject::pan_` still serialized with **zero consumers** (proposal 36 §7
+    trap 3). Proposal 36 §8 names panning a non-goal and proposal 37 §12 leaves
+    it to a later proposal. A pan lane would still store a number nothing could
+    hear — but it is now **unblocked rather than impossible**.
 
 13. **A CLIP's `cut:Gain` REACHES THE MIX THROUGH THE TRACK, NOT THROUGH THE
     CUT.** The curve lives on the WINDOW (an `SCut`), which is not allowed to

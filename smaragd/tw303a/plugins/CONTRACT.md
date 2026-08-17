@@ -255,6 +255,20 @@ Invariants:
 
    The row is chosen from the INSTANCE's ioLayout() like every other row, so a
    descriptor that lies about being an instrument changes nothing about the DSP.
+   GATED PER CHANNEL, FROM A RENDERED FILE, SINCE 2026-08-17
+   (qxa.instrument_stereo_render): DirectGen (tw.test.clap.sine on channels=2,
+   with its new default-OFF `Stereo Skew` param on, so channel 1 is at half
+   channel 0 and the two are provably not a duplicate), GenFold (the same
+   instrument on channels=1 -- 0.75x, which is what says the PAIR was averaged
+   rather than output 0 taken), the REFUSED row (the same on channels=6 ->
+   Transparent + Unsupported, silent, in a genuinely six-channel file) and
+   MonoSpread (tw.native.303, one output, both channels EQUAL -- the case
+   asserts that with an expectReject, because equal channels are the right
+   answer for a centre-panned mono voice). WideGen is NOT reachable from a
+   script: it needs an instrument with at least three MAIN outputs and no
+   in-repo fixture has one (GenFold is tested first, so a 2-out instrument on a
+   mono page can never take it), so it stays gated only by
+   test_plugin_insert.cc's synthetic 0-in/4-out plugin.
    PROPOSAL 36 B4 CHANGED THE NUMBER, NOT THE POLICY: it is the PAGE WIDTH the
    insert is handed (the project's channels=), not the count of parallel mono
    components a track was built from. One consequence is audible and is the only
@@ -517,7 +531,10 @@ Invariants:
    (qxa.instrument_mixed_track) and the reason the sum is stated as an
    invariant rather than left as an implementation detail. The sum is centre-
    panned mono into a stereo instrument's outputs until clips carry channels
-   (design D3, accepted and stated).
+   (design D3, accepted and stated). What an instrument's OWN outputs do across
+   the channels has been gated since 2026-08-17 by qxa.instrument_stereo_render;
+   the pass-through sum's centre-mono spread is what is still not, because a
+   clip carries no pan to spread it with.
 
 38. AN INSTRUMENT READS A twEventSource*, AND NEVER THE MODEL (proposal 37 P3b).
    The processor holds a shared_ptr<const twEventSource> swapped under mutex_,
@@ -704,7 +721,11 @@ The in-repo fixtures grew to match: `twtestclap.c` exports four plugins now
 (`gain` with a third parameter, id 2 `Clip Threshold`, which hard-clips AFTER
 the gain and is the order-sensitive fixture proposal 37 P3a's fader-move case
 needs; `stereoskew`; the `sine` instrument with a stereo main out AND a mono aux
-out; and the `arp`), and `twtestvst3.cpp` exports the `TestSine` SPLIT
+out, carrying since 2026-08-17 a `Stereo Skew` at param id 3 -- stepped,
+DEFAULT OFF, so every render made before it is byte-identical; ON, channels 1..
+of the main bus are at half amplitude, which is the closed form
+qxa.instrument_stereo_render needs to tell a wide sink from a duplicating one;
+and the `arp`), and `twtestvst3.cpp` exports the `TestSine` SPLIT
 component/controller pair, which closes the "split VST3 pair untested" debt this
 file carried since M6. `tw.test.clap.gain`'s state blob still writes 16 bytes
 when the clipper is off, so `plugin_slot_roundtrip.qxa`'s exact-base64
@@ -729,6 +750,12 @@ reach a file or a device, and therefore a rendered WAV's two channels are equal
 BY CONSTRUCTION and `L != R` must never be asserted on a file. All of that is
 now false. RenderSession interleaves from one wide root page into a file of the
 project's width, and AudioEngine::pullBlock fills N planar buffers.
+
+  Proposal 37's instrument and automation phases (P3b/P5) were written in the
+  same mono-sink era and carried the same caveat -- "channel 0 only, never
+  L != R". RETIRED 2026-08-17 by qxa.instrument_stereo_render (the generator
+  mapping rows above, per channel) and qxa.automation_stereo (a self:Volume
+  ramp and a per-chunk param: step, both channels).
 
   plugin_stereo_chain.qxa consequently bounds CHANNEL 1 OF THE FILE at
   [0.030, 0.037] -- 0.5x, the skew fixture's own second output -- against

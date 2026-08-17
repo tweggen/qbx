@@ -1,269 +1,530 @@
-# Proposal 21 (DRAFT v2): Real-time data flows in the demand-driven dataflow
+# Proposal 21 (DRAFT v3.2): Real-time data flows in the demand-driven dataflow
 
-> **Status: DRAFT v2 (2026-07-19).** Architectural outline only — no code yet.
-> v2 supersedes v1's "minimal monitor strip summed at the speaker": the user
-> requirement is that a live input is heard through **the same signal flow it
-> would have in playback** — the track's inserts, its routing, the busses,
-> the master chain, the same component instances. v1's strip-sum is demoted
-> to an optional low-latency degraded mode (§8).
+> **Status: DRAFT v3.2 (2026-08-17).** v3.2 applies the reviewer's verification
+> pass (§13.2: the processor holds TWO event sources — the feed and the live
+> source — so the stopped-transport feed mask and the live member never
+> contradict; the position atomic is ENGINE-owned; the epoch gate names the root
+> rewire's counter and has a disarm side; `recordStart` from a stopped transport
+> is mapped retrospectively). v3.1 applies an adversarial review of v3
+> (§13: 3 blockers, 13 majors, ~20 minors — each answered inline). The blockers
+> were real: v3 had no transport model for the pump (what position a block is
+> rendered at while stopped vs playing, and how the sequenced feed is masked
+> while stopped); MIDI-thru would have made the pump a second producer on the
+> single-producer scheduler ring; and "live-only output state" was a rewrite of
+> `twSpeaker`'s lifecycle disguised as a flag. v3 (2026-08-17) superseded v2
+> (2026-07-19), which predates proposals 36 and 37 — v2's central mechanism
+> ("run the same instances block-wise via `calcOutputTo`") is dead: mono,
+> deprecated, and holding component mutexes across recursion. What survives, one
+> level lower, is the plugin *processor's* block renderer plus two pure functions
+> (gain, channel map), and that is enough. Written from three concept studies
+> (engine, app, industry) and the review. Execution companion:
+> `21_ORCHESTRATION.md`.
 >
-> Prerequisite reading: `19_ASYNC_FREEZE_MODEL.md` ("Phase 2 REVISED" + the
-> execution-class taxonomy), `20_DATAFLOW_FOLLOWUPS.md`, and the existing
-> recording machinery (CLAUDE.md § Recording Audio; `AudioInput`,
-> `RecordingSession`, `place-recording`).
+> Prerequisite reading: `19_ASYNC_FREEZE_MODEL.md` ("Phase 2 REVISED", execution
+> classes), `20_DATAFLOW_FOLLOWUPS.md`, `36_MULTICHANNEL_SIGNAL_FLOW.md` §4,
+> `37_MIDI_INSTRUMENTS_AUTOMATION.md` D4/D6/§3.2.1/§4.3/§4.4, `docs/contracts/
+> {THREADING,FREEZE_PROTOCOL}.md`, `tw303a/{playback,schedule,plugins,devices,
+> record}/CONTRACT.md`, `35_ASIO_BACKEND.md` (the hardware prerequisite for
+> low-latency numbers — §4).
 
 ---
 
-## 1. The problem: two time domains, one signal path
+## 0. Scope
 
-The dataflow is **pull-from-the-past**: pages are deterministic functions of
-known content, demanded and rendered ahead. Live input is
-**push-from-the-present**: it exists once, arrives on the device clock, and
-must be audible within milliseconds — through the SAME plugins and busses
-that will process it on later playback. Pre-rendered master pages cannot
-contain a signal that does not exist yet, so wherever a live signal JOINS
-the shared graph, everything DOWNSTREAM of that join must be computed live.
+| # | Capability | Industry anchor |
+|---|---|---|
+| A | **Live audio input** heard through the armed track's inserts → its parent folders → the master, on the same plugin instances playback uses, while the rest of the arrangement keeps playing from frozen pages | Cubase ASIO-Guard: "record-enabled/monitored channels and all dependent channels switch to real time" with a crossfade; REAPER anticipative FX disabled per armed track |
+| B | **Live MIDI input** (hardware port or the computer keyboard) into the armed track's instrument, merged with its sequenced notes when playing, MIDI-thru to the track's port | every reference DAW; Cubase VSTi record-enable → real-time path |
+| C | **Audio recording** through one input pump: monitor ring + wide capture pages (waveform grows while recording) + WAV, placed at stop with proposal 17's takes; per-device recording offset; punch/loop | REAPER/Cubase/Logic/S1 |
+| D | **MIDI recording** to a new/overdub/replace `SMidiCut` with takes per loop pass, timestamps → ticks, input quantise at commit; retrospective capture later | Cubase Retrospective Record, REAPER retroactive record |
+| E | Transport support: monitor modes Off/On/Auto, count-in, metronome click on the live path, latency readout | universal |
 
-This yields the central concept:
+Not in scope: sub-block / hardware direct monitoring; cross-device clock drift
+(L6 outline); live time-stretch of input; input FX chains ("record wet");
+sends/sub-busses (do not exist yet — when they do, they join the closure by the
+same rule); a master insert chain (would move D2 to its option (b) — named, not
+built); the ASIO backend itself (proposal 35); hearing an armed audio track's
+OWN clips live (needs proposal 20 §2; §10.1).
 
-## 2. The live horizon (merge-point) principle
+---
 
-At any moment the component graph is split by a **live horizon**:
+## 1. What is true today (facts that shape the design)
 
-- **Upstream of the horizon — the frozen lane (unchanged):** deterministic
-  content, rendered ahead as pages by the scheduler exactly as today.
-- **Downstream of the horizon — the live lane:** computed at device-block
-  granularity in real time, by the SAME component instances, via the
-  existing block-pull contract (`calcOutputTo`).
+**Engine**
+- F1. **The block pull is mono, deprecated, and locks across recursion.**
+  `twStreamingLatch::copyData` clamps to the latch index (graph inv. 12);
+  `calcOutputTo` is on proposal 20 §3's deletion list; a plugin's legacy pull
+  feeds channel 0 only and holds `pluginsMutex_`/`mutex()` across whole pulls;
+  an instrument's legacy pull renders silence (plugins inv. 42).
+- F2. **What survives block-wise, wide:** `twPluginSlotProcessor::render(in, out,
+  len, startPos, positional=true, sr)` — any block length (chunked to 4096, short
+  last chunk legal), state-continuous when `startPos == lastEnd_`, otherwise a
+  REPOSITION (reset + chase + pre-roll ≥ 4096 frames of discarded DSP,
+  `twpluginslotproc.cc:955-964`), the sequenced FEED collected at `[startPos,
+  +len)` and automation applied per chunk; `twProcessContext.playing` is
+  hard-wired `true`. `twGainStage::applyGain(src, dst, n, pos, envelope)` and
+  `twRewire::channelMap()` are pure in position. `Transparent`/`Missing` slots
+  already pass through inside `runChunked_nolock`.
+- F3. **`renderPageWide(page, frames < FRAME_CAPACITY)` is accepted, but its input
+  side is page-shaped** (`fetchInputPage(plug, page.startPosition)` freezes a
+  FULL page at an unaligned start on a miss); small pages per lane are not
+  viable (`FRAME_CAPACITY` in 99 places / 28 files; alignment baked into
+  `copyData`, the RT cursor, the readahead, the scheduler, `planPage`, cache
+  keys, `previousPage`, meter probes).
+- F4. **The master is a unity sum plus an identity map**: `SStdMixer` builds one
+  `twMixer` and an identity `twRewire` root, no master chain, no sends. A track
+  is `twTrackMix → twPluginChain → twGainStage → twRewire`, all wide.
+  `SStdMixer::reconnectTracksToMixer` nulls the input plug of an inaudible
+  top-level track; a nested lane's audibility is `twTrackMix::setClipMuted`
+  (`applyChildTrackAudibility`); `planPage` skips a nulled plug. Stale root
+  pages are REPLACED, not re-rendered in place, and the RT adopts a fresh page
+  by epoch (`updateFrozenPage`).
+- F5. **The RT callback** reads root pages by position with the stale fallback
+  (proposal 16), fills N planar buffers (`pullBlock`), `twSpeaker` maps them
+  stereo onto the device (playback inv. 9). `twSpeaker::startOutput()` returns
+  if already playing, mints a NEW `AudioEngine` per start, registers the
+  callback, defers the device start until the readahead has primed ~3 s
+  (`minBufferFrames_` = 144000), and the callback zero-fills unless the engine
+  is PLAYING; `stopOutput()` closes the device. `CaptureBackend::startOutput()`
+  clears its recording + block log ("frame 0 = the current playback session",
+  testkit rule 1). The RT publishes the position only while PLAYING; the MIDI-out
+  pump's host-time anchor is taken on that publication.
+- F6. **Latency numbers.** WASAPI shared: `kRequestedDurationHns` = 100 ms,
+  variable callback block, `outputLatencyFrames` from `GetStreamLatency`; the
+  capture backend is a fixed 1024-frame block. v2 §4's "8 ms" is not reachable
+  here; the honest budget is ~100 ms out + input until proposal 35 (ASIO).
+- F7. **Input side.** `AudioInput::read` is a non-blocking poll (`RecordingSession`
+  spins with a 1 ms sleep); `WASAPIInput` is NOT event-driven and its `read`
+  releases a whole packet after copying only `framesToCopy` (drops the tail of
+  a packet larger than the caller's buffer). `createAudioInput()` is a compile-
+  time platform pick — no env selection, no file input. `MidiInput` (37 P7a)
+  delivers on a device thread with host-time stamps; `CaptureMidiInput` exists,
+  has `inject()`, and `SMARAGD_MIDI_BACKEND=capture` already selects it (and is
+  defaulted under `--test-case`). `MidiOutScheduler::enqueue()` is SINGLE-
+  producer, main thread only (devices inv. 11).
+- F8. **Instruments (37)**: `forgetContinuity()`; the render barrier `beginRun`
+  walks instrument tracks at render/play start; every generator page is a pure
+  function of position + feed (plugins inv. 40); `STrack::syncInstrumentSlot()`
+  calls `setEventSource(eventFeed())` from adopt/insert/remove, and
+  `setEventSource` clears continuity AND bumps the param epoch; `twEventMerge`
+  namespaces note ids per source (16 sources).
+- F9. **Meters** read pages by position (34); `pumpMeters` ticks only while
+  `isPlaying_ || isRecordingActive()`. `startRecording` sets `isPlaying_`
+  directly (bypassing `setPlaying()`).
+- F10. **Threading**: `twRtThreadGuard` is a per-thread "never render" marker
+  (an `assert()` in `freezePage`); `CaptureRevalidator` has `pause()/resume()`
+  (drains ALL in-flight jobs incl. import-time analysis) and `retireObject`
+  (IRevalidatable only); nodes are dependency-counted and deduped in
+  `graphNodes_`; asset captures / previews on the reval lane are NOT graph
+  nodes; the readahead holds a single demand handle. Teardown:
+  `smaragdOrderlyShutdown` (immortal `TwLog`, `stopScan()`), `MidiOutScheduler`
+  joins Qt-free.
+- F11. **The position-code decoder resolves 4096-frame blocks**
+  (`decodePositionAt`, `position_code.h`); latency below that is invisible to
+  `assert-source-position`.
 
-The horizon's position follows from what is armed:
+**App**
+- A1. Recording today: `startRecording` starts the record worker FIRST so
+  `locatorHeldElsewhere()` makes it the playhead authority; "monitoring" is
+  frozen playback; a modal dialog; `onRecordingCompleted` shifts the clip by
+  `outputLatency − inputLatency` in DEVICE frames (no rate conversion);
+  `place-recording` (takes for covered columns, one composite). No count-in
+  (metronome is a stub), no punch, no loop record.
+- A2. `SAutomationRecorder` (37 P6) = transport-bounded recorder, ONE action at
+  stop; `SVirtualKeyboardDock` submits `add-note` at the locator (no release;
+  `virtual-key` has only `durationTicks`); `SAddTakeAction` is audio-only.
+- A3. Per-track attributes so far: `midiOutPort/Channel/OffsetMs`,
+  `midiRouting`, `ArmedForRecording` (serialized). Options: audio input combo is
+  a "System default" TODO; the MIDI page lists inputs but they are inactive.
 
-```
-nothing armed:      [====================== frozen =====================]▶ speaker
-                     (today's model — horizon at the speaker, live lane idle)
+---
 
-track T armed:       other tracks: [chains frozen as pages]──┐
-                                                             ▼
-                     input ▶ [T's inserts LIVE] ──▶ [rewire/busses LIVE] ▶ [master LIVE] ▶ speaker
-                     (horizon sits at T's input; T's chain and every shared
-                      component T feeds — busses, master — run block-wise)
-```
+## 2. The nine decisions
 
-Key consequences:
+### D1 — The live lane is a *live executor* over processors, not a second component graph
+A `LiveGraphPump` (one std::thread per active live lane) executes a **live plan**
+— an immutable, main-thread-built snapshot of the live-owned subgraph — once
+per device block: for each armed track, `input ring (or instrument events)` →
+`processor->render(…, positional=true)` for every slot in slot order → `applyGain`
+→ `channelMap`; for a folder parent in the closure, sum its live children with
+its unarmed children's frozen root pages read **by position** (`getPageIfExists`
+try-lock; miss = silence for that input this block, keep the previous page like
+`twLevelProbe`) → the parent's own processors/gain/map; the top of the closure is
+pushed into the SPSC `liveMixRing_` — **position-stamped** entries `{startPos,
+flipEpoch, planar N × block}`, 3–4 deep. Steady state: no allocation after the
+first blocks (the processor's event vectors are pre-sized; the plan carries
+scratch for the widest track × device block). Rejected: (a) a wide block-pull
+virtual on every component — the B1–B4 sweep again plus the lock recursion that
+made the pull unsuitable for a near-RT thread; (b) small pages per lane (F3);
+(d) v2's degraded strip — unnecessary, `runChunked_nolock` already passes
+`Transparent`/`Missing` slots through (F2); RT-fitness metadata is future ABI
+work.
 
-1. **The armed track's chain runs live on its normal instances.** No dual
-   instances, no monitor-only FX subset: while armed, the frozen lane does
-   not render this track (the v1 `liveExcluded_` exclusion), so its
-   pluginchain/inserts are EXCLUSIVELY owned by the live lane — instance
-   exclusivity falls out of the lane switch itself, the same way the
-   scheduler's class-1 lanes own instances.
-2. **Shared downstream (rewire, busses, master) runs live while anything is
-   armed.** Its unarmed INPUTS are served from frozen pages: this is
-   exactly what `twStreamingLatch::copyData` already does — position-
-   aligned reads of ready pages. The expensive upstream work (every unarmed
-   track's full chain) stays pre-rendered; only [armed chains] + [shared
-   bus/master chains] execute per block.
-3. **Monitoring is playback.** The audible path while armed is the identical
-   component/plugin topology, instances, and parameter state that playback
-   uses — the user requirement, by construction rather than by imitation.
+### D2 — The live clock and transport model *(new in v3.1 — the blocker)*
+The pump renders every block at a **position** and with a **feed policy** that
+depend on the transport:
 
-## 3. Goals / non-goals
+| Transport | Block position | Sequenced feed | Automation | Continuity |
+|---|---|---|---|---|
+| PLAYING | `livePos = engineDelivered(seq, pos, hostNs) + leadFrames` (lead = ring depth); source: an **engine-owned** atomic `{seq, deliveredFrame, hostNs}` stamped by `twSpeaker`'s callback beside `publishPosition` (the DELIVERED frame — publish lag already removed — the same one `SPlayheadClock` reads later); never `SApplication`, never `PlaybackContext` (that interface is app-implemented services, UI-thread `locatorPosition()`) | ON: `events_` (the track feed) + `liveEvents_` | evaluated at `livePos` | contiguous by construction; a seek / loop wrap / play start is ONE explicit reposition (the plan tells the processor: `resetContinuity` + chase from the feed at the new position) |
+| STOPPED (armed && monitoring) | a **virtual counter** `vpos = locator + blocks·n` (monotone, so `render` stays contiguous) | **MASKED** — `events_` (the sequenced feed) is not collected; only `liveEvents_` is (no DAW plays sequenced notes while stopped; chase happens on PLAY) | **held** at the locator's value: the per-chunk automation build takes its chase at `holdAutomationAt` and emits nothing else (`buildAutomationChunk_nolock(holdAt, 1)` — no `setParamCurves` change) | contiguous; the STOP↔PLAY transition is one reposition |
 
-**Goals**
-1. Live input audible at small-block latency THROUGH the full playback
-   signal flow (inserts → routing → busses → master), same instances.
-2. All dataflow invariants preserved: the RT device callback never freezes
-   (`twRtThreadGuard`); no demand ever waits on the future; goldens stay
-   byte-identical whenever nothing is armed.
-3. The live signal continuously becomes ordinary frozen content (capture
-   bridge → pages + WAV → `place-recording` on disarm).
-4. Live plugin instruments enter as class-1 live mode; recorded events
-   (prop 12) enable later deterministic re-render.
+Both need two small, flag-gated additions to the processor, both in L1a and
+both inert unless `liveOwned`: (1) a **second event source, `liveEvents_`**
+(`setLiveEventSource`), collected alongside `events_` and merged per chunk with
+note ids namespaced — `STrack::syncInstrumentSlot()` keeps re-applying `events_`
+and never touches it, `SMidiOutPump`/`assert-midi-events` read the feed and never
+see it (a ring-draining `collect` has exactly one reader: the pump); (2) a
+**`twLiveTransport {playing, feedEnabled, holdAutomationAt}`** consulted per
+chunk (feed collection of `events_` skipped when disabled — the live source is
+always collected; automation chase taken at `holdAutomationAt`; `ctx.playing`
+reports the truth). For a folder whose instrument consumes a MIDI-armed child's
+events, the live source attaches to the CONSUMING processor (the folder's slot 0). The RT sums a ring entry only when (a) its `startPos` matches
+the frame the RT is delivering (mismatch = drop-old / silence-on-miss +
+counter) and (b) the served root page's `contentEpoch >= flipEpoch` — the
+**epoch-gated flip**, because a stale root page still CONTAINS the newly armed
+track's audio until the re-summed page lands (F4). `flipEpoch` is the **root
+rewire's `contentEpochNow()`** read on the main thread right after the exclusion
+wiring's `SStdMixer::bumpRenderChainEpoch` (the counter the RT already compares
+root pages against, and the one root pages are stamped with — graph inv. 5;
+the mixer's own bump via `setInput` is not it). **Disarm is the mirror**: the
+plan's last block carries `flipEpoch' = root epoch after re-wiring`, the RT keeps
+summing the ring while `rootPage.contentEpoch < flipEpoch'` (the stale root
+still LACKS the track) and stops the moment the re-summed page lands. A 2–3 ms
+crossfade smooths both flips. While STOPPED there is no root page: `out = ring`.
 
-**Non-goals (this proposal)**
-- Sub-block latency / hardware direct monitoring.
-- Cross-device clock-drift correction (same-device duplex first).
-- Live time-stretch of the input.
+### D3 — Exclusion by the existing wiring rule; the closure ends at the output; the RT never mixes except where addition commutes
+**The general rule first.** The live closure is every component downstream of a
+live-owned track up to the OUTPUT — the master included whenever it is anything
+but a pure linear sum with an identity map (an insert, a fader curve, a
+non-linear or stateful stage). The pump renders the whole closure; frozen
+inputs of the closure are read by position; **the RT pops the ring only** and
+never mixes two sources. That is the model, and it is what a master chain will
+run on the day one exists (v2's shape, "option (b)" below).
 
-## 4. Execution model: the live graph thread
+**Today's labelled optimization, with its precondition.** The master IS a unity
+sum with an identity map (F4), so the closure's master part commutes with
+addition: `master(unarmed ∪ live) == master(unarmed) + master(live)` sample for
+sample. That lets the frozen lane keep producing the root page for the unarmed
+tracks and the RT ADD the ring to it — keeping every existing page, fallback and
+meter path untouched. The precondition is checked, not assumed: the plan builder
+asserts the master path is `twMixer(unity) → twRewire(identity)` and falls back
+to rendering the master in the pump otherwise; a CONTRACT invariant (mix) says
+the split is legal only under that shape. "root(unarmed) + ring" below always
+means this optimization.
 
-The device render callback must stay allocation-free and must never freeze.
-Plugin chains and copyData (which may miss a page) are not that. Therefore
-the live pull does NOT run in the device callback:
+The **topmost closure member** (the armed track itself, or the highest folder in
+its closure) is made inaudible to the frozen sum by exactly the rule solo uses at
+the mixer (`reconnectTracksToMixer` nulls its plug); **nested members** of the
+closure are `setClipMuted` in their parent's `twTrackMix`; the mixer/root epoch
+bumps; the master re-sums the remaining roots (milliseconds per page); `planPage`
+skips the nulled plug — **no node is planned for the live-owned chain**, so
+exclusive ownership of its processors is by construction for new demands. Every
+UNARMED sibling under the excluded folder is then rendered by the pump from its
+frozen root pages by position — which is why the readahead **re-roots demands**
+at every "frozen input of the live plan" (`requestGraphPages(siblingRoot, pos, n,
+prio 9)` — one demand handle per root; supersession per handle); the pump never
+demands. The RT keeps reading root pages exactly as today and adds the ring:
+`root(unarmed) + live(closure) == root(all)` sample-for-sample because the
+master is a unity sum with an identity map (F4). The excluded folder's OWN clips
+are silent while a child is live (stated; §10). `isLiveOwned` is a separate
+predicate applied at the mixer/track-mix wiring only — never folded into
+`ssolo::isLaneAudible` (that would drop a live child's EVENTS from a folder
+instrument's feed and darken meters). Not chosen today: the pump rendering the
+whole master from N frozen roots (v2's shape, "option (b)") — zero invalidation
+on arm but it duplicates the RT's stale-fallback logic and darkens the master
+meter. It is not rejected: it is the GENERAL rule above, and it becomes the
+active path the moment the master is not a linear identity — the plan builder's
+precondition check is what selects between the two.
 
-- **`LiveGraphPump`** — one high-priority thread (near-RT; above the
-  readahead, below the device thread) that, while the live lane is active,
-  pulls the graph OUTPUT block-by-block, a small fixed lookahead (1–2
-  device blocks) ahead of the callback:
-  `masterOut.calcOutputTo(block)` → pushes into an SPSC **liveMixRing_**.
-- **Device callback:** when the live lane is active, it pops liveMixRing_
-  instead of reading frozen pages; when inactive, today's frozen-page path.
-  Pop-only, lock-free, RT-safe either way. Ring underrun ⇒ silence for that
-  block + xrun counter (never blocks).
-- **Inside the pump's pull:**
-  - The armed track's input component serves device-input samples from the
-    input ring (§5) — the block-pull face of `twLiveInputSource`.
-  - Unarmed inputs of shared components serve from frozen pages via
-    `copyData`. A missing page (readahead behind) must NOT synchronously
-    freeze on the pump either — the pump thread gets a "no-render" guard
-    like the RT guard (serve silence + poke the readahead), keeping the
-    scheduler the only renderer. (Generalize `twRtThreadGuard` into a
-    per-thread render-policy flag: RT = never; pump = never + poke.)
-  - Position: the pump advances the playhead-aligned block cursor; seeking/
-    loop-wrap resets it with the same discontinuity semantics as pages.
-- **Latency budget:** input block + ring hop + output block (typ. 3 blocks;
-  at 128 frames/48 kHz ≈ 8 ms) — standard software-monitoring territory.
-  The pump lookahead adds robustness, not latency (it runs ahead of the
-  consumer, bounded by the ring size).
+### D4 — Instrument live mode is P3b's processor driven contiguously; ownership is a protocol
+No `twLiveInstrument`. Arm (main thread): build the plan → apply the exclusion
+wiring → **drain** in-flight nodes holding the chain's processors
+(`CaptureRevalidator::retireComponentNodes`, §5) → `slot->forgetContinuity()` →
+`proc->setLiveOwned(true)` (assert-first: a freeze-path `render` arriving while
+live-owned answers silence and counts, so a missed drain — or a preview/asset
+demand on the reval lane, which is not a graph node — is measurable, never a
+corrupted voice) → `proc->setLiveEventSource(live)` (the SECOND source of D2 —
+never a `setEventSource` swap: `STrack::syncInstrumentSlot()` re-applies the
+feed from adopt/insert/remove and `setEventSource` clears continuity and bumps
+the epoch — F8; and never a member of `eventFeed()`, which `SMidiOutPump` and
+`assert-midi-events` also read). The first live block is one reposition; every later block is contiguous.
+`twLiveEventSource::collect` drains the MIDI ring, maps host time → project
+frame with the live clock (D2; minus input latency), rebases, **clamps late
+events to offset 0 (never drops)**, and keeps its own held-note table for the one
+chase at live start. Disarm: last block flushed with all-notes-off → `setLiveEventSource(nullptr)`
+→ `forgetContinuity()` → re-wire into the frozen sum →
+`invalidateRenderPathRange(armPos, ∞)`. **Offline render while armed**: the
+render suspends every live lane for its duration (`startRender` disarms
+monitoring, instruments return to the frozen lane with the barrier, the lanes
+resume after) — export ignores the split, as in Cubase; `beginRun` therefore
+never meets a live-owned track.
 
-**Arming transitions (the lane switch, now graph-wide):**
-- **Arm:** mark track `liveExcluded_` (leaves the frozen mix; range
-  invalidation as an ordinary edit); quiesce scheduler nodes touching the
-  now-live-owned chain components (the `retireObject`-style drain applied
-  to their in-flight nodes); reset+seek the downstream shared chain at the
-  playhead; start the pump; flip the callback's source to liveMixRing_.
-- **Disarm:** stop the pump; flip the callback back to frozen pages;
-  clear `liveExcluded_`; invalidate the downstream range from the arm
-  point (bus/master state diverged while live — their pages re-render);
-  `place-recording` places the captured clip (existing endpoint).
-- Both transitions are edit-path operations on the UI thread with a small
-  audible discontinuity budget (like seeking today).
+### D5 — Latency honesty; the speaker gains a two-lane lifecycle; the input gets a real capture thread
+WASAPI shared gives ~100 ms out; **proposal 35 (ASIO) is the hardware
+prerequisite for software-monitoring quality** — 21 is correct at any block size,
+only slow. `twSpeaker` becomes an explicit machine **device {CLOSED, OPEN} ×
+frozen lane {IDLE, BUFFERING, PLAYING} × live lane {OFF, ON}**: `out = (frozen ==
+PLAYING ? root : 0) + (live == ON ? ring : 0)`; arming while stopped OPENS the
+device (live ON, frozen IDLE, callback running); Play attaches the frozen lane
+without re-opening (a new engine may be minted under the running callback —
+handle swap under the leaf `engineMutex_`, snapshot per callback as today; the
+readahead priming gates the frozen lane's PLAYING, never the ring); Stop
+returns the frozen lane to IDLE and leaves the device open while live is ON;
+disarm-all closes it. `CaptureBackend` clears its recording at DEVICE start (not
+play start); testkit rule 1 becomes "frame 0 = the current DEVICE session; cases
+map through `frameAtHostTime`". `playback_test` gains a block per transition.
+The input side gets an **event-driven capture thread per device** writing an
+SPSC ring (WASAPI re-initialised with its own capture event; fixes F7's packet
+drop); the pump pops. Round trip = input period + ring hop + pump lookahead
+(1–2 blocks) + output buffer + reported latencies.
 
-## 5. Components
+### D6 — One named placement conversion, anchored on the published position
+`recordStart` is NOT "the locator at press": capture frame 0's host time is
+mapped through the live clock's anchor (published position + publish-lag
+correction, `SMidiOutPump`'s discipline) to a project frame `P0`, and capture
+frame k lands at `P0 + k − inputLatencyProj − outputLatencyProj + userOffsetProj`
+(all in PROJECT frames through the same scaling as `meterLatencyFrames()`).
+**Recording from a STOPPED transport:** capture frame 0's host time precedes the
+first publication (the readahead primes ~3 s before the RT publishes), so the
+bridge STORES host-time stamps per block and maps them **retrospectively** once
+the anchor exists — backward extrapolation on the same clock is exact; frames
+captured before the transport start are trimmed (or kept as a catch range,
+Cubase-style, as an option). Derivation, so the sign is not re-argued: the performer plays to what they HEAR,
+which is the engine position emitted `outputLatency` earlier; the microphone's
+sample reaches the ADC `inputLatency` before it is delivered; so the musical
+moment of capture frame k is `positionDelivered(t_arrival(k)) − outLat − inLat`
+— what REAPER's "use audio driver reported latency" (round trip) does; the
+manual `recordingOffsetMs` per input device (`SSettings`) absorbs what the
+driver misreports. Shared ANCHOR with 37 P7's MIDI-out, independent knobs.
 
-### 5.1 `twLiveInputSource` — class-0, two faces
+### D7 — One input pump, three sinks; recording is a consumer of the bridge
+Per active input: (1) the live-lane ring, (2) **wide** capture pages published
+into a **`twGrowingCaptureSource`** (chunked planar storage, atomic frontier —
+`twCapturingSource` is fixed-size and stays for containers) behind an
+**`SRecordingContent`** (an SObject content whose duration grows; the recording
+cut is an ordinary `SCut` over it; the arranger draws the frontier; preview
+peaks are extended incrementally from the frontier, never recomputed; growth
+emits `durationChanged` at ~10 Hz — and the recording cut's `updateClip` must NOT
+run `invalidateRenderPathRange` up to the root while its track is live-owned, or
+the root re-sums ten times a second: the track's clip-sync suppresses the walk
+for a live-owned track and issues one at disarm), (3) the WAV writer, with backpressure that never stalls
+the ring (a WAV falling behind drops to a "late" counter and the file is
+finalised from the pages). `RecordingSession` becomes a ring consumer (no 1 ms
+poll; non-modal — the dialog polls). At stop `place-recording` replaces the
+temporary object with the final WAV-backed cut INSIDE the one macro (takes for
+covered columns; loop record = one take per pass via the pump's wrap detection +
+`add-take startOffset=` — proposal 17's "phase 5" falls out).
+`locatorHeldElsewhere()` retires: the OUTPUT publication is the playhead
+authority in every mode; `startRecording` goes through `setPlaying()`.
 
-- **Block face (live lane):** `calcOutputTo` serves the device-input SPSC
-  ring (written by the input callback). Underrun ⇒ silence.
-- **Page face (frozen lane):** pages published by the capture bridge behind
-  `captureFrontier_` (atomic). `planPage` = no deps; scheduler contract:
-  live-bound nodes complete IN-LINE (published page, or silence-valid
-  beyond the frontier) — no demand ever parks on the future (assert).
-- `usesSerialCursor() = false` for the page face (immutable history).
+### D8 — MIDI: the recorder is a main-thread consumer of a tee; thru has its own immediate path
+The MIDI input device thread writes ONE ring per consumer (a fan-out at the
+callback: live-lane ring, recorder ring, thru) — SPSC stays SPSC. `SMidiRecorder`
+mirrors `SAutomationRecorder`: bounded by the transport (`transportStarted/
+Stopped`, which now includes record start), stamps host time → project frame
+(shared `SPlayheadClock` extracted from `SMidiOutPump`) → ticks (tempo map,
+once), and at stop commits **`place-midi-recording`** (planner shape of
+`place-recording`: `add-midi-take` where a MIDI clip covers the column — new
+verb, `add-take` is audio-only — else `insert-midi-clip` with events); modes
+**new take / overdub / replace** (global setting); loop = one take per pass in
+one macro; input quantise = a `quantize-notes` inside the macro; retrospective
+capture later (`place-retro-midi`). All-notes-off + CC/sustain chase on stop/
+locate. **MIDI-thru**: the device thread hands bytes to `MidiOutput` through a
+second, dedicated **immediate SPSC ring on `MidiOutScheduler`** (device-thread
+producer, scheduler-thread consumer, wakes the sender immediately) — never
+`enqueue()` (main-thread single producer, devices inv. 11); budget = one sender
+wake ≈ ≤ 2 ms measured, stated honestly.
 
-### 5.2 The capture bridge (non-RT) — unchanged from v1
+### D9 — One per-track input selector; monitor Off/On/Auto; the computer keyboard is a real port; testable headlessly
+`STrack::trackInput = none | audio:<device>:<channelMask> | midi:<port>:<channel|any>
+| keyboard` (portable NAMES via `SSettings`, like `midiOutPort`; the head's arm
+right-click menu; default derived from `instrumentSlot()`), `monitorMode = auto |
+on | off` — **Auto = tape-machine style** (Cubase "Tapemachine", REAPER "auto"):
+input while stopped or recording, playback while playing (so under Auto, pressing Play without Record STOPS the input and the live lane may go OFF; the exclusion is undone by the same rebuild); **On** replaces the
+track's playback with the input (Cubase semantics, not REAPER's sum) — serialized
+when non-default; arm reuses `ArmedForRecording` (never starts monitoring on
+load). Live set = closure of `{armed && monitorEffective} ∪ {monitor == on}` up to
+the master. `SVirtualKeyboardDock` becomes an in-process `MidiInput` port
+("Computer keyboard") so live play and recording treat it like hardware; step-
+input at the locator stays the stopped-transport behaviour. Meters: the pre-FX
+input meter is a lock-free peak pair from the bridge; a live track's post-FX
+meter is published position-keyed by the pump; `pumpMeters` ticks while a live
+lane is ON. Solo/mute of a live-owned track: mute silences its ring
+contribution (structural mute stays), solo behaves as for any track. Testkit:
+`SMARAGD_AUDIO_INPUT_BACKEND = file:<wav> | null | default` (`null` is the
+`--test-case` default; `FileAudioInput` replays a WAV in 1024-frame blocks
+**paced on the shared steady clock** `MidiOutScheduler::hostNowNs()`, with a
+configurable reported input latency), the existing capture MIDI input fed by
+`midi-in-event` / `midi-in-replay`; latency measured by **cross-correlation of
+the known input file against the capture** (`assert-monitor-latency`, sub-block,
+independent of the position decoder — F11); `assert-audio-continuity`,
+`assert-render-policy`, `assert-recorded-clip`, `virtual-key hold/release`.
+**Goldens byte-identical whenever no live lane is active** holds by construction
+(the pump exists iff a live lane is ON — armed∪monitor∪metronome — and renders
+suspend it).
 
-One input pump per active input, three sinks:
-- the live-lane input ring (§5.1 block face),
-- page assembly → timeline stamping (§6) → publication into the page face
-  → `captureFrontier_` advance (waveform preview grows while recording;
-  post-stop playback serves from cache),
-- the WAV writer (durable artifact; `place-recording` consumes it as
-  today). `RecordingSession` refactors into a consumer of this bridge.
+---
 
-### 5.3 `twLiveInstrument` — class-1 in live mode
+## 3. The live horizon, precisely (post-36 graph)
 
-A real-time plugin instrument is the class-1 exclusive instance entered
-through LIVE mode: driven inside the live graph pull (its position in the
-chain is wherever the user inserted it), consuming live MIDI from an event
-ring. Captured like an audio input (audio pages + optionally the MIDI
-events into a prop-12 event timeline). **Scheduled mode later:** the same
-instance flips to scheduler-lane class-1 rendering (runs + reset/pre-roll)
-from the recorded events — deterministic, editable re-render. Mode switch,
-not architecture switch.
+| Case | Live-owned (rendered by the pump) | Frozen inputs read by position | Exclusion wiring | Notes |
+|---|---|---|---|---|
+| (i) armed AUDIO track, top level | its slot processors, gain, map; source = input ring | none | plug nulled at the mixer | its own clips silent while armed (§10.1) |
+| (ii) armed INSTRUMENT track | slot-0 processor with `events = merge{feed (gated by transport), live}`, later slots, gain, map | none | plug nulled | sequenced notes sound only while PLAYING (D2) |
+| (iii) folder with a live child | the folder's SUM (live children + unarmed children's frozen roots) + its processors + gain + map; the live child as (i)/(ii) | every unarmed child ROOT (re-rooted demands) | the FOLDER's plug nulled at the mixer; the live child `setClipMuted` in the folder's trackmix | the folder's own clips silent; child MIDI bubbling to a folder instrument makes the folder the live instrument and the child a MIDI source |
+| (iv) sends / sub-busses | — | — | — | do not exist; closure by the same rule when they do |
+| root (TODAY: unity sum + identity) | not live: `root(unarmed) + ring` in the RT, epoch-gated — the LINEAR SPLIT, valid only under the checked precondition | the root page | — | a master chain / non-linear master ⇒ the master joins the closure, the pump renders it from frozen track roots, the RT pops the ring only (D3 general rule) |
 
-## 6. Time stamping & latency (unchanged from v1)
+Plan rebuild triggers: arm/disarm, `trackInput`/`monitorMode` change, transport
+state change (feed policy), reparent/insert/remove of a track in the closure,
+device change; the plan is swapped atomically, the old one released after the
+pump's next block.
 
-- Capture anchor: playhead at record start MINUS configured/reported input
-  latency (per-device "recording offset" setting; measured round-trip
-  calibration later). The input clock rules the captured material.
-- Same-device duplex assumed first; separate-device drift affects only the
-  live monitor alignment (capture stays internally consistent) —
-  compensation is phase P5.
+---
 
-## 7. Scheduler semantics while the live lane is active
+## 4. Threading contract
 
-- The frozen lane KEEPS RUNNING for everything upstream of the horizon
-  (unarmed tracks' chains) — the readahead demands pages as today; the
-  pump's copyData consumes them.
-- Components downstream of the horizon (busses/master) are NOT page-
-  rendered while live (their nodes would fight the pump's instances):
-  the demand planner treats them as live-owned — the readahead/preview
-  demands stop at the horizon (plan-level exclusion mirroring
-  `liveExcluded_`, but for the downstream shared set). Preview of the
-  master waveform during arming is simply stale (acceptable; UI hint).
-- Offline render while armed: renders the frozen world only (no live
-  future); UI-level warning as in v1.
+| Thread | New/changed | May | Must not |
+|---|---|---|---|
+| Input capture (per device) | NEW, event-driven | write its SPSC ring | touch Qt, block |
+| MIDI input (device) | existing (P7a) | write its per-consumer rings; push the thru ring | touch Qt |
+| **`LiveGraphPump`** | NEW std::thread, MMCSS "Pro Audio", `markLiveThread` | take a live-owned processor's `mutex_` (bounded), `getPageIfExists` try-lock, push the live ring, publish levels, read the engine position atomic | `freezePage`/`requestPage`/`fetchInputPage`/`copyData`, `requestGraphPages`, any blocking component `mutex()`, `queueLock_`, steady-state allocation, Qt |
+| Readahead | existing | additionally issue the re-rooted horizon demands (one handle per root) | (unchanged) |
+| RT callback | existing | pop the ring by position + epoch gate, crossfade, add to the root page | render (guard) |
+| `MidiOutScheduler` | existing | drain the immediate thru ring first | — |
+| Main | existing | build/swap plans, arm/disarm, recorders, place-* actions, meters | — |
 
-## 8. Degraded / optional modes
+`twRtThreadGuard` generalises to a per-thread `RenderPolicy {Any, Never}` with
+`markRtThread` / `markLiveThread` behind the one `freezePage` check (the RT's
+`assert()` behaviour is preserved; the live marker counts and returns silence).
+Shutdown, each step order-independent: disarm all (pump stop + join; processors
+handed back; recording finalised) → `MidiInput::setCallback(nullptr)` + close →
+`stopOutput()` → recording join → existing `stopScan()` + `TwLog::shutdown()`.
 
-- **Low-latency direct monitor (v1's strip):** input ring → gain/pan →
-  speaker sum, bypassing all chains. Optional per-track toggle for users
-  who prefer minimal latency over through-chain sound, and the automatic
-  fallback when a chain contains a plugin unfit for block-live execution.
-- **RT-capability policy:** inserts run in the live pull only if flagged
-  RT-capable (no allocation/locks in process; plugin ABI metadata,
-  proposal 08). A chain with an unfit plugin monitors in degraded mode
-  (plugin bypassed or strip-only) with a UI badge.
+## 5. `retireComponentNodes(set)` — semantics
+Queued/ready nodes whose component ∈ set are dropped: their demands complete as
+"not produced" (a consumer treats it like a miss: stale/silence); Running ones
+are waited for (bounded by one page render); dedup entries removed so a later
+demand plans fresh. Because the exclusion wiring precedes the drain, no NEW plan
+contains the set; in-flight dependents of old plans see a miss. Non-graph
+demanders (asset captures on the reval lane, previews) are not retired — the
+`liveOwned` guard makes their arrival silent + counted (gated ≈ 0). `pause()` is
+NOT a stand-in (it drains import-time analysis and hangs the UI).
 
-## 9. Threading contract (summary)
+## 6. Model, verbs, settings
+- `STrack`: `trackInput`, `monitorMode`; `ArmedForRecording` inert on load.
+- `SSettings`: `audio/recordingOffsetMs/<deviceName>`, `midi/inputOffsetMs/<port>`,
+  `midi/inputPortId/<name>`; `SOpt`: record mode, count-in bars, punch, input
+  quantise, retro buffer.
+- Verbs: `set-track-input`, `set-monitor-mode`, `arm-track` (absolute, undoable);
+  `record-start` / `record-stop` (transport-level); `place-midi-recording`,
+  `add-midi-take`, `place-retro-midi` (later); `set-record-mode`, `set-count-in`.
+- Testkit: `midi-in-event`, `midi-in-replay`, `assert-monitor-latency`
+  (`inputFile`, `channel`, `maxFrames`; cross-correlation lag), `assert-audio-
+  continuity` (`filename`, `startFrame`, `frameCount`, `maxGapFrames`,
+  `maxStep`), `assert-render-policy` (`liveThreadRefusals`, `liveOwnedRefusals`
+  bounds at exit), `assert-recorded-clip`, `assert-input-meter`, `virtual-key`
+  `hold`/`release`/`durationMs`.
 
-- Device input callback: writes input ring(s). Lock-free.
-- Device output callback: pops liveMixRing_ (armed) or reads frozen pages
-  (unarmed). Never renders (`twRtThreadGuard`).
-- LiveGraphPump: block-pulls the live-owned subgraph; serves unarmed inputs
-  from pages via copyData under a "never render, poke readahead" policy;
-  never takes `queueLock_` while holding component locks (same ordering
-  rule as everywhere).
-- Capture thread(s): page assembly + publication + WAV; may take component
-  locks for publication.
-- Scheduler/workers: unchanged; horizon-excluded components get no nodes
-  while live; live-bound page nodes complete in-line.
-- UI thread: arm/disarm = ordinary edit-path operations (blocking reads per
-  the `getDurationBlocking` rule) + pump start/stop + drains.
+## 7. Invariants (new or amended) — as v3 §7 plus
+playback: the two-lane machine and `out = frozen + ring`, ring entries stamped
+and epoch-gated, capture cleared at device start; plugins: `twLiveTransport`
+consulted only while `liveOwned`; mix: `isLiveOwned` is a wiring predicate, not
+audibility; devices: immediate thru ring (second producer path), capture threads;
+model: the placement conversion + `recordStart` definition; testkit: rule 1
+amended, `--test-case` audio input default `null`.
 
-## 10. Reuse map
+## 8. Phases (summary — briefs with ACs in `21_ORCHESTRATION.md`)
 
-| Existing | Role here |
+| Phase | Deliverable | Depends on | Headline gates |
+|---|---|---|---|
+| **L0** input device layer + seams | capture threads + rings (WASAPI event-driven), `SMARAGD_AUDIO_INPUT_BACKEND=file/null`, paced `FileAudioInput`, `midi-in-event`/`-replay` over the existing capture input, `retireComponentNodes` (§5), `RenderPolicy` markers, settings keys | — | `devices_input_test`, `schedule_test`, guard test, goldens |
+| **L1a** live lane engine | pump + stamped/epoch-gated ring + live clock (`twLiveTransport`) + speaker two-lane lifecycle + `setLiveOwned` guard + `playback_test` per transition + a synthetic-plan harness | L0 | `playback_test` transitions; harness renders a plan block-wise and matches the frozen render sample-exact where the identity holds |
+| **L1b** live lane app: audio monitoring | plan builder + closure, exclusion wiring, re-rooted demands, `trackInput`/`monitorMode`/`arm-track`, meters, UI, render-suspends-live | L1a | `monitor_through_chain`, `monitor_latency` (cross-corr), `monitor_folder_closure`, `arm_during_playback` (continuity), goldens, sweeps |
+| **L2** live instruments (37 P8a) | keyboard port, MIDI rings fan-out, `twLiveEventSource` as a feed member, ownership protocol, thru ring, `virtual-key hold/release`, Options MIDI inputs active | L1b | `live_instrument_play`, `live_instrument_merge`, `live_instrument_disarm_playback` (continuation after disarm ≡ no-arm capture), ownership counter, thru ≤ 2 ms |
+| **L3a** capture bridge engine | `twGrowingCaptureSource`, `SRecordingContent`, three sinks + backpressure, wave writer consumer, `RecordingSession` refactor | L1a (parallel with L1b) | `record_bridge_test` (sink identity vs pages) |
+| **L3b** audio recording app | placement conversion + `recordStart`, non-modal, punch, loop takes, `locatorHeldElsewhere` retired, `startRecording` via `setPlaying`, offsets in Options | L1b, L3a | `record_offset_zero`, `record_loop_takes`, `record_punch`, existing take/placement cases |
+| **L4** MIDI recording (37 P8b) | `SMidiRecorder`, `place-midi-recording`, `add-midi-take`, modes, loop takes, quantise, retro (opt.) | L2, L3b | `midi_record_placement`, `midi_record_modes`, `midi_record_loop_takes` |
+| **L5** transport polish | metronome click source in the plan (pump exists iff a live lane is ON), count-in, pre-roll, latency readout, live-path plugin latency badge | L1b (L3b for count-in placement) | click at the grid; render byte-identical; count-in placement |
+| **L6** *(outline)* multi-device duplex + drift, loopback wizard, ASIO validation (35) | 35 | own briefs |
+
+Critical path: L0 → L1a → L1b → L2 → L4 (L3a runs from L1a in parallel with L1b; L3b after L1b + L3a) → L5.
+
+## 9. Risks
+| Risk | Mitigation |
 |---|---|
-| `calcOutputTo` block-pull contract | the live lane's execution mechanism (why we never deleted it) |
-| `twStreamingLatch::copyData` page reads | unarmed inputs of live-owned components |
-| `AudioInput` backends | device seam; bridge pumps it |
-| `RecordingSession` / `place-recording` / takes | capture sinks + disarm endpoint |
-| `twRtThreadGuard` | generalized to per-thread render policy (RT: never; pump: never+poke) |
-| prop 19 execution classes | class 0 input, class 1 live instruments, lane ownership |
-| prop 16 fallback semantics | ring underrun / missing page ⇒ silence, never block |
-| prop 12 event timelines | recorded MIDI for scheduled re-render |
+| WASAPI shared latency makes monitoring feel bad | say so; ASIO (35) is the prerequisite; the design is correct at any block |
+| Arm/disarm during playback clicks | epoch-gated flip + crossfade; gated by continuity assertions |
+| A worker/preview touches a live processor | `setLiveOwned` guard + counter gated ≈ 0 |
+| Live folder's unarmed siblings never frozen | re-rooted demands, one handle per root — a folder gate |
+| Master becomes non-linear (insert, curve, state) | D3's general rule takes over automatically (precondition check in the plan builder); the linear split is an optimization, not the model |
+| Placement sign/anchor error | D6's derivation + the zero-offset gate |
+| Two clocks drift | L6; single-device duplex first |
+| Sequenced material sounding while stopped | D2's feed gate, gated |
 
-## 11. Phasing (each independently shippable + gated)
+## 10. Decisions taken in v3/v3.1 (requester may veto before L1)
+1. Input-only monitoring for an armed audio track (its own clips silent while
+   armed; hearing them needs proposal 20 §2) — the excluded folder's own clips too.
+2. Monitor Off/On/Auto per track; Auto = tape-machine style; On replaces.
+3. Record modes new-take (default) / overdub / replace as a global setting.
+4. The computer keyboard is a real input port, selectable per track.
+5. Note-on chase ON at PLAY start for sequenced material; nothing sequenced
+   sounds while stopped.
+6. MIDI-thru follows `midiOutPort` when set, via the immediate ring.
+7. Renders suspend live lanes (export ignores the split).
 
-1. **P1 — Live graph pump, audio input through the chain.** Arm → input
-   heard through the track's inserts + busses + master, mixed with frozen
-   playback of other tracks. Gates: goldens byte-identical when nothing is
-   armed; RT guard + pump-policy guard clean; manual latency check; xrun
-   counter ~0 on an idle machine.
-2. **P2 — Capture bridge unification** (pages + WAV + preview-while-
-   recording; `RecordingSession` refactor). Gate: recorded WAV
-   byte-identical to the pre-refactor recorder on a deterministic test
-   input; placement tests unchanged.
-3. **P3 — Live plugin instruments** (MIDI event ring; depends on prop 08
-   instrument ABI + RT-capability metadata).
-4. **P4 — Event capture + scheduled re-render** (prop 12 integration; the
-   live↔scheduled instrument mode switch).
-5. **P5 — Multi-device & drift** (separate in/out devices, monitor-path
-   drift compensation, measured latency calibration).
-6. **P6 — Degraded modes polish** (direct-monitor toggle, unfit-plugin
-   fallback + badges).
+## 11. Deliberately not in scope
+Direct/hardware monitoring; input FX; sends/sub-busses; a master chain; live
+time-stretch; ASIO itself (35); cross-device drift (L6); MPE live routing
+(works if the ABI passes it, not gated); hearing armed tracks' own clips (20 §2).
 
-## 12. Open questions
+## 12. Glossary
+| Smaragd | Cubase | REAPER | Logic | Studio One |
+|---|---|---|---|---|
+| live horizon / live-owned set | ASIO-Guard real-time + dependent channels | armed tracks (anticipative FX off) + receivers | live tracks (I/O buffer) | native low-latency monitor path |
+| frozen lane | ASIO-Guard pre-processed | anticipative FX / media buffering | Process Buffer Range | Dropout Protection block |
+| monitor Off/On/Auto | Manual / (On) / Tapemachine | off / on / auto | Software Monitoring + Auto Input | monitor button + tape-style |
+| recording offset | Record Shift | manual offset + driver latency | Recording Delay | Record Offset |
+| capture bridge | — | — | — | — |
+| retrospective capture | Retrospective Record | retroactive record | Capture Recording | Retrospective Record |
 
-1. Horizon computation for arbitrary routing: with sends/sub-busses, the
-   live-owned set = all components reachable downstream from any armed
-   source — needs a small graph walk on arm/disarm (and on rewiring while
-   armed).
-2. Pump block size vs device block size (fixed small block with internal
-   re-blocking, or follow the device?). Plugins prefer stable block sizes.
-3. Bus/master state at the arm boundary: reset (click-free ramp?) vs
-   carrying state from the last frozen page (restoreInternalState from the
-   page at the playhead — attractive: seamless arm during playback).
-4. Two armed tracks on different busses: one pump pulling the whole live-
-   owned set (single-threaded live graph) vs per-bus pumps (ordering).
-   Start single-pump; the live-owned set is small.
-5. Automation during live monitoring: parameter changes apply to the live
-   instances immediately (they are the same instances — should just work;
-   verify the edit-path locking budget per block).
-6. Loop-recording/punch semantics at the frontier (prop 17 takes per pass).
-7. Whether the pump should ALSO feed the capture bridge post-chain
-   (recording the processed signal, "print FX") as an option vs always
-   capturing the raw input (current design: raw input; print-FX later via
-   freeze-in-place).
+## 13. Adversarial review (v3 → v3.1)
+
+| # | Sev | Finding | Resolution |
+|---|---|---|---|
+| 1 | BLOCKER | No transport model: position/continuity/feed undefined; anchor exists only while playing; `ctx.playing` always true | **D2** (live clock: engine-published position + lead while playing, virtual counter + masked feed + held automation while stopped; `twLiveTransport` flag-gated in `render`; stamped ring; explicit repositions) |
+| 2 | BLOCKER | MIDI-thru = second producer on the single-producer scheduler ring / 20 ms via the shell | D8: dedicated immediate SPSC ring on the scheduler, device-thread producer; ≤ 2 ms measured |
+| 3 | BLOCKER | "Live-only output state" is a speaker lifecycle rewrite (new engine per start, zero-fill unless PLAYING, capture cleared per start) | D5: explicit device × frozen × live machine; `out = frozen + ring`; capture cleared at device start; testkit rule 1 amended; L1a phase with `playback_test` per transition |
+| 4 | MAJOR | Case (iii) double-counts siblings; crossfade cannot know when the root stopped containing the track | D3: topmost member nulled, nested clip-muted, folder's own clips silent; epoch-gated flip (D2) |
+| 5 | MAJOR | `syncInstrumentSlot` overwrites a processor-level live source; `setEventSource` bumps epoch | D4: live source is a MEMBER of `eventFeed()` while live-owned |
+| 6 | MAJOR | Render while armed hits the guard → silent track | D4: renders suspend live lanes; L2 AC4 → concurrent non-root demand |
+| 7 | MAJOR | Growing recording cut does not exist | D7: `twGrowingCaptureSource` + `SRecordingContent`, preview policy, macro replacement |
+| 8 | MAJOR | Latency ACs below the position decoder's resolution | D9: cross-correlation `assert-monitor-latency`; budgets in frames measured sub-block |
+| 9 | MAJOR | Verbs missing from deliverables | §6 + briefs list them |
+| 10 | MAJOR | `retireComponentNodes` under-specified; `pause()` stand-in hangs | §5; stand-in deleted |
+| 11 | MAJOR | L2 AC3 vacuous (render already barriers) | L2 gate: playback continuation after disarm ≡ no-arm capture |
+| 12 | MAJOR | `recordStart` undefined; sign argument | D6 derivation + published-anchor definition |
+| 13 | MAJOR | L1/L3 too big for one agent | L1a/L1b, L3a/L3b |
+| 14 | MAJOR | `isLiveOwned` folded into `isLaneAudible` breaks feeds/meters | D3: separate wiring predicate |
+| 15 | MAJOR | meters do not tick while stopped-and-armed | D9 |
+| 16 | MAJOR | plan lifetime unlisted; `startRecording` bypasses `setPlaying` | §3 triggers; D7 |
+| — | MINOR | existing capture MIDI input + env; not allocation-free; degraded fallback redundant; test-case input default; WASAPI not event-driven; RT assert vs marker; per-root demand handles; monitor Auto semantics; metronome vs "pump exists only when armed"; `kCacheEntries` text; RT vector allocs; L3 AC1 render; L5 count-in placement | all folded in (D1, D5, D9, L0/L5 briefs) |
+
+### 13.2 Verification pass (v3.1 → v3.2)
+
+| Item | Status → change |
+|---|---|
+| #1 partial — feed mask vs live member contradicted; `PlaybackContext` is the wrong direction | D2/D4: TWO processor sources (`events_` feed, `liveEvents_`); `feedEnabled` skips the feed only; automation hold via the per-chunk chase build; engine-owned atomic `{seq, deliveredFrame, hostNs}` stamped by the callback |
+| #4 arm side only; counter unnamed | D2: `flipEpoch` = root rewire's `contentEpochNow()` after the wiring bump; disarm mirror `flipEpoch'` |
+| #5 partial → new hazard (feed member read by the MIDI-out pump / testkit) | live source is never a feed member (D2/D4) |
+| #12 partial — recording from stopped has no anchor yet | D6: stamps stored, mapped retrospectively; pre-start frames trimmed or catch range |
+| N3 L1b AC1 self-contradictory | Auto semantics stated in D9; the AC split into Auto (input stops on Play) and On (continues) |
+| N4 graph vs table | L3a depends on L1a, parallel with L1b |
+| N5 harness identity | L1a AC2 restricted: synchronous harness, linear partition-invariant insert (`tw.test.clap.gain`), no curve; the sine fixture only for presence |
+| N6 10 Hz root re-sum | D7: no root walk while live-owned |
+| N7 thru 2 ms vs the scheduler's own 5 ms gate | L2 AC5 = 5 ms, measured value recorded |
+| N8 `midi-in-event atFrame` while stopped | valid only while playing; `now` otherwise |
+| N9 testkit in L1a's module list | added |
+| N10 no qxa case records audio today | `null` default breaks nothing — stated |
+| N11 monitoring "resumes" after a render | a fresh arm (plan rebuilt), never a resumed plan |

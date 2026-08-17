@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_stereo_render">
+
+  <!-- PROPOSAL 37, STEREO GATES (2026-08-17). THE GENERATOR MAPPING ROWS, READ
+       OUT OF A RENDERED FILE, PER CHANNEL.
+
+       Proposal 37's instrument phases (P3a/P3b/P3c) were designed and built
+       while the sink was still mono, so every audio assertion in the
+       instrument_* cases reads CHANNEL 0 and each of them carries the line
+       "STEREO IS NOT GATED (proposal 36 B5)". Since 36-B5 the sink is as wide
+       as the project (`RenderSession` writes the project's channel count), and
+       `L != R` on a FILE is a legitimate claim. This case is where the four
+       generator rows of `twPluginSlotProcessor` (plugins/CONTRACT.md inv. 16)
+       stop being a statement about the engine and become a statement about the
+       bytes in a WAV.
+
+       ================================================== which row is which
+
+       The row is chosen from the INSTANCE's ioLayout() against the PAGE WIDTH,
+       i.e. the project's `channels=` (twpluginslotproc.cc, "THE GENERATOR
+       ROWS"). `tw.test.clap.sine` reports 2 outputs — its MAIN bus; the mono
+       AUX bus is not part of ioLayout() — and `tw.native.303` reports 1. So:
+
+         sine on channels=2   0 -> C           DirectGen    (part A)
+         sine on channels=1   0 -> 2, C == 1   GenFold      (part B)
+         sine on channels=6   0 -> 2, 1<2<6    REFUSED      (part C)
+         303  on channels=2   0 -> 1, C > 1    MonoSpread   (part D)
+
+       PART C IS NOT A TYPO AND WIDEGEN IS NOT REACHABLE HERE. WideGen is
+       `0 -> M with M > C`, and the GenFold row (`0 -> 2 on C == 1`) is tested
+       first, so a 2-out instrument can never take it: reaching WideGen needs an
+       instrument with at least THREE main outputs and no in-repo fixture has
+       one. It stays gated at engine level only, in
+       `test_plugin_insert.cc` ("0-in/4-out on 2 channels is WideGen"). What a
+       2-out instrument on a SIX-channel page actually gets is the last row —
+       "a generator narrower than the page but not mono: no defined spread, so
+       refuse rather than guess" — which is `Transparent` + `Unsupported`, and
+       which nothing else in the suite asserts.
+
+       ============================================ the fixture and its param
+
+       `tw.test.clap.sine` used to write the SAME sample to every main channel,
+       which cannot distinguish a wide sink from one duplicating channel 0. It
+       now carries **param id 3, "Stereo Skew", stepped, DEFAULT 0 = OFF**: off,
+       every main channel is the same sample (so every render made before
+       2026-08-17 is byte-identical and the existing channel-0 closed forms are
+       untouched); on, channels 1.. of the main bus are at HALF amplitude.
+
+       THE CLOSED FORM. 16 envelope-less sine voices, amp = velocity, instant
+       on/off, and the ABI carries velocity NORMALIZED, so `velocity="100"` is
+       100/127 at the plugin. A held note's rms over a whole second is
+
+           ch0 = (100/127)/sqrt(2) * gain = 0.556769
+           ch1 = ch0 / 2                  = 0.278384      (skew ON)
+           ch1 = ch0                                      (skew OFF)
+
+       +/-3 % bands throughout: that is the 16-bit round trip plus the two
+       4096-frame chunk boundaries per second (4096 does not divide 48000), and
+       nothing else — the sine has no envelope to smear it.
+
+       A TRAP WORTH THE LINE IT COSTS: `set-project-channels` RE-DERIVES the
+       mapping, and re-deriving RE-INSTANTIATES the plugin
+       (`SPluginSlot::ensureChannels`, "the bypass flag and the saved state
+       chunk have to be re-applied every time the width moves"). A LIVE
+       `set-plugin-param` edit is not in that list — only `bypass_` and
+       `savedState_` are — so the skew is set AGAIN after every width change
+       here. Deliberate: the alternative is a case that silently measures a
+       default-off instrument and passes its "channels are equal" half. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ============================================================ PART A
+         DirectGen: 0 -> C on a 2-channel page. One instance, channel for
+         channel; the plugin writes STRAIGHT into the page channels. -->
+    <add-track index="-1"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <assert-instrument-slot trackPath="0" present="1" format="clap"
+                            uid="tw.test.clap.sine" mode="DirectGen"
+                            state="Active" hasFeed="1"/>
+
+    <!-- One held C4 (key 60, 261.626 Hz) over 2 s: 120 BPM / ppq 960, so
+         1920 ticks is a second and 3840 ticks is the whole clip. Every frame of
+         both seconds is inside the note, so the bands below are closed forms
+         rather than windows chosen to miss an edge. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Hold"/>
+    <add-note clip="0,0" tick="0" dur="3840" key="60" velocity="100" channel="0"/>
+
+    <!-- A1. THE DEFAULT IS OFF, and that is asserted rather than assumed —
+         it is the whole reason no golden and no existing instrument_* case
+         moves. Both channels carry the SAME closed form... -->
+    <render filename="isr2_flat.wav" format="wav" quality="10" durationSec="2.5"/>
+
+    <assert-audio-energy filename="isr2_flat.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57349"/>
+    <assert-audio-energy filename="isr2_flat.wav" startFrame="0" frameCount="48000"
+                         channel="1" minRms="0.54007" maxRms="0.57349"/>
+    <!-- ...and channel 1 is not merely at the same LEVEL, it is the same audio.
+         (This is also the first assertion in the suite that says an
+         INSTRUMENT's second output reaches the file at all: a DirectGen row
+         that wrote only genOut_[0] into the page would leave channel 1 silent
+         and fail the band above.) -->
+    <assert-channels-differ filename="isr2_flat.wav"
+                            channelA="0" channelB="1"
+                            startFrame="0" frameCount="48000"
+                            minRmsDelta="0.0" minDiffRms="0.0001"
+                            expectReject="true"/>
+
+    <!-- A2. Skew ON. Channel 1 halves; channel 0 does not move. -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="3" value="1"/>
+
+    <render filename="isr2_skew.wav" format="wav" quality="10" durationSec="2.5"/>
+
+    <assert-audio-energy filename="isr2_skew.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57349"/>
+    <assert-audio-energy filename="isr2_skew.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57349"/>
+    <assert-audio-energy filename="isr2_skew.wav" startFrame="0" frameCount="48000"
+                         channel="1" minRms="0.27003" maxRms="0.28675"/>
+    <assert-audio-energy filename="isr2_skew.wav" startFrame="48000" frameCount="48000"
+                         channel="1" minRms="0.27003" maxRms="0.28675"/>
+
+    <!-- The band must be able to FAIL, or the ratio proves nothing: channel 1
+         is NOT at channel 0's level. -->
+    <assert-audio-energy filename="isr2_skew.wav" startFrame="0" frameCount="48000"
+                         channel="1" minRms="0.54007" maxRms="0.57349"
+                         expectReject="true"/>
+
+    <!-- ...and it is the same SINE, an octave-flat copy of nothing: the pitch
+         on channel 1 is the note's, so the halving is a gain and not a second
+         voice. -->
+    <assert-audio-frequency filename="isr2_skew.wav" startFrame="0" frameCount="48000"
+                            channel="1" minHz="260.626" maxHz="262.626"/>
+
+    <!-- The level discriminator, in both of its independent forms: delta 0.2784
+         and rms(ch0 - ch1) 0.2784 (the difference of a sine and half itself is
+         half the sine). A sink that duplicated channel 0 gives 0 for both. -->
+    <assert-channels-differ filename="isr2_skew.wav"
+                            channelA="0" channelB="1"
+                            startFrame="0" frameCount="48000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+    <assert-channels-differ filename="isr2_skew.wav"
+                            channelA="0" channelB="1"
+                            startFrame="48000" frameCount="48000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- Nothing may sound after the note-off: the sine reports tailFrames() = 0
+         honestly, on BOTH channels. -->
+    <assert-audio-energy filename="isr2_skew.wav" startFrame="100000" frameCount="18000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+    <assert-audio-energy filename="isr2_skew.wav" startFrame="100000" frameCount="18000"
+                         channel="1" minRms="0.0" maxRms="0.0001"/>
+
+    <!-- ============================================================ PART B
+         GenFold: 0 -> 2 on a ONE-channel page. The pair is AVERAGED down,
+         which the skew makes visible for the first time — with both outputs
+         equal, "average the pair" and "take output 0" are the same number. -->
+    <set-project-channels channels="1"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="3" value="1"/>
+
+    <assert-instrument-slot trackPath="0" present="1" format="clap"
+                            uid="tw.test.clap.sine" mode="GenFold"
+                            state="Active" hasFeed="1"/>
+
+    <render filename="isr1_fold.wav" format="wav" quality="10" durationSec="2.5"/>
+
+    <!-- 0.5 * (s + 0.5 s) = 0.75 s, so rms = 0.75 * 0.556769 = 0.417577. -->
+    <assert-audio-energy filename="isr1_fold.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.40505" maxRms="0.43011"/>
+    <assert-audio-energy filename="isr1_fold.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.40505" maxRms="0.43011"/>
+    <!-- ...and 0.556769 — "output 0 only", i.e. a fold that never happened —
+         is 33 % away and outside it. -->
+    <assert-audio-energy filename="isr1_fold.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57349"
+                         expectReject="true"/>
+
+    <!-- The file really is ONE channel wide: channel 1 does not exist, which
+         M0 made an ERROR rather than a silent rms 0. -->
+    <assert-audio-energy filename="isr1_fold.wav" startFrame="0" frameCount="48000"
+                         channel="1" minRms="0.0" maxRms="1.0"
+                         expectReject="true"/>
+
+    <!-- ============================================================ PART C
+         THE REFUSED ROW: 0 -> 2 on a SIX-channel page. 2 is neither 6 (Direct-
+         Gen), nor 1 (MonoSpread), nor "2 on a mono page" (GenFold), nor wider
+         than the page (WideGen) — so there is no defined spread and the slot
+         loads TRANSPARENT and reports Unsupported. The instrument is silent:
+         a track with a Transparent slot passes its own audio through, and this
+         track has none. -->
+    <set-project-channels channels="6"/>
+    <assert-instrument-slot trackPath="0" present="1" format="clap"
+                            uid="tw.test.clap.sine" mode="Transparent"
+                            state="Unsupported" hasFeed="1"/>
+
+    <render filename="isr6_refused.wav" format="wav" quality="10" durationSec="2.5"/>
+
+    <assert-audio-energy filename="isr6_refused.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+    <assert-audio-energy filename="isr6_refused.wav" startFrame="0" frameCount="48000"
+                         channel="1" minRms="0.0" maxRms="0.0001"/>
+    <!-- Six channels wide, and no wider — the silence above is the mapping's
+         refusal and not a one-channel file being read at channel 0. -->
+    <assert-audio-energy filename="isr6_refused.wav" startFrame="0" frameCount="48000"
+                         channel="5" minRms="0.0" maxRms="0.0001"/>
+    <assert-audio-energy filename="isr6_refused.wav" startFrame="0" frameCount="48000"
+                         channel="6" minRms="0.0" maxRms="1.0"
+                         expectReject="true"/>
+
+    <!-- ============================================================ PART D
+         MonoSpread: 0 -> 1 on a 2-channel page. `tw.native.303` declares ONE
+         audio output (twnativeinstrument.cc: "mono, like every other page in
+         this engine"), so its single voice is COPIED to every page channel.
+
+         THE TRAP THIS PART EXISTS FOR: the two channels being EQUAL is the
+         RIGHT answer here, not a mono sink and not a bug. `assert-channels-
+         differ` must therefore be REJECTED — and the per-channel energy bands
+         beside it are what stop that rejection from also passing for silence.
+         Read the two together or neither means anything. Centre-panned mono is
+         all a pan-less clip model can express (design D3 / plugins inv. 37);
+         when clips carry a pan this part is where it will show. -->
+    <set-project-channels channels="2"/>
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <add-track index="-1"/>
+    <!-- No isInstrument attribute on purpose: `tw.native.303` is a BUILT-IN, so
+         the registry resolves the flag. -->
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.303"
+                   name="Smaragd 303" vendor="Smaragd"
+                   path="" nIn="0" nOut="1"/>
+    <assert-instrument-slot trackPath="1" present="1" format="tw"
+                            uid="tw.native.303" mode="MonoSpread"
+                            state="Active" hasFeed="1"/>
+
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="Hold"/>
+    <add-note clip="1,0" tick="0" dur="3840" key="60" velocity="100" channel="0"/>
+
+    <render filename="isr2_spread.wav" format="wav" quality="10" durationSec="2.5"/>
+
+    <!-- The 303 is a filtered saw with a decay envelope, so it gets the same
+         qualitative band instrument_sine_render gives it: audible, not a closed
+         form. On BOTH channels — a MonoSpread that copied only into channel 0
+         would leave channel 1 silent and fail the second of these. -->
+    <assert-audio-energy filename="isr2_spread.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.05" maxRms="1.0"/>
+    <assert-audio-energy filename="isr2_spread.wav" startFrame="0" frameCount="48000"
+                         channel="1" minRms="0.05" maxRms="1.0"/>
+    <assert-audio-frequency filename="isr2_spread.wav" startFrame="0" frameCount="48000"
+                            channel="1" minHz="259.626" maxHz="263.626"/>
+
+    <!-- ...and they are the SAME audio, sample for sample. -->
+    <assert-channels-differ filename="isr2_spread.wav"
+                            channelA="0" channelB="1"
+                            startFrame="0" frameCount="48000"
+                            minRmsDelta="0.0" minDiffRms="0.0001"
+                            expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
