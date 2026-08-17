@@ -16,15 +16,18 @@
 //      instrument any future memory claim about this engine has to rest on, so
 //      its own arithmetic is checked here against pages whose count the test
 //      controls exactly.
+#include "tw/graph/tw_freeze_context.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/twlatch.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/tw_output_page.h"
 #include "tw/pages/tw_page_accounting.h"
 
+#include <atomic>
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <thread>
 
 static int failures = 0;
 #define CHECK(cond, msg)                                                    \
@@ -52,6 +55,29 @@ public:
     // mutex() is protected on twComponent; the contention check below needs
     // to hold it from outside, which only a derived class can grant.
     std::mutex &testMutex() { return mutex(); }
+};
+
+// A component that actually renders, so "the guard returned silence" can be
+// told apart from "the component had nothing to say".
+class TonyComponent : public twComponent {
+public:
+    explicit TonyComponent(tw303aEnvironment &e) : twComponent(e) {}
+    std::atomic<int> renders{0};
+    void reset() override {}
+    length_t renderFrames(sample_t *out, length_t n, const sample_t *,
+                          length_t, idx_t) override {
+        ++renders;
+        for (length_t i = 0; i < n; ++i) out[i] = 1.0f;
+        return n;
+    }
+    void createOutputLatches() override {
+        pOutputLatches_[0] =
+            std::make_shared<twStreamingLatch>(shared_from_this(), 0, 0);
+    }
+    idx_t getNInputs() const override { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    const char *getInputName(idx_t) const override { return nullptr; }
+    const char *getOutputName(idx_t) const override { return "out"; }
 };
 
 int main()
@@ -197,6 +223,80 @@ int main()
               "a destroyed component is out of the per-component total");
         CHECK(tw::pages::PageAccounting::global().pages == globalWithB - 5,
               "…and its pages are out of the global one");
+    }
+
+    // --- The per-thread RENDER POLICY (proposal 21 L0, AC3) -------------
+    //
+    // markLiveThread(): silence, counted, logged ONCE. Not an assert — the
+    // live pump's arrival here is recoverable by design, unlike the RT
+    // callback's, whose assert path is deliberately unchanged (and is not
+    // exercised here: it would abort a debug build, which is the point of it).
+    {
+        tw303aEnvironment env;
+        auto c = std::make_shared<TonyComponent>(env);
+        c->init();
+
+        twRtThreadGuard::resetLiveCounters();
+
+        CHECK(twRtThreadGuard::mayRender() && !twRtThreadGuard::onRtThread() &&
+                  !twRtThreadGuard::onLiveThread(),
+              "an ordinary thread may render (the default policy is Any)");
+
+        // The control: an unmarked thread renders normally.
+        auto ok = c->freezePage(0, nullptr, 0, (length_t) CAP,
+                                env.getSRate(), nullptr);
+        CHECK(ok && ok->validFrames > 0 && c->renders.load() == 1,
+              "an unmarked thread renders as before");
+
+        std::atomic<int> silent{0};
+        std::thread live([&] {
+            twRtThreadGuard::markLiveThread();
+            if (!twRtThreadGuard::mayRender() && twRtThreadGuard::onLiveThread() &&
+                !twRtThreadGuard::onRtThread())
+                ++silent;
+            for (int i = 0; i < 3; ++i) {
+                auto p = c->freezePage((offset_t)(i + 10) * CAP, nullptr, 0,
+                                       (length_t) CAP, env.getSRate(), nullptr);
+                if (p && p->validFrames == 0) ++silent;
+            }
+        });
+        live.join();
+
+        CHECK(silent.load() == 4,
+              "a markLiveThread() thread is policy Never and every freezePage "
+              "it attempts comes back as an empty (silent) page");
+        CHECK(c->renders.load() == 1,
+              "…and the component never rendered for it");
+        CHECK(twRtThreadGuard::liveThreadRefusals() == 3,
+              "every refusal is counted (liveThreadRefusals)");
+        CHECK(twRtThreadGuard::liveThreadReports() == 1,
+              "and exactly ONE log line was emitted, not one per block");
+
+        // The marker is PER THREAD: this one is still allowed to render.
+        CHECK(twRtThreadGuard::mayRender(),
+              "marking another thread did not change this one's policy");
+        auto still = c->freezePage(CAP, nullptr, 0, (length_t) CAP,
+                                   env.getSRate(), nullptr);
+        CHECK(still && still->validFrames > 0 && c->renders.load() == 2,
+              "the calling thread still renders");
+
+        // The RT marker's own semantics, without entering freezePage (that
+        // path asserts on purpose): it sets policy Never and reports Rt.
+        std::atomic<int> rtOk{0};
+        std::thread rt([&] {
+            twRtThreadGuard::markRtThread();
+            if (twRtThreadGuard::onRtThread() && !twRtThreadGuard::mayRender() &&
+                !twRtThreadGuard::onLiveThread())
+                ++rtOk;
+        });
+        rt.join();
+        CHECK(rtOk.load() == 1,
+              "markRtThread() still means policy Never, kind Rt (the assert "
+              "path is unchanged and is gated by the existing tests)");
+        CHECK(twRtThreadGuard::liveThreadRefusals() == 3,
+              "the RT thread does not touch the live counter");
+
+        twRtThreadGuard::resetLiveCounters();
     }
 
     if (failures == 0) { printf("all graph tests passed\n"); return 0; }
