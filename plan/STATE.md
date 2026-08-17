@@ -9826,3 +9826,65 @@ reporting N lanes, since two would scan and resolve the same page twice.
 
 **New debt:** `SObject::getCapture` never schedules revalidation, which is *why*
 only an `SCut` can own an aspect page — the asymmetry that kept trap 26 latent.
+
+## 2026-08-17 — The plugin scan stops hanging every `--test-case` run at exit
+
+Every headless run PASSED and then never exited, dying on CTest's 600 s timeout.
+Three commits, and the interesting part is that the reported cause was only half
+of it.
+
+**The stack, from a live attach to a hung process** (the diagnosis was a report
+until this):
+
+```
+Thread 1 (main):  msvcrt!_initterm_e            <- static destruction
+                  ~twPluginRegistry             twpluginregistry.cc:173
+                  twPluginRegistry::waitForScan twpluginregistry.cc:292
+                  QThread::wait                 <- unbounded
+Thread 5 (scan):  __cxa_call_terminate / __verbose_terminate_handler
+                  abort()
+                  RtlEnterCriticalSection       <- blocked on the CRT lock
+```
+
+`main.cpp`'s test mode ends in **`std::exit()`**, which runs static destructors on
+the calling thread while every other thread keeps running — and never destroys
+`SApplication`, so the join in *its* destructor never happens and the first thing
+to notice a live scan is the registry's own static destructor. The scan thread,
+executing against a runtime being torn down under it, throws; nothing catches it;
+`std::terminate` calls `abort()`; `abort()` wants the CRT lock the exiting thread
+is holding while it waits for this thread. **Neither side had a timeout in it.**
+
+What the re-probe was NOT: slow. Probing all six installed modules
+out-of-process takes **2.7 s** total (160 ms each, 1.8 s for Melodyne, measured
+by driving `smaragd_pluginprobe` by hand). The hang was a deadlock, not a wait.
+
+**The trigger was cross-worktree state.** `kScannerVersion` is a source constant;
+`plugincache.json` was one file per USER. A worktree at version 2 had written it
+while this build is version 1, so every launch logged "written by scanner version
+2, this build is 1 — rescanning everything" and re-probed everything, which is
+what kept a scan in flight at exit. The file name now carries the version
+(`plugincache.v1.json`, `twPluginRegistry::cacheFileName()`). Foreign records were
+already refused wholesale on load, so nothing is lost — but **every existing user
+re-scans once**, and the old file is deliberately left alone because a build at
+another version may still be using it.
+
+The fix proper: `cancelScan()` observed between modules and once per **100 ms
+slice** of the probe wait (was one `waitForFinished( 15000 )`), a **bounded**
+`waitForScan( ms )` that leaks rather than deletes or terminates a worker that
+will not stop, a **catch-all** around the thread body, and cancel-then-join at
+the two points that can still REPORT a failure — `~SApplication` and, new,
+`main.cpp` before `std::exit()`. `~twPluginRegistry` keeps a **silent** 5 s
+cancel-and-join as the last resort: `TwLog::instance()` is a function-local
+static built after it, hence destroyed before it, so logging there would trade
+the hang for a crash.
+
+A cancelled scan writes **no** cache and publishes **no** plugin list. Its table
+is partial and its one caller is a process on the way out; a module it never
+judged must not become a record, least of all a sticky failure. The cost is that
+a run too short to finish its scan never warms the cache — acceptable, since one
+longer case warms it for every later run (the suite did exactly that).
+
+Measured, `render_sawtooth_minimal.qxa`, foreign cache, six installed plugins:
+**> 600 s (killed) → 270-350 ms**. Full suite, `-j4`, **no** `[plugins]
+searchPaths` workaround: **131/131 in 93 s** (134 registered, 3 macOS-only
+`au_*` Not Run), against 87 s previously measurable only *with* the workaround.
