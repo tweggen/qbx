@@ -59,6 +59,13 @@ public:
     void init( void ) override;
     int setNInputs( idx_t );
     int setInputLevel( idx_t, double );
+    /// The level input `i` was last set to, in dB (0 == unity). Added by
+    /// proposal 21 L1a for the MASTER-SHAPE PRECONDITION (design D3): the
+    /// "root(unarmed) + ring" split is legal only while the master really is a
+    /// UNITY sum, and a precondition that could not read the levels back would
+    /// have to be assumed rather than checked. Returns 0 dB for an index that
+    /// has no properties yet, which is what an unwired input contributes.
+    double inputLevel( idx_t ) const;
     virtual int seekTo( offset_t offset ) override;
     virtual idx_t getNInputs() const override { return mixerInputs_; }
     virtual idx_t getNOutputs() const override { return 1; }
