@@ -317,11 +317,40 @@ std::vector<AudioInputDeviceInfo> WASAPIInput::listDevices() const {
     HRESULT hr;
     IMMDeviceCollection *collection = nullptr;
 
-    if (!enumerator_) {
-        return devices;  // Return empty if not initialized (device not open)
+    // Enumerating must NOT require an open device. It used to return an empty
+    // list whenever enumerator_ was null — i.e. always, from the Options dialog,
+    // which has no reason to open a capture stream just to fill a combo box.
+    // That empty list is why the input picker only ever offered "System
+    // default" while the output picker named real devices: the backend could
+    // enumerate all along and nothing ever asked it at a moment when it could
+    // answer. Borrow the open device's enumerator when there is one, otherwise
+    // stand up a temporary one (and its COM apartment) for the call.
+    IMMDeviceEnumerator *localEnum = nullptr;
+    bool localCom = false;
+    IMMDeviceEnumerator *useEnum = enumerator_;
+    if (!useEnum) {
+        // A UI thread may already be in an apartment; RPC_E_CHANGED_MODE means
+        // COM is up in a different mode, which is fine for enumeration — we
+        // just must not uninitialize it on the way out.
+        hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (SUCCEEDED(hr)) localCom = true;
+        else if (hr != RPC_E_CHANGED_MODE) return devices;
+
+        hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                              __uuidof(IMMDeviceEnumerator), (void **)&localEnum);
+        if (FAILED(hr) || !localEnum) {
+            if (localCom) CoUninitialize();
+            return devices;
+        }
+        useEnum = localEnum;
     }
 
-    hr = enumerator_->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection);
+    struct LocalEnumGuard {
+        IMMDeviceEnumerator *e; bool com;
+        ~LocalEnumGuard() { if (e) e->Release(); if (com) CoUninitialize(); }
+    } guard{ localEnum, localCom };
+
+    hr = useEnum->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection);
     if (FAILED(hr)) {
         return devices;
     }
@@ -339,10 +368,22 @@ std::vector<AudioInputDeviceInfo> WASAPIInput::listDevices() const {
 
         IPropertyStore *props = nullptr;
         device->OpenPropertyStore(STGM_READ, &props);
+        // Guarded because this list is now built from the Options dialog over
+        // every ACTIVE capture endpoint on the machine, not just one we already
+        // opened successfully: an endpoint whose property store or friendly
+        // name is unavailable must be skipped, not dereferenced.
+        if (!props) { CoTaskMemFree(id); device->Release(); continue; }
 
         PROPVARIANT varName;
         PropVariantInit(&varName);
-        props->GetValue(PKEY_Device_FriendlyName_local, &varName);
+        if (FAILED(props->GetValue(PKEY_Device_FriendlyName_local, &varName))
+            || varName.vt != VT_LPWSTR || !varName.pwszVal) {
+            PropVariantClear(&varName);
+            props->Release();
+            CoTaskMemFree(id);
+            device->Release();
+            continue;
+        }
 
         // Convert wide string to UTF-8
         int len = WideCharToMultiByte(CP_UTF8, 0, varName.pwszVal, -1, nullptr, 0, nullptr, nullptr);
