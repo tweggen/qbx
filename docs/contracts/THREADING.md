@@ -15,7 +15,7 @@
 | Revalidator pool | `CaptureRevalidator` (N workers) | page recompute via `IRevalidatable` | **NO** |
 | Buffering monitor | `twSpeaker::startOutput` | polls readahead, starts backend | **NO** |
 | MIDI out scheduler | `MidiOutScheduler::start` | drains an SPSC ring, sends each message AT its due time (or hands it to a timestamping driver early) | **NO** |
-| MIDI device thread | the platform MIDI input (WinMM callback / CoreMIDI read proc / ALSA-seq poll) | delivers received bytes to `MidiInputCallback` | **NO** |
+| MIDI device thread | the platform MIDI input (WinMM callback / CoreMIDI read proc / ALSA-seq poll), and `CaptureMidiInput::inject` / `KeyboardMidiInput::noteOn` on their CALLER's thread | delivers received bytes to `MidiInputCallback`. Since proposal 21 L2 that callback is `MidiInFanout::onMessage`, which fans out to ONE SPSC RING PER CONSUMER (design D8) and pushes MIDI-THRU straight into `MidiOutScheduler`'s IMMEDIATE ring | **NO** |
 | MIDI-out pump | `SApplication`'s `SMidiOutPump` QTimer (20 ms) | reads the playhead, slices each MIDI-out track's event FEED over a 250 ms window, enqueues `{dueHostTimeNs, bytes}` into `MidiOutScheduler` | yes (it IS the main thread) |
 | **Audio recorder** | `SApplication`'s `SAudioRecorder` QTimer (100 ms, proposal 21 L3b) | takes the placement anchor from `twEngineClock`, publishes the growing clip's length, checks the punch-out; at stop it ends the capture segment and submits ONE undo macro of `place-recording`. The BRIDGE THREAD never touches the model — it appends to the pages and stores a frontier, and this polls | yes (it IS the main thread) |
 | **Live graph pump** | `LiveGraphPump::start` (proposal 21 L1a) | renders every live-owned track BLOCK-WISE — input ring / events → `twPluginSlotProcessor::render(positional)` per slot → `twGainStage::applyGain` → channel map → the folder sums → ONE position-stamped entry into `twLiveMixRing` | **NO** |
@@ -31,6 +31,20 @@ While PLAYING the pump paces on the CLOCK: it keeps `[nextFrame, nextFrame + lea
 `LiveGraphPump::renderOneBlock()` is public and synchronous precisely so the block-wise render can be compared to a frozen render without a device, a pacer or a ring consumer; it marks its CALLER as the live thread, and that marker is sticky, so a test that uses it must do so on a thread of its own.
 
 On the CONSUMER side the contract is symmetrical and just as tight: the RT reads the ring as a STREAM by frame range, never by block equality, because its own block size is variable on a real device while the pump's is fixed. The cursor into the head entry is consumer-private state that must live across callbacks (`twSpeaker` holds it as a member), and an entry from a run the pump has abandoned is dropped on sight — without that, the consumer's keep-the-future rule would hold a stale queue forever and starve the producer.
+
+`MidiOutScheduler` has TWO producer seams since proposal 21 L2 and they must not be
+confused. `enqueue()` is SINGLE-PRODUCER and that producer is the MIDI-out pump on the main
+thread; `sendImmediate()` is a SECOND, dedicated SPSC ring whose producer is a MIDI INPUT DEVICE
+THREAD (MIDI-thru), drained FIRST in the sender loop, waking it at once, sent with due time 0 and
+deliberately OUTSIDE `flush()`'s discard — a flush drops a queued FUTURE, and a thru byte is a key
+being pressed right now. ONE producer per ring is the caller's guarantee: `MidiInFanout::setThru`
+refuses a second target for a port, and the app routes at most one input port to a given scheduler.
+
+`twLiveEventSource::collect()` runs ON THE LIVE GRAPH PUMP, inside
+`twPluginSlotProcessor::render` — it is the only consumer of its ring, it allocates nothing in the
+steady state (every vector is sized on the main thread), and it touches no Qt. The host-time →
+frame mapping reaches it as one virtual call (`twLiveFrameClock`) so `tw/devices` need not include
+`tw/playback`.
 
 The MIDI-out pump is on this list to make the SEAM explicit: it is the single producer into `MidiOutScheduler`'s lock-free ring, and it is on the main thread, so everything above the ring may use Qt freely and everything below it may not. MIDI-out is emitted at PLAY time and only at play time — never at freeze time (proposal 37 D6, the proposal-34 metering lesson verbatim: pages are frozen ~1.4 s ahead of the playhead, and by renders that have no playhead at all).
 

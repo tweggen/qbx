@@ -324,6 +324,31 @@ if(TEST qxa.monitor_latency)
         ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav")
 endif()
 
+# --- live instruments (proposal 21 L2) ---------------------------------------
+#
+# All six PLAY a live instrument in real time and assert what the capture
+# backend was handed, so they are wall-clock tests in exactly the sense the
+# section above describes: RUN_SERIAL, with SMARAGD_CAPTURE_SPEED=1 spelled out
+# rather than left to the default. Three of them bound a LATENCY directly - the
+# note-on-to-audio onset (live_instrument_play), the MIDI-thru delta
+# (live_instrument_thru) and the hand-back gap (live_instrument_disarm_playback)
+# - and those numbers measure the box as well as the code.
+#
+# No SMARAGD_AUDIO_INPUT_BACKEND here, unlike the L1b five: a MIDI-armed
+# instrument track has NO audio input source at all (design section 3 case
+# (ii)), so the `null` default a headless run already takes is exactly right.
+# The MIDI half arrives through CaptureMidiInput, which
+# SMARAGD_MIDI_BACKEND=capture already selects by default.
+foreach(_liveinst live_instrument_play live_instrument_merge
+                  live_instrument_disarm_playback live_instrument_ownership
+                  live_instrument_thru live_instrument_keyboard)
+    if(TEST qxa.${_liveinst})
+        set_tests_properties(qxa.${_liveinst} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+    endif()
+endforeach()
+
 # SMARAGD_CAPTURE_SPEED=1 is spelled out rather than left to the default: the
 # testkit maps a MIDI host time onto a project frame through the audio capture
 # backend's block log, and any other pacing changes what a project frame means

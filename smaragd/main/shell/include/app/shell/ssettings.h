@@ -70,6 +70,14 @@ public:
     QString midiPortId( const QString &portName ) const;
     void    setMidiPortId( const QString &portName, const QString &deviceId );
 
+    // The same mapping for an INPUT port (proposal 21 L2, design section 6).
+    // Deliberately a SEPARATE key from midiPortId(): one physical interface
+    // usually offers an input and an output with the SAME name, and their
+    // machine-local ids are different numbers on every backend - a WinMM input
+    // index and a WinMM output index share nothing but their spelling.
+    QString midiInputPortId( const QString &portName ) const;
+    void    setMidiInputPortId( const QString &portName, const QString &deviceId );
+
     // Input ports a future session will listen on (proposal 37 P7b persists
     // them; P8 opens them). Machine-local ids, like the audio input device.
     QStringList midiInputPortIds() const;

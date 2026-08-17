@@ -127,6 +127,20 @@ public:
     // against the backend's own id/name list, then the name verbatim.
     QString resolvePortId( const QString &portName ) const;
 
+    /**
+     * The scheduler for `portName`, started, for MIDI-THRU (proposal 21 L2,
+     * design D8). Null when the port will not open.
+     *
+     * It is THE SAME scheduler the sequenced feed sends through, deliberately:
+     * two schedulers on one port would be two threads racing one device, and
+     * thru and playback have to interleave on the wire in the order the events
+     * happened. They do not collide because they use DIFFERENT rings - the
+     * pump's `enqueue()` (main thread, due-timed) and the fan-out's
+     * `sendImmediate()` (device thread, now) - which is exactly why the
+     * immediate ring exists instead of a second producer on the first.
+     */
+    audio::MidiOutScheduler *thruSchedulerFor( const QString &portName );
+
 private slots:
     void tick();
 

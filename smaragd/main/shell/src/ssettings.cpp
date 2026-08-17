@@ -89,6 +89,18 @@ void SSettings::setMidiPortId( const QString &portName, const QString &deviceId 
     setValue( "midi/portId/" + portName, deviceId );
 }
 
+QString SSettings::midiInputPortId( const QString &portName ) const
+{
+    if( portName.isEmpty() ) return QString();
+    return value( "midi/inputPortId/" + portName ).toString();
+}
+
+void SSettings::setMidiInputPortId( const QString &portName, const QString &deviceId )
+{
+    if( portName.isEmpty() ) return;
+    setValue( "midi/inputPortId/" + portName, deviceId );
+}
+
 QStringList SSettings::midiInputPortIds() const
 {
     return value( "midi/inputPortIds" ).toStringList();

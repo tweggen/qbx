@@ -24,17 +24,27 @@
   <setup project="new"/>
 
   <actions>
-    <!-- Exactly the backend's own ports: one out, one in, no more. -->
-    <assert-midi-options outputPorts="1" inputPorts="1"
+    <!-- The OUTPUT list is exactly the backend's own ports: one, no more.
+         The INPUT list is TWO since proposal 21 L2, and the extra one is not a
+         device: the computer keyboard is a real in-process MidiInput port
+         (design D9), enumerated beside the hardware so a user can select it
+         and a track can name it. It is listed FIRST because it is the port
+         that always exists, whatever SMARAGD_MIDI_BACKEND chose - and it is
+         reached by createMidiInput("keyboard"), which that variable cannot
+         override. -->
+    <assert-midi-options outputPorts="1" inputPorts="2"
                          contains="backend=capture"/>
     <assert-midi-options contains="out[0]=Capture (in-memory test port)"/>
-    <assert-midi-options contains="in[0]=Capture (in-memory test port) id=capture"/>
+    <assert-midi-options contains="in[0]=Computer keyboard id=keyboard"/>
+    <assert-midi-options contains="in[1]=Capture (in-memory test port) id=capture"/>
     <!-- The capture port CAN create a virtual port, so the offer is enabled.
          On WinMM it would read virtual=no - gated on the capability the backend
          reports, never on the platform (tw/devices CONTRACT inv. 18). -->
     <assert-midi-options contains="virtual=yes"/>
-    <!-- No input is listened to yet: P7b lists and persists them, P8 opens
-         them. -->
+    <!-- Nothing is SELECTED here, so nothing is opened by this page. Since
+         proposal 21 L2 a selected port IS opened on apply (and a track that
+         names one opens it on arm), which is what makes the page active; the
+         default state is still "listed, not listening". -->
     <assert-midi-options contains="selected=0"/>
 
     <!-- Defaults, straight out of SOpt::def. -->

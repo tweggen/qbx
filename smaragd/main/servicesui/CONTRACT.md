@@ -49,8 +49,14 @@ Invariants:
    that would create one. WinMM has no such concept (tw/devices CONTRACT
    inv. 18); a loopMIDI-style driver shows up as an ordinary device instead.
    Same shape as the MP3 render option's gating.
-9. Input ports are LISTED and PERSISTED here (`midi/inputPortIds`) and read by
-   nobody: opening them is proposal 37 P8. The page says so.
+9. Input ports are LISTED and PERSISTED here (`midi/inputPortIds`), and since
+   proposal 21 L2 the page is ACTIVE: applying it OPENS every selected port
+   through `SMidiInputHub`. The list is the HUB's, not the out-pump's probe,
+   so the COMPUTER KEYBOARD appears in it - it is a real in-process MidiInput
+   port (design D9) and it is listed FIRST, because it is the one that exists
+   whatever `SMARAGD_MIDI_BACKEND` chose. Deselecting does NOT close a port: a
+   track may be armed on it right now, and the Options dialog is not where a
+   monitoring session gets torn down.
 
 How to test: `ctest -R qxa.log_dock_scale` covers the log dock's scale
 requirement numerically (300k records, asserts the worst drain tick). The

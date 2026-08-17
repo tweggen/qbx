@@ -159,6 +159,15 @@ public:
                    qint64 toTick, int toKey, const QString &edge,
                    const QString &lane, double toValue );
     bool virtualKey( int key, double velocity, qint64 durationTicks );
+    //   virtualKeyHold / Release — PLAY the virtual keyboard rather than write
+    //   into a clip (proposal 21 L2): a note-on / note-off pair on the computer
+    //   keyboard's in-process MIDI port, which is what a live-armed instrument
+    //   track hears. Same rule as every other test verb here: the REAL dock
+    //   runs, so the case exercises the widget rather than the script.
+    bool virtualKeyHold( int key, double velocity );
+    bool virtualKeyRelease( int key );
+    /// The keyboard dock's describe(), for assert-event-editor.
+    QString describeVirtualKeys() const;
 
     // Log dock control, for the log-stress test action (testkit may not include
     // app/servicesui, so it reaches the dock through the shell — the same route

@@ -87,6 +87,27 @@ public:
     bool enqueue(std::int64_t dueHostTimeNs,
                  const std::uint8_t *bytes, std::size_t size);
 
+    // THE IMMEDIATE RING (proposal 21 L2, design D8) - MIDI-THRU.
+    //
+    // A second, dedicated SPSC ring whose producer is a MIDI INPUT DEVICE
+    // THREAD and whose consumer is this scheduler's sender thread. It exists
+    // because thru has no due time at all: the message is already late by the
+    // driver's own latency, so it must leave at the next possible instant, and
+    // the sender is woken immediately rather than at a deadline.
+    //
+    // It is NOT enqueue(). enqueue() is single-producer and that producer is
+    // the app's main-thread pump (devices inv. 11); pushing from a device
+    // thread would corrupt its head silently. Keeping the two rings separate
+    // is what lets the two producers coexist with no lock on either path.
+    //
+    // ONE PRODUCER, and the caller guarantees it: MidiInFanout::setThru
+    // refuses a second target for a port, and the app routes at most one input
+    // port to a given scheduler. Returns false when the ring is full or the
+    // message does not fit; both are counted in dropped().
+    bool sendImmediate( const std::uint8_t *bytes, std::size_t size );
+    std::uint64_t immediateSent() const
+    { return immSent_.load( std::memory_order_relaxed ); }
+
     // Discard everything queued but not yet sent, and return once the sender
     // is idle. This is what a transport stop / locate wants: the queued future
     // describes a playhead that no longer exists. It does NOT push the queue
@@ -128,6 +149,8 @@ private:
 
     void threadMain();
     void drainRing(std::vector<Slot> &pending);
+    // Drain the immediate ring and send every message NOW. Sender thread only.
+    void drainImmediate();
     void wake();
     void sendNow(const Slot &s, std::int64_t now);
 
@@ -146,6 +169,16 @@ private:
     std::vector<Slot>          ring_{ kRingSlots };
     std::atomic<std::size_t>   head_{ 0 };
     std::atomic<std::size_t>   tail_{ 0 };
+
+    // The immediate (MIDI-thru) SPSC ring. Small on purpose: a thru message
+    // that has been sitting here for 256 messages is not thru any more, and a
+    // controller that outruns it is a drop worth counting rather than a queue
+    // worth growing.
+    static constexpr std::size_t kImmediateSlots = 256;
+    std::vector<Slot>          immRing_{ kImmediateSlots };
+    std::atomic<std::size_t>   immHead_{ 0 };   // the device thread
+    std::atomic<std::size_t>   immTail_{ 0 };   // the sender thread
+    std::atomic<std::uint64_t> immSent_{ 0 };
 
     std::thread                thread_;
     std::atomic<bool>          running_{ false };

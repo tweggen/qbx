@@ -24,6 +24,14 @@
 #include "tw/events/tweventseq.h"
 #include "tw/events/twsmf.h"
 
+namespace smidiin {
+namespace {
+qint64 g_lastInjectedHostNs = 0;
+}
+qint64 lastInjectedHostNs() { return g_lastInjectedHostNs; }
+void   setLastInjectedHostNs( qint64 ns ) { g_lastInjectedHostNs = ns; }
+}  // namespace smidiin
+
 namespace {
 
 // The MIDI backend this process is actually using. Read from the environment
@@ -350,8 +358,11 @@ SApplyResult SMidiInEventAction::apply( SProject * )
         return { false, nullptr };
     }
 
-    port->inject( msg.constData(), (std::size_t) msg.size(),
-                  audio::MidiOutScheduler::hostNowNs() );
+    const qint64 at = audio::MidiOutScheduler::hostNowNs();
+    port->inject( msg.constData(), (std::size_t) msg.size(), at );
+    // Recorded so assert-audio-onset can measure the lag from HERE, through
+    // the AUDIO capture backend block log rather than through the live lane.
+    smidiin::setLastInjectedHostNs( at );
     return { true, nullptr };
 }
 
@@ -439,8 +450,9 @@ SApplyResult SMidiInReplayAction::apply( SProject * )
     const qint64 t0 = audio::MidiOutScheduler::hostNowNs();
     for( const Timed &t : perf ) {
         waitUntilNs( t0 + t.offsetNs );
-        port->inject( t.bytes.constData(), (std::size_t) t.bytes.size(),
-                      audio::MidiOutScheduler::hostNowNs() );
+        const qint64 at = audio::MidiOutScheduler::hostNowNs();
+        port->inject( t.bytes.constData(), (std::size_t) t.bytes.size(), at );
+        smidiin::setLastInjectedHostNs( at );
     }
     return { true, nullptr };
 }

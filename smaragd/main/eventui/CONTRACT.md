@@ -98,3 +98,20 @@ Known debt:
   than previews, and there is no note-preview-on-click.
 - The `SStepGridView` (tracker) and score kinds named in design §6.2 are not
   built; the registry exists so they are additions rather than surgery.
+
+12. **The virtual keyboard PLAYS as well as writes** (proposal 21 L2, design
+    D9). `holdNote`/`releaseNote` send note-on/note-off on the computer
+    keyboard's in-process MIDI port, which a live-armed instrument track hears
+    exactly as it hears hardware; `pressNote` still writes at the locator. A
+    mouse or key press does BOTH, in that order, and a `pressNote` that fails
+    (no clip selected) must not stop the note from sounding.
+
+    They go through `SApplication::keyboardNoteOn/Off`, NOT through
+    `tw/devices`: this module's engine budget is `core`, `graph` and `events`
+    (tools/check_layering.py), and routing the two calls through the shell is
+    the same arrangement the arranger's zoom uses.
+
+    EVERY exit from a key must release it - key-up, mouse-up and focus-out -
+    or a note sounds forever. Auto-repeat is refused on BOTH edges: X11
+    delivers a release before every repeated press, so a repeat read as a
+    finger coming off the key would stutter the note.

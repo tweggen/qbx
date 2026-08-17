@@ -182,6 +182,13 @@ audio::MidiOutScheduler *SMidiOutPump::schedulerFor( const QString &portId )
     return raw;
 }
 
+audio::MidiOutScheduler *SMidiOutPump::thruSchedulerFor( const QString &portName )
+{
+    const QString portId = resolvePortId( portName );
+    if( portId.isEmpty() ) return nullptr;
+    return schedulerFor( portId );
+}
+
 // ------------------------------------------------------------- transport ----
 
 void SMidiOutPump::start()

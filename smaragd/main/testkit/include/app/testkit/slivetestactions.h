@@ -118,6 +118,11 @@ public:
 private:
     qint64 maxLiveThreadRefusals_ = 0;
     qint64 maxLiveOwnedRefusals_  = 0;
+    // A MINIMUM, for the one case that asserts the guard FIRED (proposal 21 L2
+    // AC4). "At most 0" and "at least 1" are different claims and a case that
+    // wants the second must say so; defaulting to 0 keeps every existing case
+    // meaning exactly what it meant.
+    qint64 minLiveOwnedRefusals_  = 0;
 };
 
 /**
@@ -145,6 +150,58 @@ private:
     double     minPeak_ = -1.0;
     double     maxPeak_ = -1.0;
     QString    contains_;
+};
+
+/**
+ * `assert-audio-onset` - WHERE a sound starts, in frames, and how long after
+ * the note that asked for it (proposal 21 L2).
+ *
+ * It scans a capture dump forward for the first frame whose short-window RMS
+ * crosses `threshold` and REPORTS that frame - the number is printed whether
+ * the bounds pass or fail, because "the live instrument sounded 6 143 frames
+ * after the key" is the measurement the acceptance criterion asks to be
+ * recorded, not a boolean.
+ *
+ *   filename     the capture dump (dump-playback-capture wrote it)
+ *   channel      default 0
+ *   startFrame   where to start looking (default 0)
+ *   threshold    the RMS a window must beat to count as sound (default 0.02,
+ *                which is ~34 dB above one 16-bit lsb: well clear of dither and
+ *                far below anything a case deliberately plays)
+ *   window       the RMS window, in frames (default 64 - about 1.3 ms, short
+ *                enough to place an onset inside one device block)
+ *   minFrame / maxFrame   bounds on the onset, both optional (< 0 = unbounded)
+ *
+ *   afterMidiIn="1"  measure the onset RELATIVE to the last `midi-in-event` /
+ *                    `midi-in-replay` injection: the injection's host time is
+ *                    mapped to a capture frame through
+ *                    `CaptureBackend::frameAtHostTime` - the AUDIO backend's
+ *                    own block log, which shares no code with the live lane -
+ *                    and `minFrame`/`maxFrame` then bound the DIFFERENCE. This
+ *                    is the same independent-measurement arrangement
+ *                    `assert-midi-out` uses and requires the capture audio
+ *                    backend and `SMARAGD_CAPTURE_SPEED=1`.
+ */
+class SAssertAudioOnsetAction : public SAction
+{
+public:
+    SAssertAudioOnsetAction() = default;
+    QString name() const override
+    { return QStringLiteral( "assert-audio-onset" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString filename_;
+    int     channel_    = 0;
+    qint64  startFrame_ = 0;
+    double  threshold_  = 0.02;
+    qint64  window_     = 64;
+    qint64  minFrame_   = -1;
+    qint64  maxFrame_   = -1;
+    bool    afterMidiIn_ = false;
 };
 
 #endif // _SLIVETESTACTIONS_H_

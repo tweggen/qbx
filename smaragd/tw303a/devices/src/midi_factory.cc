@@ -2,6 +2,7 @@
 #include "tw/devices/midi_output.h"
 
 #include "tw/devices/capture_midi.h"
+#include "tw/devices/keyboard_midi.h"
 #include "tw/devices/null_midi.h"
 
 #include "tw/core/twsyslog.h"
@@ -116,6 +117,12 @@ std::unique_ptr<MidiInput> createMidiInput(const std::string &backend)
 
     if (want == "capture") return std::unique_ptr<MidiInput>(new CaptureMidiInput());
     if (want == "null")    return std::unique_ptr<MidiInput>(new NullMidiInput());
+    // THE COMPUTER KEYBOARD (proposal 21 L2, design D9). Named EXPLICITLY and
+    // never reachable through SMARAGD_MIDI_BACKEND: that variable chooses the
+    // system MIDI implementation, and the computer keyboard is present on every
+    // machine whatever that choice is - so it must not be able to replace the
+    // hardware backend, nor be replaced by it.
+    if (want == "keyboard") return std::unique_ptr<MidiInput>(new KeyboardMidiInput());
 
     if (want == "winmm") {
 #if defined(QBX_WIN_MIDI)

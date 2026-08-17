@@ -328,3 +328,82 @@ transport-behaviour decision beyond L3b's brief and it interacts with
 `toggle-playback`'s handling of a redundant Play, so it is recorded here rather
 than guessed at. The trim floor already distinguishes the two cases
 (`wasPlaying_`), so the information a fix needs is present.
+
+## Live instruments (proposal 21 L2, design D2/D4/D8/D9)
+
+19. **A MIDI-armed track contributes its CONSUMER to the closure, not itself.**
+    `sliveplan::midiConsumerFor` walks the routing UP the way
+    `STrack::eventFeed()` walks it down: a track that holds an instrument
+    consumes the events, otherwise they go to the parent iff the track bubbles
+    them up. So an armed CHILD of a folder drum machine is a MIDI SOURCE while
+    the FOLDER is the live instrument and the thing that leaves the frozen sum —
+    the child stays in it, because its own clips must keep playing (design
+    section 3 case (iii)). A MIDI track whose notes would reach NO instrument
+    is deliberately not a source at all: excluding it would trade the
+    arrangement for silence.
+
+20. **`setLiveEventSource` is the SECOND source, never a `setEventSource`
+    swap, and never a member of `eventFeed()`** (design D2). The feed is
+    re-applied by `STrack::syncInstrumentSlot()` from adopt / insert / remove
+    and would silently overwrite a live source; `setEventSource` also clears
+    continuity and bumps the param epoch, which an arm must not do per call;
+    and the feed is ALSO read by `SMidiOutPump` and `assert-midi-events`, while
+    a ring-draining `collect` has exactly ONE legal reader. The arrangement's
+    feed is untouched by an arm.
+
+    ARM order: `retireComponentNodes` → `setLiveOwned(true)` →
+    `attachLiveEvents` → wire the exclusion → `flipEpoch` → publish →
+    `requestReposition()` + `requestLiveChase()`. Installing the source BEFORE
+    ownership would let a freeze worker collect the ring.
+
+    DISARM order (the mirror, and inv. 13's rule holds unchanged):
+    `detachLiveEvents` (all-notes-off flush → `setLiveEventSource(nullptr)` →
+    thru off + `panic()`) → `setLiveOwned(false)` (which forgets continuity) →
+    un-wire → `flipEpochPrime` → the tail plan. The flush is best-effort within
+    the blocks the pump still renders; what GUARANTEES no hanging voice is the
+    hand-back itself, because the freeze path's first render resets every
+    instance.
+
+21. **A live source is keyed by its CONSUMER and is never rebuilt on a
+    republish.** Two armed children bubbling into one folder instrument share
+    ONE source and therefore one ring, which is also the only shape an SPSC
+    ring allows. It holds the ring cursor and the HELD-NOTE TABLE, so
+    rebuilding it under a finger would drop the note being played;
+    `attachLiveEvents` therefore prunes and adds, and touches nothing that is
+    already correct.
+
+22. **`SMidiInputHub` owns every open input port and never closes one until
+    teardown.** Opening a MIDI device is not free and a disarm/arm cycle must
+    not drop it — but the load-bearing reason is that
+    `CaptureMidiInput::inject()` is a NO-OP on a closed port, so closing one on
+    disarm would silently swallow a script's events between two phases of a
+    case. Its enumeration probe is constructed FIRST, before any listening
+    port, so a listening port is always the newer `CaptureMidiInput::active()`
+    and a headless injection reaches the port the live lane drains. The
+    computer keyboard is opened EAGERLY at construction: it is in-process, and
+    the piano-roll dock has to be able to play it before any track is armed.
+    `recorderSink()` is L4's hook and is spelled out now so the shape is fixed
+    before there is a second consumer to argue with.
+
+23. **MIDI-thru shares the sequenced feed's scheduler, and disarm PANICS it.**
+    Two schedulers on one port would be two threads racing one device, and
+    thru and playback have to interleave on the wire in the order the events
+    happened; they do not collide because they use different RINGS (inv. 21 of
+    tw/devices). The thru port is the ARMED track's `midiOutPort`, falling back
+    to the consumer's — the folder-drum-machine shape, where the child has no
+    port of its own. A key held when the user disarms is otherwise a stuck note
+    on their hardware synth, which is the one failure mode a performer never
+    forgives.
+
+24. **A LIVE LANE DROPS BLOCKS UNDER LOAD, AND 1024 FRAMES IS THE BOUND.** The
+    RT sums a ring entry only when its stamp matches the frame it is delivering
+    (design D2); a miss is SILENCE plus `twLiveMixRing::misses`, and that
+    silence is ONE DEVICE BLOCK wide by construction. Measured at
+    `SMARAGD_REVAL_WORKERS=8` - eight revalidation workers plus the readahead
+    against a pump that must wake every ~21 ms - the live lane misses a block
+    in roughly 2 runs in 25. A case that asserts a sub-block gap on a
+    PUMP-rendered window is therefore asserting something the design does not
+    offer: `live_instrument_disarm_playback` was 46/50 until its 512-frame
+    bound moved to the FROZEN window, where it is deterministic and reads
+    exactly 0.040405 with a gap of 1 frame on every run. 1024 is the same bound
+    L1b's own live cases already carry.

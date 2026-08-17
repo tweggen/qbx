@@ -2187,6 +2187,28 @@ bool SMainWindow::virtualKey( int key, double velocity, qint64 durationTicks )
     return virtualKeys_->pressNote( key, velocity, durationTicks );
 }
 
+bool SMainWindow::virtualKeyHold( int key, double velocity )
+{
+    if( !virtualKeys_ ) return false;
+    if( key < 0 || key > 127 ) return false;
+    virtualKeys_->holdNote( key, velocity );
+    return true;
+}
+
+bool SMainWindow::virtualKeyRelease( int key )
+{
+    if( !virtualKeys_ ) return false;
+    if( key < 0 ) { virtualKeys_->releaseAll(); return true; }
+    if( key > 127 ) return false;
+    virtualKeys_->releaseNote( key );
+    return true;
+}
+
+QString SMainWindow::describeVirtualKeys() const
+{
+    return virtualKeys_ ? virtualKeys_->describe() : QString();
+}
+
 bool SMainWindow::grabLevelMeter( const QString &path, const twLevelSampleSet &s,
                                   bool vertical, int w, int h )
 {
