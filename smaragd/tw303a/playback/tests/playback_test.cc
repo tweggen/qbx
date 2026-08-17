@@ -328,6 +328,28 @@ public:
     }
 };
 
+// The review-fix fixture. A pure function of position that NEVER returns zero,
+// so a zero in a recording is unambiguously a GAP and not a quiet sample. The
+// period is 1000 frames, which is coprime with every block size the variable-
+// grid tests use, so no partition can accidentally look right.
+inline float rampAt(std::int64_t p)
+{
+    const std::int64_t m = ((p % 1000) + 1000) % 1000;
+    return 0.25f + (float)m * 0.0005f;
+}
+
+class RampInput : public twLiveInputSource {
+public:
+    std::size_t pull(float *const *out, std::size_t channels, std::size_t frames,
+                     offset_t pos) override
+    {
+        for (std::size_t c = 0; c < channels; ++c)
+            for (std::size_t i = 0; i < frames; ++i)
+                out[c][i] = rampAt((std::int64_t)pos + (std::int64_t)i);
+        return frames;
+    }
+};
+
 class ConstInput : public twLiveInputSource {
 public:
     explicit ConstInput(float v) : v_(v) {}
@@ -1247,10 +1269,23 @@ int main()
                   "L1a AC3 ring: a full ring DROPS and counts, never blocks or grows");
             twLiveRingEntry got;
             CHECK(r.peek(got) && got.startPos == 0, "L1a AC3 ring: FIFO order");
+            CHECK(r.pending() == 2, "L1a AC3 ring: pending() counts what is readable");
             r.pop();
             CHECK(r.peek(got) && got.startPos == 4, "L1a AC3 ring: ...and it advances");
-            CHECK(r.dropBefore(8) == 1 && !r.peek(got),
-                  "L1a AC3 ring: dropBefore discards spent blocks");
+            // The drop-past is the READER's, not a separate dropBefore(): a
+            // stream consumer that is at frame 8 walks past everything behind
+            // it on its way to what it wants (review fix 1).
+            {
+                std::vector<float> o(4, 0.0f);
+                float *outs[1] = { o.data() };
+                twLiveMixReader   rd;
+                twLiveMixState    fs;
+                twLiveMixGate     g; g.wantPos = 8; g.haveRoot = false;
+                twLiveStreamStats st;
+                twlive::mixStream(outs, 1, 4, 8, g, r, rd, fs, st);
+                CHECK(st.dropped == 1 && st.starved == 1 && !r.peek(got),
+                      "L1a AC3 ring: a consumer past an entry DROPS it and counts");
+            }
         }
     }
 
@@ -1491,7 +1526,10 @@ int main()
         auto plan = std::make_shared<twLivePlan>();
         plan->blockFrames = BLOCK;
         plan->sampleRate  = rate;
-        plan->leadFrames  = 0;      // the harness IS the device clock
+        // ONE block of lead and a clock stamped per block: the harness IS the
+        // device, so it renders exactly the block the RT is about to pull and
+        // then idles (review fix 2's pacing, driven synchronously).
+        plan->leadFrames  = BLOCK;
         plan->outputTrack = 0;
         plan->transport.playing     = true;
         plan->transport.feedEnabled = true;
@@ -1522,8 +1560,10 @@ int main()
         // sticky — which is why it is a thread of its own.
         std::thread harness([&] {
             for (int b = 0; b < NBLK; ++b) {
-                // The device consuming: stamp the delivered frame, then render.
-                clock.stamp((std::int64_t)b * BLOCK, 0);
+                // The device consuming: stamp what it will pull NEXT (and the
+                // frame it is delivering, one buffer behind), then render.
+                clock.stamp((std::int64_t)b * BLOCK - (std::int64_t)BLOCK,
+                            (std::int64_t)b * BLOCK, 0);
                 if (b == 1) pump.resetStats();   // drop the ADOPTION reposition
                 if (!pump.renderOneBlock()) break;
                 twLiveRingEntry e;
@@ -1536,7 +1576,7 @@ int main()
 
             // A SEEK MID-RUN: one jump, then the device consuming from there.
             pump.resetStats();
-            clock.stamp(seekAt, 0);
+            clock.stamp((std::int64_t)seekAt - (std::int64_t)BLOCK, seekAt, 0);
             if (pump.renderOneBlock()) {
                 twLiveRingEntry e;
                 if (ring.peek(e)) {
@@ -1547,7 +1587,8 @@ int main()
             }
             // Two more blocks at the new position must NOT reposition again.
             for (int b = 1; b <= 2; ++b) {
-                clock.stamp(seekAt + (std::int64_t)b * BLOCK, 0);
+                clock.stamp(seekAt + (std::int64_t)b * BLOCK - (std::int64_t)BLOCK,
+                            seekAt + (std::int64_t)b * BLOCK, 0);
                 if (!pump.renderOneBlock()) break;
                 twLiveRingEntry e;
                 if (ring.peek(e)) ring.pop();
@@ -1781,6 +1822,495 @@ int main()
 #else
     printf("\n  note 21 L1a AC2/AC4 SKIPPED (built without the CLAP fixture)\n");
 #endif
+
+    // ==================================================================
+    // PROPOSAL 21 L1a — ORCHESTRATOR REVIEW FIXES.
+    //
+    // T1 the ring consumed as a STREAM by a VARIABLE-block RT (fix 1);
+    // T2 the pump PACED ON THE CLOCK, threaded (fix 2);
+    // T3 both of them end to end through the real render callback;
+    // T4 the live lane REFUSES a device whose rate is not the project's (fix 3).
+    // ==================================================================
+
+    // --- T1: the stream consumer, variable blocks ----------------------
+    {
+        printf("\n=== 21 L1a T1: the ring is a STREAM (variable RT blocks) ===\n");
+
+        constexpr std::uint32_t ENTRY = 1024;
+        constexpr std::uint32_t DEPTH = 8;
+
+        twLiveMixRing   ring;
+        twLiveMixReader reader;
+        twLiveMixState  fade;                 // fadeFrames 0 == a plain sum
+        ring.reset(1, ENTRY, DEPTH);
+
+        std::int64_t producePos = 0;
+        auto produce = [&](std::int64_t upto, std::uint64_t flipEpoch) {
+            while (producePos < upto) {
+                float *w = ring.beginWrite();
+                if (!w) break;
+                for (std::uint32_t i = 0; i < ENTRY; ++i)
+                    w[i] = rampAt(producePos + (std::int64_t)i);
+                ring.commit(producePos, ENTRY, flipEpoch, 0, true);
+                producePos += (std::int64_t)ENTRY;
+            }
+        };
+
+        // THE IRREGULAR GRID. Nothing here is a multiple of the pump's block,
+        // two of them are smaller than one entry and one spans two — which is
+        // what a WASAPI callback asking for `bufferFrames - padding` looks like
+        // (design F6), and what the old exact-equality gate could not serve at
+        // all.
+        const std::size_t BLOCKS[] = { 480, 1056, 33, 2048, 1024, 7 };
+        std::vector<float> out(4096, 0.0f);
+        float *outs[1] = { out.data() };
+
+        std::int64_t want   = 0;
+        std::size_t  bad    = 0, produced = 0;
+        std::int64_t firstBad = -1;
+        std::uint32_t gaps  = 0;
+
+        twLiveMixGate g;
+        g.haveRoot = false;                   // stopped: out = ring
+
+        for (int round = 0; round < 40; ++round) {
+            const std::size_t n = BLOCKS[round % 6];
+            produce(want + (std::int64_t)n + (std::int64_t)ENTRY, 0);
+            std::fill(out.begin(), out.begin() + (std::ptrdiff_t)n, 0.0f);
+            g.wantPos = want;
+            twLiveStreamStats st;
+            twlive::mixStream(outs, 1, n, want, g, ring, reader, fade, st);
+            gaps += st.notYet + st.starved;
+            for (std::size_t i = 0; i < n; ++i) {
+                const float expect = rampAt(want + (std::int64_t)i);
+                if (out[i] != expect) { if (firstBad < 0) firstBad = want + (std::int64_t)i; ++bad; }
+                ++produced;
+            }
+            want += (std::int64_t)n;
+        }
+        if (bad)
+            printf("     first wrong frame at %lld\n", (long long)firstBad);
+        CHECK(bad == 0,
+              "L1a T1: a VARIABLE-block RT reads the pump's fixed blocks "
+              "SAMPLE-FOR-SAMPLE across every partition");
+        CHECK(produced > 20000, "L1a T1: ...over enough frames to mean it");
+        CHECK(gaps == 0, "L1a T1: ...with no gap, because the pump stayed ahead");
+        CHECK(ring.mismatches() == 0,
+              "L1a T1: the exact-position MISMATCH counter never fires on a "
+              "stream — that was the defect");
+
+        // A SEEK FORWARD past what the ring holds: the entries behind are
+        // DROPPED and counted, and the audio at the new position is still exact.
+        {
+            const std::int64_t target = producePos + 4 * (std::int64_t)ENTRY;
+            produce(target + 2 * (std::int64_t)ENTRY, 0);
+            std::fill(out.begin(), out.begin() + 512, 0.0f);
+            g.wantPos = target;
+            twLiveStreamStats st;
+            twlive::mixStream(outs, 1, 512, target, g, ring, reader, fade, st);
+            bool ok = true;
+            for (std::size_t i = 0; i < 512; ++i)
+                if (out[i] != rampAt(target + (std::int64_t)i)) ok = false;
+            CHECK(st.dropped >= 1,
+                  "L1a T1 seek forward: the entries the RT passed are DROPPED and counted");
+            CHECK(ok, "L1a T1 seek forward: ...and the new position reads exactly");
+        }
+
+        // A SEEK BACK with no pump reaction: the head is the FUTURE, so the RT
+        // gets silence and counts notYet — and CRUCIALLY does not pop it, or
+        // the audio the next callback needs would be gone.
+        {
+            const std::uint32_t before = ring.pending();
+            std::fill(out.begin(), out.begin() + 256, 0.0f);
+            const std::int64_t back = 0;
+            g.wantPos = back;
+            twLiveStreamStats st;
+            twlive::mixStream(outs, 1, 256, back, g, ring, reader, fade, st);
+            bool silent = true;
+            for (std::size_t i = 0; i < 256; ++i) if (out[i] != 0.0f) silent = false;
+            CHECK(st.notYet >= 1 && silent,
+                  "L1a T1 seek back: the head is the FUTURE — silence, counted");
+            CHECK(ring.pending() == before,
+                  "L1a T1 seek back: ...and NOTHING is popped (the next callback needs it)");
+        }
+
+        // THE EPOCH GATE, PER ENTRY, ACROSS A PARTIAL CONSUMPTION. The verdict
+        // comes from the entry's epochs against the ROOT PAGE IN HAND, so a
+        // flip that lands mid-entry takes effect mid-entry — which is the whole
+        // point of gating on the served page rather than on a block count.
+        {
+            twLiveMixRing   r2;
+            twLiveMixReader rd2;
+            twLiveMixState  f2;
+            r2.reset(1, ENTRY, 4);
+            float *w = r2.beginWrite();
+            for (std::uint32_t i = 0; i < ENTRY; ++i) w[i] = 1.0f;
+            r2.commit(0, ENTRY, /*flipEpoch=*/100, 0, true);
+
+            std::vector<float> o(ENTRY, 0.0f);
+            float *os[1] = { o.data() };
+            twLiveMixGate gg; gg.haveRoot = true; gg.wantPos = 0;
+
+            gg.rootEpoch = 99;
+            twLiveStreamStats s1;
+            twlive::mixStream(os, 1, 33, 0, gg, r2, rd2, f2, s1);
+            CHECK(s1.gated == 1 && o[0] == 0.0f,
+                  "L1a T1 epoch: a partial consumption before the flip is GATED");
+            CHECK(rd2.cursor == 33,
+                  "L1a T1 epoch: ...and still advances the cursor (the frames are spent)");
+
+            gg.rootEpoch = 100;
+            gg.wantPos   = 33;
+            twLiveStreamStats s2;
+            twlive::mixStream(os, 1, 64, 33, gg, r2, rd2, f2, s2);
+            CHECK(s2.summed == 1 && o[0] == 1.0f,
+                  "L1a T1 epoch: the REST of the same entry is summed once the "
+                  "re-summed root page lands");
+        }
+    }
+
+    // --- T2: the pump paced on the clock, threaded ---------------------
+    {
+        printf("\n=== 21 L1a T2: the pump PACES on the clock (threaded) ===\n");
+
+        const length_t BLOCK = 1024;
+        const length_t LEAD  = 4 * BLOCK;
+        const std::uint32_t DEPTH = 6;          // ceil(LEAD/BLOCK) + 2
+
+        auto plan = std::make_shared<twLivePlan>();
+        plan->blockFrames = BLOCK;
+        plan->sampleRate  = (int)env.getSRate();
+        plan->leadFrames  = LEAD;
+        plan->outputTrack = 0;
+        plan->transport.playing = true;
+        {
+            twLiveTrackPlan t;
+            t.name     = "ramp";
+            t.channels = 1;
+            t.input    = std::make_shared<RampInput>();
+            plan->tracks.push_back(std::move(t));
+        }
+        CHECK(plan->finalize(), "L1a T2: the plan finalizes");
+        CHECK(plan->requiredRingDepth() == DEPTH,
+              "L1a T2: requiredRingDepth is ceil(lead/block) + 2");
+
+        twLiveMixRing   ring;
+        twLiveMixReader reader;
+        twLiveMixState  fade;
+        ring.reset(1, (std::uint32_t)BLOCK, DEPTH);
+        twEngineClock clock;
+        LiveGraphPump pump(ring, clock);
+        pump.setPlan(plan);
+        pump.start();
+
+        // The pretend RT: a variable block every ~1 ms, stamping what it will
+        // pull NEXT from its own counter. It is not the audio thread and does
+        // not pretend to be one; what it reproduces is the SHAPE the pump has
+        // to survive — an irregular grid and a clock it does not control.
+        const std::size_t BLOCKS[] = { 480, 1056, 33, 2048, 1024, 7 };
+        std::vector<float> out(4096, 0.0f);
+        float *outs[1] = { out.data() };
+        twLiveMixGate g; g.haveRoot = false;
+
+        std::int64_t want = 0;
+        std::size_t  bad = 0, summedFrames = 0, silentFrames = 0;
+        std::uint32_t maxPending = 0;
+
+        // `realtime` paces the pretend RT at the rate a device would: a block of
+        // n frames takes n/48 ms at 48 kHz. The fast 1 ms tick is a DELIBERATE
+        // over-drive for the steady-state run — it consumes ~10x real time and
+        // is the harshest pacing pressure the pump can be put under — but it is
+        // the wrong instrument for a SEEK, where the pump has to shed the
+        // abandoned run and refill a whole lead before the RT arrives. At 10x
+        // real time it gets a tenth of the budget a real device would give it
+        // and can legitimately need a second reposition; that would be
+        // measuring the test's clock, not the pump.
+        auto runBlocks = [&](int count, bool realtime = false) {
+            for (int i = 0; i < count; ++i) {
+                const std::size_t n = BLOCKS[i % 6];
+                clock.stamp(want - (std::int64_t)BLOCK, want, 0);
+                std::this_thread::sleep_for(std::chrono::milliseconds(
+                    realtime ? (long long)std::max<std::size_t>(1, n / 48) : 1LL));
+                maxPending = std::max(maxPending, ring.pending());
+                std::fill(out.begin(), out.begin() + (std::ptrdiff_t)n, 0.0f);
+                g.wantPos = want;
+                twLiveStreamStats st;
+                twlive::mixStream(outs, 1, n, want, g, ring, reader, fade, st);
+                for (std::size_t k = 0; k < n; ++k) {
+                    const float expect = rampAt(want + (std::int64_t)k);
+                    if (out[k] == 0.0f)        ++silentFrames;
+                    else if (out[k] != expect) ++bad;
+                    else                       ++summedFrames;
+                }
+                want += (std::int64_t)n;
+            }
+        };
+
+        // The RT STANDING STILL: stamping where it is and consuming nothing. It
+        // is how every reposition below is COUNTED, and the reason is not
+        // convenience. A seek makes the pump shed the run it had queued and
+        // re-cover a whole lead; if the RT keeps advancing through that
+        // refill it can outrun the pump once more and earn a second, perfectly
+        // correct reposition — so a window that spans the refill measures the
+        // refill, not the seek. With the clock static the pump repositions
+        // once, renders up to its lead and then idles, which makes "exactly
+        // one" deterministic. Continuity after the seek is then asserted
+        // separately, over a moving window, which is the other half of the
+        // claim and the half a still window cannot make.
+        auto holdStill = [&](int ticks) {
+            for (int i = 0; i < ticks; ++i) {
+                clock.stamp(want - (std::int64_t)BLOCK, want, 0);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        };
+
+        runBlocks(40);                 // warm up: let the pump reach its lead
+        pump.resetStats();
+        bad = summedFrames = silentFrames = 0;
+        maxPending = 0;
+        runBlocks(500);
+
+        const std::uint64_t reposSteady = pump.repositions();
+        printf("     steady: %llu blocks, %llu summed frames, %llu silent, "
+               "maxPending=%u, repositions=%llu\n",
+               500ULL, (unsigned long long)summedFrames,
+               (unsigned long long)silentFrames, (unsigned)maxPending,
+               (unsigned long long)reposSteady);
+
+        CHECK(bad == 0,
+              "L1a T2: every frame the stream delivered is the RIGHT frame "
+              "(contiguous positions, no duplication)");
+        CHECK(reposSteady == 0,
+              "L1a T2: a steady run causes NO repositions — the old fill-until-full "
+              "pump repositioned on every clock stamp");
+        CHECK(maxPending <= DEPTH - 1,
+              "L1a T2: the pump never runs further ahead than its lead "
+              "(occupancy <= ceil(lead/block) + 1)");
+        // Timing-dependent, so it is REPORTED and bounded loosely rather than
+        // asserted tightly: this is a 1 ms tick against a 2 ms pump nap on a
+        // machine that is also running a test suite.
+        CHECK(silentFrames * 20 < summedFrames,
+              "L1a T2: starvation stays under 5% of frames on an idle box "
+              "(reported above; a loose bound on purpose)");
+
+        // ONE SEEK FORWARD, then ONE SEEK BACK. Each is exactly one reposition.
+        pump.resetStats();
+        want += 2000000;                       // far past the covered range
+        holdStill(20);
+        CHECK(pump.repositions() == 1, "L1a T2: a seek FORWARD is exactly one reposition");
+
+        pump.resetStats();
+        bad = summedFrames = silentFrames = 0;
+        runBlocks(30, /*realtime=*/true);
+        CHECK(pump.repositions() == 0 && bad == 0 && summedFrames > 0,
+              "L1a T2: ...and continuity resumes at the new position");
+
+        pump.resetStats();
+        want = 4096;                           // back, far behind the lead
+        holdStill(20);
+        CHECK(pump.repositions() == 1, "L1a T2: a seek BACK is exactly one reposition");
+
+        pump.resetStats();
+        bad = summedFrames = silentFrames = 0;
+        runBlocks(30, /*realtime=*/true);
+        CHECK(pump.repositions() == 0 && bad == 0 && summedFrames > 0,
+              "L1a T2: ...and continuity resumes there too");
+
+        // The explicit request the app will use (design D2), independent of any
+        // drift the clock happens to show.
+        //
+        // Measured with the RT STANDING STILL — stamping the same nextFrame and
+        // consuming nothing. That is not a convenience: it removes the refill
+        // transient from the window, so what is asserted is the REQUEST and not
+        // how fast the pump can re-cover its lead afterwards. With the clock
+        // static the pump repositions once, renders up to its lead, and then
+        // idles, so "exactly one" is deterministic rather than a race.
+        pump.resetStats();
+        holdStill(20);
+        CHECK(pump.repositions() == 0,
+              "L1a T2 control: a clock that does not move causes NO reposition");
+
+        pump.resetStats();
+        pump.requestReposition();
+        holdStill(20);
+        CHECK(pump.repositions() == 1,
+              "L1a T2: requestReposition() forces exactly one, with no clock jump");
+
+        pump.stop();
+        CHECK(!pump.running(), "L1a T2: the pump thread joins");
+    }
+
+    // --- T3: end to end, through the REAL render callback --------------
+    {
+        printf("\n=== 21 L1a T3: the live lane through the real callback ===\n");
+
+#if defined(_WIN32)
+        _putenv((char *)"SMARAGD_AUDIO_BACKEND=capture");
+#else
+        setenv("SMARAGD_AUDIO_BACKEND", "capture", 1);
+#endif
+        auto tone = std::make_shared<ToneComponent>(env);
+        tone->init();
+        TestPlaybackContext ctx;
+        ctx.root = tone;
+
+        auto spk = std::make_shared<twSpeaker>(env);
+        spk->init();
+        spk->setPlaybackContext(&ctx);
+        auto *cap = dynamic_cast<audio::CaptureBackend *>(spk->getBackend());
+
+        const std::uint32_t rate = (std::uint32_t)env.getSRate();
+        CHECK(spk->openLive(rate, 1) == 0, "L1a T3: openLive() succeeds at the project rate");
+        const length_t BLOCK = (length_t)spk->getBackend()->getConfig().bufferFrames;
+
+        // STOPPED: the pump runs its virtual counter from 0 and the RT consumes
+        // the stream sequentially. No crossfade, so the assertion is about the
+        // samples and not about a ramp.
+        spk->setLiveCrossfadeMs(0.0);
+
+        auto plan = std::make_shared<twLivePlan>();
+        plan->blockFrames   = BLOCK;
+        plan->sampleRate    = (int)rate;
+        plan->outputTrack   = 0;
+        plan->stoppedAnchor = 0;
+        plan->transport.playing     = false;
+        plan->transport.feedEnabled = false;
+        {
+            twLiveTrackPlan t;
+            t.name     = "ramp";
+            t.channels = 1;
+            t.input    = std::make_shared<RampInput>();
+            plan->tracks.push_back(std::move(t));
+        }
+        plan->finalize();
+
+        LiveGraphPump pump(spk->liveRing(), spk->engineClock());
+        pump.setPlan(plan);
+        pump.start();
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+        audio::CaptureBackend::CaptureBuffer rec = cap->capturedAudio();
+        const std::uint32_t nch = rec.channels ? rec.channels : 1;
+        CHECK(rec.frames() > 4096,
+              "L1a T3: the callback recorded while the transport was STOPPED");
+
+        // The recording is the ramp: find where it starts, then require a long
+        // CONTIGUOUS run of it. A gap would show as a zero (the ramp never is).
+        std::size_t start = 0;
+        while (start < rec.frames() && rec.samples[start * nch] == 0.0f) ++start;
+        std::size_t run = 0, mismatched = 0;
+        for (std::size_t i = start; i < rec.frames(); ++i) {
+            const float got = rec.samples[i * nch];
+            if (got == 0.0f) break;                 // a gap ends the run
+            if (got != rampAt((std::int64_t)(i - start))) { ++mismatched; break; }
+            ++run;
+        }
+        printf("     stopped: %llu frames recorded, ramp starts at %llu, "
+               "contiguous run %llu\n",
+               (unsigned long long)rec.frames(), (unsigned long long)start,
+               (unsigned long long)run);
+        CHECK(mismatched == 0 && run >= 4096,
+              "L1a T3: the recording IS the ramp, contiguous, from the first "
+              "block the pump produced");
+        if (nch >= 2)
+            CHECK(rec.samples[(start + 10) * nch + 1] == rec.samples[(start + 10) * nch],
+                  "L1a T3: ...on both device channels (a mono project is L = R = ch0)");
+
+        // NOW ATTACH THE FROZEN LANE. The plan goes to PLAYING so the pump
+        // follows the engine clock (this is what L1b's rebuild does), and the
+        // transport change is one explicit reposition.
+        const std::size_t framesBeforePlay = cap->capturedFrames();
+        spk->startOutput();
+        bool playing = false;
+        for (int i = 0; i < 1500 && !playing; ++i) {
+            if (spk->getOutputState() == OutputState::PLAYING) { playing = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(playing, "L1a T3: PLAY attaches to the device the live lane opened");
+        CHECK(cap->capturedFrames() >= framesBeforePlay,
+              "L1a T3: ...with no re-open, so the recording has no hole");
+
+        auto plan2 = std::make_shared<twLivePlan>(*plan);
+        plan2->transport.playing = true;
+        plan2->leadFrames        = 2 * BLOCK;
+        plan2->finalize();
+        pump.requestReposition();
+        pump.setPlan(plan2);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        rec = cap->capturedAudio();
+        pump.stop();
+
+        // The tone is a constant 0.25 and the ramp never leaves [0.25, 0.75],
+        // so a SUMMED frame is >= 0.5 and either lane alone is < 0.5 + eps.
+        // Counting them is what shows the two lanes are both in the output.
+        std::size_t summed = 0, holes = 0;
+        for (std::size_t i = framesBeforePlay; i < rec.frames(); ++i) {
+            const float v = rec.samples[i * nch];
+            if (v == 0.0f) ++holes;
+            else if (v >= 0.4999f) ++summed;
+        }
+        printf("     playing: %llu frames after the attach, %llu carry BOTH lanes, "
+               "%llu holes\n",
+               (unsigned long long)(rec.frames() - framesBeforePlay),
+               (unsigned long long)summed, (unsigned long long)holes);
+        CHECK(summed > 4096,
+              "L1a T3: after the attach the output carries the frozen material "
+              "SUMMED with the ring (tone 0.25 + ramp >= 0.25)");
+        spk->stopOutput();
+        spk->closeLive();
+    }
+
+    // --- T4: the rate scope ---------------------------------------------
+    {
+        printf("\n=== 21 L1a T4: the live lane refuses a rate mismatch ===\n");
+
+        auto tone = std::make_shared<ToneComponent>(env);
+        tone->init();
+        TestPlaybackContext ctx;
+        ctx.root = tone;
+
+        auto spk = std::make_shared<twSpeaker>(env);
+        spk->init();
+        spk->setPlaybackContext(&ctx);
+        const std::uint32_t rate = (std::uint32_t)env.getSRate();
+
+        // (a) THE DEVICE IS OURS. Both synthetic backends ADOPT the rate they
+        //     are opened with, so the only way to reach a closed-device
+        //     mismatch is to ask for one they cannot adopt: rate 0 keeps their
+        //     default, which is then not the rate we asked for.
+        CHECK(spk->openLive(0, 1) == -1,
+              "L1a T4: openLive() at a rate the device will not take is REFUSED");
+        CHECK(spk->liveRateRefusals() == 1, "L1a T4: ...and counted");
+        CHECK(!spk->liveActive() && spk->deviceState() == DeviceState::CLOSED,
+              "L1a T4: ...and the device WE opened is closed again");
+
+        // (b) THE DEVICE IS THE FROZEN LANE'S. A refused arm must leave it
+        //     completely alone — the arrangement is playing through it.
+        spk->startOutput();
+        bool playing = false;
+        for (int i = 0; i < 1500 && !playing; ++i) {
+            if (spk->getOutputState() == OutputState::PLAYING) { playing = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(playing, "L1a T4: the frozen lane is playing");
+        CHECK(spk->openLive(rate + 1000, 1) == -1,
+              "L1a T4: arming at the wrong rate on a busy device is REFUSED");
+        CHECK(spk->liveRateRefusals() == 2, "L1a T4: ...and counted");
+        CHECK(!spk->liveActive() && spk->deviceState() == DeviceState::OPEN &&
+                  spk->getOutputState() == OutputState::PLAYING,
+              "L1a T4: ...and the frozen lane keeps its device, still playing");
+
+        // ...and the matching rate is accepted on the very same device.
+        CHECK(spk->openLive(rate, 1) == 0,
+              "L1a T4: the project's own rate is accepted on the open device");
+        CHECK(spk->liveActive() && spk->liveRateRefusals() == 2,
+              "L1a T4: ...with no further refusal");
+        spk->stopOutput();
+        spk->closeLive();
+        CHECK(spk->deviceState() == DeviceState::CLOSED, "L1a T4: everything closes");
+    }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall playback tests passed\n",
            failures);
