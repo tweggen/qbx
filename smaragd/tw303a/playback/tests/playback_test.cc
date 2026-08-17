@@ -494,6 +494,118 @@ int main()
     }
 
     // ------------------------------------------------------------------
+    // THE RESAMPLING BRANCH OF pullBlock(), PER CHANNEL — the coverage hole.
+    //
+    // Every headless run in this repo has device rate == project rate. The
+    // capture backend honours whatever rate the app asks for
+    // (CaptureBackend::openDevice: `if (preferredRate != 0) config_.sampleRate =
+    // preferredRate`), so passthrough_ is true in every qxa case, in
+    // render_test and in every case above — and pullBlock's `if (!passthrough_)`
+    // half had never been executed by any test in the tree. On real hardware it
+    // is the COMMON path: WASAPI shared mode is locked to the OS mix rate, so a
+    // 44.1 kHz project on a 48 kHz endpoint (or the reverse) resamples on every
+    // single callback.
+    //
+    // The assertion is per channel and in both directions, because the two
+    // halves of the branch index `resampleBuf_` by a stride and the failure
+    // mode of getting that wrong is not "wrong pitch" — it is one destination
+    // channel carrying silence or another channel's audio, i.e. exactly the
+    // "plays on the left only" shape. A constant tone resamples to the same
+    // constant under linear interpolation, so the expected value is a closed
+    // form rather than a tolerance.
+    {
+        struct RateCase { std::uint32_t in, out; const char *name; };
+        const RateCase rates[] = {
+            { 48000, 44100, "48k project -> 44.1k device (downsample)" },
+            { 44100, 48000, "44.1k project -> 48k device (upsample)" },
+        };
+
+        for (const RateCase &rc : rates) {
+            // --- width 2: the ladder must arrive per channel, in order -----
+            {
+                auto src = std::make_shared<WidthTone>(env);
+                src->width.store(2);
+                src->ladder.store(true);          // ch0 = 0.25, ch1 = 0.125
+                src->init();
+
+                audio::AudioEngine engine(src, rc.in);
+                engine.configureResampling(rc.in, rc.out);
+                engine.startReadahead();
+
+                constexpr length_t BLOCK = 512;
+                std::vector<float> L(BLOCK, -1.0f), R(BLOCK, -1.0f);
+
+                bool audible = false;
+                for (int i = 0; i < 500 && !audible; ++i) {
+                    length_t n = pullLR(engine, L, R, BLOCK);
+                    if (n == BLOCK && std::fabs(L[0] - 0.25f) < 1e-6f) audible = true;
+                    else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                char msg[256];
+                std::snprintf(msg, sizeof(msg),
+                              "resample %s: a width-2 graph plays", rc.name);
+                CHECK(audible, msg);
+
+                bool ch0ok = audible, ch1ok = audible;
+                float ch1first = R[0], ch1worst = R[0];
+                for (length_t i = 0; i < BLOCK; ++i) {
+                    if (std::fabs(L[i] - 0.25f)  >= 1e-6f) ch0ok = false;
+                    if (std::fabs(R[i] - 0.125f) >= 1e-6f) {
+                        ch1ok = false;
+                        if (std::fabs(R[i] - 0.125f) > std::fabs(ch1worst - 0.125f))
+                            ch1worst = R[i];
+                    }
+                }
+                std::snprintf(msg, sizeof(msg),
+                              "resample %s: destination channel 0 carries page "
+                              "channel 0", rc.name);
+                CHECK(ch0ok, msg);
+                std::snprintf(msg, sizeof(msg),
+                              "resample %s: destination channel 1 carries page "
+                              "channel 1 (want 0.125, got first=%.6f worst=%.6f) "
+                              "-- NOT silence, NOT a copy of channel 0",
+                              rc.name, (double)ch1first, (double)ch1worst);
+                CHECK(ch1ok, msg);
+
+                engine.stopReadahead();
+            }
+
+            // --- width 1: mono must still fan out to every destination -----
+            {
+                auto src = std::make_shared<WidthTone>(env);
+                src->width.store(1);
+                src->ladder.store(false);
+                src->init();
+
+                audio::AudioEngine engine(src, rc.in);
+                engine.configureResampling(rc.in, rc.out);
+                engine.startReadahead();
+
+                constexpr length_t BLOCK = 512;
+                std::vector<float> L(BLOCK, -1.0f), R(BLOCK, -1.0f);
+
+                bool audible = false;
+                for (int i = 0; i < 500 && !audible; ++i) {
+                    length_t n = pullLR(engine, L, R, BLOCK);
+                    if (n == BLOCK && std::fabs(L[0] - 0.25f) < 1e-6f) audible = true;
+                    else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                bool bothOk = audible;
+                for (length_t i = 0; i < BLOCK && bothOk; ++i)
+                    bothOk = (std::fabs(L[i] - 0.25f) < 1e-6f) && (L[i] == R[i]);
+                char msg[256];
+                std::snprintf(msg, sizeof(msg),
+                              "resample %s: a width-1 graph fans out to every "
+                              "destination channel (the mono-on-a-stereo-device "
+                              "case)", rc.name);
+                CHECK(bothOk, msg);
+
+                engine.stopReadahead();
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Live seek during playback (requestSeek): the RT pull thread adopts the
     // requested position without a restart/re-buffer, and playback resumes
     // from there. This is what click-to-seek routes through while playing.
