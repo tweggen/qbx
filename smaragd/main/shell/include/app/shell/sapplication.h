@@ -29,6 +29,7 @@ class SMidiInputHub;
 class SAutomationRecorder;
 class SLiveMonitor;
 class SAudioRecorder;
+class SMidiRecorder;
 class QTimer;
 
 typedef QList<SLink*> SSelectionList;
@@ -153,10 +154,17 @@ public:
     // AUDIO RECORDING (proposal 21 L3b). One recorder per app; it owns the
     // take, the growing clip and the placement. Never null after construction.
     SAudioRecorder *audioRecorder() const { return audioRecorder_.get(); }
-    /// Begin a take on every armed track. False when nothing is armed or the
-    /// input would not open.
+    // MIDI RECORDING (proposal 21 L4 = 37 P8b). The SECOND recorder, and the
+    // split between them is by TRACK INPUT rather than by two record buttons:
+    // an armed track whose `trackInput` is `midi:`/`keyboard` belongs to this
+    // one, every other armed track to the audio recorder. A record start runs
+    // both, so a project with an armed guitar and an armed synth part records
+    // both in one pass. Never null after construction.
+    SMidiRecorder *midiRecorder() const { return midiRecorder_.get(); }
+    /// Begin a take on every armed track, audio and MIDI. False when nothing
+    /// is armed or the audio input would not open for the audio half.
     bool startRecording();
-    /// End the take and commit the placement (one undo step).
+    /// End the take and commit the placement (one undo step per recorder).
     void stopRecording();
 
     // SAppContext: start/stop transport playback (speaker + playing flag).
@@ -338,6 +346,12 @@ private:
     SActionHistory *actionHistory_;
     std::unique_ptr<audio::RenderSession> renderSession_;
     std::unique_ptr<SAudioRecorder> audioRecorder_;
+    std::unique_ptr<SMidiRecorder>  midiRecorder_;   // proposal 21 L4
+    // True while a MIDI-only take is running, i.e. one that the AUDIO recorder
+    // did not start the transport for. It decides who stops the transport at
+    // the end, and it is a flag rather than a re-derivation because the armed
+    // set is cleared by the commit before the stop finishes.
+    bool midiOwnsTransport_ = false;
 
     SLink *currentSelectedSLink_;
 

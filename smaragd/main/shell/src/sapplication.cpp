@@ -25,6 +25,7 @@
 #include "app/shell/smidiinputhub.h"
 #include "app/shell/smidioutpump.h"
 #include "app/shell/saudiorecorder.h"
+#include "app/shell/smidirecorder.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/sautomationrecorder.h"
 #include "app/servicesui/soptions.h"
@@ -580,6 +581,9 @@ SApplication::SApplication( int &argc, char **argv )
     // one input pump) and must be destroyed BEFORE it, which the reverse
     // construction order in the destructor below gives.
     audioRecorder_.reset( new SAudioRecorder( this ) );
+    // The MIDI half of a record start (proposal 21 L4). After the input hub,
+    // whose recorder SINKS it acquires, and destroyed before it.
+    midiRecorder_.reset( new SMidiRecorder( this ) );
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
@@ -627,6 +631,7 @@ SApplication::~SApplication()
     // The live lane goes first: it stops and JOINS the pump thread and closes
     // the input device, and both of those must happen before the speaker it
     // hands audio to is destroyed.
+    midiRecorder_.reset();
     audioRecorder_.reset();
     liveMonitor_.reset();
     // AFTER the live monitor: it holds fan-out sinks and a thru route into a
@@ -835,22 +840,56 @@ void SApplication::setPlaybackRunning( bool play )
 
 bool SApplication::isRecordingActive() const
 {
-    return audioRecorder_ && audioRecorder_->isActive();
+    return ( audioRecorder_ && audioRecorder_->isActive() )
+        || ( midiRecorder_ && midiRecorder_->isActive() );
 }
 
 bool SApplication::startRecording()
 {
-    // Everything a record start MEANS lives in SAudioRecorder (proposal 21
-    // L3b): the transport edge through setPlaybackRunning(), the capture
-    // segment on the app's ONE input pump, the growing clip, the placement
-    // conversion and the one-macro commit at stop. This is the entry point and
-    // nothing else.
-    return audioRecorder_ ? audioRecorder_->start() : false;
+    // Everything a record start MEANS lives in the two recorders: the audio
+    // half in SAudioRecorder (proposal 21 L3b) - the transport edge through
+    // setPlaybackRunning(), the capture segment on the app's ONE input pump,
+    // the growing clip, the placement conversion, the one-macro commit - and
+    // the MIDI half in SMidiRecorder (L4). This is the entry point and nothing
+    // else.
+    //
+    // THE MIDI RECORDER GOES FIRST AND DOES NOT TOUCH THE TRANSPORT. Two
+    // reasons, both load-bearing: monitor AUTO is "input while stopped OR
+    // RECORDING" (design D9), so isRecordingActive() has to be true BEFORE the
+    // live plan is rebuilt by the transport edge; and the audio recorder owns
+    // that edge whenever it has a take of its own, so only a MIDI-ONLY run
+    // starts the transport here.
+    const bool midiOk  = midiRecorder_  ? midiRecorder_->start()  : false;
+    const bool audioOk = audioRecorder_ ? audioRecorder_->start() : false;
+    midiOwnsTransport_ = ( midiOk && !audioOk );
+    if( !midiOk && !audioOk ) return false;
+    if( midiOwnsTransport_ ) {
+        setRecordingStartFrame( midiRecorder_->recordStartFrame() );
+        if( !isPlaying_ ) setPlaybackRunning( true );
+        else              liveLanesChanged();
+    }
+    return true;
 }
 
 void SApplication::stopRecording()
 {
+    // The MIDI recorder commits FIRST, while the transport is still running:
+    // every host time it captured is mapped through the playhead clock's
+    // anchor, and that anchor is only valid while the RT thread is publishing
+    // (SPlayheadClock). The audio recorder's stop() is what ends the transport
+    // when the take had an audio half.
+    const bool wasMidiOnly = midiOwnsTransport_;
+    const offset_t midiStart =
+        midiRecorder_ ? midiRecorder_->recordStartFrame() : (offset_t) 0;
+    if( midiRecorder_ ) midiRecorder_->stop();
     if( audioRecorder_ ) audioRecorder_->stop();
+    if( wasMidiOnly ) {
+        midiOwnsTransport_ = false;
+        if( isPlaying_ ) setPlaybackRunning( false );
+        // Line the playhead up with what was just placed (it advanced during
+        // the take), exactly as SAudioRecorder::stop() does for its own.
+        setGlobalLocatorPos( midiStart );
+    }
 }
 
 

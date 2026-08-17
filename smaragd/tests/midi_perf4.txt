@@ -1,0 +1,26 @@
+# A four-note performance for the MIDI-recording cases (proposal 21 L4).
+#
+# The TEXT form `midi-in-replay` accepts: an offset in MILLISECONDS from the
+# start of the replay, then the raw bytes. It is used instead of a .mid on
+# purpose - a performance file is read at its OWN timing (a .mid brings its own
+# PPQ and tempo metas), and here the timing IS the assertion, so it is spelled
+# in the unit the gate reasons in rather than in one that has to be converted.
+#
+# Four notes on channel 0, one every 250 ms, each held 200 ms:
+#
+#   note   key         on      off
+#   1      60  (C4)      0 ms   200 ms
+#   2      62  (D4)    250 ms   450 ms
+#   3      64  (E4)    500 ms   700 ms
+#   4      65  (F4)    750 ms   950 ms
+#
+# At the project's 48 kHz that is one note every 12000 frames, each 9600
+# frames long - integers, so every expectation in the cases is a closed form.
+0       90 3C 64
+200     80 3C 00
+250     90 3E 64
+450     80 3E 00
+500     90 40 64
+700     80 40 00
+750     90 41 64
+950     80 41 00

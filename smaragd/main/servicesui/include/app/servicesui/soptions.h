@@ -85,6 +85,29 @@ inline constexpr const char *MidiOutOffsetMs   = "midi/outOffsetMs";
 inline constexpr const char *MidiChaseNoteOns  = "midi/chaseNoteOns";
 inline constexpr const char *MidiInputPortIds  = "midi/inputPortIds";
 
+// MIDI RECORDING (proposal 21 L4 = 37 P8b, design D8). Both are GLOBAL and
+// per-user, not per track: "how does a recorded pass combine with what is
+// already there" and "quantise the input" are properties of how this person
+// works, and every reference DAW puts them in one place beside the transport.
+// They are read ONCE at each record start (SMidiRecorder), so a change made
+// during a take cannot make the commit disagree with the capture.
+//
+//   MidiRecordMode      new-take | overdub | replace.
+//                       new-take is the default and is what "record over that
+//                       part again" means everywhere: the pass becomes a new
+//                       TAKE on the column, and the previous one is still
+//                       there to go back to. Overdub merges into the active
+//                       take; replace drops the notes inside the recorded
+//                       window first.
+//   MidiRecordQuantize  off | 1/4 | 1/8 | 1/16 | 1/8t | 1/16t | ... - the
+//                       `quantize-notes` grid spelling, so the input quantise
+//                       and the edit verb can never disagree about what "1/8t"
+//                       means. OFF by default: quantising a performance the
+//                       user did not ask to have quantised is destructive, and
+//                       the verb is one keystroke away afterwards.
+inline constexpr const char *MidiRecordMode     = "midi/recordMode";
+inline constexpr const char *MidiRecordQuantize = "midi/recordQuantize";
+
 // Default value for a key (invalid QVariant if unknown). Scroll-first defaults.
 QVariant def( const QString &key );
 
