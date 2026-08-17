@@ -84,6 +84,14 @@ int STrack::serializeSelfAttributes( QTextStream &o )
         o << " midiOutChannel='" << midiOutChannel_ << "'";
     if( midiOutOffsetMs_ != 0 )
         o << " midiOutOffsetMs='" << midiOutOffsetMs_ << "'";
+    // Live input / monitoring (proposal 21 L1b), same non-default-only rule:
+    // a project written before this phase re-serializes byte-identically.
+    // `liveOwnedLane_` is NEVER written - it is this session's monitoring
+    // state, not a property of the project.
+    if( !trackInput_.isEmpty() )
+        o << " trackInput='" << trackInput_.toHtmlEscaped() << "'";
+    if( monitorMode_ != MonitorMode::Auto )
+        o << " monitorMode='" << monitorModeToString( monitorMode_ ) << "'";
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -127,6 +135,82 @@ void STrack::setMidiOutput( const QString &port, int channel, int offsetMs )
     // never bounded on the right, hence the open-ended range.
     if( hadOut != hasMidiOut() )
         invalidateRenderPathRange( 0, EVENT_DIRTY_END );
+}
+
+// --- live input / monitoring (proposal 21 L1b, design D9) -------------------
+
+void STrack::setTrackInput( const QString &spec )
+{
+    QString v = spec.trimmed();
+    if( v == QStringLiteral( "none" ) ) v.clear();
+    if( v == trackInput_ ) return;
+    trackInput_ = v;
+    // NOTHING is invalidated here. A live input changes what the LIVE LANE
+    // renders, never what a frozen page contains: the exclusion wiring (and
+    // the epoch bump that goes with it) is applied by SLivePlanBuilder when the
+    // lane actually arms, which is the only moment the frozen sum changes.
+    emit trackInputChanged();
+}
+
+QString STrack::trackInputAudioDevice() const
+{
+    if( !trackInput_.startsWith( QStringLiteral( "audio:" ) ) ) return QString();
+    // audio:<device>:<mask> - the device may itself be empty ("audio::3").
+    const QString rest = trackInput_.mid( 6 );
+    const int     colon = rest.lastIndexOf( QLatin1Char( ':' ) );
+    return ( colon < 0 ) ? rest : rest.left( colon );
+}
+
+unsigned STrack::trackInputChannelMask() const
+{
+    if( !trackInput_.startsWith( QStringLiteral( "audio:" ) ) ) return 0u;
+    const QString rest  = trackInput_.mid( 6 );
+    const int     colon = rest.lastIndexOf( QLatin1Char( ':' ) );
+    if( colon < 0 ) return 0u;
+    bool ok = false;
+    const unsigned mask = rest.mid( colon + 1 ).toUInt( &ok, 16 );
+    return ok ? mask : 0u;
+}
+
+STrack::MonitorMode STrack::monitorModeFromString( const QString &s, bool *ok )
+{
+    if( ok ) *ok = true;
+    if( s.compare( "on",   Qt::CaseInsensitive ) == 0 ) return MonitorMode::On;
+    if( s.compare( "off",  Qt::CaseInsensitive ) == 0 ) return MonitorMode::Off;
+    if( s.compare( "auto", Qt::CaseInsensitive ) == 0 ) return MonitorMode::Auto;
+    if( ok ) *ok = false;
+    return MonitorMode::Auto;
+}
+
+QString STrack::monitorModeToString( MonitorMode m )
+{
+    switch( m ) {
+    case MonitorMode::On:  return QStringLiteral( "on" );
+    case MonitorMode::Off: return QStringLiteral( "off" );
+    default:               return QStringLiteral( "auto" );
+    }
+}
+
+void STrack::setMonitorMode( MonitorMode m )
+{
+    if( m == monitorMode_ ) return;
+    monitorMode_ = m;
+    emit trackInputChanged();
+}
+
+bool STrack::monitorEffective( bool playing, bool recording ) const
+{
+    switch( monitorMode_ ) {
+    case MonitorMode::Off: return false;
+    case MonitorMode::On:  return true;
+    default: break;
+    }
+    // AUTO is the tape machine: the input is heard while the transport is
+    // STOPPED or while a record pass is running, and gives way to the track's
+    // own material on plain Play. That is Cubase "Tapemachine" / REAPER
+    // "auto", and it is what makes pressing Play an audition of what is on
+    // the timeline rather than a duet with the performer.
+    return recording || !playing;
 }
 
 void STrack::setMidiRouting( MidiRouting r )
@@ -393,6 +477,37 @@ void STrack::checkDurationChanged()
     }
 }
 
+void STrack::setLiveOwnedLane( bool owned )
+{
+    if( liveOwnedLane_ == owned ) return;
+    liveOwnedLane_ = owned;
+    if( owned ) return;
+
+    // Handed back. ONE walk for everything the lane accumulated while the pump
+    // owned it (design D7).
+    if( !haveDeferredDirty_ ) return;
+    const offset_t a = deferredDirtyStart_, b = deferredDirtyEnd_;
+    haveDeferredDirty_ = false;
+    deferredDirtyStart_ = deferredDirtyEnd_ = 0;
+    invalidateRenderPathRange( a, b );
+}
+
+void STrack::invalidateRootWalkOrDefer( offset_t start, offset_t end )
+{
+    if( !liveOwnedLane_ ) {
+        invalidateRenderPathRange( start, end );
+        return;
+    }
+    if( !haveDeferredDirty_ ) {
+        haveDeferredDirty_  = true;
+        deferredDirtyStart_ = start;
+        deferredDirtyEnd_   = end;
+        return;
+    }
+    if( start < deferredDirtyStart_ ) deferredDirtyStart_ = start;
+    if( end   > deferredDirtyEnd_ )   deferredDirtyEnd_   = end;
+}
+
 void STrack::trackChildDurationChanged( length_t newLength )
 {
     // durationChanged is connected on the child's OBJECT (see
@@ -415,6 +530,16 @@ void STrack::trackChildDurationChanged( length_t newLength )
         checkDurationChanged();
         return;
     }
+    if( obj && obj->isLiveRecording() ) {
+        // A GROWING RECORDING never entered the bus mixers (see
+        // trackChildWasAdded), so there is nothing to update and nothing to
+        // invalidate: it is drawn, not rendered. Its length moves ten times a
+        // second, which is exactly the traffic design D7 says must not reach
+        // the root.
+        lastDurationValid_ = false;
+        checkDurationChanged();
+        return;
+    }
     if( obj ) {
         twEditRange affected;
         for( SLink *lk : childLinks() ) {
@@ -429,7 +554,7 @@ void STrack::trackChildDurationChanged( length_t newLength )
         // to the root over EXACTLY the affected extent (union of the pre-
         // and post-edit clip windows, reported by the mix) — pages elsewhere
         // in the song survive (proposal 18 Phase 5).
-        invalidateRenderPathRange( (offset_t) affected.start,
+        invalidateRootWalkOrDefer( (offset_t) affected.start,
                                    (offset_t) affected.end );
     }
     lastDurationValid_ = false;
@@ -476,6 +601,20 @@ void STrack::trackChildWasAdded( SLink &child )
                               this, SLOT( trackChildWasMoved( offset_t ) ) );
             QObject::connect( &(child.getSObject()), SIGNAL( durationChanged( length_t ) ),
                               this, SLOT( trackChildDurationChanged( length_t ) ) );
+
+            // A LIVE RECORDING goes into NEITHER (proposal 21 L3b, design
+            // D7). It has no root component, so inserting it as a clip entry
+            // would cost a dummy freeze per page per clip and make
+            // `twView::getComponent() returned nullptr` fire once per freeze
+            // — the same argument the event route below makes, for the same
+            // reason. What is heard while recording is the live monitor lane;
+            // this clip is drawn only, and at stop it is replaced by the
+            // WAV-backed cut place-recording builds.
+            if( child.getSObject().isLiveRecording() ) {
+                lastDurationValid_ = false;
+                checkDurationChanged();
+                return;
+            }
 
             // EVENT material goes into the event clip set and NOT into the bus
             // mixers (design 3.2): a MIDI clip has no page to freeze, and
@@ -565,6 +704,12 @@ void STrack::trackChildWasRemoved( SLink &child )
 {
     if( child.hasStartTime() ) {
         if( child.getSObject().hasDuration() ) {
+            if( child.getSObject().isLiveRecording() ) {
+                // Never inserted; nothing to remove and nothing stale.
+                lastDurationValid_ = false;
+                checkDurationChanged();
+                return;
+            }
             if( eventClips_->hasClip( &child ) ) {
                 twFrameRange r = eventClips_->removeClip( &child );
                 invalidateRenderPathRange( (offset_t) r.start, EVENT_DIRTY_END );
@@ -959,6 +1104,16 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     setMidiOutput( element.attribute( "midiOutPort", "" ),
                    element.attribute( "midiOutChannel", "-1" ).toInt(),
                    element.attribute( "midiOutOffsetMs", "0" ).toInt() );
+
+    // Live input / monitoring (L1b). Absent = no input, monitor Auto, which is
+    // what every project written before proposal 21 means. ArmedForRecording
+    // is read by SObject above and is INERT on load: SLiveMonitor records the
+    // set of tracks that arrived armed and refuses to monitor them until the
+    // user arms them in this session (design D9, "never starts monitoring on
+    // load") - a loaded project must not open the developer's microphone.
+    setTrackInput( element.attribute( "trackInput", "" ) );
+    setMonitorMode( monitorModeFromString(
+        element.attribute( "monitorMode", "auto" ) ) );
     
     return 0;
 }
@@ -1164,7 +1319,13 @@ void STrack::applyChildTrackAudibility()
         if( !lk ) continue;
         STrack *child = dynamic_cast<STrack*>( &lk->getSObject() );
         if( !child ) continue;
-        const bool audible = ssolo::isLaneAudible( root, child, anySolo );
+        // The second, separate term (proposal 21 L1b, design D3): a NESTED
+        // member of the live closure is excluded from the frozen sum through
+        // its parent's twTrackMix, exactly the way an inaudible lane is - and
+        // for the same reason the mixer nulls a top-level member's plug. It is
+        // NOT a mute: the child keeps feeding events upward and keeps metering.
+        const bool audible = ssolo::isLaneAudible( root, child, anySolo )
+                             && !child->isLiveOwnedLane();
         {
             if( cpTrackMix_ ) {
                 twEditRange r = cpTrackMix_->setClipMuted( lk, !audible );

@@ -45,7 +45,14 @@ DEPS = {
     'sinks':    ['core'],
     # playback → schedule since proposal 19 stage 5: the readahead is a
     # demand consumer of the page scheduler instead of pulling freezes.
-    'playback': ['core', 'pages', 'graph', 'devices', 'sources', 'schedule'],
+    # playback → plugins, mix since proposal 21 L1a: the LiveGraphPump renders
+    # live-owned tracks BLOCK-WISE, outside the frozen-page machinery, and the
+    # three pieces of the graph that survive block-wise are exactly
+    # twPluginSlotProcessor::render, twGainStage::applyGain and twRewire's
+    # channel map. Neither plugins nor mix depends on playback, so the DAG stays
+    # acyclic; events arrives transitively through both.
+    'playback': ['core', 'pages', 'graph', 'devices', 'sources', 'schedule',
+                 'plugins', 'mix'],
     # render → schedule since proposal 19 stage 4: the offline render is a
     # watermark CONSUMER of the page scheduler instead of pulling freezes.
     'render':   ['core', 'pages', 'graph', 'sinks', 'playback', 'schedule'],
@@ -213,9 +220,16 @@ APP_ENG = {
     # shell + events since proposal 37 P7b: the MIDI-out pump slices a track's
     # event FEED (twEventMerge/twEventBlock) on the main thread and hands the
     # bytes to tw/devices' MidiOutScheduler.
+    # shell + mix + pages since proposal 21 L1b: the live plan builder
+    # SNAPSHOTS the two pure-in-position pieces the pump replays outside the
+    # graph - twGainStage::Envelope and twRewire::channelMap() - and checks the
+    # master-shape precondition over the master's own twMixer/twRewire
+    # (twlive::checkMasterShape, design D3). It reaches tw/pages for one
+    # constant, twOutputPage::FRAME_CAPACITY, which is the stride the re-rooted
+    # horizon demands are issued on.
     'shell':          _ENG_BASE | {'devices', 'dsp', 'events', 'metering',
-                                   'playback', 'plugins', 'record', 'render',
-                                   'schedule', 'sidecar'},
+                                   'mix', 'pages', 'playback', 'plugins',
+                                   'record', 'render', 'schedule', 'sidecar'},
     # testkit + sidecar + schedule since proposal 27 M1 test verbs:
     # assert-sidecar reads twQafReader/twSidecarStore, wait-analysis polls the
     # revalidator's jobsQueued().

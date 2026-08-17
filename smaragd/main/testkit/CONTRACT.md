@@ -30,6 +30,20 @@ Invariants:
    an assertion be pointed at a committed FIXTURE (`../test_channels4.wav`),
    which never appears in the output dir. A name that exists nowhere still
    fails with the output-dir spelling, unchanged.
+3a. AUDIO INPUT is `null` by default under --test-case (proposal 21 L0;
+   main.cpp sets SMARAGD_AUDIO_INPUT_BACKEND next to the audio and MIDI backend
+   defaults, unless it is already set). THIS CHANGES NOTHING ABOUT THE SUITE AS
+   IT STANDS: no case records audio — there is no record verb yet — so nothing
+   opened an input device in the first place. It is set now so that the moment
+   one does, it cannot reach the developer's microphone by accident, and so a
+   case that WANTS input says so: `SMARAGD_AUDIO_INPUT_BACKEND=file:<wav>` gives
+   a device that replays known audio in 1024-frame blocks on the shared steady
+   clock (devices inv. 22-23).
+   The MIDI-in verbs (`midi-in-event`, `midi-in-replay`) inject into the CAPTURE
+   MIDI input, which is already the --test-case default. Nothing CONSUMES a
+   MidiInput yet (L1a/L3a attach the live lane and the recorder), so today those
+   verbs gate their own behaviour — order, stamps, real-time pacing — and
+   nothing sounding.
 4. Exit code: 0 iff all actions applied as expected AND <assertions> pass.
 5. drag-clip-edge is the ONLY route to clip-edge gesture code. Every clamp and
    snap of a trim / extend / loop / loop-marker drag lives in
@@ -197,10 +211,16 @@ Invariants:
   SMARAGD_AUDIO_BACKEND=capture before SApplication exists, unless it is
   already set), which pumps the callback on a real-time paced clock and keeps
   every frame. Three rules for writing such a case:
-   1. Captured frame 0 is the first frame of the CURRENT playback session, i.e.
-      the locator position play started from (the recording is cleared at each
-      start). Measured leading silence is zero, but budget for a bounded amount
-      explicitly — do not assert content at frame 0 by luck.
+   1. Captured frame 0 is the first frame of the CURRENT DEVICE session
+      (`CaptureBackend::openDevice` clears the recording; proposal 21 L1a,
+      design D5). With NO LIVE LANE — which is every case today — the device is
+      still opened at play and closed at stop, so this is exactly the old
+      "current playback session" and every existing `dump-playback-capture`
+      case reads the same recording it always did. It stops being the same
+      thing once a track is armed: the device then outlives the transport, and
+      a second Play must NOT erase what the monitored input recorded in
+      between. Measured leading silence is zero, but budget for a bounded
+      amount explicitly — do not assert content at frame 0 by luck.
    2. Playback is REAL TIME. A case's wall-clock cost is the span it plays;
       keep the spans short (SMARAGD_CAPTURE_SPEED can accelerate a smoke run,
       but the committed case must pass at 1.0x).
@@ -383,3 +403,86 @@ both would have to move them consistently.
 A MISSING lane is REJECTED rather than reported as the target's default value —
 a typo in a `target` must never read as a passing assertion. Pair it with
 `expectReject="true"` to assert that a lane is ABSENT.
+
+## The live-lane assertions (proposal 21 L1b)
+
+10. **The measurement is independent of the thing measured**, the same
+    discipline the MIDI-out assertions follow and the only reason any of these
+    are worth anything. The INPUT is a committed WAV replayed by
+    `FileAudioInput` through a real capture thread and ring
+    (`SMARAGD_AUDIO_INPUT_BACKEND=file:…`, set on the CTest entry because the
+    runner reads it long after the script is parsed); the OUTPUT is the audio
+    capture backend's own recording of what the device was handed. Nothing in
+    between is asked what it thinks it did.
+
+11. **`assert-monitor-latency` is a cross-correlation, not a position decode.**
+    `decodePositionAt` resolves 4096-frame blocks and the whole monitoring
+    budget is 8192, so the decoder could not tell a pass from a fail. The
+    correlation is NORMALISED — the peak is a similarity, so `minCorrelation`
+    means the same thing whatever the monitored level is — and the input index
+    WRAPS, because the file input loops.
+
+12. **`assert-render-policy` bounds are MAXIMA and default to 0.** A non-zero
+    bound is legal but must be spelled out in the case and justified there. All
+    five L1b cases assert 0/0, and that is a property of the arm/disarm
+    ordering (shell inv. 13), not luck: the wrong order measured 8.
+
+13. **A case that arms and disarms is a sequence of DEVICE SESSIONS.**
+    `CaptureBackend` clears its recording at device start (rule 1) and
+    disarming the last live lane closes the device, so a disarm between phases
+    makes frame 0 of the next dump the first frame of that phase — which is
+    what lets a monitoring case use absolute frame windows instead of
+    wall-clock guesses.
+
+## The recording verbs (proposal 21 L3b)
+
+14. **`record-start` / `record-stop` are ABSOLUTE and go through the production
+    entry points** (`SApplication::startRecording` / `stopRecording`), which is
+    what the record button calls — a script exercises the real path rather than
+    a copy of it. `record-start` is REJECTED when nothing is armed or the input
+    will not open; `record-stop` is REJECTED when not recording. Neither is
+    undoable: they are transport. The PLACEMENT they cause is one undo step.
+
+15. **A take that PUNCHES OUT ends without `record-stop`**, so a case that sets
+    a punch region must not call it afterwards (it would be rejected). The
+    dialog, the record button and the punch-out all converge on the same
+    `stop()`.
+
+16. **`assert-recorded-clip`'s numeric expectations are opt-in**, so one verb
+    serves the mid-take assertions (`growing`, `previewNonEmpty`,
+    `minDurationFrames`) and the post-take ones. It ALSO checks the placement
+    IDENTITY on every call once the take is over — the clip's link start must
+    equal `placementFrame(trimmed)` — so a recorder that reported the right
+    terms and applied different ones fails even when no expectation was given.
+
+17. **WHAT A RECORDING CASE CAN AND CANNOT CLAIM.** `P0`, the project frame
+    capture frame 0 maps to, depends on when the capture thread and the render
+    callback actually ran; it is NOT predictable and no case asserts it. What
+    IS a closed form in integers is the COMPENSATION — `-inputLatency -
+    outputLatency + userOffset` — because a case sets the reported input
+    latency (`SMARAGD_AUDIO_INPUT_LATENCY_FRAMES`) and the capture backend's
+    output latency is its own buffer (1024). `FileAudioInput` does NOT actually
+    delay by the reported latency, which is the point: the gate is on the
+    CONVERSION, not on the physics of a device no headless run can see.
+
+18. **`sourceAtStartFrame` is a FAITHFULNESS claim, not a latency one.** It
+    decodes the position-encoded fixture at the placed clip's first content
+    frame and compares it to the number of capture frames the mapping says were
+    trimmed. They agree only if every frame the file produced reached the pages
+    in order, none lost or duplicated between the device ring, the bridge
+    thread, the growing capture source and the placement. The tolerance is one
+    DECODE block (4096) because the decoder resolves 4096-frame blocks by
+    construction.
+
+19. **A LOOP-PASS COUNT IS A WALL-CLOCK QUANTITY.** It is captured material
+    divided by loop length, and captured material shrinks when the box is
+    loaded enough to cost ring overruns — `record_loop_takes` DID fail under a
+    concurrent suite with an exact count. Assert a FLOOR (`minTakes` /
+    `minPasses`) and let the verb assert the part that is not load-sensitive:
+    ONE COLUMN, and exactly as many takes as passes, which it does
+    unconditionally whenever more than one pass was committed.
+
+20. **Nothing undoable may come between a take and the `<undo/>` that gates
+    it.** A `select-take` probe placed there is undone instead, which is how
+    the first draft of `record_loop_takes` mis-read a working undo as a broken
+    one.

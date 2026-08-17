@@ -164,9 +164,31 @@ Invariants:
 Threading: THREADING.md rules 2-3; one mutex per component, _nolock suffix
 convention.
 
+The per-thread RENDER POLICY lives here (`tw_freeze_context.h`,
+`twRtThreadGuard`) and there is exactly ONE check on it, at the top of
+`twComponent::freezePage`. Two markers, two consequences (proposal 19 stage 6,
+generalised by proposal 21 L0 / design 21 §4):
+
+  markRtThread()   the audio callback. One-shot report + a debug ASSERT, and a
+                   defused empty page in release. A freeze there would block
+                   the callback on a mutex and a disk read; it is a bug to fix,
+                   not a condition to tolerate.
+  markLiveThread() proposal 21 L1a's live pump. Silence, a process-wide
+                   `liveThreadRefusals` counter (which `assert-render-policy`
+                   bounds at exit) and exactly ONE log line — never an assert,
+                   because a preview or an asset capture arriving at a
+                   live-owned component is recoverable BY DESIGN.
+
+Both markers are POD thread_locals (a thread_local with a non-trivial
+destructor corrupts the heap under MinGW at 3+ threads), the counters are plain
+process-wide atomics, and marking one thread never changes another's policy.
+
 How to test: the full qxa suite exercises every sub-contract;
 render_split_slip_offset.qxa is the MapPosFn regression; `ctest -R graph_test`
-pins invariants 8-9 (links only tw_graph). Invariant 7 has a
+pins invariants 8-9 (links only tw_graph) and, since proposal 21 L0, the render
+policy: a markLiveThread() thread gets an empty page from every freezePage, the
+component never renders for it, every refusal is counted and exactly one line is
+logged, while the calling thread's own policy is untouched. Invariant 7 has a
 dedicated stress case in playback_test ("seek storm"): four threads freezing
 position-coded pages while a fifth hammers AudioEngine::seekTo, then every
 produced page is decoded and must carry the audio of its own startPosition.

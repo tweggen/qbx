@@ -95,6 +95,7 @@ tw_module(sources
         sources/include/tw/sources/twresampledsource.h
         sources/include/tw/sources/twresampler.h
         sources/include/tw/sources/twcapturingsource.h
+        sources/include/tw/sources/twgrowingcapturesource.h
         sources/include/tw/sources/twloopreader.h
         sources/include/tw/sources/twgrainsource.h
         sources/include/tw/sources/twgrainparams.h
@@ -106,6 +107,7 @@ tw_module(sources
         sources/src/twresampledsource.cc
         sources/src/twresampler.cc
         sources/src/twcapturingsource.cc
+        sources/src/twgrowingcapturesource.cc
         sources/src/twloopreader.cc
         sources/src/twgrainsource.cc
         sources/src/twpagedvocoder.cc
@@ -479,6 +481,7 @@ tw_module(devices
         devices/include/tw/devices/null_backend.h
         devices/include/tw/devices/capture_backend.h
         devices/include/tw/devices/audio_input.h
+        devices/include/tw/devices/audio_ring.h
         devices/include/tw/devices/midi_output.h
         devices/include/tw/devices/midi_input.h
         devices/include/tw/devices/midi_out_scheduler.h
@@ -488,6 +491,11 @@ tw_module(devices
         devices/src/null_backend.cc
         devices/src/capture_backend.cc
         devices/src/audio_input.cc
+        devices/src/audio_ring.cc
+        devices/src/file_input.cc
+        devices/src/file_input.h
+        devices/src/precise_waiter.cc
+        devices/src/precise_waiter.h
         devices/src/null_input.cc
         devices/src/null_input.h
         devices/src/midi_factory.cc
@@ -515,16 +523,37 @@ tw_module(sinks
     DEPS tw_core
 )
 
-# --- E12 playback: speaker, engine pump --------------------------------------
+# --- E12 playback: speaker, engine pump, THE LIVE LANE ------------------------
+#
+# playback -> plugins, mix since proposal 21 L1a. The LiveGraphPump renders a
+# live-owned track BLOCK-WISE, outside the frozen-page machinery, and the three
+# pieces of the graph that survive block-wise are exactly
+# twPluginSlotProcessor::render (tw/plugins), twGainStage::applyGain and
+# twRewire's channel map (tw/mix). Neither module depends on playback, so the
+# DAG stays acyclic; tw/events comes in transitively through both.
 tw_module(playback
     SOURCES
         playback/include/tw/playback/twspeaker.h
         playback/include/tw/playback/audio_engine.h
         playback/include/tw/playback/playback_context.h
+        playback/include/tw/playback/twliveclock.h
+        playback/include/tw/playback/twlivering.h
+        playback/include/tw/playback/twliveplan.h
+        playback/include/tw/playback/twlivepump.h
         playback/src/twspeaker.cc
         playback/src/audio_engine.cc
+        playback/src/twlivering.cc
+        playback/src/twliveplan.cc
+        playback/src/twlivepump.cc
     DEPS tw_core tw_pages tw_graph tw_devices tw_sources tw_schedule
+         tw_plugins tw_mix
 )
+if(WIN32)
+    # MMCSS ("Pro Audio") for the live pump thread, exactly as the WASAPI render
+    # thread does it. avrt is already a tw_devices dependency; the pump lives
+    # here, so the link line has to say so here too.
+    target_link_libraries(tw_playback PRIVATE avrt)
+endif()
 
 # --- E10 render: the offline rendering engine ---------------------------------
 tw_module(render
@@ -537,7 +566,9 @@ tw_module(render
 # --- E11 record: capture from input devices -----------------------------------
 tw_module(record
     SOURCES
+        record/include/tw/record/capture_bridge.h
         record/include/tw/record/recording_session.h
+        record/src/capture_bridge.cc
         record/src/recording_session.cc
     DEPS tw_core tw_devices tw_sinks tw_sources
 )
@@ -966,6 +997,30 @@ target_compile_definitions(events_test PRIVATE
 # -j4 run's own load is what it reports.
 tw_module_test(devices_midi_test            devices/tests/midi_test.cc                  tw_devices)
 set_tests_properties(devices_midi_test PROPERTIES RUN_SERIAL TRUE)
+# The INPUT device layer (proposal 21 L0): the SPSC ring under a producer three
+# times the consumer's block (the WASAPI tail-drop regression), FileAudioInput's
+# paced replay of a position-coded fixture it generates itself, the capture MIDI
+# input's injection order, and the backend selection. Like devices_midi_test it
+# measures WALL-CLOCK pacing, so it needs the box to itself. It reaches
+# file_input.h, which is PRIVATE to the module (src/), the same way
+# plugins_scan_test reaches the scan cache's private header.
+tw_module_test(devices_input_test           devices/tests/input_test.cc                 tw_devices)
+target_include_directories(devices_input_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/devices/src)
+set_tests_properties(devices_input_test PROPERTIES RUN_SERIAL TRUE)
+# The CAPTURE BRIDGE gate (proposal 21 L3a): twGrowingCaptureSource as a data
+# structure, then the whole fan-out end to end over a paced FileAudioInput —
+# pages == WAV == the input file SAMPLE-EXACT at 2 and 6 channels, a
+# deliberately stalled WAV writer that must not cost a single ring overrun, the
+# live-lane pull, the per-sink channel mask, and RecordingSession as a bridge
+# consumer. It drives a REAL-TIME PACED device, so like devices_input_test it
+# measures the machine as well as the code: RUN_SERIAL. It reaches file_input.h
+# (PRIVATE to tw_devices) the same way devices_input_test does, and writes its
+# fixtures into the build tree rather than the source tree.
+tw_module_test(record_bridge_test           record/tests/record_bridge_test.cc          tw_record)
+target_include_directories(record_bridge_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/devices/src)
+set_tests_properties(record_bridge_test PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
+    ENVIRONMENT "TW_RECORD_TEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/record-test")
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/record-test)
 # Proposal 36 B2: components declare their width (getOutputChannels), the wide
 # render path exists (renderPageWide), the plug channel rule and the direct
 # bound-page read. It lives under schedule/tests because AC B2.1 requires the
@@ -983,5 +1038,15 @@ tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc     
 # unchanged): the position-coded case constructs a CapturePagePool and a
 # CaptureRevalidator and hands the latter to AudioEngine::setScheduler, which is
 # the first time the demand scheduler is exercised from a unit test at all.
-tw_module_test(playback_test                playback/tests/playback_test.cc             tw_playback tw_schedule tw_pages)
+tw_module_test(playback_test                playback/tests/playback_test.cc             tw_playback tw_schedule tw_pages tw_plugins tw_mix)
+# The proposal 21 L1a SYNTHETIC-PLAN HARNESS runs a live plan over the REAL
+# `tw.test.clap.gain` fixture and compares it, sample for sample, against the
+# frozen render of the same material through the same insert. Without the CLAP
+# submodule the harness compiles out (the test #ifdefs on the path) and the rest
+# of playback_test is unaffected.
+if(TARGET twtestclap)
+    add_dependencies(playback_test twtestclap)
+    target_compile_definitions(playback_test PRIVATE
+        TW_TESTCLAP_PATH="$<TARGET_FILE:twtestclap>")
+endif()
 tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)

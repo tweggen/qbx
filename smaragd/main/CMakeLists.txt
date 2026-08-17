@@ -145,9 +145,13 @@ set(APP_OBJECTS_FILES
     # --- app/objects/wave
     objects/wave/include/app/objects/wave/splainwave.h
     objects/wave/include/app/objects/wave/splainwaverndrinline.h
+    objects/wave/include/app/objects/wave/srecordingcontent.h
+    objects/wave/include/app/objects/wave/srecordingrndrinline.h
     objects/wave/include/app/objects/wave/swaveformdraw.h
     objects/wave/src/splainwave.cpp
     objects/wave/src/splainwaverndrinline.cpp
+    objects/wave/src/srecordingcontent.cpp
+    objects/wave/src/srecordingrndrinline.cpp
     objects/wave/src/swaveformdraw.cpp
     # --- app/objects/midi
     objects/midi/include/app/objects/midi/smidiactionsupport.h
@@ -177,6 +181,7 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/sreorderpluginaction.h
     objects/track/include/app/objects/track/ssetpluginbypassaction.h
     objects/track/include/app/objects/track/ssetpluginparamaction.h
+    objects/track/include/app/objects/track/sliveinputactions.h
     objects/track/include/app/objects/track/ssettrackmidiroutingaction.h
     objects/track/include/app/objects/track/ssettrackmuteaction.h
     objects/track/include/app/objects/track/ssettracknameaction.h
@@ -199,6 +204,7 @@ set(APP_OBJECTS_FILES
     objects/track/src/ssetpluginbypassaction.cpp
     objects/track/src/ssetpluginparamaction.cpp
     objects/track/include/app/objects/track/ssettrackmidioutputaction.h
+    objects/track/src/sliveinputactions.cpp
     objects/track/src/ssettrackmidioutputaction.cpp
     objects/track/src/ssettrackmidiroutingaction.cpp
     objects/track/src/ssettrackmuteaction.cpp
@@ -294,11 +300,20 @@ set(APP_UI_FILES
     # --- app/shell
     shell/include/app/shell/sapplication.h
     shell/include/app/shell/sautomationrecorder.h
+    shell/include/app/shell/saudiorecorder.h
+    shell/include/app/shell/srecordplacement.h
+    shell/include/app/shell/sliveinputsource.h
+    shell/include/app/shell/slivemonitor.h
+    shell/include/app/shell/sliveplanbuilder.h
     shell/include/app/shell/smidioutpump.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssettings.h
     shell/src/sautomationrecorder.cpp
     shell/src/sapplication.cpp
+    shell/src/saudiorecorder.cpp
+    shell/src/sliveinputsource.cpp
+    shell/src/slivemonitor.cpp
+    shell/src/sliveplanbuilder.cpp
     shell/src/smidioutpump.cpp
     shell/src/smainwindow.cpp
     shell/src/ssettings.cpp
@@ -318,6 +333,8 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertclipwindowaction.h
     testkit/include/app/testkit/sassertfileidenticalaction.h
     testkit/include/app/testkit/sassertlogaction.h
+    testkit/include/app/testkit/slivetestactions.h
+    testkit/include/app/testkit/srecordtestactions.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
     testkit/include/app/testkit/seventuitestactions.h
@@ -350,6 +367,8 @@ set(APP_UI_FILES
     testkit/src/sassertclipwindowaction.cpp
     testkit/src/sassertfileidenticalaction.cpp
     testkit/src/sassertlogaction.cpp
+    testkit/src/slivetestactions.cpp
+    testkit/src/srecordtestactions.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/seventuitestactions.cpp
@@ -360,6 +379,7 @@ set(APP_UI_FILES
     testkit/src/smetertestactions.cpp
     testkit/include/app/testkit/smidiouttestactions.h
     testkit/src/smidiouttestactions.cpp
+    testkit/src/smidiintestactions.cpp
     testkit/src/smiditestactions.cpp
     testkit/src/spluginuitestactions.cpp
     testkit/src/sreportpagememoryaction.cpp

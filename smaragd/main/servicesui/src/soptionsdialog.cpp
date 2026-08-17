@@ -157,6 +157,21 @@ QWidget *SOptionsDialog::buildAudioPage()
     inputLatencyLabel_ = new QLabel;
     form->addRow( "Input latency:", inputLatencyLabel_ );
 
+    // THE LAST TERM OF THE PLACEMENT CONVERSION (proposal 21 L3b, design D6).
+    // Per INPUT DEVICE, and stored under the device's NAME, so it survives an
+    // id change the way midiPortId() does. Same range and same sign as the
+    // MIDI-out offset on the MIDI page: POSITIVE = the driver under-reports,
+    // compensate more, place the recorded audio EARLIER. It is the number a
+    // "record a click, look at where it landed, type the difference"
+    // calibration produces.
+    recordingOffsetMs_ = new QSpinBox;
+    recordingOffsetMs_->setRange( -500, 500 );
+    recordingOffsetMs_->setSuffix( " ms" );
+    form->addRow( "Recording offset (+ = earlier):", recordingOffsetMs_ );
+    form->addRow( new QLabel(
+        "Applies to the selected input device. The driver's reported latencies "
+        "are compensated automatically; this corrects what it misreports." ) );
+
     bufferSizeCombo_ = new QComboBox;
     form->addRow( "Buffer size:", bufferSizeCombo_ );
     form->addRow( new QLabel( "Smaller buffer = lower latency but higher CPU load. "
@@ -368,28 +383,36 @@ void SOptionsDialog::loadAudioPage()
     int i = audioDevice_->findData( cur );
     if( i >= 0 ) audioDevice_->setCurrentIndex( i );
 
-    // Load input devices. The backend has been able to enumerate all along —
-    // AudioInput::listDevices() is part of the interface and WASAPIInput
-    // implements it — but nothing ever called it, so this combo offered
-    // "System default" and nothing else while the OUTPUT combo named real
-    // devices. That asymmetry is not cosmetic: with only "default" available
-    // the input cannot be pinned to the same interface the output is on, and
-    // the two streams can land on different endpoints (and different clocks).
+    // Load input devices. REAL since proposal 21 L1b / main PR #54: the same
+    // createAudioInput() the live lane uses, so the list is the backend the env
+    // selected (a headless run sees the file or null backend, a desktop one
+    // sees WASAPI / ALSA / CoreAudio). The label carries the endpoint's
+    // shared-mode MIX RATE and channel count (main PR #55): a rate mismatch
+    // between the input and the output is then visible AT THE POINT OF CHOICE.
+    // The probe device is opened and closed here and nowhere else; a failure
+    // to enumerate leaves just "System default", which is what it did before.
     audioInputDevice_->clear();
     audioInputDevice_->addItem( "System default", "default" );
     {
-        std::unique_ptr<audio::AudioInput> in = audio::createAudioInput();
-        const std::vector<audio::AudioInputDeviceInfo> inDevs =
-            in ? in->listDevices() : std::vector<audio::AudioInputDeviceInfo>();
-        for( const audio::AudioInputDeviceInfo &d : inDevs ) {
-            audioInputDevice_->addItem( sDeviceLabel( d.name, d.sampleRate ),
-                                        QString::fromStdString( d.id ) );
+        std::unique_ptr<audio::AudioInput> probe = audio::createAudioInput();
+        if( probe ) {
+            for( const audio::AudioInputDeviceInfo &d : probe->listDevices() ) {
+                const QString id   = QString::fromStdString( d.id );
+                if( id.isEmpty() || id == QStringLiteral( "default" ) ) continue;
+                QString label = sDeviceLabel( d.name, d.sampleRate );
+                if( d.channels > 0 )
+                    label = QStringLiteral( "%1 (%2 ch)" ).arg( label ).arg( d.channels );
+                audioInputDevice_->addItem( label, id );
+            }
         }
     }
     QString curIn = SSettings::instance().audioInputDeviceId();
     if( curIn.isEmpty() ) curIn = "default";
     int j = audioInputDevice_->findData( curIn );
     if( j >= 0 ) audioInputDevice_->setCurrentIndex( j );
+    if( recordingOffsetMs_ )
+        recordingOffsetMs_->setValue(
+            (int) SSettings::instance().recordingOffsetMs( curIn ) );
 
     // Load latencies (cached from startup) and buffer size options
     if( spk ) {
@@ -464,8 +487,20 @@ void SOptionsDialog::applyAudioPage()
 
     // Save input device
     QString inId = audioInputDevice_->currentData().toString();
+    if( !inId.isEmpty() && recordingOffsetMs_ ) {
+        // Written against the device the combo NOW names, so changing both in
+        // one visit stores the offset for the device it was typed for.
+        SSettings::instance().setRecordingOffsetMs(
+            inId, (double) recordingOffsetMs_->value() );
+    }
     if( !inId.isEmpty() ) {
+        const bool moved = SSettings::instance().audioInputDeviceId() != inId;
         SSettings::instance().setAudioInputDeviceId( inId );
+        // A DEVICE CHANGE is a live-plan rebuild trigger (proposal 21 design
+        // section 3): a track whose trackInput names no device follows this
+        // setting, and the monitor has to re-open the input for it. Nothing
+        // else in the app is watching this key.
+        if( moved ) SApplication::app().liveLanesChanged();
     }
 
     // Apply buffer size change (if supported)

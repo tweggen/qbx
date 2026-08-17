@@ -12235,3 +12235,838 @@ rebuilt — `instrument_sine_render` + `instrument_render_determinism{,_xproc}` 
 racing to rewrite a `plugincache.json` invalidated by the new mtime/size; not
 reproduced in four subsequent `-j4` sweeps of the same subset or in the full
 run, and unrelated to the case content.
+
+## 2026-08-17 — Proposal 21 L0: input device layer + seams
+
+The first phase of proposal 21 (real-time data flows): the INPUT side of the
+device layer grows a thread and a ring, the scheduler learns to retire a
+component's nodes, the RT freeze guard becomes a per-thread render POLICY, and
+the testkit gets a hand on the MIDI input port. Nothing in the audio path
+changed — no live lane exists yet, and no render, playback or golden moved.
+
+**1. Every capture device now has a capture THREAD and an SPSC RING; `read()` is
+a POP.** `tw/devices/audio_ring.h` (`AudioRing`) is the new public class: frame
+granular, lock-free, allocation-free, with `framesPushed / framesPopped /
+overrunFrames / underrunFrames` exposed through `AudioInput::stats()`.
+
+This fixes design §1 F7, which is a REAL data loss, not a tidiness point:
+`WASAPIInput::read()` copied `min(packet, caller's buffer)` and then released
+the WHOLE packet, so every frame past the caller's buffer was dropped on the
+floor and the recorded timeline silently compressed. The structure is what fixes
+it — separating "what the device gave us" from "what the caller asked for" is
+the only shape in which a tail cannot be lost — so the gate is on the ring: a
+producer writing a packet THREE TIMES the consumer's pop size must lose nothing.
+
+- **WASAPI** re-initialises with `AUDCLNT_STREAMFLAGS_EVENTCALLBACK` +
+  `SetEventHandle` and drains every packet whole on its own thread. That thread
+  takes NO lock — `stopCapture()` joins it while holding the object's mutex, so
+  a capture thread that wanted that mutex would deadlock the stop — and the
+  client handles are created before it starts and released after it is joined.
+  A SILENT packet is pushed as zeros, because it still occupies time.
+- **ALSA** gets the same shape around `snd_pcm_wait` (and, incidentally, the
+  S16 fallback path now converts instead of writing raw shorts into a float
+  buffer). **CoreAudio** needed no thread — the AVAudioEngine tap already IS
+  one — only the ring in place of its hand-rolled circular buffer, plus a real
+  planar-to-interleaved conversion: the old tap read `frameCount * channels`
+  samples out of PLANE 0, i.e. past the end of the plane for any stereo device.
+  Its `read()` also stopped waiting up to 100 ms on a condition variable, which
+  had made a documented non-blocking poll block. **Both are UNVERIFIED** —
+  written and reviewed on Windows, compiled and run nowhere in this gate.
+- `RecordingSession` is untouched and still works: its 1 ms poll now pops the
+  ring instead of the device.
+
+**2. `SMARAGD_AUDIO_INPUT_BACKEND = file:<wav> | null | default`**, read per call
+in `createAudioInput()`, ahead of the platform pick — the input twin of
+`SMARAGD_AUDIO_BACKEND`, with `AudioInput::backendName()` added so the selection
+is assertable without opening anything. `FileAudioInput` (private to the module)
+is a REAL device: its own capture thread and ring, 1024-frame blocks **paced on
+`MidiOutScheduler::hostNowNs()`** through the same kind of high-resolution
+waitable timer the MIDI sender uses (`PreciseWaiter`, that wait extracted;
+the scheduler keeps its own copy, being on the MIDI timing gate), a configurable
+reported `inputLatencyFrames`, and loop / stop-at-end. Block i is due at
+`t0 + (i+1)*period` — a device cannot hand over audio it has not recorded yet —
+and the anchor is taken in `startCapture()`, not inside the thread, so a caller
+can read it the instant the call returns. Its WAV reader is hand-rolled on
+purpose: libsndfile lives behind `tw_sources`/`tw_sinks`, and reaching for it
+here would make the platform I/O layer depend on the codec stack.
+
+`--test-case` defaults the variable to `null` (main.cpp, next to its two
+siblings, unless already set). **This changes nothing about the suite as it
+stands** — no case records audio, so nothing opened an input device in the first
+place — and it is stated that way in `main/testkit/CONTRACT.md`.
+
+**3. `midi-in-event` / `midi-in-replay`** over the EXISTING
+`CaptureMidiInput::inject()`. `atFrame` / `startFrame` are valid only while the
+transport is PLAYING and are REJECTED, not ignored, when it is not: a project
+frame is a position on a moving playhead (design D2). They are resolved by
+WAITING for the locator, because the engine's delivered-frame clock is L1a's
+deliverable; accuracy is therefore the locator's publication granularity, and
+the verbs say so. A replay is real-time paced on the same steady clock the audio
+capture backend stamps its blocks with, with ABSOLUTE deadlines so a late
+message does not drag the ones behind it; a `.mid` is timed by its OWN ppq and
+tempo metas (a performance file describes a performance), and its note-offs are
+synthesised from each note's `duration`, because no table holds one. Nothing
+consumes a `MidiInput` yet, so the verbs gate their own behaviour and nothing
+sounding.
+
+**4. `CaptureRevalidator::retireComponentNodes(...)`**, design §5 exactly:
+queued/waiting nodes of the named components are DROPPED and never execute,
+their demands complete as NOT PRODUCED (a count on the handle; a consumer treats
+it like a miss); a RUNNING one is WAITED FOR, bounded by one page render; the
+dedup entries go, so a later demand PLANS FRESH; other components are untouched;
+and a dependent of a dropped node loses the edge, runs, and sees a MISS.
+`pause()` is not a stand-in — it drains import-time analysis and stops the graph
+everywhere.
+
+Two mechanical points make that a promise rather than a likelihood. A worker now
+CLAIMS a node (`state = Running`) under the same `queueLock_` that dequeued it:
+claiming it later, inside `processGraphNode`, left a window in which the node was
+in no queue and in no state a retirement could see, and it would then have
+executed AFTER the call returned — the one thing the call promises cannot happen.
+And the retirement holds `expansionMutex_`, so no expansion can add a node for a
+retiring component while it walks. **`std::span` is spelled as a pointer + count
+with a `vector` overload**: the repo is C++17.
+
+**5. `twRtThreadGuard` is now a per-thread `RenderPolicy {Any, Never}`** with two
+markers behind ONE check in `freezePage`. `markRtThread()` is unchanged in
+behaviour (one-shot report + debug assert). `markLiveThread()` is silence, a
+process-wide `liveThreadRefusals` counter and exactly ONE log line, and NO
+assert — a preview or an asset capture arriving at a live-owned component is
+recoverable by design, and killing the process for it would be wrong.
+
+**6. `SSettings`**: `audio/recordingOffsetMs/<deviceName>` and
+`midi/inputOffsetMs/<port>`, readers and writers only, no UI. Both signed,
+POSITIVE = earlier, matching `midiOutOffsetMs`.
+
+CONTRACT deltas: `tw/devices` (public `audio_ring.h`; invariants 19-24: the
+thread + ring rule and what it replaced, the overrun/underrun policy, one
+producer one consumer, the env selection, FileAudioInput's real-time pacing,
+PreciseWaiter), `tw/schedule` (invariant 10: retirement semantics and the two
+mechanical points), `tw/graph` (the render policy and its two consequences),
+`main/testkit` (3a: the `null` input default changes nothing today),
+`docs/contracts/THREADING.md` (the input capture thread in the inventory, the
+seam paragraph, the policy note) and `docs/ACTIONS.md` (the two verbs).
+
+**Gates.** `./build.sh` clean; `check_layering.py` and `check_logging.py` clean
+(devices still depends on tw/core alone). **`ctest -j4`: 174/174 passed on the
+last two full runs (60.0 s / 58.8 s), 177 registered** (176 + the new
+`devices_input_test`), 3 `au_*` disabled off macOS. The first of three runs was
+173/174. The single first-run failure was
+`qxa.instrument_render_determinism`, which passed alone immediately afterwards
+and in the second full run: it failed with "slot 0 of the track is not an
+instrument" while its two renders compared BYTE-IDENTICAL, i.e. the plugin was
+missing, not the determinism — the same `plugincache.json` race four concurrent
+processes hit on the first `-j4` run after a rebuild, recorded verbatim in the
+2026-08-16 entry. Not chased further; recorded.
+
+New unit gates:
+- `devices_input_test` (RUN_SERIAL): the ring under a 3x packet (the tail-drop
+  regression), the overrun/underrun policy, `FileAudioInput` over a 2 s
+  position-coded WAV it generates itself — 96 blocks, every frame exactly once,
+  in order, SAMPLE-EXACT against the file, ring counters agreeing and zero
+  overruns, and the pacing measured TWICE: **max |pushed − due| = 0.68-0.91 ms
+  over six runs against a 2 ms bound**, and **max |consumer saw − due| =
+  1.1-1.9 ms against a 15 ms one** — the capture MIDI input's injection order
+  and stamps, and the backend selection including `null`.
+
+  The two numbers are separate because two different things are being asked
+  about, and the first version of the test conflated them: it stamped only what
+  the polling consumer saw and asserted 2 ms on that, which failed once in five
+  runs at 3.4 ms taken straight after a full ctest sweep — the reader thread
+  descheduled, not the device. `FileAudioInput` now keeps a per-block PUSH-TIME
+  log (the file backend's analogue of `CaptureBackend`'s block log, devices
+  inv. 9), the 2 ms bound is on THAT — the property this module actually
+  promises — and the consumer's view is reported and loosely bounded. The
+  capture thread also took MMCSS "Pro Audio", like the WASAPI render thread,
+  which roughly halved the device-side jitter.
+- `schedule_test` + 5 blocks: queued nodes dropped and never executed, the
+  demand completing as not-produced, a re-demand PLANNING FRESH (counted through
+  an overridden `planPage`), a running node waited for (measured: the call
+  blocked ≥ 100 ms for a gated render), another component untouched, a dependent
+  seeing a miss, and **100 randomized interleavings** over worker counts 1-4 with
+  a deterministic xorshift delay — no node executed after the call returned, no
+  demand hung.
+- `graph_test` + 1 block: a `markLiveThread` thread gets an empty page from
+  every `freezePage`, the component never renders for it, refusals == 3 with
+  exactly ONE log line, the calling thread's policy untouched, and the RT
+  marker's own semantics unchanged.
+- `action_roundtrip_test`: 134 verbs (132 + the two new ones).
+
+**NOT gated:** WASAPI capture against real hardware (nothing headless opens an
+input device, so the event-driven client, the packet drain and the join were
+never run against a microphone); the ALSA and CoreAudio capture paths at all;
+the `--test-case` `null` default end to end (no case records audio — the factory
+semantics are gated, the one `qputenv` line is not); `midi-in-*` reaching a
+consumer (there is none until L1a/L3a); the pacing on a loaded box (the numbers
+above are an idle machine, and like `devices_midi_test` this measures the
+machine as much as the code).
+
+**Goldens are byte-identical, and by construction rather than by re-freezing:**
+`qxa.mc_golden_mono` and `qxa.mc_golden_stereo` are green in every run above,
+and no render path was touched. The only edit inside `freezePage` is the guard's condition
+(`onRtThread()` → `!mayRender()`, identical for every unmarked thread), and the
+scheduler edit moves one state assignment earlier under a lock it was already
+taking.
+
+## 2026-08-17 — Proposal 21 L1a: live lane engine
+
+The ENGINE half of the live lane (design D1/D2/D5, orchestration brief L1a):
+the pump, the position-stamped epoch-gated ring, the live clock and transport
+model, the speaker's two-lane lifecycle, the processor's live-owned guard and
+second event source, and a synthetic-plan harness. **Nothing in the app calls
+any of it yet** — L1b wires arm/disarm — so every existing path is untouched
+and the goldens are byte-identical by construction.
+
+**New in `tw/playback`** (which now depends on `tw/plugins` and `tw/mix`; both
+are acyclic against it, and the pump needs exactly the three pieces of the graph
+that survive block-wise):
+
+- `twliveclock.h` — `twEngineClock`, a SEQLOCK stamped by the render callback
+  beside `publishPosition()` with `{seq, deliveredFrame, hostNs}`.
+  `deliveredFrame = published − bufferFramesProject`, i.e. `SMidiOutPump`'s
+  publish-lag correction applied ONCE so every consumer shares one definition.
+  Engine-owned on purpose: `PlaybackContext` is the app-implemented services
+  interface (UI-thread `locatorPosition()`) and `SApplication` is unreachable
+  from `tw/`. Readers retry a BOUNDED four times, then report "no reading".
+- `twlivering.h/.cc` — `twLiveMixRing` (SPSC, 4 deep, one device block per
+  entry, a full ring DROPS and counts) plus the RT sum as a PURE FUNCTION,
+  `twlive::mixRing` / `twlive::gateEntry`, extracted for the same reason
+  `twmonitor::pullChannels` is: the gate is the part most able to be got subtly
+  wrong and it has to be assertable without a device, a pump or a graph.
+- `twliveplan.h/.cc` — `twLivePlan` (immutable snapshot: ordered tracks →
+  processors, a `twGainStage::Envelope`, a channel map, frozen-input roots, live
+  children, scratch sized at `finalize()`), `twLiveInputSource` (the seam L1b
+  fills with a device ring), and `twlive::checkMasterShape()` — the D3
+  precondition, over the master's two components.
+- `twlivepump.h/.cc` — `LiveGraphPump`: `markLiveThread()`, MMCSS "Pro Audio",
+  a plan swapped by generation and adopted at the top of a block (which is also
+  where the old one dies), allocation-free steady state, paced by the RT's own
+  drain rather than by a timer. `renderOneBlock()` is public and SYNCHRONOUS so
+  the harness can drive it.
+
+**`twSpeaker` became an explicit three-axis machine** — device {CLOSED, OPEN} ×
+frozen {IDLE, BUFFERING, PLAYING} × live {OFF, ON}, `out = (frozen==PLAYING ?
+root : 0) + (live==ON ? ring : 0)`. `openLive()` opens AND starts the backend
+immediately (no readahead to prime); `startOutput()` ATTACHES to an already-open
+device (the callback is registered once, by `ensureDeviceOpen()`, and a new
+engine is minted under it); `stopOutput()` stops the LANE only while live is ON;
+`closeLive()` closes iff the frozen lane is idle. The engine handle is now read
+and written through `std::atomic_load/store` — a plain assignment was safe only
+while the device could not be running during a swap. The callback's two
+per-block vector allocations (recorded debt) are gone: the ring sum needs the
+planar buffers anyway, so they are members sized at device open.
+`AudioEngine::servedContentEpoch()` publishes the epoch of the page the RT is
+already holding, so the gate is a pure function of it rather than a second
+lookup. `CaptureBackend` clears its recording at DEVICE start rather than at
+play start (testkit rule 1 amended; with no live lane the device still opens at
+play, so every existing `dump-playback-capture` case reads the same recording).
+
+**`twPluginSlotProcessor` gained three flag-gated things**, all inert unless
+`setLiveOwned(true)`: the OWNERSHIP GUARD (a `render()` from a thread that is not
+the pump answers silence and bumps `liveOwnedRefusals()`, one log per slot, never
+an assert, and never touching continuity — that would make the pump's next block
+a spurious reposition); a SECOND EVENT SOURCE `liveEvents_` merged with note ids
+namespaced to 15; and `twLiveTransport {playing, feedEnabled, holdAutomationAt}`
+consulted per chunk. `twProcessContext.playing` is truthful for the first caller
+that can be stopped. **`feedEnabled=false` also skips the PRE-ROLL** — it chases
+and replays the same feed, so running it with the feed masked would put the
+sequenced material into the DSP by the back door, which is exactly what D2's mask
+exists to prevent.
+
+**Gates (all green).**
+- `./build.sh`, `check_layering.py` (the DAG grew `playback → {plugins, mix}`,
+  declared in both the checker and `tw303a/CMakeLists.txt`), `check_logging.py`.
+- **AC1** — `playback_test` walks CLOSED→OPEN(live) → PLAY attaches → STOP keeps
+  the device → disarm closes, and separately PLAY-without-live opens and closes
+  exactly as before. "No re-open" is measured, not asserted by inspection: the
+  capture backend clears at device open, so an unchanged recording across Play
+  IS the proof. Frame 0 = device start is gated deterministically (the second
+  `startOutput()` returns before the backend restarts, so the recording reads 0).
+- **AC2** — the synthetic-plan harness: 32 blocks of 1024 frames through
+  `tw.test.clap.gain` at 0.5 over a position-encoded input equal the frozen
+  render of the same material through the same insert **sample for sample, 0
+  differences in 65 536 comparisons** (32768 frames × 2 channels). Linear and
+  partition-invariant is the whole reason the claim is makeable — the pump
+  partitions at 1024 and the freeze path at 4096. A seek mid-run produces
+  EXACTLY ONE reposition, the next entry is stamped at the target, and the
+  output re-aligns to the material there. STOPPED: with `feedEnabled=false` the
+  block is EXACTLY silent (peak < 1e-6) while an injected live event sounds
+  (peak > 0.1), and the same feed sounds when `feedEnabled=true` — so the mask
+  has teeth; an automation curve present but held reads constant to 1e-6 across
+  the block at `valueAt(holdAutomationAt) = 0.5`.
+- **AC3** — the ring gate: position mismatch ⇒ silence + counter; arm
+  `rootEpoch < flipEpoch` ⇒ not summed, `>=` ⇒ summed; disarm
+  `rootEpoch < flipEpoch'` ⇒ STILL summed, and it stops exactly when the
+  re-summed page lands; stopped (no root page) ⇒ out = ring; the crossfade in
+  both directions; the SPSC ring's FIFO order, drop-on-full and `dropBefore`.
+  The master-shape precondition flips as designed: unity sum + identity map ⇒
+  LinearSplit; a non-unity input level, a swapped channel map, a width
+  disagreement or a missing component ⇒ Closure.
+- **AC4** — `liveOwnedRefusals`: a `render(positional)` from an unmarked thread
+  on a live-owned processor returns silence and counts exactly once; after
+  `setLiveOwned(false)` the same call renders normally and nothing further is
+  counted.
+- **AC5** — `qxa.mc_golden_mono` / `qxa.mc_golden_stereo` green and
+  `git status tests/goldens/` clean; every playback / instrument / automation /
+  midi_out case green.
+- `ctest --test-dir smaragd/build -j4`: **174/174 passed, 177 registered, 3 Not
+  Run (Disabled — the macOS-only `au_*` trio)**, 62.5 s.
+- Sweeps: `playback_test` × 50 at `SMARAGD_REVAL_WORKERS` {1,4,8,16} and
+  `qxa.instrument_render_determinism` × 50 at the same four — numbers in the PR.
+
+**NOT gated, and say so:** the real-device behaviour of the two-lane machine
+(WASAPI — nothing headless opens an output device, so `openLive` → `startOutput`
+attach has only been exercised against `CaptureBackend`); any latency number for
+the live path (proposal 35 / ASIO is the prerequisite, and a bound tight enough
+to separate the behaviours would flake); MMCSS actually being granted; anything
+app-side — L1b wires arm/disarm and **nothing in the app calls `openLive()`
+yet**, so the pump does not exist at runtime and the goldens hold by
+construction rather than by re-freezing; the folder-closure and frozen-input
+paths of the pump (`liveChildren` / `frozenInputs` are built and finalize-checked
+but have no live producer until L1b); the disarm crossfade end to end (the gate
+is on the pure function, not on a running lane).
+
+**One pre-existing hazard found and NOT fixed here** (it is `tw/graph`, outside
+this phase's module set): `tw303aEnvironment::bufferSize` has no initialiser and
+no default — the APP sets it at startup, so a unit test that never does reads
+whatever was on the stack, and `twMixer`'s constructor `calloc`s from it and
+throws. `playback_test` now calls `env.setBufferSize(4096)` before constructing
+one, with the reason stated at the call site.
+
+**Two unreproduced flakes seen under a FULL `-j4` run, named because the rule
+says a case that fails once and passes on re-run is not a pass.** Five full
+`-j4` runs were made; three were 174/174 and two each lost ONE case, a
+different one each time:
+
+| Case | Shape | Pinned |
+|---|---|---|
+| `qxa.instrument_render_determinism` + its `_xproc` driver (both, in one run) | render-vs-render byte compare | `repeat_test.sh` 50/50 at workers {1,4,8,16}; the pair together under `ctest -R … -j4` 20/20 |
+| `qxa.instrument_locate_continuity` | `assert-instrument-slot FAILED: slot 0 … is not an instrument (or the chain is empty)`, then both RMS assertions read exactly 0 | `repeat_test.sh` 25/25 at workers 4 |
+
+The second one's first line is the diagnosis and it is NOT a DSP or a
+determinism failure: the slot had NO PLUGIN, i.e. the CLAP module did not
+resolve in that process, so the instrument rendered silence and every later
+assertion followed from it. That points at the plugin registry / module load
+under concurrent load (four `smaragd.exe` processes each scanning and
+`LoadLibrary`-ing the same `twtestclap.clap`), not at anything this phase
+touched — no code path in L1a runs unless something calls `openLive()`, and
+nothing does yet. It left no sticky cache record: the next runs were green.
+Root cause is NOT established; both are recorded as open.
+
+A full SERIAL run was made as the cleaner signal: **174/174, 164.8 s.**
+
+### 2026-08-17 — L1a review fix: stream consumption / clock-paced pump / rate scoping
+
+Orchestrator review of `feat/21-l1a-live-lane-engine` accepted the processor,
+the plan, the speaker machine, the precondition helper and the AC1–AC5
+evidence, and found ONE protocol defect plus a scoping gap. Neither is a design
+change: D2 already said the entries are position-stamped and F6 already said
+the device block is variable — the implementation had read "startPos matches
+the frame being delivered" as BLOCK EQUALITY.
+
+**Fix 1 — the ring is consumed as a STREAM by frame range.** Two facts broke the
+equality test: (a) WASAPI's callback block is VARIABLE (`bufferFrames − padding`
+per call), so the RT's grid is irregular by construction and a fixed-block ring
+can never align — a permanently silent live lane with every entry counted a
+mismatch; (b) even at a fixed block, the pump filled the ring to depth 4 while
+the drift tolerance was 2 blocks, so after the first fill the next stamp read as
+a −3-block jump ⇒ a spurious reposition, `forgetContinuity` and a burst of
+duplicated blocks on EVERY start. The AC2 harness stamped the clock in lockstep
+with each pump block, which is exactly why neither surfaced.
+
+The consumer now holds a CURSOR into the head entry (`twLiveMixReader`, a member
+of `twSpeaker` because it must live across callbacks) and `twlive::mixStream`
+consumes [P, P+n): entries wholly behind P are dropped and counted; an entry
+starting after the want position is the FUTURE and is KEPT (silence for the gap,
+`notYet`) because popping it would throw away audio the next callback needs;
+overlaps are summed from the entry's own offset and popped only when exhausted.
+`frames` may differ from `framesPerEntry` in BOTH directions. `mixRing` survives
+as the one-entry primitive with the strict position claim. `dropBefore` is gone —
+the drop-past is the reader's.
+
+**A second defect the fix exposed, and fixed: the RUN ID.** "Keep the future" is
+right for a pump running legitimately ahead and catastrophic across a
+REPOSITION: the queued entries describe an abandoned timeline arbitrarily far
+from where the RT now is, so the consumer holds them forever, the ring fills,
+the producer can never write the new position and the lane stops dead. Measured
+on a seek back and on the STOPPED→PLAYING switch (T2 and T3 both failed on it
+before the fix). The producer stamps a monotone run id, bumps it in
+`applyReposition()` and publishes it; the consumer drops any entry not of the
+current run. The ring unblocks within one callback and the drop is counted.
+
+**Fix 2 — the pump paces on the clock.** `twEnginePosition` gains `nextFrame`
+(what the RT will pull next = the position the callback publishes);
+`deliveredFrame` is unchanged and still means what is being HEARD, for MIDI-out
+and metering. While PLAYING the pump keeps `[nextFrame, nextFrame + lead)`
+covered and idles otherwise; default lead is TWO blocks and
+`requiredRingDepth() = ceil(lead/block) + 2` (the pump warns once if the ring is
+shallower). The fixed 2-block tolerance is replaced by positional rules:
+`nextPos < nextFrame` ⇒ fell behind / seek forward; `nextPos > nextFrame + lead
++ block` ⇒ the clock moved back (seek back or loop wrap); a jump INSIDE the
+covered window needs none. `LiveGraphPump::requestReposition()` lets L1b force
+D2's "one explicit reposition" on a transport action without relying on drift
+detection — and it is READ, not consumed, until the reposition is actually
+applied, so a congested ring cannot swallow it. The reposition is applied BEFORE
+the ring slot is claimed for the same reason.
+
+**Fix 3 — rate scoping** (a gap in the design, recorded rather than
+re-litigated). The live lane stamps PROJECT frames and the RT sums them straight
+into a device buffer, so the two only line up while the rates are equal; the
+frozen lane has a resampler at this seam and the live lane has nowhere to put
+one (a resampler makes an entry's frame count fractional, and an entry must
+carry a position). `openLive()` now REFUSES a mismatch: −1, one log naming both
+rates, `liveRateRefusals()`, and the device closed again iff the frozen lane is
+not using it. Recorded as known debt in `playback/CONTRACT.md` inv. 18 with the
+resolution path (a device-frame-stamped ring, or opening at the project rate —
+ASIO, proposal 35).
+
+**Gates.** Every existing test kept and adapted to the new API without
+weakening: AC2's harness now paces on `nextFrame` with a one-block lead, and
+AC3's `dropBefore` assertion became the reader's drop-past through the path that
+is actually used. Four new blocks in `playback_test`:
+
+- **T1** the stream consumer over an irregular RT grid — the block sequence
+  `{480, 1056, 33, 2048, 1024, 7}` repeated 40 times, **24 606 frames,
+  sample-for-sample exact, 0 gaps, 0 mismatches**; a seek forward drops the
+  passed entries and reads the new position exactly; a seek back is silence +
+  `notYet` with NOTHING popped; the epoch gate flips MID-ENTRY across a partial
+  consumption (33 frames gated, the rest summed once the re-summed page lands).
+- **T2** the pump on a real thread against a pretend RT that consumes a variable
+  block every ~1 ms and stamps its own clock: over **500 blocks / 387 320
+  frames, 0 wrong frames, 0 silent, 0 repositions, max ring occupancy 5 =
+  ceil(lead/block)+1** with lead 4 blocks and depth 6. One seek forward, one
+  seek back and one `requestReposition()` are **exactly one reposition each**,
+  and continuity resumes after each. The reposition COUNTS are measured with the
+  RT standing still, deliberately: a seek makes the pump shed its run and
+  re-cover a whole lead, and a window spanning that refill measures the refill
+  rather than the seek (it cost 3 failures in 25 before the windows were
+  separated). Continuity is then asserted separately over a moving window, which
+  is the half a still window cannot make. Starvation is REPORTED and bounded
+  loosely (< 5 %) because it is the one genuinely timing-dependent number here.
+- **T3** end to end through the REAL render callback on the capture backend:
+  `openLive` with the transport STOPPED ⇒ the recording is the ramp,
+  **contiguous from frame 0 for 18 432 frames, no gap**, on both device
+  channels; then `startOutput()` attaches with no re-open and no hole, and after
+  the plan goes to PLAYING **18 908 of 22 528 frames carry BOTH lanes summed
+  (tone 0.25 + ramp ≥ 0.25), 0 holes**.
+- **T4** the rate refusal, both branches: a device WE opened is closed again on
+  refusal; a device the FROZEN LANE is using survives a refused arm untouched
+  and still PLAYING; the project's own rate is then accepted on that same open
+  device. Both counted.
+
+`playback_test` **25/25** and a second loop of 25 (it is threaded and
+timing-sensitive, so it is looped rather than run once). `ctest -j4`
+**174/174, 177 registered, 3 Not Run (Disabled)**, 63.6 s. Layering and logging
+clean; `smaragd/tests/goldens/` byte-identical (`git status` clean) — no render
+path was touched and nothing in the app calls `openLive()` yet.
+
+**Still NOT gated:** real WASAPI behaviour of any of this (the variable block is
+REPRODUCED by T1/T2's irregular grid, not observed on a driver); MMCSS actually
+being granted; the closed-device rate refusal against a device that genuinely
+cannot adopt a rate (both in-repo backends adopt whatever they are opened with,
+so T4 reaches that branch by asking for a rate of 0 — stated rather than
+implied); the folder-closure and frozen-input pump paths (no producer until
+L1b); the crossfade end to end.
+
+---
+
+## 2026-08-17 — Proposal 21 L3a: capture bridge engine
+
+- **Status:** ✅ COMPLETE (branch `feat/21-l3a-capture-bridge`, base `d034035`)
+- **Scope:** design D7's "one input pump, three sinks", the growing capture
+  source it publishes into, and `RecordingSession` refactored to be a consumer
+  of it. Engine only — the app is untouched (L3b rewires it).
+- **Modules:** `tw303a/sources` (+CONTRACT inv. 13), `tw303a/record`
+  (+CONTRACT, rewritten), `docs/contracts/THREADING.md`.
+
+### What landed
+
+**`twGrowingCaptureSource`** (`tw/sources`, not `tw/record`, because the DAG
+already says so: `record → sources` exists, `sources` is where every
+`twRandomSource` lives, and putting it in `record` would make the recording
+module the owner of a data type that L3b's `SRecordingContent` and the engine's
+readers both need). It is `twCapturingSource`'s counterpart for material that is
+still arriving: chunked planar storage (one chunk = `chunkFrames` frames of
+every channel; the default is `twOutputPage::FRAME_CAPACITY`, static_asserted),
+an atomic monotone `frontier()`, a width fixed at construction, a
+single-producer `append`/`appendPlanar`/`reserveThrough`, and a by-position
+reader API callable from any thread. Three properties are load-bearing:
+
+- **The frontier's release store is the ONLY publication.** Samples and the
+  chunk pointer holding them are written first; a reader acquires the frontier
+  and never touches a frame above it. That one pairing is the whole
+  synchronisation — no lock anywhere on either side.
+- **A read past the frontier is a SHORT READ, never a wait.** Live material has
+  no "not yet" to give, and a reader that blocked on one could deadlock the
+  audio thread. Hence `isReproducible() == false`.
+- **The chunk INDEX never reallocates** — a fixed array of atomic pointers sized
+  at construction (4096 chunks = 1.55 h at 48 kHz), because a `std::vector` that
+  reallocated would move the samples a concurrent reader is copying out. Which
+  is also why the storage is chunked at all. Appending past it is refused and
+  counted (`droppedFrames()`), never grown silently.
+
+`toCapturingSource()` is the handover to the fixed-size source and costs exactly
+ONE copy: the flat planar buffer `twCapturingSource` adopts is built straight
+out of the chunks and moved in.
+
+**`CaptureBridge`** (`tw/record`). Per active input: the device's SPSC ring (L0)
+gets exactly ONE consumer — the bridge thread — which pops, resamples if and
+only if the device rate is not the project rate, and fans out to (1) a live-lane
+`AudioRing` popped by `pullLive()`, (2) the growing capture source, (3) —
+deliberately not here — the WAV writers.
+
+**The WAV sink runs on its OWN thread and reads THE PAGES by position.** That is
+the whole of "backpressure that never stalls the ring": a writer that falls
+behind costs a backlog (`wavLate`, a high-water mark in frames) and nothing
+else, and at stop `finalizeFromPages()` completes every file out of the pages
+(`wavFinalized`). Putting the `write()` call on the bridge thread — the obvious
+shape — is exactly what would turn a slow disk into an input-ring overrun, and
+the gate is built to catch that.
+
+**Threading decision, stated because the brief asked:** the bridge consumer is
+its OWN thread, not the pump. The pump exists only while a live lane is armed,
+must be allocation-free and must not block, while the bridge allocates a chunk
+at a chunk boundary and must outlive any plan (recording with no live lane is
+the ordinary case). Steady state on the bridge thread is allocation-free — pop
+scratch, resampler output vector and per-sink interleave scratch are sized once
+in `start()` — EXCEPT one 512 KB chunk allocation per 65536 frames (1.37 s at
+48 kHz stereo), which is the one place allocation happens and is what
+`reserveThrough()` exists to move earlier.
+
+**The live-lane sink is `CaptureBridge::pullLive(out, channels, frames, pos)` —
+`twLiveInputSource::pull()`'s exact signature, but NOT a subclass of it.** That
+interface lives in `tw/playback`, and `record → playback` would be a new module
+edge carrying the whole playback library for one pure virtual; the app-side
+adapter L1b/L3b needs is ten lines. `pos` is accepted and ignored, which is what
+that interface already documents a device ring does.
+
+**`RecordingSession` is now a bridge consumer** with its public shape unchanged
+(the app compiles and behaves identically; `SMainWindow::onRecordingCompleted`
+was not touched). **The 1 ms poll is gone**: the session thread waits on a
+condition variable until the transport stops, waking at 100 ms only to emit
+progress, and the playhead comes from the bridge's per-batch callback as an
+atomic store. `requestStop()` still never blocks — the blocking finalisation
+(stop the device → drain the ring → complete the files from the pages) is what
+the session thread exists for. `bridge()` is the new accessor L3b reads the
+growing source through. `LinearResampler` moved verbatim to
+`record/src/linear_resampler.h`.
+
+### Gate
+
+`record_bridge_test` (new, `RUN_SERIAL`, drives a real-time-paced
+`FileAudioInput` over fixtures it generates itself, so both sides of every
+comparison come from one function):
+
+| Claim | Measured |
+|---|---|
+| growing source: odd appends across chunk boundaries, short read at the frontier, masked interleaved read, index-exhausted refusal, one-copy handover | 8/8 |
+| **2 ch**: pages == WAV == input file | **0 differences in 32 768 frames × 2 ch (65 536 samples) each**; live lane 0 differences |
+| 2 ch counters | `in=pages=live=wav=32768`, `ringOverruns=0`, `liveOverruns=0`, `pageDrops=0` |
+| channel mask | the second sink is a MONO file equal to channel 0, 0 differences |
+| **stalled writer** (150 ms per 4096-frame write ≈ 27 frames/ms against a device producing 48) | **`ringOverruns = 0` while `wavLate = 17 408` frames**; `wavFinalized = 19 456` frames written out of the pages after capture ended; `framesToWav = 32 768`; the file is STILL 0 differences from the input |
+| **6 ch**: pages == WAV == input file | 0 differences in 196 608 samples; source width 6 |
+| `RecordingSession` over `SMARAGD_AUDIO_INPUT_BACKEND=file:` | 2 files, track A exact (2 ch @ 48 kHz), track B channel 0 only, playhead == `startLocatorFrames + 32768`, pages survive the stop |
+
+Loop: **25/25 iterations** of `record_bridge_test`, judged on the EXIT CODE, not
+on a stdout grep (`repeat_test.sh` cannot see a teardown crash — CLAUDE.md says
+so, and this is a threaded test).
+
+Standing gate: `./build.sh` clean; `check_layering.py` clean (**no DAG change
+was needed** — `record → sources` and `sources → pages` already existed);
+`check_logging.py` clean; **`ctest -j4` 175/175 passed, 178 registered, 3 Not
+Run (Disabled)**, 81.3 s. `smaragd/tests/goldens/` byte-identical and
+`git status smaragd/tests/` clean — no render path was touched.
+
+Three full `-j4` runs were taken and the box was NOT idle (a sibling worktree
+was building and running its own suite throughout). Run 1: **175/175**, 81.3 s.
+Run 2: one failure, `qxa.instrument_stereo_render` — plugin-load shaped, the
+same family the L0 entry above records (a `plugincache` race between concurrent
+processes); it was green in runs 1 and 3 and **20/20 in isolation**. Run 3: one
+failure, `devices_midi_test` — **max |sent − due| = 6.962 ms against its 5 ms
+wall-clock bound**, which is the load artifact CLAUDE.md warns about (RUN_SERIAL
+excludes other tests in the same invocation, never another agent's suite); it
+passed immediately afterwards. Neither case touches `tw/sources` or `tw/record`
+and neither is caused by this branch — but both are named rather than averaged
+away. `record_bridge_test` was green in all three runs and 25/25 in the loop.
+
+### NOT gated
+
+Real capture hardware; ALSA and CoreAudio input (CoreAudio still returns
+silence — L0 debt); the app's placement of a recording (L3b); the live-lane sink
+being pulled by a REAL `LiveGraphPump` (L1b/L3b — here it is pulled by a test
+thread in the pump's shape, concurrently in one case and after the fact in the
+others); a device whose rate differs from the project's (the resampler path is
+carried over verbatim from the old loop and is still only exercised by a real
+driver that refuses auto-conversion); `SMARAGD_CAPTURE_SPEED ≠ 1`.
+
+### Known debt this leaves
+
+The bridge thread's wake is a block-paced condition-variable TIMEOUT (half a
+device block, clamped to 1–10 ms), not an event: `AudioInput` has no "wake me
+when frames arrive" ABI. It is bounded by the ring's 16-block depth so it cannot
+overrun, but it does add up to ~10 ms to the live lane's latency, which L1b's
+monitor-latency budget has to carry. Named in `tw/record/CONTRACT.md`.
+
+---
+
+## 2026-08-17 — Proposal 21 L1b: live lane app — monitoring through the chain
+
+The APP half of the live lane. An audio input is heard through the armed
+track's own insert chain, its folders and the master, while the rest of the
+arrangement keeps playing from frozen pages. New files: `main/shell/
+sliveplanbuilder.{h,cpp}` (the closure + the plan), `slivemonitor.{h,cpp}` (the
+lifecycle and the ordering), `sliveinputsource.{h,cpp}` (an `AudioInput` ring
+seen as a `twLiveInputSource`, allocation-free `pull`), `main/objects/track/
+sliveinputactions.{h,cpp}` (three verbs), `main/testkit/slivetestactions.{h,cpp}`
+(four assertions), and five qxa cases.
+
+**THE CLOSURE.** `sliveplan::computeClosure` walks the lane tree once, takes
+`{armed && monitorEffective} ∪ {monitor == on}` intersected with "has an
+`audio:` input", and closes it upward to the output — DEEPEST FIRST, which is
+what makes a parent's `liveChildren` indices strictly less than its own
+(`twLivePlan::finalize()` proves it). Per member: the slot processors in slot
+order, the `twGainStage::Envelope` snapshot, the `twRewire` channel map, the
+input source for a source track, and the unarmed children's ROOT components as
+`frozenInputs`. `twlive::checkMasterShape` is re-checked on every build; more
+than one top-level member — or a master that is not a unity sum with an identity
+map — gets a synthetic sum node shaped exactly like a folder, which is also how
+the `Closure` mode renders the master.
+
+**THREE THINGS THAT WERE WRONG AND ARE THE REASON THIS TOOK ITERATIONS.**
+
+1. **Ownership must be released BEFORE the re-wire, not after.** The brief's
+   order reads "un-wire → publish the tail → `setLiveOwned(false)` after the
+   plan retires", and taken literally it produces a folder that goes SILENT for
+   the whole tail: the freeze path regains a still-live-owned chain, the very
+   next root page is frozen as silence for those tracks, and the epoch gate
+   dutifully flips the RT onto it. Measured: a 256 ms hole in the sibling and
+   8 `liveOwnedRefusals`. Releasing ownership while the exclusion is still
+   applied is safe (a nulled plug is never planned) and makes the first
+   re-summed page carry real audio. With the correct order: an 8-frame gap and
+   0 refusals.
+
+2. **`SObject::invalidateRenderPath()` on the mixer stales the mixer and the
+   root rewire and NOTHING BELOW THEM** — it walks from the project root and
+   stales every chain CONTAINING the object it was called on. The exclusion
+   therefore invalidates per closure MEMBER. One call on the mixer left the
+   members' own (silent) pages being served and the folder never came back.
+
+3. **A transport edge must rebuild BEFORE `startOutput()`.**
+   `setPlaybackRunning` starts the readahead first and flips `isPlaying_` last,
+   so a rebuild driven by the flag alone left a track that monitor Auto was
+   about to release still live-owned while the readahead was already freezing
+   its chain — six refusals per Play. `transportAboutToChange(playing)` is now
+   called at the top of `setPlaybackRunning`.
+
+A fourth, smaller: `finishDisarm()` computes what is really gone as "departing
+minus current", so calling it before `current_` was updated released nothing and
+left the device open — which made every phase of a case share one capture
+session and every window point at the first phase.
+
+**MEASURED, per acceptance criterion.**
+
+- **AC1 `monitor_through_chain`** (four device sessions, four absolute-frame
+  windows): gain 0.5 → **0.115478** against the closed form 0.115470 (±3 % band);
+  bypassed → **0.230956** against 0.230940; monitor **Auto** + Play → **0.137769**
+  against the clip-alone closed form 0.137800, i.e. the input STOPPED exactly as
+  the tape rule says; monitor **On** + Play → **0.179799** against the
+  two-source form 0.179800. Input meter peak **0.399994** against the fixture's
+  0.4. `liveThreadRefusals` 0, `liveOwnedRefusals` 0.
+- **AC2 `monitor_latency`**: measured lag **5120 frames = 106.7 ms**, correlation
+  **1.000**, against a budget of 8192 (input block 1024 + ring depth 4096 + 3
+  output blocks 3072). Five 1024-frame blocks: one the input capture thread
+  holds, the pump's two-block lead, two on the RT side. Stable across runs.
+- **AC3 `monitor_folder_closure`**: live phase **0.134485** against 0.134500
+  (sibling read out of its own frozen pages by the pump + the input, both through
+  the folder's insert); after the mid-play hand-back **0.0688844** against
+  0.068900 — the same number by a completely different route; longest silent run
+  **8 frames** against a 1024 budget; refusals 0/0.
+- **AC4 `arm_during_playback`**: bystander RMS **0.576783 / 0.577287 / 0.550341**
+  across the three windows (before the arm, across the flip, after the release);
+  longest gap **1 frame**, largest sample step **1.896** against the source's own
+  reset of 1.9 and a bound of 3.8 — so nothing was doubled and nothing was
+  served twice. Refusals 0/0.
+- **AC5 `render_while_armed`**: the armed render is **byte-identical** to the
+  unarmed one (384 044 bytes) — and the armed track carries a CLIP on purpose,
+  because a track without one would render identically whether the suspension
+  worked or not. Monitoring comes back as a fresh arm: **0.115478** again.
+- **AC6**: every new case asserts `assert-render-policy liveThreadRefusals="0"
+  liveOwnedRefusals="0"`. Goldens byte-identical (`git status
+  smaragd/tests/goldens/` clean) — no live lane exists during a render.
+
+**NOT GATED**, and none of it is an oversight: real device latency and jitter
+(the numbers above are the capture backend's 1024-frame grid; WASAPI shared adds
+~100 ms of its own and proposal 35 is the prerequisite for a number a performer
+would call low), WASAPI shared under load, ASIO, and hearing an ARMED track's
+OWN clips (design §10.1 — it needs proposal 20 §2). Also not gated: the
+`midi:`/`keyboard` input spellings, which round-trip and are refused by nothing
+but render nothing until L2; the Options input combo and the arm menu, which are
+real but have no headless gesture; and the `Closure` master mode, which is
+implemented and unreachable while `SStdMixer` builds a unity sum.
+
+**AC7 sweeps (orchestrator-collected, 2026-08-17; the agent's session was
+cut by API overload after launching them):** `monitor_folder_closure` 50/50 ×
+workers {1,4,8,16} = 200/200; `arm_during_playback` 200/200; `monitor_through_chain`
+200/200; `render_while_armed` 25/25 (workers 8); `monitor_latency` **48/50** at
+workers 8 while the box was ALSO running another worktree's suite — the case
+asserts a wall-clock lag budget (8192 frames; measured 5120–6144 idle), so it
+belongs in the same load-sensitive family as `twlog_test` and `devices_midi_test`
+(RUN_SERIAL protects it only from tests in the same ctest run). Re-run idle 8/8.
+Full suite on the branch after the sweeps: `ctest -j4` **179/179, 182 registered,
+3 Not Run (Disabled)**, 91.8 s.
+
+**Orchestrator review notes (accepted, recorded):** (1) the disarm releases
+processor ownership BEFORE the re-wire (measured necessity: otherwise the first
+re-summed page freezes as silence and the epoch gate flips the RT onto it), so for
+the length of the hand-back tail the pump and the freeze path both render the
+departing processors — bounded, mutex-serialised, but a stateful insert can
+carry a small artefact across the ~256 ms tail; (2) design D3's Closure master
+mode is REFUSED (one log line, arrangement untouched) rather than run: the plan
+builder can express it but the RT still adds the frozen root page whenever the
+frozen lane is PLAYING, and nothing reads `twLivePlan::masterLinear`. Unreachable
+today (the master is a unity `twMixer` + identity `twRewire` by construction);
+whoever adds a master insert chain lands on the log line and the fix is a
+`twSpeaker` flag that pulls-and-discards the root while a Closure plan is live.
+
+
+---
+
+## 2026-08-17 - Proposal 21 L3b: audio recording app
+
+- **Status:** COMPLETE
+- **Branch:** `feat/21-l3b-recording-app`
+- **Design:** `plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md` D6 (the
+  placement conversion), D7 (one input pump, three sinks; the growing content;
+  the one macro), D9 (monitor Auto while recording).
+
+### What landed
+
+A take now produces a **growing clip** on every armed lane while it runs, and
+one **undo step** when it stops.
+
+- **`SRecordingContent`** (`main/objects/wave`) - an `SObject` whose duration
+  grows behind an ordinary `SCut`, a VIEW of the bridge's
+  `twGrowingCaptureSource` over `[startFrame, frontier)`, with a peak ladder
+  EXTENDED from the frontier in whole hops and `durationChanged` at ~10 Hz from
+  the main thread. Its renderer draws the waveform and the FRONTIER rule.
+  `getRootComponent()` is null and `isLiveRecording()` is true, so `STrack`
+  keeps it out of the bus mixers entirely - the same routing decision the
+  module already makes for MIDI clips, for the same reason.
+- **`SRecordPlacement`** (`main/shell/srecordplacement.h`) - THE placement
+  conversion, named once and coded once:
+  `placementFrame(k) = P0 + k - inputLatencyProj - outputLatencyProj + userOffsetProj`.
+  `P0` comes from the ENGINE-owned `twEngineClock` anchor, and the mapping is
+  applied RETROSPECTIVELY (backward extrapolation) when a take starts from a
+  stopped transport. `recordingOffsetMs` is POSITIVE = EARLIER, with the
+  negation in one setter.
+- **`SAudioRecorder`** (`main/shell`) - the take: collect armed, open a capture
+  SEGMENT on the app's one input pump, place the growing clips, tick at 10 Hz
+  (anchor / growth / punch-out), and at stop finalise the files out of the
+  pages, remove the growing clips and submit one macro of `place-recording`.
+- **`CaptureBridge` segments** (`tw/record`) - `capturePages`, `liveEnabled`,
+  `beginCapture()` / `endCapture()` on a RUNNING bridge, `captureStartHostNs()`.
+  A record start while monitoring therefore does not gap the monitored signal.
+- **One input pump**: `SLiveMonitor` now owns a `CaptureBridge` instead of an
+  `AudioInput`, and `SLiveAudioInputSource` pulls `pullLive()`. The recorder
+  BORROWS it through a hold count.
+- **Punch** (the project range with Cycle off) and **loop takes** (the range
+  with Cycle on): passes are ARITHMETIC, one `place-recording` per pass at the
+  loop start, and proposal 17's "phase 5" falls out of `srcOffset`/`length` on
+  a verb that already existed.
+- **Non-modal recording**; `locatorHeldElsewhere()` RETIRED from
+  `PlaybackContext`, `twSpeaker` and `SApplication`; `startRecording` goes
+  through `setPlaybackRunning()`; the deferred root walk while live-owned;
+  Options gained a per-device recording offset; verbs `record-start`,
+  `record-stop`, `assert-recorded-clip`.
+
+### Two defects this phase found, both in `SCut`, both expensive
+
+1. **`buildCapture_()` over a growing content stalled ~2 s and SEGFAULTED.** A
+   capture is a RENDER of the content into a fixed-size snapshot; the content
+   here grows ten times a second. Found by `record_punch`'s `previewNonEmpty`
+   assertion reaching `getPreviewCapture`.
+2. **`invalidateAspects()` per growth tick starved the bridge thread.**
+   Measured: `ringOverruns 106496` (2.2 s of input LOST) and the capture
+   backend 2.5 s behind its deadline, on a take that should have cost nothing.
+
+Both are now short-circuited on `isLiveRecording()`, along with `ensureReader`
+and `getPreview`. The WAV-backed cut that replaces the growing one at stop is
+an ordinary cut and takes every one of those paths normally.
+
+### Gate
+
+- `./build.sh` (re-configured); `check_layering.py` clean; `check_logging.py` clean.
+- `ctest -j4`: **184/184 passed**, **187 registered**, 3 Not Run (Disabled - the
+  macOS-only `au_*` trio), 123.6 s. Baseline before the phase on the same box:
+  180/180 run, 183 registered (+4 new qxa cases). `git status smaragd/tests/goldens/` clean; no
+  golden moved (no live lane and no recording in any golden's case).
+- `record_offset_zero`: compensation **-5824 frames exactly** with offset 0 and
+  **-6784 exactly** with `recordingOffsetMs=+20`, i.e. the offset moved the clip
+  exactly **960 frames earlier**; measured placements `P0=27098 -> clip at 21274`
+  and `P0=27314 -> clip at 20530`, the identity `clipStart == placementFrame(trimmed)`
+  exact on both; `sourceAtStartFrame` decoded **0** with confidence 231100;
+  `ringOverruns 0`.
+- `record_loop_takes`: 7 s over a 2 s cycle gave **4 committed passes**, ONE
+  column (`clips=1`) with **4 takes** — the verb asserts `takes == passes`
+  unconditionally — duration exactly 96000, removed by **one undo**. The pass
+  COUNT is asserted as a FLOOR (`minPasses=3`), not exactly: it is captured
+  material over loop length, and captured material shrinks under load. This
+  case failed under a concurrent suite with an exact count before it was
+  relaxed, and `record_punch` failed the same way with a 5 s budget for a 2 s
+  punch-out (now 8 s).
+- `record_punch`: a mid-take assertion saw a growing clip with a NON-EMPTY
+  preview; the take punched out by itself at 96000 and placed a clip at
+  **48000** of length **48000**, both to the frame; one undo.
+- `record_while_monitoring` (added beyond the brief, after the smoke test below
+  found a real defect): a record start on an ALREADY-MONITORING track opens
+  **no** device and provokes **no** device-change deferral, asserted with
+  `assert-log` over the record-start window.
+- Sweeps, looping on the EXIT CODE rather than on the PASS line
+  (`repeat_test.sh` greps stdout for `^PASS - ` and therefore cannot see a case
+  that passes and then crashes on exit - exactly the shape this phase hit once
+  during development):
+
+  | case | w=1 | w=4 | w=8 | w=16 |
+  |---|---|---|---|---|
+  | `record_offset_zero` | 50/50 | 50/50 | 50/50 | 50/50 |
+  | `record_loop_takes` | 50/50 | 50/50 | 50/50 | 50/50 |
+  | `record_punch` | 50/50 | 50/50 | 50/50 | 50/50 |
+  | `record_while_monitoring` | 25/25 | 25/25 | 25/25 | 25/25 |
+
+  **700 runs, 0 failures.** The fourth case is swept at N=25 rather than 50: it
+  is this phase's own addition beyond the brief, and its claim (no device open,
+  no deferral at record start) is structural rather than timing-shaped.
+
+  Two of these cases DID fail once under a concurrent suite before being
+  relaxed, with an exact loop-pass count and a 5 s budget for a 2 s punch-out.
+  Both failures were load artifacts of the CASE DESIGN, not of the code: a
+  pass count is captured material over loop length, and captured material
+  shrinks when the box is loaded enough to cost ring overruns.
+
+### NOT gated
+
+Real capture hardware and real driver latencies - `FileAudioInput` REPORTS a
+latency and does not delay by it, so the gate is on the CONVERSION applying the
+reported number with the right sign and scaling, never on the physics. Also:
+ALSA and CoreAudio input, a device rate different from the project rate,
+multi-track recording beyond one WAV per armed track, saving a project mid-take
+(`SRecordingContent` has no loader registration - it writes an element the
+loader will not recognise), and the Cubase-style **catch range**, which is NOT
+implemented: pre-roll frames are trimmed.
+
+### One more defect, found by smoke-testing the DEFAULT flow
+
+The recorder resolved its input device from the settings default while the
+monitor had the device open under the armed track's own `trackInput` name, so a
+record start CLOSED AND REOPENED the input — a monitoring gap in exactly the
+case "one input pump" exists to prevent — and then fought the monitor over the
+device for the rest of the take. The recorder now resolves the name the way the
+monitor does: the armed track's `trackInput` device, then whatever the monitor
+already has open, then the settings default. `record_while_monitoring.qxa` is
+the gate.
+
+### Debt left
+
+`RecordingSession` (`tw/record`) no longer has an app consumer - the app drives
+the bridge directly. It is kept because `record_bridge_test` drives it end to
+end; retiring it is a later cleanup.

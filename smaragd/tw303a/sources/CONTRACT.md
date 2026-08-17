@@ -6,7 +6,8 @@ rate views, loop windows, grain time-stretch.
 
 Public headers: twrandomsource.h (THE data contract), twsamplesource.h,
 twsamplereader.h, twresampledsource.h, twresampler.h, twcapturingsource.h,
-twloopreader.h, twgrainsource.h, twgrainparams.h, twwavinput.h, twwav.h.
+twgrowingcapturesource.h, twloopreader.h, twgrainsource.h, twgrainparams.h,
+twwavinput.h, twwav.h.
 
 Depends on: tw/core, tw/pages, tw/graph. Forbidden: mix/playback/render
 (sources do not know who consumes them).
@@ -122,9 +123,41 @@ Invariants:
    displacing shape §4.3 forbids, and it had never had a caller. Do not confuse it with `CapturePagePool`, which is
    an unrelated pool of an unrelated type and does NOT widen (pages/CONTRACT.md).
 
+13. **A GROWING CAPTURE IS THE ONE SOURCE WHOSE LENGTH CHANGES** (proposal 21
+   L3a, design D7). `twGrowingCaptureSource` is the recording counterpart of
+   invariant 12's snapshot: chunked planar storage, one chunk per
+   `chunkFrames` frames of every channel (default `twOutputPage::FRAME_CAPACITY`,
+   static_asserted), an atomic `frontier()` that only grows, and a width fixed
+   at construction. Four things a change here must preserve:
+   (a) **ONE producer, any number of readers.** `append`/`appendPlanar`/
+   `reserveThrough` are single-writer; `read`/`readInterleaved`/`frontier` are
+   callable from anywhere, including the RT-adjacent pump.
+   (b) **The frontier's release store is the ONLY publication.** Samples and
+   the chunk pointer that holds them are both written before it, and a reader
+   only touches frames below the frontier it acquired, so nothing else needs
+   ordering. A reader must never trust a chunk pointer it found above the
+   frontier.
+   (c) **A read past the frontier is a SHORT READ, never a wait.** Live
+   material has no "not yet" answer to give, and a reader that blocked on one
+   could deadlock the audio thread. `isReproducible()` is therefore **false**
+   (the same read can return more next time), so no derived-data cache may key
+   on it.
+   (d) **The chunk INDEX never reallocates.** It is a fixed array of atomic
+   pointers sized at construction (default 4096 chunks — 1.55 h at 48 kHz);
+   appending past it is REFUSED and counted in `droppedFrames()`. A
+   `std::vector` that reallocated would move the samples a reader is copying
+   out, which is exactly why the storage is chunked at all.
+   `toCapturingSource()` is the handover to invariant 12's fixed source and
+   costs exactly ONE copy of the audio — the flat planar buffer
+   `twCapturingSource` adopts is built straight out of the chunks and moved in.
+   Accounted through the same `PageAccounting::onCaptureAllocated` as
+   invariant 12, per chunk.
+
 Threading: sources are immutable after load; readers are single-consumer
 cursors (one per clip placement). The streaming grain's block LRU is the one
-mutable, mutex-guarded exception (invariant 6).
+mutable, mutex-guarded exception (invariant 6). `twGrowingCaptureSource` is the
+second: it is mutable BY DESIGN, lock-free, and safe only under invariant 13's
+single-producer rule.
 
 How to test: `ctest -R sources_test` (reader absolute seeks, loop window,
 zero-fill, grain stretch, and the width-4 capture round trip of invariant 12 —
@@ -132,7 +165,10 @@ sources/tests/); `qxa.mc_capture_clip_width` (invariant 12 end to end: a
 stretched, a pitched and a container/asset clip over `tests/test_stereo.wav`,
 each asserted at the clip AND in the rendered file); `ctest -R wide_reader_test`
 (invariants 8-11 over the committed `tests/test_stereo.wav`, plus the
-`warp.pcm` channel-count key check of proposal 36 AC B3.4); grain_*.qxa for the audible
+`warp.pcm` channel-count key check of proposal 36 AC B3.4); `ctest -R
+record_bridge_test` (invariant 13 — odd-sized appends across chunk boundaries,
+the short read at the frontier, the masked interleaved read, the index-exhausted
+refusal and the one-copy handover); grain_*.qxa for the audible
 grain path; qxa.render_split_slip_offset for offset semantics end-to-end;
 qxa.mp3_sample_import for the libsndfile decode path (RMS discriminator over a
 committed MP3 fixture — never a byte-cmp, since mpg123 decode is not

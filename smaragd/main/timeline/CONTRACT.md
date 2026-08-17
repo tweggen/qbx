@@ -267,3 +267,19 @@ head).
 Known debt: sstdmixerview is the largest file in the app and knows every
 object type; per-object renderer extraction (proposal 14 slices) is the
 long-term shape.
+
+21. **The ARM button is a VERB and its right-click menu is the INPUT SELECTOR**
+    (proposal 21 L1b, design D9). Arm used to be a direct model write on the
+    grounds that it is transport state; it is `arm-track` now because it decides
+    whether a track is MONITORED — which re-wires the mixer and hands a plugin
+    chain to another thread — so it must pass through the one place that owns
+    that ordering, and because a user who armed the wrong lane of a
+    multi-selection has the same right to undo it as one who muted it. The menu
+    carries Monitor (auto/on/off), Input device and the channel mask, all over
+    the SELECTION like every other head toggle, all through their verbs. The
+    device and the mask are two halves of ONE portable string, and the legacy
+    `recordingChannels` mask is kept in step with it so the recording path and
+    the monitoring path cannot disagree about which channels this track hears.
+    The tooltip ANNOUNCES the live state, including the one failure a user
+    cannot otherwise see: `openLive()` refuses a device whose rate is not the
+    project rate.

@@ -285,6 +285,31 @@ const Fixture kFixtures[] = {
       "<set-track-midi-output trackPath='1,0' port='capture' channel='2'"
       " offsetMs='-200'/>" },
 
+    // Proposal 21 L1b. All three are ABSOLUTE, so every attribute is always
+    // written and every one of them must survive the round trip: an omitted
+    // `armed` would read back as 0 and undo would un-arm a track the user
+    // never touched.
+    { "arm-track", "<arm-track trackPath='1,0' armed='1'/>" },
+    { "set-track-input",
+      "<set-track-input trackPath='1,0' input='audio:default:3'/>" },
+    { "set-monitor-mode", "<set-monitor-mode trackPath='1,0' mode='on'/>" },
+
+    // Audio recording (proposal 21 L3b). record-start / record-stop carry no
+    // attributes at all, so they need no fixture row; assert-recorded-clip
+    // writes only what is non-default, so only the attributes below may be
+    // declared here.
+    { "assert-recorded-clip",
+      "<assert-recorded-clip trackPath='1,0' clips='1' takes='3' passes='3'"
+      " startFrame='48000' startTolerance='0' durationFrames='48000'"
+      " durationTolerance='0' minDurationFrames='24000'"
+      " inputLatencyFrames='4800' outputLatencyFrames='1024'"
+      " userOffsetFrames='-960' compensationFrames='-6784' trimmedFrames='0'"
+      " growing='true' previewNonEmpty='true' sourceAtStartFrame='0'"
+      " sourceTolerance='2048'/>" },
+    { "place-recording",
+      "<place-recording trackPath='0' filePath='x.wav' timePos='96000'"
+      " srcOffset='48000' length='24000'/>" },
+
     // --- the event test verbs ----------------------------------------------
     // clip AND trackPath, kind, contains and velocityTolerance are each
     // written only when set, so the fixture sets every one of them.
@@ -356,6 +381,16 @@ const Fixture kFixtures[] = {
       "<assert-midi-options contains='backend=capture' absent='virtual=no'"
       " outputPorts='1' inputPorts='1'/>" },
     { "set-option", "<set-option key='midi/outOffsetMs' value='120'/>" },
+    // --- the MIDI-in verbs (proposal 21 L0) ---------------------------------
+    // The field form and the raw-bytes form are exclusive (bytes= suppresses
+    // the fields on write), so the fixture uses the field form plus cc, and
+    // atFrame is written only when it was given.
+    { "midi-in-event",
+      "<midi-in-event kind='cc' key='60' velocity='100' channel='2' cc='7'"
+      " atFrame='48000' timeoutMs='5000'/>" },
+    { "midi-in-replay",
+      "<midi-in-replay filePath='perf.mid' track='1' channel='3'"
+      " startFrame='96000' timeoutMs='5000'/>" },
     { "wait-ms", "<wait-ms ms='3600'/>" },
 
     { "assert-clip-window",

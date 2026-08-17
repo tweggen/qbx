@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L1b, AC3. THE CLOSURE IS THE WHOLE CHAIN UP TO THE OUTPUT, and a
+  folder's UNARMED child is read out of its own frozen pages by the pump.
+
+  Runs with SMARAGD_AUDIO_INPUT_BACKEND=file:../test_autosaw.wav and
+  SMARAGD_CAPTURE_SPEED=1 (set on the CTest entry). RUN_SERIAL.
+
+  THE SHAPE (design section 3, case (iii)). Track 0 is a folder holding two
+  lanes: "0,0" is a sibling with six seconds of a 100 Hz sawtooth and no input,
+  "0,1" is armed on the file input. Arming "0,1" puts BOTH of them plus the
+  folder into the live closure - the folder because the audio has to reach the
+  output through its insert - so:
+
+    * the FOLDER's plug is nulled at the mixer (it is the topmost member),
+    * "0,1" is setClipMuted inside the folder's twTrackMix (it is nested),
+    * the sibling is NOT in the closure and is NOT excluded: the pump reads its
+      frozen root pages BY POSITION, and the readahead re-roots a demand there
+      so those pages exist (design D3).
+
+  THE CLOSED FORM. The sibling is a 0.95-amplitude sawtooth, RMS 0.548, at
+  -12 dB (x0.2512) = 0.1378. The input is 0.4/sqrt(3) = 0.2309. The folder's
+  insert is tw.test.clap.gain at 0.5, so both are halved on the way out:
+  0.0689 and 0.1155, and the sum of two uncorrelated sources is 0.1345.
+
+  AFTER THE DISARM the folder returns to the frozen sum and the sibling comes
+  out of the root page instead of the ring - the same 0.0689, by a completely
+  different route. assert-audio-continuity is what says the hand-over did not
+  leave a hole in it.
+
+  MEASURED: live 0.134485 (closed form 0.1345), after the hand-back 0.0688844
+  (closed form 0.0689), longest silent run 8 frames against a 1024 budget, and
+  liveOwnedRefusals 0.
+-->
+<SActionScript version="1" name="monitor_folder_closure">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>                <!-- 0: becomes the folder -->
+    <add-track index="-1"/>                <!-- 1: the sibling -->
+    <add-track index="-1"/>                <!-- 2: the armed child -->
+
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="96000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="192000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="288000"/>
+    <set-track-volume trackPath="1" volume="-12"/>
+
+    <reparent-track source="2" destParent="0" destIndex="-1"/>
+    <reparent-track source="1" destParent="0" destIndex="0"/>
+
+    <!-- The folder's own insert: everything below it goes through this. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.5"/>
+
+    <set-track-input trackPath="0,1" input="audio:file:3"/>
+    <!-- monitor ON so the lane survives the transport start: Auto would
+         release it on Play, which is AC1's subject, not this one. -->
+    <set-monitor-mode trackPath="0,1" mode="on"/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0,1" armed="1"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2500"/>
+
+    <!-- Mid-play DISARM. The folder leaves the closure and hands back to the
+         frozen sum while the sibling is sounding.
+
+         Both verbs are needed and the ORDER of the two is not the point: the
+         live set is `{armed && monitorEffective} u {monitor == on}` (design
+         D9), so a track on monitor ON stays live whether it is armed or not.
+         Dropping it to Auto while the transport is PLAYING is what makes the
+         tape rule release it. -->
+    <set-monitor-mode trackPath="0,1" mode="auto"/>
+    <arm-track trackPath="0,1" armed="0"/>
+    <wait-ms ms="2500"/>
+    <toggle-playback play="0"/>
+
+    <dump-playback-capture filename="fold.wav" minFrames="192000"/>
+
+    <!-- While live: sibling 0.0689 + input 0.1155, both through the folder's
+         insert. The band excludes either one alone. -->
+    <assert-audio-energy filename="fold.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.110" maxRms="0.160"/>
+
+    <!-- After the hand-back: the sibling ALONE, through the frozen path, at
+         the same 0.0689 it had through the pump. -->
+    <assert-audio-energy filename="fold.wav" startFrame="192000" frameCount="48000"
+                         channel="0" minRms="0.055" maxRms="0.085"/>
+
+    <!-- AND IT NEVER STOPPED. The sibling is a continuous sawtooth, so any
+         hole in the hand-over is a run of near-zero samples. -->
+    <assert-audio-continuity filename="fold.wav" startFrame="48000"
+                             frameCount="192000" channel="0"
+                             maxGapFrames="1024" silenceLevel="0.002"/>
+
+    <!-- ZERO, and it is not an accident: the disarm releases ownership WHILE
+         the exclusion is still applied, so no freeze can reach the chain
+         between the two (SLiveMonitor::refresh). Getting that order wrong is
+         what this bound would catch - the wrong order measured 8 refusals and
+         a 256 ms hole in the sibling above. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

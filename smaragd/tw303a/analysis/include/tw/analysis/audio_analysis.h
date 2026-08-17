@@ -44,6 +44,27 @@ bool readAudioFileInfo(const std::string &filename, AudioFileInfo &info,
                        std::string &error);
 
 /**
+ * Read ONE CHANNEL of a region as normalized floats (proposal 21 L1b).
+ *
+ * Every other entry point here REDUCES a region to a number - an RMS, a peak,
+ * a fundamental, a position code. Cross-correlating a monitored capture
+ * against the file that was played into the input needs the SAMPLES, and the
+ * alternative was a second libsndfile reader inside the testkit, which is how
+ * two readers come to disagree about channel selection and about what
+ * "frameCount < 0" means.
+ *
+ * `channelIndex < 0` pools every channel by AVERAGING them, matching what the
+ * analysers mean by -1. `frameCount < 0` reads to the end of the file. A
+ * region that starts past the end is not an error: `out` comes back empty.
+ *
+ * @return false only when the file cannot be opened; `error` then says why.
+ */
+bool readAudioRegion(const std::string &filename, int64_t startFrame,
+                     int64_t frameCount, int channelIndex,
+                     std::vector<float> &out, int &sampleRate,
+                     std::string &error);
+
+/**
  * Read a WAV file and analyze acoustic properties.
  *
  * `channelIndex` defaults to -1 (all channels pooled), which is what this

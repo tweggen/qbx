@@ -47,6 +47,21 @@ public:
     /// For SObject
     virtual std::shared_ptr<twComponent> getRootComponent() override;
 
+    /**
+     * The master's two components, for `twlive::checkMasterShape` (proposal 21
+     * L1b, design D3). The "root(unarmed) + ring" split is exact only while
+     * the master is a UNITY SUM followed by an IDENTITY MAP, and that
+     * precondition is CHECKED on every plan build rather than assumed - so the
+     * plan builder needs both halves. `getRootComponent()` already hands out
+     * the rewire; the summing mixer had no accessor at all.
+     *
+     * Bus 0 is the only bus there has ever been (nBusses_ has been 1 since
+     * proposal 36 B4 made the width a channel count); null before setNBusses().
+     */
+    std::shared_ptr<twMixer> masterMixComponent() const
+    { return cpMixers_.empty() ? std::shared_ptr<twMixer>() : cpMixers_[0]; }
+    std::shared_ptr<twRewire> masterRewireComponent() const { return cpRewire_; }
+
     virtual QWidget *getDetailEditWidget( QWidget *parent ) override;
     virtual QWidget *getInlineEditWidget( QWidget *parent ) override;
     virtual SObjectRenderer *getInlineRenderer() override;

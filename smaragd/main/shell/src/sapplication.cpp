@@ -22,6 +22,8 @@
 #include "app/model/sproject.h"
 #include "app/shell/ssettings.h"
 #include "app/shell/smidioutpump.h"
+#include "app/shell/saudiorecorder.h"
+#include "app/shell/slivemonitor.h"
 #include "app/shell/sautomationrecorder.h"
 #include "app/servicesui/soptions.h"
 #include "app/actions/sactionhistory.h"
@@ -68,6 +70,10 @@ void SApplication::setCurrentProject( SProject *cp )
     if( t3Speaker_ )
         t3Speaker_->setPageScheduler( cp ? cp->getRevalidator() : nullptr );
     rewireSpeaker();
+    // Every track that arrived ARMED out of a project file is inert until the
+    // user arms it in this session (design D9): loading a project must not open
+    // the microphone.
+    if( liveMonitor_ ) liveMonitor_->projectChanged();
 }
 
 void SApplication::rewireSpeaker()
@@ -132,6 +138,13 @@ void SApplication::setPlaying( bool f )
         if( f ) automationRecorder_->transportStarted( getGlobalLocatorPos() );
         else    automationRecorder_->transportStopped( getGlobalLocatorPos() );
     }
+
+    // The live lane (proposal 21 L1b). The transport decides the FEED POLICY
+    // and the automation hold (design D2), and under monitor Auto it decides
+    // whether there is a live lane at all - tape style, the input gives way to
+    // the track's own material on plain Play. So a transport edge is a plan
+    // REBUILD plus exactly one explicit reposition.
+    if( liveMonitor_ ) liveMonitor_->transportChanged();
 }
 
 const SSelectionList &SApplication::getSelectionList() const
@@ -262,6 +275,13 @@ void SApplication::setGlobalLocatorPos( offset_t o )
     // inferred from a jump in the atomic - a forward seek of less than a tick
     // is indistinguishable from ordinary advance.
     if( isPlaying_ && midiOutPump_ ) midiOutPump_->locate( o );
+
+    // The live pump renders every block AT A POSITION, and while STOPPED that
+    // position is a virtual counter from the LOCATOR (design D2). A seek moves
+    // the anchor and the automation hold, so it is a plan rebuild plus one
+    // explicit reposition - drift detection alone would make the first block
+    // after the seek a race.
+    if( liveMonitor_ ) liveMonitor_->seeked();
 }
 
 void SApplication::setGlobalLocatorPosRealtime( offset_t o )
@@ -380,7 +400,11 @@ int SApplication::masterChannels()
 
 void SApplication::pumpMeters()
 {
-    const bool live = isPlaying_ || isRecordingActive();
+    // A LIVE LANE keeps the meters alive too (design D9): monitoring an input
+    // with the transport stopped is exactly the case where a decaying bar would
+    // be a lie about a signal that is still there.
+    const bool live = isPlaying_ || isRecordingActive()
+                      || ( liveMonitor_ && liveMonitor_->active() );
 
     offset_t pos = globalLocatorPos_.load( std::memory_order_relaxed )
                    - meterLatencyFrames();
@@ -517,7 +541,7 @@ SApplication::SApplication( int &argc, char **argv )
       isPlaying_( false ),
       renderSession_( nullptr ),
       currentProject_( NULL ),
-      recordingSession_( nullptr )
+      audioRecorder_( nullptr )
 {
     setOrganizationName( "Smaragd" );
     setApplicationName( "smaragd" );
@@ -539,7 +563,15 @@ SApplication::SApplication( int &argc, char **argv )
     // this process constructs (see SMidiOutPump's constructor). Its own timer
     // only runs between play and stop.
     midiOutPump_.reset( new SMidiOutPump( this ) );
+    // The live lane (proposal 21 L1b). A sibling of the MIDI-out pump in every
+    // respect that matters: constructed with the app, destroyed FIRST, and the
+    // owner of a std::thread whose join must happen on the main thread.
+    liveMonitor_.reset( new SLiveMonitor( this ) );
     automationRecorder_.reset( new SAutomationRecorder( this ) );
+    // AFTER the monitor: the recorder borrows the monitor's bridge (design D7,
+    // one input pump) and must be destroyed BEFORE it, which the reverse
+    // construction order in the destructor below gives.
+    audioRecorder_.reset( new SAudioRecorder( this ) );
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
@@ -584,6 +616,11 @@ SApplication::~SApplication()
     // The MIDI scheduler threads join HERE, on the main thread, while the log
     // sink is still alive - not during static destruction, which is where this
     // repo has already recorded a teardown hang of exactly that shape.
+    // The live lane goes first: it stops and JOINS the pump thread and closes
+    // the input device, and both of those must happen before the speaker it
+    // hands audio to is destroyed.
+    audioRecorder_.reset();
+    liveMonitor_.reset();
     midiOutPump_.reset();
     automationRecorder_.reset();
     DTOR_DEL( actionHistory_ );
@@ -658,6 +695,15 @@ void SApplication::startRender(const audio::RenderParams &params)
         isPlaying_ = false;
     }
 
+    // A RENDER SUSPENDS EVERY LIVE LANE for its duration (proposal 21 D4).
+    // Export ignores the split, as in Cubase; the practical requirement is
+    // harder than the aesthetic one: `beginRun` below walks instrument tracks
+    // and the render's own demands freeze the whole graph, so a live-owned
+    // processor would answer silence to both. Suspending BEFORE beginRun is
+    // what makes "the barrier never meets a live-owned track" true by order
+    // rather than by luck. It comes back afterwards as a FRESH arm.
+    if (liveMonitor_) liveMonitor_->suspendForRender();
+
     // Get the synth output component
     std::shared_ptr<twComponent> synthOutput = rootComponent();
     if (!synthOutput) {
@@ -705,11 +751,21 @@ void SApplication::startRender(const audio::RenderParams &params)
         // full pause ("offline renders stay exact").
         sched->pauseBackground();
         renderSession_->onComplete =
-            [sched](bool /*success*/, const char * /*error*/) { sched->resumeBackground(); };
+            [this, sched](bool /*success*/, const char * /*error*/) {
+                sched->resumeBackground();
+                // The session thread is Qt-free by contract, so the live lane
+                // is re-armed by a QUEUED call that runs on the main thread.
+                QMetaObject::invokeMethod( this, "resumeLiveAfterRender",
+                                           Qt::QueuedConnection );
+            };
     } else if (proj) {
         proj->pauseRevalidation();
         renderSession_->onComplete =
-            [proj](bool /*success*/, const char * /*error*/) { proj->resumeRevalidation(); };
+            [this, proj](bool /*success*/, const char * /*error*/) {
+                proj->resumeRevalidation();
+                QMetaObject::invokeMethod( this, "resumeLiveAfterRender",
+                                           Qt::QueuedConnection );
+            };
     }
 
     // Start rendering
@@ -720,11 +776,26 @@ void SApplication::startRender(const audio::RenderParams &params)
         // Render never launched → onComplete will not fire; resume now.
         if (sched) sched->resumeBackground();
         else if (proj) proj->resumeRevalidation();
+        resumeLiveAfterRender();
     }
+}
+
+void SApplication::resumeLiveAfterRender()
+{
+    if( liveMonitor_ ) liveMonitor_->resumeAfterRender();
+}
+
+void SApplication::liveLanesChanged()
+{
+    if( liveMonitor_ ) liveMonitor_->refresh();
 }
 
 void SApplication::setPlaybackRunning( bool play )
 {
+    // BEFORE the frozen lane moves (see SLiveMonitor::transportAboutToChange):
+    // startOutput() starts the readahead immediately, and a track that monitor
+    // Auto is about to release must stop being live-owned first.
+    if( liveMonitor_ ) liveMonitor_->transportAboutToChange( play );
     if( !t3Speaker_ ) return;
     if( play ) {
         // Run barrier immediately before startOutput(), which performs the
@@ -739,129 +810,26 @@ void SApplication::setPlaybackRunning( bool play )
     }
 }
 
-audio::RecordingSession *SApplication::recordingSession() const
-{
-    return recordingSession_.get();
-}
-
 bool SApplication::isRecordingActive() const
 {
-    return recordingSession_ && recordingSession_->isRunning();
+    return audioRecorder_ && audioRecorder_->isActive();
 }
 
-// AUDIO THREAD. Atomics only — no Qt, no allocation (THREADING.md rule 1).
-// The first published position of a take is the first frame the user can hear,
-// so whatever the recorder has captured by then IS the priming lag. Stamped
-// once per take with a CAS, so later callbacks cost one relaxed load.
-void SApplication::noteMonitorAudibleRealtime()
+bool SApplication::startRecording()
 {
-    if( recordPrimingFrames_.load( std::memory_order_relaxed ) != NOT_PRIMED )
-        return;
-    if( !isRecordingActive() ) return;
-    std::uint64_t expected = NOT_PRIMED;
-    recordPrimingFrames_.compare_exchange_strong(
-        expected, recordCaptureFrames_.load( std::memory_order_relaxed ),
-        std::memory_order_relaxed );
+    // Everything a record start MEANS lives in SAudioRecorder (proposal 21
+    // L3b): the transport edge through setPlaybackRunning(), the capture
+    // segment on the app's ONE input pump, the growing clip, the placement
+    // conversion and the one-macro commit at stop. This is the entry point and
+    // nothing else.
+    return audioRecorder_ ? audioRecorder_->start() : false;
 }
 
-offset_t SApplication::recordMonitorPrimingFrames() const
+void SApplication::stopRecording()
 {
-    const std::uint64_t v = recordPrimingFrames_.load( std::memory_order_relaxed );
-    return ( v == NOT_PRIMED ) ? 0 : (offset_t) v;
+    if( audioRecorder_ ) audioRecorder_->stop();
 }
 
-void SApplication::startRecording(const audio::RecordingParams &params)
-{
-    if (!recordingSession_) {
-        recordingSession_ = std::make_unique<audio::RecordingSession>();
-    }
-
-    // Remember where capture begins so the view can draw the growing in-progress
-    // region (the worker advances the locator from here as it captures).
-    recordingStartFrame_ = getGlobalLocatorPos();
-
-    // The engine session has no app knowledge: hand it the start position and
-    // a realtime-safe playhead callback (atomic store only — record thread!).
-    audio::RecordingParams p = params;
-    p.startLocatorFrames = (std::uint64_t) recordingStartFrame_;
-
-    // Fresh take: nobody has published an audible frame yet, and until the
-    // monitor starts the record worker is the only thing that can move the
-    // playhead at all.
-    recordCaptureFrames_.store( 0, std::memory_order_relaxed );
-    recordPrimingFrames_.store( NOT_PRIMED, std::memory_order_relaxed );
-    recordLocatorFromCapture_.store( true, std::memory_order_relaxed );
-
-    const std::uint64_t startFrames = (std::uint64_t) recordingStartFrame_;
-    recordingSession_->onPosition = [this, startFrames](std::uint64_t pos) {
-        // The captured-frame count is kept ALWAYS: it is what measures the
-        // priming lag below, and it stays meaningful after the speaker has
-        // taken the playhead over.
-        recordCaptureFrames_.store( pos >= startFrames ? pos - startFrames : 0,
-                                    std::memory_order_relaxed );
-        // The playhead itself only follows the capture while nothing is
-        // audible. Once the monitor is running the speaker publishes the
-        // position it is actually delivering, which is the one the user can
-        // hear — and the one the meters and the MIDI-out pump already use.
-        if( recordLocatorFromCapture_.load( std::memory_order_relaxed ) )
-            setGlobalLocatorPosRealtime((offset_t) pos);
-    };
-
-    // DIAGNOSTIC: which physical devices are involved.
-    // The evidence so far says whichever stream opens SECOND perturbs the one
-    // already open (a take where the input opened first came out 8.6 % fast; a
-    // take where the output opened first played slow), and the first thing that
-    // would explain is input and output being the same interface. Every
-    // existing rate diag is emitted BEFORE the other stream exists, so none of
-    // them can show it.
-    TW_LOGI( "app", "record devices — input='%s', output='%s'",
-             p.inputDeviceId.c_str(),
-             t3Speaker_ ? t3Speaker_->outputDevice().c_str() : "(no speaker)" );
-
-    // Start capture first, so isRecordingActive() is already true before the
-    // monitoring playback below produces its first buffer.
-    recordingSession_->start(p);
-
-    // Monitoring: play the existing arrangement so the user hears it while
-    // recording. Output is best-effort — capture and the playhead still work if
-    // it fails (the worker drives the locator regardless).
-    if (!isPlaying_ && currentProject_) {
-        // The root is a PRESENCE check only: there is nothing to monitor
-        // without one.
-        if (currentProject_->getRootComponent()) {
-            // NO graph seek here (same reason as SMainWindow::startPlaying):
-            // an external seek cascade races in-flight page freezes, which
-            // serialize on cursorMutex_ while a seek takes only mutex(). The
-            // monitoring playback starts at the locator because the engine
-            // pulls pages BY POSITION, not because the graph's cursors were
-            // moved.
-            //
-            // The monitoring playback is a RUN like any other (D4): it is the
-            // readahead reading the arrangement, instruments included, so it
-            // gets the same barrier immediately before startOutput().
-            beginRun( getGlobalLocatorPos() );
-            t3Speaker_->startOutput();
-            isPlaying_ = true;
-            // Hand the playhead to the speaker. startOutput() returns before
-            // the device actually starts (twSpeaker defers it until the
-            // readahead is primed), so between here and the first callback
-            // NOBODY advances the locator — which is exactly right: nothing is
-            // audible yet, so the playhead must not move. The first
-            // publishPosition then takes over and records how much capture went
-            // by in the meantime.
-            recordLocatorFromCapture_.store( false, std::memory_order_relaxed );
-        }
-    }
-
-    // Drive the playhead repaints while recording (the worker stores positions
-    // lock-free; pumpLocator turns them into repaints and self-stops at the end).
-    if( locatorTimer_ && !locatorTimer_->isActive() )
-        locatorTimer_->start();
-
-    // Meters follow the monitoring playback started above. isPlaying_ was set
-    // directly here rather than through setPlaying(), so arm the pump explicitly.
-    startMetering();
-}
 
 void SApplication::setSelectionFromPaths(const QList<QList<int>> &paths)
 {

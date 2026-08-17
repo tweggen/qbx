@@ -71,6 +71,19 @@ int CaptureBackend::openDevice(const std::string & /*deviceName*/,
 
     config_.outputLatencyFrames = config_.bufferFrames;
 
+    // FRAME 0 IS THE FIRST FRAME OF THE DEVICE SESSION (proposal 21 L1a,
+    // design D5; testkit rule 1). It used to be cleared in startOutput(), i.e.
+    // per PLAYBACK session — which was the same thing right up until the live
+    // lane made the device outlive the transport: arm, play, stop, play again
+    // and the second start would erase what the monitored input had recorded.
+    // The device open is the one event that really does begin a new recording.
+    clearCapture();
+    {
+        std::lock_guard<std::mutex> lock(captureMutex_);
+        capture_.sampleRate = config_.sampleRate;
+        capture_.channels   = config_.channels;
+    }
+
     syslog(LOG_INFO,
            "audio: CaptureBackend active (%u Hz, %u ch, %u-frame blocks, %.2fx real time)"
            " — audio is recorded to memory, not played.",
@@ -98,8 +111,8 @@ int CaptureBackend::startOutput()
 {
     if (running_.load(std::memory_order_relaxed)) return 0;
 
-    clearCapture();
-
+    // NOT cleared here — see openDevice(). The format is re-stated because a
+    // negotiation between open and start can still have moved it.
     {
         std::lock_guard<std::mutex> lock(captureMutex_);
         capture_.sampleRate = config_.sampleRate;

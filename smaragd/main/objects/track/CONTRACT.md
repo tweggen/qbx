@@ -276,3 +276,52 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     hear. Trim and Off are NOT redirected — there the static value is still the
     thing being edited (design §11 decision 3). The locator comes from
     `SAppContext::getGlobalLocatorPos()`, which P5 added for exactly this.
+
+## Live input / monitoring (proposal 21 L1b, design D9)
+
+16. **`trackInput` is a PORTABLE STRING and `isLiveOwnedLane` is a WIRING
+    PREDICATE.** The input selector is stored as written
+    (`none | audio:<device>:<mask> | midi:<port>:<ch|any> | keyboard`) and
+    parsed once, by the plan builder, on the main thread — the model's job is
+    to round-trip it, and an unknown spelling must survive a save/load rather
+    than be normalised away. `monitorMode` is `auto|on|off` with AUTO the tape
+    machine (input while STOPPED or RECORDING). Both are written only when they
+    are not the default, so every project written before this phase
+    re-serializes byte-identically, and `liveOwnedLane_` is NEVER written: it
+    describes this session's monitoring, not the project.
+
+17. **`isLiveOwnedLane()` is consulted at the two places solo already is and
+    NOWHERE ELSE** — `SStdMixer::reconnectTracksToMixer` nulls a top-level
+    closure member's plug, `STrack::applyChildTrackAudibility` `setClipMuted`s
+    a nested one — and it is deliberately kept OUT of `ssolo::isLaneAudible`.
+    Folding it in would drop a live child's EVENTS from a folder instrument's
+    feed and darken its meters, which are exactly the two things a monitored
+    track must keep doing.
+
+18. **`ArmedForRecording` is INERT ON LOAD.** The flag round-trips through the
+    file untouched, but a track that arrived armed is not a monitoring source
+    until the user arms it in THIS session (`SLiveMonitor::projectChanged()`
+    records the set). Opening a project must not open the microphone.
+
+19. **A LIVE RECORDING GOES INTO NEITHER THE BUS MIXERS NOR THE EVENT CLIP
+    SET** (proposal 21 L3b, design D7). `trackChildWasAdded` /
+    `WasRemoved` / `DurationChanged` route on `SObject::isLiveRecording()`
+    BEFORE they route on `contentKind()`, and the route is "do nothing but the
+    duration bookkeeping". The argument is exactly the one invariant 5b makes
+    for a MIDI clip: a growing recording has no root component, so inserting it
+    as a clip entry would cost a dummy freeze per page per clip AND make
+    `twView::getComponent() returned nullptr` fire once per freeze forever —
+    and its length moves ten times a second, which is the traffic design D7
+    says must not reach the root. The predicate is on the BASE CLASS for the
+    same reason `contentKind()` is: the track must route by it without knowing
+    the concrete type, and `objects/track` has no edge to `objects/wave`.
+
+20. **WHILE A LANE IS LIVE-OWNED, THE ROOT WALK IS DEFERRED AND ISSUED ONCE AT
+    DISARM.** `invalidateRootWalkOrDefer()` accumulates the union of the ranges
+    and `setLiveOwnedLane(false)` flushes exactly one
+    `invalidateRenderPathRange()` (design D7). The walk is the expensive half
+    of a clip edit — from the project root down, per hop, mapping domains —
+    and while the pump owns the lane its frozen output is not being summed at
+    all, so a walk per edit buys nothing. Note this is the GENERAL rule for
+    edits during monitoring; the growing recording clip is covered by 19 and
+    never reaches it.

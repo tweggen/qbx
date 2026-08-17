@@ -44,7 +44,7 @@ it has no place in the dataflow DAG at all — and it must stay core-only becaus
 | tw/sinks | file writers (WAV/OGG/MP3), frame sinks | tw303a/sinks/CONTRACT.md |
 | tw/playback | speaker, audio engine, readahead | tw303a/playback/CONTRACT.md |
 | tw/render | **the rendering engine** (offline) | tw303a/render/CONTRACT.md |
-| tw/record | recording session | tw303a/record/CONTRACT.md |
+| tw/record | capture bridge (one input pump, three sinks) + recording session | tw303a/record/CONTRACT.md |
 | tw/schedule | async revalidation (IRevalidatable) | tw303a/schedule/CONTRACT.md |
 | tw/analysis | WAV metrics for tests | tw303a/analysis/CONTRACT.md |
 | tw/sidecar | derived-data QAF container + LRU store | tw303a/sidecar/CONTRACT.md |
@@ -88,7 +88,7 @@ minimal.
 | app/model | SObject/SLink/SProject document tree | main/model/CONTRACT.md |
 | app/objects/cut | clip window (SCut) + renderer + window actions | main/objects/cut/CONTRACT.md |
 | app/objects/midi | event clip (SMidiSequence/SMidiCut) + renderer + event verbs | main/objects/midi/CONTRACT.md |
-| app/objects/wave | sample object + renderer + sample actions | main/objects/wave/CONTRACT.md |
+| app/objects/wave | sample object + renderer + sample actions; the GROWING recording content (proposal 21 L3b) | main/objects/wave/CONTRACT.md |
 | app/objects/track | track + clip sync to engine + placement actions | main/objects/track/CONTRACT.md |
 | app/objects/mixer | root mixer, plugin chain model, asset actions | main/objects/mixer/CONTRACT.md |
 | app/actions | command framework + generic verbs | main/actions/CONTRACT.md |
@@ -98,7 +98,7 @@ minimal.
 | app/pluginui | plugin browser/editor widgets | main/pluginui/CONTRACT.md |
 | app/eventui | event editor (piano roll) + virtual keyboard | main/eventui/CONTRACT.md |
 | app/servicesui | render/record/options dialogs | main/servicesui/CONTRACT.md |
-| app/shell | SApplication, SMainWindow, main() — composition root | main/shell/CONTRACT.md |
+| app/shell | SApplication, SMainWindow, main() — composition root; the live monitor, the MIDI-out pump and the AUDIO RECORDER | main/shell/CONTRACT.md |
 | app/testkit | qxa runner, audio assertions | main/testkit/CONTRACT.md |
 
 ## Cross-module protocols (read these before touching audio paths)

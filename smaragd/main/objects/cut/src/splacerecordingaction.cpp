@@ -15,8 +15,11 @@ using namespace strackpath;
 
 SPlaceRecordingAction::SPlaceRecordingAction( const QList<int> &trackPath,
                                               const QString &filePath,
-                                              offset_t timePos )
-    : trackPath_( trackPath ), filePath_( filePath ), timePos_( timePos )
+                                              offset_t timePos,
+                                              offset_t srcOffset,
+                                              length_t length )
+    : trackPath_( trackPath ), filePath_( filePath ), timePos_( timePos ),
+      srcOffset_( srcOffset ), length_( length )
 {
 }
 
@@ -47,8 +50,15 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     if( !hasDur || waveDur == 0 ) {
         return {false, nullptr};
     }
+    // The SUB-RANGE of the recording this call places (proposal 21 L3b): the
+    // whole file by default, one loop pass when the recorder is cycling.
+    offset_t srcOff = srcOffset_ < 0 ? 0 : srcOffset_;
+    if( srcOff >= (offset_t) waveDur ) return {false, nullptr};
+    length_t span = (length_t)( (offset_t) waveDur - srcOff );
+    if( length_ > 0 && length_ < span ) span = length_;
+
     const offset_t recStart = timePos_;
-    const offset_t recEnd = recStart + (offset_t)waveDur;
+    const offset_t recEnd = recStart + (offset_t)span;
 
     // The lane's columns overlapping the recording span. Paths are computed
     // NOW and stay valid through the plan: place-clip appends new links and
@@ -86,10 +96,11 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
             if( col.start > cursor ) {
                 composite.append( new SPlaceClipAction(
                     trackPath_, filePath_, cursor,
-                    cursor - recStart, (length_t)( col.start - cursor ) ) );
+                    srcOff + cursor - recStart,
+                    (length_t)( col.start - cursor ) ) );
             }
             composite.append( new SAddTakeAction(
-                col.path, filePath_, col.start - recStart ) );
+                col.path, filePath_, srcOff + col.start - recStart ) );
         }
         cursor = std::max( cursor, std::min( colEnd, recEnd ) );
     }
@@ -97,7 +108,7 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
         // Trailing gap; when nothing overlapped at all this is the whole
         // file at timePos — today's plain placement.
         composite.append( new SPlaceClipAction(
-            trackPath_, filePath_, cursor, cursor - recStart,
+            trackPath_, filePath_, cursor, srcOff + cursor - recStart,
             (length_t)( recEnd - cursor ) ) );
     }
 
@@ -110,6 +121,14 @@ void SPlaceRecordingAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "filePath", filePath_ );
     elem.setAttribute( "timePos", QString::fromStdString(
                            Fraction( timePos_, 1 ).toString() ) );
+    // Only when non-default: the round-trip audit requires that an attribute a
+    // fixture does not declare must not appear.
+    if( srcOffset_ != 0 )
+        elem.setAttribute( "srcOffset", QString::fromStdString(
+                               Fraction( srcOffset_, 1 ).toString() ) );
+    if( length_ != 0 )
+        elem.setAttribute( "length", QString::fromStdString(
+                               Fraction( length_, 1 ).toString() ) );
 }
 
 bool SPlaceRecordingAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -118,6 +137,10 @@ bool SPlaceRecordingAction::readXml( const QDomElement &elem, int /*version*/ )
     filePath_ = elem.attribute( "filePath", "" );
     timePos_ = (offset_t)parseFractionOrDouble(
         elem.attribute( "timePos", "0" ).toStdString() ).toDouble();
+    srcOffset_ = (offset_t)parseFractionOrDouble(
+        elem.attribute( "srcOffset", "0" ).toStdString() ).toDouble();
+    length_ = (length_t)parseFractionOrDouble(
+        elem.attribute( "length", "0" ).toStdString() ).toDouble();
     return true;
 }
 

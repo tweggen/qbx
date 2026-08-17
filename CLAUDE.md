@@ -937,74 +937,157 @@ head PNG), plus `action_roundtrip_test`. NOT gated: plugin-gesture punch-in,
 Delete over a marquee (a QAction shortcut, not synthesisable from a script),
 Latch/Write passes, the read-value display, pixel exactness.
 
-## Recording Audio
+## Live monitoring (proposal 21 L1a/L1b — executed 2026-08-17)
 
-Smaragd supports recording from input devices (microphone, line-in, etc.) via **Record** button in the transport toolbar or **Ctrl-R** / **Cmd-R** keyboard shortcut. Recorded audio is automatically converted to clips and placed on armed tracks.
+An audio input is heard through the armed track's own insert chain, its folders
+and the master, on the same plugin instances playback uses, while the rest of
+the arrangement keeps playing from frozen pages. The engine half is `tw/playback`
+(L1a: `twLivePlan`, `LiveGraphPump`, `twLiveMixRing`, `twEngineClock`, the
+`twSpeaker` device×frozen×live machine); the app half is `SLiveMonitor` +
+`SLivePlanBuilder` + `SLiveAudioInputSource` in `main/shell` (L1b). Design:
+`plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md` D1–D5 and D9. Invariants:
+`tw303a/playback/CONTRACT.md` inv. 13–18, `main/shell/CONTRACT.md` inv. 12–18,
+`main/objects/track/CONTRACT.md` inv. 16–18, `main/objects/mixer/CONTRACT.md`
+inv. 5–6, `main/timeline/CONTRACT.md` inv. 21, `main/testkit/CONTRACT.md` 10–13.
 
-### Recording Flow
+**Read this before touching the live lane — the obvious design is wrong, and it
+is wrong in a way that produces silence rather than a crash.**
 
-1. **Arm tracks:** Click ARM button (red "R") on track headers to select which tracks receive recorded audio
-2. **Select input device:** Edit → Options → Audio tab → Input device dropdown
-3. **Start recording:** Click record button or press Ctrl-R/Cmd-R
-4. **Progress dialog:** Shows real-time duration and allows stopping via "Stop Recording" button
-5. **Automatic placement:** On completion, WAV file is converted to `SPlainWave` → `SCut` and placed on all armed tracks at current time position
-6. **Auto-disarm:** Armed tracks are automatically disarmed after recording placement
+| Thing to know | Why |
+|---|---|
+| The pump is a **live executor over PROCESSORS**, not a second component graph | Only three pieces of the graph survive block-wise and are pure in position: `twPluginSlotProcessor::render(…, positional=true)`, `twGainStage::applyGain` over an `Envelope` snapshot, and `twRewire`'s channel map. The plan is those three, per track, in order, plus the frozen inputs a folder sums by position. Everything else — pages, latches, the readahead — is unreachable from a `RenderPolicy::Never` thread by construction. |
+| **Ownership is released BEFORE the re-wire on disarm**, not after | The natural reading ("release it once the plan has retired") makes the freeze path regain a still-live-owned chain: the next root page is frozen as SILENCE for those tracks, the epoch gate flips the RT onto it, and the folder goes quiet for the whole tail. Measured: a 256 ms hole and 8 `liveOwnedRefusals`. Releasing while the exclusion is still applied is safe — a nulled plug is never planned — and the first re-summed page then carries real audio. |
+| **`SObject::invalidateRenderPath()` on the mixer reaches NOTHING BELOW IT** | It walks from the project root and stales every chain CONTAINING the object it was called on. The exclusion therefore invalidates PER CLOSURE MEMBER; one call on the mixer leaves the members' own pages being served, and that is the second way a track stays silent after a hand-back. |
+| A transport edge **rebuilds before `twSpeaker::startOutput()`** | `setPlaybackRunning` starts the readahead first and flips `isPlaying_` last, so a rebuild driven by the flag alone leaves a track monitor Auto is about to release still live-owned while the readahead is already freezing it — six refusals per Play. `transportAboutToChange(playing)` runs at the top of `setPlaybackRunning`; `transportChanged()` follows and adds the one explicit reposition. |
+| `isLiveOwnedLane()` is a **wiring predicate**, never folded into `ssolo::isLaneAudible` | The mixer nulls a top-level closure member's plug and a folder `setClipMuted`s a nested one, exactly as solo does — but a live-owned track is still audible in every OTHER sense: its events still reach a folder instrument's feed and its meters still light. Folding the two would darken both. |
+| Monitor **Auto is the tape machine** | Input while STOPPED or RECORDING, the track's own material on plain Play (Cubase "Tapemachine", REAPER "auto"). **On** always monitors, **Off** never does. The live set is `{armed && monitorEffective} ∪ {monitor == on}`, so a track on **On** stays live whether it is armed or not — which is why a case that wants to disarm mid-play has to drop it to Auto as well. |
+| `trackInput` is a **portable string**, `ArmedForRecording` is **inert on load** | `none \| audio:<device>:<mask> \| midi:<port>:<ch\|any> \| keyboard`, stored as written and parsed once by the plan builder; the machine-local device id lives in `SSettings`. A track that arrived armed out of a file is not a monitoring source until the user arms it in THIS session — opening a project must not open the microphone. L1b renders `audio:` only; the other two spellings round-trip and wait for L2. |
+| **`openLive()` REFUSES a device rate that is not the project rate** | Ring entries are stamped in PROJECT frames and the RT sums them straight into the device buffer, so the two line up only while the rates are equal — and a ring entry carrying a position cannot go through a resampler. It is refused loudly: a log line naming both rates, `liveRateRefusals()`, and the ARM tooltip saying so. |
+| The **`Closure` master mode is REFUSED**, not approximated | `checkMasterShape` is asked before anything is re-wired. The plan builder can express "the master joins the closure", but the RT half is not wired — `twSpeaker` adds the frozen root page whenever the frozen lane is PLAYING and nothing reads `twLivePlan::masterLinear` — so such a plan would be summed on top of a page that already contains those tracks and the arrangement would be heard doubled. Unreachable today (`SStdMixer` builds exactly the linear shape); a master insert chain lands here first. |
+| A **render suspends every live lane** and comes back as a FRESH arm | `startRender()` suspends BEFORE `beginRun()`, so the run barrier never meets a live-owned track; the resume is a QUEUED call because the session's `onComplete` runs on the render thread. "Fresh" is the point: the closure is recomputed from the model as it then stands. Export ignores the split, as in Cubase. |
+| The app **never touches the ring and never renders on the pump** | Plans are built on the main thread and published with one `setPlan()`. The re-rooted horizon demands — one handle per frozen input root, superseded by replacing the handle — are issued from a 40 ms main-thread timer, because the pump may not demand. |
 
-### Architecture
+**Knob:** `SMARAGD_AUDIO_INPUT_BACKEND=file:<wav>|null|default` (L0) picks the
+input ahead of the platform; `null` is the `--test-case` default. `FileAudioInput`
+replays a WAV in 1024-frame blocks through a real capture thread and ring, which
+is what makes a monitoring case assertable at all.
 
-**Audio input abstraction:** `tw303a/include/audio/audio_input.h` defines `AudioInput` interface (platform-agnostic):
-- `openDevice(deviceId, sampleRate)` — select input device
-- `startCapture()` / `stopCapture()` — control recording stream
-- `read(buffer, frameCount)` — pull audio samples (non-blocking)
-- `listDevices()` — enumerate available input devices
+Gates: the qxa cases `monitor_through_chain`, `monitor_latency`,
+`monitor_folder_closure`, `arm_during_playback`, `render_while_armed` — all
+`RUN_SERIAL` at `SMARAGD_CAPTURE_SPEED=1` against a paced `file:` input — plus
+`playback_test`, `devices_input_test` and `action_roundtrip_test`. Measured:
+monitored lag **5120 frames = 106.7 ms** (correlation 1.000) against an 8192
+budget; a mid-play hand-back gap of **8 frames** against 1024; an armed render
+**byte-identical** to the unarmed one; `liveThreadRefusals` and
+`liveOwnedRefusals` **0** in every case. `monitor_latency` is a WALL-CLOCK bound
+(like `twlog_test`): 48/50 under a second worktree's suite, 8/8 idle — confirm the
+box is idle before reading it as a regression. **NOT gated:** real device latency and
+jitter, WASAPI shared under load, ASIO, and hearing an ARMED track's own clips
+(design §10.1 — it needs proposal 20 §2).
 
-**Platform implementations:**
-- `WASAPIInput` (Windows) — shared-mode capture via WASAPI
-- `ALSAInput` (Linux) — ALSA PCM device capture
-- `CoreAudioInput` (macOS) — HAL audio unit input (needs read callback implementation)
+## Recording Audio (proposal 21 L3b - executed 2026-08-17)
 
-**Recording session:** `tw303a/src/recording_session.cc` manages background recording thread:
-- Creates `AudioInput` for selected device
-- Opens WAV output file via `createAudioFileWriter(AudioFormat::WAV)`
-- Records loop: pulls frames from input → writes to WAV → emits progress every ~100ms
-- Handles stop request gracefully with file cleanup
+Arm a track, press Record (or Ctrl-R): a **growing clip** appears on every armed
+lane and draws its waveform as the capture arrives, the app stays usable
+throughout, and at stop the whole take is placed as **one undo step** -
+latency-compensated, one take per loop pass, clamped to the punch region.
+Design: `plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md` **D6** (the
+placement conversion) and **D7** (one input pump, three sinks). Invariants:
+`main/shell/CONTRACT.md` inv. 19-29, `main/objects/wave/CONTRACT.md` R1-R7,
+`main/objects/track/CONTRACT.md` inv. 19-20, `main/objects/cut/CONTRACT.md`
+("A cut over a LIVE RECORDING"), `tw303a/record/CONTRACT.md` inv. 9-9c,
+`main/testkit/CONTRACT.md` 14-19.
 
-**UI integration:**
-- Transport toolbar: Record button with play/pause icons
-- Keyboard shortcuts: Ctrl-R (Windows/Linux), Cmd-R (macOS), numpad * (all platforms)
-- Per-track ARM buttons: Red "R" toggle on track control strips (mute/solo area)
-- Options dialog: Input device selection (Audio tab)
-- Progress dialog: `SRecordingProgressDialog` shows duration MM:SS.mmm, stop button
-- Settings: Input device ID persisted in per-machine INI config
+**Read this before touching recording - two of the obvious designs are wrong,
+and one of them produces a two-second stall and a segfault rather than a
+symptom you can read.**
 
-**Cut placement:** `SMainWindow::onRecordingCompleted()`:
-- Loads recorded WAV as `SPlainWave` object
-- Wraps in `SCut` for timeline placement
-- Creates `SLink` with timestamp = recording start position
-- Parents link to track (UI automatically syncs)
-- Places cut once per armed track (one input → multiple track recording)
+| Thing to know | Why |
+|---|---|
+| `SAudioRecorder` (`main/shell`) is what a record start MEANS. It is a sibling of `SMidiOutPump` / `SAutomationRecorder` / `SLiveMonitor`: one per app, main thread, a 100 ms `QTimer` | Everything used to be spread across `SApplication::startRecording`, `SMainWindow::onRecordTriggered` and `onRecordingCompleted`, and the transport half of it bypassed `setPlaying()` entirely. |
+| **THE PLACEMENT CONVERSION IS ONE NAMED FUNCTION**, `app/shell/srecordplacement.h`: `placementFrame(k) = P0 + k - inputLatencyProj - outputLatencyProj + userOffsetProj` | `P0` is the project frame capture frame 0's HOST TIME maps to through the ENGINE-owned clock (`twEngineClock::read()`'s `{deliveredFrame, hostNs}`) - never `SApplication`'s locator, which is a UI-thread value and would re-derive a publish-lag correction the clock already carries. The sign is D6's derivation: the performer plays to what they HEAR. |
+| `recordingOffsetMs` is **POSITIVE = EARLIER**, and the negation lives in ONE setter | The app-wide convention (37 P7's `midi/offsetMs`). The design writes the term with a PLUS, so `setUserOffsetMs(+20)` at 48 kHz stores `-960` - spelled once, with the reasoning beside it, instead of at every call site. |
+| The anchor is taken **ONCE, RETROSPECTIVELY, and only from THIS run** | A take from a stopped transport captures its first frames before the RT has published anything (the readahead primes first), so the bridge stamps `captureStartHostNs()` and the mapping is applied BACKWARD when an anchor appears. The publication counter is process-global, so the anchor must have `seq >` the one sampled at start - `SMidiOutPump::resetRun`'s trap, again. |
+| The **output latency is read WITH the anchor, not at start** | A take begun from a stopped transport OPENS the device as part of starting, so at `start()` there is no backend to ask and the term is silently 0. Measured: that put the whole compensation 1024 frames out. |
+| **The trim floor is the TRANSPORT start, not the record start** | D6 trims "frames captured before the transport start". Recording into a run that was already playing legitimately places audio EARLIER than the button press - that is what latency compensation IS. A Cubase-style catch range is NOT implemented. |
+| **ONE INPUT PUMP, and `SLiveMonitor` owns it** | The `CaptureBridge` (L3a) drains the input device's ring; monitoring pops its live ring (`SLiveAudioInputSource` -> `pullLive`) and recording opens a capture SEGMENT on the SAME bridge (`beginCapture`). So a record start while monitoring does not gap the monitored signal, and the recorder BORROWS the bridge through a hold count that stops `closeInputIfUnused()` pulling the device out from under a take. |
+| The bridge's **pages are for a RECORDING, not for monitoring** | `capturePages=false` on the monitor's bridge: growing them for a monitoring session leaks ~370 KB/s of RAM for audio nobody asked to keep. `liveEnabled=false` for a recording with monitoring off, or the ring fills once and counts every frame of the take as a phantom overrun. |
+| `SRecordingContent` (`main/objects/wave`) is a **VIEW of the growing capture**, and `getRootComponent()` is NULL | `STrack` routes it out of the bus mixers on `SObject::isLiveRecording()` - the same decision `objects/track` already makes for MIDI clips, for the same reason: no component to freeze, so a dummy freeze per page per clip plus `twView::getComponent() returned nullptr` forever. What you HEAR while recording is the live monitor lane; what you SEE is this clip. |
+| **A cut over a live recording does no capture, no reader, no aspect** | THIS IS THE ONE THAT BITES. `SCut::buildCapture_` RENDERS the content into a fixed-size snapshot; over a growing multi-second take that cost seconds on the UI thread and then **segfaulted** (found by `record_punch`'s `previewNonEmpty` assertion). Separately, a growing clip re-scheduling a Preview recompute per 100 ms tick starved the bridge thread badly enough to **lose 2.2 s of input to ring overruns** and put the capture backend 2.5 s behind. All four paths (`buildCapture_`, `ensureReader`, `invalidateAspects`, `getPreview`) short-circuit on `isLiveRecording()`. |
+| Preview peaks are **EXTENDED from the frontier**, in whole hops, never recomputed | A five-minute take rescanned ten times a second is 90 GB of reads a minute. Folding a partial hop would bake silence into a bucket for frames about to arrive. |
+| **Loop passes are ARITHMETIC, not wrap detection** | The conversion is linear in capture frame, so the pass is `floor((placement - loopIn)/loopLen)`. A 100 ms poll could not see a wrap between two ticks. Each pass is one `place-recording` at the loop start, and that verb's own proposal-17 planner turns pass 2 onto pass 1's column as a TAKE - so proposal 17's "phase 5" needed no new machinery, only `srcOffset`/`length` on a verb that already existed. |
+| **Punch is a CLAMP, not a race** | The take ends once the placement passes the out point and the span is then clipped to `[in, out)` however far past it the tick got - the placed clip is exact to the frame. The project has ONE range: the LOOP when Cycle is on, the PUNCH region when it is off. |
+| The growing clips are **not actions**; the placement is **one macro** | The clip at record start is a direct model mutation, like auto-disarm. At stop the growing clips are removed FIRST (else `place-recording` would stack a take on them) and then one macro of `place-recording` calls is submitted. |
+| `locatorHeldElsewhere()` is **RETIRED** | It existed because the old path drove the playhead from the record worker. A record start now goes through `setPlaybackRunning()`, so the OUTPUT publication is the playhead authority in every mode - which is also what the placement anchor needs. |
+| The progress dialog is **non-modal and polls** | It used to `exec()` inside the record-button handler, blocking the whole app for the length of a take. |
+| **While a lane is live-owned, the root walk is DEFERRED** and issued once at disarm | `STrack::invalidateRootWalkOrDefer` accumulates the range union; `setLiveOwnedLane(false)` flushes one `invalidateRenderPathRange`. The general rule for edits during monitoring (D7); the recording clip itself never reaches it, being out of the mixers. |
 
-### Recorded File Format
+### Files a take writes
 
-Files written as WAV (PCM, lossless) in project directory:
-- **Filename:** `YYYYMMDD_HHMMSS_mmm_<trackName>.wav` (timestamp with millisecond
-  precision, then the armed track's name — `recording_session.cc:275-281`). That
-  timestamp prefix is what the resources dock's **Cleanup...** dialog matches on.
-- **Sample rate:** Matches project rate
-- **Channels:** **The armed track's input-channel selection**, NOT the project's
-  width — `SObject::recordingChannels_`, a bitmask, filtered out of the input
-  device's own capture width by `filterChannels()`. This entry used to claim
-  "stereo (or project channel count)" and that was never true (see
-  `plan/todo/RECORDING_CHANNEL_COUNT.md`): the mask defaults to `0` = *all*
-  channels, so on a 16-input interface every recording was a 16-channel file
-  with the signal in channel 0 and dither in 1..15 — inaudible before proposal
-  36, a dead right speaker after it. **The default is now bit 0, the first input
-  alone** (`SObject::DEFAULT_RECORDING_CHANNELS`), and the mask is serialized
-  (`recordingChannels='…'`, written only when it differs from the default) so an
-  explicit "All Channels" choice survives a save. `params.channels` on
-  `RecordingParams` is still read nowhere — the width comes from the mask and
-  the device.
-- **Bit depth:** Float32 (internal engine format)
+One WAV per armed track, at the PROJECT rate, written streamingly by the
+bridge's WAV thread out of the capture pages and finalised from them at stop
+(so a slow disk costs `wavLate` and never a ring overrun). Named
+`YYYYMMDD_HHMMSS_zzz_track<N>.wav`, into `--test-output-dir` when there is one,
+else the project's own directory, else Documents.
+
+### Options
+
+Edit -> Options -> Audio gains **Recording offset (+ = earlier)**, +-500 ms, per
+INPUT DEVICE, stored under the device's NAME (`audio/recordingOffsetMs/<name>`)
+so it survives an id change. It is the number a "record a click, look at where
+it landed, type the difference" calibration produces; the driver's *reported*
+latencies are compensated automatically.
+
+### Gates
+
+The qxa cases `record_offset_zero`, `record_loop_takes`, `record_punch`,
+`record_while_monitoring` - all `RUN_SERIAL` at `SMARAGD_CAPTURE_SPEED=1`
+against the paced position-encoded `file:` input with
+`SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800` - plus `takes_recording_placement`
+and `action_roundtrip_test`. Measured: compensation
+**-5824 frames exactly** (4800 reported input + 1024 capture-backend output) and
+**-6784 with `recordingOffsetMs=+20`**, i.e. the offset moved the clip exactly
+**960 frames earlier**; the placement identity `clipStart == placementFrame(trimmed)`
+held to the frame on every run; 7 s over a 2 s cycle gave **one column** whose
+take count EQUALS the pass count (4 and 4 as measured), removed by **one undo**;
+a punch region placed a clip at 48000 of length 48000 **exactly**; and a record
+start on an already-monitoring track opened **no** device and provoked **no**
+device-change deferral.
+
+**A LOOP-PASS COUNT IS A WALL-CLOCK QUANTITY** and must be asserted as a FLOOR.
+It is captured material over loop length, and captured material shrinks when
+the box is loaded enough to cost ring overruns - `record_loop_takes` failed
+exactly that way under a concurrent suite before it was relaxed. The part that
+is NOT load-sensitive, and that `assert-recorded-clip` therefore asserts
+unconditionally, is ONE COLUMN with as many TAKES as there were PASSES.
+
+**NOT gated:** real capture hardware and real driver latencies (`FileAudioInput`
+REPORTS a latency and does not delay by it - the gate is on the conversion, not
+on the physics), ALSA and CoreAudio input, a device rate different from the
+project rate, multi-track recording beyond one WAV per armed track, saving a
+project mid-take (`SRecordingContent` has no loader registration), and the
+Cubase-style **catch range**, which is not implemented - pre-roll frames are
+trimmed.
+
+Also not gated: **`SRecordingRendererInline::draw()`**. The `screenshot` verb
+grabs the SCREEN's root window, blank under `QT_QPA_PLATFORM=offscreen`, so it
+proves nothing about one widget's paint; the verbs that DO gate a paint
+(`assert-track-head`, `assert-lane-alignment`) build one specific widget off
+screen and there is no such verb for the arranger canvas. The growing clip's
+PREVIEW DATA is gated (`record_punch`, `previewNonEmpty`) — what is not is the
+code that turns it into pixels.
+
+**Known limitation:** a record stop STOPS the transport and returns the
+playhead to the record start, whatever the take was recorded into. Right when
+the take started the transport; not what a punch drop-out should do to a run
+that was already playing. `main/shell/CONTRACT.md` records why it was left.
+
+**Channels:** the armed track's input-channel selection (`SObject::recordingChannels_`,
+a bitmask applied per SINK by the bridge — `CaptureWavSink::channelMask`), NOT
+the project's width; **the default is bit 0, the first input alone**
+(`SObject::DEFAULT_RECORDING_CHANNELS`, main PR #52), serialized only when it
+differs. The resources dock's **Cleanup...** dialog matches recordings on the
+`YYYYMMDD_HHMMSS_zzz` timestamp prefix.
 
 ### THE ENDPOINT SAMPLE-RATE TRAP (found the hard way, 2026-08-17)
 

@@ -206,7 +206,7 @@ protected slots:
     void stopPlaying();
     void gotoRangeStart();
     void onRecordTriggered();
-    void onRecordingCompleted();
+    void onRecordingFinished();
 
     void audioDeviceSelected( QAction * );
     void runTestSequence();
@@ -339,6 +339,7 @@ private:
     // session: a modal before every take would be intolerable, and the user may
     // legitimately decide to record anyway.
     bool endpointRateWarningShown_ = false;
+    void warnOnEndpointRateMismatch();
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
     SExternFileList *externFileList_;

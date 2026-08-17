@@ -21,14 +21,13 @@ Invariants:
    QObject machinery (audio/worker threads call it; THREADING.md rule 1).
    The UI playhead is driven by the pumpLocator QTimer.
 2. PlaybackContext implementation: rootComponent()/locatorPosition() UI
-   thread; locatorHeldElsewhere()/publishPosition() audio thread, atomics.
-   locatorHeldElsewhere() is `recording AND nothing audible yet`, never
-   `recording` alone — see tw/record/CONTRACT.md inv. 1. publishPosition()
-   also stamps the priming lag once per take
-   (recordMonitorPrimingFrames), which is what places a recorded take
-   where the performer HEARD themselves: the clip moves EARLIER by
-   priming + outputLatency + inputLatency. A SUM and a minus — the old
-   `+ (output - input)` had the wrong sign and a near-zero magnitude.
+   thread; publishPosition() audio thread, atomics. `locatorHeldElsewhere()`
+   is RETIRED (proposal 21 L3b): a recording is an ordinary transport run
+   and the OUTPUT publication is the playhead authority in every mode.
+   (Main's interim `recordMonitorPrimingFrames` / "held while nothing is
+   audible yet" mechanism from PR #53 is superseded by the same rule: the
+   take is anchored on the engine clock and pre-roll is trimmed — see
+   `SRecordPlacement`.)
 3. Session wiring (render/record onPosition, startLocatorFrames, speaker
    context) happens HERE — engine modules never see the app.
 4. Window layout restore order: openMostRecent() → restoreWindowLayout() →
@@ -147,3 +146,185 @@ Known debt: there is no UI for the per-track MIDI port — the verb and the seri
 
 Known debt: SApplication is the app-wide service locator — the SCC hub;
 Phase 6 splits it into narrow context interfaces.
+
+## The live lane (proposal 21 L1b, design D3/D4/D5/D9)
+
+12. **`SLiveMonitor` is a sibling of `SMidiOutPump` and `SAutomationRecorder`,
+    and it OWNS THE ARM/DISARM ORDERING.** Constructed with the app, destroyed
+    FIRST in `~SApplication` (it joins a `std::thread` — the pump — and closes
+    the input device, and both must happen on the main thread while the log
+    sink is alive and before the speaker goes). A verb never does this work: it
+    raises `SAppContext::liveLanesChanged()` and the sequence happens here,
+    once, with the pump and the speaker in reach.
+
+    ARM: `retireComponentNodes(closure)` → `setLiveOwned(true)` → wire the
+    exclusion + invalidate PER MEMBER → read the ROOT REWIRE's
+    `contentEpochNow()` as `flipEpoch` → open the INPUT → `openLive()` →
+    publish the plan → `requestReposition()`.
+
+13. **DISARM RELEASES OWNERSHIP BEFORE THE RE-WIRE, and the other order is a
+    bug that looks like the right one.** `setLiveOwned(false)` runs while the
+    exclusion is STILL applied — so no freeze can reach the chain between the
+    two (`planPage` skips a nulled plug) — and only then are the flags cleared,
+    the wiring re-applied and `flipEpochPrime` read. Releasing ownership
+    afterwards lets the freeze path regain a still-live-owned chain, the next
+    root page is frozen as SILENCE for those tracks, and the epoch gate flips
+    the RT onto it: measured as a folder that went quiet for the whole 256 ms
+    tail and eight `liveOwnedRefusals`. The departing members keep being
+    rendered by the pump for `kDisarmTailMs` after that, carrying
+    `flipEpochPrime`, which is what covers the hole while the root re-freezes.
+
+14. **The tail only runs while the frozen lane is PLAYING.** With no root page
+    being served there is nothing for the ring to cover, and holding a
+    processor the freeze path is about to want would count refusals for no
+    benefit. `refresh()` therefore finishes the disarm synchronously when the
+    transport is stopped — and it must do so AFTER `current_` has been updated,
+    because `finishDisarm()` computes what is really gone as "departing minus
+    current" and closes the device when `current_` is empty.
+
+15. **A transport edge rebuilds BEFORE `twSpeaker::startOutput()`, not after.**
+    `setPlaybackRunning()` starts the readahead first and flips `isPlaying_`
+    last, so a rebuild driven by the flag alone leaves a track that monitor
+    Auto is about to release still live-owned while the readahead is already
+    freezing its chain. `SLiveMonitor::transportAboutToChange(playing)` is
+    called at the top of `setPlaybackRunning`; `transportChanged()` follows
+    from `setPlaying` and adds the one explicit reposition.
+
+16. **`SObject::invalidateRenderPath()` ON THE MIXER STALES THE MIXER AND THE
+    ROOT REWIRE AND NOTHING BELOW THEM.** It walks from the project root and
+    stales every chain CONTAINING the object it was called on. The exclusion
+    therefore invalidates PER CLOSURE MEMBER; one call on the mixer leaves the
+    members' own pages being served and is how a track stays silent after a
+    hand-back.
+
+17. **A render suspends every live lane and comes back as a FRESH ARM.**
+    `startRender()` calls `suspendForRender()` BEFORE `beginRun()`, so the run
+    barrier never meets a live-owned track; the session's `onComplete` posts a
+    QUEUED `resumeLiveAfterRender()` because that callback runs on the render
+    thread. "Fresh" is the point: the closure is recomputed from the model as
+    it then stands, never restored from a snapshot.
+
+18a. **The `Closure` master mode is REFUSED, not approximated.**
+    `twlive::checkMasterShape` is asked BEFORE anything is re-wired, and a
+    master that is not a unity sum with an identity map turns monitoring OFF
+    with one log line and a tooltip. The plan builder can express the other
+    mode, but the RT half of it is not wired — `twSpeaker` adds the frozen
+    root page whenever the frozen lane is PLAYING and nothing reads
+    `twLivePlan::masterLinear` — so a Closure-shaped plan would be summed on
+    top of a root page that already contains those tracks and the arrangement
+    would be heard DOUBLED. Unreachable today (`SStdMixer` builds exactly the
+    linear shape); whoever adds a master insert chain lands here first, and the
+    fix belongs in `twSpeaker`.
+
+18. **The app never touches the ring and never renders on the pump.** Plans are
+    built on the main thread and published with one `setPlan()`; the pump is
+    the only thread that reads them. The re-rooted horizon demands (one handle
+    per frozen input root, superseded by replacing the handle) are issued from
+    a main-thread 40 ms timer here, because the pump may not demand.
+
+
+## Audio recording (proposal 21 L3b, design D6/D7/D9)
+
+`saudiorecorder.{h,cpp}` + `srecordplacement.h`. `SAudioRecorder` is a sibling
+of `SMidiOutPump`, `SAutomationRecorder` and `SLiveMonitor`: one per
+`SApplication`, main thread only, owning a 100 ms `QTimer`. It is what a record
+start and a record stop MEAN in the app.
+
+19. **THE PLACEMENT CONVERSION IS ONE NAMED FUNCTION**, `srecordplacement.h`,
+    and it is coded exactly once:
+
+        placementFrame(k) = P0 + k - inputLatencyProj - outputLatencyProj
+                                   + userOffsetProj
+
+    `P0` is the project frame that capture frame 0's HOST TIME maps to through
+    the ENGINE-owned clock anchor (`twEngineClock::read()`'s
+    `{deliveredFrame, hostNs}`) — never `SApplication`'s locator, which is a
+    UI-thread value and would re-derive a publish-lag correction the clock
+    already carries. The sign is design D6's derivation and is not re-argued:
+    the performer plays to what they HEAR (`outputLatency` earlier) and the
+    microphone's sample reaches the ADC `inputLatency` before delivery.
+
+20. **`recordingOffsetMs` is POSITIVE = EARLIER**, the app-wide convention (37
+    P7's `midi/offsetMs`). The design writes the term with a PLUS, so the
+    negation lives in ONE setter — `SRecordPlacement::setUserOffsetMs` — with
+    the reasoning beside it, rather than being spread over call sites.
+
+21. **THE ANCHOR IS TAKEN ONCE, RETROSPECTIVELY, AND ONLY FROM THIS RUN.**
+    Capture frame 0's host time precedes the first publication when a take
+    starts from a STOPPED transport (the readahead primes before the RT
+    publishes), so the bridge stamps `captureStartHostNs()` and the mapping is
+    applied BACKWARD as soon as an anchor appears. The publication counter is
+    process-global and monotone, so the anchor must have `seq >` the one
+    sampled at start — the same trap `SMidiOutPump::resetRun` records.
+
+22. **THE OUTPUT LATENCY IS READ WITH THE ANCHOR, NOT AT START.** A take begun
+    from a stopped transport OPENS the device as part of starting, so at
+    `start()` there is no backend to ask and the term would silently be 0.
+    By the time the clock has published, the device is open by construction.
+    The scaling is `meterLatencyFrames()`'s (proposal 34), restated rather than
+    called because that accessor answers 0 unless `isPlaying_`.
+
+23. **THE TRIM FLOOR IS THE TRANSPORT START, NOT THE RECORD START.** Design D6
+    trims "frames captured before the transport start". That is the record
+    start only when the take STARTED the transport; recording into a run that
+    was already playing legitimately places audio EARLIER than the button
+    press — that is what latency compensation IS — and trimming to the button
+    press would throw the compensation away again. A Cubase-style catch range
+    is NOT implemented.
+
+24. **THE TRANSPORT EDGE IS LAST IN `start()`, AND AFTER `active_`.** Monitor
+    Auto is "input while stopped OR RECORDING" (design D9), so the plan has to
+    be built with `isRecordingActive()` already true or plain Play would take
+    the input away from the take. And it goes through `setPlaybackRunning()`
+    like any other transport start — the old path set `isPlaying_` directly and
+    told neither the MIDI-out pump, nor the automation recorder, nor the live
+    monitor.
+
+25. **THE APP HAS ONE INPUT PUMP AND `SLiveMonitor` OWNS IT.** The bridge is
+    the object that drains the input device's ring (design D7); monitoring pops
+    its live ring through `SLiveAudioInputSource::pull` -> `pullLive`, and
+    recording opens a capture SEGMENT on the same bridge with `beginCapture()`.
+    `SAudioRecorder` BORROWS it — `acquireBridge`/`releaseBridge` is a hold
+    count, and it is what stops `closeInputIfUnused()` pulling the device out
+    from under a take when the last monitored lane disarms mid-recording. A
+    record start while monitoring therefore does NOT gap the monitored signal.
+
+26. **THE GROWING CLIPS ARE NOT ACTIONS; THE PLACEMENT IS ONE.** The clip that
+    appears at record start is a direct model mutation, like auto-disarm: it is
+    transient UI state that the one undoable step at stop replaces. At stop the
+    growing clips are removed FIRST (else `place-recording` would see them as
+    covering columns and stack a take on them) and then one macro of
+    `place-recording` calls — one per armed track, one per LOOP PASS — is
+    submitted, so a whole take is ONE undo.
+
+27. **LOOP PASSES ARE ARITHMETIC, NOT WRAP DETECTION.** The conversion is
+    linear in capture frame, so the pass a frame belongs to is
+    `floor((placement - loopIn) / loopLen)`; the recorder splits at those
+    boundaries and emits one `place-recording` per segment, all at the loop
+    start. `place-recording`'s own proposal-17 planner then turns pass 2 onto
+    pass 1's column as a TAKE. A poll-based wrap detector could not see a wrap
+    that happened between two 100 ms ticks.
+
+28. **PUNCH IS A CLAMP, NOT A RACE.** The take ends once the placement passes
+    the out point, and the placed span is then clipped to `[in, out)` however
+    far past it the tick actually got — so the placed clip is exact to the
+    frame. The project has ONE range: it is the LOOP when Cycle is on and the
+    PUNCH region when it is off.
+
+29. **THE RECORDING DIALOG IS NON-MODAL AND POLLS.** It used to `exec()` inside
+    the record-button handler, blocking the whole app for the length of a take.
+    It now shows, polls `SAudioRecorder` at 10 Hz, follows a stop that happened
+    anywhere else (a punch-out, the record button again), and stops the take
+    when closed.
+
+### Known limitation: a record stop STOPS the transport
+
+`stop()` ends the transport and returns the playhead to the record start,
+whatever the take was recorded into. That is right when the take STARTED the
+transport, and it is what the previous (modal) implementation did; it is not
+what a punch drop-out should do to a run that was already playing, where a
+reference DAW keeps rolling and leaves the playhead alone. Changing it is a
+transport-behaviour decision beyond L3b's brief and it interacts with
+`toggle-playback`'s handling of a redundant Play, so it is recorded here rather
+than guessed at. The trim floor already distinguishes the two cases
+(`wasPlaying_`), so the information a fix needs is present.

@@ -518,6 +518,12 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     // page at the PRE-WRAP offset while the playhead reported loopStart.
     // Deriving it here is what makes "what you hear" == "where the playhead is"
     // on every path, including the two that used to return early.
+    // Proposal 21 L1a: publish what we are SERVING, on every exit including
+    // the miss paths, so the live lane's epoch gate reads the page in hand
+    // rather than looking it up a second time (and possibly getting another).
+    servedEpoch_.store( currentFrozenPage_ ? currentFrozenPage_->contentEpoch.load()
+                                           : 0,
+                        std::memory_order_relaxed );
     if (currentFrozenPage_) {
         currentPageStartPos_ = (uint64_t)currentFrozenPage_->startPosition;
         pageFrameOffset_ = (size_t)(desiredPos - currentPageStartPos_);

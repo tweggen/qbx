@@ -206,12 +206,25 @@ void SStdMixer::reconnectTracksToMixer()
             // CONTAINS a soloed lane has to stay wired, or the nested solo would
             // be silenced by its own parent. Inaudible tracks get a NULL input so
             // their DSP is not pulled at all (processing AND output disabled).
+            //
+            // THE LIVE-OWNED PREDICATE (proposal 21 L1b, design D3) is a
+            // SECOND, SEPARATE term, deliberately not folded into
+            // ssolo::isLaneAudible: a live-owned track is excluded from the
+            // FROZEN SUM (the pump renders it and the RT adds the ring), but
+            // it is still audible in every other sense - its events still
+            // reach a folder instrument's feed and its meters still light.
+            // Folding the two would darken both. A top-level closure member
+            // is always the TOPMOST one by construction, which is why the
+            // mixer's rule is simply "in the closure => null the plug".
             bool audible = false;
+            bool liveOwned = false;
             if( lk ) {
                 SObject &so = lk->getSObject();
                 audible = ssolo::isLaneAudible( this, &so, solo );
+                if( STrack *t = dynamic_cast<STrack *>( &so ) )
+                    liveOwned = t->isLiveOwnedLane();
             }
-            if( !lk || !audible ) {
+            if( !lk || !audible || liveOwned ) {
                 mix->setInput( channel, NULL );
                 mix->setInputLevel( channel, 0 );
             } else {

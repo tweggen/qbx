@@ -908,3 +908,55 @@ Known debt:
     normalized [0,1] for VST3 (invariant 26), i.e. exactly what
     `set-plugin-param` writes and `getParam()` returns. `twNormalizeForAbi()`
     deliberately leaves `ParamValue` alone for the same reason.
+
+45. **LIVE OWNERSHIP IS A PROTOCOL, AND EVERY PART OF IT IS FLAG-GATED**
+    (proposal 21 L1a, design D2/D4). While `setLiveOwned(true)`, the processor
+    belongs to ONE thread — the `LiveGraphPump`, identified by the per-thread
+    render-policy marker `twRtThreadGuard::onLiveThread()`, not by a thread id
+    of its own. A `render()` arriving from any other thread answers SILENCE and
+    bumps the process-wide `liveOwnedRefusals()` counter, with one log line per
+    slot. Deliberately not an assert: the design says such an arrival is
+    RECOVERABLE (a preview or an asset capture on the revalidation lane is not
+    a graph node and cannot be retired), so it must be a number
+    `assert-render-policy` can bound, never a process the user loses.
+
+    A refusal does NOT touch `lastEnd_`/`haveLastEnd_`. The refused caller is
+    the foreign one; clearing continuity would make the PUMP's next block a
+    spurious reposition.
+
+    `setLiveOwned()` itself DOES clear continuity in both directions: the two
+    owners render different position streams, so the first block of the new
+    owner is one reposition by construction. Handing ownership back also drops
+    the live event source and resets the transport.
+
+46. **THE PROCESSOR HOLDS TWO EVENT SOURCES.** `events_` is THE FEED
+    (`setEventSource`, owned by `STrack::syncInstrumentSlot()`, also read by
+    `SMidiOutPump` and `assert-midi-events`); `liveEvents_` is the LIVE source
+    (`setLiveEventSource`), collected ONLY while live-owned and merged into the
+    same block with its note ids namespaced to `kLiveNoteIdSource` (15). It is
+    not a `setEventSource` swap — that would be overwritten by the next
+    `syncInstrumentSlot()` and would clear continuity and bump the param epoch
+    per call — and it is not a member of `eventFeed()`, because a ring-draining
+    `collect` has exactly one legal reader.
+
+    KNOWN DEBT: a feed built from SIXTEEN merged children would reuse index 15
+    and could collide. Ids only have to be distinct within one collect and the
+    failure mode is one truncated note, so this is recorded rather than papered
+    over with a wider id.
+
+47. **`twLiveTransport` IS CONSULTED PER CHUNK, AND ONLY WHILE LIVE-OWNED.**
+    Three fields, all inert otherwise, so the frozen path — and the golden
+    corpus — is byte-identical:
+      * `playing` becomes `twProcessContext.playing`. Every freeze path still
+        reports `true` (a render IS a moving timeline to a plugin's transport);
+        a live-owned slot under a stopped transport is the first caller for
+        which that would be a lie.
+      * `feedEnabled == false` skips collecting `events_` **and skips the
+        pre-roll**, which chases and replays the same feed — running it with the
+        feed masked would put the sequenced material into the DSP by the back
+        door. `liveEvents_` is always collected.
+      * `holdAutomationAt >= 0` makes the per-chunk build
+        `buildAutomationChunk_nolock(holdAt, 1)`: the chase alone, one constant
+        value for the whole chunk. No `setParamCurves` change is needed to
+        express "held", and a one-frame window cannot contain a breakpoint or a
+        ramp point, so the constancy is by construction.

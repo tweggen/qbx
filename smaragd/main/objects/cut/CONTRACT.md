@@ -210,3 +210,34 @@ reach EXACTLY zero — which is what a fade-out is. The consumer is
 
 PLACEMENT-SCOPE envelopes (per-`SLink`) are deliberately deferred until proposal
 32 gives links identity: an `SLink` has no id to hang one on today.
+
+## A cut over a LIVE RECORDING (proposal 21 L3b)
+
+`SCut::isLiveRecording()` forwards its content's answer, so the predicate holds
+for the window the arranger actually owns and not only for the content behind
+it. Three paths are then SHORT-CIRCUITED, and all three for the same reason —
+there is nothing derivable to cache from a source that grows ten times a
+second, and building it is not free:
+
+- `buildCapture_()` returns immediately. A capture is a RENDER of the content
+  into a fixed-size snapshot; over a multi-second take that cost SECONDS on the
+  UI thread and then crashed. This was the actual defect, found by
+  `record_punch.qxa`: a `previewNonEmpty` assertion reached `getPreviewCapture`
+  and the process stalled ~2 s and segfaulted.
+- `ensureReader()` returns immediately. Building a grain/vocoder chain over a
+  source whose length changes under it is both expensive and meaningless.
+- `invalidateAspects()` returns immediately. Measured, a growing clip
+  re-scheduling a Preview recompute per 100 ms tick starved the capture
+  bridge's own thread badly enough to lose 2.2 s of input to ring overruns and
+  put the capture backend 2.5 s behind its deadline.
+- `getPreview()` delegates straight to the content, which answers from its own
+  incrementally-extended peak ladder (`objects/wave` CONTRACT R4).
+
+The WAV-backed cut that `place-recording` builds at stop is an ordinary one and
+takes every one of those paths normally.
+
+`place-recording` gained `srcOffset` / `length` (both defaulting to "the whole
+file", so every existing call and script is unchanged). They place a SUB-RANGE,
+which is what makes LOOP RECORDING one call per pass with no new machinery: all
+passes go at the loop start, and this verb's own planner turns pass 2 onto pass
+1's column as a take.

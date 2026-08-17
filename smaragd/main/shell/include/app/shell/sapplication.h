@@ -8,7 +8,6 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/render/render_session.h"
-#include "tw/record/recording_session.h"
 #include "tw/playback/playback_context.h"
 #include "tw/metering/tw_level_probe.h"
 #include "app/model/sappcontext.h"
@@ -27,6 +26,8 @@ class SActionHistory;
 class SAction;
 class SMidiOutPump;
 class SAutomationRecorder;
+class SLiveMonitor;
+class SAudioRecorder;
 class QTimer;
 
 typedef QList<SLink*> SSelectionList;
@@ -106,6 +107,7 @@ public:
     // Locator position captured when the current recording began. The view uses
     // it (with the live locator) to draw the growing in-progress capture region.
     offset_t recordingStartFrame() const { return recordingStartFrame_; }
+    void setRecordingStartFrame( offset_t f ) { recordingStartFrame_ = f; }
     SActionHistory *actionHistory() const;
     void submitAction(SAction *action);
 
@@ -147,35 +149,35 @@ public:
     // schedule inv. 8). A project with no instrument does nothing at all.
     void beginRun( offset_t pos );
 
-    audio::RecordingSession *recordingSession() const;
-    void startRecording(const audio::RecordingParams &params);
+    // AUDIO RECORDING (proposal 21 L3b). One recorder per app; it owns the
+    // take, the growing clip and the placement. Never null after construction.
+    SAudioRecorder *audioRecorder() const { return audioRecorder_.get(); }
+    /// Begin a take on every armed track. False when nothing is armed or the
+    /// input would not open.
+    bool startRecording();
+    /// End the take and commit the placement (one undo step).
+    void stopRecording();
 
     // SAppContext: start/stop transport playback (speaker + playing flag).
     void setPlaybackRunning( bool play ) override;
 
     // audio::PlaybackContext — the speaker's view of the app. rootComponent()
-    // and locatorPosition() run on the UI thread; locatorHeldElsewhere() and
-    // publishPosition() run on the AUDIO thread (atomic ops only, no Qt).
+    // and locatorPosition() run on the UI thread; publishPosition() runs on the
+    // AUDIO thread (atomic ops only, no Qt).
+    //
+    // `locatorHeldElsewhere()` is RETIRED (proposal 21 L3b, design D7). It
+    // existed because the old recording path drove the playhead from the record
+    // worker and had to stop the render callback from also publishing it. A
+    // record start now goes through `setPlaybackRunning()` like any other
+    // transport start, so THE OUTPUT PUBLICATION IS THE PLAYHEAD AUTHORITY IN
+    // EVERY MODE — which is also what the placement conversion's anchor needs
+    // (it reads the engine clock, which was being stamped all along while the
+    // locator was "held").
     std::shared_ptr<twComponent> rootComponent() override;
     std::uint64_t locatorPosition() override { return getGlobalLocatorPos(); }
-    // The record worker owns the playhead only while NOTHING IS AUDIBLE. Once
-    // the monitoring playback is running, the speaker publishes the position it
-    // is actually delivering and the worker stands down — see
-    // recordLocatorFromCapture_.
-    bool locatorHeldElsewhere() override
-        { return isRecordingActive() && recordLocatorFromCapture_.load(
-                     std::memory_order_relaxed ); }
     void publishPosition(std::uint64_t absPos) override {
-        noteMonitorAudibleRealtime();
         setGlobalLocatorPosRealtime((offset_t) absPos);
     }
-
-    // How many PROJECT-rate frames the recorder had already captured when the
-    // monitoring playback became audible for the first time — the constant lag
-    // between "capture started" and "the arrangement started coming out of the
-    // speakers", which twSpeaker spends priming the readahead. 0 when there is
-    // no monitor (or none started). Read on the UI thread at placement time.
-    offset_t recordMonitorPrimingFrames() const;
 
     // How many times the RT thread has published a position in this process.
     // The MIDI-out pump anchors its clock on a PUBLICATION rather than on a
@@ -206,6 +208,12 @@ public:
     // Options dialog asks it for the port lists rather than minting a
     // MidiOutput of its own (see SMidiOutPump::outputPorts).
     SMidiOutPump *midiOutPump() const { return midiOutPump_.get(); }
+    // The live lane (proposal 21 L1b). Never null after construction; the
+    // arm/disarm ordering, the pump and the input device all live in there.
+    SLiveMonitor *liveMonitor() const { return liveMonitor_.get(); }
+    // SAppContext: a track was armed / disarmed, or its input or monitor mode
+    // moved. One plan rebuild, here, on the main thread.
+    void liveLanesChanged() override;
 
     // Test output directory for artifacts (screenshots, renders, etc.)
     void setTestOutputDir(const QString &path);
@@ -289,8 +297,16 @@ private slots:
     // instant playback stops, whereas meters need a tick at a static position
     // (to decay) plus a tail after stop, or the bars freeze mid-level.
     void pumpMeters();
+    // A render suspends every live lane for its duration and comes back as a
+    // FRESH arm (proposal 21 design D4). The render session signals completion
+    // from ITS OWN thread, so this is reached by a queued invocation and runs
+    // where every other model edit runs.
+    void resumeLiveAfterRender();
 
 private:
+    // The live monitor drives metering and reads the master width; both are
+    // app state it has no business duplicating.
+    friend class SLiveMonitor;
     void initPluginRegistry();
 
     // Start (or re-arm) the metering pump. No-op during an offline render.
@@ -309,7 +325,7 @@ private:
     std::shared_ptr<twWhiteNoise> t3WhiteNoise_;
     SActionHistory *actionHistory_;
     std::unique_ptr<audio::RenderSession> renderSession_;
-    std::unique_ptr<audio::RecordingSession> recordingSession_;
+    std::unique_ptr<SAudioRecorder> audioRecorder_;
 
     SLink *currentSelectedSLink_;
 
@@ -322,24 +338,6 @@ private:
     offset_t lastShownLocator_ = 0;   // last position the UI emitted (main thread only)
     offset_t recordingStartFrame_ = 0; // locator at record start (for the live region)
 
-    // --- who moves the playhead while recording (see locatorHeldElsewhere) ---
-    // TRUE from the moment capture starts until the monitoring playback is
-    // running. It used to be "for the whole take", which put the displayed
-    // playhead ahead of what the user could HEAR by the readahead priming time
-    // (~1.4 s per page) and then let it drift further, because a capture-frame
-    // count is only a clock if the capture clock is right — and a measured
-    // take came in 8.6 % fast. Written on the UI thread, read on the audio and
-    // record threads.
-    std::atomic<bool> recordLocatorFromCapture_{ false };
-    // PROJECT-rate frames the recorder has captured so far (record thread).
-    std::atomic<std::uint64_t> recordCaptureFrames_{ 0 };
-    // Snapshot of the above taken on the FIRST publishPosition of a take, i.e.
-    // the priming lag. NOT_PRIMED until then; the capture's own frame count is
-    // the clock, so no host-time plumbing is needed to measure it.
-    static constexpr std::uint64_t NOT_PRIMED = ~0ull;
-    std::atomic<std::uint64_t> recordPrimingFrames_{ NOT_PRIMED };
-    // Audio-thread half of the snapshot above (atomics only, no Qt).
-    void noteMonitorAudibleRealtime();
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     QTimer *pluginScanTimer_ = nullptr;  // polls the background plugin scan
     QTimer *meterTimer_ = nullptr;    // drives meterTick (proposal 34)
@@ -347,6 +345,7 @@ private:
     int meterTailTicks_ = 0;          // remaining decay ticks after a stop
     twLevelProbe masterProbe_;        // reads the mixer root's frozen pages
     std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 37 P7b
+    std::unique_ptr<SLiveMonitor> liveMonitor_;   // proposal 21 L1b
     std::unique_ptr<SAutomationRecorder> automationRecorder_;  // proposal 37 P6
     bool isPlaying_;
     SProject *currentProject_;

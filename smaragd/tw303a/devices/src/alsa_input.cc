@@ -1,7 +1,10 @@
 #include "alsa_input.h"
 
+#include "tw/core/twlog.h"
+
 #include <cstring>
 #include <sstream>
+#include <vector>
 
 namespace audio {
 
@@ -99,6 +102,13 @@ int ALSAInput::openDevice(const std::string &deviceId, std::uint32_t preferredRa
     // Calculate input latency as the buffer size (device latency ~= buffer time).
     config_.inputLatencyFrames = static_cast<uint32_t>(bufferFrames);
 
+    // The ring the capture thread produces into (proposal 21 L0).
+    {
+        std::size_t want = static_cast<std::size_t>(config_.bufferFrames) * 4;
+        if (want < 16384) want = 16384;
+        ring_.reset(config_.channels, want);
+    }
+
     snd_pcm_hw_params_free(hwParams);
     return 0;
 }
@@ -120,20 +130,82 @@ int ALSAInput::startCapture() {
         return -1;
     }
 
+    ring_.clear();
+    ring_.resetStats();
+    wakeups_.store(0, std::memory_order_relaxed);
+
     int err = snd_pcm_start(pcmHandle_);
     if (err < 0) {
         lastError_ = std::string("Failed to start PCM: ") + snd_strerror(err);
         return -1;
     }
 
+    captureRun_.store(true, std::memory_order_release);
+    captureThread_ = std::thread([this] { captureThreadMain_(); });
+
     isCapturing_ = true;
     return 0;
+}
+
+// The capture thread. snd_pcm_wait() blocks until a period is ready, with a
+// timeout so a stop is never more than 100 ms away; everything available is
+// then read WHOLE into the ring. read() no longer touches the PCM handle, which
+// is what lets one consumer poll at its own block size without losing frames.
+void ALSAInput::captureThreadMain_() {
+    tw::TwLog::markNonBlocking();
+    tw::TwLog::nameThread( "audio-in-alsa" );
+
+    const std::size_t chunkFrames = 1024;
+    const std::uint32_t ch = config_.channels;
+    const bool s16 = (config_.sampleType == twSampleType::Int16);
+
+    std::vector<float> scratch(chunkFrames * ch, 0.0f);
+    std::vector<std::int16_t> raw16(s16 ? chunkFrames * ch : 0);
+
+    while (captureRun_.load(std::memory_order_acquire)) {
+        const int r = snd_pcm_wait(pcmHandle_, 100);
+        if (!captureRun_.load(std::memory_order_acquire)) break;
+        if (r == 0) continue;                       // timeout: nothing ready
+        if (r < 0) {
+            snd_pcm_recover(pcmHandle_, r, 1);
+            continue;
+        }
+
+        for (;;) {
+            snd_pcm_sframes_t avail = snd_pcm_avail_update(pcmHandle_);
+            if (avail < 0) { snd_pcm_recover(pcmHandle_, (int) avail, 1); break; }
+            if (avail == 0) break;
+
+            std::size_t want = (std::size_t) avail;
+            if (want > chunkFrames) want = chunkFrames;
+
+            snd_pcm_sframes_t got;
+            if (s16) {
+                got = snd_pcm_readi(pcmHandle_, raw16.data(), want);
+                if (got > 0)
+                    for (std::size_t i = 0; i < (std::size_t) got * ch; ++i)
+                        scratch[i] = (float) raw16[i] / 32768.0f;
+            } else {
+                got = snd_pcm_readi(pcmHandle_, scratch.data(), want);
+            }
+
+            if (got < 0) { snd_pcm_recover(pcmHandle_, (int) got, 1); break; }
+            if (got == 0) break;
+
+            ring_.push(scratch.data(), (std::size_t) got);
+            wakeups_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 }
 
 int ALSAInput::stopCapture() {
     if (!pcmHandle_ || !isCapturing_) {
         return 0;
     }
+
+    // The thread first (it owns the PCM handle while running), then the drop.
+    captureRun_.store(false, std::memory_order_release);
+    if (captureThread_.joinable()) captureThread_.join();
 
     snd_pcm_drop(pcmHandle_);
     isCapturing_ = false;
@@ -185,23 +257,19 @@ int ALSAInput::setBufferSize(uint32_t frameCount) {
 }
 
 std::int32_t ALSAInput::read(float *interleaved, std::size_t frameCount) {
-    if (!pcmHandle_) {
-        return -1;
-    }
+    // A ring pop (proposal 21 L0): the capture thread owns snd_pcm_readi.
+    if (!interleaved) return -1;
+    return static_cast<std::int32_t>(ring_.pop(interleaved, frameCount));
+}
 
-    snd_pcm_sframes_t frames = snd_pcm_readi(pcmHandle_, interleaved, frameCount);
-
-    if (frames < 0) {
-        // Handle underrun
-        if (frames == -EPIPE) {
-            snd_pcm_recover(pcmHandle_, frames, 1);
-            return 0;
-        }
-        lastError_ = std::string("Read error: ") + snd_strerror(frames);
-        return -1;
-    }
-
-    return static_cast<std::int32_t>(frames);
+AudioInputStats ALSAInput::stats() const {
+    AudioInputStats s;
+    s.framesPushed = ring_.framesPushed();
+    s.framesPopped = ring_.framesPopped();
+    s.overrunFrames = ring_.overrunFrames();
+    s.underrunFrames = ring_.underrunFrames();
+    s.captureWakeups = wakeups_.load(std::memory_order_relaxed);
+    return s;
 }
 
 const AudioInputConfig &ALSAInput::getConfig() const {

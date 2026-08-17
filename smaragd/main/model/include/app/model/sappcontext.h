@@ -61,6 +61,16 @@ public:
     // becomes a point ON that lane, and "where" is the locator.
     virtual offset_t getGlobalLocatorPos() const = 0;
 
+    // A LIVE-LANE input changed (proposal 21 L1b, design §3 "plan rebuild
+    // triggers"): a track was armed or disarmed, or its trackInput /
+    // monitorMode moved. The shell rebuilds the live plan; every other
+    // implementation may ignore it, which is why it is not pure.
+    //
+    // It is a NOTIFICATION, not a command: the verbs stay pure model edits and
+    // the arm/disarm sequence (retire -> setLiveOwned -> rewire -> epoch ->
+    // publish) lives in one place, where the pump and the speaker are.
+    virtual void liveLanesChanged() {}
+
     // Process-wide instance, set once by SApplication at startup.
     static void setInstance( SAppContext *ctx );
     static SAppContext &get();

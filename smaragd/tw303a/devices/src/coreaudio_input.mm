@@ -12,7 +12,7 @@ CoreAudioInput::CoreAudioInput() {
     config_.channels = 1;
     config_.bufferFrames = 1024;
     config_.sampleType = twSampleType::Float32;
-    circularBuffer_.resize(2 * 48000 * 1);  // 2 seconds at 48kHz
+    ring_.reset(config_.channels, 16384);
 }
 
 CoreAudioInput::~CoreAudioInput() {
@@ -40,6 +40,7 @@ int CoreAudioInput::openDevice(const std::string &deviceId, std::uint32_t prefer
 
         config_.sampleRate = static_cast<std::uint32_t>(inputFormat.sampleRate);
         config_.channels = inputFormat.channelCount;
+        ring_.reset(config_.channels, 16384);
 
         // Store engine as opaque void pointer
         audioUnit_ = reinterpret_cast<AudioComponentInstance>(engine);
@@ -109,8 +110,9 @@ int CoreAudioInput::startCapture() {
         return -1;
     }
 
-    writePos_.store(0);
-    readPos_.store(0);
+    ring_.clear();
+    ring_.resetStats();
+    wakeups_.store(0, std::memory_order_relaxed);
 
     if (@available(macOS 10.13, *)) {
         AVAudioEngine *engine = reinterpret_cast<AVAudioEngine *>(audioUnit_);
@@ -193,111 +195,48 @@ void CoreAudioInput::captureAVAudioBuffer(void *avAudioPCMBuffer) {
     if (!buffer) return;
 
     AVAudioFormat *format = buffer.format;
-    std::size_t frameCount = buffer.frameLength;
-    std::uint32_t channels = format.channelCount;
+    const std::size_t frameCount = buffer.frameLength;
+    const std::uint32_t channels = format.channelCount;
+    float * const *planes = buffer.floatChannelData;
+    if (!planes || !planes[0] || frameCount == 0) return;
 
-    // Convert float32 audio to our internal format and buffer
-    float * const *floatChannelData = buffer.floatChannelData;
+    // AVAudioPCMBuffer is PLANAR; the ring is interleaved. The old code copied
+    // frameCount * channels samples out of plane 0 alone, i.e. read past the
+    // end of the plane for a stereo device and wrote the overrun in as if it
+    // were channel data. Interleave properly, and push the WHOLE buffer — a tap
+    // block that does not fit is an overrun the ring counts, never a silent
+    // truncation.
+    const std::uint32_t nch = channels < config_.channels ? channels
+                                                          : config_.channels;
+    std::vector<float> inter(frameCount * config_.channels, 0.0f);
+    for (std::size_t f = 0; f < frameCount; ++f)
+        for (std::uint32_t c = 0; c < nch; ++c)
+            inter[f * config_.channels + c] = planes[c][f];
 
-    static int tapCount = 0;
-    ++tapCount;
-
-    if (tapCount <= 3) {
-        fprintf(stderr, "coreaudio_input: tap #%d — frameCount=%zu, ch=%u, floatChannelData=%p\n",
-                tapCount, frameCount, channels, floatChannelData);
-        fflush(stderr);
-    }
-
-    if (!floatChannelData || !floatChannelData[0]) {
-        if (tapCount <= 3) {
-            fprintf(stderr, "coreaudio_input: tap #%d — ERROR: no float channel data!\n", tapCount);
-            fflush(stderr);
-        }
-        return;
-    }
-    float *floatData = floatChannelData[0];  // First channel
-
-    // Diagnostic: check if buffer contains actual audio or just zeros
-    if (tapCount <= 3) {
-        float maxSample = 0.0f;
-        for (std::size_t i = 0; i < std::min(frameCount, size_t(1000)); ++i) {
-            float absVal = floatData[i] < 0 ? -floatData[i] : floatData[i];
-            if (absVal > maxSample) maxSample = absVal;
-        }
-        fprintf(stderr, "coreaudio_input: tap #%d — maxSample=%.6f (first 1000 frames)\n",
-                tapCount, maxSample);
-        fflush(stderr);
-    }
-
-    std::unique_lock<std::mutex> lock(bufferMutex_);
-    std::size_t wp = writePos_.load();
-    std::size_t rp = readPos_.load();
-
-    for (std::size_t i = 0; i < frameCount * channels; ++i) {
-        std::size_t nextWp = (wp + 1) % circularBuffer_.size();
-        if (nextWp != rp) {
-            circularBuffer_[wp] = floatData[i];
-            wp = nextWp;
-        }
-    }
-
-    writePos_.store(wp);
-    bufferCV_.notify_one();
+    ring_.push(inter.data(), frameCount);
+    wakeups_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void CoreAudioInput::bufferAudioData(const float *audioData, std::size_t frameCount) {
-    if (!audioData || frameCount == 0) {
-        return;
-    }
-
-    std::unique_lock<std::mutex> lock(bufferMutex_);
-    std::size_t wp = writePos_.load();
-    std::size_t rp = readPos_.load();
-    std::size_t inSamples = frameCount * config_.channels;
-
-    for (std::size_t i = 0; i < inSamples; ++i) {
-        std::size_t nextWp = (wp + 1) % circularBuffer_.size();
-        if (nextWp != rp) {
-            circularBuffer_[wp] = audioData[i];
-            wp = nextWp;
-        }
-    }
-
-    writePos_.store(wp);
-    bufferCV_.notify_one();
+    if (!audioData || frameCount == 0) return;
+    ring_.push(audioData, frameCount);
+    wakeups_.fetch_add(1, std::memory_order_relaxed);
 }
 
 std::int32_t CoreAudioInput::read(float *interleaved, std::size_t frameCount) {
-    if (!interleaved || frameCount == 0) {
-        return 0;
-    }
+    // A ring pop, and NON-BLOCKING (proposal 21 L0).
+    if (!interleaved) return -1;
+    return static_cast<std::int32_t>(ring_.pop(interleaved, frameCount));
+}
 
-    std::unique_lock<std::mutex> lock(bufferMutex_);
-
-    std::size_t rp = readPos_.load();
-    std::size_t wp = writePos_.load();
-    std::size_t framesAvailable = (wp >= rp) ? (wp - rp) : (circularBuffer_.size() - rp + wp);
-
-    if (framesAvailable < frameCount && isCapturing_) {
-        bufferCV_.wait_for(lock, std::chrono::milliseconds(100));
-        rp = readPos_.load();
-        wp = writePos_.load();
-        framesAvailable = (wp >= rp) ? (wp - rp) : (circularBuffer_.size() - rp + wp);
-    }
-
-    std::size_t framesCopied = std::min(frameCount, framesAvailable);
-    std::size_t samplesCopied = 0;
-
-    for (std::size_t i = 0; i < framesCopied; ++i) {
-        for (std::uint32_t c = 0; c < config_.channels; ++c) {
-            std::size_t idx = (rp + i) % circularBuffer_.size();
-            interleaved[samplesCopied++] = circularBuffer_[idx];
-        }
-    }
-
-    readPos_.store((rp + framesCopied) % circularBuffer_.size());
-
-    return static_cast<std::int32_t>(framesCopied);
+AudioInputStats CoreAudioInput::stats() const {
+    AudioInputStats s;
+    s.framesPushed = ring_.framesPushed();
+    s.framesPopped = ring_.framesPopped();
+    s.overrunFrames = ring_.overrunFrames();
+    s.underrunFrames = ring_.underrunFrames();
+    s.captureWakeups = wakeups_.load(std::memory_order_relaxed);
+    return s;
 }
 
 const AudioInputConfig &CoreAudioInput::getConfig() const {

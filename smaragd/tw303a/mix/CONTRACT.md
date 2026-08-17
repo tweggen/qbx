@@ -166,3 +166,26 @@ an asset window over a faded track captures the unfaded audio.
     writing through it would corrupt both. The entry's `previousPage` is
     deliberately NOT dropped on a curve change — the envelope changes what is
     SUMMED, never the child's own state.
+
+24. **THE FADER'S ARITHMETIC IS PUBLIC, AND IT IS THE ONLY COPY** (proposal 21
+    L1a). `twGainStage::Envelope`, `envelope()`, `factorAt()`, `isFlat()` and
+    `applyGain()` are public because the live pump applies a track's fader to a
+    block it rendered itself, outside the frozen-page machinery, and it must be
+    THE SAME arithmetic over THE SAME snapshot — otherwise an armed track's
+    fader would differ from the frozen one it hands back to at disarm. Nothing
+    else about the class is public, and the functions stay pure in position.
+
+25. **THE MASTER IS A UNITY SUM WITH AN IDENTITY MAP, AND THAT IS A CHECKED
+    PRECONDITION, NOT AN ASSUMPTION** (proposal 21 design D3). The live lane's
+    "root(unarmed) + ring" split is legal only while
+
+        master(unarmed ∪ live) == master(unarmed) + master(live)
+
+    holds sample for sample, which needs `twMixer` summing at unity into a
+    `twRewire` whose channel map is the identity, both at the project's width.
+    `twlive::checkMasterShape(mixer, root, width)` (tw/playback) answers it over
+    the two components; anything else — an insert, a non-unity input level, a
+    re-map, a width disagreement — selects CLOSURE mode, in which the pump
+    renders the master itself and the RT pops the ring only. `twMixer::
+    inputLevel()` exists for exactly this check: a precondition that could not
+    read the levels back would have to be assumed.

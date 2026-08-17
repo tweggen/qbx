@@ -23,6 +23,7 @@
 #include <iostream>
 
 #include "app/shell/sapplication.h"
+#include "app/shell/saudiorecorder.h"
 #include "app/timeline/sgridtoolbar.h"
 #include "app/shell/smainwindow.h"
 #include "app/model/sobject.h"
@@ -759,25 +760,65 @@ void SMainWindow::gotoRangeStart()
     SApplication::app().setGlobalLocatorPos( pos );
 }
 
-// Collect armed tracks depth-first WITH their root-relative paths — nested
-// (folder) tracks record too. The order is the contract between recording
-// start (armedTrackIds) and completion (createdFiles are matched
-// positionally), so both sides call this.
-static void collectArmedTracks( SObject *container, const QList<int> &path,
-                                QList<QPair<STrack *, QList<int>>> &out )
+// PRE-FLIGHT (main PR #55, kept across proposal 21 L3b): the two endpoints must
+// agree on a rate. They share ONE hardware clock, so if the OS has them declared
+// differently it resamples one side AND MISREPORTS THAT SIDE'S CLOCK — measured
+// on a US-16x08 with capture at 44100 and render at 48000, the capture came in
+// 8.6 % fast and the take was 1.47 semitones flat. Nothing in the engine can
+// correct for a false clock, so the only honest thing is to say so BEFORE the
+// take rather than after it. Warned once per session: a modal before every
+// recording would be intolerable, and the user may legitimately go ahead.
+void SMainWindow::warnOnEndpointRateMismatch()
 {
-    if( !container ) return;
-    for( int i = 0; i < container->childCount(); ++i ) {
-        SLink *lk = container->childAt( i );
-        if( !lk ) continue;
-        STrack *track = dynamic_cast<STrack *>( &lk->getSObject() );
-        if( !track ) continue;
-        QList<int> childPath = path;
-        childPath.append( i );
-        if( track->isArmedForRecording() ) {
-            out.append( qMakePair( track, childPath ) );
+    if( endpointRateWarningShown_ || !currentProject_ ) return;
+    const QString inputDevId = SSettings::instance().audioInputDeviceId();
+    uint32_t inRate = 0, outRate = 0;
+    QString inName, outName;
+    {
+        std::unique_ptr<audio::AudioInput> probe = audio::createAudioInput();
+        if( probe ) {
+            for( const audio::AudioInputDeviceInfo &d : probe->listDevices() ) {
+                if( QString::fromStdString( d.id ) == inputDevId ) {
+                    inRate = d.sampleRate;
+                    inName = QString::fromStdString( d.name );
+                    break;
+                }
+            }
         }
-        collectArmedTracks( track, childPath, out );
+    }
+    if( auto spk = SApplication::app().getSpeaker() ) {
+        const std::string cur = spk->outputDevice();
+        for( const audio::AudioDeviceInfo &d : spk->outputDevices() ) {
+            if( d.id == cur ) {
+                outRate = d.sampleRate;
+                outName = QString::fromStdString( d.name );
+                break;
+            }
+        }
+    }
+    if( inRate != 0 && outRate != 0 && inRate != outRate ) {
+        endpointRateWarningShown_ = true;
+        TW_LOGW( "ui.shell",
+                 "endpoint rate mismatch: input '%s' = %u Hz, output '%s' = %u Hz",
+                 inName.toUtf8().constData(), (unsigned) inRate,
+                 outName.toUtf8().constData(), (unsigned) outRate );
+        QMessageBox::warning( this, "Input and output rates differ",
+            QString( "The recording input and the playback output are set to "
+                     "DIFFERENT sample rates in the operating system:\n\n"
+                     "    Input:  %1 — %2 Hz\n"
+                     "    Output: %3 — %4 Hz\n\n"
+                     "If these are the same interface they share one clock, so "
+                     "the OS must resample one side — and it then reports that "
+                     "side's rate incorrectly. Recordings can come out pitched "
+                     "by the ratio between them, and monitoring can play slow.\n\n"
+                     "Set both to the same rate (ideally the project's, %5 Hz) "
+                     "in the system sound settings.\n\n"
+                     "This warning is shown once per session." )
+                .arg( inName.isEmpty() ? QStringLiteral( "System default" ) : inName )
+                .arg( inRate )
+                .arg( outName.isEmpty() ? QStringLiteral( "System default" ) : outName )
+                .arg( outRate )
+                .arg( currentProject_->getSRate() ) );
     }
 }
 
@@ -786,234 +827,54 @@ void SMainWindow::onRecordTriggered()
     if( !currentProject_ ) return;
 
     if( SApplication::app().isRecordingActive() ) {
-        // Stop recording
-        audio::RecordingSession *session = SApplication::app().recordingSession();
-        if( session ) {
-            session->requestStop();
-        }
+        // Second press == stop. The recorder ends the capture, finalises the
+        // files out of the pages and commits ONE undo step (proposal 21 L3b).
+        SApplication::app().stopRecording();
+        if( recordingProgressDialog_ ) recordingProgressDialog_->close();
         actRecord_->setIcon( QIcon( QPixmap( (const char **)recoff_xpm ) ) );
-    } else {
-        // Check if any tracks are armed (recursively — tracks nested in
-        // folder tracks record too, proposal 17 phase 2)
-        QList<QPair<STrack *, QList<int>>> armed;
-        collectArmedTracks( currentProject_->getRootComponent(), QList<int>(), armed );
-
-        if( armed.isEmpty() ) {
-            // Inform user to arm a track
-            QMessageBox::information( this, "No Tracks Armed",
-                "Please arm at least one track for recording before starting." );
-            return;
-        }
-
-        // Start recording
-        audio::RecordingParams params;
-        // Get input device from settings (defaults to "default" if not set)
-        QString inputDevId = SSettings::instance().audioInputDeviceId();
-        params.inputDeviceId = inputDevId.toStdString();
-        // Use the project file directory for recordings, or a default if unsaved
-        QString projectDir = currentFilePath_.isEmpty() ?
-            QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation ) :
-            QFileInfo( currentFilePath_ ).absolutePath();
-        params.projectDirectory = projectDir.toStdString();
-        params.sampleRate = currentProject_->getSRate();
-        params.channels = 2;
-
-        // Collect armed track IDs and per-track channel selections, in the
-        // SAME recursive order onRecordingCompleted will use — created files
-        // are matched to tracks positionally.
-        for( const auto &pr : armed ) {
-            params.armedTrackIds.push_back( pr.first->getSName().toStdString() );
-            params.trackChannels.push_back( pr.first->getRecordingChannels() );
-        }
-
-        // PRE-FLIGHT: the two endpoints must agree on a rate. They share ONE
-        // hardware clock, so if the OS has them declared differently it
-        // resamples one side AND MISREPORTS THAT SIDE'S CLOCK — measured on a
-        // US-16x08 with capture at 44100 and render at 48000, the capture came
-        // in 8.6 % fast and the take was 1.47 semitones flat. Nothing in the
-        // engine can correct for a false clock, so the only honest thing is to
-        // say so BEFORE the take rather than after it. Warned once per session:
-        // a modal before every recording would be intolerable, and the user may
-        // legitimately choose to go ahead.
-        if( !endpointRateWarningShown_ ) {
-            uint32_t inRate = 0, outRate = 0;
-            QString inName, outName;
-            {
-                std::unique_ptr<audio::AudioInput> probe = audio::createAudioInput();
-                if( probe ) {
-                    for( const audio::AudioInputDeviceInfo &d : probe->listDevices() ) {
-                        if( QString::fromStdString( d.id ) == inputDevId ) {
-                            inRate = d.sampleRate;
-                            inName = QString::fromStdString( d.name );
-                            break;
-                        }
-                    }
-                }
-            }
-            if( auto spk = SApplication::app().getSpeaker() ) {
-                const std::string cur = spk->outputDevice();
-                for( const audio::AudioDeviceInfo &d : spk->outputDevices() ) {
-                    if( d.id == cur ) {
-                        outRate = d.sampleRate;
-                        outName = QString::fromStdString( d.name );
-                        break;
-                    }
-                }
-            }
-            if( inRate != 0 && outRate != 0 && inRate != outRate ) {
-                endpointRateWarningShown_ = true;
-                TW_LOGW( "ui.shell",
-                         "endpoint rate mismatch: input '%s' = %u Hz, output "
-                         "'%s' = %u Hz",
-                         inName.toUtf8().constData(), (unsigned) inRate,
-                         outName.toUtf8().constData(), (unsigned) outRate );
-                QMessageBox::warning( this, "Input and output rates differ",
-                    QString( "The recording input and the playback output are set to "
-                             "DIFFERENT sample rates in the operating system:\n\n"
-                             "    Input:  %1 — %2 Hz\n"
-                             "    Output: %3 — %4 Hz\n\n"
-                             "If these are the same interface they share one clock, so "
-                             "the OS must resample one side — and it then reports that "
-                             "side's rate incorrectly. Recordings can come out pitched "
-                             "by the ratio between them, and monitoring can play slow.\n\n"
-                             "Set both to the same rate (ideally the project's, %5 Hz) "
-                             "in the system sound settings.\n\n"
-                             "This warning is shown once per session." )
-                        .arg( inName.isEmpty() ? QStringLiteral( "System default" ) : inName )
-                        .arg( inRate )
-                        .arg( outName.isEmpty() ? QStringLiteral( "System default" ) : outName )
-                        .arg( outRate )
-                        .arg( currentProject_->getSRate() ) );
-            }
-        }
-
-        // Remember where the playhead is now: the cut goes here, and the playhead
-        // advances from here during the capture.
-        recordingStartPos_ = SApplication::app().getGlobalLocatorPos();
-
-        // Note: latency sync offset will be calculated in onRecordingCompleted()
-        // after the input latency is known from the recording session.
-        recordingLatencySyncOffset_ = 0;
-
-        SApplication::app().startRecording( params );
-        actRecord_->setIcon( QIcon( QPixmap( (const char **)recon_xpm ) ) );
-
-        // Show recording progress dialog
-        audio::RecordingSession *recSession = SApplication::app().recordingSession();
-        if( recSession ) {
-            recordingProgressDialog_ = new SRecordingProgressDialog( recSession, this );
-            int result = recordingProgressDialog_->exec();
-
-            // Recording has ended: stop the monitoring playback we started in
-            // startRecording (safe now that the audio thread never touches Qt).
-            if( SApplication::app().isPlaying() ) {
-                SApplication::app().getSpeaker()->stopOutput();
-                SApplication::app().setPlaying( false );
-            }
-
-            // On dialog close, place the cuts on armed tracks
-            if( result == QDialog::Accepted ) {
-                onRecordingCompleted();
-            }
-        }
+        if( projectRootWidget_ ) projectRootWidget_->update();
+        return;
     }
+
+    // Where the take begins, for the arranger's in-progress overlay.
+    recordingStartPos_ = SApplication::app().getGlobalLocatorPos();
+
+    warnOnEndpointRateMismatch();
+
+    if( !SApplication::app().startRecording() ) {
+        QMessageBox::information(
+            this, "Cannot Record",
+            SApplication::app().audioRecorder()
+                ? QStringLiteral( "Recording could not start: %1" )
+                      .arg( SApplication::app().audioRecorder()->errorMessage() )
+                : QStringLiteral( "Recording could not start." ) );
+        return;
+    }
+    actRecord_->setIcon( QIcon( QPixmap( (const char **)recon_xpm ) ) );
+
+    // NON-MODAL (design D7): a take runs while the app stays usable, and the
+    // growing clip is drawn by the arranger from the model rather than by this
+    // dialog poking its parent. The dialog polls the recorder and follows a
+    // stop that happens anywhere else (a punch-out, the record button again).
+    if( !recordingProgressDialog_ ) {
+        recordingProgressDialog_ =
+            new SRecordingProgressDialog( SApplication::app().audioRecorder(), this );
+        QObject::connect( recordingProgressDialog_, &QDialog::finished,
+                          this, &SMainWindow::onRecordingFinished );
+    }
+    recordingProgressDialog_->show();
+    recordingProgressDialog_->raise();
 }
 
-void SMainWindow::onRecordingCompleted()
+// The take ended (from the dialog, the record button, or a punch-out). The
+// PLACEMENT already happened inside SAudioRecorder::stop() as one undo macro;
+// there is nothing left to do here but the UI.
+void SMainWindow::onRecordingFinished()
 {
-    if( !currentProject_ ) return;
-
-    audio::RecordingSession *recSession = SApplication::app().recordingSession();
-    if( !recSession ) return;
-
-    // Get the created files (one per armed track)
-    const auto &createdFiles = recSession->createdFiles();
-    if( createdFiles.empty() ) return;
-
-    // The recording start time, captured when recording began (the live locator
-    // has since advanced with the capture).
-    offset_t recordingStartTime = recordingStartPos_;
-
-    // Where capture frame 0 belongs on the timeline.
-    //
-    // A performer plays along with what they HEAR, so the take is LATE by
-    // everything between the timeline and their ears, and the clip has to move
-    // EARLIER by the same amount. Two terms, and this used to have neither
-    // right — it added `outputLatency - inputLatency`, i.e. the wrong SIGN and
-    // a difference that is ~0 whenever the two latencies are similar:
-    //
-    //  - the PRIMING lag: capture starts immediately, while twSpeaker defers
-    //    the device start until the readahead is primed (a page is ~1.4 s at
-    //    48 kHz). Everything captured in that window happened before the
-    //    arrangement was audible at all. Measured, not assumed — it is the
-    //    capture frame count at the first published position.
-    //  - the ROUND TRIP: the arrangement reaches the ears `outputLatency`
-    //    after the device takes it, and the answering sound reaches us
-    //    `inputLatency` after it was made. A SUM, not a difference.
-    int64_t shiftEarlierFrames =
-        (int64_t) SApplication::app().recordMonitorPrimingFrames();
-
-    auto speaker = SApplication::app().getSpeaker();
-    if( speaker ) {
-        audio::AudioBackend *backend = speaker->getBackend();
-        uint32_t inputLatency = recSession->getInputLatencyFrames();
-        if( backend && inputLatency > 0 ) {
-            uint32_t outputLatency = backend->getLatencyFrames();
-            shiftEarlierFrames += (int64_t) outputLatency + (int64_t) inputLatency;
-        }
-    }
-
-    // Clamp at the start of the timeline: a take recorded at position 0 has
-    // nowhere earlier to go, and a negative start is not representable.
-    if( shiftEarlierFrames > (int64_t) recordingStartTime )
-        shiftEarlierFrames = (int64_t) recordingStartTime;
-    recordingStartTime -= shiftEarlierFrames;
-
-    TW_LOGI( "ui.shell",
-             "recording placed at %lld (locator was %lld, shifted %lld frames "
-             "earlier: %lld priming + round trip)",
-             (long long) recordingStartTime, (long long) recordingStartPos_,
-             (long long) shiftEarlierFrames,
-             (long long) SApplication::app().recordMonitorPrimingFrames() );
-
-    // Place the recordings through the action system (proposal 17 phase 2):
-    // one place-recording per armed track, all inside ONE undo macro. The
-    // action plans the file against the track's existing columns — new take
-    // per covered column (auto-activated), plain cuts for the gaps — so
-    // recording over material stacks takes instead of layering clips, and
-    // Ctrl-Z removes the whole recording pass.
-    QList<QPair<STrack *, QList<int>>> armed;
-    collectArmedTracks( currentProject_->getRootComponent(), QList<int>(), armed );
-
-    QUndoStack *undoStack = SApplication::app().actionHistory()->undoStack();
-    const bool macro = !armed.isEmpty() && undoStack;
-    if( macro ) undoStack->beginMacro( QStringLiteral( "Recording" ) );
-    int fileIndex = 0;
-    for( const auto &pr : armed ) {
-        STrack *track = pr.first;
-        if( fileIndex < (int)createdFiles.size() ) {
-            QString recordedFile = QString::fromStdString( createdFiles[fileIndex] );
-            if( QFileInfo( recordedFile ).exists() ) {
-                SApplication::app().submitAction( new SPlaceRecordingAction(
-                    pr.second, recordedFile, recordingStartTime ) );
-            }
-        }
-        // Auto-disarm stays a direct UI-state mutation (not undoable).
-        track->setArmedForRecording( false );
-        fileIndex++;
-    }
-    if( macro ) undoStack->endMacro();
-
-    // Return the playhead to where recording began, lining it up with the cut we
-    // just placed (it had advanced to the end during capture).
-    SApplication::app().setGlobalLocatorPos( recordingStartTime );
-
-    // Refresh the UI to display the newly placed clip
-    if( projectRootWidget_ ) {
-        projectRootWidget_->update();
-    }
-
+    if( SApplication::app().isRecordingActive() )
+        SApplication::app().stopRecording();
     actRecord_->setIcon( QIcon( QPixmap( (const char **)recoff_xpm ) ) );
+    if( projectRootWidget_ ) projectRootWidget_->update();
 }
 
 SMainWindow::SMainWindow()
