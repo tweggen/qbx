@@ -916,7 +916,76 @@ void SStdMixerView::ctAddTrack()
 {
     // Route through the action: undoable, and it rewires the speaker so the new
     // track is audible (the old direct insertTrack did neither).
+    //
+    // The new track lands BELOW the lane the gesture names, not at the bottom
+    // of the arrangement. This menu is opened AT a position — on a head or on a
+    // lane — and every other track item in it acts there, so "New track"
+    // appending twenty lanes away was the odd one out; on a long arrangement it
+    // also put the new track off screen.
+    addTrackBelow_( newTrackReference_() );
+}
+
+STrack *SStdMixerView::newTrackReference_() const
+{
+    if( !model_ ) return nullptr;
+    // The SELECTION is the reference, and within it the LAST lane by position —
+    // so "New track" after selecting a block lands under the block rather than
+    // under whichever member happened to be clicked.
+    //
+    // Deliberately the selection rather than lastClickTrack_, even though the
+    // rest of this menu goes through selectionTargets(): showTrackContextMenu()
+    // selects the lane it pops on before showing the menu, so for a menu
+    // gesture the two agree anyway — and the selection is the only one of the
+    // two that stays current. add-track SELECTS the track it just made, so
+    // repeated Ctrl+T walks downwards; keyed off a click that may be many
+    // gestures old, every new lane would pile into the same slot instead, in
+    // reverse order.
+    const QList<STrack *> sel = orderByLane( model_->getSelectedTracks() );
+    if( !sel.isEmpty() ) return sel.last();
+    // Nothing selected: fall back to the lane the menu was opened on. With
+    // neither there is nothing to be below, and the caller appends.
+    if( qContent_ ) return qContent_->getLastClickTrack();
+    return nullptr;
+}
+
+void SStdMixerView::addTrackBelow_( STrack *ref )
+{
+    if( !model_ ) return;
+
+    const QList<int> refPath = ref ? strackpath::pathOf( model_, ref )
+                                   : QList<int>();
+    if( refPath.isEmpty() ) {
+        // No reference, or one that is not in the tree: append, as before.
+        SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+        return;
+    }
+
+    QList<int> parentPath = refPath;
+    const int slot = parentPath.takeLast();   // ref's slot in its container
+
+    if( parentPath.isEmpty() ) {
+        // Top level. add-track takes a TRACK index and a path step is a CHILD
+        // index, but the root mixer holds nothing except tracks, so the two
+        // coincide there — which is what lets this be one action instead of a
+        // macro. (ctGroupTrack() leans on the same identity.)
+        SApplication::app().submitAction( new SAddTrackAction( slot + 1 ) );
+        return;
+    }
+
+    // NESTED: add-track can only append at the MIXER's top level, so the track
+    // is born there and moved into the reference's container — two actions
+    // wrapped in one undo step, the ctGroupTrack()/ctAddTrackBelowLast()
+    // pattern.
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    if( stack ) stack->beginMacro( "Add track" );
     SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+    // submitAction drains synchronously (Phase 1), so the new track is now the
+    // last top-level one. An APPEND at the top level shifts no existing index,
+    // so parentPath and slot are still the ones we measured.
+    const int newIdx = model_->getNTracks() - 1;
+    SApplication::app().submitAction( new SReparentTrackAction(
+        QList<int>{ newIdx }, parentPath, slot + 1 ) );
+    if( stack ) stack->endMacro();
 }
 
 /**
