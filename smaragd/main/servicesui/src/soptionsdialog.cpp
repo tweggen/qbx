@@ -437,7 +437,13 @@ void SOptionsDialog::applyAudioPage()
     // Save input device
     QString inId = audioInputDevice_->currentData().toString();
     if( !inId.isEmpty() ) {
+        const bool moved = SSettings::instance().audioInputDeviceId() != inId;
         SSettings::instance().setAudioInputDeviceId( inId );
+        // A DEVICE CHANGE is a live-plan rebuild trigger (proposal 21 design
+        // section 3): a track whose trackInput names no device follows this
+        // setting, and the monitor has to re-open the input for it. Nothing
+        // else in the app is watching this key.
+        if( moved ) SApplication::app().liveLanesChanged();
     }
 
     // Apply buffer size change (if supported)

@@ -319,10 +319,12 @@ void SLiveMonitor::refresh()
         applyExclusion( leaving );
         const std::uint64_t flipPrime = rootEpoch();
 
-        // THE TAIL: the departing members are still rendered and still
-        // live-owned, and the entry carries flipEpochPrime, so the RT keeps
-        // summing the ring while the root page it serves still LACKS them and
-        // stops the moment the re-summed one lands (design D2).
+        // THE TAIL: the departing members are STILL RENDERED by the pump (on
+        // processors it no longer owns exclusively, which is safe for exactly
+        // the length of the tail and is the price of a gap-free hand-back),
+        // and every entry carries flipEpochPrime - so the RT keeps summing the
+        // ring while the root page it serves still LACKS them, and stops the
+        // moment the re-summed one lands (design D2).
         departing_ = current_;
         publishPlan( current_, 0, flipPrime );
         // THE TAIL IS ONLY FOR A HAND-BACK THAT SOMEBODY IS LISTENING TO.
@@ -356,7 +358,7 @@ void SLiveMonitor::refresh()
         return;
     }
 
-    // THE MASTER-SHAPE PRECONDITION, BEFORE ANYTHING IS RE-WIRED (design D3).
+    // THE MASTER-SHAPE PRECONDITION, BEFORE ANYTHING IS ARMED (design D3).
     //
     // "root(unarmed) + ring" is exact only while the master is a unity sum
     // followed by an identity map. The plan builder can express the other mode

@@ -203,6 +203,10 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
     // folder: no input, no inserts, unity gain, its members as liveChildren.
     // Under Closure it additionally reads every UNARMED top-level track's
     // frozen root, which IS "the pump renders the master" (design D3).
+    // topLevel cannot be empty for a non-empty closure - the walk stops at the
+    // root mixer, so every member has an ancestor that is a direct child of it
+    // - but front() on an empty vector is not a diagnosis, it is a crash.
+    if( closure.topLevel.empty() ) return nullptr;
     const bool needSum = closure.topLevel.size() > 1 || !plan->masterLinear;
     if( !needSum ) {
         plan->outputTrack = indexOf[closure.topLevel.front()];
