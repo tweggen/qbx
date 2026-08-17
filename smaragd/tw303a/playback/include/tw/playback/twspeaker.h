@@ -6,6 +6,8 @@
 #include "tw/devices/audio_backend.h"
 #include "tw/playback/audio_engine.h"
 #include "tw/playback/playback_context.h"
+#include "tw/playback/twliveclock.h"
+#include "tw/playback/twlivering.h"
 
 #include <atomic>
 #include <memory>
@@ -63,6 +65,49 @@ inline void interleave( float *out, std::size_t frames, unsigned deviceChannels,
 }
 
 }  // namespace twmonitor
+
+// THE TWO-LANE MACHINE (proposal 21 L1a, design D5).
+//
+// twSpeaker used to have ONE state axis, because it had one job: play the
+// arrangement. Monitoring an input while the transport is stopped is a SECOND
+// producer with its own lifetime, so the machine becomes three independent
+// axes:
+//
+//     device { CLOSED, OPEN } x frozen { IDLE, BUFFERING, PLAYING } x live { OFF, ON }
+//
+//     out = (frozen == PLAYING ? root : 0) + (live == ON ? ring : 0)
+//
+// and the transitions are:
+//
+//   arm while stopped   openLive()   -> device OPEN (callback RUNNING), live ON,
+//                                       frozen IDLE. The callback zero-fills the
+//                                       frozen half and sums the ring.
+//   Play                startOutput()-> the frozen lane ATTACHES to the device
+//                                       that is already open: no openDevice, no
+//                                       second setRenderCallback, and a NEW
+//                                       AudioEngine minted under the running
+//                                       callback (the handle is swapped
+//                                       atomically; engineMutex_ stays a leaf).
+//   Stop                stopOutput() -> the frozen lane returns to IDLE and the
+//                                       DEVICE STAYS OPEN while live is ON.
+//   disarm all          closeLive()  -> live OFF; the device closes iff the
+//                                       frozen lane is IDLE.
+//
+// WHAT DID NOT CHANGE, deliberately: with live OFF every path above is the one
+// that was there before — Play opens the device, the readahead priming still
+// defers the backend start (so a capture backend's frame 0 is still the first
+// frame of real audio), Stop closes it. The priming gates THE FROZEN LANE'S
+// PLAYING and never the ring: a monitored input must be audible immediately,
+// and it has no readahead to wait for.
+enum class DeviceState {
+    CLOSED = 0,
+    OPEN   = 1,    // openDevice() succeeded; the callback may be running
+};
+
+enum class LiveLaneState {
+    OFF = 0,
+    ON  = 1,
+};
 
 // Playback output state machine (Phase 6b: deferred backend startup until buffer ready)
 enum class OutputState {
@@ -227,8 +272,102 @@ public:
     void setPageScheduler(CaptureRevalidator *scheduler) { pageScheduler_ = scheduler; }
 
 public:
+    // THE FROZEN LANE. Unchanged in every respect except one: when the device is
+    // already OPEN (the live lane opened it), it ATTACHES rather than re-opening
+    // — and the engine it mints is published under the running callback.
     void startOutput();
+    // Stops the FROZEN LANE. Closes the device only when the live lane is OFF.
     void stopOutput();
+
+    // --- the live lane (proposal 21 L1a, design D5) -------------------------
+
+    // Open the device for live monitoring, at `rate` (the project rate), and
+    // turn the live lane ON. Idempotent. Returns 0 on success, -1 on refusal.
+    //
+    // Unlike startOutput() this starts the backend IMMEDIATELY: there is no
+    // readahead to prime, and a performer must hear their input the moment they
+    // arm. `channels` is the project width the ring will carry.
+    //
+    // IT REFUSES WHEN THE DEVICE RATE IS NOT THE PROJECT RATE (review fix 3).
+    // The live lane stamps its entries in PROJECT frames and the RT sums them
+    // straight into the device buffer, so the two only line up while the rates
+    // are equal. The frozen lane has a resampler at this seam; the live lane
+    // has nowhere to put one, because a ring entry has to carry a position and
+    // a resampler makes the frame count fractional. Refusing loudly beats
+    // monitoring at the wrong pitch: one log line naming both rates, a counter,
+    // and the device closed again iff the frozen lane is not using it.
+    // Resolution path (playback/CONTRACT.md known debt): a device-frame-stamped
+    // ring, or opening the device at the project rate (ASIO, proposal 35).
+    int  openLive( std::uint32_t rate, idx_t channels );
+
+    // How many openLive() calls were refused for a rate mismatch. Process-wide
+    // per speaker; the app reads it to explain itself to the user.
+    std::uint64_t liveRateRefusals() const
+    { return liveRateRefusals_.load( std::memory_order_relaxed ); }
+
+    // Turn the live lane OFF and close the device if the frozen lane is idle.
+    // The PUMP must already be stopped: this does not own it (the app does),
+    // and closing the device under a running producer would leave it writing
+    // into a ring nobody drains.
+    void closeLive();
+
+    bool liveActive() const
+    { return liveLane_.load( std::memory_order_acquire ) == LiveLaneState::ON; }
+    DeviceState deviceState() const
+    { return deviceState_.load( std::memory_order_acquire ); }
+
+    // The pump's producer handle. Valid for the lifetime of the speaker; sized
+    // by openLive().
+    twLiveMixRing &liveRing() { return liveRing_; }
+
+    // THE LIVE CLOCK (design D2). Stamped by the render callback beside
+    // publishPosition(); the pump reads it to decide what position to render.
+    const twEngineClock &engineClock() const { return engineClock_; }
+
+    // The arm/disarm crossfade, 2-3 ms (design D2). Applied by the RT sum.
+    void setLiveCrossfadeMs( double ms );
+
+    // The device buffer, in PROJECT frames — the publish-lag correction the
+    // live clock applies (see twliveclock.h). 0 until a device is open.
+    std::uint64_t outputBufferFramesProject() const
+    { return bufferFramesProject_.load( std::memory_order_relaxed ); }
+
+private:
+    // The ONE render callback, for both lanes. A member rather than a lambda so
+    // it can be registered once, at device open, and keep working across a
+    // frozen-lane start/stop underneath it.
+    std::size_t renderCallbackBody( float *out, std::size_t frames,
+                                    std::uint32_t channels );
+    // Open the device and register the callback if it is not open already.
+    // Returns 0 on success. Never starts the backend — the two lanes disagree
+    // about when that should happen and each does it itself.
+    int  ensureDeviceOpen( std::uint32_t rate );
+    // Close the device. Caller must hold NO lock (closeDevice() waits for the
+    // render thread) and must have stopped the backend if it was running.
+    void closeDeviceNoLock();
+
+    std::atomic<DeviceState>   deviceState_{ DeviceState::CLOSED };
+    std::atomic<bool>          deviceRunning_{ false };   // backend_->startOutput() done
+    std::atomic<LiveLaneState> liveLane_{ LiveLaneState::OFF };
+
+    twLiveMixRing  liveRing_;
+    // The RT's place in the ring's stream. It MUST live across callbacks: a
+    // 480-frame callback leaves the cursor 480 frames into a 1024-frame entry
+    // and the next one has to resume there (review fix 1).
+    twLiveMixReader liveReader_;
+    twLiveMixState liveFade_;          // RT-thread only
+    twEngineClock  engineClock_;
+    std::atomic<std::uint64_t> bufferFramesProject_{ 0 };
+    std::atomic<std::uint32_t> liveCrossfadeFrames_{ 0 };
+    std::atomic<std::uint64_t> liveRateRefusals_{ 0 };
+
+    // The callback's planar scratch. Members since proposal 21 L1a: the ring
+    // sum needs the pull's PLANAR buffers (it sums before the interleave), and
+    // a per-callback std::vector on the RT path was recorded debt anyway. Sized
+    // at device open; a callback larger than that grows it once and logs.
+    std::vector<float>  cbBuf_;
+    std::vector<float*> cbChans_;
+    std::atomic<bool>   loggedCbGrow_{ false };
 };
 
 #endif

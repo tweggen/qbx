@@ -12351,3 +12351,263 @@ and no render path was touched. The only edit inside `freezePage` is the guard's
 (`onRtThread()` → `!mayRender()`, identical for every unmarked thread), and the
 scheduler edit moves one state assignment earlier under a lock it was already
 taking.
+
+## 2026-08-17 — Proposal 21 L1a: live lane engine
+
+The ENGINE half of the live lane (design D1/D2/D5, orchestration brief L1a):
+the pump, the position-stamped epoch-gated ring, the live clock and transport
+model, the speaker's two-lane lifecycle, the processor's live-owned guard and
+second event source, and a synthetic-plan harness. **Nothing in the app calls
+any of it yet** — L1b wires arm/disarm — so every existing path is untouched
+and the goldens are byte-identical by construction.
+
+**New in `tw/playback`** (which now depends on `tw/plugins` and `tw/mix`; both
+are acyclic against it, and the pump needs exactly the three pieces of the graph
+that survive block-wise):
+
+- `twliveclock.h` — `twEngineClock`, a SEQLOCK stamped by the render callback
+  beside `publishPosition()` with `{seq, deliveredFrame, hostNs}`.
+  `deliveredFrame = published − bufferFramesProject`, i.e. `SMidiOutPump`'s
+  publish-lag correction applied ONCE so every consumer shares one definition.
+  Engine-owned on purpose: `PlaybackContext` is the app-implemented services
+  interface (UI-thread `locatorPosition()`) and `SApplication` is unreachable
+  from `tw/`. Readers retry a BOUNDED four times, then report "no reading".
+- `twlivering.h/.cc` — `twLiveMixRing` (SPSC, 4 deep, one device block per
+  entry, a full ring DROPS and counts) plus the RT sum as a PURE FUNCTION,
+  `twlive::mixRing` / `twlive::gateEntry`, extracted for the same reason
+  `twmonitor::pullChannels` is: the gate is the part most able to be got subtly
+  wrong and it has to be assertable without a device, a pump or a graph.
+- `twliveplan.h/.cc` — `twLivePlan` (immutable snapshot: ordered tracks →
+  processors, a `twGainStage::Envelope`, a channel map, frozen-input roots, live
+  children, scratch sized at `finalize()`), `twLiveInputSource` (the seam L1b
+  fills with a device ring), and `twlive::checkMasterShape()` — the D3
+  precondition, over the master's two components.
+- `twlivepump.h/.cc` — `LiveGraphPump`: `markLiveThread()`, MMCSS "Pro Audio",
+  a plan swapped by generation and adopted at the top of a block (which is also
+  where the old one dies), allocation-free steady state, paced by the RT's own
+  drain rather than by a timer. `renderOneBlock()` is public and SYNCHRONOUS so
+  the harness can drive it.
+
+**`twSpeaker` became an explicit three-axis machine** — device {CLOSED, OPEN} ×
+frozen {IDLE, BUFFERING, PLAYING} × live {OFF, ON}, `out = (frozen==PLAYING ?
+root : 0) + (live==ON ? ring : 0)`. `openLive()` opens AND starts the backend
+immediately (no readahead to prime); `startOutput()` ATTACHES to an already-open
+device (the callback is registered once, by `ensureDeviceOpen()`, and a new
+engine is minted under it); `stopOutput()` stops the LANE only while live is ON;
+`closeLive()` closes iff the frozen lane is idle. The engine handle is now read
+and written through `std::atomic_load/store` — a plain assignment was safe only
+while the device could not be running during a swap. The callback's two
+per-block vector allocations (recorded debt) are gone: the ring sum needs the
+planar buffers anyway, so they are members sized at device open.
+`AudioEngine::servedContentEpoch()` publishes the epoch of the page the RT is
+already holding, so the gate is a pure function of it rather than a second
+lookup. `CaptureBackend` clears its recording at DEVICE start rather than at
+play start (testkit rule 1 amended; with no live lane the device still opens at
+play, so every existing `dump-playback-capture` case reads the same recording).
+
+**`twPluginSlotProcessor` gained three flag-gated things**, all inert unless
+`setLiveOwned(true)`: the OWNERSHIP GUARD (a `render()` from a thread that is not
+the pump answers silence and bumps `liveOwnedRefusals()`, one log per slot, never
+an assert, and never touching continuity — that would make the pump's next block
+a spurious reposition); a SECOND EVENT SOURCE `liveEvents_` merged with note ids
+namespaced to 15; and `twLiveTransport {playing, feedEnabled, holdAutomationAt}`
+consulted per chunk. `twProcessContext.playing` is truthful for the first caller
+that can be stopped. **`feedEnabled=false` also skips the PRE-ROLL** — it chases
+and replays the same feed, so running it with the feed masked would put the
+sequenced material into the DSP by the back door, which is exactly what D2's mask
+exists to prevent.
+
+**Gates (all green).**
+- `./build.sh`, `check_layering.py` (the DAG grew `playback → {plugins, mix}`,
+  declared in both the checker and `tw303a/CMakeLists.txt`), `check_logging.py`.
+- **AC1** — `playback_test` walks CLOSED→OPEN(live) → PLAY attaches → STOP keeps
+  the device → disarm closes, and separately PLAY-without-live opens and closes
+  exactly as before. "No re-open" is measured, not asserted by inspection: the
+  capture backend clears at device open, so an unchanged recording across Play
+  IS the proof. Frame 0 = device start is gated deterministically (the second
+  `startOutput()` returns before the backend restarts, so the recording reads 0).
+- **AC2** — the synthetic-plan harness: 32 blocks of 1024 frames through
+  `tw.test.clap.gain` at 0.5 over a position-encoded input equal the frozen
+  render of the same material through the same insert **sample for sample, 0
+  differences in 65 536 comparisons** (32768 frames × 2 channels). Linear and
+  partition-invariant is the whole reason the claim is makeable — the pump
+  partitions at 1024 and the freeze path at 4096. A seek mid-run produces
+  EXACTLY ONE reposition, the next entry is stamped at the target, and the
+  output re-aligns to the material there. STOPPED: with `feedEnabled=false` the
+  block is EXACTLY silent (peak < 1e-6) while an injected live event sounds
+  (peak > 0.1), and the same feed sounds when `feedEnabled=true` — so the mask
+  has teeth; an automation curve present but held reads constant to 1e-6 across
+  the block at `valueAt(holdAutomationAt) = 0.5`.
+- **AC3** — the ring gate: position mismatch ⇒ silence + counter; arm
+  `rootEpoch < flipEpoch` ⇒ not summed, `>=` ⇒ summed; disarm
+  `rootEpoch < flipEpoch'` ⇒ STILL summed, and it stops exactly when the
+  re-summed page lands; stopped (no root page) ⇒ out = ring; the crossfade in
+  both directions; the SPSC ring's FIFO order, drop-on-full and `dropBefore`.
+  The master-shape precondition flips as designed: unity sum + identity map ⇒
+  LinearSplit; a non-unity input level, a swapped channel map, a width
+  disagreement or a missing component ⇒ Closure.
+- **AC4** — `liveOwnedRefusals`: a `render(positional)` from an unmarked thread
+  on a live-owned processor returns silence and counts exactly once; after
+  `setLiveOwned(false)` the same call renders normally and nothing further is
+  counted.
+- **AC5** — `qxa.mc_golden_mono` / `qxa.mc_golden_stereo` green and
+  `git status tests/goldens/` clean; every playback / instrument / automation /
+  midi_out case green.
+- `ctest --test-dir smaragd/build -j4`: **174/174 passed, 177 registered, 3 Not
+  Run (Disabled — the macOS-only `au_*` trio)**, 62.5 s.
+- Sweeps: `playback_test` × 50 at `SMARAGD_REVAL_WORKERS` {1,4,8,16} and
+  `qxa.instrument_render_determinism` × 50 at the same four — numbers in the PR.
+
+**NOT gated, and say so:** the real-device behaviour of the two-lane machine
+(WASAPI — nothing headless opens an output device, so `openLive` → `startOutput`
+attach has only been exercised against `CaptureBackend`); any latency number for
+the live path (proposal 35 / ASIO is the prerequisite, and a bound tight enough
+to separate the behaviours would flake); MMCSS actually being granted; anything
+app-side — L1b wires arm/disarm and **nothing in the app calls `openLive()`
+yet**, so the pump does not exist at runtime and the goldens hold by
+construction rather than by re-freezing; the folder-closure and frozen-input
+paths of the pump (`liveChildren` / `frozenInputs` are built and finalize-checked
+but have no live producer until L1b); the disarm crossfade end to end (the gate
+is on the pure function, not on a running lane).
+
+**One pre-existing hazard found and NOT fixed here** (it is `tw/graph`, outside
+this phase's module set): `tw303aEnvironment::bufferSize` has no initialiser and
+no default — the APP sets it at startup, so a unit test that never does reads
+whatever was on the stack, and `twMixer`'s constructor `calloc`s from it and
+throws. `playback_test` now calls `env.setBufferSize(4096)` before constructing
+one, with the reason stated at the call site.
+
+**Two unreproduced flakes seen under a FULL `-j4` run, named because the rule
+says a case that fails once and passes on re-run is not a pass.** Five full
+`-j4` runs were made; three were 174/174 and two each lost ONE case, a
+different one each time:
+
+| Case | Shape | Pinned |
+|---|---|---|
+| `qxa.instrument_render_determinism` + its `_xproc` driver (both, in one run) | render-vs-render byte compare | `repeat_test.sh` 50/50 at workers {1,4,8,16}; the pair together under `ctest -R … -j4` 20/20 |
+| `qxa.instrument_locate_continuity` | `assert-instrument-slot FAILED: slot 0 … is not an instrument (or the chain is empty)`, then both RMS assertions read exactly 0 | `repeat_test.sh` 25/25 at workers 4 |
+
+The second one's first line is the diagnosis and it is NOT a DSP or a
+determinism failure: the slot had NO PLUGIN, i.e. the CLAP module did not
+resolve in that process, so the instrument rendered silence and every later
+assertion followed from it. That points at the plugin registry / module load
+under concurrent load (four `smaragd.exe` processes each scanning and
+`LoadLibrary`-ing the same `twtestclap.clap`), not at anything this phase
+touched — no code path in L1a runs unless something calls `openLive()`, and
+nothing does yet. It left no sticky cache record: the next runs were green.
+Root cause is NOT established; both are recorded as open.
+
+A full SERIAL run was made as the cleaner signal: **174/174, 164.8 s.**
+
+### 2026-08-17 — L1a review fix: stream consumption / clock-paced pump / rate scoping
+
+Orchestrator review of `feat/21-l1a-live-lane-engine` accepted the processor,
+the plan, the speaker machine, the precondition helper and the AC1–AC5
+evidence, and found ONE protocol defect plus a scoping gap. Neither is a design
+change: D2 already said the entries are position-stamped and F6 already said
+the device block is variable — the implementation had read "startPos matches
+the frame being delivered" as BLOCK EQUALITY.
+
+**Fix 1 — the ring is consumed as a STREAM by frame range.** Two facts broke the
+equality test: (a) WASAPI's callback block is VARIABLE (`bufferFrames − padding`
+per call), so the RT's grid is irregular by construction and a fixed-block ring
+can never align — a permanently silent live lane with every entry counted a
+mismatch; (b) even at a fixed block, the pump filled the ring to depth 4 while
+the drift tolerance was 2 blocks, so after the first fill the next stamp read as
+a −3-block jump ⇒ a spurious reposition, `forgetContinuity` and a burst of
+duplicated blocks on EVERY start. The AC2 harness stamped the clock in lockstep
+with each pump block, which is exactly why neither surfaced.
+
+The consumer now holds a CURSOR into the head entry (`twLiveMixReader`, a member
+of `twSpeaker` because it must live across callbacks) and `twlive::mixStream`
+consumes [P, P+n): entries wholly behind P are dropped and counted; an entry
+starting after the want position is the FUTURE and is KEPT (silence for the gap,
+`notYet`) because popping it would throw away audio the next callback needs;
+overlaps are summed from the entry's own offset and popped only when exhausted.
+`frames` may differ from `framesPerEntry` in BOTH directions. `mixRing` survives
+as the one-entry primitive with the strict position claim. `dropBefore` is gone —
+the drop-past is the reader's.
+
+**A second defect the fix exposed, and fixed: the RUN ID.** "Keep the future" is
+right for a pump running legitimately ahead and catastrophic across a
+REPOSITION: the queued entries describe an abandoned timeline arbitrarily far
+from where the RT now is, so the consumer holds them forever, the ring fills,
+the producer can never write the new position and the lane stops dead. Measured
+on a seek back and on the STOPPED→PLAYING switch (T2 and T3 both failed on it
+before the fix). The producer stamps a monotone run id, bumps it in
+`applyReposition()` and publishes it; the consumer drops any entry not of the
+current run. The ring unblocks within one callback and the drop is counted.
+
+**Fix 2 — the pump paces on the clock.** `twEnginePosition` gains `nextFrame`
+(what the RT will pull next = the position the callback publishes);
+`deliveredFrame` is unchanged and still means what is being HEARD, for MIDI-out
+and metering. While PLAYING the pump keeps `[nextFrame, nextFrame + lead)`
+covered and idles otherwise; default lead is TWO blocks and
+`requiredRingDepth() = ceil(lead/block) + 2` (the pump warns once if the ring is
+shallower). The fixed 2-block tolerance is replaced by positional rules:
+`nextPos < nextFrame` ⇒ fell behind / seek forward; `nextPos > nextFrame + lead
++ block` ⇒ the clock moved back (seek back or loop wrap); a jump INSIDE the
+covered window needs none. `LiveGraphPump::requestReposition()` lets L1b force
+D2's "one explicit reposition" on a transport action without relying on drift
+detection — and it is READ, not consumed, until the reposition is actually
+applied, so a congested ring cannot swallow it. The reposition is applied BEFORE
+the ring slot is claimed for the same reason.
+
+**Fix 3 — rate scoping** (a gap in the design, recorded rather than
+re-litigated). The live lane stamps PROJECT frames and the RT sums them straight
+into a device buffer, so the two only line up while the rates are equal; the
+frozen lane has a resampler at this seam and the live lane has nowhere to put
+one (a resampler makes an entry's frame count fractional, and an entry must
+carry a position). `openLive()` now REFUSES a mismatch: −1, one log naming both
+rates, `liveRateRefusals()`, and the device closed again iff the frozen lane is
+not using it. Recorded as known debt in `playback/CONTRACT.md` inv. 18 with the
+resolution path (a device-frame-stamped ring, or opening at the project rate —
+ASIO, proposal 35).
+
+**Gates.** Every existing test kept and adapted to the new API without
+weakening: AC2's harness now paces on `nextFrame` with a one-block lead, and
+AC3's `dropBefore` assertion became the reader's drop-past through the path that
+is actually used. Four new blocks in `playback_test`:
+
+- **T1** the stream consumer over an irregular RT grid — the block sequence
+  `{480, 1056, 33, 2048, 1024, 7}` repeated 40 times, **24 606 frames,
+  sample-for-sample exact, 0 gaps, 0 mismatches**; a seek forward drops the
+  passed entries and reads the new position exactly; a seek back is silence +
+  `notYet` with NOTHING popped; the epoch gate flips MID-ENTRY across a partial
+  consumption (33 frames gated, the rest summed once the re-summed page lands).
+- **T2** the pump on a real thread against a pretend RT that consumes a variable
+  block every ~1 ms and stamps its own clock: over **500 blocks / 387 320
+  frames, 0 wrong frames, 0 silent, 0 repositions, max ring occupancy 5 =
+  ceil(lead/block)+1** with lead 4 blocks and depth 6. One seek forward, one
+  seek back and one `requestReposition()` are **exactly one reposition each**,
+  and continuity resumes after each. The reposition COUNTS are measured with the
+  RT standing still, deliberately: a seek makes the pump shed its run and
+  re-cover a whole lead, and a window spanning that refill measures the refill
+  rather than the seek (it cost 3 failures in 25 before the windows were
+  separated). Continuity is then asserted separately over a moving window, which
+  is the half a still window cannot make. Starvation is REPORTED and bounded
+  loosely (< 5 %) because it is the one genuinely timing-dependent number here.
+- **T3** end to end through the REAL render callback on the capture backend:
+  `openLive` with the transport STOPPED ⇒ the recording is the ramp,
+  **contiguous from frame 0 for 18 432 frames, no gap**, on both device
+  channels; then `startOutput()` attaches with no re-open and no hole, and after
+  the plan goes to PLAYING **18 908 of 22 528 frames carry BOTH lanes summed
+  (tone 0.25 + ramp ≥ 0.25), 0 holes**.
+- **T4** the rate refusal, both branches: a device WE opened is closed again on
+  refusal; a device the FROZEN LANE is using survives a refused arm untouched
+  and still PLAYING; the project's own rate is then accepted on that same open
+  device. Both counted.
+
+`playback_test` **25/25** and a second loop of 25 (it is threaded and
+timing-sensitive, so it is looped rather than run once). `ctest -j4`
+**174/174, 177 registered, 3 Not Run (Disabled)**, 63.6 s. Layering and logging
+clean; `smaragd/tests/goldens/` byte-identical (`git status` clean) — no render
+path was touched and nothing in the app calls `openLive()` yet.
+
+**Still NOT gated:** real WASAPI behaviour of any of this (the variable block is
+REPRODUCED by T1/T2's irregular grid, not observed on a driver); MMCSS actually
+being granted; the closed-device rate refusal against a device that genuinely
+cannot adopt a rate (both in-repo backends adopt whatever they are opened with,
+so T4 reaches that branch by asking for a rate of 0 — stated rather than
+implied); the folder-closure and frozen-input pump paths (no producer until
+L1b); the crossfade end to end.

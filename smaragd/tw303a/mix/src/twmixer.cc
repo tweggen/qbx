@@ -235,6 +235,12 @@ int twMixer::setInputLevel( idx_t i, double volume )
     return 0;
 }
 
+double twMixer::inputLevel( idx_t i ) const
+{
+    if( i < 0 || i >= mixerInputs_ || !inputProperties_ ) return 0.0;
+    return inputProperties_[i].volume_;
+}
+
 /**
  * Change the number of mixer inputs.
  * The number of channels can only be shrunken, if there is nothing connected.

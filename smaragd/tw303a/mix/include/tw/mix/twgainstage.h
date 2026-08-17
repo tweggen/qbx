@@ -147,7 +147,18 @@ protected:
     virtual void reset() override;
     virtual void teardown() override;
 
-private:
+public:
+    // --- the pure fader arithmetic, PUBLIC since proposal 21 L1a -----------
+    //
+    // The live pump (design D1) applies a track's fader to a BLOCK it rendered
+    // itself, outside the graph: it never freezes a page, so it cannot reach
+    // renderPageWide(). It needs exactly what a page render needs — one
+    // Envelope snapshot taken on the main thread when the plan is built, and
+    // the same position-pure applyGain over it — and it must be THE SAME
+    // arithmetic, or an armed track's fader would differ from the frozen one it
+    // hands back to at disarm. So the snapshot type and the three pure
+    // functions below are public; nothing else about this class is.
+
     // One snapshot of everything the render needs, taken once per page under
     // mutex() (THREADING rule 2) and then read lock-free.
     struct Envelope {
@@ -160,6 +171,7 @@ private:
         bool     volAbsolute = false;                    // Read (vs Trim)
         std::shared_ptr<const twAutomationCurve> mute;   // >= 0.5 == muted
     };
+    /// A snapshot of the fader as it stands right now. Main thread.
     Envelope envelope() const;
 
     // The multiplier for the frame at absolute position `pos`.
@@ -175,6 +187,7 @@ private:
     static void applyGain( const sample_t *src, sample_t *dst, length_t n,
                            offset_t start, const Envelope &e );
 
+private:
     // The multiplier a mute CURVE gives at `pos`, ramp included.
     static double muteFactorFromCurve( const twAutomationCurve &c, offset_t pos,
                                        length_t ramp );

@@ -6,6 +6,7 @@
 #include "tw/graph/twnegotiator.h"
 #include "tw/core/twsyslog.h"
 #include "tw/core/twlog.h"
+#include "tw/devices/midi_out_scheduler.h"
 
 #include <algorithm>
 #include <cassert>
@@ -31,15 +32,20 @@ twSpeaker::twSpeaker(tw303aEnvironment &env0)
 
 twSpeaker::~twSpeaker()
 {
-    TWSPK_LOG( "destroying (isPlaying=%d)", (int) isPlaying_.load() );
-    if (isPlaying_) backend_->stopOutput();
+    TWSPK_LOG( "destroying (isPlaying=%d, live=%d)", (int) isPlaying_.load(),
+               (int) liveActive() );
+    liveLane_.store(LiveLaneState::OFF, std::memory_order_release);
+    if (deviceRunning_.load(std::memory_order_relaxed) || isPlaying_)
+        backend_->stopOutput();
     backend_->closeDevice();
+    deviceRunning_.store(false, std::memory_order_relaxed);
+    deviceState_.store(DeviceState::CLOSED, std::memory_order_release);
 }
 
 std::shared_ptr<audio::AudioEngine> twSpeaker::engineSnapshot() const
 {
     std::lock_guard<std::mutex> lock(engineMutex_);
-    return audioEngine_;
+    return std::atomic_load(&audioEngine_);
 }
 
 void twSpeaker::releaseEngine()
@@ -47,8 +53,13 @@ void twSpeaker::releaseEngine()
     std::shared_ptr<audio::AudioEngine> dying;
     {
         std::lock_guard<std::mutex> lock(engineMutex_);
-        dying.swap(audioEngine_);
+        dying = std::atomic_load(&audioEngine_);
+        std::atomic_store(&audioEngine_, std::shared_ptr<audio::AudioEngine>());
     }
+    // The frozen lane is gone; what the clock last published describes a
+    // playhead that no longer exists (design D2). The pump falls back to its
+    // virtual counter on the next block.
+    engineClock_.invalidate();
     // ~AudioEngine joins the readahead thread; run it with no lock held.
     dying.reset();
 }
@@ -78,16 +89,20 @@ void twSpeaker::startOutput()
         graphRate = pInputPlugs_[0]->getFormat().sampleRate;
     }
 
-    TWSPK_LOG( "calling openDevice with rate=%u", graphRate );
-    if (backend_->openDevice(outputDeviceId_, graphRate) != 0) {
-        TWSPK_LOG( "openDevice FAILED" );
-        {
-            std::lock_guard<std::mutex> lock(mutex());
-            outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
-        }
+    // THE ATTACH (proposal 21 L1a, design D5). When the live lane already has
+    // the device open, Play must NOT re-open it: the callback is running, a
+    // performer is hearing their input through it, and closing/reopening would
+    // be an audible hole for no reason. ensureDeviceOpen() is a no-op then.
+    const bool deviceWasOpen =
+        ( deviceState_.load(std::memory_order_acquire) == DeviceState::OPEN );
+    if (ensureDeviceOpen(graphRate) != 0) {
+        std::lock_guard<std::mutex> lock(mutex());
+        outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
         return;
     }
-    TWSPK_LOG( "openDevice succeeded" );
+    if (deviceWasOpen)
+        TWSPK_LOG( "device already OPEN (live lane) — attaching the frozen lane "
+                   "without re-opening" );
 
     // Negotiate rates (no lock needed)
     {
@@ -125,6 +140,14 @@ void twSpeaker::startOutput()
     engine->setScheduler(pageScheduler_);
 
     rateRatio_ = (graphRate > 0) ? ((double) cfg.sampleRate / (double) graphRate) : 1.0;
+    // THE PUBLISH-LAG CORRECTION, in PROJECT frames (design D2, and the same
+    // conversion SMidiOutPump makes). cfg.bufferFrames is DEVICE frames at the
+    // DEVICE rate; the position the callback publishes is a project frame.
+    bufferFramesProject_.store(
+        (std::uint64_t) ( (rateRatio_ > 0.0)
+                              ? ( (double) cfg.bufferFrames / rateRatio_ )
+                              : (double) cfg.bufferFrames ),
+        std::memory_order_relaxed );
 
     engine->setLoopBoundaries(
         cycleEnabled_.load(std::memory_order_relaxed),
@@ -142,8 +165,13 @@ void twSpeaker::startOutput()
     // Publish the handle (leaf-lock write).
 
     {
+        // THE HANDLE SWAP UNDER A RUNNING CALLBACK (design D5). engineMutex_
+        // stays a LEAF and is never taken by the callback; the store is atomic
+        // so the callback's atomic_load either sees the old engine or the new
+        // one, never a torn pointer. Before L1a this was a plain assignment,
+        // which was safe only because the device could not be running yet.
         std::lock_guard<std::mutex> lock(engineMutex_);
-        audioEngine_ = engine;
+        std::atomic_store(&audioEngine_, engine);
     }
 
     // Rate diagnostics
@@ -163,80 +191,10 @@ void twSpeaker::startOutput()
                    (unsigned) graphRate, (unsigned) cfg.sampleRate );
     }
 
-    // Phase 5: Register callback (no lock needed)
-    backend_->setRenderCallback(
-        [this](float *out, std::size_t frames, std::uint32_t channels) -> std::size_t {
-            // Stage 6: mark the RT thread so twComponent::freezePage can
-            // ENFORCE "the RT path never renders" (thread-local flag; a
-            // repeated store of `true` is free).
-            twRtThreadGuard::markRtThread();
-            auto engine = audioEngine_;  // Lock-free capture via shared_ptr
-            if (!engine) {
-                std::fill_n(out, frames * channels, 0.0f);
-                return frames;
-            }
-
-            // Defensive: Only pull audio if engine is in PLAYING state (Phase 6b safety)
-            if (engine->getPlaybackState() != audio::PlaybackState::PLAYING) {
-                std::fill_n(out, frames * channels, 0.0f);
-                return frames;
-            }
-
-            // THE DEVICE MONITORING RULE — stated in full at the top of
-            // twspeaker.h and in playback/CONTRACT.md inv. 9:
-            //     L = ch0;  R = (projectWidth >= 2) ? ch1 : ch0
-            // and that pair meets the device's channel count as it always has.
-            // A project wider than two is monitored on its FIRST TWO channels;
-            // the rest are computed and dropped HERE, at the device, and never
-            // in a file (that is RenderSession, which shares no code with this).
-            const std::size_t projectWidth = std::max<std::size_t>(1, engine->graphChannels());
-            const std::size_t pullCh       = twmonitor::pullChannels(projectWidth);
-
-            // ONE log line per width, not per callback: the exchange returns the
-            // width we last reported, so this fires on the first callback of a
-            // session and again only if the project's width changes underneath
-            // it. Someone hearing four of their six channels missing can find
-            // out why without reading source.
-            if ((int) projectWidth != monitorWidthLogged_.exchange((int) projectWidth,
-                                                                   std::memory_order_relaxed)) {
-                if (projectWidth > 2)
-                    TWSPK_LOG("monitoring a %u-channel project on the device's FIRST TWO "
-                              "channels (L=ch0, R=ch1); channels 2..%u are rendered and "
-                              "dropped at the device. A render still gets all %u.",
-                              (unsigned) projectWidth, (unsigned) (projectWidth - 1),
-                              (unsigned) projectWidth);
-                else
-                    TWSPK_LOG("monitoring a %u-channel project (L=ch0, R=%s)",
-                              (unsigned) projectWidth,
-                              projectWidth >= 2 ? "ch1" : "ch0");
-            }
-
-            std::vector<float> buf(pullCh * frames);
-            std::vector<float *> chans(pullCh);
-            for (std::size_t c = 0; c < pullCh; ++c) chans[c] = buf.data() + c * frames;
-
-            const std::size_t outFrames =
-                (std::size_t) engine->pullBlock(chans.data(), pullCh, frames);
-
-            if (outFrames == 0) {
-                std::fill_n(out, frames * channels, 0.0f);
-                if (context_ && !context_->locatorHeldElsewhere())
-                    context_->publishPosition(engine->currentPosition());
-                return frames;
-            }
-
-            twmonitor::interleave(out, outFrames, channels,
-                                  const_cast<const float *const *>(chans.data()), pullCh);
-
-            if (outFrames < frames) {
-                std::fill_n(out + outFrames * channels,
-                            (frames - outFrames) * channels, 0.0f);
-            }
-
-            if (context_ && !context_->locatorHeldElsewhere())
-                context_->publishPosition(engine->currentPosition());
-            return static_cast<std::size_t>(outFrames);
-        });
+    // Phase 5: the callback is registered ONCE, by ensureDeviceOpen(), and
+    // serves BOTH lanes for the life of the device session (design D5). It used
+    // to be installed here, per start, which is exactly what made "attach
+    // without re-opening" impossible.
 
     // Phase 6: Transition to BUFFERING and spawn monitor task
     {
@@ -285,16 +243,24 @@ void twSpeaker::stopOutput()
         }
     } // Release taskMutex_
 
-    // Phase 3: Stop backend output (no lock - potentially blocking I/O)
-    if (curState == OutputState::PLAYING) {
-        TWSPK_LOG( "stopping backend output" );
-        backend_->stopOutput();  // Blocks until callback thread exits
-    } else if (curState == OutputState::BUFFERING || curState == OutputState::OPENING) {
-        TWSPK_LOG( "stopped before playback started (state=%d)", (int)curState );
+    // Phase 3/4: the device (no lock - potentially blocking I/O).
+    //
+    // WHILE THE LIVE LANE IS ON, THIS STOPS THE LANE AND NOT THE DEVICE (design
+    // D5). The callback keeps running and keeps summing the ring; all that
+    // changes is that its frozen half goes back to zero-filling. Stopping the
+    // transport must not take a monitored input off the air.
+    if (liveActive()) {
+        TWSPK_LOG( "live lane is ON — stopping the FROZEN lane only; the device "
+                   "stays open" );
+    } else {
+        if (curState == OutputState::PLAYING) {
+            TWSPK_LOG( "stopping backend output" );
+            backend_->stopOutput();  // Blocks until callback thread exits
+        } else if (curState == OutputState::BUFFERING || curState == OutputState::OPENING) {
+            TWSPK_LOG( "stopped before playback started (state=%d)", (int)curState );
+        }
+        closeDeviceNoLock();
     }
-
-    // Phase 4: Close device (no lock - potentially blocking I/O)
-    backend_->closeDevice();
 
     // Phase 5: Destroy engine (handle cleared under engineMutex_, destructor runs unlocked)
     releaseEngine();
@@ -353,8 +319,20 @@ void twSpeaker::monitorReadaheadBuffer()
                     return;
                 }
 
-                if (backend_->startOutput() == 0) {
+                // THE PRIMING GATES THE FROZEN LANE, NEVER THE RING (design
+                // D5). If the live lane already started the device, there is
+                // nothing to start: the callback has been running and zero-
+                // filling the frozen half, and all that changes here is that it
+                // begins pulling.
+                const bool alreadyRunning =
+                    deviceRunning_.load(std::memory_order_acquire);
+                if (alreadyRunning) {
+                    TWSPK_LOG( "monitorReadaheadBuffer: device already running "
+                               "(live lane) — frozen lane -> PLAYING" );
+                    outputState_.store(OutputState::PLAYING, std::memory_order_relaxed);
+                } else if (backend_->startOutput() == 0) {
                     TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() succeeded" );
+                    deviceRunning_.store(true, std::memory_order_release);
                     outputState_.store(OutputState::PLAYING, std::memory_order_relaxed);
                 } else {
                     TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() FAILED" );
@@ -368,9 +346,10 @@ void twSpeaker::monitorReadaheadBuffer()
 
             if (startFailed) {
                 // Teardown with no lock held: closeDevice() waits for the render thread
-                // and ~AudioEngine joins the readahead thread.
+                // and ~AudioEngine joins the readahead thread. The DEVICE is closed
+                // only when the live lane does not own it.
                 engine.reset();
-                backend_->closeDevice();
+                if (!liveActive()) closeDeviceNoLock();
                 releaseEngine();
                 std::lock_guard<std::mutex> stateLock(mutex());
                 outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
@@ -404,7 +383,7 @@ void twSpeaker::monitorReadaheadBuffer()
         }
 
         if (ownsTeardown) {
-            backend_->closeDevice();
+            if (!liveActive()) closeDeviceNoLock();
             releaseEngine();
             std::lock_guard<std::mutex> stateLock(mutex());
             outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
@@ -451,6 +430,311 @@ void twSpeaker::setOutputDevice(const std::string &id)
 std::vector<audio::AudioDeviceInfo> twSpeaker::outputDevices() const
 {
     return backend_->enumerateDevices();
+}
+
+// ============================================================================
+// THE LIVE LANE (proposal 21 L1a, design D5)
+// ============================================================================
+
+int twSpeaker::ensureDeviceOpen(std::uint32_t rate)
+{
+    if (deviceState_.load(std::memory_order_acquire) == DeviceState::OPEN) return 0;
+
+    TWSPK_LOG( "calling openDevice with rate=%u", rate );
+    if (backend_->openDevice(outputDeviceId_, rate) != 0) {
+        TWSPK_LOG( "openDevice FAILED" );
+        return -1;
+    }
+    TWSPK_LOG( "openDevice succeeded" );
+
+    const audio::AudioConfig cfg = backend_->getConfig();
+
+    // The callback's planar scratch, sized ONCE per device session. It used to
+    // be two std::vectors constructed per callback (recorded debt in the
+    // CONTRACT); the live sum needs the planar buffers anyway, because it adds
+    // into them BEFORE the interleave.
+    const std::size_t maxFrames = std::max<std::size_t>( cfg.bufferFrames, 4096 );
+    cbBuf_.assign( maxFrames * 2u, 0.0f );      // at most two pulled channels
+    cbChans_.assign( 2u, nullptr );
+    loggedCbGrow_.store( false, std::memory_order_relaxed );
+
+    // The crossfade, at the DEVICE rate. 2.5 ms is the middle of design D2's
+    // 2-3 ms band; setLiveCrossfadeMs() overrides it.
+    if (liveCrossfadeFrames_.load(std::memory_order_relaxed) == 0)
+        setLiveCrossfadeMs( 2.5 );
+
+    backend_->setRenderCallback(
+        [this](float *out, std::size_t frames, std::uint32_t channels) -> std::size_t {
+            return renderCallbackBody( out, frames, channels );
+        });
+
+    deviceState_.store(DeviceState::OPEN, std::memory_order_release);
+    return 0;
+}
+
+// Caller must hold NO lock: closeDevice() waits for the render thread.
+void twSpeaker::closeDeviceNoLock()
+{
+    backend_->closeDevice();
+    deviceRunning_.store(false, std::memory_order_release);
+    deviceState_.store(DeviceState::CLOSED, std::memory_order_release);
+}
+
+void twSpeaker::setLiveCrossfadeMs(double ms)
+{
+    if (ms < 0.0) ms = 0.0;
+    std::uint32_t rate = 48000;
+    if (deviceState_.load(std::memory_order_acquire) == DeviceState::OPEN)
+        rate = backend_->getConfig().sampleRate;
+    liveCrossfadeFrames_.store( (std::uint32_t) ( ms * 0.001 * (double) rate ),
+                                std::memory_order_relaxed );
+}
+
+int twSpeaker::openLive(std::uint32_t rate, idx_t channels)
+{
+    std::lock_guard<std::mutex> lock(mutex());
+    if (liveActive()) return 0;
+
+    if (channels < 1) channels = 1;
+
+    const bool deviceWasOpen =
+        (deviceState_.load(std::memory_order_acquire) == DeviceState::OPEN);
+
+    if (ensureDeviceOpen(rate) != 0) return -1;
+
+    const audio::AudioConfig cfg = backend_->getConfig();
+
+    // THE RATE SCOPE (review fix 3). The live lane's entries are stamped in
+    // PROJECT frames and summed straight into the device buffer; the frozen
+    // lane has a resampler at this seam and the live lane has nowhere to put
+    // one (a resampler makes a ring entry's frame count fractional, and an
+    // entry has to carry a position). So the two rates must be equal, and when
+    // they are not this REFUSES rather than monitoring off-pitch.
+    if (cfg.sampleRate != rate) {
+        liveRateRefusals_.fetch_add(1, std::memory_order_relaxed);
+        TWSPK_LOG( "REFUSING the live lane: the device is at %u Hz and the project "
+                   "at %u Hz. The live path carries PROJECT frames with no "
+                   "resampler, so monitoring would be off-pitch. Open the device "
+                   "at the project rate (playback/CONTRACT.md, known debt).",
+                   (unsigned) cfg.sampleRate, (unsigned) rate );
+        // Undo the open only if WE did it. A device the frozen lane is using
+        // must survive a refused arm completely untouched.
+        if (!deviceWasOpen &&
+            outputState_.load(std::memory_order_relaxed) == OutputState::STOPPED) {
+            if (deviceRunning_.load(std::memory_order_acquire)) backend_->stopOutput();
+            closeDeviceNoLock();
+        }
+        return -1;
+    }
+    // The ring carries the PROJECT's channels, not the device's: the device
+    // rule (playback inv. 9) is applied at the interleave, once, for both
+    // lanes. Its entries are one device block each, 4 deep.
+    liveRing_.reset( (std::uint32_t) channels,
+                     (std::uint32_t) std::max<std::uint32_t>( cfg.bufferFrames, 1 ),
+                     twLiveMixRing::kDefaultDepth );
+    liveReader_.rewind();
+    liveFade_ = twLiveMixState{};
+    liveFade_.fadeFrames = liveCrossfadeFrames_.load(std::memory_order_relaxed);
+
+    // NO PRIMING (design D5). There is no readahead behind a live lane and
+    // nothing to buffer: the performer must hear the input the moment they arm.
+    if (!deviceRunning_.load(std::memory_order_acquire)) {
+        if (backend_->startOutput() != 0) {
+            TWSPK_LOG( "openLive: backend->startOutput() FAILED" );
+            closeDeviceNoLock();
+            return -1;
+        }
+        deviceRunning_.store(true, std::memory_order_release);
+    }
+
+    liveLane_.store(LiveLaneState::ON, std::memory_order_release);
+    TWSPK_LOG( "live lane ON (rate=%u, %d ch, %u-frame ring x %u)",
+               (unsigned) cfg.sampleRate, (int) channels,
+               (unsigned) liveRing_.framesPerEntry(), (unsigned) liveRing_.depth() );
+    return 0;
+}
+
+void twSpeaker::closeLive()
+{
+    bool closeDevice = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        if (!liveActive()) return;
+        liveLane_.store(LiveLaneState::OFF, std::memory_order_release);
+        // The device goes only if the frozen lane is not using it. Read the
+        // state, act outside the lock: closeDevice() waits for the render
+        // thread and must never run under mutex().
+        closeDevice = ( outputState_.load(std::memory_order_relaxed) == OutputState::STOPPED );
+        TWSPK_LOG( "live lane OFF (device %s)",
+                   closeDevice ? "closing" : "kept by the frozen lane" );
+    }
+    if (closeDevice) {
+        if (deviceRunning_.load(std::memory_order_acquire)) backend_->stopOutput();
+        closeDeviceNoLock();
+    }
+}
+
+// ---------------------------------------------------------- the RT callback
+
+std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
+                                          std::uint32_t channels)
+{
+    // Stage 6: mark the RT thread so twComponent::freezePage can ENFORCE
+    // "the RT path never renders" (thread-local flag; a repeated store of
+    // `true` is free).
+    twRtThreadGuard::markRtThread();
+
+    // The engine handle, atomically: since proposal 21 L1a a NEW engine can be
+    // minted while this callback is running (Play attaching to a device the
+    // live lane opened), so a plain read of the shared_ptr would be a race.
+    std::shared_ptr<audio::AudioEngine> engine = std::atomic_load(&audioEngine_);
+    const bool liveOn = liveActive();
+
+    const bool frozenPlaying =
+        engine && engine->getPlaybackState() == audio::PlaybackState::PLAYING &&
+        outputState_.load(std::memory_order_relaxed) == OutputState::PLAYING;
+
+    if (!frozenPlaying && !liveOn) {
+        // The pre-L1a behaviour, byte for byte: nothing to play, zero-fill.
+        std::fill_n(out, frames * channels, 0.0f);
+        return frames;
+    }
+
+    // THE DEVICE MONITORING RULE — stated in full at the top of twspeaker.h and
+    // in playback/CONTRACT.md inv. 9:
+    //     L = ch0;  R = (projectWidth >= 2) ? ch1 : ch0
+    // and that pair meets the device's channel count as it always has. A
+    // project wider than two is monitored on its FIRST TWO channels; the rest
+    // are computed and dropped HERE, at the device, and never in a file.
+    std::size_t projectWidth = 1;
+    if (engine) projectWidth = std::max<std::size_t>(1, engine->graphChannels());
+    else if (liveOn && liveRing_.channels() > 0)
+        projectWidth = liveRing_.channels();
+    const std::size_t pullCh = twmonitor::pullChannels(projectWidth);
+
+    // ONE log line per width, not per callback.
+    if ((int) projectWidth != monitorWidthLogged_.exchange((int) projectWidth,
+                                                           std::memory_order_relaxed)) {
+        if (projectWidth > 2)
+            TWSPK_LOG("monitoring a %u-channel project on the device's FIRST TWO "
+                      "channels (L=ch0, R=ch1); channels 2..%u are rendered and "
+                      "dropped at the device. A render still gets all %u.",
+                      (unsigned) projectWidth, (unsigned) (projectWidth - 1),
+                      (unsigned) projectWidth);
+        else
+            TWSPK_LOG("monitoring a %u-channel project (L=ch0, R=%s)",
+                      (unsigned) projectWidth,
+                      projectWidth >= 2 ? "ch1" : "ch0");
+    }
+
+    if (cbBuf_.size() < pullCh * frames) {
+        // A device block larger than the one the session opened with. Growing
+        // here allocates on the RT path exactly once per surprise, which is
+        // strictly better than the per-callback allocation this replaced.
+        cbBuf_.assign(pullCh * frames, 0.0f);
+        if (!loggedCbGrow_.exchange(true, std::memory_order_relaxed))
+            TWSPK_LOG("callback block grew to %u frames x %u ch; scratch resized once",
+                      (unsigned) frames, (unsigned) pullCh);
+    }
+    if (cbChans_.size() < pullCh) cbChans_.assign(pullCh, nullptr);
+    for (std::size_t c = 0; c < pullCh; ++c) cbChans_[c] = cbBuf_.data() + c * frames;
+    float *const *chans = cbChans_.data();
+
+    // --- the FROZEN lane ----------------------------------------------------
+    std::size_t   outFrames = 0;
+    bool          haveRoot  = false;
+    std::uint64_t rootEpoch = 0;
+    std::int64_t  blockStart = -1;
+
+    if (frozenPlaying) {
+        blockStart = (std::int64_t) engine->currentPosition();
+        outFrames  = (std::size_t) engine->pullBlock(chans, pullCh, frames);
+        if (outFrames > 0) {
+            haveRoot  = true;
+            rootEpoch = engine->servedContentEpoch();
+        }
+        // pullBlock() writes every buffer for the full nFrames on every path,
+        // including the misses — so the planar scratch is defined either way.
+    } else {
+        std::fill(cbBuf_.begin(), cbBuf_.begin() + (std::ptrdiff_t)(pullCh * frames), 0.0f);
+    }
+
+    // --- the LIVE lane ------------------------------------------------------
+    //
+    // THE RING IS A STREAM, NOT A BLOCK QUEUE (review fix 1). This callback's
+    // `frames` is whatever the device asked for -- VARIABLE on WASAPI, which
+    // hands us `bufferFrames - padding` -- while the pump produces fixed
+    // blocks, so the two grids never line up and an equality test would leave
+    // the live lane permanently silent on real hardware. mixStream() consumes
+    // by FRAME RANGE, with a cursor that lives across callbacks.
+    if (liveOn) {
+        twLiveRingEntry head;
+        const bool haveHead = liveRing_.peek(head);
+
+        twLiveMixGate gate;
+        // WHILE STOPPED THERE IS NO ROOT PAGE: out = ring (design D2), and the
+        // stream is consumed sequentially from wherever its head sits -- the
+        // ring is then the only position authority there is. With the frozen
+        // lane playing, the engine's position is the authority.
+        gate.wantPos   = haveRoot
+                             ? blockStart
+                             : (haveHead ? head.startPos + (std::int64_t) liveReader_.cursor
+                                         : 0);
+        gate.rootEpoch = rootEpoch;
+        gate.haveRoot  = haveRoot;
+
+        const bool wantFadeOut = (haveHead && head.flipEpochPrime != 0);
+        if (wantFadeOut != liveFade_.fadingOut) {
+            liveFade_.fadingOut = wantFadeOut;
+            liveFade_.fadeDone  = 0;
+        }
+        liveFade_.fadeFrames = liveCrossfadeFrames_.load(std::memory_order_relaxed);
+
+        if (frozenPlaying && outFrames < frames) {
+            // The ring covers the whole block even where the frozen lane ran
+            // short, so the tail must be defined before the sum.
+            for (std::size_t c = 0; c < pullCh; ++c)
+                std::fill(chans[c] + outFrames, chans[c] + frames, 0.0f);
+            outFrames = frames;
+        }
+
+        twLiveStreamStats st;
+        twlive::mixStream(chans, pullCh, frames, gate.wantPos, gate,
+                          liveRing_, liveReader_, liveFade_, st);
+        if (st.framesSummed > 0 && !haveRoot) outFrames = frames;
+    }
+
+    if (outFrames == 0) {
+        std::fill_n(out, frames * channels, 0.0f);
+        if (frozenPlaying && context_ && !context_->locatorHeldElsewhere())
+            context_->publishPosition(engine->currentPosition());
+        return frames;
+    }
+
+    twmonitor::interleave(out, outFrames, channels,
+                          const_cast<const float *const *>(chans), pullCh);
+
+    if (outFrames < frames) {
+        std::fill_n(out + outFrames * channels,
+                    (frames - outFrames) * channels, 0.0f);
+    }
+
+    if (frozenPlaying) {
+        const std::uint64_t pos = engine->currentPosition();
+        if (context_ && !context_->locatorHeldElsewhere())
+            context_->publishPosition(pos);
+        // THE LIVE CLOCK, stamped beside the publication and derived from it by
+        // the one publish-lag correction (design D2 / twliveclock.h).
+        const std::uint64_t lag = bufferFramesProject_.load(std::memory_order_relaxed);
+        // deliveredFrame is what is being HEARD (publish lag removed), which is
+        // what MIDI-out and metering want; nextFrame is what the RT will PULL
+        // next, which is the published position itself, and is what the PUMP
+        // paces on (review fix 2). One stamp, two readings, no conflation.
+        engineClock_.stamp( (std::int64_t) pos - (std::int64_t) lag,
+                            (std::int64_t) pos,
+                            audio::MidiOutScheduler::hostNowNs() );
+    }
+    return outFrames;
 }
 
 // Phase 3: IOVector-based interface (type-safe, page-backed rendering)
