@@ -102,7 +102,12 @@ R7. **The frontier rule is drawn HERE, in the recording renderer**, not in
     cuts over one capture both show it and no existing clip gains a branch it
     would have to skip.
 
-Known debt: an `SRecordingContent` has no loader registration, so SAVING a
+Known debt: `SRecordingRendererInline::draw()` has NO gate. `screenshot` grabs
+the screen's root window (blank offscreen), and the verbs that do gate a paint
+build one named widget off screen — there is none for the arranger canvas. The
+peak ladder it draws from IS gated (`record_punch`, `previewNonEmpty`).
+
+Also: an `SRecordingContent` has no loader registration, so SAVING a
 project mid-take writes an element the loader will not recognise. The object
 exists for the length of a take and is replaced by a WAV-backed cut at stop;
 refusing the save, or materialising the partial take, is a later decision.

@@ -979,6 +979,14 @@ project mid-take (`SRecordingContent` has no loader registration), and the
 Cubase-style **catch range**, which is not implemented - pre-roll frames are
 trimmed.
 
+Also not gated: **`SRecordingRendererInline::draw()`**. The `screenshot` verb
+grabs the SCREEN's root window, blank under `QT_QPA_PLATFORM=offscreen`, so it
+proves nothing about one widget's paint; the verbs that DO gate a paint
+(`assert-track-head`, `assert-lane-alignment`) build one specific widget off
+screen and there is no such verb for the arranger canvas. The growing clip's
+PREVIEW DATA is gated (`record_punch`, `previewNonEmpty`) — what is not is the
+code that turns it into pixels.
+
 **Known limitation:** a record stop STOPS the transport and returns the
 playhead to the record start, whatever the take was recorded into. Right when
 the take started the transport; not what a punch drop-out should do to a run

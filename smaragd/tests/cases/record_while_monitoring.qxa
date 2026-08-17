@@ -23,6 +23,15 @@
   The take itself is asserted only loosely; record_offset_zero owns the
   placement numbers. What matters here is that a take through a live lane
   produces a clip at all and refuses nothing.
+
+  NOT GATED HERE, and nowhere else either: SRecordingRendererInline::draw().
+  The `screenshot` verb grabs the SCREEN's root window, which under
+  QT_QPA_PLATFORM=offscreen is blank, so a screenshot proves nothing about a
+  particular widget's paint; the verbs that DO gate a paint (assert-track-head,
+  assert-lane-alignment) build one specific widget off screen and there is no
+  such verb for the arranger canvas. The growing clip's PREVIEW DATA is gated
+  (record_punch, `previewNonEmpty`) - what is not is the code that turns it
+  into pixels.
 -->
 <SActionScript version="1" name="record_while_monitoring">
 
@@ -49,6 +58,7 @@
     <assert-log contains="input device change to" minCount="0" maxCount="0"/>
 
     <wait-ms ms="2000"/>
+
     <record-stop/>
 
     <assert-recorded-clip trackPath="0" clips="1" passes="1"
