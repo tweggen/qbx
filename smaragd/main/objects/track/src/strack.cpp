@@ -477,6 +477,37 @@ void STrack::checkDurationChanged()
     }
 }
 
+void STrack::setLiveOwnedLane( bool owned )
+{
+    if( liveOwnedLane_ == owned ) return;
+    liveOwnedLane_ = owned;
+    if( owned ) return;
+
+    // Handed back. ONE walk for everything the lane accumulated while the pump
+    // owned it (design D7).
+    if( !haveDeferredDirty_ ) return;
+    const offset_t a = deferredDirtyStart_, b = deferredDirtyEnd_;
+    haveDeferredDirty_ = false;
+    deferredDirtyStart_ = deferredDirtyEnd_ = 0;
+    invalidateRenderPathRange( a, b );
+}
+
+void STrack::invalidateRootWalkOrDefer( offset_t start, offset_t end )
+{
+    if( !liveOwnedLane_ ) {
+        invalidateRenderPathRange( start, end );
+        return;
+    }
+    if( !haveDeferredDirty_ ) {
+        haveDeferredDirty_  = true;
+        deferredDirtyStart_ = start;
+        deferredDirtyEnd_   = end;
+        return;
+    }
+    if( start < deferredDirtyStart_ ) deferredDirtyStart_ = start;
+    if( end   > deferredDirtyEnd_ )   deferredDirtyEnd_   = end;
+}
+
 void STrack::trackChildDurationChanged( length_t newLength )
 {
     // durationChanged is connected on the child's OBJECT (see
@@ -499,6 +530,16 @@ void STrack::trackChildDurationChanged( length_t newLength )
         checkDurationChanged();
         return;
     }
+    if( obj && obj->isLiveRecording() ) {
+        // A GROWING RECORDING never entered the bus mixers (see
+        // trackChildWasAdded), so there is nothing to update and nothing to
+        // invalidate: it is drawn, not rendered. Its length moves ten times a
+        // second, which is exactly the traffic design D7 says must not reach
+        // the root.
+        lastDurationValid_ = false;
+        checkDurationChanged();
+        return;
+    }
     if( obj ) {
         twEditRange affected;
         for( SLink *lk : childLinks() ) {
@@ -513,7 +554,7 @@ void STrack::trackChildDurationChanged( length_t newLength )
         // to the root over EXACTLY the affected extent (union of the pre-
         // and post-edit clip windows, reported by the mix) — pages elsewhere
         // in the song survive (proposal 18 Phase 5).
-        invalidateRenderPathRange( (offset_t) affected.start,
+        invalidateRootWalkOrDefer( (offset_t) affected.start,
                                    (offset_t) affected.end );
     }
     lastDurationValid_ = false;
@@ -560,6 +601,20 @@ void STrack::trackChildWasAdded( SLink &child )
                               this, SLOT( trackChildWasMoved( offset_t ) ) );
             QObject::connect( &(child.getSObject()), SIGNAL( durationChanged( length_t ) ),
                               this, SLOT( trackChildDurationChanged( length_t ) ) );
+
+            // A LIVE RECORDING goes into NEITHER (proposal 21 L3b, design
+            // D7). It has no root component, so inserting it as a clip entry
+            // would cost a dummy freeze per page per clip and make
+            // `twView::getComponent() returned nullptr` fire once per freeze
+            // — the same argument the event route below makes, for the same
+            // reason. What is heard while recording is the live monitor lane;
+            // this clip is drawn only, and at stop it is replaced by the
+            // WAV-backed cut place-recording builds.
+            if( child.getSObject().isLiveRecording() ) {
+                lastDurationValid_ = false;
+                checkDurationChanged();
+                return;
+            }
 
             // EVENT material goes into the event clip set and NOT into the bus
             // mixers (design 3.2): a MIDI clip has no page to freeze, and
@@ -649,6 +704,12 @@ void STrack::trackChildWasRemoved( SLink &child )
 {
     if( child.hasStartTime() ) {
         if( child.getSObject().hasDuration() ) {
+            if( child.getSObject().isLiveRecording() ) {
+                // Never inserted; nothing to remove and nothing stale.
+                lastDurationValid_ = false;
+                checkDurationChanged();
+                return;
+            }
             if( eventClips_->hasClip( &child ) ) {
                 twFrameRange r = eventClips_->removeClip( &child );
                 invalidateRenderPathRange( (offset_t) r.start, EVENT_DIRTY_END );

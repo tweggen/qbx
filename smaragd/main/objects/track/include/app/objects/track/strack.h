@@ -240,7 +240,24 @@ public:
     // plan is published, cleared after the plan that drops it retires. Never
     // serialized: it describes this session's monitoring, not the project.
     bool isLiveOwnedLane() const { return liveOwnedLane_; }
-    void setLiveOwnedLane( bool owned ) { liveOwnedLane_ = owned; }
+    /// Clearing it FLUSHES the deferred invalidation (see
+    /// invalidateRootWalkOrDefer): design D7's "the track's clip-sync
+    /// suppresses the walk for a live-owned track and issues ONE at disarm".
+    void setLiveOwnedLane( bool owned );
+
+    /**
+     * Stale this chain and every container up to the root over [start, end) —
+     * UNLESS this lane is live-owned, in which case the range is accumulated
+     * and ONE walk is issued when it is handed back (proposal 21 L3b, design
+     * D7).
+     *
+     * The walk is the expensive half of a clip edit: it runs from the project
+     * root down, per hop, mapping domains. While a lane is live-owned its
+     * frozen output is not being summed at all — the pump renders it — so a
+     * walk per edit buys nothing and a clip whose length moves ten times a
+     * second would re-stale the root ten times a second.
+     */
+    void invalidateRootWalkOrDefer( offset_t start, offset_t end );
 
     // The engine pieces the live plan needs, in render order. They are handed
     // out as shared_ptr because the plan outlives any single call and the pump
@@ -419,6 +436,10 @@ private:
     QString                         trackInput_;
     MonitorMode                     monitorMode_ = MonitorMode::Auto;
     bool                            liveOwnedLane_ = false;
+    // The invalidation owed to the root while live-owned (proposal 21 L3b).
+    bool     haveDeferredDirty_  = false;
+    offset_t deferredDirtyStart_ = 0;
+    offset_t deferredDirtyEnd_   = 0;
     int                             midiOutChannel_ = -1;
     int                             midiOutOffsetMs_ = 0;
     
