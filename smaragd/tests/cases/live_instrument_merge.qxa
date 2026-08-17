@@ -113,13 +113,25 @@
                          minRms="0.44882" maxRms="0.49606"/>
 
     <!-- THE SEQUENCED NOTE WAS NOT RESTARTED. A re-attack at the moment the
-         live note arrives is a discontinuity, and a hand-over that dropped a
-         block is a gap; neither may happen across 1.0 s - 2.0 s. maxStep is
-         generous because the SUM of two sines legitimately steps by more than
-         one of them does, and because a note-on is itself a step. -->
+         live note arrives is a discontinuity, and that is what `maxStep`
+         catches: it is generous because the SUM of two sines legitimately
+         steps by more than one of them does, and because a note-on is itself a
+         step, but a RE-ATTACK of the sequenced note would put a full-amplitude
+         edge in here.
+
+         `maxGapFrames` is ONE DEVICE BLOCK, not less, and that is design D2
+         rather than tolerance. This whole window is rendered by the PUMP - the
+         track went live before second 1 - and the RT sums a ring entry only
+         when its stamp matches the frame being delivered, so a miss is SILENCE
+         plus a counter (`twLiveMixRing::misses`), one block wide by
+         construction. 1024 is the bound L1b's own live cases carry
+         (`arm_during_playback` measured 8 frames against it); an earlier draft
+         asserted 256 and cost 2 failures in 50 at REVAL_WORKERS=8 for
+         asserting something no live lane can promise. Two consecutive missed
+         blocks still fail. -->
     <assert-audio-continuity filename="merge.wav" channel="0"
                              startFrame="48000" frameCount="48000"
-                             maxGapFrames="256" maxStep="0.25"
+                             maxGapFrames="1024" maxStep="0.25"
                              silenceLevel="0.002"/>
 
     <!-- 2.083 s - 2.375 s: the sequenced note has ENDED and the LIVE one is
