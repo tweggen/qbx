@@ -347,6 +347,19 @@ public:
                     offset_t nProbes );
 
     /**
+     * Is this a LIVE RECORDING — a content (or a window over one) whose
+     * material is still arriving from a capture device (proposal 21 L3b,
+     * design D7)?
+     *
+     * On the base class for exactly the reason contentKind() and
+     * resolveEventClip() are: the TRACK has to route by it (a growing clip has
+     * no component and never enters the bus mixers) and `objects/track` may
+     * not know the concrete type. `SCut` forwards its content's answer, so the
+     * predicate holds for the recording CUT as well as for the content.
+     */
+    virtual bool isLiveRecording() const { return false; }
+
+    /**
      * Phase 5e: Unified page cache API
      *
      * All SObjects use the same capture/revalidation system for preview,
