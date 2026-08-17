@@ -158,6 +158,12 @@ private:
     // both timestamps are taken on the control thread.
     std::atomic<std::uint64_t> outFramesDelivered_{0};
     std::chrono::steady_clock::time_point outputStartWall_{};
+    // When the DEVICE actually began draining (set in monitorReadaheadBuffer
+    // once backend_->startOutput() succeeds). The gap to outputStartWall_ is
+    // the readahead priming, which is a DELAY; the rate measured from here on
+    // is the device CLOCK. One ratio cannot tell those apart, and they call for
+    // completely different fixes.
+    std::chrono::steady_clock::time_point outputDeviceStartWall_{};
 
     // Helper: Background task that waits for readahead buffer, then starts backend output
     void monitorReadaheadBuffer();

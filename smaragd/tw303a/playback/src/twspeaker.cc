@@ -293,16 +293,37 @@ void twSpeaker::stopOutput()
     // the arrangement came out slow and flat; ~1.0 exonerates the device and
     // points the finger back at the graph.
     {
-        const double wall = std::chrono::duration_cast<std::chrono::duration<double>>(
-                                std::chrono::steady_clock::now() - outputStartWall_ ).count();
+        const auto now = std::chrono::steady_clock::now();
+        auto secsSince = [&now]( std::chrono::steady_clock::time_point t ) {
+            return std::chrono::duration_cast<std::chrono::duration<double>>( now - t ).count();
+        };
+        const double wall = secsSince( outputStartWall_ );
         const std::uint64_t frames = outFramesDelivered_.load( std::memory_order_relaxed );
         const unsigned assumed = backend_ ? backend_->getConfig().sampleRate : 0u;
         const double eff = wall > 0.0 ? (double) frames / wall : 0.0;
-        TWSPK_LOG( "output-rate check — assumed device=%u Hz, MEASURED "
-                   "effective=%.1f Hz over %.3fs (%llu frames). "
-                   "ratio meas/assumed=%.4f",
-                   assumed, eff, wall, (unsigned long long) frames,
-                   assumed > 0 ? eff / assumed : 0.0 );
+
+        // The DEVICE window excludes the priming wait, so its ratio is the
+        // device CLOCK alone. Split explicitly: ~1.0 here with a low overall
+        // ratio means the audio was merely LATE by `priming`; a low ratio HERE
+        // means the device really is draining slower than the rate we opened it
+        // at, and 48 k content comes out flat.
+        const bool started = outputDeviceStartWall_.time_since_epoch().count() != 0;
+        const double devWall = started ? secsSince( outputDeviceStartWall_ ) : 0.0;
+        const double devEff = devWall > 0.0 ? (double) frames / devWall : 0.0;
+        const double priming = started
+            ? std::chrono::duration_cast<std::chrono::duration<double>>(
+                  outputDeviceStartWall_ - outputStartWall_ ).count()
+            : wall;
+
+        TWSPK_LOG( "output-rate check — assumed device=%u Hz, %llu frames. "
+                   "SINCE START: %.1f Hz over %.3fs (ratio %.4f). "
+                   "PRIMING: %.3fs. "
+                   "SINCE DEVICE START: %.1f Hz over %.3fs (ratio %.4f)%s",
+                   assumed, (unsigned long long) frames,
+                   eff, wall, assumed > 0 ? eff / assumed : 0.0,
+                   priming,
+                   devEff, devWall, assumed > 0 ? devEff / assumed : 0.0,
+                   started ? "" : "  [device never started]" );
     }
 
     // Phase 2: Stop buffering task (brief lock, may join)
@@ -387,6 +408,11 @@ void twSpeaker::monitorReadaheadBuffer()
 
                 if (backend_->startOutput() == 0) {
                     TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() succeeded" );
+                    // DIAGNOSTIC (temporary): the instant the DEVICE actually
+                    // began draining, so stopOutput can separate the one-off
+                    // priming gap from a sustained clock error. Without this
+                    // split the two are indistinguishable in one ratio.
+                    outputDeviceStartWall_ = std::chrono::steady_clock::now();
                     outputState_.store(OutputState::PLAYING, std::memory_order_relaxed);
                 } else {
                     TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() FAILED" );
