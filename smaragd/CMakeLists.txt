@@ -309,7 +309,8 @@ endforeach()
 # and puts it back; it OWNS that key, and no other case reads it.
 #
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
-foreach(_rec record_offset_zero record_loop_takes record_punch)
+foreach(_rec record_offset_zero record_loop_takes record_punch
+              record_while_monitoring)
     if(TEST qxa.${_rec})
         set_tests_properties(qxa.${_rec} PROPERTIES
             RUN_SERIAL TRUE

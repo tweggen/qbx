@@ -459,7 +459,15 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     DECODE block (4096) because the decoder resolves 4096-frame blocks by
     construction.
 
-19. **Nothing undoable may come between a take and the `<undo/>` that gates
+19. **A LOOP-PASS COUNT IS A WALL-CLOCK QUANTITY.** It is captured material
+    divided by loop length, and captured material shrinks when the box is
+    loaded enough to cost ring overruns — `record_loop_takes` DID fail under a
+    concurrent suite with an exact count. Assert a FLOOR (`minTakes` /
+    `minPasses`) and let the verb assert the part that is not load-sensitive:
+    ONE COLUMN, and exactly as many takes as passes, which it does
+    unconditionally whenever more than one pass was committed.
+
+20. **Nothing undoable may come between a take and the `<undo/>` that gates
     it.** A `select-take` probe placed there is undone instead, which is how
     the first draft of `record_loop_takes` mis-read a working undo as a broken
     one.

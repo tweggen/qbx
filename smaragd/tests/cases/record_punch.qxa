@@ -16,8 +16,9 @@
   then clips the placed span to [in, out) regardless of how far past it the
   100 ms tick actually got. So the clip is at 48000 with length 48000 to the
   frame, and a tolerance of 0 is honest. What is NOT deterministic is the
-  moment the tick fires, which is why the take is given 5 s of wall clock to
-  reach an out point 2 s in.
+  moment the tick fires, and how much material a loaded box actually captures,
+  which is why the take is given 8 s of wall clock to reach an out point 2 s
+  in. An earlier draft gave it 5 s and failed under a concurrent suite.
 
   THE GROWING CLIP is asserted MID-TAKE, which is the only place it can be:
   `growing="true"` is SObject::isLiveRecording() (the routing predicate that
@@ -47,13 +48,13 @@
 
     <!-- MID-TAKE: the growing clip is on the lane, it is a live recording, and
          its waveform is not empty. -->
-    <wait-ms ms="1200"/>
+    <wait-ms ms="2000"/>
     <assert-recorded-clip trackPath="0" clips="1" growing="true"
                           previewNonEmpty="true"
                           minDurationFrames="24000"/>
 
     <!-- The take ends BY ITSELF at the out point; no record-stop here. -->
-    <wait-ms ms="3800"/>
+    <wait-ms ms="6000"/>
 
     <assert-recorded-clip trackPath="0" clips="1" passes="1"
                           startFrame="48000" startTolerance="0"

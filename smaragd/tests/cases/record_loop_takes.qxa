@@ -18,13 +18,16 @@
   ends with ONE COLUMN holding N takes, not N clips side by side, and that is
   what `clips="1"` plus `takes="3"` says.
 
-  WHY THE TAKE IS 5.5 s FOR A 2 s CYCLE. The recording starts from a STOPPED
-  transport, so the frames captured while the readahead primed are trimmed
-  (design D6) and the placeable material is the take minus that priming. Three
-  passes needs placeable in (2, 3] cycles, i.e. (192000, 288000] frames.
-  Measured here: 5.5 s captures ~264000 frames and the priming discards 9000 to
-  13000, leaving ~252000 ... comfortably inside the band from either end, and
-  it stays inside even for a priming of 0 (264000) or of 1.5 s (192000+).
+  WHY THE ASSERTION IS A FLOOR AND NOT AN EXACT COUNT. How many passes a take
+  produces is a WALL-CLOCK quantity ... captured material divided by the loop
+  length ... and captured material shrinks when the box is loaded enough to
+  cost ring overruns. An exact count is therefore load-sensitive, and this case
+  DID fail that way under a concurrent suite before it was relaxed. So the
+  count is a floor (7 s over a 2 s cycle leaves room for a second and a half of
+  loss before 3 passes stops being true), and the part that is NOT
+  load-sensitive is asserted instead, unconditionally, by the verb itself:
+  ONE COLUMN, and exactly as many TAKES as there were PASSES. That pair is the
+  whole claim of loop recording and it holds however many passes there were.
 
   The whole loop-record is ONE undo step, which is the property that makes it
   usable at all.
@@ -48,12 +51,12 @@
     <arm-track trackPath="0" armed="1"/>
 
     <record-start/>
-    <wait-ms ms="5500"/>
+    <wait-ms ms="7000"/>
     <record-stop/>
 
     <!-- ONE column at the loop start, three takes, three committed passes,
          and the column is exactly the loop long. -->
-    <assert-recorded-clip trackPath="0" clips="1" takes="3" passes="3"
+    <assert-recorded-clip trackPath="0" clips="1" minTakes="3" minPasses="3"
                           startFrame="0" startTolerance="0"
                           durationFrames="96000" durationTolerance="0"
                           inputLatencyFrames="4800"

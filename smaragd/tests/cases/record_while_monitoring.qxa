@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L3b. ONE INPUT PUMP (design D7): a record start on a track that
+  is ALREADY MONITORING must not disturb the device.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  This is the DEFAULT user flow (arm a track, hear yourself, press record), and
+  it is the one the "monitoring and recording read one device" claim is about.
+  Recording opens a capture SEGMENT on the bridge the monitor already has open
+  ... the device, its capture thread and its ring are never touched ... so the
+  monitored signal does not gap.
+
+  WHAT WOULD FAIL WITHOUT IT, and did while this case was being written: the
+  recorder resolved its device name from the settings default while the monitor
+  had the device open under the track's own `trackInput` name, so a record
+  start CLOSED and REOPENED the input and then fought the monitor over it for
+  the rest of the take (two "input device change deferred" warnings per take).
+  The assert-log pair right after record-start is the gate on exactly that:
+  starting a take must open no device and provoke no device-change deferral.
+
+  The take itself is asserted only loosely; record_offset_zero owns the
+  placement numbers. What matters here is that a take through a live lane
+  produces a clip at all and refuses nothing.
+-->
+<SActionScript version="1" name="record_while_monitoring">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="1200"/>
+    <!-- The live lane is up and the input is reaching it. -->
+    <assert-input-meter trackPath="0" minPeak="0.02" maxPeak="1.0"
+                        contains="live=on"/>
+
+    <record-start/>
+    <!-- THE CLAIM, and assert-log's window is exactly right for it: records
+         since the PREVIOUS action started, i.e. since record-start. Two
+         consecutive assert-logs share that one window. The record start must
+         not have opened a device (the monitor's is reused) and must not have
+         set off a device-change fight with the monitor. -->
+    <assert-log contains="[LIVE] input open" minCount="0" maxCount="0"/>
+    <assert-log contains="input device change to" minCount="0" maxCount="0"/>
+
+    <wait-ms ms="2000"/>
+    <record-stop/>
+
+    <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          minDurationFrames="24000"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

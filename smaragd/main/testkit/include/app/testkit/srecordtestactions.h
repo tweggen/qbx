@@ -22,7 +22,7 @@
  * `assert-recorded-clip` is the placement gate.
  *
  *   <assert-recorded-clip trackPath="0"
- *                         clips="1" takes="-1"
+ *                         clips="1" takes="-1" minTakes="-1" minPasses="-1"
  *                         startFrame="-1" startTolerance="1024"
  *                         durationFrames="-1" durationTolerance="4096"
  *                         inputLatencyFrames="-1" outputLatencyFrames="-1"
@@ -35,6 +35,16 @@
  *
  * Every numeric expectation is opt-in (the sentinel means "unchecked"), so one
  * verb serves the mid-take assertions and the post-take ones.
+ *
+ * `minTakes` / `minPasses` exist because HOW MANY loop passes a take produces
+ * is a WALL-CLOCK quantity: it is the captured material divided by the loop
+ * length, and captured material shrinks when the box is loaded enough to cost
+ * ring overruns. An exact count is therefore a load-sensitive assertion, and a
+ * gate that fails under `-j4` contention is not a gate. What is NOT
+ * load-sensitive, and is asserted unconditionally whenever more than one pass
+ * was committed, is that the number of TAKES equals the number of PASSES on a
+ * single column: that is the whole claim of loop recording ("one take per
+ * pass"), and it holds however many passes there happened to be.
  *
  * WHAT IS AND IS NOT A CLOSED FORM HERE, because it decides what the gates can
  * claim. `P0` — the project frame capture frame 0 maps to — depends on when the
@@ -91,6 +101,8 @@ private:
     QList<int> trackPath_;
     qint64 clips_             = kUnset;
     qint64 takes_             = kUnset;
+    qint64 minTakes_          = kUnset;
+    qint64 minPasses_         = kUnset;
     qint64 startFrame_        = kUnset;
     qint64 startTolerance_    = 1024;
     qint64 durationFrames_    = kUnset;

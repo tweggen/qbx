@@ -57,7 +57,8 @@ bool SRecordStopAction::readXml( const QDomElement &, int ) { return true; }
 QStringList SAssertRecordedClipAction::knownAttributes() const
 {
     return { QStringLiteral( "trackPath" ),        QStringLiteral( "clips" ),
-             QStringLiteral( "takes" ),            QStringLiteral( "startFrame" ),
+             QStringLiteral( "takes" ),            QStringLiteral( "minTakes" ),
+             QStringLiteral( "minPasses" ),        QStringLiteral( "startFrame" ),
              QStringLiteral( "startTolerance" ),   QStringLiteral( "durationFrames" ),
              QStringLiteral( "durationTolerance" ),QStringLiteral( "minDurationFrames" ),
              QStringLiteral( "inputLatencyFrames" ),
@@ -102,12 +103,28 @@ SApplyResult SAssertRecordedClipAction::apply( SProject *project )
     SLink   *link = clips.front();
     SObject &obj  = link->getSObject();
 
-    if( takes_ != kUnset ) {
+    {
         STakeStack *stack = dynamic_cast<STakeStack *>( &obj );
         const qint64 n = stack ? stack->nTakes() : 1;
-        if( n != takes_ ) {
+        if( takes_ != kUnset && n != takes_ ) {
             qWarning() << "assert-recorded-clip: column holds" << n
                        << "take(s), expected" << takes_;
+            return { false, nullptr };
+        }
+        if( minTakes_ != kUnset && n < minTakes_ ) {
+            qWarning() << "assert-recorded-clip: column holds" << n
+                       << "take(s), expected at least" << minTakes_;
+            return { false, nullptr };
+        }
+        // ONE TAKE PER PASS -- the whole claim of loop recording, and the half
+        // of it that is NOT wall-clock-dependent. Asserted whenever more than
+        // one pass was committed, without being asked.
+        SAudioRecorder *r = SApplication::app().audioRecorder();
+        if( r && !r->isActive() && r->lastPassCount() > 1
+            && n != (qint64) r->lastPassCount() ) {
+            qWarning() << "assert-recorded-clip: " << r->lastPassCount()
+                       << "pass(es) committed but the column holds" << n
+                       << "take(s) -- loop recording must be one take per pass";
             return { false, nullptr };
         }
     }
@@ -195,6 +212,11 @@ SApplyResult SAssertRecordedClipAction::apply( SProject *project )
                        << (qint64) rec->trimmedFrames() << "expected" << trimmed_;
             return { false, nullptr };
         }
+        if( minPasses_ != kUnset && rec->lastPassCount() < (int) minPasses_ ) {
+            qWarning() << "assert-recorded-clip: committed" << rec->lastPassCount()
+                       << "pass(es), expected at least" << minPasses_;
+            return { false, nullptr };
+        }
         if( passes_ != kUnset && rec->lastPassCount() != (int) passes_ ) {
             qWarning() << "assert-recorded-clip: committed" << rec->lastPassCount()
                        << "pass(es), expected" << passes_;
@@ -268,6 +290,10 @@ void SAssertRecordedClipAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
     if( clips_ != kUnset )   elem.setAttribute( "clips", QString::number( clips_ ) );
     if( takes_ != kUnset )   elem.setAttribute( "takes", QString::number( takes_ ) );
+    if( minTakes_ != kUnset )
+        elem.setAttribute( "minTakes", QString::number( minTakes_ ) );
+    if( minPasses_ != kUnset )
+        elem.setAttribute( "minPasses", QString::number( minPasses_ ) );
     if( startFrame_ != kUnset )
         elem.setAttribute( "startFrame", QString::number( startFrame_ ) );
     if( startTolerance_ != 1024 )
@@ -303,6 +329,8 @@ bool SAssertRecordedClipAction::readXml( const QDomElement &elem, int )
     trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
     clips_             = elem.attribute( "clips", "-1" ).toLongLong();
     takes_             = elem.attribute( "takes", "-1" ).toLongLong();
+    minTakes_          = elem.attribute( "minTakes", "-1" ).toLongLong();
+    minPasses_         = elem.attribute( "minPasses", "-1" ).toLongLong();
     startFrame_        = elem.attribute( "startFrame", "-1" ).toLongLong();
     startTolerance_    = elem.attribute( "startTolerance", "1024" ).toLongLong();
     durationFrames_    = elem.attribute( "durationFrames", "-1" ).toLongLong();
