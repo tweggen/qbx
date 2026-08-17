@@ -11,6 +11,7 @@
 #include "app/shell/ssettings.h"
 #include "app/servicesui/soptions.h"
 #include "tw/core/twlog.h"
+#include "tw/plugins/twplugindescriptor.h"
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
@@ -57,6 +58,32 @@ static void smaragdMessageHandler( QtMsgType type,
     if( type == QtFatalMsg ) {
         tw::TwLog::instance().shutdown();
         abort();
+    }
+}
+
+// Stop the background plugin scan before a --test-case run calls std::exit().
+//
+// std::exit() runs static destructors on THIS thread while every other thread
+// keeps running, and SApplication is never destroyed on that path -- so its
+// destructor's join never happens, and the first thing to notice the scan is
+// the registry's own destructor, under static destruction. A scan still in
+// flight there trips over half-destructed runtime state, throws, reaches
+// std::terminate, and blocks forever in abort() on the CRT lock that this
+// thread is holding: a --test-case run that PASSES and then hangs until CTest
+// kills it at 600 s. Measured on a machine with six installed plugins and a
+// cache written by another build: > 600 s before, ~0.4 s after.
+//
+// Doing it here, while the process is fully alive, is the difference between
+// cancelling a scan and cancelling one during teardown.
+static void stopPluginScanBeforeExit()
+{
+    audio::twPluginRegistry &reg = audio::pluginRegistry();
+    if( !reg.isScanning() ) return;
+    reg.cancelScan();
+    if( !reg.waitForScan( 5000 ) ) {
+        TW_LOGE( "plugins", "[app] the plugin scan thread did NOT stop within 5 s of "
+                 "being cancelled; exiting anyway. A hang or crash after this line "
+                 "is that thread." );
     }
 }
 
@@ -347,12 +374,14 @@ int main( int argc, char *argv[] )
 
             // Exit immediately in test mode
             if (testMode) {
+                stopPluginScanBeforeExit();
                 std::exit(result.passed ? 0 : 1);
             }
         } else {
             std::cerr << "Failed to load script: " << script.error().toStdString() << "\n";
             std::cerr.flush();
             if (testMode) {
+                stopPluginScanBeforeExit();
                 std::exit(1);
             }
         }

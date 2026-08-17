@@ -11,10 +11,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QDeadlineTimer>
 #include <QProcess>
 #include <QString>
 #include <QStringList>
 #include <QThread>
+
+#include <exception>
+#include <string>
 
 #include <memory>
 #include <utility>
@@ -194,9 +198,31 @@ struct ScanFlagGuard {
 
 }  // namespace
 
+// How long the LAST-RESORT join at static destruction is willing to wait. The
+// scan checks its cancel flag once per module and once per 100 ms probe slice,
+// so a healthy worker stops well inside this; anything that does not is a
+// worker we would rather leak than hang the process on.
+static constexpr int kTeardownJoinMs = 5000;
+
 twPluginRegistry::~twPluginRegistry()
 {
-    waitForScan();
+    // The registry is a static, so this runs during static destruction — after
+    // main() has returned or, for a --test-case run, from inside std::exit().
+    // That is precisely the moment a still-running scan is lethal: the exiting
+    // thread holds the CRT's teardown lock, and a scan thread that trips over
+    // half-destructed runtime state throws, reaches std::terminate, and blocks
+    // forever inside abort() waiting for that same lock. The unbounded wait
+    // that used to be here then never returned, which is the observed hang.
+    //
+    // So: ask it to stop, wait a bounded time, and give up rather than block.
+    // Deliberately SILENT even when the wait expires — TwLog::instance() is a
+    // function-local static constructed AFTER this one, hence destroyed BEFORE
+    // it, and logging into a destroyed sink at exit would trade a hang for a
+    // crash. The paths that can log (SApplication's destructor and main()'s
+    // test-mode exit) run first, while everything is still alive, and this is
+    // only reached when they did not.
+    cancelScan();
+    waitForScan( kTeardownJoinMs );
 }
 
 // ---------------------------------------------------------------- config ----
@@ -307,19 +333,58 @@ bool twPluginRegistry::rescanAsync( bool force )
     // runs — and so the worker never clears a cancel that arrived after it.
     scanning_.store( true, std::memory_order_release );
     scanCancel_.store( false, std::memory_order_release );
-    scanThread_ = QThread::create( [this, force]() { this->rescanImpl( force, false ); } );
+    // NOTHING may leave this lambda. An exception escaping a QThread body goes
+    // to std::terminate, and the verbose terminate handler's abort() then takes
+    // the CRT lock — which, when the process is already exiting, the exiting
+    // thread is holding while it waits for THIS thread. That is a deadlock with
+    // no timeout in it, and it is what a foreign-versioned cache used to buy us
+    // on every single run: a scan still in flight when std::exit() started
+    // running static destructors, tripping over half-destructed runtime state.
+    // A caught exception loses a scan; an uncaught one loses the process.
+    scanThread_ = QThread::create( [this, force]() {
+        std::string what;
+        try {
+            this->rescanImpl( force, false );
+            return;
+        } catch( const std::exception &e ) {
+            what = e.what();
+        } catch( ... ) {
+            what = "(non-std exception)";
+        }
+        scanning_.store( false, std::memory_order_release );
+        // Reporting it is best-effort and must not become a second way to die:
+        // if we got here during teardown, the log sink itself may be gone.
+        try {
+            TW_LOGE( "plugins", "[scan] the scan thread threw '%s' — the scan is "
+                     "abandoned; the registry keeps its previous plugin list",
+                     what.c_str() );
+        } catch( ... ) {}
+    } );
     scanThread_->setObjectName( "smaragd-plugin-scan" );
     scanThread_->start();
     return true;
 }
 
-void twPluginRegistry::waitForScan()
+bool twPluginRegistry::waitForScan( int timeoutMs )
 {
     std::lock_guard<std::mutex> g( threadMutex_ );
-    if( !scanThread_ ) return;
-    scanThread_->wait();
+    if( !scanThread_ ) return true;
+
+    const bool joined = timeoutMs < 0
+        ? scanThread_->wait()
+        : scanThread_->wait( QDeadlineTimer( timeoutMs ) );
+    if( !joined ) {
+        // Leak it, deliberately. deleting a QThread that is still running is
+        // undefined behaviour, and terminate()ing one that is inside a plugin's
+        // DSO or holding a CRT lock is worse than the leak: the process is on
+        // its way out and the OS reclaims the thread. Keep the pointer so a
+        // later waitForScan() can try again against the same thread rather than
+        // returning "joined" against a null one.
+        return false;
+    }
     delete scanThread_;
     scanThread_ = nullptr;
+    return true;
 }
 
 void twPluginRegistry::cancelScan()

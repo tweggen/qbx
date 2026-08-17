@@ -130,7 +130,21 @@ public:
     bool scanCancelled() const { return scanCancel_.load( std::memory_order_acquire ); }
 
     bool isScanning() const { return scanning_.load( std::memory_order_acquire ); }
-    void waitForScan();
+
+    // Join the scan worker. timeoutMs < 0 waits forever (what the headless
+    // tests want, where a scan that never ends IS the failure); a shutdown path
+    // must pass a bound, and must pair it with cancelScan() first or the bound
+    // is just a slower way to wait out a full re-probe.
+    //
+    // Returns true when the thread was joined and disposed of. False means the
+    // wait expired and the worker is STILL RUNNING: the QThread is deliberately
+    // neither deleted nor forgotten (deleting a running QThread is undefined,
+    // and dropping the pointer would let a later join silently succeed against
+    // nothing), so a subsequent waitForScan() gets another chance at the same
+    // thread. A false return is worth a LOUD log — from the caller, not from
+    // here, because the last-resort caller is ~twPluginRegistry running under
+    // static destruction, where the log sink may already be gone.
+    bool waitForScan( int timeoutMs = -1 );
 
     twPluginScanStats scanStats() const;
 

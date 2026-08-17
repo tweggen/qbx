@@ -508,7 +508,21 @@ SApplication::~SApplication()
 {
     // Join the scan worker BEFORE anything else goes away: it holds a QProcess
     // and writes the cache, and the registry outlives us (it is a static).
-    audio::pluginRegistry().waitForScan();
+    //
+    // CANCEL first and BOUND the wait. Plain waitForScan() waits out a full
+    // re-probe of every plugin on the machine, which on a cold cache is however
+    // long the slowest module takes to load — and if the worker has already
+    // died on an exception it never returns at all. This is also the last point
+    // where a failure to join can still be REPORTED: the registry's own
+    // destructor runs under static destruction, with the log sink already gone.
+    audio::twPluginRegistry &reg = audio::pluginRegistry();
+    reg.cancelScan();
+    if( !reg.waitForScan( 5000 ) ) {
+        TW_LOGE( "plugins", "[app] the plugin scan thread did NOT stop within 5 s of "
+                 "being cancelled; leaving it running and exiting anyway. If the "
+                 "process now hangs or crashes at exit, it is that thread — the "
+                 "module it was probing is the last '[scan]' line above." );
+    }
     DTOR_DEL( actionHistory_ );
     t3Speaker_.reset();
     DTOR_DEL( t3Env_ );
