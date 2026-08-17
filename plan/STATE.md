@@ -12721,6 +12721,18 @@ was needed** — `record → sources` and `sources → pages` already existed);
 Run (Disabled)**, 81.3 s. `smaragd/tests/goldens/` byte-identical and
 `git status smaragd/tests/` clean — no render path was touched.
 
+Three full `-j4` runs were taken and the box was NOT idle (a sibling worktree
+was building and running its own suite throughout). Run 1: **175/175**, 81.3 s.
+Run 2: one failure, `qxa.instrument_stereo_render` — plugin-load shaped, the
+same family the L0 entry above records (a `plugincache` race between concurrent
+processes); it was green in runs 1 and 3 and **20/20 in isolation**. Run 3: one
+failure, `devices_midi_test` — **max |sent − due| = 6.962 ms against its 5 ms
+wall-clock bound**, which is the load artifact CLAUDE.md warns about (RUN_SERIAL
+excludes other tests in the same invocation, never another agent's suite); it
+passed immediately afterwards. Neither case touches `tw/sources` or `tw/record`
+and neither is caused by this branch — but both are named rather than averaged
+away. `record_bridge_test` was green in all three runs and 25/25 in the loop.
+
 ### NOT gated
 
 Real capture hardware; ALSA and CoreAudio input (CoreAudio still returns
