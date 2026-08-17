@@ -706,7 +706,7 @@ std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
 
     if (outFrames == 0) {
         std::fill_n(out, frames * channels, 0.0f);
-        if (frozenPlaying && context_ && !context_->locatorHeldElsewhere())
+        if (frozenPlaying && context_)
             context_->publishPosition(engine->currentPosition());
         return frames;
     }
@@ -721,7 +721,11 @@ std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
 
     if (frozenPlaying) {
         const std::uint64_t pos = engine->currentPosition();
-        if (context_ && !context_->locatorHeldElsewhere())
+        // THE PLAYHEAD AUTHORITY, in every mode (proposal 21 L3b, design D7).
+        // `locatorHeldElsewhere()` is retired: a recording is an ordinary
+        // transport run now, and the record worker no longer drives the
+        // locator, so there is nobody else to hold it.
+        if (context_)
             context_->publishPosition(pos);
         // THE LIVE CLOCK, stamped beside the publication and derived from it by
         // the one publish-lag correction (design D2 / twliveclock.h).

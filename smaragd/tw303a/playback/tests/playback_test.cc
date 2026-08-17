@@ -247,7 +247,6 @@ public:
 
     std::shared_ptr<twComponent> rootComponent() override { return root; }
     std::uint64_t locatorPosition() override { return 0; }
-    bool locatorHeldElsewhere() override { return false; }
     void publishPosition(std::uint64_t absPos) override
     {
         published.store(absPos, std::memory_order_relaxed);

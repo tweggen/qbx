@@ -17,9 +17,11 @@ namespace audio {
  * Threading:
  *  - rootComponent() / locatorPosition() are called on the UI thread from
  *    twSpeaker::startOutput().
- *  - locatorHeldElsewhere() / publishPosition() are called on the AUDIO
- *    callback thread: implementations must be lock-free (atomic loads and
- *    stores only) and must not touch Qt.
+ *  - publishPosition() is called on the AUDIO callback thread:
+ *    implementations must be lock-free (atomic loads and stores only) and
+ *    must not touch Qt. It is the ONE playhead authority (proposal 21 L3b,
+ *    design D7) — the `locatorHeldElsewhere()` escape a recording used to
+ *    take is retired, because a recording is an ordinary transport run.
  */
 struct PlaybackContext {
     virtual ~PlaybackContext() = default;
@@ -32,7 +34,6 @@ struct PlaybackContext {
 
     // True while another authority (e.g. an active recording) owns the
     // playhead; the speaker then refrains from publishing positions.
-    virtual bool locatorHeldElsewhere() = 0;
 
     // Publish the current playback position (frames). Realtime-safe required.
     virtual void publishPosition(std::uint64_t absPos) = 0;
