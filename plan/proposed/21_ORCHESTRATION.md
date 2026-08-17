@@ -1,7 +1,7 @@
 # Proposal 21 — Orchestration plan (execution companion)
 
-> **Status: PLAN v1.1 (2026-08-17)** for `21_REALTIME_DATAFLOW_INTEGRATION.md`
-> v3.1. One Opus 5 sub-agent per phase (L0, L1a, L1b, L2, L3a, L3b, L4, L5),
+> **Status: PLAN v1.2 (2026-08-17)** for `21_REALTIME_DATAFLOW_INTEGRATION.md`
+> v3.2. One Opus 5 sub-agent per phase (L0, L1a, L1b, L2, L3a, L3b, L4, L5),
 > each in its own worktree/branch, closed only when every acceptance criterion in
 > its GATE is green; the orchestrator reviews the *orchestrator-reviewed* items
 > line by line, runs the gate verdict and merges via PR. Ground rules and loop as
@@ -54,9 +54,11 @@ plus **byte-identical `smaragd/tests/goldens/`** (no live lane ⇒ the pump does
 not exist; a golden that moves is a design violation, never a re-freeze) and
 `repeat_test.sh` sweeps on every new playback case. Dependency graph:
 ```
-L0 ─► L1a ─► L1b ─┬─► L2 ────┐
-                  └─► L3a ─► L3b ─► L4 ─► L5
+L0 ─► L1a ─┬─► L1b ─┬─► L2 ─────────┐
+           │        └─────────► L3b ─┴─► L4 ─► L5
+           └─► L3a ─────────────┘
 ```
+(L3a needs only L1a and runs in parallel with L1b; L3b needs L1b + L3a; L2 and L3b are independent.)
 
 ---
 
@@ -82,7 +84,8 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
   3. Testkit verbs over the EXISTING `CaptureMidiInput::inject()` (selected by
      `SMARAGD_MIDI_BACKEND=capture`, already the `--test-case` default):
      `midi-in-event` (`kind`, `key`, `velocity`, `channel` or `bytes`; `atFrame`
-     optional = now, mapped through the shared clock) and `midi-in-replay`
+     optional and valid only while PLAYING — mapped through the engine's
+     delivered-frame atomic — otherwise `now`) and `midi-in-replay`
      (`filePath` .mid or text log, `startFrame`, real-time paced).
   4. `CaptureRevalidator::retireComponentNodes(span<const twComponent*>)` with
      the semantics of design §5 (queued/ready dropped + demands complete as
@@ -91,6 +94,8 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
      `markRtThread()` (keeps today's `assert()`) and `markLiveThread()` (silence +
      `liveThreadRefusals` counter + one log); one check in `freezePage`.
   6. `SSettings` keys `audio/recordingOffsetMs/<deviceName>`, `midi/inputOffsetMs/<port>`.
+  (No existing qxa case records audio — there is no record verb yet — so the `null`
+  input default under `--test-case` changes nothing; say so in the testkit CONTRACT.)
 - **Gate (ACs):**
   - AC1 `devices_input_test`: (a) `FileAudioInput` over a 2 s position-encoded
     WAV delivers every frame exactly once, in order (compare to the file), block
@@ -110,10 +115,14 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
 
 ### L1a — Live lane ENGINE: pump, ring, live clock, speaker lifecycle  *(tw/playback, tw/plugins, tw/mix identity note)*
 - **Entry:** L0 merged.
-- **Modules:** `tw303a/playback` (+CONTRACT), `tw303a/plugins` (`setLiveOwned`,
-  `twLiveTransport` flag-gated in `render`; +CONTRACT), `tw303a/graph` (engine
-  position atomic through `PlaybackContext` if it lives there), `tw303a/mix`
-  (CONTRACT identity note), `playback_test`, docs/contracts.
+- **Modules:** `tw303a/playback` (+CONTRACT; the ENGINE-owned position atomic
+  `{seq, deliveredFrame, hostNs}` stamped in `twSpeaker`'s callback beside
+  `publishPosition`), `tw303a/plugins` (`setLiveOwned`, `setLiveEventSource`,
+  `twLiveTransport` — all flag-gated in `render`; +CONTRACT), `tw303a/mix`
+  (CONTRACT identity note), `main/testkit` (testkit CONTRACT rule 1 amended:
+  frame 0 = device session; existing `dump-playback-capture` cases unchanged
+  because with the live lane OFF the device still opens at play), `playback_test`,
+  docs/contracts.
 - **Deliverables:** design D1/D2/D5 (engine half): `twLivePlan` (immutable:
   ordered live-owned tracks → per-slot processor pointers, gain envelopes, channel
   maps; folder sums with the frozen-input root list; scratch; `feedEnabled`,
@@ -127,8 +136,12 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
   BUFFERING, PLAYING} × live {OFF, ON}, `out = frozen + ring`, `startOutput()`
   attaches the frozen lane to an open device, `stopOutput()` stops the lane
   only while live is ON, `openLive()/closeLive()`; capture backend cleared at
-  DEVICE start; `twProcessContext.playing` truthful; `setLiveOwned` guard +
-  `liveOwnedRefusals`; a **synthetic-plan harness** in `playback_test` (a plan
+  DEVICE start; `twProcessContext.playing` truthful; the processor's SECOND
+  event source `liveEvents_` (`setLiveEventSource`) collected alongside `events_`
+  with namespaced note ids, `feedEnabled=false` skipping `events_` only,
+  automation hold via the per-chunk chase build (no `setParamCurves` change);
+  `flipEpoch`/`flipEpoch'` = the root rewire's `contentEpochNow()`; `setLiveOwned`
+  guard + `liveOwnedRefusals`; a **synthetic-plan harness** in `playback_test` (a plan
   over test processors driven block-wise, compared to the frozen render of the
   same material where the identity holds).
 - **Gate (ACs):**
@@ -136,16 +149,23 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
     engine swap under the leaf lock) → STOP keeps the device → disarm closes;
     PLAY without live still opens/closes as today (existing tests green); capture
     frame 0 = device start.
-  - AC2 harness: a plan with `tw.test.clap.gain` at 0.5 over a paced position-
-    encoded input, PLAYING with a synthetic engine position, output blocks equal
-    the frozen render of the same material through the same insert **sample-
-    exactly** over the contiguous run (linear insert, no reposition after the
-    first block); a seek mid-run causes exactly ONE reposition (counter) and the
-    output re-aligns; STOPPED: no sequenced material from a test feed reaches
-    the processor (`feedEnabled=false`) and automation is held.
+  - AC2 harness (SYNCHRONOUS — no pacing; the input is a clip at frame 0 for
+    the frozen render): a plan with `tw.test.clap.gain` at 0.5 (linear,
+    partition-invariant — the ONLY fixture the sample-exact claim is made for;
+    stateful plugins differ across 4096-chunk vs 1024-block partitions and are
+    NOT claimed) over a position-encoded input, PLAYING with a synthetic engine
+    position, no automation curve: output blocks equal the frozen render of the
+    same material through the same insert **sample-exactly** over the contiguous
+    run; a seek mid-run causes exactly ONE reposition (counter) and the output
+    re-aligns; STOPPED: no sequenced material from a test feed reaches the
+    processor (`feedEnabled=false`) while an injected live event does, and
+    automation is held (a curve present but the value constant at
+    `holdAutomationAt`); the sine fixture is used for presence only.
   - AC3 ring gate: a root page with `contentEpoch < flipEpoch` ⇒ the ring entry
-    is NOT summed (unit test on the RT mixer function, extracted as a pure
-    function like `twmonitor::*`); position mismatch ⇒ silence + counter.
+    is NOT summed; on disarm a root page with `contentEpoch < flipEpoch'` ⇒ the
+    ring IS still summed and stops once the re-summed page lands (unit test on
+    the RT mixer function, extracted as a pure function like `twmonitor::*`);
+    position mismatch ⇒ silence + counter.
   - AC4 `liveOwnedRefusals`: a `render(positional)` from a non-marked thread on a
     live-owned processor returns silence and counts; after `setLiveOwned(false)`
     it renders.
@@ -170,12 +190,13 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
   `assert-render-policy`, `assert-input-meter`.
 - **Gate (ACs)** (`RUN_SERIAL`, `SMARAGD_CAPTURE_SPEED=1`, `SMARAGD_AUDIO_INPUT_BACKEND=file:…`):
   - AC1 `monitor_through_chain.qxa`: track 0 armed, `trackInput=audio:file:0`
-    (2 s 480 Hz sawtooth, known RMS), `tw.test.clap.gain` 0.5, monitor Auto,
-    transport STOPPED; `wait-ms 1500`; `dump-playback-capture` (device session)
-    → RMS 0.5× (±3 %); bypass → 1.0×; a second unarmed track's clip is silent
-    while stopped; press play → the clip appears and the input keeps sounding
-    (Auto = tape style: while PLAYING the armed track's INPUT stops — assert
-    both).
+    (2 s 480 Hz sawtooth, known RMS), `tw.test.clap.gain` 0.5, transport STOPPED;
+    `wait-ms 1500`; `dump-playback-capture` (device session) → RMS 0.5× (±3 %);
+    bypass → 1.0×; a second unarmed track's clip is silent while stopped. Then
+    (a) monitor **Auto**: press Play (not Record) → the clip appears and the
+    INPUT STOPS (tape style; the live lane may go OFF and the exclusion is
+    undone); (b) monitor **On**: press Play → the clip appears AND the input
+    keeps sounding through the insert (the armed track's own clips silent).
   - AC2 `monitor_latency.qxa`: `assert-monitor-latency inputFile=… maxFrames=…`
     over the position-encoded input: measured lag ≤ input block + ring depth +
     3 output blocks (in frames, capture backend 1024) — number recorded in the
@@ -189,8 +210,9 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
     `maxStep` = 2× the source's own) and no double (RMS band unchanged in the
     flip windows).
   - AC5 `render_while_armed.qxa`: armed + monitoring; `render` → byte-identical
-    to the unarmed render of the same project (live suspended); monitoring resumes
-    after (capture shows the input again).
+    to the unarmed render of the same project (live suspended); after the render
+    monitoring comes back as a FRESH arm (plan rebuilt, never resumed) — the
+    capture shows the input again.
   - AC6 `assert-render-policy liveThreadRefusals=0 liveOwnedRefusals=0` at the
     end of every new case; goldens; every existing case green.
   - AC7 `repeat_test.sh` on AC1, AC3, AC4 N=50 × workers {1,4,8,16}.
@@ -209,8 +231,9 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
   the MIDI device callback; `twLiveEventSource` (live clock mapping − input
   latency, rebase, clamp late to 0, held-note table for the chase); arm =
   exclusion → `retireComponentNodes` → `forgetContinuity()` → `setLiveOwned` →
-  live member added to `eventFeed()`'s merge (no processor swap); disarm order per
-  D4; thru through the immediate ring; the keyboard port; Options MIDI inputs
+  `setLiveEventSource(live)` on the CONSUMING processor (a folder instrument
+  fed by a MIDI-armed child: the folder's slot 0) — never a `setEventSource`
+  swap, never a member of `eventFeed()`; disarm order per D4; thru through the immediate ring; the keyboard port; Options MIDI inputs
   active; `virtual-key hold`/`release`/`durationMs`.
 - **Gate (ACs):**
   - AC1 `live_instrument_play.qxa`: instrument track (`tw.test.clap.sine`), armed,
@@ -221,21 +244,24 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
     note NOT restarted (energy continuity across 1.2 s); while STOPPED the same
     project sounds NOTHING sequenced (feed masked).
   - AC3 `live_instrument_disarm_playback.qxa`: play; arm at 1 s, inject, disarm at
-    2 s; the capture from 2.5 s on is `assert-file-identical` (frame range) to a
-    no-arm playback capture of the same project (the frozen lane resumed exactly);
-    and a subsequent render equals a fresh-process render.
+    2 s; from 2.5 s on the capture matches a no-arm playback capture of the same
+    project by per-block RMS bands and `assert-audio-frequency` (two real-time
+    captures are not byte-comparable — device-start locator and underruns
+    differ), plus `assert-audio-continuity` across the disarm point; and a
+    subsequent render equals a fresh-process render byte for byte.
   - AC4 `live_instrument_ownership.qxa`: with the instrument armed, a concurrent
     NON-ROOT demand (a preview/asset capture of that track) → `liveOwnedRefusals`
     ≥ 1 and the audible path unaffected; after disarm the same demand renders audio.
   - AC5 thru: `midiOutPort=capture`; injected notes appear on the capture MIDI
-    OUT ≤ 2 ms after injection (`assert-midi-out` host-time delta).
+    OUT ≤ 5 ms after injection (`assert-midi-out` host-time delta — the same
+    bound `devices_midi_test` holds for the sender; the measured value is recorded).
   - AC6 `virtual-key hold` C4 audible via the keyboard port; `release` → silence;
     stopped-transport step input still works.
   - AC7 goldens; instrument cases; `repeat_test` on AC1/AC2/AC3; `assert-render-policy`.
 - **Orchestrator-reviewed:** the ownership sequence; the live source mapping; the thru ring.
 
 ### L3a — Capture bridge ENGINE  *(tw/sources, tw/record, tw/devices)*
-- **Entry:** L1a merged.
+- **Entry:** L1a merged (runs in parallel with L1b).
 - **Deliverables:** `twGrowingCaptureSource` (chunked planar, atomic frontier,
   reader API by position), the bridge (input ring → pages + WAV writer with
   backpressure counters), `RecordingSession` refactor to a bridge consumer;
@@ -247,7 +273,10 @@ L0 ─► L1a ─► L1b ─┬─► L2 ────┐
 ### L3b — Audio recording APP
 - **Entry:** L1b, L3a merged.
 - **Deliverables:** `SRecordingContent` + the recording cut (frontier, preview
-  extension), the placement conversion + `recordStart` (D6) named once, non-modal
+  extension; NO `invalidateRenderPathRange` walk to the root while its track is
+  live-owned — one at disarm), the placement conversion + `recordStart` (D6)
+  named once incl. the retrospective mapping when recording starts from a
+  stopped transport, non-modal
   recording, punch region, loop takes (`add-take startOffset=`), `locatorHeldElsewhere`
   retired, `startRecording` via `setPlaying`, offsets/latency in Options,
   `record-start`/`record-stop`, `assert-recorded-clip`.
