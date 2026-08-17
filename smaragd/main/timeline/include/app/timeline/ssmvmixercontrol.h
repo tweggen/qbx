@@ -68,6 +68,11 @@ protected slots:
     void muteToggled( bool );
     void soloToggled( bool );
     void armToggled( bool );
+    // Name field -> model, through set-track-name so a rename is undoable and
+    // actually reaches the project file. Fires on Enter and on focus-out; a
+    // no-op when the string did not change, so merely clicking through a head
+    // never puts an entry on the undo stack.
+    void commitTrackName();
     // Button -> view: expand/collapse this track's take lanes (UI-only state
     // on SStdMixerView; the rebuild this triggers deletes this control via
     // deleteLater, which is safe from inside the handler).

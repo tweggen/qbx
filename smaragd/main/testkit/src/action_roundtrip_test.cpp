@@ -159,6 +159,10 @@ const Fixture kFixtures[] = {
     { "set-track-mute",  "<set-track-mute trackPath='1,1' muted='1'/>" },
     { "set-track-volume",
       "<set-track-volume trackPath='1,0' volume='-6'/>" },
+    // A non-empty name, deliberately: the default is the empty string, which an
+    // unread attribute also produces.
+    { "set-track-name",
+      "<set-track-name trackPath='1,1' name='Drum bus'/>" },
 
     // A NON-default width, deliberately: the default (2) is what an unread
     // attribute also produces, so a fixture of 2 would round-trip through a
