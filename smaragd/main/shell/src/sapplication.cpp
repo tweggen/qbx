@@ -749,6 +749,27 @@ bool SApplication::isRecordingActive() const
     return recordingSession_ && recordingSession_->isRunning();
 }
 
+// AUDIO THREAD. Atomics only — no Qt, no allocation (THREADING.md rule 1).
+// The first published position of a take is the first frame the user can hear,
+// so whatever the recorder has captured by then IS the priming lag. Stamped
+// once per take with a CAS, so later callbacks cost one relaxed load.
+void SApplication::noteMonitorAudibleRealtime()
+{
+    if( recordPrimingFrames_.load( std::memory_order_relaxed ) != NOT_PRIMED )
+        return;
+    if( !isRecordingActive() ) return;
+    std::uint64_t expected = NOT_PRIMED;
+    recordPrimingFrames_.compare_exchange_strong(
+        expected, recordCaptureFrames_.load( std::memory_order_relaxed ),
+        std::memory_order_relaxed );
+}
+
+offset_t SApplication::recordMonitorPrimingFrames() const
+{
+    const std::uint64_t v = recordPrimingFrames_.load( std::memory_order_relaxed );
+    return ( v == NOT_PRIMED ) ? 0 : (offset_t) v;
+}
+
 void SApplication::startRecording(const audio::RecordingParams &params)
 {
     if (!recordingSession_) {
@@ -763,14 +784,31 @@ void SApplication::startRecording(const audio::RecordingParams &params)
     // a realtime-safe playhead callback (atomic store only — record thread!).
     audio::RecordingParams p = params;
     p.startLocatorFrames = (std::uint64_t) recordingStartFrame_;
-    recordingSession_->onPosition = [this](std::uint64_t pos) {
-        setGlobalLocatorPosRealtime((offset_t) pos);
+
+    // Fresh take: nobody has published an audible frame yet, and until the
+    // monitor starts the record worker is the only thing that can move the
+    // playhead at all.
+    recordCaptureFrames_.store( 0, std::memory_order_relaxed );
+    recordPrimingFrames_.store( NOT_PRIMED, std::memory_order_relaxed );
+    recordLocatorFromCapture_.store( true, std::memory_order_relaxed );
+
+    const std::uint64_t startFrames = (std::uint64_t) recordingStartFrame_;
+    recordingSession_->onPosition = [this, startFrames](std::uint64_t pos) {
+        // The captured-frame count is kept ALWAYS: it is what measures the
+        // priming lag below, and it stays meaningful after the speaker has
+        // taken the playhead over.
+        recordCaptureFrames_.store( pos >= startFrames ? pos - startFrames : 0,
+                                    std::memory_order_relaxed );
+        // The playhead itself only follows the capture while nothing is
+        // audible. Once the monitor is running the speaker publishes the
+        // position it is actually delivering, which is the one the user can
+        // hear — and the one the meters and the MIDI-out pump already use.
+        if( recordLocatorFromCapture_.load( std::memory_order_relaxed ) )
+            setGlobalLocatorPosRealtime((offset_t) pos);
     };
 
     // Start capture first, so isRecordingActive() is already true before the
-    // monitoring playback below produces its first buffer. That keeps the record
-    // worker the sole locator authority (the playback callback won't advance the
-    // locator while recording — see twSpeaker).
+    // monitoring playback below produces its first buffer.
     recordingSession_->start(p);
 
     // Monitoring: play the existing arrangement so the user hears it while
@@ -793,6 +831,14 @@ void SApplication::startRecording(const audio::RecordingParams &params)
             beginRun( getGlobalLocatorPos() );
             t3Speaker_->startOutput();
             isPlaying_ = true;
+            // Hand the playhead to the speaker. startOutput() returns before
+            // the device actually starts (twSpeaker defers it until the
+            // readahead is primed), so between here and the first callback
+            // NOBODY advances the locator — which is exactly right: nothing is
+            // audible yet, so the playhead must not move. The first
+            // publishPosition then takes over and records how much capture went
+            // by in the meantime.
+            recordLocatorFromCapture_.store( false, std::memory_order_relaxed );
         }
     }
 

@@ -873,25 +873,47 @@ void SMainWindow::onRecordingCompleted()
     // has since advanced with the capture).
     offset_t recordingStartTime = recordingStartPos_;
 
-    // Calculate latency sync offset if playback was running during recording.
-    // Offset = output_latency - input_latency (in frames).
-    // Positive offset: input is faster, so shift the clip earlier to compensate.
-    int64_t latencySyncFrames = 0;
+    // Where capture frame 0 belongs on the timeline.
+    //
+    // A performer plays along with what they HEAR, so the take is LATE by
+    // everything between the timeline and their ears, and the clip has to move
+    // EARLIER by the same amount. Two terms, and this used to have neither
+    // right — it added `outputLatency - inputLatency`, i.e. the wrong SIGN and
+    // a difference that is ~0 whenever the two latencies are similar:
+    //
+    //  - the PRIMING lag: capture starts immediately, while twSpeaker defers
+    //    the device start until the readahead is primed (a page is ~1.4 s at
+    //    48 kHz). Everything captured in that window happened before the
+    //    arrangement was audible at all. Measured, not assumed — it is the
+    //    capture frame count at the first published position.
+    //  - the ROUND TRIP: the arrangement reaches the ears `outputLatency`
+    //    after the device takes it, and the answering sound reaches us
+    //    `inputLatency` after it was made. A SUM, not a difference.
+    int64_t shiftEarlierFrames =
+        (int64_t) SApplication::app().recordMonitorPrimingFrames();
+
     auto speaker = SApplication::app().getSpeaker();
     if( speaker ) {
         audio::AudioBackend *backend = speaker->getBackend();
         uint32_t inputLatency = recSession->getInputLatencyFrames();
         if( backend && inputLatency > 0 ) {
             uint32_t outputLatency = backend->getLatencyFrames();
-            latencySyncFrames = static_cast<int64_t>(outputLatency) - static_cast<int64_t>(inputLatency);
+            shiftEarlierFrames += (int64_t) outputLatency + (int64_t) inputLatency;
         }
     }
 
-    // Apply the offset to the recording start position
-    if( latencySyncFrames != 0 ) {
-        // latencySyncFrames is in samples; convert to the timeline representation
-        recordingStartTime += latencySyncFrames;
-    }
+    // Clamp at the start of the timeline: a take recorded at position 0 has
+    // nowhere earlier to go, and a negative start is not representable.
+    if( shiftEarlierFrames > (int64_t) recordingStartTime )
+        shiftEarlierFrames = (int64_t) recordingStartTime;
+    recordingStartTime -= shiftEarlierFrames;
+
+    TW_LOGI( "ui.shell",
+             "recording placed at %lld (locator was %lld, shifted %lld frames "
+             "earlier: %lld priming + round trip)",
+             (long long) recordingStartTime, (long long) recordingStartPos_,
+             (long long) shiftEarlierFrames,
+             (long long) SApplication::app().recordMonitorPrimingFrames() );
 
     // Place the recordings through the action system (proposal 17 phase 2):
     // one place-recording per armed track, all inside ONE undo macro. The
