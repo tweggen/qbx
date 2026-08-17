@@ -36,13 +36,21 @@ class twCapturingSource
     : public twRandomSource
 {
 public:
-    // Capture `nFrames` frames of `source`, starting at `captureStart`, for
-    // `channels` channels, tagged with `sampleRate`. `source` should be seekable
-    // so each channel can be captured from the same start (twTrackMix advances
-    // one shared cursor per call, regardless of channel).
-    twCapturingSource( tw303aEnvironment &env, twComponent &source,
-                       offset_t captureStart, length_t nFrames,
-                       idx_t channels, int sampleRate );
+    // THERE IS NO "capture a live component" CONSTRUCTOR (proposal 36 §7 trap
+    // 27, deleted at B9). One existed — `(env, source, captureStart, nFrames,
+    // channels, sampleRate)` — and had ZERO callers for its whole life, which
+    // is the only reason it was harmless: its body was a per-channel loop that
+    // seekTo'd a cursor-bearing component and pulled calcOutputTo once per
+    // channel, which is EXACTLY the shape §4.3 forbids. Rendering channel 0,
+    // advancing the source's cursor a whole buffer, then asking for channel 1
+    // fills channel 1 with the NEXT window's audio — the "coherent page
+    // displaced by one page" bug this repo has already bled for. It survived
+    // review by being dead, and would have become a live trap the moment
+    // anybody wired it, so it goes rather than getting a comment.
+    //
+    // If a live component ever does need capturing, it must be ONE wide pass:
+    // freeze the source's pages and copy every channel out of each page, the
+    // way SCut::buildCapture_ does since B7.
 
     // Adopt an already-rendered planar buffer (size channels*nFrames). Used by
     // the recursive container capture (proposal 10 Phase 1), which composes a

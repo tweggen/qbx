@@ -45,9 +45,17 @@ public:
     virtual uint32_t getValidFrames() const = 0;
     virtual void setValidFrames(uint32_t frames) = 0;
 
-    // Data access: get pointer to raw page data
-    virtual void* getDataPtr() = 0;
-    virtual const void* getDataPtr() const = 0;
+    // NO RAW DATA ACCESSOR (proposal 36 B9). There used to be
+    // `virtual void *getDataPtr()`, returning the base of the sample buffer.
+    // It had ZERO callers in the entire tree outside one unit-test assertion
+    // about itself, and it was a WIDTH-BLIND HOLE in the two page types that
+    // implemented it: for a twOutputPage it handed out channel 0's pointer
+    // with no channel, no stride and no frame bound attached, which is exactly
+    // the "correct today, silently wrong at width 2" shape this proposal
+    // exists to remove. twOutputPage's own channelPtr(c) / channelFrames()
+    // are the way in, and the buffer is private so the compiler says so.
+    // CapturePageData::data is a public member of a plain struct and needs no
+    // accessor at all. Nothing polymorphic ever wanted either.
 
     // Internal state snapshot (for sequential components)
     virtual std::any& getInternalState() = 0;
