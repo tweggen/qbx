@@ -826,6 +826,67 @@ void SMainWindow::onRecordTriggered()
             params.trackChannels.push_back( pr.first->getRecordingChannels() );
         }
 
+        // PRE-FLIGHT: the two endpoints must agree on a rate. They share ONE
+        // hardware clock, so if the OS has them declared differently it
+        // resamples one side AND MISREPORTS THAT SIDE'S CLOCK — measured on a
+        // US-16x08 with capture at 44100 and render at 48000, the capture came
+        // in 8.6 % fast and the take was 1.47 semitones flat. Nothing in the
+        // engine can correct for a false clock, so the only honest thing is to
+        // say so BEFORE the take rather than after it. Warned once per session:
+        // a modal before every recording would be intolerable, and the user may
+        // legitimately choose to go ahead.
+        if( !endpointRateWarningShown_ ) {
+            uint32_t inRate = 0, outRate = 0;
+            QString inName, outName;
+            {
+                std::unique_ptr<audio::AudioInput> probe = audio::createAudioInput();
+                if( probe ) {
+                    for( const audio::AudioInputDeviceInfo &d : probe->listDevices() ) {
+                        if( QString::fromStdString( d.id ) == inputDevId ) {
+                            inRate = d.sampleRate;
+                            inName = QString::fromStdString( d.name );
+                            break;
+                        }
+                    }
+                }
+            }
+            if( auto spk = SApplication::app().getSpeaker() ) {
+                const std::string cur = spk->outputDevice();
+                for( const audio::AudioDeviceInfo &d : spk->outputDevices() ) {
+                    if( d.id == cur ) {
+                        outRate = d.sampleRate;
+                        outName = QString::fromStdString( d.name );
+                        break;
+                    }
+                }
+            }
+            if( inRate != 0 && outRate != 0 && inRate != outRate ) {
+                endpointRateWarningShown_ = true;
+                TW_LOGW( "ui.shell",
+                         "endpoint rate mismatch: input '%s' = %u Hz, output "
+                         "'%s' = %u Hz",
+                         inName.toUtf8().constData(), (unsigned) inRate,
+                         outName.toUtf8().constData(), (unsigned) outRate );
+                QMessageBox::warning( this, "Input and output rates differ",
+                    QString( "The recording input and the playback output are set to "
+                             "DIFFERENT sample rates in the operating system:\n\n"
+                             "    Input:  %1 — %2 Hz\n"
+                             "    Output: %3 — %4 Hz\n\n"
+                             "If these are the same interface they share one clock, so "
+                             "the OS must resample one side — and it then reports that "
+                             "side's rate incorrectly. Recordings can come out pitched "
+                             "by the ratio between them, and monitoring can play slow.\n\n"
+                             "Set both to the same rate (ideally the project's, %5 Hz) "
+                             "in the system sound settings.\n\n"
+                             "This warning is shown once per session." )
+                        .arg( inName.isEmpty() ? QStringLiteral( "System default" ) : inName )
+                        .arg( inRate )
+                        .arg( outName.isEmpty() ? QStringLiteral( "System default" ) : outName )
+                        .arg( outRate )
+                        .arg( currentProject_->getSRate() ) );
+            }
+        }
+
         // Remember where the playhead is now: the cut goes here, and the playhead
         // advances from here during the capture.
         recordingStartPos_ = SApplication::app().getGlobalLocatorPos();

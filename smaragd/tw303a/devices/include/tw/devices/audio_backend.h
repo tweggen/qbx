@@ -32,6 +32,12 @@ struct AudioConfig {
 struct AudioDeviceInfo {
     std::string id;
     std::string name;
+    // The endpoint's SHARED-MODE MIX RATE as the OS reports it, 0 when unknown.
+    // The twin of AudioInputDeviceInfo::sampleRate, and it exists for the same
+    // reason: an input endpoint and an output endpoint on ONE interface share a
+    // single hardware clock, so if the OS has them declared at different rates
+    // it must resample one side — and it then misreports that side's clock.
+    std::uint32_t sampleRate = 0;
 };
 
 // Pull callback: fill `out` with up to `frames` interleaved float samples
