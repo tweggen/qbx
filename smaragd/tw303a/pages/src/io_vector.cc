@@ -43,7 +43,20 @@ IOVector IOVector::CreateForPageOutput(std::shared_ptr<twOutputPage> page,
     if (!page) {
         throw std::runtime_error("IOVector::CreateForPageOutput: page is null");
     }
-    return IOVector(page, 0, twOutputPage::FRAME_CAPACITY, channel);
+    // THE PAGE'S OWN FRAME BOUND, not the class constant (proposal 36 §7 trap
+    // 21, fixed at B9). This hard-coded FRAME_CAPACITY was a latent heap
+    // overrun: twComponent::calcOutputTo builds a MONO SCRATCH page of the
+    // caller's `length` (resizeMonoScratch), wrapped it here, and the vector
+    // then claimed 65536 frames of room in a buffer that had `length`. Any
+    // sub-page pull therefore wrote past the scratch and memcpy'd back more
+    // than the caller's buffer held. It stayed latent only because the freeze
+    // path always asks for a whole page.
+    //
+    // This is a NO-OP for every page the engine freezes: twOutputPage's
+    // constructor sets channelFrames_ = FRAME_CAPACITY and only
+    // resizeMonoScratch ever lowers it. So the value is unchanged everywhere
+    // except exactly where it was wrong.
+    return IOVector(page, 0, (length_t) page->channelFrames(), channel);
 }
 
 IOVector IOVector::CreateFromBuffer(sample_t* buffer, length_t lengthFrames)
@@ -126,10 +139,16 @@ length_t IOVector::availableFrames() const
         return 0;
     }
 
-    // Single page: available = (page size - start offset)
+    // Single page: available = (this page's frame bound - start offset).
+    // Same trap-21 correction as CreateForPageOutput: clampLength() is what
+    // stops a copy running off the end, and it cannot do that against a
+    // constant when the page in hand is a shorter mono scratch buffer. Equal to
+    // FRAME_CAPACITY for every frozen page.
     if (pages_.size() == 1) {
-        length_t available = twOutputPage::FRAME_CAPACITY - startOffset_;
-        return available;
+        const length_t bound = pages_[0]
+            ? (length_t) pages_[0]->channelFrames()
+            : (length_t) twOutputPage::FRAME_CAPACITY;
+        return (startOffset_ >= bound) ? 0 : (bound - startOffset_);
     }
 
     // Multi-page: available = full first page - offset + middle pages + partial last page

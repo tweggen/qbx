@@ -80,10 +80,25 @@ inline twFormat twCanonicalFormat( std::uint32_t rate )
 // format finally chosen. An empty vector for a dimension means "no constraint"
 // (any); the negotiator intersects an empty `rates` with its candidate set D at
 // the start of a pass, after which an empty `rates` means *infeasible*.
+//
+// THERE IS NO `channelCounts` HERE, deliberately (proposal 36 §7 trap 5,
+// resolved at B9). The field existed from proposal 04 onward, was written in
+// exactly two places and READ IN NONE: twNegotiator::negotiate copies caps
+// forward as `caps.rates` alone and discards types and channel counts on the
+// spot, so the negotiator has never had a single line of channel logic. Left in
+// place it was strictly worse than absent — the next reader would reasonably
+// conclude that width is negotiated between components, when in fact
+// twComponent::getOutputChannels() is the sole authority for page width and the
+// plug seam clamps per §4.4 rule 1. Adding a SECOND authority that drifts from
+// the first is the failure this proposal spent eight milestones avoiding.
+//
+// Giving it meaning is a real feature (a component declaring which widths it
+// can accept, and a negotiator that intersects them) and it is not this
+// proposal's: §8 names a routing matrix as a non-goal, and nothing in the
+// engine can express an INPUT width to negotiate over yet.
 struct twFormatCaps {
     std::vector<std::uint32_t> rates;          // empty = any
     std::vector<twSampleType>  types;          // empty = any
-    std::vector<std::uint16_t> channelCounts;  // empty = any
     std::uint32_t preferredRate = 0;           // 0 = defer to project rate
 };
 

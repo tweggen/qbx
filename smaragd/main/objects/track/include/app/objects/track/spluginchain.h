@@ -44,10 +44,16 @@ public:
 
     // Where the DSP component for this chain comes from (proposal 08 M4).
     //
-    // A chain owns NO component of its own: STrack builds one twPluginChain per
-    // BUS (the frozen-page model is one mono page per component), and this model
-    // object is the ordered container in front of all of them. So the owning
-    // track installs a provider that hands out bus 0's component, and
+    // A chain owns NO component of its own: STrack builds ONE twPluginChain of
+    // the project's channel width, and this model object is the ordered
+    // container in front of it. So the owning track installs a provider that
+    // hands out that component, and
+    //
+    // (This read "one twPluginChain per BUS (the frozen-page model is one mono
+    // page per component)". Both halves retired at proposal 36 B4: the page
+    // carries N planar channels, so N channels are no longer N component
+    // instances, and the per-bus instantiation went with the plugin taps.)
+    //
     // getRootComponent() answers with it instead of throwing — which is what it
     // used to do UNCONDITIONALLY, because getChainComponent() was a TODO stub
     // returning a member nothing ever assigned. An unowned chain (one loaded

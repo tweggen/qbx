@@ -83,8 +83,9 @@ int main()
         CHECK(p->sampleCount() == CAP, "…and FRAME_CAPACITY floats of storage");
         CHECK(p->accountedBytes() == CAP * sizeof(float),
               "…accounting the same 262144 bytes as before B1b");
-        CHECK((const void *)p->channelPtr(0) == p->getDataPtr(),
-              "getDataPtr() is channel 0, so width-1 call sites stay correct");
+        // (The getDataPtr() assertion that stood here retired with the accessor
+        // itself at B9 — it was the only caller in the tree, and it asserted a
+        // width-blind pointer's identity with channel 0.)
 
         p->channelPtr(0)[0] = 0.5f;
         p->channelPtr(0)[CAP - 1] = -0.25f;

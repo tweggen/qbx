@@ -374,12 +374,28 @@ public:
     // page's size in BYTES). See the note on the definition — this comparison
     // was frames-against-bytes until proposal 36 B1a.
     //
-    // NOTE (B1a): nothing in the tree calls this. Page caches are pruned only by
-    // invalidation and by component teardown, so a long session's outputPages_
-    // maps grow without bound. Retiring or wiring it is proposal 36 B9's call;
-    // the arithmetic is fixed here because widening the page would have
-    // multiplied the error the day it did get wired.
+    // NOTE (B1a, resolved at B9): nothing called this, so page caches were
+    // pruned only by component teardown and by a re-freeze replacing the same
+    // key — an epoch bump marks pages stale IN PLACE and does not prune — and a
+    // long session's outputPages_ maps grew without bound. B9 measured the cost
+    // (one 60 s render: 681 pages resident, 357 MB at width 2, 1.42 GB at
+    // width 8) and WIRED it, through releaseOldPagesGlobally() below. This
+    // single-component entry point stays as the primitive and is what
+    // graph_test pins the retention boundary on.
     void releaseOldPages(offset_t keepAfterPos);
+
+    // The same retention rule applied to EVERY live component in one registry
+    // walk, with a TRY-lock per component (a component busy freezing is skipped,
+    // not waited for). Returns the number of pages dropped.
+    //
+    // Erasing a map entry drops one shared_ptr and nothing else: a page bound
+    // into a scheduler node, chained as a stalePredecessor or held by an audio
+    // callback stays alive on its own references, so this cannot free a page in
+    // use — it can only turn a later lookup into a miss, which the engine
+    // already answers by re-freezing. Callers must still leave a MARGIN behind
+    // the consuming position, because the same-component predecessor edge
+    // chains DSP state from page N-1. See the definition for the full argument.
+    static size_t releaseOldPagesGlobally(offset_t keepAfterPos);
 
     // --- Page-memory accounting (proposal 36 B1a) ---------------------------
     //

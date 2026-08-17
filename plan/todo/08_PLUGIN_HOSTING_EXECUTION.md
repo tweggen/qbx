@@ -11,7 +11,10 @@ what is broken, and the milestone order to close it out*.
 > verified). Every §Confirmed problems item below is closed, with
 > two carry-overs recorded where they landed: the MONO SINK (`RenderSession` /
 > `AudioEngine` collapse the graph's buses to one page and duplicate it) is a
-> tw_render / tw_playback gap, not a plugin-layer one, and is nobody's milestone; and
+> tw_render / tw_playback gap, not a plugin-layer one, and is nobody's milestone
+> — **CLOSED 2026-08-16 by proposal 36 B5, which made it somebody's milestone:
+> both stages are N-channel now, a render writes `SProject::channels()`
+> channels, and `L != R` on a rendered FILE is a legitimate assertion**; and
 > the FX strip's drag-to-reorder GESTURE cannot fire (`dragSourceIndex_` is never
 > assigned; `startDragFromPlugin()` was declared and never defined) — the
 > `reorder-plugin` action behind it exists and is tested. Per-milestone detail is in

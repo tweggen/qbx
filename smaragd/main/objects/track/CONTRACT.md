@@ -1,7 +1,9 @@
 # app/objects/track — CONTRACT
 
-Purpose: the track object. STrack (bus mixers, clip synchronization to
-twTrackMix, MapPosFn wiring), its renderers, strackpath (path resolution
+Purpose: the track object. STrack (ONE twTrackMix of the project's channel
+width — the per-bus mixers retired at proposal 36 B4, see inv. 9 — clip
+synchronization to it, MapPosFn wiring), its renderers, strackpath (path
+resolution
 used by ALL placement actions), and track/placement actions: add/remove/
 move/reparent/restore-track, set-track-volume, move-clip, remove-clip.
 
@@ -25,10 +27,12 @@ Invariants (normative detail: CLIP_MODEL.md):
 5. strackpath resolution: comma-separated child indices from the root
    mixer; reparent guards against self/descendant cycles.
 
-5b. EVENT CHILDREN GO INTO THE EVENT CLIP SET, NOT THE BUS MIXERS (proposal
+5b. EVENT CHILDREN GO INTO THE EVENT CLIP SET, NOT THE TRACK MIX (proposal
    36 3.2). A child whose contentKind() is Event is inserted into the track's
-   ONE twEventClipSet - same slots, same SLink* key rule as the mixers, but one
-   set per track rather than one per bus, because events are not per bus. It is
+   ONE twEventClipSet - same slots, same SLink* key rule as the track mix. (The
+   sentence here used to contrast "one set per track rather than one per bus";
+   since B4 a track has one mix, so there is no longer a plural to contrast
+   with, and the event set's shape is simply the same as the mix's.) It is
    never inserted as a ClipEntry: a MIDI clip has no page to freeze, and doing
    so would cost a dummy freeze per page per clip plus a twView warning per
    freeze (fact M5/F12). The resolver is the generic
@@ -233,11 +237,15 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     `onAutomationChanged()` pushes and then calls `invalidateRenderPathRange()`
     with the EXACT range, because a gain stage is class infinity and pure.
     `applyAutomationToEngine()` is the load-path replay, called once the chain
-    exists. `self:Pan` is still absent, but no longer for that reason: the sink
-    has been as wide as the project since 36-B5 (and `automation_stereo.qxa`
-    asserts a volume lane on both channels), so what is missing is a pan — a
-    clip and track model that carries one — and not somewhere to hear it.
-    Proposal 37 §12 leaves it to a later proposal.
+    exists. `self:Pan` is deliberately absent, and the ORIGINAL reason has
+    expired: it read "until the sink is stereo (36-B5)", and the sink went wide
+    at B5 — `automation_stereo.qxa` now asserts a volume lane on both channels,
+    so there IS somewhere to hear one. What is missing is the pan itself: no pan
+    law and no pan stage in the graph, no clip/track model carrying one, and
+    `SObject::pan_` still serialized with **zero consumers** (proposal 36 §7
+    trap 3). Proposal 36 §8 names panning a non-goal and proposal 37 §12 leaves
+    it to a later proposal. A pan lane would still store a number nothing could
+    hear — but it is now **unblocked rather than impossible**.
 
 13. **A CLIP's `cut:Gain` REACHES THE MIX THROUGH THE TRACK, NOT THROUGH THE
     CUT.** The curve lives on the WINDOW (an `SCut`), which is not allowed to

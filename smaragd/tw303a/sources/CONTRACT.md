@@ -105,7 +105,21 @@ Invariants:
    width, and it is per placement rather than shared (proposal 06 §7's
    content-addressed capture cache does not exist yet): it is accounted by
    `PageAccounting::onCaptureAllocated` and printed as `captureBuffers=` by
-   `<report-page-memory>`. Do not confuse it with `CapturePagePool`, which is
+   `<report-page-memory>`. SIZED AT B9, because "multiplies by width" understates
+   it — the multiplier is (width x rebuilds x placements) and only the first
+   factor came from proposal 36. Measured on the corpus: `captureBuffers`
+   230 400 B at width 1 against 1 843 200 B at width 8 (exactly x8), while
+   `buildCapture_` runs **7-9 times in a single run** for a corpus with one
+   asset clip, because `invalidateCapture()` has ten call sites and two
+   independent rebuilders (the UI thread through `rebuildReader`, a revalidator
+   worker through `revalPrepPreview`) race for the same work with no
+   memoization, and `oldReader_` holds a `captureRef` until `~SCut`. That, not
+   the page model, is where a width-8 memory problem would actually come from
+   (proposal 36 §7 trap 25). B9 measured it and did not fix it: the fix is the
+   content-addressed cache, which is proposal 06 §7's scope.
+   **The live-component capture constructor is GONE** (trap 27, deleted at B9):
+   its per-channel `seekTo` + `calcOutputTo` loop was exactly the cursor-
+   displacing shape §4.3 forbids, and it had never had a caller. Do not confuse it with `CapturePagePool`, which is
    an unrelated pool of an unrelated type and does NOT widen (pages/CONTRACT.md).
 
 Threading: sources are immutable after load; readers are single-consumer
