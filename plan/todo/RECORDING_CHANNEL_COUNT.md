@@ -47,32 +47,55 @@ invisible. Carrying channels honestly made a pre-existing defect audible.
 This is the same shape as proposal 36 B4's golden, where the "correct" old bytes
 turned out to be a *saturating* render nobody had noticed.
 
-## 4. What is actually wrong, and the decision it needs
+## 4. What is actually wrong — traced, not guessed
 
 `CLAUDE.md` § Recording Audio claims a recorded file's **Channels** are "Stereo
-(or project channel count)". That is not what happens. `RecordingParams.channels`
-is hard-coded to `2` in `SMainWindow`, and the files have 16 — so the width is
-coming from the **input device's** `AudioInputConfig` somewhere on the write
-path, and neither the project width nor the per-track selection reaches the
-writer.
+(or project channel count)". **That has been false since this code was written.**
+It is the **input device's capture channel count**, minus the per-track mask:
 
-Note the UI for this **already exists and is half-wired**: the ARM button's
-right-click menu offers "All Channels", per-channel toggles and stereo pairs,
-writing `SObject::recordingChannels_` (a bitmask, 0 = all) — which is **never
-serialised** (`serializeSelfAttributes` omits it) and, on this evidence, does not
-reach the file either.
+| Step | Location | What happens |
+|---|---|---|
+| 1 | `main/shell/src/smainwindow.cpp:818` | `params.channels = 2;` — hard-coded |
+| 2 | `tw303a/record/include/tw/record/recording_session.h:23` | `std::uint32_t channels = 2; // device input channel count` |
+| 3 | — | **`params_.channels` is read NOWHERE.** Step 1 is dead code |
+| 4 | `record/src/recording_session.cc:232` | `openDevice(inputDeviceId, sampleRate)` — device id and **rate only**; no channel count is requested |
+| 5 | `record/src/recording_session.cc:244-247` | `const AudioInputConfig &in = input->getConfig(); channels = in.channels;` — **the authority** |
+| 6 | `devices/src/wasapi_input.cc:151` | `config_.channels = deviceFormat->nChannels;` — the endpoint's shared-mode mix format. **16 on a 16-input interface** |
+| 7 | `record/src/recording_session.cc:288-300` | per armed track: `outChannels = channels`, recounted from the mask's set bits **only if `trackChannelMask != 0`** |
+| 8 | `record/src/recording_session.cc:315-317` | `fileConfig.channels = outChannels` — the WAV header width |
+| 9 | `record/src/recording_session.cc:404-412` | `filterChannels(...)`, which (`:29-64`) **returns every channel verbatim when the mask is 0** |
 
-**The product decision** — what should a user with a 16-input interface and
-"All Channels" selected get?
+### The per-track selection is NOT broken — its DEFAULT is
+
+An earlier draft of this note said the ARM channel selection never reaches the
+writer. **That was wrong.** It does: `ssmvmixercontrol.cpp:745-822` →
+`SObject::recordingChannels_` → `smainwindow.cpp:825` → `params.trackChannels`
+→ step 9. Pick "Channel 1" on a 16-input interface and you genuinely get a
+1-channel file.
+
+What bites is that **`recordingChannels_` defaults to `0`, and `0` means "all
+channels"** (`sobject.h:784`) — so an armed track records everything the
+interface offers unless the user has explicitly been into a right-click menu
+they have no reason to suspect exists.
+
+And it is **never serialized**: `sobject.cpp:131-132` writes
+`armedForRecording` and nothing writes or reads a `recordingChannels`
+attribute anywhere (`grep -rn recordingChannels main/persistence/` is empty).
+**Every save/reload silently reverts an armed track to "All Channels"** — so a
+default-side fix is the only thing a returning user would ever see, and
+serializing it is not optional.
+
+### The decision this needs
 
 | Option | Consequence |
 |---|---|
-| Write only the selected channel(s) | Honours the existing UI; "All Channels" on a 16-input rig still yields 16-channel files |
-| Fold/select down to the project width | Always playable, but silently discards inputs the user may have wanted |
-| Keep all inputs, fix it at the CLIP (a per-clip source-channel choice) | Most faithful, and the largest piece of new model |
+| Default a newly armed track to the first channel (or first stereo pair) rather than mask 0 | Smallest change; the existing UI keeps meaning what it says |
+| Keep mask 0, but clamp the written width to the project's at open time | Also small; silently discards inputs on a genuine multitrack capture |
+| Fold N inputs down to the project width | **Argue against**: it sums unrelated physical inputs |
+| Keep all inputs, add a per-clip source-channel choice | Most faithful, and much the largest piece of new model |
 
-Whatever is chosen, `recordingChannels_` should probably start being serialised,
-and `CLAUDE.md`'s claim should be corrected to whatever becomes true.
+"All Channels" exists precisely for the user doing a live multitrack capture, so
+whatever is chosen should keep that reachable.
 
 ## 5. Existing recordings
 
