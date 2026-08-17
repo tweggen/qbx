@@ -241,3 +241,30 @@ before P5 byte-unchanged.
   the default does the `invalidateRenderPathRange` and nothing else.
   **`applyAutomationToEngine()`** is the load-path replay, because the lanes are
   read before the components exist.
+
+## The generic TAKE-COLUMN seam (proposal 21 L4)
+
+`SObject::windowTakeAt()` has existed since proposal 37 D8b so that a verb could
+ADDRESS a take without naming `STakeStack`. L4 needed to BUILD one from
+`objects/midi`, which sits at the rank of `objects/cut` and must not depend on
+it, so the seam grew the four calls it was missing —
+`windowTakeCount()`, `activeWindowTakeIndex()`, `insertWindowTake()`,
+`removeWindowTake()`, `setActiveWindowTake()` — plus a registered factory pair
+on `SClipWindow`:
+
+    registerTakeColumnFactory( wrap, collapse )
+    wrapIntoTakeColumn( project, lane, clipLink )   // plain placement -> column
+    collapseTakeColumn( lane, columnLink )          // one-take column -> plain
+
+Registration is by static initializer from the slice that OWNS `STakeStack`
+(`stakehelpers.cpp`), exactly like `registerWrapFactory` — and it works for the
+same reason: `smaragd_app` is an OBJECT library, so nothing strips a translation
+unit whose only reference is a static constructor.
+
+Every override on `STakeStack` is a ONE-LINE FORWARDER. The stack has been
+window-typed since D8b; the two helpers already took an `SClipWindow` and named
+no `SCut`. What was missing was not generality but REACH, and this is the
+smallest thing that provides it. The defaults (`0` / `-1` / null / no-op) mean
+an object that is not a column answers honestly rather than being asked to
+pretend, so a caller's `windowTakeCount() == 0` test is "this is a plain
+placement" and needs no `dynamic_cast`.

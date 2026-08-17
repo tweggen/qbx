@@ -407,3 +407,90 @@ than guessed at. The trim floor already distinguishes the two cases
     bound moved to the FROZEN window, where it is deterministic and reads
     exactly 0.040405 with a gap of 1 frame on every run. 1024 is the same bound
     L1b's own live cases already carry.
+
+## MIDI recording (proposal 21 L4 = 37 P8b, design D6/D8/D9)
+
+25. **`SPlayheadClock` is THE host-time <-> project-frame conversion, and there
+    is exactly one of it.** `SMidiOutPump` asks it forward ("what host time is
+    frame F heard at?") to schedule a message; `SMidiRecorder` asks it backward
+    ("what frame was being heard when this byte arrived?") to place a recorded
+    note. It is the pump's own anchor discipline moved out unchanged:
+    re-anchored on every position PUBLICATION rather than every position CHANGE
+    (the two differ exactly once, at the start, and that is the time that
+    matters - measured: anchoring on a change put the first note of a run 59 ms
+    early), the publish-lag correction (`twSpeaker` publishes AFTER the pull, so
+    the frame just delivered is `P - bufferFrames`), the device-latency term
+    through `meterLatencyFrames()`, and the GUARD on the first anchor of a run
+    (a locate is published by the UI thread before the engine's seek lands, and
+    anchoring on that publication would put a whole window in the past). A
+    second implementation of any of that would be a second set of corrections to
+    keep in step.
+
+26. **`SMidiRecorder` maps NOTHING on its tick.** The 20 ms poll pops each
+    port's recorder ring into a buffer of `{hostTimeNs, bytes}` and offers the
+    playhead to the clock; the model is touched only at the stop, inside one
+    undo macro. That is what makes the mapping RETROSPECTIVE by construction
+    rather than by a special case: a take begun from a stopped transport
+    captures its first messages before the RT has published anything, and
+    backward extrapolation on a clock linear in host time is exact. The
+    conversion, in one line:
+
+        projectFrame(msg) = clock.frameAtHostNs(msg.hostTimeNs) - inputOffsetProj
+
+    `frameAtHostNs` already answers "the frame being HEARD", so there is no
+    separate output-latency term here - design D6's derivation, that the
+    performer plays to what they hear. `inputOffsetProj` is the port's
+    `midi/inputOffsetMs` and its sign is the app-wide one: POSITIVE = EARLIER.
+
+27. **The split between the two recorders is by TRACK INPUT, never by two
+    record buttons.** `SApplication::startRecording()` runs both: an armed track
+    whose `trackInput` is `midi:`/`keyboard` belongs to `SMidiRecorder`, every
+    other armed track to `SAudioRecorder` (`collectArmed` in each filters on
+    `hasMidiTrackInput()`, in opposite directions). Without that filter a
+    MIDI-armed track would be given an audio WAV sink and a growing audio clip
+    out of an input device it never asked for.
+
+    ORDER, and it is load-bearing: the MIDI recorder starts FIRST and does not
+    touch the transport; the audio recorder starts second and owns the transport
+    edge whenever it has a take of its own; only a MIDI-ONLY run starts the
+    transport from `startRecording` itself. Monitor AUTO is "input while stopped
+    OR RECORDING" (design D9), so `isRecordingActive()` has to be true before
+    the live plan is rebuilt by that edge - which is why the MIDI half sets its
+    `active_` before anything transport-shaped happens.
+
+    At the stop the MIDI recorder commits FIRST, while the transport is still
+    running: its anchor is only valid while the RT thread is publishing.
+
+28. **The recorder's ring is a SECOND consumer of the fan-out, and the live
+    lane's is untouched.** `SMidiInputHub::recorderSink(port)` mints one sink
+    per PORT and keeps it for the process (design D8: the device thread writes
+    one ring per consumer, so SPSC stays SPSC). Two armed tracks on one port
+    SHARE that sink, because a ring has exactly one consumer; the per-track
+    channel filter is applied when the buffer is read, not when it is filled.
+    At a record start the ring is DRAINED, never `clear()`ed - `clear()` is only
+    safe while the producer is known to be idle, and a performer's finger is not.
+    A retrospective `place-retro-midi` (design D8) would keep what was drained;
+    it is not implemented.
+
+29. **Loop passes are ARITHMETIC on wrap-counted frames**, exactly as they are
+    for audio: `floor((f - loopIn) / loopLen)`, never wrap detection, because a
+    20 ms poll cannot see a wrap between two ticks. The tick folds
+    `iteration * cycleLength` into the clock's anchor so every frame the
+    recorder computes is unwrapped and monotone. **Every pass is PLACED AT THE
+    LOOP START** - `passStart(pass)` is unbounded (pass 2 of a 2 s cycle starts
+    at 192000) and placing there would put pass 2 three loops to the right
+    instead of stacking a take on pass 1's column.
+
+30. **A note still held at the stop is CLOSED at the stop frame, and a note
+    whose mapping lands before its pass is CLAMPED into it, never dropped.** A
+    recording with an unterminated note is not a recording; and being early is
+    the NORMAL case for the first messages of a take begun from a stopped
+    transport, exactly as being late is the normal case for a live event
+    (`twLiveEventSource`). Both are counted (`clampedNotes()`), not silent.
+
+31. **ALL-NOTES-OFF ON STOP IS NOT SENT FROM THE RECORDER.** Closing the held
+    notes in the RECORDING is its half. The sounding half already has two
+    owners: `SMidiOutPump::stop()` panics every MIDI-out port its run used, and
+    L2's `detachLiveEvents` flushes the live source's held-note table at disarm.
+    A third flush would be a duplicate all-notes-off on the user's hardware, and
+    the recorder is not the thing holding those notes.

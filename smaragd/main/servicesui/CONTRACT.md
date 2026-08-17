@@ -67,3 +67,16 @@ Known debt: the MIDI page cannot EDIT the `midi/portId/<name>` mapping — it li
 Known debt: render extent enum duplicated between dialog and params. The log
 page's "write a rotating log file" setting only takes effect on restart —
 starting/stopping the writer mid-session was not worth the complexity.
+
+`SOpt` gained `midi/recordMode` (new-take | overdub | replace) and
+`midi/recordQuantize` (off | 1/4 | 1/8 | 1/16 | 1/8t | ...) for proposal 21
+L4. Both are GLOBAL and per-user, not per track: "how does a recorded pass
+combine with what is already there" and "quantise the input" are properties
+of how this person works, and every reference DAW puts them in one place
+beside the transport. `SMidiRecorder` reads both ONCE at each record start,
+so a change made during a take cannot make the commit disagree with the
+capture. The defaults are the two that cannot destroy anything: new-take
+(the previous performance is still take 0) and off (a performance nobody
+asked to have quantised arrives as played). **Known debt: neither has a UI
+control yet** - the Options MIDI page does not show them, and a headless
+case reaches them through `set-option`.

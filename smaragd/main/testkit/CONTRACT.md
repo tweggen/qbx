@@ -521,3 +521,39 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     means both - but a case measuring what an instrument SOUNDS must not also
     be editing the project under the measurement, so the verb keeps them apart.
     `key="-1"` with `release` lets go of everything.
+
+18. **`assert-midi-recorded` asserts SHAPE, not placement** (proposal 21 L4).
+    Where a recorded note landed is `assert-midi-events`' job, over the clip's
+    own frame-domain snapshot, per note, with a tolerance — a far better
+    instrument than a second one that would have to re-derive the same domain.
+    What this verb checks is how many event columns the lane holds, how many
+    takes are on the first of them, and — from `SMidiRecorder` itself — how many
+    passes, notes and non-note events were committed, in which mode and under
+    which quantise grid.
+
+    Reading BOTH sides is the point. A recorder that reports three passes while
+    the lane holds one take is exactly the failure "one take per pass" is a
+    claim about, and neither number alone can see it — so the verb asserts that
+    identity UNCONDITIONALLY whenever more than one pass was committed, as
+    `assert-recorded-clip` does for audio.
+
+19. **A MIDI pass COUNT is wall-clock, a NOTE count is not.** How many cycle
+    passes a take produces is elapsed time over loop length, so a loop case
+    asserts `minPasses` / `minTakes`. How many notes arrived is a property of
+    the performance being replayed, so `notes` can be exact. The same split
+    `assert-recorded-clip` documents, for the same reason.
+
+20. **`midi-in-replay` WITHOUT `startFrame` exercises the RETROSPECTIVE
+    mapping.** It begins the instant the take does — while the readahead is
+    still priming and the RT thread has published nothing — so the recorder
+    buffers the host times and maps them at the stop, backwards through whatever
+    anchor exists by then (design D6). Notes whose mapping lands before the pass
+    are CLAMPED into it, so a case in that shape asserts COUNTS.
+
+    WITH `startFrame` the performance is held until the playhead is running and
+    the placement becomes a closed form — with a SYSTEMATIC OFFSET that is the
+    conversion working rather than an error: `startFrame` waits on the PUBLISHED
+    locator while the recorder maps to the frame being HEARD, and the published
+    position leads the heard one by one device buffer plus the output latency.
+    Measured on the capture backend: **-1025 frames**, inside
+    `midi_record_placement`'s 4096 band.

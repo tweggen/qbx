@@ -241,3 +241,17 @@ file", so every existing call and script is unchanged). They place a SUB-RANGE,
 which is what makes LOOP RECORDING one call per pass with no new machinery: all
 passes go at the loop start, and this verb's own planner turns pass 2 onto pass
 1's column as a take.
+
+`STakeStack` gained the rest of the generic take-column seam (proposal 21 L4):
+`windowTakeCount` / `activeWindowTakeIndex` / `insertWindowTake` /
+`removeWindowTake` / `setActiveWindowTake`, and `stakehelpers.cpp` registers
+`wrapCutLinkIntoStack` / `collapseSingleTakeStack` with
+`SClipWindow::registerTakeColumnFactory` from a static initializer. Every
+override is a ONE-LINE FORWARDER — the stack has been window-typed since
+proposal 37 D8b and both helpers already took an `SClipWindow` — and none of it
+changes behaviour here. It exists so `objects/midi`, which sits at THIS SLICE's
+rank and must not depend on it, can build a column of EVENT takes
+(`add-midi-take`). The homogeneity rule is what keeps that safe: `insertTake`
+still refuses a window whose `contentKind()` differs from the takes already in
+the column, so no column can end up playing audio or notes depending on which
+lane is active.
