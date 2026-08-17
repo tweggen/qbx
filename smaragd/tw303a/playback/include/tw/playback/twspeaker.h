@@ -147,13 +147,20 @@ private:
     // cannot discover.
     std::atomic<int> monitorWidthLogged_{0};
 
-    // DIAGNOSTIC (temporary, 2026-08-17): the OUTPUT twin of the recorder's
+    // DIAGNOSTIC, and a PERMANENT one — the OUTPUT twin of the recorder's
     // effective-capture-rate check. The render callback counts the frames the
     // device actually consumes; stopOutput divides by wall clock. If that comes
     // out ~44100 while openDevice reported 48000, the device is draining slower
-    // than we assume and 48 k content plays ~8.8 % slow and 1.47 semitones flat
-    // -- which is the reported symptom, and which no existing log can see,
-    // because every rate diag is emitted BEFORE the other stream exists.
+    // than we assume and 48 k content plays ~8.8 % slow and 1.47 semitones flat.
+    // No other log can see it: every `rate diag` line is emitted BEFORE the
+    // other stream exists, so a mismatch introduced by the second stream
+    // opening is invisible to all of them.
+    //
+    // It is kept rather than removed with the investigation that prompted it
+    // (2026-08-17) because the capture-side twin has already earned its keep
+    // twice, it costs ONE relaxed atomic add per callback and one log line per
+    // stop, and the failure it detects is otherwise reported by users as
+    // "everything sounds slightly wrong" with nothing in the log to confirm it.
     // Counter is bumped on the AUDIO thread (relaxed atomic, nothing else);
     // both timestamps are taken on the control thread.
     std::atomic<std::uint64_t> outFramesDelivered_{0};

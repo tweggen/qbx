@@ -177,7 +177,7 @@ void STrackDetailPanel::onVolumeSliderMoved(int sliderValue)
     } else {
         currentTrack_->setVolume(dB);
         if (SProject *p = SApplication::app().getCurrentProject())
-            p->notifyArrangementChanged( "detail.volumeDirect" );
+            p->notifyArrangementChanged();
     }
 }
 

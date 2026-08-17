@@ -807,7 +807,7 @@ void SApplication::startRecording(const audio::RecordingParams &params)
             setGlobalLocatorPosRealtime((offset_t) pos);
     };
 
-    // DIAGNOSTIC (temporary, 2026-08-17): which physical devices are involved.
+    // DIAGNOSTIC: which physical devices are involved.
     // The evidence so far says whichever stream opens SECOND perturbs the one
     // already open (a take where the input opened first came out 8.6 % fast; a
     // take where the output opened first played slow), and the first thing that

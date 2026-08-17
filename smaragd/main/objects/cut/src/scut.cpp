@@ -542,15 +542,8 @@ void SCut::buildCapture_()
     everHadCapture_.store( true );
 }
 
-void SCut::invalidateCapture( const char *reason )
+void SCut::invalidateCapture()
 {
-    // DIAGNOSTIC (temporary, 2026-08-17) — see the header. `everHad` says
-    // whether this cut is one of the ones onArrangementChanged() acts on, so a
-    // storm can be attributed to the right population of clips.
-    TW_LOGD( "cut", "[INVCAP] obj=%p reason=%s everHadCapture=%d",
-             (void*)this, reason ? reason : "?",
-             everHadCapture_.load() ? 1 : 0 );
-
     // Drop the cached render (async model).
     // Use reset() not delete: the shared_ptr releases SCut's reference, but readers
     // (audio thread) may still hold references via currentPage().
@@ -892,7 +885,7 @@ void SCut::setStartOffset( offset_t off )
         buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
         dur = cutDuration_.frames();
     }
-    invalidateCapture( "setStartOffset" );  // Window change requires new capture (formal guidelines)
+    invalidateCapture();  // Window change requires new capture (formal guidelines)
     invalidateRenderPathForSlip( dur );
 }
 
@@ -905,7 +898,7 @@ void SCut::setSrcStart( const Fraction &srcStart )
         buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
         dur = cutDuration_.frames();
     }
-    invalidateCapture( "setSrcStart" );  // Window change requires new capture (formal guidelines)
+    invalidateCapture();  // Window change requires new capture (formal guidelines)
     invalidateRenderPathForSlip( dur );
 }
 
@@ -916,7 +909,7 @@ void SCut::setDuration( length_t dur )
         cutDuration_ = ClipLen( dur );
         buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
     }
-    invalidateCapture( "setDuration" );  // Invalidate UI data; twView decides if revalidation needed
+    invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
     emit durationChanged( dur );
 }
@@ -932,7 +925,7 @@ void SCut::setLoopStart( offset_t s )
     }
     // Was the odd one out: it published nothing at all, not even the capture,
     // so it now follows its siblings exactly.
-    invalidateCapture( "setLoopStart" );
+    invalidateCapture();
     invalidateRenderPathForSlip( dur );
 }
 
@@ -1000,7 +993,7 @@ void SCut::setLoopLength( length_t l )
         dur = cutDuration_.frames();
         buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
     }
-    invalidateCapture( "setLoopLength" );  // Invalidate UI data; twView decides if revalidation needed
+    invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
     emit durationChanged( dur );
 }
@@ -1016,7 +1009,7 @@ void SCut::setWindow( const Fraction &srcStart, ClipLen duration,
         grainParams_.stretch = stretch;
         buildSnapshot_nolock();   // keep the try-lock fallback current (P19)
     }
-    invalidateCapture( "setWindow" );  // Invalidate UI data; twView decides if revalidation needed
+    invalidateCapture();  // Invalidate UI data; twView decides if revalidation needed
     // Reader rebuild deferred to ensureReader() on playback access (demand-driven)
     emit durationChanged( duration.frames() );
 }
@@ -1031,7 +1024,7 @@ void SCut::setWarpAnchors( const std::vector<twWarpAnchor> &anchors )
         grainParams_.warpAnchors = twWarpMap::sanitize( anchors );
         buildSnapshot_nolock();
     }
-    invalidateCapture( "setWarpAnchors" );
+    invalidateCapture();
     emit durationChanged( getDurationBlocking() );
 }
 
@@ -1088,7 +1081,7 @@ void SCut::setGrainParams( const twGrainParams &p )
     // stretch/pitch edit leaves the WAVEFORM PREVIEW drawing the previous
     // transform forever (playback is unaffected: it builds its own grain over
     // the raw source below). setWindow() invalidates for the same reason.
-    invalidateCapture( "setGrainParams" );
+    invalidateCapture();
 
     rebuildReader( snap );   // pre-build off the audio thread (caller is the UI thread)
     emit durationChanged( snap.cutDuration.frames() );
@@ -1258,7 +1251,7 @@ void SCut::onArrangementChanged()
     // action — an invalidation storm that stalled offline renders (the
     // workers=8 takes_group_broadcast hang).
     if( !everHadCapture_.load() ) return;
-    invalidateCapture( "arrangementChanged" );
+    invalidateCapture();
 }
 
 int SCut::serializeSelfAttributes( QTextStream &o )
@@ -1535,7 +1528,7 @@ void SCut::processWindowParamEvents()
 
     // Call invalidateCapture and rebuildReader outside the lock
     if( needsCaptureBuild ) {
-        invalidateCapture( "processWindowParamEvents" );
+        invalidateCapture();
     }
     if( needsReaderBuild ) {
         rebuildReader( snap );
@@ -1607,13 +1600,11 @@ std::shared_ptr<CapturePageData> SCut::getCapture(uint32_t aspectsMask)
 
     // If current page has all needed aspects, return immediately
     // Acquire page lock to safely read validAspects (prevents torn reads during concurrent writes)
-    uint32_t haveBits = 0;   // diagnostic only; read under the page lock below
     if (page) {
         std::lock_guard<std::mutex> pageLock(page->pageMutex);
         if ((page->validAspects & aspectsMask) == aspectsMask) {
             return page;
         }
-        haveBits = page->validAspects;
     }
 
     // Page missing aspects: unconditionally schedule revalidation.
@@ -1623,17 +1614,6 @@ std::shared_ptr<CapturePageData> SCut::getCapture(uint32_t aspectsMask)
     int priority = 5;  // Default: Metadata
     if (aspectsMask & Playback) priority = 10;
     if (aspectsMask & Preview)  priority = 1;
-
-    // DIAGNOSTIC (temporary, 2026-08-17): the DEMAND half of a repeating
-    // recompute. `have` is what the page in hand carries; a page that is
-    // repeatedly non-null while still missing the wanted bit says the recompute
-    // is being clobbered rather than never landing -- note that a job publishes
-    // a FRESH page carrying only the aspects IT computed, so two different
-    // masks on one cut overwrite each other.
-    TW_LOGD( "cut", "[CAPMISS] obj=%p want=0x%x have=%s0x%x",
-             (void*)this, (unsigned)aspectsMask,
-             page ? "" : "(nopage)", (unsigned)haveBits );
-
     revalidator_->scheduleRevalidation(this, aspectsMask, priority);
 
     // Return current page anyway (stale is OK; better than null/dropout)

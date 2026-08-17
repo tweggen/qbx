@@ -1006,13 +1006,62 @@ Files written as WAV (PCM, lossless) in project directory:
   the device.
 - **Bit depth:** Float32 (internal engine format)
 
+### THE ENDPOINT SAMPLE-RATE TRAP (found the hard way, 2026-08-17)
+
+**Read this before debugging any "the recording is pitched / playback is too
+slow" report.** It is not the engine, and no `rate diag` line will show it.
+
+On Windows the sample rate is a **per-ENDPOINT** setting, and an interface's
+capture and render endpoints can be set to *different* rates while sharing **one
+hardware clock**. The OS then has to resample one side — and it **misreports
+that side's clock**. Measured on a Tascam US-16x08 with capture at 44100 and
+render at 48000: we ask for 48000 on capture with
+`AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`, Windows upconverts 44.1→48 a stream that
+is *already* advancing at 48 k real frames per second, and hands us
+
+```
+48000 × (48000 / 44100) = 52 244.9 Hz     (measured 52 144.1 Hz)
+```
+
+under a 48000 label. The take is 8.6 % long and plays **1.47 semitones flat**.
+Open the two streams in the other order and the *render* side takes the hit
+instead, so monitoring plays slow while the capture measures clean — which is
+why the symptom appears to alternate between takes.
+
+**Nothing downstream can correct it**: our own resampler would convert from the
+same false number. The two paths are also deliberately asymmetric and it is
+worth knowing which is which — the **input** overwrites `nSamplesPerSec` and
+forces its rate with AUTOCONVERTPCM (`wasapi_input.cc`), while the **output**
+adopts the endpoint's mix format verbatim and logs "the speaker will resample"
+(`wasapi_backend.cc`). Only one of them asks.
+
+So the app **surfaces** the condition instead of hiding it:
+
+| Where | What |
+|---|---|
+| Options → Audio | both combos show the endpoint's mix rate — `Lautsprecher (US-16x08) — 48000 Hz`. A mismatch is visible at the point of choice |
+| Starting a recording | a warning naming both devices, both rates and the project rate, **once per session** |
+| End of a take | `capture-rate check` escalates from debug to a **warning** past 1 % over a ≥2 s run, converting the ratio to semitones |
+| End of playback | `output-rate check` — the OUTPUT twin, reporting `SINCE START` / `PRIMING` / `SINCE DEVICE START`. The last of those is the device clock alone; ~1.0 exonerates the device |
+
+**Reading `output-rate check`:** the priming wait sits inside the `SINCE START`
+window by design, so a short run reads low even on a healthy device (measured
+baseline on the capture backend: 0.9470 over 1.081 s, 0.9925 over 6.878 s, with
+`SINCE DEVICE START` at 1.0176 and 1.0014). Compare like-for-like durations and
+prefer long takes: priming shrinks with length, a real rate error does not.
+
+**ASIO would remove this whole failure class** — one driver, one clock, matched
+in/out — and `asio_driver_list.cc` is already in the tree. It is a proposal, not
+a patch.
+
 ### Known Limitations & Future Work
 
 1. **CoreAudio input:** Currently placeholder (read returns silence). Full HAL callback integration pending.
-2. **Device enumeration:** Only "System default" shown in UI; full platform-specific enumeration deferred to Phase 7b.
+2. **Monitor priming lag:** `twSpeaker` defers the device start until the readahead is primed. Measured at **~2.3 s** on a real project (baseline on the capture backend: 0.06–0.13 s), during which the transport is running and nothing is audible. Recording no longer *mis-times* because of it (the playhead follows the audible position and a take is placed earlier by the measured priming — `tw/record/CONTRACT.md` inv. 1), but two seconds is still a long wait after pressing record. Unlike the endpoint-rate trap above, this one is ours.
 3. **Hardware monitoring:** Recording pulls from input device only (no synth-to-recording path). Plugin support on input planned for future phase.
 4. **Multi-input:** One WAV per input device; multiple inputs with separate files not yet supported.
 5. **Latency control:** Fixed at device default; no user-facing buffer sizing.
+6. **No headless coverage at all.** Nothing in the qxa suite records anything, and every device path needs real endpoints. Every recording change to date has been hand-verified only — say so in the PR rather than letting a green suite imply otherwise.
 
 ## Plugin Hosting (proposal 08 — M0..M8 executed; VST3 landed 2026-07-29)
 
