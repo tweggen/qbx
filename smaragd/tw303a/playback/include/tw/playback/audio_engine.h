@@ -178,6 +178,23 @@ public:
     // keeps the legacy synchronous requestPage pull.
     void setScheduler(CaptureRevalidator *scheduler) { scheduler_ = scheduler; }
 
+    /**
+     * The content epoch of the ROOT PAGE the last pull actually served, or 0
+     * when it served none (a miss, or the engine is not PLAYING).
+     *
+     * Added by proposal 21 L1a for the EPOCH-GATED FLIP (design D2). The RT
+     * callback sums a live-lane ring entry onto the root page only once that
+     * page is at least as new as the arm's `flipEpoch` — because a stale root
+     * page STILL CONTAINS the newly armed track's audio and summing would
+     * double it. The RT already holds the page; this is simply the number it
+     * is holding, published so the sum can be a pure function of it rather
+     * than a second lookup.
+     *
+     * Lock-free; written by the pull thread, read by the same one.
+     */
+    std::uint64_t servedContentEpoch() const
+    { return servedEpoch_.load( std::memory_order_relaxed ); }
+
 private:
     std::shared_ptr<twComponent> synthOutput_;
     uint32_t engineSampleRate_;  // The engine's native sample rate
@@ -232,6 +249,8 @@ private:
     // from desiredPos — no caller may carry the cursor across a position jump.
 
     void updateFrozenPage(uint64_t desiredPos);
+    // The content epoch of the page updateFrozenPage() ended up holding, or 0.
+    std::atomic<uint64_t> servedEpoch_{0};
     // Read-ahead thread: pre-computes pages to keep ahead of playhead
     std::thread readaheadThread_;
     std::atomic<bool> readaheadRunning_{false};
