@@ -95,6 +95,7 @@ tw_module(sources
         sources/include/tw/sources/twresampledsource.h
         sources/include/tw/sources/twresampler.h
         sources/include/tw/sources/twcapturingsource.h
+        sources/include/tw/sources/twgrowingcapturesource.h
         sources/include/tw/sources/twloopreader.h
         sources/include/tw/sources/twgrainsource.h
         sources/include/tw/sources/twgrainparams.h
@@ -106,6 +107,7 @@ tw_module(sources
         sources/src/twresampledsource.cc
         sources/src/twresampler.cc
         sources/src/twcapturingsource.cc
+        sources/src/twgrowingcapturesource.cc
         sources/src/twloopreader.cc
         sources/src/twgrainsource.cc
         sources/src/twpagedvocoder.cc
