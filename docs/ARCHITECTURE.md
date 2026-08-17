@@ -44,7 +44,7 @@ it has no place in the dataflow DAG at all — and it must stay core-only becaus
 | tw/sinks | file writers (WAV/OGG/MP3), frame sinks | tw303a/sinks/CONTRACT.md |
 | tw/playback | speaker, audio engine, readahead | tw303a/playback/CONTRACT.md |
 | tw/render | **the rendering engine** (offline) | tw303a/render/CONTRACT.md |
-| tw/record | recording session | tw303a/record/CONTRACT.md |
+| tw/record | capture bridge (one input pump, three sinks) + recording session | tw303a/record/CONTRACT.md |
 | tw/schedule | async revalidation (IRevalidatable) | tw303a/schedule/CONTRACT.md |
 | tw/analysis | WAV metrics for tests | tw303a/analysis/CONTRACT.md |
 | tw/sidecar | derived-data QAF container + LRU store | tw303a/sidecar/CONTRACT.md |

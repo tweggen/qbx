@@ -566,7 +566,9 @@ tw_module(render
 # --- E11 record: capture from input devices -----------------------------------
 tw_module(record
     SOURCES
+        record/include/tw/record/capture_bridge.h
         record/include/tw/record/recording_session.h
+        record/src/capture_bridge.cc
         record/src/recording_session.cc
     DEPS tw_core tw_devices tw_sinks tw_sources
 )
