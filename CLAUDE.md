@@ -987,9 +987,23 @@ Smaragd supports recording from input devices (microphone, line-in, etc.) via **
 ### Recorded File Format
 
 Files written as WAV (PCM, lossless) in project directory:
-- **Filename:** `YYYYMMDD_HHMMSS_mmm_input0.wav` (timestamp with millisecond precision)
+- **Filename:** `YYYYMMDD_HHMMSS_mmm_<trackName>.wav` (timestamp with millisecond
+  precision, then the armed track's name — `recording_session.cc:275-281`). That
+  timestamp prefix is what the resources dock's **Cleanup...** dialog matches on.
 - **Sample rate:** Matches project rate
-- **Channels:** Stereo (or project channel count)
+- **Channels:** **The armed track's input-channel selection**, NOT the project's
+  width — `SObject::recordingChannels_`, a bitmask, filtered out of the input
+  device's own capture width by `filterChannels()`. This entry used to claim
+  "stereo (or project channel count)" and that was never true (see
+  `plan/todo/RECORDING_CHANNEL_COUNT.md`): the mask defaults to `0` = *all*
+  channels, so on a 16-input interface every recording was a 16-channel file
+  with the signal in channel 0 and dither in 1..15 — inaudible before proposal
+  36, a dead right speaker after it. **The default is now bit 0, the first input
+  alone** (`SObject::DEFAULT_RECORDING_CHANNELS`), and the mask is serialized
+  (`recordingChannels='…'`, written only when it differs from the default) so an
+  explicit "All Channels" choice survives a save. `params.channels` on
+  `RecordingParams` is still read nowhere — the width comes from the mask and
+  the device.
 - **Bit depth:** Float32 (internal engine format)
 
 ### Known Limitations & Future Work

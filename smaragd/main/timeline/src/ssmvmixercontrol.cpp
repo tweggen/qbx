@@ -51,6 +51,10 @@
 #include <QUndoStack>
 #include <QPair>
 
+// Defined next to setRecordingChannels(); declared here because the ctor seeds
+// the ARM tooltip from the track's current mask.
+static QString armTooltipFor( uint32_t channels );
+
 // The fader mapping now lives in app/timeline/sfadercurve.h, because the Track
 // Detail dock drives the same track volume and has to agree with this one.
 // Local aliases keep the call sites below unchanged.
@@ -673,6 +677,7 @@ SSMVMixerControl::SSMVMixerControl(
     qMute_->setChecked( tk_.isMuted() );
     qSolo_->setChecked( tk_.isSolo() );
     qArm_->setChecked( tk_.isArmedForRecording() );
+    qArm_->setToolTip( armTooltipFor( tk_.getRecordingChannels() ) );
     qTakes_->setChecked( smv_.isTrackTakesExpanded( &tk_ ) );
     qGroup_->setChecked( tk_.getEditGroup() != 0 );
     refreshAutomationButton();
@@ -790,8 +795,14 @@ void SSMVMixerControl::showChannelMenu()
                 // "All" mode: switch to single channel
                 channels = (1U << ch);
             } else {
-                // Toggle this channel
-                channels ^= (1U << ch);
+                // Toggle this channel. Un-checking the LAST one would land on
+                // mask 0, which does not mean "record nothing" — it means
+                // "record every input the interface has". Refuse instead:
+                // "All Channels" is its own menu entry and has to be chosen
+                // deliberately.
+                uint32_t toggled = channels ^ (1U << ch);
+                if( toggled == 0 ) return;
+                channels = toggled;
             }
             setRecordingChannels( channels );
         });
@@ -815,25 +826,36 @@ void SSMVMixerControl::showChannelMenu()
     menu.exec( QCursor::pos() );
 }
 
+// The ARM tooltip is the only place the input-channel selection is visible
+// without opening the right-click menu, so it is built from the mask in ONE
+// place and shown from the start — the default is no longer "all channels",
+// and a user who never opens that menu still has to be able to see which
+// input is being recorded.
+static QString armTooltipFor( uint32_t channels )
+{
+    QString tooltip = "Arm for Recording\n(Right-click to select input channels)";
+    if( channels == 0 ) {
+        tooltip += "\nSelected: All Channels";
+        return tooltip;
+    }
+    QString channelStr;
+    for( uint32_t ch = 0; ch < 32; ++ch ) {
+        if( channels & (1U << ch) ) {
+            if( !channelStr.isEmpty() ) channelStr += ", ";
+            channelStr += QString::number( ch + 1 );
+        }
+    }
+    tooltip += QString( "\nSelected: %1" ).arg( channelStr );
+    return tooltip;
+}
+
 void SSMVMixerControl::setRecordingChannels( uint32_t channels )
 {
     // Like ARM itself, this follows the selection: picking the input channels
     // for one armed lane out of several selected ones is never what was meant.
     for( STrack *t : toggleTargets() ) t->setRecordingChannels( channels );
 
-    // Update the ARM button tooltip to show selected channels
-    QString tooltip = "Arm for Recording\n(Right-click to select input channels)";
-    if( channels != 0 ) {
-        QString channelStr;
-        for( uint32_t ch = 0; ch < 32; ++ch ) {
-            if( channels & (1U << ch) ) {
-                if( !channelStr.isEmpty() ) channelStr += ", ";
-                channelStr += QString::number( ch + 1 );
-            }
-        }
-        tooltip += QString( "\nSelected: %1" ).arg( channelStr );
-    }
-    qArm_->setToolTip( tooltip );
+    qArm_->setToolTip( armTooltipFor( channels ) );
 }
 
 // Highlight follows the selection SET, not just the primary: with several
