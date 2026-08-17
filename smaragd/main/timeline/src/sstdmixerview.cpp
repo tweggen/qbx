@@ -721,7 +721,25 @@ void SMVActualView::ctGlobalShow()
         qGlobalPopup_->addAction( "Delete sample", &smv_, SLOT( ctDeleteSample() ) );
         qGlobalPopup_->addSeparator();
     }
-    qGlobalPopup_->addAction( smv_.actNewTrack_ );
+    // "New track" from THIS menu goes below the lane the menu was opened on —
+    // the menu is aimed at a position, and every other track item in it acts
+    // there. So it is built per show against lastClickTrack_ rather than
+    // reusing smv_.actNewTrack_, whose Ctrl+T path has no click to aim at and
+    // follows the selection instead. Built fresh each time like the other
+    // per-click items above; qGlobalPopup_->clear() owns and deletes it.
+    {
+        QAction *aNew = qGlobalPopup_->addAction( smv_.actNewTrack_->text() );
+        // Display only. WidgetShortcut binds it to the menu, which has focus
+        // only while it is up, so it can never go ambiguous with the view's
+        // window-level Ctrl+T.
+        aNew->setShortcut( smv_.actNewTrack_->shortcut() );
+        aNew->setShortcutContext( Qt::WidgetShortcut );
+        // By QPointer: the lane could in principle be gone by the time the
+        // action fires, and a dead reference just means "append".
+        const QPointer<STrack> ref( lastClickTrack_ );
+        QObject::connect( aNew, &QAction::triggered, this,
+                          [this, ref]() { smv_.addTrackBelow_( ref.data() ); } );
+    }
     if( lastClickTrack_ ) {
         // How many tracks the track items below will actually act on. The menu
         // says so out loud: an item that silently hits four lanes when the
@@ -917,33 +935,28 @@ void SStdMixerView::ctAddTrack()
     // Route through the action: undoable, and it rewires the speaker so the new
     // track is audible (the old direct insertTrack did neither).
     //
-    // The new track lands BELOW the lane the gesture names, not at the bottom
-    // of the arrangement. This menu is opened AT a position — on a head or on a
-    // lane — and every other track item in it acts there, so "New track"
-    // appending twenty lanes away was the odd one out; on a long arrangement it
-    // also put the new track off screen.
+    // The new track lands BELOW a reference lane, not at the bottom of the
+    // arrangement; on a long arrangement the append also put it off screen.
+    //
+    // THIS entry point is the Ctrl+T shortcut, which names no click, so the
+    // reference is the selection. The context menu does NOT come through here:
+    // it is aimed at a position and builds its own item against the lane it was
+    // opened on (see SMVActualView::ctGlobalShow).
     addTrackBelow_( newTrackReference_() );
 }
 
 STrack *SStdMixerView::newTrackReference_() const
 {
     if( !model_ ) return nullptr;
-    // The SELECTION is the reference, and within it the LAST lane by position —
-    // so "New track" after selecting a block lands under the block rather than
-    // under whichever member happened to be clicked.
-    //
-    // Deliberately the selection rather than lastClickTrack_, even though the
-    // rest of this menu goes through selectionTargets(): showTrackContextMenu()
-    // selects the lane it pops on before showing the menu, so for a menu
-    // gesture the two agree anyway — and the selection is the only one of the
-    // two that stays current. add-track SELECTS the track it just made, so
-    // repeated Ctrl+T walks downwards; keyed off a click that may be many
-    // gestures old, every new lane would pile into the same slot instead, in
-    // reverse order.
+    // The LAST selected lane by position, so Ctrl+T after selecting a block
+    // lands under the block rather than under whichever member was clicked.
+    // add-track SELECTS the track it just made, so repeated Ctrl+T walks
+    // downwards; keyed off a click that may be many gestures old, every new
+    // lane would pile into the same slot instead, in reverse order.
     const QList<STrack *> sel = orderByLane( model_->getSelectedTracks() );
     if( !sel.isEmpty() ) return sel.last();
-    // Nothing selected: fall back to the lane the menu was opened on. With
-    // neither there is nothing to be below, and the caller appends.
+    // Nothing selected: fall back to the last lane the user aimed at. With
+    // neither there is nothing to be below, and addTrackBelow_ appends.
     if( qContent_ ) return qContent_->getLastClickTrack();
     return nullptr;
 }

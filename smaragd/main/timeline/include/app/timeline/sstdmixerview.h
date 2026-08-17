@@ -617,11 +617,10 @@ public:
     // Sort `in` by lane position. Order decides insertion slots, so every
     // multi-track operation sequences by it rather than by click order.
     QList<STrack *> orderByLane( const QList<STrack *> &in ) const;
-    // The lane a position-related "new track" gesture is relative to: the LAST
-    // by lane position of the tracks the gesture aims at (selectionTargets, the
-    // same rule the rest of the context menu follows), falling back to the
-    // selection for a keyboard invocation that names no click. NULL when there
-    // is nothing to be below.
+    // The lane Ctrl+T's new track goes below: the LAST selected one by lane
+    // position, falling back to the last lane the user aimed at. NULL when
+    // there is nothing to be below. The CONTEXT MENU does not use this — it
+    // aims at the lane it was opened on (SMVActualView::ctGlobalShow).
     STrack *newTrackReference_() const;
     // Insert a new track immediately BELOW `ref`, as its next sibling in the
     // same container. `ref == NULL` appends at the end of the arrangement,
