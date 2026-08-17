@@ -354,10 +354,24 @@ void SOptionsDialog::loadAudioPage()
     int i = audioDevice_->findData( cur );
     if( i >= 0 ) audioDevice_->setCurrentIndex( i );
 
-    // Load input devices
+    // Load input devices. The backend has been able to enumerate all along —
+    // AudioInput::listDevices() is part of the interface and WASAPIInput
+    // implements it — but nothing ever called it, so this combo offered
+    // "System default" and nothing else while the OUTPUT combo named real
+    // devices. That asymmetry is not cosmetic: with only "default" available
+    // the input cannot be pinned to the same interface the output is on, and
+    // the two streams can land on different endpoints (and different clocks).
     audioInputDevice_->clear();
     audioInputDevice_->addItem( "System default", "default" );
-    // TODO: Phase 7: enumerate input devices via AudioInput factory for this platform
+    {
+        std::unique_ptr<audio::AudioInput> in = audio::createAudioInput();
+        const std::vector<audio::AudioInputDeviceInfo> inDevs =
+            in ? in->listDevices() : std::vector<audio::AudioInputDeviceInfo>();
+        for( const audio::AudioInputDeviceInfo &d : inDevs ) {
+            audioInputDevice_->addItem( QString::fromStdString( d.name ),
+                                        QString::fromStdString( d.id ) );
+        }
+    }
     QString curIn = SSettings::instance().audioInputDeviceId();
     if( curIn.isEmpty() ) curIn = "default";
     int j = audioInputDevice_->findData( curIn );
