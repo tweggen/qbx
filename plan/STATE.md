@@ -12871,3 +12871,274 @@ frozen lane is PLAYING, and nothing reads `twLivePlan::masterLinear`. Unreachabl
 today (the master is a unity `twMixer` + identity `twRewire` by construction);
 whoever adds a master insert chain lands on the log line and the fix is a
 `twSpeaker` flag that pulls-and-discards the root while a Closure plan is live.
+
+## 2026-08-17 — Proposal 21 L2: live instruments (37 P8a)
+
+Branch `feat/21-l2-live-instruments`, from the L1b integration tip (`b7ea3bb`).
+A track's instrument can be PLAYED — from a MIDI port or the computer keyboard,
+through the live lane, merged with the sequenced feed while the transport runs,
+with MIDI-thru and the ownership protocol of design D4. This is proposal 37's
+P8a as re-derived by proposal 21. Design:
+`plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md` D2 / D4 / D8 / D9.
+
+### The engine half (`tw/devices` + one header in `tw/playback`)
+
+All of it new files or additive, and the only DAG change is one edge.
+
+- **`MidiInRing` / `MidiInFanout`** — the MIDI input device thread writes ONE
+  SPSC RING PER CONSUMER (design D8), never one queue everybody pops: the live
+  lane (one sink per consuming instrument), the recorder (L4's `recorderSink()`,
+  declared and unused), and thru. The sinks are OWNED by the fan-out for its
+  whole life and taken/returned by an atomic flag, because a consumer that
+  registered its own ring would have to unregister it and then prove the device
+  thread was not inside a `push()` on it — a lifetime problem with no lock-free
+  answer. Channel filtering (`midi:<port>:<ch>`) happens at the callback, so a
+  consumer's ring never fills with traffic it would throw away.
+- **`MidiOutScheduler::sendImmediate()`** — a SECOND, dedicated SPSC ring for
+  MIDI-THRU, drained FIRST in the sender loop and waking it at once.
+  `enqueue()` is single-producer and that producer is the app's main-thread
+  MIDI-out pump (devices inv. 11), so a device thread may not touch it; two
+  rings is what lets the two producers coexist with no lock on either path. It
+  is deliberately OUTSIDE `flush()`'s discard — a flush drops a queued FUTURE
+  and a thru byte is a key being pressed now — and it always sends with due
+  time 0, never handed to a driver queue even on a backend with timestamps.
+- **`KeyboardMidiInput`** — the computer keyboard as a real in-process
+  `MidiInput` (design D9). Named explicitly by `createMidiInput("keyboard")`
+  and deliberately NOT reachable through `SMARAGD_MIDI_BACKEND`: that variable
+  chooses the SYSTEM MIDI implementation and the computer keyboard exists
+  whatever it chooses, so it must neither replace the hardware backend nor be
+  replaced by it.
+- **`twLiveEventSource`** — the second event source of D2, as a `twEventSource`.
+  It drains its own sink INSIDE `collect()`, on the pump, inside
+  `twPluginSlotProcessor::render`; maps host time to a project frame through
+  `twLiveFrameClock` minus the input latency; rebases into the block; **clamps
+  a late event to offset 0 and never drops it**; defers an event mapped past
+  the block to the next collect, in order; and keeps the held-note table the
+  ONE chase at live start re-attacks and the all-notes-off flush empties. Every
+  vector is sized on the main thread, so the drain allocates nothing in the
+  steady state.
+- **`twLiveEventClock`** (tw/playback, header-only) — the one implementation of
+  that mapping: the engine clock while PLAYING
+  (`deliveredFrame + (T − hostNs)·rate`), the block being rendered while
+  STOPPED. The same conclusion, arrived at without pretending to a reading that
+  does not exist. Clamping-to-0 is the normal outcome either way, because the
+  pump renders ahead of the RT — which is exactly what makes the latency the
+  ring depth plus the lead rather than a whole extra block.
+
+**`devices` gains ONE DAG edge, to `events`.** A live event source IS a
+`twEventSource` and turns device bytes into the one `twEvent` this codebase
+has. `events` is core-only and outside the dataflow DAG, so this adds no page
+dependency; the alternative (`events → devices`) would break the leaf status
+`events` is deliberately kept at. `playback` already depended on both.
+
+### The app half (`main/shell`, `objects/track`, `eventui`, `servicesui`)
+
+`SLiveMonitor` grows the MIDI arm/disarm protocol beside the audio one it
+already owns — one monitor, not two.
+
+```
+ARM     retireComponentNodes(closure)
+        -> setLiveOwned(true)
+        -> attachLiveEvents          [setLiveEventSource on the CONSUMING proc]
+        -> wire the exclusion + invalidate per member
+        -> flipEpoch = root rewire contentEpochNow()
+        -> publish the plan -> requestReposition() + requestLiveChase()
+
+DISARM  detachLiveEvents             [requestAllNotesOff -> setLiveEventSource(0)
+                                      -> clearThru + scheduler panic()]
+        -> setLiveOwned(false)       [which forgets continuity]
+        -> un-wire + invalidate per member
+        -> flipEpochPrime -> the tail plan
+```
+
+Installing the source BEFORE ownership would let a freeze worker collect the
+ring; detaching it AFTER ownership would leave the flush nowhere to land
+(`setLiveOwned(false)` drops the source anyway). L1b's inv. 13 rule — ownership
+released before the re-wire — is unchanged.
+
+**WHICH processor is design D4's whole folder case.** `sliveplan::midiConsumerFor`
+walks the routing UP the way `STrack::eventFeed()` walks it down: a track that
+holds an instrument consumes the events, otherwise they go to the parent iff
+the track bubbles them up. So an armed CHILD of a folder drum machine is a MIDI
+SOURCE while the FOLDER is the live instrument and the thing that leaves the
+frozen sum — the child stays in it, because its own clips must keep playing. A
+MIDI track whose notes would reach NO instrument is deliberately not a source
+at all: excluding it would trade the arrangement for silence.
+
+`setLiveEventSource` is never a `setEventSource` swap and never a member of
+`eventFeed()` (D2): the feed is re-applied by `STrack::syncInstrumentSlot()`
+from adopt/insert/remove and would silently overwrite a live source, and it is
+ALSO read by `SMidiOutPump` and `assert-midi-events`, while a ring-draining
+`collect` has exactly one legal reader. The arrangement's feed is untouched.
+
+`SMidiInputHub` (new) owns the open input ports, one per portable NAME, kept
+for the process. Two reasons and the second is load-bearing: opening a MIDI
+device is not free, and `CaptureMidiInput::inject()` is a NO-OP on a closed
+port, so closing one on disarm would silently swallow a script's events between
+two phases of a case. Its enumeration probe is constructed FIRST so a listening
+port is always the newer `CaptureMidiInput::active()`. The keyboard port is
+opened EAGERLY: it is in-process, and the dock must be able to play it before
+any track is armed.
+
+The virtual keyboard now PLAYS as well as writes — `holdNote`/`releaseNote` on
+the keyboard port, released on key-up, mouse-up and focus-out. A mouse press
+does both, because a user pressing a key means both; the test verb can address
+them separately, because a case measuring what an instrument SOUNDS must not
+also be editing the project under the measurement. Options → MIDI lists the
+hub's ports (keyboard first) and OPENS what is selected.
+
+### Gates — every AC with its number
+
+`./build.sh`, `check_layering.py` clean, `check_logging.py` clean, goldens
+byte-identical (`git status smaragd/tests/goldens/` clean — a render suspends
+every live lane, so no live lane exists during one).
+
+- **AC1** `live_instrument_play`: armed instrument, transport STOPPED,
+  `trackInput=midi:capture:any`. Note-on → **onset lag 4544 frames = 94.67 ms**,
+  measured through `CaptureBackend::frameAtHostTime` (the AUDIO block log,
+  which shares no code with the pump), against AC1's ring-depth + 3 blocks =
+  7168 and the case's 12288 bound. Fundamental **261.648 Hz**, rms **0.556787**
+  against the closed form 0.556769. Note-off → **exactly 0**.
+- **AC2** `live_instrument_merge`: PLAYING, sequenced E4 (1–2 s) + injected C4
+  at 1.2 s, both at velocity 60 so the pair peaks at 0.945 and the 16-bit dump
+  cannot clip. Sequenced alone **0.334240 @ 329.591 Hz** against the closed
+  form 0.334066 at 329.628 — 0.05 % and 0.04 Hz; the PAIR **0.472966**
+  against the two-tone closed form 0.472441 (which excludes either note alone
+  by √2); the live note alone after the sequenced one ends **0.333745 @
+  261.656 Hz**. The sequenced note is not restarted: longest gap **9 frames**,
+  largest step **0.0366** across 1–2 s. STOPPED with the locator inside the
+  sequenced note: **exactly 0** — the feed mask.
+- **AC3** `live_instrument_disarm_playback`: two playback runs of the same
+  four-note project, one plain and one armed at ~0.2 s and disarmed at 2.4 s.
+  From 2.5 s on they agree by per-second RMS and fundamental: G4 **0.556780 @
+  391.945 Hz** on BOTH files, A4 **0.556776 @ 439.949 Hz** on both. The FROZEN
+  lane is clean to **exactly 0.040405** — the closed-form maximum step of a
+  391.995 Hz sine at amplitude 0.7874, to six figures — with a gap of 1 frame.
+  Across the flip the dropout is bounded at ONE DEVICE BLOCK, which is all
+  design D2's silence-on-miss can offer (see the second flake below). The flip
+  itself costs ONE
+  step of **0.319–0.341** and the step is deliberately unbounded in that window
+  — a stateful GENERATOR handed back is two DSP streams, not one
+  (`setLiveOwned(false)` clears the continuity precisely because "the two
+  owners render different position streams", D4), so the two renderings of the
+  same held note agree in frequency and level but not in accumulated phase.
+  A render taken after the whole live session is **byte-identical** to one
+  taken before it (768 044 bytes).
+- **AC4** `live_instrument_ownership`: `assert-meter` is a demand that is not a
+  graph node — it freezes a component DIRECTLY — so it reaches the chain even
+  though the exclusion nulled the track's plug at the MIXER.
+  **liveOwnedRefusals 2** while armed and **still 2** at exit; the probed page
+  reads **exactly 0** while armed and **0.5568** after the hand-back; the live
+  tone measures **0.556932 @ 391.976 Hz** right through the refused freeze.
+  `assert-render-policy` grew `minLiveOwnedRefusals` for this: "at most 0" and
+  "at least 1" are different claims.
+- **AC5** `live_instrument_thru`: `midiOutPort=capture`, injected notes on the
+  capture MIDI OUT after **0.125 ms** (note-on) and **0.011 ms** (note-off),
+  against design D8's 2 ms budget for one sender wake and AC5's 5 ms bound.
+  Host time to host time, no frame mapping anywhere in it. Disarm panics the
+  port (16 all-notes-off) and thru goes off — an injection afterwards reaches
+  the wire not at all.
+- **AC6** `live_instrument_keyboard`: `trackInput=keyboard`, `virtual-key
+  hold` → **0.556750 @ 261.585 Hz**, the live source reports `held=1`;
+  `release` → **exactly 0** and `held=0`. Step input at the locator still
+  writes, still undoes in one step.
+- **AC7**: `ctest -j4` **186/186 passed, 189 registered, 3 Not Run (Disabled)**,
+  127.8 s, reconciled against `ctest -N`. A SECOND full run came back
+  186/186 while 40 concurrent `live_instrument_merge` processes were on the
+  same box, which is a stronger statement about the suite than the quiet one.
+  Goldens byte-identical (`git status smaragd/tests/goldens/` clean).
+  `action_roundtrip_test` green with fixtures for the new attribute forms.
+  Every new case except AC4 ends with `assert-render-policy
+  liveThreadRefusals="0" liveOwnedRefusals="0"`.
+
+**A flake the sweeps found, DIAGNOSED rather than re-run.** The first sweep
+pass had `live_instrument_merge` at **48/50** with workers 1 while another
+worktree's suite was on the box, and the obvious reading — "a wall-clock case
+under load" — was wrong. Per-1500-frame RMS over the capture shows the injected
+note actually starting inside **[58500, 60000)**, so the "sequenced note ALONE"
+window, which ran to 60000, legitimately contained ~1400 frames of the PAIR and
+read **0.3439** instead of the closed form **0.3341**: inside a ±5 % band idle
+and outside it loaded. The window now ends where it can be ARGUED rather than
+measured — `midi-in-event atFrame` waits for the published LOCATOR to reach
+57600, and `twSpeaker` publishes AFTER the pull, so the frame going out at that
+instant is 57600 − bufferFrames = **56576**, and nothing live can appear in the
+capture before then whatever the load. The window stops at 55400. Being right by
+construction let the band TIGHTEN to ±3 %, and the window now reads **0.334240
+at 329.591 Hz**: the case is strictly stronger than the one that flaked. It did
+NOT reproduce idle (40/40 before the fix), which is why it had to be reasoned
+about rather than bisected.
+
+**A SECOND flake, and it turned out to be the CONTRACT rather than a bug.**
+`live_instrument_disarm_playback` was **46/50** at `SMARAGD_REVAL_WORKERS=8`
+(49/50 at 4), and it reproduced 2 in 25 on an idle box, so this one could be
+captured. The failure is exactly one **1024-frame block of SILENCE** inside the
+window covering the PUMP's own rendering, with `liveThreadRefusals` and
+`liveOwnedRefusals` both 0. That is design D2 working as written: the RT sums a
+ring entry only when its stamp matches the frame being delivered, and a miss is
+SILENCE plus a counter (`twLiveMixRing::misses`) — one DEVICE BLOCK wide by
+construction. At workers 8 there are eight revalidation workers plus the
+readahead against a pump that must wake every ~21 ms. L1b's own live cases
+already carry **1024** as the bound for exactly this (`arm_during_playback`
+measured 8 frames against it); the **512** this case asserted was below the
+house bound for a live lane and below the granularity the design can offer at
+all.
+
+The sub-block bound therefore moved to where it is deterministic and stayed
+EXACT there. The FROZEN window keeps `maxGapFrames=512 maxStep=0.08` and reads
+**exactly 0.040405 with a gap of 1 frame on every run — including both runs
+that failed the earlier draft**, which is the evidence that the hand-back
+itself was never what broke. The window spanning the flip keeps
+`maxGapFrames=1024`, so a wrong epoch gate (a hole hundreds of milliseconds
+wide) and any two consecutive missed blocks still fail it. Verified **30/30** at
+workers 8, the configuration that had been 46/50.
+
+**So: a live lane on a loaded box drops about one block in 25 runs, and that is
+bounded rather than forbidden.** It is the first number this project has for
+live-lane underrun and it belongs in the L1a/L5 conversation, not here.
+
+**Sweeps** (`repeat_test.sh` from `tests/cases/`, N=50 × `SMARAGD_REVAL_WORKERS`
+{1,4,8,16}, run sequentially so the sweep is not its own load, and re-run in
+full on the FINAL binary after the window fix): | case | w=1 | w=4 | w=8 | w=16 | total |
+|---|---|---|---|---|---|
+| `live_instrument_play` | 50/50 | 50/50 | 50/50 | 50/50 | **200/200** |
+| `live_instrument_merge` | 50/50 | 50/50 | 49/50 | 49/50 | **198/200** |
+| `live_instrument_disarm_playback` | 50/50 | 50/50 | 50/50 | 50/50 | **200/200** |
+
+**`live_instrument_merge`'s two residual failures are UNREPRODUCED and are
+reported as such.** They appear only inside `repeat_test.sh`, at unrelated
+iterations (15 and 37) and only at the two highest worker counts. Against that:
+**180 controlled runs with zero failures** — 40 idle at w1, 60 idle at w8, 40
+idle at w1 after the gap change, and **40 at w8 while a full `ctest -j4` ran
+concurrently on the same box**, which was the deliberate attempt to reproduce it
+under load and did not. Every earlier merge failure that WAS captured turned out
+to be a defect in the case's own window arithmetic and is fixed. What is left is
+1-in-50 inside the sweep harness and 0-in-180 outside it; the mechanism is not
+established, and it is named here rather than explained away.
+
+**One committed expectation moved, and it is not a weakening.**
+`midi_options_page` asserted `inputPorts="1"` and `in[0]=Capture…`; the input
+list is now TWO and the computer keyboard is first, because it is a real port
+enumerated beside the hardware (D9) and it is the one that always exists. The
+case says so.
+
+**NOT GATED**, none of it an oversight: real MIDI hardware and WinMM jitter
+against a physical controller; CoreMIDI and ALSA-sequencer (written, compiled
+and run nowhere); latency against a real audio device (every number above is
+the capture backend's 1024-frame grid — WASAPI shared adds ~100 ms of its own,
+and proposal 35 is the prerequisite for a figure a performer would call low);
+sysex over the live lane (refused by the ring and counted, never truncated);
+the cross-PROCESS render comparison AC3 names (the in-process before/after
+byte gate is used instead — the two-case driver `run_xproc_determinism.cmake`
+would be needed for the other form); a MIDI-armed CHILD bubbling into a FOLDER
+instrument, which is implemented and has a unit-shaped walk
+(`sliveplan::midiConsumerFor`) but no qxa case of its own; the per-port
+`midi/inputOffsetMs` correction, which is read and applied but has no UI and no
+case; and more than one input port thru-ing to one scheduler, which is REFUSED
+with a log line rather than raced.
+
+**Known behaviour worth knowing before touching this.** The hand-back of a
+stateful generator costs one phase step (AC3 above). Design D2 calls for a
+2–3 ms crossfade at both flips; the RT does not have one, and that is L1a's
+half of the design rather than something L2 could add. It is inaudible on a
+sine at this amplitude and would not be on a loud pad; it is recorded here
+rather than papered over with a wider bound.

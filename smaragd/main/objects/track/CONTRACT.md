@@ -294,3 +294,12 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     file untouched, but a track that arrived armed is not a monitoring source
     until the user arms it in THIS session (`SLiveMonitor::projectChanged()`
     records the set). Opening a project must not open the microphone.
+
+19. **A `midi:` / `keyboard` `trackInput` makes the CONSUMER a live source, not
+    the track** (proposal 21 L2, design D4). `trackInputMidiPort()` /
+    `trackInputMidiChannel()` parse the spelling; who SOUNDS the notes is the
+    live monitor's question and it answers it with `sliveplan::midiConsumerFor`,
+    which walks the routing up the way `eventFeed()` walks it down. `keyboard`
+    is a whole spelling rather than a scheme because there is exactly one such
+    port and it exists on every machine; `midi:keyboard:any` means the same
+    thing.

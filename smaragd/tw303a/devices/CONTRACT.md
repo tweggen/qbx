@@ -206,6 +206,70 @@ log, the backend selection, and the null port's never-fails contract. It
 measures the MACHINE as much as the code, like twlog_test — confirm the box is
 idle before reading a failure as a regression.
 
+20. **The MIDI input device thread writes ONE RING PER CONSUMER, and the
+    fan-out OWNS them for its whole life** (proposal 21 L2, design D8).
+    `MidiInFanout` holds a FIXED array of `Sink`s; acquiring one flips an
+    atomic flag, releasing it flips it back, and the device thread only ever
+    touches memory the fan-out still owns. A consumer that registered its own
+    ring would have to unregister it and then prove the device thread was not
+    inside a `push()` on it, and that has no lock-free answer. A released sink
+    is inert and reusable, and `acquire()` CLEARS it before raising the flag —
+    the producer does not push into an inactive sink, so nothing can arrive
+    between the clear and the store.
+
+21. **MIDI-THRU has its own IMMEDIATE ring on `MidiOutScheduler`, and it is not
+    `enqueue()`** (design D8). `sendImmediate()` is a second SPSC ring whose
+    producer is a MIDI INPUT DEVICE THREAD and whose consumer is the sender;
+    pushing thru bytes into `enqueue()`'s ring would corrupt its head silently,
+    because that ring's single producer is the app's main-thread pump
+    (inv. 11). It is drained FIRST in the sender loop, sends with due time 0
+    (never handed to a driver queue, even on a backend that supports
+    timestamps — thru has no future time to be scheduled at) and wakes the
+    sender at once. It is deliberately OUTSIDE `flush()`'s discard: a flush
+    drops a queued FUTURE, and a thru byte is a key being pressed now. ONE
+    producer per scheduler is the caller's guarantee — `MidiInFanout::setThru`
+    refuses a second target for a port and the app routes at most one input
+    port to a given scheduler. Measured thru lag on an idle box: 0.011 –
+    0.125 ms against design D8's 2 ms budget and AC5's 5 ms bound.
+
+22. **The computer keyboard is a REAL `MidiInput` port and is NOT selected by
+    `SMARAGD_MIDI_BACKEND`** (design D9). `createMidiInput("keyboard")` names
+    `KeyboardMidiInput` explicitly; the environment variable chooses the SYSTEM
+    MIDI implementation and the computer keyboard exists whatever it chooses,
+    so it must neither replace the hardware backend nor be replaced by it. Its
+    callback runs on the CALLING thread, exactly as `CaptureMidiInput::inject`
+    does, which is what makes it a device thread as far as the fan-out is
+    concerned. `createVirtualPort()` returns FALSE: there is nothing to create,
+    and saying true would claim the capability inv. 18 means something else by.
+
+23. **`twLiveEventSource::collect()` runs ON THE PUMP and CLAMPS A LATE EVENT
+    TO OFFSET 0 — it never drops one** (design D4). Being late is the NORMAL
+    case, not the exception: the pump renders ahead of the RT, so a byte that
+    arrives while a block is being built is by construction older than that
+    block, and clamping is what makes the latency the ring depth plus the lead
+    rather than a whole extra block. An event mapped PAST the block is kept in
+    `pending_` and emitted by the next collect, in order. The host-time
+    mapping arrives as one virtual call (`twLiveFrameClock`) because
+    tw/devices may not include tw/playback; the held-note table is what the ONE
+    chase at live start re-attacks and what the all-notes-off flush empties.
+    Every vector is sized on the MAIN thread, so the drain is allocation-free
+    in the steady state. Two paths CAN allocate and both are named rather than
+    hidden: deferring an event past the block grows a vector that is empty (and
+    therefore free) whenever nothing is deferred, which is every ordinary
+    block; and the chase set copies the controller maps, which allocates map
+    nodes only once a CC / bend / program has actually been received - the same
+    shape the sequenced feed'''s collect already has, and zero for the notes-only
+    performance the gates measure.
+
+Known debt (proposal 21 L2): `twLiveEventSource`'s deferred queue is UNBOUNDED.
+An event whose mapped frame lands PAST the block is kept for the next collect,
+which is right - but if the engine clock were to report `valid()` while the RT
+had stopped stamping (a stalled device with the transport still flagged
+playing), every arriving event would map far into the future and be re-deferred
+forever. The queue is 24 bytes an entry and the trigger needs a stalled device,
+so it is recorded rather than defended; the fix is a cap plus a drop counter,
+next to the ring's own.
+
 Known debt: the L0 capture threads are UNVERIFIED against hardware — the WASAPI
 one is written and reviewed but was never run against a real microphone in the
 L0 gate (nothing headless opens an input device), and the ALSA and CoreAudio
@@ -221,7 +285,8 @@ MIDI: the CoreMIDI and ALSA-sequencer backends are UNVERIFIED — written and
 reviewed on Windows, compiled and run nowhere in the P7a gate. WinMM sysex OUT
 blocks the sender thread until the driver releases the header (rare, bounded,
 and the alternative was a completion queue for a path nothing uses yet); sysex
-IN (MIM_LONGDATA) is not implemented at all. Neither MidiInput nor the capture
-MIDI input has a consumer until proposal 37 P8. Send jitter against real
+IN (MIM_LONGDATA) is not implemented at all. Since proposal 21 L2 `MidiInput` HAS consumers - the live lane through
+`MidiInFanout`, and MIDI-thru - but the recorder sink is declared and
+unused until L4. Send jitter against real
 hardware, driver timestamps, and virtual-port creation on Windows (which needs a
 loopback driver) are not gated by anything.

@@ -895,6 +895,46 @@ box is idle before reading it as a regression. **NOT gated:** real device latenc
 jitter, WASAPI shared under load, ASIO, and hearing an ARMED track's own clips
 (design §10.1 — it needs proposal 20 §2).
 
+### Live instruments (proposal 21 L2 = 37 P8a — executed 2026-08-17)
+
+A track's instrument can be PLAYED, live, from a MIDI port or the computer
+keyboard, merged with the sequenced feed while the transport runs, with MIDI-thru
+and the ownership protocol. Engine: `tw/devices` (`MidiInRing`, `MidiInFanout`,
+`MidiOutScheduler::sendImmediate`, `KeyboardMidiInput`, `twLiveEventSource`) plus
+`twLiveEventClock` in `tw/playback`; app: `SLiveMonitor` extended +
+`SMidiInputHub` in `main/shell`. Design: `21_REALTIME_DATAFLOW_INTEGRATION.md`
+D2/D4/D8/D9. Invariants: `tw303a/devices/CONTRACT.md` inv. 20–23,
+`main/shell/CONTRACT.md` inv. 19–23.
+
+| Thing to know | Why |
+|---|---|
+| The live source is the processor's **SECOND** event source, never a `setEventSource` swap and never a member of `eventFeed()` | `STrack::syncInstrumentSlot()` re-applies the feed from adopt / insert / remove and would silently overwrite a live source; `setEventSource` also clears continuity and bumps the param epoch, which an arm must not do per call; and the feed is ALSO read by `SMidiOutPump` and `assert-midi-events`, while a ring-draining `collect` has exactly ONE legal reader. |
+| A MIDI-armed track contributes its **CONSUMER** to the closure, not itself | `sliveplan::midiConsumerFor` walks the routing UP the way `eventFeed()` walks it down. An armed CHILD of a folder drum machine is a MIDI SOURCE while the **FOLDER** is the live instrument and the thing that leaves the frozen sum — the child stays in it, because its own clips must keep playing (§3 case (iii)). A MIDI track whose notes reach no instrument is deliberately **not** a source: excluding it would trade the arrangement for silence. |
+| **A late live event is CLAMPED to offset 0 and never dropped** — and being late is the NORMAL case | The pump renders ahead of the RT, so a byte arriving while a block is built is by construction older than that block. Clamping is what makes the latency the ring depth plus the lead rather than a whole extra block. An event mapped PAST the block waits in `pending_` for the next collect, in order. |
+| The host-time → frame mapping is the ENGINE CLOCK while playing and **the block being rendered** while stopped | While stopped there is no clock at all — the pump counts virtual blocks — so anchoring "now" at the block is the honest answer rather than inventing a reading. Both routes land on the same clamp in practice. |
+| The MIDI input device thread writes **ONE RING PER CONSUMER**, and the fan-out owns the sinks forever | A consumer registering its own ring would have to unregister it and then prove the device thread was not inside a `push()` on it, and that has no lock-free answer. Acquire clears the sink BEFORE raising its flag; the producer never pushes into an inactive one. |
+| **MIDI-thru is a second, IMMEDIATE ring on `MidiOutScheduler`, never `enqueue()`** | `enqueue()` is single-producer and that producer is the main-thread pump (devices inv. 11). Two rings let a device thread and the main thread coexist with no lock on either path. Thru is drained FIRST, sends with due time 0 (never handed to a driver queue), and sits OUTSIDE `flush()`'s discard — a flush drops a queued FUTURE, and a thru byte is a key being pressed now. Measured **0.011–0.125 ms**. |
+| The computer keyboard is a **real `MidiInput` port** and `SMARAGD_MIDI_BACKEND` cannot reach it | `createMidiInput("keyboard")` names it explicitly. The variable chooses the SYSTEM MIDI implementation; the computer keyboard exists whatever it chooses, so it must neither replace the hardware backend nor be replaced by it. Every consumer downstream then has ONE shape to handle. |
+| A port is opened once and **never closed until teardown** | Opening a device is not free — but the load-bearing reason is that `CaptureMidiInput::inject()` is a NO-OP on a closed port, so closing one on disarm would silently swallow a script's events between two phases of a case. The hub's enumeration probe is constructed FIRST so a listening port is always the newer `active()`. |
+| The disarm flush is best-effort; **the hand-back is what guarantees no hanging voice** | `detachLiveEvents` asks the source for all-notes-off before ownership drops, but `setLiveOwned(false)` also forgets continuity, so the freeze path's first render resets every instance. The thru port is PANICked separately — a key held at the disarm is otherwise a stuck note on the user's hardware. |
+| A live lane on a loaded box **drops about one 1024-frame block in 25 runs**, and that is the CONTRACT | Design D2: the RT sums a ring entry only when its stamp matches the frame being delivered, and a miss is SILENCE plus a counter (`twLiveMixRing::misses`) — one DEVICE BLOCK wide by construction. Measured at `SMARAGD_REVAL_WORKERS=8`, where eight revalidation workers plus the readahead run against a pump that must wake every ~21 ms. **1024 is the house bound for a live lane** (`arm_during_playback` measured 8 frames against it); anything tighter is asserting something the design cannot offer, and `live_instrument_disarm_playback` was 46/50 until its 512 moved to the FROZEN side — where it reads exactly 0.040405 on every run. |
+| **The hand-back of a stateful generator costs ONE phase step** (measured 0.319–0.341 at amplitude 0.787) | The pump and the freeze path are two DSP streams by design (D4), so two renderings of the same held note agree in frequency and level but not in accumulated phase. Design D2 calls for a 2–3 ms crossfade at the flip; the RT does not have one. `live_instrument_disarm_playback` therefore bounds the GAP tightly (1 frame) and leaves the step unbounded across the flip, while asserting **exactly 0.040405** — the sine's closed-form maximum step — on either side. |
+| `virtual-key` has **two modes** and they are not folded together | `hold`/`release` PLAY the port; the default WRITES a note at the locator. The real mouse handler does both, because a user pressing a key means both — but a case measuring what an instrument SOUNDS must not also be editing the project under the measurement. |
+
+Gates: the qxa cases `live_instrument_play`, `live_instrument_merge`,
+`live_instrument_disarm_playback`, `live_instrument_ownership`,
+`live_instrument_thru`, `live_instrument_keyboard` — all `RUN_SERIAL` at
+`SMARAGD_CAPTURE_SPEED=1`, no `SMARAGD_AUDIO_INPUT_BACKEND` (a MIDI-armed
+instrument track has no audio input at all) — plus `action_roundtrip_test` and
+`midi_options_page`. Measured: onset lag **4544 frames = 94.67 ms**; the two-tone
+merge **0.472966** against 0.472441; the hand-back gap **1 frame**; thru
+**0.125 / 0.011 ms**; `liveOwnedRefusals` **2** when the guard is meant to fire
+and **0** everywhere else. **NOT gated:** real MIDI hardware / WinMM jitter,
+CoreMIDI / ALSA-seq, latency on a real audio device, sysex over the live lane,
+the cross-PROCESS render comparison (the in-process before/after byte gate is
+used), the folder-instrument-fed-by-an-armed-child shape (implemented, no case),
+and `midi/inputOffsetMs` (applied, no UI and no case).
+
 ## Recording Audio
 
 Smaragd supports recording from input devices (microphone, line-in, etc.) via **Record** button in the transport toolbar or **Ctrl-R** / **Cmd-R** keyboard shortcut. Recorded audio is automatically converted to clips and placed on armed tracks.
