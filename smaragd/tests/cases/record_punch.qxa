@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L3b. THE PUNCH REGION, and THE WAVEFORM WHILE RECORDING.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  THE ONE RANGE, TWO READINGS. The project has a single time-range marker pair,
+  and what it means to a take depends on the cycle flag: with Cycle ON it is
+  the LOOP (record_loop_takes), with Cycle OFF it is the PUNCH region. So this
+  case sets exactly the same three properties as that one and simply does not
+  enable cycling.
+
+  WHY THE NUMBERS ARE EXACT RATHER THAN BANDED. Punch-out is a CLAMP, not a
+  race: the recorder ends the take once the placement passes the out point and
+  then clips the placed span to [in, out) regardless of how far past it the
+  100 ms tick actually got. So the clip is at 48000 with length 48000 to the
+  frame, and a tolerance of 0 is honest. What is NOT deterministic is the
+  moment the tick fires, which is why the take is given 5 s of wall clock to
+  reach an out point 2 s in.
+
+  THE GROWING CLIP is asserted MID-TAKE, which is the only place it can be:
+  `growing="true"` is SObject::isLiveRecording() (the routing predicate that
+  keeps a clip with no component out of the bus mixers), and
+  `previewNonEmpty="true"` runs the REAL probe array the arranger draws from
+  ... SRecordingContent::getPreview over the peak ladder extended incrementally
+  from the frontier. A flat probe array means the clip is an empty box, which
+  is what a waveform-while-recording that never got wired would look like.
+-->
+<SActionScript version="1" name="record_punch">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <!-- The punch region: 1 s .. 2 s. Cycle stays OFF. -->
+    <set-property key="rangeStart" value="[48000]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+
+    <!-- MID-TAKE: the growing clip is on the lane, it is a live recording, and
+         its waveform is not empty. -->
+    <wait-ms ms="1200"/>
+    <assert-recorded-clip trackPath="0" clips="1" growing="true"
+                          previewNonEmpty="true"
+                          minDurationFrames="24000"/>
+
+    <!-- The take ends BY ITSELF at the out point; no record-stop here. -->
+    <wait-ms ms="3800"/>
+
+    <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          startFrame="48000" startTolerance="0"
+                          durationFrames="48000" durationTolerance="0"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          compensationFrames="-5824"/>
+
+    <undo/>
+    <assert-recorded-clip trackPath="0" clips="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

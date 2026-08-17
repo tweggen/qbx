@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L3b. LOOP RECORDING: ONE TAKE PER CYCLE PASS (design D7), which
+  is proposal 17's "phase 5" falling out of a verb that already existed rather
+  than being built.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  THE MECHANISM, so the numbers below are readable. The recorder does not
+  "detect a wrap": the placement conversion is LINEAR in capture frame, so the
+  pass a frame belongs to is arithmetic, `floor((placement - loopIn)/loopLen)`,
+  and the recorder splits the take at those boundaries and emits ONE
+  place-recording per segment, all at the loop start, inside ONE undo macro.
+  place-recording then does the rest by its own proposal-17 rules: the first
+  segment lands on an empty lane and becomes a plain cut; the second finds that
+  cut covering the column and becomes a TAKE; the third likewise. So a lane
+  ends with ONE COLUMN holding N takes, not N clips side by side, and that is
+  what `clips="1"` plus `takes="3"` says.
+
+  WHY THE TAKE IS 5.5 s FOR A 2 s CYCLE. The recording starts from a STOPPED
+  transport, so the frames captured while the readahead primed are trimmed
+  (design D6) and the placeable material is the take minus that priming. Three
+  passes needs placeable in (2, 3] cycles, i.e. (192000, 288000] frames.
+  Measured here: 5.5 s captures ~264000 frames and the priming discards 9000 to
+  13000, leaving ~252000 ... comfortably inside the band from either end, and
+  it stays inside even for a priming of 0 (264000) or of 1.5 s (192000+).
+
+  The whole loop-record is ONE undo step, which is the property that makes it
+  usable at all.
+-->
+<SActionScript version="1" name="record_loop_takes">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <!-- The cycle region: 0 .. 2 s. set-property takes its value as a JSON
+         ARRAY (SSetPropertyAction::readXml), hence the brackets. -->
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <cycle-enable/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+    <wait-ms ms="5500"/>
+    <record-stop/>
+
+    <!-- ONE column at the loop start, three takes, three committed passes,
+         and the column is exactly the loop long. -->
+    <assert-recorded-clip trackPath="0" clips="1" takes="3" passes="3"
+                          startFrame="0" startTolerance="0"
+                          durationFrames="96000" durationTolerance="0"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          compensationFrames="-5824"/>
+
+    <!-- ONE undo removes the whole pass. Nothing undoable may come between
+         the take and this: a select-take probe here would be undone instead,
+         which is how the first draft of this case mis-read a working undo as
+         a broken one. -->
+    <undo/>
+    <assert-recorded-clip trackPath="0" clips="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
