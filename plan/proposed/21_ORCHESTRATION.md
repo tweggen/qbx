@@ -326,7 +326,7 @@ STATE.md + §6 + git are the durable state.
 ## 6. Progress tracker
 | Phase | Status | Closed on | PR / commit | Notes |
 |---|---|---|---|---|
-| L0 input device layer + seams | ☐ | | | |
+| L0 input device layer + seams | ☑ | 2026-08-17 | `feat/21-l0-input-devices` | Capture thread + SPSC ring per device (WASAPI event-driven; ALSA/CoreAudio written, UNVERIFIED), `SMARAGD_AUDIO_INPUT_BACKEND` + `FileAudioInput` (paced 0.68-0.91 ms of a 2 ms bound), `midi-in-event`/`midi-in-replay`, `retireComponentNodes`, `RenderPolicy{Any,Never}` + `liveThreadRefusals`, the two `SSettings` offsets. ctest -j4 174/174, 177 registered. NOT gated: real capture hardware, ALSA/CoreAudio. |
 | L1a live lane engine | ☐ | | | |
 | L1b live lane app: audio monitoring | ☐ | | | |
 | L2 live instruments (37 P8a) | ☐ | | | |

@@ -12179,3 +12179,175 @@ rebuilt — `instrument_sine_render` + `instrument_render_determinism{,_xproc}` 
 racing to rewrite a `plugincache.json` invalidated by the new mtime/size; not
 reproduced in four subsequent `-j4` sweeps of the same subset or in the full
 run, and unrelated to the case content.
+
+## 2026-08-17 — Proposal 21 L0: input device layer + seams
+
+The first phase of proposal 21 (real-time data flows): the INPUT side of the
+device layer grows a thread and a ring, the scheduler learns to retire a
+component's nodes, the RT freeze guard becomes a per-thread render POLICY, and
+the testkit gets a hand on the MIDI input port. Nothing in the audio path
+changed — no live lane exists yet, and no render, playback or golden moved.
+
+**1. Every capture device now has a capture THREAD and an SPSC RING; `read()` is
+a POP.** `tw/devices/audio_ring.h` (`AudioRing`) is the new public class: frame
+granular, lock-free, allocation-free, with `framesPushed / framesPopped /
+overrunFrames / underrunFrames` exposed through `AudioInput::stats()`.
+
+This fixes design §1 F7, which is a REAL data loss, not a tidiness point:
+`WASAPIInput::read()` copied `min(packet, caller's buffer)` and then released
+the WHOLE packet, so every frame past the caller's buffer was dropped on the
+floor and the recorded timeline silently compressed. The structure is what fixes
+it — separating "what the device gave us" from "what the caller asked for" is
+the only shape in which a tail cannot be lost — so the gate is on the ring: a
+producer writing a packet THREE TIMES the consumer's pop size must lose nothing.
+
+- **WASAPI** re-initialises with `AUDCLNT_STREAMFLAGS_EVENTCALLBACK` +
+  `SetEventHandle` and drains every packet whole on its own thread. That thread
+  takes NO lock — `stopCapture()` joins it while holding the object's mutex, so
+  a capture thread that wanted that mutex would deadlock the stop — and the
+  client handles are created before it starts and released after it is joined.
+  A SILENT packet is pushed as zeros, because it still occupies time.
+- **ALSA** gets the same shape around `snd_pcm_wait` (and, incidentally, the
+  S16 fallback path now converts instead of writing raw shorts into a float
+  buffer). **CoreAudio** needed no thread — the AVAudioEngine tap already IS
+  one — only the ring in place of its hand-rolled circular buffer, plus a real
+  planar-to-interleaved conversion: the old tap read `frameCount * channels`
+  samples out of PLANE 0, i.e. past the end of the plane for any stereo device.
+  Its `read()` also stopped waiting up to 100 ms on a condition variable, which
+  had made a documented non-blocking poll block. **Both are UNVERIFIED** —
+  written and reviewed on Windows, compiled and run nowhere in this gate.
+- `RecordingSession` is untouched and still works: its 1 ms poll now pops the
+  ring instead of the device.
+
+**2. `SMARAGD_AUDIO_INPUT_BACKEND = file:<wav> | null | default`**, read per call
+in `createAudioInput()`, ahead of the platform pick — the input twin of
+`SMARAGD_AUDIO_BACKEND`, with `AudioInput::backendName()` added so the selection
+is assertable without opening anything. `FileAudioInput` (private to the module)
+is a REAL device: its own capture thread and ring, 1024-frame blocks **paced on
+`MidiOutScheduler::hostNowNs()`** through the same kind of high-resolution
+waitable timer the MIDI sender uses (`PreciseWaiter`, that wait extracted;
+the scheduler keeps its own copy, being on the MIDI timing gate), a configurable
+reported `inputLatencyFrames`, and loop / stop-at-end. Block i is due at
+`t0 + (i+1)*period` — a device cannot hand over audio it has not recorded yet —
+and the anchor is taken in `startCapture()`, not inside the thread, so a caller
+can read it the instant the call returns. Its WAV reader is hand-rolled on
+purpose: libsndfile lives behind `tw_sources`/`tw_sinks`, and reaching for it
+here would make the platform I/O layer depend on the codec stack.
+
+`--test-case` defaults the variable to `null` (main.cpp, next to its two
+siblings, unless already set). **This changes nothing about the suite as it
+stands** — no case records audio, so nothing opened an input device in the first
+place — and it is stated that way in `main/testkit/CONTRACT.md`.
+
+**3. `midi-in-event` / `midi-in-replay`** over the EXISTING
+`CaptureMidiInput::inject()`. `atFrame` / `startFrame` are valid only while the
+transport is PLAYING and are REJECTED, not ignored, when it is not: a project
+frame is a position on a moving playhead (design D2). They are resolved by
+WAITING for the locator, because the engine's delivered-frame clock is L1a's
+deliverable; accuracy is therefore the locator's publication granularity, and
+the verbs say so. A replay is real-time paced on the same steady clock the audio
+capture backend stamps its blocks with, with ABSOLUTE deadlines so a late
+message does not drag the ones behind it; a `.mid` is timed by its OWN ppq and
+tempo metas (a performance file describes a performance), and its note-offs are
+synthesised from each note's `duration`, because no table holds one. Nothing
+consumes a `MidiInput` yet, so the verbs gate their own behaviour and nothing
+sounding.
+
+**4. `CaptureRevalidator::retireComponentNodes(...)`**, design §5 exactly:
+queued/waiting nodes of the named components are DROPPED and never execute,
+their demands complete as NOT PRODUCED (a count on the handle; a consumer treats
+it like a miss); a RUNNING one is WAITED FOR, bounded by one page render; the
+dedup entries go, so a later demand PLANS FRESH; other components are untouched;
+and a dependent of a dropped node loses the edge, runs, and sees a MISS.
+`pause()` is not a stand-in — it drains import-time analysis and stops the graph
+everywhere.
+
+Two mechanical points make that a promise rather than a likelihood. A worker now
+CLAIMS a node (`state = Running`) under the same `queueLock_` that dequeued it:
+claiming it later, inside `processGraphNode`, left a window in which the node was
+in no queue and in no state a retirement could see, and it would then have
+executed AFTER the call returned — the one thing the call promises cannot happen.
+And the retirement holds `expansionMutex_`, so no expansion can add a node for a
+retiring component while it walks. **`std::span` is spelled as a pointer + count
+with a `vector` overload**: the repo is C++17.
+
+**5. `twRtThreadGuard` is now a per-thread `RenderPolicy {Any, Never}`** with two
+markers behind ONE check in `freezePage`. `markRtThread()` is unchanged in
+behaviour (one-shot report + debug assert). `markLiveThread()` is silence, a
+process-wide `liveThreadRefusals` counter and exactly ONE log line, and NO
+assert — a preview or an asset capture arriving at a live-owned component is
+recoverable by design, and killing the process for it would be wrong.
+
+**6. `SSettings`**: `audio/recordingOffsetMs/<deviceName>` and
+`midi/inputOffsetMs/<port>`, readers and writers only, no UI. Both signed,
+POSITIVE = earlier, matching `midiOutOffsetMs`.
+
+CONTRACT deltas: `tw/devices` (public `audio_ring.h`; invariants 19-24: the
+thread + ring rule and what it replaced, the overrun/underrun policy, one
+producer one consumer, the env selection, FileAudioInput's real-time pacing,
+PreciseWaiter), `tw/schedule` (invariant 10: retirement semantics and the two
+mechanical points), `tw/graph` (the render policy and its two consequences),
+`main/testkit` (3a: the `null` input default changes nothing today),
+`docs/contracts/THREADING.md` (the input capture thread in the inventory, the
+seam paragraph, the policy note) and `docs/ACTIONS.md` (the two verbs).
+
+**Gates.** `./build.sh` clean; `check_layering.py` and `check_logging.py` clean
+(devices still depends on tw/core alone). **`ctest -j4`: 174/174 passed on the
+last two full runs (60.0 s / 58.8 s), 177 registered** (176 + the new
+`devices_input_test`), 3 `au_*` disabled off macOS. The first of three runs was
+173/174. The single first-run failure was
+`qxa.instrument_render_determinism`, which passed alone immediately afterwards
+and in the second full run: it failed with "slot 0 of the track is not an
+instrument" while its two renders compared BYTE-IDENTICAL, i.e. the plugin was
+missing, not the determinism — the same `plugincache.json` race four concurrent
+processes hit on the first `-j4` run after a rebuild, recorded verbatim in the
+2026-08-16 entry. Not chased further; recorded.
+
+New unit gates:
+- `devices_input_test` (RUN_SERIAL): the ring under a 3x packet (the tail-drop
+  regression), the overrun/underrun policy, `FileAudioInput` over a 2 s
+  position-coded WAV it generates itself — 96 blocks, every frame exactly once,
+  in order, SAMPLE-EXACT against the file, ring counters agreeing and zero
+  overruns, and the pacing measured TWICE: **max |pushed − due| = 0.68-0.91 ms
+  over six runs against a 2 ms bound**, and **max |consumer saw − due| =
+  1.1-1.9 ms against a 15 ms one** — the capture MIDI input's injection order
+  and stamps, and the backend selection including `null`.
+
+  The two numbers are separate because two different things are being asked
+  about, and the first version of the test conflated them: it stamped only what
+  the polling consumer saw and asserted 2 ms on that, which failed once in five
+  runs at 3.4 ms taken straight after a full ctest sweep — the reader thread
+  descheduled, not the device. `FileAudioInput` now keeps a per-block PUSH-TIME
+  log (the file backend's analogue of `CaptureBackend`'s block log, devices
+  inv. 9), the 2 ms bound is on THAT — the property this module actually
+  promises — and the consumer's view is reported and loosely bounded. The
+  capture thread also took MMCSS "Pro Audio", like the WASAPI render thread,
+  which roughly halved the device-side jitter.
+- `schedule_test` + 5 blocks: queued nodes dropped and never executed, the
+  demand completing as not-produced, a re-demand PLANNING FRESH (counted through
+  an overridden `planPage`), a running node waited for (measured: the call
+  blocked ≥ 100 ms for a gated render), another component untouched, a dependent
+  seeing a miss, and **100 randomized interleavings** over worker counts 1-4 with
+  a deterministic xorshift delay — no node executed after the call returned, no
+  demand hung.
+- `graph_test` + 1 block: a `markLiveThread` thread gets an empty page from
+  every `freezePage`, the component never renders for it, refusals == 3 with
+  exactly ONE log line, the calling thread's policy untouched, and the RT
+  marker's own semantics unchanged.
+- `action_roundtrip_test`: 134 verbs (132 + the two new ones).
+
+**NOT gated:** WASAPI capture against real hardware (nothing headless opens an
+input device, so the event-driven client, the packet drain and the join were
+never run against a microphone); the ALSA and CoreAudio capture paths at all;
+the `--test-case` `null` default end to end (no case records audio — the factory
+semantics are gated, the one `qputenv` line is not); `midi-in-*` reaching a
+consumer (there is none until L1a/L3a); the pacing on a loaded box (the numbers
+above are an idle machine, and like `devices_midi_test` this measures the
+machine as much as the code).
+
+**Goldens are byte-identical, and by construction rather than by re-freezing:**
+`qxa.mc_golden_mono` and `qxa.mc_golden_stereo` are green in every run above,
+and no render path was touched. The only edit inside `freezePage` is the guard's condition
+(`onRtThread()` → `!mayRender()`, identical for every unmarked thread), and the
+scheduler edit moves one state assignment earlier under a lock it was already
+taking.

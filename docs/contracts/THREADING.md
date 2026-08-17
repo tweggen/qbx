@@ -8,12 +8,17 @@
 | Audio callback | platform backend (WASAPI/ALSA/CoreAudio) | `twSpeaker` render callback → `AudioEngine::pullBlock` | **NO** |
 | Readahead | `AudioEngine::startReadahead` | pre-buffers engine output | **NO** |
 | Render worker | `RenderSession::start` | sequential freezePage + file writing | **NO** |
-| Record worker | `RecordingSession::start` | device capture → resample → WAV writers | **NO** |
+| Record worker | `RecordingSession::start` | POPS the input ring → resample → WAV writers | **NO** |
+| **Input capture (one per open device)** | `AudioInput::startCapture` (WASAPI / ALSA / FileAudioInput; on CoreAudio the AVAudioEngine TAP plays this role and is not ours to create) | waits on the device's own event, pushes WHOLE packets into that device's SPSC ring (`tw/devices/audio_ring.h`) | **NO** |
 | Revalidator pool | `CaptureRevalidator` (N workers) | page recompute via `IRevalidatable` | **NO** |
 | Buffering monitor | `twSpeaker::startOutput` | polls readahead, starts backend | **NO** |
 | MIDI out scheduler | `MidiOutScheduler::start` | drains an SPSC ring, sends each message AT its due time (or hands it to a timestamping driver early) | **NO** |
 | MIDI device thread | the platform MIDI input (WinMM callback / CoreMIDI read proc / ALSA-seq poll) | delivers received bytes to `MidiInputCallback` | **NO** |
 | MIDI-out pump | `SApplication`'s `SMidiOutPump` QTimer (20 ms) | reads the playhead, slices each MIDI-out track's event FEED over a 250 ms window, enqueues `{dueHostTimeNs, bytes}` into `MidiOutScheduler` | yes (it IS the main thread) |
+
+The INPUT CAPTURE thread is on this list for the same reason the MIDI-out pump is: it makes a SEAM explicit. It is the ONE producer into its device's ring and it does nothing else — no Qt, no allocation in the steady state, no lock, and never a call back into the app. Everything above the ring (`AudioInput::read`, which is a pop) may be an ordinary worker; everything below it runs at device priority. Before proposal 21 L0 there was no such thread: `read()` WAS the device poll, which is why a packet bigger than the caller's buffer lost its tail (design §1 F7) and why a consumer that was late lost audio rather than latency.
+
+Its counterpart on the policy side is `twRtThreadGuard`, which since L0 carries a per-thread `RenderPolicy {Any, Never}` with TWO markers behind ONE check in `twComponent::freezePage`: `markRtThread()` (the audio callback — one-shot report plus a debug assert, a bug to fix) and `markLiveThread()` (proposal 21 L1a's pump — silence, a process-wide `liveThreadRefusals` counter and exactly one log line, never an assert, because a preview or an asset capture arriving at a live-owned component is recoverable by design).
 
 The MIDI-out pump is on this list to make the SEAM explicit: it is the single producer into `MidiOutScheduler`'s lock-free ring, and it is on the main thread, so everything above the ring may use Qt freely and everything below it may not. MIDI-out is emitted at PLAY time and only at play time — never at freeze time (proposal 37 D6, the proposal-34 metering lesson verbatim: pages are frozen ~1.4 s ahead of the playhead, and by renders that have no playhead at all).
 
