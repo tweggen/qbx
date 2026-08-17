@@ -26,10 +26,25 @@
   a performer would call low. What this bounds is the part 21 owns - the ring,
   the pump's lead and the hand-off to the RT.
 
-  MEASURED on the development box: 5120 frames = 106.7 ms, correlation 1.000
-  (five 1024-frame blocks: one the input capture thread holds, the pump lead of
-  two, and two on the RT side). Well inside the 8192 budget and stable across
-  runs.
+  MEASURED on the development box, 40 consecutive runs: 5120 frames = 106.7 ms
+  in 33 of them and 6144 = 128 ms in the other 7, correlation 1.000 throughout.
+  Five 1024-frame blocks is the resting value - one the input capture thread
+  holds, the pump lead of two, two on the RT side - and the sixth appears when
+  the file input jitters.
+
+  WHY THE WINDOW IS 8192 FRAMES AND NOT 24000, which is the thing this case
+  cost the most time to get right. FileAudioInput has its OWN clock
+  (MidiOutScheduler::hostNowNs) while the capture backend paces the RT on its
+  own, so the two drift; when a block is late the pump pulls short, zero-fills,
+  and the frames it did not get are DELAYED rather than lost - so the lag steps
+  up by one input block and stays there. A 24000-frame window can therefore
+  span a lag CHANGE, and no single lag correlates well with a window that has
+  two of them in it: measured 0.88 and 0.69 in 2 of 40 runs, which is a
+  correctly-reported change of alignment and not a monitoring fault. A window
+  short enough to sit inside one alignment (8192 = ~170 ms) measures the lag
+  the case is about, and the correlation floor stays at 0.9 rather than being
+  lowered to swallow the artefact. A REAL device does not have this failure
+  mode at all: input and output share one clock.
 -->
 <SActionScript version="1" name="monitor_latency">
 
@@ -49,7 +64,7 @@
     <dump-playback-capture filename="lat.wav" minFrames="96000"/>
 
     <assert-monitor-latency filename="lat.wav" inputFile="../test_position.wav"
-                            channel="0" startFrame="48000" frameCount="24000"
+                            channel="0" startFrame="60000" frameCount="8192"
                             searchFrames="24000" minCorrelation="0.9"
                             maxFrames="8192"/>
 

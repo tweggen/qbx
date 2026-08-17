@@ -1,6 +1,7 @@
 #include "app/shell/slivemonitor.h"
 
 #include <algorithm>
+#include <cstring>
 
 #include <QTimer>
 
@@ -54,6 +55,7 @@ SLiveMonitor::SLiveMonitor( SApplication *app )
     demandTimer_ = new QTimer( this );
     demandTimer_->setInterval( kDemandTickMs );
     connect( demandTimer_, &QTimer::timeout, this, &SLiveMonitor::pumpDemands );
+    connect( demandTimer_, &QTimer::timeout, this, &SLiveMonitor::pumpEdits );
 }
 
 SLiveMonitor::~SLiveMonitor()
@@ -262,6 +264,7 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
     if( !pump_ ) return;
     pump_->setPlan( plan );
     pump_->start();
+    publishedSignature_ = planSignature();
 }
 
 // --- the triggers -----------------------------------------------------------
@@ -351,6 +354,38 @@ void SLiveMonitor::refresh()
         demandTimer_->stop();
         demands_.clear();
         return;
+    }
+
+    // THE MASTER-SHAPE PRECONDITION, BEFORE ANYTHING IS RE-WIRED (design D3).
+    //
+    // "root(unarmed) + ring" is exact only while the master is a unity sum
+    // followed by an identity map. The plan builder can express the other mode
+    // - the master joins the closure and the pump renders it - but the RT half
+    // of it is NOT wired: twSpeaker adds the frozen root page whenever the
+    // frozen lane is PLAYING, and nothing reads twLivePlan::masterLinear. A
+    // Closure-shaped plan would therefore be summed ON TOP of a root page that
+    // already contains those tracks, and the user would hear the arrangement
+    // doubled.
+    //
+    // So it is REFUSED rather than approximated: one log line naming the
+    // reason, and the arrangement keeps playing untouched. Whoever adds a
+    // master insert chain will land here, and the fix is a twSpeaker that
+    // stops adding the root page while a non-linear plan is live.
+    {
+        const twlive::twMasterShape shape = twlive::checkMasterShape(
+            mixer->masterMixComponent().get(),
+            mixer->masterRewireComponent().get(),
+            (idx_t) app_->masterChannels() );
+        if( !shape.linear() ) {
+            if( lastRefusal_.isEmpty() ) {
+                lastRefusal_ = QStringLiteral(
+                    "the master is not a unity sum with an identity map (%1); "
+                    "live monitoring is off" ).arg( QString::fromUtf8( shape.reason ) );
+                TW_LOGW( "shell", "[LIVE] %s", lastRefusal_.toStdString().c_str() );
+            }
+            current_ = SLiveClosure();
+            return;
+        }
     }
 
     if( !arriving.ordered.empty() ) {
@@ -539,11 +574,32 @@ void SLiveMonitor::pumpDemands()
         demands_[i] = sched->requestGraphPages( roots[i], start, kDemandPages, 9 );
 }
 
+void SLiveMonitor::pumpEdits()
+{
+    // The rest of design section 3's rebuild triggers, asked rather than
+    // wired: a fader move, an insert added / removed / reordered, or an input
+    // device change on a closure member all show up as a different signature,
+    // and everything else costs one vector compare.
+    // NOT while a disarm tail is in flight: the tail plan was published for the
+    // OLD closure, so its signature differs from the new one by construction
+    // and republishing here would cut the tail short - which is the one thing
+    // it exists to prevent.
+    if( current_.empty() || suspendedForRender_ || !departing_.empty() ) return;
+    const std::vector<std::uintptr_t> sig = planSignature();
+    if( sig == publishedSignature_ ) return;
+    publishPlan( current_, 0, 0 );
+}
+
 // --- state ------------------------------------------------------------------
 
 bool SLiveMonitor::active() const
 {
     return !current_.empty() && pump_ && pump_->running();
+}
+
+bool SLiveMonitor::isLive( const STrack *track ) const
+{
+    return track && current_.contains( track ) && pump_ && pump_->running();
 }
 
 double SLiveMonitor::inputPeak( const STrack *track ) const
@@ -552,6 +608,44 @@ double SLiveMonitor::inputPeak( const STrack *track ) const
         if( current_.sources[i] == track && sources_[i] )
             return sources_[i]->peekPeak();
     return 0.0;
+}
+
+double SLiveMonitor::takeInputPeak( const STrack *track )
+{
+    for( std::size_t i = 0; i < current_.sources.size() && i < sources_.size(); ++i )
+        if( current_.sources[i] == track && sources_[i] )
+            return sources_[i]->takePeak();
+    return 0.0;
+}
+
+std::vector<std::uintptr_t> SLiveMonitor::planSignature() const
+{
+    std::vector<std::uintptr_t> sig;
+    for( STrack *t : current_.ordered ) {
+        sig.push_back( (std::uintptr_t) t );
+        sig.push_back( (std::uintptr_t) t->getChannels() );
+        if( SPluginChain *chain = t->getPluginChain() ) {
+            const int n = chain->getSlotCount();
+            for( int i = 0; i < n; ++i ) {
+                SPluginSlot *slot = chain->getSlotAt( i );
+                sig.push_back( slot ? (std::uintptr_t) slot->getProcessor().get() : 0u );
+            }
+        }
+        if( t->gainStageComponent() ) {
+            // The fader, as bits: the pump replays an Envelope SNAPSHOT, so a
+            // gain that moved is a plan that is out of date.
+            const twGainStage::Envelope e = t->gainStageComponent()->envelope();
+            std::uintptr_t bits = 0;
+            std::memcpy( &bits, &e.base, sizeof( bits ) < sizeof( e.base )
+                                              ? sizeof( bits ) : sizeof( e.base ) );
+            sig.push_back( bits );
+            sig.push_back( e.muted ? 1u : 0u );
+            sig.push_back( (std::uintptr_t) e.vol.get() );
+            sig.push_back( (std::uintptr_t) e.mute.get() );
+        }
+        sig.push_back( 0xFFFFu );   // a member separator, so two shapes cannot alias
+    }
+    return sig;
 }
 
 std::uint64_t SLiveMonitor::liveOwnedRefusals()

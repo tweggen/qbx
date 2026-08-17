@@ -653,6 +653,7 @@ SSMVMixerControl::SSMVMixerControl(
     qMeter_ = new SLevelMeter( this );
     // Bind ONCE: the track's twRewire is created only when null
     // (STrack::buildComponents), so its identity is stable for this head's life.
+    qMeter_->setMeterLabel( QString() );   // undo the live label, if it was set
     probe_.setTap( tk_.getRootComponent() );
     syncMeterLanes();
 
@@ -1014,6 +1015,32 @@ void SSMVMixerControl::onMeterTick( offset_t pos, qint64 nowMs, bool live )
     if( !ssolo::isLaneAudible( smv_.getModel(), &tk_ ) ) {
         qMeter_->pushIdle( nowMs );
         return;
+    }
+
+    // A LIVE-OWNED track has NO FROZEN PAGES to read (proposal 21 L1b): its
+    // audio is rendered by the pump and its chain is excluded from the frozen
+    // sum, so the probe would MISS every tick and the bar would decay to the
+    // floor while the performer is playing. The head therefore shows the
+    // PRE-FX INPUT level, which is the one thing measurable from the main
+    // thread, and the meter's label says so. A post-FX live meter would need
+    // the pump to publish levels by position - engine work, and not this phase.
+    if( tk_.isLiveOwnedLane() ) {
+        if( SLiveMonitor *mon = SApplication::app().liveMonitor() ) {
+            const double peak = mon->takeInputPeak( &tk_ );
+            twLevelSample ls;
+            ls.peak       = (float) peak;
+            // No RMS is available without keeping a window on the pump thread,
+            // and a wrong one would read as a quiet signal. Report the peak as
+            // both and let the bar be a peak bar: honest, if coarse.
+            ls.meanSquare = (float) ( peak * peak );
+            ls.frames     = 1;
+            ls.clipped    = peak >= 1.0;
+            qMeter_->setMeterLabel(
+                QStringLiteral( "Input level (pre-FX) - this track is MONITORED, "
+                                "so it has no frozen pages to read" ) );
+            qMeter_->pushLevel( ls, nowMs );
+            return;
+        }
     }
 
     // Re-bind every tick rather than only in the ctor: setTap() is a pointer

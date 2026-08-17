@@ -118,9 +118,15 @@ public:
     void projectChanged();
 
     bool active() const;
-    /// Peak of what the input actually delivered since the last read, 0..1.
-    /// The pre-FX input meter (design D9); decays like every other meter.
+    /// Is this track being rendered by the pump right now?
+    bool isLive( const STrack *track ) const;
+    /// Peak of what the input delivered, 0..1, WITHOUT clearing it - the
+    /// assertion's view, which must not depend on who read it last.
     double inputPeak( const STrack *track ) const;
+    /// The same peak, CLEARED - the meter's view. The pre-FX input meter
+    /// (design D9) needs a since-the-last-tick reading or the bar latches at
+    /// the loudest thing that ever happened.
+    double takeInputPeak( const STrack *track );
     /// Freeze-path renders that arrived at a LIVE-OWNED processor and were
     /// answered with silence (design D4). Process-wide. Surfaced here rather
     /// than read straight off `twPluginSlotProcessor` because `app/testkit`
@@ -135,6 +141,7 @@ public:
 private slots:
     void finishDisarm();
     void pumpDemands();
+    void pumpEdits();
 
 private:
     SStdMixer *rootMixer() const;
@@ -148,6 +155,20 @@ private:
     void closeInputIfUnused();
     void ensurePump();
     void stopPump();
+    /**
+     * What the plan would contain if it were rebuilt right now, as a cheap
+     * comparable value.
+     *
+     * Design section 3 lists "fader / insert / bypass / reorder edits on a
+     * closure member" among the plan-rebuild triggers, and a plan is a
+     * SNAPSHOT: a fader moved while monitoring is inaudible until a new one is
+     * built. Wiring a signal from every one of those edit paths into here
+     * would be four couplings for one question, and the question is cheap to
+     * ask: the processors in slot order and the gain envelope, per member. The
+     * demand tick asks it and republishes only on a difference, so a monitoring
+     * session that nobody is editing costs one vector compare every 40 ms.
+     */
+    std::vector<std::uintptr_t> planSignature() const;
 
     SApplication *app_ = nullptr;
 
@@ -175,6 +196,7 @@ private:
     SLiveClosure suspended_;
     bool liveOpened_ = false;
     QString lastRefusal_;
+    std::vector<std::uintptr_t> publishedSignature_;
 };
 
 #endif // _SLIVEMONITOR_H_

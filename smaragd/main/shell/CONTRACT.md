@@ -198,6 +198,18 @@ Phase 6 splits it into narrow context interfaces.
     thread. "Fresh" is the point: the closure is recomputed from the model as
     it then stands, never restored from a snapshot.
 
+18a. **The `Closure` master mode is REFUSED, not approximated.**
+    `twlive::checkMasterShape` is asked BEFORE anything is re-wired, and a
+    master that is not a unity sum with an identity map turns monitoring OFF
+    with one log line and a tooltip. The plan builder can express the other
+    mode, but the RT half of it is not wired — `twSpeaker` adds the frozen
+    root page whenever the frozen lane is PLAYING and nothing reads
+    `twLivePlan::masterLinear` — so a Closure-shaped plan would be summed on
+    top of a root page that already contains those tracks and the arrangement
+    would be heard DOUBLED. Unreachable today (`SStdMixer` builds exactly the
+    linear shape); whoever adds a master insert chain lands here first, and the
+    fix belongs in `twSpeaker`.
+
 18. **The app never touches the ring and never renders on the pump.** Plans are
     built on the main thread and published with one `setPlan()`; the pump is
     the only thread that reads them. The re-rooted horizon demands (one handle
