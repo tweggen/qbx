@@ -305,8 +305,21 @@ const Fixture kFixtures[] = {
     // --- the event-editor verbs (proposal 37 P4) ---------------------------
     // Every attribute is written unconditionally by these four, so a fixture
     // declaring all of them keeps all of them in the audit.
+    // The PLAY mode of proposal 21 L2 is folded in rather than given a second
+    // fixture: the lookup returns the FIRST match for a verb, so one element
+    // has to carry every attribute. `release` is absent because writeXml omits
+    // it when false, which is the rule the header above states.
     { "virtual-key",
-      "<virtual-key key='67' velocity='90' durationTicks='480'/>" },
+      "<virtual-key key='67' velocity='90' durationTicks='480' hold='1'"
+      " durationMs='250'/>" },
+    // The live-instrument assertions (proposal 21 L2).
+    { "assert-audio-onset",
+      "<assert-audio-onset filename='cap.wav' channel='1' startFrame='4096'"
+      " threshold='0.05' window='128' minFrame='0' maxFrame='12288'"
+      " afterMidiIn='1'/>" },
+    { "assert-render-policy",
+      "<assert-render-policy liveThreadRefusals='0' liveOwnedRefusals='64'"
+      " minLiveOwnedRefusals='1'/>" },
     // edge='end' deliberately: with an empty edge and lane='notes', readXml
     // DEFAULTS toKey to key (a move needs a destination, a resize does not),
     // which would hide a dropped toKey.
@@ -350,10 +363,12 @@ const Fixture kFixtures[] = {
     // --- the MIDI-out verbs (proposal 37 P7b) -------------------------------
     // port/kind are written only when non-empty and `at` only when it was
     // given, so the fixture sets all three plus every numeric attribute.
+    // maxLagMs (proposal 21 L2 AC5) is written only when >= 0, so it belongs
+    // in the one fixture rather than in a second element.
     { "assert-midi-out",
       "<assert-midi-out port='capture' kind='noteon' channel='2' key='60'"
       " cc='7' value='100' at='-9600' tolerance='2048' count='1'"
-      " minCount='1' maxCount='2' index='0'/>" },
+      " minCount='1' maxCount='2' index='0' maxLagMs='5'/>" },
     // minCount is written only when non-zero.
     { "dump-midi-capture",
       "<dump-midi-capture filename='midi_out.txt' minCount='6'/>" },

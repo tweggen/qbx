@@ -418,3 +418,38 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     makes frame 0 of the next dump the first frame of that phase — which is
     what lets a monitoring case use absolute frame windows instead of
     wall-clock guesses.
+
+## Live instruments (proposal 21 L2)
+
+14. **`assert-audio-onset` REPORTS the number it measured, pass or fail.** The
+    acceptance criterion asks for the onset lag to be RECORDED, not for a
+    boolean, so the verb prints "onset lag N frames (M ms)" on every run. The
+    scan is a running RMS window rather than a per-sample threshold: one sample
+    above the line is a click or a dither bit, and an onset a case can reason
+    about is where ENERGY begins. `afterMidiIn="1"` measures RELATIVE to the
+    last injection by mapping its host time through
+    `CaptureBackend::frameAtHostTime` - the AUDIO backend's own block log,
+    which shares no code with the pump, the ring or the event source. No
+    latency term belongs in that comparison: the capture dump IS what the
+    device was handed, and `frameAtHostTime` answers in exactly that domain.
+
+15. **`assert-render-policy` grew a MINIMUM, and only one case may use it.**
+    `minLiveOwnedRefusals` exists for `live_instrument_ownership`, which
+    asserts that the ownership guard FIRED. "At most 0" and "at least 1" are
+    different claims; the minimum defaults to 0 so every other case means
+    exactly what it meant.
+
+16. **`assert-midi-out maxLagMs` is HOST TIME TO HOST TIME**, with no frame
+    mapping anywhere in it - unlike `at`, which maps through the audio clock.
+    Thru has no position: it is a key being pressed right now, and the only
+    question is how long the wire took. Both sides are recorded by things that
+    are not the thing under test (`midi-in-event`'s injection instant and the
+    capture port's `send()` instant), which is what makes the number worth
+    anything.
+
+17. **`virtual-key` has TWO MODES and a case must choose.** `hold`/`release`
+    PLAY the computer keyboard's MIDI port; the default WRITES a note at the
+    locator. The real mouse handler does both, because a user pressing a key
+    means both - but a case measuring what an instrument SOUNDS must not also
+    be editing the project under the measurement, so the verb keeps them apart.
+    `key="-1"` with `release` lets go of everything.

@@ -16,15 +16,35 @@
  */
 
 /**
- * `virtual-key` - one press on the virtual keyboard, which inserts a note at
- * the LOCATOR through `add-note`.
+ * `virtual-key` - one press on the virtual keyboard.
  *
- * The target is the first event clip in the SELECTION, else the first one on
- * the SELECTED TRACK. With neither, the verb FAILS rather than doing nothing
- * quietly - a case asserts that with `expectReject`.
+ * TWO MODES, because the keyboard does two things and a case needs to address
+ * them separately (proposal 21 L2, design D9):
  *
- * The note lands as a nested `add-note` action, so `<undo count="1"/>` after
- * this verb removes it.
+ *   (default)              WRITE a note at the LOCATOR through `add-note`.
+ *                          The target is the first event clip in the SELECTION,
+ *                          else the first one on the SELECTED TRACK. With
+ *                          neither, the verb FAILS rather than doing nothing
+ *                          quietly - a case asserts that with `expectReject`.
+ *                          The note lands as a nested `add-note` action, so
+ *                          `<undo count="1"/>` after this verb removes it.
+ *
+ *   hold="1"               PLAY it: a note-on on the computer keyboard's
+ *                          in-process MIDI PORT, which a live-armed instrument
+ *                          track hears exactly as it hears hardware. Nothing is
+ *                          written and nothing lands on the undo stack.
+ *   release="1"            the matching note-off. `key="-1"` releases every key
+ *                          the dock is holding.
+ *   durationMs="N"         with hold: send the note-off N ms later, pacing on
+ *                          the ONE steady clock (MidiOutScheduler::hostNowNs)
+ *                          and PUMPING the event loop while it waits - every
+ *                          clock a case cares about only advances when events
+ *                          are processed.
+ *
+ * The two modes are deliberately not folded into one "do both": a case that is
+ * measuring what an instrument SOUNDS must not also be editing the project
+ * under the measurement, while the real mouse handler does both precisely
+ * because a user pressing a key means both.
  */
 class SVirtualKeyAction : public SAction
 {
@@ -34,7 +54,8 @@ public:
     QString name() const override { return QStringLiteral( "virtual-key" ); }
     QStringList knownAttributes() const override
     { return { QStringLiteral( "key" ), QStringLiteral( "velocity" ),
-               QStringLiteral( "durationTicks" ) }; }
+               QStringLiteral( "durationTicks" ), QStringLiteral( "hold" ),
+               QStringLiteral( "release" ), QStringLiteral( "durationMs" ) }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -43,6 +64,9 @@ private:
     int    key_ = 60;
     double velocity_ = 100.0;
     qint64 durationTicks_ = 960;
+    bool   hold_ = false;
+    bool   release_ = false;
+    int    durationMs_ = 0;
 };
 
 /**

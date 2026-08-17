@@ -13,9 +13,12 @@
 #include "app/objects/track/strack.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/slivemonitor.h"
+#include "app/testkit/smidiintestactions.h"
 #include "app/testkit/stestfilepath.h"
 #include "tw/analysis/audio_analysis.h"
+#include "tw/devices/capture_backend.h"
 #include "tw/graph/tw_freeze_context.h"
+#include "tw/playback/twspeaker.h"
 
 using namespace strackpath;
 
@@ -262,7 +265,8 @@ bool SAssertAudioContinuityAction::readXml( const QDomElement &elem, int )
 QStringList SAssertRenderPolicyAction::knownAttributes() const
 {
     return { QStringLiteral( "liveThreadRefusals" ),
-             QStringLiteral( "liveOwnedRefusals" ) };
+             QStringLiteral( "liveOwnedRefusals" ),
+             QStringLiteral( "minLiveOwnedRefusals" ) };
 }
 
 SApplyResult SAssertRenderPolicyAction::apply( SProject * )
@@ -283,10 +287,18 @@ SApplyResult SAssertRenderPolicyAction::apply( SProject * )
                    << "- a freeze arrived at a live-owned processor";
         ok = false;
     }
+    if( liveOwned < minLiveOwnedRefusals_ ) {
+        qWarning() << "assert-render-policy: liveOwnedRefusals" << liveOwned
+                   << "is below the required minimum" << minLiveOwnedRefusals_
+                   << "- the ownership guard never fired, so this case proved"
+                      " nothing about it";
+        ok = false;
+    }
     if( !ok ) return { false, nullptr };
     qDebug() << "assert-render-policy: liveThreadRefusals" << liveThread
              << "( <=" << maxLiveThreadRefusals_ << "), liveOwnedRefusals"
-             << liveOwned << "( <=" << maxLiveOwnedRefusals_ << ")";
+             << liveOwned << "( <=" << maxLiveOwnedRefusals_ << ", >="
+             << minLiveOwnedRefusals_ << ")";
     return { true, nullptr };
 }
 
@@ -294,12 +306,16 @@ void SAssertRenderPolicyAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "liveThreadRefusals", QString::number( maxLiveThreadRefusals_ ) );
     elem.setAttribute( "liveOwnedRefusals", QString::number( maxLiveOwnedRefusals_ ) );
+    if( minLiveOwnedRefusals_ > 0 )
+        elem.setAttribute( "minLiveOwnedRefusals",
+                           QString::number( minLiveOwnedRefusals_ ) );
 }
 
 bool SAssertRenderPolicyAction::readXml( const QDomElement &elem, int )
 {
     maxLiveThreadRefusals_ = elem.attribute( "liveThreadRefusals", "0" ).toLongLong();
     maxLiveOwnedRefusals_  = elem.attribute( "liveOwnedRefusals", "0" ).toLongLong();
+    minLiveOwnedRefusals_  = elem.attribute( "minLiveOwnedRefusals", "0" ).toLongLong();
     return true;
 }
 
@@ -370,6 +386,126 @@ bool SAssertInputMeterAction::readXml( const QDomElement &elem, int )
     return true;
 }
 
+// --- assert-audio-onset -----------------------------------------------------
+
+QStringList SAssertAudioOnsetAction::knownAttributes() const
+{
+    return { QStringLiteral( "filename" ),   QStringLiteral( "channel" ),
+             QStringLiteral( "startFrame" ), QStringLiteral( "threshold" ),
+             QStringLiteral( "window" ),     QStringLiteral( "minFrame" ),
+             QStringLiteral( "maxFrame" ),   QStringLiteral( "afterMidiIn" ) };
+}
+
+SApplyResult SAssertAudioOnsetAction::apply( SProject *project )
+{
+    if( filename_.isEmpty() ) {
+        qWarning() << "assert-audio-onset: filename is required";
+        return { false, nullptr };
+    }
+    QString path;
+    if( !resolveOrReject( filename_, project, "assert-audio-onset", path ) )
+        return { false, nullptr };
+
+    std::string err;
+    int rate = 0;
+    std::vector<float> pcm;
+    if( !audio::readAudioRegion( path.toStdString(), startFrame_, -1, channel_,
+                                 pcm, rate, err )
+        || pcm.empty() ) {
+        qWarning() << "assert-audio-onset: cannot read" << path
+                   << QString::fromStdString( err );
+        return { false, nullptr };
+    }
+
+    const qint64 w = window_ > 0 ? window_ : 64;
+    qint64 onset = -1;
+    // A RUNNING window rather than a per-sample threshold: a single sample
+    // above the line is a click or a dither bit, and an onset that a case can
+    // reason about is where ENERGY begins.
+    for( qint64 i = 0; i + w <= (qint64) pcm.size(); ++i ) {
+        double sum = 0.0;
+        for( qint64 k = 0; k < w; ++k ) sum += (double) pcm[i + k] * pcm[i + k];
+        if( std::sqrt( sum / (double) w ) >= threshold_ ) { onset = i; break; }
+    }
+    if( onset < 0 ) {
+        qWarning() << "assert-audio-onset:" << filename_
+                   << "never reaches RMS" << threshold_
+                   << "- no onset in" << (qint64) pcm.size() << "frames from"
+                   << startFrame_;
+        return { false, nullptr };
+    }
+    const qint64 absOnset = startFrame_ + onset;
+
+    qint64 measured = absOnset;
+    QString what = QStringLiteral( "onset" );
+    if( afterMidiIn_ ) {
+        const qint64 injected = smidiin::lastInjectedHostNs();
+        if( injected == 0 ) {
+            qWarning() << "assert-audio-onset: afterMidiIn=1 but nothing has been"
+                          " injected in this run";
+            return { false, nullptr };
+        }
+        std::shared_ptr<twSpeaker> speaker = SApplication::app().getSpeaker();
+        audio::AudioBackend *backend = speaker ? speaker->getBackend() : nullptr;
+        audio::CaptureBackend *cap =
+            dynamic_cast<audio::CaptureBackend *>( backend );
+        if( !cap ) {
+            qWarning() << "assert-audio-onset: afterMidiIn=1 needs the CAPTURE"
+                          " audio backend - there is no block log to map a host"
+                          " time through. Set SMARAGD_AUDIO_BACKEND=capture.";
+            return { false, nullptr };
+        }
+        // The dump IS what the device was handed, and frameAtHostTime answers
+        // in exactly that domain, so no latency term belongs here: both sides
+        // are delivery-frame indices.
+        const qint64 refFrame = (qint64) cap->frameAtHostTime( injected );
+        measured = absOnset - refFrame;
+        what = QStringLiteral( "onset lag (note-on at capture frame %1)" )
+                   .arg( refFrame );
+    }
+
+    const double ms = rate > 0 ? ( 1000.0 * (double) measured / rate ) : 0.0;
+    qInfo().noquote() << QStringLiteral(
+        "assert-audio-onset: %1 %2 = %3 frames (%4 ms at %5 Hz)" )
+        .arg( filename_ ).arg( what ).arg( measured )
+        .arg( QString::number( ms, 'f', 2 ) ).arg( rate );
+
+    if( minFrame_ >= 0 && measured < minFrame_ ) {
+        qWarning() << "assert-audio-onset:" << measured << "<" << minFrame_;
+        return { false, nullptr };
+    }
+    if( maxFrame_ >= 0 && measured > maxFrame_ ) {
+        qWarning() << "assert-audio-onset:" << measured << ">" << maxFrame_;
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertAudioOnsetAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "filename", filename_ );
+    elem.setAttribute( "channel", channel_ );
+    elem.setAttribute( "startFrame", QString::number( startFrame_ ) );
+    elem.setAttribute( "threshold", QString::number( threshold_ ) );
+    elem.setAttribute( "window", QString::number( window_ ) );
+    if( minFrame_ >= 0 ) elem.setAttribute( "minFrame", QString::number( minFrame_ ) );
+    if( maxFrame_ >= 0 ) elem.setAttribute( "maxFrame", QString::number( maxFrame_ ) );
+    if( afterMidiIn_ ) elem.setAttribute( "afterMidiIn", "1" );
+}
+
+bool SAssertAudioOnsetAction::readXml( const QDomElement &elem, int )
+{
+    filename_    = elem.attribute( "filename", "" );
+    channel_     = elem.attribute( "channel", "0" ).toInt();
+    startFrame_  = elem.attribute( "startFrame", "0" ).toLongLong();
+    threshold_   = elem.attribute( "threshold", "0.02" ).toDouble();
+    window_      = elem.attribute( "window", "64" ).toLongLong();
+    minFrame_    = elem.attribute( "minFrame", "-1" ).toLongLong();
+    maxFrame_    = elem.attribute( "maxFrame", "-1" ).toLongLong();
+    afterMidiIn_ = elem.attribute( "afterMidiIn", "0" ).toInt() != 0;
+    return true;
+}
+
 static const bool s_reg_live_test_actions = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "assert-monitor-latency" ),
@@ -383,4 +519,7 @@ static const bool s_reg_live_test_actions = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "assert-input-meter" ),
         []{ return new SAssertInputMeterAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "assert-audio-onset" ),
+        []{ return new SAssertAudioOnsetAction; } ),
     true );

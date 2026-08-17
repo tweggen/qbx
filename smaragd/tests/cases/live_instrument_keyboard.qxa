@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L2, AC6. THE COMPUTER KEYBOARD IS A REAL MIDI PORT.
+
+  Design D9: `SVirtualKeyboardDock` becomes an in-process `MidiInput` so live
+  play and recording treat it exactly like hardware. That is the whole point of
+  making it a DEVICE rather than a shortcut into the live lane: the fan-out,
+  the per-consumer rings, the host-time mapping, the held-note table, MIDI-thru
+  and (in L4) the recorder then have ONE shape to handle instead of two.
+
+  `trackInput="keyboard"` is a spelling of its own rather than a scheme,
+  because there is exactly one such port and it is present on every machine
+  whatever `SMARAGD_MIDI_BACKEND` chooses - `createMidiInput("keyboard")` is
+  named explicitly and the environment variable cannot reach it.
+
+  THE VERB HAS TWO MODES AND THIS CASE EXERCISES BOTH, because the real widget
+  does both and they are different things:
+
+    virtual-key hold / release   PLAY the port. Nothing is written, nothing
+                                 lands on the undo stack.
+    virtual-key (default)        WRITE a note at the LOCATOR through
+                                 `add-note` - the stopped-transport step input
+                                 design D9 keeps.
+
+  Both go through the REAL SVirtualKeyboardDock via the shell, so what is under
+  test is the widget rather than the script (testkit CONTRACT inv. 5).
+
+  MEASURED, idle box: the held C4 reads rms 0.556750 at 261.585 Hz against the
+  closed form 0.556769, the live source reports held=1 while it is down and
+  held=0 after the release, and the window after the release is EXACTLY 0.
+-->
+<SActionScript version="1" name="live_instrument_keyboard">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Notes"/>
+    <set-selection paths="0,0"/>
+    <set-locator position="0"/>
+
+    <!-- The computer keyboard, not a MIDI device. -->
+    <set-track-input trackPath="0" input="keyboard"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-input-meter trackPath="0" contains="keyboard"/>
+    <wait-ms ms="500"/>
+
+    <!-- ================== PLAY it: hold, then release =================== -->
+    <virtual-key key="60" velocity="100" hold="1"/>
+    <wait-ms ms="1400"/>
+    <dump-playback-capture filename="kb_a.wav" minFrames="80000"/>
+    <assert-audio-frequency filename="kb_a.wav" channel="0"
+                            startFrame="45000" frameCount="30000"
+                            minHz="256" maxHz="268"/>
+    <!-- (100/127)/sqrt(2) = 0.556769, +-4 % -->
+    <assert-audio-energy filename="kb_a.wav" channel="0"
+                         startFrame="45000" frameCount="30000"
+                         minRms="0.53450" maxRms="0.57904"/>
+    <!-- The LIVE SOURCE knows it is holding it - that table is what the one
+         chase at live start is rebuilt from, and what the all-notes-off flush
+         on disarm empties. -->
+    <assert-input-meter trackPath="0" contains="held=1"/>
+
+    <virtual-key key="60" release="1"/>
+    <wait-ms ms="1400"/>
+    <dump-playback-capture filename="kb_b.wav" minFrames="140000"/>
+    <assert-audio-energy filename="kb_b.wav" channel="0"
+                         startFrame="130000" frameCount="8000"
+                         minRms="0" maxRms="0.0005"/>
+    <assert-input-meter trackPath="0" contains="held=0"/>
+
+    <!-- ============ ...and STEP INPUT still writes at the locator ======== -->
+    <!-- Deliberately AFTER the play half, on the same armed track: making the
+         keyboard a port must not have taken its other job away. -->
+    <assert-midi-events clip="0,0" kind="note" count="0"/>
+    <virtual-key key="62" velocity="90" durationTicks="960"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="62" at="0"
+                        velocity="90"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="0"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

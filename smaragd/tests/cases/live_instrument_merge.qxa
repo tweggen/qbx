@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L2, AC2. THE LIVE NOTES AND THE SEQUENCED ONES ARE MERGED, AND
+  THE SEQUENCED HALF IS MASKED WHILE THE TRANSPORT IS STOPPED.
+
+  This is design D2's transport table, made audible. One instrument slot, TWO
+  event sources: the track's own feed (`events_`, gated by
+  `twLiveTransport::feedEnabled`) and the live one (`liveEvents_`, always
+  collected while live-owned), merged per block with the live source's note ids
+  namespaced to kLiveNoteIdSource.
+
+  WHY THE ARM HAPPENS MID-PLAY. The capture backend clears its recording at
+  DEVICE start, and arming a track opens the device. Arming BEFORE Play would
+  therefore make capture frame 0 the arm, not the play, and every absolute
+  window below would be off by however long the readahead took to prime.
+  Starting the transport first and arming a fraction of a second in makes
+  capture frame N project frame N exactly, which is what the other playback
+  cases rely on too.
+
+  Monitor is set to ON rather than left on Auto: Auto is the tape machine, so
+  under it a PLAYING transport gives the track's own material and no input at
+  all (design D9). ON is the "replace the playback with the input" mode, and it
+  is the only one under which a live instrument can be played along to a
+  running arrangement.
+
+  THE CLOSED FORM. `tw.test.clap.sine` is envelope-less sine voices with
+  amp = velocity/127, so at velocity 60 one note is amp 0.472441 and its rms is
+  0.334066. TWO notes at different frequencies are uncorrelated, so the mean
+  square adds: rms = sqrt(2) * 0.334066 = 0.472441 - and the peak is 0.945,
+  which is why velocity 60 and not 100: two notes at 100 would sum to 1.57 and
+  the 16-bit capture dump would clip, destroying the very number being measured.
+
+      E4 (key 64) 329.628 Hz, SEQUENCED,  1 s - 2 s
+      C4 (key 60) 261.626 Hz, LIVE,       injected at 1.2 s, released at 2.5 s
+
+  so second 1 carries both and second 2 carries the live one alone - which is
+  also the check that the sequenced note ENDED on time rather than being held
+  by the merge.
+
+  MEASURED, idle box: E4 alone rms 0.343944 at 327.689 Hz; the PAIR rms
+  0.472966 against the closed form 0.472441; C4 alone rms 0.333745 at
+  261.656 Hz; the stopped-transport window rms EXACTLY 0; longest gap across
+  the merge 9 frames, largest step 0.0366.
+-->
+<SActionScript version="1" name="live_instrument_merge">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+
+    <!-- The SEQUENCED half: E4 from 1 s to 2 s. 120 BPM / ppq 960, so one
+         second is 1920 ticks. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="5760" name="Seq"/>
+    <add-note clip="0,0" tick="1920" dur="1920" key="64" velocity="60" channel="0"/>
+
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <!-- ================= PLAYING: the two sources merge ================== -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <!-- Live from here on. Both verbs are needed: ON is what makes it live
+         while PLAYING, and the arm is what a user would actually do. -->
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <midi-in-event kind="noteon" key="60" velocity="60" channel="0"
+                   atFrame="57600" timeoutMs="30000"/>
+    <midi-in-event kind="noteoff" key="60" channel="0"
+                   atFrame="120000" timeoutMs="30000"/>
+    <wait-ms ms="1200"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="merge.wav" minFrames="150000"/>
+
+    <!-- 1.05 s - 1.25 s: the SEQUENCED note alone. The injection is gated on
+         the locator reaching 1.2 s and the live path costs ~95 ms on top, so
+         nothing live can be in this window. 0.334066 +-5 %. -->
+    <assert-audio-frequency filename="merge.wav" channel="0"
+                            startFrame="50400" frameCount="9600"
+                            minHz="323" maxHz="337"/>
+    <assert-audio-energy filename="merge.wav" channel="0"
+                         startFrame="50400" frameCount="9600"
+                         minRms="0.31736" maxRms="0.35077"/>
+
+    <!-- 1.5 s - 1.9 s: BOTH. 0.472441 +-5 %, which excludes either note alone
+         (0.334) by a factor of 1.41 - the whole point of the two-tone form. -->
+    <assert-audio-energy filename="merge.wav" channel="0"
+                         startFrame="72000" frameCount="19200"
+                         minRms="0.44882" maxRms="0.49606"/>
+
+    <!-- THE SEQUENCED NOTE WAS NOT RESTARTED. A re-attack at the moment the
+         live note arrives is a discontinuity, and a hand-over that dropped a
+         block is a gap; neither may happen across 1.0 s - 2.0 s. maxStep is
+         generous because the SUM of two sines legitimately steps by more than
+         one of them does, and because a note-on is itself a step. -->
+    <assert-audio-continuity filename="merge.wav" channel="0"
+                             startFrame="48000" frameCount="48000"
+                             maxGapFrames="256" maxStep="0.25"
+                             silenceLevel="0.002"/>
+
+    <!-- 2.083 s - 2.375 s: the sequenced note has ENDED and the LIVE one is
+         still held. C4 alone, at one-note level. -->
+    <assert-audio-frequency filename="merge.wav" channel="0"
+                            startFrame="100000" frameCount="14000"
+                            minHz="256" maxHz="268"/>
+    <assert-audio-energy filename="merge.wav" channel="0"
+                         startFrame="100000" frameCount="14000"
+                         minRms="0.31736" maxRms="0.35077"/>
+
+    <!-- ========== STOPPED: the sequenced feed is MASKED ================== -->
+    <!-- Off, then on again, so the device restarts and the capture below
+         starts at frame 0 of its own session. -->
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <arm-track trackPath="0" armed="0"/>
+    <wait-ms ms="500"/>
+
+    <!-- The locator sits INSIDE the sequenced note. A stopped live lane holds
+         its automation there and renders from a virtual counter - and it must
+         sound NOTHING, because no reference DAW plays sequenced notes with the
+         transport stopped; the chase happens on Play. -->
+    <set-locator position="72000"/>
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="900"/>
+    <dump-playback-capture filename="stopped.wav" minFrames="32000"/>
+    <assert-audio-energy filename="stopped.wav" channel="0"
+                         startFrame="4000" frameCount="24000"
+                         minRms="0" maxRms="0.0005"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

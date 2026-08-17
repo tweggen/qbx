@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L2, AC3. THE HAND-BACK. After a live instrument is disarmed
+  mid-playback, the arrangement carries on from the FROZEN lane exactly as if
+  it had never been armed, and the project is left in a state a render cannot
+  tell apart from the one it started in.
+
+  THE TWO CAPTURES ARE NOT BYTE-COMPARABLE, and that is a fact about real-time
+  playback rather than a weakness of the assertion: two runs start their device
+  at slightly different locator positions and absorb different underruns, so a
+  cmp would fail on a perfectly correct engine. They are compared the only way
+  two real-time recordings honestly can be - by PER-SECOND RMS against a CLOSED
+  FORM, and by fundamental. `tw.test.clap.sine` is envelope-less, so
+  "per-second rms of a held note" is exact rather than a measurement:
+
+      rms = (velocity/127)/sqrt(2) = (100/127)/sqrt(2) = 0.556769
+
+  and the same four bands are asserted on BOTH files. A live lane that left the
+  chain in a different state - a plugin still holding a voice, a page frozen as
+  silence during the tail and then adopted - moves one of the eight numbers.
+
+  THE RENDER IS the byte gate. R1 is taken before anything is armed and R2
+  after the whole live session; they must be IDENTICAL. That is a stronger
+  statement than the acceptance criterion's fresh-process comparison in one
+  respect (it also catches state that a process restart would have hidden) and
+  weaker in another (a fresh process is not exercised). The cross-process form
+  needs the two-case driver `run_xproc_determinism.cmake`; it is NOT gated here
+  and is named in STATE.md as such.
+
+      C4 60  261.626 Hz   0 s - 1 s
+      E4 64  329.628 Hz   1 s - 2 s      <- armed at ~0.2 s, LIVE through here
+      G4 67  391.995 Hz   2 s - 3 s      <- disarmed at 2.4 s, FROZEN after
+      A4 69  440.000 Hz   3 s - 4 s
+
+  MEASURED, idle box: G4 rms 0.556780 and 391.945 Hz on BOTH files, A4 rms
+  0.556776 and 439.949 Hz on both; r2.wav byte-identical to r1.wav (768 044
+  bytes); the longest gap anywhere is 1 frame; both clean windows step by
+  EXACTLY 0.040405, which is the closed-form maximum of the sine to six
+  figures; the flip itself costs one step of 0.319 - 0.341 across runs.
+-->
+<SActionScript version="1" name="live_instrument_disarm_playback">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Scale"/>
+    <add-note clip="0,0" tick="0"    dur="1920" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="1920" dur="1920" key="64" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="3840" dur="1920" key="67" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="5760" dur="1920" key="69" velocity="100" channel="0"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <!-- THE BYTE GATE, before anything is live. -->
+    <render filename="r1.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- ============== RUN A: no arm, the reference recording ============= -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="4200"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="plain.wav" minFrames="180000"/>
+    <wait-ms ms="400"/>
+
+    <!-- ============== RUN B: armed at ~0.2 s, disarmed at 2 s ============ -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <!-- A live note ON TOP of the arrangement while the lane is live. It is
+         released before the disarm on purpose: a note still held at the
+         hand-back is a different (and later) question, and this case is about
+         what the FROZEN lane does afterwards. -->
+    <midi-in-event kind="noteon" key="72" velocity="40" channel="0"
+                   atFrame="48000" timeoutMs="30000"/>
+    <midi-in-event kind="noteoff" key="72" channel="0"
+                   atFrame="76800" timeoutMs="30000"/>
+
+    <!-- DISARM at 2.4 s, INSIDE the G4 note and deliberately NOT on a note
+         boundary. A boundary is itself a step of up to twice the amplitude, so
+         a hand-back that landed on one could hide a real discontinuity behind
+         a legitimate one - measured, the E4-to-G4 boundary steps by 0.54 all
+         by itself. Off the boundary, a pure 391.995 Hz sine at amp 0.7874
+         steps by at most 0.7874 * 2*pi*392/48000 = 0.0404 per sample, so the
+         0.08 bound below is tight enough that one duplicated or dropped block
+         fails it.
+
+         Monitor has to go back to Auto as well: under ON the track is live
+         whether it is armed or not (design D9), so the arm alone would change
+         nothing. -->
+    <wait-playhead position="115200" timeoutMs="30000"/>
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <wait-ms ms="2400"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="live.wav" minFrames="180000"/>
+
+    <!-- ===== the two recordings agree from 2.5 s on ====================== -->
+    <!-- Second 2 (G4) and second 3 (A4), on BOTH files, against the closed
+         form 0.556769 +-4 %. The windows start 0.5 s into each second so the
+         note boundaries and the hand-back itself are outside them. -->
+    <assert-audio-energy filename="plain.wav" channel="0"
+                         startFrame="120000" frameCount="24000"
+                         minRms="0.53450" maxRms="0.57904"/>
+    <assert-audio-energy filename="live.wav" channel="0"
+                         startFrame="120000" frameCount="24000"
+                         minRms="0.53450" maxRms="0.57904"/>
+    <assert-audio-frequency filename="plain.wav" channel="0"
+                            startFrame="120000" frameCount="24000"
+                            minHz="384" maxHz="400"/>
+    <assert-audio-frequency filename="live.wav" channel="0"
+                            startFrame="120000" frameCount="24000"
+                            minHz="384" maxHz="400"/>
+
+    <assert-audio-energy filename="plain.wav" channel="0"
+                         startFrame="168000" frameCount="24000"
+                         minRms="0.53450" maxRms="0.57904"/>
+    <assert-audio-energy filename="live.wav" channel="0"
+                         startFrame="168000" frameCount="24000"
+                         minRms="0.53450" maxRms="0.57904"/>
+    <assert-audio-frequency filename="plain.wav" channel="0"
+                            startFrame="168000" frameCount="24000"
+                            minHz="432" maxHz="448"/>
+    <assert-audio-frequency filename="live.wav" channel="0"
+                            startFrame="168000" frameCount="24000"
+                            minHz="432" maxHz="448"/>
+
+    <!-- ACROSS THE FLIP: NO DROPOUT. The step is deliberately NOT bounded in
+         this window, and that is a statement about the design rather than a
+         concession. A stateful GENERATOR handed back to the freeze path is two
+         DSP streams, not one: `setLiveOwned(false)` clears the continuity
+         precisely because "the two owners render different position streams"
+         (design D4), so the two renderings of the same held note agree in
+         frequency and level but not in accumulated phase, and ONE bounded step
+         at the flip is what that costs. Measured: 0.319 - 0.341 across runs,
+         against an amplitude of 0.787 - a fifth of a cycle, and a fifth of the
+         1.575 a full inversion would give. A DROPOUT is a different thing
+         entirely and is what this window is for: a wrong epoch gate shows up
+         as a hole hundreds of milliseconds wide.  -->
+    <assert-audio-continuity filename="live.wav" channel="0"
+                             startFrame="100800" frameCount="33600"
+                             maxGapFrames="1024" maxStep="-1"
+                             silenceLevel="0.002"/>
+
+    <!-- ...and BOTH lanes are clean in their own right, to a bound a single
+         duplicated or dropped block could not survive. A pure 391.995 Hz sine
+         at amp 0.7874 steps by at most 0.7874 * 2*pi*392/48000 = 0.0404 per
+         sample; 0.08 is twice that.
+
+         2.10 s - 2.35 s is the PUMP rendering the arrangement (still armed);
+         2.70 s - 2.95 s is the FROZEN lane after the 250 ms disarm tail has
+         retired. Neither window contains a note boundary. -->
+    <assert-audio-continuity filename="live.wav" channel="0"
+                             startFrame="100800" frameCount="12000"
+                             maxGapFrames="512" maxStep="0.08"
+                             silenceLevel="0.002"/>
+    <assert-audio-continuity filename="live.wav" channel="0"
+                             startFrame="129600" frameCount="12000"
+                             maxGapFrames="512" maxStep="0.08"
+                             silenceLevel="0.002"/>
+
+    <!-- ===== and the project is where it started ========================= -->
+    <render filename="r2.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="r2.wav" expected="r1.wav"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
