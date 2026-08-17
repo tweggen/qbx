@@ -370,7 +370,13 @@ public slots:
     // feature (b) / 07 step 5). Also called during dragging for live preview
     // feedback. Only container-backed cuts ever use this.
     // Async model: schedules revalidation, returns immediately (no hang).
-    void invalidateCapture();
+    //
+    // DIAGNOSTIC (temporary, 2026-08-17): `reason` is a short literal naming
+    // the call site, logged at debug level. This is the ONLY thing that resets
+    // currentPage_ outside a Playback invalidation, so it is what has to be
+    // watched when a [PREVIEW] recompute succeeds and is immediately owed
+    // again.
+    void invalidateCapture( const char *reason = "?" );
 
     // Lazy invalidation + aspect-based caching (Phase 3/4).
     // Invalidate specific aspects of the capture (Preview, Playback, Metadata, Export).

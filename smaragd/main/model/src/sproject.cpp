@@ -16,6 +16,7 @@ using namespace std;
 #include "app/model/sprojectprops.h"
 #include "app/model/sexternfile.h"
 #include "tw/schedule/capture_revalidator.h"
+#include "tw/core/twlog.h"
 
 // Minimal XML escaping for embedding a JSON string inside a single-quoted
 // attribute. JSON's own double quotes are fine inside single quotes; we only
@@ -676,6 +677,15 @@ void SProject::resumeRevalidation()
     if (revalidator_) revalidator_->resume();
 }
 
+// DIAGNOSTIC (temporary, 2026-08-17) — see the header. One line per emission,
+// naming the caller, so a repeating [PREVIEW] recompute can be matched against
+// whatever keeps dropping the captures underneath it.
+void SProject::notifyArrangementChanged( const char *why )
+{
+    TW_LOGD( "model", "[ARRANGE] notifyArrangementChanged why=%s", why ? why : "?" );
+    emit arrangementChanged();
+}
+
 void SProject::enableInvalidation()
 {
     if (invalidationSuppressed_ > 0) {
@@ -689,6 +699,7 @@ void SProject::enableInvalidation()
         // repaint as captures transition from empty to revalidated state.
         // Individual cuts will be invalidated on first access (lazy model),
         // but views need to know to trigger repaints as data becomes available.
+        TW_LOGD( "model", "[ARRANGE] notifyArrangementChanged why=enableInvalidation" );
         emit arrangementChanged();
     }
 }

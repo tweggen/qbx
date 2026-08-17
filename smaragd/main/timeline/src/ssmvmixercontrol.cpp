@@ -119,7 +119,7 @@ void SSMVMixerControl::applyVolume_( double newVolume )
         // Direct mutation doesn't go through actions, so invalidate caches manually
         // (asset captures need to reflect volume changes).
         if( SProject *p = SApplication::app().getCurrentProject() )
-            p->notifyArrangementChanged();
+            p->notifyArrangementChanged( "head.volumeDirect" );
     }
 }
 
@@ -363,7 +363,7 @@ QList<STrack *> SSMVMixerControl::toggleTargets() const
 // is nameable) rather than writing the model directly: that is what makes them
 // undoable, scriptable — and testable, which is why nested solo could break and
 // stay broken. The model write itself is unchanged; setMuted()/setSolo() still
-// do the lazy invalidation (proposal 06), so no notifyArrangementChanged() here.
+// do the lazy invalidation (proposal 06), so no notifyArrangementChanged( "head.volumeDirect" ) here.
 //
 // Broadcasting over a selection is ONE undo step (a macro), because the user
 // made one gesture. Each target gets its own absolute value — `on`, the state

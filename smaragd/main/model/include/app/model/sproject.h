@@ -227,7 +227,14 @@ public:
     // applied action so cached renders (asset captures) invalidate transparently
     // on any edit. Coarse by design (every action, not just arrangement edits);
     // over-invalidation only costs a re-render, never correctness.
-    void notifyArrangementChanged() { emit arrangementChanged(); }
+    //
+    // DIAGNOSTIC (temporary, 2026-08-17): `why` is a short literal naming the
+    // call site, logged at debug level. This signal drops the capture of every
+    // container-backed / grained cut in the project (SCut::onArrangementChanged
+    // -> invalidateCapture), so when a preview recompute repeats without end
+    // the first question is who keeps firing this. Out of line so the log call
+    // does not drag tw/core/twlog.h into every includer of this header.
+    void notifyArrangementChanged( const char *why = "?" );
 
     // Fire captureRevalidated(). Invoked (queued) from revalidator worker
     // threads when an async recompute lands, so views repaint and pick up the

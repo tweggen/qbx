@@ -2167,7 +2167,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->setLoopLengthRaw( WarpedLen( newSeg ) );
                     cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) newSeg );
                     cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
-                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    smv_.getModel()->getProject().notifyArrangementChanged( "drag.loopMarker" );  // Cascade to live assets
                     update( oldRect );
                 }
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -2208,7 +2208,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 if( WarpedPos( (int64_t)newOff ) != cut->getStartOffset() ) {
                     cut->setStartOffset( (offset_t) newOff );  // Visual feedback + queues event via invalidateCapture
                     cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
-                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    smv_.getModel()->getProject().notifyArrangementChanged( "drag.slip" );  // Cascade to live assets
                 }
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -2254,7 +2254,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 cut->setStretchRaw( newStretch );
                 cut->setDurationRaw( ClipLen( newDur ) );
                 cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
-                smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                smv_.getModel()->getProject().notifyArrangementChanged( "drag.resizeRaw" );  // Cascade to live assets
                 update( oldRect );
                 repaint( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
             } else if( clipDragIsLoop_ ) {
@@ -2291,7 +2291,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
                     cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
                     cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
-                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    smv_.getModel()->getProject().notifyArrangementChanged( "drag.resizeRight" );  // Cascade to live assets
                 }
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -2348,7 +2348,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
                     cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
                     cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
-                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    smv_.getModel()->getProject().notifyArrangementChanged( "drag.resizeLeft" );  // Cascade to live assets
                     update( oldRect );
                 }
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -2385,10 +2385,10 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->setStartOffset( rCutStart );
                     cut->setDuration( rDur );
                     lastClickSLink_->setStartTime( rStart );
-                    cut->invalidateCapture();  // Drop cached render, schedule async revalidation
+                    cut->invalidateCapture( "drag.stretch" );  // Drop cached render, schedule async revalidation
                     // Non-blocking: get preview cache (or stale) for live feedback during drag
                     cut->getPreviewCapture();
-                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    smv_.getModel()->getProject().notifyArrangementChanged( "drag.stretch" );  // Cascade to live assets
                     update( oldRect );
                     update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
                 }
@@ -2413,7 +2413,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut->setDuration( rDur );
                     cut->queueWindowParamEvent( DURATION_CHANGE, (double) rDur );
                     cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
-                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    smv_.getModel()->getProject().notifyArrangementChanged( "drag.resizeLoop" );  // Cascade to live assets
                 }
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
