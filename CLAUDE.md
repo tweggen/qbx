@@ -1188,6 +1188,61 @@ a patch.
 5. **Latency control:** Fixed at device default; no user-facing buffer sizing.
 6. **No headless coverage at all.** Nothing in the qxa suite records anything, and every device path needs real endpoints. Every recording change to date has been hand-verified only — say so in the PR rather than letting a green suite imply otherwise.
 
+## Recording MIDI (proposal 21 L4 = 37 P8b — executed 2026-08-18)
+
+Arm a track whose input is `midi:<port>:<ch|any>` or `keyboard`, press Record:
+what the performer plays becomes an event clip on that track — latency-mapped,
+one take per loop pass, optionally quantised, as **one undo step**. Design:
+`plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md` **D6** (the placement
+conversion) and **D8** (the recorder as a main-thread consumer of a tee).
+Invariants: `main/shell/CONTRACT.md` inv. 25-31, `main/objects/midi/CONTRACT.md`
+("The recording verbs"), `main/model/CONTRACT.md` ("The generic take-column
+seam"), `main/testkit/CONTRACT.md` 18-20.
+
+**Read this before touching MIDI recording — the obvious design is wrong for
+exactly the reason MIDI-OUT's was, mirrored.** MIDI-out must not be emitted at
+freeze time because pages are frozen ahead of the playhead; MIDI-IN must not be
+PLACED on the tick that receives it, because when the first bytes arrive there
+is often no playhead clock at all. Both are answered by the same object.
+
+| Thing to know | Why |
+|---|---|
+| `SPlayheadClock` is THE host-time ↔ project-frame conversion, and both MIDI directions use it | `SMidiOutPump` reads it forward to schedule a message; `SMidiRecorder` reads it backward to place a note. It is the pump's own anchor discipline moved out unchanged — publication-driven re-anchoring (measured: anchoring on a position CHANGE put the first note of a run 59 ms early), the publish-lag correction, the device-latency term, the guarded first anchor. A second implementation would be a second set of corrections to keep in step. |
+| **The tick maps NOTHING.** It buffers `{hostTimeNs, bytes}`; the model is touched only at the stop | That is what makes the mapping RETROSPECTIVE by construction rather than by a special case. A take begun from a stopped transport captures its first messages before the RT has published anything, and backward extrapolation on a clock linear in host time is exact — the same argument `SRecordPlacement` makes for audio. |
+| The conversion is one line: `projectFrame(msg) = clock.frameAtHostNs(msg.hostTimeNs) − inputOffsetProj` | `frameAtHostNs` already answers "the frame being HEARD", so there is no separate output-latency term — design D6's derivation, that the performer plays to what they hear. `inputOffsetProj` is the port's `midi/inputOffsetMs`, and its sign is the app-wide one: **POSITIVE = EARLIER** ("this controller arrives late, compensate more"). |
+| The split with `SAudioRecorder` is by **TRACK INPUT**, never by two record buttons | An armed track whose `trackInput` is `midi:`/`keyboard` goes to `SMidiRecorder`, every other armed track to `SAudioRecorder`. One press records a guitar and a synth part together. Without the filter a MIDI-armed track would get an audio WAV sink and a growing audio clip out of a device it never asked for. |
+| The MIDI recorder starts FIRST and does not touch the transport; only a MIDI-ONLY run starts it from `startRecording` | Monitor AUTO is "input while stopped OR RECORDING" (design D9), so `isRecordingActive()` must already be true when the transport edge rebuilds the live plan. At the stop the MIDI half commits FIRST, while the transport is still running — its anchor is only valid while the RT is publishing. |
+| The recorder's ring is a **SECOND consumer of `MidiInFanout`**; the live lane's is untouched | Design D8: the device thread writes one ring per consumer, so SPSC stays SPSC. Two armed tracks on one port SHARE the sink (a ring has one consumer); the channel filter is applied when the buffer is READ. At a record start the ring is DRAINED, never `clear()`ed — `clear()` is only safe while the producer is idle, and a performer's finger is not. |
+| **`add-take` is audio-only, so `add-midi-take` is a new verb** — and both it and `place-midi-recording` live in `objects/midi` | `add-take` addresses a FILE and seeds grain params; `SRemoveTakeAction` builds its inverse from an `SExternFile` path, so an event take removed through it would be a NON-UNDOABLE removal. And a take stack lives in `objects/cut`, which `objects/midi` sits at the RANK of and must not depend on — so the verbs reach a column through the generic seam on `SObject` (`windowTakeCount` / `insertWindowTake` / …) plus a registered wrap factory, exactly as `objects/track` consults MIDI-ness only through `contentKind()`. |
+| Modes and input quantise are **`SOpt` globals**, read ONCE per take | new-take (default) / overdub / replace, and off / 1/4 / 1/8 / 1/16 / 1/8t / … The two defaults are the two that cannot destroy anything. Reading them once is what stops a settings change mid-take making the commit disagree with the capture. **Neither has a UI control yet.** |
+| The quantise is a `quantize-notes` **inside `place-midi-recording`'s own composite** | One undo entry covers the recording AND its grid. A separate action would leave the user two things to undo for one take. |
+| Loop passes are **ARITHMETIC on wrap-counted frames**, and every pass is placed at the **LOOP START** | `floor((f − loopIn)/loopLen)`, never wrap detection: a 20 ms poll cannot see a wrap between two ticks. `passStart(pass)` is unbounded (pass 2 of a 2 s cycle starts at 192000), so placing there would put pass 2 three loops to the right instead of stacking a take on pass 1's column. |
+| A note held at the stop is CLOSED there; a note whose mapping lands before its pass is CLAMPED into it, never dropped | A recording with an unterminated note is not a recording. Being early is the NORMAL case for the first messages of a take begun from a stopped transport, exactly as being late is normal for a live event. Both are counted, not silent. |
+| **All-notes-off on stop is NOT sent from the recorder** | Closing the held notes in the RECORDING is its half. The sounding half already has two owners — `SMidiOutPump::stop()` panics its run's ports, L2's `detachLiveEvents` flushes the live source at disarm — and a third flush would be a duplicate on the user's hardware. |
+
+Gates: the qxa cases `midi_record_placement`, `midi_record_modes` (all three
+modes against one pre-existing clip, plus the 1/16 input quantise) and
+`midi_record_loop_takes` — all `RUN_SERIAL` at `SMARAGD_CAPTURE_SPEED=1` with no
+`SMARAGD_AUDIO_INPUT_BACKEND` (a MIDI-armed track has no audio input at all) —
+plus `action_roundtrip_test`. Measured: notes placed at **22975 / 34975 / 46975 /
+58975** against the ideal 24000 / 36000 / 48000 / 60000, i.e. **−1025 frames**
+inside a 4096 band, with durations **exactly 9600**; a 1/16 grid snapping to
+24000 / 36000 / 48000 / 60000 at **tolerance 0**; **3 passes → 3 takes on ONE
+column**, removed by ONE undo.
+
+**THE −1025 IS THE CONVERSION WORKING, NOT AN ERROR.** `midi-in-replay
+startFrame=` waits on the PUBLISHED locator while the recorder maps to the frame
+being HEARD, and the published position leads the heard one by one device buffer
+plus the output latency. A case that wanted to remove it would have to measure
+the same two terms a second time.
+
+**NOT gated:** real MIDI hardware and its jitter, CoreMIDI / ALSA-seq,
+`midi/inputOffsetMs` (applied, no UI and no case), sysex (system messages are
+skipped by the recorder, as they are refused by the ring), a `place-retro-midi`
+catch range (design D8 lists it as later work; **not implemented** — the ring is
+drained at the record start), the mode/quantise UI, and recording a MIDI and an
+audio track in the SAME pass (implemented and reachable, no case).
+
 ## Plugin Hosting (proposal 08 — M0..M8 executed; VST3 landed 2026-07-29)
 
 CLAP, **VST3** and **AudioUnit** (macOS) audio-effect plugins are scanned,

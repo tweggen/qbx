@@ -77,6 +77,19 @@ public:
     /** SObject: index < 0 means the ACTIVE take (the generic take seam). */
     SClipWindow *windowTakeAt( int index ) const override
     { return takeAt( index < 0 ? activeTake_ : index ); }
+    /**
+     * The rest of the generic take-column seam (proposal 21 L4). One-line
+     * forwarders: the stack has been window-typed since proposal 37 D8b, so
+     * there is nothing audio-specific left to translate. They exist so
+     * `add-midi-take` can build a column of EVENT takes from `objects/midi`,
+     * which has no edge to this slice.
+     */
+    int windowTakeCount() const override { return nTakes(); }
+    int activeWindowTakeIndex() const override { return activeTake_; }
+    SLink *insertWindowTake( SClipWindow &window, int atIndex ) override
+    { return insertTake( window, atIndex ); }
+    void removeWindowTake( int index ) override { removeTake( index ); }
+    void setActiveWindowTake( int index ) override { setActiveTake( index ); }
     /** The take at index as the model OBJECT it also is (delegation target). */
     SObject *takeObjectAt( int index ) const;
     SObject *activeTakeObject() const { return takeObjectAt( activeTake_ ); }

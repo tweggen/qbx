@@ -310,6 +310,30 @@ const Fixture kFixtures[] = {
       "<place-recording trackPath='0' filePath='x.wav' timePos='96000'"
       " srcOffset='48000' length='24000'/>" },
 
+    // MIDI recording (proposal 21 L4). Both verbs carry CHILD elements, so the
+    // round trip has to survive the events as well as the attributes; the
+    // children are `<e .../>` and not `<n .../>` because a recorded pass
+    // carries CCs as well as notes and the note spelling would read a CC back
+    // as a NoteOn. record-start / record-stop still carry no attributes.
+    { "add-midi-take",
+      "<add-midi-take clip='1,0' index='2' activate='0' name='Take 3'"
+      " lengthTicks='3840'>"
+      "<e k='note' t='0' d='480' ch='0' key='60' v='100'/>"
+      "<e k='note' t='960' d='240' ch='0' key='67' v='80'/>"
+      "</add-midi-take>" },
+    { "place-midi-recording",
+      "<place-midi-recording trackPath='1,0' timePos='96000'"
+      " durationTicks='3840' mode='overdub' quantize='1/16' name='Rec'>"
+      "<e k='note' t='0' d='480' ch='0' key='60' v='100'/>"
+      "<e k='cc' t='480' ch='0' p='7' v='64'/>"
+      "</place-midi-recording>" },
+    { "assert-midi-recorded",
+      "<assert-midi-recorded trackPath='1,0' clips='1' takes='3' minTakes='2'"
+      " passes='3' minPasses='2' notes='8' minNotes='4' events='2'"
+      " startFrame='48000' startTolerance='0' durationFrames='96000'"
+      " durationTolerance='0' mode='new-take' quantize='1/16'"
+      " contains='rec=off'/>" },
+
     // --- the event test verbs ----------------------------------------------
     // clip AND trackPath, kind, contains and velocityTolerance are each
     // written only when set, so the fixture sets every one of them.

@@ -156,6 +156,7 @@ set(APP_OBJECTS_FILES
     # --- app/objects/midi
     objects/midi/include/app/objects/midi/smidiactionsupport.h
     objects/midi/include/app/objects/midi/smidiclipactions.h
+    objects/midi/include/app/objects/midi/smidirecordactions.h
     objects/midi/include/app/objects/midi/smidicut.h
     objects/midi/include/app/objects/midi/smidieventactions.h
     objects/midi/include/app/objects/midi/smidifileactions.h
@@ -163,6 +164,7 @@ set(APP_OBJECTS_FILES
     objects/midi/include/app/objects/midi/smidisequence.h
     objects/midi/src/smidiactionsupport.cpp
     objects/midi/src/smidiclipactions.cpp
+    objects/midi/src/smidirecordactions.cpp
     objects/midi/src/smidicut.cpp
     objects/midi/src/smidieventactions.cpp
     objects/midi/src/smidifileactions.cpp
@@ -307,6 +309,8 @@ set(APP_UI_FILES
     shell/include/app/shell/sliveplanbuilder.h
     shell/include/app/shell/smidiinputhub.h
     shell/include/app/shell/smidioutpump.h
+    shell/include/app/shell/smidirecorder.h
+    shell/include/app/shell/splayheadclock.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssettings.h
     shell/src/sautomationrecorder.cpp
@@ -317,6 +321,7 @@ set(APP_UI_FILES
     shell/src/sliveplanbuilder.cpp
     shell/src/smidiinputhub.cpp
     shell/src/smidioutpump.cpp
+    shell/src/smidirecorder.cpp
     shell/src/smainwindow.cpp
     shell/src/ssettings.cpp
     # --- app/testkit
@@ -337,6 +342,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertlogaction.h
     testkit/include/app/testkit/slivetestactions.h
     testkit/include/app/testkit/srecordtestactions.h
+    testkit/include/app/testkit/smidirecordtestactions.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
     testkit/include/app/testkit/seventuitestactions.h
@@ -371,6 +377,7 @@ set(APP_UI_FILES
     testkit/src/sassertlogaction.cpp
     testkit/src/slivetestactions.cpp
     testkit/src/srecordtestactions.cpp
+    testkit/src/smidirecordtestactions.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/seventuitestactions.cpp

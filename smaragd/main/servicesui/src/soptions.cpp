@@ -51,6 +51,11 @@ QVariant SOpt::def( const QString &key )
     if( key == MidiOutOffsetMs )  return 0;
     if( key == MidiChaseNoteOns ) return false;
     if( key == MidiInputPortIds ) return QStringList();
+    // MIDI recording (proposal 21 L4). New-take because it is the only mode
+    // that cannot destroy what was already played; quantise OFF because a
+    // performance the user did not ask to have quantised must arrive as played.
+    if( key == MidiRecordMode )     return QStringLiteral( "new-take" );
+    if( key == MidiRecordQuantize ) return QStringLiteral( "off" );
     return QVariant();
 }
 

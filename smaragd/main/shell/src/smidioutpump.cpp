@@ -23,23 +23,20 @@
 
 namespace {
 
-constexpr qint64 kNsPerSec = 1000000000LL;
-
 // Frames -> nanoseconds at the PROJECT rate. Everything the pump measures is
 // in project frames (the locator's domain); only the device latency arrives in
 // device frames, and SApplication::meterLatencyFrames() has already converted
 // that one (proposal 34 - skipping it is a ~9 % error at 44.1 kHz on a 48 kHz
-// device).
+// device). The arithmetic itself lives on SPlayheadClock since proposal 21 L4,
+// so the pump and the MIDI recorder cannot round differently.
 inline qint64 framesToNs( qint64 frames, qint64 rate )
 {
-    if( rate <= 0 ) return 0;
-    return (qint64) ( (double) frames * (double) kNsPerSec / (double) rate );
+    return SPlayheadClock::framesToNs( frames, rate );
 }
 
 inline qint64 nsToFrames( qint64 ns, qint64 rate )
 {
-    if( rate <= 0 ) return 0;
-    return (qint64) ( (double) ns * (double) rate / (double) kNsPerSec );
+    return SPlayheadClock::nsToFrames( ns, rate );
 }
 
 inline int clamp7( double v )
@@ -255,7 +252,7 @@ void SMidiOutPump::stop()
     // longer exists, and a note-on that escaped after the stop is a stuck note.
     panicAll();
     cursors_.clear();
-    haveAnchor_ = false;
+    clock_.beginRun( lastPos_, SApplication::app().locatorPublishSeq() );
 }
 
 void SMidiOutPump::locate( offset_t newPos )
@@ -268,15 +265,12 @@ void SMidiOutPump::locate( offset_t newPos )
 void SMidiOutPump::resetRun( offset_t pos )
 {
     cursors_.clear();
-    haveAnchor_     = false;
     lastPos_        = (qint64) pos;
-    runStartPos_    = (qint64) pos;
-    // The publication counter AS OF NOW, so the first anchor waits for a
-    // publication that happened after this run began. Zero would be wrong on
-    // the second run of a process (the counter is process-global and monotone)
-    // and, worse, would make the very first tick anchor on a clock that has
-    // not started - which is how the first note went out 59 ms early.
-    lastPublishSeq_ = SApplication::app().locatorPublishSeq();
+    // The clock takes the publication counter AS OF NOW, so the first anchor
+    // waits for a publication that happened after this run began (see
+    // SPlayheadClock::beginRun - zero would be wrong on the second run of a
+    // process, and is how the first note went out 59 ms early).
+    clock_.beginRun( (qint64) pos, SApplication::app().locatorPublishSeq() );
     playIter_       = 0;
 }
 
@@ -348,13 +342,12 @@ qint64 SMidiOutPump::dueNsFor( qint64 absFrame, qint64 rate, int trackOffsetMs,
 {
     // D6: dueHostTime = hostTime(playhead) + deviceOutputLatency
     //                   - midiOutLatency - globalOffset - trackOffset.
-    // hostTime(playhead) is the anchor extended at the project rate; the
-    // device latency has already been folded into anchorNs_ by the caller
-    // (it is one term for every track, so it is applied once).
+    // hostTime(playhead) is SPlayheadClock's anchor extended at the project
+    // rate; the device latency is already folded into that anchor (it is one
+    // term for every track, so it is applied once).
     const qint64 offsetNs =
         ( (qint64) trackOffsetMs + (qint64) globalOffsetMs_ ) * 1000000LL;
-    return anchorNs_ + framesToNs( absFrame - anchorAbs_, rate )
-           - midiLatencyNs - offsetNs;
+    return clock_.hostNsForFrame( absFrame, rate ) - midiLatencyNs - offsetNs;
 }
 
 void SMidiOutPump::send3( audio::MidiOutScheduler *sched, qint64 dueNs,
@@ -426,32 +419,22 @@ void SMidiOutPump::tick()
     //    instant (D6). meterLatencyFrames() is reused verbatim because it
     //    already converts DEVICE frames at the DEVICE rate into PROJECT frames
     //    - the ~9 % error proposal 34 records for 44.1 kHz on a 48 kHz device.
-    const quint64 seq = app.locatorPublishSeq();
-    if( seq != lastPublishSeq_ ) {
-        // A locate is published by the UI thread immediately, but the RT thread
-        // can still deliver one block against the OLD position before the
-        // engine's seek lands. Anchoring the FIRST time on such a publication
-        // would put the whole first window's due times in the past and flush it
-        // at once. So the first anchor of a run only accepts a position near
-        // where the run started; every later one is unconditional, because by
-        // then the playhead is the authority on where playback actually is.
-        // NOT GATED: a seek DURING playback has no bespoke case - a timing
-        // assertion tight enough to separate the behaviours would be flaky.
-        if( !haveAnchor_
-            && qAbs( pos - runStartPos_ ) > (qint64) rate ) {
-            return;   // NOT consumed: retry on the next publication
-        }
-        lastPublishSeq_ = seq;
-        anchorAbs_ = pos - (qint64) app.outputBufferFramesProject()
-                     + (qint64) playIter_ * cycleLen;
-        anchorNs_  = now + framesToNs( (qint64) app.meterLatencyFrames(), rate );
-        haveAnchor_ = true;
-    }
-    if( !haveAnchor_ ) return;
+    // The first anchor of a run is GUARDED (SPlayheadClock): a locate is
+    // published by the UI thread immediately, but the RT thread can still
+    // deliver one block against the OLD position before the engine's seek
+    // lands, and anchoring on that would put a whole window's due times in the
+    // past and flush it at once. NOT GATED: a seek DURING playback has no
+    // bespoke case - a timing assertion tight enough to separate the
+    // behaviours would be flaky.
+    if( !clock_.observe( now, pos, app.locatorPublishSeq(), rate,
+                         (qint64) app.outputBufferFramesProject(),
+                         (qint64) app.meterLatencyFrames(),
+                         (qint64) playIter_ * cycleLen ) )
+        return;
 
     // Where the ear is right now, in wrap-counted frames, and how far ahead of
     // it we are willing to queue.
-    const qint64 heardAbs = anchorAbs_ + nsToFrames( now - anchorNs_, rate );
+    const qint64 heardAbs = clock_.frameAtHostNs( now, rate );
     const qint64 lookaheadFrames =
         nsToFrames( (qint64) kLookaheadMs * 1000000LL, rate );
     const qint64 maxBacklog =
@@ -496,7 +479,7 @@ void SMidiOutPump::tick()
             }
             c.portId = portId;
             c.iter   = playIter_;
-            c.pos    = runStartPos_;
+            c.pos    = clock_.runStartPos();
             c.chased = false;
         }
 

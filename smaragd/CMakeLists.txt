@@ -349,6 +349,33 @@ foreach(_liveinst live_instrument_play live_instrument_merge
     endif()
 endforeach()
 
+# --- MIDI recording (proposal 21 L4 = 37 P8b) --------------------------------
+#
+# All three RECORD a real-time-paced performance and assert where it was PLACED
+# on the timeline, so they are wall-clock tests in exactly the sense the section
+# above describes: RUN_SERIAL, with SMARAGD_CAPTURE_SPEED=1 spelled out rather
+# than left to the default. The recorder maps a MIDI host time onto a project
+# frame through the playhead clock, and any other pacing changes what a project
+# frame means in wall-clock terms while the injected messages keep meaning
+# wall-clock.
+#
+# No SMARAGD_AUDIO_INPUT_BACKEND, for the same reason the live-instrument six
+# have none: a MIDI-armed track has NO audio input at all (design section 3
+# case (ii)), so the `null` default a headless run already takes is right. The
+# MIDI half arrives through CaptureMidiInput, which SMARAGD_MIDI_BACKEND=capture
+# already selects by default.
+#
+# midi_record_modes WRITES midi/recordMode and midi/recordQuantize through
+# set-option and puts both back; it OWNS those two keys, and no other case
+# reads them.
+foreach(_mrec midi_record_placement midi_record_modes midi_record_loop_takes)
+    if(TEST qxa.${_mrec})
+        set_tests_properties(qxa.${_mrec} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+    endif()
+endforeach()
+
 # SMARAGD_CAPTURE_SPEED=1 is spelled out rather than left to the default: the
 # testkit maps a MIDI host time onto a project frame through the audio capture
 # backend's block log, and any other pacing changes what a project frame means

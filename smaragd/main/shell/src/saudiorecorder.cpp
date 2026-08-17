@@ -51,7 +51,13 @@ void collectArmed( SObject *container, const QList<int> &path,
         QList<int> p = path;
         p.append( i );
         if( STrack *t = dynamic_cast<STrack *>( child ) ) {
-            if( t->isArmedForRecording() ) out.push_back( { t, p } );
+            // A MIDI-armed track belongs to SMidiRecorder (proposal 21 L4).
+            // The split is by TRACK INPUT, not by two record buttons - and it
+            // matters here in particular, because without it a MIDI-armed
+            // track would get an audio WAV sink and a growing audio clip out
+            // of an input device it never asked for.
+            if( t->isArmedForRecording() && !t->hasMidiTrackInput() )
+                out.push_back( { t, p } );
         }
         collectArmed( child, p, out );
     }

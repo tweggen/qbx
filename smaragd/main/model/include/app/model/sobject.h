@@ -227,6 +227,26 @@ public:
     virtual SClipWindow *windowTakeAt( int index ) const
     { (void) index; return nullptr; }
 
+    /**
+     * The REST of that seam (proposal 21 L4), for the same reason and with the
+     * same defaults: an object that is not a take column answers 0 / -1 /
+     * null / nothing, and `add-midi-take` can build a column of EVENT takes
+     * without `objects/midi` growing an edge to `objects/cut` (where
+     * `STakeStack` lives). The stack is window-typed since proposal 37 D8b, so
+     * everything below is already generic there - these are one-line
+     * forwarders, not new behaviour.
+     *
+     * `insertWindowTake` returns the new take's link, or null when the column
+     * REFUSED it (homogeneity: a stack of audio takes will not accept an event
+     * window). Main thread only, like every other model mutation.
+     */
+    virtual int windowTakeCount() const { return 0; }
+    virtual int activeWindowTakeIndex() const { return -1; }
+    virtual SLink *insertWindowTake( SClipWindow &window, int atIndex )
+    { (void) window; (void) atIndex; return nullptr; }
+    virtual void removeWindowTake( int index ) { (void) index; }
+    virtual void setActiveWindowTake( int index ) { (void) index; }
+
     // --- automation lanes (proposal 37 P5, design §3.3) --------------------
     //
     // OWNER-HELD, NEVER AN SLink CHILD. They live on SObject rather than on the

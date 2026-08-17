@@ -165,3 +165,54 @@ so a rebuild and an edit cannot interleave) and then invalidates open-endedly:
 the consumer of an event stream is class-1, so an event change is never bounded
 on the right (design F9). `cut:Gain` is inherited from `SObject` and means
 nothing on an event clip — the mix has no audio page of this cut's to scale.
+
+## The recording verbs (proposal 21 L4 = 37 P8b)
+
+`add-midi-take` and `place-midi-recording` live HERE and not in `objects/cut`,
+and they reach a take column through the generic seam on `SObject`
+(`windowTakeCount` / `activeWindowTakeIndex` / `insertWindowTake` /
+`removeWindowTake` / `setActiveWindowTake`) plus `SClipWindow`'s registered
+wrap/collapse factory. `STakeStack` has been window-typed since proposal 37 D8b,
+so nothing about a column of takes is audio-specific — but the class lives in
+`objects/cut`, and this slice sits at the SAME RANK and must not depend on it.
+Same rule, same reason, as `objects/track` consulting MIDI-ness only through
+`contentKind()` and `resolveEventClip()`.
+
+**`add-take` could not have been widened.** It addresses a FILE and seeds grain
+params; an event take has neither. `SRemoveTakeAction` is the same story from
+the other end: it builds its inverse from an `SExternFile` path, so removing an
+event take through it would be a NON-UNDOABLE removal — a lost take, not an
+undo. Hence `remove-midi-take`, which captures the take's whole event table when
+it runs so its own inverse restores the notes.
+
+**`place-midi-recording` is `place-recording`'s planner shape**, and the two
+stay parallel deliberately: one call per track per pass, the verb decides by
+itself whether the pass is a take, a merge, a replace or a new clip. Three
+things about it are worth knowing:
+
+- The `<n>` / `<e>` children are in the PASS WINDOW's ticks (zero = `timePos`),
+  not the target sequence's, which is what lets a recorder emit one identical
+  table per loop pass. The re-base asks the WINDOW for its map
+  (`timelineToSourceExact`, `stretchOrRate`) rather than computing slip and rate
+  itself — two callers converting independently is how a rounding difference
+  becomes an off-by-one note.
+- Overdub and replace both END as one absolute `set-events` on the column's
+  active take, which is the universal inverse every event edit already uses
+  (37 §3.4). So undo is the previous table, verbatim, whichever mode ran.
+  Replace drops only NOTES inside the window; CCs, and everything outside it,
+  survive — that is what makes it a replace rather than a clear.
+- The input quantise is a `quantize-notes` INSIDE this verb's own composite, so
+  one undo entry covers the placement and its grid together. Its clip path is
+  computed at PLAN time (the column's index, or `lane->childCount()` for the
+  fresh insert, which appends) — the same discipline `place-recording` uses.
+
+Events written by both verbs are `<e .../>` children, never `<n .../>`: a
+recorded pass carries CCs, bends and pressure as well as notes, and the note
+spelling would read every one of them back as a `NoteOn`. `readEventChildren`
+accepts both, so a hand-written case may still use `<n>` for a notes-only pass.
+
+An `add-midi-take` whose target column holds AUDIO takes is REJECTED
+(`STakeStack::insertTake`'s homogeneity rule), and so is one whose target
+placement is not an event clip at all — checked BEFORE the wrap, because
+wrapping an audio cut into a column the insert is then bound to refuse would
+have moved the user's clip for nothing.

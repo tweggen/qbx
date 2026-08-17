@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L4 (= 37 P8b). MIDI RECORDING: a performance played into an armed
+  MIDI track becomes an event clip whose notes are WHERE THEY WERE PLAYED.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL. No
+  SMARAGD_AUDIO_INPUT_BACKEND - a MIDI-armed track has no audio input at all
+  (design section 3 case (ii)), so the `null` default a headless run already
+  takes is exactly right. The MIDI half arrives through CaptureMidiInput, which
+  SMARAGD_MIDI_BACKEND=capture already selects by default.
+
+  THE PATH UNDER TEST is the production one end to end: CaptureMidiInput
+  (`midi-in-replay`, real-time paced on MidiOutScheduler::hostNowNs) ->
+  MidiInFanout on the injecting thread as a device callback -> the RECORDER's
+  own SPSC sink (design D8: one ring per consumer; the live lane's is a
+  different ring and is not involved here) -> SMidiRecorder's 20 ms tick, which
+  buffers {hostTimeNs, bytes} and maps NOTHING -> at the stop, one mapping per
+  message through SPlayheadClock and one `place-midi-recording` inside one undo
+  macro.
+
+  THE CLOSED FORM. The take begins at the locator, 24000 frames (0.5 s). The
+  performance is held until the playhead reaches 48000 (1.0 s) and then plays
+  four notes 250 ms apart, each 200 ms long - 12000 and 9600 frames at 48 kHz.
+  So inside the clip, whose zero IS the record start, the notes are expected at
+
+      24000, 36000, 48000, 60000        (+- 4096)
+
+  and each is 9600 frames long.
+
+  WHY THERE IS A SYSTEMATIC OFFSET, and why it is inside the band rather than
+  subtracted. `midi-in-replay startFrame=` waits on the PUBLISHED locator,
+  while the recorder maps a message to the frame that was being HEARD at that
+  instant (design D6: the performer plays to what they hear). The published
+  position leads the heard one by one device buffer plus the output latency -
+  1024 + 1024 = 2048 frames with the capture backend - so every note is
+  expected to land about 2048 frames EARLY. That is the conversion working,
+  not an error, and the band is wide enough to hold it plus the locator's
+  publication granularity. The MEASURED numbers are printed by
+  assert-midi-events on every run.
+
+  ONE UNDO removes the whole take - the property that makes recording usable at
+  all. Nothing undoable may come between the take and the undo.
+-->
+<SActionScript version="1" name="midi_record_placement">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <!-- Monitor OFF: this case is about what was RECORDED, not about what was
+         heard, and a live lane would only add a pump to the measurement. -->
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <set-locator position="24000"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+    <!-- Held until the playhead reaches 1.0 s, then paced in real time. -->
+    <midi-in-replay filePath="../midi_perf4.txt" startFrame="48000"/>
+    <wait-ms ms="500"/>
+    <record-stop/>
+
+    <!-- ONE event clip at the record start, ONE take, ONE pass, four notes and
+         no non-note events. The clip spans the take, so its length is a
+         wall-clock quantity and is not asserted. -->
+    <assert-midi-recorded trackPath="0" clips="1" takes="1" passes="1"
+                          notes="4" events="0" mode="new-take" quantize="off"
+                          startFrame="24000" startTolerance="4096"/>
+
+    <!-- ...and the notes are where they were played. `at` is the clip's own
+         frame domain, which is what every consumer of the clip reads. -->
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="4"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="60"
+                        at="24000" tolerance="4096" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="62"
+                        at="36000" tolerance="4096" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="64"
+                        at="48000" tolerance="4096" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="65"
+                        at="60000" tolerance="4096" count="1"/>
+    <!-- The releases: a note is stored WITH its length, so a note-off exists
+         only inside a collect (events/CONTRACT inv. 8). 200 ms = 9600 frames
+         after each attack. -->
+    <assert-midi-events scope="clip" clip="0,0" kind="noteoff" key="60"
+                        at="33600" tolerance="4096" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteoff" key="65"
+                        at="69600" tolerance="4096" count="1"/>
+
+    <!-- ONE undo removes the clip. -->
+    <undo/>
+    <assert-midi-recorded trackPath="0" clips="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
