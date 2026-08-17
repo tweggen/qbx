@@ -282,12 +282,28 @@ public:
     // --- the live lane (proposal 21 L1a, design D5) -------------------------
 
     // Open the device for live monitoring, at `rate` (the project rate), and
-    // turn the live lane ON. Idempotent. Returns 0 on success.
+    // turn the live lane ON. Idempotent. Returns 0 on success, -1 on refusal.
     //
     // Unlike startOutput() this starts the backend IMMEDIATELY: there is no
     // readahead to prime, and a performer must hear their input the moment they
     // arm. `channels` is the project width the ring will carry.
+    //
+    // IT REFUSES WHEN THE DEVICE RATE IS NOT THE PROJECT RATE (review fix 3).
+    // The live lane stamps its entries in PROJECT frames and the RT sums them
+    // straight into the device buffer, so the two only line up while the rates
+    // are equal. The frozen lane has a resampler at this seam; the live lane
+    // has nowhere to put one, because a ring entry has to carry a position and
+    // a resampler makes the frame count fractional. Refusing loudly beats
+    // monitoring at the wrong pitch: one log line naming both rates, a counter,
+    // and the device closed again iff the frozen lane is not using it.
+    // Resolution path (playback/CONTRACT.md known debt): a device-frame-stamped
+    // ring, or opening the device at the project rate (ASIO, proposal 35).
     int  openLive( std::uint32_t rate, idx_t channels );
+
+    // How many openLive() calls were refused for a rate mismatch. Process-wide
+    // per speaker; the app reads it to explain itself to the user.
+    std::uint64_t liveRateRefusals() const
+    { return liveRateRefusals_.load( std::memory_order_relaxed ); }
 
     // Turn the live lane OFF and close the device if the frozen lane is idle.
     // The PUMP must already be stopped: this does not own it (the app does),
@@ -335,10 +351,15 @@ private:
     std::atomic<LiveLaneState> liveLane_{ LiveLaneState::OFF };
 
     twLiveMixRing  liveRing_;
+    // The RT's place in the ring's stream. It MUST live across callbacks: a
+    // 480-frame callback leaves the cursor 480 frames into a 1024-frame entry
+    // and the next one has to resume there (review fix 1).
+    twLiveMixReader liveReader_;
     twLiveMixState liveFade_;          // RT-thread only
     twEngineClock  engineClock_;
     std::atomic<std::uint64_t> bufferFramesProject_{ 0 };
     std::atomic<std::uint32_t> liveCrossfadeFrames_{ 0 };
+    std::atomic<std::uint64_t> liveRateRefusals_{ 0 };
 
     // The callback's planar scratch. Members since proposal 21 L1a: the ring
     // sum needs the pull's PLANAR buffers (it sums before the interleave), and

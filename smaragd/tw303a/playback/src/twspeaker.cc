@@ -497,15 +497,42 @@ int twSpeaker::openLive(std::uint32_t rate, idx_t channels)
 
     if (channels < 1) channels = 1;
 
+    const bool deviceWasOpen =
+        (deviceState_.load(std::memory_order_acquire) == DeviceState::OPEN);
+
     if (ensureDeviceOpen(rate) != 0) return -1;
 
     const audio::AudioConfig cfg = backend_->getConfig();
+
+    // THE RATE SCOPE (review fix 3). The live lane's entries are stamped in
+    // PROJECT frames and summed straight into the device buffer; the frozen
+    // lane has a resampler at this seam and the live lane has nowhere to put
+    // one (a resampler makes a ring entry's frame count fractional, and an
+    // entry has to carry a position). So the two rates must be equal, and when
+    // they are not this REFUSES rather than monitoring off-pitch.
+    if (cfg.sampleRate != rate) {
+        liveRateRefusals_.fetch_add(1, std::memory_order_relaxed);
+        TWSPK_LOG( "REFUSING the live lane: the device is at %u Hz and the project "
+                   "at %u Hz. The live path carries PROJECT frames with no "
+                   "resampler, so monitoring would be off-pitch. Open the device "
+                   "at the project rate (playback/CONTRACT.md, known debt).",
+                   (unsigned) cfg.sampleRate, (unsigned) rate );
+        // Undo the open only if WE did it. A device the frozen lane is using
+        // must survive a refused arm completely untouched.
+        if (!deviceWasOpen &&
+            outputState_.load(std::memory_order_relaxed) == OutputState::STOPPED) {
+            if (deviceRunning_.load(std::memory_order_acquire)) backend_->stopOutput();
+            closeDeviceNoLock();
+        }
+        return -1;
+    }
     // The ring carries the PROJECT's channels, not the device's: the device
     // rule (playback inv. 9) is applied at the interleave, once, for both
     // lanes. Its entries are one device block each, 4 deep.
     liveRing_.reset( (std::uint32_t) channels,
                      (std::uint32_t) std::max<std::uint32_t>( cfg.bufferFrames, 1 ),
                      twLiveMixRing::kDefaultDepth );
+    liveReader_.rewind();
     liveFade_ = twLiveMixState{};
     liveFade_.fadeFrames = liveCrossfadeFrames_.load(std::memory_order_relaxed);
 
@@ -633,45 +660,48 @@ std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
     }
 
     // --- the LIVE lane ------------------------------------------------------
+    //
+    // THE RING IS A STREAM, NOT A BLOCK QUEUE (review fix 1). This callback's
+    // `frames` is whatever the device asked for -- VARIABLE on WASAPI, which
+    // hands us `bufferFrames - padding` -- while the pump produces fixed
+    // blocks, so the two grids never line up and an equality test would leave
+    // the live lane permanently silent on real hardware. mixStream() consumes
+    // by FRAME RANGE, with a cursor that lives across callbacks.
     if (liveOn) {
-        // A block older than the frame being delivered is spent; discard it and
-        // look at the next one rather than desynchronising the whole ring.
-        if (haveRoot) liveRing_.dropBefore(blockStart);
+        twLiveRingEntry head;
+        const bool haveHead = liveRing_.peek(head);
 
-        twLiveRingEntry e;
-        if (liveRing_.peek(e)) {
-            twLiveMixGate gate;
-            // WHILE STOPPED THERE IS NO ROOT PAGE: out = ring (design D2). The
-            // ring is then the only position authority there is, so the entry
-            // is accepted on its own stamp; with the frozen lane playing, the
-            // engine's position is the authority and a mismatch is a drop.
-            gate.wantPos   = haveRoot ? blockStart : e.startPos;
-            gate.rootEpoch = rootEpoch;
-            gate.haveRoot  = haveRoot;
+        twLiveMixGate gate;
+        // WHILE STOPPED THERE IS NO ROOT PAGE: out = ring (design D2), and the
+        // stream is consumed sequentially from wherever its head sits -- the
+        // ring is then the only position authority there is. With the frozen
+        // lane playing, the engine's position is the authority.
+        gate.wantPos   = haveRoot
+                             ? blockStart
+                             : (haveHead ? head.startPos + (std::int64_t) liveReader_.cursor
+                                         : 0);
+        gate.rootEpoch = rootEpoch;
+        gate.haveRoot  = haveRoot;
 
-            const bool wantFadeOut = ( e.flipEpochPrime != 0 );
-            if (wantFadeOut != liveFade_.fadingOut) {
-                liveFade_.fadingOut = wantFadeOut;
-                liveFade_.fadeDone  = 0;
-            }
-            liveFade_.fadeFrames = liveCrossfadeFrames_.load(std::memory_order_relaxed);
-
-            if (frozenPlaying && outFrames < frames) {
-                // The ring covers the whole block even where the frozen lane
-                // ran short, so the tail must be defined before the sum.
-                for (std::size_t c = 0; c < pullCh; ++c)
-                    std::fill(chans[c] + outFrames, chans[c] + frames, 0.0f);
-                outFrames = frames;
-            }
-
-            const twLiveMixOutcome oc =
-                twlive::mixRing(chans, pullCh, frames, e, gate, liveFade_);
-            liveRing_.noteOutcome(oc);
-            liveRing_.pop();     // the block was rendered FOR this frame either way
-            if (oc == twLiveMixOutcome::Summed && !haveRoot) outFrames = frames;
-        } else {
-            liveRing_.noteOutcome(twLiveMixOutcome::NoEntry);
+        const bool wantFadeOut = (haveHead && head.flipEpochPrime != 0);
+        if (wantFadeOut != liveFade_.fadingOut) {
+            liveFade_.fadingOut = wantFadeOut;
+            liveFade_.fadeDone  = 0;
         }
+        liveFade_.fadeFrames = liveCrossfadeFrames_.load(std::memory_order_relaxed);
+
+        if (frozenPlaying && outFrames < frames) {
+            // The ring covers the whole block even where the frozen lane ran
+            // short, so the tail must be defined before the sum.
+            for (std::size_t c = 0; c < pullCh; ++c)
+                std::fill(chans[c] + outFrames, chans[c] + frames, 0.0f);
+            outFrames = frames;
+        }
+
+        twLiveStreamStats st;
+        twlive::mixStream(chans, pullCh, frames, gate.wantPos, gate,
+                          liveRing_, liveReader_, liveFade_, st);
+        if (st.framesSummed > 0 && !haveRoot) outFrames = frames;
     }
 
     if (outFrames == 0) {
@@ -696,7 +726,12 @@ std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
         // THE LIVE CLOCK, stamped beside the publication and derived from it by
         // the one publish-lag correction (design D2 / twliveclock.h).
         const std::uint64_t lag = bufferFramesProject_.load(std::memory_order_relaxed);
+        // deliveredFrame is what is being HEARD (publish lag removed), which is
+        // what MIDI-out and metering want; nextFrame is what the RT will PULL
+        // next, which is the published position itself, and is what the PUMP
+        // paces on (review fix 2). One stamp, two readings, no conflation.
         engineClock_.stamp( (std::int64_t) pos - (std::int64_t) lag,
+                            (std::int64_t) pos,
                             audio::MidiOutScheduler::hostNowNs() );
     }
     return outFrames;
