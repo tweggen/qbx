@@ -23,6 +23,7 @@ twLiveEventSource::twLiveEventSource( MidiInFanout::Sink *sink, int sampleRate )
     // events.
     held_.reserve( kHeldReserve );
     pending_.reserve( kPendingReserve );
+    pendingNext_.reserve( kPendingReserve );
 }
 
 twLiveEventSource::~twLiveEventSource() = default;
@@ -244,8 +245,8 @@ void twLiveEventSource::collect( std::int64_t startPos, std::int64_t len,
     // 3. WHAT WAS DEFERRED LAST TIME, then the ring. In that order, because a
     //    deferred event is by definition older than anything still in the ring.
     const std::int64_t end = startPos + len;
-    std::vector<Deferred> stillPending;
-    stillPending.reserve( pending_.size() );
+    std::vector<Deferred> &stillPending = pendingNext_;
+    stillPending.clear();
 
     auto place = [&]( const MidiInMessage &m, offset_t frame ) {
         std::int64_t off = (std::int64_t) frame - startPos;

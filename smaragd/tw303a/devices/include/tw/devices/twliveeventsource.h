@@ -147,6 +147,9 @@ private:
     // --- pump-thread state (one reader by construction) --------------------
     mutable std::vector<Held>     held_;
     mutable std::vector<Deferred> pending_;
+    // The swap partner of pending_ for one collect(): a member so a block with a
+    // deferred backlog does not allocate on the pump (both reserved once).
+    mutable std::vector<Deferred> pendingNext_;
     mutable std::map<std::pair<std::int16_t, std::uint32_t>, double> cc_;
     mutable std::map<std::int16_t, double>  bend_;
     mutable std::map<std::int16_t, double>  pressure_;
