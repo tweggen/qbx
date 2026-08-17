@@ -45,7 +45,14 @@ DEPS = {
     'sinks':    ['core'],
     # playback → schedule since proposal 19 stage 5: the readahead is a
     # demand consumer of the page scheduler instead of pulling freezes.
-    'playback': ['core', 'pages', 'graph', 'devices', 'sources', 'schedule'],
+    # playback → plugins, mix since proposal 21 L1a: the LiveGraphPump renders
+    # live-owned tracks BLOCK-WISE, outside the frozen-page machinery, and the
+    # three pieces of the graph that survive block-wise are exactly
+    # twPluginSlotProcessor::render, twGainStage::applyGain and twRewire's
+    # channel map. Neither plugins nor mix depends on playback, so the DAG stays
+    # acyclic; events arrives transitively through both.
+    'playback': ['core', 'pages', 'graph', 'devices', 'sources', 'schedule',
+                 'plugins', 'mix'],
     # render → schedule since proposal 19 stage 4: the offline render is a
     # watermark CONSUMER of the page scheduler instead of pulling freezes.
     'render':   ['core', 'pages', 'graph', 'sinks', 'playback', 'schedule'],

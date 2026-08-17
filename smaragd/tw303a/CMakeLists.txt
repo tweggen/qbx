@@ -521,16 +521,37 @@ tw_module(sinks
     DEPS tw_core
 )
 
-# --- E12 playback: speaker, engine pump --------------------------------------
+# --- E12 playback: speaker, engine pump, THE LIVE LANE ------------------------
+#
+# playback -> plugins, mix since proposal 21 L1a. The LiveGraphPump renders a
+# live-owned track BLOCK-WISE, outside the frozen-page machinery, and the three
+# pieces of the graph that survive block-wise are exactly
+# twPluginSlotProcessor::render (tw/plugins), twGainStage::applyGain and
+# twRewire's channel map (tw/mix). Neither module depends on playback, so the
+# DAG stays acyclic; tw/events comes in transitively through both.
 tw_module(playback
     SOURCES
         playback/include/tw/playback/twspeaker.h
         playback/include/tw/playback/audio_engine.h
         playback/include/tw/playback/playback_context.h
+        playback/include/tw/playback/twliveclock.h
+        playback/include/tw/playback/twlivering.h
+        playback/include/tw/playback/twliveplan.h
+        playback/include/tw/playback/twlivepump.h
         playback/src/twspeaker.cc
         playback/src/audio_engine.cc
+        playback/src/twlivering.cc
+        playback/src/twliveplan.cc
+        playback/src/twlivepump.cc
     DEPS tw_core tw_pages tw_graph tw_devices tw_sources tw_schedule
+         tw_plugins tw_mix
 )
+if(WIN32)
+    # MMCSS ("Pro Audio") for the live pump thread, exactly as the WASAPI render
+    # thread does it. avrt is already a tw_devices dependency; the pump lives
+    # here, so the link line has to say so here too.
+    target_link_libraries(tw_playback PRIVATE avrt)
+endif()
 
 # --- E10 render: the offline rendering engine ---------------------------------
 tw_module(render
@@ -999,5 +1020,15 @@ tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc     
 # unchanged): the position-coded case constructs a CapturePagePool and a
 # CaptureRevalidator and hands the latter to AudioEngine::setScheduler, which is
 # the first time the demand scheduler is exercised from a unit test at all.
-tw_module_test(playback_test                playback/tests/playback_test.cc             tw_playback tw_schedule tw_pages)
+tw_module_test(playback_test                playback/tests/playback_test.cc             tw_playback tw_schedule tw_pages tw_plugins tw_mix)
+# The proposal 21 L1a SYNTHETIC-PLAN HARNESS runs a live plan over the REAL
+# `tw.test.clap.gain` fixture and compares it, sample for sample, against the
+# frozen render of the same material through the same insert. Without the CLAP
+# submodule the harness compiles out (the test #ifdefs on the path) and the rest
+# of playback_test is unaffected.
+if(TARGET twtestclap)
+    add_dependencies(playback_test twtestclap)
+    target_compile_definitions(playback_test PRIVATE
+        TW_TESTCLAP_PATH="$<TARGET_FILE:twtestclap>")
+endif()
 tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)
