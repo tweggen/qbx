@@ -98,7 +98,10 @@ public:
     void collect( std::int64_t startPos, std::int64_t len,
                   twEventBlock &out ) const override;
 
-    // Diagnostics; read from the main thread.
+    // Diagnostics; read from the main thread. The counters are atomics;
+    // heldNotes() reads a vector the PUMP owns and is therefore approximate by
+    // construction - it is a number for a describe() line and an assertion
+    // about "is a key down", never a synchronisation point.
     std::uint64_t eventsEmitted() const
     { return emitted_.load( std::memory_order_relaxed ); }
     std::uint64_t lateClamped() const

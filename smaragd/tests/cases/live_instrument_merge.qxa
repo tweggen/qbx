@@ -37,10 +37,11 @@
   also the check that the sequenced note ENDED on time rather than being held
   by the merge.
 
-  MEASURED, idle box: E4 alone rms 0.343944 at 327.689 Hz; the PAIR rms
-  0.472966 against the closed form 0.472441; C4 alone rms 0.333745 at
-  261.656 Hz; the stopped-transport window rms EXACTLY 0; longest gap across
-  the merge 9 frames, largest step 0.0366.
+  MEASURED, idle box: E4 alone rms 0.334240 at 329.591 Hz (closed form
+  0.334066 at 329.628 - 0.05 % and 0.04 Hz); the PAIR rms 0.472966 against the
+  closed form 0.472441; C4 alone rms 0.333745 at 261.656 Hz; the
+  stopped-transport window rms EXACTLY 0; longest gap across the merge 9
+  frames, largest step 0.0366.
 -->
 <SActionScript version="1" name="live_instrument_merge">
 
@@ -78,15 +79,32 @@
     <toggle-playback play="0"/>
     <dump-playback-capture filename="merge.wav" minFrames="150000"/>
 
-    <!-- 1.05 s - 1.25 s: the SEQUENCED note alone. The injection is gated on
-         the locator reaching 1.2 s and the live path costs ~95 ms on top, so
-         nothing live can be in this window. 0.334066 +-5 %. -->
+    <!-- 1.05 s - 1.154 s: the SEQUENCED note ALONE, and the window ends where
+         it does BY CONSTRUCTION rather than by measurement.
+
+         `midi-in-event atFrame` waits for the published LOCATOR to reach
+         57600, so no live byte can be injected before that instant. The
+         capture dump indexes DELIVERED frames, and twSpeaker publishes the
+         position AFTER the pull - so the frame going out when the locator
+         reads 57600 is 57600 - bufferFrames = 56576. Nothing live can appear
+         in the capture before 56576, whatever the load, and this window stops
+         at 55400 with 1176 frames to spare.
+
+         The first draft ran to 60000 and was WRONG, not merely tight: measured
+         per-1500-frame, the live note actually starts inside [58500, 60000),
+         so a window ending at 60000 legitimately contained ~1400 frames of the
+         PAIR and read 0.3439 instead of 0.3341 - inside a +-5 % band on an
+         idle box and outside it under load (2 failures in 50 at
+         SMARAGD_REVAL_WORKERS=1 while another suite was running). Ending the
+         window before the injection is POSSIBLE lets the band tighten to
+         +-3 %, which is a stronger assertion than the one that flaked.
+         0.334066 +-3 %. -->
     <assert-audio-frequency filename="merge.wav" channel="0"
-                            startFrame="50400" frameCount="9600"
+                            startFrame="50400" frameCount="5000"
                             minHz="323" maxHz="337"/>
     <assert-audio-energy filename="merge.wav" channel="0"
-                         startFrame="50400" frameCount="9600"
-                         minRms="0.31736" maxRms="0.35077"/>
+                         startFrame="50400" frameCount="5000"
+                         minRms="0.32404" maxRms="0.34409"/>
 
     <!-- 1.5 s - 1.9 s: BOTH. 0.472441 +-5 %, which excludes either note alone
          (0.334) by a factor of 1.41 - the whole point of the two-tone form. -->

@@ -272,6 +272,13 @@ void SLiveMonitor::attachLiveEvents( const SLiveClosure &closure )
             // Already live. A source is deliberately NOT rebuilt on a
             // republish: it holds the ring cursor and the HELD-NOTE TABLE, and
             // rebuilding it under a finger would drop the note being played.
+            //
+            // The THRU ROUTE IS NOT RE-EVALUATED EITHER, and that is a stated
+            // limitation rather than an oversight: it is resolved once, at the
+            // arm, so moving a track's `midiOutPort` while it is armed keeps
+            // sending to the old port until the next arm. Re-routing it here
+            // would mean panicking and re-opening a port under a held key,
+            // which is a worse failure than the one it fixes.
             if( it->source ) it->source->setSampleRate( rate );
             continue;
         }
@@ -295,8 +302,11 @@ void SLiveMonitor::attachLiveEvents( const SLiveClosure &closure )
 
         live.source = std::make_shared<audio::twLiveEventSource>( live.sink, rate );
         live.source->setClock( eventClock_ );
-        // The input latency, in PROJECT frames: what the port itself costs plus
-        // the user's per-port correction. POSITIVE means the byte arrived that
+        // The input latency, in PROJECT frames. It is the USER's per-port
+        // correction and nothing else: MidiInput has no latency to report -
+        // no MIDI API this app hosts offers one - so the number a "play a
+        // click, look at where it landed, type the difference" calibration
+        // produces is the whole of it. POSITIVE means the byte arrived that
         // much AFTER the key went down, so the source subtracts it.
         const double offsetMs =
             SSettings::instance().midiInputOffsetMs( feed.port );
@@ -312,12 +322,11 @@ void SLiveMonitor::attachLiveEvents( const SLiveClosure &closure )
         // MIDI-THRU (design D8). The ARMED track's port first - it is the one
         // being played - and the consumer's as the fallback, which is the
         // folder-drum-machine shape where the child has no port of its own.
-        const QString thruPort = !feed.armed->getMidiOutPort().isEmpty()
-                                     ? feed.armed->getMidiOutPort()
-                                     : feed.consumer->getMidiOutPort();
-        const int thruChannel = !feed.armed->getMidiOutPort().isEmpty()
-                                    ? feed.armed->getMidiOutChannel()
-                                    : feed.consumer->getMidiOutChannel();
+        const bool ownPort = !feed.armed->getMidiOutPort().isEmpty();
+        const QString thruPort = ownPort ? feed.armed->getMidiOutPort()
+                                         : feed.consumer->getMidiOutPort();
+        const int thruChannel = ownPort ? feed.armed->getMidiOutChannel()
+                                        : feed.consumer->getMidiOutChannel();
         if( !thruPort.isEmpty() && app_->midiOutPump() ) {
             if( audio::MidiOutScheduler *sched =
                     app_->midiOutPump()->thruSchedulerFor( thruPort ) ) {
@@ -564,6 +573,12 @@ void SLiveMonitor::refresh()
                     "live monitoring is off" ).arg( QString::fromUtf8( shape.reason ) );
                 TW_LOGW( "shell", "[LIVE] %s", lastRefusal_.toStdString().c_str() );
             }
+            // Nothing is armed on this path, but a PREVIOUS pass may have left
+            // live sources attached (the master can only stop being linear
+            // while something is already monitoring). Dropping the closure
+            // without dropping them would leave a ring being drained for a
+            // lane nobody renders.
+            detachLiveEvents( current_ );
             current_ = SLiveClosure();
             return;
         }
