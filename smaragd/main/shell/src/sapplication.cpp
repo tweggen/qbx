@@ -807,6 +807,17 @@ void SApplication::startRecording(const audio::RecordingParams &params)
             setGlobalLocatorPosRealtime((offset_t) pos);
     };
 
+    // DIAGNOSTIC (temporary, 2026-08-17): which physical devices are involved.
+    // The evidence so far says whichever stream opens SECOND perturbs the one
+    // already open (a take where the input opened first came out 8.6 % fast; a
+    // take where the output opened first played slow), and the first thing that
+    // would explain is input and output being the same interface. Every
+    // existing rate diag is emitted BEFORE the other stream exists, so none of
+    // them can show it.
+    TW_LOGI( "app", "record devices — input='%s', output='%s'",
+             p.inputDeviceId.c_str(),
+             t3Speaker_ ? t3Speaker_->outputDevice().c_str() : "(no speaker)" );
+
     // Start capture first, so isRecordingActive() is already true before the
     // monitoring playback below produces its first buffer.
     recordingSession_->start(p);
