@@ -91,6 +91,18 @@
  * It pushes CLAP_EVENT_NOTE_END on every note-off, so the host's event-OUT path
  * has a producer that is not the arpeggiator.
  *
+ * PARAM ID 3, "Stereo Skew" (stepped, default 0 = OFF, added 2026-08-17 for the
+ * proposal 37 stereo gates). Off, every main channel carries the same sample -
+ * which is what every assertion written before this date measured, and is why
+ * the default may never move. On, channels 1.. of the MAIN out are at HALF
+ * amplitude, so the rendered file's channel relation is a closed form:
+ *
+ *     rms(ch0) = velocity/sqrt(2) * gain      rms(ch1) = rms(ch0) / 2
+ *
+ * An instrument whose outputs are identical cannot distinguish a wide sink from
+ * one that duplicates channel 0, which is exactly what qxa.instrument_stereo_
+ * render needs to tell apart; the aux out is untouched (still main * 0.5).
+ *
  * CLAP_PROCESS_ERROR on an over-size block (as the gain fixture) and on a
  * WILDCARD note-on (key < 0): a host that forwards a wildcard to an instrument
  * has lost the note's identity, and failing loudly beats playing a wrong note.
@@ -216,6 +228,7 @@ typedef struct {
    double   gain;
    double   report;
    double   clip;      /* 0 = off; > 0 = hard clip at +/- clip AFTER the gain */
+   double   skew;      /* SINE only: 0 = off; >= 0.5 = right channels at 0.5x */
    uint32_t maxFrames;
    double   sampleRate;
    int      active;
@@ -245,7 +258,7 @@ static uint32_t tc_params_count( const clap_plugin_t *p )
    if( self->kind == TW_KIND_ARP )
       return 0;
    if( self->kind == TW_KIND_SINE )
-      return 1;   /* Gain only */
+      return 2;   /* Gain, Stereo Skew */
    return 3;      /* Gain, Report Block Size, Clip Threshold */
 }
 
@@ -261,6 +274,23 @@ static bool tc_params_get_info( const clap_plugin_t *p, uint32_t index,
       info->max_value     = 4.0;
       info->default_value = 1.0;
       strncpy( info->name, "Gain", CLAP_NAME_SIZE - 1 );
+      return true;
+   }
+   if( self->kind == TW_KIND_SINE && index == 1 ) {
+      /* STEREO SKEW (proposal 37 stereo gates, 2026-08-17). OFF by default, so
+       * every render made before this parameter existed is byte-identical: the
+       * two main channels stay the same sample, which is what instrument_sine_
+       * render.qxa's channel-0 closed form was written against. Switched ON the
+       * right channels drop to HALF amplitude, which is a closed form too
+       * (rms ch1 = rms ch0 / 2) and is what makes a channel claim assertable
+       * from a FILE at all - an instrument whose two outputs are identical
+       * cannot tell a wide sink from a duplicating one. */
+      info->id            = 3;
+      info->flags         = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
+      info->min_value     = 0.0;
+      info->max_value     = 1.0;
+      info->default_value = 0.0;   /* off */
+      strncpy( info->name, "Stereo Skew", CLAP_NAME_SIZE - 1 );
       return true;
    }
    if( self->kind == TW_KIND_SINE || self->kind == TW_KIND_ARP )
@@ -290,6 +320,7 @@ static bool tc_params_get_value( const clap_plugin_t *p, clap_id id, double *out
 {
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
    if( id == 0 ) { *out = self->gain;   return true; }
+   if( self->kind == TW_KIND_SINE && id == 3 ) { *out = self->skew; return true; }
    if( self->kind == TW_KIND_SINE || self->kind == TW_KIND_ARP )
       return false;
    if( id == 1 ) { *out = self->report; return true; }
@@ -330,6 +361,7 @@ static void tc_apply_param( tw_testclap_t *self, clap_id id, double value )
    if( id == 0 ) self->gain   = value;
    if( id == 1 ) self->report = value;
    if( id == 2 ) self->clip   = value;
+   if( id == 3 ) self->skew   = value;
 }
 
 static void tc_apply_events( tw_testclap_t *self, const clap_input_events_t *in )
@@ -504,8 +536,14 @@ static bool tc_state_save( const clap_plugin_t *p, const clap_ostream_t *os )
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
 
    if( self->kind == TW_KIND_SINE ) {
-      uint8_t one[8];
+      /* The skew is appended ONLY when it is on, exactly as the gain fixture's
+       * clip threshold is: a default instrument's blob stays the 8 bytes every
+       * project written before 2026-08-17 carries. */
+      uint8_t one[16];
       tc_put_double( one, self->gain );
+      if( self->skew == 0.0 )
+         return tc_write_all( os, one, 8 );
+      tc_put_double( one + 8, self->skew );
       return tc_write_all( os, one, sizeof( one ) );
    }
 
@@ -537,6 +575,18 @@ static bool tc_state_load( const clap_plugin_t *p, const clap_istream_t *is )
          got += (uint64_t)k;
       }
       memcpy( &self->gain, one, sizeof( double ) );
+
+      /* The optional second value. A short blob simply leaves the skew off. */
+      uint8_t  more[8];
+      uint64_t extra = 0;
+      while( extra < sizeof( more ) ) {
+         int64_t k = is->read( is, more + extra, sizeof( more ) - extra );
+         if( k <= 0 ) break;
+         extra += (uint64_t)k;
+      }
+      self->skew = 0.0;
+      if( extra == sizeof( more ) )
+         memcpy( &self->skew, more, sizeof( double ) );
       return true;
    }
 
@@ -809,6 +859,10 @@ static void tc_render_sine( tw_testclap_t *self, clap_audio_buffer_t *main,
                             clap_audio_buffer_t *aux, uint32_t from, uint32_t to )
 {
    const float g = (float)self->gain;
+   /* Channels 1.. of the MAIN out at half amplitude when the skew is on. Closed
+    * form on purpose: the level relation between the channels is exactly 2, at
+    * every sample, so a file assertion measures a ratio and not a texture. */
+   const float r = self->skew >= 0.5 ? 0.5f : 1.0f;
    for( uint32_t i = from; i < to; ++i ) {
       double sum = 0.0;
       for( int vi = 0; vi < TW_SINE_VOICES; ++vi ) {
@@ -823,7 +877,7 @@ static void tc_render_sine( tw_testclap_t *self, clap_audio_buffer_t *main,
       const float s = (float)sum * g;
       if( main && main->data32 )
          for( uint32_t c = 0; c < main->channel_count; ++c )
-            if( main->data32[c] ) main->data32[c][i] = s;
+            if( main->data32[c] ) main->data32[c][i] = c == 0 ? s : s * r;
       /* The aux carries the same signal at -6 dB, so a multi-out gate can tell
        * the two buses apart without needing two different notes. */
       if( aux && aux->data32 && aux->channel_count > 0 && aux->data32[0] )
@@ -1083,6 +1137,7 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    self->gain       = 1.0;
    self->report     = 0.0;
    self->clip       = 0.0;
+   self->skew       = 0.0;
    self->maxFrames  = 0;
    self->sampleRate = 48000.0;
    self->active     = 0;

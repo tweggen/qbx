@@ -204,6 +204,12 @@ instrument_transpose_and_velocity.qxa, instrument_bypass_keeps_voices.qxa,
 instrument_slot_rules.qxa (the three slot rules, the derived glyphs and the
 project end) and instrument_folder_drums.qxa (one instrument on a folder playing
 its children's patterns, with mute and the two-overlapping-notes rule).
+STEREO IS GATED SINCE 2026-08-17 -- the cases above read CHANNEL 0 only,
+because P3b predates the wide sink (36-B5): instrument_stereo_render.qxa walks
+the four generator mapping rows per channel out of a rendered file (DirectGen,
+GenFold, the refused narrow-generator row, and MonoSpread's deliberately EQUAL
+channels), and automation_stereo.qxa does the same for a self:Volume ramp and a
+slot param: step.
 The run barrier's walk (proposal 37 P3c) is exercised by
 instrument_render_determinism.qxa, its cross-process driver
 instrument_render_determinism_xproc and instrument_locate_continuity.qxa.
@@ -227,8 +233,11 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     `onAutomationChanged()` pushes and then calls `invalidateRenderPathRange()`
     with the EXACT range, because a gain stage is class infinity and pure.
     `applyAutomationToEngine()` is the load-path replay, called once the chain
-    exists. `self:Pan` is deliberately absent until the sink is stereo (36-B5) —
-    a pan lane today would store a number nothing could hear.
+    exists. `self:Pan` is still absent, but no longer for that reason: the sink
+    has been as wide as the project since 36-B5 (and `automation_stereo.qxa`
+    asserts a volume lane on both channels), so what is missing is a pan — a
+    clip and track model that carries one — and not somewhere to hear it.
+    Proposal 37 §12 leaves it to a later proposal.
 
 13. **A CLIP's `cut:Gain` REACHES THE MIX THROUGH THE TRACK, NOT THROUGH THE
     CUT.** The curve lives on the WINDOW (an `SCut`), which is not allowed to

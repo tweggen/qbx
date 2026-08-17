@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_stereo">
+
+  <!-- PROPOSAL 37, STEREO GATES (2026-08-17). AUTOMATION IS APPLIED TO EVERY
+       CHANNEL, AND IT DOES NOT FLATTEN THE IMAGE.
+
+       P5 (automation) was built while the sink was still mono, so
+       `automation_volume_ramp` and `automation_plugin_param` read channel 0 and
+       nothing else. Both consumers are per-channel loops over a page whose
+       width is the project's, and neither had a gate that could tell a
+       per-channel gain from a gain applied to channel 0 and copied outward.
+       This case is that gate, for both of them:
+
+         PART A  a `self:Volume` ramp consumed by `twGainStage`, per SAMPLE
+         PART B  a `param:` step consumed by `twPluginSlotProcessor`, per CHUNK
+                 with a sample offset
+
+       THE FIXTURE IS THE ONLY ONE THAT CAN CARRY THIS CLAIM.
+       ../test_stereo.wav is the 6 dB ladder: a 480 Hz sine, 3.0 s (144000
+       frames), channel 0 at rms exactly 0.5 and channel 1 the SAME sine at
+       0.25 — measured 0.499987 / 0.249990 after the 16-bit round trip, and
+       `rms(ch0 - 2*ch1)` is 2.3e-05, i.e. they are in phase and one is exactly
+       half the other. `test_sawtooth.wav` (§7 trap 22) has two BYTE-IDENTICAL
+       channels and would pass every assertion below for a sink that duplicated
+       channel 0; it cannot be used here.
+
+       The period is EXACTLY 100 frames, so 100 divides 48000, 69000, 70000 and
+       71000: every window below is a whole number of periods and its rms is a
+       closed form rather than a measurement of one particular window.
+
+       ===================================================== PART A, the numbers
+
+       The lane runs -45 dB at frame 0 to 0 dB at frame 144000, linear IN dB
+       (P5's reading of "dB-linear in fader space"), i.e. 15 dB per second — the
+       same rate `automation_volume_ramp` uses, so consecutive seconds stand in
+       the constant ratio 10^0.75 = 5.6234. With g(t) = 10^((-45 + 15t)/20) the
+       mean of g^2 over the k-th second is
+
+           10^-4.5 * 10^(1.5k) * (10^1.5 - 1) / (1.5 * ln 10)
+
+       and its square root, times the CHANNEL's own rms, is the band (the MEAN
+       grows by 10^1.5 = 31.62 per second, so the RMS grows by 10^0.75 = 5.6234
+       — the same constant ratio `automation_volume_ramp` lists):
+
+                       sqrt(mean g^2)     ch 0 (x0.5)     ch 1 (x0.25)
+           second 0       0.0167443         0.0083722       0.0041861
+           second 1       0.0941606         0.0470803       0.0235401
+           second 2       0.5295000         0.2647500       0.1323750
+
+       (measured: 0.008372 / 0.047079 / 0.264745 and 0.004186 / 0.023539 /
+       0.132371.)
+
+       The +/-3 % bands are 46 times narrower than the ratio between neighbouring
+       seconds, so nothing that is not this ramp passes them; and channel 1 is
+       held to HALF of channel 0 at every step, so a gain stage that wrote
+       channel 0 and copied it outward fails three assertions rather than none.
+
+       ===================================================== PART B, the numbers
+
+       `tw.test.clap.stereoskew` is cross-channel BY DESIGN:
+
+           out[0] = (in[0]*0.5 + in[1]) * gain
+           out[c>=1] = in[c] * 0.5 * gain
+
+       Fed the ladder (in[1] = in[0]/2, in phase) that is
+
+           out[0] rms = 0.5   * gain          out[1] rms = 0.125 * gain
+
+       so a `param:0` step 0.5 -> 1.0 doubles BOTH channels while keeping their
+       ratio at 4. The step is at frame 70000 and is placed MID-CHUNK on
+       purpose: chunks are 4096 frames out of a 65536-frame page, so page 1
+       chunks at 65536, 69632, 73728 …, and 70000 lands 368 frames into the
+       chunk that starts at 69632. A host that applied the value at the CHUNK
+       boundary would move the level at 69632, one that applied it per PAGE at
+       65536; measuring [69000, 70000) and [70000, 71000) excludes both — on
+       each channel independently.
+
+       The FIRST render in part B is made BEFORE the lane exists, at gain 1.0,
+       so the automated render cannot be a cached answer to the automated
+       question (the epoch argument `automation_plugin_param` documents). -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ============================================================ PART A -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+
+    <!-- The unautomated ladder: every band below is derived from these two. -->
+    <render filename="as_nolane.wav" format="wav" quality="10" durationSec="3.05"/>
+    <assert-audio-energy filename="as_nolane.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.4900" maxRms="0.5100"/>
+    <assert-audio-energy filename="as_nolane.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2450" maxRms="0.2550"/>
+    <assert-channels-differ filename="as_nolane.wav"
+                            channelA="0" channelB="1"
+                            startFrame="0" frameCount="48000"
+                            minRmsDelta="0.20" minDiffRms="0.20"/>
+
+    <!-- The lane. Mode `read`: the curve IS the value, so the track's stored
+         0 dB fader plays no part and the closed form above is the whole
+         story. -->
+    <add-automation-lane owner="0" target="self:Volume" mode="read"/>
+    <add-automation-point owner="0" target="self:Volume"
+                          time="0" value="-45" curve="linear"/>
+    <add-automation-point owner="0" target="self:Volume"
+                          time="144000" value="0" curve="linear"/>
+
+    <!-- The midpoint out of the SNAPSHOT the engine is handed: -45 dB and 0 dB,
+         linearly in dB, is -22.5 dB at 1.5 s. This and the rms bands are two
+         independent views of one curve. -->
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="72000" value="-22.5" tolerance="1e-9"
+                             mode="read" pointCount="2"/>
+
+    <render filename="as_ramp.wav" format="wav" quality="10" durationSec="3.05"/>
+
+    <!-- Channel 0, second by second. -->
+    <assert-audio-energy filename="as_ramp.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.00812098" maxRms="0.00862331"/>
+    <assert-audio-energy filename="as_ramp.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.04566789" maxRms="0.04849271"/>
+    <assert-audio-energy filename="as_ramp.wav" channel="0"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.25680750" maxRms="0.27269250"/>
+
+    <!-- CHANNEL 1 FOLLOWS THE SAME RAMP AT HALF THE LEVEL. This is the half of
+         the case that did not exist before B5: the gain stage's per-channel
+         loop, read out of a file. -->
+    <assert-audio-energy filename="as_ramp.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.00406050" maxRms="0.00431166"/>
+    <assert-audio-energy filename="as_ramp.wav" channel="1"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.02283395" maxRms="0.02424635"/>
+    <assert-audio-energy filename="as_ramp.wav" channel="1"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.12840375" maxRms="0.13634625"/>
+
+    <!-- The bands must be able to FAIL: channel 1 is NOT at channel 0's level
+         (which is exactly what a gain applied to channel 0 and copied outward
+         would produce), and second 1 is not second 2. -->
+    <assert-audio-energy filename="as_ramp.wav" channel="1"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.25680750" maxRms="0.27269250"
+                         expectReject="true"/>
+    <assert-audio-energy filename="as_ramp.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.25680750" maxRms="0.27269250"
+                         expectReject="true"/>
+
+    <!-- ...and the IMAGE survives the ramp: the two channels are still a factor
+         of two apart, sample for sample, after a per-sample gain that changed by
+         45 dB across the file. -->
+    <assert-channels-differ filename="as_ramp.wav"
+                            channelA="0" channelB="1"
+                            startFrame="96000" frameCount="48000"
+                            minRmsDelta="0.100" minDiffRms="0.100"/>
+
+    <!-- ============================================================ PART B -->
+    <!-- Track 0 is muted so ONE render answers for the plugin track alone; a
+         second lane at the same time would sum and the closed form would be
+         about the sum. (Track 0 has no `self:Muted` lane, so this is the
+         ordinary STRUCTURAL mute and not P5's redirect to a lane point.) -->
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="1" slotIndex="0" format="clap"
+                   uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- Unautomated: gain 1.0 everywhere, so 0.5 and 0.125. Made BEFORE the
+         lane exists, so it cannot be a cached answer to the automated
+         question. -->
+    <render filename="as_skew_flat.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="as_skew_flat.wav" channel="0"
+                         startFrame="69000" frameCount="1000"
+                         minRms="0.4900" maxRms="0.5100"/>
+    <assert-audio-energy filename="as_skew_flat.wav" channel="1"
+                         startFrame="69000" frameCount="1000"
+                         minRms="0.1225" maxRms="0.1275"/>
+
+    <add-automation-lane owner="1" slotIndex="0" target="param:0" mode="read"
+                         name="Gain"/>
+    <add-automation-point owner="1" slotIndex="0" target="param:0"
+                          time="0" value="0.5" curve="step"/>
+    <add-automation-point owner="1" slotIndex="0" target="param:0"
+                          time="70000" value="1.0" curve="step"/>
+
+    <assert-automation-value owner="1" slotIndex="0" target="param:0"
+                             time="69999" value="0.5" tolerance="1e-9"
+                             mode="read" pointCount="2"/>
+    <assert-automation-value owner="1" slotIndex="0" target="param:0"
+                             time="70000" value="1.0" tolerance="1e-9"/>
+
+    <render filename="as_skew_a.wav" format="wav" quality="10" durationSec="1.5"/>
+
+    <!-- Before the step: half of the flat render, on BOTH channels. -->
+    <assert-audio-energy filename="as_skew_a.wav" channel="0"
+                         startFrame="69000" frameCount="1000"
+                         minRms="0.2450" maxRms="0.2550"/>
+    <assert-audio-energy filename="as_skew_a.wav" channel="1"
+                         startFrame="69000" frameCount="1000"
+                         minRms="0.06125" maxRms="0.06375"/>
+
+    <!-- After it: unity, on BOTH channels. A host that moved the value at the
+         chunk boundary (69632) or per page (65536) fails the pair above. -->
+    <assert-audio-energy filename="as_skew_a.wav" channel="0"
+                         startFrame="70000" frameCount="1000"
+                         minRms="0.4900" maxRms="0.5100"/>
+    <assert-audio-energy filename="as_skew_a.wav" channel="1"
+                         startFrame="70000" frameCount="1000"
+                         minRms="0.1225" maxRms="0.1275"/>
+
+    <!-- The ratio between the channels is the SKEW's, 4, on both sides of the
+         step: delta 0.1875 before and 0.375 after, and the same numbers again
+         as rms(ch0 - ch1) (the two are equal because ch1 is a scaled copy of
+         ch0 here). A parameter event applied to one channel's instance only —
+         or a slot that re-rendered the pair per channel — moves one of these
+         four numbers and not the others. -->
+    <assert-channels-differ filename="as_skew_a.wav"
+                            channelA="0" channelB="1"
+                            startFrame="69000" frameCount="1000"
+                            minRmsDelta="0.150" minDiffRms="0.150"/>
+    <assert-channels-differ filename="as_skew_a.wav"
+                            channelA="0" channelB="1"
+                            startFrame="70000" frameCount="1000"
+                            minRmsDelta="0.300" minDiffRms="0.300"/>
+
+    <!-- Two renders, byte for byte: a per-chunk event list built from a
+         shared_ptr swapped under a mutex is exactly the thing that renders
+         differently the second time if the snapshot is not immutable — and now
+         it is two channels of it. -->
+    <render filename="as_skew_b.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-file-identical actual="as_skew_b.wav" expected="as_skew_a.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

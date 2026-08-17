@@ -46,8 +46,14 @@
        2-channel page, which is the MonoSpread row; the two CLAP/VST3 fixtures
        are 0 -> 2 on a 2-channel page, which is DirectGen.
 
-       STEREO IS NOT GATED (proposal 36 B5): the sink is still mono, so channel
-       0 is the only channel asserted and `L != R` is never claimed. -->
+       THIS CASE STILL READS CHANNEL 0 ONLY, and its numbers are unchanged. It
+       was written while the sink was mono; since proposal 36 B5 it is as wide as
+       the project, and the per-channel half of the claim lives in its sibling
+       instrument_stereo_render.qxa (2026-08-17), which walks the four generator
+       mapping rows — DirectGen, GenFold, the refused narrow-generator row and
+       MonoSpread — out of rendered files. `tw.test.clap.sine` writes the SAME
+       sample to both main channels unless its `Stereo Skew` (param id 3, default
+       OFF) is on, which is exactly why the closed forms below did not move. -->
 
   <setup project="new"/>
 
