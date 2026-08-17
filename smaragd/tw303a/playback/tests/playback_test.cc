@@ -1280,7 +1280,7 @@ int main()
                 float *outs[1] = { o.data() };
                 twLiveMixReader   rd;
                 twLiveMixState    fs;
-                twLiveMixGate     g; g.wantPos = 8; g.haveRoot = false;
+                twLiveMixGate     g; g.wantPos = 8; g.haveRoot = true;   // positional authority
                 twLiveStreamStats st;
                 twlive::mixStream(outs, 1, 4, 8, g, r, rd, fs, st);
                 CHECK(st.dropped == 1 && st.starved == 1 && !r.peek(got),
@@ -1871,7 +1871,12 @@ int main()
         std::uint32_t gaps  = 0;
 
         twLiveMixGate g;
-        g.haveRoot = false;                   // stopped: out = ring
+        // The RT is the POSITION AUTHORITY here (haveRoot): the seeks below are
+        // measured against wantPos. Without a root the stream is consumed
+        // sequentially and a "seek" is not a thing the consumer can see (that
+        // path is asserted separately, right after this block). rootEpoch 0 and
+        // flipEpoch 0 entries ⇒ every entry passes the epoch gate.
+        g.haveRoot = true;
 
         for (int round = 0; round < 40; ++round) {
             const std::size_t n = BLOCKS[round % 6];
@@ -1932,6 +1937,33 @@ int main()
                   "L1a T1 seek back: the head is the FUTURE — silence, counted");
             CHECK(ring.pending() == before,
                   "L1a T1 seek back: ...and NOTHING is popped (the next callback needs it)");
+        }
+
+        // NO ROOT (STOPPED): the stream is its own authority and is consumed
+        // SEQUENTIALLY -- the entry in hand IS the want. So a new RUN (a
+        // reposition while stopped) plays from its first frame regardless of
+        // where the abandoned run stood: no gap, no skipped head.
+        {
+            twLiveMixGate gs; gs.haveRoot = false;
+            // Drain whatever the seek-back left queued (all still the old run).
+            {
+                std::vector<float> junk(65536, 0.0f);
+                float *j[1] = { junk.data() };
+                twLiveStreamStats st;
+                twlive::mixStream(j, 1, 65536, 0, gs, ring, reader, fade, st);
+            }
+            ring.setRun(ring.currentRun() + 1);
+            const std::int64_t newPos = 7;   // arbitrary, far from the old run
+            producePos = newPos;
+            produce(newPos + 3 * (std::int64_t)ENTRY, 0);
+            std::fill(out.begin(), out.begin() + 300, 0.0f);
+            twLiveStreamStats st;
+            twlive::mixStream(outs, 1, 300, /*wantPos ignored*/ 123456, gs, ring, reader, fade, st);
+            bool ok = true;
+            for (std::size_t i = 0; i < 300; ++i)
+                if (out[i] != rampAt(newPos + (std::int64_t)i)) ok = false;
+            CHECK(ok && st.framesSummed == 300 && st.notYet == 0 && st.starved == 0,
+                  "L1a T1 no-root: a new run is consumed sequentially from its frame 0");
         }
 
         // THE EPOCH GATE, PER ENTRY, ACROSS A PARTIAL CONSUMPTION. The verdict

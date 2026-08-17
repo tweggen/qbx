@@ -138,7 +138,13 @@ void mixStream( float *const *out, std::size_t outChannels, std::size_t frames,
 
         const std::int64_t entryPos  = e.startPos + (std::int64_t)reader.cursor;
         const std::size_t  entryLeft = (std::size_t)( e.frames - reader.cursor );
-        const std::int64_t want      = wantPos + (std::int64_t)done;
+        // NO ROOT (STOPPED): the stream is its own position authority and is
+        // consumed SEQUENTIALLY -- the entry in hand IS the want. That is what
+        // makes a reposition while stopped cost nothing: the first entry of the
+        // new run is played from its frame 0 instead of being measured against
+        // the abandoned run's last position (which would skip or gap it).
+        const std::int64_t want      = gate.haveRoot ? wantPos + (std::int64_t)done
+                                                     : entryPos;
 
         if( entryPos + (std::int64_t)entryLeft <= want ) {
             // WHOLLY BEHIND: the RT has moved past it (a seek forward, or a
