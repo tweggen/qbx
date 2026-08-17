@@ -7,6 +7,10 @@
 
 #include <cstdint>
 #include <memory>
+// Only for twLiveMixRingDefaultDepth, so requiredRingDepth() can name the same
+// number openLive() sizes the ring with.
+#include "tw/playback/twlivering.h"
+
 #include <string>
 #include <vector>
 
@@ -127,15 +131,29 @@ public:
     // here: `vpos = stoppedAnchor + blocks * n`, monotone by construction.
     offset_t stoppedAnchor = 0;
 
-    // How far ahead of the delivered frame the pump renders while PLAYING, in
-    // frames: the pump must be at least a block ahead or the RT finds nothing
-    // stamped for the frame it is on.
+    // HOW FAR AHEAD OF THE RT the pump keeps the ring covered, in frames: it
+    // renders while `nextPos < clock.nextFrame + leadFrames` and idles
+    // otherwise (review fix 2). The pump must be at least one block ahead or
+    // the RT finds nothing stamped for the frame it is on; more than that is
+    // latency the user pays for nothing.
     //
-    // NEGATIVE means "take the default" (one block). ZERO is a LEGAL EXPLICIT
-    // VALUE and means "render exactly the delivered frame" — which is what a
-    // synchronous harness driving the clock itself wants, and the distinction
-    // has to be expressible or the harness silently renders a block early.
+    // NEGATIVE means "take the default", which is TWO blocks: one so the RT
+    // always has the block it is on, one of slack for a late pump wake-up.
+    // ZERO is a legal explicit value and means "cover nothing ahead", i.e. the
+    // pump renders only when the RT has already moved on — useful only to a
+    // test that is driving both sides itself.
     length_t leadFrames = -1;
+
+    /// How deep the ring must be for this plan: the blocks inside the lead,
+    /// plus the one the RT is consuming, plus one being written. openLive()
+    /// sizes the ring; the pump WARNS (once) if a plan asks for more than the
+    /// ring it was handed, because the symptom otherwise is a silent stall.
+    std::uint32_t requiredRingDepth() const
+    {
+        if( blockFrames <= 0 ) return twLiveMixRingDefaultDepth;
+        const length_t lead = ( leadFrames < 0 ) ? ( 2 * blockFrames ) : leadFrames;
+        return (std::uint32_t)( ( lead + blockFrames - 1 ) / blockFrames ) + 2u;
+    }
 
     // Allocate the scratch and validate the shape. Called once, on the main
     // thread, before the plan is published. Returns false (and logs) when the

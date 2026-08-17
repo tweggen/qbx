@@ -31,16 +31,36 @@
 // a freeze reached from here answers silence and counts rather than blocking
 // the pump on a disk read.
 //
-// THE CLOCK (design D2, and the reason this class has a `renderOneBlock`):
+// THE CLOCK, AND THE PACING (design D2; review fix 2).
 //
-//   PLAYING  livePos = engineClock.deliveredFrame + plan->leadFrames
-//   STOPPED  vpos    = plan->stoppedAnchor + blocks * blockFrames
+//   PLAYING  the pump keeps [nextFrame, nextFrame + lead) COVERED, where
+//            nextFrame is the frame the RT will pull next (twliveclock.h). It
+//            renders while `nextPos_ < nextFrame + lead` and the ring has room,
+//            and idles otherwise.
+//   STOPPED  a virtual counter from plan->stoppedAnchor, paced by the ring
+//            drain (there is no clock to follow).
 //
-// and a block whose target has jumped away from where the previous one ended is
-// ONE explicit REPOSITION: the plan's processors are told to forget continuity
-// and the render at the new position rebuilds (a generator resets + chases +
-// pre-rolls; an effect starts a fresh run). The counter is a gate: a contiguous
-// run must produce exactly zero of them, and one seek exactly one.
+// FILLING THE RING UNTIL IT IS FULL IS WRONG AND WAS THE ORIGINAL BUG. With a
+// depth-4 ring and a 2-block tolerance the pump ran 4 blocks ahead, so the very
+// next stamp read as a 3-block backwards jump, repositioned, forgot continuity
+// and re-rendered the covered range — on every start, forever. Pacing on the
+// frames the RT actually wants removes the failure mode rather than widening
+// the tolerance past it.
+//
+// REPOSITION RULES (design D2's "ONE explicit reposition per start / stop /
+// seek / wrap"), which replace the old fixed drift tolerance:
+//
+//   nextPos_ <  nextFrame                    fell behind, or a seek FORWARD
+//                                            past the covered range
+//   nextPos_ >  nextFrame + lead + block      the clock moved BACK: a seek back
+//                                            or a loop wrap
+//   requestReposition()                       the app said so explicitly
+//
+// A jump INSIDE the covered window needs none: the RT drops the entries it has
+// passed and streams on. A reposition tells the plan's processors to forget
+// continuity, so a generator resets, chases and pre-rolls at the new position.
+// The counter is a gate: a contiguous run must produce exactly one (the first),
+// and each seek exactly one more.
 //
 // `renderOneBlock()` is public and SYNCHRONOUS on purpose. The thread loop is a
 // pacer around it, and the L1a harness drives it directly — with no pacing, no
@@ -63,6 +83,13 @@ public:
     // The thread. start() is idempotent; stop() joins.
     void start();
     void stop();
+
+    // Force ONE reposition at the top of the next block (design D2). The app
+    // knows about a start, a stop, a seek and a loop wrap before any clock
+    // reading can show them, and relying on drift detection alone would make
+    // the first block after a transport action a race. Consumed by the pump;
+    // safe from any thread.
+    void requestReposition() { repositionReq_.store( true, std::memory_order_release ); }
     bool running() const { return running_.load( std::memory_order_acquire ); }
 
     // ONE block, on the CALLING thread. Marks the caller as a live thread (so
@@ -83,6 +110,10 @@ public:
 
 private:
     void loop();
+    // Apply ONE reposition: move the position, clear the request, count it,
+    // open a new RUN on the ring, and tell the plan's processors to forget
+    // continuity. Pump thread only.
+    void applyReposition( const twLivePlan &plan, offset_t want );
     // Everything below runs on the pump thread (or the harness's caller).
     void renderTrack( const twLivePlan &plan, int index, length_t frames, offset_t pos );
     // Sum one frozen input's page at `pos` into `dst` (planar, `channels` x
@@ -124,6 +155,9 @@ private:
     bool          wasPlaying_ = false;
     std::uint64_t blockIndex_ = 0;     // blocks since the last reposition
     std::uint64_t lastSeq_    = 0;
+    std::atomic<bool> repositionReq_{ false };
+    std::uint64_t     runId_ = 0;
+    bool              loggedShallowRing_ = false;
 
     std::thread       thread_;
     std::atomic<bool> running_{ false };

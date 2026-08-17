@@ -25,6 +25,16 @@
 //                  twice knows the callback has not run since — which is how it
 //                  distinguishes "the playhead is not moving" from "the
 //                  playhead moved back to the same number".
+//   nextFrame      the PROJECT frame the RT will pull NEXT -- exactly the
+//                  position the callback publishes. This is what the PUMP
+//                  paces on (review fix 2): it keeps [nextFrame, nextFrame +
+//                  lead) covered, so "how far ahead am I" is a question about
+//                  the frames the RT is about to ask for rather than about
+//                  block counts. Keeping it separate from deliveredFrame is
+//                  what lets MIDI-out and metering go on reading the frame
+//                  being HEARD while the pump reads the frame being WANTED;
+//                  the two differ by one device buffer and conflating them
+//                  would put the live lane a buffer behind the arrangement.
 //   deliveredFrame the PROJECT frame the device is being handed right now:
 //                  `engine->currentPosition() - bufferFrames`. twSpeaker
 //                  publishes the position AFTER the pull, so the published
@@ -52,6 +62,7 @@
 struct twEnginePosition {
     std::uint64_t seq            = 0;    // 0 == nothing published yet
     std::int64_t  deliveredFrame = 0;
+    std::int64_t  nextFrame      = 0;
     std::int64_t  hostNs         = 0;
 
     bool valid() const { return seq != 0; }
@@ -59,13 +70,15 @@ struct twEnginePosition {
 
 class twEngineClock {
 public:
-    // RT callback only. Cheap: two relaxed stores between two releases.
-    void stamp( std::int64_t deliveredFrame, std::int64_t hostNs )
+    // RT callback only. Cheap: three relaxed stores between two releases.
+    void stamp( std::int64_t deliveredFrame, std::int64_t nextFrame,
+                std::int64_t hostNs )
     {
         const std::uint64_t s = guard_.load( std::memory_order_relaxed );
         guard_.store( s + 1, std::memory_order_release );          // odd: writing
         std::atomic_thread_fence( std::memory_order_release );
         frame_.store( deliveredFrame, std::memory_order_relaxed );
+        next_.store( nextFrame, std::memory_order_relaxed );
         host_.store( hostNs, std::memory_order_relaxed );
         // A stamp is a live reading by definition, so it also UNDOES an
         // invalidate(): a new device session needs no separate revalidation.
@@ -98,6 +111,7 @@ public:
             if( g0 & 1u ) continue;                       // mid-write
             std::atomic_thread_fence( std::memory_order_acquire );
             const std::int64_t f = frame_.load( std::memory_order_relaxed );
+            const std::int64_t x = next_.load( std::memory_order_relaxed );
             const std::int64_t h = host_.load( std::memory_order_relaxed );
             const bool         v = valid_.load( std::memory_order_relaxed );
             std::atomic_thread_fence( std::memory_order_acquire );
@@ -105,6 +119,7 @@ public:
             if( !v || g0 == 0 ) return out;               // never stamped / invalidated
             out.seq            = g0 / 2;                  // publications, not guard ticks
             out.deliveredFrame = f;
+            out.nextFrame      = x;
             out.hostNs         = h;
             return out;
         }
@@ -114,6 +129,7 @@ public:
 private:
     std::atomic<std::uint64_t> guard_{ 0 };   // even == stable, odd == writing
     std::atomic<std::int64_t>  frame_{ 0 };
+    std::atomic<std::int64_t>  next_{ 0 };
     std::atomic<std::int64_t>  host_{ 0 };
     std::atomic<bool>          valid_{ true };
 };

@@ -55,7 +55,9 @@ bool twLivePlan::finalize()
     }
     arena_.assign( total, 0.0f );
 
-    if( leadFrames < 0 ) leadFrames = blockFrames;   // 0 is explicit, see the header
+    // TWO blocks by default: one for the block the RT is on, one of slack for
+    // a late pump wake-up. 0 is a legal explicit value (see the header).
+    if( leadFrames < 0 ) leadFrames = 2 * blockFrames;
     return true;
 }
 

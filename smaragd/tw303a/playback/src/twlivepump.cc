@@ -109,6 +109,27 @@ void LiveGraphPump::loop()
 #endif
 }
 
+// ONE EXPLICIT REPOSITION, THROUGH THE PLAN (design D2/D4) -- never through the
+// app, which is not on this thread and does not know when a block boundary is.
+// A generator then resets, chases and pre-rolls on its next render; an effect
+// starts a fresh contiguous run.
+//
+// It also opens a NEW RUN on the ring. Everything already queued describes the
+// timeline we are abandoning, and the consumer's keep-the-future rule would
+// hold it forever -- so the run id is bumped here and the consumer drops the
+// stale entries on its next call, which is what unblocks the producer.
+void LiveGraphPump::applyReposition( const twLivePlan &plan, offset_t want )
+{
+    nextPos_    = want;
+    blockIndex_ = 0;
+    repositionReq_.store( false, std::memory_order_release );
+    repositions_.fetch_add( 1, std::memory_order_relaxed );
+    ring_.setRun( ++runId_ );
+    for( const twLiveTrackPlan &t : plan.tracks )
+        for( const std::shared_ptr<audio::twPluginSlotProcessor> &sp : t.inserts )
+            if( sp ) sp->forgetContinuity();
+}
+
 // ---------------------------------------------------------------- one block
 
 bool LiveGraphPump::renderOneBlock()
@@ -150,6 +171,20 @@ bool LiveGraphPump::renderOneBlock()
         inPtrs_.assign( widest, nullptr );
         outPtrs_.assign( widest, nullptr );
 
+        // THE RING MUST BE DEEP ENOUGH FOR THE PLAN's LEAD. Warned rather than
+        // clamped: the ring is sized by openLive() and the lead by the plan
+        // builder, and the symptom of a mismatch is a pump that idles with the
+        // ring full while the RT starves, which reads as "the live lane does
+        // not work" and nothing else.
+        if( held_ && ring_.configured() &&
+            ring_.depth() < held_->requiredRingDepth() && !loggedShallowRing_ ) {
+            loggedShallowRing_ = true;
+            TW_LOGW( "playback", "[live] ring is %u deep but the plan's lead of %lld "
+                     "frames needs %u; the pump will idle short of its lead",
+                     (unsigned)ring_.depth(), (long long)held_->leadFrames,
+                     (unsigned)held_->requiredRingDepth() );
+        }
+
         // THE TRANSPORT IS APPLIED FROM THE PLAN, once per adoption. The plan
         // builder decides it (design D2); pushing it through here is what makes
         // it impossible for the plan and the processors to disagree about
@@ -172,23 +207,53 @@ bool LiveGraphPump::renderOneBlock()
     const length_t block = plan->blockFrames;
     if( block <= 0 ) return false;
 
-    float *dest = ring_.beginWrite();
-    if( !dest ) {
-        ringFull_.fetch_add( 1, std::memory_order_relaxed );
-        return false;   // the RT is not draining: DROP, never block or grow
-    }
-
-    // --- the live clock (design D2) ----------------------------------------
+    // --- the live clock and the pacing (design D2; review fix 2) -----------
     const bool playing = plan->transport.playing;
-    bool reposition = !havePos_ || ( havePos_ && playing != wasPlaying_ );
-    offset_t want = havePos_ ? nextPos_ : plan->stoppedAnchor;
+    // READ, do not consume: a request must survive a block we decide not to
+    // render (a full ring, or a pace that says idle), or the app's explicit
+    // "reposition now" is silently lost exactly when the ring is congested.
+    const bool forced = repositionReq_.load( std::memory_order_acquire );
+
+    bool     reposition = forced || !havePos_ || ( havePos_ && playing != wasPlaying_ );
+    offset_t want       = havePos_ ? nextPos_ : plan->stoppedAnchor;
 
     if( playing ) {
         const twEnginePosition p = clock_.read();
         if( p.valid() ) {
-            want = (offset_t)p.deliveredFrame + plan->leadFrames;
-            if( want < 0 ) want = 0;
             lastSeq_ = p.seq;
+            offset_t nf = (offset_t)p.nextFrame;
+            if( nf < 0 ) nf = 0;
+            const offset_t lead = plan->leadFrames;
+
+            if( !havePos_ ) {
+                want = nf;
+            } else if( nextPos_ < nf ) {
+                // FELL BEHIND, or a seek forward past everything we covered.
+                reposition = true;
+                want       = nf;
+            } else if( nextPos_ > nf + lead + (offset_t)block ) {
+                // THE CLOCK MOVED BACK: a seek back or a loop wrap. What we
+                // have rendered describes a future that no longer exists.
+                reposition = true;
+                want       = nf;
+            } else if( forced ) {
+                want = nf;
+            }
+
+            // THE PACE. Everything inside [nf, nf + lead) is covered; anything
+            // beyond it is latency the user pays for nothing. Idle instead.
+            const offset_t after = reposition ? want : nextPos_;
+            if( after >= nf + lead ) {
+                // Adopt the reposition decision even though we are not
+                // rendering this block: the RT is ahead of us and the next
+                // call must not count the same jump twice.
+                if( reposition ) {
+                    applyReposition( *plan, want );
+                    havePos_    = true;
+                    wasPlaying_ = playing;
+                }
+                return false;
+            }
         } else if( !havePos_ ) {
             // The device has not published yet (twSpeaker defers the start
             // until the readahead is primed). Start from the locator; the first
@@ -199,27 +264,17 @@ bool LiveGraphPump::renderOneBlock()
         want = plan->stoppedAnchor;
     }
 
-    if( !reposition && playing ) {
-        // TOLERANCE. Between two publications the clock stands still, and a
-        // publication that lands between two pump blocks moves it by less than
-        // a block; treating either as a jump would reposition at block rate.
-        // A real seek or loop wrap is orders of magnitude larger than the lead.
-        const offset_t tol   = (offset_t)block * 2;
-        const offset_t drift = want - nextPos_;
-        if( drift > tol || drift < -tol ) reposition = true;
-    }
+    // THE REPOSITION IS APPLIED BEFORE THE RING SLOT IS CLAIMED, so a full ring
+    // cannot lose it. That matters most in exactly the case a reposition
+    // creates: the ring is full of the run we are abandoning, and the run bump
+    // inside applyReposition() is what tells the consumer to throw it away and
+    // let the producer back in.
+    if( reposition ) applyReposition( *plan, want );
 
-    if( reposition ) {
-        nextPos_    = want;
-        blockIndex_ = 0;
-        repositions_.fetch_add( 1, std::memory_order_relaxed );
-        // ONE EXPLICIT REPOSITION, THROUGH THE PLAN (design D2/D4) — never
-        // through the app, which is not on this thread and does not know when a
-        // block boundary is. A generator then resets, chases and pre-rolls on
-        // its next render; an effect starts a fresh contiguous run.
-        for( const twLiveTrackPlan &t : plan->tracks )
-            for( const std::shared_ptr<audio::twPluginSlotProcessor> &s : t.inserts )
-                if( s ) s->forgetContinuity();
+    float *dest = ring_.beginWrite();
+    if( !dest ) {
+        ringFull_.fetch_add( 1, std::memory_order_relaxed );
+        return false;   // the RT is not draining: DROP, never block or grow
     }
 
     const offset_t pos = nextPos_;
