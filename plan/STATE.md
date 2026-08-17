@@ -12476,3 +12476,25 @@ no default — the APP sets it at startup, so a unit test that never does reads
 whatever was on the stack, and `twMixer`'s constructor `calloc`s from it and
 throws. `playback_test` now calls `env.setBufferSize(4096)` before constructing
 one, with the reason stated at the call site.
+
+**Two unreproduced flakes seen under a FULL `-j4` run, named because the rule
+says a case that fails once and passes on re-run is not a pass.** Five full
+`-j4` runs were made; three were 174/174 and two each lost ONE case, a
+different one each time:
+
+| Case | Shape | Pinned |
+|---|---|---|
+| `qxa.instrument_render_determinism` + its `_xproc` driver (both, in one run) | render-vs-render byte compare | `repeat_test.sh` 50/50 at workers {1,4,8,16}; the pair together under `ctest -R … -j4` 20/20 |
+| `qxa.instrument_locate_continuity` | `assert-instrument-slot FAILED: slot 0 … is not an instrument (or the chain is empty)`, then both RMS assertions read exactly 0 | `repeat_test.sh` 25/25 at workers 4 |
+
+The second one's first line is the diagnosis and it is NOT a DSP or a
+determinism failure: the slot had NO PLUGIN, i.e. the CLAP module did not
+resolve in that process, so the instrument rendered silence and every later
+assertion followed from it. That points at the plugin registry / module load
+under concurrent load (four `smaragd.exe` processes each scanning and
+`LoadLibrary`-ing the same `twtestclap.clap`), not at anything this phase
+touched — no code path in L1a runs unless something calls `openLive()`, and
+nothing does yet. It left no sticky cache record: the next runs were green.
+Root cause is NOT established; both are recorded as open.
+
+A full SERIAL run was made as the cleaner signal: **174/174, 164.8 s.**
