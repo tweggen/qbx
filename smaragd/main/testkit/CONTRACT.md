@@ -30,6 +30,20 @@ Invariants:
    an assertion be pointed at a committed FIXTURE (`../test_channels4.wav`),
    which never appears in the output dir. A name that exists nowhere still
    fails with the output-dir spelling, unchanged.
+3a. AUDIO INPUT is `null` by default under --test-case (proposal 21 L0;
+   main.cpp sets SMARAGD_AUDIO_INPUT_BACKEND next to the audio and MIDI backend
+   defaults, unless it is already set). THIS CHANGES NOTHING ABOUT THE SUITE AS
+   IT STANDS: no case records audio — there is no record verb yet — so nothing
+   opened an input device in the first place. It is set now so that the moment
+   one does, it cannot reach the developer's microphone by accident, and so a
+   case that WANTS input says so: `SMARAGD_AUDIO_INPUT_BACKEND=file:<wav>` gives
+   a device that replays known audio in 1024-frame blocks on the shared steady
+   clock (devices inv. 22-23).
+   The MIDI-in verbs (`midi-in-event`, `midi-in-replay`) inject into the CAPTURE
+   MIDI input, which is already the --test-case default. Nothing CONSUMES a
+   MidiInput yet (L1a/L3a attach the live lane and the recorder), so today those
+   verbs gate their own behaviour — order, stamps, real-time pacing — and
+   nothing sounding.
 4. Exit code: 0 iff all actions applied as expected AND <assertions> pass.
 5. drag-clip-edge is the ONLY route to clip-edge gesture code. Every clamp and
    snap of a trim / extend / loop / loop-marker drag lives in

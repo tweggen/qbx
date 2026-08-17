@@ -352,6 +352,16 @@ const Fixture kFixtures[] = {
       "<assert-midi-options contains='backend=capture' absent='virtual=no'"
       " outputPorts='1' inputPorts='1'/>" },
     { "set-option", "<set-option key='midi/outOffsetMs' value='120'/>" },
+    // --- the MIDI-in verbs (proposal 21 L0) ---------------------------------
+    // The field form and the raw-bytes form are exclusive (bytes= suppresses
+    // the fields on write), so the fixture uses the field form plus cc, and
+    // atFrame is written only when it was given.
+    { "midi-in-event",
+      "<midi-in-event kind='cc' key='60' velocity='100' channel='2' cc='7'"
+      " atFrame='48000' timeoutMs='5000'/>" },
+    { "midi-in-replay",
+      "<midi-in-replay filePath='perf.mid' track='1' channel='3'"
+      " startFrame='96000' timeoutMs='5000'/>" },
     { "wait-ms", "<wait-ms ms='3600'/>" },
 
     { "assert-clip-window",

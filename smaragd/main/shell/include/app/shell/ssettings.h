@@ -45,6 +45,23 @@ public:
     uint32_t audioInputLatencyFrames( const QString &deviceId ) const;
     void     setAudioInputLatencyFrames( const QString &deviceId, uint32_t frames );
 
+    // Per-DEVICE recording offset, in milliseconds, signed (proposal 21 L0,
+    // design §6). The device-reported latencies above are what the driver
+    // CLAIMS; this is the user's correction for what it actually does — the
+    // number a "record a click, look at where it landed, type the difference"
+    // calibration produces, and the last term in the placement conversion
+    // (design D6). Keyed by the device NAME so it survives an id change, like
+    // midiPortId(). POSITIVE moves a recorded clip EARLIER, matching
+    // midiOutOffsetMs's sign convention.
+    double recordingOffsetMs( const QString &deviceName ) const;
+    void   setRecordingOffsetMs( const QString &deviceName, double ms );
+
+    // The same correction for a MIDI INPUT port, keyed by port name. A
+    // controller with its own buffering, or a MIDI-over-USB hub, arrives late
+    // by an amount only measurement can find.
+    double midiInputOffsetMs( const QString &port ) const;
+    void   setMidiInputOffsetMs( const QString &port, double ms );
+
     // MIDI ports (proposal 37 P7b). A project stores a PORTABLE port NAME
     // (STrack::midiOutPort); the machine-local id the backend's open() wants -
     // a WinMM device index, a CoreMIDI uniqueID, an ALSA "client:port" - lives

@@ -153,6 +153,22 @@ int main( int argc, char *argv[] )
         if (qEnvironmentVariableIsEmpty("SMARAGD_MIDI_BACKEND"))
             qputenv("SMARAGD_MIDI_BACKEND", "capture");
 
+        // ... and the NULL audio INPUT (proposal 21 L0, design D9). Same three
+        // reasons as its two siblings: a headless suite must not open the
+        // developer's microphone ~90 times, what a real input device delivers
+        // is whatever is in the room and therefore not assertable, and the
+        // default must be overridable — a monitoring or recording case sets
+        // SMARAGD_AUDIO_INPUT_BACKEND=file:<wav> and gets a device that
+        // replays known audio on a paced clock.
+        //
+        // This changes nothing about the suite as it stands: no qxa case
+        // records audio (there is no record verb yet), so nothing opened an
+        // input device in the first place. It is set now so that the moment one
+        // does, it does not reach hardware by accident.
+        // Only when unset: an explicit SMARAGD_AUDIO_INPUT_BACKEND always wins.
+        if (qEnvironmentVariableIsEmpty("SMARAGD_AUDIO_INPUT_BACKEND"))
+            qputenv("SMARAGD_AUDIO_INPUT_BACKEND", "null");
+
 #ifdef Q_OS_LINUX
         // Same intent as the previous argv rewrite, minus the undefined
         // behaviour: that version built `new char*[argc + 2]`, filled every slot
