@@ -34,8 +34,9 @@ of double-audio, silent-clip, and wrong-material bugs.
    but its window is stored in musical TICKS and every frame-facing value is
    derived through `twTempoMap` exactly once inside the cut (POSITION_DOMAINS
    rule 7). Its engine view is NOT a `ClipEntry`: a track routes a
-   `contentKind() == Event` child into its `twEventClipSet` instead of the bus
-   mixers, so an event clip costs no page freeze. Its SPLIT is
+   `contentKind() == Event` child into its `twEventClipSet` instead of its
+   `twTrackMix`, so an event clip costs no page freeze. (One track mix, N
+   channels wide, since proposal 36 B4 — the per-bus mixers are gone.) Its SPLIT is
    NON-DESTRUCTIVE — the window gates the notes and the shared sequence is
    never edited, so a straddling note keeps its full duration in the head, the
    head's window end SYNTHESISES the note-off, and the tail never re-attacks
@@ -56,7 +57,10 @@ sample on a cross-track move.)
 ## Synchronization STrack → twTrackMix
 
 - `trackChildWasAdded(child)` → `insertClip(&child, startTime, duration,
-  getComponentFn, mapPosFn)` on every bus mixer.
+  getComponentFn, mapPosFn)` on the track's `twTrackMix`. Note the SINGULAR:
+  proposal 36 B4 retired the per-bus instantiation, so this is one call, not one
+  per bus, and the clip's channels travel inside the page rather than across
+  parallel wires.
 - `trackChildWasMoved` (sender IS the SLink — `startTimeChanged` is a link
   signal) → `updateClip(slink, newTime, duration)`.
 - `trackChildDurationChanged` — **sender is the OBJECT (SCut), not the

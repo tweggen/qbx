@@ -69,12 +69,29 @@ Invariants:
    page whose [startPos, startPos + FRAME_CAPACITY) ends before keepAfterPos.
    It compared against PAGE_SIZE — the page's size in BYTES — until proposal 36
    B1a, which made the window four times wider than the comment claimed. Note
-   the second half of the finding: NOTHING IN THE TREE CALLS releaseOldPages.
-   Component page caches are pruned only by invalidation and by teardown, so a
-   long session's outputPages_ maps grow without bound; the fix was made
-   because B1b multiplies a page's byte size by its channel count, at which
-   point the same expression would have become width-dependent as well as
-   wrong. Pinned frame-exactly by graph_test.
+   the second half of the finding: NOTHING CALLED releaseOldPages, so page
+   caches were pruned only by component teardown and by a re-freeze replacing
+   the same key. An epoch bump marks pages stale IN PLACE and does not prune,
+   so a long session's outputPages_ maps grew without bound. Pinned
+   frame-exactly by graph_test.
+8b. B9 WIRED IT, through the static releaseOldPagesGlobally(keepAfterPos): one
+   registry walk, a TRY-lock per component (a component busy freezing is
+   skipped, never waited for), driven by RenderSession once per page boundary
+   with a four-page margin behind the render position. Measured: a 60-second
+   render went from 681 resident pages to 108 — 1.42 GB to 219 MB at width 8 —
+   and both committed goldens stayed byte-identical. Two things make it safe,
+   and a change that breaks either breaks this: erasing a map entry drops ONE
+   shared_ptr, so a page bound into a scheduler node, chained as a
+   stalePredecessor or held by an audio callback survives on its own references
+   and a lookup can only MISS (which the engine answers by re-freezing); and
+   the margin exists for the SAME-COMPONENT PREDECESSOR EDGE, which chains DSP
+   state from page N-1 — pruning to the current page would break the chain and
+   could change audio.
+8c. PLAYBACK IS STILL NOT PRUNED, deliberately. The readahead has a frontier
+   but it also has proposal 16's stale-page fallback and a user who can seek
+   backwards, so "what may be dropped" there is a design question and not a
+   call site. What bounds a playing session's caches today is component
+   teardown and nothing else. Recorded as known debt rather than guessed at.
 9. Every live twComponent is in a process-wide registry (proposal 36 B1a), for
    the per-component half of the page accounting. The registry holds RAW
    pointers and owns nothing; it is a leaked singleton so that a component
@@ -99,8 +116,10 @@ Invariants:
     three classes (twRewire's plugs are buses, twSampleReader's outputs are
     channels, twWavInput reports a hardcoded 4 with one latch built); the two
     must never be merged. twView forwards it to whatever it resolves to.
-    twFormatCaps::channelCounts is DERIVED from it rather than restated, so it
-    cannot drift — nothing reads that field and B9 deletes it.
+    twFormatCaps::channelCounts is GONE (B9 deleted it): it was written in two
+    places, read in none, and the negotiator has no channel logic at all, so
+    leaving it would have told the next reader that width is negotiated between
+    components when getOutputChannels() is the sole authority.
 11. A page WIDER THAN ONE CHANNEL is filled by renderPageWide(), never by a
     per-channel loop over renderFrames() (§4.3). freezePage_nolock forks on the
     width of the PAGE IN HAND — a declared width is a promise about future

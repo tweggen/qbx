@@ -1,9 +1,15 @@
 # tw/pages — CONTRACT
 
-Purpose: the frozen-output page model — twOutputPage (256 KiB / 65536 frames
-PER CHANNEL, planar, one channel wide everywhere in the tree today), the
-PageBase interface, the bounds-safe IOVector view over pages, and the
-CapturePagePool used by async revalidation.
+Purpose: the frozen-output page model — twOutputPage (256 KiB per channel /
+65536 frames per channel, planar, **N channels wide: the project's width, 1/2/
+4/6/8**), the PageBase interface, the bounds-safe IOVector view over pages, and
+the CapturePagePool used by async revalidation.
+
+*(This line said "one channel wide everywhere in the tree today" until proposal
+36 B9. It was written at B1b, when it was true and load-bearing — the whole
+safety argument of that milestone was that the mechanical sweep happened while
+every page was still one channel wide. B4 widened the track path and B5 the
+sink; the sentence outlived its milestone by five of them.)*
 
 Public headers: tw_output_page.h, page_interface.h, io_vector.h,
 capture_page_pool.h, tw_page_accounting.h.
@@ -45,8 +51,10 @@ Invariants:
    read-time question. Storage is `channels * CHANNEL_STRIDE`.
 8. Sample data is reached ONLY through `channelPtr(c)`; `channelFrames()` (per
    channel), not `sampleCount()`, is what a frame index is bounded by.
-   `getDataPtr()` is channel 0, so a width-1 call site stays correct. There is
-   no raw `samples.data()` anywhere outside this class — that is what makes
+   `getDataPtr()` — which returned channel 0 so a width-1 call site stayed
+   correct — was **deleted at B9**: it had no callers, and a width-blind
+   pointer into a planar buffer is the hole this invariant exists to close.
+   There is no raw `samples.data()` anywhere outside this class — that is what makes
    "every consumer was converted" a fact the compiler checks. An out-of-range
    channel is reported once and answered with channel 0, so it can never be an
    out-of-bounds read on the audio thread; the §4.4 clamp
@@ -69,7 +77,8 @@ Invariants:
     allocated at their producer's declared width), and a correctly-WIDE page is
     never rejected merely because its consumer only reads channel 0 — that
     consumer is narrow, not wrong. Gated by metering_test; the RT half is
-    AC B4.5's to prove, since nothing in production is wide before B4.
+    AC B4.5's to prove. (That clause read "since nothing in production is
+    wide before B4" when it was written; production has been wide since.)
 
 How to test: `ctest -R page_channels` (the channel dimension: stride
 arithmetic, a four-channel round trip through channelPtr with signals whose
@@ -85,9 +94,14 @@ figures from inside one.
 Known debt: a page's storage is always channels * FRAME_CAPACITY (memory over-
 allocation for short tails); two aspect enums exist (twRenderAspect here,
 twCaptureAspect in tw/schedule) with DIFFERENT bit layouts — do not mix.
-There is NO twOutputPage pool: pages are make_shared on demand into unbounded
-per-component maps in tw/graph, and the accounting added in B1a measures that
-fact rather than changing it. CapturePagePool is a SEPARATE thing serving a
+There is NO twOutputPage pool: pages are make_shared on demand into
+per-component maps in tw/graph. Those maps were UNBOUNDED until proposal 36 B9
+— B1a's accounting measured the fact rather than changing it, and B9 measured
+what it cost (one 60-second render left 681 pages resident and freed none:
+357 MB at width 2, 1.42 GB at width 8) and then wired the pruning that had
+existed unused since the beginning. An offline render now drops its trail as it
+advances and holds ~108 pages whatever its duration. PLAYBACK STILL DOES NOT
+PRUNE — see tw/graph inv. 8 for exactly what is and is not bounded. CapturePagePool is a SEPARATE thing serving a
 separate page type (CapturePageData, the preview/metadata capture page), and it
 is not a small one: it pre-allocates its whole std::vector in its constructor and
 SProject asks for 2048 pages — 553 648 128 bytes reserved eagerly per project,
@@ -102,9 +116,10 @@ naively would have made SProject's eager pool 4.2 GiB at width 8. It stays one
 plane wide because IT IS NOT AUDIO STORAGE: its 256 KiB payload is an ASPECT
 page — FLOAT SAMPLES of the object's output decimated to ~1 kHz (channel 0,
 from position 0) written by CaptureRevalidator::dispatchRecomputation, or a
-Metadata/Export blob — reached through getDataPtr(), with no notion of a frame,
-a stride or a channel anywhere in its type. Nothing on the audio path allocates
-one.
+Metadata/Export blob — reached through its plain `data` member (the
+`getDataPtr()` accessor went at B9 with the rest of the width-blind API), with
+no notion of a frame, a stride or a channel anywhere in its type. Nothing on the
+audio path allocates one.
 
 SAY "FLOAT SAMPLES", NOT "PREVIEW WAVEFORM": the loose wording is what proposal
 36 trap 26 was. The waveform the user sees is a preview_t {int8 min, int8 max}

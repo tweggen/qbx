@@ -313,33 +313,45 @@ so this suite is the entire safety net and every branch pays it in full; `-j` is
 the cheapest available win.
 
 Measured on this repo's usual Windows box (16 logical cores, 16 GB RAM),
-107 tests run + 3 disabled, back to back, nothing else of consequence on the
-machine:
+171 tests run + 3 disabled, four modes back to back, nothing else of consequence
+on the machine (**re-measured 2026-08-17, proposal 36 B9**):
 
 | Mode | Wall clock | Speedup | Result |
 |---|---|---|---|
-| serial | 2338 s | 1.00× | 105/107 — 2 crash flakes, see below |
-| `-j2` | 1151 s | 2.03× | 106/107 — 1 crash flake |
-| **`-j4`** | **791 s** | **2.96×** | **107/107 green** |
-| `-j8` | 552 s | 4.23× | 107/107 green |
-| serial, repeated later | 2719 s | — | 107/107 green |
+| serial | 164 s | 1.00× | 171/171 green |
+| `-j2` | 94 s | 1.74× | 171/171 green |
+| **`-j4`** | **57 s** | **2.9×** | **171/171 green** |
+| `-j8` | 42 s | 3.9× | 171/171 green |
 
-Counts reconciled both ways and every time: 89 `.qxa` files on disk = 89 `qxa.*`
-tests registered, 110 registered in total, 3 Not Run (Disabled), **107 run**.
+Counts reconciled both ways: **174 registered / 171 run / 3 Not Run (Disabled)**
+— the disabled three are the macOS-only `au_*` trio.
 
-The serial run was done twice because the first one was the only run in the set
-that was not green, and its two failures were crashes rather than assertion
-failures. The second serial run is 16 % slower than the first for no reason
-either run can explain, which is roughly the noise floor for wall-clock numbers
-on a desktop — do not read small differences in this table as signal.
+**THE OLD NUMBERS IN THIS TABLE WERE 20× LARGER AND THE REASON IS NOT THE
+MACHINE.** It read 2338 s serial / 791 s at `-j4` for 107 tests, and it is worth
+knowing why it moved, because the wrong explanation is available and plausible:
+it is NOT plugin scanning, and it is not a faster box. It is that
+`SProject::getDurationSeconds()` was a hard-coded `return 60.0`, so **every
+`<render>` in the suite rendered a full minute regardless of how much audio the
+case contained** (proposal 36 §7 trap 13 — the 4-second corpus rendered 11.5 MB,
+93 % of it silence). `<render durationSec="…">` fixed that, and with `<render>`
+appearing ~147 times across the suite it is essentially the whole difference.
+The suite got 20× cheaper without losing a single assertion.
 
-`-j8` is faster still and was green here, but `-j4` is the recommendation: it
-leaves headroom on a box that is also running an editor, a browser and possibly
-another worktree's build, and the failure mode of running out of headroom is not
-graceful (see the render watchdog below). Scale by RAM, not by core count.
+The consequence for reading this table: the shape is the same but the stakes are
+much lower. **A serial run is now under three minutes**, so "run it serially when
+you are flake-hunting" costs nothing worth optimising, and the argument for `-j`
+is convenience rather than necessity.
 
-A serial run uses about **1/16 of this machine** — measured, CPU sat at ~6 %
-during it. That is the whole argument for `-j`.
+`-j8` is faster still and was green here, but `-j4` is still the recommendation:
+it leaves headroom on a box that is also running an editor, a browser and
+possibly another worktree's build, and the failure mode of running out of
+headroom is not graceful (see the render watchdog below). Scale by RAM, not by
+core count — and note the memory figures below moved too, in the other
+direction: an offline render now prunes its page trail (proposal 36 B9), so a
+long render no longer grows without bound.
+
+A serial run still uses about **1/16 of this machine**. That is the whole
+argument for `-j`.
 
 - **The re-configure is load-bearing.** The qxa glob in `smaragd/CMakeLists.txt` is
   `CONFIGURE_DEPENDS`; without a configure pass a newly added `.qxa` is never registered
@@ -347,7 +359,7 @@ during it. That is the whole argument for `-j`.
 - **Reconcile the count**: registered vs run vs skipped — `ctest -N` against the run's
   own summary, and do it for the parallel run too. A silently-unregistered case is a
   failure mode this repo has actually hit. On a non-Apple box the expected shape is
-  **110 registered / 107 run / 3 Not Run (Disabled)** — the disabled three are the
+  **174 registered / 171 run / 3 Not Run (Disabled)** — the disabled three are the
   macOS-only `au_*` trio.
 - **A case that fails once and passes on re-run is not a pass.** Pin it with
   `smaragd/tests/repeat_test.sh <bin> <case.qxa> [N] [workers]`, swept over
@@ -419,7 +431,7 @@ contract: a change that breaks one of these breaks the parallel gate.
 | **`.qxp` save targets** | No collision. Nine cases save into the build root; the names are unique per case (`au_missing_resave`, `au_slot_resave`, `clip_properties_actions`, `exact_stretch_roundtrip`, `plugin_missing_resave`, `plugin_remove_restores_param`, `plugin_slot_resave`, `takes_roundtrip`, `warp_anchors_roundtrip`) and each is written and read back **by its own case only**. No case consumes another case's artifact. |
 | **The sidecar (QAF) store** | **This was a real bug, now fixed.** One shared per-user cache dir, and **80 of 89 cases use the same `test_sawtooth.wav`** → the same content hash → the same aspect keys, so concurrent stores of one key are the normal case, not the exotic one. The writer used a fixed `<path>.tmp`, so two processes truncated and interleaved into one temp and one published the mixture. Only the QAF **header** is CRC-protected — a torn payload of the right length passes the reader's bounds check and feeds wrong analysis data (onsets / f0 / warp.pcm) into the engine. The temp is now `<path>.<pid>.<seq>.tmp`; see `tw303a/sidecar/CONTRACT.md` inv. 2. Note the hazard is **latent**: it only bites when a key is cold, i.e. on the runs right after an aspect-version bump or a cleared cache — exactly when nobody is expecting it. |
 | **`plugincache.v<n>.json`** | Harmless. Written on every run (`plugins/scanOnStartup` defaults true), but through `QSaveFile` — write-to-temp-then-rename, so a concurrent write is a lost update at worst, never a torn file. Verified live: parsed as valid JSON repeatedly while four `smaragd.exe` processes rewrote it. A lost update costs a re-probe, and records are keyed on path+size+mtime so it cannot manufacture a false failure. |
-| **`smaragd.ini`** | Harmless. Qt takes a `QLockFile` around `QSettings` writes, and a headless run does not write it at all — mtime unchanged across a full suite. |
+| **`smaragd.ini`** | Harmless — but **not for the reason this row used to give**. It said "a headless run does not write it at all — mtime unchanged across a full suite", and that is **false**: measured across a full `-j4` run, the file's **mtime moves**. Two `.qxa` cases write it deliberately through the `set-option` verb (`midi_options_page` → `midi/…`, `midi_out_chase_and_stop` → `midi/chaseNoteOns`), and `SStdMixerView::saveTrackControlWidth` writes `MixerView/TrackControlWidth` whenever a case changes the track-control column width (the only guard is `changed`). What makes it harmless is stronger than "nobody writes": both `set-option` cases are **`RUN_SERIAL`**, so they never run beside anything; each restores its key, so the file comes back **byte-identical** (md5 unchanged, verified across a full run); each declares in its own header that it OWNS its key, and no other case reads those keys; and Qt still takes a `QLockFile` around `QSettings` writes, so even a concurrent write could not tear. **The residual hazard is the ownership convention, not the locking** — a future case that READS `midi/chaseNoteOns` would be racing one that writes it, and `RUN_SERIAL` on the writer is what would have to be noticed. Whether a headless run should be writing a user's preferences at all is a separate question and is not fixed here. |
 | **`smaragd.log`** | Not shared. `--test-case` runs deliberately take **no file sink** (`main/shell/src/main.cpp`), which the code already justifies by naming `ctest -j`. |
 | **Wall-clock latency assertions** | Not isolation bugs — see the table above. `RUN_SERIAL`. |
 
@@ -677,6 +689,84 @@ have been re-frozen exactly twice, each under a licence recorded beside the case
 at B4 (a mono project's stereo plugin now folds — the old bytes were a *saturating*
 render of a project whose width reached no track) and at B5 (mono became a
 one-channel file; stereo's channel 1 became real audio).
+
+### The measurement B is built on — node count is FLAT in channel width (B9)
+
+B's whole justification over the parallel-wire model was that one page per
+(component, position) means **one node per (component, position), whatever the
+width**. Measured on one corpus project at widths 1 / 2 / 6 / 8:
+
+| | w1 | w2 | w6 | w8 |
+|---|---|---|---|---|
+| `nodesExecuted` | **281** | **281** | **281** | **281** |
+| `nodeRetries` / `missPages` | 33 / 33 | 33 / 33 | 33 / 33 | 33 / 33 |
+| resident pages after render | **66** | **66** | **66** | **66** |
+| resident page bytes | 19.1 MB | 34.6 MB | 96.5 MB | 127.4 MB |
+| cold render wall clock (median) | 57 ms | 57 ms | 81 ms | 90 ms |
+
+62 runs, `SMARAGD_REVAL_WORKERS` ∈ {1,4,8,16}: **281 every single time, zero
+variance.** Node count and page COUNT are flat; only page BYTES scale, and they
+scale as `Σ channel planes` rather than `pages × width` because a clip reader
+keeps its *file's* width (`test_sawtooth.wav` is 2 channels, so 7 of the 66 pages
+are width 2 in every project — trap 22 again). A ×8 width costs **×1.6 in render
+wall clock**, not ×8: only the per-sample copying scales, while scheduling,
+analysis, capture building and position arithmetic do not.
+
+Note for whoever measures next: proposal 36 B2 recorded that `nodesExecuted`
+jitters ±2 run to run. It does not here, and the difference is the *shape of the
+case*: B2's figure came from a case with concurrent playback readahead demands,
+where the node set really does depend on timing. A pure offline render is
+deterministic in node count. `everAllocated` and `peakBytes` do still jitter —
+**quote residency, not churn**.
+
+### An offline render now PRUNES its page trail (B9)
+
+`releaseOldPages` had existed since the beginning with **no caller**, so the only
+things that ever removed an entry from a component's `outputPages_` were teardown
+and a re-freeze replacing the same key — an epoch bump marks pages stale *in
+place*. Measured cost of that: one **60-second** render left **681 pages**
+resident and freed none — 357 MB at width 2, **1.42 GB at width 8**, growing
+linearly with the duration rendered and never coming back down.
+
+`RenderSession` now calls the new `twComponent::releaseOldPagesGlobally()` once
+per page boundary, keeping **four pages behind** the render position. A render of
+any length now holds **108 pages** (219 MB at width 8, 57 MB at width 2). Two
+things make it safe, and a change that breaks either breaks this:
+
+- **Erasing a map entry drops ONE `shared_ptr`.** A page bound into a scheduler
+  node, chained as a `stalePredecessor`, held as the render loop's `prevPage` or
+  read by an audio callback survives on its own references. Pruning can therefore
+  never free a page in use — it can only turn a later lookup into a MISS, which
+  the engine already answers by re-freezing.
+- **The four-page margin is for the SAME-COMPONENT PREDECESSOR EDGE**, which
+  chains DSP state from page N-1. Pruning to the current page would break the
+  chain and could change audio. One page back is the letter of it; four is the
+  margin.
+
+It costs the render LOOP 6–31 % of wall clock and **costs the PROCESS nothing** —
+total process time is unchanged (and slightly better at width 8). What the loop's
+timer now sees is ~570 `free()` calls that the process paid at teardown before.
+
+**PLAYBACK IS STILL NOT PRUNED, deliberately.** The readahead has a frontier, but
+it also has proposal 16's stale-page fallback and a user who can seek backwards,
+so "what may be dropped" there is a design question, not a call site. A long
+playing session's caches are still bounded only by teardown.
+
+### What B9 deleted
+
+`PageBase::getDataPtr()` (zero callers; a width-blind pointer into a planar
+buffer), `twFormatCaps::channelCounts` (written twice, read never — the
+negotiator has no channel logic at all, and `getOutputChannels()` is the sole
+authority), and `twCapturingSource`'s live-component constructor (zero callers,
+and its body was the per-channel `seekTo` + `calcOutputTo` loop §4.3 forbids).
+Also fixed: **trap 21**, a latent heap overrun where `IOVector::CreateForPageOutput`
+hard-coded `FRAME_CAPACITY` as the length of a mono scratch page sized to the
+caller's `length` — now `page->channelFrames()`, which is identical for every
+page the engine freezes and correct for the scratch ones.
+
+`twSpeaker`'s remaining input plug was reviewed for deletion and **kept**: it
+carries no audio, but it is read for the wire sample rate, so removing it is a
+re-plumbing job rather than a cleanup.
 
 ## Event clips (proposal 37 P1 — executed 2026-08-15)
 

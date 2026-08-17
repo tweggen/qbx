@@ -89,8 +89,13 @@ Data format is a property of every "wire" (the `twLatch` → `twLatchStreamingOu
 connection), not an engine-wide constant:
 
 1. **`twFormat`** (rate, binary sample type, channels, layout) is attached to
-   each producing latch and queried by its consumer. The default is mono float32,
-   byte-identical to the engine's historic assumption.
+   each producing latch and queried by its consumer. The default is mono float32
+   interleaved. **This is the WIRE format and says nothing about page width**:
+   since proposal 36 a frozen `twOutputPage` carries `SProject::channels()`
+   planar channels, and a plug pull takes channel `min(latchIndex,
+   page->channels()-1)` out of it. Nothing negotiates channels — `twFormatCaps`
+   carries rate and sample type only, and `twComponent::getOutputChannels()` is
+   the sole authority for width.
 2. **Per-project sample rate.** `SProject` stores a sample rate (a fresh project
    defaults to **48 kHz**; legacy files without the attribute load as 44.1 kHz)
    and a configurable candidate-rate set, both persisted in the project XML and

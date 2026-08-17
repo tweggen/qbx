@@ -85,8 +85,9 @@ Normative background: CLIP_MODEL.md, POSITION_DOMAINS.md (rule 7),
    trick). A null component makes `twView::getComponent()` warn once per freeze
    for the lifetime of the project (fact M5), which is noise, not information —
    and the absence of that line is the only observable difference between "the
-   clip was routed into the event clip set" and "it was routed into the bus
-   mixers as a silent clip". Gated by `midi_clip_render_silent`.
+   clip was routed into the event clip set" and "it was routed into the track
+   mix as a silent clip". (Written as "the bus mixers"; a track has had exactly
+   one twTrackMix since proposal 36 B4.) Gated by `midi_clip_render_silent`.
 
 9. **UNKNOWN EVENT KINDS ROUND-TRIP VERBATIM.** An `<e>` whose `k` this build
    does not recognise keeps its spelling AND its whole attribute map, and every

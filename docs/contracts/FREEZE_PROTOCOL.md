@@ -58,8 +58,11 @@ only carries across a contiguous page chain.
   master (`twMixer` → `twRewire`) are all `SProject::channels()` wide. A
   component's width is `getOutputChannels()`; `freezePage_nolock` forks on the
   width of the PAGE IN HAND, and a page whose width disagrees with its
-  producer's declared width is a MISS, never audio (§4.5). The remaining
-  contract sweep is proposal 36 B9.
+  producer's declared width is a MISS, never audio (§4.5). **The contract
+  sweep closed at proposal 36 B9**: no contract in the tree asserts a mono page
+  any more, and the dead width-blind API went with it (`PageBase::getDataPtr`,
+  `twFormatCaps::channelCounts`, `twCapturingSource`'s live-component
+  constructor).
 - A page always carries a full page of the component's material; consumers
   that represent a bounded window (a clip!) must clamp what they mix out of
   it (see CLIP_MODEL.md — the clip-end-bleed bug).

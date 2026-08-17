@@ -25,5 +25,10 @@ Invariants:
 How to test: manual (Ctrl-R with an armed track); the WAV output is a plain
 sinks-path file. No headless coverage yet.
 
-Known debt: one file per track duplicates identical channel content; no
-input monitoring path; CoreAudio input returns silence (placeholder).
+Known debt: one file per track duplicates identical channel content — note
+this is about the INPUT side and is unaffected by proposal 36, which widened
+the graph and the output sink; RecordingParams::channels is still hard-coded 2
+in SMainWindow and SObject::recordingChannels_ is live in the UI but never
+serialized (proposal 36 §7 trap 2), so a recording does not follow the
+project's width. No input monitoring path; CoreAudio input returns silence
+(placeholder).

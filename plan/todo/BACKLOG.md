@@ -21,8 +21,17 @@ Each item: one line of *what*, one of *why deferred* / what unblocks it.
   **content-addressed shared cache** so identical cuts render once instead of each
   owning its own capture (proposal 06 §7 tier 3); a **finer invalidation gate**
   (re-capture only when the captured subtree actually changed, vs every action);
-  and **multi-channel** capture (mono for now). The cache is **dormant until asset
-  placement** (slice 2) gives it a consumer.
+  and ~~**multi-channel** capture (mono for now)~~ — **DONE at proposal 36 B7**:
+  `SCut::buildCapture_` captures every channel, with the width taken from the
+  content (a mono container still yields a mono capture). The cache is **dormant
+  until asset placement** (slice 2) gives it a consumer.
+  **The content-addressed cache is now the bigger item, not the smaller one**
+  (proposal 36 §7 trap 25, sized at B9): a capture is per PLACEMENT and is
+  rebuilt on every invalidation without memoization — measured at 7-9 rebuilds
+  per corpus run — and B7 made each rebuilt buffer `channels *` larger, so ten
+  placements of one 8-channel asset are ten full-width buffers. Measured on the
+  corpus: 230 400 B of resident capture at width 1 against 1 843 200 B at
+  width 8, exactly x8.
 
 - **Windowed / streaming sample source** — a fallback for files too large to keep
   fully resident in RAM (`twSampleSource` decodes the whole WAV to planar Float32
@@ -59,8 +68,10 @@ item.)
 
 ## From component chain review (2026-06-30)
 
-- **Verbose qWarning() calls in SStdMixer::setNBusses** — lines 227, 248, 255, 264 spam stderr during normal operation (e.g. track add/remove). Should be debug-only or removed.
-  *Deferred:* cosmetic; does not affect correctness or performance.
+- ~~**Verbose qWarning() calls in SStdMixer::setNBusses**~~ — **MOOT.**
+  `setNBusses` was deleted by proposal 36 B4 along with the per-bus
+  instantiation; a mixer's width is `SProject::channels()`. The line numbers
+  cited here have not referred to anything since.
 
 - **Speaker input wiring silent before first track added** — twRewire::linkOutput(0) returns NULL until wired, so rewireSpeaker() on empty project gives speaker NULL inputs. Playing outputs nothing (correct but unintuitive). Document in comment or add debug-friendly silence generation.
   *Deferred:* correct current behavior; UX refinement only.

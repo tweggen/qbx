@@ -91,9 +91,11 @@
                          channel="0" minRms="0.001" maxRms="0.900"/>
 
     <!-- PROPOSAL 36 AC B4.3, at the track's ROOT COMPONENT rather than in the
-         rendered file. The comment above says the file's two channels are equal
-         BY CONSTRUCTION and that the distinctness is gated at engine level in
-         plugins_test; B4 makes it assertable from a script for the first time,
+         rendered file. The comment above USED TO SAY that the file's two
+         channels are equal BY CONSTRUCTION and that the distinctness was gated
+         at engine level in plugins_test; it was rewritten to the past tense at
+         B4/B5, so read this as history rather than as a live cross-reference.
+         B4 makes it assertable from a script for the first time,
          because the whole track path is now one N-channel wire and the insert
          renders every channel in ONE process() call.
 
