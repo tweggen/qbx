@@ -20,6 +20,7 @@ public:
     const AudioInputConfig &getConfig() const override;
     std::vector<AudioInputDeviceInfo> listDevices() const override;
     const char *errorMessage() const override;
+    const char *backendName() const override { return "null"; }
 
 private:
     AudioInputConfig config_;

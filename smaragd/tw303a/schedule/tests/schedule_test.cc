@@ -146,6 +146,30 @@ public:
     const char *getOutputName(idx_t) const override { return "out"; }
 };
 
+// A source that also counts how often it was PLANNED. retireComponentNodes()
+// promises that a later demand plans FRESH rather than adopting the node it
+// just retired, and the plan count is the only place that is visible: a
+// re-planned page renders identically to an adopted one.
+class CountingSource : public GraphSource {
+public:
+    explicit CountingSource(tw303aEnvironment &e) : GraphSource(e) {}
+    std::atomic<int> plans{0};
+    twPagePlan planPage(offset_t pageStart) override {
+        ++plans;
+        return GraphSource::planPage(pageStart);
+    }
+};
+
+// Bounded wait for a demand, so a broken retirement fails the test instead of
+// hanging it (a hang is a failure too, but a named one is a better bug report).
+static bool waitDemand(const std::shared_ptr<CaptureRevalidator::GraphDemand> &d,
+                       int ms = 5000)
+{
+    for (int i = 0; i < ms && !d->done(); ++i)
+        std::this_thread::sleep_for(1ms);
+    return d->done();
+}
+
 int main()
 {
     // ---- Test 1: retireObject() DRAINS an in-flight job -------------------
@@ -367,6 +391,183 @@ int main()
               "and no retries or bound-set misses");
         CHECK(src->renders() == 3 && pass->renders.load() == 3,
               "each page rendered exactly once");
+    }
+
+    // ---- Proposal 21 L0 / design §5: retireComponentNodes() ---------------
+    //
+    // The live lane takes a track's processors out of the frozen graph, so the
+    // nodes already planned for those components must stop — without pause(),
+    // which would drain import-time analysis and stop the graph everywhere.
+
+    // R-1: QUEUED nodes are dropped and NEVER execute; their demands complete
+    // as "not produced"; a re-demand plans fresh.
+    {
+        tw303aEnvironment env;
+        CapturePagePool pool(16);
+        CaptureRevalidator reval(&pool, 4);
+
+        auto src = std::make_shared<CountingSource>(env);
+        src->init();
+
+        reval.pause();                       // nothing will be dequeued
+        auto d = reval.requestGraphPages(src, 0, 3);
+        const int plansAfterDemand = src->plans.load();
+        CHECK(plansAfterDemand == 3, "three pages planned");
+
+        reval.retireComponentNodes({ (const twComponent *) src.get() });
+        reval.resume();
+
+        CHECK(waitDemand(d), "the demand completes after its nodes were retired");
+        CHECK(d->notProduced() == 3,
+              "all three root pages completed as NOT PRODUCED (the consumer's "
+              "miss signal), rather than waiting for a page nobody will make");
+        std::this_thread::sleep_for(60ms);   // ample time for a stray execution
+        CHECK(src->renders() == 0,
+              "no node of the retired component ever executed");
+
+        // A later demand re-PLANS: the dedup entries went with the nodes.
+        auto d2 = reval.requestGraphPages(src, 0, 3);
+        CHECK(waitDemand(d2), "the re-demand completes");
+        CHECK(src->plans.load() == plansAfterDemand + 3,
+              "a demand after retirement plans FRESH (dedup entries removed)");
+        CHECK(d2->notProduced() == 0 && src->renders() == 3,
+              "and it really renders this time");
+    }
+
+    // R-2: a RUNNING node is WAITED FOR — the call does not return while a
+    // worker is still inside the component.
+    {
+        tw303aEnvironment env;
+        CapturePagePool pool(16);
+        CaptureRevalidator reval(&pool, 4);
+
+        auto src = std::make_shared<GraphSource>(env);
+        src->init();
+        src->gateOpen.store(false);          // hold the render open
+
+        auto d = reval.requestGraphPages(src, 0, 1);
+        for (int i = 0; i < 5000 && !src->inRender.load(); ++i)
+            std::this_thread::sleep_for(1ms);
+        CHECK(src->inRender.load(), "a worker is inside the component's render");
+
+        std::thread opener([&src] {
+            std::this_thread::sleep_for(120ms);
+            src->gateOpen.store(true);
+        });
+        const auto t0 = std::chrono::steady_clock::now();
+        reval.retireComponentNodes({ (const twComponent *) src.get() });
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - t0).count();
+        opener.join();
+
+        CHECK(elapsed >= 100,
+              "retireComponentNodes() blocked until the running node finished");
+        CHECK(!src->inRender.load() && src->renders() == 1,
+              "the running node completed rather than being abandoned");
+        CHECK(waitDemand(d) && d->notProduced() == 0,
+              "its demand completed WITH a page (it had already been produced)");
+    }
+
+    // R-3: other components are untouched — same revalidator, same instant.
+    {
+        tw303aEnvironment env;
+        CapturePagePool pool(16);
+        CaptureRevalidator reval(&pool, 4);
+
+        auto victim = std::make_shared<CountingSource>(env);
+        victim->init();
+        auto bystander = std::make_shared<CountingSource>(env);
+        bystander->init();
+
+        reval.pause();
+        auto dv = reval.requestGraphPages(victim, 0, 3);
+        auto db = reval.requestGraphPages(bystander, 0, 3);
+
+        reval.retireComponentNodes({ (const twComponent *) victim.get() });
+        reval.resume();
+
+        CHECK(waitDemand(dv) && waitDemand(db), "both demands complete");
+        CHECK(db->notProduced() == 0 && bystander->renders() == 3,
+              "the OTHER component's nodes ran normally and produced every page");
+        CHECK(dv->notProduced() == 3 && victim->renders() == 0,
+              "while the retired component produced nothing");
+        CHECK(bystander->plans.load() == 3,
+              "and the bystander was not re-planned");
+    }
+
+    // R-4: a consumer whose input was retired sees a MISS, not a wait. The
+    // dependent node loses the edge, becomes runnable, and renders with that
+    // input unbound (design §5: "in-flight dependents of old plans see a miss").
+    {
+        tw303aEnvironment env;
+        CapturePagePool pool(16);
+        CaptureRevalidator reval(&pool, 4);
+
+        auto src = std::make_shared<GraphSource>(env);
+        src->init();
+        auto pass = std::make_shared<GraphPass>(env);
+        pass->init();
+        pass->setInput(0, src->linkOutput(0));
+
+        reval.pause();
+        auto d = reval.requestGraphPages(pass, 0, 2);
+        reval.retireComponentNodes({ (const twComponent *) src.get() });
+        reval.resume();
+
+        CHECK(waitDemand(d), "the consumer's demand still completes");
+        CHECK(d->notProduced() == 0,
+              "the consumer's OWN pages were produced (only its input was retired)");
+        CHECK(pass->renders.load() >= 2,
+              "the dependent ran rather than waiting on a node that will never come");
+        // And it saw the retirement AS A MISS: its plan wanted the retired
+        // component's page, the bound set did not have it, which is exactly the
+        // signal verify-at-publish already counts. (That also costs the node its
+        // ONE bounded retry, which is why the render count above is >= and not
+        // ==; content stays correct through the legacy fallback inside the
+        // render.)
+        CHECK(reval.graphStats().missPages > 0,
+              "the retired input shows up as a bound-set MISS, not as a wait");
+    }
+
+    // R-5: 100 randomized interleavings. The retirement lands at an arbitrary
+    // point in the run — before the first dequeue, mid-render, after some pages
+    // are done — and the invariant is the same every time: nothing of that
+    // component executes after the call returns, and the demand completes.
+    {
+        int badExec = 0, badDone = 0, badCount = 0;
+        unsigned seed = 12345u;
+        for (int iter = 0; iter < 100; ++iter) {
+            tw303aEnvironment env;
+            CapturePagePool pool(16);
+            CaptureRevalidator reval(&pool, (iter % 4) + 1);
+
+            auto src = std::make_shared<GraphSource>(env);
+            src->init();
+
+            auto d = reval.requestGraphPages(src, 0, 4);
+
+            // xorshift: deterministic across runs, arbitrary against the
+            // scheduler. 0..3 ms covers "before anything ran" through "most of
+            // it ran" for a 4-page demand of this stub.
+            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+            const int delayUs = (int)(seed % 3000);
+            std::this_thread::sleep_for(std::chrono::microseconds(delayUs));
+
+            reval.retireComponentNodes({ (const twComponent *) src.get() });
+            const int atReturn = src->renders();
+
+            if (!waitDemand(d)) ++badDone;
+            std::this_thread::sleep_for(20ms);
+            if (src->renders() != atReturn) ++badExec;
+            // Every root page is accounted for exactly once, either way.
+            if (d->notProduced() < 0 || d->notProduced() > 4) ++badCount;
+        }
+        CHECK(badExec == 0,
+              "100 randomized interleavings: no node executed after the call returned");
+        CHECK(badDone == 0,
+              "100 randomized interleavings: every demand completed (no hang)");
+        CHECK(badCount == 0,
+              "100 randomized interleavings: the not-produced count stays in range");
     }
 
     if (failures == 0) { printf("all schedule tests passed\n"); return 0; }

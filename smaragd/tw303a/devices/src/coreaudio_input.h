@@ -2,6 +2,7 @@
 #define _COREAUDIO_INPUT_H_
 
 #include "tw/devices/audio_input.h"
+#include "tw/devices/audio_ring.h"
 
 #include <AudioToolbox/AudioToolbox.h>
 #include <atomic>
@@ -26,8 +27,10 @@ public:
     std::int32_t read(float *interleaved, std::size_t frameCount) override;
 
     const AudioInputConfig &getConfig() const override;
+    AudioInputStats stats() const override;
     std::vector<AudioInputDeviceInfo> listDevices() const override;
     const char *errorMessage() const override;
+    const char *backendName() const override { return "coreaudio"; }
 
     // Called from the input render callback to buffer audio
     void bufferAudioData(const float *audioData, std::size_t frameCount);
@@ -44,12 +47,16 @@ private:
     std::atomic<bool> stopCaptureThread_{false};
     std::unique_ptr<std::thread> captureThread_;
 
-    // Circular buffer for captured audio
-    std::vector<float> circularBuffer_;
-    std::atomic<std::size_t> writePos_{0};
-    std::atomic<std::size_t> readPos_{0};
-    std::mutex bufferMutex_;
-    std::condition_variable bufferCV_;
+    // Proposal 21 L0: the AVAudioEngine tap IS the capture thread — it is
+    // already an event-driven producer on a thread we do not own — so this
+    // backend needed no thread of its own, only the shared ring in place of the
+    // hand-rolled circular buffer + mutex + condition_variable it had. read()
+    // is now a non-blocking pop, as the interface always said it was: the old
+    // one waited up to 100 ms on the CV, which turned a poll into a block.
+    // UNVERIFIED: written and reviewed on Windows, compiled and run nowhere in
+    // the L0 gate.
+    AudioRing ring_;
+    std::atomic<std::uint64_t> wakeups_{0};
 };
 
 }  // namespace audio

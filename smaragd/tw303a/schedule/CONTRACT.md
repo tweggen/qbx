@@ -60,7 +60,33 @@ Invariants:
    never published as current; the barrier is idempotent under any ordering and
    costs at most one re-render.
 
-How to test: `ctest -R schedule_test` (retireObject lifetime, the dependency-
+10. **retireComponentNodes(set) is NOT pause()** (proposal 21 L0, design 21
+   §5). The live lane takes a track's processors out of the frozen graph, so
+   the nodes already planned for those components must stop — and pause() is
+   the wrong instrument for that: it drains ALL in-flight work, including
+   import-time analysis jobs that run for tens of seconds, and it stops the
+   graph everywhere, so a change concerning two components would hang the UI.
+   The semantics are exactly: queued/waiting nodes of those components are
+   DROPPED and never execute (their demands complete as NOT PRODUCED — a count
+   on the handle, which a consumer treats like a miss: stale page or silence,
+   never a wait); a RUNNING one is WAITED FOR, bounded by one page render,
+   because its page already exists; the dedup entries are removed so a later
+   demand PLANS FRESH; every other component's nodes are untouched. A dependent
+   of a dropped node loses that edge, becomes runnable, and renders with the
+   input unbound — i.e. it sees a MISS, which verify-at-publish already counts
+   and the legacy fallback already covers for content.
+   Two mechanical points that make the promise true rather than likely: a
+   worker CLAIMS a node (state = Running) under the same queueLock_ that
+   dequeued it — claiming it later, inside processGraphNode, leaves a window in
+   which the node is in no queue and in no state a retirement can see, and it
+   would then execute after the call returned — and the retirement holds
+   expansionMutex_, so no expansion can add a node for a retiring component
+   while it walks (design §5 says the exclusion wiring precedes the drain; this
+   makes "should not arrive" into "cannot").
+
+How to test: `ctest -R schedule_test` (retireObject and retireComponentNodes lifetime/retirement — including 100
+randomized interleavings of a retirement against a running demand — the
+dependency-
 counting scheduler, and both directions of verify-at-publish self-staleness);
 `SMARAGD_LOG_LEVEL=debug` prints the run's `nodesExecuted / nodeRetries /
 missPages / selfStale` at shutdown, which is how a scheduler change is shown

@@ -53,6 +53,30 @@ void SSettings::setAudioInputDeviceId( const QString &id )
     setValue( "audio/inputDeviceId", id );
 }
 
+double SSettings::recordingOffsetMs( const QString &deviceName ) const
+{
+    if( deviceName.isEmpty() ) return 0.0;
+    return value( "audio/recordingOffsetMs/" + deviceName, 0.0 ).toDouble();
+}
+
+void SSettings::setRecordingOffsetMs( const QString &deviceName, double ms )
+{
+    if( deviceName.isEmpty() ) return;
+    setValue( "audio/recordingOffsetMs/" + deviceName, ms );
+}
+
+double SSettings::midiInputOffsetMs( const QString &port ) const
+{
+    if( port.isEmpty() ) return 0.0;
+    return value( "midi/inputOffsetMs/" + port, 0.0 ).toDouble();
+}
+
+void SSettings::setMidiInputOffsetMs( const QString &port, double ms )
+{
+    if( port.isEmpty() ) return;
+    setValue( "midi/inputOffsetMs/" + port, ms );
+}
+
 QString SSettings::midiPortId( const QString &portName ) const
 {
     if( portName.isEmpty() ) return QString();

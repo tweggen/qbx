@@ -6,11 +6,13 @@ since proposal 37 P7a, the MIDI half — MidiOutput/MidiInput plus the
 WinMM/CoreMIDI/ALSA-sequencer/Capture/Null implementations and MidiOutScheduler,
 the one thread that puts MIDI bytes on the wire at their due time.
 
-Public headers: audio_backend.h, audio_input.h, null_backend.h,
+Public headers: audio_backend.h, audio_input.h, audio_ring.h, null_backend.h,
 capture_backend.h, midi_output.h, midi_input.h, midi_out_scheduler.h,
 capture_midi.h, null_midi.h, and the per-platform AUDIO backend headers.
-Platform *_input.h and every platform MIDI header (winmm_midi.h,
-coremidi_midi.h, alsa_seq_midi.h) are PRIVATE (src/).
+Platform *_input.h, file_input.h, precise_waiter.h and every platform MIDI
+header (winmm_midi.h, coremidi_midi.h, alsa_seq_midi.h) are PRIVATE (src/).
+audio_ring.h is public because the ring's contract IS the input contract and
+because a gate has to be able to test the class directly.
 
 Depends on: tw/core. Platform SDKs (ole32/avrt/winmm/ALSA/CoreAudio/CoreMIDI)
 are PRIVATE link deps; QBX_* backend defines are PRIVATE compile definitions.
@@ -107,6 +109,68 @@ Invariants:
     createVirtualPort() returns FALSE there — a UI must gate on that return, not
     on the platform. loopMIDI-style loopback drivers appear as ordinary devices.
 
+--- INPUT (proposal 21 L0) ---
+
+19. EVERY capture device has a THREAD and a RING, and read() is a POP.
+    The thread waits on the device's own event (WASAPI: a client initialised
+    with AUDCLNT_STREAMFLAGS_EVENTCALLBACK + SetEventHandle; ALSA:
+    snd_pcm_wait; the file backend: a paced high-resolution timer; CoreAudio:
+    the AVAudioEngine tap, which is already such a thread and is not ours to
+    create) and pushes the WHOLE packet into an SPSC AudioRing. It takes no
+    lock — stopCapture() joins it while holding the object's mutex, so a
+    capture thread that wanted that mutex would deadlock the stop — and the
+    handles it uses are created before it starts and released after it is
+    joined.
+    What this replaced: read() WAS the device poll, and WASAPIInput::read()
+    copied min(packet, caller's buffer) and then released the WHOLE packet, so
+    every frame past the caller's buffer was DROPPED and the recorded timeline
+    silently compressed (design 21 §1 F7). Separating "what the device gave us"
+    from "what the caller asked for" is the only shape in which that cannot
+    happen; the tail now costs latency, never audio.
+20. The ring never overwrites unread frames. A push that does not fit takes
+    what fits and COUNTS the rest in overrunFrames(): in SPSC the consumer may
+    be mid-copy out of exactly the oldest frames, so "drop the oldest" is a
+    data race, not a policy. A dropped frame is a number a test can assert on;
+    a corrupted one is not. A SHORT pop counts an underrun, an EMPTY one does
+    not — an idle device with nothing to give is the normal case, not a hole.
+21. ONE producer, ONE consumer, and reset()/clear() are CONTROL PLANE. The
+    consumer is whichever thread calls read() — RecordingSession's worker
+    today, proposal 21 L1a's pump later, never both at once. openDevice /
+    startCapture / stopCapture / closeDevice come from one thread, as they
+    always have.
+22. SMARAGD_AUDIO_INPUT_BACKEND (file:<wav> | null | default) outranks the
+    platform choice in createAudioInput(), exactly as SMARAGD_AUDIO_BACKEND
+    does for output — but it is read PER CALL, because unlike the speaker's
+    backend an AudioInput is minted at several call sites. An unknown value
+    warns and falls back to the platform, never to a null pointer. A
+    --test-case run defaults it to `null` (main.cpp, unless already set): a
+    headless suite must not open the developer's microphone, and what a real
+    input delivers is whatever is in the room and therefore not assertable.
+23. FileAudioInput is a REAL device, paced in REAL TIME, at MMCSS priority.
+    Blocks of 1024
+    frames, due at t0 + (i+1) * period on MidiOutScheduler::hostNowNs() — the
+    same steady clock CaptureBackend stamps its blocks with, so a case can map
+    what it sent onto what it heard — through the same kind of high-resolution
+    waitable timer inv. 13 exists for. The reason is inv. 7's verbatim: a clock
+    that handed the whole file over at once would remove exactly the pressure
+    (the consumer arriving before the frames do) that a live-input case is
+    looking for. Block i is delivered one period AFTER its start, because a
+    device cannot hand over audio it has not recorded yet. Its WAV reader is
+    hand-rolled ON PURPOSE: libsndfile lives behind tw_sources/tw_sinks, and
+    reaching for it here would make the platform I/O layer depend on the codec
+    stack for the sake of a fixture. Its capture thread takes MMCSS "Pro Audio"
+    exactly as the WASAPI RENDER thread does — it is standing in for a device,
+    and without the promotion an ordinary desktop scheduling hiccup shows up as
+    delivery jitter the real thing would not have had (measured: roughly double,
+    with outliers past 3 ms). It also keeps a per-block PUSH-TIME log, the file
+    backend's analogue of inv. 9's block log and for the same reason: pacing is
+    a wall-clock property, so the only way to hold it to a number is to record
+    when delivery actually happened.
+24. PreciseWaiter (src/) is MidiOutScheduler's wait, extracted for the second
+    paced thread. The scheduler still owns its copy: it is on the MIDI timing
+    gate, and re-pointing a green measured path at a new class buys nothing.
+    This is the form a future consolidation takes, not that consolidation.
+
 How to test: WASAPI is the only regularly exercised backend (manual GUI
 playback); Null backend keeps headless/CI paths honest. devices/tools/
 asio_probe (Windows, needs the drop-in ASIO SDK — proposal 35) triages an
@@ -115,6 +179,26 @@ what makes the playback path assertable at all — it is the headless default, s
 every qxa case with a <toggle-playback> runs through it, and
 playback_start_after_edit_position decodes its recording position by position.
 
+devices_input_test (ctest, RUN_SERIAL) is the INPUT gate (proposal 21 L0 AC1):
+the ring under a producer three times the consumer's pop size (the tail-drop
+regression, at the level the fix lives), FileAudioInput replaying a 2 s
+position-coded WAV it generates itself — every frame exactly once, in order,
+sample-exact against the file, every block DELIVERED within 2 ms of its paced
+due time (MEASURED 0.68-0.91 ms max over six runs on this repo's idle box) and
+observed by a polling consumer within 15 ms (measured 1.1-1.9 ms) — the capture
+MIDI input's injection order and stamps, and the backend selection including
+`null`.
+The two numbers are separate ON PURPOSE. The device's own schedule is what this
+module promises and is held to 2 ms; what a polling reader SEES additionally
+contains the ring hop and the reader thread's own scheduling, and a desktop
+deschedules an ordinary thread for a few milliseconds now and then — measured at
+3.4 ms once in five runs taken straight after a full ctest sweep, while the
+device-side number stayed inside 2 ms. Asserting the consumer's number tightly
+would gate the machine rather than the code. (The capture thread runs at MMCSS
+"Pro Audio", like the WASAPI render thread; without it the device-side jitter is
+roughly double.) Like devices_midi_test this measures the MACHINE as much as the
+code.
+
 devices_midi_test (ctest, RUN_SERIAL) is the MIDI gate: a capture round trip
 through the scheduler that reports the measured max |sent − due| and asserts
 5 ms, shutdown under a full queue, the frameAtHostTime map over a synthetic
@@ -122,7 +206,14 @@ log, the backend selection, and the null port's never-fails contract. It
 measures the MACHINE as much as the code, like twlog_test — confirm the box is
 idle before reading a failure as a regression.
 
-Known debt: WASAPI shared-mode only; ALSA untested since the refactor;
+Known debt: the L0 capture threads are UNVERIFIED against hardware — the WASAPI
+one is written and reviewed but was never run against a real microphone in the
+L0 gate (nothing headless opens an input device), and the ALSA and CoreAudio
+ones were written on Windows and compiled and run nowhere. The CoreAudio tap's
+planar-to-interleaved conversion is new code fixing an old out-of-bounds read
+(it copied frameCount * channels samples out of PLANE 0), and it too is
+unverified. Everything that IS gated runs through FileAudioInput and the ring.
+WASAPI shared-mode only; ALSA untested since the refactor;
 PipeWire/Pulse/JACK placeholders; input enumeration shows only defaults.
 CaptureBackend has no unit test of its own (its pacing is a wall-clock
 property); it is covered end to end by the qxa cases that play.

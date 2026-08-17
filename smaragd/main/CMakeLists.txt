@@ -356,6 +356,7 @@ set(APP_UI_FILES
     testkit/src/smetertestactions.cpp
     testkit/include/app/testkit/smidiouttestactions.h
     testkit/src/smidiouttestactions.cpp
+    testkit/src/smidiintestactions.cpp
     testkit/src/smiditestactions.cpp
     testkit/src/spluginuitestactions.cpp
     testkit/src/sreportpagememoryaction.cpp

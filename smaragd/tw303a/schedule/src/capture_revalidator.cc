@@ -166,6 +166,14 @@ void CaptureRevalidator::workerLoop() {
             } else if (gp != INT_NONE) {
                 graphNode = graphReady_.front();
                 graphReady_.pop_front();
+                // CLAIM it under the same lock that dequeued it. Setting
+                // Running inside processGraphNode() instead leaves a window in
+                // which the node is in no queue and in no state a retirement
+                // can see, so retireComponentNodes() would neither drop it nor
+                // wait for it — and it would then execute after the retirement
+                // returned, which is the one thing that call promises cannot
+                // happen.
+                graphNode->state = PageNode::Running;
             }
 
             // Mark in-flight under the lock so pause() can drain reliably;
@@ -266,6 +274,102 @@ void CaptureRevalidator::retireObject(IRevalidatable* object) {
     });
 }
 
+void CaptureRevalidator::retireComponentNodes(
+        const std::vector<const twComponent *> &comps) {
+    retireComponentNodes(comps.data(), comps.size());
+}
+
+void CaptureRevalidator::retireComponentNodes(const twComponent *const *comps,
+                                              size_t count) {
+    if (!comps || count == 0) return;
+
+    auto inSet = [comps, count](const twComponent *c) {
+        for (size_t i = 0; i < count; ++i)
+            if (comps[i] == c) return true;
+        return false;
+    };
+
+    // expansionMutex_ FIRST, then queueLock_ — the same order requestGraphPages
+    // takes them in, and workers take neither expansionMutex_ nor anything
+    // above queueLock_, so there is no inversion. Holding it means no expansion
+    // can add a node for a retiring component while we walk (design §5 says the
+    // exclusion wiring precedes the drain, so none SHOULD arrive; this makes
+    // "should" into "cannot").
+    std::lock_guard<std::mutex> ex(expansionMutex_);
+
+    std::vector<std::shared_ptr<GraphDemand>> orphaned;
+    {
+        std::unique_lock<std::mutex> lock(queueLock_);
+
+        // 1. Drop everything of these components that has not started.
+        std::vector<std::shared_ptr<PageNode>> dropped;
+        for (auto it = graphNodes_.begin(); it != graphNodes_.end(); ) {
+            const std::shared_ptr<PageNode> &n = it->second;
+            if (!inSet(it->first.first) ||
+                n->state == PageNode::Running || n->state == PageNode::Done) {
+                ++it;
+                continue;
+            }
+            n->state = PageNode::Dropped;
+            dropped.push_back(n);
+            // The dedup entry goes with it, so a later demand for this position
+            // PLANS FRESH instead of adopting a corpse.
+            it = graphNodes_.erase(it);
+        }
+
+        // Out of the ready queue, so no worker can ever dequeue one.
+        if (!dropped.empty()) {
+            for (auto q = graphReady_.begin(); q != graphReady_.end(); ) {
+                if ((*q)->state == PageNode::Dropped) q = graphReady_.erase(q);
+                else ++q;
+            }
+        }
+
+        // 2. Release the dependents. A node of ANOTHER component that was
+        //    waiting on a dropped one becomes runnable with that input UNBOUND
+        //    — i.e. it renders and records a miss, which is exactly what a
+        //    consumer of a retired component is supposed to see. Mirrors
+        //    completeGraphNode()'s promotion, minus the page.
+        for (auto &n : dropped) {
+            for (auto &wd : n->dependents) {
+                if (auto dep = wd.lock()) {
+                    if (dep->state == PageNode::Waiting && --dep->pendingDeps == 0) {
+                        dep->state = PageNode::Ready;
+                        graphReady_.push_back(dep);
+                    }
+                }
+            }
+            n->dependents.clear();
+            for (auto &dm : n->demands) orphaned.push_back(dm);
+            n->demands.clear();
+        }
+
+        // 3. Wait for the RUNNING ones. Bounded by one page render: a worker
+        //    finishing a graph node re-takes queueLock_ in completeGraphNode()
+        //    (which erases it from graphNodes_) and then notifies idleCv_ from
+        //    workerLoop(), so this predicate is re-evaluated at every
+        //    completion. No new node of the set can appear — expansionMutex_ is
+        //    held above.
+        idleCv_.wait(lock, [this, &inSet]() {
+            for (auto &kv : graphNodes_) {
+                if (inSet(kv.first.first) && kv.second->state == PageNode::Running)
+                    return false;
+            }
+            return true;
+        });
+    }
+    queueNotEmpty_.notify_all();
+
+    // 4. Complete the orphaned demands OUTSIDE queueLock_ (the lock order
+    //    completeGraphNode() uses for the same reason), counting each as NOT
+    //    PRODUCED so the waiter can tell a delivered page from a retired one.
+    for (auto &dm : orphaned) {
+        std::lock_guard<std::mutex> dl(dm->m_);
+        ++dm->notProduced_;
+        if (--dm->outstanding_ == 0) dm->cv_.notify_all();
+    }
+}
+
 // --- Proposal 19 dataflow stage 3: dependency-counting page scheduler --------
 
 void CaptureRevalidator::GraphDemand::wait() {
@@ -276,6 +380,11 @@ void CaptureRevalidator::GraphDemand::wait() {
 bool CaptureRevalidator::GraphDemand::done() const {
     std::lock_guard<std::mutex> l(m_);
     return outstanding_ == 0;
+}
+
+int CaptureRevalidator::GraphDemand::notProduced() const {
+    std::lock_guard<std::mutex> l(m_);
+    return notProduced_;
 }
 
 std::shared_ptr<CaptureRevalidator::GraphDemand>
@@ -393,7 +502,11 @@ CaptureRevalidator::expandNode_(std::shared_ptr<twComponent> comp,
 // path, verify-at-publish (one bounded retry), then complete.
 void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node) {
     {
+        // The worker claimed this node (state = Running) when it dequeued it;
+        // all that is left here is the retirement check, for the shutdown /
+        // direct-call paths that did not go through workerLoop().
         std::lock_guard<std::mutex> lock(queueLock_);
+        if (node->state == PageNode::Dropped) return;
         node->state = PageNode::Running;
     }
 

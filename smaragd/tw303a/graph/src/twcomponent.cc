@@ -797,19 +797,27 @@ std::shared_ptr<twOutputPage> twComponent::freezePage(
     std::shared_ptr<twOutputPage> previousPage
 )
 {
-    // Proposal 19 dataflow stage 6 — enforce the RT invariant: the realtime
-    // audio callback reads ready pages (stale fallback per proposal 16) and
-    // must NEVER render. One-shot report + debug assert; in release we return
-    // a defused empty page rather than render on the RT thread.
-    if (twRtThreadGuard::onRtThread()) {
-        static std::atomic<bool> reported{false};
-        if (!reported.exchange(true)) {
-            TW_LOGE( "graph", "ERROR: freezePage() entered on the RT audio thread "
-                            "(component=%p pos=%llu) — the RT path must only read "
-                            "ready pages. Returning empty page.",
-                    (void *)this, (unsigned long long)startPos );
+    // ONE check for the per-thread RENDER POLICY (proposal 19 stage 6,
+    // generalised by proposal 21 L0). Both marked kinds return the same defused
+    // page; they differ in what the violation MEANS. The RT callback must never
+    // render at all — one-shot report + debug assert, a bug to fix. The live
+    // pump's arrival here is recoverable by design (a preview or an asset
+    // capture can reach a component it owns), so it is silence + a counter the
+    // exit assertion bounds + one log, and no assert.
+    if (!twRtThreadGuard::mayRender()) {
+        if (twRtThreadGuard::onRtThread()) {
+            static std::atomic<bool> reported{false};
+            if (!reported.exchange(true)) {
+                TW_LOGE( "graph", "ERROR: freezePage() entered on the RT audio thread "
+                                "(component=%p pos=%llu) — the RT path must only read "
+                                "ready pages. Returning empty page.",
+                        (void *)this, (unsigned long long)startPos );
+            }
+            assert(!"freezePage on RT audio thread");
+        } else {
+            twRtThreadGuard::noteLiveRefusal((void *)this,
+                                             (unsigned long long)startPos);
         }
-        assert(!"freezePage on RT audio thread");
         // At this component's declared width, so even a defused page has the
         // geometry its consumer expects (§4.5's width check would otherwise read
         // it as a miss for a second, unrelated reason).
