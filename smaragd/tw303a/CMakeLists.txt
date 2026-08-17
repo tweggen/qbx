@@ -486,6 +486,10 @@ tw_module(devices
         devices/include/tw/devices/midi_input.h
         devices/include/tw/devices/midi_out_scheduler.h
         devices/include/tw/devices/capture_midi.h
+        devices/include/tw/devices/keyboard_midi.h
+        devices/include/tw/devices/midi_in_ring.h
+        devices/include/tw/devices/midi_in_fanout.h
+        devices/include/tw/devices/twliveeventsource.h
         devices/include/tw/devices/null_midi.h
         devices/src/audio_backend.cc
         devices/src/null_backend.cc
@@ -501,7 +505,16 @@ tw_module(devices
         devices/src/midi_factory.cc
         devices/src/midi_out_scheduler.cc
         devices/src/capture_midi.cc
-    DEPS tw_core
+        devices/src/keyboard_midi.cc
+        devices/src/midi_in_fanout.cc
+        devices/src/twliveeventsource.cc
+    # devices -> events since proposal 21 L2: twLiveEventSource IS a
+    # twEventSource - it turns the bytes a MIDI input delivers into the ONE
+    # twEvent this codebase has, placed inside the block the live pump is
+    # rendering. tw/events is core-only and outside the dataflow DAG, so this
+    # adds no page dependency; the alternative (events -> devices) would break
+    # the leaf status events is deliberately kept at.
+    DEPS tw_core tw_events
 )
 
 # --- E9 sinks: audio destinations (file writers, sinks) -----------------------
@@ -537,6 +550,7 @@ tw_module(playback
         playback/include/tw/playback/audio_engine.h
         playback/include/tw/playback/playback_context.h
         playback/include/tw/playback/twliveclock.h
+        playback/include/tw/playback/twliveeventclock.h
         playback/include/tw/playback/twlivering.h
         playback/include/tw/playback/twliveplan.h
         playback/include/tw/playback/twlivepump.h

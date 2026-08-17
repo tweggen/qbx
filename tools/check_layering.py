@@ -41,7 +41,12 @@ DEPS = {
     # tw/events/twevent.h. tw/events is core-only and NOT in the dataflow DAG,
     # so this adds no page dependency (design F15: plugins may not reach mix).
     'plugins':  ['core', 'graph', 'events'],
-    'devices':  ['core'],
+    # devices -> events since proposal 21 L2: twLiveEventSource IS a
+    # twEventSource - it turns the bytes a MIDI input delivers into the ONE
+    # twEvent this codebase has. tw/events is core-only and outside the
+    # dataflow DAG, so this adds no page dependency; the alternative
+    # (events -> devices) would break the leaf status events is kept at.
+    'devices':  ['core', 'events'],
     'sinks':    ['core'],
     # playback → schedule since proposal 19 stage 5: the readahead is a
     # demand consumer of the page scheduler instead of pulling freezes.
