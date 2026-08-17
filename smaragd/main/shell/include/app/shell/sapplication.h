@@ -27,6 +27,7 @@ class SActionHistory;
 class SAction;
 class SMidiOutPump;
 class SAutomationRecorder;
+class SLiveMonitor;
 class QTimer;
 
 typedef QList<SLink*> SSelectionList;
@@ -192,6 +193,12 @@ public:
     // Options dialog asks it for the port lists rather than minting a
     // MidiOutput of its own (see SMidiOutPump::outputPorts).
     SMidiOutPump *midiOutPump() const { return midiOutPump_.get(); }
+    // The live lane (proposal 21 L1b). Never null after construction; the
+    // arm/disarm ordering, the pump and the input device all live in there.
+    SLiveMonitor *liveMonitor() const { return liveMonitor_.get(); }
+    // SAppContext: a track was armed / disarmed, or its input or monitor mode
+    // moved. One plan rebuild, here, on the main thread.
+    void liveLanesChanged() override;
 
     // Test output directory for artifacts (screenshots, renders, etc.)
     void setTestOutputDir(const QString &path);
@@ -275,8 +282,16 @@ private slots:
     // instant playback stops, whereas meters need a tick at a static position
     // (to decay) plus a tail after stop, or the bars freeze mid-level.
     void pumpMeters();
+    // A render suspends every live lane for its duration and comes back as a
+    // FRESH arm (proposal 21 design D4). The render session signals completion
+    // from ITS OWN thread, so this is reached by a queued invocation and runs
+    // where every other model edit runs.
+    void resumeLiveAfterRender();
 
 private:
+    // The live monitor drives metering and reads the master width; both are
+    // app state it has no business duplicating.
+    friend class SLiveMonitor;
     void initPluginRegistry();
 
     // Start (or re-arm) the metering pump. No-op during an offline render.
@@ -314,6 +329,7 @@ private:
     int meterTailTicks_ = 0;          // remaining decay ticks after a stop
     twLevelProbe masterProbe_;        // reads the mixer root's frozen pages
     std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 37 P7b
+    std::unique_ptr<SLiveMonitor> liveMonitor_;   // proposal 21 L1b
     std::unique_ptr<SAutomationRecorder> automationRecorder_;  // proposal 37 P6
     bool isPlaying_;
     SProject *currentProject_;

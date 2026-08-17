@@ -22,6 +22,7 @@
 #include "app/model/sproject.h"
 #include "app/shell/ssettings.h"
 #include "app/shell/smidioutpump.h"
+#include "app/shell/slivemonitor.h"
 #include "app/shell/sautomationrecorder.h"
 #include "app/servicesui/soptions.h"
 #include "app/actions/sactionhistory.h"
@@ -68,6 +69,10 @@ void SApplication::setCurrentProject( SProject *cp )
     if( t3Speaker_ )
         t3Speaker_->setPageScheduler( cp ? cp->getRevalidator() : nullptr );
     rewireSpeaker();
+    // Every track that arrived ARMED out of a project file is inert until the
+    // user arms it in this session (design D9): loading a project must not open
+    // the microphone.
+    if( liveMonitor_ ) liveMonitor_->projectChanged();
 }
 
 void SApplication::rewireSpeaker()
@@ -132,6 +137,13 @@ void SApplication::setPlaying( bool f )
         if( f ) automationRecorder_->transportStarted( getGlobalLocatorPos() );
         else    automationRecorder_->transportStopped( getGlobalLocatorPos() );
     }
+
+    // The live lane (proposal 21 L1b). The transport decides the FEED POLICY
+    // and the automation hold (design D2), and under monitor Auto it decides
+    // whether there is a live lane at all - tape style, the input gives way to
+    // the track's own material on plain Play. So a transport edge is a plan
+    // REBUILD plus exactly one explicit reposition.
+    if( liveMonitor_ ) liveMonitor_->transportChanged();
 }
 
 const SSelectionList &SApplication::getSelectionList() const
@@ -262,6 +274,13 @@ void SApplication::setGlobalLocatorPos( offset_t o )
     // inferred from a jump in the atomic - a forward seek of less than a tick
     // is indistinguishable from ordinary advance.
     if( isPlaying_ && midiOutPump_ ) midiOutPump_->locate( o );
+
+    // The live pump renders every block AT A POSITION, and while STOPPED that
+    // position is a virtual counter from the LOCATOR (design D2). A seek moves
+    // the anchor and the automation hold, so it is a plan rebuild plus one
+    // explicit reposition - drift detection alone would make the first block
+    // after the seek a race.
+    if( liveMonitor_ ) liveMonitor_->seeked();
 }
 
 void SApplication::setGlobalLocatorPosRealtime( offset_t o )
@@ -380,7 +399,11 @@ int SApplication::masterChannels()
 
 void SApplication::pumpMeters()
 {
-    const bool live = isPlaying_ || isRecordingActive();
+    // A LIVE LANE keeps the meters alive too (design D9): monitoring an input
+    // with the transport stopped is exactly the case where a decaying bar would
+    // be a lie about a signal that is still there.
+    const bool live = isPlaying_ || isRecordingActive()
+                      || ( liveMonitor_ && liveMonitor_->active() );
 
     offset_t pos = globalLocatorPos_.load( std::memory_order_relaxed )
                    - meterLatencyFrames();
@@ -532,6 +555,10 @@ SApplication::SApplication( int &argc, char **argv )
     // this process constructs (see SMidiOutPump's constructor). Its own timer
     // only runs between play and stop.
     midiOutPump_.reset( new SMidiOutPump( this ) );
+    // The live lane (proposal 21 L1b). A sibling of the MIDI-out pump in every
+    // respect that matters: constructed with the app, destroyed FIRST, and the
+    // owner of a std::thread whose join must happen on the main thread.
+    liveMonitor_.reset( new SLiveMonitor( this ) );
     automationRecorder_.reset( new SAutomationRecorder( this ) );
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
@@ -575,6 +602,10 @@ SApplication::~SApplication()
     // The MIDI scheduler threads join HERE, on the main thread, while the log
     // sink is still alive - not during static destruction, which is where this
     // repo has already recorded a teardown hang of exactly that shape.
+    // The live lane goes first: it stops and JOINS the pump thread and closes
+    // the input device, and both of those must happen before the speaker it
+    // hands audio to is destroyed.
+    liveMonitor_.reset();
     midiOutPump_.reset();
     automationRecorder_.reset();
     DTOR_DEL( actionHistory_ );
@@ -649,6 +680,15 @@ void SApplication::startRender(const audio::RenderParams &params)
         isPlaying_ = false;
     }
 
+    // A RENDER SUSPENDS EVERY LIVE LANE for its duration (proposal 21 D4).
+    // Export ignores the split, as in Cubase; the practical requirement is
+    // harder than the aesthetic one: `beginRun` below walks instrument tracks
+    // and the render's own demands freeze the whole graph, so a live-owned
+    // processor would answer silence to both. Suspending BEFORE beginRun is
+    // what makes "the barrier never meets a live-owned track" true by order
+    // rather than by luck. It comes back afterwards as a FRESH arm.
+    if (liveMonitor_) liveMonitor_->suspendForRender();
+
     // Get the synth output component
     std::shared_ptr<twComponent> synthOutput = rootComponent();
     if (!synthOutput) {
@@ -696,11 +736,21 @@ void SApplication::startRender(const audio::RenderParams &params)
         // full pause ("offline renders stay exact").
         sched->pauseBackground();
         renderSession_->onComplete =
-            [sched](bool /*success*/, const char * /*error*/) { sched->resumeBackground(); };
+            [this, sched](bool /*success*/, const char * /*error*/) {
+                sched->resumeBackground();
+                // The session thread is Qt-free by contract, so the live lane
+                // is re-armed by a QUEUED call that runs on the main thread.
+                QMetaObject::invokeMethod( this, "resumeLiveAfterRender",
+                                           Qt::QueuedConnection );
+            };
     } else if (proj) {
         proj->pauseRevalidation();
         renderSession_->onComplete =
-            [proj](bool /*success*/, const char * /*error*/) { proj->resumeRevalidation(); };
+            [this, proj](bool /*success*/, const char * /*error*/) {
+                proj->resumeRevalidation();
+                QMetaObject::invokeMethod( this, "resumeLiveAfterRender",
+                                           Qt::QueuedConnection );
+            };
     }
 
     // Start rendering
@@ -711,11 +761,26 @@ void SApplication::startRender(const audio::RenderParams &params)
         // Render never launched → onComplete will not fire; resume now.
         if (sched) sched->resumeBackground();
         else if (proj) proj->resumeRevalidation();
+        resumeLiveAfterRender();
     }
+}
+
+void SApplication::resumeLiveAfterRender()
+{
+    if( liveMonitor_ ) liveMonitor_->resumeAfterRender();
+}
+
+void SApplication::liveLanesChanged()
+{
+    if( liveMonitor_ ) liveMonitor_->refresh();
 }
 
 void SApplication::setPlaybackRunning( bool play )
 {
+    // BEFORE the frozen lane moves (see SLiveMonitor::transportAboutToChange):
+    // startOutput() starts the readahead immediately, and a track that monitor
+    // Auto is about to release must stop being live-owned first.
+    if( liveMonitor_ ) liveMonitor_->transportAboutToChange( play );
     if( !t3Speaker_ ) return;
     if( play ) {
         // Run barrier immediately before startOutput(), which performs the

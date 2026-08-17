@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L1b, AC5. A RENDER SUSPENDS EVERY LIVE LANE, and monitoring comes
+  back afterwards as a FRESH ARM.
+
+  Runs with SMARAGD_AUDIO_INPUT_BACKEND=file:../test_autosaw.wav and
+  SMARAGD_CAPTURE_SPEED=1 (set on the CTest entry). RUN_SERIAL.
+
+  WHY THE ARMED TRACK CARRIES A CLIP. Export ignores the split (design D4), so
+  the rendered file must be byte-identical to the one the same project renders
+  unarmed. That claim is only worth something if arming would OTHERWISE change
+  the render - and it would: an armed track is excluded from the frozen sum by
+  the mixer wiring, so its own clip would vanish from the file. A track with no
+  clips would render identically whether the suspension worked or not, and the
+  case would pass while testing nothing.
+
+  Byte-identical, not a band: two renders of one project in one process are a
+  pure function of the graph, which is what makes assert-file-identical the
+  right gate here.
+-->
+<SActionScript version="1" name="render_while_armed">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.5"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+
+    <!-- The reference: the same project, nothing armed. -->
+    <render filename="raw_unarmed.wav" format="wav" quality="10" durationSec="2.0"/>
+
+    <!-- Now ARM. The mixer nulls the track's plug, the pump takes its
+         processors and the input is audible. -->
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="1200"/>
+
+    <render filename="raw_armed.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="raw_armed.wav" expected="raw_unarmed.wav"/>
+
+    <!-- ...and monitoring is BACK, as a fresh arm: the plan was rebuilt from
+         the model as it now stands, never resumed. The device was closed for
+         the render, so this recording starts at the re-arm. -->
+    <wait-ms ms="1800"/>
+    <dump-playback-capture filename="rearm.wav" minFrames="48000"/>
+    <!-- 0.4/sqrt(3) x 0.5 = 0.115470, +-4 % (the window is nearer the start of
+         a session than AC1's, so it carries a little more of the ramp-in). -->
+    <assert-audio-energy filename="rearm.wav" startFrame="24000" frameCount="24000"
+                         channel="0" minRms="0.1109" maxRms="0.1201"/>
+    <assert-input-meter trackPath="0" minPeak="0.35" maxPeak="0.45"
+                        contains="live=on"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

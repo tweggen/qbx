@@ -37,3 +37,19 @@ coverage via action_roundtrip_test.
 
 Known debt: mixer→timeline/pluginui edges (getDetailEditWidget creates
 views) — the renderer/editor factory extraction is the Phase 6 fix.
+
+5. **The master's two components are reachable (proposal 21 L1b).**
+   `masterMixComponent()` / `masterRewireComponent()` exist so the live plan
+   builder can hand both to `twlive::checkMasterShape` — the "root(unarmed) +
+   ring" split is exact only while the master is a UNITY SUM followed by an
+   IDENTITY MAP, and that precondition is CHECKED on every plan build rather
+   than assumed. `getRootComponent()` already handed out the rewire; the
+   summing mixer had no accessor at all.
+
+6. **`reconnectTracksToMixer` carries a SECOND, SEPARATE audibility term.**
+   A live-owned lane gets a NULL input plug exactly the way an inaudible one
+   does, but the predicate is `STrack::isLiveOwnedLane()` and not
+   `ssolo::isLaneAudible` — see objects/track inv. 17 for why the two must not
+   be folded. A top-level closure member is always the TOPMOST one by
+   construction, which is why the rule here is simply "in the closure ⇒ null
+   the plug".

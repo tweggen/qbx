@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L1b, AC4. ARMING AND DISARMING WHILE THE TRANSPORT RUNS MUST NOT
+  DISTURB THE REST OF THE ARRANGEMENT.
+
+  Runs with SMARAGD_AUDIO_INPUT_BACKEND=file:../test_autosaw.wav and
+  SMARAGD_CAPTURE_SPEED=1 (set on the CTest entry). RUN_SERIAL.
+
+  Track 1 plays eight seconds of a 100 Hz sawtooth and is never armed, never
+  in the closure, and never re-wired. Track 0 is armed at about one second and
+  released at about two, which re-wires the MIXER twice and bumps the root
+  epoch four times while track 1's audio is passing through it. What must be
+  true of track 1's material is that it is CONTINUOUS across both flips and
+  that it is not DOUBLED by one - the two failure modes the epoch gate exists
+  for, and neither of them is visible in an average taken over the whole run.
+
+  THE CLOSED FORM. The sawtooth is amplitude 0.95, RMS 0.548; the monitored
+  input is on the OTHER track and never enters this measurement, because every
+  assertion below is over channel 0 of a recording in which track 0 contributes
+  the input at 0.2309 - so the flip windows are asserted as a BAND that
+  excludes 0.548 alone (below) and 0.548 doubled (above).
+-->
+<SActionScript version="1" name="arm_during_playback">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>                <!-- 0: the armed one -->
+    <add-track index="-1"/>                <!-- 1: the bystander -->
+
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="96000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="192000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="288000"/>
+
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="1000"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="1000"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <arm-track trackPath="0" armed="0"/>
+    <wait-ms ms="1500"/>
+    <toggle-playback play="0"/>
+
+    <dump-playback-capture filename="arm.wav" minFrames="144000"/>
+
+    <!-- Before the arm: track 1 alone, RMS 0.548. -->
+    <assert-audio-energy filename="arm.wav" startFrame="20000" frameCount="20000"
+                         channel="0" minRms="0.50" maxRms="0.60"/>
+    <!-- Across the ARM flip: track 1 plus the monitored input (0.2309),
+         sqrt(0.548^2 + 0.2309^2) = 0.5947. The upper bound excludes a DOUBLED
+         track 1 (1.096, which would also clip), the lower bound excludes it
+         having gone missing. -->
+    <assert-audio-energy filename="arm.wav" startFrame="72000" frameCount="24000"
+                         channel="0" minRms="0.52" maxRms="0.68"/>
+    <!-- After the release: track 1 alone again. -->
+    <assert-audio-energy filename="arm.wav" startFrame="160000" frameCount="20000"
+                         channel="0" minRms="0.50" maxRms="0.60"/>
+
+    <!-- AND IT NEVER STOPPED AND NEVER JUMPED. The source is a 100 Hz sawtooth
+         at 48 kHz: 480 frames per period, so its OWN largest sample-to-sample
+         step is the reset, 2 x 0.95 = 1.9. maxStep is twice that, which is the
+         brief's "2x the source's own" and is what a doubled or twice-served
+         block would exceed. -->
+    <assert-audio-continuity filename="arm.wav" startFrame="20000"
+                             frameCount="160000" channel="0"
+                             maxGapFrames="1024" maxStep="3.8"
+                             silenceLevel="0.002"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -281,6 +281,15 @@ const Fixture kFixtures[] = {
       "<set-track-midi-output trackPath='1,0' port='capture' channel='2'"
       " offsetMs='-200'/>" },
 
+    // Proposal 21 L1b. All three are ABSOLUTE, so every attribute is always
+    // written and every one of them must survive the round trip: an omitted
+    // `armed` would read back as 0 and undo would un-arm a track the user
+    // never touched.
+    { "arm-track", "<arm-track trackPath='1,0' armed='1'/>" },
+    { "set-track-input",
+      "<set-track-input trackPath='1,0' input='audio:default:3'/>" },
+    { "set-monitor-mode", "<set-monitor-mode trackPath='1,0' mode='on'/>" },
+
     // --- the event test verbs ----------------------------------------------
     // clip AND trackPath, kind, contains and velocityTolerance are each
     // written only when set, so the fixture sets every one of them.

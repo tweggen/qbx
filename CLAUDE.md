@@ -847,6 +847,54 @@ head PNG), plus `action_roundtrip_test`. NOT gated: plugin-gesture punch-in,
 Delete over a marquee (a QAction shortcut, not synthesisable from a script),
 Latch/Write passes, the read-value display, pixel exactness.
 
+## Live monitoring (proposal 21 L1a/L1b — executed 2026-08-17)
+
+An audio input is heard through the armed track's own insert chain, its folders
+and the master, on the same plugin instances playback uses, while the rest of
+the arrangement keeps playing from frozen pages. The engine half is `tw/playback`
+(L1a: `twLivePlan`, `LiveGraphPump`, `twLiveMixRing`, `twEngineClock`, the
+`twSpeaker` device×frozen×live machine); the app half is `SLiveMonitor` +
+`SLivePlanBuilder` + `SLiveAudioInputSource` in `main/shell` (L1b). Design:
+`plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md` D1–D5 and D9. Invariants:
+`tw303a/playback/CONTRACT.md` inv. 13–18, `main/shell/CONTRACT.md` inv. 12–18,
+`main/objects/track/CONTRACT.md` inv. 16–18, `main/objects/mixer/CONTRACT.md`
+inv. 5–6, `main/timeline/CONTRACT.md` inv. 21, `main/testkit/CONTRACT.md` 10–13.
+
+**Read this before touching the live lane — the obvious design is wrong, and it
+is wrong in a way that produces silence rather than a crash.**
+
+| Thing to know | Why |
+|---|---|
+| The pump is a **live executor over PROCESSORS**, not a second component graph | Only three pieces of the graph survive block-wise and are pure in position: `twPluginSlotProcessor::render(…, positional=true)`, `twGainStage::applyGain` over an `Envelope` snapshot, and `twRewire`'s channel map. The plan is those three, per track, in order, plus the frozen inputs a folder sums by position. Everything else — pages, latches, the readahead — is unreachable from a `RenderPolicy::Never` thread by construction. |
+| **Ownership is released BEFORE the re-wire on disarm**, not after | The natural reading ("release it once the plan has retired") makes the freeze path regain a still-live-owned chain: the next root page is frozen as SILENCE for those tracks, the epoch gate flips the RT onto it, and the folder goes quiet for the whole tail. Measured: a 256 ms hole and 8 `liveOwnedRefusals`. Releasing while the exclusion is still applied is safe — a nulled plug is never planned — and the first re-summed page then carries real audio. |
+| **`SObject::invalidateRenderPath()` on the mixer reaches NOTHING BELOW IT** | It walks from the project root and stales every chain CONTAINING the object it was called on. The exclusion therefore invalidates PER CLOSURE MEMBER; one call on the mixer leaves the members' own pages being served, and that is the second way a track stays silent after a hand-back. |
+| A transport edge **rebuilds before `twSpeaker::startOutput()`** | `setPlaybackRunning` starts the readahead first and flips `isPlaying_` last, so a rebuild driven by the flag alone leaves a track monitor Auto is about to release still live-owned while the readahead is already freezing it — six refusals per Play. `transportAboutToChange(playing)` runs at the top of `setPlaybackRunning`; `transportChanged()` follows and adds the one explicit reposition. |
+| `isLiveOwnedLane()` is a **wiring predicate**, never folded into `ssolo::isLaneAudible` | The mixer nulls a top-level closure member's plug and a folder `setClipMuted`s a nested one, exactly as solo does — but a live-owned track is still audible in every OTHER sense: its events still reach a folder instrument's feed and its meters still light. Folding the two would darken both. |
+| Monitor **Auto is the tape machine** | Input while STOPPED or RECORDING, the track's own material on plain Play (Cubase "Tapemachine", REAPER "auto"). **On** always monitors, **Off** never does. The live set is `{armed && monitorEffective} ∪ {monitor == on}`, so a track on **On** stays live whether it is armed or not — which is why a case that wants to disarm mid-play has to drop it to Auto as well. |
+| `trackInput` is a **portable string**, `ArmedForRecording` is **inert on load** | `none \| audio:<device>:<mask> \| midi:<port>:<ch\|any> \| keyboard`, stored as written and parsed once by the plan builder; the machine-local device id lives in `SSettings`. A track that arrived armed out of a file is not a monitoring source until the user arms it in THIS session — opening a project must not open the microphone. L1b renders `audio:` only; the other two spellings round-trip and wait for L2. |
+| **`openLive()` REFUSES a device rate that is not the project rate** | Ring entries are stamped in PROJECT frames and the RT sums them straight into the device buffer, so the two line up only while the rates are equal — and a ring entry carrying a position cannot go through a resampler. It is refused loudly: a log line naming both rates, `liveRateRefusals()`, and the ARM tooltip saying so. |
+| The **`Closure` master mode is REFUSED**, not approximated | `checkMasterShape` is asked before anything is re-wired. The plan builder can express "the master joins the closure", but the RT half is not wired — `twSpeaker` adds the frozen root page whenever the frozen lane is PLAYING and nothing reads `twLivePlan::masterLinear` — so such a plan would be summed on top of a page that already contains those tracks and the arrangement would be heard doubled. Unreachable today (`SStdMixer` builds exactly the linear shape); a master insert chain lands here first. |
+| A **render suspends every live lane** and comes back as a FRESH arm | `startRender()` suspends BEFORE `beginRun()`, so the run barrier never meets a live-owned track; the resume is a QUEUED call because the session's `onComplete` runs on the render thread. "Fresh" is the point: the closure is recomputed from the model as it then stands. Export ignores the split, as in Cubase. |
+| The app **never touches the ring and never renders on the pump** | Plans are built on the main thread and published with one `setPlan()`. The re-rooted horizon demands — one handle per frozen input root, superseded by replacing the handle — are issued from a 40 ms main-thread timer, because the pump may not demand. |
+
+**Knob:** `SMARAGD_AUDIO_INPUT_BACKEND=file:<wav>|null|default` (L0) picks the
+input ahead of the platform; `null` is the `--test-case` default. `FileAudioInput`
+replays a WAV in 1024-frame blocks through a real capture thread and ring, which
+is what makes a monitoring case assertable at all.
+
+Gates: the qxa cases `monitor_through_chain`, `monitor_latency`,
+`monitor_folder_closure`, `arm_during_playback`, `render_while_armed` — all
+`RUN_SERIAL` at `SMARAGD_CAPTURE_SPEED=1` against a paced `file:` input — plus
+`playback_test`, `devices_input_test` and `action_roundtrip_test`. Measured:
+monitored lag **5120 frames = 106.7 ms** (correlation 1.000) against an 8192
+budget; a mid-play hand-back gap of **8 frames** against 1024; an armed render
+**byte-identical** to the unarmed one; `liveThreadRefusals` and
+`liveOwnedRefusals` **0** in every case. `monitor_latency` is a WALL-CLOCK bound
+(like `twlog_test`): 48/50 under a second worktree's suite, 8/8 idle — confirm the
+box is idle before reading it as a regression. **NOT gated:** real device latency and
+jitter, WASAPI shared under load, ASIO, and hearing an ARMED track's own clips
+(design §10.1 — it needs proposal 20 §2).
+
 ## Recording Audio
 
 Smaragd supports recording from input devices (microphone, line-in, etc.) via **Record** button in the transport toolbar or **Ctrl-R** / **Cmd-R** keyboard shortcut. Recorded audio is automatically converted to clips and placed on armed tracks.
