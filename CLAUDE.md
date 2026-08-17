@@ -419,7 +419,7 @@ contract: a change that breaks one of these breaks the parallel gate.
 | **`.qxp` save targets** | No collision. Nine cases save into the build root; the names are unique per case (`au_missing_resave`, `au_slot_resave`, `clip_properties_actions`, `exact_stretch_roundtrip`, `plugin_missing_resave`, `plugin_remove_restores_param`, `plugin_slot_resave`, `takes_roundtrip`, `warp_anchors_roundtrip`) and each is written and read back **by its own case only**. No case consumes another case's artifact. |
 | **The sidecar (QAF) store** | **This was a real bug, now fixed.** One shared per-user cache dir, and **80 of 89 cases use the same `test_sawtooth.wav`** → the same content hash → the same aspect keys, so concurrent stores of one key are the normal case, not the exotic one. The writer used a fixed `<path>.tmp`, so two processes truncated and interleaved into one temp and one published the mixture. Only the QAF **header** is CRC-protected — a torn payload of the right length passes the reader's bounds check and feeds wrong analysis data (onsets / f0 / warp.pcm) into the engine. The temp is now `<path>.<pid>.<seq>.tmp`; see `tw303a/sidecar/CONTRACT.md` inv. 2. Note the hazard is **latent**: it only bites when a key is cold, i.e. on the runs right after an aspect-version bump or a cleared cache — exactly when nobody is expecting it. |
 | **`plugincache.json`** | Harmless. Written on every run (`plugins/scanOnStartup` defaults true), but through `QSaveFile` — write-to-temp-then-rename, so a concurrent write is a lost update at worst, never a torn file. Verified live: parsed as valid JSON repeatedly while four `smaragd.exe` processes rewrote it. A lost update costs a re-probe, and records are keyed on path+size+mtime so it cannot manufacture a false failure. |
-| **`smaragd.ini`** | Harmless. Qt takes a `QLockFile` around `QSettings` writes, and a headless run does not write it at all — mtime unchanged across a full suite. |
+| **`smaragd.ini`** | Harmless, but NOT because nothing writes it: a headless run does write it. Cases that use the `set-option` verb write real keys — `midi_options_page`, `midi_out_chase_and_stop`, and since proposal 21 L3b `record_offset_zero` (`audio/recordingOffsetMs/default`). What makes it safe is stronger than locking: each of those cases is **`RUN_SERIAL`**, each OWNS its key and no other case reads it, and each restores the key it wrote. Qt still takes a `QLockFile` around `QSettings` writes, so even a concurrent write could not tear. The residual hazard is the ownership CONVENTION, not the locking — a future case that READS one of those keys would be racing the one that writes it. |
 | **`smaragd.log`** | Not shared. `--test-case` runs deliberately take **no file sink** (`main/shell/src/main.cpp`), which the code already justifies by naming `ctest -j`. |
 | **Wall-clock latency assertions** | Not isolation bugs — see the table above. `RUN_SERIAL`. |
 
@@ -895,68 +895,94 @@ box is idle before reading it as a regression. **NOT gated:** real device latenc
 jitter, WASAPI shared under load, ASIO, and hearing an ARMED track's own clips
 (design §10.1 — it needs proposal 20 §2).
 
-## Recording Audio
+## Recording Audio (proposal 21 L3b - executed 2026-08-17)
 
-Smaragd supports recording from input devices (microphone, line-in, etc.) via **Record** button in the transport toolbar or **Ctrl-R** / **Cmd-R** keyboard shortcut. Recorded audio is automatically converted to clips and placed on armed tracks.
+Arm a track, press Record (or Ctrl-R): a **growing clip** appears on every armed
+lane and draws its waveform as the capture arrives, the app stays usable
+throughout, and at stop the whole take is placed as **one undo step** -
+latency-compensated, one take per loop pass, clamped to the punch region.
+Design: `plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md` **D6** (the
+placement conversion) and **D7** (one input pump, three sinks). Invariants:
+`main/shell/CONTRACT.md` inv. 19-29, `main/objects/wave/CONTRACT.md` R1-R7,
+`main/objects/track/CONTRACT.md` inv. 19-20, `main/objects/cut/CONTRACT.md`
+("A cut over a LIVE RECORDING"), `tw303a/record/CONTRACT.md` inv. 9-9c,
+`main/testkit/CONTRACT.md` 14-19.
 
-### Recording Flow
+**Read this before touching recording - two of the obvious designs are wrong,
+and one of them produces a two-second stall and a segfault rather than a
+symptom you can read.**
 
-1. **Arm tracks:** Click ARM button (red "R") on track headers to select which tracks receive recorded audio
-2. **Select input device:** Edit → Options → Audio tab → Input device dropdown
-3. **Start recording:** Click record button or press Ctrl-R/Cmd-R
-4. **Progress dialog:** Shows real-time duration and allows stopping via "Stop Recording" button
-5. **Automatic placement:** On completion, WAV file is converted to `SPlainWave` → `SCut` and placed on all armed tracks at current time position
-6. **Auto-disarm:** Armed tracks are automatically disarmed after recording placement
+| Thing to know | Why |
+|---|---|
+| `SAudioRecorder` (`main/shell`) is what a record start MEANS. It is a sibling of `SMidiOutPump` / `SAutomationRecorder` / `SLiveMonitor`: one per app, main thread, a 100 ms `QTimer` | Everything used to be spread across `SApplication::startRecording`, `SMainWindow::onRecordTriggered` and `onRecordingCompleted`, and the transport half of it bypassed `setPlaying()` entirely. |
+| **THE PLACEMENT CONVERSION IS ONE NAMED FUNCTION**, `app/shell/srecordplacement.h`: `placementFrame(k) = P0 + k - inputLatencyProj - outputLatencyProj + userOffsetProj` | `P0` is the project frame capture frame 0's HOST TIME maps to through the ENGINE-owned clock (`twEngineClock::read()`'s `{deliveredFrame, hostNs}`) - never `SApplication`'s locator, which is a UI-thread value and would re-derive a publish-lag correction the clock already carries. The sign is D6's derivation: the performer plays to what they HEAR. |
+| `recordingOffsetMs` is **POSITIVE = EARLIER**, and the negation lives in ONE setter | The app-wide convention (37 P7's `midi/offsetMs`). The design writes the term with a PLUS, so `setUserOffsetMs(+20)` at 48 kHz stores `-960` - spelled once, with the reasoning beside it, instead of at every call site. |
+| The anchor is taken **ONCE, RETROSPECTIVELY, and only from THIS run** | A take from a stopped transport captures its first frames before the RT has published anything (the readahead primes first), so the bridge stamps `captureStartHostNs()` and the mapping is applied BACKWARD when an anchor appears. The publication counter is process-global, so the anchor must have `seq >` the one sampled at start - `SMidiOutPump::resetRun`'s trap, again. |
+| The **output latency is read WITH the anchor, not at start** | A take begun from a stopped transport OPENS the device as part of starting, so at `start()` there is no backend to ask and the term is silently 0. Measured: that put the whole compensation 1024 frames out. |
+| **The trim floor is the TRANSPORT start, not the record start** | D6 trims "frames captured before the transport start". Recording into a run that was already playing legitimately places audio EARLIER than the button press - that is what latency compensation IS. A Cubase-style catch range is NOT implemented. |
+| **ONE INPUT PUMP, and `SLiveMonitor` owns it** | The `CaptureBridge` (L3a) drains the input device's ring; monitoring pops its live ring (`SLiveAudioInputSource` -> `pullLive`) and recording opens a capture SEGMENT on the SAME bridge (`beginCapture`). So a record start while monitoring does not gap the monitored signal, and the recorder BORROWS the bridge through a hold count that stops `closeInputIfUnused()` pulling the device out from under a take. |
+| The bridge's **pages are for a RECORDING, not for monitoring** | `capturePages=false` on the monitor's bridge: growing them for a monitoring session leaks ~370 KB/s of RAM for audio nobody asked to keep. `liveEnabled=false` for a recording with monitoring off, or the ring fills once and counts every frame of the take as a phantom overrun. |
+| `SRecordingContent` (`main/objects/wave`) is a **VIEW of the growing capture**, and `getRootComponent()` is NULL | `STrack` routes it out of the bus mixers on `SObject::isLiveRecording()` - the same decision `objects/track` already makes for MIDI clips, for the same reason: no component to freeze, so a dummy freeze per page per clip plus `twView::getComponent() returned nullptr` forever. What you HEAR while recording is the live monitor lane; what you SEE is this clip. |
+| **A cut over a live recording does no capture, no reader, no aspect** | THIS IS THE ONE THAT BITES. `SCut::buildCapture_` RENDERS the content into a fixed-size snapshot; over a growing multi-second take that cost seconds on the UI thread and then **segfaulted** (found by `record_punch`'s `previewNonEmpty` assertion). Separately, a growing clip re-scheduling a Preview recompute per 100 ms tick starved the bridge thread badly enough to **lose 2.2 s of input to ring overruns** and put the capture backend 2.5 s behind. All four paths (`buildCapture_`, `ensureReader`, `invalidateAspects`, `getPreview`) short-circuit on `isLiveRecording()`. |
+| Preview peaks are **EXTENDED from the frontier**, in whole hops, never recomputed | A five-minute take rescanned ten times a second is 90 GB of reads a minute. Folding a partial hop would bake silence into a bucket for frames about to arrive. |
+| **Loop passes are ARITHMETIC, not wrap detection** | The conversion is linear in capture frame, so the pass is `floor((placement - loopIn)/loopLen)`. A 100 ms poll could not see a wrap between two ticks. Each pass is one `place-recording` at the loop start, and that verb's own proposal-17 planner turns pass 2 onto pass 1's column as a TAKE - so proposal 17's "phase 5" needed no new machinery, only `srcOffset`/`length` on a verb that already existed. |
+| **Punch is a CLAMP, not a race** | The take ends once the placement passes the out point and the span is then clipped to `[in, out)` however far past it the tick got - the placed clip is exact to the frame. The project has ONE range: the LOOP when Cycle is on, the PUNCH region when it is off. |
+| The growing clips are **not actions**; the placement is **one macro** | The clip at record start is a direct model mutation, like auto-disarm. At stop the growing clips are removed FIRST (else `place-recording` would stack a take on them) and then one macro of `place-recording` calls is submitted. |
+| `locatorHeldElsewhere()` is **RETIRED** | It existed because the old path drove the playhead from the record worker. A record start now goes through `setPlaybackRunning()`, so the OUTPUT publication is the playhead authority in every mode - which is also what the placement anchor needs. |
+| The progress dialog is **non-modal and polls** | It used to `exec()` inside the record-button handler, blocking the whole app for the length of a take. |
+| **While a lane is live-owned, the root walk is DEFERRED** and issued once at disarm | `STrack::invalidateRootWalkOrDefer` accumulates the range union; `setLiveOwnedLane(false)` flushes one `invalidateRenderPathRange`. The general rule for edits during monitoring (D7); the recording clip itself never reaches it, being out of the mixers. |
 
-### Architecture
+### Files a take writes
 
-**Audio input abstraction:** `tw303a/include/audio/audio_input.h` defines `AudioInput` interface (platform-agnostic):
-- `openDevice(deviceId, sampleRate)` — select input device
-- `startCapture()` / `stopCapture()` — control recording stream
-- `read(buffer, frameCount)` — pull audio samples (non-blocking)
-- `listDevices()` — enumerate available input devices
+One WAV per armed track, at the PROJECT rate, written streamingly by the
+bridge's WAV thread out of the capture pages and finalised from them at stop
+(so a slow disk costs `wavLate` and never a ring overrun). Named
+`YYYYMMDD_HHMMSS_zzz_track<N>.wav`, into `--test-output-dir` when there is one,
+else the project's own directory, else Documents.
 
-**Platform implementations:**
-- `WASAPIInput` (Windows) — shared-mode capture via WASAPI
-- `ALSAInput` (Linux) — ALSA PCM device capture
-- `CoreAudioInput` (macOS) — HAL audio unit input (needs read callback implementation)
+### Options
 
-**Recording session:** `tw303a/src/recording_session.cc` manages background recording thread:
-- Creates `AudioInput` for selected device
-- Opens WAV output file via `createAudioFileWriter(AudioFormat::WAV)`
-- Records loop: pulls frames from input → writes to WAV → emits progress every ~100ms
-- Handles stop request gracefully with file cleanup
+Edit -> Options -> Audio gains **Recording offset (+ = earlier)**, +-500 ms, per
+INPUT DEVICE, stored under the device's NAME (`audio/recordingOffsetMs/<name>`)
+so it survives an id change. It is the number a "record a click, look at where
+it landed, type the difference" calibration produces; the driver's *reported*
+latencies are compensated automatically.
 
-**UI integration:**
-- Transport toolbar: Record button with play/pause icons
-- Keyboard shortcuts: Ctrl-R (Windows/Linux), Cmd-R (macOS), numpad * (all platforms)
-- Per-track ARM buttons: Red "R" toggle on track control strips (mute/solo area)
-- Options dialog: Input device selection (Audio tab)
-- Progress dialog: `SRecordingProgressDialog` shows duration MM:SS.mmm, stop button
-- Settings: Input device ID persisted in per-machine INI config
+### Gates
 
-**Cut placement:** `SMainWindow::onRecordingCompleted()`:
-- Loads recorded WAV as `SPlainWave` object
-- Wraps in `SCut` for timeline placement
-- Creates `SLink` with timestamp = recording start position
-- Parents link to track (UI automatically syncs)
-- Places cut once per armed track (one input → multiple track recording)
+The qxa cases `record_offset_zero`, `record_loop_takes`, `record_punch`,
+`record_while_monitoring` - all `RUN_SERIAL` at `SMARAGD_CAPTURE_SPEED=1`
+against the paced position-encoded `file:` input with
+`SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800` - plus `takes_recording_placement`
+and `action_roundtrip_test`. Measured: compensation
+**-5824 frames exactly** (4800 reported input + 1024 capture-backend output) and
+**-6784 with `recordingOffsetMs=+20`**, i.e. the offset moved the clip exactly
+**960 frames earlier**; the placement identity `clipStart == placementFrame(trimmed)`
+held to the frame on every run; 7 s over a 2 s cycle gave **one column** whose
+take count EQUALS the pass count (4 and 4 as measured), removed by **one undo**;
+a punch region placed a clip at 48000 of length 48000 **exactly**; and a record
+start on an already-monitoring track opened **no** device and provoked **no**
+device-change deferral.
 
-### Recorded File Format
+**A LOOP-PASS COUNT IS A WALL-CLOCK QUANTITY** and must be asserted as a FLOOR.
+It is captured material over loop length, and captured material shrinks when
+the box is loaded enough to cost ring overruns - `record_loop_takes` failed
+exactly that way under a concurrent suite before it was relaxed. The part that
+is NOT load-sensitive, and that `assert-recorded-clip` therefore asserts
+unconditionally, is ONE COLUMN with as many TAKES as there were PASSES.
 
-Files written as WAV (PCM, lossless) in project directory:
-- **Filename:** `YYYYMMDD_HHMMSS_mmm_input0.wav` (timestamp with millisecond precision)
-- **Sample rate:** Matches project rate
-- **Channels:** Stereo (or project channel count)
-- **Bit depth:** Float32 (internal engine format)
+**NOT gated:** real capture hardware and real driver latencies (`FileAudioInput`
+REPORTS a latency and does not delay by it - the gate is on the conversion, not
+on the physics), ALSA and CoreAudio input, a device rate different from the
+project rate, multi-track recording beyond one WAV per armed track, saving a
+project mid-take (`SRecordingContent` has no loader registration), and the
+Cubase-style **catch range**, which is not implemented - pre-roll frames are
+trimmed.
 
-### Known Limitations & Future Work
-
-1. **CoreAudio input:** Currently placeholder (read returns silence). Full HAL callback integration pending.
-2. **Device enumeration:** Only "System default" shown in UI; full platform-specific enumeration deferred to Phase 7b.
-3. **Hardware monitoring:** Recording pulls from input device only (no synth-to-recording path). Plugin support on input planned for future phase.
-4. **Multi-input:** One WAV per input device; multiple inputs with separate files not yet supported.
-5. **Latency control:** Fixed at device default; no user-facing buffer sizing.
+**Known limitation:** a record stop STOPS the transport and returns the
+playhead to the record start, whatever the take was recorded into. Right when
+the take started the transport; not what a punch drop-out should do to a run
+that was already playing. `main/shell/CONTRACT.md` records why it was left.
 
 ## Plugin Hosting (proposal 08 — M0..M8 executed; VST3 landed 2026-07-29)
 

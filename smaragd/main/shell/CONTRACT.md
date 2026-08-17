@@ -312,3 +312,15 @@ start and a record stop MEAN in the app.
     It now shows, polls `SAudioRecorder` at 10 Hz, follows a stop that happened
     anywhere else (a punch-out, the record button again), and stops the take
     when closed.
+
+### Known limitation: a record stop STOPS the transport
+
+`stop()` ends the transport and returns the playhead to the record start,
+whatever the take was recorded into. That is right when the take STARTED the
+transport, and it is what the previous (modal) implementation did; it is not
+what a punch drop-out should do to a run that was already playing, where a
+reference DAW keeps rolling and leaves the playhead alone. Changing it is a
+transport-behaviour decision beyond L3b's brief and it interacts with
+`toggle-playback`'s handling of a redundant Play, so it is recorded here rather
+than guessed at. The trim floor already distinguishes the two cases
+(`wasPlaying_`), so the information a fix needs is present.
