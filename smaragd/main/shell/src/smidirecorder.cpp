@@ -169,7 +169,6 @@ bool SMidiRecorder::start()
     }
 
     recordStart_ = app_->getGlobalLocatorPos();
-    wasPlaying_  = app_->isPlaying();
     cycle_       = cycleRegion_( cycleIn_, cycleOut_ );
 
     // The rings are DRAINED, never cleared: `MidiInRing::clear()` is only safe
@@ -314,8 +313,9 @@ void SMidiRecorder::commit_()
     const qint64 loopLen = cycle_ ? (qint64) ( cycleOut_ - cycleIn_ ) : 0;
     const qint64 stopAbs = (qint64) stopFrame_;
 
-    // (track, pass) -> the events of that pass, in the PASS WINDOW's ticks.
-    struct PassKey { std::size_t track; qint64 pass; };
+    // armed index -> pass -> the events of that pass, in the PASS WINDOW's
+    // ticks. Both keys are ordered, so the commit below walks tracks in the
+    // collection order and passes in time order without sorting anything.
     std::map<std::size_t, std::map<qint64, std::vector<SEvent> > > byTrackPass;
 
     // The pass a wrap-counted project frame belongs to, and where that pass

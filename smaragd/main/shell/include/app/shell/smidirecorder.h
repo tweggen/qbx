@@ -177,7 +177,6 @@ private:
     QTimer       *timer_ = nullptr;
 
     bool     active_ = false;
-    bool     wasPlaying_ = false;
     offset_t recordStart_ = 0;
     offset_t stopFrame_   = 0;
     QString  error_;
