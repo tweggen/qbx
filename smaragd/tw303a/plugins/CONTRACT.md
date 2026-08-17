@@ -138,9 +138,14 @@ Invariants:
    Otherwise one crashing or hanging plugin costs a probe (or a timeout) on
    every launch, forever. kScannerVersion is part of the key, so any change to
    what the scanner derives invalidates every record including the failures.
-   The cache is <configDir>/plugincache.json, NOT twSidecarStore: that store
-   keys on a content hash of audio PCM and caps itself with an LRU, which would
-   silently evict the plugin table.
+   The cache is <configDir>/plugincache.v<kScannerVersion>.json (the app asks
+   twPluginRegistry::cacheFileName() for that spelling), NOT twSidecarStore:
+   that store keys on a content hash of audio PCM and caps itself with an LRU,
+   which would silently evict the plugin table. The version is in the FILE NAME
+   as well as in every record because the config dir is shared by every build
+   this user runs: one file meant a build at version N and a build at version
+   N+1 rejected each other's records on every launch, leaving both permanently
+   cold and re-probing every installed plugin in every process.
 10. Crash isolation is the probe EXECUTABLE, and the app supplies its path.
    setProbeExecutable() is what turns "load foreign code in our address space"
    into "load it in a child process we can bury". The registry does not go
@@ -622,6 +627,30 @@ Invariants:
    never reached — so successive short runs converge instead of restarting cold
    forever (invariant 9's stickiness is preserved either way). It does NOT
    replace plugins_: a partial result is not the plugin table.
+
+43. NO SHUTDOWN PATH MAY WAIT ON THE SCAN UNBOUNDED, AND NOTHING MAY ESCAPE THE
+   SCAN THREAD. Invariant 36 says WHO stops the scan; this says what the stop is
+   allowed to cost and what it must survive. `requestStopScan()` sets the flag;
+   the scan reads it in THREE places, not one -- between modules, once per 100 ms
+   slice of the out-of-process probe wait (the child is KILLED, not orphaned),
+   and immediately before the in-process fallback, which cannot be interrupted
+   once it has entered a plugin's DSO. Between-modules alone bounds a stop by one
+   `probeTimeoutMs_` PER installed module, which is not a teardown budget.
+   `stopScan( ms )` then joins with a TIMEOUT: an expired join LEAKS the worker
+   rather than deleting it (undefined) or terminating it (worse -- it may be
+   inside a plugin), KEEPS the pointer so a later join retries the same thread,
+   does NOT clear the stop request (the worker must keep seeing it), and LOGS
+   loudly. Unbounded is not an option for the same reason invariant 36 exists:
+   the worker may be unable to return at all, having already died on an exception
+   and wedged in `abort()`. Which is the last part -- the thread body carries a
+   CATCH-ALL. An exception out of a QThread reaches `std::terminate`, whose
+   `abort()` blocks on the CRT lock an exiting thread already holds while it
+   waits for this one, and that deadlock has no timeout in it. Invariant 36
+   removed the KNOWN exception (a destroyed log sink); this removes the class.
+   Reporting the caught exception is itself wrapped, because the reason we got
+   there may be that reporting is what fails. An aborted scan is asserted usable
+   in `plugins_scan_test`: the cache still parses, and the next `rescanAsync()`
+   probes everything and completes.
 
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears

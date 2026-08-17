@@ -221,7 +221,7 @@ endif()
 #    are routine. They are safe because each writer stages its own temp file --
 #    see tw303a/sidecar/CONTRACT.md inv. 2, which is exactly the invariant that
 #    had to be repaired to make `-j` sound.
-#  * The per-user config (smaragd.ini, plugincache.json). Qt's QSettings takes a
+#  * The per-user config (smaragd.ini, plugincache.v<n>.json). Qt's QSettings takes a
 #    QLockFile, and the plugin cache is written through QSaveFile, so a
 #    concurrent write is a lost update at worst, never a torn file. Headless
 #    --test-case runs take no file log sink at all (see main.cpp), so the

@@ -480,6 +480,97 @@ int main( int argc, char **argv )
               << std::endl;
 #endif
 
+    // ---- 10: a STOPPED scan leaves the registry usable ---------------------
+    //
+    // Stopping exists so that shutdown never has to wait out a full re-probe
+    // (CONTRACT invariants 36 and 43). Three properties have to hold together:
+    // the cache it writes is VALID (invariant 36 keeps what was learned, so a
+    // short run still converges), a module that was interrupted MID-PROBE gets
+    // no record at all -- least of all a sticky failure for a plugin that was
+    // never judged -- and a later scan behaves exactly as if the stopped one
+    // had never run.
+    //
+    // The stop is issued from the PROGRESS CALLBACK, which the scan invokes on
+    // its OWN thread once per module. That is what makes it land deterministically
+    // mid-probe of module 0; a stop fired from this thread right after
+    // rescanAsync() would be a race with a scan of two tiny modules. It is also
+    // why requestStopScan() exists separately from stopScan(): the joining one,
+    // called from the worker, would wait for itself.
+    std::cout << "=== stopping a scan mid-probe ===" << std::endl;
+    {
+        const QString stopCache = QDir( root ).filePath( "plugincache_stop.json" );
+        twPluginRegistry reg;
+        reg.setSearchPaths( { modDir.toStdString() } );
+        reg.setCachePath( stopCache.toStdString() );
+        reg.setScanProgress(
+            [&reg]( const twPluginScanStats & ) { reg.requestStopScan(); } );
+
+        audio::check( reg.rescanAsync( false ), "rescanAsync started a scan to stop" );
+        audio::check( reg.waitForScan( 30000 ),
+                      "the stopped scan joined well inside the bound" );
+        audio::check( !reg.isScanning(), "...and left isScanning() false" );
+
+        // The file it wrote is VALID JSON, and it holds no record for the module
+        // whose probe was interrupted.
+        //
+        // Asserted with QJsonDocument rather than loadPluginScanCache(), because
+        // that one answers false for an EMPTY table -- and empty is exactly what
+        // a stop at the first module legitimately produces on a cold cache: no
+        // module probed, and nothing to carry forward. The property under test is
+        // "not corrupt", not "non-empty".
+        std::map<std::string, twPluginModuleRecord> partial;
+        if( QFileInfo::exists( stopCache ) ) {
+            QFile f( stopCache );
+            audio::check( f.open( QIODevice::ReadOnly ),
+                          "the cache a stopped scan wrote is readable" );
+            QJsonParseError perr{};
+            const QJsonDocument doc = QJsonDocument::fromJson( f.readAll(), &perr );
+            f.close();
+            audio::check( perr.error == QJsonParseError::NoError && doc.isObject(),
+                          "...and is valid JSON, not a truncated write" );
+            loadPluginScanCache( stopCache.toStdString(),
+                                 twPluginRegistry::kScannerVersion, partial );
+        }
+        bool inventedFailure = false;
+        for( const auto &kv : partial )
+            if( kv.second.status != twPluginModuleStatus::Ok ) inventedFailure = true;
+        audio::check( !inventedFailure,
+                      "an interrupted module is NOT recorded as a failure" );
+
+        // And now the part that matters: the registry is not poisoned.
+        reg.setScanProgress( nullptr );
+        audio::check( reg.rescanAsync( false ), "a rescan after a stop starts" );
+        audio::check( reg.waitForScan( 120000 ), "...and runs to completion" );
+        const twPluginScanStats s = reg.scanStats();
+        std::cout << "       after stop: " << audio::statsLine( s ) << std::endl;
+        audio::check( s.modulesFound == expectFound,
+                      "...seeing every module again" );
+        audio::check( s.modulesProbed == expectFound,
+                      "...probing every one of them (the stop cached nothing)" );
+        if( haveFixture )
+            audio::check( audio::hasUid( reg.plugins(), audio::kGainUid ),
+                          "...and finding the plugin" );
+
+        std::map<std::string, twPluginModuleRecord> table;
+        audio::check( loadPluginScanCache( stopCache.toStdString(),
+                                           twPluginRegistry::kScannerVersion, table ),
+                      "the cache written after the stop parses" );
+        audio::check( (int) table.size() == expectFound,
+                      "...and has a record for every module" );
+    }
+
+    // ---- 11: the cache file name carries the scanner version ---------------
+    std::cout << "=== version-scoped cache file name ===" << std::endl;
+    {
+        const std::string n = twPluginRegistry::cacheFileName();
+        audio::check( n == "plugincache.v"
+                              + std::to_string( twPluginRegistry::kScannerVersion )
+                              + ".json",
+                      "cacheFileName() spells the scanner version into the name" );
+        audio::check( n.find( ".v" ) != std::string::npos,
+                      "...so two builds at different versions cannot share one file" );
+    }
+
     QDir( root ).removeRecursively();
 
     if( audio::gFailures ) {

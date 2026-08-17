@@ -410,8 +410,15 @@ void SApplication::initPluginRegistry()
     // The cache lives next to smaragd.ini, not in the sidecar store: the
     // sidecar store keys on a content hash of audio PCM and caps itself with an
     // LRU, which would silently evict the plugin table.
-    reg.setCachePath(
-        QDir( s.configDir() ).filePath( "plugincache.json" ).toStdString() );
+    //
+    // The NAME carries the scanner version (twPluginRegistry::cacheFileName),
+    // because the config dir is shared by every build this user runs while
+    // kScannerVersion is a source constant. Two builds at different versions
+    // sharing one file meant each rejected the other's records on every launch.
+    reg.setCachePath( QDir( s.configDir() )
+                          .filePath( QString::fromStdString(
+                              audio::twPluginRegistry::cacheFileName() ) )
+                          .toStdString() );
 
     // The APP supplies the probe path, so the registry stays dumb and headlessly
     // testable — and on macOS the executable lives inside the .app bundle next
@@ -570,7 +577,9 @@ SApplication::~SApplication()
     // static). stopScan(), not waitForScan(): a scan still walking this
     // machine's installed modules must not hold the process open for minutes,
     // and it must not still be alive (and logging) once static destruction
-    // starts -- see plan/STATE.md 2026-08-16.
+    // starts -- see plan/STATE.md 2026-08-16. It is BOUNDED and it LOGS when
+    // the bound expires, so a worker that will not stop leaves a message here
+    // naming the module it was on instead of a silent hang.
     audio::pluginRegistry().stopScan();
     // The MIDI scheduler threads join HERE, on the main thread, while the log
     // sink is still alive - not during static destruction, which is where this

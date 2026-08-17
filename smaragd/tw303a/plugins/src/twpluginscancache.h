@@ -3,7 +3,10 @@
 
 // PRIVATE header of the plugin scanner (proposal 08 M2).
 //
-// The scan cache is <configDir>/plugincache.json. QJson deliberately: tw_core
+// The scan cache is <configDir>/plugincache.v<kScannerVersion>.json -- the name
+// carries the version because the config dir is shared by every build this user
+// runs, and a single file meant two builds invalidated each other's records on
+// every launch. See twPluginRegistry::cacheFileName(). QJson deliberately: tw_core
 // already links Qt Core, the scan path is not realtime, and a human-readable
 // table is worth a lot when a user reports "it does not find my plugin".
 //
