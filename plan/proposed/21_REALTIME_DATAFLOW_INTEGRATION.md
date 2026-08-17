@@ -193,7 +193,26 @@ summing the ring while `rootPage.contentEpoch < flipEpoch'` (the stale root
 still LACKS the track) and stops the moment the re-summed page lands. A 2–3 ms
 crossfade smooths both flips. While STOPPED there is no root page: `out = ring`.
 
-### D3 — Exclusion by the existing wiring rule; RT = frozen root page + live ring; exact by linearity
+### D3 — Exclusion by the existing wiring rule; the closure ends at the output; the RT never mixes except where addition commutes
+**The general rule first.** The live closure is every component downstream of a
+live-owned track up to the OUTPUT — the master included whenever it is anything
+but a pure linear sum with an identity map (an insert, a fader curve, a
+non-linear or stateful stage). The pump renders the whole closure; frozen
+inputs of the closure are read by position; **the RT pops the ring only** and
+never mixes two sources. That is the model, and it is what a master chain will
+run on the day one exists (v2's shape, "option (b)" below).
+
+**Today's labelled optimization, with its precondition.** The master IS a unity
+sum with an identity map (F4), so the closure's master part commutes with
+addition: `master(unarmed ∪ live) == master(unarmed) + master(live)` sample for
+sample. That lets the frozen lane keep producing the root page for the unarmed
+tracks and the RT ADD the ring to it — keeping every existing page, fallback and
+meter path untouched. The precondition is checked, not assumed: the plan builder
+asserts the master path is `twMixer(unity) → twRewire(identity)` and falls back
+to rendering the master in the pump otherwise; a CONTRACT invariant (mix) says
+the split is legal only under that shape. "root(unarmed) + ring" below always
+means this optimization.
+
 The **topmost closure member** (the armed track itself, or the highest folder in
 its closure) is made inaudible to the frozen sum by exactly the rule solo uses at
 the mixer (`reconnectTracksToMixer` nulls its plug); **nested members** of the
@@ -211,10 +230,12 @@ master is a unity sum with an identity map (F4). The excluded folder's OWN clips
 are silent while a child is live (stated; §10). `isLiveOwned` is a separate
 predicate applied at the mixer/track-mix wiring only — never folded into
 `ssolo::isLaneAudible` (that would drop a live child's EVENTS from a folder
-instrument's feed and darken meters). Rejected for now: the pump rendering the
-whole master from N frozen roots (v2's shape) — zero invalidation on arm but it
-duplicates the RT's stale-fallback logic and darkens the master meter; it
-becomes the design the day a master insert chain exists.
+instrument's feed and darken meters). Not chosen today: the pump rendering the
+whole master from N frozen roots (v2's shape, "option (b)") — zero invalidation
+on arm but it duplicates the RT's stale-fallback logic and darkens the master
+meter. It is not rejected: it is the GENERAL rule above, and it becomes the
+active path the moment the master is not a linear identity — the plan builder's
+precondition check is what selects between the two.
 
 ### D4 — Instrument live mode is P3b's processor driven contiguously; ownership is a protocol
 No `twLiveInstrument`. Arm (main thread): build the plan → apply the exclusion
@@ -353,7 +374,7 @@ suspend it).
 | (ii) armed INSTRUMENT track | slot-0 processor with `events = merge{feed (gated by transport), live}`, later slots, gain, map | none | plug nulled | sequenced notes sound only while PLAYING (D2) |
 | (iii) folder with a live child | the folder's SUM (live children + unarmed children's frozen roots) + its processors + gain + map; the live child as (i)/(ii) | every unarmed child ROOT (re-rooted demands) | the FOLDER's plug nulled at the mixer; the live child `setClipMuted` in the folder's trackmix | the folder's own clips silent; child MIDI bubbling to a folder instrument makes the folder the live instrument and the child a MIDI source |
 | (iv) sends / sub-busses | — | — | — | do not exist; closure by the same rule when they do |
-| root | not live: `root(unarmed) + ring` in the RT, epoch-gated | the root page | — | exact by linearity; a master chain moves this to D3 option (b) |
+| root (TODAY: unity sum + identity) | not live: `root(unarmed) + ring` in the RT, epoch-gated — the LINEAR SPLIT, valid only under the checked precondition | the root page | — | a master chain / non-linear master ⇒ the master joins the closure, the pump renders it from frozen track roots, the RT pops the ring only (D3 general rule) |
 
 Plan rebuild triggers: arm/disarm, `trackInput`/`monitorMode` change, transport
 state change (feed policy), reparent/insert/remove of a track in the closure,
@@ -437,7 +458,7 @@ Critical path: L0 → L1a → L1b → L2 → L4 (L3a runs from L1a in parallel w
 | Arm/disarm during playback clicks | epoch-gated flip + crossfade; gated by continuity assertions |
 | A worker/preview touches a live processor | `setLiveOwned` guard + counter gated ≈ 0 |
 | Live folder's unarmed siblings never frozen | re-rooted demands, one handle per root — a folder gate |
-| A master chain appears later | D3 option (b), named |
+| Master becomes non-linear (insert, curve, state) | D3's general rule takes over automatically (precondition check in the plan builder); the linear split is an optimization, not the model |
 | Placement sign/anchor error | D6's derivation + the zero-offset gate |
 | Two clocks drift | L6; single-device duplex first |
 | Sequenced material sounding while stopped | D2's feed gate, gated |
