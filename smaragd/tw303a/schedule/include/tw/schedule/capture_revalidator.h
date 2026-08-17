@@ -203,11 +203,21 @@ public:
         // shuts down (abort). NOT for the RT audio thread.
         void wait();
         bool done() const;
+
+        // How many of this demand's root pages completed WITHOUT a page
+        // (proposal 21 L0): the component was retired mid-flight, so the
+        // demand is finished but that position was never produced. A consumer
+        // treats it exactly like a miss — stale page or silence — which is why
+        // it is a count rather than an error: waiting forever for a page whose
+        // producer has been taken out of the graph is the failure mode this
+        // replaces.
+        int notProduced() const;
     private:
         friend class CaptureRevalidator;
         mutable std::mutex m_;
         std::condition_variable cv_;
         int  outstanding_ = 0;
+        int  notProduced_ = 0;
         bool aborted_ = false;
         int  priority_ = 5;
     };
@@ -246,6 +256,40 @@ public:
      * thread (it would deadlock waiting on itself).
      */
     void retireObject(IRevalidatable* object);
+
+    /**
+     * Proposal 21 L0 / design §5 — retire every in-flight GRAPH NODE of the
+     * given components, because they are about to be rendered by something
+     * else (the live lane takes ownership of a track's processors) or to
+     * disappear.
+     *
+     * Semantics, exactly:
+     *  - a node of one of these components that is QUEUED or WAITING is
+     *    DROPPED: it never executes, its demands complete as "not produced"
+     *    (GraphDemand::notProduced(); a consumer treats that like a miss —
+     *    stale page or silence, never a wait), and its dependents lose the
+     *    edge, so a node of ANOTHER component that was waiting on it becomes
+     *    runnable and renders with that input unbound, i.e. sees a miss;
+     *  - a node that is RUNNING is WAITED FOR — bounded by one page render;
+     *    it publishes its page normally, because it already exists;
+     *  - the dedup entries go, so a LATER demand for the same position plans
+     *    FRESH (expandNode_ calls planPage again) rather than adopting the
+     *    node that was just retired;
+     *  - nodes of every other component are untouched: their queue positions,
+     *    dependency counters and demands are exactly as they were.
+     *
+     * Why not pause(): pause() drains ALL in-flight work including import-time
+     * analysis jobs (tens of seconds) and stops the graph everywhere, which
+     * hangs the UI for a change that concerns two components.
+     *
+     * Callable from the main thread; NOT from a worker (it waits on them).
+     * `comps` is a borrowed, non-owning view: the pointers are compared, never
+     * dereferenced. std::span would be the natural parameter and this repo is
+     * C++17, so the view is spelled as a pointer + count with a vector
+     * convenience overload.
+     */
+    void retireComponentNodes(const twComponent *const *comps, size_t count);
+    void retireComponentNodes(const std::vector<const twComponent *> &comps);
 
     /**
      * RAII guard: pause() on construction (drains in-flight jobs), resume() on
@@ -338,7 +382,12 @@ private:
         // it reaches Done — the queueLock_ in completeGraphNode() is the
         // happens-before, exactly as for `result`.
         uint64_t observedEpoch = 0;
-        enum State { Waiting, Ready, Running, Done } state = Waiting;
+        // Dropped: retireComponentNodes() took this node out. It is erased
+        // from graphNodes_ and from graphReady_, but other nodes may still
+        // hold it in their deps/dependents vectors, so the state is what makes
+        // it inert — completeGraphNode() only promotes a dependent that is
+        // still Waiting, and processGraphNode() refuses to run a Dropped node.
+        enum State { Waiting, Ready, Running, Done, Dropped } state = Waiting;
         std::shared_ptr<twOutputPage> result;
         twPagePlan plan;
         std::vector<std::shared_ptr<PageNode>> deps;      // owning (binding)
