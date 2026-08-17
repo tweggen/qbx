@@ -11,6 +11,7 @@
 #include "tw/plugins/twpluginsearchpaths.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/devices/audio_backend.h"
+#include "tw/devices/keyboard_midi.h"
 #include "tw/playback/twspeaker.h"
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/dsp/twwhitenoise.h"
@@ -21,6 +22,7 @@
 #include "app/shell/sapplication.h"
 #include "app/model/sproject.h"
 #include "app/shell/ssettings.h"
+#include "app/shell/smidiinputhub.h"
 #include "app/shell/smidioutpump.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/sautomationrecorder.h"
@@ -558,6 +560,12 @@ SApplication::SApplication( int &argc, char **argv )
     // The live lane (proposal 21 L1b). A sibling of the MIDI-out pump in every
     // respect that matters: constructed with the app, destroyed FIRST, and the
     // owner of a std::thread whose join must happen on the main thread.
+    // The MIDI input ports (proposal 21 L2), BEFORE the live monitor that
+    // acquires sinks from them and before any project can arm a track. Its own
+    // enumeration probe must also be constructed before any listening port, so
+    // that a headless case's `midi-in-event` reaches the port the live lane
+    // drains rather than the probe (see SMidiInputHub's constructor).
+    midiInputHub_.reset( new SMidiInputHub() );
     liveMonitor_.reset( new SLiveMonitor( this ) );
     automationRecorder_.reset( new SAutomationRecorder( this ) );
     selectionList_ = new SSelectionList();
@@ -606,6 +614,9 @@ SApplication::~SApplication()
     // the input device, and both of those must happen before the speaker it
     // hands audio to is destroyed.
     liveMonitor_.reset();
+    // AFTER the live monitor: it holds fan-out sinks and a thru route into a
+    // scheduler, and both belong to ports this owns.
+    midiInputHub_.reset();
     midiOutPump_.reset();
     automationRecorder_.reset();
     DTOR_DEL( actionHistory_ );
@@ -768,6 +779,18 @@ void SApplication::startRender(const audio::RenderParams &params)
 void SApplication::resumeLiveAfterRender()
 {
     if( liveMonitor_ ) liveMonitor_->resumeAfterRender();
+}
+
+void SApplication::keyboardNoteOn( int key, int velocity, int channel )
+{
+    if( audio::KeyboardMidiInput *kb = audio::KeyboardMidiInput::active() )
+        kb->noteOn( key, velocity, channel );
+}
+
+void SApplication::keyboardNoteOff( int key, int channel )
+{
+    if( audio::KeyboardMidiInput *kb = audio::KeyboardMidiInput::active() )
+        kb->noteOff( key, channel );
 }
 
 void SApplication::liveLanesChanged()

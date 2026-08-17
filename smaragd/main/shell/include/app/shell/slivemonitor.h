@@ -11,6 +11,11 @@
 
 #include "app/shell/sliveplanbuilder.h"
 #include "tw/core/twtypes.h"
+// The fan-out's Sink is a NESTED type, so it cannot be forward-declared; and
+// the live event source is held by shared_ptr and destroyed here. Both are
+// tw/devices, which app/shell already depends on.
+#include "tw/devices/midi_in_fanout.h"
+#include "tw/devices/twliveeventsource.h"
 
 class QTimer;
 class SApplication;
@@ -23,6 +28,11 @@ class AudioInput;
 }
 
 class SLiveAudioInputSource;
+class twLiveEventClock;
+
+namespace audio {
+class MidiOutScheduler;
+}
 
 /**
  * SLiveMonitor - the APP half of the live lane (proposal 21 L1b, design
@@ -144,6 +154,19 @@ private slots:
     void pumpEdits();
 
 private:
+    // One live event source per CONSUMING track (proposal 21 L2). Keyed by the
+    // consumer rather than by the armed track because that is what the
+    // processor hangs off: two armed children bubbling into one folder
+    // instrument share ONE source and therefore one ring, which is also the
+    // only shape an SPSC ring allows.
+    struct MidiLive {
+        SLiveMidiFeed                              feed;
+        audio::MidiInFanout                       *fanout = nullptr;
+        audio::MidiInFanout::Sink                 *sink   = nullptr;
+        std::shared_ptr<audio::twLiveEventSource>  source;
+        audio::MidiOutScheduler                   *thru   = nullptr;
+    };
+
     SStdMixer *rootMixer() const;
     void applyExclusion( const SLiveClosure &affected );  // flags -> wiring
     void publishPlan( const SLiveClosure &closure, std::uint64_t flipEpoch,
@@ -153,6 +176,30 @@ private:
     void setClosureOwned( const SLiveClosure &closure, bool owned );
     bool ensureInput( STrack *track );
     void closeInputIfUnused();
+
+    // --- live INSTRUMENTS (proposal 21 L2, design D2/D4/D8) ----------------
+    //
+    // THE ORDER IS THE PROTOCOL, and it is the mirror image of the audio one:
+    //
+    //   arm     retire -> setLiveOwned(true) -> attachLiveEvents(...)
+    //           -> wire the exclusion -> read the epoch -> publish
+    //   disarm  detachLiveEvents(...)  [all-notes-off + setLiveEventSource(0)]
+    //           -> setLiveOwned(false) (which forgets continuity)
+    //           -> un-wire -> read the epoch' -> publish the tail
+    //
+    // `setLiveEventSource` is deliberately NOT a `setEventSource` swap and NOT
+    // a member of `STrack::eventFeed()` (design D2): the feed is re-applied by
+    // `STrack::syncInstrumentSlot()` from adopt / insert / remove and would
+    // silently overwrite a live source, and it is ALSO read by SMidiOutPump and
+    // `assert-midi-events`, while a ring-draining collect has exactly one legal
+    // reader.
+    void attachLiveEvents( const SLiveClosure &closure );
+    void detachLiveEvents( const SLiveClosure &leaving );
+    void releaseLiveEntry( MidiLive &m );
+    /// Ask every live source to re-attack what the performer is holding. Runs
+    /// wherever the pump is asked to reposition - a reposition resets the
+    /// instrument's voices, and a held key must survive it (design D4).
+    void requestLiveChase();
     void ensurePump();
     void stopPump();
     /**
@@ -181,6 +228,11 @@ private:
     QString                              inputDeviceId_;
     std::vector<std::shared_ptr<SLiveAudioInputSource> > sources_;
     std::unique_ptr<LiveGraphPump>       pump_;
+
+    std::vector<MidiLive>                midiLive_;
+    // The host-time -> project-frame mapping the live sources share. One per
+    // monitor: it reads the ENGINE clock, which there is exactly one of.
+    std::shared_ptr<twLiveEventClock>    eventClock_;
 
     QTimer *disarmTimer_ = nullptr;
     QTimer *demandTimer_ = nullptr;

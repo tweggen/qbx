@@ -26,6 +26,7 @@ class SProject;
 class SActionHistory;
 class SAction;
 class SMidiOutPump;
+class SMidiInputHub;
 class SAutomationRecorder;
 class SLiveMonitor;
 class QTimer;
@@ -196,6 +197,17 @@ public:
     // The live lane (proposal 21 L1b). Never null after construction; the
     // arm/disarm ordering, the pump and the input device all live in there.
     SLiveMonitor *liveMonitor() const { return liveMonitor_.get(); }
+    // The app's MIDI INPUT ports (proposal 21 L2). Never null after
+    // construction. Owned here rather than by SLiveMonitor because the MIDI
+    // recorder (L4) is a second consumer of the same ports, and neither of
+    // them may own the other's device.
+    SMidiInputHub *midiInputHub() const { return midiInputHub_.get(); }
+    // The computer keyboard as a real MIDI port (design D9). The piano-roll
+    // dock reaches it through here: `app/eventui` may not include tw/devices,
+    // and routing the two calls through the shell is the same arrangement the
+    // arranger's zoom uses.
+    void keyboardNoteOn( int key, int velocity, int channel = 0 );
+    void keyboardNoteOff( int key, int channel = 0 );
     // SAppContext: a track was armed / disarmed, or its input or monitor mode
     // moved. One plan rebuild, here, on the main thread.
     void liveLanesChanged() override;
@@ -330,6 +342,7 @@ private:
     twLevelProbe masterProbe_;        // reads the mixer root's frozen pages
     std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 37 P7b
     std::unique_ptr<SLiveMonitor> liveMonitor_;   // proposal 21 L1b
+    std::unique_ptr<SMidiInputHub> midiInputHub_; // proposal 21 L2
     std::unique_ptr<SAutomationRecorder> automationRecorder_;  // proposal 37 P6
     bool isPlaying_;
     SProject *currentProject_;

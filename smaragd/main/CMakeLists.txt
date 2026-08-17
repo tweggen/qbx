@@ -295,6 +295,7 @@ set(APP_UI_FILES
     shell/include/app/shell/sliveinputsource.h
     shell/include/app/shell/slivemonitor.h
     shell/include/app/shell/sliveplanbuilder.h
+    shell/include/app/shell/smidiinputhub.h
     shell/include/app/shell/smidioutpump.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssettings.h
@@ -303,6 +304,7 @@ set(APP_UI_FILES
     shell/src/sliveinputsource.cpp
     shell/src/slivemonitor.cpp
     shell/src/sliveplanbuilder.cpp
+    shell/src/smidiinputhub.cpp
     shell/src/smidioutpump.cpp
     shell/src/smainwindow.cpp
     shell/src/ssettings.cpp

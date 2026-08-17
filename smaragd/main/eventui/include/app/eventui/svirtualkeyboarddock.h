@@ -48,17 +48,42 @@ public:
      */
     bool pressNote( int midiKey, double velocity, qint64 durationTicks );
 
+    /**
+     * PLAY the key (proposal 21 L2, design D9). A note-on / note-off pair on
+     * the computer keyboard's in-process MIDI PORT, which a live-armed
+     * instrument track hears exactly as it hears hardware.
+     *
+     * This is a different thing from `pressNote`, and both are wanted: a press
+     * SOUNDS the note now (this), and — while the transport is stopped and a
+     * clip is selected — also WRITES one at the locator (that). Step input at
+     * the locator is the stopped-transport behaviour design D9 keeps.
+     *
+     * They go through `SApplication`, not `tw/devices`: `app/eventui` may not
+     * include the device layer (tools/check_layering.py), and the shell already
+     * owns the port.
+     */
+    void holdNote( int midiKey, double velocity );
+    void releaseNote( int midiKey );
+    /// Release every key this dock is holding (focus lost, dock hidden, stop).
+    void releaseAll();
+
+    /// Which keys are sounding right now, for `describe()` and the highlight.
+    const QList<int> &heldKeys() const { return held_; }
+
     int  octave() const { return octave_; }
     void setOctave( int octave );
     double velocity() const;
 
-    /** Test face: `octave=4|velocity=100|keys=24|last=60`. */
+    /** Test face: `octave=4|velocity=100|keys=24|last=60|held=60,64`. */
     QString describe() const;
 
 protected:
     void paintEvent( QPaintEvent * ) override;
     void mousePressEvent( QMouseEvent * ) override;
     void keyPressEvent( QKeyEvent * ) override;
+    void keyReleaseEvent( QKeyEvent * ) override;
+    void mouseReleaseEvent( QMouseEvent * ) override;
+    void focusOutEvent( QFocusEvent * ) override;
 
 private:
     void buildUi();
@@ -73,6 +98,7 @@ private:
 
     int octave_  = 4;      // octave 4 => C4 = MIDI 60
     int lastKey_ = -1;     // for describe() and for the pressed-key highlight
+    QList<int> held_;      // keys currently sounding on the keyboard PORT
     /** Where the painted keyboard starts, under the little control row. */
     static constexpr int CONTROLS_H = 22;
     static constexpr int OCTAVES    = 2;

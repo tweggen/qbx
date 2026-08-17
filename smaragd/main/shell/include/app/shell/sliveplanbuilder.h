@@ -29,11 +29,39 @@ class STrack;
  * pump renders the vector front to back and a parent sums buffers its children
  * have already written. Emitting by DECREASING DEPTH gives that for free.
  */
+/**
+ * ONE armed MIDI track and the processor its notes actually reach (proposal 21
+ * L2, design D4 / section 3 case (iii)).
+ *
+ * `armed` is the track carrying `trackInput=midi:… | keyboard`; `consumer` is
+ * the track whose SLOT 0 is the instrument that will sound it — itself when it
+ * has one, otherwise the nearest ancestor it bubbles its events up to. The
+ * distinction is the whole of the folder-drum-machine case: the child is a MIDI
+ * SOURCE, the folder is the live INSTRUMENT, and it is the FOLDER that leaves
+ * the frozen sum.
+ */
+struct SLiveMidiFeed {
+    STrack *armed    = nullptr;
+    STrack *consumer = nullptr;
+    QString port;              // portable NAME; "keyboard" is one
+    int     channel  = -1;     // 0-based; -1 == any
+
+    bool operator==( const SLiveMidiFeed &o ) const
+    {
+        return armed == o.armed && consumer == o.consumer && port == o.port
+               && channel == o.channel;
+    }
+    bool operator!=( const SLiveMidiFeed &o ) const { return !( *this == o ); }
+};
+
 struct SLiveClosure {
     /// Every member, children before parents.
     std::vector<STrack *> ordered;
     /// The subset that has a live INPUT (the armed / monitoring tracks).
     std::vector<STrack *> sources;
+    /// The MIDI half of `sources` (proposal 21 L2). A feed's `consumer` is in
+    /// `sources`; its `armed` track may not be a member at all.
+    std::vector<SLiveMidiFeed> midiFeeds;
     /// The members that are direct children of the root mixer — the TOPMOST
     /// ones by construction, which is why the mixer's exclusion rule is simply
     /// "in the closure ⇒ null the plug".
@@ -55,16 +83,28 @@ namespace sliveplan {
  * project must not open the developer's microphone — while the flag itself
  * still round-trips through the file untouched.
  *
- * L1b consumes `audio:` inputs only. A `midi:` or `keyboard` input is a
- * perfectly legal spelling that nothing renders yet (L2), so such a track is
- * not a source and is not excluded from the frozen sum: silence would be a
- * worse answer than the arrangement.
+ * Since L2 both halves are live. An `audio:` track is a source in its own
+ * right; a `midi:`/`keyboard` track contributes its CONSUMER (design D4) —
+ * itself when it holds the instrument, its folder when it bubbles its events
+ * up to one. A MIDI track whose notes would reach no instrument at all is
+ * still not a source: excluding it would trade the arrangement for silence.
  */
 SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
                              const std::vector<const STrack *> &inertlyArmed );
 
 /// Does this track's `trackInput` name an audio device (the L1b half)?
 bool isAudioInput( const STrack *t );
+/// Does it name a MIDI port or the computer keyboard (the L2 half)?
+bool isMidiInput( const STrack *t );
+/**
+ * The track whose SLOT 0 will sound `t`'s live notes: `t` itself when it has an
+ * instrument, else the nearest ancestor it bubbles its events up to that has
+ * one. Null when nothing would sound them — and a track with no consumer is
+ * deliberately NOT a live source, because excluding it from the frozen sum
+ * would trade the arrangement for silence (design D3's "silence is the worse
+ * answer").
+ */
+STrack *midiConsumerFor( SObject *rootMixer, STrack *t );
 
 }  // namespace sliveplan
 

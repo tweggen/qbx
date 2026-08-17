@@ -1,5 +1,7 @@
 #include "app/eventui/svirtualkeyboarddock.h"
 
+#include <QStringList>
+
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -172,9 +174,44 @@ int SVirtualKeyboardDock::noteForKey( int qtKey ) const
 
 QString SVirtualKeyboardDock::describe() const
 {
-    return QStringLiteral( "octave=%1|velocity=%2|keys=%3|last=%4" )
+    QStringList heldStr;
+    for( int k : held_ ) heldStr << QString::number( k );
+    return QStringLiteral( "octave=%1|velocity=%2|keys=%3|last=%4|held=%5" )
         .arg( octave_ ).arg( (int) velocity() )
-        .arg( OCTAVES * 12 ).arg( lastKey_ );
+        .arg( OCTAVES * 12 ).arg( lastKey_ )
+        .arg( heldStr.join( QLatin1Char( ',' ) ) );
+}
+
+// ---------------------------------------------------------------------------
+// The PORT (proposal 21 L2, design D9): the keyboard as a MIDI input device
+// ---------------------------------------------------------------------------
+
+void SVirtualKeyboardDock::holdNote( int midiKey, double velocity )
+{
+    if( midiKey < 0 || midiKey > 127 ) return;
+    // Idempotent: a second hold of a sounding key is not a second voice, it is
+    // the auto-repeat this dock already refuses at the key handler.
+    if( held_.contains( midiKey ) ) return;
+    held_.append( midiKey );
+    lastKey_ = midiKey;
+    SApplication::app().keyboardNoteOn( midiKey, (int) velocity, 0 );
+    update();
+}
+
+void SVirtualKeyboardDock::releaseNote( int midiKey )
+{
+    if( !held_.removeOne( midiKey ) ) return;
+    SApplication::app().keyboardNoteOff( midiKey, 0 );
+    update();
+}
+
+void SVirtualKeyboardDock::releaseAll()
+{
+    // A copy, because releaseNote() edits the list it iterates. Losing focus
+    // with a key down must not leave a note sounding forever - the stuck-note
+    // failure a performer never forgives.
+    const QList<int> keys = held_;
+    for( int k : keys ) releaseNote( k );
 }
 
 // ---------------------------------------------------------------------------
@@ -302,8 +339,27 @@ void SVirtualKeyboardDock::mousePressEvent( QMouseEvent *ev )
 {
     setFocus( Qt::MouseFocusReason );
     const int note = noteAtPoint( ev->position().toPoint() );
-    if( note >= 0 ) pressNote( note, velocity(), 960 );
+    if( note >= 0 ) {
+        // SOUND it (the port) and WRITE it (the clip). Both, and in that order:
+        // the sound is what a live-armed instrument track hears, the write is
+        // the step input design D9 keeps for a stopped transport. pressNote()
+        // failing - no clip selected - must not stop the note from sounding.
+        holdNote( note, velocity() );
+        pressNote( note, velocity(), 960 );
+    }
     ev->accept();
+}
+
+void SVirtualKeyboardDock::mouseReleaseEvent( QMouseEvent *ev )
+{
+    releaseAll();
+    ev->accept();
+}
+
+void SVirtualKeyboardDock::focusOutEvent( QFocusEvent *ev )
+{
+    releaseAll();
+    QWidget::focusOutEvent( ev );
 }
 
 void SVirtualKeyboardDock::keyPressEvent( QKeyEvent *ev )
@@ -321,6 +377,18 @@ void SVirtualKeyboardDock::keyPressEvent( QKeyEvent *ev )
         ev->ignore();
         return;
     }
+    holdNote( note, velocity() );
     pressNote( note, velocity(), 960 );
+    ev->accept();
+}
+
+void SVirtualKeyboardDock::keyReleaseEvent( QKeyEvent *ev )
+{
+    // Auto-repeat delivers a RELEASE before every repeated press on X11, so a
+    // repeat must not be read as the finger coming off the key.
+    if( ev->isAutoRepeat() ) { ev->ignore(); return; }
+    const int note = noteForKey( ev->key() );
+    if( note < 0 ) { ev->ignore(); return; }
+    releaseNote( note );
     ev->accept();
 }

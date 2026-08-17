@@ -6,6 +6,7 @@
 #include "tw/devices/audio_backend.h"
 #include "tw/devices/audio_input.h"
 #include "tw/devices/midi_output.h"
+#include "app/shell/smidiinputhub.h"
 #include "app/shell/smidioutpump.h"
 #include "tw/core/twlog.h"
 
@@ -172,7 +173,12 @@ QWidget *SOptionsDialog::buildMidiPage()
     midiVirtualBtn_ = new QPushButton( "Create virtual port..." );
     box->addWidget( midiVirtualBtn_ );
 
-    box->addWidget( new QLabel( "Input ports (listened to from a later release):" ) );
+    // ACTIVE since proposal 21 L2: a selected port is OPENED, and a track
+    // whose `trackInput` names it hears what arrives on it. The list is the
+    // hub's, not the out-pump's probe, so the computer keyboard appears in it
+    // beside the hardware (design D9).
+    box->addWidget( new QLabel(
+        "Input ports (selected ports are opened for live play and recording):" ) );
     midiInputs_ = new QListWidget;
     midiInputs_->setSelectionMode( QAbstractItemView::MultiSelection );
     box->addWidget( midiInputs_, 1 );
@@ -218,13 +224,17 @@ void SOptionsDialog::loadMidiPage()
         midiOutputs_->addItem( "(no MIDI output ports on this machine)" );
 
     const QStringList wanted = SSettings::instance().midiInputPortIds();
-    const std::vector<audio::MidiPortInfo> ins = pump->inputPorts();
+    SMidiInputHub *hub = SApplication::app().midiInputHub();
+    const std::vector<audio::MidiPortInfo> ins =
+        hub ? hub->listPorts() : pump->inputPorts();
     for( const audio::MidiPortInfo &p : ins ) {
         QListWidgetItem *item =
             new QListWidgetItem( QString::fromStdString( p.name ), midiInputs_ );
         item->setData( Qt::UserRole, QString::fromStdString( p.id ) );
         if( wanted.contains( QString::fromStdString( p.id ) ) )
             item->setSelected( true );
+        if( hub && hub->isOpen( QString::fromStdString( p.id ) ) )
+            item->setToolTip( "Open." );
     }
     if( ins.empty() )
         midiInputs_->addItem( "(no MIDI input ports on this machine)" );
@@ -266,6 +276,15 @@ void SOptionsDialog::applyMidiPage()
         if( item->isSelected() && !id.isEmpty() ) selected << id;
     }
     s.setMidiInputPortIds( selected );
+
+    // OPEN what was selected (proposal 21 L2). Opening is idempotent and a
+    // port is kept for the process, so this is "make sure it is listening"
+    // rather than a toggle - and it is what makes the page ACTIVE instead of
+    // an informational list. Deselecting does NOT close: a track may be armed
+    // on that port right now, and the Options dialog is not where a monitoring
+    // session gets torn down.
+    if( SMidiInputHub *hub = SApplication::app().midiInputHub() )
+        for( const QString &id : selected ) hub->fanoutFor( id );
 }
 
 QString SOptionsDialog::describeMidiPage() const

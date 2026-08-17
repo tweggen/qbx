@@ -209,6 +209,20 @@ public:
     QString trackInputAudioDevice() const;
     /** The `audio:` channel mask of trackInput_; 0 when there is none. */
     unsigned trackInputChannelMask() const;
+    /**
+     * The portable MIDI PORT NAME of trackInput_ (proposal 21 L2), or a null
+     * string when the input is not a MIDI one.
+     *
+     * `keyboard` is spelled without a scheme and resolves to the computer
+     * keyboard's own port id, so the two MIDI spellings differ only in how the
+     * port is named - which is what makes the whole live-instrument path treat
+     * the keyboard exactly like hardware (design D9).
+     */
+    QString trackInputMidiPort() const;
+    /** The `midi:` channel, 0-BASED, or -1 for `any` / not a MIDI input. */
+    int trackInputMidiChannel() const;
+    /** Is this a `midi:` or `keyboard` input (the L2 half)? */
+    bool hasMidiTrackInput() const { return !trackInputMidiPort().isNull(); }
 
     // Off / On / Auto, design D9. AUTO is TAPE-MACHINE style (Cubase
     // "Tapemachine", REAPER "auto"): the input sounds while the transport is
