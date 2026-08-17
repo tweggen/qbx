@@ -1,4 +1,4 @@
-# Proposal 21 (DRAFT v3.2): Real-time data flows in the demand-driven dataflow
+# Proposal 21 (DRAFT v3.3): Real-time data flows in the demand-driven dataflow
 
 > **Status: DRAFT v3.2 (2026-08-17).** v3.2 applies the reviewer's verification
 > pass (§13.2: the processor holds TWO event sources — the feed and the live
@@ -528,3 +528,19 @@ time-stretch; ASIO itself (35); cross-device drift (L6); MPE live routing
 | N9 testkit in L1a's module list | added |
 | N10 no qxa case records audio today | `null` default breaks nothing — stated |
 | N11 monitoring "resumes" after a render | a fresh arm (plan rebuilt), never a resumed plan |
+
+### 13.3 Findings during execution (L1a review, 2026-08-17) — v3.3 amendments to D1/D2/D5
+
+Recorded here because the phase agents may not edit the design; the code and
+`tw303a/playback/CONTRACT.md` inv. 13-18 are the authority for the details.
+
+| # | Finding | Amendment |
+|---|---|---|
+| E1 | D1's "position-stamped entries … the RT sums an entry only when its `startPos` matches the frame being delivered" was implemented as **block equality**, but F6 already states that WASAPI's callback block is VARIABLE (`bufferFrames − padding`), so a fixed pump block can never align with the RT grid on real hardware; and a pump that fills the ring to depth against a 2-block drift tolerance repositions in a burst on every start. | The ring is a **position-stamped STREAM consumed by frame range**: the RT keeps a cursor into the head entry (`twLiveMixReader`), drops entries wholly behind its want position (counted), keeps entries in the future (silence for the gap, `notYet`, never popped), sums overlaps and pops only exhausted entries; the epoch gate is per entry, the crossfade carries across entries and callbacks. Without a root page (STOPPED) the stream is its own authority and is consumed **sequentially** — the entry in hand IS the want. Entries carry a **run id** the pump bumps on every reposition, so an abandoned timeline can never jam the ring. |
+| E2 | "lead = ring depth" left the pump filling the ring rather than pacing. | `twEnginePosition` gains **`nextFrame`** (the project frame the RT pulls next = the published position; `deliveredFrame` stays what is HEARD, for MIDI-out and metering). The pump keeps `[nextFrame, nextFrame + lead)` covered (default lead = 2 device blocks) and idles otherwise; it repositions when `nextPos < nextFrame`, when `nextPos > nextFrame + lead + block`, or on `LiveGraphPump::requestReposition()` — which the APP calls for D2's one explicit reposition per start/stop/seek/wrap. Ring depth ≥ ⌈lead/block⌉ + 2. |
+| E3 | The live lane's frames are project frames summed into device-rate buffers, which the design never scoped. | `twSpeaker::openLive()` **refuses a device whose rate is not the project rate** (`liveRateRefusals()`, one log naming both rates); the app surfaces it. Resolution path: a device-frame-stamped ring, or opening the device at the project rate (ASIO, proposal 35). Recorded as known debt in `playback/CONTRACT.md`. |
+
+Gates added for these: T1 (irregular RT grid, sample-exact stream), T2
+(threaded pump vs a variable-block RT, 500 blocks, 0 spurious repositions,
+occupancy = ⌈lead/block⌉+1), T3 (end to end through the real callback, both
+lanes summed, no holes), T4 (rate refusal, both branches).
