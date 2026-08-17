@@ -84,6 +84,14 @@ int STrack::serializeSelfAttributes( QTextStream &o )
         o << " midiOutChannel='" << midiOutChannel_ << "'";
     if( midiOutOffsetMs_ != 0 )
         o << " midiOutOffsetMs='" << midiOutOffsetMs_ << "'";
+    // Live input / monitoring (proposal 21 L1b), same non-default-only rule:
+    // a project written before this phase re-serializes byte-identically.
+    // `liveOwnedLane_` is NEVER written - it is this session's monitoring
+    // state, not a property of the project.
+    if( !trackInput_.isEmpty() )
+        o << " trackInput='" << trackInput_.toHtmlEscaped() << "'";
+    if( monitorMode_ != MonitorMode::Auto )
+        o << " monitorMode='" << monitorModeToString( monitorMode_ ) << "'";
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -127,6 +135,82 @@ void STrack::setMidiOutput( const QString &port, int channel, int offsetMs )
     // never bounded on the right, hence the open-ended range.
     if( hadOut != hasMidiOut() )
         invalidateRenderPathRange( 0, EVENT_DIRTY_END );
+}
+
+// --- live input / monitoring (proposal 21 L1b, design D9) -------------------
+
+void STrack::setTrackInput( const QString &spec )
+{
+    QString v = spec.trimmed();
+    if( v == QStringLiteral( "none" ) ) v.clear();
+    if( v == trackInput_ ) return;
+    trackInput_ = v;
+    // NOTHING is invalidated here. A live input changes what the LIVE LANE
+    // renders, never what a frozen page contains: the exclusion wiring (and
+    // the epoch bump that goes with it) is applied by SLivePlanBuilder when the
+    // lane actually arms, which is the only moment the frozen sum changes.
+    emit trackInputChanged();
+}
+
+QString STrack::trackInputAudioDevice() const
+{
+    if( !trackInput_.startsWith( QStringLiteral( "audio:" ) ) ) return QString();
+    // audio:<device>:<mask> - the device may itself be empty ("audio::3").
+    const QString rest = trackInput_.mid( 6 );
+    const int     colon = rest.lastIndexOf( QLatin1Char( ':' ) );
+    return ( colon < 0 ) ? rest : rest.left( colon );
+}
+
+unsigned STrack::trackInputChannelMask() const
+{
+    if( !trackInput_.startsWith( QStringLiteral( "audio:" ) ) ) return 0u;
+    const QString rest  = trackInput_.mid( 6 );
+    const int     colon = rest.lastIndexOf( QLatin1Char( ':' ) );
+    if( colon < 0 ) return 0u;
+    bool ok = false;
+    const unsigned mask = rest.mid( colon + 1 ).toUInt( &ok, 16 );
+    return ok ? mask : 0u;
+}
+
+STrack::MonitorMode STrack::monitorModeFromString( const QString &s, bool *ok )
+{
+    if( ok ) *ok = true;
+    if( s.compare( "on",   Qt::CaseInsensitive ) == 0 ) return MonitorMode::On;
+    if( s.compare( "off",  Qt::CaseInsensitive ) == 0 ) return MonitorMode::Off;
+    if( s.compare( "auto", Qt::CaseInsensitive ) == 0 ) return MonitorMode::Auto;
+    if( ok ) *ok = false;
+    return MonitorMode::Auto;
+}
+
+QString STrack::monitorModeToString( MonitorMode m )
+{
+    switch( m ) {
+    case MonitorMode::On:  return QStringLiteral( "on" );
+    case MonitorMode::Off: return QStringLiteral( "off" );
+    default:               return QStringLiteral( "auto" );
+    }
+}
+
+void STrack::setMonitorMode( MonitorMode m )
+{
+    if( m == monitorMode_ ) return;
+    monitorMode_ = m;
+    emit trackInputChanged();
+}
+
+bool STrack::monitorEffective( bool playing, bool recording ) const
+{
+    switch( monitorMode_ ) {
+    case MonitorMode::Off: return false;
+    case MonitorMode::On:  return true;
+    default: break;
+    }
+    // AUTO is the tape machine: the input is heard while the transport is
+    // STOPPED or while a record pass is running, and gives way to the track's
+    // own material on plain Play. That is Cubase "Tapemachine" / REAPER
+    // "auto", and it is what makes pressing Play an audition of what is on
+    // the timeline rather than a duet with the performer.
+    return recording || !playing;
 }
 
 void STrack::setMidiRouting( MidiRouting r )
@@ -959,6 +1043,16 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     setMidiOutput( element.attribute( "midiOutPort", "" ),
                    element.attribute( "midiOutChannel", "-1" ).toInt(),
                    element.attribute( "midiOutOffsetMs", "0" ).toInt() );
+
+    // Live input / monitoring (L1b). Absent = no input, monitor Auto, which is
+    // what every project written before proposal 21 means. ArmedForRecording
+    // is read by SObject above and is INERT on load: SLiveMonitor records the
+    // set of tracks that arrived armed and refuses to monitor them until the
+    // user arms them in this session (design D9, "never starts monitoring on
+    // load") - a loaded project must not open the developer's microphone.
+    setTrackInput( element.attribute( "trackInput", "" ) );
+    setMonitorMode( monitorModeFromString(
+        element.attribute( "monitorMode", "auto" ) ) );
     
     return 0;
 }
@@ -1164,7 +1258,13 @@ void STrack::applyChildTrackAudibility()
         if( !lk ) continue;
         STrack *child = dynamic_cast<STrack*>( &lk->getSObject() );
         if( !child ) continue;
-        const bool audible = ssolo::isLaneAudible( root, child, anySolo );
+        // The second, separate term (proposal 21 L1b, design D3): a NESTED
+        // member of the live closure is excluded from the frozen sum through
+        // its parent's twTrackMix, exactly the way an inaudible lane is - and
+        // for the same reason the mixer nulls a top-level member's plug. It is
+        // NOT a mute: the child keeps feeding events upward and keeps metering.
+        const bool audible = ssolo::isLaneAudible( root, child, anySolo )
+                             && !child->isLiveOwnedLane();
         {
             if( cpTrackMix_ ) {
                 twEditRange r = cpTrackMix_->setClipMuted( lk, !audible );

@@ -184,6 +184,72 @@ public:
     /** Does this track hand its events to its parent right now? */
     bool bubblesEventsUp() const;
 
+    // --- live input / monitoring (proposal 21 L1b, design D9) --------------
+    //
+    // ONE per-track input selector, spelled as a PORTABLE string exactly the
+    // way `midiOutPort` is a portable name: the machine-local half (a WASAPI
+    // endpoint id, a WinMM index) never enters the project file.
+    //
+    //     none                     the default; the track has no live input
+    //     audio:<device>:<mask>    an audio device, <mask> a hex channel mask
+    //                              ("3" = the first two channels); <device>
+    //                              empty = the app's selected input device
+    //     midi:<port>:<ch|any>     a MIDI port and channel (consumed in L2)
+    //     keyboard                 the computer keyboard port (L2)
+    //
+    // Kept as the raw string rather than a parsed struct because the model's
+    // job is to round-trip it: the live plan builder parses it once, on the
+    // main thread, and an unknown spelling must survive a save/load rather
+    // than be silently normalised away.
+    const QString &getTrackInput() const { return trackInput_; }
+    void setTrackInput( const QString &spec );
+    bool hasTrackInput() const
+    { return !trackInput_.isEmpty() && trackInput_ != QStringLiteral( "none" ); }
+    /** The `audio:` device id of trackInput_, or a null string. */
+    QString trackInputAudioDevice() const;
+    /** The `audio:` channel mask of trackInput_; 0 when there is none. */
+    unsigned trackInputChannelMask() const;
+
+    // Off / On / Auto, design D9. AUTO is TAPE-MACHINE style (Cubase
+    // "Tapemachine", REAPER "auto"): the input sounds while the transport is
+    // STOPPED or RECORDING and gives way to the track's own material on plain
+    // Play. ON always monitors; OFF never does. Serialized only when it is not
+    // the default.
+    enum class MonitorMode { Auto = 0, On = 1, Off = 2 };
+    MonitorMode getMonitorMode() const { return monitorMode_; }
+    void setMonitorMode( MonitorMode );
+    static MonitorMode monitorModeFromString( const QString &, bool *ok = nullptr );
+    static QString monitorModeToString( MonitorMode );
+    /**
+     * Should this track monitor its input right now?
+     *
+     * `playing` is the transport state and `recording` says a record pass is
+     * running; the two are separate because Auto follows the tape machine:
+     * input while STOPPED or RECORDING, playback on plain Play.
+     */
+    bool monitorEffective( bool playing, bool recording ) const;
+
+    // THE LIVE-OWNED PREDICATE (design D3). It is a WIRING predicate and
+    // NOTHING else: the mixer nulls the plug of a live-owned top-level track
+    // and a folder `setClipMuted`s a live-owned child, exactly the way solo
+    // does it — and it is deliberately kept OUT of `ssolo::isLaneAudible`,
+    // because folding it in there would drop a live child's EVENTS from a
+    // folder instrument's feed and darken its meters.
+    //
+    // Set by SLivePlanBuilder on every member of the live closure BEFORE the
+    // plan is published, cleared after the plan that drops it retires. Never
+    // serialized: it describes this session's monitoring, not the project.
+    bool isLiveOwnedLane() const { return liveOwnedLane_; }
+    void setLiveOwnedLane( bool owned ) { liveOwnedLane_ = owned; }
+
+    // The engine pieces the live plan needs, in render order. They are handed
+    // out as shared_ptr because the plan outlives any single call and the pump
+    // reads them from another thread; the plan holds no raw component pointer
+    // except the frozen-input roots it reads pages off.
+    const std::shared_ptr<twTrackMix>  &trackMixComponent() const { return cpTrackMix_; }
+    const std::shared_ptr<twGainStage> &gainStageComponent() const { return cpGainStage_; }
+    const std::shared_ptr<twPluginChain> &pluginChainComponent() const { return cpDspChain_; }
+
     // Adopt a plugin chain loaded from a project file (proposal 08 M4): drop the
     // empty one the constructor made, take over the loaded one, reconnect its
     // signals and rebuild the per-bus DSP chains from its slots. Called from the
@@ -284,6 +350,9 @@ signals:
     void nChannelsChanged( int n );
     // A lane at or below us changed its solo flag (see childTrackSoloChanged).
     void subtreeSoloChanged();
+    // trackInput / monitorMode changed (proposal 21 L1b). A plan-rebuild
+    // trigger, design §3: SLiveMonitor connects to it.
+    void trackInputChanged();
 
 protected:
     
@@ -345,6 +414,11 @@ private:
     // signed send offset in ms. Serialized only when non-default, so every
     // project written before proposal 37 re-serializes byte-identically.
     QString                         midiOutPort_;
+    // Live input / monitoring (proposal 21 L1b). trackInput_ is the portable
+    // selector string; liveOwnedLane_ is session state and is never written.
+    QString                         trackInput_;
+    MonitorMode                     monitorMode_ = MonitorMode::Auto;
+    bool                            liveOwnedLane_ = false;
     int                             midiOutChannel_ = -1;
     int                             midiOutOffsetMs_ = 0;
     
