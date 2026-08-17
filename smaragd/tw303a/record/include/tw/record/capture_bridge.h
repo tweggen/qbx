@@ -50,6 +50,21 @@ struct CaptureBridgeParams {
 
     std::vector<CaptureWavSink> wavSinks;
 
+    // Does this bridge CAPTURE (append to the pages and to the files) from the
+    // moment it starts? A bridge started purely to MONITOR says false: the
+    // pages are the record of a RECORDING, and a monitoring session that grew
+    // them would leak 370 KB/s of the user's RAM for audio nobody asked to
+    // keep. It then holds no source at all until beginCapture() (proposal 21
+    // L3b). Default true, which is the L3a shape and what record_bridge_test
+    // exercises.
+    bool capturePages = true;
+
+    // Does the bridge push into the LIVE-LANE ring? A recording with
+    // monitoring OFF has no pump popping it, so pushing would fill the ring
+    // once and then count a phantom `liveOverruns` for every frame of the take
+    // (proposal 21 L3b). Runtime-settable through setLiveEnabled().
+    bool liveEnabled = true;
+
     // --- test seams ------------------------------------------------------
     // An already-open, already-startable input the bridge does NOT own. When
     // set, inputBackend/inputDeviceId are ignored and the caller keeps the
@@ -138,9 +153,50 @@ public:
 
     bool isRunning() const { return running_.load( std::memory_order_acquire ); }
 
-    /// The pages. Outlives stop() — the recorded audio is still there to be
-    /// read, converted (toCapturingSource) or placed after the file is closed.
-    const std::shared_ptr<twGrowingCaptureSource> &source() const { return source_; }
+    /// The pages of the CURRENT (or most recent) capture segment. Outlives
+    /// stop() and endCapture() — the recorded audio is still there to be read,
+    /// converted (toCapturingSource) or placed after the file is closed. Null
+    /// when the bridge was started with `capturePages = false` and
+    /// beginCapture() has not been called.
+    ///
+    /// NOT safe to hold across a beginCapture(): take a copy of the
+    /// shared_ptr (that is what the app's recorder does) and the segment you
+    /// were given stays alive and readable whatever the bridge does next.
+    std::shared_ptr<twGrowingCaptureSource> source() const;
+
+    /// Begin a capture SEGMENT on a bridge that is already running: a FRESH
+    /// growing capture source, and fresh WAV writers. This is what makes
+    /// "one input pump, three sinks" (design D7) true across a record start
+    /// while monitoring — the device, its capture thread and its ring are
+    /// never touched, so the monitored signal does not gap.
+    /// Refuses when a segment is already open. Main thread.
+    bool beginCapture( const std::vector<CaptureWavSink> &sinks );
+
+    /// End the segment: stop appending, complete every file OUT OF THE PAGES
+    /// (invariant 3) and close the writers. BLOCKS for as long as the WAV
+    /// backlog takes to write. source() stays valid and readable afterwards.
+    /// Idempotent. Main thread.
+    void endCapture();
+
+    bool isCapturing() const
+    { return capturing_.load( std::memory_order_acquire ); }
+
+    /// The steady-clock host time (MidiOutScheduler::hostNowNs()) at which
+    /// frame 0 of the current segment was RECORDED — the pop time of the first
+    /// batch, minus that batch's own duration, because a device hands over
+    /// audio it has already captured. 0 before the first frame lands.
+    ///
+    /// This is the input side of design D6's anchor: the app maps it through
+    /// the engine clock to get P0, the project frame of capture frame 0.
+    std::int64_t captureStartHostNs() const
+    { return captureStartHostNs_.load( std::memory_order_acquire ); }
+
+    /// Turn the live-lane sink on or off while running (see
+    /// CaptureBridgeParams::liveEnabled).
+    void setLiveEnabled( bool on )
+    { liveEnabled_.store( on, std::memory_order_release ); }
+    bool liveEnabled() const
+    { return liveEnabled_.load( std::memory_order_acquire ); }
 
     /// Frames captured so far == the growing source's frontier.
     std::uint64_t frontier() const;
@@ -176,6 +232,9 @@ public:
 private:
     void bridgeThreadMain();
     void wavThreadMain();
+    /// Open the writers for `sinks` against `src`. Caller holds sinkM_.
+    bool openSinks_( const std::vector<CaptureWavSink> &sinks,
+                     const std::shared_ptr<twGrowingCaptureSource> &src );
     /// Write everything from wavCursor_ up to the frontier into every sink.
     /// Frames written after the capture has ENDED are counted in
     /// wavFinalized_ — same code path, because "the file is finalised from the
@@ -194,12 +253,22 @@ private:
 
     std::shared_ptr<twGrowingCaptureSource> source_;
     std::unique_ptr<AudioRing>              liveRing_;
-    std::vector<std::unique_ptr<WavSinkState> > sinks_;
+    std::vector<std::unique_ptr<WavSinkState> > sinks_;   // under sinkM_
+    std::function<std::unique_ptr<AudioFileWriter>()> writerFactory_;
 
     std::thread bridgeThread_;
     std::thread wavThread_;
 
-    std::mutex              m_;
+    // TWO mutexes, and the order is always sinkM_ BEFORE m_ — never the
+    // reverse. `m_` is the short one the BRIDGE thread takes (its snapshot of
+    // the segment, its append, its condition-variable wait); `sinkM_` is the
+    // long one the WAV thread holds across a whole drain, so a control-plane
+    // call that must not interleave with a write (beginCapture/endCapture)
+    // takes it first and then m_. Putting the drain under `m_` instead would
+    // let a large backlog block the bridge thread for the length of a file
+    // write, which is exactly what invariant 2 forbids.
+    mutable std::mutex      m_;
+    std::mutex              sinkM_;
     std::condition_variable bridgeCv_;
     std::condition_variable wavCv_;
 
@@ -209,14 +278,24 @@ private:
     // final and everything the WAV thread still writes comes out of the pages.
     std::atomic<bool> captureEnded_{ false };
     std::atomic<bool> wavStop_{ false };
+    // Is a capture SEGMENT open? Read by the bridge thread under m_, so
+    // clearing it under m_ is a hard fence: no append can follow.
+    std::atomic<bool> capturing_{ false };
+    std::atomic<bool> liveEnabled_{ true };
+    std::atomic<std::int64_t> captureStartHostNs_{ 0 };
 
     std::uint32_t inputChannels_ = 0;
     std::uint32_t inputRate_ = 0;
     std::uint32_t targetRate_ = 0;
     std::uint32_t inputLatencyFrames_ = 0;
     std::size_t   blockFrames_ = 1024;
+    std::size_t   chunkFrames_ = 0;
 
-    std::uint64_t wavCursor_ = 0;          // WAV thread only
+    // WAV thread only, except under sinkM_ where a segment change resets it.
+    std::uint64_t wavCursor_ = 0;
+    // Frames appended to the CURRENT segment; 0 marks "the next append is
+    // frame 0", which is when captureStartHostNs_ is stamped.
+    std::uint64_t segFrames_ = 0;          // bridge thread, under m_
 
     std::atomic<std::uint64_t> framesIn_{ 0 };
     std::atomic<std::uint64_t> framesToPages_{ 0 };

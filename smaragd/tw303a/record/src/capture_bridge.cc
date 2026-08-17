@@ -4,6 +4,7 @@
 #include "tw/devices/audio_input.h"
 #include "tw/devices/audio_ring.h"
 #include "tw/sinks/audio_file_writer.h"
+#include "tw/devices/midi_out_scheduler.h"
 #include "tw/sources/twgrowingcapturesource.h"
 
 #include "linear_resampler.h"
@@ -55,9 +56,16 @@ CaptureBridge::~CaptureBridge()
     stop();
 }
 
+std::shared_ptr<twGrowingCaptureSource> CaptureBridge::source() const
+{
+    std::lock_guard<std::mutex> lk( m_ );
+    return source_;
+}
+
 std::uint64_t CaptureBridge::frontier() const
 {
-    return source_ ? source_->frontier() : 0;
+    const std::shared_ptr<twGrowingCaptureSource> src = source();
+    return src ? src->frontier() : 0;
 }
 
 bool CaptureBridge::start( const CaptureBridgeParams &params )
@@ -87,6 +95,8 @@ bool CaptureBridge::start( const CaptureBridgeParams &params )
         }
     }
 
+    writerFactory_ = params.writerFactory;
+
     const AudioInputConfig &cfg = input_->getConfig();
     inputRate_          = cfg.sampleRate;
     inputChannels_      = cfg.channels ? cfg.channels : 1;
@@ -100,11 +110,19 @@ bool CaptureBridge::start( const CaptureBridgeParams &params )
                 (unsigned) inputLatencyFrames_ );
 
     // --- the pages -------------------------------------------------------
-    const std::size_t chunk = params.chunkFrames
-                                  ? params.chunkFrames
-                                  : twGrowingCaptureSource::kDefaultChunkFrames;
-    source_ = std::make_shared<twGrowingCaptureSource>(
-        (idx_t) inputChannels_, (int) targetRate_, chunk );
+    // Only when this bridge is capturing from the start. A MONITOR-only bridge
+    // holds no source until beginCapture() (proposal 21 L3b).
+    chunkFrames_ = params.chunkFrames
+                       ? params.chunkFrames
+                       : twGrowingCaptureSource::kDefaultChunkFrames;
+    liveEnabled_.store( params.liveEnabled, std::memory_order_release );
+    capturing_.store( params.capturePages, std::memory_order_release );
+    captureStartHostNs_.store( 0, std::memory_order_release );
+    segFrames_ = 0;
+    source_.reset();
+    if( params.capturePages )
+        source_ = std::make_shared<twGrowingCaptureSource>(
+            (idx_t) inputChannels_, (int) targetRate_, chunkFrames_ );
 
     // --- the live-lane ring ---------------------------------------------
     liveRing_ = std::unique_ptr<AudioRing>( new AudioRing() );
@@ -113,15 +131,16 @@ bool CaptureBridge::start( const CaptureBridgeParams &params )
     liveScratch_.assign( (std::size_t) 8192 * inputChannels_, 0.0f );
 
     // --- the files -------------------------------------------------------
-    for( const CaptureWavSink &spec : params.wavSinks ) {
-        auto st = std::unique_ptr<WavSinkState>( new WavSinkState() );
-        st->path        = spec.path;
-        st->channelMask = spec.channelMask;
-        st->outChannels = source_->maskedChannels( spec.channelMask );
-        st->writer      = params.writerFactory ? params.writerFactory()
-                                               : createAudioFileWriter( AudioFormat::WAV );
-        if( !st->writer ) {
-            lastError_ = "Failed to create WAV writer";
+    if( !params.wavSinks.empty() ) {
+        if( !source_ ) {
+            lastError_ = "WAV sinks without capturePages";
+            liveRing_.reset();
+            if( ownedInput_ ) { ownedInput_->closeDevice(); ownedInput_.reset(); }
+            input_ = nullptr;
+            return false;
+        }
+        std::lock_guard<std::mutex> lk( sinkM_ );
+        if( !openSinks_( params.wavSinks, source_ ) ) {
             closeWriters();
             sinks_.clear();
             source_.reset();
@@ -130,23 +149,6 @@ bool CaptureBridge::start( const CaptureBridgeParams &params )
             input_ = nullptr;
             return false;
         }
-        AudioFileConfig fc;
-        fc.sampleRate = targetRate_;
-        fc.channels   = st->outChannels;
-        fc.sampleType = cfg.sampleType;
-        if( !st->writer->open( st->path, fc ) ) {
-            lastError_ = std::string( "Failed to open WAV file: " ) + st->writer->errorMessage();
-            st->writer.reset();
-            closeWriters();
-            sinks_.clear();
-            source_.reset();
-            liveRing_.reset();
-            if( ownedInput_ ) { ownedInput_->closeDevice(); ownedInput_.reset(); }
-            input_ = nullptr;
-            return false;
-        }
-        st->scratch.assign( kWavChunkFrames * st->outChannels, 0.0f );
-        sinks_.push_back( std::move( st ) );
     }
 
     // --- go --------------------------------------------------------------
@@ -199,7 +201,12 @@ void CaptureBridge::stop()
     wavCv_.notify_all();
     if( wavThread_.joinable() ) wavThread_.join();
 
-    closeWriters();
+    {
+        std::lock_guard<std::mutex> sl( sinkM_ );
+        closeWriters();
+        sinks_.clear();
+    }
+    capturing_.store( false, std::memory_order_release );
 
     const CaptureBridgeStats s = stats();      // latches the input's counters
 
@@ -215,6 +222,102 @@ void CaptureBridge::stop()
                 (unsigned long long) s.framesToLive, (unsigned long long) s.framesToWav,
                 (unsigned long long) s.wavFinalized, (unsigned long long) s.wavLate,
                 (unsigned long long) s.ringOverruns, (unsigned long long) s.pageDrops );
+}
+
+bool CaptureBridge::openSinks_( const std::vector<CaptureWavSink> &sinks,
+                                const std::shared_ptr<twGrowingCaptureSource> &src )
+{
+    // Caller holds sinkM_.
+    AudioFileConfig base;
+    base.sampleRate = targetRate_;
+    base.sampleType = input_ ? input_->getConfig().sampleType : twSampleType::Float32;
+
+    for( const CaptureWavSink &spec : sinks ) {
+        auto st = std::unique_ptr<WavSinkState>( new WavSinkState() );
+        st->path        = spec.path;
+        st->channelMask = spec.channelMask;
+        st->outChannels = src->maskedChannels( spec.channelMask );
+        st->writer      = writerFactory_ ? writerFactory_()
+                                         : createAudioFileWriter( AudioFormat::WAV );
+        if( !st->writer ) {
+            lastError_ = "Failed to create WAV writer";
+            return false;
+        }
+        AudioFileConfig fc = base;
+        fc.channels = st->outChannels;
+        if( !st->writer->open( st->path, fc ) ) {
+            lastError_ = std::string( "Failed to open WAV file: " )
+                       + st->writer->errorMessage();
+            st->writer.reset();
+            return false;
+        }
+        st->scratch.assign( kWavChunkFrames * st->outChannels, 0.0f );
+        sinks_.push_back( std::move( st ) );
+    }
+    return true;
+}
+
+bool CaptureBridge::beginCapture( const std::vector<CaptureWavSink> &sinks )
+{
+    if( !running_.load( std::memory_order_acquire ) ) {
+        lastError_ = "beginCapture on a bridge that is not running";
+        return false;
+    }
+    if( capturing_.load( std::memory_order_acquire ) ) {
+        lastError_ = "beginCapture while a segment is already open";
+        return false;
+    }
+    // sinkM_ first, then m_ (see the header: the order is never the reverse).
+    std::lock_guard<std::mutex> sl( sinkM_ );
+    closeWriters();
+    sinks_.clear();
+
+    std::shared_ptr<twGrowingCaptureSource> src =
+        std::make_shared<twGrowingCaptureSource>(
+            (idx_t) inputChannels_, (int) targetRate_,
+            chunkFrames_ ? chunkFrames_
+                         : twGrowingCaptureSource::kDefaultChunkFrames );
+
+    if( !openSinks_( sinks, src ) ) {
+        closeWriters();
+        sinks_.clear();
+        return false;
+    }
+    wavCursor_ = 0;
+    {
+        std::lock_guard<std::mutex> lk( m_ );
+        source_    = src;
+        segFrames_ = 0;
+        captureStartHostNs_.store( 0, std::memory_order_release );
+        capturing_.store( true, std::memory_order_release );
+    }
+    BRIDGE_LOG( "segment opened, %u file(s)", (unsigned) sinks.size() );
+    return true;
+}
+
+void CaptureBridge::endCapture()
+{
+    if( !capturing_.load( std::memory_order_acquire ) ) return;
+
+    std::lock_guard<std::mutex> sl( sinkM_ );
+    {
+        // Under m_, so the bridge thread cannot be mid-append: after this the
+        // frontier is final for this segment (invariant 3's precondition, made
+        // local to a segment).
+        std::lock_guard<std::mutex> lk( m_ );
+        capturing_.store( false, std::memory_order_release );
+    }
+    // The ordinary drain, made from this thread — there is no second write
+    // path that could disagree with the first (invariant 3).
+    const std::uint64_t before = framesToWav_.load( std::memory_order_relaxed );
+    drainToWriters();
+    wavFinalized_.fetch_add(
+        framesToWav_.load( std::memory_order_relaxed ) - before,
+        std::memory_order_relaxed );
+    closeWriters();
+    sinks_.clear();
+    BRIDGE_LOG( "segment closed at frontier %llu",
+                (unsigned long long) frontier() );
 }
 
 void CaptureBridge::closeWriters()
@@ -278,16 +381,45 @@ void CaptureBridge::bridgeThreadMain()
         // SINK 1 — the live lane. First, because it is the only sink with a
         // latency budget; a dropped frame here is a monitoring glitch and a
         // counter, never a loss of the recording (which is sink 2's job).
-        const std::size_t pushed = liveRing_->push( data, frames );
-        framesToLive_.fetch_add( pushed, std::memory_order_relaxed );
-        if( pushed < frames )
-            liveOverruns_.fetch_add( frames - pushed, std::memory_order_relaxed );
+        // Skipped entirely when nothing is popping the ring: a recording with
+        // monitoring off would otherwise fill it once and then count every
+        // frame of the take as an overrun (proposal 21 L3b).
+        if( liveEnabled_.load( std::memory_order_acquire ) ) {
+            const std::size_t pushed = liveRing_->push( data, frames );
+            framesToLive_.fetch_add( pushed, std::memory_order_relaxed );
+            if( pushed < frames )
+                liveOverruns_.fetch_add( frames - pushed,
+                                         std::memory_order_relaxed );
+        }
 
-        // SINK 2 — the pages. THE record of what was captured.
-        const std::size_t appended = source_->append( data, frames );
+        // SINK 2 — the pages. THE record of what was captured. Under m_, and
+        // only while a SEGMENT is open: that is what makes endCapture()'s
+        // `capturing_ = false` a fence rather than a hint, and what keeps a
+        // monitor-only bridge from growing pages nobody asked to keep.
+        std::uint64_t frontierNow = 0;
+        std::size_t   appended    = 0;
+        {
+            std::lock_guard<std::mutex> lk( m_ );
+            if( capturing_.load( std::memory_order_relaxed ) && source_ ) {
+                if( segFrames_ == 0 ) {
+                    // THE INPUT ANCHOR (design D6). The batch was POPPED now,
+                    // but a device hands over audio it has already recorded,
+                    // so its first frame was captured one batch duration ago.
+                    const std::int64_t rate =
+                        targetRate_ ? (std::int64_t) targetRate_ : 48000;
+                    captureStartHostNs_.store(
+                        MidiOutScheduler::hostNowNs()
+                            - (std::int64_t) frames * 1000000000LL / rate,
+                        std::memory_order_release );
+                }
+                appended = source_->append( data, frames );
+                segFrames_ += appended;
+                frontierNow = source_->frontier();
+            }
+        }
         framesToPages_.fetch_add( appended, std::memory_order_relaxed );
 
-        if( onFrames ) onFrames( source_->frontier(), appended );
+        if( appended && onFrames ) onFrames( frontierNow, appended );
 
         // SINK 3 is not here on purpose: the WAV thread reads the pages by
         // position, so a slow file cannot reach back and stall this loop.
@@ -302,15 +434,20 @@ void CaptureBridge::bridgeThreadMain()
 
 void CaptureBridge::wavThreadMain()
 {
-    if( sinks_.empty() ) return;
-
+    // NOTE it runs even with no sinks: beginCapture() may install some later
+    // (proposal 21 L3b), and drainToWriters() over an empty sink list is a
+    // frontier read and a return.
     const auto wait = idleWait( blockFrames_, inputRate_ );
     for( ;; ) {
-        drainToWriters();
+        {
+            std::lock_guard<std::mutex> sl( sinkM_ );
+            drainToWriters();
+        }
 
         if( wavStop_.load( std::memory_order_acquire ) ) {
             // The bridge thread has exited, so the frontier is final: complete
             // every file OUT OF THE PAGES, however far behind it had fallen.
+            std::lock_guard<std::mutex> sl( sinkM_ );
             finalizeFromPages();
             break;
         }
@@ -322,8 +459,19 @@ void CaptureBridge::wavThreadMain()
 
 void CaptureBridge::drainToWriters()
 {
+    // The segment in hand. Taken ONCE per drain: beginCapture() cannot swap it
+    // underneath because it holds sinkM_ for the whole call, and this runs
+    // either on the WAV thread (which holds sinkM_) or from endCapture()
+    // (which holds it too).
+    std::shared_ptr<twGrowingCaptureSource> src;
+    {
+        std::lock_guard<std::mutex> lk( m_ );
+        src = source_;
+    }
+    if( !src || sinks_.empty() ) return;
+
     for( ;; ) {
-        const std::uint64_t fr = source_->frontier();
+        const std::uint64_t fr = src->frontier();
         if( fr <= wavCursor_ ) return;   // caught up
 
         const std::uint64_t backlog = fr - wavCursor_;
@@ -337,7 +485,7 @@ void CaptureBridge::drainToWriters()
 
         for( auto &st : sinks_ ) {
             if( !st->ok || !st->writer ) continue;
-            source_->readInterleaved( wavCursor_, st->scratch.data(), n,
+            src->readInterleaved( wavCursor_, st->scratch.data(), n,
                                       st->channelMask );
             if( !st->writer->write( st->scratch.data(), n ) ) {
                 st->ok = false;
@@ -396,7 +544,10 @@ CaptureBridgeStats CaptureBridge::stats() const
     s.liveOverruns  = liveOverruns_.load( std::memory_order_relaxed );
     s.bridgeWakeups = bridgeWakeups_.load( std::memory_order_relaxed );
     s.wavWakeups    = wavWakeups_.load( std::memory_order_relaxed );
-    s.pageDrops     = source_ ? source_->droppedFrames() : 0;
+    {
+        std::lock_guard<std::mutex> lk( m_ );
+        s.pageDrops = source_ ? source_->droppedFrames() : 0;
+    }
     // The input's own counters are LATCHED, because stop() closes the device
     // and drops the pointer — and "ringOverruns == 0" is exactly the claim a
     // test makes AFTER the run, when there is no device left to ask.

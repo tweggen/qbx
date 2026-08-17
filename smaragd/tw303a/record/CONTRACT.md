@@ -80,12 +80,44 @@ Invariants:
    a device block period (1–10 ms, block-paced) and the session thread waits
    until stop is requested, waking on a 100 ms timeout only to emit progress.
 
-9. **`channelMask` is per SINK, not per capture.** One capture feeds several
+9. **A CAPTURE SEGMENT is what the pages and the files belong to** (proposal
+   21 L3b). A bridge started with `capturePages = false` is a MONITOR-only
+   pump: it feeds the live ring and holds no growing source at all, because
+   the pages are the record of a RECORDING and growing them for a monitoring
+   session would leak ~370 KB/s of the user's RAM for audio nobody asked to
+   keep. `beginCapture(sinks)` then opens a segment ON A RUNNING BRIDGE — a
+   fresh growing source, fresh writers, and the device, its capture thread and
+   its ring untouched, which is what makes a record start while monitoring not
+   gap the monitored signal. `endCapture()` closes it: it clears `capturing_`
+   under `m_` (so no append can follow — a fence, not a hint), makes the
+   ORDINARY drain from the calling thread, and closes the writers. `source()`
+   stays valid and readable afterwards.
+
+9a. **TWO MUTEXES, AND THE ORDER IS ALWAYS `sinkM_` BEFORE `m_`.** `m_` is the
+   short one the BRIDGE thread takes (its segment snapshot, its append, its
+   CV wait); `sinkM_` is the long one the WAV thread holds across a whole
+   drain, so a control-plane call that must not interleave with a write takes
+   it first and then `m_`. Putting the drain under `m_` instead would let a
+   large backlog block the bridge thread for the length of a file write, which
+   is what invariant 2 forbids.
+
+9b. **`liveEnabled` gates the live-ring push.** A recording with monitoring OFF
+   has nothing popping the ring; leaving the push on would fill it once and
+   then count EVERY frame of the take as a `liveOverruns` — a phantom counter
+   on a perfectly healthy take.
+
+9c. **`captureStartHostNs()` is the input half of the placement anchor** (design
+   D6). It is the pop time of the segment's first batch MINUS that batch's own
+   duration, because a device hands over audio it has already recorded. The app
+   maps it through the engine clock to get `P0`; nothing here knows what a
+   project frame is.
+
+10. **`channelMask` is per SINK, not per capture.** One capture feeds several
    armed tracks of different widths (`readInterleaved` applies the mask on the
    way out), so a second copy of the audio is never made. Mask 0 == every
    channel.
 
-10. The session's playhead publication is unchanged: `startLocatorFrames` plus
+11. The session's playhead publication is unchanged: `startLocatorFrames` plus
    the growing source's frontier, i.e. PROJECT-rate frames captured so far.
 
 How to test: `ctest -R record_bridge_test` — the growing source as a data
@@ -106,7 +138,13 @@ Known debt:
 - One file per track still duplicates identical channel content when two armed
   tracks take the same mask.
 - The recording is not PLACED by this module — the growing capture source is
-  handed on (`RecordingSession::bridge()->source()`); `SRecordingContent`, the
-  frontier-drawing clip and the placement conversion are L3b.
+  handed on; `SRecordingContent`, the frontier-drawing clip and the placement
+  conversion are L3b (`main/objects/wave`, `main/shell`).
+- **`RecordingSession` no longer has an app consumer** (proposal 21 L3b). The
+  app drives `CaptureBridge` directly through `SAudioRecorder`, which names the
+  files, owns the transport edge and does the placement — everything the
+  session used to wrap. The class is kept because `record_bridge_test` drives
+  it end to end and because deleting it is not this phase's risk to take;
+  whoever next touches this module should consider retiring it.
 - CoreAudio input returns silence (placeholder, L0 debt); real capture
   hardware, ALSA and CoreAudio are not gated anywhere.
